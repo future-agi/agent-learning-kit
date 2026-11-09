@@ -297,6 +297,23 @@ def _at(row: Mapping[str, Any]) -> float:
         return 0.0
 
 
+def _trial_log(door: Any, since: float = 0.0) -> list[dict[str, Any]]:
+    """This trial's action log. The world's own table holds every row, the agent's calls through its tool proxy
+    included; this process's memory holds only what passed its own door. The table keeps every trial played on it, so
+    this trial's rows are the ones from its start on."""
+    try:
+        log = door.log.rows()
+    except Exception:  # noqa: BLE001 - no rows, never a failed call
+        log = []
+    mirror = getattr(door.log, "mirror", None)
+    if mirror is not None:
+        try:
+            log = [row for row in mirror.rows() if _at(row) >= since] or log
+        except Exception:  # noqa: BLE001 - the world's table unreadable: this process's own rows stand
+            pass
+    return log
+
+
 def _world_actors_record(
     door: Any, listing: Any, dispatcher: Any, cast: Any, meter: Any, limits: dict[str, Any], since: float = 0.0
 ) -> dict[str, Any] | None:
@@ -305,19 +322,7 @@ def _world_actors_record(
     from .call_runner import actor_rows, approvals, trial_state_changes
 
     listed = listing.by_id()
-    try:
-        # The world's own table holds every row, the agent's calls through its tool proxy included; this process's
-        # memory holds only what passed its own door.
-        log = door.log.rows()
-    except Exception:  # noqa: BLE001 - no record, never a failed call
-        log = []
-    mirror = getattr(door.log, "mirror", None)
-    if mirror is not None:
-        try:
-            # The world's table keeps every trial played on it; this trial's rows are the ones from its start on.
-            log = [row for row in mirror.rows() if _at(row) >= since] or log
-        except Exception:  # noqa: BLE001 - the world's table unreadable: this process's own rows stand
-            pass
+    log = _trial_log(door, since)
     acted = actor_rows(log, listed)
     decisions = dispatcher.record() if dispatcher is not None else []
     if cast is not None:
@@ -827,9 +832,11 @@ class HostedChatCallRunner:
         # A readiness probe runs a chat with no job of its own; its trial is still one scenario's.
         job_id = getattr(self._context.job, "job_id", None) or "probe"
         trial = f"{job_id}:{scenario.scenario_key}"
+        trial_started = time.time()
         dispatcher = build_dispatcher(
-            document, self._context.bundle_dir, act=acts, read_log=door.log.rows, records=records,
-            trial_id=trial, meter=meter,
+            # What actors watch (an on_tool trigger) includes the agent's calls through its tool proxy.
+            document, self._context.bundle_dir, act=acts, read_log=lambda: _trial_log(door, trial_started),
+            records=records, trial_id=trial, meter=meter,
         )
         cast = (
             ChatActors(
@@ -864,7 +871,6 @@ class HostedChatCallRunner:
         failure: CallAborted | None = None
         _clear_file_tool_calls(runtime)
         acting: asyncio.Task[None] | None = None
-        trial_started = time.time()
         # An agent that runs its own tools reaches them through the tool proxy, which reads this trial's faults from
         # the world's database, as on a voice call.
         proxied = runtime.endpoints.get("tool_proxy") is not None

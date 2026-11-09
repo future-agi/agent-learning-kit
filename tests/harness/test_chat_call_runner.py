@@ -1539,3 +1539,28 @@ def test_a_chat_trial_s_world_changes_read_the_world_s_table_where_the_proxy_log
     door.log.write({"name": "put", "actor_id": "manager", "outcome": "committed", "ok": True, "at": 11.0})
     record = chat._world_actors_record(door, listing, None, None, meter, {}, since=9.0)
     assert {one["who"]: one["committed"] for one in record["state_changes"]}["manager"] == 1
+
+
+def test_a_chat_trial_s_actors_see_the_agent_s_calls_through_its_tool_proxy(tmp_path: Path) -> None:
+    """The agent's own tools service is reached through the tool proxy, which writes to the world's table, never to
+    this process's memory: what actors watch (an on_tool trigger) must read the world's table, from the trial's start."""
+    from fi.alk.harness.world_door import MemoryLog, TeeLog
+
+    class _Mirror:
+        def __init__(self, rows):
+            self._rows = rows
+
+        def rows(self):
+            return list(self._rows)
+
+        def write(self, row):
+            self._rows.append(row)
+
+    earlier = {"actor_id": "agent", "name": "apply_discount", "at": 5.0}
+    proxied = {"actor_id": "agent", "name": "apply_discount", "at": 12.0}
+    door = SimpleNamespace(log=TeeLog(MemoryLog(), _Mirror([earlier, proxied])))
+    assert chat._trial_log(door, since=10.0) == [proxied]
+    # A world without a mirrored table: this process's own rows.
+    alone = SimpleNamespace(log=TeeLog(MemoryLog(), None))
+    alone.log.write({"actor_id": "manager", "name": "approve", "at": 11.0})
+    assert [one["name"] for one in chat._trial_log(alone, since=10.0)] == ["approve"]

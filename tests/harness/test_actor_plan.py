@@ -1330,3 +1330,46 @@ def test_a_pre_run_session_nobody_can_write_is_refused_with_the_fix(tmp_path):
     assert session_problems([{"actors": ["mia"], "about": "deal 8", "where": place}], tmp_path) == []
     given = [{"actor": "mia", "action": "chat.post_message", "arguments": {"channel": "#sales", "text": "20% ok?"}}]
     assert session_problems([{"actors": ["mia"], "about": "deal 8", "where": place, "thread": given}], tmp_path) == []
+
+
+def test_an_actor_that_only_waits_on_its_own_trigger_is_watched_until_the_agent_s_call_comes(tmp_path):
+    """No scheduled action and no scenario trigger: the actor comes in on its own activation, so the trial's run must
+    keep watching the log for it, not stop at once because nothing else is pending."""
+    from fi.alk.harness.actor_dispatch import build_dispatcher
+    from fi.alk.harness.actors import save_actors
+
+    decided: list = []
+    watcher = Actor(
+        id="watcher",
+        name="Priya",
+        play="both",
+        permitted_actions=["chat.post_message"],
+        activation={"trigger": {"kind": "on_tool", "tool": "crm.apply_discount"}},
+    )
+    save_actors(tmp_path, ActorList(actors=[watcher]))
+    (tmp_path / "contract.json").write_text(
+        json.dumps({"tool_entrypoints": [{"tool": "apply_discount", "endpoint": "/crm/apply_discount"}]})
+    )
+    log: list = []
+    dispatcher = build_dispatcher(
+        {"actors": [{"id": "watcher"}]},
+        tmp_path,
+        act=door_acts(_sent_to([])),
+        read_log=lambda: log,
+        records=None,
+        trial_id="t",
+    )
+    dispatcher.decide = lambda situation, actor: decided.append(actor.id) or "{}"
+
+    async def trial():
+        running = asyncio.create_task(dispatcher.run())
+        await asyncio.sleep(0.1)
+        # The agent's call arrives after the run started.
+        log.append({"actor_id": "agent", "name": "apply_discount", "action_id": "a1", "arguments": {}})
+        try:
+            await asyncio.wait_for(running, timeout=5)
+        except asyncio.TimeoutError:
+            pass
+
+    asyncio.run(trial())
+    assert decided == ["watcher"]
