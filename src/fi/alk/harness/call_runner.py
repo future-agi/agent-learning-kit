@@ -1225,6 +1225,55 @@ def _write_trial_state(
         )
 
 
+def _same_action(action: str, name: str) -> bool:
+    """A fault names the world action (`crm.apply_discount`); a call may carry the tool's own name (`apply_discount`)."""
+    return bool(action) and bool(name) and (action == name or action.rsplit(".", 1)[-1] == name.rsplit(".", 1)[-1])
+
+
+def fault_notices(
+    faults: Sequence[Any],
+    log: Sequence[Mapping[str, Any]] | None,
+    calls: Sequence[Call],
+    *,
+    unreachable: str | None = None,
+) -> list[dict[str, Any]]:
+    """What became of each fault the scenario set, in plain words, for the faults that did not take effect: one that
+    could not be applied (no world database to hold it, or the call ran outside the world's door) and one the agent
+    never reached. A fault the door applied says nothing; the log already shows it as faulted."""
+    notices: list[dict[str, Any]] = []
+    for fault in faults:
+        if not isinstance(fault, Mapping):
+            continue
+        action = str(fault.get("action") or "")
+        on_call = _int_or(fault.get("on_call"), 1)
+        mode = str(fault.get("mode") or "fault")
+        base = {"action": action, "on_call": on_call, "mode": mode}
+        if unreachable:
+            notices.append({**base, "code": "fault_not_applied",
+                            "message": f"The {mode} fault on call {on_call} of {action} could not be applied: {unreachable}."})
+            continue
+        rows = [row for row in log or [] if _same_action(action, str(row.get("name") or ""))]
+        if any(row.get("outcome") == "faulted" for row in rows):
+            continue
+        made = sum(1 for call in calls if _same_action(action, call.name))
+        if made >= on_call:
+            notices.append({**base, "code": "fault_not_applied",
+                            "message": f"The {mode} fault on call {on_call} of {action} could not be applied: the agent "
+                                       "made that call outside the world's door (in its own process), so nothing held it."})
+        else:
+            notices.append({**base, "code": "fault_not_triggered",
+                            "message": f"The {mode} fault on call {on_call} of {action} never took effect: the agent "
+                                       f"made {made} call{'s' if made != 1 else ''} of it."})
+    return notices
+
+
+def _int_or(value: Any, default: int) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
 def worker_deadline(document: Mapping[str, Any]) -> float | None:
     """When this trial's workers stop being allowed to act: its start plus the scenario's worker budget, if any."""
     budget = document.get("worker_budget_seconds")
@@ -2492,6 +2541,7 @@ class CallRunnerImpl:
                 actor_usage=meter.rows(),
                 limits=actor_limits(doc, self._context.bundle_dir, "voice"),
                 actor_briefs=actors.briefs if actors is not None else None,
+                faults=list(doc.get("faults") or []),
             )
         except (CallAborted, WorldUnavailable):
             # `_translate_report`'s own typed control-flow (non-completed status, no test case,
@@ -2504,6 +2554,23 @@ class CallRunnerImpl:
                 f"voice_call_translate_crashed: {type(exc).__name__}: {exc}",
                 partial=self._timing_only_outcome(started_at),
             ) from exc
+
+    def _fault_notices(
+        self, runtime: EnvironmentRuntime, faults: Sequence[Any], calls: Sequence[Call]
+    ) -> list[dict[str, Any]]:
+        """The scenario's faults that did not take effect on this call, each with why."""
+        if not faults:
+            return []
+        database = _find_postgres_endpoint(runtime)
+        if database is None:
+            return fault_notices(
+                faults, None, calls, unreachable="this world has no database the tool proxy reads trial state from"
+            )
+        try:
+            log = _read_action_log(database.address)
+        except Exception:  # noqa: BLE001 - an unreadable log says nothing rather than something wrong
+            return []
+        return fault_notices(faults, log, calls)
 
     def _approvals(self, runtime: EnvironmentRuntime, decisions: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
         database = _find_postgres_endpoint(runtime)
@@ -2536,6 +2603,7 @@ class CallRunnerImpl:
         actor_usage: Sequence[dict[str, Any]] = (),
         limits: Mapping[str, Any] | None = None,
         actor_briefs: Mapping[str, str] | None = None,
+        faults: Sequence[Any] = (),
     ) -> CallOutcome:
         case = report.test_cases[0] if report.test_cases else None
         took_part = (
@@ -2640,6 +2708,10 @@ class CallRunnerImpl:
                         "limits": dict(limits or {}),
                         "usage": list(actor_usage),
                     }
+                notices = self._fault_notices(runtime, faults, calls)
+                if notices:
+                    # A fault that did not take effect is said, never only logged: the trial ran without it.
+                    transcript_document["notices"] = notices
                 recording_offset_ms = result.metadata.get("recording_offset_ms")
                 if isinstance(recording_offset_ms, (int, float)):
                     transcript_document["recording_offset_ms"] = int(

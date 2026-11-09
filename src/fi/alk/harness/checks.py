@@ -89,7 +89,9 @@ def same_id(first: Any, second: Any) -> bool:
     """
     if first is None or second is None:
         return False
-    return _ID_NOISE.sub("", str(first)).casefold() == _ID_NOISE.sub("", str(second)).casefold()
+    mine, theirs = _ID_NOISE.sub("", str(first)).casefold(), _ID_NOISE.sub("", str(second)).casefold()
+    # An empty id names no record, so it never matches, not even another empty one.
+    return bool(mine) and mine == theirs
 
 
 def run_check(

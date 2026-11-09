@@ -572,3 +572,65 @@ def test_same_id_ignores_separators_and_case_but_not_the_number():
     assert same_id("ord_1043", "ORD-1043")
     assert not same_id("CLM-88213", "CLM-88214")
     assert not same_id(None, "CLM-88213")
+
+
+def test_same_id_still_tells_apart_identifiers_that_name_different_records():
+    from fi.alk.harness.checks import same_id
+
+    assert not same_id("CLM-88213", "CLA-88213")
+    assert not same_id("CLM-88213", "CLM-882130")
+    assert not same_id("ORD-01", "ORD-1")
+    assert not same_id("INV 1043", "1043")
+    assert not same_id("", "")
+    assert not same_id("--", " ")
+    assert not same_id("CLM-88213", "")
+
+
+def _raw_claims_world(tmp_path):
+    """A world that stores the claim exactly as sent, so an id typed differently is a different record."""
+    from fi.alk.harness.world import GeneratedWorld
+    from fi.alk.harness.world.snapshot import save
+
+    class W(GeneratedWorld):
+        name = "raw_claims"
+        tools = [{"name": "check_status"}]
+        handlers = {
+            "check_status": (
+                "def handle(args, db):\n"
+                "    db.execute('INSERT INTO lookups (claim) VALUES (?)', [str(args['claim'])])\n"
+                "    return {'status': 'open'}\n"
+            )
+        }
+
+    world = W(":memory:")
+    world.connection.executescript("CREATE TABLE lookups(claim TEXT);")
+    world.connection.commit()
+    save(world, tmp_path, notes="test", sequences=[])
+    return tmp_path
+
+
+def test_an_exact_comparison_is_kept_when_the_world_treats_the_id_typed_differently_as_another_record(tmp_path):
+    from fi.alk.harness.scenario import Step
+
+    root = _raw_claims_world(tmp_path)
+    check = (
+        "def check(world, calls, reference):\n"
+        "    want = [s['arguments'].get('claim') for s in reference if s['tool'] == 'check_status'][-1]\n"
+        "    sent = [c.arguments.get('claim') for c in calls if c.name == 'check_status' and c.ok]\n"
+        "    return None if sent and sent[-1] == want else 'wrong claim: expected ' + repr(want)\n"
+    )
+    solution = [Step(tool="check_status", arguments={"claim": "CLM-88213"}, fixed={"claim": "their claim"})]
+    # The world stores what it was given, so "CLM88213" ends in a different state: the strict check is right.
+    assert _proof(root, solution, check).too_strict == []
+
+
+def test_a_fixed_value_that_is_not_an_identifier_is_never_replayed_without_separators(tmp_path):
+    from fi.alk.harness.prove import _unseparated_ids
+    from fi.alk.harness.scenario import Step
+
+    scenario = type("S", (), {"solution": [
+        Step(tool="note", arguments={"text": "call back after lunch", "date": "2026-07-21", "claim": "CLM-88213"},
+             fixed={"text": "x", "date": "y", "claim": "z"}),
+    ]})()
+    labels = [label for label, _ in _unseparated_ids(scenario)]
+    assert labels == ["note.claim"]

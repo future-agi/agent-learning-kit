@@ -976,6 +976,12 @@ class HostedChatCallRunner:
         world_record = _world_actors_record(door, listing, dispatcher, cast, meter, limits, since=trial_started)
         if world_record is not None:
             transcript.world_actors = world_record
+        faults = list(document.get("faults") or [])
+        if faults:
+            from .call_runner import fault_notices
+
+            # A fault that did not take effect is said, never only logged: the trial ran without it.
+            transcript.notices = fault_notices(faults, _trial_log(door, trial_started), transcript.calls)
         ended = datetime.now(timezone.utc)
         transcript_id = await self._adapter.upload_artifact(
             transcript.artifact(),
