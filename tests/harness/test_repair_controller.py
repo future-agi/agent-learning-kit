@@ -298,3 +298,67 @@ def test_default_runtime_budget_allows_eight_changed_candidates_but_not_repeats(
     assert controller.decide(_observation(
         "candidate-8", "ready_condition_invalid", phase=RepairPhase.RUNTIME,
     )).action is RepairAction.REJECT
+
+
+def test_a_seeded_value_in_a_generated_column_goes_to_authoring_repair() -> None:
+    """A value written into a generated column is authored data: recompiling cannot change it,
+    so the controller must ask authoring to patch the environment, not recompile then reject."""
+    import sqlite3
+
+    from fi.alk.harness.diagnostic_adapters.world_ir import diagnose_world_ir_error
+    from fi.alk.harness.repair_controller import CandidateObservation, RepairPhase
+    from fi.alk.harness.source_model import (
+        LogicalType,
+        SourceColumn,
+        SourceModel,
+        SourceTable,
+    )
+    from fi.alk.harness.world_import.sqlite import import_sqlite_world
+    from fi.alk.harness.world_ir import WorldIRValidationError
+
+    model = SourceModel.create(
+        source_digest="sha256:" + "a" * 64,
+        engine="postgres",
+        tables=(
+            SourceTable(
+                name="orders",
+                primary_key=("id",),
+                columns=(
+                    SourceColumn(
+                        name="id",
+                        logical_type=LogicalType.STRING,
+                        native_type="text",
+                        nullable=False,
+                        has_default=False,
+                    ),
+                    SourceColumn(
+                        name="total_cents",
+                        logical_type=LogicalType.INTEGER,
+                        native_type="integer",
+                        nullable=True,
+                        has_default=False,
+                        generated=True,
+                    ),
+                ),
+            ),
+        ),
+    )
+    database = sqlite3.connect(":memory:")
+    database.execute("CREATE TABLE orders (id TEXT, total_cents INTEGER)")
+    database.execute("INSERT INTO orders VALUES ('o1', 1200)")
+    try:
+        import_sqlite_world(database, model)
+    except WorldIRValidationError as error:
+        diagnostics = diagnose_world_ir_error(error)
+    else:
+        raise AssertionError("a value in a generated column must be refused")
+
+    assert [one.code for one in diagnostics] == ["generated_column_authored"]
+    decision = RepairController().decide(
+        CandidateObservation(
+            candidate_hash="cand-a",
+            phase=RepairPhase.ENVIRONMENT,
+            diagnostics=diagnostics,
+        )
+    )
+    assert decision.action is RepairAction.PATCH_ENVIRONMENT

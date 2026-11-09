@@ -90,8 +90,8 @@ _POLICIES = MappingProxyType(
         ),
         "generated_column_authored": DiagnosticPolicy(
             domain=FailureDomain.ENVIRONMENT,
-            owner=RepairOwner.COMPILER,
-            repair_strategy="mark_generated_column_absent",
+            owner=RepairOwner.AUTHORING,
+            repair_strategy="leave_generated_column_unset",
         ),
         "value_shape_mismatch": DiagnosticPolicy(
             domain=FailureDomain.ENVIRONMENT,

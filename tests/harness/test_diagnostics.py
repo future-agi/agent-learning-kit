@@ -87,7 +87,7 @@ def test_unknown_code_requires_explicit_taxonomy_change() -> None:
     ("code", "owner"),
     [
         ("source_model_fingerprint_mismatch", RepairOwner.COMPILER),
-        ("generated_column_authored", RepairOwner.COMPILER),
+        ("generated_column_authored", RepairOwner.AUTHORING),
         ("value_shape_mismatch", RepairOwner.AUTHORING),
         ("array_shape_mismatch", RepairOwner.AUTHORING),
         ("unknown_table", RepairOwner.AUTHORING),
