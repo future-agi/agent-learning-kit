@@ -2848,6 +2848,20 @@ def test_a_change_one_of_the_agent_s_workers_committed_is_not_no_change() -> Non
     assert cr.trial_state_changes(log[1:], {})[0]["no_change"] is True
 
 
+def test_a_call_through_the_tool_proxy_is_shown_by_the_agent_s_tool_name_not_its_route() -> None:
+    log = [
+        {"name": "get", "agent_tool": "get_order", "actor_id": "agent", "worker_id": "lookup", "outcome": "committed"},
+        {"name": "update_status", "agent_tool": "update_order_status", "actor_id": "agent", "worker_id": "lookup",
+         "outcome": "refused", "refusal_code": "not_permitted", "refusal": "not permitted"},
+        {"name": "list", "agent_tool": "list_refunds", "actor_id": "agent", "outcome": "committed"},
+        {"name": "list", "actor_id": "agent", "outcome": "committed"},
+    ]
+    agent, worker = cr.trial_state_changes(log, {})
+    assert agent["committed_actions"] == ["list_refunds", "list"]
+    assert worker["committed_actions"] == ["get_order"]
+    assert [one["action"] for one in worker["refused_actions"]] == ["update_order_status"]
+
+
 def test_a_worker_s_call_carries_the_worker_and_why_the_world_refused_it(monkeypatch) -> None:
     columns = ["name", "arguments", "result", "ok", "error", "at", "action_id", "actor_id", "worker_id", "outcome",
                "refusal_code"]

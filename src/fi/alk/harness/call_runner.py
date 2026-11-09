@@ -1090,15 +1090,15 @@ def trial_state_changes(
         )
         if outcome in _OUTCOMES:
             entry[outcome] += 1
+        # A call through the tool proxy is named by the agent's own tool, as its checks are graded, not by its route.
+        name = str(row.get("agent_tool") or row.get("name") or "")
         if outcome == "committed":
-            entry["committed_actions"].append(
-                str(row.get("name") or "") if who == AGENT else chosen.name(who, str(row.get("name") or ""), actor)
-            )
+            entry["committed_actions"].append(name if who == AGENT else chosen.name(who, name, actor))
         elif outcome == "refused":
             # An attempted violation stays visible: what was tried and why the world said no.
             entry["refused_actions"].append(
                 {
-                    "action": str(row.get("name") or ""),
+                    "action": name,
                     "code": str(row.get("refusal_code") or ""),
                     "reason": str(row.get("refusal") or row.get("error") or ""),
                 }
