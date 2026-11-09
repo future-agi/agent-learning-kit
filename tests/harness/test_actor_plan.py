@@ -1460,3 +1460,107 @@ def test_seeing_the_watched_call_does_not_wake_an_actor_before_its_trigger_s_cou
 
     asyncio.run(trial())
     assert decided == ["watcher"]
+
+
+def _watcher_dispatcher(tmp_path, log, sent):
+    from fi.alk.harness.actor_dispatch import build_dispatcher
+    from fi.alk.harness.actors import save_actors
+
+    watcher = Actor(
+        id="watcher",
+        name="Priya",
+        play="both",
+        permitted_actions=["chat.post_message"],
+        activation={"trigger": {"kind": "on_tool", "tool": "crm.apply_discount"}},
+    )
+    save_actors(tmp_path, ActorList(actors=[watcher]))
+    (tmp_path / "contract.json").write_text(
+        json.dumps({"tool_entrypoints": [{"tool": "apply_discount", "endpoint": "/crm/apply_discount"}]})
+    )
+    return build_dispatcher(
+        {"actors": [{"id": "watcher"}]},
+        tmp_path,
+        act=door_acts(_sent_to(sent)),
+        read_log=lambda: log,
+        records=None,
+        trial_id="t",
+    )
+
+
+_POST = json.dumps({"action": "chat.post_message", "arguments": {"text": "noted"}, "why": "the discount was applied"})
+
+
+def test_a_live_turn_the_trial_s_end_cut_short_is_taken_when_the_trial_settles(tmp_path):
+    log = [{"actor_id": "agent", "name": "apply_discount", "action_id": "a1", "arguments": {}}]
+    sent: list = []
+    dispatcher = _watcher_dispatcher(tmp_path, log, sent)
+    started = asyncio.Event()
+    calls: list = []
+
+    async def decide(situation, actor):
+        calls.append(actor.id)
+        if len(calls) == 1:
+            started.set()
+            await asyncio.sleep(60)  # the conversation ends during this first decision
+        return _POST
+
+    dispatcher.decide = decide
+
+    async def trial():
+        running = asyncio.create_task(dispatcher.run())
+        await asyncio.wait_for(started.wait(), timeout=5)
+        running.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await running
+        await dispatcher.settle(seconds=5)
+
+    asyncio.run(trial())
+    assert calls == ["watcher", "watcher"]
+    assert len(sent) == 1
+    assert [(one.get("action"), one.get("turn")) for one in dispatcher.record() if one.get("play") == "live"] == [
+        ("chat.post_message", 1)
+    ]
+
+
+def test_an_agent_call_just_before_the_end_still_wakes_its_actor_when_the_trial_settles(tmp_path):
+    log: list = []
+    sent: list = []
+    dispatcher = _watcher_dispatcher(tmp_path, log, sent)
+    dispatcher.decide = lambda situation, actor: _POST
+
+    async def trial():
+        running = asyncio.create_task(dispatcher.run())
+        await asyncio.sleep(0.05)
+        running.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await running
+        # The agent's call reached the log after the actors' last look, as the conversation ended.
+        log.append({"actor_id": "agent", "name": "apply_discount", "action_id": "a1", "arguments": {}})
+        await dispatcher.settle(seconds=5)
+
+    asyncio.run(trial())
+    assert len(sent) == 1
+
+
+def test_a_turn_still_unfinished_when_the_settle_runs_out_is_recorded_not_lost(tmp_path):
+    log = [{"actor_id": "agent", "name": "apply_discount", "action_id": "a1", "arguments": {}}]
+    dispatcher = _watcher_dispatcher(tmp_path, log, [])
+
+    async def decide(situation, actor):
+        await asyncio.sleep(60)
+
+    dispatcher.decide = decide
+
+    async def trial():
+        running = asyncio.create_task(dispatcher.run())
+        await asyncio.sleep(0.3)
+        running.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await running
+        await dispatcher.settle(seconds=0.3)
+
+    asyncio.run(trial())
+    rows = [one for one in dispatcher.record() if one.get("actor") == "watcher"]
+    assert [(one["play"], one.get("why")) for one in rows] == [
+        ("live", "the trial ended before its turn finished")
+    ]

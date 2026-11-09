@@ -1564,3 +1564,46 @@ def test_a_chat_trial_s_actors_see_the_agent_s_calls_through_its_tool_proxy(tmp_
     alone = SimpleNamespace(log=TeeLog(MemoryLog(), None))
     alone.log.write({"actor_id": "manager", "name": "approve", "at": 11.0})
     assert [one["name"] for one in chat._trial_log(alone, since=10.0)] == ["approve"]
+
+
+def test_an_actor_the_agent_s_last_call_wakes_still_acts_when_the_conversation_ends_at_once(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    from fi.alk.harness.actors import Actor, ActorList, save_actors
+
+    context = _context(tmp_path)
+    save_actors(context.bundle_dir, ActorList(actors=[
+        Actor(id="manager", name="Mia", play="mocked", permitted_actions=["lookup_account"]),
+    ]))
+    path = context.bundle_dir / "scenarios" / "one" / "scenario.json"
+    document = json.loads(path.read_text(encoding="utf-8"))
+    document["actors"] = [{"id": "manager", "actions": [{
+        "action": "lookup_account", "arguments": {"account_id": "ACC-1"},
+        "trigger": {"kind": "on_tool", "tool": "lookup_account"},
+    }]}]
+    path.write_text(json.dumps(document), encoding="utf-8")
+    monkeypatch.setattr(chat, "_tool_world", lambda *_args: _ToolWorld())
+    monkeypatch.setattr(chat, "_drive_conversation", _single_exchange)
+
+    class Wrapper:
+        def __init__(self, **_kwargs: Any) -> None:
+            self.calls = 0
+
+        async def call(self, _request: Any) -> AgentResponse:
+            # No pause: the conversation is over before the actors' next look at the log.
+            self.calls += 1
+            if self.calls == 1:
+                return AgentResponse(content="", tool_calls=[{"id": "tool-1", "function": {
+                    "name": "lookup_account", "arguments": '{"account_id":"ACC-2048"}'}}])
+            return AgentResponse(content="The account is active.")
+
+    monkeypatch.setattr(chat, "HTTPAgentWrapper", Wrapper)
+    runtime = EnvironmentRuntime(
+        runtime_id="runtime-1", world_index=0, bundle_digest="sha256:" + "a" * 64, state=RuntimeState.READY,
+        endpoints={"target_http": RuntimeEndpoint(capability="target_http", protocol="http",
+                                                  address="http://localhost:18080")},
+    )
+    outcome = asyncio.run(
+        chat.HostedChatCallRunner(_Adapter(), context).run(SimpleNamespace(scenario_key="one", scenario_id="scenario-1"), runtime)
+    )
+    assert [(one["actor_id"], one["outcome"]) for one in outcome.world_actions] == [("manager", "committed")]
