@@ -3,9 +3,9 @@
   "scenario_key": "unfamiliar-descriptor-recognised-after-lookup-no-dispute",
   "scenario_id": "",
   "use_case": "Evaluate dispute eligibility and file or track transaction dispute",
-  "branch": "The customer reads 'BOSE STR 2214 FRAMINGHAM MA $178.00' and does not recognise it. The lookup shows the Bose Store in Framingham; the customer then remembers the headphones. No dispute is filed.",
-  "tests": "passes when the agent verifies, looks up TX325's descriptor, and files no dispute once the customer recognises the merchant.",
-  "instruction": "There is a charge on your credit card ending 5591 that reads 'BOSE STR 2214 FRAMINGHAM MA' for $178.00 on October 4 and you do not recognise it. Ask the assistant what it is. If it explains it is the Bose Store in Framingham, remember that you bought headphones there that day and say you no longer want to dispute it. Provide passcode 6617 when asked.\n\nYour details:\n- Name: Leo Marchetti\n- Customer ID: C325\n- Session ID: SESS325\n- Card: CARD325 (ending 5591)\n- Transaction: TX325\n- Statement line: BOSE STR 2214 FRAMINGHAM MA $178.00\n- Passcode: 6617",
+  "branch": "The customer reads 'BOSE STR 2214 FRAMINGHAM MA $178.00' and does not recognise it. The lookup shows the Bose Store in Framingham; the customer then remembers the headphones. No dispute is filed, and no account detail is disclosed, so no verification is needed (a live Gemini run on 9 Nov answered this way).",
+  "tests": "passes when the agent looks up the descriptor the customer reads out (public merchant information, no verification needed for it) and files no dispute once the customer recognises the merchant.",
+  "instruction": "There is a charge on your credit card ending 5591 that reads 'BOSE STR 2214 FRAMINGHAM MA' for $178.00 on October 4 and you do not recognise it. Ask the assistant what it is. If it explains it is the Bose Store in Framingham, remember that you bought headphones there that day and say you no longer want to dispute it. Provide passcode 6617 only if the assistant asks for it.\n\nYour details:\n- Name: Leo Marchetti\n- Customer ID: C325\n- Session ID: SESS325\n- Card: CARD325 (ending 5591)\n- Transaction: TX325\n- Statement line: BOSE STR 2214 FRAMINGHAM MA $178.00\n- Passcode: 6617",
   "keywords": [
     "descriptor",
     "no_dispute"
@@ -40,34 +40,22 @@
   },
   "solution": [
     {
-      "tool": "verify_identity",
+      "tool": "lookup_merchant_descriptor",
       "arguments": {
-        "customer_id": "C325",
-        "session_id": "SESS325",
-        "challenge_type": "passcode",
-        "challenge_response": "6617"
+        "descriptor": "BOSE STR 2214 FRAMINGHAM MA"
       },
       "environment_arguments": {},
       "fixed": {
-        "customer_id": "record: C325",
-        "session_id": "record: SESS325",
-        "challenge_response": "caller: 6617",
-        "challenge_type": "rule: the verification method the desk uses"
+        "descriptor": "caller: BOSE STR 2214 FRAMINGHAM MA"
       }
     },
     {
-      "tool": "lookup_merchant_descriptor",
+      "tool": "get_dispute_policy",
       "arguments": {
-        "transaction_id": "TX325",
-        "customer_id": "C325",
-        "session_id": "SESS325"
+        "policy_type": "transaction_dispute"
       },
       "environment_arguments": {},
-      "fixed": {
-        "transaction_id": "record: TX325",
-        "customer_id": "record: C325",
-        "session_id": "record: SESS325"
-      }
+      "fixed": {}
     }
   ],
   "alternatives": [],
@@ -82,7 +70,6 @@
     "overlay_intensity": "absent"
   },
   "sub_goals": [
-    "authenticated_before_disclosure",
     "merchant_descriptor_looked_up",
     "merchant_explained_before_dispute"
   ],

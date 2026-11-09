@@ -503,8 +503,8 @@ WRONG_RUNS = [
         "policy_dispute_window_is_sixty_days_not_ninety",
         "reads only the superseded 2024 policy",
         lambda k: _swap(k, "read_file_content", fileId="pol_dispute_v1"),
-        "policy_document_read_from_drive",
-        "never read",
+        "effective_policy_consulted",
+        "not consulted",
     ),
     (
         "fee_expedited_replacement_is_twenty_five",

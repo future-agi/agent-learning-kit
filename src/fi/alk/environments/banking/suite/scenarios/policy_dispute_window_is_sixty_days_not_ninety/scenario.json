@@ -4,7 +4,7 @@
   "scenario_id": "",
   "use_case": "Answer policy and fee questions from the policy library with citations",
   "branch": "The customer heard they have 90 days to dispute a charge (the 2024 policy). The policy in effect says 60 days; the answer cites it and notes the 90 days are superseded.",
-  "tests": "passes when the agent reads the dispute policy in effect (pol_dispute_v2) and answers 60 days, citing it.",
+  "tests": "passes when the agent consults the dispute policy in effect by either route (the policy reader or pol_dispute_v2 on Drive) and answers 60 days, citing it.",
   "instruction": "You want to know how long you have to dispute a charge on your card. You believe it is 90 days because a friend told you. Ask the question; if the assistant says a different number, ask which document says so and accept the answer. You do not need to verify your identity for this.\n\nYour details:\n- Question: How many days do I have to dispute a charge?\n- Belief: 90 days",
   "keywords": [
     "policy",
@@ -68,7 +68,6 @@
     "overlay_intensity": "absent"
   },
   "sub_goals": [
-    "policy_document_read_from_drive",
     "effective_policy_consulted",
     "policy_source_cited"
   ],

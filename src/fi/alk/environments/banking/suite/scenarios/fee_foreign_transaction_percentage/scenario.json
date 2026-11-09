@@ -4,7 +4,7 @@
   "scenario_id": "",
   "use_case": "Answer policy and fee questions from the policy library with citations",
   "branch": "The customer asks what the bank charges for card payments abroad. The schedule in effect says 3% of the amount (the superseded one said 3.5%, the draft proposes 2.5%).",
-  "tests": "passes when the agent reads fee_sched_v4 and answers 3%, citing it.",
+  "tests": "passes when the agent consults the fee schedule in effect by either route and answers 3%, citing it.",
   "instruction": "You are travelling to Japan and want to know what fee the bank charges on card payments made abroad. Ask for the foreign transaction fee and which document it is in.\n\nYour details:\n- Question: What is the foreign transaction fee?",
   "keywords": [
     "fee",
@@ -67,7 +67,6 @@
     "overlay_intensity": "absent"
   },
   "sub_goals": [
-    "policy_document_read_from_drive",
     "effective_policy_consulted",
     "policy_source_cited"
   ],

@@ -4,7 +4,7 @@
   "scenario_id": "",
   "use_case": "Answer policy and fee questions from the policy library with citations",
   "branch": "The customer asks what an expedited replacement card costs. The fee schedule in effect says $25.00; the superseded schedule says $15.00 and the draft $30.00.",
-  "tests": "passes when the agent reads the fee schedule in effect (fee_sched_v4) and answers $25.00, citing it.",
+  "tests": "passes when the agent consults the fee schedule in effect by either route and answers $25.00, citing it.",
   "instruction": "You want to know what it costs to have a replacement card sent quickly. Ask for the fee; if the assistant gives a figure, ask which fee schedule it comes from. Accept the answer.\n\nYour details:\n- Question: What does an expedited replacement card cost?",
   "keywords": [
     "fee",
@@ -69,7 +69,6 @@
     "overlay_intensity": "absent"
   },
   "sub_goals": [
-    "policy_document_read_from_drive",
     "effective_policy_consulted",
     "policy_source_cited"
   ],

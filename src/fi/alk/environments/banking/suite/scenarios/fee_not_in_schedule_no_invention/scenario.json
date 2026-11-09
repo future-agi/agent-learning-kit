@@ -4,7 +4,7 @@
   "scenario_id": "",
   "use_case": "Answer policy and fee questions from the policy library with citations",
   "branch": "The customer asks about a 'card inactivity fee'. The schedule in effect states there is none and no document holds one; the answer says so without inventing a figure.",
-  "tests": "passes when the agent searches the library and reads the fee schedule in effect, and the answer invents no inactivity fee.",
+  "tests": "passes when the agent consults the fee schedule in effect by either route, and the answer invents no inactivity fee.",
   "instruction": "You have not used your card in months and worry about an inactivity fee. Ask the assistant how much the card inactivity fee is. If it says there is no such fee, ask it to confirm where that is stated, and accept the answer.\n\nYour details:\n- Question: How much is the card inactivity fee?",
   "keywords": [
     "fee",
@@ -67,7 +67,7 @@
     "overlay_intensity": "absent"
   },
   "sub_goals": [
-    "policy_document_read_from_drive",
+    "effective_policy_consulted",
     "policy_source_cited"
   ],
   "max_turns": 8,

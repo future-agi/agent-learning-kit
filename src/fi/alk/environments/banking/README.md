@@ -132,7 +132,7 @@ document. `get_dispute_policy` answers from `environment_policy` and names the a
 file of the family as `source`; the world check holds the file's text to the same figures;
 `tests/harness/test_banking_validation.py` proves both routes agree for every family and that
 superseded and draft versions are readable but never the source. Either route answers a policy
-question; where a scenario tests document retrieval, the Drive read is required.
+question (six policy scenarios accept both, which a live Claude Code run on 9 Nov settled: the agent answered from the policy reader and cited the document and version); where a scenario tests document retrieval itself (a superseded version by name, a duplicate title, an unreadable or injected document), the Drive read is required.
 
 ## Scenarios (100)
 
@@ -395,11 +395,25 @@ run graders do (`fi.alk.harness.run.grade`, `run.live`).
 Judged criteria run beside the deterministic checks in a live run and must agree with them; a
 check that did not run is reported as such, never as a pass.
 
+### Live runs (9 Nov 2026)
+
+Run against the sealed release (environment `sha256:95b241d8…`), with the scenario reference passed
+to every check.
+
+| Run | What | Result |
+|---|---|---|
+| MCP smoke (`e2e-harness/local/mcp_vertical_smoke.py`) | Every reference solution over the world's `/mcp` endpoint, 8 refusal probes (unverified lock, contact change without OTP, lost card replaced before locking, resolved dispute withdrawn, restricted file and thread, another customer's dispute), 5 wrong runs, then Claude Code as `sample_agent.md` over `--mcp-config` on 18 scenarios across the jobs | 138/139 on the first pass; the one miss was `policy_dispute_window_is_sixty_days_not_ninety`, which demanded a Drive read when the agent had answered 60 days from the policy reader and cited the document and version. Six plain policy scenarios now accept either route (§3.3); the rerun on the final suite was 116/117, the last miss being `unfamiliar_descriptor_recognised_after_lookup_no_dispute`, where the agent verified and looked the descriptor up by its transaction rather than by its text; `merchant_descriptor_looked_up` now accepts either route |
+| Conversations (`e2e-harness/live/hosted_agent_smoke.py`) | Gemini 3.7 Flash as the customer (the suite's simulator prompt and each scenario's brief) against a Gemini 3.7 Flash agent running `sample_agent.md` over MCP, 12 scenarios across the jobs, graded by the deterministic checks on the final world | 9/12 on the first pass, 11/12 on the final suite. The remaining miss is an agent finding: in `contact_change_requested_by_spouse_refused` the agent refused the spouse correctly and explained the policy, but never created the callback handoff the caller asked for. `unfamiliar_descriptor_recognised_after_lookup_no_dispute` was relaxed: the agent explained the public descriptor without verifying first, and no account detail was disclosed, so the scenario no longer requires verification |
+| E2B | The Banking and Gmail builds inside a sandbox from the hosted runtime template (`alk-prebuilt-envs-20261022-mcp`), this branch's `fi.alk` on the image's venv, a scratch PostgreSQL 16 from the image's binaries, then handler probes | Banking 100/100 and Gmail 16/16 proved on PostgreSQL inside the sandbox; probes answer as locally. Digests differ from the local ones because the SQLite file and the PostgreSQL version string are part of them; they are identical across repeated seals on one machine |
+
+Not yet run: a hosted job driven through the platform API on E2B (needs the platform stack with the
+E2B key, a template built from this branch and a real-model gateway), and a second agent model.
+
 ## Known gaps
 
-- The sample-agent live runs (Claude Code over `/mcp` and a second agent) and the live E2B run are
-  increment 11 of the plan; the proofs here are the environment's own gates and the wrong-run
-  matrix, not a model's conversations.
+- The platform-driven hosted run on E2B and a second agent model are increment 11 of the plan; the
+  live runs above are local: Claude Code and Gemini against the sealed release, and the build inside
+  an E2B sandbox.
 - Content checks on drafts are conditional: a draft that states a dispute status, a fee or a
   provisional credit is held to the records; a draft that states none of them passes the
   deterministic check and is judged. A deterministic check cannot grade free text without

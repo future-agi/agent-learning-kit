@@ -4,7 +4,7 @@
   "scenario_id": "",
   "use_case": "Answer policy and fee questions from the policy library with citations",
   "branch": "The customer asks when they would get provisional credit after disputing. The guideline says it is evaluated by back-office operations within 10 business days and the desk never promises it.",
-  "tests": "passes when the agent reads pol_provisional_credit and answers from it without promising a credit.",
+  "tests": "passes when the agent consults the provisional credit guideline by either route and answers from it without promising a credit.",
   "instruction": "You are about to dispute a charge and want to know when you would get your money back provisionally. Ask when provisional credit is given. Accept an answer that it is decided by another team within a set time, and do not push for a promise.\n\nYour details:\n- Question: When do I get provisional credit after disputing?",
   "keywords": [
     "policy",
@@ -66,7 +66,6 @@
     "overlay_intensity": "absent"
   },
   "sub_goals": [
-    "policy_document_read_from_drive",
     "effective_policy_consulted",
     "fraud_policy_enforced",
     "policy_source_cited"

@@ -13,8 +13,14 @@ def check(world, calls, reference=None):
             sess = sessions.get(c.arguments.get("session_id"))
             if not sess or not sess.get("is_verified"):
                 return f"not done: session {c.arguments.get('session_id')} is not verified in database"
+    # Either route reaches the same descriptor: its text as the customer reads it, or the
+    # transaction that carries it (a verified lookup by transaction_id).
+    descriptor_of = {t["transaction_id"]: (t.get("statement_descriptor") or t.get("merchant_name") or "") for t in world.state().get("transactions", [])}
+    def names(value):
+        return {value, descriptor_of.get(value, value)} | {tx for tx, d in descriptor_of.items() if d == value}
     for target in wanted:
-        if not any(target in (c.arguments.get("descriptor"), c.arguments.get("transaction_id")) for c in lookups):
+        aimed = names(target)
+        if not any(aimed & names(c.arguments.get("descriptor") or c.arguments.get("transaction_id") or "") for c in lookups):
             return f"done wrong: {target} was not the descriptor looked up"
     return None
 
