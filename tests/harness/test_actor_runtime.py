@@ -337,6 +337,26 @@ def test_an_actor_s_action_is_shown_by_its_full_name_where_its_permissions_name_
     assert [row["name"] for row in actor_rows(log, listed)] == ["approvals.put", "approvals.change", "change", "chat.post_message"]
 
 
+def test_an_actor_s_ambiguous_action_takes_its_full_name_from_what_it_chose():
+    from fi.alk.harness.call_runner import actor_rows, trial_state_changes
+
+    log = [
+        {"actor_id": "manager", "name": "put", "outcome": "committed", "ok": True},
+        {"actor_id": "manager", "name": "put", "outcome": "committed", "ok": True},
+    ]
+    # Both collections log their puts as `put`: only the actor's own choices say which was which.
+    listed = {"manager": Actor(id="manager", name="Mia", permitted_actions=["approvals.put", "channel_members.put"])}
+    decisions = [
+        {"actor": "manager", "play": "mocked", "action": "approvals.put", "outcome": "committed"},
+        {"actor": "manager", "play": "live", "action": "channel_members.put", "outcome": "committed"},
+    ]
+    changes = {c["who"]: c["committed_actions"] for c in trial_state_changes(log, listed, decisions)}
+    assert changes["manager"] == ["approvals.put", "channel_members.put"]
+    assert [row["name"] for row in actor_rows(log, listed, decisions)] == ["approvals.put", "channel_members.put"]
+    # Without its choices the verb alone can't say which, so it is kept.
+    assert {c["who"]: c["committed_actions"] for c in trial_state_changes(log, listed)}["manager"] == ["put", "put"]
+
+
 def _history_dispatcher(history, actors):
     from fi.alk.harness.actor_dispatch import ActorDispatcher
 

@@ -1007,12 +1007,35 @@ def _shown_action(name: str, actor: Any) -> str:
     return full[0] if len(full) == 1 else name
 
 
-def trial_state_changes(log: list[dict[str, Any]], listed: Mapping[str, Any]) -> list[dict[str, Any]]:
+class _ChosenActions:
+    """Each actor's actions in the order it chose them (scheduled or decided), with full names: what names a logged
+    row when the actor's permissions alone can't (`approvals.put` and `channel_members.put` both log as `put`)."""
+
+    def __init__(self, decisions: Sequence[dict[str, Any]]) -> None:
+        self.left: dict[str, list[str]] = {}
+        for one in decisions or ():
+            action = str(one.get("action") or "")
+            if one.get("actor") and "." in action:
+                self.left.setdefault(str(one["actor"]), []).append(action)
+
+    def name(self, who: str, logged: str, actor: Any) -> str:
+        if "." not in logged:
+            queue = self.left.get(who) or []
+            for index, action in enumerate(queue):
+                if action.rsplit(".", 1)[-1] == logged:
+                    return queue.pop(index)
+        return _shown_action(logged, actor)
+
+
+def trial_state_changes(
+    log: list[dict[str, Any]], listed: Mapping[str, Any], decisions: Sequence[dict[str, Any]] = ()
+) -> list[dict[str, Any]]:
     """What each participant attempted in this trial and what the world made of it: one entry for the agent and one
     per actor that acted, with attempted, committed, refused, faulted and duplicate counts and the actions it
     committed, in order. Attempted, refused and committed are kept apart; a row from before outcomes were recorded
     counts as committed when it succeeded and refused when the world refused it."""
     entries: dict[str, dict[str, Any]] = {}
+    chosen = _ChosenActions(decisions)
     for row in log:
         if is_pre_run(row.get("idempotency_key")):
             # Written before the run: the trial's starting point, not a change made during it.
@@ -1036,7 +1059,9 @@ def trial_state_changes(log: list[dict[str, Any]], listed: Mapping[str, Any]) ->
         if outcome in _OUTCOMES:
             entry[outcome] += 1
         if outcome == "committed":
-            entry["committed_actions"].append(_shown_action(str(row.get("name") or ""), actor))
+            entry["committed_actions"].append(
+                str(row.get("name") or "") if who == AGENT else chosen.name(who, str(row.get("name") or ""), actor)
+            )
     # The agent always has a line: "no change" is a result, since doing nothing can be correct.
     agent = entries.pop(AGENT, None) or {
         "who": AGENT, "name": "the agent", "attempted": 0, **{outcome: 0 for outcome in _OUTCOMES},
@@ -1083,7 +1108,9 @@ def approvals(log: list[dict[str, Any]], decisions: Sequence[dict[str, Any]] = (
     return out
 
 
-def _state_changes(runtime: EnvironmentRuntime, bundle_dir: Path) -> list[dict[str, Any]]:
+def _state_changes(
+    runtime: EnvironmentRuntime, bundle_dir: Path, decisions: Sequence[dict[str, Any]] = ()
+) -> list[dict[str, Any]]:
     database = _find_postgres_endpoint(runtime)
     if database is None:
         return []
@@ -1092,10 +1119,12 @@ def _state_changes(runtime: EnvironmentRuntime, bundle_dir: Path) -> list[dict[s
     except Exception as exc:  # noqa: BLE001 - no state changes, never a failed call
         logger.debug("state changes unreadable: %s", type(exc).__name__)
         return []
-    return trial_state_changes(log, load_actors(bundle_dir).by_id())
+    return trial_state_changes(log, load_actors(bundle_dir).by_id(), decisions)
 
 
-def _actor_rows(runtime: EnvironmentRuntime, bundle_dir: Path) -> list[dict[str, Any]]:
+def _actor_rows(
+    runtime: EnvironmentRuntime, bundle_dir: Path, decisions: Sequence[dict[str, Any]] = ()
+) -> list[dict[str, Any]]:
     """This trial's actions by actors, named and with their outcome; none for a world without actors."""
     listed = load_actors(bundle_dir).by_id()
     database = _find_postgres_endpoint(runtime)
@@ -1106,19 +1135,23 @@ def _actor_rows(runtime: EnvironmentRuntime, bundle_dir: Path) -> list[dict[str,
     except Exception as exc:  # noqa: BLE001 - no actor evidence, never a failed call
         logger.debug("actor rows unreadable: %s", type(exc).__name__)
         return []
-    return actor_rows(log, listed)
+    return actor_rows(log, listed, decisions)
 
 
-def actor_rows(log: list[dict[str, Any]], listed: Mapping[str, Any]) -> list[dict[str, Any]]:
+def actor_rows(
+    log: list[dict[str, Any]], listed: Mapping[str, Any], decisions: Sequence[dict[str, Any]] = ()
+) -> list[dict[str, Any]]:
     """The actors' rows of an action log, named and with their outcome: the same for every runtime."""
     rows = []
+    chosen = _ChosenActions(decisions)
     for row in log:
-        actor = listed.get(str(row.get("actor_id") or AGENT))
+        who = str(row.get("actor_id") or AGENT)
+        actor = listed.get(who)
         if actor is None:
             continue
         rows.append(
             {
-                "name": _shown_action(str(row.get("name") or ""), actor),
+                "name": chosen.name(who, str(row.get("name") or ""), actor),
                 "arguments": row.get("arguments") or {},
                 "result": _structured(row.get("result")),
                 "ok": bool(row.get("ok")),
@@ -2242,13 +2275,13 @@ class CallRunnerImpl:
         if not calls and case is not None:
             calls = _collect_provider_tool_calls(case)
         acted = (
-            _actor_rows(runtime, self._context.bundle_dir)
+            _actor_rows(runtime, self._context.bundle_dir, actor_decisions)
             if case is not None
             and self._context.evidence_seam is EvidenceSeam.TOOL_TRACE
             else []
         )
         changes = (
-            _state_changes(runtime, self._context.bundle_dir)
+            _state_changes(runtime, self._context.bundle_dir, actor_decisions)
             if acted or actor_decisions
             else []
         )

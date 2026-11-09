@@ -323,7 +323,6 @@ def _world_actors_record(
 
     listed = listing.by_id()
     log = _trial_log(door, since)
-    acted = actor_rows(log, listed)
     decisions = dispatcher.record() if dispatcher is not None else []
     if cast is not None:
         decisions += [
@@ -332,12 +331,13 @@ def _world_actors_record(
             for one in cast.events
             if one.get("kind") == "acted"
         ]
+    acted = actor_rows(log, listed, decisions)
     if not acted and not decisions:
         return None
     return {
         "actions": acted,
         "decisions": decisions,
-        "state_changes": trial_state_changes(log, listed),
+        "state_changes": trial_state_changes(log, listed, decisions),
         "approvals": approvals(log, decisions),
         "limits": dict(limits),
         "usage": meter.rows(),
