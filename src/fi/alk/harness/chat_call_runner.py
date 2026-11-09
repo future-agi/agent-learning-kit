@@ -22,8 +22,8 @@ from .call_runner import (
     ArtifactUploader,
     CallRunnerContext,
     _clear_file_tool_calls,
-    _with_span_calls,
     _with_scenario_edits,
+    collect_seam_calls,
 )
 from .contract import AgentContract
 from .hosted_scheduler import CallAborted, CallOutcome, Scenario, World
@@ -950,10 +950,10 @@ class HostedChatCallRunner:
                 failure=failure,
             )
 
-        # The submitted agent may execute tools entirely inside its Python process instead
-        # of returning tool requests over HTTP. These observed calls belong to the same attempt;
-        # do not replay the tool through the generated world or fabricate evidence from text.
-        transcript.calls[:] = _with_span_calls(transcript.calls, runtime)
+        # The submitted agent may execute tools inside its own process or against the world's services instead of
+        # returning tool requests over HTTP. These observed calls belong to the same attempt; do not replay the tool
+        # through the generated world or fabricate evidence from text.
+        transcript.calls[:] = collect_seam_calls(runtime, self._context.evidence_seam, transcript.calls)
 
         if cast is not None:
             transcript.call_actors = {"resolved": chat_actors, "summary": cast.summary(), "events": cast.events}

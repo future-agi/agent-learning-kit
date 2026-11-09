@@ -330,6 +330,8 @@ class SubGoalResult:
     judged: bool
     # What it was decided from (`world_state`, `transcript`, `recording`, `tool_calls`).
     evidence: tuple[str, ...] = field(default=(), compare=False)
+    # Whose result: the task, or `worker:<id>`; reported beside the task verdict, never folded into it.
+    subject: str = "task"
     # Derived from held and reason, so a result changed with `replace` never disagrees with it.
     verdict: str | None = field(default=None, init=False)
 
@@ -2528,6 +2530,11 @@ class HostedScheduler:
                 )
                 sub_goal_results[slot] = replace(judged, held=False, reason=reason or None)
 
+        subjects = {goal.name: getattr(goal, "subject", "task") or "task" for goal in scenario.sub_goals}
+        sub_goal_results = [
+            replace(result, subject=subjects.get(result.name, "task")) for result in sub_goal_results
+        ]
+
         if broken_failure is not None:
             return self._fault(
                 scenario,
@@ -2575,10 +2582,11 @@ class HostedScheduler:
             replace(result, evidence=_evidence_of(goal, call_outcome))
             for goal, result in zip(scenario.sub_goals, sub_goal_results)
         ]
-        # A settled `False` fails the scenario; an unsettled sub-goal (unmeasured included) makes it not decided.
-        if any(result.held is False for result in sub_goal_results):
+        # A settled `False` fails the scenario; an unsettled sub-goal (unmeasured included) makes it not decided. A
+        # worker's own sub-goals are reported beside the task's verdict, never folded into it.
+        if any(result.held is False and result.subject == "task" for result in sub_goal_results):
             status = "failed"
-        elif any(result.held is None for result in sub_goal_results):
+        elif any(result.held is None and result.subject == "task" for result in sub_goal_results):
             return self._fault(
                 scenario,
                 world_index,

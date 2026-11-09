@@ -6,7 +6,7 @@
     POST /refunds/issue         {"order_id", "amount"}  -> the refund; an order with one gets it back unchanged
     GET  /health                                         -> 200 {"status": "ok"}
 
-Issuing is idempotent per order: a second refund is never created. It listens on $LEDGER_PORT (default 8090).
+Issuing is idempotent per order: a second refund is never created. It listens on --port, else $LEDGER_PORT (8090).
 """
 
 from __future__ import annotations
@@ -102,4 +102,8 @@ class Handler(BaseHTTPRequestHandler):
 
 
 if __name__ == "__main__":
-    ThreadingHTTPServer(("0.0.0.0", int(os.environ.get("LEDGER_PORT") or 8090)), Handler).serve_forever()
+    import argparse
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--port", type=int, default=int(os.environ.get("LEDGER_PORT") or 8090))
+    ThreadingHTTPServer(("0.0.0.0", parser.parse_args().port), Handler).serve_forever()

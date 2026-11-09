@@ -15,9 +15,10 @@ Environment it reads, by name:
     ANTHROPIC_API_KEY or OPENAI_API_KEY  one is required; the platform does not supply a model key.
     RETURNS_MODEL      optional. Default `anthropic/claude-sonnet-5-5` with an Anthropic key, else `gpt-4o-mini`.
     OPENAI_BASE_URL    optional. A gateway for OpenAI model calls, read by the openai client.
-    RETURNS_API_URL    required. The returns ledger's base address.
+    RETURNS_API_URL or TOOLS_API_URL
+                       required. The returns ledger's base address (docker-compose.yml runs it as tools-api).
     ORDER_LOOKUP_API_URL, REFUND_API_URL
-                       optional. Each worker's own address for the ledger; RETURNS_API_URL when unset.
+                       optional. Each worker's own address for the ledger; the shared address when unset.
     PORT               optional. Default 8080.
     OTEL_EXPORTER_OTLP_TRACES_ENDPOINT or OTEL_EXPORTER_OTLP_ENDPOINT
                        when present (the platform sets the first with the trace export), each turn's agent, hand-off
@@ -43,7 +44,9 @@ def _ledger(address_env: str) -> Any:
     """A call into the ledger at the address this worker is given, falling back to the shared one."""
 
     def call(path: str, body: dict[str, Any]) -> str:
-        base = (os.environ.get(address_env) or os.environ.get("RETURNS_API_URL") or "").rstrip("/")
+        base = (
+            os.environ.get(address_env) or os.environ.get("RETURNS_API_URL") or os.environ.get("TOOLS_API_URL") or ""
+        ).rstrip("/")
         request = urllib.request.Request(
             base + path, data=json.dumps(body).encode(), method="POST", headers={"Content-Type": "application/json"}
         )

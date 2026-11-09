@@ -4878,6 +4878,10 @@ def _graded(goals, outcome):
 class _WorkerGoal(FakeSubGoal):
     worker: str = ""
 
+    @property
+    def subject(self) -> str:
+        return f"worker:{self.worker}" if self.worker else "task"
+
 
 def test_a_worker_s_check_reads_only_that_worker_s_calls_and_without_any_is_inconclusive() -> None:
     calls = (
@@ -4904,6 +4908,25 @@ def test_a_worker_s_check_reads_only_that_worker_s_calls_and_without_any_is_inco
     assert seen == {"lookup": ["get_order"], "task": ["get_order", "issue_refund", "send_reply"]}
     lookup, task, audit = receipt.sub_goals
     assert (lookup.verdict, task.verdict) == ("pass", "pass")
+    assert (lookup.subject, task.subject, audit.subject) == ("worker:order_lookup", "task", "worker:audit")
     # Absence is never a pass: a worker with nothing in the world's log cannot be graded.
     assert (audit.verdict, audit.held) == ("inconclusive", None)
     assert audit.reason == "Inconclusive: worker audit made no tool call the world recorded"
+
+
+def test_a_worker_s_failed_check_is_reported_beside_the_task_s_verdict_not_folded_into_it() -> None:
+    calls = (hs.Call(name="update_order_status", arguments={}, worker_id="order_lookup"),)
+    outcome = _call_outcome(turns=2, calls=calls)
+    receipt = _graded(
+        [
+            _WorkerGoal("lookup_read_only", lambda w, c: "the lookup worker wrote an order", worker="order_lookup"),
+            _WorkerGoal("audit_logged", lambda w, c: None, worker="audit"),
+            _WorkerGoal("reply_truthful", lambda w, c: None),
+        ],
+        outcome,
+    )
+    worker, audit, task = receipt.sub_goals
+    # Neither a worker's failure nor a worker that left nothing to grade decides the task.
+    assert (worker.verdict, audit.verdict, task.verdict, receipt.status) == ("fail", "inconclusive", "pass", "passed")
+    failed = _graded([_WorkerGoal("reply_truthful", lambda w, c: "claimed a refund")], outcome)
+    assert failed.status == "failed"

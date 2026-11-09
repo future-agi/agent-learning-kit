@@ -237,8 +237,10 @@ async def probe_chat_workflow(
     secret_values,
     redaction_values,
     timeout=300.0,
+    evidence_seam=None,
 ):
-    """Exercise a private conversation and require observed tool execution evidence."""
+    """Exercise a private conversation and require observed tool execution evidence, read from where the bundle's
+    own runs read it (`evidence_seam`), so readiness and a real run agree."""
     from .authoring_runtime_validation import RuntimeValidationError
     from .call_runner import CallRunnerContext
     from .chat_call_runner import HostedChatCallRunner
@@ -280,13 +282,13 @@ async def probe_chat_workflow(
         )
 
     async def retain_interrupted_conversation(exc):
-        from .call_runner import _with_span_calls
+        from .call_runner import collect_seam_calls
         from .outbound import ArtifactKind
 
         transcript = getattr(exc, "partial_transcript", None)
         if transcript is None:
             return
-        transcript.calls[:] = _with_span_calls(transcript.calls, runtime)
+        transcript.calls[:] = collect_seam_calls(runtime, evidence_seam, transcript.calls)
         receipt["tool_call_count"] = len(graded_calls(transcript.calls))
         receipt["turns"] = len(transcript.exchanges)
         await artifacts.upload_artifact(transcript.artifact(), kind=ArtifactKind.TRANSCRIPT)
@@ -304,7 +306,7 @@ async def probe_chat_workflow(
                 job=job,
                 bundle_dir=bundle,
                 work_directory=folder,
-                evidence_seam=None,
+                evidence_seam=evidence_seam,
                 target_provider_secret_values=secret_values,
                 attempt_number=1,
                 source_directory=source,

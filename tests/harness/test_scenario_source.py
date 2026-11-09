@@ -2815,3 +2815,34 @@ def test_a_caller_acting_on_someone_elses_record_is_told_whose_it_is(monkeypatch
     assert scenario_tools.records_of_someone_else(caller("Ravi Patel", {"order_id": "caller says"}), _P("/tmp")) == ""
     # Only identifiers something fixes for the caller say whose record it is.
     assert scenario_tools.records_of_someone_else(caller("Maya Chen", {}), _P("/tmp")) == ""
+
+
+def test_a_catalogued_worker_subject_reaches_the_graded_sub_goal(tmp_path: Path) -> None:
+    _write_scenario(
+        tmp_path / ss.SCENARIOS_DIRNAME,
+        "coded",
+        scenario_key="coded",
+        sub_goals=["coded"],
+        checks={"coded": "def check(world, calls):\n    return None\n"},
+    )
+    scenario = ss.load_scenarios(tmp_path)[0]
+    as_task = ss._with_claims(scenario, {"coded": {"what": "x"}}).sub_goals[0]
+    as_worker = ss._with_claims(scenario, {"coded": {"what": "x", "subject": "worker:refund"}}).sub_goals[0]
+    assert (as_task.subject, as_task.worker) == ("task", "")
+    assert (as_worker.subject, as_worker.worker) == ("worker:refund", "refund")
+
+
+def test_a_worker_subject_in_the_bundle_catalogue_reaches_the_loaded_scenario(tmp_path: Path) -> None:
+    _write_scenario(
+        tmp_path / ss.SCENARIOS_DIRNAME,
+        "coded",
+        scenario_key="coded",
+        sub_goals=["coded"],
+        checks={"coded": "def check(world, calls):\n    return None\n"},
+    )
+    (tmp_path / "sub_goals.json").write_text(
+        json.dumps({"sub_goals": [{"name": "coded", "what": "x", "check": "def check(world, calls):\n    return None\n",
+                                   "subject": "worker:refund"}]}),
+        encoding="utf-8",
+    )
+    assert ss.load_scenarios(tmp_path)[0].sub_goals[0].worker == "refund"

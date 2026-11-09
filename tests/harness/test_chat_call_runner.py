@@ -1605,3 +1605,42 @@ def test_a_chat_trial_s_world_changes_read_the_world_s_table_where_the_proxy_log
     door.log.write({"name": "put", "actor_id": "manager", "outcome": "committed", "ok": True, "at": 11.0})
     record = chat._world_actors_record(door, listing, None, None, meter, {}, since=9.0)
     assert {one["who"]: one["committed"] for one in record["state_changes"]}["manager"] == 1
+
+
+@pytest.mark.parametrize("seam", [None, "tool_trace"])
+def test_a_chat_call_reads_the_world_s_action_log_when_its_bundle_says_evidence_lands_there(
+    tmp_path: Path, monkeypatch: Any, seam: str | None
+) -> None:
+    from dataclasses import replace
+
+    from fi.alk.harness import call_runner
+    from fi.alk.harness.bundle_v2 import EvidenceSeam
+
+    logged = Call(name="issue_refund", arguments={"order_id": "1043"}, worker_id="refund")
+    monkeypatch.setattr(call_runner, "_collect_tool_trace_calls", lambda _runtime: (logged,))
+    monkeypatch.setattr(chat, "_tool_world", lambda *_args: _ToolWorld())
+    monkeypatch.setattr(chat, "_drive_conversation", _single_exchange)
+
+    class Wrapper:
+        def __init__(self, **_kwargs: Any) -> None:
+            pass
+
+        async def call(self, _request: Any) -> AgentResponse:
+            return AgentResponse(content="Refund RF-8 is issued.")
+
+    monkeypatch.setattr(chat, "HTTPAgentWrapper", Wrapper)
+    context = replace(_context(tmp_path), evidence_seam=EvidenceSeam(seam) if seam else None)
+    runtime = EnvironmentRuntime(
+        runtime_id="runtime-1",
+        world_index=0,
+        bundle_digest="sha256:" + "a" * 64,
+        state=RuntimeState.READY,
+        endpoints={"target_http": RuntimeEndpoint(capability="target_http", protocol="http", address="http://x")},
+    )
+    outcome = asyncio.run(
+        chat.HostedChatCallRunner(_Adapter(), context).run(
+            SimpleNamespace(scenario_key="one", scenario_id="scenario-1"), runtime
+        )
+    )
+    # The agent's tools ran against the world's services, so only the world's own log saw them.
+    assert [(call.name, call.worker_id) for call in outcome.calls] == ([("issue_refund", "refund")] if seam else [])
