@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from fi.alk.harness.call_runner import fault_notices
 from fi.alk.harness.run.conversation import Transcript
 from fi.alk.harness.world.runtime import Call
@@ -18,9 +20,6 @@ def _call(name: str) -> Call:
 def test_a_fault_the_door_applied_says_nothing():
     log = [{"name": "apply_discount", "outcome": "faulted"}]
     assert fault_notices([FAULT], log, [_call("apply_discount")]) == []
-
-
-import pytest
 
 
 @pytest.mark.parametrize("mode", ["timeout_before_commit", "timeout_after_commit"])
