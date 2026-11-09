@@ -947,6 +947,9 @@ def _collect_tool_trace_calls(runtime: EnvironmentRuntime) -> tuple[Call, ...]:
         error = _truncate(str(record.get("error") or ""))
         raw_at = record.get("at")
         at = float(raw_at) if isinstance(raw_at, (int, float)) else 0.0
+        # The door says what happened; a row from before it did reads any failure as a refusal.
+        outcome = record.get("outcome")
+        refused = outcome == "refused" if outcome else not ok
         calls.append(
             Call(
                 name=name,
@@ -954,11 +957,11 @@ def _collect_tool_trace_calls(runtime: EnvironmentRuntime) -> tuple[Call, ...]:
                 result=result,
                 ok=ok,
                 error=error,
-                refused=not ok,
+                refused=refused,
                 at=at,
                 # The worker the world saw make it, by the channel it came through.
                 worker_id=str(record.get("worker_id") or ""),
-                refusal_code=str(record.get("refusal_code") or ""),
+                refusal_code=str(record.get("refusal_code") or "") if refused else "",
             )
         )
     return tuple(calls)

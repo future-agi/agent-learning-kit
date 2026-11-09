@@ -107,6 +107,43 @@ def settled(value: Any) -> Any:
         return pool.submit(asyncio.run, value).result()
 
 
+_ARGUMENTS_PARAMETER = {"args", "arguments", "params", "payload", "body", "data", "request", "input", "kwargs_dict"}
+
+
+def call_agent_tool(fn: Any, args: Mapping[str, Any], db: Any, *, state: bool = False) -> Any:
+    """Call one of the agent's own tool functions the way its signature expects.
+
+    Most take the tool's arguments as keywords. A route-style function, as a small tools service writes it, takes a
+    database handle and the arguments as one dict (``def get_deal(db, args)``); calling that with keywords fails every
+    call with a TypeError. A function taking only the arguments dict gets the dict.
+    """
+    import inspect
+
+    arguments = dict(args)
+    if state:
+        return fn(db.state, **arguments)
+    try:
+        signature = inspect.signature(fn)
+    except (TypeError, ValueError):
+        return fn(**arguments)
+    try:
+        signature.bind(**arguments)
+        return fn(**arguments)
+    except TypeError:
+        pass
+    positional = [
+        one
+        for one in signature.parameters.values()
+        if one.kind in (one.POSITIONAL_ONLY, one.POSITIONAL_OR_KEYWORD) and one.name not in ("self", "cls")
+    ]
+    if len(positional) == 2 and positional[1].name in _ARGUMENTS_PARAMETER:
+        # The store's own connection when it has one, which is what such a function was written against.
+        return fn(getattr(getattr(db, "store", None), "connection", db), arguments)
+    if len(positional) == 1 and positional[0].name in _ARGUMENTS_PARAMETER:
+        return fn(arguments)
+    return fn(**arguments)
+
+
 def _is_refusal(raised: BaseException, refusal_signature: str = "") -> bool:
     """Whether an exception is the world saying no, rather than the world falling over.
 
@@ -172,7 +209,8 @@ class Call:
     # Part of the arguments or the result was left out to keep the record bounded.
     input_omitted: bool = False
     output_omitted: bool = False
-    # Why the world refused it, as its action log coded it (`not_permitted`, `deadline_passed`); empty otherwise.
+    # Why a refused call was refused: "world_rule" when the tool ran and said no, otherwise what stopped it first
+    # (`not_permitted`, `deadline_passed`, `unknown_tool`).
     refusal_code: str = ""
 
 
@@ -433,6 +471,7 @@ class GeneratedWorld(EnvironmentAdapter):
                     arguments=args,
                     ok=False,
                     refused=True,
+                    refusal_code="unknown_tool",
                     error=(
                         f"no such tool {name!r}; this agent has "
                         f"{', '.join(sorted(self.handlers)) or 'none'}"
@@ -455,6 +494,7 @@ class GeneratedWorld(EnvironmentAdapter):
                         arguments=args,
                         ok=False,
                         refused=True,
+                        refusal_code="world_rule",
                         error=str(raised),
                     )
                 )
@@ -480,6 +520,7 @@ class GeneratedWorld(EnvironmentAdapter):
                     result=value,
                     ok=False,
                     refused=True,
+                    refusal_code="world_rule",
                     error=str(value)[:400],
                 )
             )

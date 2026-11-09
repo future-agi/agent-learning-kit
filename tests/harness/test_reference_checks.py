@@ -518,3 +518,57 @@ def test_a_prefixed_id_the_world_stores_as_given_leaves_the_check_free_to_want_i
     )
     solution = [Step(tool="book", arguments={"time": "slot:9am"}, fixed={"time": "their record"})]
     assert _proof(root, solution, check).too_strict == []
+
+
+def _claims_world(tmp_path):
+    from fi.alk.harness.world import GeneratedWorld
+    from fi.alk.harness.world.snapshot import save
+
+    class W(GeneratedWorld):
+        name = "claims"
+        tools = [{"name": "check_status"}]
+        handlers = {
+            "check_status": (
+                "def handle(args, db):\n"
+                "    claim = str(args['claim']).replace('-', '').upper()\n"
+                "    db.execute('INSERT INTO lookups (claim) VALUES (?)', [claim])\n"
+                "    return {'status': 'open'}\n"
+            )
+        }
+
+    world = W(":memory:")
+    world.connection.executescript("CREATE TABLE lookups(claim TEXT);")
+    world.connection.commit()
+    save(world, tmp_path, notes="test", sequences=[])
+    return tmp_path
+
+
+def test_a_check_that_compares_a_claim_id_as_text_fails_the_id_typed_without_separators(tmp_path):
+    from fi.alk.harness.scenario import Step
+
+    root = _claims_world(tmp_path)
+
+    def proof_of(compare: str):
+        check = (
+            "def check(world, calls, reference):\n"
+            "    want = [s['arguments'].get('claim') for s in reference if s['tool'] == 'check_status'][-1]\n"
+            "    sent = [c.arguments.get('claim') for c in calls if c.name == 'check_status' and c.ok]\n"
+            f"    return None if sent and {compare} else 'wrong claim: expected ' + repr(want)\n"
+        )
+        solution = [Step(tool="check_status", arguments={"claim": "CLM-88213"}, fixed={"claim": "their claim"})]
+        return _proof(root, solution, check)
+
+    assert proof_of("sent[-1] == want").too_strict == [
+        "right (the same id typed without separators: check_status.claim; compare ids with same_id)"
+    ]
+    assert proof_of("same_id(sent[-1], want)").too_strict == []
+
+
+def test_same_id_ignores_separators_and_case_but_not_the_number():
+    from fi.alk.harness.checks import same_id
+
+    assert same_id("CLM-88213", "CLM88213")
+    assert same_id("clm 88213", "CLM-88213")
+    assert same_id("ord_1043", "ORD-1043")
+    assert not same_id("CLM-88213", "CLM-88214")
+    assert not same_id(None, "CLM-88213")

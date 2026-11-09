@@ -692,6 +692,24 @@ def _bare_ids(scenario: Scenario) -> list[tuple[str, list[Any]]]:
     return out
 
 
+_SEPARATED_ID = re.compile(r"^(?=.*[A-Za-z])(?=.*\d)[A-Za-z0-9]+(?:[-_. ][A-Za-z0-9]+)+$")
+
+
+def _unseparated_ids(scenario: Scenario) -> list[tuple[str, list[Any]]]:
+    """For each fixed id written with separators (`CLM-88213`), the solution with it typed without them (`CLM88213`),
+    as an agent often says it."""
+    steps = list(getattr(scenario, "solution", None) or ())
+    out = []
+    for at, step in enumerate(steps):
+        for name in step.fixed or ():
+            value = step.arguments.get(name)
+            if isinstance(value, str) and not value.startswith("$") and _SEPARATED_ID.match(value):
+                changed = _with_value(step, name, re.sub(r"[-_. ]", "", value))
+                if changed is not None:
+                    out.append((f"{step.tool}.{name}", [*steps[:at], changed, *steps[at + 1 :]]))
+    return out
+
+
 def _with_one_wrong(scenario: Scenario) -> list[tuple[str, list[Any], bool]]:
     """For each fixed value, the solution with only that value changed, and whether a later step
     sets that argument again (a draft the solution itself corrects)."""
@@ -816,6 +834,18 @@ def prove(
                 ]
         finally:
             bare_world.close()
+    for label, steps in _unseparated_ids(scenario) if held else ():
+        typed_world, typed_calls, typed_refused, _ = _run(scenario, world_root, with_solution=True, steps=steps)
+        try:
+            # The world took the id typed without separators and ended where the reference does: the same record.
+            if not typed_refused and right_state is not None and _end_state(typed_world) == right_state:
+                proof.too_strict += [
+                    f"{name} (the same id typed without separators: {label}; compare ids with same_id)"
+                    for name, source in held
+                    if not run_check(source, typed_world, typed_calls, name=name, reference=reference).held
+                ]
+        finally:
+            typed_world.close()
     said, spoken = _said_another_way(scenario)
     if spoken and held:
         said_world, said_calls, said_refused, _ = _run(scenario, world_root, with_solution=True, steps=said)

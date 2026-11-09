@@ -875,8 +875,29 @@ def actor_input_schema() -> dict[str, Any]:
     """The builder chat's `add_actor` input: every field of the record, from the model, except who last set it."""
     body = actor_record_schema()
     body["properties"].pop("provenance", None)
+    body["properties"]["share_actions"] = {
+        "type": "array",
+        "items": {"type": "string"},
+        "description": "Actions you give this actor that only one other actor holds, which the person confirmed "
+        "both should have. Never saved on the actor",
+    }
     body["required"] = ["id", "name"]
     return body
+
+
+def permission_conflicts(listing: "ActorList", actor: "Actor") -> list[tuple[str, "Actor"]]:
+    """Each action newly given to `actor` that exactly one other actor holds today: that one's alone, so a second
+    holder is a conflict to confirm. An action two or more already hold is shared, not reserved."""
+    current = listing.by_id().get(actor.id)
+    had = set(current.permitted_actions) if current is not None else set()
+    conflicts = []
+    for action in actor.permitted_actions:
+        if action in had:
+            continue
+        holders = [one for one in listing.actors if one.id != actor.id and action in one.permitted_actions]
+        if len(holders) == 1:
+            conflicts.append((action, holders[0]))
+    return conflicts
 
 
 def write_actor_rules(bundle: Path) -> None:

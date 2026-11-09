@@ -1795,6 +1795,25 @@ class _RaisingPsycopg:
         raise self.Error("connection refused")
 
 
+def test_tool_trace_keeps_the_door_s_outcome_apart_from_a_failure(monkeypatch) -> None:
+    """A row the door wrote says whether the world refused the call or it broke before running."""
+    columns = ["name", "arguments", "result", "ok", "error", "at", "outcome", "refusal_code"]
+    rows = [
+        ("cancel_order", {}, None, False, "already shipped", 1.0, "refused", "world_rule"),
+        ("refund", {}, None, False, "refund is not permitted", 2.0, "refused", "not_permitted"),
+        ("lookup", {}, None, False, "TypeError: unavailable", 3.0, "faulted", None),
+        ("legacy", {}, None, False, "not found", 4.0, None, None),
+    ]
+    monkeypatch.setitem(sys.modules, "psycopg", _FakePsycopg(rows, columns))
+    calls = cr._collect_tool_trace_calls(_runtime(endpoints={"database": _postgres_endpoint()}))
+    assert [(c.name, c.refused, c.refusal_code) for c in calls] == [
+        ("cancel_order", True, "world_rule"),
+        ("refund", True, "not_permitted"),
+        ("lookup", False, ""),
+        ("legacy", True, ""),
+    ]
+
+
 def test_tool_trace_translates_rows_and_applies_v1_refused_rule(monkeypatch) -> None:
     """world-handle-interface.md V1 rule: `refused = not ok` (a trace cannot distinguish refusal
     from crash)."""

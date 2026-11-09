@@ -34,6 +34,11 @@ def _failure_code(trace):
     return "chat_ingress_failed"
 
 
+def _reached_world(call):
+    """Whether a recorded call ran in the world: it succeeded, or the world's own rule refused it."""
+    return call.ok or (call.refused and getattr(call, "refusal_code", "") == "world_rule")
+
+
 def _usable_tool_call(call):
     function = call.get("function") if isinstance(call.get("function"), dict) else {}
     name = call.get("name") or function.get("name")
@@ -331,6 +336,18 @@ async def probe_chat_workflow(
             )
         if not graded:
             receipt["tool_evidence_status"] = "not_observed"
+        elif not any(_reached_world(call) for call in outcome.calls):
+            if requires_tool_evidence:
+                raise failure(
+                    "chat_tool_evidence_unverified",
+                    "Every tool call stopped before the world ran it: "
+                    + "; ".join(
+                        f"{call.name}: {call.refusal_code or call.error or 'failed'}"[:200]
+                        for call in outcome.calls[:5]
+                    )
+                    + ". Inspect how the agent's tools are bound to the world.",
+                )
+            receipt["tool_evidence_status"] = "never_reached_world"
         receipt["status"] = "passed"
     except RuntimeValidationError:
         raise
