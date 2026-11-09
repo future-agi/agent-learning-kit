@@ -71,6 +71,8 @@ class Transcript:
     call_actors: dict[str, Any] | None = None
     # What actors did in the world and what it changed, as a call's record keeps it.
     world_actors: dict[str, Any] | None = None
+    # Things the person should know about how the trial ran, e.g. a fault the scenario set that did not take effect.
+    notices: list[dict[str, Any]] = field(default_factory=list)
 
     def spoken(self) -> str:
         return "\n".join(f"{turn.speaker}: {turn.text}" for turn in self.exchanges)
@@ -93,6 +95,7 @@ class Transcript:
                     "ended": self.ended,
                     **({"call_actors": self.call_actors} if self.call_actors else {}),
                     **({"world_actors": self.world_actors} if self.world_actors else {}),
+                    **({"notices": self.notices} if self.notices else {}),
                 },
                 sort_keys=True,
             )
