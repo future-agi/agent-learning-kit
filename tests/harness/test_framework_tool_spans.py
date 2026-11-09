@@ -516,7 +516,7 @@ def test_a_span_made_before_the_process_sets_its_provider_leaves_it_free_to_set_
     assert [r["name"] for r in records] == ["startup", "lookup"]
 
 
-@pytest.mark.parametrize("native_worker", ["", "Writer worker"])
+@pytest.mark.parametrize("native_worker", ["", "from span"])
 def test_a_span_line_lends_its_agent_to_another_tracer_s_line_for_the_same_call(
     native_worker: str,
 ) -> None:
@@ -1989,3 +1989,69 @@ other = tracer.start_span("invoke_agent root_agent", context=set_span_in_context
     tide = next(r for r in rows if r["name"] == "look_up_tide")
     assert "delegated_to" not in transfer
     assert tide["parent_span_id"] != transfer["span_id"]
+
+
+def test_spans_count_only_against_the_calls_they_could_be_and_an_unrelated_call_keeps_no_owner() -> None:
+    # Two spans prove two q=a calls by worker A; the other tracer saw one q=a and one unrelated q=b.
+    natives = [
+        Call(name="search", arguments={"q": "a"}, ok=True, result="r", at=1.0),
+        Call(name="search", arguments={"q": "b"}, ok=True, result="s", at=2.0),
+    ]
+    spans = [
+        Call(
+            name="search", arguments={"q": "a"}, ok=True, result="r", worker_id="A", worker_label="A",
+            at=1.0, ended_at=5.0, runtime_ids={"event_id": "s1"},
+        ),
+        Call(
+            name="search", arguments={"q": "a"}, ok=True, result="r", worker_id="A", worker_label="A",
+            at=1.2, ended_at=5.0, runtime_ids={"event_id": "s2"},
+        ),
+    ]
+    merged = call_runner._merge_span_calls(natives, spans)
+    assert sorted((c.arguments["q"], c.worker_id) for c in merged) == [("a", "A"), ("a", "A"), ("b", "")]
+
+
+@pytest.mark.parametrize(
+    "native, span",
+    [
+        # A framework's hashed key on one side, its role name on the other: one worker.
+        (
+            {"worker_id": "5f0b6ebc4e2a3f1c9d8e7a6b5c4d3e2f", "worker_label": "Researcher"},
+            {"worker_id": "Researcher", "worker_label": "Researcher"},
+        ),
+        # The role spelled differently by two tracers.
+        ({"worker_id": "", "worker_label": "Order lookup"}, {"worker_id": "order_lookup", "worker_label": ""}),
+    ],
+    ids=["hashed-key-vs-role", "spelling"],
+)
+def test_one_worker_named_differently_by_two_tracers_is_one_call(native, span) -> None:
+    merged = call_runner._merge_span_calls(
+        [Call(name="lookup", arguments={"q": "a"}, ok=True, result="found", at=10.0, **native)],
+        [
+            Call(
+                name="lookup", arguments={"q": "a"}, ok=True, result="found", at=10.0, ended_at=10.5,
+                runtime_ids={"event_id": "sp1"}, **span,
+            )
+        ],
+    )
+    assert len(merged) == 1
+
+
+def test_a_call_named_by_its_worker_label_never_takes_another_worker_s_place() -> None:
+    merged = call_runner._merge_span_calls(
+        [Call(name="search", arguments={"q": "a"}, ok=True, result="r", worker_label="A", at=1.0)],
+        [
+            Call(
+                name="search", arguments={"q": "a"}, ok=True, result="r", worker_id="B", worker_label="B",
+                at=1.0, runtime_ids={"event_id": "sB"}, parent_span_id="hB", relationship="observed",
+            ),
+            Call(
+                name="ask_b", arguments={}, ok=True, delegated_to="B", at=0.5, ended_at=3.0,
+                runtime_ids={"event_id": "hB"},
+            ),
+        ],
+    )
+    searches = sorted(
+        (c.worker_label, c.runtime_ids.get("event_id"), c.parent_span_id) for c in merged if c.name == "search"
+    )
+    assert searches == [("A", None, ""), ("B", "sB", "hB")]
