@@ -792,6 +792,10 @@ def build_dispatcher(
             entry.trigger.tool = logged_tool_name(contract, entry.trigger.tool)
     listing = load_actors(bundle_dir)
     listed = listing.by_id()
+    for actor in listed.values():
+        own = actor.activation.trigger if actor.activation else None
+        if own is not None and own.kind == "on_tool":
+            own.tool = logged_tool_name(contract, own.tool)
     sessions = [PreRunSession.model_validate(one) for one in doc.get("pre_run") or []]
     in_sessions = {
         one

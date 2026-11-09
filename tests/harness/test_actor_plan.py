@@ -701,6 +701,43 @@ def test_a_voice_actor_with_permitted_actions_reaches_the_engine_able_to_act(tmp
     ).acts
 
 
+def test_a_voice_actor_s_own_on_tool_activation_waits_on_the_call_the_log_records(
+    tmp_path,
+):
+    from fi.alk.harness.actors import save_actors
+    from fi.alk.harness.call_runner import _resolved_call_actors
+
+    manager = Actor(
+        id="manager",
+        name="Mia",
+        channel="audio_handoff",
+        role="manager",
+        persona={"gender": "female"},
+        activation={"trigger": {"kind": "on_tool", "tool": "crm.apply_discount"}},
+    )
+    save_actors(tmp_path, ActorList(actors=[manager]))
+    (tmp_path / "contract.json").write_text(
+        json.dumps(
+            {
+                "tool_entrypoints": [
+                    {"tool": "apply_discount", "endpoint": "/crm/apply_discount"}
+                ]
+            }
+        )
+    )
+    doc = {
+        "instruction": "Move my order.",
+        "persona": {"name": "Asha", "gender": "male"},
+        "actors": [{"id": "manager", "instruction": "Approve if within limits."}],
+    }
+    [voice] = [
+        one
+        for one in _resolved_call_actors(doc, tmp_path, "deepgram", "", "run")
+        if one.get("entered", True)
+    ]
+    assert voice["trigger"]["tool"] == "apply_discount"
+
+
 def test_a_speaking_live_actor_is_decided_by_its_channel_only_never_also_by_the_dispatcher(
     tmp_path,
 ):
@@ -740,6 +777,51 @@ def test_a_speaking_live_actor_is_decided_by_its_channel_only_never_also_by_the_
     )
     asyncio.run(dispatcher.tick())
     assert dispatcher.live == [] and decided == [] and sent == []
+
+
+@pytest.mark.parametrize(
+    ("trigger_tool", "tool", "endpoint", "logged"),
+    [
+        (
+            "crm.apply_discount",
+            "apply_discount",
+            "/crm/apply_discount",
+            "apply_discount",
+        ),
+        ("issue_refund", "issue_refund", "/refunds/create", "create"),
+    ],
+    ids=["action-id", "tool-name"],
+)
+def test_an_actor_s_own_on_tool_activation_comes_in_on_the_call_the_log_records(
+    tmp_path, trigger_tool, tool, endpoint, logged
+):
+    from fi.alk.harness.actor_dispatch import build_dispatcher
+    from fi.alk.harness.actors import save_actors
+
+    decided: list = []
+    reviewer = Actor(
+        id="reviewer",
+        name="Rey",
+        play="live",
+        permitted_actions=["crm.note"],
+        activation={"trigger": {"kind": "on_tool", "tool": trigger_tool}},
+    )
+    save_actors(tmp_path, ActorList(actors=[reviewer]))
+    (tmp_path / "contract.json").write_text(
+        json.dumps({"tool_entrypoints": [{"tool": tool, "endpoint": endpoint}]})
+    )
+    log = [{"actor_id": "agent", "name": logged, "action_id": "a1", "arguments": {}}]
+    dispatcher = build_dispatcher(
+        {"actors": [{"id": "reviewer"}]},
+        tmp_path,
+        act=door_acts(_sent_to([])),
+        read_log=lambda: log,
+        records=None,
+        trial_id="t",
+    )
+    dispatcher.decide = lambda situation, actor: decided.append(actor.id) or "{}"
+    asyncio.run(dispatcher.tick())
+    assert decided == ["reviewer"]
 
 
 def test_one_decider_serves_every_runtime_on_the_actor_s_model_and_meters_each_call(
