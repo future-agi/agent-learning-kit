@@ -314,7 +314,8 @@ class CallActorsOnCall:
             voice = self.voices.get(str(actor["id"]))
             if outcome == "fallback_action" and voice is not None and voice.report_action is not None:
                 # Its own action taken for it, through the run that holds the world's door.
-                voice.report_action({"actor": str(actor["id"]), "action": fallback, "arguments": {},
+                voice.report_action({"actor": str(actor["id"]), "action": fallback,
+                                     "arguments": dict(actor.get("fallback_arguments") or {}),
                                      "why": "timeout fallback", "at": time.time()})
         heard = [*self.conversation(), f"The agent: {text}"]
         took_part = False

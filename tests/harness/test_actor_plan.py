@@ -1564,3 +1564,95 @@ def test_a_turn_still_unfinished_when_the_settle_runs_out_is_recorded_not_lost(t
     assert [(one["play"], one.get("why")) for one in rows] == [
         ("live", "the trial ended before its turn finished")
     ]
+
+
+def test_a_speaking_chat_actor_s_record_fallback_is_taken_with_its_arguments_and_writes_its_record():
+    from fi.alk.harness.actors import acting_fields
+    from fi.alk.harness.run import conversation as conv
+
+    actor = Actor.model_validate({
+        "id": "manager", "name": "Mia", "role": "manager", "channel": "chat_message",
+        "permitted_actions": ["approvals.change"],
+        "activation": {"timeout_seconds": 1, "fallback": "approvals.change",
+                       "fallback_arguments": {"where": {"status": "pending"}, "set": {"status": "declined"}}},
+    })
+    sent: list = []
+
+    async def act(actor_id, action, arguments, **kwargs):
+        sent.append((action, arguments, kwargs.get("form")))
+        return {"status": 200, "outcome": "committed"}
+
+    clock = _Clock()
+    entry = {"id": "manager", "name": "Mia", "trigger": {"kind": "always"}, **acting_fields(actor)}
+    cast = conv.ChatActors([entry], seed="t", model=None, act=act, clock=clock)
+    cast.waits.due(entry)
+    clock.now = 5
+    asyncio.run(cast._fall_back())
+    assert sent == [("approvals.change", {"where": {"status": "pending"}, "set": {"status": "declined"}}, "record")]
+    timeout = next(one for one in cast.events if one["kind"] == "timeout")
+    assert timeout["action_outcome"] == "committed"
+
+
+def _manager_chat(history, sent, briefs):
+    from fi.alk.harness.run import conversation as conv
+
+    async def act(actor_id, action, arguments, **kwargs):
+        sent.append((action, arguments))
+        return {"status": 200, "outcome": "committed"}
+
+    cast = conv.ChatActors(
+        [{"id": "manager", "name": "Mia", "trigger": {"kind": "always"}, "brief": "You are Mia, the manager.",
+          "permitted_actions": ["approvals.change"]}],
+        seed="t", model=None, act=act, history=history,
+    )
+
+    async def write(actor, brief):
+        briefs.append(brief)
+        return ('{"line": "Approved.", "action": "approvals.change", "arguments": '
+                '{"where": {"deal_id": 8}, "set": {"status": "approved"}}, "why": "approve"}')
+
+    cast._write = write
+    return cast
+
+
+def test_a_chat_actor_decides_knowing_its_own_earlier_actions_in_the_trial():
+    # Its scheduled rejection, written before the conversation, is shown to it as its own.
+    rows = [{"actor_id": "manager", "name": "put", "outcome": "committed",
+             "arguments": {"deal_id": 8, "status": "rejected"}}]
+    sent, briefs = [], []
+    cast = _manager_chat(lambda key: rows if key == "manager" else [], sent, briefs)
+    asyncio.run(cast.due_lines(agent_turns=1, last_text="Is it approved?", tools_called=[], conversation=[]))
+    assert '"by": "you"' in briefs[0] and '"rejected"' in briefs[0]
+    assert "do not reverse a decision you already made" in briefs[0]
+
+
+def test_a_chat_actor_never_sends_an_action_it_already_committed_again():
+    rows: list = []
+    sent, briefs = [], []
+
+    def history(key):
+        return rows
+
+    cast = _manager_chat(history, sent, briefs)
+
+    async def turns():
+        for turn in (1, 2, 3):
+            await cast.due_lines(agent_turns=turn, last_text="Still not approved?", tools_called=[], conversation=[])
+            # The door logs what the actor sent.
+            rows[:] = [{"actor_id": "manager", "name": "change", "outcome": "committed", "arguments": arguments}
+                       for _, arguments in sent]
+
+    asyncio.run(turns())
+    assert len(sent) == 1
+    assert [one["kind"] for one in cast.events if one.get("kind") == "repeated"] == ["repeated", "repeated"]
+
+
+def test_the_dispatcher_shows_a_live_actor_its_own_rows_as_its_own():
+    from fi.simulate.simulation.call_actors import decision_brief
+
+    brief = decision_brief({"name": "Mia"}, situation="", said=[], conversation=[], language="",
+                           seen=['{"by": "you", "action": "put"}'], actions={}, speaks=False)
+    assert "your own earlier actions" in brief
+    plain = decision_brief({"name": "Mia"}, situation="", said=[], conversation=[], language="",
+                           seen=['{"by": "agent", "action": "get"}'], actions={}, speaks=False)
+    assert "your own earlier actions" not in plain

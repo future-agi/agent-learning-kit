@@ -82,9 +82,10 @@ def _trial_row(column: str, *, strict: bool = False) -> tuple | None:
 
 
 def _trial_faults() -> list[dict]:
-    """This trial's faults on the agent's calls, written by the runner into the world's database; never from a request
-    or a file the agent's process could reach. Read over one kept connection; a world whose runner set no faults has
-    no row, and an unreadable table is no faults."""
+    """This trial's faults on the agent's calls, written by the runner into the world's database; never from a request.
+    Known limit: an agent whose own tools service holds the world's database URL can read and write that table too.
+    Read over one kept connection; a world whose runner set no faults has no row, and an unreadable table is no
+    faults."""
     row = _trial_row("faults")
     faults = row[0] if row else []
     return [one for one in faults if isinstance(one, dict)] if isinstance(faults, list) else []

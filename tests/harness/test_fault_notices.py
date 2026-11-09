@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from fi.alk.harness.call_runner import fault_notices
 from fi.alk.harness.run.conversation import Transcript
 from fi.alk.harness.world.runtime import Call
@@ -18,6 +20,21 @@ def _call(name: str) -> Call:
 def test_a_fault_the_door_applied_says_nothing():
     log = [{"name": "apply_discount", "outcome": "faulted"}]
     assert fault_notices([FAULT], log, [_call("apply_discount")]) == []
+
+
+@pytest.mark.parametrize("mode", ["timeout_before_commit", "timeout_after_commit"])
+def test_a_fault_the_real_door_applied_says_nothing_in_either_mode(mode):
+    from fi.alk.harness.world_door import DictRoster, Executed, MemoryLog, ToolCall, WorldDoor
+
+    class _Ok:
+        def run(self, call):
+            return Executed(200, {"applied": True})
+
+    fault = {**FAULT, "mode": mode, "delay_seconds": 0}
+    log = MemoryLog()
+    door = WorldDoor(_Ok(), log, DictRoster({}), faults=lambda: [fault])
+    door.enter(ToolCall(action="crm.apply_discount", name="apply_discount", arguments={"pct": 10}))
+    assert fault_notices([fault], log.rows(), [_call("apply_discount")]) == []
 
 
 def test_a_fault_on_a_call_made_outside_the_door_is_said_not_applied():

@@ -1021,13 +1021,46 @@ class _ActionLog:
 _OUTCOMES = ("committed", "refused", "faulted", "duplicate")
 
 
-def trial_state_changes(log: list[dict[str, Any]], listed: Mapping[str, Any]) -> list[dict[str, Any]]:
+def _shown_action(name: str, actor: Any) -> str:
+    """How a person reads an actor's logged action: the door logs it by its last part (`change`, `post_message`), as
+    the proof does, so the actor's one permitted action ending that way (`approvals.change`) names it. More than one,
+    or none, keeps the logged name."""
+    if actor is None or "." in name:
+        return name
+    full = [one for one in getattr(actor, "permitted_actions", None) or () if one.rsplit(".", 1)[-1] == name]
+    return full[0] if len(full) == 1 else name
+
+
+class _ChosenActions:
+    """Each actor's actions in the order it chose them (scheduled or decided), with full names: what names a logged
+    row when the actor's permissions alone can't (`approvals.put` and `channel_members.put` both log as `put`)."""
+
+    def __init__(self, decisions: Sequence[dict[str, Any]]) -> None:
+        self.left: dict[str, list[str]] = {}
+        for one in decisions or ():
+            action = str(one.get("action") or "")
+            if one.get("actor") and "." in action:
+                self.left.setdefault(str(one["actor"]), []).append(action)
+
+    def name(self, who: str, logged: str, actor: Any) -> str:
+        if "." not in logged:
+            queue = self.left.get(who) or []
+            for index, action in enumerate(queue):
+                if action.rsplit(".", 1)[-1] == logged:
+                    return queue.pop(index)
+        return _shown_action(logged, actor)
+
+
+def trial_state_changes(
+    log: list[dict[str, Any]], listed: Mapping[str, Any], decisions: Sequence[dict[str, Any]] = ()
+) -> list[dict[str, Any]]:
     """What each participant attempted in this trial and what the world made of it: one entry for the agent, one per
     actor that acted and one per agent worker the world told apart (`worker:<id>`, by the channel it came through),
     with attempted, committed, refused, faulted and duplicate counts, the actions it committed and the ones the world
     refused with why, in order. Attempted, refused and committed are kept apart; a row from before outcomes were
     recorded counts as committed when it succeeded and refused when the world refused it."""
     entries: dict[str, dict[str, Any]] = {}
+    chosen = _ChosenActions(decisions)
     for row in log:
         if is_pre_run(row.get("idempotency_key")):
             # Written before the run: the trial's starting point, not a change made during it.
@@ -1058,7 +1091,9 @@ def trial_state_changes(log: list[dict[str, Any]], listed: Mapping[str, Any]) ->
         if outcome in _OUTCOMES:
             entry[outcome] += 1
         if outcome == "committed":
-            entry["committed_actions"].append(str(row.get("name") or ""))
+            entry["committed_actions"].append(
+                str(row.get("name") or "") if who == AGENT else chosen.name(who, str(row.get("name") or ""), actor)
+            )
         elif outcome == "refused":
             # An attempted violation stays visible: what was tried and why the world said no.
             entry["refused_actions"].append(
@@ -1117,7 +1152,9 @@ def approvals(log: list[dict[str, Any]], decisions: Sequence[dict[str, Any]] = (
     return out
 
 
-def _state_changes(runtime: EnvironmentRuntime, bundle_dir: Path) -> list[dict[str, Any]]:
+def _state_changes(
+    runtime: EnvironmentRuntime, bundle_dir: Path, decisions: Sequence[dict[str, Any]] = ()
+) -> list[dict[str, Any]]:
     database = _find_postgres_endpoint(runtime)
     if database is None:
         return []
@@ -1126,10 +1163,12 @@ def _state_changes(runtime: EnvironmentRuntime, bundle_dir: Path) -> list[dict[s
     except Exception as exc:  # noqa: BLE001 - no state changes, never a failed call
         logger.debug("state changes unreadable: %s", type(exc).__name__)
         return []
-    return trial_state_changes(log, load_actors(bundle_dir).by_id())
+    return trial_state_changes(log, load_actors(bundle_dir).by_id(), decisions)
 
 
-def _actor_rows(runtime: EnvironmentRuntime, bundle_dir: Path) -> list[dict[str, Any]]:
+def _actor_rows(
+    runtime: EnvironmentRuntime, bundle_dir: Path, decisions: Sequence[dict[str, Any]] = ()
+) -> list[dict[str, Any]]:
     """This trial's actions by actors, named and with their outcome; none for a world without actors."""
     listed = load_actors(bundle_dir).by_id()
     database = _find_postgres_endpoint(runtime)
@@ -1140,19 +1179,23 @@ def _actor_rows(runtime: EnvironmentRuntime, bundle_dir: Path) -> list[dict[str,
     except Exception as exc:  # noqa: BLE001 - no actor evidence, never a failed call
         logger.debug("actor rows unreadable: %s", type(exc).__name__)
         return []
-    return actor_rows(log, listed)
+    return actor_rows(log, listed, decisions)
 
 
-def actor_rows(log: list[dict[str, Any]], listed: Mapping[str, Any]) -> list[dict[str, Any]]:
+def actor_rows(
+    log: list[dict[str, Any]], listed: Mapping[str, Any], decisions: Sequence[dict[str, Any]] = ()
+) -> list[dict[str, Any]]:
     """The actors' rows of an action log, named and with their outcome: the same for every runtime."""
     rows = []
+    chosen = _ChosenActions(decisions)
     for row in log:
-        actor = listed.get(str(row.get("actor_id") or AGENT))
+        who = str(row.get("actor_id") or AGENT)
+        actor = listed.get(who)
         if actor is None:
             continue
         rows.append(
             {
-                "name": row.get("name"),
+                "name": chosen.name(who, str(row.get("name") or ""), actor),
                 "arguments": row.get("arguments") or {},
                 "result": _structured(row.get("result")),
                 "ok": bool(row.get("ok")),
@@ -1256,7 +1299,7 @@ def fault_notices(
                             "message": f"The {mode} fault on call {on_call} of {action} could not be applied: {unreachable}."})
             continue
         rows = [row for row in log or [] if _same_action(action, str(row.get("name") or ""))]
-        if any(row.get("outcome") == "faulted" for row in rows):
+        if any(_fault_applied(row) for row in rows):
             continue
         made = sum(1 for call in calls if _same_action(action, call.name))
         if made >= on_call:
@@ -1268,6 +1311,14 @@ def fault_notices(
                             "message": f"The {mode} fault on call {on_call} of {action} never took effect: the agent "
                                        f"made {made} call{'s' if made != 1 else ''} of it."})
     return notices
+
+
+def _fault_applied(row: Mapping[str, Any]) -> bool:
+    """The door's row for a fault it applied: refused before commit (`faulted`), or committed with the answer lost
+    (`timeout_after_commit` keeps the commit and records `response_lost`)."""
+    return row.get("outcome") == "faulted" or (
+        row.get("outcome") == "committed" and row.get("error") == "response_lost"
+    )
 
 
 def _int_or(value: Any, default: int) -> int:
@@ -1295,12 +1346,16 @@ def _set_trial_faults(
         _write_trial_state(runtime, faults, worker_deadline_at)
         return
     if faults:
-        _write_trial_state(runtime, faults)
+        try:
+            _write_trial_state(runtime, faults)
+        except Exception as exc:  # noqa: BLE001 - the text of a database error can carry the world's password
+            raise RuntimeError(f"trial faults could not be set: {type(exc).__name__}") from None
         return
     try:
         _write_trial_state(runtime, [])
     except Exception as exc:  # noqa: BLE001 - nothing to set; the trial runs as it would without faults
-        logger.warning("trial faults could not be cleared before a trial with none: %s", exc)
+        # Only the type: the text of a database error can carry the world's password.
+        logger.warning("trial faults could not be cleared before a trial with none: %s", type(exc).__name__)
 
 
 def runner_door(tools_url: str, dsn: str, timeout: float) -> Any:
@@ -2653,13 +2708,13 @@ class CallRunnerImpl:
         if not calls and case is not None:
             calls = _collect_provider_tool_calls(case)
         acted = (
-            _actor_rows(runtime, self._context.bundle_dir)
+            _actor_rows(runtime, self._context.bundle_dir, actor_decisions)
             if case is not None
             and self._context.evidence_seam is EvidenceSeam.TOOL_TRACE
             else []
         )
         changes = (
-            _state_changes(runtime, self._context.bundle_dir)
+            _state_changes(runtime, self._context.bundle_dir, actor_decisions)
             if case is not None
             and self._context.evidence_seam is EvidenceSeam.TOOL_TRACE
             else []

@@ -324,7 +324,6 @@ def _world_actors_record(
 
     listed = listing.by_id()
     log = _trial_log(door, since)
-    acted = actor_rows(log, listed)
     decisions = dispatcher.record() if dispatcher is not None else []
     if cast is not None:
         decisions += [
@@ -333,7 +332,8 @@ def _world_actors_record(
             for one in cast.events
             if one.get("kind") == "acted"
         ]
-    changes = trial_state_changes(log, listed)
+    acted = actor_rows(log, listed, decisions)
+    changes = trial_state_changes(log, listed, decisions)
     # A worker the world told apart is kept as an actor is, so its refused attempts are never lost.
     workers_acted = any(str(entry.get("who") or "").startswith("worker:") for entry in changes)
     if not acted and not decisions and not workers_acted:
@@ -818,12 +818,14 @@ class HostedChatCallRunner:
         listing = load_actors(self._context.bundle_dir)
         world_db = runtime.endpoints.get("world_db")
         service = runtime.endpoints.get("tools_api")
-        # Limited workers act through the tool proxy, which writes to the world's table: read it as actors' rows are.
+        # The tool proxy logs the agent's own calls (and the faults it applies) in the world's table, and limited workers
+        # act through it: read that table whenever the trial is proxied or has limited workers, cast or not.
+        proxied = runtime.endpoints.get("tool_proxy") is not None
         limited_workers = (Path(self._context.bundle_dir) / "generated" / "tool-proxy" / "permissions.json").is_file()
         door = chat_door(
             target_world,
             world_db.address
-            if (listing.actors or limited_workers) and world_db is not None and world_db.protocol == "postgres"
+            if (listing.actors or proxied or limited_workers) and world_db is not None and world_db.protocol == "postgres"
             else None,
             {
                 one.id: {"permitted_actions": list(one.permitted_actions), "on_behalf_of": one.on_behalf_of}
@@ -851,6 +853,10 @@ class HostedChatCallRunner:
                 [{**one, **acting_fields(listing.by_id().get(str(one.get("id"))))} for one in chat_actors],
                 seed=trial, model=None, limits=limits, act=acts, records=records, meter=meter,
                 about=action_descriptions(self._contract.model_dump()),
+                # Each actor's own rows in this trial's log (scheduled ones included), so it decides knowing them.
+                history=lambda key, since=time.time(): [
+                    row for row in _trial_log(door, since) if row.get("actor_id") == key
+                ],
             )
             if chat_actors
             else None
@@ -881,7 +887,6 @@ class HostedChatCallRunner:
         acting: asyncio.Task[None] | None = None
         # An agent that runs its own tools reaches them through the tool proxy, which reads this trial's faults from
         # the world's database, as on a voice call.
-        proxied = runtime.endpoints.get("tool_proxy") is not None
         if proxied:
             from .call_runner import _set_trial_faults, worker_deadline
 

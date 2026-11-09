@@ -1089,3 +1089,23 @@ def test_a_line_late_on_its_own_limit_never_ends_the_call_s_call_actor_time():
     assert not cast.out_of_time()
     cast.late(cast.actors[1], cut_by_call_time=second < registry.HANDOFF_LINE_SECONDS)
     assert cast.out_of_time()
+
+
+def test_a_speaking_voice_actor_s_fallback_action_is_reported_with_its_arguments():
+    actor = {**_actor("manager"), "permitted_actions": ["approvals.change"], "fallback": "approvals.change",
+             "fallback_arguments": {"where": {"status": "pending"}, "set": {"status": "declined"}}}
+    voice = _Voice(actor, ["silent"])
+    reported: list = []
+    voice.report_action = reported.append
+
+    async def scenario():
+        call, _said, _played = _on_call([voice])
+        call.cast.fallbacks = lambda: [(actor, "approvals.change", "fallback_action")]
+        call.cast.entering = lambda moment: []
+        await call.agent_turn("Let me check with my manager.")
+        await call.close()
+
+    asyncio.run(scenario())
+    assert [(one["action"], one["arguments"]) for one in reported] == [
+        ("approvals.change", {"where": {"status": "pending"}, "set": {"status": "declined"}})
+    ]

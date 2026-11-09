@@ -347,6 +347,46 @@ def test_a_worker_s_attempts_are_its_own_participant_with_each_refusal_and_why()
     ]
 
 
+def test_an_actor_s_action_is_shown_by_its_full_name_where_its_permissions_name_one():
+    from fi.alk.harness.call_runner import actor_rows, trial_state_changes
+
+    log = [
+        {"actor_id": "manager", "name": "put", "outcome": "committed", "ok": True},
+        {"actor_id": "manager", "name": "change", "outcome": "committed", "ok": True},
+        {"actor_id": "both", "name": "change", "outcome": "committed", "ok": True},
+        {"actor_id": "manager", "name": "post_message", "outcome": "committed", "ok": True},
+    ]
+    listed = {
+        "manager": Actor(id="manager", name="Mia", permitted_actions=["approvals.put", "approvals.change", "chat.post_message"]),
+        # Two collections it may change: the verb alone can't say which, so it is kept as logged.
+        "both": Actor(id="both", name="Bo", permitted_actions=["approvals.change", "deals.change"]),
+    }
+    changes = {c["who"]: c["committed_actions"] for c in trial_state_changes(log, listed)}
+    assert changes["manager"] == ["approvals.put", "approvals.change", "chat.post_message"]
+    assert changes["both"] == ["change"]
+    assert [row["name"] for row in actor_rows(log, listed)] == ["approvals.put", "approvals.change", "change", "chat.post_message"]
+
+
+def test_an_actor_s_ambiguous_action_takes_its_full_name_from_what_it_chose():
+    from fi.alk.harness.call_runner import actor_rows, trial_state_changes
+
+    log = [
+        {"actor_id": "manager", "name": "put", "outcome": "committed", "ok": True},
+        {"actor_id": "manager", "name": "put", "outcome": "committed", "ok": True},
+    ]
+    # Both collections log their puts as `put`: only the actor's own choices say which was which.
+    listed = {"manager": Actor(id="manager", name="Mia", permitted_actions=["approvals.put", "channel_members.put"])}
+    decisions = [
+        {"actor": "manager", "play": "mocked", "action": "approvals.put", "outcome": "committed"},
+        {"actor": "manager", "play": "live", "action": "channel_members.put", "outcome": "committed"},
+    ]
+    changes = {c["who"]: c["committed_actions"] for c in trial_state_changes(log, listed, decisions)}
+    assert changes["manager"] == ["approvals.put", "channel_members.put"]
+    assert [row["name"] for row in actor_rows(log, listed, decisions)] == ["approvals.put", "channel_members.put"]
+    # Without its choices the verb alone can't say which, so it is kept.
+    assert {c["who"]: c["committed_actions"] for c in trial_state_changes(log, listed)}["manager"] == ["put", "put"]
+
+
 def _history_dispatcher(history, actors):
     from fi.alk.harness.actor_dispatch import ActorDispatcher
 

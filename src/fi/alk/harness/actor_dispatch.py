@@ -405,7 +405,7 @@ class ActorDispatcher:
         seen = [
             json.dumps(
                 {
-                    "by": r.get("actor_id") or AGENT,
+                    "by": "you" if r.get("actor_id") == actor.id else (r.get("actor_id") or AGENT),
                     "action": r.get("name"),
                     "arguments": r.get("arguments"),
                     "outcome": r.get("outcome"),

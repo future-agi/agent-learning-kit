@@ -634,3 +634,26 @@ def test_a_fixed_value_that_is_not_an_identifier_is_never_replayed_without_separ
     ]})()
     labels = [label for label, _ in _unseparated_ids(scenario)]
     assert labels == ["note.claim"]
+
+
+def test_the_spoken_date_replay_runs_only_for_a_language_it_can_write():
+    from types import SimpleNamespace
+
+    from fi.alk.harness.prove import _said_another_way
+
+    class _Step(SimpleNamespace):
+        def model_copy(self, update):
+            return _Step(**{**vars(self), **update})
+
+    step = _Step(tool="book", arguments={"date": "1984-06-25"}, fixed=["date"], environment_arguments=None)
+
+    def scenario(languages):
+        return SimpleNamespace(solution=[step], persona={"languages": languages})
+
+    # A language whose spoken form the proof does not write: nothing is said another way, so nothing is called
+    # too strict on the strength of an English month name.
+    assert _said_another_way(scenario(["Hindi"])) == ([step], set())
+    _, changed = _said_another_way(scenario(["English"]))
+    assert changed == {"book.date"}
+    _, changed = _said_another_way(scenario([]))
+    assert changed == {"book.date"}

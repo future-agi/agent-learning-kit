@@ -84,7 +84,8 @@ _ID_NOISE = re.compile(r"[\s\-_.:/#]")
 def same_id(first: Any, second: Any) -> bool:
     """Whether two identifiers name the same record however they were typed or spoken.
 
-    An agent says "CLM88213" for "CLM-88213", or "clm 88213"; a check comparing them as text fails a correct answer.
+    An agent says "<PREFIX><digits>" for "<PREFIX>-<digits>", or spells it with spaces or another case; a check
+    comparing them as text fails a correct answer.
     Only separators and case are ignored, so a different number is still different.
     """
     if first is None or second is None:

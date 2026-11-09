@@ -476,7 +476,7 @@ TOO STRICT  requires transfer_to_human AND zero bookings in the world
 One check too loose passes everything and one too strict fails correct behaviour, and each looks
 reasonable on its own. That is why you read the check, not the name.
 
-**Identifiers are compared with `same_id(a, b)`, never as text.** An agent says `CLM88213` for `CLM-88213`, or
+**Identifiers are compared with `same_id(a, b)`, never as text.** An agent says `<PREFIX><digits>` for `<PREFIX>-<digits>`, or
 spells it with spaces; `same_id` ignores separators and case and nothing else, so a different number still fails.
 The proof replays each fixed id typed without its separators and refuses a check that fails it as too strict.
 

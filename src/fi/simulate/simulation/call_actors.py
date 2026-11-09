@@ -378,6 +378,11 @@ def decision_brief(
         + ("\n".join(f"- {name}: {about}".rstrip(": ") for name, about in allowed.items()) or "- none")
     )
     parts.append("What you can see happened in the world, oldest first:\n" + ("\n".join(seen or []) or "nothing yet"))
+    if any('"by": "you"' in one for one in seen or []):
+        parts.append(
+            'Rows marked "by": "you" are your own earlier actions. A committed action is done: do not send it again, '
+            "and do not reverse a decision you already made unless the conversation gives you a new reason."
+        )
     if not speaks:
         parts.append("You do not speak on this conversation; leave `line` null.")
     parts.append(DECISION_ASK)
