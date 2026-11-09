@@ -1,0 +1,88 @@
+{
+  "name": "draft_demo_reply_follows_customer_correction_t17",
+  "scenario_key": "draft-demo-reply-follows-customer-correction-t17",
+  "scenario_id": "",
+  "use_case": "Draft grounded customer replies using thread history and authorized policy",
+  "branch": "Kevin first asked for Tuesday, the company offered Tuesday 14:00 or Thursday 11:00, and Kevin's later message chose Thursday 11:00 for 17 people; the confirmation draft must follow the later message.",
+  "tests": "passes when the demo confirmation drafted on T-17 confirms Thursday 11:00 from Kevin's latest message and not the Tuesday he first mentioned.",
+  "instruction": "Ask the assistant to read thread T-17 and prepare a draft confirming Kevin's product demo for whatever slot he settled on in the thread. You have not read the thread yourself; if asked which day, say the assistant should take it from Kevin's latest email.\n\nYour details:\nThread: T-17\nRecipient: kevin@lead.com",
+  "keywords": [
+    "draft_reply",
+    "correction"
+  ],
+  "persona": {
+    "name": "Priya Raman",
+    "gender": "female",
+    "age_group": "25-32",
+    "occupation": "Sales Operations",
+    "location": "United Kingdom",
+    "personality": "Professional and formal",
+    "communication_style": "Collaborative",
+    "initial_message": "Please read thread T-17 and draft Kevin a confirmation for the demo slot he settled on.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "origin": "seed",
+    "thread_id": "T-17",
+    "recipient": "kevin@lead.com",
+    "latest_message": "M-29",
+    "superseded_choice": "Tuesday",
+    "final_choice": "Thursday 11:00"
+  },
+  "solution": [
+    {
+      "tool": "get_thread",
+      "arguments": {
+        "threadId": "T-17"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "threadId": "caller: Thread: T-17"
+      }
+    },
+    {
+      "tool": "create_draft",
+      "arguments": {
+        "replyToMessageId": "M-29",
+        "to": [
+          "kevin@lead.com"
+        ],
+        "subject": "Re: Product Demo Request",
+        "body": "Hi Kevin, confirmed: your product demo is booked for Thursday at 11:00 for your team of 17. We look forward to it."
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "replyToMessageId": "record: M-29 is the latest message on T-17",
+        "to": "caller: Recipient: kevin@lead.com"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "overlay_vector": "none",
+    "disposition": "corrected_request",
+    "task": "draft_grounded_reply",
+    "overlay": "none",
+    "overlay_intensity": "absent",
+    "interface": "clean_text",
+    "counterparty": "internal_user",
+    "interaction": "correction"
+  },
+  "sub_goals": [
+    "draft_created_for_thread",
+    "draft_follows_latest_correction"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

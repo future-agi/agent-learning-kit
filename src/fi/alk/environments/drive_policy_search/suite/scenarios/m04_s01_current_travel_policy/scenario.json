@@ -34,7 +34,7 @@
     {
       "tool": "search_files",
       "arguments": {
-        "query": "travel"
+        "query": "fullText contains 'travel'"
       },
       "environment_arguments": {},
       "fixed": {}
@@ -42,11 +42,11 @@
     {
       "tool": "read_file_content",
       "arguments": {
-        "file_id": "file_travel_v2_active"
+        "fileId": "file_travel_v2_active"
       },
       "environment_arguments": {},
       "fixed": {
-        "file_id": "record: files.file_id for active travel policy"
+        "fileId": "record: drive_files.file_id for active travel policy"
       }
     }
   ],

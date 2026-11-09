@@ -36,10 +36,11 @@
   },
   "solution": [
     {
-      "tool": "slack_get_channel_info",
+      "tool": "slack_search_channels",
       "arguments": {
-        "actor_id": "U01",
-        "channel_id": "C01"
+        "keywords": [
+          "proj-launch"
+        ]
       },
       "environment_arguments": {},
       "fixed": {}

@@ -35,12 +35,9 @@
   },
   "solution": [
     {
-      "tool": "slack_search_messages",
+      "tool": "slack_read_channel",
       "arguments": {
-        "actor_id": "U05",
-        "channel_id": "C01",
-        "cursor": "0",
-        "limit": 10
+        "channel_id": "C01"
       },
       "environment_arguments": {},
       "fixed": {
@@ -48,18 +45,14 @@
       }
     },
     {
-      "tool": "slack_get_thread",
+      "tool": "slack_read_thread",
       "arguments": {
         "channel_id": "C01",
-        "actor_id": "U05",
-        "thread_ts": "1729850000.000100",
-        "limit": 10,
-        "cursor": "0"
+        "message_ts": "1729850000.000100"
       },
       "environment_arguments": {},
       "fixed": {
-        "channel_id": "caller: C01",
-        "actor_id": "record: users.user_id for Eli QA"
+        "channel_id": "caller: C01"
       }
     }
   ],

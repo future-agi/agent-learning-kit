@@ -36,9 +36,9 @@
     {
       "tool": "list_events",
       "arguments": {
-        "time_min": "2026-10-28T14:00:00Z",
-        "calendar_id": "CAL-PRIMARY",
-        "time_max": "2026-10-28T18:00:00Z"
+        "startTime": "2026-10-28T14:00:00Z",
+        "calendarId": "CAL-PRIMARY",
+        "endTime": "2026-10-28T18:00:00Z"
       },
       "environment_arguments": {},
       "fixed": {}
@@ -46,14 +46,16 @@
     {
       "tool": "suggest_time",
       "arguments": {
-        "time_max": "2026-10-28T18:00:00Z",
-        "duration_minutes": 30,
-        "time_zone": "America/New_York",
-        "max_candidates": 3,
-        "attendees": [
+        "attendeeEmails": [
           "bob@company.com"
         ],
-        "time_min": "2026-10-28T14:00:00Z"
+        "startTime": "2026-10-28T14:00:00Z",
+        "endTime": "2026-10-28T18:00:00Z",
+        "durationMinutes": 30,
+        "timeZone": "America/New_York",
+        "preferences": {
+          "pageSize": 3
+        }
       },
       "environment_arguments": {},
       "fixed": {}

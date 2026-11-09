@@ -1,0 +1,57 @@
+{
+  "server": "Slack MCP server (official, hosted)",
+  "endpoint": "https://mcp.slack.com/mcp",
+  "transport": "streamable_http",
+  "recorded": "2026-11-04",
+  "sources": [
+    "https://docs.slack.dev/ai/slack-mcp-server/",
+    "https://docs.slack.dev/changelog/2026/05/13/new-mcp-tools/",
+    "tools/list of mcp.slack.com as served to a connected client on 2026-11-04 (the docs name the tools by display name only; the identifiers and input schemas below are the server's own)"
+  ],
+  "notes": [
+    "Slack publishes no result schemas for these tools; the result shapes below are this world's and are pinned here.",
+    "The acting user is the OAuth user on the official server. This world holds it in the current_actor table, set by a scenario's setup; no tool takes an actor argument.",
+    "Search takes Slack search modifiers in `filters` (in:<#C01>, from:<@U01>, after:, before:); this world answers those four and refuses others.",
+    "Posting is approval-gated and idempotent by policy (workbook C06, C07): slack_send_message takes approval_id and request_key beyond the official arguments."
+  ],
+  "tools": {
+    "slack_search_channels": {
+      "input": {"properties": {"keywords": {"type": "array", "items": {"type": "string"}}, "natural_language_query": {"type": "string"}, "channel_types": {"type": "string"}, "cursor": {"type": "string"}, "include_archived": {"type": "boolean"}, "limit": {"type": "integer", "maximum": 20}, "response_format": {"type": "string", "enum": ["detailed", "concise"]}}, "required": []},
+      "output": {"properties": {"channels": "object[] (channel_id, name, topic, is_private, is_member, member_count, is_archived)", "next_cursor": "string"}, "required": ["channels"]},
+      "scopes": ["search:read.public", "search:read.private"]
+    },
+    "slack_read_channel": {
+      "input": {"properties": {"channel_id": {"type": "string"}, "cursor": {"type": "string"}, "latest": {"type": "string"}, "limit": {"type": "integer", "minimum": 1, "maximum": 100, "default": 100}, "oldest": {"type": "string"}, "response_format": {"type": "string"}}, "required": ["channel_id"]},
+      "output": {"properties": {"channel_id": "string", "messages": "object[] (message_id, user_id, text, ts, thread_ts, permalink)", "has_more": "boolean", "next_cursor": "string"}, "required": ["channel_id", "messages", "has_more"]},
+      "scopes": ["channels:history", "groups:history", "mpim:history", "im:history"]
+    },
+    "slack_read_thread": {
+      "input": {"properties": {"channel_id": {"type": "string"}, "message_ts": {"type": "string"}, "cursor": {"type": "string"}, "latest": {"type": "string"}, "limit": {"type": "integer", "minimum": 1, "maximum": 1000, "default": 100}, "oldest": {"type": "string"}, "response_format": {"type": "string"}}, "required": ["channel_id", "message_ts"]},
+      "output": {"properties": {"channel_id": "string", "message_ts": "string", "messages": "object[]", "has_more": "boolean", "next_cursor": "string"}, "required": ["channel_id", "message_ts", "messages", "has_more"]},
+      "scopes": ["channels:history", "groups:history", "mpim:history", "im:history"]
+    },
+    "slack_search_public_and_private": {
+      "input": {"properties": {"keywords": {"type": "array", "items": {"type": "string"}}, "filters": {"type": "string"}, "natural_language_query": {"type": "string"}, "after": {"type": "string"}, "before": {"type": "string"}, "channel_types": {"type": "string"}, "content_types": {"type": "string"}, "context_channel_id": {"type": "string"}, "cursor": {"type": "string"}, "include_bots": {"type": "boolean"}, "include_context": {"type": "boolean"}, "limit": {"type": "integer", "maximum": 20, "default": 20}, "max_context_length": {"type": "integer"}, "only_my_channels": {"type": "boolean"}, "response_format": {"type": "string", "enum": ["detailed", "concise"]}, "sort": {"type": "string", "enum": ["score", "timestamp"]}, "sort_dir": {"type": "string", "enum": ["asc", "desc"]}}, "required": []},
+      "output": {"properties": {"messages": "object[] (message_id, channel_id, user_id, text, ts, thread_ts, permalink)", "has_more": "boolean", "next_cursor": "string"}, "required": ["messages", "has_more"]},
+      "scopes": ["search:read.public", "search:read.private", "search:read.mpim", "search:read.im"]
+    },
+    "slack_send_message": {
+      "input": {"properties": {"channel_id": {"type": "string"}, "message": {"type": "string"}, "thread_ts": {"type": "string"}, "reply_broadcast": {"type": "boolean"}, "unfurl_app_links": {"type": "boolean"}, "draft_id": {"type": "string"}}, "required": ["channel_id", "message"]},
+      "output": {"properties": {"channel_id": "string", "ts": "string", "message_id": "string", "permalink": "string", "status": "string", "request_key": "string", "thread_ts": "string"}, "required": ["channel_id", "ts", "message_id", "permalink", "status"]},
+      "scopes": ["chat:write"]
+    }
+  },
+  "not_attached": {
+    "slack_search_public": "slack_search_public_and_private covers it; private channels are filtered by membership",
+    "slack_list_channel_members": "the M01 cases resolve channels, not members",
+    "slack_schedule_message, slack_send_message_draft, canvases, lists, reactions, files, emoji, users": "outside M01"
+  },
+  "local": {
+    "tools": {
+      "slack_check_message_status": "M01-S05 reconciles a send that timed out after committing (workbook C07 read-back); the official server has no ledger, an agent reads the channel back instead, which the check also accepts"
+    },
+    "parameters": {
+      "slack_send_message": {"approval_id": "approval event bound to actor, destination and content (C06)", "request_key": "idempotency key (C07)"}
+    }
+  }
+}

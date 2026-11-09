@@ -7,23 +7,23 @@ def check(world, calls, reference=None):
     wanted_labels = None
     if reference:
         for step in reference:
-            if step.get("tool") == "label_thread" and "thread_id" in step.get("arguments", {}):
-                wanted_thread = step["arguments"]["thread_id"]
-                if "add_label_ids" in step.get("arguments", {}):
-                    wanted_labels = step["arguments"]["add_label_ids"]
+            if step.get("tool") == "label_thread" and "threadId" in step.get("arguments", {}):
+                wanted_thread = step["arguments"]["threadId"]
+                if "labelIds" in step.get("arguments", {}):
+                    wanted_labels = step["arguments"]["labelIds"]
                     
-    tl = world.state().get("thread_labels", [])
+    tl = world.state().get("gmail_thread_labels", [])
     
     for c in made_calls:
-        t_id = c.arguments.get("thread_id")
+        t_id = c.arguments.get("threadId")
         if wanted_thread and t_id != wanted_thread:
             return f"done wrong: label_thread called for thread {t_id!r}, expected {wanted_thread!r}"
             
-        added = c.arguments.get("add_label_ids") or []
+        added = c.arguments.get("labelIds") or []
         if isinstance(added, str):
             added = [added]
         if not added:
-            return "not done: label_thread called without add_label_ids"
+            return "not done: label_thread called without labelIds"
             
         if wanted_labels:
             w_list = [wanted_labels] if isinstance(wanted_labels, str) else wanted_labels

@@ -1,0 +1,2 @@
+def setup(world):
+    world.put("gmail_drafts", {"id": "D-0901", "thread_id": "th_c03_draft_needed", "recipient": "charlie.j@example.com", "cc": "", "bcc": "", "subject": "Re: Question about Best Buy charge", "body": "Hi Charlie, the Best Buy charge of $85.00 (TX05) has posted and carries no fee. Regards, Sam", "is_human_edited": 1, "created_at": "2026-10-19T09:00:00Z", "updated_at": "2026-10-19T09:30:00Z"})

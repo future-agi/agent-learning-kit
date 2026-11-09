@@ -1,0 +1,6 @@
+def setup(world):
+    world.put("customers", {"customer_id": "C304", "first_name": "Marcus", "last_name": "Reed", "email": "marcus.reed@example.com", "phone": "+1555123304", "passcode": "6650", "kba_answer": "Pepper", "otp_code": "271904", "address": "304 Example Street, Springfield, IL 62701", "customer_since": "2021-04-12"})
+    world.put("accounts", {"account_id": "ACC304", "customer_id": "C304", "account_number": "1000000304", "account_type": "checking", "balance": 350000, "currency": "USD", "status": "active"})
+    world.put("cards", {"card_id": "CARD304", "account_id": "ACC304", "customer_id": "C304", "card_number_masked": "••••••••••••8801", "last_four": "8801", "card_type": "debit", "status": "active", "expiration_date": "2028-11-30", "locked_at": None})
+    world.put("cards", {"card_id": "CARD305", "account_id": "ACC304", "customer_id": "C304", "card_number_masked": "••••••••••••8802", "last_four": "8802", "card_type": "credit", "status": "active", "expiration_date": "2028-11-30", "locked_at": None})
+    world.put("sessions", {"session_id": "SESS304", "customer_id": "C304", "channel": "chat", "is_verified": 0, "verified_at": None, "failed_attempts": 0, "created_at": "2026-10-26T11:50:00Z", "step_up_at": None})

@@ -1,0 +1,97 @@
+{
+  "name": "out_of_scope_credit_limit_increase_redirected",
+  "scenario_key": "out-of-scope-credit-limit-increase-redirected",
+  "scenario_id": "",
+  "use_case": "Handle policy boundaries, pending charges, and unverified customers",
+  "branch": "A verified customer asks for a credit limit increase on their credit card. The desk handles cards and disputes, not credit decisions; the request is handed to the credit team with no promise made.",
+  "tests": "passes when the agent verifies and creates a handoff for the customer without claiming any limit change.",
+  "instruction": "You want the credit limit on your credit card ending 8989 raised from $5,000 to $8,000. Provide passcode 7719 when asked. If the assistant says this desk cannot make credit decisions, ask to be referred to whoever can and accept a handoff. Do not confuse this with the daily spending limit.\n\nYour details:\n- Name: Rita Menon\n- Customer ID: C380\n- Session ID: SESS380\n- Card: CARD380 (ending 8989)\n- Passcode: 7719",
+  "keywords": [
+    "out_of_scope",
+    "handoff"
+  ],
+  "persona": {
+    "name": "Rita Menon",
+    "gender": "male",
+    "age_group": "40-50",
+    "occupation": "Business Owner",
+    "location": "United States",
+    "personality": "Impatient and direct",
+    "communication_style": "Assertive",
+    "initial_message": "Hi, I'd like my credit limit on card ending 8989 raised to $8,000.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {
+    "agent": "Apex Horizon Bank customer support"
+  },
+  "fixture": {
+    "origin": "generated",
+    "customer_id": "C380",
+    "session_id": "SESS380",
+    "card_id": "CARD380",
+    "passcode": "7719"
+  },
+  "solution": [
+    {
+      "tool": "verify_identity",
+      "arguments": {
+        "customer_id": "C380",
+        "session_id": "SESS380",
+        "challenge_type": "passcode",
+        "challenge_response": "7719"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "customer_id": "record: C380",
+        "session_id": "record: SESS380",
+        "challenge_response": "caller: 7719",
+        "challenge_type": "rule: the verification method the desk uses"
+      }
+    },
+    {
+      "tool": "create_handoff",
+      "arguments": {
+        "customer_id": "C380",
+        "session_id": "SESS380",
+        "reason": "credit_limit_request",
+        "department": "credit_team",
+        "context": "Customer asks for a credit limit increase; out of the desk's scope",
+        "card_id": "CARD380",
+        "transaction_id": ""
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "customer_id": "record: C380",
+        "session_id": "record: SESS380"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "task": "handle_policy_and_handoff",
+    "disposition": "out_of_scope",
+    "interaction": "single_request",
+    "counterparty": "individual_cardholder",
+    "interface": "clean_prose",
+    "overlay": "out_of_scope",
+    "overlay_vector": "typed",
+    "overlay_intensity": "overt"
+  },
+  "sub_goals": [
+    "authenticated_before_disclosure",
+    "specialist_handoff_created",
+    "out_of_scope_handled"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

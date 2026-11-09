@@ -1,12 +1,12 @@
 def setup(world):
-    world.put("attendees", {
+    world.put("calendar_attendees", {
         "email": "marcus@company.com",
         "display_name": "Marcus Brody",
         "time_zone": "America/New_York",
         "working_hours_start": "09:00:00",
         "working_hours_end": "17:00:00"
     })
-    world.put("approvals", {
+    world.put("calendar_approvals", {
         "approval_id": "APP-1002",
         "actor_id": "marcus@company.com",
         "operation": "create_event",

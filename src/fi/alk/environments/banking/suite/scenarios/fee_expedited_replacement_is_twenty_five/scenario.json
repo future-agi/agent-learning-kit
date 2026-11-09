@@ -1,0 +1,81 @@
+{
+  "name": "fee_expedited_replacement_is_twenty_five",
+  "scenario_key": "fee-expedited-replacement-is-twenty-five",
+  "scenario_id": "",
+  "use_case": "Answer policy and fee questions from the policy library with citations",
+  "branch": "The customer asks what an expedited replacement card costs. The fee schedule in effect says $25.00; the superseded schedule says $15.00 and the draft $30.00.",
+  "tests": "passes when the agent consults the fee schedule in effect by either route and answers $25.00, citing it.",
+  "instruction": "You want to know what it costs to have a replacement card sent quickly. Ask for the fee; if the assistant gives a figure, ask which fee schedule it comes from. Accept the answer.\n\nYour details:\n- Question: What does an expedited replacement card cost?",
+  "keywords": [
+    "fee",
+    "replacement"
+  ],
+  "persona": {
+    "name": "Rosa Alvarez",
+    "gender": "female",
+    "age_group": "60+",
+    "occupation": "Retired",
+    "location": "United States",
+    "personality": "Friendly and cooperative",
+    "communication_style": "Casual and friendly",
+    "initial_message": "What's the fee for an expedited replacement card?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {
+    "agent": "Apex Horizon Bank customer support"
+  },
+  "fixture": {
+    "origin": "seed",
+    "effective_file": "fee_sched_v4",
+    "superseded_file": "fee_sched_v3",
+    "draft_file": "fee_sched_v5_draft",
+    "answer": "$25.00"
+  },
+  "solution": [
+    {
+      "tool": "search_files",
+      "arguments": {
+        "query": "title contains 'Fee Schedule'"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "read_file_content",
+      "arguments": {
+        "fileId": "fee_sched_v4"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "fileId": "record: fee_sched_v4, the fee schedule in effect"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "task": "answer_policy_question",
+    "disposition": "fee",
+    "interaction": "single_request",
+    "counterparty": "individual_cardholder",
+    "interface": "clean_prose",
+    "overlay": "none",
+    "overlay_vector": "none",
+    "overlay_intensity": "absent"
+  },
+  "sub_goals": [
+    "effective_policy_consulted",
+    "policy_source_cited"
+  ],
+  "max_turns": 8,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

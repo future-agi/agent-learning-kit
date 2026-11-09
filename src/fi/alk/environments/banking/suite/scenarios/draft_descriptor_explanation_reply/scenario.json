@@ -1,0 +1,99 @@
+{
+  "name": "draft_descriptor_explanation_reply",
+  "scenario_key": "draft-descriptor-explanation-reply",
+  "scenario_id": "",
+  "use_case": "Draft a reply on a customer's email thread for a person to review",
+  "branch": "Laura asked by email what 'BOSE STR 2214 FRAMINGHAM MA' is. The descriptor is looked up (Bose Store, Framingham) and the draft explains it on her thread.",
+  "tests": "passes when the descriptor is looked up and a draft explaining it is created on th_c12_descriptor to laura.m@example.com.",
+  "instruction": "You are a support colleague. Ask the assistant to read Laura Martinez's email asking what the 'BOSE STR 2214 FRAMINGHAM MA' charge is, find out what merchant that is, and draft a reply explaining it for you to review.\n\nYour details:\n- Thread: th_c12_descriptor\n- Recipient: laura.m@example.com",
+  "keywords": [
+    "draft_reply",
+    "descriptor"
+  ],
+  "persona": {
+    "name": "Marco Ruiz",
+    "gender": "male",
+    "age_group": "32-40",
+    "occupation": "Customer Service",
+    "location": "United States",
+    "personality": "Confident",
+    "communication_style": "Direct and concise",
+    "initial_message": "Please look at Laura Martinez's email about a 'BOSE STR 2214' charge, work out the merchant and draft her a reply.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {
+    "agent": "Apex Horizon Bank customer support"
+  },
+  "fixture": {
+    "origin": "seed",
+    "thread_id": "th_c12_descriptor",
+    "recipient": "laura.m@example.com",
+    "descriptor": "BOSE STR 2214 FRAMINGHAM MA",
+    "transaction_id": "TX77"
+  },
+  "solution": [
+    {
+      "tool": "get_thread",
+      "arguments": {
+        "threadId": "th_c12_descriptor"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "threadId": "record: th_c12_descriptor, Laura's question"
+      }
+    },
+    {
+      "tool": "lookup_merchant_descriptor",
+      "arguments": {
+        "descriptor": "BOSE STR 2214 FRAMINGHAM MA"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "descriptor": "caller: BOSE STR 2214 FRAMINGHAM MA"
+      }
+    },
+    {
+      "tool": "create_draft",
+      "arguments": {
+        "replyToMessageId": "msg_030",
+        "to": [
+          "laura.m@example.com"
+        ],
+        "subject": "Re: What is BOSE STR 2214 - card ending in 3434",
+        "body": "Dear Laura Martinez, 'BOSE STR 2214 FRAMINGHAM MA' is the Bose Store in Framingham, Massachusetts (an electronics store); the $178.00 charge on October 4 (TX77) is from that shop. If you still do not recognise it, reply and we can open a dispute for you."
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "replyToMessageId": "record: msg_030, a message of the customer's thread",
+        "to": "record: laura.m@example.com, the customer's address"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "task": "draft_email_reply",
+    "disposition": "descriptor",
+    "interaction": "single_request",
+    "counterparty": "authorized_representative",
+    "interface": "clean_prose",
+    "overlay": "none",
+    "overlay_vector": "none",
+    "overlay_intensity": "absent"
+  },
+  "sub_goals": [
+    "draft_created_for_review",
+    "merchant_explained_before_dispute"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

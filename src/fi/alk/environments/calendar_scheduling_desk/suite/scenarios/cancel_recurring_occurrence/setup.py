@@ -1,5 +1,5 @@
 def setup(world):
-    world.put("events", {
+    world.put("calendar_events", {
         "event_id": "EVT-01",
         "calendar_id": "CAL-PRIMARY",
         "summary": "Weekly Project Standup",

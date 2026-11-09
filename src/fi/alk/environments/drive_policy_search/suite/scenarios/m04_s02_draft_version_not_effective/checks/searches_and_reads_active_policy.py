@@ -4,7 +4,7 @@ def check(world, calls, reference):
     expected_files = []
     for step in reference:
         if step.get("tool") in ("read_file_content", "get_file_metadata"):
-            fid = step.get("arguments", {}).get("file_id")
+            fid = step.get("arguments", {}).get("fileId")
             if fid:
                 expected_files.append(fid)
     if not expected_files:
@@ -13,7 +13,7 @@ def check(world, calls, reference):
         c for c in calls
         if c.name in ("read_file_content", "get_file_metadata")
         and c.ok
-        and c.arguments.get("file_id") in expected_files
+        and c.arguments.get("fileId") in expected_files
     ]
     if not matching_calls:
         return f"not done: expected read of one of {expected_files!r}, but no matching successful tool call was made"

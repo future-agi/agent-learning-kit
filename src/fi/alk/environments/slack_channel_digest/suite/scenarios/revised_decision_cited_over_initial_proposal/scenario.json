@@ -35,11 +35,8 @@
   },
   "solution": [
     {
-      "tool": "slack_search_messages",
+      "tool": "slack_read_channel",
       "arguments": {
-        "actor_id": "U02",
-        "cursor": "0",
-        "limit": 10,
         "channel_id": "C01"
       },
       "environment_arguments": {},
@@ -48,13 +45,10 @@
       }
     },
     {
-      "tool": "slack_get_thread",
+      "tool": "slack_read_thread",
       "arguments": {
-        "thread_ts": "1729840000.000100",
         "channel_id": "C01",
-        "cursor": "0",
-        "limit": 10,
-        "actor_id": "U02"
+        "message_ts": "1729840000.000100"
       },
       "environment_arguments": {},
       "fixed": {}

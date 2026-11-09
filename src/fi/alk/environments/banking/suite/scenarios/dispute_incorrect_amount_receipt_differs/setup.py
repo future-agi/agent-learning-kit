@@ -1,0 +1,6 @@
+def setup(world):
+    world.put("customers", {"customer_id": "C322", "first_name": "Aisha", "last_name": "Rahman", "email": "aisha.rahman@example.com", "phone": "+1555123322", "passcode": "7708", "kba_answer": "Pepper", "otp_code": "334190", "address": "322 Example Street, Springfield, IL 62701", "customer_since": "2021-04-12"})
+    world.put("accounts", {"account_id": "ACC322", "customer_id": "C322", "account_number": "1000000322", "account_type": "checking", "balance": 350000, "currency": "USD", "status": "active"})
+    world.put("cards", {"card_id": "CARD322", "account_id": "ACC322", "customer_id": "C322", "card_number_masked": "••••••••••••6160", "last_four": "6160", "card_type": "credit", "status": "active", "expiration_date": "2028-11-30", "locked_at": None})
+    world.put("sessions", {"session_id": "SESS322", "customer_id": "C322", "channel": "chat", "is_verified": 0, "verified_at": None, "failed_attempts": 0, "created_at": "2026-10-26T11:50:00Z", "step_up_at": None})
+    world.put("transactions", {"transaction_id": "TX322", "account_id": "ACC322", "card_id": "CARD322", "merchant_name": "Harbor Grill", "amount": 18450, "currency": "USD", "status": "posted", "transaction_time": "2026-10-20T20:15:00Z", "description": "Dinner", "statement_descriptor": "HARBOR GRILL BOSTON MA"})

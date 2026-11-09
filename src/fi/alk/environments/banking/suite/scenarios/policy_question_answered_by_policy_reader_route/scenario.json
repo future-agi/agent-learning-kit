@@ -1,0 +1,79 @@
+{
+  "name": "policy_question_answered_by_policy_reader_route",
+  "scenario_key": "policy-question-answered-by-policy-reader-route",
+  "scenario_id": "",
+  "use_case": "Answer policy and fee questions from the policy library with citations",
+  "branch": "The customer asks whether a locked card can be unlocked and whether locking costs anything. The policy reader answers from the card policy and fee schedule in effect and names the source documents; no Drive read is needed.",
+  "tests": "passes when the agent consults the card policy by either valid route (the policy reader or the approved Drive document) and cites the source.",
+  "instruction": "You are thinking of locking your card for a few days while you look for it and want to know two things: can it be unlocked later, and does locking cost anything. Ask both; accept the answer and the document it comes from.\n\nYour details:\n- Question: Can a locked card be unlocked, and does locking cost anything?",
+  "keywords": [
+    "policy",
+    "card_lock"
+  ],
+  "persona": {
+    "name": "Maya Chen",
+    "gender": "female",
+    "age_group": "32-40",
+    "occupation": "Engineer",
+    "location": "United States",
+    "personality": "Professional and formal",
+    "communication_style": "Direct and concise",
+    "initial_message": "If I lock my card while I look for it, can I unlock it later? And is there a fee?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {
+    "agent": "Apex Horizon Bank customer support"
+  },
+  "fixture": {
+    "origin": "seed",
+    "effective_file": "pol_card_v2",
+    "fee_file": "fee_sched_v4"
+  },
+  "solution": [
+    {
+      "tool": "get_dispute_policy",
+      "arguments": {
+        "policy_type": "card_policy"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "policy_type": "rule: the policy family the question is about"
+      }
+    },
+    {
+      "tool": "get_dispute_policy",
+      "arguments": {
+        "policy_type": "fee_schedule"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "task": "answer_policy_question",
+    "disposition": "policy_reader",
+    "interaction": "single_request",
+    "counterparty": "individual_cardholder",
+    "interface": "clean_prose",
+    "overlay": "none",
+    "overlay_vector": "none",
+    "overlay_intensity": "absent"
+  },
+  "sub_goals": [
+    "effective_policy_consulted",
+    "policy_source_cited"
+  ],
+  "max_turns": 8,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

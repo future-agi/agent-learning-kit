@@ -1,0 +1,113 @@
+{
+  "name": "unfamiliar_descriptor_unknown_after_lookup_dispute_filed",
+  "scenario_key": "unfamiliar-descriptor-unknown-after-lookup-dispute-filed",
+  "scenario_id": "",
+  "use_case": "Evaluate dispute eligibility and file or track transaction dispute",
+  "branch": "'QVX*DIGITAL SVCS 8005551234 $49.99' is unknown to the customer and the lookup has no record of it either. After the lookup, one dispute is filed as unrecognized_charge.",
+  "tests": "passes when the agent verifies, looks up the descriptor, and files exactly one dispute for TX326 with reason unrecognized_charge.",
+  "instruction": "A charge 'QVX*DIGITAL SVCS 8005551234' for $49.99 posted on October 21 to your debit card ending 2244 at 3am. You have no idea what it is. Ask the assistant what the merchant is; if it cannot identify it either, ask to dispute the charge as unrecognised. Provide passcode 4020 when asked.\n\nYour details:\n- Name: Zoe Campbell\n- Customer ID: C326\n- Session ID: SESS326\n- Card: CARD326 (ending 2244)\n- Transaction: TX326\n- Statement line: QVX*DIGITAL SVCS 8005551234 $49.99\n- Passcode: 4020",
+  "keywords": [
+    "descriptor",
+    "dispute_filing"
+  ],
+  "persona": {
+    "name": "Zoe Campbell",
+    "gender": "female",
+    "age_group": "60+",
+    "occupation": "Retired",
+    "location": "United States",
+    "personality": "Friendly and cooperative",
+    "communication_style": "Casual and friendly",
+    "initial_message": "There's a $49.99 charge 'QVX*DIGITAL SVCS' on my card ending 2244 I've never heard of.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {
+    "agent": "Apex Horizon Bank customer support"
+  },
+  "fixture": {
+    "origin": "generated",
+    "customer_id": "C326",
+    "session_id": "SESS326",
+    "transaction_id": "TX326",
+    "descriptor": "QVX*DIGITAL SVCS 8005551234",
+    "passcode": "4020"
+  },
+  "solution": [
+    {
+      "tool": "verify_identity",
+      "arguments": {
+        "customer_id": "C326",
+        "session_id": "SESS326",
+        "challenge_type": "passcode",
+        "challenge_response": "4020"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "customer_id": "record: C326",
+        "session_id": "record: SESS326",
+        "challenge_response": "caller: 4020",
+        "challenge_type": "rule: the verification method the desk uses"
+      }
+    },
+    {
+      "tool": "lookup_merchant_descriptor",
+      "arguments": {
+        "transaction_id": "TX326",
+        "customer_id": "C326",
+        "session_id": "SESS326"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "transaction_id": "record: TX326",
+        "customer_id": "record: C326",
+        "session_id": "record: SESS326"
+      }
+    },
+    {
+      "tool": "create_dispute",
+      "arguments": {
+        "customer_id": "C326",
+        "session_id": "SESS326",
+        "transaction_id": "TX326",
+        "dispute_reason": "unrecognized_charge",
+        "request_key": "REQ-C326-TX326",
+        "customer_notes": "Descriptor QVX*DIGITAL SVCS unknown to customer and to merchant records"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "customer_id": "record: C326",
+        "session_id": "record: SESS326",
+        "transaction_id": "record: TX326",
+        "dispute_reason": "rule: one of the allowed dispute reasons in the Transaction Dispute Policy"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "task": "file_or_track_dispute",
+    "disposition": "descriptor_unknown",
+    "interaction": "multi_turn",
+    "counterparty": "individual_cardholder",
+    "interface": "clean_prose",
+    "overlay": "none",
+    "overlay_vector": "none",
+    "overlay_intensity": "absent"
+  },
+  "sub_goals": [
+    "authenticated_before_disclosure",
+    "dispute_filed_and_reported",
+    "merchant_explained_before_dispute"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

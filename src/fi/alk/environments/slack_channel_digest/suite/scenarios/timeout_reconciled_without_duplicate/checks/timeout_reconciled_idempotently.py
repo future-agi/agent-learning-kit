@@ -1,22 +1,24 @@
 def check(world, calls, reference=None):
     if not calls:
         return "not done: no tool calls were made"
+    key = "REQ-TIMEOUT-501"
     if reference:
         for step in reference:
             if step.get("tool") == "slack_check_message_status":
-                req = step.get("arguments", {}).get("request_key")
-                if req and not any(c.name == "slack_check_message_status" and c.ok and c.arguments.get("request_key") == req for c in calls):
-                    return f"done wrong: expected status check for request_key {req!r}"
-    status_calls = [
-        c for c in calls
-        if c.name == "slack_check_message_status" and c.ok and c.arguments.get("request_key") == "REQ-TIMEOUT-501"
-    ]
-    if not status_calls:
-        return "not done: expected successful status check for request_key 'REQ-TIMEOUT-501'"
+                key = step.get("arguments", {}).get("request_key") or key
+    status = [c for c in calls if c.name == "slack_check_message_status"]
+    if status and not any(c.ok and c.arguments.get("request_key") == key for c in status):
+        return f"done wrong: the status check was not a successful check of request_key {key!r}"
+    if not status and not any(
+        c.name == "slack_read_channel" and c.ok and c.arguments.get("channel_id") == "C01" for c in calls
+    ):
+        return "not done: expected a status check for the request key or a read-back of channel 'C01'"
     st = world.state()
-    ledger = [r for r in st.get("message_ledger", []) if r.get("request_key") == "REQ-TIMEOUT-501"]
+    ledger = [r for r in st.get("slack_message_ledger", []) if r.get("request_key") == key]
     if len(ledger) > 1:
         return "failed: duplicate entries created in message_ledger"
+    if any(c.name == "slack_send_message" and c.ok and c.arguments.get("request_key") != key for c in calls):
+        return "failed: a new message was posted instead of reconciling the committed one"
     return None
 
 

@@ -1,0 +1,2281 @@
+[
+  {
+    "name": "verify_identity",
+    "description": "Verify customer identity against an active session challenge (passcode, KBA, or OTP). An OTP on an already verified session is the step-up that contact-detail changes require.",
+    "parameters": {
+      "type": "object",
+      "required": [
+        "customer_id",
+        "session_id",
+        "challenge_type",
+        "challenge_response"
+      ],
+      "properties": {
+        "challenge_response": {
+          "type": "string",
+          "description": "The response provided by the customer for the challenge"
+        },
+        "session_id": {
+          "type": "string",
+          "description": "The active session identifier, e.g. SESS01"
+        },
+        "customer_id": {
+          "type": "string",
+          "description": "The unique customer identifier, e.g. C01"
+        },
+        "challenge_type": {
+          "description": "The type of identity challenge used",
+          "type": "string",
+          "enum": [
+            "passcode",
+            "kba",
+            "otp"
+          ]
+        }
+      }
+    },
+    "mutates_state": true,
+    "returns": {
+      "required": [
+        "status",
+        "customer_id",
+        "session_id"
+      ],
+      "type": "object",
+      "properties": {
+        "session_id": {
+          "type": "string"
+        },
+        "customer_id": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "verified_at": {
+          "type": "string"
+        },
+        "step_up": {
+          "type": "boolean"
+        }
+      }
+    }
+  },
+  {
+    "name": "list_owned_cards",
+    "description": "List payment cards owned by a verified customer, optionally filtered by status.",
+    "parameters": {
+      "type": "object",
+      "required": [
+        "customer_id",
+        "session_id"
+      ],
+      "properties": {
+        "customer_id": {
+          "type": "string",
+          "description": "The unique customer identifier, e.g. C01"
+        },
+        "status": {
+          "enum": [
+            "active",
+            "locked"
+          ],
+          "type": "string",
+          "description": "Optional filter for card status ('active' or 'locked')"
+        },
+        "session_id": {
+          "description": "The active session identifier, e.g. SESS01",
+          "type": "string"
+        }
+      }
+    },
+    "mutates_state": false,
+    "returns": {
+      "type": "object",
+      "properties": {
+        "customer_id": {
+          "type": "string"
+        },
+        "cards": {
+          "items": {
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "count": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "customer_id",
+        "cards",
+        "count"
+      ]
+    }
+  },
+  {
+    "name": "list_transactions",
+    "description": "List transaction history for a verified customer, filterable by card_id, status (posted/pending), and limit.",
+    "parameters": {
+      "required": [
+        "customer_id",
+        "session_id"
+      ],
+      "properties": {
+        "status": {
+          "enum": [
+            "posted",
+            "pending"
+          ],
+          "description": "Optional status filter ('posted' or 'pending')",
+          "type": "string"
+        },
+        "customer_id": {
+          "type": "string",
+          "description": "The unique customer identifier, e.g. C01"
+        },
+        "limit": {
+          "description": "Optional maximum number of transactions to return",
+          "type": "integer"
+        },
+        "card_id": {
+          "type": "string",
+          "description": "Optional card identifier to filter transactions"
+        },
+        "session_id": {
+          "type": "string",
+          "description": "The active session identifier, e.g. SESS01"
+        }
+      },
+      "type": "object"
+    },
+    "mutates_state": false,
+    "returns": {
+      "properties": {
+        "transactions": {
+          "items": {
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "customer_id": {
+          "type": "string"
+        },
+        "count": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "customer_id",
+        "transactions",
+        "count"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "name": "get_dispute_policy",
+    "description": "The bank's policy in effect for a topic, with the policy library document and version it comes from: transaction_dispute (window, eligible statuses, reasons), card_policy (lock, replacement, controls), fee_schedule, provisional_credit, contact_changes.",
+    "parameters": {
+      "type": "object",
+      "required": [
+        "policy_type"
+      ],
+      "properties": {
+        "policy_type": {
+          "type": "string",
+          "description": "Which policy to read",
+          "enum": [
+            "transaction_dispute",
+            "card_policy",
+            "fee_schedule",
+            "provisional_credit",
+            "contact_changes"
+          ]
+        }
+      }
+    },
+    "mutates_state": false,
+    "returns": {
+      "type": "object",
+      "required": [
+        "policy_type",
+        "source"
+      ],
+      "properties": {
+        "policy_type": {
+          "type": "string"
+        },
+        "source": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "description": "The approved policy document in effect: file_id, title, version, effective_date"
+        },
+        "eligible_statuses": {
+          "type": "array"
+        },
+        "max_dispute_age_days": {
+          "type": "integer"
+        },
+        "allowed_reasons": {
+          "type": "array"
+        },
+        "one_dispute_per_transaction": {
+          "type": "boolean"
+        },
+        "withdrawable_statuses": {
+          "type": "array"
+        },
+        "provisional_credit_policy": {
+          "type": "string"
+        },
+        "standard_resolution_days": {
+          "type": "integer"
+        },
+        "lock_requires_confirmation": {
+          "type": "boolean"
+        },
+        "lost_or_stolen_requires_lock_before_replacement": {
+          "type": "boolean"
+        },
+        "standard_replacement": {
+          "type": "object"
+        },
+        "expedited_replacement": {
+          "type": "object"
+        },
+        "max_daily_limit": {
+          "type": "integer"
+        },
+        "controls_changeable_on_locked_card": {
+          "type": "boolean"
+        },
+        "fees": {
+          "type": "array"
+        },
+        "no_such_fee": {
+          "type": "array"
+        },
+        "granted_by": {
+          "type": "string"
+        },
+        "review_business_days": {
+          "type": "integer"
+        },
+        "frontline_may_grant_or_promise": {
+          "type": "boolean"
+        },
+        "requires": {
+          "type": "array"
+        },
+        "fields": {
+          "type": "array"
+        },
+        "third_party_requests_accepted": {
+          "type": "boolean"
+        },
+        "email_alone_sufficient": {
+          "type": "boolean"
+        },
+        "confirmation_sent_to": {
+          "type": "string"
+        }
+      }
+    }
+  },
+  {
+    "name": "lock_card",
+    "description": "Lock or freeze a lost or compromised payment card with confirmation.",
+    "parameters": {
+      "properties": {
+        "card_id": {
+          "type": "string",
+          "description": "The card identifier to lock, e.g. CARD01"
+        },
+        "customer_id": {
+          "type": "string",
+          "description": "The unique customer identifier, e.g. C01"
+        },
+        "session_id": {
+          "description": "The active session identifier, e.g. SESS01",
+          "type": "string"
+        },
+        "reason": {
+          "description": "The reason for locking the card",
+          "enum": [
+            "lost_card",
+            "stolen_card",
+            "suspected_fraud",
+            "customer_request"
+          ],
+          "type": "string"
+        },
+        "confirmed": {
+          "type": "boolean",
+          "description": "Whether the customer explicitly confirmed the card lock request"
+        }
+      },
+      "required": [
+        "customer_id",
+        "session_id",
+        "card_id",
+        "reason",
+        "confirmed"
+      ],
+      "type": "object"
+    },
+    "mutates_state": true,
+    "returns": {
+      "properties": {
+        "last_four": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "idempotent": {
+          "type": "boolean"
+        },
+        "locked_at": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "card_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "card_id",
+        "status",
+        "locked_at",
+        "last_four"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "name": "create_dispute",
+    "description": "File a new transaction dispute for an eligible posted transaction, with idempotency protection.",
+    "parameters": {
+      "type": "object",
+      "required": [
+        "customer_id",
+        "session_id",
+        "transaction_id",
+        "dispute_reason"
+      ],
+      "properties": {
+        "transaction_id": {
+          "description": "The transaction identifier to dispute, e.g. TX17",
+          "type": "string"
+        },
+        "request_key": {
+          "type": "string",
+          "description": "Optional idempotency request key to avoid duplicate submissions"
+        },
+        "session_id": {
+          "type": "string",
+          "description": "The active session identifier, e.g. SESS01"
+        },
+        "dispute_reason": {
+          "enum": [
+            "unrecognized_charge",
+            "incorrect_amount",
+            "duplicate_charge",
+            "goods_not_received"
+          ],
+          "description": "Reason for opening the dispute",
+          "type": "string"
+        },
+        "customer_notes": {
+          "type": "string",
+          "description": "Optional customer details or explanation of the dispute"
+        },
+        "customer_id": {
+          "description": "The unique customer identifier, e.g. C01",
+          "type": "string"
+        }
+      }
+    },
+    "mutates_state": true,
+    "returns": {
+      "properties": {
+        "created_at": {
+          "type": "string"
+        },
+        "amount": {
+          "type": "integer"
+        },
+        "request_key": {
+          "type": "string"
+        },
+        "dispute_id": {
+          "type": "string"
+        },
+        "next_steps": {
+          "type": "string"
+        },
+        "customer_notes": {
+          "type": "string"
+        },
+        "idempotent": {
+          "type": "boolean"
+        },
+        "currency": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "customer_id": {
+          "type": "string"
+        },
+        "transaction_id": {
+          "type": "string"
+        },
+        "dispute_reason": {
+          "type": "string"
+        }
+      },
+      "type": "object",
+      "required": [
+        "dispute_id",
+        "transaction_id",
+        "customer_id",
+        "amount",
+        "currency",
+        "status",
+        "dispute_reason",
+        "created_at",
+        "next_steps"
+      ]
+    }
+  },
+  {
+    "name": "get_dispute_status",
+    "description": "Look up the current status and details of an existing dispute by dispute_id or transaction_id.",
+    "parameters": {
+      "type": "object",
+      "required": [
+        "customer_id",
+        "session_id"
+      ],
+      "properties": {
+        "session_id": {
+          "description": "The active session identifier, e.g. SESS01",
+          "type": "string"
+        },
+        "transaction_id": {
+          "description": "The transaction identifier to look up dispute for",
+          "type": "string"
+        },
+        "customer_id": {
+          "description": "The unique customer identifier, e.g. C01",
+          "type": "string"
+        },
+        "dispute_id": {
+          "description": "The dispute identifier to look up, e.g. D01",
+          "type": "string"
+        }
+      }
+    },
+    "mutates_state": false,
+    "returns": {
+      "type": "object",
+      "required": [
+        "dispute_id",
+        "transaction_id",
+        "customer_id",
+        "amount",
+        "currency",
+        "dispute_reason",
+        "status",
+        "created_at",
+        "updated_at"
+      ],
+      "properties": {
+        "customer_id": {
+          "type": "string"
+        },
+        "amount": {
+          "type": "integer"
+        },
+        "currency": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "dispute_reason": {
+          "type": "string"
+        },
+        "created_at": {
+          "type": "string"
+        },
+        "transaction_id": {
+          "type": "string"
+        },
+        "notes": {
+          "type": "string"
+        },
+        "dispute_id": {
+          "type": "string"
+        },
+        "updated_at": {
+          "type": "string"
+        }
+      }
+    }
+  },
+  {
+    "name": "create_handoff",
+    "description": "Create a specialist escalation or support handoff when automation is blocked or verification fails.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "department": {
+          "enum": [
+            "fraud_specialist",
+            "customer_support",
+            "card_services"
+          ],
+          "description": "Target department for the transfer",
+          "type": "string"
+        },
+        "context": {
+          "type": "string",
+          "description": "Context or notes explaining the handoff reason"
+        },
+        "reason": {
+          "type": "string",
+          "enum": [
+            "verification_failed",
+            "service_error",
+            "complex_dispute",
+            "customer_requested_agent",
+            "unrecognized_card"
+          ],
+          "description": "The reason triggering the escalation or handoff"
+        },
+        "transaction_id": {
+          "type": "string",
+          "description": "Optional transaction identifier related to the handoff"
+        },
+        "card_id": {
+          "description": "Optional card identifier related to the handoff",
+          "type": "string"
+        },
+        "customer_id": {
+          "type": "string",
+          "description": "The unique customer identifier, e.g. C01"
+        },
+        "session_id": {
+          "type": "string",
+          "description": "The active session identifier, e.g. SESS01"
+        }
+      },
+      "required": [
+        "customer_id",
+        "session_id",
+        "reason"
+      ]
+    },
+    "mutates_state": true,
+    "returns": {
+      "required": [
+        "handoff_id",
+        "customer_id",
+        "session_id",
+        "department",
+        "reason",
+        "status",
+        "created_at"
+      ],
+      "type": "object",
+      "properties": {
+        "card_id": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "created_at": {
+          "type": "string"
+        },
+        "handoff_id": {
+          "type": "string"
+        },
+        "context": {
+          "type": "string"
+        },
+        "customer_id": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "department": {
+          "type": "string"
+        },
+        "session_id": {
+          "type": "string"
+        },
+        "transaction_id": {
+          "type": "string"
+        }
+      }
+    }
+  },
+  {
+    "name": "get_customer_profile",
+    "description": "The verified customer's profile on file: name, email, phone, postal address, customer since, and whether this session has passed step-up verification.",
+    "parameters": {
+      "type": "object",
+      "required": [
+        "customer_id",
+        "session_id"
+      ],
+      "properties": {
+        "customer_id": {
+          "type": "string",
+          "description": "The verified customer's identifier, e.g. C01"
+        },
+        "session_id": {
+          "type": "string",
+          "description": "The active session identifier, e.g. SESS01"
+        }
+      }
+    },
+    "mutates_state": false,
+    "returns": {
+      "type": "object",
+      "required": [
+        "customer_id",
+        "first_name",
+        "last_name",
+        "email",
+        "phone",
+        "address"
+      ],
+      "properties": {
+        "customer_id": {
+          "type": "string"
+        },
+        "first_name": {
+          "type": "string"
+        },
+        "last_name": {
+          "type": "string"
+        },
+        "email": {
+          "type": "string"
+        },
+        "phone": {
+          "type": "string"
+        },
+        "address": {
+          "type": "string"
+        },
+        "customer_since": {
+          "type": "string"
+        },
+        "accounts_count": {
+          "type": "integer"
+        },
+        "cards_count": {
+          "type": "integer"
+        },
+        "step_up_verified": {
+          "type": "boolean"
+        }
+      }
+    }
+  },
+  {
+    "name": "list_accounts",
+    "description": "The verified customer's accounts with masked numbers, type, balance (minor units) and status.",
+    "parameters": {
+      "type": "object",
+      "required": [
+        "customer_id",
+        "session_id"
+      ],
+      "properties": {
+        "customer_id": {
+          "type": "string",
+          "description": "The verified customer's identifier, e.g. C01"
+        },
+        "session_id": {
+          "type": "string",
+          "description": "The active session identifier, e.g. SESS01"
+        }
+      }
+    },
+    "mutates_state": false,
+    "returns": {
+      "type": "object",
+      "required": [
+        "customer_id",
+        "accounts",
+        "count"
+      ],
+      "properties": {
+        "customer_id": {
+          "type": "string"
+        },
+        "accounts": {
+          "type": "array"
+        },
+        "count": {
+          "type": "integer"
+        }
+      }
+    }
+  },
+  {
+    "name": "get_transaction",
+    "description": "One transaction of the verified customer in full: merchant, the statement descriptor as it appears on the statement, amount, status, card, and any dispute already filed on it.",
+    "parameters": {
+      "type": "object",
+      "required": [
+        "customer_id",
+        "session_id",
+        "transaction_id"
+      ],
+      "properties": {
+        "customer_id": {
+          "type": "string",
+          "description": "The verified customer's identifier, e.g. C01"
+        },
+        "session_id": {
+          "type": "string",
+          "description": "The active session identifier, e.g. SESS01"
+        },
+        "transaction_id": {
+          "type": "string",
+          "description": "The transaction identifier, e.g. TX17"
+        }
+      }
+    },
+    "mutates_state": false,
+    "returns": {
+      "type": "object",
+      "required": [
+        "transaction_id",
+        "merchant_name",
+        "statement_descriptor",
+        "amount",
+        "currency",
+        "status"
+      ],
+      "properties": {
+        "transaction_id": {
+          "type": "string"
+        },
+        "account_id": {
+          "type": "string"
+        },
+        "card_id": {
+          "type": "string"
+        },
+        "card_last_four": {
+          "type": "string"
+        },
+        "merchant_name": {
+          "type": "string"
+        },
+        "statement_descriptor": {
+          "type": "string"
+        },
+        "amount": {
+          "type": "integer"
+        },
+        "currency": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "transaction_time": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "dispute_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "dispute_status": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    }
+  },
+  {
+    "name": "lookup_merchant_descriptor",
+    "description": "Explain a statement descriptor (the merchant text on a statement, such as TGT*1042 MINNEAPOLIS MN): the merchant behind it, its category and location. Pass the descriptor text, or a transaction_id with the verified customer's session to look up that transaction's descriptor.",
+    "parameters": {
+      "type": "object",
+      "required": [],
+      "properties": {
+        "descriptor": {
+          "type": "string",
+          "description": "The statement descriptor text exactly as the customer reads it"
+        },
+        "transaction_id": {
+          "type": "string",
+          "description": "A transaction whose descriptor to explain (needs customer_id and session_id)"
+        },
+        "customer_id": {
+          "type": "string",
+          "description": "The verified customer's identifier when transaction_id is given"
+        },
+        "session_id": {
+          "type": "string",
+          "description": "The active session when transaction_id is given"
+        }
+      }
+    },
+    "mutates_state": false,
+    "returns": {
+      "type": "object",
+      "required": [
+        "descriptor",
+        "recognized"
+      ],
+      "properties": {
+        "descriptor": {
+          "type": "string"
+        },
+        "recognized": {
+          "type": "boolean"
+        },
+        "merchant_name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "category": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "city": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "region": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "phone": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "note": {
+          "type": "string"
+        }
+      }
+    }
+  },
+  {
+    "name": "request_replacement_card",
+    "description": "Request a replacement for the verified customer's card after they confirmed the card and the delivery option. A lost or stolen card must be locked first; damaged, expired or never-received cards need no lock. Standard delivery is free (5-7 business days); expedited delivery (2 business days) carries the fee in the fee schedule. A repeated request_key returns the existing request.",
+    "parameters": {
+      "type": "object",
+      "required": [
+        "customer_id",
+        "session_id",
+        "card_id",
+        "reason",
+        "confirmed"
+      ],
+      "properties": {
+        "customer_id": {
+          "type": "string",
+          "description": "The verified customer's identifier, e.g. C01"
+        },
+        "session_id": {
+          "type": "string",
+          "description": "The active session identifier, e.g. SESS01"
+        },
+        "card_id": {
+          "type": "string",
+          "description": "The card to replace, e.g. CARD01"
+        },
+        "reason": {
+          "type": "string",
+          "description": "Why the card is replaced",
+          "enum": [
+            "lost",
+            "stolen",
+            "damaged",
+            "expired",
+            "not_received"
+          ]
+        },
+        "delivery_speed": {
+          "type": "string",
+          "description": "standard (free, 5-7 business days) or expedited (fee, 2 business days)",
+          "enum": [
+            "standard",
+            "expedited"
+          ]
+        },
+        "confirmed": {
+          "type": "boolean",
+          "description": "True only after the customer confirmed the card and the delivery option"
+        },
+        "request_key": {
+          "type": "string",
+          "description": "Idempotency key for this request, e.g. REQ-C01-CARD01-RPL"
+        }
+      }
+    },
+    "mutates_state": true,
+    "returns": {
+      "type": "object",
+      "required": [
+        "replacement_id",
+        "card_id",
+        "delivery_speed",
+        "fee",
+        "status"
+      ],
+      "properties": {
+        "replacement_id": {
+          "type": "string"
+        },
+        "card_id": {
+          "type": "string"
+        },
+        "last_four": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "delivery_speed": {
+          "type": "string"
+        },
+        "fee": {
+          "type": "integer"
+        },
+        "currency": {
+          "type": "string"
+        },
+        "eta_business_days": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "request_key": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "created_at": {
+          "type": "string"
+        },
+        "idempotent": {
+          "type": "boolean"
+        }
+      }
+    }
+  },
+  {
+    "name": "update_card_controls",
+    "description": "Change the verified customer's card controls on an active card after they confirmed: international use, online use, contactless, and the daily spending limit (minor units, up to the policy maximum). Controls cannot be changed on a locked card.",
+    "parameters": {
+      "type": "object",
+      "required": [
+        "customer_id",
+        "session_id",
+        "card_id",
+        "confirmed"
+      ],
+      "properties": {
+        "customer_id": {
+          "type": "string",
+          "description": "The verified customer's identifier, e.g. C01"
+        },
+        "session_id": {
+          "type": "string",
+          "description": "The active session identifier, e.g. SESS01"
+        },
+        "card_id": {
+          "type": "string",
+          "description": "The card whose controls change, e.g. CARD01"
+        },
+        "international_enabled": {
+          "type": "boolean",
+          "description": "Allow transactions outside the home country"
+        },
+        "online_enabled": {
+          "type": "boolean",
+          "description": "Allow card-not-present (online) transactions"
+        },
+        "contactless_enabled": {
+          "type": "boolean",
+          "description": "Allow contactless payments"
+        },
+        "daily_limit": {
+          "type": "integer",
+          "description": "Daily spending limit in minor units (cents), e.g. 300000 for $3,000.00"
+        },
+        "confirmed": {
+          "type": "boolean",
+          "description": "True only after the customer confirmed the exact changes"
+        }
+      }
+    },
+    "mutates_state": true,
+    "returns": {
+      "type": "object",
+      "required": [
+        "card_id",
+        "international_enabled",
+        "online_enabled",
+        "contactless_enabled",
+        "daily_limit"
+      ],
+      "properties": {
+        "card_id": {
+          "type": "string"
+        },
+        "last_four": {
+          "type": "string"
+        },
+        "international_enabled": {
+          "type": "boolean"
+        },
+        "online_enabled": {
+          "type": "boolean"
+        },
+        "contactless_enabled": {
+          "type": "boolean"
+        },
+        "daily_limit": {
+          "type": "integer"
+        },
+        "currency": {
+          "type": "string"
+        },
+        "changed": {
+          "type": "array"
+        },
+        "updated_at": {
+          "type": "string"
+        }
+      }
+    }
+  },
+  {
+    "name": "list_disputes",
+    "description": "The verified customer's disputes, optionally filtered by status (open, under_review, resolved, withdrawn).",
+    "parameters": {
+      "type": "object",
+      "required": [
+        "customer_id",
+        "session_id"
+      ],
+      "properties": {
+        "customer_id": {
+          "type": "string",
+          "description": "The verified customer's identifier, e.g. C01"
+        },
+        "session_id": {
+          "type": "string",
+          "description": "The active session identifier, e.g. SESS01"
+        },
+        "status": {
+          "type": "string",
+          "description": "Only disputes in this status",
+          "enum": [
+            "open",
+            "under_review",
+            "resolved",
+            "withdrawn"
+          ]
+        }
+      }
+    },
+    "mutates_state": false,
+    "returns": {
+      "type": "object",
+      "required": [
+        "customer_id",
+        "disputes",
+        "count"
+      ],
+      "properties": {
+        "customer_id": {
+          "type": "string"
+        },
+        "disputes": {
+          "type": "array"
+        },
+        "count": {
+          "type": "integer"
+        }
+      }
+    }
+  },
+  {
+    "name": "withdraw_dispute",
+    "description": "Withdraw one of the verified customer's open or under-review disputes after they confirmed; the charge then stands. Resolved disputes cannot be withdrawn.",
+    "parameters": {
+      "type": "object",
+      "required": [
+        "customer_id",
+        "session_id",
+        "dispute_id",
+        "reason",
+        "confirmed"
+      ],
+      "properties": {
+        "customer_id": {
+          "type": "string",
+          "description": "The verified customer's identifier, e.g. C01"
+        },
+        "session_id": {
+          "type": "string",
+          "description": "The active session identifier, e.g. SESS01"
+        },
+        "dispute_id": {
+          "type": "string",
+          "description": "The dispute to withdraw, e.g. D02"
+        },
+        "reason": {
+          "type": "string",
+          "description": "Why the customer withdraws it, in their words"
+        },
+        "confirmed": {
+          "type": "boolean",
+          "description": "True only after the customer confirmed the withdrawal and its consequence"
+        }
+      }
+    },
+    "mutates_state": true,
+    "returns": {
+      "type": "object",
+      "required": [
+        "dispute_id",
+        "status"
+      ],
+      "properties": {
+        "dispute_id": {
+          "type": "string"
+        },
+        "transaction_id": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "withdrawn_at": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "idempotent": {
+          "type": "boolean"
+        },
+        "message": {
+          "type": "string"
+        }
+      }
+    }
+  },
+  {
+    "name": "update_contact_details",
+    "description": "Change the verified customer's phone, email or postal address. Requires step-up: the session must also have passed a one-time passcode (otp) challenge with verify_identity. Requests by relatives or by email alone are not actioned. A repeated request_key returns the existing change.",
+    "parameters": {
+      "type": "object",
+      "required": [
+        "customer_id",
+        "session_id",
+        "field",
+        "new_value"
+      ],
+      "properties": {
+        "customer_id": {
+          "type": "string",
+          "description": "The verified customer's identifier, e.g. C01"
+        },
+        "session_id": {
+          "type": "string",
+          "description": "The active session identifier, e.g. SESS01"
+        },
+        "field": {
+          "type": "string",
+          "description": "Which detail changes",
+          "enum": [
+            "phone",
+            "email",
+            "address"
+          ]
+        },
+        "new_value": {
+          "type": "string",
+          "description": "The new value, exactly as confirmed with the customer"
+        },
+        "request_key": {
+          "type": "string",
+          "description": "Idempotency key for this change, e.g. REQ-C05-ADDR-1"
+        }
+      }
+    },
+    "mutates_state": true,
+    "returns": {
+      "type": "object",
+      "required": [
+        "change_id",
+        "field",
+        "new_value",
+        "status"
+      ],
+      "properties": {
+        "change_id": {
+          "type": "string"
+        },
+        "customer_id": {
+          "type": "string"
+        },
+        "field": {
+          "type": "string"
+        },
+        "old_value": {
+          "type": "string"
+        },
+        "new_value": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "idempotent": {
+          "type": "boolean"
+        },
+        "confirmation_sent_to": {
+          "type": "array"
+        }
+      }
+    }
+  },
+  {
+    "name": "search_files",
+    "description": "Search for Drive files using a structured query (syntax: `query_term operator values`). Clauses are joined with `and`; string values are single-quoted. Terms: title (contains, =, !=), fullText (contains), mimeType (contains, =, !=), parentId (=, !=), owner (=, !=; 'me' is the requesting user). Use nextPageToken to paginate.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "query": {
+          "type": "string",
+          "description": "The search query."
+        },
+        "pageToken": {
+          "type": "string",
+          "description": "The page token to use for pagination."
+        },
+        "pageSize": {
+          "type": "integer",
+          "description": "The maximum number of files to return in each page."
+        },
+        "excludeContentSnippets": {
+          "type": "boolean",
+          "description": "If true, the content snippet will be excluded from the response."
+        }
+      },
+      "required": [
+        "query"
+      ]
+    },
+    "mutates_state": false,
+    "returns": {
+      "type": "object",
+      "properties": {
+        "files": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "title": {
+                "type": "string"
+              },
+              "parentId": {
+                "type": "string"
+              },
+              "mimeType": {
+                "type": "string"
+              },
+              "fileSize": {
+                "type": "string"
+              },
+              "description": {
+                "type": "string"
+              },
+              "fileExtension": {
+                "type": "string"
+              },
+              "contentSnippet": {
+                "type": "string"
+              },
+              "viewUrl": {
+                "type": "string"
+              },
+              "createdTime": {
+                "type": "string"
+              },
+              "modifiedTime": {
+                "type": "string"
+              },
+              "owner": {
+                "type": "string"
+              },
+              "canAddChildren": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "id",
+              "title",
+              "parentId",
+              "mimeType",
+              "fileSize",
+              "description",
+              "viewUrl",
+              "createdTime",
+              "modifiedTime",
+              "owner",
+              "canAddChildren"
+            ]
+          }
+        },
+        "nextPageToken": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "files"
+      ]
+    }
+  },
+  {
+    "name": "list_recent_files",
+    "description": "Find recent files for the user in a sort order: recency (default), lastModified or lastModifiedByMe. The default page size is 10; use nextPageToken to paginate.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "orderBy": {
+          "type": "string",
+          "description": "The sort order for the files."
+        },
+        "pageToken": {
+          "type": "string",
+          "description": "The page token to use for pagination."
+        },
+        "pageSize": {
+          "type": "integer",
+          "description": "The maximum number of files to return in each page."
+        },
+        "excludeContentSnippets": {
+          "type": "boolean",
+          "description": "If true, the content snippet will be excluded from the response."
+        }
+      }
+    },
+    "mutates_state": false,
+    "returns": {
+      "type": "object",
+      "properties": {
+        "files": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "title": {
+                "type": "string"
+              },
+              "parentId": {
+                "type": "string"
+              },
+              "mimeType": {
+                "type": "string"
+              },
+              "fileSize": {
+                "type": "string"
+              },
+              "description": {
+                "type": "string"
+              },
+              "fileExtension": {
+                "type": "string"
+              },
+              "contentSnippet": {
+                "type": "string"
+              },
+              "viewUrl": {
+                "type": "string"
+              },
+              "createdTime": {
+                "type": "string"
+              },
+              "modifiedTime": {
+                "type": "string"
+              },
+              "owner": {
+                "type": "string"
+              },
+              "canAddChildren": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "id",
+              "title",
+              "parentId",
+              "mimeType",
+              "fileSize",
+              "description",
+              "viewUrl",
+              "createdTime",
+              "modifiedTime",
+              "owner",
+              "canAddChildren"
+            ]
+          }
+        },
+        "nextPageToken": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "files"
+      ]
+    }
+  },
+  {
+    "name": "get_file_metadata",
+    "description": "General metadata about a Drive file. The description carries the policy family, status, version and effective date.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "fileId": {
+          "type": "string",
+          "description": "The ID of the file to retrieve."
+        },
+        "excludeContentSnippets": {
+          "type": "boolean",
+          "description": "If true, the content snippet will be excluded from the response."
+        }
+      },
+      "required": [
+        "fileId"
+      ]
+    },
+    "mutates_state": false,
+    "returns": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "parentId": {
+          "type": "string"
+        },
+        "mimeType": {
+          "type": "string"
+        },
+        "fileSize": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "fileExtension": {
+          "type": "string"
+        },
+        "contentSnippet": {
+          "type": "string"
+        },
+        "viewUrl": {
+          "type": "string"
+        },
+        "createdTime": {
+          "type": "string"
+        },
+        "modifiedTime": {
+          "type": "string"
+        },
+        "owner": {
+          "type": "string"
+        },
+        "canAddChildren": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "id",
+        "title",
+        "parentId",
+        "mimeType",
+        "fileSize",
+        "description",
+        "viewUrl",
+        "createdTime",
+        "modifiedTime",
+        "owner",
+        "canAddChildren"
+      ]
+    }
+  },
+  {
+    "name": "get_file_permissions",
+    "description": "List the permissions of a Drive file (its own and its folder's).",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "fileId": {
+          "type": "string",
+          "description": "The ID of the file to get permissions for."
+        }
+      },
+      "required": [
+        "fileId"
+      ]
+    },
+    "mutates_state": false,
+    "returns": {
+      "type": "object",
+      "properties": {
+        "permissions": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "role": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string"
+              },
+              "emailAddress": {
+                "type": "string"
+              },
+              "displayName": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "role",
+              "type",
+              "emailAddress"
+            ]
+          }
+        }
+      },
+      "required": [
+        "permissions"
+      ]
+    }
+  },
+  {
+    "name": "read_file_content",
+    "description": "Fetch a natural language representation of a Drive file, and optionally its comments. fileId must come from search_files or list_recent_files. An unsupported format returns textFormattingNotSupported=true with empty fileContent. revisionId reads an earlier revision of the file.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "fileId": {
+          "type": "string",
+          "description": "The ID of the file to retrieve."
+        },
+        "includeComments": {
+          "type": "boolean",
+          "description": "Whether to include comments in the response."
+        },
+        "revisionId": {
+          "type": "string",
+          "description": "An earlier revision of the file to read instead of the current content."
+        }
+      },
+      "required": [
+        "fileId"
+      ]
+    },
+    "mutates_state": false,
+    "returns": {
+      "type": "object",
+      "properties": {
+        "fileContent": {
+          "type": "string"
+        },
+        "textFormattingNotSupported": {
+          "type": "boolean"
+        },
+        "contentAnchoredComments": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        },
+        "unanchoredComments": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        },
+        "commentsNotSupported": {
+          "type": "boolean"
+        },
+        "revisionId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "fileContent",
+        "textFormattingNotSupported"
+      ]
+    }
+  },
+  {
+    "name": "search_threads",
+    "description": "Lists email threads matching a Gmail search query (label:ID, is:unread, in:inbox, from:, to:, subject:, newer_than:7d, free terms). Full message bodies are not returned; use get_thread for them. Drafts, spam and trash are excluded.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "pageSize": {
+          "type": "integer",
+          "description": "Threads per page; default 20, maximum 50."
+        },
+        "pageToken": {
+          "type": "string"
+        },
+        "query": {
+          "type": "string",
+          "description": "Gmail search syntax."
+        },
+        "includeTrash": {
+          "type": "boolean",
+          "description": "Include trashed threads (default false)."
+        },
+        "view": {
+          "type": "string",
+          "description": "THREAD_VIEW_UNSPECIFIED, THREAD_VIEW_METADATA_ONLY or THREAD_VIEW_MINIMAL (default)."
+        }
+      }
+    },
+    "mutates_state": false,
+    "returns": {
+      "type": "object",
+      "properties": {
+        "threads": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "messages": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "snippet": {
+                      "type": "string"
+                    },
+                    "subject": {
+                      "type": "string"
+                    },
+                    "sender": {
+                      "type": "string"
+                    },
+                    "toRecipients": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "ccRecipients": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "date": {
+                      "type": "string"
+                    },
+                    "plaintextBody": {
+                      "type": "string"
+                    },
+                    "htmlBody": {
+                      "type": "string"
+                    },
+                    "attachmentIds": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "attachments": {
+                      "type": "array",
+                      "items": {
+                        "type": "object"
+                      }
+                    },
+                    "labelIds": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "snippet",
+                    "subject",
+                    "sender",
+                    "toRecipients",
+                    "date",
+                    "labelIds"
+                  ]
+                }
+              }
+            },
+            "required": [
+              "id",
+              "messages"
+            ]
+          }
+        },
+        "nextPageToken": {
+          "type": "string"
+        },
+        "resultCountEstimate": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "threads",
+        "resultCountEstimate"
+      ]
+    }
+  },
+  {
+    "name": "get_thread",
+    "description": "Retrieves an email thread by ID with its messages in date order (bodies under FULL_CONTENT).",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "threadId": {
+          "type": "string",
+          "description": "The unique identifier of the thread."
+        },
+        "messageFormat": {
+          "type": "string",
+          "description": "MESSAGE_FORMAT_UNSPECIFIED, MINIMAL, FULL_CONTENT (default; bodies included) or METADATA_ONLY."
+        }
+      },
+      "required": [
+        "threadId"
+      ]
+    },
+    "mutates_state": false,
+    "returns": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "messages": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "snippet": {
+                "type": "string"
+              },
+              "subject": {
+                "type": "string"
+              },
+              "sender": {
+                "type": "string"
+              },
+              "toRecipients": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "ccRecipients": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "date": {
+                "type": "string"
+              },
+              "plaintextBody": {
+                "type": "string"
+              },
+              "htmlBody": {
+                "type": "string"
+              },
+              "attachmentIds": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "attachments": {
+                "type": "array",
+                "items": {
+                  "type": "object"
+                }
+              },
+              "labelIds": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            },
+            "required": [
+              "id",
+              "snippet",
+              "subject",
+              "sender",
+              "toRecipients",
+              "date",
+              "labelIds"
+            ]
+          }
+        }
+      },
+      "required": [
+        "id",
+        "messages"
+      ]
+    }
+  },
+  {
+    "name": "get_message",
+    "description": "Retrieves one email message by its message ID.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "messageId": {
+          "type": "string",
+          "description": "The unique identifier of the message."
+        },
+        "messageFormat": {
+          "type": "string",
+          "description": "MESSAGE_FORMAT_UNSPECIFIED, MINIMAL, FULL_CONTENT (default; bodies included) or METADATA_ONLY."
+        }
+      },
+      "required": [
+        "messageId"
+      ]
+    },
+    "mutates_state": false,
+    "returns": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "snippet": {
+          "type": "string"
+        },
+        "subject": {
+          "type": "string"
+        },
+        "sender": {
+          "type": "string"
+        },
+        "toRecipients": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "ccRecipients": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "date": {
+          "type": "string"
+        },
+        "plaintextBody": {
+          "type": "string"
+        },
+        "htmlBody": {
+          "type": "string"
+        },
+        "attachmentIds": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "attachments": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        },
+        "labelIds": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "id",
+        "snippet",
+        "subject",
+        "sender",
+        "toRecipients",
+        "date",
+        "labelIds"
+      ]
+    }
+  },
+  {
+    "name": "list_labels",
+    "description": "Lists the user-defined labels of the mailbox with their IDs. System label IDs (INBOX, UNREAD, STARRED, IMPORTANT, SENT, DRAFT, SPAM, TRASH) are usable without listing.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "pageSize": {
+          "type": "integer"
+        },
+        "pageToken": {
+          "type": "string"
+        }
+      }
+    },
+    "mutates_state": false,
+    "returns": {
+      "type": "object",
+      "properties": {
+        "labels": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "labelId": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "threadsTotal": {
+                "type": "integer"
+              },
+              "threadsUnread": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "labelId",
+              "name"
+            ]
+          }
+        },
+        "nextPageToken": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "labels"
+      ]
+    }
+  },
+  {
+    "name": "label_thread",
+    "description": "Adds labels to an entire thread (every message in it). Takes label IDs, not names; use list_labels when unsure of a user label's ID.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "threadId": {
+          "type": "string",
+          "description": "The unique identifier of the thread."
+        },
+        "labelIds": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Label IDs (system IDs such as INBOX, UNREAD, IMPORTANT, or user label IDs from list_labels), never names."
+        }
+      },
+      "required": [
+        "threadId",
+        "labelIds"
+      ]
+    },
+    "mutates_state": true,
+    "returns": {
+      "type": "object",
+      "properties": {}
+    }
+  },
+  {
+    "name": "unlabel_thread",
+    "description": "Removes labels from an entire thread. Takes label IDs, not names.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "threadId": {
+          "type": "string",
+          "description": "The unique identifier of the thread."
+        },
+        "labelIds": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Label IDs (system IDs such as INBOX, UNREAD, IMPORTANT, or user label IDs from list_labels), never names."
+        }
+      },
+      "required": [
+        "threadId",
+        "labelIds"
+      ]
+    },
+    "mutates_state": true,
+    "returns": {
+      "type": "object",
+      "properties": {}
+    }
+  },
+  {
+    "name": "list_drafts",
+    "description": "Lists the mailbox's drafts, newest first. humanEdited marks a draft a person has edited.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "pageSize": {
+          "type": "integer",
+          "description": "Drafts per page; default 20, maximum 50."
+        },
+        "pageToken": {
+          "type": "string"
+        },
+        "query": {
+          "type": "string",
+          "description": "Gmail search syntax."
+        },
+        "view": {
+          "type": "string",
+          "description": "DRAFT_VIEW_UNSPECIFIED, DRAFT_VIEW_METADATA_ONLY or DRAFT_VIEW_FULL (default)."
+        }
+      }
+    },
+    "mutates_state": false,
+    "returns": {
+      "type": "object",
+      "properties": {
+        "drafts": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "subject": {
+                "type": "string"
+              },
+              "threadId": {
+                "type": "string"
+              },
+              "toRecipients": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "ccRecipients": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "bccRecipients": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "plaintextBody": {
+                "type": "string"
+              },
+              "htmlBody": {
+                "type": "string"
+              },
+              "date": {
+                "type": "string"
+              },
+              "humanEdited": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "id",
+              "threadId",
+              "toRecipients",
+              "date"
+            ]
+          }
+        },
+        "nextPageToken": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "drafts"
+      ]
+    }
+  },
+  {
+    "name": "create_draft",
+    "description": "Creates a draft email for a person to review and send. To reply in an existing thread pass the original message's ID as replyToMessageId. Addresses are plain (no 'Name <email>'). Attachments are not supported yet. Nothing is sent.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "to": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Recipient email addresses."
+        },
+        "cc": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "bcc": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "subject": {
+          "type": "string"
+        },
+        "body": {
+          "type": "string",
+          "description": "Plain-text body."
+        },
+        "htmlBody": {
+          "type": "string"
+        },
+        "replyToMessageId": {
+          "type": "string",
+          "description": "The message this draft replies to; the draft joins its thread."
+        },
+        "attachments": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        }
+      }
+    },
+    "mutates_state": true,
+    "returns": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "subject": {
+          "type": "string"
+        },
+        "threadId": {
+          "type": "string"
+        },
+        "toRecipients": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "ccRecipients": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "bccRecipients": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "plaintextBody": {
+          "type": "string"
+        },
+        "htmlBody": {
+          "type": "string"
+        },
+        "date": {
+          "type": "string"
+        },
+        "humanEdited": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "id",
+        "threadId",
+        "toRecipients",
+        "date"
+      ]
+    }
+  }
+]

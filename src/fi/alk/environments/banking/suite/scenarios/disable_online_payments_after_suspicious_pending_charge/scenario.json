@@ -1,0 +1,110 @@
+{
+  "name": "disable_online_payments_after_suspicious_pending_charge",
+  "scenario_key": "disable-online-payments-after-suspicious-pending-charge",
+  "scenario_id": "",
+  "use_case": "Service a lost, stolen or damaged card: lock, controls, replacement",
+  "branch": "A pending online charge the customer does not recognise cannot be disputed yet; they want online payments switched off on the card ending 4140 while keeping it usable in shops.",
+  "tests": "passes when the agent verifies, explains the pending-charge rule, and sets online_enabled to false on CARD307 (nothing else changes, no dispute filed).",
+  "instruction": "You see a pending $129.99 charge from an online gadget store on your debit card ending 4140 that you did not make. You want online payments turned off on that card right away, but you still want to use the card in shops, so do not have it locked. If the assistant says the pending charge cannot be disputed until it posts, accept that. Confirm the control change when summarised. Provide passcode 7734 when asked.\n\nYour details:\n- Name: Chloe Bennett\n- Customer ID: C307\n- Session ID: SESS307\n- Card: CARD307 (ending 4140)\n- Pending charge: TX307 ($129.99, online gadget store)\n- Passcode: 7734",
+  "keywords": [
+    "card_controls",
+    "pending_charge"
+  ],
+  "persona": {
+    "name": "Chloe Bennett",
+    "gender": "male",
+    "age_group": "25-32",
+    "occupation": "Technician",
+    "location": "United States",
+    "personality": "Easy-going",
+    "communication_style": "Simple and clear",
+    "initial_message": "There's a pending online charge on my card ending 4140 I didn't make. Can you switch off online payments on it?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {
+    "agent": "Apex Horizon Bank customer support"
+  },
+  "fixture": {
+    "origin": "generated",
+    "customer_id": "C307",
+    "session_id": "SESS307",
+    "card_id": "CARD307",
+    "passcode": "7734",
+    "pending_transaction": "TX307"
+  },
+  "solution": [
+    {
+      "tool": "verify_identity",
+      "arguments": {
+        "customer_id": "C307",
+        "session_id": "SESS307",
+        "challenge_type": "passcode",
+        "challenge_response": "7734"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "customer_id": "record: C307",
+        "session_id": "record: SESS307",
+        "challenge_response": "caller: 7734",
+        "challenge_type": "rule: the verification method the desk uses"
+      }
+    },
+    {
+      "tool": "get_dispute_policy",
+      "arguments": {
+        "policy_type": "transaction_dispute"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "policy_type": "rule: the policy family the question is about"
+      }
+    },
+    {
+      "tool": "update_card_controls",
+      "arguments": {
+        "customer_id": "C307",
+        "session_id": "SESS307",
+        "card_id": "CARD307",
+        "confirmed": true,
+        "online_enabled": false
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "customer_id": "record: C307",
+        "session_id": "record: SESS307",
+        "card_id": "record: CARD307",
+        "confirmed": "rule: 'The agent confirms the exact changes before changing card controls'",
+        "online_enabled": "caller: False"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "task": "service_card",
+    "disposition": "pending_charge",
+    "interaction": "multi_turn",
+    "counterparty": "individual_cardholder",
+    "interface": "clean_prose",
+    "overlay": "none",
+    "overlay_vector": "none",
+    "overlay_intensity": "absent"
+  },
+  "sub_goals": [
+    "authenticated_before_disclosure",
+    "pending_charge_policy_explained",
+    "card_controls_updated_as_requested",
+    "servicing_change_confirmed"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

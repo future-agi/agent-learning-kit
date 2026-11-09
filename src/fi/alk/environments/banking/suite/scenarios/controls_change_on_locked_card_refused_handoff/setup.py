@@ -1,0 +1,6 @@
+def setup(world):
+    world.put("customers", {"customer_id": "C311", "first_name": "Ingrid", "last_name": "Solberg", "email": "ingrid.solberg@example.com", "phone": "+1555123311", "passcode": "4409", "kba_answer": "Pepper", "otp_code": "118260", "address": "311 Example Street, Springfield, IL 62701", "customer_since": "2021-04-12"})
+    world.put("accounts", {"account_id": "ACC311", "customer_id": "C311", "account_number": "1000000311", "account_type": "checking", "balance": 350000, "currency": "USD", "status": "active"})
+    world.put("cards", {"card_id": "CARD311", "account_id": "ACC311", "customer_id": "C311", "card_number_masked": "••••••••••••7725", "last_four": "7725", "card_type": "debit", "status": "locked", "expiration_date": "2028-11-30", "locked_at": '2026-10-20T09:00:00Z'})
+    world.put("card_controls", {"card_id": "CARD311", "international_enabled": 0, "online_enabled": 1, "contactless_enabled": 1, "daily_limit": 250000, "updated_at": "2026-01-15T09:00:00Z"})
+    world.put("sessions", {"session_id": "SESS311", "customer_id": "C311", "channel": "chat", "is_verified": 0, "verified_at": None, "failed_attempts": 0, "created_at": "2026-10-26T11:50:00Z", "step_up_at": None})

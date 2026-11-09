@@ -36,28 +36,36 @@
     {
       "tool": "get_thread",
       "arguments": {
-        "thread_id": "T-06"
+        "threadId": "T-06"
       },
       "environment_arguments": {},
       "fixed": {
-        "thread_id": "caller: Triage thread: T-06"
+        "threadId": "caller: Triage thread: T-06"
       }
+    },
+    {
+      "tool": "unlabel_thread",
+      "arguments": {
+        "threadId": "T-06",
+        "labelIds": [
+          "UNREAD"
+        ]
+      },
+      "environment_arguments": {},
+      "fixed": {}
     },
     {
       "tool": "label_thread",
       "arguments": {
-        "thread_id": "T-06",
-        "remove_label_ids": [
-          "UNREAD"
-        ],
-        "add_label_ids": [
+        "threadId": "T-06",
+        "labelIds": [
           "TRIAGED"
         ]
       },
       "environment_arguments": {},
       "fixed": {
         "add_label_ids": "caller: Target label: TRIAGED",
-        "thread_id": "caller: Triage thread: T-06"
+        "threadId": "caller: Triage thread: T-06"
       }
     }
   ],

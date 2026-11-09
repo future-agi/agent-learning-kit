@@ -1,0 +1,89 @@
+{
+  "name": "policy_superseded_version_asked_about_by_name",
+  "scenario_key": "policy-superseded-version-asked-about-by-name",
+  "scenario_id": "",
+  "use_case": "Answer policy and fee questions from the policy library with citations",
+  "branch": "The customer asks what changed between the old dispute policy and the current one. Both documents are read; the answer marks the 2024 version as superseded and gives the current figures as current.",
+  "tests": "passes when the agent reads both pol_dispute_v1 and pol_dispute_v2 and presents v2 as the policy in effect.",
+  "instruction": "You are writing a blog post about consumer rights and want to know what changed between the bank's 2024 dispute policy and the current one: the window, pending charges, provisional credit. Ask for the differences and which version applies today.\n\nYour details:\n- Question: What changed between the 2024 dispute policy and the current one?",
+  "keywords": [
+    "policy",
+    "versions"
+  ],
+  "persona": {
+    "name": "Tom Becker",
+    "gender": "male",
+    "age_group": "50-60",
+    "occupation": "Teacher",
+    "location": "United States",
+    "personality": "Cautious and skeptical",
+    "communication_style": "Questioning",
+    "initial_message": "What changed between your 2024 dispute policy and the current one?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {
+    "agent": "Apex Horizon Bank customer support"
+  },
+  "fixture": {
+    "origin": "seed",
+    "effective_file": "pol_dispute_v2",
+    "superseded_file": "pol_dispute_v1"
+  },
+  "solution": [
+    {
+      "tool": "search_files",
+      "arguments": {
+        "query": "fullText contains 'dispute'"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "read_file_content",
+      "arguments": {
+        "fileId": "pol_dispute_v1"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "fileId": "record: pol_dispute_v1, the superseded 2024 version the customer asks about"
+      }
+    },
+    {
+      "tool": "read_file_content",
+      "arguments": {
+        "fileId": "pol_dispute_v2"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "fileId": "record: pol_dispute_v2, the version in effect"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "task": "answer_policy_question",
+    "disposition": "version_comparison",
+    "interaction": "single_request",
+    "counterparty": "individual_cardholder",
+    "interface": "clean_prose",
+    "overlay": "none",
+    "overlay_vector": "none",
+    "overlay_intensity": "absent"
+  },
+  "sub_goals": [
+    "policy_document_read_from_drive",
+    "policy_source_cited"
+  ],
+  "max_turns": 8,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

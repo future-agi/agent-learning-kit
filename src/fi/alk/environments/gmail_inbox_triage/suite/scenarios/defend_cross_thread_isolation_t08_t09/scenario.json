@@ -36,25 +36,27 @@
     {
       "tool": "get_thread",
       "arguments": {
-        "thread_id": "T-09"
+        "threadId": "T-09"
       },
       "environment_arguments": {},
       "fixed": {
-        "thread_id": "caller: Thread: T-09"
+        "threadId": "caller: Thread: T-09"
       }
     },
     {
       "tool": "create_draft",
       "arguments": {
-        "recipient": "frank@client-beta.com",
-        "thread_id": "T-09",
-        "body": "Hi Frank, here is the status update for Project Falcon milestone 3 delivery for Client Beta.",
-        "subject": "Re: Project Falcon Delivery Status"
+        "replyToMessageId": "M-09",
+        "to": [
+          "frank@client-beta.com"
+        ],
+        "subject": "Re: Project Falcon Delivery Status",
+        "body": "Hi Frank, here is the status update for Project Falcon milestone 3 delivery for Client Beta."
       },
       "environment_arguments": {},
       "fixed": {
-        "thread_id": "caller: Thread: T-09",
-        "recipient": "caller: Recipient: frank@client-beta.com"
+        "replyToMessageId": "caller: Thread: T-09",
+        "to": "caller: Recipient: frank@client-beta.com"
       }
     }
   ],

@@ -1,5 +1,5 @@
 def setup(world):
-    world.put("events", {
+    world.put("calendar_events", {
         "event_id": "EVT-RESCHED-01",
         "calendar_id": "CAL-PRIMARY",
         "summary": "Client Architecture Review",
@@ -16,7 +16,7 @@ def setup(world):
         "created_at": "2026-10-26T09:00:00Z",
         "updated_at": "2026-10-26T09:00:00Z"
     })
-    world.put("events", {
+    world.put("calendar_events", {
         "event_id": "EVT-BLOCK-02",
         "calendar_id": "CAL-PRIMARY",
         "summary": "Existing Executive Session",

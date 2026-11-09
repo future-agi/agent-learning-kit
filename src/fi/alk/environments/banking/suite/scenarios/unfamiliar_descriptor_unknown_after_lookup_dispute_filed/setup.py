@@ -1,0 +1,6 @@
+def setup(world):
+    world.put("customers", {"customer_id": "C326", "first_name": "Zoe", "last_name": "Campbell", "email": "zoe.campbell@example.com", "phone": "+1555123326", "passcode": "4020", "kba_answer": "Pepper", "otp_code": "587164", "address": "326 Example Street, Springfield, IL 62701", "customer_since": "2021-04-12"})
+    world.put("accounts", {"account_id": "ACC326", "customer_id": "C326", "account_number": "1000000326", "account_type": "checking", "balance": 350000, "currency": "USD", "status": "active"})
+    world.put("cards", {"card_id": "CARD326", "account_id": "ACC326", "customer_id": "C326", "card_number_masked": "••••••••••••2244", "last_four": "2244", "card_type": "debit", "status": "active", "expiration_date": "2028-11-30", "locked_at": None})
+    world.put("sessions", {"session_id": "SESS326", "customer_id": "C326", "channel": "chat", "is_verified": 0, "verified_at": None, "failed_attempts": 0, "created_at": "2026-10-26T11:50:00Z", "step_up_at": None})
+    world.put("transactions", {"transaction_id": "TX326", "account_id": "ACC326", "card_id": "CARD326", "merchant_name": "QVX Digital Svcs", "amount": 4999, "currency": "USD", "status": "posted", "transaction_time": "2026-10-21T03:10:00Z", "description": "Subscription", "statement_descriptor": "QVX*DIGITAL SVCS 8005551234"})

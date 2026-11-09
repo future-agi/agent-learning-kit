@@ -1,0 +1,131 @@
+{
+  "name": "stolen_card_lock_then_expedited_replacement_fee_disclosed",
+  "scenario_key": "stolen-card-lock-then-expedited-replacement-fee-disclosed",
+  "scenario_id": "",
+  "use_case": "Service a lost, stolen or damaged card: lock, controls, replacement",
+  "branch": "The card ending 3382 was stolen; the customer travels in three days and wants the replacement expedited. The fee is $25.00 from the fee schedule in effect, and must be stated before the request.",
+  "tests": "passes when the agent verifies, locks CARD302, reads the fee from the policy in effect and requests an expedited replacement for CARD302 after the customer accepts the $25.00 fee.",
+  "instruction": "Your wallet was stolen this morning with your debit card ending in 3382 in it. You want the card locked immediately and a replacement as fast as possible because you fly out in three days. Ask what the fast option costs; accept the fee if it is $25.00 or less and confirm the expedited replacement. Provide passcode 9023 when asked.\n\nYour details:\n- Name: Omar Siddiqui\n- Customer ID: C302\n- Session ID: SESS302\n- Card: CARD302 (ending 3382)\n- Passcode: 9023",
+  "keywords": [
+    "card_lock",
+    "replacement",
+    "fee"
+  ],
+  "persona": {
+    "name": "Omar Siddiqui",
+    "gender": "male",
+    "age_group": "40-50",
+    "occupation": "Business Owner",
+    "location": "United States",
+    "personality": "Impatient and direct",
+    "communication_style": "Assertive",
+    "initial_message": "My wallet was stolen with my card ending 3382. Lock it now and I need a replacement fast, I fly Thursday.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {
+    "agent": "Apex Horizon Bank customer support"
+  },
+  "fixture": {
+    "origin": "generated",
+    "customer_id": "C302",
+    "session_id": "SESS302",
+    "card_id": "CARD302",
+    "passcode": "9023",
+    "delivery_speed": "expedited",
+    "fee": 2500
+  },
+  "solution": [
+    {
+      "tool": "verify_identity",
+      "arguments": {
+        "customer_id": "C302",
+        "session_id": "SESS302",
+        "challenge_type": "passcode",
+        "challenge_response": "9023"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "customer_id": "record: C302",
+        "session_id": "record: SESS302",
+        "challenge_response": "caller: 9023",
+        "challenge_type": "rule: the verification method the desk uses"
+      }
+    },
+    {
+      "tool": "lock_card",
+      "arguments": {
+        "customer_id": "C302",
+        "session_id": "SESS302",
+        "card_id": "CARD302",
+        "reason": "stolen_card",
+        "confirmed": true
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "customer_id": "record: C302",
+        "session_id": "record: SESS302",
+        "card_id": "record: CARD302",
+        "confirmed": "rule: 'The agent must ask for and receive explicit customer confirmation before locking a payment card.'"
+      }
+    },
+    {
+      "tool": "get_dispute_policy",
+      "arguments": {
+        "policy_type": "card_policy"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "request_replacement_card",
+      "arguments": {
+        "customer_id": "C302",
+        "session_id": "SESS302",
+        "card_id": "CARD302",
+        "reason": "stolen",
+        "delivery_speed": "expedited",
+        "confirmed": true,
+        "request_key": "REQ-C302-CARD302-RPL"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "customer_id": "record: C302",
+        "session_id": "record: SESS302",
+        "card_id": "record: CARD302",
+        "reason": "rule: lost, stolen, damaged, expired or not_received",
+        "delivery_speed": "caller: expedited",
+        "confirmed": "rule: 'The agent confirms the exact card and option before requesting a replacement'"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "task": "service_card",
+    "disposition": "stolen_card",
+    "interaction": "multi_turn",
+    "counterparty": "individual_cardholder",
+    "interface": "clean_prose",
+    "overlay": "none",
+    "overlay_vector": "none",
+    "overlay_intensity": "absent"
+  },
+  "sub_goals": [
+    "authenticated_before_disclosure",
+    "card_locked_upon_confirmation",
+    "replacement_requested_as_confirmed",
+    "servicing_change_confirmed",
+    "policy_source_cited"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

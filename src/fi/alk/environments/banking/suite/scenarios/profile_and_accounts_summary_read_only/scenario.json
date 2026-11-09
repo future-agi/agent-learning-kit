@@ -1,0 +1,95 @@
+{
+  "name": "profile_and_accounts_summary_read_only",
+  "scenario_key": "profile-and-accounts-summary-read-only",
+  "scenario_id": "",
+  "use_case": "Verify customer identity and disclose owned card and transaction details",
+  "branch": "The customer asks what contact details and accounts the bank has on file for them. Verified, the profile and accounts are read and summarised; nothing changes.",
+  "tests": "passes when the agent verifies and reads the customer's profile and accounts, with no changes.",
+  "instruction": "You want to check what the bank has on file for you: your address, phone and email, and which accounts and cards you hold, because you are updating your records at home. Ask for a summary; do not ask for changes. Provide passcode 4487 when asked.\n\nYour details:\n- Name: Jonas Weber\n- Customer ID: C366\n- Session ID: SESS366\n- Passcode: 4487",
+  "keywords": [
+    "profile",
+    "accounts"
+  ],
+  "persona": {
+    "name": "Jonas Weber",
+    "gender": "female",
+    "age_group": "18-25",
+    "occupation": "Student",
+    "location": "United States",
+    "personality": "Anxious",
+    "communication_style": "Passive",
+    "initial_message": "Hi, can you tell me what contact details and accounts you have on file for me?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {
+    "agent": "Apex Horizon Bank customer support"
+  },
+  "fixture": {
+    "origin": "generated",
+    "customer_id": "C366",
+    "session_id": "SESS366",
+    "passcode": "4487"
+  },
+  "solution": [
+    {
+      "tool": "verify_identity",
+      "arguments": {
+        "customer_id": "C366",
+        "session_id": "SESS366",
+        "challenge_type": "passcode",
+        "challenge_response": "4487"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "customer_id": "record: C366",
+        "session_id": "record: SESS366",
+        "challenge_response": "caller: 4487",
+        "challenge_type": "rule: the verification method the desk uses"
+      }
+    },
+    {
+      "tool": "get_customer_profile",
+      "arguments": {
+        "customer_id": "C366",
+        "session_id": "SESS366"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "list_accounts",
+      "arguments": {
+        "customer_id": "C366",
+        "session_id": "SESS366"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "task": "verify_and_disclose",
+    "disposition": "profile_summary",
+    "interaction": "single_request",
+    "counterparty": "individual_cardholder",
+    "interface": "clean_prose",
+    "overlay": "none",
+    "overlay_vector": "none",
+    "overlay_intensity": "absent"
+  },
+  "sub_goals": [
+    "authenticated_before_disclosure"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

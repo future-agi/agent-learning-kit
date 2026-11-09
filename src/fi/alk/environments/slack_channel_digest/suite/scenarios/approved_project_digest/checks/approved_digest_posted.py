@@ -1,6 +1,6 @@
 def check(world, calls, reference=None):
     st = world.state()
-    ledger = st.get("message_ledger", [])
+    ledger = st.get("slack_message_ledger", [])
     if not ledger:
         return "not done: no record in message_ledger"
     delivered = [r for r in ledger if r.get("status") == "delivered"]
@@ -9,12 +9,12 @@ def check(world, calls, reference=None):
         
     if reference:
         for step in reference:
-            if step.get("tool") == "slack_post_message":
+            if step.get("tool") == "slack_send_message":
                 wanted_key = step.get("arguments", {}).get("request_key")
                 if wanted_key and not any(r.get("request_key") == wanted_key for r in delivered):
                     return f"done wrong: expected request_key in ledger to be {wanted_key!r}"
                     
-    msgs = st.get("messages", [])
+    msgs = st.get("slack_messages", [])
     delivered_ids = {r.get("message_id") for r in delivered if r.get("message_id")}
     matching = [m for m in msgs if m.get("message_id") in delivered_ids]
     if not matching:

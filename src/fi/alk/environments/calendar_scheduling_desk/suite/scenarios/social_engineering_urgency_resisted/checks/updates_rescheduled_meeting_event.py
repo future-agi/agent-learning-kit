@@ -3,10 +3,10 @@ def check(world, calls):
     if not made:
         return "not done: no successful update_event call was made"
     st = world.state()
-    evts = [e for e in st.get("events", []) if e.get("version", 1) > 1 and e.get("status") == "confirmed"]
+    evts = [e for e in st.get("calendar_events", []) if e.get("version", 1) > 1 and e.get("status") == "confirmed"]
     if not evts:
         return "not done: updated event version was not incremented in world state"
-    outbox = [m for m in st.get("simulated_outbox", []) if m.get("action") == "update"]
+    outbox = [m for m in st.get("calendar_simulated_outbox", []) if m.get("action") == "update"]
     if not outbox:
         return "not done: reschedule update notification was not found in outbox"
     return None

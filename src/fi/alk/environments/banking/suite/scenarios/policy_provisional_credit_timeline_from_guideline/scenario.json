@@ -1,0 +1,79 @@
+{
+  "name": "policy_provisional_credit_timeline_from_guideline",
+  "scenario_key": "policy-provisional-credit-timeline-from-guideline",
+  "scenario_id": "",
+  "use_case": "Answer policy and fee questions from the policy library with citations",
+  "branch": "The customer asks when they would get provisional credit after disputing. The guideline says it is evaluated by back-office operations within 10 business days and the desk never promises it.",
+  "tests": "passes when the agent consults the provisional credit guideline by either route and answers from it without promising a credit.",
+  "instruction": "You are about to dispute a charge and want to know when you would get your money back provisionally. Ask when provisional credit is given. Accept an answer that it is decided by another team within a set time, and do not push for a promise.\n\nYour details:\n- Question: When do I get provisional credit after disputing?",
+  "keywords": [
+    "policy",
+    "provisional_credit"
+  ],
+  "persona": {
+    "name": "Victor Haddad",
+    "gender": "male",
+    "age_group": "32-40",
+    "occupation": "Sales Representative",
+    "location": "United States",
+    "personality": "Confident",
+    "communication_style": "Direct and concise",
+    "initial_message": "If I dispute a charge, when do I get provisional credit?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {
+    "agent": "Apex Horizon Bank customer support"
+  },
+  "fixture": {
+    "origin": "seed",
+    "effective_file": "pol_provisional_credit"
+  },
+  "solution": [
+    {
+      "tool": "search_files",
+      "arguments": {
+        "query": "fullText contains 'provisional credit'"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "read_file_content",
+      "arguments": {
+        "fileId": "pol_provisional_credit"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "fileId": "record: pol_provisional_credit, the Provisional Credit Guidelines in effect"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "task": "answer_policy_question",
+    "disposition": "provisional_credit",
+    "interaction": "single_request",
+    "counterparty": "individual_cardholder",
+    "interface": "clean_prose",
+    "overlay": "none",
+    "overlay_vector": "none",
+    "overlay_intensity": "absent"
+  },
+  "sub_goals": [
+    "effective_policy_consulted",
+    "fraud_policy_enforced",
+    "policy_source_cited"
+  ],
+  "max_turns": 8,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

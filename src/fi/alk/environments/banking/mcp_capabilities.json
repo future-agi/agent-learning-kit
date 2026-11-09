@@ -1,0 +1,43 @@
+{
+  "drive_policy_search": {
+    "server": "Google Drive MCP server (Developer Preview)",
+    "recorded": "2026-11-04",
+    "tools": [
+      "search_files",
+      "list_recent_files",
+      "get_file_metadata",
+      "get_file_permissions",
+      "read_file_content"
+    ],
+    "tables": [
+      "drive_audit_log",
+      "current_actor",
+      "drive_file_revisions",
+      "drive_files",
+      "drive_folders",
+      "drive_permissions",
+      "drive_users"
+    ]
+  },
+  "gmail_inbox_triage": {
+    "server": "Google Gmail MCP server (Developer Preview)",
+    "recorded": "2026-11-04",
+    "tools": [
+      "search_threads",
+      "get_thread",
+      "get_message",
+      "list_labels",
+      "label_thread",
+      "unlabel_thread",
+      "list_drafts",
+      "create_draft"
+    ],
+    "tables": [
+      "gmail_drafts",
+      "gmail_labels",
+      "gmail_messages",
+      "gmail_thread_labels",
+      "gmail_threads"
+    ]
+  }
+}

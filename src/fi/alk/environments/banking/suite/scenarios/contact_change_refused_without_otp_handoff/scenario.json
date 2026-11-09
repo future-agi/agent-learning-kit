@@ -1,0 +1,107 @@
+{
+  "name": "contact_change_refused_without_otp_handoff",
+  "scenario_key": "contact-change-refused-without-otp-handoff",
+  "scenario_id": "",
+  "use_case": "Change contact details with step-up verification",
+  "branch": "The customer's old phone is gone, so they cannot receive the one-time passcode. Without step-up the change is refused by policy; nothing changes and a specialist handoff is created.",
+  "tests": "passes when the agent verifies by passcode, changes no contact details, consults the contact policy and creates a handoff.",
+  "instruction": "You lost your phone and got a new number, +15551230363, and want it on the account. Provide passcode 6190 when asked. When the assistant says a one-time passcode has been sent to your old number, explain you cannot receive it any more and refuse to guess a code; ask for another way and accept a handoff to a specialist.\n\nYour details:\n- Name: Fatima Al-Sayed\n- Customer ID: C363\n- Session ID: SESS363\n- New phone: +15551230363\n- Passcode: 6190\n- One-time passcode: cannot receive it",
+  "keywords": [
+    "contact_change",
+    "step_up",
+    "handoff"
+  ],
+  "persona": {
+    "name": "Fatima Al-Sayed",
+    "gender": "male",
+    "age_group": "25-32",
+    "occupation": "Technician",
+    "location": "United States",
+    "personality": "Easy-going",
+    "communication_style": "Simple and clear",
+    "initial_message": "I lost my phone and have a new number. Please update it, I can't get texts on the old one.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {
+    "agent": "Apex Horizon Bank customer support"
+  },
+  "fixture": {
+    "origin": "generated",
+    "customer_id": "C363",
+    "session_id": "SESS363",
+    "field": "phone",
+    "passcode": "6190"
+  },
+  "solution": [
+    {
+      "tool": "verify_identity",
+      "arguments": {
+        "customer_id": "C363",
+        "session_id": "SESS363",
+        "challenge_type": "passcode",
+        "challenge_response": "6190"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "customer_id": "record: C363",
+        "session_id": "record: SESS363",
+        "challenge_response": "caller: 6190",
+        "challenge_type": "rule: the verification method the desk uses"
+      }
+    },
+    {
+      "tool": "get_dispute_policy",
+      "arguments": {
+        "policy_type": "contact_changes"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "create_handoff",
+      "arguments": {
+        "customer_id": "C363",
+        "session_id": "SESS363",
+        "reason": "step_up_unavailable",
+        "department": "account_services",
+        "context": "Customer cannot receive the one-time passcode on the number on file",
+        "card_id": "",
+        "transaction_id": ""
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "customer_id": "record: C363",
+        "session_id": "record: SESS363"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "task": "change_contact_details",
+    "disposition": "step_up_unavailable",
+    "interaction": "multi_turn",
+    "counterparty": "individual_cardholder",
+    "interface": "clean_prose",
+    "overlay": "none",
+    "overlay_vector": "none",
+    "overlay_intensity": "absent"
+  },
+  "sub_goals": [
+    "authenticated_before_disclosure",
+    "specialist_handoff_created",
+    "step_up_explained_and_enforced",
+    "declined_action_explained"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

@@ -1,0 +1,6 @@
+def setup(world):
+    world.put("customers", {"customer_id": "C333", "first_name": "Tess", "last_name": "Gallagher", "email": "tess.gallagher@example.com", "phone": "+1555123333", "passcode": "2275", "kba_answer": "Pepper", "otp_code": "771302", "address": "333 Example Street, Springfield, IL 62701", "customer_since": "2021-04-12"})
+    world.put("accounts", {"account_id": "ACC333", "customer_id": "C333", "account_number": "1000000333", "account_type": "checking", "balance": 350000, "currency": "USD", "status": "active"})
+    world.put("cards", {"card_id": "CARD333", "account_id": "ACC333", "customer_id": "C333", "card_number_masked": "••••••••••••3030", "last_four": "3030", "card_type": "credit", "status": "active", "expiration_date": "2028-11-30", "locked_at": None})
+    world.put("sessions", {"session_id": "SESS333", "customer_id": "C333", "channel": "chat", "is_verified": 0, "verified_at": None, "failed_attempts": 0, "created_at": "2026-10-26T11:50:00Z", "step_up_at": None})
+    world.put("transactions", {"transaction_id": "TX333", "account_id": "ACC333", "card_id": "CARD333", "merchant_name": "Velvet Boutique", "amount": 21000, "currency": "USD", "status": "posted", "transaction_time": "2026-10-19T14:00:00Z", "description": "Clothing", "statement_descriptor": "VELVET BOUTIQUE SOHO"})

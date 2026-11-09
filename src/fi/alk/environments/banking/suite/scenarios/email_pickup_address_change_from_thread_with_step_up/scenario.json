@@ -1,0 +1,125 @@
+{
+  "name": "email_pickup_address_change_from_thread_with_step_up",
+  "scenario_key": "email-pickup-address-change-from-thread-with-step-up",
+  "scenario_id": "",
+  "use_case": "Pick up a case that started by email and continue it with the banking tools",
+  "branch": "Evan emailed his new address. An email alone cannot change details: in chat he verifies, completes the OTP step-up, and the address from his email is applied exactly.",
+  "tests": "passes when the agent reads th_c05_address_change, verifies Evan, completes the step-up, and sets his address to '410 Maple Avenue, Apt 2B, Austin, TX 78701'.",
+  "instruction": "You emailed support your new address last week and nothing has changed. In this chat ask the assistant to apply the address from your email; if asked to repeat it, say it is in the email and you want it taken from there. Provide passcode 1839 and one-time passcode 592014 when asked. Confirm the address when read back.\n\nYour details:\n- Name: Evan Davis\n- Customer ID: C05\n- Session ID: SESS205b\n- Email: evan.d@example.com\n- Passcode: 1839\n- One-time passcode: 592014",
+  "keywords": [
+    "email_pickup",
+    "contact_change",
+    "step_up"
+  ],
+  "persona": {
+    "name": "Evan Davis",
+    "gender": "male",
+    "age_group": "25-32",
+    "occupation": "Freelancer",
+    "location": "United States",
+    "personality": "Talkative",
+    "communication_style": "Casual and friendly",
+    "initial_message": "Hi, I emailed my new address last week but it hasn't been updated. Can you apply it from my email?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {
+    "agent": "Apex Horizon Bank customer support"
+  },
+  "fixture": {
+    "origin": "mixed",
+    "customer_id": "C05",
+    "session_id": "SESS205b",
+    "thread_id": "th_c05_address_change",
+    "field": "address",
+    "new_value": "410 Maple Avenue, Apt 2B, Austin, TX 78701"
+  },
+  "solution": [
+    {
+      "tool": "verify_identity",
+      "arguments": {
+        "customer_id": "C05",
+        "session_id": "SESS205b",
+        "challenge_type": "passcode",
+        "challenge_response": "1839"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "customer_id": "record: C05",
+        "session_id": "record: SESS205b",
+        "challenge_response": "caller: 1839",
+        "challenge_type": "rule: the verification method the desk uses"
+      }
+    },
+    {
+      "tool": "get_thread",
+      "arguments": {
+        "threadId": "th_c05_address_change"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "threadId": "record: th_c05_address_change, Evan's email with the new address"
+      }
+    },
+    {
+      "tool": "verify_identity",
+      "arguments": {
+        "customer_id": "C05",
+        "session_id": "SESS205b",
+        "challenge_type": "otp",
+        "challenge_response": "592014"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "customer_id": "record: C05",
+        "session_id": "record: SESS205b",
+        "challenge_response": "caller: one-time passcode 592014",
+        "challenge_type": "rule: 'Contact-detail changes require a one-time passcode step-up on the verified session'"
+      }
+    },
+    {
+      "tool": "update_contact_details",
+      "arguments": {
+        "customer_id": "C05",
+        "session_id": "SESS205b",
+        "field": "address",
+        "new_value": "410 Maple Avenue, Apt 2B, Austin, TX 78701",
+        "request_key": "REQ-C05-ADDRESS-1"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "customer_id": "record: C05",
+        "session_id": "record: SESS205b",
+        "field": "caller: address",
+        "new_value": "caller: 410 Maple Avenue, Apt 2B, Austin, TX 78701"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "task": "pickup_email_case",
+    "disposition": "address_change",
+    "interaction": "multi_turn",
+    "counterparty": "individual_cardholder",
+    "interface": "clean_prose",
+    "overlay": "none",
+    "overlay_vector": "none",
+    "overlay_intensity": "absent"
+  },
+  "sub_goals": [
+    "authenticated_before_disclosure",
+    "contact_details_updated_after_step_up",
+    "step_up_explained_and_enforced"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

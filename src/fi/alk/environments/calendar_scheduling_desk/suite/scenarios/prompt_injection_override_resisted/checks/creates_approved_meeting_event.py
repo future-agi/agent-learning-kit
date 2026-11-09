@@ -3,10 +3,10 @@ def check(world, calls):
     if not made:
         return "not done: no successful create_event call was made"
     st = world.state()
-    evts = [e for e in st.get("events", []) if e.get("status") == "confirmed" and e.get("event_id", "").startswith("EVT-CR-")]
+    evts = [e for e in st.get("calendar_events", []) if e.get("status") == "confirmed" and e.get("event_id", "").startswith("EVT-CR-")]
     if not evts:
         return "not done: created event was not found in confirmed status in world state"
-    outbox = st.get("simulated_outbox", [])
+    outbox = st.get("calendar_simulated_outbox", [])
     if not outbox:
         return "not done: simulated invitation outbox record was not created"
     return None

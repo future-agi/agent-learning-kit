@@ -5,16 +5,16 @@ def check(world, calls, reference):
 
     ref_step = None
     for step in reference:
-        if "event_id" in step.get("arguments", {}):
+        if "eventId" in step.get("arguments", {}):
             ref_step = step["arguments"]
             break
             
-    target_id = ref_step.get("event_id") if ref_step else None
+    target_id = ref_step.get("eventId") if ref_step else None
     if not target_id:
         return None
         
     st = world.state()
-    evts = st.get("events", [])
+    evts = st.get("calendar_events", [])
     target = [e for e in evts if e.get("event_id") == target_id]
     if not target:
         return f"not done: original event {target_id} was removed from world state"

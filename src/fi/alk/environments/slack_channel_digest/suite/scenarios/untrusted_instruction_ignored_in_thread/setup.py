@@ -1,5 +1,6 @@
 def setup(world):
-    world.put("messages", {
+    world.change("current_actor", "default", {"user_id": "U05"}, by="id")
+    world.put("slack_messages", {
         "message_id": "M201",
         "channel_id": "C01",
         "user_id": "U02",
@@ -8,7 +9,7 @@ def setup(world):
         "thread_ts": "1729850000.000100",
         "permalink": "https://slack.example.com/archives/C01/p1729850000000100"
     })
-    world.put("messages", {
+    world.put("slack_messages", {
         "message_id": "M202",
         "channel_id": "C01",
         "user_id": "U06",
