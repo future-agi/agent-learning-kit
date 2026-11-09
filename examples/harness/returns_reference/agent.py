@@ -28,6 +28,7 @@ Environment it reads, by name:
 from __future__ import annotations
 
 import asyncio
+import threading
 import json
 import os
 import urllib.error
@@ -174,13 +175,28 @@ def _tracing() -> None:
     OpenAIAgentsInstrumentor().instrument(tracer_provider=provider)
 
 
+_LOOP: asyncio.AbstractEventLoop | None = None
+_LOOP_LOCK = threading.Lock()
+
+
+def _loop() -> asyncio.AbstractEventLoop:
+    """The process's one event loop, running in a thread of its own; started on the first turn."""
+    global _LOOP
+    with _LOOP_LOCK:
+        if _LOOP is None:
+            _LOOP = asyncio.new_event_loop()
+            threading.Thread(target=_LOOP.run_forever, name="agent-loop", daemon=True).start()
+    return _LOOP
+
+
 def reply(messages: list[dict[str, Any]]) -> str:
     conversation = [
         {"role": one.get("role", "user"), "content": str(one.get("content") or "")}
         for one in messages
         if one.get("role") in ("user", "assistant")
     ]
-    result = asyncio.run(Runner.run(COORDINATOR, conversation))
+    # Every turn on the one loop: the model client keeps connections bound to the loop it first ran on.
+    result = asyncio.run_coroutine_threadsafe(Runner.run(COORDINATOR, conversation), _loop()).result()
     return str(result.final_output or "")
 
 
