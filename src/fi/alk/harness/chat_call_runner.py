@@ -332,12 +332,15 @@ def _world_actors_record(
             for one in cast.events
             if one.get("kind") == "acted"
         ]
-    if not acted and not decisions:
+    changes = trial_state_changes(log, listed)
+    # A worker the world told apart is kept as an actor is, so its refused attempts are never lost.
+    workers_acted = any(str(entry.get("who") or "").startswith("worker:") for entry in changes)
+    if not acted and not decisions and not workers_acted:
         return None
     return {
         "actions": acted,
         "decisions": decisions,
-        "state_changes": trial_state_changes(log, listed),
+        "state_changes": changes,
         "approvals": approvals(log, decisions),
         "limits": dict(limits),
         "usage": meter.rows(),
@@ -814,9 +817,13 @@ class HostedChatCallRunner:
         listing = load_actors(self._context.bundle_dir)
         world_db = runtime.endpoints.get("world_db")
         service = runtime.endpoints.get("tools_api")
+        # Limited workers act through the tool proxy, which writes to the world's table: read it as actors' rows are.
+        limited_workers = (Path(self._context.bundle_dir) / "generated" / "tool-proxy" / "permissions.json").is_file()
         door = chat_door(
             target_world,
-            world_db.address if listing.actors and world_db is not None and world_db.protocol == "postgres" else None,
+            world_db.address
+            if (listing.actors or limited_workers) and world_db is not None and world_db.protocol == "postgres"
+            else None,
             {
                 one.id: {"permitted_actions": list(one.permitted_actions), "on_behalf_of": one.on_behalf_of}
                 for one in listing.actors

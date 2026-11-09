@@ -1669,3 +1669,27 @@ def test_a_chat_trial_s_actors_see_the_agent_s_calls_through_its_tool_proxy(tmp_
     alone = SimpleNamespace(log=TeeLog(MemoryLog(), None))
     alone.log.write({"actor_id": "manager", "name": "approve", "at": 11.0})
     assert [one["name"] for one in chat._trial_log(alone, since=10.0)] == ["approve"]
+
+
+def test_a_chat_trial_keeps_a_worker_s_refused_attempt_in_its_world_record_without_any_actor() -> None:
+    from fi.alk.harness.world_door import MemoryLog, TeeLog
+
+    class _Mirror:
+        def rows(self):
+            return [
+                {"actor_id": "agent", "worker_id": "refund", "name": "issue", "outcome": "refused",
+                 "refusal_code": "deadline_passed", "refusal": "the deadline for refund has passed", "at": 12.0},
+            ]
+
+        def write(self, row):
+            pass
+
+    door = SimpleNamespace(log=TeeLog(MemoryLog(), _Mirror()))
+    listing = SimpleNamespace(by_id=lambda: {})
+    meter = SimpleNamespace(rows=lambda: [])
+    record = chat._world_actors_record(door, listing, None, None, meter, {}, since=10.0)
+    assert record is not None
+    assert [(one["who"], [r["code"] for r in one["refused_actions"]]) for one in record["state_changes"]] == [
+        ("agent", []),
+        ("worker:refund", ["deadline_passed"]),
+    ]
