@@ -171,6 +171,8 @@ class _ToolSpans:
         self._path = path
         self._live = {}
         self._handed = {}
+        # Tool calls that passed control to the agent they ran, as the framework recorded it.
+        self._passed = set()
         self._wrapped = set()
         # Tool calls that returned something, oldest first, so a job started by one can be joined to it.
         self._launches = collections.deque(maxlen=_LAUNCHES_MAX)
@@ -481,7 +483,11 @@ class _ToolSpans:
                     self._handed[handing.get_span_context().span_id] = name
                 handed_from = _first(span.attributes or {}, _HANDED_FROM_KEYS)
                 if handed_from and name and handed_from != name:
-                    self._transfer_record(span, span_id, handed_from, name)
+                    if handing is not None:
+                        # The tool that ran it is the control pass: its own line says so, once.
+                        self._passed.add(handing.get_span_context().span_id)
+                    else:
+                        self._transfer_record(span, span_id, handed_from, name)
             elif kind != "TOOL" and entry is not None and entry[1] in self._live:
                 # A run opened right under a span by an agent other than the one running that span is the span
                 # handing it the work, as a sub-agent started through a tool is. A tool's kind is often set only
@@ -494,6 +500,7 @@ class _ToolSpans:
                     # Two instrumentations wrapped this one call; the inner span was written.
                     self._wrapped.discard(span_id)
                     self._handed.pop(span_id, None)
+                    self._passed.discard(span_id)
                 else:
                     outer = self._above(span_id, ("TOOL",))
                     if outer is not None and _same_tool(outer, span):
@@ -648,6 +655,10 @@ class _ToolSpans:
         delegated = self._handed.pop(span_id, None)
         if delegated:
             record["delegated_to"] = delegated[:256]
+            if span_id in self._passed:
+                record["transfer"] = True
+                record.pop("ended_at")
+        self._passed.discard(span_id)
         target = _transfer_target(attributes)
         # The framework's own transfer tool with no recorded target hands control to the next agent run in this run.
         framework = attributes.get("gen_ai.tool.type") in _TRANSFER_TOOL_TYPES
