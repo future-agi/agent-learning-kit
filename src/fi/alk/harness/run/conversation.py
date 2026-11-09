@@ -386,13 +386,29 @@ class ChatActors:
         for actor, fallback, outcome in self.waits.expired(self.actors):
             key = str(actor["id"])
             self.done.add(key)
-            self.events.append({"actor": key, "kind": "timeout", "fallback": fallback, "outcome": outcome,
-                                "reason": f"no answer in time: {outcome}"})
+            event = {"actor": key, "kind": "timeout", "fallback": fallback, "outcome": outcome,
+                     "reason": f"no answer in time: {outcome}"}
+            self.events.append(event)
             if outcome == "declined":
                 out.append((actor, declined_line(actor)))
             elif outcome == "fallback_action" and self.act is not None:
+                from ..world_door import record_action
+
                 self.decisions += 1
-                await self.act(key, fallback, {}, key=f"{self.seed}:{key}:fallback", parent=None)
+                # Taken with its own arguments, and as a record change when it is one this actor may make, exactly as
+                # the world's dispatcher takes a fallback, so a decline writes its record on chat too.
+                record = record_action(fallback) is not None and fallback in (actor.get("permitted_actions") or [])
+                sent = await self.act(
+                    key,
+                    fallback,
+                    dict(actor.get("fallback_arguments") or {}),
+                    key=f"{self.seed}:{key}:fallback",
+                    parent=None,
+                    **({"form": "record"} if record else {}),
+                )
+                if isinstance(sent, dict):
+                    event["status"] = sent.get("status")
+                    event["action_outcome"] = sent.get("outcome")
             elif outcome == "answered_by":
                 instead = next((one for one in self.actors if str(one["id"]) == fallback), None)
                 if instead is not None and fallback not in self.triggered:

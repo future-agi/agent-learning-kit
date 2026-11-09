@@ -750,6 +750,8 @@ def acting_fields(actor: "Actor | None") -> dict[str, Any]:
         # How long the run waits for it once due, and what happens if it does not answer.
         "timeout_seconds": activation.timeout_seconds if activation else 0,
         "fallback": activation.fallback if activation else "silent",
+        # What the fallback action is taken with, the same as when the world's dispatcher takes it.
+        "fallback_arguments": dict(activation.fallback_arguments) if activation else {},
     }
 
 
