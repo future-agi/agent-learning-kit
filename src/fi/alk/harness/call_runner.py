@@ -1279,12 +1279,16 @@ def _set_trial_faults(runtime: EnvironmentRuntime, faults: list[Any]) -> None:
     """This trial's faults at its start. A trial with faults to set fails when they cannot be set; one with none only
     clears what an earlier trial may have left, so a world database out of reach never fails it."""
     if faults:
-        _write_trial_state(runtime, faults)
+        try:
+            _write_trial_state(runtime, faults)
+        except Exception as exc:  # noqa: BLE001 - the text of a database error can carry the world's password
+            raise RuntimeError(f"trial faults could not be set: {type(exc).__name__}") from None
         return
     try:
         _write_trial_state(runtime, [])
     except Exception as exc:  # noqa: BLE001 - nothing to set; the trial runs as it would without faults
-        logger.warning("trial faults could not be cleared before a trial with none: %s", exc)
+        # Only the type: the text of a database error can carry the world's password.
+        logger.warning("trial faults could not be cleared before a trial with none: %s", type(exc).__name__)
 
 
 def runner_door(tools_url: str, dsn: str, timeout: float) -> Any:

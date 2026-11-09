@@ -2484,13 +2484,15 @@ def test_a_trial_with_no_faults_behind_a_tool_proxy_still_writes_its_own_none(tm
 
 def test_a_world_database_out_of_reach_fails_only_a_trial_with_faults_to_set(monkeypatch) -> None:
     def unreachable(runtime, faults):
-        raise OSError("connection refused")
+        raise OSError("connection to postgresql://world:secret@db refused")
 
     monkeypatch.setattr(cr, "_write_trial_state", unreachable)
     # Nothing to set: the trial runs as dev would have run it.
     cr._set_trial_faults(None, [])
-    with pytest.raises(OSError):
+    with pytest.raises(RuntimeError) as failed:
         cr._set_trial_faults(None, [{"action": "approve", "mode": "timeout_before_commit"}])
+    # The failure names the error's type only: a database error's text can carry the world's password.
+    assert "secret" not in str(failed.value) and "OSError" in str(failed.value)
 
 
 def test_a_trial_s_action_log_is_read_over_one_connection_and_reopened_after_a_failed_read(

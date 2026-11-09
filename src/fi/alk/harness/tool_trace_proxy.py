@@ -51,9 +51,10 @@ _FAULTS_LOCK = threading.Lock()
 
 
 def _trial_faults() -> list[dict]:
-    """This trial's faults on the agent's calls, written by the runner into the world's database; never from a request
-    or a file the agent's process could reach. Read over one kept connection; a world whose runner set no faults has
-    no row, and an unreadable table is no faults."""
+    """This trial's faults on the agent's calls, written by the runner into the world's database; never from a request.
+    Known limit: an agent whose own tools service holds the world's database URL can read and write that table too.
+    Read over one kept connection; a world whose runner set no faults has no row, and an unreadable table is no
+    faults."""
     global _FAULTS_CONNECTION
     if not DATABASE_URL:
         return []

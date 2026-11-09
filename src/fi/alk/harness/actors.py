@@ -333,7 +333,8 @@ def session_fingerprint(session: PreRunSession, actors: dict[str, "Actor"]) -> s
 
 class Fault(BaseModel):
     """A timeout the world gives the agent on one call of one action: before commit the world never sees it; after
-    commit it does and the agent never hears back. Graders read it; no actor or agent ever does."""
+    commit it does and the agent never hears back. Graders read it and no actor is ever told it; an agent whose own
+    tools service holds the world's database URL could read the table it is kept in (a known limit)."""
 
     model_config = ConfigDict(extra="forbid")
 
