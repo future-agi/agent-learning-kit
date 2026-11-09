@@ -941,7 +941,6 @@ def test_overlapping_calls_of_one_tool_nothing_tells_apart_keep_their_agent_and_
         Call(
             name="search", arguments={"q": "a-cut"}, ok=True, at=9.0, input_omitted=True
         ),
-        _search("other", 9.0),
     ],
 )
 def test_one_span_and_one_call_of_a_tool_pair_however_each_tracer_spelled_the_arguments(
@@ -953,6 +952,30 @@ def test_one_span_and_one_call_of_a_tool_pair_however_each_tracer_spelled_the_ar
     assert (merged.worker_id, merged.runtime_ids) == (
         "worker-a",
         {"event_id": "event-5"},
+    )
+
+
+@pytest.mark.parametrize(
+    "span",
+    [
+        _search_span("b", 9.0, "worker-b", ok=False, result="search failed"),
+        _search_span("a", 9.0, "worker-b", ok=False, result="search failed"),
+    ],
+    ids=["arguments-differ", "outcome-differs"],
+)
+def test_one_span_and_one_call_that_disagree_are_two_calls_each_tracer_missed_one(
+    span: Call,
+) -> None:
+    native = _search("a", 1.0)
+    merged = call_runner._merge_span_calls([native], [span])
+    assert sorted(
+        (c.arguments["q"], c.ok, c.worker_id, c.runtime_ids.get("event_id"))
+        for c in merged
+    ) == sorted(
+        [
+            ("a", True, "", None),
+            (span.arguments["q"], False, "worker-b", span.runtime_ids["event_id"]),
+        ]
     )
 
 

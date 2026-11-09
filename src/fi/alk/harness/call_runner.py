@@ -975,7 +975,8 @@ def _merge_span_calls(calls: list[Call], from_spans: list[Call]) -> tuple[Call, 
             tools[_tool_key(call.name)][1].append(call)
     unknown: set[str | None] = set()
     for spans, natives in tools.values():
-        spans_left, calls_left = _pair_tool(spans, natives, span_ids)
+        spans_left, calls_left, apart = _pair_tool(spans, natives, span_ids)
+        merged.extend(apart)
         if not calls_left:
             # Calls only the spans saw.
             merged.extend(spans_left)
@@ -992,10 +993,11 @@ def _merge_span_calls(calls: list[Call], from_spans: list[Call]) -> tuple[Call, 
 
 def _pair_tool(
     spans: list[Call], natives: list[Call], span_ids: set[str]
-) -> tuple[list[Call], list[Call]]:
+) -> tuple[list[Call], list[Call], list[Call]]:
     """Pair one tool's spans with the calls another tracer saw of it, on evidence that holds across the two tracers'
     clocks: an event id, then arguments and outcome between competing calls, then order when the spans did not
-    overlap, then calls that are the same in all but time. Returns the spans and calls left unpaired."""
+    overlap, then calls that are the same in all but time. Returns the spans and calls left unpaired, and the spans that
+    can be none of the calls left."""
     by_id = {
         call.runtime_ids["event_id"]: call
         for call in natives
@@ -1012,10 +1014,6 @@ def _pair_tool(
     free = [
         call for call in natives if call.runtime_ids.get("event_id") not in span_ids
     ]
-    if len(rest) == 1 and len(free) == 1:
-        # Nothing competes: one span and one call are the same call however each tracer spelled it.
-        _lend_span(rest[0], free[0])
-        return [], []
     values = {id(call): _argument_values(call) for call in [*rest, *free]}
 
     def fit(span: Call, call: Call) -> tuple[bool, bool] | None:
@@ -1030,6 +1028,12 @@ def _pair_tool(
             return None
         return bool(shared), call.ok == span.ok
 
+    if len(rest) == 1 and len(free) == 1:
+        # Nothing competes, but count alone is not identity: each tracer may have missed a different call.
+        if _compatible(rest[0], free[0], fit):
+            _lend_span(rest[0], free[0])
+            return [], [], []
+        return [], [], rest
     contested_spans: list[Call] = []
     contested_calls: list[Call] = []
     while True:
@@ -1062,7 +1066,20 @@ def _pair_tool(
     if rest and len(rest) == len(free) and _pair_in_order(rest, free, fit):
         rest, free = [], []
     rest, free = _pair_interchangeable(rest, free, fit)
-    return [*rest, *contested_spans], [*free, *contested_calls]
+    left = [*free, *contested_calls]
+    # A span no call left could be is a call only the spans saw.
+    apart = [
+        span for span in rest if not any(_compatible(span, call, fit) for call in left)
+    ]
+    rest = [span for span in rest if not any(span is other for other in apart)]
+    return [*rest, *contested_spans], left, apart
+
+
+def _compatible(span: Call, call: Call, fit: Callable[[Call, Call], Any]) -> bool:
+    """Whether a span and a call can be one call: no argument differs, and they agree on the outcome or record the
+    same result (two tracers can read one refusal differently)."""
+    strength = fit(span, call)
+    return strength is not None and (strength[1] or span.result == call.result)
 
 
 def _pair_in_order(
