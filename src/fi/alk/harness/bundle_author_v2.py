@@ -2035,7 +2035,7 @@ def _tool_actions(contract_body: dict[str, Any] | None) -> dict[str, str]:
     return {
         world_action(entry.endpoint): entry.tool
         for entry in contract.tool_entrypoints
-        if entry.endpoint.strip() and "{" not in entry.endpoint
+        if entry.endpoint.strip()
     }
 
 

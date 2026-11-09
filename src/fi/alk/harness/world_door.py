@@ -166,6 +166,17 @@ def permitted(permitted_actions: object, action: str) -> bool:
     )
 
 
+def action_tool(actions: object, action: str) -> str:
+    """The agent's own tool a world action is, from the sealed map of routes to tools: the action itself first, then a
+    templated route (`refunds.{order_id}.issue`) whose `{...}` segments its values fill. Empty when no route names it."""
+    if not isinstance(actions, dict):
+        return ""
+    tool = actions.get(action)
+    if tool is None:
+        tool = next((name for route, name in actions.items() if "{" in str(route) and _matches(str(route), action)), "")
+    return tool if isinstance(tool, str) else ""
+
+
 def record_action(action: str) -> tuple[str, str] | None:
     """The collection and verb of a record change (`approvals.change`), or None for any other action."""
     collection, _, verb = action.rpartition(".")

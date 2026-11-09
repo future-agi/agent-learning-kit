@@ -5966,5 +5966,29 @@ def test_each_routed_tool_is_sealed_under_the_world_action_its_route_names():
             {"tool": "lookup", "mode": "service", "service": "returns-api", "endpoint": "/orders/{id}"},
         ],
     }
-    # A route with a path parameter names no fixed action, so it is left out.
-    assert _tool_actions(contract) == {"orders.get": "get_order", "refunds.list": "list_refunds"}
+    assert _tool_actions(contract) == {
+        "orders.get": "get_order",
+        "refunds.list": "list_refunds",
+        "orders.{id}": "lookup",
+    }
+
+
+def test_a_templated_route_s_real_call_is_logged_under_its_tool_s_own_name():
+    from fi.alk.harness.bundle_author_v2 import _tool_actions
+    from fi.alk.harness.world_door import action_tool, world_action
+
+    contract = {
+        "tools": [{"name": "get_order"}, {"name": "issue_refund"}],
+        "tool_entrypoints": [
+            {"tool": "get_order", "mode": "service", "service": "api", "endpoint": "/orders/get"},
+            {"tool": "issue_refund", "mode": "service", "service": "api", "endpoint": "/refunds/{order_id}/issue"},
+        ],
+    }
+    actions = _tool_actions(contract)
+    assert action_tool(actions, world_action("/refunds/1043/issue?x=1")) == "issue_refund"
+    assert action_tool(actions, world_action("/orders/get")) == "get_order"
+    # One segment per template value, nothing wider, and an unknown route names no tool.
+    assert action_tool(actions, world_action("/refunds/1043/issue/now")) == ""
+    assert action_tool(actions, world_action("/refunds/issue")) == ""
+    assert action_tool({}, "orders.get") == ""
+    assert action_tool(None, "orders.get") == ""

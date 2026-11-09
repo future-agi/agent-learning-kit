@@ -518,3 +518,13 @@ def test_a_worker_deadline_that_cannot_be_read_refuses_rather_than_reads_as_none
         tp._worker_deadline()
     # Faults keep reading a broken table as none.
     assert tp._trial_faults() == []
+
+
+def test_a_templated_route_s_real_call_is_logged_under_the_agent_s_tool_name(worker_proxy, tmp_path):
+    url, rows = worker_proxy
+    (tmp_path / "shipped" / "actions.json").write_text(
+        json.dumps({"records.{deal}.approve": "approve_record"}), encoding="utf-8"
+    )
+    _post(url, "/w/c-refund/records/7/approve", {})
+    [row] = rows()
+    assert row["agent_tool"] == "approve_record"

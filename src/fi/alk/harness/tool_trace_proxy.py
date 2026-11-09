@@ -23,6 +23,7 @@ try:  # Beside the proxy in a bundle; the harness package when run from source.
         Routed,
         ToolCall,
         WorldDoor,
+        action_tool,
         permitted,
         world_action,
     )
@@ -37,6 +38,7 @@ except ImportError:  # pragma: no cover - imported as part of the package
         Routed,
         ToolCall,
         WorldDoor,
+        action_tool,
         permitted,
         world_action,
     )
@@ -183,7 +185,6 @@ class Handler(BaseHTTPRequestHandler):
         actor = (self.headers.get("x-alk-actor") or "").strip()
         proven = not actor
         action = world_action(route) or "unknown"
-        tool = (_read_json(ACTIONS_FILE) or {}).get(action)
         return ToolCall(
             action=action,
             name=route.rstrip("/").rsplit("/", 1)[-1] or "unknown",
@@ -198,7 +199,7 @@ class Handler(BaseHTTPRequestHandler):
             body=body,
             content_type=self.headers.get("content-type", "application/json"),
             worker=worker,
-            tool=tool if isinstance(tool, str) else "",
+            tool=action_tool(_read_json(ACTIONS_FILE), action),
         )
 
     def _enter(self) -> None:
