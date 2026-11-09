@@ -345,8 +345,9 @@ class Scenario(BaseModel):
     faults: list[Fault] = Field(default_factory=list)
 
     max_turns: int = 10
-    # How long each of the agent's workers may act in a trial, in seconds; it can only shorten the run's own limit.
-    # Past it the world refuses that worker's calls, and the worker ends timed out. None: the run's limit alone.
+    # Seconds from the trial's start after which no worker's call reaches the world: one deadline for all workers, not
+    # a budget per worker. It can only shorten the run's own limit; a worker still acting then is refused and ends
+    # timed out. None: the run's limit alone.
     worker_budget_seconds: int | None = Field(default=None, gt=0)
 
     # Where this call is made from. A string names the place ("street", "vehicle", "retail"), and

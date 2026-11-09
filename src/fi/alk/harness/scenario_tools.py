@@ -2394,9 +2394,10 @@ def scenario_tools(
                 },
                 "worker_budget_seconds": {
                     "type": "integer",
-                    "description": "Only for an agent with workers: how long each worker may act in this "
-                    "trial, in seconds. Past it the world refuses that worker's calls and it ends timed "
-                    "out. Leave out to use the run's own limit.",
+                    "description": "Only for an agent with workers: seconds from the start of the trial after "
+                    "which no worker's call reaches the world. One deadline for all workers, counted from "
+                    "the trial's start, not from each worker's hand-off: a worker still acting then is "
+                    "refused and ends timed out. Leave out to use the run's own limit.",
                 },
                 "coverage": {
                     "type": "object",
