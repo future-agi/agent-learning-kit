@@ -286,3 +286,30 @@ def test_a_scenario_s_worker_budget_is_positive_and_absent_from_its_document_whe
     assert document_for(plain.model_copy(update={"worker_budget_seconds": 20}))["worker_budget_seconds"] == 20
     with pytest.raises(ValidationError):
         Scenario(name="a", instruction="x", worker_budget_seconds=0)
+
+
+# The platform's result receipt validates a sub-goal's subject with this pattern
+# (future-agi simulate/serializers/hosted_harness.py). Every subject the harness accepts must match it, or the whole
+# receipt is refused and the call's result is lost.
+PLATFORM_SUBJECT = r"^(task|worker:.*\S.*)$"
+
+
+@pytest.mark.parametrize("subject", ["task", "worker:refund", "worker:Order lookup", "worker:order-lookup_2"])
+def test_every_subject_the_harness_accepts_matches_the_platform_s_receipt_rule(subject):
+    import re
+
+    from fi.alk.harness.catalogue import SubGoal
+
+    accepted = SubGoal.model_validate({"name": "g", "subject": subject}).subject
+    assert re.match(PLATFORM_SUBJECT, accepted)
+
+
+@pytest.mark.parametrize("subject", ["worker:", "worker:   ", "agent"])
+def test_a_subject_the_platform_would_refuse_is_refused_by_the_harness_too(subject):
+    import re
+
+    from fi.alk.harness.catalogue import SubGoal
+
+    assert not re.match(PLATFORM_SUBJECT, subject.strip())
+    with pytest.raises(ValueError):
+        SubGoal.model_validate({"name": "g", "subject": subject})
