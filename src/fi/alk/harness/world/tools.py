@@ -663,7 +663,8 @@ def world_actor_tools(
     async def add_actor(args: dict[str, Any]) -> dict[str, Any]:
         listing = load_actors(destination)
         current = listing.by_id().get(str(args.get("id") or ""))
-        given = {name: value for name, value in args.items() if name != "provenance"}
+        given = {name: value for name, value in args.items() if name not in ("provenance", "share_actions")}
+        shared = {str(one) for one in args.get("share_actions") or []}
         if given.get("surface") in CHANNELS:
             # A way of speaking sent as the place it acts: said back, never saved as a surface no world has.
             return _err(
@@ -712,6 +713,20 @@ def world_actor_tools(
                 f"Not added: {actor.id} acts in {', '.join(unnamed)} but has no identity there. Give `identities` "
                 f"with who they are in each one's records (the member, user or handle the world seeds for them), "
                 f"for example {{{', '.join(repr(one) + ': ...' for one in unnamed)}}}."
+            )
+        from ..actors import permission_conflicts
+
+        unconfirmed = [(action, holder) for action, holder in permission_conflicts(listing, actor) if action not in shared]
+        if unconfirmed:
+            # One actor's own action given to a second lets both take it: the person decides, never the builder.
+            return _err(
+                "Not added: "
+                + " ".join(
+                    f"{action} is held only by {holder.name or holder.id} today; giving it to {actor.id} lets both "
+                    "take it."
+                    for action, holder in unconfirmed
+                )
+                + " Ask the person whether both should have it; if they confirm, send it again with `share_actions`."
             )
         if current is not None and current.channel != actor.channel:
             using = scenarios_using(destination, actor.id)

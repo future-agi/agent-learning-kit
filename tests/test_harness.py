@@ -10306,3 +10306,49 @@ def test_an_event_started_scenario_for_an_agent_reached_by_a_call_is_refused(tmp
     )
     assert said.get("is_error")
     assert "nothing can deliver an event to it" in said["content"][0]["text"]
+
+
+def test_the_builder_does_not_give_one_actor_s_own_action_to_a_second_until_the_person_confirms(
+    tmp_path, monkeypatch
+):
+    import asyncio
+
+    from fi.alk.harness.actors import load_actors
+    from fi.alk.harness.world import tools as world_tools
+
+    _root, contract = _saved_world(tmp_path)
+    server, _world = world_tools.world_tools(contract, tmp_path)
+
+    async def call(name, payload):
+        from mcp.types import CallToolRequestParams
+
+        handler = _request_handler(_instance(server), "tools/call")
+        result = await handler.handler(
+            None, CallToolRequestParams(name=name, arguments=payload)
+        )
+        return result.content[0].text
+
+    reviewer = {
+        "id": "reviewer",
+        "name": "Robin",
+        "role": "reviewer",
+        "permitted_actions": ["records.approve"],
+        "identities": {"records": "robin"},
+    }
+    manager = {
+        "id": "manager",
+        "name": "Lee",
+        "role": "manager",
+        "permitted_actions": ["records.approve"],
+        "identities": {"records": "lee"},
+    }
+    asyncio.run(call("add_actor", reviewer))
+
+    refused = asyncio.run(call("add_actor", manager))
+    assert refused.startswith("Not added") and "records.approve is held only by Robin" in refused
+    assert [one.id for one in load_actors(tmp_path).actors] == ["reviewer"]
+    confirmed = asyncio.run(call("add_actor", {**manager, "share_actions": ["records.approve"]}))
+    assert not confirmed.startswith("Not added"), confirmed
+    saved = load_actors(tmp_path).by_id()["manager"]
+    assert saved.permitted_actions == ["records.approve"]
+    assert "share_actions" not in saved.model_dump()
