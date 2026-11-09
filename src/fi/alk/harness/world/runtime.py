@@ -156,6 +156,8 @@ class Call:
     worker_label: str = ""
     task_id: str = ""
     task_label: str = ""
+    # Why a refused call was refused: "world_rule" when the tool ran and said no, otherwise what stopped it first.
+    refusal_code: str = ""
 
 
 def tool_call_attribution(record: Mapping[str, Any]) -> dict[str, str]:
@@ -322,6 +324,7 @@ class GeneratedWorld(EnvironmentAdapter):
                     arguments=args,
                     ok=False,
                     refused=True,
+                    refusal_code="unknown_tool",
                     error=(
                         f"no such tool {name!r}; this agent has "
                         f"{', '.join(sorted(self.handlers)) or 'none'}"
@@ -344,6 +347,7 @@ class GeneratedWorld(EnvironmentAdapter):
                         arguments=args,
                         ok=False,
                         refused=True,
+                        refusal_code="world_rule",
                         error=str(raised),
                     )
                 )
@@ -369,6 +373,7 @@ class GeneratedWorld(EnvironmentAdapter):
                     result=value,
                     ok=False,
                     refused=True,
+                    refusal_code="world_rule",
                     error=str(value)[:400],
                 )
             )
