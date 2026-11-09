@@ -3917,7 +3917,9 @@ def test_adk_servers_are_recognised_however_adk_is_invoked_and_however_the_app_i
     (nested / "agent.py").write_text("root_agent = object()\n", encoding="utf-8")
     # ADK also accepts an app defined by root_agent.yaml, as one app or as a sub-app.
     (tmp_path / "yaml_app").mkdir()
-    (tmp_path / "yaml_app" / "root_agent.yaml").write_text("name: x\n", encoding="utf-8")
+    (tmp_path / "yaml_app" / "root_agent.yaml").write_text(
+        "name: x\n", encoding="utf-8"
+    )
     (tmp_path / "yaml_agents" / "only_yaml").mkdir(parents=True)
     (tmp_path / "yaml_agents" / "only_yaml" / "root_agent.yaml").write_text(
         "name: y\n", encoding="utf-8"
