@@ -1017,25 +1017,33 @@ _OUTCOMES = ("committed", "refused", "faulted", "duplicate")
 
 
 def trial_state_changes(log: list[dict[str, Any]], listed: Mapping[str, Any]) -> list[dict[str, Any]]:
-    """What each participant attempted in this trial and what the world made of it: one entry for the agent and one
-    per actor that acted, with attempted, committed, refused, faulted and duplicate counts and the actions it
-    committed, in order. Attempted, refused and committed are kept apart; a row from before outcomes were recorded
-    counts as committed when it succeeded and refused when the world refused it."""
+    """What each participant attempted in this trial and what the world made of it: one entry for the agent, one per
+    actor that acted and one per agent worker the world told apart (`worker:<id>`, by the channel it came through),
+    with attempted, committed, refused, faulted and duplicate counts, the actions it committed and the ones the world
+    refused with why, in order. Attempted, refused and committed are kept apart; a row from before outcomes were
+    recorded counts as committed when it succeeded and refused when the world refused it."""
     entries: dict[str, dict[str, Any]] = {}
     for row in log:
         if is_pre_run(row.get("idempotency_key")):
             # Written before the run: the trial's starting point, not a change made during it.
             continue
         who = str(row.get("actor_id") or AGENT)
+        if who == AGENT and row.get("worker_id"):
+            who = f"worker:{row['worker_id']}"
         actor = listed.get(who)
         entry = entries.setdefault(
             who,
             {
                 "who": who,
-                "name": "the agent" if who == AGENT else (actor.name if actor is not None else who),
+                "name": "the agent"
+                if who == AGENT
+                else actor.name
+                if actor is not None
+                else str(row.get("worker_id") or who),
                 "attempted": 0,
                 **{outcome: 0 for outcome in _OUTCOMES},
                 "committed_actions": [],
+                "refused_actions": [],
             },
         )
         entry["attempted"] += 1
@@ -1046,12 +1054,24 @@ def trial_state_changes(log: list[dict[str, Any]], listed: Mapping[str, Any]) ->
             entry[outcome] += 1
         if outcome == "committed":
             entry["committed_actions"].append(str(row.get("name") or ""))
-    # The agent always has a line: "no change" is a result, since doing nothing can be correct.
+        elif outcome == "refused":
+            # An attempted violation stays visible: what was tried and why the world said no.
+            entry["refused_actions"].append(
+                {
+                    "action": str(row.get("name") or ""),
+                    "code": str(row.get("refusal_code") or ""),
+                    "reason": str(row.get("refusal") or row.get("error") or ""),
+                }
+            )
+    # The agent always has a line: "no change" is a result, since doing nothing can be correct. Its workers are the
+    # agent too, so a change one of them committed is not "no change".
     agent = entries.pop(AGENT, None) or {
         "who": AGENT, "name": "the agent", "attempted": 0, **{outcome: 0 for outcome in _OUTCOMES},
-        "committed_actions": [],
+        "committed_actions": [], "refused_actions": [],
     }
-    agent["no_change"] = not agent["committed_actions"]
+    agent["no_change"] = not agent["committed_actions"] and not any(
+        entry["committed_actions"] for who, entry in entries.items() if who.startswith("worker:")
+    )
     return [agent] + list(entries.values())
 
 
@@ -2561,8 +2581,13 @@ class CallRunnerImpl:
         )
         changes = (
             _state_changes(runtime, self._context.bundle_dir)
-            if acted or actor_decisions
+            if case is not None
+            and self._context.evidence_seam is EvidenceSeam.TOOL_TRACE
             else []
+        )
+        # A worker the world told apart is kept beside the actors, so its refused attempts are never lost.
+        workers_acted = any(
+            str(entry.get("who") or "").startswith("worker:") for entry in changes
         )
         marks = _agent_marks(runtime, self._context.bundle_dir, calls) if acted else []
         if calls:
@@ -2595,7 +2620,7 @@ class CallRunnerImpl:
                         "summary": took_part.get("call_actors") or [],
                         "events": took_part.get("call_actor_events") or [],
                     }
-                if acted or actor_decisions:
+                if acted or actor_decisions or workers_acted:
                     # Kept out of the tool trace, whose every line is one of the agent's own calls. `decisions` is
                     # what each actor chose and why (live) or was scheduled to do (mocked); `actions` what the world
                     # made of it.

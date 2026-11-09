@@ -2604,6 +2604,45 @@ def test_a_world_actor_s_actions_are_sealed_with_the_transcript_never_as_the_age
     ] == [("approve", "reviewer")]
 
 
+def test_a_worker_s_refused_attempt_is_sealed_in_the_trial_s_state_changes_without_any_actor(
+    tmp_path, monkeypatch
+) -> None:
+    _job_obj, context = _context(
+        tmp_path=tmp_path, evidence_seam=EvidenceSeam.TOOL_TRACE
+    )
+    _write_scenario_doc(context.bundle_dir, scenario_key="k1")
+    columns = ["name", "arguments", "result", "ok", "error", "at", "action_id", "actor_id", "worker_id", "outcome",
+               "refusal_code", "refusal"]
+    rows = [
+        ("update_status", {}, None, False, "", 1.0, "a1", "agent", "order_lookup", "refused", "not_permitted",
+         "orders.update_status is not permitted for order_lookup"),
+    ]
+    monkeypatch.setitem(sys.modules, "psycopg", _FakePsycopg(rows, columns))
+
+    async def place_call(spec):
+        return _report(
+            transcript="user: hello", messages=[{"role": "user", "content": "hello"}]
+        )
+
+    adapter = FakeAdapter()
+    runner = cr.CallRunnerImpl(adapter, context, place_call=place_call)
+    _run(
+        runner,
+        _FakeScenario("k1"),
+        _runtime(
+            endpoints={"database": _postgres_endpoint()},
+            metadata={"livekit_agent_name": "agent-w0"},
+        ),
+    )
+    sealed = {kind: data for kind, _key, data in adapter.uploads}
+    changes = json.loads(sealed[cr.ArtifactKind.TRANSCRIPT])["world_actors"]["state_changes"]
+    # The agent keeps its own line ("no change"); the worker's refused attempt is its own entry.
+    assert [(one["who"], one["refused"], [r["code"] for r in one["refused_actions"]]) for one in changes] == [
+        ("agent", 0, []),
+        ("worker:order_lookup", 1, ["not_permitted"]),
+    ]
+
+
 def test_a_trial_s_faults_go_to_the_world_database_and_are_cleared_after_the_call(tmp_path, monkeypatch) -> None:
     _job_obj, context = _context(tmp_path=tmp_path, evidence_seam=EvidenceSeam.TOOL_TRACE)
     _write_scenario_doc(context.bundle_dir, scenario_key="k1")
@@ -2761,3 +2800,20 @@ def test_a_trial_with_a_worker_deadline_writes_it_beside_its_faults(monkeypatch)
     cr._set_trial_faults(None, [], 1030.0)
     cr._set_trial_faults(None, [{"action": "approve"}])
     assert written == [([], 1030.0), ([{"action": "approve"}], None)]
+
+
+def test_a_change_one_of_the_agent_s_workers_committed_is_not_no_change() -> None:
+    log = [
+        {"name": "issue_refund", "actor_id": "agent", "worker_id": "refund", "outcome": "committed", "ok": True},
+        {"name": "cancel_order", "actor_id": "agent", "worker_id": "lookup", "outcome": "refused",
+         "refusal_code": "not_permitted", "refusal": "orders.cancel is not permitted for lookup"},
+    ]
+    agent, *workers = cr.trial_state_changes(log, {})
+    assert (agent["who"], agent["no_change"]) == ("agent", False)
+    assert [(one["who"], one["committed_actions"], one["refused_actions"]) for one in workers] == [
+        ("worker:refund", ["issue_refund"], []),
+        ("worker:lookup", [], [{"action": "cancel_order", "code": "not_permitted",
+                                "reason": "orders.cancel is not permitted for lookup"}]),
+    ]
+    # Only refused attempts: nothing changed.
+    assert cr.trial_state_changes(log[1:], {})[0]["no_change"] is True
