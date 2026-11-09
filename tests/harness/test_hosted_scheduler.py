@@ -4852,3 +4852,58 @@ def test_an_actor_who_speaks_but_only_acted_in_the_world_reached_the_agent() -> 
     assert hs._call_actors_missing(scenario, posted) == ""
     refused = replace(posted, world_actions=({"actor_id": "jordan", "outcome": "refused", "name": "post_message"},))
     assert hs._call_actors_missing(scenario, refused) == "Jordan (not_delivered)"
+
+
+def _graded(goals, outcome):
+    async def scenario():
+        outbound = FakeOutbound()
+        pool, _ = _pool(1, outbound=outbound)
+        await pool.start()
+
+        class Runner:
+            async def run(self, scenario, runtime):
+                return outcome
+
+        scheduler = hs.HostedScheduler(
+            pool=pool, world_factory=FakeWorldFactory(), call_runner=Runner(), outbound=outbound, job_seed=1
+        )
+        result = await scheduler.run([FakeScenario("s1", "id-1", sub_goals=goals)])
+        await pool.close()
+        return result.receipts[0]
+
+    return asyncio.run(scenario())
+
+
+@dataclass
+class _WorkerGoal(FakeSubGoal):
+    worker: str = ""
+
+
+def test_a_worker_s_check_reads_only_that_worker_s_calls_and_without_any_is_inconclusive() -> None:
+    calls = (
+        hs.Call(name="get_order", arguments={}, worker_id="order_lookup"),
+        hs.Call(name="issue_refund", arguments={}, worker_id="refund"),
+        hs.Call(name="send_reply", arguments={}),
+    )
+    seen: dict[str, list[str]] = {}
+
+    def lane(name):
+        def check(world, given):
+            seen[name] = [one.name for one in given]
+
+        return check
+
+    receipt = _graded(
+        [
+            _WorkerGoal("lookup_read_only", lane("lookup"), worker="order_lookup"),
+            _WorkerGoal("task_done", lane("task")),
+            _WorkerGoal("audit_logged", lambda w, c: None, worker="audit"),
+        ],
+        _call_outcome(turns=2, calls=calls),
+    )
+    assert seen == {"lookup": ["get_order"], "task": ["get_order", "issue_refund", "send_reply"]}
+    lookup, task, audit = receipt.sub_goals
+    assert (lookup.verdict, task.verdict) == ("pass", "pass")
+    # Absence is never a pass: a worker with nothing in the world's log cannot be graded.
+    assert (audit.verdict, audit.held) == ("inconclusive", None)
+    assert audit.reason == "Inconclusive: worker audit made no tool call the world recorded"

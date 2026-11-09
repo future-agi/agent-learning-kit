@@ -103,13 +103,27 @@ def test_returns_reference_declares_the_workers_and_tools_its_app_builds() -> No
 
     app = ROOT / "examples" / "harness" / "returns_reference"
     reference = json.loads((app / "reference.json").read_text(encoding="utf-8"))
+    tree = ast.parse((app / "agent.py").read_text(encoding="utf-8"))
+    # A worker's tools are built by a function of their own (each reaches the world through its own address).
+    builders = {
+        node.name: sorted(
+            inner.name
+            for inner in node.body
+            if isinstance(inner, ast.FunctionDef)
+            and any(getattr(one, "id", "") == "function_tool" for one in inner.decorator_list)
+        )
+        for node in tree.body
+        if isinstance(node, ast.FunctionDef)
+    }
     built = {}
-    for node in ast.walk(ast.parse((app / "agent.py").read_text(encoding="utf-8"))):
+    for node in ast.walk(tree):
         if isinstance(node, ast.Call) and getattr(node.func, "id", "") == "Agent":
             fields = {one.arg: one.value for one in node.keywords}
-            tools = fields["tools"].elts
-            built[ast.literal_eval(fields["name"])] = sorted(
-                one.id for one in tools if isinstance(one, ast.Name)
+            tools = fields["tools"]
+            built[ast.literal_eval(fields["name"])] = (
+                builders[tools.func.id]
+                if isinstance(tools, ast.Call)
+                else sorted(one.id for one in tools.elts if isinstance(one, ast.Name))
             )
     topology = reference["topology"]
     assert topology["coordinator"] in built

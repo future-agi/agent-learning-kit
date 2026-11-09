@@ -219,6 +219,8 @@ class DeclaredWorker(BaseModel):
     name: str = ""
     # The contract tools this worker holds, by name.
     tools: list[str] = Field(default_factory=list)
+    # The ones it may use, when that is narrower than what its code holds; empty means all of `tools`.
+    allowed_tools: list[str] = Field(default_factory=list)
     # separate: the worker's tools can be told apart from the others' at the world; shared: they cannot.
     binding: Literal["separate", "shared"] = "shared"
     # For a separate worker, the environment variable its tool client reads as the base address of its tools.
@@ -1528,6 +1530,12 @@ def validate_contract(contract: AgentContract) -> list[str]:
             problems.append(
                 f"worker[{index}]:no-id: give this worker the id the agent's source uses for it, "
                 "one that no other worker has."
+            )
+        beyond = sorted(set(worker.allowed_tools) - set(worker.tools))
+        if beyond:
+            problems.append(
+                f"worker[{index}]:allowed-tools-it-does-not-hold:{','.join(beyond)}: a worker may be allowed "
+                "only tools it holds."
             )
     worker_ids = [worker.id for worker in contract.workers if worker.id.strip()]
     repeated = sorted({one for one in worker_ids if worker_ids.count(one) > 1})
