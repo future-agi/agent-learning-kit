@@ -60,9 +60,9 @@ _FAULTS_CONNECTION = None
 _FAULTS_LOCK = threading.Lock()
 
 
-def _trial_row(column: str) -> tuple | None:
+def _trial_row(column: str, *, strict: bool = False) -> tuple | None:
     """One column of this trial's row, read over the one kept connection; None when there is no database, table,
-    column or row."""
+    column or row. With `strict`, a read that failed for any other reason raises instead of reading as nothing."""
     global _FAULTS_CONNECTION
     if not DATABASE_URL:
         return None
@@ -75,7 +75,9 @@ def _trial_row(column: str) -> tuple | None:
             return _FAULTS_CONNECTION.execute(
                 f"SELECT {column} FROM _alk_trial_faults WHERE id = 1"  # noqa: S608 - a fixed column name
             ).fetchone()
-        except Exception:  # noqa: BLE001 - no table (nothing was ever set), or no database: nothing this trial
+        except Exception as exc:  # noqa: BLE001 - no table or column: nothing was ever set this trial
+            if strict and type(exc).__name__ not in {"UndefinedTable", "UndefinedColumn"}:
+                raise
             return None
 
 
@@ -98,8 +100,9 @@ def _read_json(path: str) -> dict | None:
 
 
 def _worker_deadline() -> float | None:
-    """This trial's worker deadline, written by the runner beside its faults; none when it set none."""
-    row = _trial_row("worker_deadline_at")
+    """This trial's worker deadline, written by the runner beside its faults; none when it set none. A read that failed
+    raises, so the door refuses workers rather than letting them act with no deadline."""
+    row = _trial_row("worker_deadline_at", strict=True)
     value = row[0] if row else None
     return float(value) if isinstance(value, (int, float)) else None
 

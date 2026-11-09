@@ -1210,7 +1210,10 @@ def _write_trial_state(
     call (`deadline_passed`)."""
     database = _find_postgres_endpoint(runtime)
     if database is None:
-        if faults or worker_deadline_at:
+        if worker_deadline_at:
+            # Workers would act with no deadline at all: the trial fails rather than grade them as if one held.
+            raise RuntimeError("the workers' deadline cannot be set: this world has no database the tool proxy reads")
+        if faults:
             logger.warning("trial state cannot be set: this world has no database the tool proxy reads it from")
         return
     import psycopg

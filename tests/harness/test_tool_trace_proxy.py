@@ -491,3 +491,30 @@ def test_a_call_is_logged_with_the_agent_s_own_tool_name_beside_its_route(worker
     assert _post(url, "/ok", {})[0] == 201
     # The route stays the row's name (what actors read); the tool the agent called is beside it, for grading.
     assert [(one["name"], one["agent_tool"]) for one in rows()] == [("approve", "approve_record"), ("ok", None)]
+
+
+def test_a_worker_deadline_that_cannot_be_read_refuses_rather_than_reads_as_none(monkeypatch):
+    from fi.alk.harness import tool_trace_proxy as tp
+
+    class _Conn:
+        closed = False
+
+        def __init__(self, error):
+            self.error = error
+
+        def execute(self, *_args):
+            raise self.error
+
+    class UndefinedColumn(Exception):
+        pass
+
+    monkeypatch.setattr(tp, "DATABASE_URL", "postgresql://example")
+    # Nothing set this trial (no column yet): no deadline.
+    monkeypatch.setattr(tp, "_FAULTS_CONNECTION", _Conn(UndefinedColumn("worker_deadline_at")))
+    assert tp._worker_deadline() is None
+    # Any other failure: the read raises, and the door refuses every worker call.
+    monkeypatch.setattr(tp, "_FAULTS_CONNECTION", _Conn(OSError("connection lost")))
+    with pytest.raises(OSError):
+        tp._worker_deadline()
+    # Faults keep reading a broken table as none.
+    assert tp._trial_faults() == []

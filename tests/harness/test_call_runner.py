@@ -2821,6 +2821,14 @@ def test_a_trial_with_a_worker_deadline_writes_it_beside_its_faults(monkeypatch)
     assert written == [([], 1030.0), ([{"action": "approve"}], None)]
 
 
+def test_a_worker_deadline_that_cannot_be_written_fails_the_trial_rather_than_run_without_one(monkeypatch):
+    monkeypatch.setattr(cr, "_find_postgres_endpoint", lambda runtime: None)
+    with pytest.raises(RuntimeError, match="deadline cannot be set"):
+        cr._write_trial_state(None, [], 1030.0)
+    # Faults alone on a world with no database keep the old behaviour: noted, the trial runs.
+    cr._write_trial_state(None, [{"action": "approve"}])
+
+
 def test_a_change_one_of_the_agent_s_workers_committed_is_not_no_change() -> None:
     log = [
         {"name": "issue_refund", "actor_id": "agent", "worker_id": "refund", "outcome": "committed", "ok": True},
