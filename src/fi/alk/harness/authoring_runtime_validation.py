@@ -1672,9 +1672,10 @@ async def validate_and_repair(
         )
         candidate_hash = _generic_candidate_hash(source, authoring)
         for _attempt in range(decision_bound):
+            # A record left by an earlier attempt must never speak for this one.
+            failure_record.clear()
             try:
                 count = await validate(job, source, authoring)
-                failure_record.clear()
             except RuntimeValidationError as exc:
                 if readiness_only and exc.phase == "scenarios":
                     raise
@@ -1950,9 +1951,9 @@ async def validate_and_repair(
     repairs = {"environment": 0, "scenarios": 0}
     for attempt in range(5):
         print(f"runtime validation: attempt {attempt + 1}/5", flush=True)
+        failure_record.clear()
         try:
             count = await validate(job, source, authoring)
-            failure_record.clear()
         except RuntimeValidationError as exc:
             print(f"runtime validation: {exc.phase}: {exc}", flush=True)
             failure_record.record(exc.phase, exc)

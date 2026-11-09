@@ -379,6 +379,12 @@ def _tool_request(tool) -> str:
     )
 
 
+# The per-tool requests after qualification: one fresh message per tool not yet shown,
+# bounded so a check with many tools stays well inside the platform's check deadline.
+TOOL_REQUEST_LIMIT = 8
+TOOL_REQUEST_SECONDS = 300.0
+
+
 async def request_uncovered_tools(
     *,
     interface,
@@ -391,8 +397,13 @@ async def request_uncovered_tools(
     secret_values,
     local_auth_values=None,
     timeout=120.0,
+    budget=TOOL_REQUEST_SECONDS,
+    limit=TOOL_REQUEST_LIMIT,
 ) -> None:
     """Ask the agent once for each tool the qualification conversation did not show.
+
+    At most ``limit`` requests within ``budget`` seconds in all, so a check stays well
+    inside its deadline; the tools left over are recorded as ``not_asked``.
 
     The world is disposable and reset after qualification, so a tool is asked whatever it
     changes there; only a tool the contract says leaves the world (no reachable
@@ -412,6 +423,8 @@ async def request_uncovered_tools(
     body.setdefault("unobserved", [])
     shown = {one["tool"] for one in [*body["tools"], *body["unobserved"]]}
     outside = _outside_world(contract)
+    deadline = time.monotonic() + budget
+    asked_count = 0
     for tool in getattr(contract, "tools", None) or []:
         if tool.name in shown:
             continue
@@ -419,6 +432,12 @@ async def request_uncovered_tools(
             # Asking could reach a real system: the contract says the tool leaves the world.
             body["unobserved"].append({"tool": tool.name, "reason": "reaches_outside"})
             continue
+        left = deadline - time.monotonic()
+        if asked_count >= limit or left <= 0:
+            body["unobserved"].append({"tool": tool.name, "reason": "not_asked"})
+            continue
+        asked_count += 1
+        request_timeout = min(timeout, left)
         since = time.time()
         try:
             traced = len(_collect_file_tool_calls(runtime))
@@ -427,8 +446,8 @@ async def request_uncovered_tools(
                 wrapper=create_chat_wrapper(
                     interface,
                     endpoint,
-                    timeout=timeout,
-                    total_timeout=timeout,
+                    timeout=request_timeout,
+                    total_timeout=request_timeout,
                     secret_values=secret_values,
                     local_auth_values=local_auth_values,
                 ),

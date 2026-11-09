@@ -153,7 +153,7 @@ class _World:
         return SimpleNamespace(content="{}")
 
 
-def _requests(tmp_path, monkeypatch, *, runtime=PROXIED, **behaviour):
+def _requests(tmp_path, monkeypatch, *, runtime=PROXIED, bounds=None, **behaviour):
     """Each request is answered as ``behaviour`` says, per tool: ``world`` (the call goes
     through the proxy), ``reported`` (the agent says it ran it; nothing reached the world),
     ``returned`` (the agent returns the call for the harness to run), ``fail``."""
@@ -216,6 +216,7 @@ def _requests(tmp_path, monkeypatch, *, runtime=PROXIED, **behaviour):
             bundle=tmp_path,
             source=None,
             secret_values={},
+            **(bounds or {}),
         )
     )
     return _body(tmp_path), sent
@@ -255,6 +256,28 @@ def test_a_request_the_agent_cannot_answer_or_ignores_leaves_the_tool_unobserved
 
     assert {"tool": "track_parcel", "reason": "request_failed"} in body["unobserved"]
     assert {"tool": "get_hours", "reason": "not_called"} in body["unobserved"]
+
+
+def test_requests_past_the_limit_are_recorded_as_not_asked(tmp_path, monkeypatch):
+    body, sent = _requests(
+        tmp_path, monkeypatch, bounds={"limit": 1}, names=NAMES, track_parcel="world"
+    )
+
+    assert len(sent) == 1
+    asked = [one["tool"] for one in body["tools"] if one.get("source") == "tool_request"]
+    left = sorted(one["tool"] for one in body["unobserved"] if one["reason"] == "not_asked")
+    assert len(asked) + len(left) == 3
+    assert len(left) == 2
+    assert all(one.get("reason") != "not_asked" for one in body["tools"])
+
+
+def test_no_request_is_sent_once_the_time_is_spent(tmp_path, monkeypatch):
+    body, sent = _requests(
+        tmp_path, monkeypatch, bounds={"budget": 0.0}, names=NAMES, track_parcel="world"
+    )
+
+    assert sent == []
+    assert sorted(one["tool"] for one in body["unobserved"] if one["reason"] == "not_asked") == sorted(NAMES)
 
 
 def test_the_request_names_the_tool_and_an_example_from_its_contract():

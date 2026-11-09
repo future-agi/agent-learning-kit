@@ -220,3 +220,36 @@ def test_a_validation_writes_the_failure_that_ended_it_and_a_pass_clears_it(
     )
 
     assert not path.exists()
+
+
+@pytest.mark.parametrize("generic", [False, True])
+def test_a_record_from_an_earlier_attempt_never_speaks_for_a_later_failure(
+    tmp_path, monkeypatch, generic
+):
+    import asyncio
+
+    from fi.alk.harness.authoring_runtime_validation import validate_and_repair
+    from tests.harness.test_workflow_intent import _job as _plain_job
+
+    job = _plain_job(tmp_path)
+    if generic:
+        job = job.model_copy(
+            update={"metadata": {**job.metadata, "generic_harness_v1": True}}
+        )
+    path = tmp_path / "failure.json"
+    monkeypatch.setattr(failure_record, "FAILURE_RECORD", path)
+    # What an earlier attempt that failed on our side left behind.
+    path.write_text(json.dumps({"domain": "world", "message": "seed/seed_failed (world-db)"}))
+
+    async def crashes(*args):
+        raise RuntimeError("the agent crashed")
+
+    async def refuse(phase, guidance):
+        raise RuntimeValidationError(phase, "Certify-only does not repair")
+
+    with pytest.raises(RuntimeError):
+        asyncio.run(
+            validate_and_repair(job, tmp_path, tmp_path, validate=crashes, repair=refuse)
+        )
+
+    assert not path.exists()
