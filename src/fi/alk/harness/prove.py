@@ -654,13 +654,26 @@ def _other_choices(scenario: Scenario, declared: set[str] = frozenset()) -> tupl
 
 
 _ISO_DATE = re.compile(r"^(\d{4})-(\d{2})-(\d{2})$")
+# Languages whose spoken date form this proof writes ("" = not stated, the platform's default language).
+_SPOKEN_DATE_LANGUAGES = frozenset({"", "english", "en"})
 _MONTHS = ("January", "February", "March", "April", "May", "June", "July", "August", "September", "October",
            "November", "December")
 
 
+def _conversation_language(scenario: Scenario) -> str:
+    persona = getattr(scenario, "persona", None)
+    languages = (
+        persona.get("languages") if isinstance(persona, dict) else getattr(persona, "languages", None)
+    ) or []
+    return str(languages[0]).strip().casefold() if languages else ""
+
+
 def _said_another_way(scenario: Scenario) -> tuple[list[Any], set[str]]:
-    """The solution with every fixed date written the way a person says it ("25 June 1984"): the same value, in
-    the form it reaches an agent that heard it. English month names only."""
+    """The solution with every fixed date written the way a person says it in the conversation's language: the same
+    value, in the form it reaches an agent that heard it. Only the spoken form of languages this proof knows is
+    replayed; for any other language this replay is skipped (no date is said another way), never guessed."""
+    if _conversation_language(scenario) not in _SPOKEN_DATE_LANGUAGES:
+        return list(getattr(scenario, "solution", None) or ()), set()
     steps = list(getattr(scenario, "solution", None) or ())
     said, changed = [], set()
     for step in steps:
@@ -696,8 +709,8 @@ _SEPARATED_ID = re.compile(r"^(?=.*[A-Za-z])(?=.*\d)[A-Za-z0-9]+(?:[-_. ][A-Za-z
 
 
 def _unseparated_ids(scenario: Scenario) -> list[tuple[str, list[Any]]]:
-    """For each fixed id written with separators (`CLM-88213`), the solution with it typed without them (`CLM88213`),
-    as an agent often says it."""
+    """For each fixed id written with separators (`<PREFIX>-<digits>`), the solution with it typed without them
+    (`<PREFIX><digits>`), as an agent often says it."""
     steps = list(getattr(scenario, "solution", None) or ())
     out = []
     for at, step in enumerate(steps):
