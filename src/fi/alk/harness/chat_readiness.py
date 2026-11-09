@@ -423,14 +423,28 @@ async def request_uncovered_tools(
     body.setdefault("unobserved", [])
     shown = {one["tool"] for one in [*body["tools"], *body["unobserved"]]}
     outside = _outside_world(contract)
-    deadline = time.monotonic() + budget
-    asked_count = 0
+    logged = _logged_tools(contract, runtime, bundle)
+    # Requests already sent by an earlier attempt of this check: their answers are reused
+    # and their count and time spent stay within one bound for the whole check.
+    ledger = _request_ledger(authoring)
+    deadline = time.monotonic() + max(0.0, budget - ledger["seconds"])
+    asked_count = len(ledger["asked"])
     for tool in getattr(contract, "tools", None) or []:
         if tool.name in shown:
             continue
         if tool.name in outside:
             # Asking could reach a real system: the contract says the tool leaves the world.
             body["unobserved"].append({"tool": tool.name, "reason": "reaches_outside"})
+            continue
+        if tool.name in ledger["asked"]:
+            earlier = ledger["asked"][tool.name]
+            body["tools"].extend(earlier["tools"])
+            body["unobserved"].extend(earlier["unobserved"])
+            continue
+        if tool.name not in logged and getattr(tool, "effects", None):
+            # The world keeps no record of this tool's calls, so asking could only change
+            # something for no evidence.
+            body["unobserved"].append({"tool": tool.name, "reason": "not_observable"})
             continue
         left = deadline - time.monotonic()
         if asked_count >= limit or left <= 0:
@@ -439,6 +453,7 @@ async def request_uncovered_tools(
         asked_count += 1
         request_timeout = min(timeout, left)
         since = time.time()
+        started = time.monotonic()
         try:
             traced = len(_collect_file_tool_calls(runtime))
             key = f"tool-request-{uuid4().hex}"
@@ -462,7 +477,9 @@ async def request_uncovered_tools(
                 *_collect_file_tool_calls(runtime)[traced:],
             ]
         except Exception:  # noqa: BLE001 - an unanswered request leaves the tool unobserved
-            body["unobserved"].append({"tool": tool.name, "reason": "request_failed"})
+            failed = [{"tool": tool.name, "reason": "request_failed"}]
+            body["unobserved"].extend(failed)
+            _note_request(ledger, tool.name, [], failed, time.monotonic() - started)
             continue
         tools, unobserved = _routing(
             contract,
@@ -471,12 +488,52 @@ async def request_uncovered_tools(
             reported=[call for call in reported if call.name == tool.name],
             bundle=bundle,
         )
-        asked = [one for one in tools if one["tool"] == tool.name]
-        body["tools"].extend({**one, "source": "tool_request"} for one in asked)
-        body["unobserved"].extend(one for one in unobserved if one["tool"] == tool.name)
-        if not asked and not any(one["tool"] == tool.name for one in unobserved):
-            body["unobserved"].append({"tool": tool.name, "reason": "not_called"})
+        asked = [
+            {**one, "source": "tool_request"}
+            for one in tools
+            if one["tool"] == tool.name
+        ]
+        left_over = [one for one in unobserved if one["tool"] == tool.name]
+        if not asked and not left_over:
+            left_over = [{"tool": tool.name, "reason": "not_called"}]
+        body["tools"].extend(asked)
+        body["unobserved"].extend(left_over)
+        _note_request(ledger, tool.name, asked, left_over, time.monotonic() - started)
     _write_routing(authoring, body)
+    _save_ledger(authoring, ledger)
+
+
+TOOL_REQUESTS = "tool-requests.json"
+
+
+def _request_ledger(authoring: Path) -> dict:
+    """The tool requests earlier attempts of this check sent, and the time they took."""
+    path = authoring / "generic-harness" / TOOL_REQUESTS
+    try:
+        stored = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        stored = {}
+    asked = stored.get("asked") if isinstance(stored, dict) else None
+    seconds = stored.get("seconds") if isinstance(stored, dict) else None
+    return {
+        "asked": asked if isinstance(asked, dict) else {},
+        "seconds": float(seconds) if isinstance(seconds, (int, float)) else 0.0,
+    }
+
+
+def _note_request(
+    ledger: dict, tool: str, tools: list, unobserved: list, spent: float
+) -> None:
+    ledger["asked"][tool] = {"tools": tools, "unobserved": unobserved}
+    ledger["seconds"] += max(0.0, spent)
+
+
+def _save_ledger(authoring: Path, ledger: dict) -> None:
+    path = authoring / "generic-harness" / TOOL_REQUESTS
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(ledger, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
 
 
 async def probe_chat_workflow(

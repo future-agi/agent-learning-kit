@@ -305,3 +305,29 @@ def test_an_argument_without_an_example_takes_a_plain_value_of_its_type():
     ).tools[0]
 
     assert "item_id=1, note='test'" in chat_readiness._tool_request(tool)
+
+
+def test_a_later_attempt_of_the_check_reuses_the_answers_and_stays_within_the_limit(
+    tmp_path, monkeypatch
+):
+    first, sent_first = _requests(
+        tmp_path, monkeypatch, bounds={"limit": 2}, names=NAMES, track_parcel="world"
+    )
+    # A retry writes the qualification's routing again, then asks for the rest.
+    again, sent_again = _requests(
+        tmp_path, monkeypatch, bounds={"limit": 2}, names=NAMES, track_parcel="world"
+    )
+
+    assert len(sent_first) == 2
+    assert sent_again == []
+    assert again["tools"] == first["tools"]
+    assert again["unobserved"] == first["unobserved"]
+
+
+def test_a_tool_that_changes_state_and_leaves_no_world_record_is_not_asked(
+    tmp_path, monkeypatch
+):
+    body, sent = _requests(tmp_path, monkeypatch, runtime=NO_PROXY, names=NAMES)
+
+    assert {"tool": "issue_refund", "reason": "not_observable"} in body["unobserved"]
+    assert not any("issue_refund" in text for text in sent)
