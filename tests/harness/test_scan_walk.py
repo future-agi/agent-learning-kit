@@ -1980,3 +1980,33 @@ def test_the_descriptions_cap_stops_it_partial_at_either_read_site(
 
     assert candidate is not None and candidate.partial is True
     assert "agent description stopped" not in caplog.text
+
+
+def test_a_rows_pass_over_many_files_watches_the_clock(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """One row's pass over the kept files checks the clock as it goes, so a huge tree of files
+    that import nothing ends as a clock stop, never past the helper's hard stop."""
+    _files(tmp_path, {"bot.py": "from openai import OpenAI\nOpenAI()\n"})
+    for folder in range(50):
+        package = tmp_path / f"p{folder:02}"
+        package.mkdir()
+        for index in range(200):
+            (package / f"m{index:03}.py").touch()
+    now = [0.0]
+    side_checks = scan_walk._is_side_path
+    seen = [0]
+
+    def counting(path: str) -> bool:
+        seen[0] += 1
+        if seen[0] == 5_000:
+            now[0] = 10_000.0  # past the result's deadline, mid-pass
+        return side_checks(path)
+
+    monkeypatch.setattr(scan_walk, "_is_side_path", counting)
+    walk = scan_walk._Walk(tmp_path, deadline=100.0, clock=lambda: now[0])
+    walk.run()
+    seen[0] = 0
+
+    with pytest.raises(scan_walk._ResultOutOfTime):
+        walk.result(upload=False)
