@@ -68,7 +68,10 @@ identities), at a set time (`after_seconds`), or once a record exists (`conditio
 `on_tool`, `on_keyword`, `mid_journey`, `conditional`; someone acting through the world can use `always`,
 `on_tool`, `contacted`, `after_seconds`, `conditional`. A trigger the actor's runtime cannot evaluate is refused when
 the scenario is kept. Two actors each brought in only by the other's action are a cycle and are refused. Tie a
-response to what the agent does rather than to a clock. An actor's timeout and fallback are its own: `silent`,
+response to what the agent does rather than to a clock. An action that only works after another actor's action
+(posting once someone adds them to a channel, applying once an approval exists) is brought in by that record
+(`conditional` on it), never by `after_seconds`: a clock does not wait for the other actor, so the world refuses the
+action and the trial ends as a scenario problem. An actor's timeout and fallback are its own: `silent`,
 `decline`, one of its own permitted actions taken for it, or another actor who answers instead.
 
 **Mocked, live or both.** A mocked actor takes exactly the `actions` the scenario schedules, the same every trial: each
