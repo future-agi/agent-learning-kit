@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import sys
 from datetime import datetime, timezone
 from typing import Any
 
@@ -1644,13 +1645,10 @@ def test_retell_client_constructed_with_max_retries_zero() -> None:
 def test_retell_call_originator_requires_retell_sdk(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    # retell-sdk is optional at the package level (see the module's
-    # try/except ImportError); only RetellCallOriginator — the class that
-    # actually talks to the SDK — must fail loudly, and only at
-    # construction time, when it's unavailable.
-    import fi.simulate.endpoints.retell as retell_module
-
-    monkeypatch.setattr(retell_module, "retell", None)
+    # retell-sdk is optional at the package level; only RetellCallOriginator
+    # — the class that actually talks to the SDK — must fail loudly, and
+    # only at construction time, when it's unavailable.
+    monkeypatch.setitem(sys.modules, "retell", None)
     with pytest.raises(RuntimeError, match="retell_sdk_missing"):
         RetellCallOriginator(
             api_key="k",
@@ -1675,8 +1673,7 @@ def test_import_fi_simulate_endpoints_succeeds_without_retell_sdk() -> None:
             "import sys; sys.modules['retell'] = None; "
             "import fi.simulate.endpoints; "
             "import fi.simulate.endpoints.retell as m; "
-            "assert m.retell is None; "
-            "assert m.AsyncRetell is None; "
+            "assert m._sdk() is None; "
             "print('OK')",
         ],
         capture_output=True,

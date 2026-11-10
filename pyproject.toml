@@ -114,7 +114,7 @@ harness-stores = [
 # else. traceai-google-adk is not here: it pins google-genai<2 while google-adk needs >=2.12, so
 # the image installs it separately without dependencies.
 hosted-tracing = [
-  "traceai-claude-agent-sdk>=0.1.0",
+  "traceai-claude-agent-sdk>=0.1.1",
 ]
 feedback = ["chromadb>=0.4.0"]
 notebook = [

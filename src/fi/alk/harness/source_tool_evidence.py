@@ -12,7 +12,7 @@ import tokenize
 from pathlib import Path
 
 from .contract import AgentContract
-from .python_source import ParseBudget, TokenBudget, parsed, read_module
+from .python_source import EscapeBudget, ParseBudget, TokenBudget, parsed, read_module
 from .runtime_selection import charged_path
 from .source_folder import SubfolderNotFound, agent_folder, is_within
 
@@ -49,6 +49,7 @@ def tool_evidence_problems(
     commented: dict[Path, list[str] | None] = {}
     budget = ParseBudget()
     tokens = TokenBudget()
+    escapes = EscapeBudget()
     for entry in contract.tool_entrypoints:
         if entry.mode not in {"import", "construct"} or not entry.module:
             continue
@@ -65,7 +66,7 @@ def tool_evidence_problems(
         if path is None:
             continue
         if path not in read:
-            text = read_module(path)
+            text = read_module(path, escapes=escapes)
             tree = parsed(text) if text is not None and budget.spend(text) else None
             read[path] = None if tree is None else (tree, text)
         if read[path] is None:

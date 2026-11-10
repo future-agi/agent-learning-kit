@@ -780,3 +780,35 @@ def test_nudge_world_checks_cite_only_the_recorded_folder(tmp_path):
 
     assert cite("agents/b/seed.sql").get("is_error")
     assert not cite("agents/a/seed.sql").get("is_error")
+
+
+def test_a_file_that_shrinks_while_the_workspace_is_packed_does_not_fail_the_pack(
+    tmp_path, monkeypatch
+):
+    import io
+    import tarfile
+
+    from fi.alk.harness.hosted_conversation import _workspace_archive
+
+    (tmp_path / "scenarios").mkdir()
+    scenario = tmp_path / "scenarios" / "one.json"
+    scenario.write_text("x" * 4096)
+    (tmp_path / "contract.json").write_text("{}")
+    measured = tarfile.TarFile.gettarinfo
+    shrunk = []
+
+    def rewritten_after_its_size_is_read(self, name=None, *args, **kwargs):
+        info = measured(self, name, *args, **kwargs)
+        if name is not None and Path(name).name == "one.json" and not shrunk:
+            scenario.write_text("{}")  # a scenario writer rewrites it mid-pack
+            shrunk.append(name)
+        return info
+
+    monkeypatch.setattr(tarfile.TarFile, "gettarinfo", rewritten_after_its_size_is_read)
+
+    body = _workspace_archive(tmp_path)
+
+    assert shrunk
+    with tarfile.open(fileobj=io.BytesIO(body), mode="r:gz") as archive:
+        assert archive.extractfile("scenarios/one.json").read() == b"{}"
+        assert archive.extractfile("contract.json").read() == b"{}"

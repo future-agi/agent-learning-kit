@@ -369,19 +369,87 @@ def test_a_folder_ending_in_a_test_word_that_holds_an_agent_is_read(
     assert browser_tools_found(tmp_path) == expected
 
 
+@pytest.mark.parametrize(
+    "files",
+    [
+        {"qa_e2e/test_a.py": "x = 1\n", "qa_e2e/agent/__init__.py": "import playwright\n"},
+        {"qa_e2e/test_a.py": "x = 1\n", "qa_e2e/ui_tests/agent.py": "import playwright\n"},
+        {"b_e2e/test_a.py": "x = 1\n", "b_e2e/c_e2e/agent.py": "import playwright\n"},
+    ],
+    ids=["init-only-package", "nested-test-word-folder", "two-levels"],
+)
+def test_an_agent_one_level_inside_a_test_named_folder_is_read(tmp_path, files):
+    _tree(tmp_path, files)
+    assert browser_tools_found(tmp_path) == ["playwright"]
+
+
+@pytest.mark.skipif(not hasattr(os, "symlink"), reason="needs folder links")
+def test_links_inside_a_test_named_folder_are_not_followed_to_decide_it(tmp_path):
+    big = tmp_path / "big"
+    big.mkdir()
+    for n in range(5_000):
+        (big / f"f{n}.txt").write_text("", encoding="utf-8")
+    _tree(tmp_path, {"t_e2e/test_a.py": "x = 1\n", "agent.py": "import playwright\n"})
+    for n in range(500):
+        os.symlink(big, tmp_path / "t_e2e" / f"link{n}", target_is_directory=True)
+    started = time.monotonic()
+    assert browser_tools_found(tmp_path) == ["playwright"]
+    # Following each link would list the target once per link.
+    assert time.monotonic() - started < 2
+
+
+def test_a_linked_test_named_folder_is_not_listed_to_decide_it(tmp_path, monkeypatch):
+    # The walk doesn't enter a linked folder, so it isn't listed to see whether it holds only tests.
+    _tree(tmp_path, {"shared/test_a.py": "x = 1\n", "agent.py": "import playwright\n"})
+    os.symlink(tmp_path / "shared", tmp_path / "ui-tests", target_is_directory=True)
+    listed: list[str] = []
+    real = agent_type_check._only_tests
+    monkeypatch.setattr(
+        agent_type_check, "_only_tests", lambda folder: listed.append(folder) or real(folder)
+    )
+    assert browser_tools_found(tmp_path) == ["playwright"]
+    assert not any(folder.endswith("ui-tests") for folder in listed)
+
+
 @pytest.mark.parametrize("folder", ["ui-tests", "functional_tests", "qa_e2e", "web_testing"])
 def test_a_folder_ending_in_a_test_word_that_holds_only_tests_is_skipped_whole(tmp_path, folder):
     _tree(
         tmp_path,
         {
-            f"{folder}/__init__.py": "",
+            # Read if the folder were walked, so only skipping it whole gives nothing.
+            f"{folder}/__init__.py": "import playwright\n",
             f"{folder}/conftest.py": "import playwright\n",
             f"{folder}/test_login.py": "import selenium\n",
-            f"{folder}/package.json": json.dumps({"devDependencies": {"puppeteer": "22"}}),
-            f"{folder}/pages/login_page.py": "from selenium import webdriver\n",
+            f"{folder}/login.spec.ts": 'const t = "computer-use-preview";\n',
+            f"{folder}/e2e/test_flow.py": "import playwright\n",
+            f"{folder}/smoke_tests/test_smoke.py": "import playwright\n",
+            f"{folder}/data/users.json": "[]\n",
         },
     )
     assert browser_tools_found(tmp_path) == []
+
+
+@pytest.mark.parametrize(
+    "files",
+    [
+        {"qa_e2e/conftest.py": "", "qa_e2e/agent/main.py": "import playwright\n"},
+        {"qa_e2e/test_login.py": "", "qa_e2e/agent/main.py": "import playwright\n"},
+        {
+            "web_e2e/login.spec.ts": "test('login', () => {});\n",
+            "web_e2e/package.json": json.dumps({"devDependencies": {"playwright": "1"}}),
+        },
+        {"qa_e2e/conftest.py": "", "qa_e2e/__init__.py": "import playwright\n"},
+    ],
+    ids=[
+        "conftest-beside-an-agent-folder",
+        "test-beside-an-agent-folder",
+        "spec-beside-a-package-json",
+        "only-a-conftest",
+    ],
+)
+def test_a_test_named_folder_with_more_than_tests_is_read(tmp_path, files):
+    _tree(tmp_path, files)
+    assert browser_tools_found(tmp_path) == ["playwright"]
 
 
 def test_tools_found_skips_an_upper_case_test_file(tmp_path):
@@ -571,22 +639,83 @@ def _punycode_decodes(monkeypatch) -> list[int]:
     return decoded
 
 
+def _parsed_in_a_refused_codec(monkeypatch) -> list[bytes]:
+    import ast
+
+    parsed: list[bytes] = []
+    real = ast.parse
+
+    def spy(source, *args, **kwargs):
+        if isinstance(source, bytes) and b"# coding: " in source[:40]:
+            parsed.append(source)
+        return real(source, *args, **kwargs)
+
+    monkeypatch.setattr(ast, "parse", spy)
+    return parsed
+
+
 @pytest.mark.parametrize(
-    "codec, body",
+    "codec, body, expected",
     [
-        ("punycode", b"import playwright\n-" + b"9" * 64_000),
-        ("idna", b'import playwright\nTOOL = "computer_20241022"\n'),
-        ("undefined", b"import playwright\n"),
+        (
+            "idna",
+            b"import playwright\nTOOL = 'computer-use-preview'\n",
+            ["computer-use tool", "playwright"],
+        ),
+        ("idna", b'import playwright\nHOST = "' + b"xn--bcher-kva." * 4_000 + b'"\n', ["playwright"]),
+        ("punycode", b"import playwright\n-" + b"9" * 64_000, ["playwright"]),
+        ("undefined", b"import playwright\n", ["playwright"]),
+        (
+            "idna",
+            b"from langchain_community.agent_toolkits import PlayWrightBrowserToolkit\n",
+            ["PlayWrightBrowserToolkit"],
+        ),
+        ("idna", b"TEAM = 'steelers'\n", []),
+    ],
+    ids=[
+        "idna-plain",
+        "idna-encoded-labels",
+        "punycode",
+        "undefined",
+        "idna-toolkit",
+        "idna-word-inside-a-word",
     ],
 )
-def test_a_file_in_a_codec_too_slow_to_decode_is_not_read(tmp_path, monkeypatch, codec, body):
+def test_a_file_in_a_refused_codec_still_names_its_tools(
+    tmp_path, monkeypatch, codec, body, expected
+):
     decoded = _punycode_decodes(monkeypatch)
+    parsed = _parsed_in_a_refused_codec(monkeypatch)
+    import encodings.idna
+
+    labels = []
+    real = encodings.idna.ToUnicode
+    monkeypatch.setattr(encodings.idna, "ToUnicode", lambda label: labels.append(label) or real(label))
     (tmp_path / "helper.py").write_bytes(f"# coding: {codec}\n".encode() + body)
     started = time.monotonic()
-    assert browser_tools_found(tmp_path) == []
+    # Not decoded, but the browser packages and markers it names, as bytes, still count (Dileep's
+    # P2 on #224).
+    assert browser_tools_found(tmp_path) == expected
     assert time.monotonic() - started < 5
-    # A punycode decode costs the square of its size, so a 1 MB file would hold the scan minutes.
-    assert decoded == []
+    # Never decoded: punycode's decode costs the square of its size, and idna's runs per label.
+    assert (decoded, labels, parsed) == ([], [], [])
+
+
+def test_an_escaped_import_in_a_unicode_escape_file_is_found(tmp_path):
+    # Python decodes the escapes before it parses, so the import is real and so is the finding.
+    (tmp_path / "helper.py").write_bytes(b"# coding: unicode-escape\nimport \\x70laywright\n")
+    assert browser_tools_found(tmp_path) == ["playwright"]
+
+
+@pytest.mark.skipif(not hasattr(os, "symlink"), reason="needs folder links")
+def test_a_test_named_folder_that_is_a_link_is_not_listed_to_decide_it(tmp_path, monkeypatch):
+    _tree(tmp_path, {"shared/test_a.py": "x = 1\n", "agent.py": "import playwright\n"})
+    os.symlink(tmp_path / "shared", tmp_path / "ui-tests", target_is_directory=True)
+    asked = []
+    real = agent_type_check._only_tests
+    monkeypatch.setattr(agent_type_check, "_only_tests", lambda folder: asked.append(folder) or real(folder))
+    assert browser_tools_found(tmp_path) == ["playwright"]
+    assert not any(folder.endswith("ui-tests") for folder in asked)
 
 
 def test_a_slow_codec_named_after_a_lone_cr_is_not_read(tmp_path, monkeypatch):
@@ -595,8 +724,140 @@ def test_a_slow_codec_named_after_a_lone_cr_is_not_read(tmp_path, monkeypatch):
     (tmp_path / "helper.py").write_bytes(
         b"\r# coding: punycode\rimport playwright\r-" + b"9" * 64_000
     )
-    assert browser_tools_found(tmp_path) == []
+    assert browser_tools_found(tmp_path) == ["playwright"]
     assert decoded == []
+
+
+def test_the_coding_line_is_masked_without_a_python_pass_over_it(tmp_path, monkeypatch):
+    from fi.alk.harness import python_source
+
+    # Every file's first two lines are looked at, and one line can be the whole 128 KB: a
+    # Python-level pass over it held a crafted save 18.6 s.
+    def no_pass(*args, **kwargs):
+        raise AssertionError("a Python-level pass over the coding lines")
+
+    # Only this module's regular expressions: the reader compiles its own patterns at import.
+    monkeypatch.setattr(python_source, "re", SimpleNamespace(sub=no_pass))
+    path = tmp_path / "agent.py"
+    path.write_bytes(b"# coding: latin-1 " + b"\xe9" * 100_000 + b"\nimport playwright\n")
+    assert python_source.read_module(path) is not None
+
+
+def test_an_import_joined_across_a_crlf_under_unicode_escape_is_found(tmp_path):
+    # Python ends lines first, then decodes: the backslash before the line end joins the name.
+    (tmp_path / "agent.py").write_bytes(b"# coding: unicode_escape\r\nimport play\\\r\nwright\r\n")
+    assert browser_tools_found(tmp_path) == ["playwright"]
+
+
+def test_a_unicode_escape_file_python_cant_decode_is_skipped(tmp_path):
+    # Python refuses an unknown \N{...} name, so the file never runs.
+    (tmp_path / "agent.py").write_bytes(
+        b"# coding: unicode_escape\nimport playwright\n# \\N{NOSUCH NAME}\n"
+    )
+    assert browser_tools_found(tmp_path) == []
+
+
+def test_the_unicode_escape_total_is_shared_by_the_scans_files(tmp_path, monkeypatch):
+    from fi.alk.harness import python_source
+
+    first = b"# coding: unicode_escape\nimport \\x70atchright\n"
+    second = b"# coding: unicode_escape\nimport \\x70laywright\n"
+    assert len(first) == len(second)
+    monkeypatch.setattr(python_source, "LARGEST_ESCAPED_TOTAL", len(first))
+    (tmp_path / "a.py").write_bytes(first)
+    (tmp_path / "b.py").write_bytes(second)
+    # One file's worth: the second is read as bytes, where its escaped name isn't.
+    assert len(browser_tools_found(tmp_path)) == 1
+
+
+def test_past_the_unicode_escape_total_an_escape_before_a_name_is_a_boundary(
+    tmp_path, monkeypatch
+):
+    from fi.alk.harness import python_source
+
+    monkeypatch.setattr(python_source, "LARGEST_ESCAPED_TOTAL", 0)
+    (tmp_path / "agent.py").write_bytes(b"# coding: unicode_escape\nimport\\tplaywright\n")
+    assert browser_tools_found(tmp_path) == ["playwright"]
+
+
+def test_past_the_scans_unicode_escape_total_a_file_is_searched_as_bytes(tmp_path, monkeypatch):
+    from fi.alk.harness import python_source
+
+    monkeypatch.setattr(python_source, "LARGEST_ESCAPED_TOTAL", 0)
+    (tmp_path / "escaped.py").write_bytes(b"# coding: unicode_escape\nimport \\x70laywright\n")
+    (tmp_path / "plain.py").write_bytes(b"# coding: unicode_escape\nimport selenium\n")
+    assert browser_tools_found(tmp_path) == ["selenium"]
+
+
+@pytest.mark.parametrize(
+    "head",
+    [b"# coding: latin-1 \xe9\n", b"# -*- coding: cp1252 -*- Soci\xe9t\xe9\n", b"#!/usr/bin/env python \xe9\n# coding: latin-1\n"],
+    ids=["after-the-name", "emacs-style", "on-the-first-of-two-lines"],
+)
+def test_a_non_ascii_byte_on_the_coding_line_leaves_the_file_read(tmp_path, head):
+    # detect_encoding refuses such a line, but Python reads the file in the codec it names.
+    (tmp_path / "agent.py").write_bytes(head + b"import playwright\nNAME = '\xe9'\n")
+    assert browser_tools_found(tmp_path) == ["playwright"]
+
+
+def test_a_name_in_a_refused_codec_that_is_the_agents_own_module_does_not_count(tmp_path):
+    (tmp_path / "steel.py").write_text("x = 1\n", encoding="utf-8")
+    (tmp_path / "agent.py").write_bytes(b"# coding: idna\nimport steel\n")
+    assert browser_tools_found(tmp_path) == []
+
+
+def test_a_name_in_a_refused_codec_counts_only_as_a_whole_name(tmp_path):
+    (tmp_path / "agent.py").write_bytes(b"# coding: idna\nTEAM = 'steelers'\n")
+    assert browser_tools_found(tmp_path) == []
+
+
+def test_past_the_raw_search_total_a_name_counts_wherever_it_appears(tmp_path, monkeypatch):
+    monkeypatch.setattr(agent_type_check, "_LARGEST_RAW_SEARCH", 0)
+    (tmp_path / "agent.py").write_bytes(
+        b"# coding: idna\nTEAM = 'steelers'\nTOOL = 'computer-use-preview'\n"
+    )
+    # Not searched for whole names or markers, so the cheap search's superset stands: a second
+    # look at most.
+    assert browser_tools_found(tmp_path) == ["steel"]
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        b"# hi\r\r\nTOOL = 'computer-use-preview'\r\r\n",
+        b"x = 1 + \\\r2\rTOOL = 'computer-use-preview'\r",
+    ],
+    ids=["cr-cr-lf", "backslash-before-cr"],
+)
+def test_markers_after_cr_line_ends_are_read_as_python_reads_them(tmp_path, source):
+    (tmp_path / "agent.py").write_bytes(source)
+    assert browser_tools_found(tmp_path) == ["computer-use tool"]
+
+
+def test_a_coding_word_in_a_later_cr_line_is_not_the_cookie(tmp_path):
+    # With only CRs, detect_encoding saw one line and took the string's "coding:" as the cookie.
+    (tmp_path / "agent.py").write_bytes(
+        b"# hi\rx = 'coding: rot13'\rTOOL = 'computer-use-preview'\r"
+    )
+    # A comment is still not read: the file is tokenized, not searched as bytes.
+    (tmp_path / "notes.py").write_bytes(b"# hi\rx = 'coding: rot13'\r# @playwright/mcp\r")
+    assert browser_tools_found(tmp_path) == ["computer-use tool"]
+
+
+def test_a_script_with_a_byte_that_is_not_utf8_is_still_read(tmp_path):
+    (tmp_path / "agent.ts").write_bytes(b"// \xa9 2024\nconst t = 'computer-use-preview'\n")
+    assert browser_tools_found(tmp_path) == ["computer-use tool"]
+
+
+def test_a_python_file_the_readers_refuse_is_logged_at_debug(tmp_path, caplog):
+    (tmp_path / "broken.py").write_text('TOOL = ("computer_20241022"\n', encoding="utf-8")
+    with caplog.at_level("DEBUG", logger=agent_type_check.__name__):
+        assert browser_tools_found(tmp_path) == []
+    said = [(record.levelname, record.getMessage()) for record in caplog.records]
+    path = str(tmp_path.resolve() / "broken.py")
+    assert ("DEBUG", f"agent type scan read no imports from {path}") in said
+    # The error's type only: its text can quote a line of the customer's file.
+    assert ("DEBUG", f"agent type scan read no markers from {path}: TokenError") in said
 
 
 def test_a_python_file_saved_with_a_bom_is_read(tmp_path):
@@ -3407,12 +3668,41 @@ def test_each_folder_above_the_agent_has_its_records_read_once(tmp_path, monkeyp
     assert read.count((repo / "agents" / "a").resolve()) == 2
 
 
+@pytest.mark.parametrize(
+    "source",
+    [
+        # Dileep's: Python runs plain ASCII under idna as it would without the line.
+        b"# coding: idna\nimport playwright\n",
+        b"# coding: idna\nimport playwright  # xn--bcher-kva\n",
+        b"# coding: punycode\nimport playwright\n",
+        b"# coding: undefined\nimport playwright\n",
+        b"# coding: unicode_escape\n\\x69mport playwright\n",
+        # A non-ASCII byte on the coding line: detect_encoding refuses it, the parser doesn't.
+        b"# caf\xe9 coding: idna\nimport playwright\n",
+    ],
+    ids=["idna", "idna-xn", "punycode", "undefined", "unicode-escape", "non-ascii-line"],
+)
+def test_a_file_left_undecoded_for_its_codec_still_counts_the_browser_names_it_holds(tmp_path, source):
+    # Its names count, as bytes, which asks for a second look, never a refusal on its own.
+    (tmp_path / "agent.py").write_bytes(source)
+    (tmp_path / "other.py").write_text("import selenium\n", encoding="utf-8")
+
+    assert browser_tools_found(tmp_path) == ["playwright", "selenium"]
+
+
 @pytest.mark.parametrize("coding", ["rot13", "nosuch"])
-def test_a_coding_line_python_cant_read_is_skipped_by_the_browser_scan(tmp_path, coding):
+def test_a_coding_line_python_itself_refuses_is_skipped_by_the_browser_scan(tmp_path, coding):
+    # Python won't run such a file at all, so what it names says nothing.
     (tmp_path / "agent.py").write_bytes(f"# coding: {coding}\nimport playwright\n".encode())
     (tmp_path / "other.py").write_text("import selenium\n", encoding="utf-8")
 
     assert browser_tools_found(tmp_path) == ["selenium"]
+
+
+def test_a_file_naming_nothing_in_a_refused_codec_finds_nothing(tmp_path):
+    (tmp_path / "agent.py").write_bytes(b"# coding: idna\nx = 1\n")
+
+    assert browser_tools_found(tmp_path) == []
 
 
 def test_a_coding_line_is_found_with_lone_cr_line_ends(tmp_path):
@@ -3455,7 +3745,9 @@ def test_the_walk_reads_a_file_whose_coding_line_python_cant_read_as_utf8(tmp_pa
     assert (repo / "common" / "__init__.py").resolve() in imported_by_agent(repo, "agents/a")
 
 
-@pytest.mark.parametrize("coding", ["punycode", "PUNYCODE", "idna", "IDNA", "undefined"])
+@pytest.mark.parametrize(
+    "coding", ["punycode", "PUNYCODE", "idna", "IDNA", "undefined", "unicode_escape", "unicode-escape"]
+)
 def test_a_codec_python_reads_slowly_or_not_at_all_is_not_used(coding):
     from fi.alk.harness.python_source import source_encoding
 
@@ -3463,6 +3755,31 @@ def test_a_codec_python_reads_slowly_or_not_at_all_is_not_used(coding):
     # 128 KB of valid labels. Python keeps a coding line's spelling, so the codec's own name is
     # the one compared.
     assert source_encoding(f"# coding: {coding}\nx = 1\n".encode()) is None
+
+
+@pytest.mark.parametrize(
+    "coding", ["punycode", "PUNYCODE", "idna", "IDNA", "undefined", "unicode_escape", "unicode-escape"]
+)
+def test_the_reader_leaves_a_slow_codecs_file_undecoded(tmp_path, coding):
+    from fi.alk.harness.python_source import read_module
+
+    # Handed back as bytes, not decoded; without a scan's total, unicode-escape too.
+    path = tmp_path / "agent.py"
+    path.write_bytes(f"# coding: {coding}\nx = 1\n".encode())
+    undecoded: list[bytes] = []
+    assert read_module(path, undecoded=undecoded) is None
+    assert undecoded == [path.read_bytes()]
+
+
+def test_the_reader_hands_back_only_a_file_in_a_codec_refused_by_name(tmp_path):
+    from fi.alk.harness.python_source import read_module
+
+    # Not UTF-8 and no coding line: Python refuses it, so its names don't count.
+    path = tmp_path / "agent.py"
+    path.write_bytes(b"import playwright\nx = '\xff'\n")
+    undecoded: list[bytes] = []
+    assert read_module(path, undecoded=undecoded) is None
+    assert undecoded == []
 
 
 def test_the_walk_reads_a_file_python_cant_decode_as_utf8(tmp_path):
@@ -3625,7 +3942,13 @@ def test_the_walk_charges_a_file_found_for_each_part_of_its_path(tmp_path, monke
 
     repo = _tree(
         tmp_path / "repo",
-        {"agents/a/agent.py": "import common.web\n", "common/__init__.py": "", "common/web.py": ""},
+        {
+            "agents/a/agent.py": "import common.web\n",
+            # A real folder without the module: its candidate is looked up, and missed.
+            "agents/a/common/README": "",
+            "common/__init__.py": "",
+            "common/web.py": "",
+        },
     )
     charged: list[tuple[Path, float]] = []
     real = credentials._file_inside
@@ -3639,7 +3962,8 @@ def test_the_walk_charges_a_file_found_for_each_part_of_its_path(tmp_path, monke
     monkeypatch.setattr(credentials, "_file_inside", spy)
     credentials.imported_by_agent(repo, "agents/a", lookup_limit=10**9)
 
-    # Resolving a file looks up each part of its path in turn; a miss is one lookup.
+    # Resolving a file looks up each part of its path in turn; a miss is one lookup. (A candidate
+    # under a folder that isn't there, or a link, is charged as a miss before this is asked.)
     assert any(candidate.is_file() for candidate, _ in charged)
     assert any(not candidate.exists() for candidate, _ in charged)
     for candidate, cost in charged:
@@ -3705,3 +4029,76 @@ def test_the_walk_stops_reading_once_its_lookups_are_spent(tmp_path, monkeypatch
     # a.py's first lookup spends it all; nothing b.py names could be looked up.
     assert credentials.imported_by_agent(repo, "agents/a", lookup_limit=1) == frozenset()
     assert parsed == ["import nowhere\n"]
+
+
+def test_a_toolkit_whose_record_is_left_unread_is_not_the_customers_module(tmp_path, monkeypatch):
+    # Once the budget is cut, every import counts, not only the browser packages' own names.
+    repo = _tree(
+        tmp_path / "repo",
+        {
+            "langchain_community/__init__.py": "",
+            "langchain_community-1.0.dist-info/METADATA": "",
+            "langchain_community-1.0.dist-info/RECORD": "langchain_community/__init__.py,,\n",
+            "agents/a/agent.py": (
+                "from langchain_community.agent_toolkits import PlayWrightBrowserToolkit\n"
+            ),
+            "agents/a/y-1.dist-info/METADATA": "",
+            "agents/a/y-1.dist-info/RECORD": "".join(f"r{n:06d}.py,,\n" for n in range(200)),
+        },
+    )
+    folder_record = (repo / "agents/a/y-1.dist-info/RECORD").stat().st_size
+    monkeypatch.setattr(
+        agent_type_check, "_RECORDS_AT_AND_ABOVE", max(folder_record, agent_type_check._SMALLEST_RECORD)
+    )
+
+    assert browser_tools_in_agent(repo, "agents/a") == ["PlayWrightBrowserToolkit"]
+
+
+def test_the_save_does_not_follow_an_import_through_a_folder_link(tmp_path):
+    from fi.alk.harness.credentials import imported_by_agent
+
+    repo = _tree(
+        tmp_path / "repo",
+        {"agents/a/agent.py": "import shared.web\n", "common/__init__.py": "", "common/web.py": ""},
+    )
+    (repo / "shared").symlink_to("common")
+    web = (repo / "common" / "web.py").resolve()
+
+    # Resolving through a link costs lookups the save can't charge, so at the save it's a miss;
+    # bundling still follows it.
+    assert web not in imported_by_agent(repo, "agents/a", lookup_limit=100_000)
+    assert web in imported_by_agent(repo, "agents/a")
+
+
+def test_the_save_does_not_follow_an_import_through_a_link_two_folders_up(tmp_path, monkeypatch):
+    from fi.alk.harness.credentials import imported_by_agent
+
+    repo = _tree(
+        tmp_path / "repo",
+        {
+            "agents/a/agent.py": "import shared.deep.web\nimport shared.deep.page\n",
+            "common/__init__.py": "",
+            "common/deep/__init__.py": "",
+            "common/deep/web.py": "",
+            "common/deep/page.py": "",
+        },
+    )
+    (repo / "shared").symlink_to("common")
+    web = (repo / "common" / "deep" / "web.py").resolve()
+    looked: Counter[Path] = Counter()
+    real = Path.lstat
+    monkeypatch.setattr(Path, "lstat", lambda self: looked.update([self]) or real(self))
+    # The candidate's own folder isn't a link, the one above it is.
+    assert web not in imported_by_agent(repo, "agents/a", lookup_limit=100_000)
+    folders = {path: count for path, count in looked.items() if path.is_dir()}
+    assert folders and max(folders.values()) == 1
+    monkeypatch.undo()
+    assert web in imported_by_agent(repo, "agents/a")
+
+
+def test_a_script_import_naming_thousands_of_folders_does_not_raise_at_the_save(tmp_path):
+    from fi.alk.harness.credentials import imported_by_agent
+
+    deep = "/".join(["a"] * 2_000)
+    repo = _tree(tmp_path / "repo", {"agents/a/index.js": f'import "./{deep}/x";\n'})
+    assert imported_by_agent(repo, "agents/a", lookup_limit=100_000) is not None

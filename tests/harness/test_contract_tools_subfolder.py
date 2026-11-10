@@ -1689,9 +1689,10 @@ def _lookups(monkeypatch, refused: bool) -> None:
     monkeypatch.setattr(runtime_selection, "_SAVE_PATH_LOOKUPS", 300 if refused else 20_000)
 
 
+@pytest.mark.parametrize("subfolder", ["agents/a", None])
 @pytest.mark.parametrize("refused", [False, True])
 def test_a_prompt_path_through_links_is_charged_to_the_saves_budget(
-    tmp_path, repo, monkeypatch, refused
+    tmp_path, repo, monkeypatch, refused, subfolder
 ):
     _lookups(monkeypatch, refused)
     (repo / "agents" / "a" / "prompt.txt").write_text("Be polite.\n")
@@ -1706,7 +1707,7 @@ def test_a_prompt_path_through_links_is_charged_to_the_saves_budget(
         ),
         tmp_path / "out",
         source_root=repo,
-        subfolder="agents/a",
+        subfolder=subfolder,
     )
 
     assert bool(result.get("is_error")) is refused, result
@@ -1741,9 +1742,10 @@ def test_a_runtime_path_through_links_is_charged_to_the_saves_budget(
         assert "path_lookup_limit:" in result["content"][0]["text"]
 
 
+@pytest.mark.parametrize("subfolder", ["agents/a", None])
 @pytest.mark.parametrize("refused", [False, True])
 def test_a_tool_module_through_links_is_charged_to_the_saves_budget(
-    tmp_path, repo, monkeypatch, refused
+    tmp_path, repo, monkeypatch, refused, subfolder
 ):
     _lookups(monkeypatch, refused)
     (repo / "agents" / "a" / "tools.py").write_text("def add(item_id):\n    return item_id\n")
@@ -1763,7 +1765,7 @@ def test_a_tool_module_through_links_is_charged_to_the_saves_budget(
         ),
         tmp_path / "out",
         source_root=repo,
-        subfolder="agents/a",
+        subfolder=subfolder,
     )
 
     assert bool(result.get("is_error")) is refused, result
@@ -1799,19 +1801,21 @@ def test_a_prompt_path_named_again_is_resolved_once(tmp_path, repo, monkeypatch)
 
 
 @pytest.mark.parametrize(
-    "named",
+    "named, refused",
     [
-        {"system_prompt_from": [{"path": "x/" * 2500 + "p.txt", "start_line": 1, "end_line": 1}]},
-        {"system_prompt_from": [{"path": "agents/a/p\x00.txt", "start_line": 1, "end_line": 1}]},
-        {"tool_entrypoints": [{"tool": "add", "mode": "import", "module": "x." * 2500 + "t", "callable": "add"}]},
-        {"tool_entrypoints": [{"tool": "add", "mode": "import", "module": "x\x00.t", "callable": "add"}]},
-        {"runtime": {"language": "python", "compose_file": "x/" * 2500 + "compose.yaml"}},
-        {"runtime": {"language": "python", "command": ["python", "x/" * 2500 + "a.py"]}},
-        {"runtime": {"language": "python", "command": ["python", "a\x00.py"]}},
+        ({"system_prompt_from": [{"path": "x/" * 2500 + "p.txt", "start_line": 1, "end_line": 1}]}, "is not a file in the source"),
+        ({"system_prompt_from": [{"path": "agents/a/p\x00.txt", "start_line": 1, "end_line": 1}]}, "is not a file in the source"),
+        # Not found, so the tool's evidence is unproven, not refused.
+        ({"tool_entrypoints": [{"tool": "add", "mode": "import", "module": "x." * 2500 + "t", "callable": "add"}]}, None),
+        ({"tool_entrypoints": [{"tool": "add", "mode": "import", "module": "x\x00.t", "callable": "add"}]}, None),
+        ({"runtime": {"language": "python", "compose_file": "x/" * 2500 + "compose.yaml"}}, "runtime_compose_file_outside_subfolder"),
+        # A program no system can open can't leave the folder; bundling refuses it.
+        ({"runtime": {"language": "python", "command": ["python", "x/" * 2500 + "a.py"]}}, None),
+        ({"runtime": {"language": "python", "command": ["python", "a\x00.py"]}}, None),
     ],
     ids=["prompt-long", "prompt-nul", "module-long", "module-nul", "compose-long", "command-long", "command-nul"],
 )
-def test_a_path_no_system_can_open_is_answered_not_raised(tmp_path, repo, named):
+def test_a_path_no_system_can_open_is_answered_not_raised(tmp_path, repo, named, refused):
     # A path past the system's limit, or holding a NUL, raised out of the save before.
     result = accept_contract(
         payload(**{"runtime": {"language": "python"}, **named}),
@@ -1820,7 +1824,9 @@ def test_a_path_no_system_can_open_is_answered_not_raised(tmp_path, repo, named)
         subfolder="agents/a",
     )
 
-    assert "content" in result
+    assert bool(result.get("is_error")) is (refused is not None), result
+    if refused:
+        assert refused in result["content"][0]["text"]
 
 
 @pytest.mark.parametrize(
@@ -1955,8 +1961,10 @@ def test_a_root_compose_file_may_read_the_roots_env_file_and_name_a_volume(repo)
           "agents/a/sub/more.yaml": "services:\n  extra:\n    image: redis\n    volumes: ./data:/data\n"}, {}),
         ({"agents/a/compose.yaml": "services:\n  agent:\n    build: .\ninclude: [sub/more.yaml]\n",
           "agents/a/sub/more.yaml": "services:\n  extra:\n    image: redis\n    volumes:\n      - type: bind\n        target: /x\n"}, {}),
+        ({"agents/a/compose.yaml": "services:\n  agent:\n    build: .\ninclude: [sub/more.yaml]\n",
+          "agents/a/sub/more.yaml": "services:\n  extra:\n    image: redis\n    env_file: 5\n"}, {}),
     ],
-    ids=["int-key", "build-int", "volumes-string", "bind-without-source"],
+    ids=["int-key", "build-int", "volumes-string", "bind-without-source", "env-file-int"],
 )
 def test_a_compose_file_docker_refuses_is_left_to_bundling_not_raised(tmp_path, repo, files, runtime):
     # The sibling check catches only what the customer's files can cause; reading a malformed
@@ -1988,3 +1996,14 @@ def test_a_test_helper_above_the_folder_says_nothing_of_its_instrumentation(tmp_
 
     assert not result.get("is_error"), result
     assert _saved(tmp_path / "out")["instrumentation"] == "none"
+
+
+def test_a_path_past_twice_the_system_limit_is_refused_before_any_lookup(monkeypatch):
+    from fi.alk.harness import runtime_selection
+
+    looked: list[Path] = []
+    monkeypatch.setattr(runtime_selection, "_charged_resolve", lambda path: looked.append(path) or path)
+
+    with pytest.raises(ValueError):
+        runtime_selection.charged_path(Path("/" + "../" * 3000 + "x"))
+    assert looked == []

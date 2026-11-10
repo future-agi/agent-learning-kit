@@ -236,6 +236,68 @@ def test_read_only_tools_skip_the_workspace_checkpoint(tmp_path, monkeypatch):
     assert client.checkpoints == 3
 
 
+class PackFailingClient(BuilderClient):
+    """A client whose workspace pack fails on the checkpoints named, as when a file shrinks mid-pack."""
+
+    def __init__(self, failing: set[int]):
+        super().__init__()
+        self.failing = failing
+
+    async def checkpoint(self, workspace):
+        self.checkpoints += 1
+        if self.checkpoints in self.failing:
+            raise OSError("unexpected end of data")
+        return {"digest": f"sha256:{self.checkpoints:064x}", "size": 1}
+
+
+def test_a_checkpoint_whose_pack_fails_leaves_the_pump_running_for_the_next_one(
+    tmp_path, monkeypatch
+):
+    client = PackFailingClient(failing={1})
+    runtime = _runtime(tmp_path, client, monkeypatch)
+    queue: asyncio.Queue = asyncio.Queue()
+    for name in ("submit_scenario", "edit_scenario"):
+        queue.put_nowait(RuntimeEvent(kind="tool", tool=f"mcp__x__{name}", detail={"call_id": name}))
+    queue.put_nowait(RuntimeEvent(kind="text", text="Both kept.", detail={}))
+    queue.put_nowait(None)
+    said: list[str] = []
+
+    asyncio.run(
+        runtime._pump_events(
+            queue,
+            assistant_message_id="a-1",
+            fallback_invocation_id="turn-1",
+            emitted_text=said,
+            turn_failures=[],
+        )
+    )
+
+    assert client.checkpoints == 2
+    committed = [e for e in client.events if e["kind"] == "checkpoint_committed"]
+    assert [e["payload"]["digest"] for e in committed] == [f"sha256:{2:064x}"]
+    assert said == ["Both kept."]
+
+
+def test_a_turn_whose_pump_failed_still_sends_its_reply_and_completes(tmp_path, monkeypatch):
+    # The turn's opening checkpoint is the first; the write's, packed by the pump, fails.
+    client = PackFailingClient(failing={2})
+    runtime = _runtime(tmp_path, client, monkeypatch)
+    runtime._published_fingerprint()
+
+    class WritingConversation(EditingConversation):
+        async def say(self, message, on_event=None):
+            on_event(RuntimeEvent(kind="tool", tool="mcp__x__edit_scenario", detail={"call_id": "e"}))
+            on_event(RuntimeEvent(kind="text", text="Edited it.", detail={}))
+
+    runtime.conversation = WritingConversation(tmp_path, writes=False)
+    _turn(runtime, {"content": "make it harder"})
+
+    assert _reply(client) == "Edited it."
+    completed = [e for e in client.events if e["kind"] == "turn_completed"]
+    assert [e["payload"]["outcome"] for e in completed] == ["success"]
+    assert client.checkpoints == 3
+
+
 def test_older_platforms_without_builder_endpoints_still_load(monkeypatch):
     body = _capabilities().model_dump(mode="json")
     capabilities = ConversationCapabilities.model_validate(body)
@@ -461,6 +523,157 @@ def test_an_edit_and_a_clear_go_through_the_same_confirmation_as_a_submission(
         is True
     )
     assert len(calls) == 1
+
+
+_EVERY_CHANGE = "Yes, make every change for this request"
+
+
+def _guarded_refund_changes(tmp_path, monkeypatch, answer):
+    """A saved scenario and sub-goal, and guarded tools whose changes to them each need a yes."""
+    from fi.alk.harness.backends import ToolSpec
+
+    runtime = _runtime(tmp_path, BuilderClient(), monkeypatch)
+    (tmp_path / "scenarios" / "one" / "scenario.json").write_text(
+        json.dumps({"name": "one", "scenario_key": "one", "instruction": "ask for a refund"})
+    )
+    (tmp_path / "sub_goals.json").write_text(
+        json.dumps({"sub_goals": [{"name": "refunded", "description": "x"}]})
+    )
+    ran, offered = [], []
+
+    async def handler(args):
+        ran.append(args)
+        return {"content": [{"type": "text", "text": "kept"}]}
+
+    async def ask(tool, payload, context):
+        offered.append(payload["options"])
+        await asyncio.sleep(0.01)  # the person takes a moment to answer
+        return {"content": [{"type": "text", "text": answer(len(offered))}]}
+
+    runtime._ask = ask
+
+    def guarded(name):
+        return runtime._confirmed(ToolSpec(name, "", {}, handler)).handler
+
+    return runtime, guarded, ran, offered
+
+
+def test_one_yes_to_every_change_runs_the_rest_of_its_message_and_the_next_message_asks_again(
+    tmp_path, monkeypatch
+):
+    from fi.alk.harness.hosted_chat_entrypoint import _CONFIRM
+
+    answers = [_EVERY_CHANGE, "No"]
+    runtime, guarded, ran, offered = _guarded_refund_changes(
+        tmp_path, monkeypatch, lambda asked: answers[asked - 1]
+    )
+    edit, goal = guarded("edit_scenario"), guarded("add_sub_goal")
+    turns = [
+        [
+            lambda: edit({"scenario_key": "one", "instruction": "ask for a cancellation"}),
+            lambda: goal({"name": "refunded", "description": "y"}),
+            lambda: edit({"scenario_key": "one", "instruction": "ask for store credit"}),
+        ],
+        [lambda: edit({"scenario_key": "one", "instruction": "ask for an exchange"})],
+    ]
+    results: list[list[dict]] = []
+
+    class Changing(BuilderConversation):
+        def __init__(self):
+            super().__init__(lambda: None)
+
+        async def say(self, message, on_event=None):
+            results.append([await change() for change in turns[len(results)]])
+            on_event(RuntimeEvent(kind="text", text="Done.", detail={"stage": "builder"}))
+
+    runtime.conversation = Changing()
+    runtime._published_fingerprint()
+    for sequence in (1, 2):
+        command = {
+            "sequence": sequence,
+            "message_id": f"m-{sequence}",
+            "kind": "user_message",
+            "payload": {"content": "Add 30 more scenarios so it has 60 in total"},
+        }
+        asyncio.run(runtime._handle(command))
+
+    # One question for the whole first message, then one again for the next.
+    assert offered == [[_CONFIRM, _EVERY_CHANGE, "No"]] * 2
+    assert [one.get("is_error") for one in results[0]] == [None, None, None]
+    assert results[1][0]["is_error"] is True and "they said: No" in results[1][0]["content"][0]["text"]
+    assert [args.get("instruction") or args["name"] for args in ran] == [
+        "ask for a cancellation",
+        "refunded",
+        "ask for store credit",
+    ]
+
+
+def test_a_yes_to_one_change_runs_only_that_change_and_a_no_still_refuses(tmp_path, monkeypatch):
+    from fi.alk.harness.hosted_chat_entrypoint import _CONFIRM
+
+    answers = [_CONFIRM, "No", _CONFIRM]
+    _, guarded, ran, offered = _guarded_refund_changes(
+        tmp_path, monkeypatch, lambda asked: answers[asked - 1]
+    )
+    edit, goal = guarded("edit_scenario"), guarded("add_sub_goal")
+
+    assert asyncio.run(edit({"scenario_key": "one", "instruction": "ask for a cancellation"})).get("is_error") is None
+    refused = asyncio.run(goal({"name": "refunded", "description": "y"}))
+    assert refused["is_error"] is True and "did not confirm" in refused["content"][0]["text"]
+    assert asyncio.run(goal({"name": "refunded", "description": "z"})).get("is_error") is None
+    assert len(offered) == 3
+    assert [args.get("instruction") or args["description"] for args in ran] == ["ask for a cancellation", "z"]
+
+
+def test_changes_made_at_once_ask_one_at_a_time_so_one_yes_to_every_change_runs_them_all(
+    tmp_path, monkeypatch
+):
+    _, guarded, ran, offered = _guarded_refund_changes(
+        tmp_path, monkeypatch, lambda asked: _EVERY_CHANGE
+    )
+    edit = guarded("edit_scenario")
+
+    async def together():
+        return await asyncio.gather(
+            *(
+                edit({"scenario_key": "one", "instruction": f"ask for refund number {n}"})
+                for n in range(3)
+            )
+        )
+
+    assert [one.get("is_error") for one in asyncio.run(together())] == [None, None, None]
+    # A second open question would have no answer: the platform takes one to the latest only.
+    assert len(offered) == 1 and len(ran) == 3
+
+
+def test_a_drop_after_a_yes_to_every_change_still_asks_on_its_own(tmp_path, monkeypatch):
+    from fi.alk.harness.hosted_chat_entrypoint import _CONFIRM
+
+    answers = [_EVERY_CHANGE, _EVERY_CHANGE, _CONFIRM]
+    _, guarded, ran, offered = _guarded_refund_changes(
+        tmp_path, monkeypatch, lambda asked: answers[asked - 1]
+    )
+    edit, drop = guarded("edit_scenario"), guarded("drop_scenario")
+
+    assert asyncio.run(edit({"scenario_key": "one", "instruction": "ask for a cancellation"})).get("is_error") is None
+    # Not offered on a drop, so the batch answer typed in does not run it.
+    assert asyncio.run(drop({"name": "one"})).get("is_error") is True
+    assert asyncio.run(drop({"name": "one"})).get("is_error") is None
+    assert asyncio.run(edit({"scenario_key": "one", "instruction": "ask for store credit"})).get("is_error") is None
+    assert offered == [[_CONFIRM, _EVERY_CHANGE, "No"], [_CONFIRM, "No"], [_CONFIRM, "No"]]
+    assert [args.get("instruction") or args["name"] for args in ran] == [
+        "ask for a cancellation",
+        "one",
+        "ask for store credit",
+    ]
+
+
+def test_only_scenario_and_sub_goal_changes_are_covered_by_a_yes_to_every_change():
+    from fi.alk.harness.hosted_chat_entrypoint import _ASKS_ALONE, _NEEDS_CONFIRMATION
+
+    # A newly guarded tool fails here until it is put on one side or the other.
+    assert _ASKS_ALONE < _NEEDS_CONFIRMATION
+    assert _NEEDS_CONFIRMATION - _ASKS_ALONE == {"submit_scenario", "edit_scenario", "add_sub_goal"}
 
 
 def test_the_keys_the_platform_has_used_are_never_given_to_a_new_scenario(

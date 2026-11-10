@@ -108,8 +108,17 @@ class Transcript:
             outcome = (
                 "refused" if call.refused else ("crashed" if not call.ok else "ok")
             )
+            actor = "/".join(
+                part
+                for part in (
+                    call.worker_label or call.worker_id,
+                    call.task_label or call.task_id,
+                )
+                if part
+            )
             lines.append(
-                f"{call.name}({call.arguments}) -> {outcome}: {call.error or call.result}"
+                f"{f'[{actor}] ' if actor else ''}{call.name}({call.arguments})"
+                f" -> {outcome}: {call.error or call.result}"
             )
         return "\n".join(lines)
 

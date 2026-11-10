@@ -618,6 +618,9 @@ def charged_path(path: Path) -> Path:
     can open (past twice its limit, or holding a NUL), ``OSError`` for one past the system's
     limit, and ``RuntimeError`` for a link loop, as ``Path.resolve()`` does.
     """
+    # Resolving costs the path's length for each part it walks: a 3 MB path took 7.4 s.
+    if len(os.fspath(path)) > 2 * _LONGEST_PATH:
+        raise RuntimeSelectionError("compose_source_path_invalid")
     try:
         return _charged_resolve(path)
     except RuntimeSelectionError:
