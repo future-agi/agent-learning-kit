@@ -650,7 +650,9 @@ negotiating, granting access) is an actor in that scenario, with their actions o
 caller's instruction or a record already in place, and never the caller. When an actor decides something the person
 wants (a price, a discount, an approval), the person's instruction says what they ask for and never the outcome; how
 far the actor will go sits in that actor's limits (may agree to, keeps to themselves), so the negotiation happens in
-the run. A kept scenario's reply reads its cast back beside the actors it leaves out: compare it with the request
+the run. A check that the agent tells the person what an actor decided is fair only if the agent can learn it: a
+tool it has reads that record, the actor tells the agent, or the person asks again after the decision lands. The figure they settle on is written only there: not in the person's instruction (not even as "once 18% is
+approved, ask to apply it"), and not in the actor's own scenario instruction as the end point it must reach. A kept scenario's reply reads its cast back beside the actors it leaves out: compare it with the request
 before the next one.
 
 Write the scenario first as if no one else were there: the
@@ -1912,7 +1914,9 @@ graded; never put the answer to the scenario in it. For an agent started by a ta
 person, give `starts_with`: the one message that invokes it, with no `actor` when the scenario itself hands over the
 task, and an actor only when a real person or system sends it. When a request says a run is started by someone's
 message, the scenario has `starts_with` with that actor, never a caller asking on their behalf. That scenario has no caller, so its instruction says what
-happened, and its sub-goals are graded from what the agent did in the world, including doing nothing.
+happened, and its sub-goals are graded from what the agent did in the world, including doing nothing. The run opens
+with that actor's own message: never a person whose instruction narrates that the actor started it ("the
+conversation is started by the manager"), which plays the person, not the actor, and tests nothing about them.
 
 ## Faults and two systems
 

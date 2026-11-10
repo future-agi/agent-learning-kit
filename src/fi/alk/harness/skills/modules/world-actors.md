@@ -85,7 +85,8 @@ conversation is the starting state and is never graded.
 **Task-driven and event-started runs.** For an agent started by a message rather than by a person, `starts_with`
 gives that message; there is no caller. A task the scenario itself hands the agent (summarize this thread, fix this
 ticket) needs no actor: leave `actor` out. Name an actor only when a real person or system sends it (the calendar's
-meeting-ended notice). Only an agent reached by messages can be started this way.
+meeting-ended notice). Only an agent reached by messages can be started this way. A run a person's request says
+someone else starts has that actor in `starts_with`, never a caller whose instruction narrates it.
 
 **What is graded.** Every sub-goal grades the agent, never an actor. A sub-goal can depend on an actor (give its
 `actor`): it then reads not applicable when that actor never came in, and inconclusive when it came in and never

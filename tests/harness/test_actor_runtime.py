@@ -527,7 +527,7 @@ def test_a_task_driven_run_needs_no_actor_and_the_scenario_sends_the_task(monkey
     scenario = SimpleNamespace(instruction="", max_turns=4, starts_with=StartsWith(text="Summarize the launch thread"))
     transcript = asyncio.run(conv.converse(agent, scenario, SimpleNamespace()))
     assert agent.heard == ["Summarize the launch thread"]
-    assert [one["role"] for one in transcript.canonical_messages()] == ["user", "assistant"]
+    assert [one["role"] for one in transcript.canonical_messages()] == ["task", "assistant"]
     assert transcript.exchanges[0].speaker == "task" and transcript.exchanges[0].actor is None
 
 
@@ -1027,10 +1027,10 @@ def test_a_unit_for_a_field_the_tool_does_not_have_is_a_contract_problem():
     assert "units: refund_amount in cents, USD" in named.brief()
 
 
-def test_a_task_driven_run_s_task_reaches_the_platform_as_the_person_s_message():
+def test_a_task_driven_run_s_task_reaches_the_platform_as_its_own_turn():
     from fi.alk.harness.platform import SPEAKERS
 
-    assert SPEAKERS["task"] == "user"
+    assert SPEAKERS["task"] == "task"
 
 
 def test_a_start_message_from_no_one_is_read_back_with_the_actors_who_could_send_it(tmp_path):
@@ -1099,3 +1099,77 @@ def test_a_caller_instruction_that_states_what_an_actor_decides_is_read_back_as_
         {"name": "x", "instruction": "Ask for 25% on deal 9.", "actors": [{"id": "manager"}]}
     )
     assert "already states" not in cast_read_back(asked, tmp_path)
+
+
+def test_an_actor_with_no_identity_in_a_service_still_acts_there_as_itself():
+    from fi.alk.harness.run.conversation import ChatActors
+
+    acted = []
+
+    async def act(actor, action, arguments, *, key, parent, identity="", form="tool"):
+        acted.append((action, identity))
+        return {"status": 200, "outcome": "committed"}
+
+    cast = ChatActors(
+        [{"id": "manager", "name": "Alex", "permitted_actions": ["chat.post_message"], "trigger": {"kind": "always"}}],
+        seed="t", model=None, act=act, about={},
+    )
+
+    async def write(actor, brief):
+        return json.dumps({"action": "chat.post_message", "arguments": {"channel": "#sales", "text": "Approved."}})
+
+    cast._write = write
+    asyncio.run(cast.due_lines(agent_turns=1, last_text="", tools_called=[], conversation=[]))
+    # With no identity the world would fill in its own default, and that default is the agent.
+    assert acted == [("chat.post_message", "manager")]
+
+
+def test_a_decision_written_only_as_a_record_after_the_agent_s_call_is_read_back_as_unseen_by_the_agent(tmp_path):
+    from fi.alk.harness.scenario import Scenario
+    from fi.alk.harness.scenario_tools import cast_read_back
+
+    save_actors(tmp_path, ActorList(actors=[Actor(id="manager", name="Alex Vance", permitted_actions=["approvals.put"])]))
+    on_request = {"action": "approvals.put", "arguments": {"status": "rejected"},
+                  "trigger": {"kind": "on_tool", "tool": "request_discount"}}
+    silent = Scenario.model_validate({"name": "x", "instruction": "Ask for 25%.", "actors": [{"id": "manager", "actions": [on_request]}]})
+    assert "Alex Vance decide only by writing a record after the agent's call" in cast_read_back(silent, tmp_path)
+    # An actor who also tells the agent is heard; no note.
+    told = Scenario.model_validate(
+        {"name": "x", "instruction": "Ask for 25%.",
+         "actors": [{"id": "manager", "instruction": "Say you rejected it.", "actions": [on_request]}]}
+    )
+    assert "decide only by writing a record" not in cast_read_back(told, tmp_path)
+
+
+def test_a_scenario_s_own_start_message_is_the_task_s_turn_not_the_person_s():
+    from fi.alk.harness.run.conversation import Exchange, Transcript
+
+    transcript = Transcript(exchanges=[Exchange("task", "Nightly reconciliation: post deal 9."), Exchange("agent", "Posted.")])
+    assert transcript.canonical_messages() == [
+        {"role": "task", "content": "Nightly reconciliation: post deal 9."},
+        {"role": "assistant", "content": "Posted."},
+    ]
+    assert json.loads(transcript.artifact())["messages"][0]["role"] == "task"
+    # The person's own turn is unchanged.
+    assert Transcript(exchanges=[Exchange("customer", "Hi")]).canonical_messages() == [{"role": "user", "content": "Hi"}]
+
+
+def test_a_speaking_actor_can_come_in_on_a_tool_the_agent_s_tools_service_runs():
+    from types import SimpleNamespace
+
+    from fi.alk.harness.call_actor import CallActor, CallActorList
+    from fi.alk.harness.scenario import Scenario
+    from fi.alk.harness.scenario_tools import _call_actors_that_cannot_run
+
+    listing = CallActorList(call_actors=[CallActor(id="manager", name="Alex", channel="chat_message")])
+    scenario = Scenario.model_validate(
+        {"name": "x", "instruction": "Ask for 25% on deal 8.",
+         "actors": [{"id": "manager", "trigger": {"kind": "on_tool", "tool": "request_discount"}}]}
+    )
+    # The writer's local world cannot run the service's tool, but the world's tool trace sees every call of it.
+    trial = SimpleNamespace(runtime_tools={"request_discount"}, endpoint_for={})
+    tools = {"request_discount"}
+    assert _call_actors_that_cannot_run(scenario, listing, trial, False, tools, {"request_discount"}) == []
+    # A tool that truly runs only inside the agent is still refused.
+    refused = _call_actors_that_cannot_run(scenario, listing, trial, False, tools, set())
+    assert refused and "runs only inside the agent" in refused[0]

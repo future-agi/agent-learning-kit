@@ -513,6 +513,17 @@ def cast_read_back(scenario: Scenario, world_root: Path, caller_names: set[str] 
         if actor is not None and (named := _names_a_caller(actor, callers))
     ]
     unsent = scenario.starts_with is not None and not scenario.starts_with.actor
+    # Decisions that reach the world only as a record, from an actor who never writes to the agent.
+    silent_deciders = [
+        listed[entry.id].name or entry.id
+        for entry in scenario.actors
+        if entry.id in listed
+        and not listed[entry.id].channel
+        and not entry.instruction
+        and entry.actions
+        and all(record_action(one.action) for one in entry.actions)
+        and any(one.trigger is not None and one.trigger.kind == "on_tool" for one in entry.actions)
+    ]
     decided = _decided_values_the_caller_states(scenario, listed)
     return (
         "\nCast: the caller" + "".join(f"; {one}" for one in parts)
@@ -539,6 +550,13 @@ def cast_read_back(scenario: Scenario, world_root: Path, caller_names: set[str] 
             "caller closes it: keep what they decide out of the caller's instruction, or the caller closes before "
             "they have decided."
             if answering
+            else ""
+        )
+        + (
+            f" {', '.join(silent_deciders)} decide only by writing a record after the agent's call, and say nothing "
+            "to the agent: it learns the decision only from a tool that reads that record or from the person asking "
+            "again. A check that the agent tells the person the outcome needs one of those in the scenario."
+            if silent_deciders
             else ""
         )
         + (
@@ -1447,12 +1465,22 @@ def _credentials_the_world_lacks(scenario: Scenario, trial: Any) -> list[str]:
     ]
 
 
+def _service_tools(contract: Any) -> set[str]:
+    """The agent's tools its own tools service runs: the world's tool trace sees each call of them."""
+    return {
+        str(entry.get("tool") or "")
+        for entry in (one if isinstance(one, dict) else one.model_dump() for one in (contract.tool_entrypoints or []))
+        if entry.get("mode") == "service"
+    } - {""}
+
+
 def _call_actors_that_cannot_run(
     scenario: Scenario,
     listing: CallActorList | None,
     trial: Any,
     spoken: bool,
     tools: set[str] | None,
+    service_tools: set[str] | None = None,
 ) -> list[str]:
     """Why the scenario's actors that speak on the call cannot, or nothing."""
     if not scenario.actors:
@@ -1474,7 +1502,9 @@ def _call_actors_that_cannot_run(
         call_direction=scenario.call_direction,
         person=scenario.persona.name if scenario.persona else "",
         tools=tools,
-        runs_in_world=lambda tool: executes(trial, tool),
+        # A tool the agent's own tools service runs is seen by the world's tool trace on every call, though the
+        # writer's local world cannot execute it.
+        runs_in_world=lambda tool: tool in (service_tools or set()) or executes(trial, tool),
     ) + [
         f"instruction: the person's instruction names {name}, who speaks on this call. Write the person's "
         "situation as if no one else were there; the trigger brings them in and the run tells the person "
@@ -1532,6 +1562,7 @@ def accept_scenario(
     tools: set[str] | None = None,
     used: set[str] | None = None,
     renaming: bool = False,
+    service_tools: set[str] | None = None,
 ) -> dict[str, Any]:
     """Validate one scenario, then prove it. A plain function so both halves are testable.
 
@@ -1584,7 +1615,7 @@ def accept_scenario(
             problems.extend(_shared_check_bound_to_one_task(scenario, catalogue, kept))
             problems.extend(
                 _call_actors_that_cannot_run(
-                    scenario, call_actor_list, None, spoken, tools
+                    scenario, call_actor_list, None, spoken, tools, service_tools
                 )
             )
         else:
@@ -1610,7 +1641,7 @@ def accept_scenario(
                 problems.extend(_shared_check_bound_to_one_task(scenario, catalogue, kept))
                 problems.extend(
                     _call_actors_that_cannot_run(
-                        scenario, call_actor_list, trial, spoken, tools
+                        scenario, call_actor_list, trial, spoken, tools, service_tools
                     )
                 )
             finally:
@@ -2608,6 +2639,7 @@ def scenario_tools(
             call_actor_list=load_call_actors(destination),
             tools=set(contract.tool_names()),
             used=used,
+            service_tools=_service_tools(contract),
         )
         if not result.get("is_error"):
             exploration["since_submit"] = 0

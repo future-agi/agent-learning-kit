@@ -594,7 +594,7 @@ def _reference_solution(scenario: Any) -> str:
     )
 
 
-_SPEAKERS = {"user": "Customer", "assistant": "Agent"}
+_SPEAKERS = {"user": "Customer", "assistant": "Agent", "task": "Task"}
 
 
 def _speaker(message: dict[str, Any]) -> str:

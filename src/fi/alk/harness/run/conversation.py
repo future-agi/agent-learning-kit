@@ -231,6 +231,9 @@ def _message(turn: Exchange) -> dict[str, Any]:
             "name": turn.actor.get("name"),
             "content": turn.text,
         }
+    if turn.speaker == "task":
+        # A scenario's own start message: no person sent it, so it is never shown as one.
+        return {"role": "task", "content": turn.text}
     return {"role": "assistant" if turn.speaker == "agent" else "user", "content": turn.text}
 
 
@@ -396,7 +399,10 @@ class ChatActors:
                 self.decisions += 1
                 from ..world_door import record_action
 
-                identity = (actor.get("identities") or {}).get(decision.action.split(".", 1)[0], "")
+                # Without an identity in that service the actor still acts as itself, never as the agent.
+                identity = (actor.get("identities") or {}).get(decision.action.split(".", 1)[0], "") or str(
+                    actor.get("id") or ""
+                )
                 # A record change the actor may make goes to the world's records, as a scheduled one does; anything
                 # else is a tool call in its service.
                 record = record_action(decision.action) is not None and decision.action in (
