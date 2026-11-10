@@ -9,13 +9,21 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import logging
 import os
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from pydantic import BaseModel, ValidationError
 
-from fi.alk.harness import authoring_entrypoint, cli, reading_entry, seed_contract
+from fi.alk.harness import (
+    authoring_entrypoint,
+    cli,
+    reading_entry,
+    reading_result,
+    seed_contract,
+)
 from fi.alk.harness.contract import AgentContract
 from fi.alk.harness.framework_detection import detect_framework
 from fi.alk.harness.hosted_chat_entrypoint import HostedChatRuntime
@@ -26,10 +34,11 @@ from fi.alk.harness.seed_contract import (
     RECORD_KEY,
     SEED_ACCEPTED,
     SEED_LIMIT_BYTES,
+    SEED_RESULT,
     differs,
     record_for,
-    record_reading,
     use_seed,
+    with_record,
 )
 from fi.alk.harness.understand import load
 from fi.alk.providers.agent import build_authored_agent
@@ -127,11 +136,10 @@ def _reading(tmp_path: Path, data: bytes) -> Path:
 def test_a_reading_records_what_it_was_made_from(tmp_path):
     job = _job()
     original = json.dumps(CONTRACT, indent=1).encode()
-    reading = _reading(tmp_path, original)
 
-    record_reading(job, reading)
+    saved = with_record(job, original)
 
-    saved = (reading / "contract.json").read_bytes()
+    assert saved is not None
     assert record_for(job) == {
         "version": 1,
         "source": {"kind": "github", "repository": "owner/repo", "commit_sha": COMMIT},
@@ -195,17 +203,113 @@ def test_the_record_is_skipped_near_the_size_cap(tmp_path, monkeypatch, size):
         assert parsed == []
 
 
+def test_a_record_is_never_parsed_from_a_contract_over_the_cap(monkeypatch):
+    parsed: list[int] = []
+
+    def loads(value, *args, **kwargs):
+        parsed.append(len(value))
+        return json.loads(value, *args, **kwargs)
+
+    monkeypatch.setattr(
+        seed_contract, "json", SimpleNamespace(loads=loads, dumps=json.dumps)
+    )
+    text = json.dumps(CONTRACT).encode()
+    raw = text + b" " * (SEED_LIMIT_BYTES + 1 - len(text))
+
+    assert seed_contract.with_record(_job(), raw) is None
+    assert parsed == []
+
+
 def test_a_failed_record_keeps_the_reading(tmp_path, monkeypatch):
-    def broken(job, output):
+    def broken(job, raw):
         raise OSError("the disk refused the write")
 
-    monkeypatch.setattr(seed_contract, "record_reading", broken)
+    monkeypatch.setattr(seed_contract, "with_record", broken)
     data = json.dumps(CONTRACT).encode()
     reading = _reading(tmp_path, data)
 
     assert document(_job(), _source(tmp_path), reading) == 0
 
     assert (reading / "contract.json").read_bytes() == data
+
+
+def test_a_failed_record_keeps_its_traceback(tmp_path, monkeypatch, caplog):
+    def broken(job, raw):
+        raise RuntimeError("rec-9")
+
+    monkeypatch.setattr(seed_contract, "with_record", broken)
+    reading = _reading(tmp_path, json.dumps(CONTRACT).encode())
+
+    with caplog.at_level(logging.WARNING, logger=reading_result.__name__):
+        assert document(_job(), _source(tmp_path), reading) == 0
+
+    [logged] = [r for r in caplog.records if r.name == reading_result.__name__]
+    assert logged.getMessage() == "reading record not written"
+    # The logger's mask keeps the trace only as masked text.
+    assert "Traceback" in logged.exc_text
+    assert "RuntimeError: rec-9" in logged.exc_text
+
+
+LATER = json.dumps({**CONTRACT, "agent": "saved-later"}).encode()
+
+
+def test_a_save_after_the_read_is_never_overwritten(tmp_path, monkeypatch):
+    job = _job()
+    reading = _reading(tmp_path, json.dumps(CONTRACT).encode())
+    real = seed_contract.with_record
+
+    def saved_meanwhile(job, raw):
+        # The session saves again while the record is being made.
+        (reading / "contract.json").write_bytes(LATER)
+        return real(job, raw)
+
+    monkeypatch.setattr(seed_contract, "with_record", saved_meanwhile)
+
+    assert document(job, _source(tmp_path), reading) == 0
+
+    assert (reading / "contract.json").read_bytes() == LATER
+
+
+@pytest.mark.parametrize("saved_during_the_read", [False, True], ids=["quiet", "saved"])
+def test_the_record_is_made_from_the_bytes_the_document_used(
+    tmp_path, monkeypatch, saved_during_the_read
+):
+    job = _job()
+    data = json.dumps(CONTRACT, indent=1).encode()
+    reading = _reading(tmp_path, data)
+    real = seed_contract.with_record
+    seen: list[bytes] = []
+
+    def spy(job, raw):
+        seen.append(raw)
+        return real(job, raw)
+
+    monkeypatch.setattr(seed_contract, "with_record", spy)
+    if saved_during_the_read:
+        landed: list[bool] = []
+
+        def saved_then_sized(descriptor):
+            # Right after the document's read: only a fresh read of the file would see it.
+            if not landed:
+                landed.append(True)
+                (reading / "contract.json").write_bytes(LATER)
+            return os.fstat(descriptor)
+
+        monkeypatch.setattr(
+            reading_result,
+            "os",
+            SimpleNamespace(fstat=saved_then_sized, replace=os.replace),
+        )
+
+    assert document(job, _source(tmp_path), reading) == 0
+
+    assert seen == [data]
+    saved = (reading / "contract.json").read_bytes()
+    if saved_during_the_read:
+        assert saved == LATER
+        assert "saved-later" not in (reading / "agent.json").read_text()
+    else:
+        assert saved == real(job, data)
 
 
 @pytest.mark.parametrize(
@@ -238,14 +342,12 @@ def test_a_failed_record_keeps_the_reading(tmp_path, monkeypatch):
 def test_no_record_without_a_source_identity(tmp_path, make, made_from):
     job = make()
     data = json.dumps(CONTRACT).encode()
-    reading = _reading(tmp_path, data)
 
-    record_reading(job, reading)
+    saved = with_record(job, data)
 
-    saved = (reading / "contract.json").read_bytes()
     if made_from is None:
         assert record_for(job) is None
-        assert saved == data
+        assert saved is None
     else:
         assert record_for(job)["source"] == made_from
         assert record_for(job)["subfolder"] == ""
@@ -432,6 +534,22 @@ def test_a_seed_exactly_at_the_cap_is_accepted(tmp_path, monkeypatch):
     assert _marker(tmp_path).is_file()
 
 
+@pytest.mark.parametrize("case", ["no_seed", "refused"])
+def test_the_build_command_clears_a_stale_mark(tmp_path, monkeypatch, case):
+    calls = _watch_authoring(monkeypatch)
+    _marker(tmp_path).parent.mkdir(parents=True)
+    _marker(tmp_path).write_bytes(b"")
+
+    if case == "no_seed":
+        assert _build(tmp_path, "--await-harness") == 0
+        assert calls == ["compose", "await"]
+    else:
+        assert _build(tmp_path, *_seeded(tmp_path, _elsewhere(tmp_path))) == 78
+        assert calls == []
+
+    assert not _marker(tmp_path).exists()
+
+
 def test_a_refusal_holds_none_of_the_seed(tmp_path, monkeypatch, capfd):
     _watch_authoring(monkeypatch)
     _place(tmp_path, b"not json " + TOKEN.encode())
@@ -492,7 +610,7 @@ def test_a_matching_seed_is_copied_byte_for_byte(tmp_path):
     seed = _place(tmp_path, _seed_bytes(job))
     output = tmp_path / "authoring"
 
-    assert use_seed(seed, job, _source(tmp_path), output) == "used"
+    assert use_seed(seed, job, _source(tmp_path), output) == ("used", [])
 
     assert (output / "contract.json").read_bytes() == seed.read_bytes()
     # What the world stage compares the world it builds against.
@@ -552,7 +670,7 @@ def test_a_mismatched_seed_reads_again(tmp_path, capsys, build, body, names):
     output = tmp_path / "authoring"
 
     assert differs(json.loads(seed.read_bytes()), job) == names
-    assert use_seed(seed, job, _source(tmp_path), output) == "mismatch"
+    assert use_seed(seed, job, _source(tmp_path), output) == ("mismatch", names)
 
     assert not (output / "contract.json").exists()
     assert not (output / "failure.json").exists()
@@ -575,7 +693,10 @@ def test_a_seed_without_a_record_reads_again(tmp_path, body):
     seed = _place(tmp_path, _seed_bytes(job, body, record=False))
 
     assert differs(json.loads(seed.read_bytes()), job) == ["reading_inputs"]
-    assert use_seed(seed, job, _source(tmp_path), tmp_path / "authoring") == "mismatch"
+    assert use_seed(seed, job, _source(tmp_path), tmp_path / "authoring") == (
+        "mismatch",
+        ["reading_inputs"],
+    )
 
 
 def test_a_rejected_contract_reads_again(tmp_path, capsys):
@@ -583,7 +704,7 @@ def test_a_rejected_contract_reads_again(tmp_path, capsys):
     seed = _place(tmp_path, _seed_bytes(job, {**CONTRACT, "tools": TOKEN}))
     output = tmp_path / "authoring"
 
-    assert use_seed(seed, job, _source(tmp_path), output) == "rejected"
+    assert use_seed(seed, job, _source(tmp_path), output) == ("rejected", [])
 
     assert not (output / "contract.json").exists()
     assert not (output / "failure.json").exists()
@@ -604,7 +725,7 @@ def test_a_failed_setup_step_reads_again(tmp_path, monkeypatch, capsys):
     seed = _place(tmp_path, _seed_bytes(job))
     output = tmp_path / "authoring"
 
-    assert use_seed(seed, job, _source(tmp_path), output) == "setup_failed"
+    assert use_seed(seed, job, _source(tmp_path), output) == ("setup_failed", [])
 
     assert not (output / "contract.json").exists()
     assert not (output / "generic-harness" / "source-model.json").exists()
@@ -615,7 +736,7 @@ def test_a_seed_changed_after_it_was_accepted_reads_again(tmp_path):
     seed = _place(tmp_path, b"not json")
     output = tmp_path / "authoring"
 
-    assert use_seed(seed, _job(), _source(tmp_path), output) == "unreadable"
+    assert use_seed(seed, _job(), _source(tmp_path), output) == ("unreadable", [])
 
     assert not (output / "failure.json").exists()
     assert not (output / "contract.json").exists()
@@ -780,6 +901,7 @@ def test_the_seed_is_left_alone_when(tmp_path, monkeypatch, case):
         assert (workspace / "contract.json").read_bytes() == kept
     else:
         assert not (workspace / "contract.json").exists()
+    assert not (workspace / SEED_RESULT).exists()
 
 
 def test_a_command_installs_nothing_before_a_stage_opens(tmp_path, monkeypatch):
@@ -809,6 +931,407 @@ def test_a_failed_source_model_step_still_opens_the_world_stage(
     assert "class: RuntimeError" in capsys.readouterr().err
 
 
+def _outcome(tmp_path: Path) -> dict:
+    # The platform's path, spelled out: it is stored with the version but never hashed.
+    workspace = tmp_path / "authoring"
+    assert not (workspace / "seed-result.json").exists()
+    return json.loads((workspace / "generic-harness" / "seed-result.json").read_bytes())
+
+
+def _real_world(runtime) -> HostedChatRuntime:
+    runtime._what_exists = HostedChatRuntime._what_exists.__get__(runtime)
+    return runtime
+
+
+def test_a_later_opening_never_installs(tmp_path, monkeypatch):
+    runtime = _real_world(_builder(tmp_path, monkeypatch, marker=False))
+    workspace = tmp_path / "authoring"
+
+    assert _open(runtime).contract is None
+    decided = (workspace / SEED_RESULT).read_bytes()
+    assert json.loads(decided) == {"seed": "not_accepted", "differs": []}
+
+    # The build command's mark lands after the builder's first opening.
+    _marker(tmp_path).write_bytes(b"")
+    assert _open(runtime).contract is None
+
+    assert not (workspace / "contract.json").exists()
+    assert _marker(tmp_path).is_file()
+    assert (workspace / SEED_RESULT).read_bytes() == decided
+
+    # A new process finds only the file to go by.
+    assert _open(_restarted(runtime)).contract is None
+    assert not (workspace / "contract.json").exists()
+    assert (workspace / SEED_RESULT).read_bytes() == decided
+
+
+def _restarted(runtime) -> HostedChatRuntime:
+    """The same workspace as a new process sees it: nothing remembered of the seed."""
+    again = object.__new__(HostedChatRuntime)
+    again.__dict__.update(
+        {
+            key: value
+            for key, value in vars(runtime).items()
+            if not key.startswith("_seed")
+        }
+    )
+    return again
+
+
+def _from_another_commit(tmp_path, monkeypatch, runtime) -> None:
+    _place(tmp_path, _seed_bytes(_job(source={**GITHUB, "commit_sha": OTHER_COMMIT})))
+
+
+@pytest.mark.parametrize("outcome", ["used", "mismatch"])
+def test_the_mark_is_consumed_whatever_the_outcome(tmp_path, monkeypatch, outcome):
+    runtime = _real_world(_builder(tmp_path, monkeypatch))
+    if outcome == "mismatch":
+        _from_another_commit(tmp_path, monkeypatch, runtime)
+
+    _open(runtime)
+
+    assert not _marker(tmp_path).exists()
+    assert _outcome(tmp_path)["seed"] == outcome
+
+
+def _as_placed(tmp_path, monkeypatch, runtime) -> None:
+    pass
+
+
+def _not_a_contract(tmp_path, monkeypatch, runtime) -> None:
+    _place(tmp_path, _seed_bytes(_job(), {**CONTRACT, "tools": TOKEN}))
+
+
+def _changed_since(tmp_path, monkeypatch, runtime) -> None:
+    _place(tmp_path, b"not json")
+
+
+def _setup_fails(tmp_path, monkeypatch, runtime) -> None:
+    def fails(destination, source, job):
+        raise RuntimeError("the source could not be modelled")
+
+    monkeypatch.setattr(cli, "after_contract", fails)
+
+
+def _job_unreadable(tmp_path, monkeypatch, runtime) -> None:
+    runtime.job = {**runtime.job, "execution": "nowhere"}
+
+
+@pytest.mark.parametrize(
+    ("arrange", "expected"),
+    [
+        (_as_placed, {"seed": "used", "differs": []}),
+        (_from_another_commit, {"seed": "mismatch", "differs": ["source"]}),
+        (_not_a_contract, {"seed": "rejected", "differs": []}),
+        (_changed_since, {"seed": "unreadable", "differs": []}),
+        (_setup_fails, {"seed": "setup_failed", "differs": []}),
+        (_job_unreadable, {"seed": "error", "differs": []}),
+    ],
+    ids=["used", "mismatch", "rejected", "unreadable", "setup_failed", "error"],
+)
+def test_the_outcome_is_written_for_the_platform(
+    tmp_path, monkeypatch, arrange, expected
+):
+    runtime = _real_world(_builder(tmp_path, monkeypatch))
+    arrange(tmp_path, monkeypatch, runtime)
+
+    opened = _open(runtime)
+
+    used = expected["seed"] == "used"
+    assert _outcome(tmp_path) == expected
+    assert (opened.contract is not None) == used
+    assert (tmp_path / "authoring" / "contract.json").exists() == used
+
+
+def test_no_outcome_without_a_seed(tmp_path, monkeypatch):
+    runtime = _real_world(_builder(tmp_path, monkeypatch, marker=False))
+    _seed_path(tmp_path).unlink()
+
+    assert _open(runtime).contract is None
+
+    assert not (tmp_path / "authoring" / SEED_RESULT).exists()
+
+
+def test_no_outcome_after_a_refusal(tmp_path, monkeypatch):
+    # Outside control-only, so the refusal's own file is all that stops it.
+    runtime = _real_world(
+        _builder(tmp_path, monkeypatch, marker=False, control_only=False)
+    )
+    (tmp_path / "authoring" / "failure.json").write_text("{}", encoding="utf-8")
+
+    _open(runtime)
+
+    assert not (tmp_path / "authoring" / SEED_RESULT).exists()
+
+
+def _install_breaks(tmp_path, monkeypatch, runtime) -> None:
+    def breaks(destination, source, job):
+        raise RuntimeError("boom-7")
+
+    monkeypatch.setattr(cli, "after_contract", breaks)
+
+
+def _check_breaks(tmp_path, monkeypatch, runtime) -> None:
+    def breaks(body, job):
+        raise RuntimeError("boom-7")
+
+    monkeypatch.setattr(seed_contract, "differs", breaks)
+
+
+class _JobThatBreaks:
+    @classmethod
+    def model_validate(cls, value):
+        raise RuntimeError("boom-7")
+
+
+def _job_breaks(tmp_path, monkeypatch, runtime) -> None:
+    # Imported first, so nothing the opening imports binds the stand-in for good.
+    from fi.alk.harness import builder  # noqa: F401
+    from fi.alk.harness import job as job_module
+
+    monkeypatch.setattr(job_module, "HarnessJob", _JobThatBreaks)
+
+
+def _source_model_breaks(tmp_path, monkeypatch, runtime) -> None:
+    (tmp_path / "authoring" / "contract.json").write_text(
+        json.dumps(CONTRACT), encoding="utf-8"
+    )
+
+    def breaks():
+        raise RuntimeError("boom-7")
+
+    runtime._after_saved = breaks
+
+
+@pytest.mark.parametrize(
+    "arrange",
+    [_install_breaks, _check_breaks, _job_breaks, _source_model_breaks],
+    ids=["after_contract", "use_seed", "job", "after_saved"],
+)
+def test_an_unexpected_failure_keeps_its_traceback(
+    tmp_path, monkeypatch, capsys, arrange
+):
+    runtime = _real_world(_builder(tmp_path, monkeypatch))
+    arrange(tmp_path, monkeypatch, runtime)
+
+    _open(runtime)
+
+    err = capsys.readouterr().err
+    assert "Traceback" in err
+    assert "boom-7" in err
+
+
+def test_a_job_that_fails_validation_logs_no_values(tmp_path, monkeypatch, capfd):
+    secret = "sk-JOBTOKEN42"
+    runtime = _real_world(_builder(tmp_path, monkeypatch))
+    runtime.job = {**runtime.job, "execution": secret}
+
+    _open(runtime)
+
+    err = capfd.readouterr().err
+    assert "ValidationError" in err
+    assert "Traceback" not in err
+    assert secret not in err
+    assert _outcome(tmp_path) == {"seed": "error", "differs": []}
+    assert secret not in (tmp_path / "authoring" / SEED_RESULT).read_text()
+
+
+class _Holds(BaseModel):
+    value: int
+
+
+def _holding_values() -> ValidationError:
+    try:
+        _Holds.model_validate({"value": TOKEN})
+    except ValidationError as exc:
+        return exc
+    raise AssertionError("the value must fail")
+
+
+def _install_holds_values(tmp_path, monkeypatch, runtime) -> None:
+    def fails(destination, source, job):
+        raise _holding_values()
+
+    monkeypatch.setattr(cli, "after_contract", fails)
+
+
+def _check_holds_values(tmp_path, monkeypatch, runtime) -> None:
+    def fails(body, job):
+        raise _holding_values()
+
+    monkeypatch.setattr(seed_contract, "differs", fails)
+
+
+def _source_model_holds_values(tmp_path, monkeypatch, runtime) -> None:
+    (tmp_path / "authoring" / "contract.json").write_text(
+        json.dumps(CONTRACT), encoding="utf-8"
+    )
+
+    def fails():
+        raise _holding_values()
+
+    runtime._after_saved = fails
+
+
+def _chained_under_another(tmp_path, monkeypatch, runtime) -> None:
+    def fails(destination, source, job):
+        try:
+            raise _holding_values()
+        except ValidationError:
+            raise RuntimeError("boom-7")
+
+    monkeypatch.setattr(cli, "after_contract", fails)
+
+
+@pytest.mark.parametrize(
+    "arrange",
+    [
+        _install_holds_values,
+        _check_holds_values,
+        _source_model_holds_values,
+        _chained_under_another,
+    ],
+    ids=["after_contract", "use_seed", "after_saved", "chained"],
+)
+def test_a_validation_error_never_prints_its_values(
+    tmp_path, monkeypatch, capfd, arrange
+):
+    runtime = _real_world(_builder(tmp_path, monkeypatch))
+    arrange(tmp_path, monkeypatch, runtime)
+
+    _open(runtime)
+
+    err = capfd.readouterr().err
+    assert "class: " in err
+    assert "Traceback" not in err
+    assert TOKEN not in err
+
+
+def _result_write_fails(monkeypatch, *, times: int) -> list[str]:
+    real = os.replace
+    failed: list[str] = []
+
+    def replace(src, dst):
+        if Path(dst).name == SEED_RESULT.name and len(failed) < times:
+            failed.append(str(dst))
+            raise OSError(28, "No space left on device")
+        return real(src, dst)
+
+    monkeypatch.setattr(seed_contract.os, "replace", replace)
+    return failed
+
+
+def test_the_outcome_is_written_whole_or_not_at_all(tmp_path, monkeypatch, capsys):
+    runtime = _real_world(_builder(tmp_path, monkeypatch))
+    workspace = tmp_path / "authoring"
+    failed = _result_write_fails(monkeypatch, times=1)
+
+    assert _open(runtime).contract is not None
+
+    assert failed
+    assert not (workspace / SEED_RESULT).exists()
+    assert not list(workspace.rglob(".seed-*.tmp"))
+    assert "seed result not written; class: OSError" in capsys.readouterr().err
+
+    # The next opening writes what was decided, and installs nothing again.
+    installed = (workspace / "contract.json").read_bytes()
+    assert _open(runtime).contract is not None
+    assert _outcome(tmp_path) == {"seed": "used", "differs": []}
+    assert (workspace / "contract.json").read_bytes() == installed
+
+
+def test_a_lost_outcome_never_lets_a_reopen_install(tmp_path, monkeypatch):
+    runtime = _real_world(_builder(tmp_path, monkeypatch, marker=False))
+    workspace = tmp_path / "authoring"
+    _result_write_fails(monkeypatch, times=1)
+
+    assert _open(runtime).contract is None
+    assert not (workspace / SEED_RESULT).exists()
+
+    # The build command's mark lands while the reading is under way.
+    _marker(tmp_path).write_bytes(b"")
+    assert _open(runtime).contract is None
+
+    assert not (workspace / "contract.json").exists()
+    assert _outcome(tmp_path) == {"seed": "not_accepted", "differs": []}
+
+
+def test_a_restart_after_the_install_says_it_was_used(tmp_path, monkeypatch):
+    runtime = _real_world(_builder(tmp_path, monkeypatch))
+    workspace = tmp_path / "authoring"
+    # The process stopped after the install and before it could say so.
+    (workspace / "contract.json").write_bytes(_seed_path(tmp_path).read_bytes())
+
+    assert _open(runtime).contract is not None
+
+    assert _outcome(tmp_path) == {"seed": "used", "differs": []}
+    assert not _marker(tmp_path).exists()
+    assert runtime.order == ["after_saved", "open"]
+
+
+def test_a_restart_after_a_lost_outcome_says_it_was_used(tmp_path, monkeypatch):
+    runtime = _real_world(_builder(tmp_path, monkeypatch))
+    _result_write_fails(monkeypatch, times=1)
+    assert _open(runtime).contract is not None
+    assert not (tmp_path / "authoring" / SEED_RESULT).exists()
+
+    assert _open(_restarted(runtime)).contract is not None
+
+    assert _outcome(tmp_path) == {"seed": "used", "differs": []}
+
+
+def test_a_contract_that_is_not_the_seed_is_never_claimed(tmp_path, monkeypatch):
+    runtime = _real_world(_builder(tmp_path, monkeypatch))
+    workspace = tmp_path / "authoring"
+    seed = _seed_path(tmp_path).read_bytes()
+    # The same length, one byte apart: what a reading of its own saved.
+    saved = seed.replace(b'"support"', b'"Support"', 1)
+    assert saved != seed and len(saved) == len(seed)
+    (workspace / "contract.json").write_bytes(saved)
+
+    _open(runtime)
+
+    assert not (workspace / SEED_RESULT).exists()
+    assert (workspace / "contract.json").read_bytes() == saved
+
+
+def _unlink_fails_for(monkeypatch, name: str) -> None:
+    real = Path.unlink
+
+    def unlink(self, missing_ok=False):
+        if self.name == name:
+            raise PermissionError(13, "Permission denied")
+        return real(self, missing_ok=missing_ok)
+
+    monkeypatch.setattr(Path, "unlink", unlink)
+
+
+def test_a_mark_that_cannot_be_removed_still_leaves_the_outcome(
+    tmp_path, monkeypatch, capsys
+):
+    runtime = _real_world(_builder(tmp_path, monkeypatch))
+    _unlink_fails_for(monkeypatch, SEED_ACCEPTED)
+
+    assert _open(runtime).contract is not None
+
+    assert _outcome(tmp_path) == {"seed": "used", "differs": []}
+    err = capsys.readouterr().err
+    assert "Traceback" in err
+    assert "PermissionError" in err
+
+
+def test_a_contract_that_cannot_be_taken_back_is_used(tmp_path, monkeypatch):
+    runtime = _real_world(_builder(tmp_path, monkeypatch))
+    _setup_fails(tmp_path, monkeypatch, runtime)
+    _unlink_fails_for(monkeypatch, "contract.json")
+
+    assert _open(runtime).contract is not None
+
+    assert _outcome(tmp_path) == {"seed": "used", "differs": []}
+    installed = (tmp_path / "authoring" / "contract.json").read_bytes()
+    assert installed == _seed_path(tmp_path).read_bytes()
+
+
 # -- the round trip ----------------------------------------------------------------------------
 
 
@@ -817,17 +1340,17 @@ def test_a_reading_seeds_its_own_build(tmp_path):
     source = _source(tmp_path)
     reading = _reading(tmp_path, json.dumps(CONTRACT, indent=1).encode())
 
-    record_reading(job, reading)
+    assert document(job, source, reading) == 0
     seed = reading / "contract.json"
 
-    assert use_seed(seed, job, source, tmp_path / "build") == "used"
+    assert use_seed(seed, job, source, tmp_path / "build") == ("used", [])
     assert (tmp_path / "build" / "contract.json").read_bytes() == seed.read_bytes()
     other = _job(source={**GITHUB, "commit_sha": OTHER_COMMIT})
     assert differs(json.loads(seed.read_bytes()), other) == ["source"]
-    assert use_seed(seed, other, source, tmp_path / "other") == "mismatch"
+    assert use_seed(seed, other, source, tmp_path / "other") == ("mismatch", ["source"])
 
 
-# -- after the change review: the whole wire, and what it left unpinned ------------------------
+# -- the build command and the builder together, and the record's edge cases --
 
 
 def _saved_like_a_reading(tmp_path: Path, body: dict, job: HarnessJob) -> bytes:
@@ -835,11 +1358,11 @@ def _saved_like_a_reading(tmp_path: Path, body: dict, job: HarnessJob) -> bytes:
     reading = tmp_path / "reading"
     reading.mkdir()
     dumped = AgentContract.model_validate(body).model_dump()
-    (reading / "contract.json").write_text(
-        json.dumps(dumped, indent=2, ensure_ascii=False), encoding="utf-8"
-    )
-    record_reading(job, reading)
-    return (reading / "contract.json").read_bytes()
+    saved = json.dumps(dumped, indent=2, ensure_ascii=False).encode("utf-8")
+    recorded = with_record(job, saved)
+    assert recorded is not None
+    (reading / "contract.json").write_bytes(recorded)
+    return recorded
 
 
 def test_the_build_command_then_the_builder(tmp_path, monkeypatch):
@@ -864,6 +1387,8 @@ def test_the_build_command_then_the_builder(tmp_path, monkeypatch):
     assert (workspace / "contract.json").read_bytes() == raw
     assert load(workspace).base_environment == CONTRACT["base_environment"]
     assert (workspace / "generic-harness" / "source-model.json").is_file()
+    assert _outcome(tmp_path) == {"seed": "used", "differs": []}
+    assert not _marker(tmp_path).exists()
 
 
 def test_a_reading_of_the_repository_root_matches(tmp_path):
@@ -874,17 +1399,15 @@ def test_a_reading_of_the_repository_root_matches(tmp_path):
     source = tmp_path / "source"
     source.mkdir()
     (source / "agent.py").write_text("x = 1\n")
-    assert (
-        use_seed(tmp_path / "reading" / "contract.json", job, source, tmp_path / "out")
-        == "used"
-    )
+    assert use_seed(
+        tmp_path / "reading" / "contract.json", job, source, tmp_path / "out"
+    ) == ("used", [])
 
 
 def test_a_reading_recorded_twice_keeps_one_record(tmp_path):
     job = _job()
     raw = _saved_like_a_reading(tmp_path, CONTRACT, job)
-    record_reading(job, tmp_path / "reading")
-    assert (tmp_path / "reading" / "contract.json").read_bytes() == raw
+    assert with_record(job, raw) is None
     assert raw.count(b'"reading_inputs"') == 1
 
 
@@ -894,7 +1417,10 @@ def test_a_record_of_another_version_reads_again(tmp_path, version):
     record = {**record_for(job), "version": version}
     seed = _place(tmp_path, _seed_bytes(job, record=record))
     assert differs(json.loads(seed.read_bytes()), job) == ["version"]
-    assert use_seed(seed, job, _source(tmp_path), tmp_path / "out") == "mismatch"
+    assert use_seed(seed, job, _source(tmp_path), tmp_path / "out") == (
+        "mismatch",
+        ["version"],
+    )
 
 
 def test_an_open_reading_is_never_installed_under(tmp_path, monkeypatch):
@@ -952,11 +1478,12 @@ def test_the_builder_hands_over_the_agents_source(tmp_path, monkeypatch):
     runtime = _builder(tmp_path, monkeypatch)
     runtime._what_exists = HostedChatRuntime._what_exists.__get__(runtime)
     handed = []
-    monkeypatch.setattr(
-        seed_contract,
-        "use_seed",
-        lambda seed, job, source, output: handed.append((source, output)),
-    )
+
+    def use(seed, job, source, output):
+        handed.append((source, output))
+        return "mismatch", []
+
+    monkeypatch.setattr(seed_contract, "use_seed", use)
     _open(runtime)
     assert handed == [(runtime.source, runtime.workspace)]
 
@@ -979,7 +1506,7 @@ def test_a_seed_that_grows_while_it_is_read_is_refused(tmp_path, monkeypatch):
 def test_a_contract_the_reading_would_not_save_reads_again(tmp_path, capsys):
     job = _job()
     seed = _place(tmp_path, _seed_bytes(job, {**CONTRACT, "agent": ""}))
-    assert use_seed(seed, job, _source(tmp_path), tmp_path / "out") == "rejected"
+    assert use_seed(seed, job, _source(tmp_path), tmp_path / "out") == ("rejected", [])
     assert not (tmp_path / "out" / "contract.json").exists()
     assert "problems: 1" in capsys.readouterr().err
 
@@ -1000,10 +1527,12 @@ def test_one_install_at_a_time(tmp_path, monkeypatch):
         time.sleep(0.2)
         with gate:
             running[0] -= 1
-        return "mismatch"
+        return "mismatch", []
 
     monkeypatch.setattr(seed_contract, "use_seed", slow)
-    threads = [threading.Thread(target=runtime._take_seed) for _ in range(2)]
+    # Two processes' worth of memory, so only the lock and the file keep them apart.
+    openings = [runtime, _restarted(runtime)]
+    threads = [threading.Thread(target=one._take_seed) for one in openings]
     for thread in threads:
         thread.start()
     for thread in threads:
@@ -1022,5 +1551,14 @@ def test_a_broken_stderr_does_not_undo_a_used_seed(tmp_path, monkeypatch):
     job = _job()
     seed = _place(tmp_path, _seed_bytes(job))
     monkeypatch.setattr(seed_contract.sys, "stderr", Closed())
-    assert use_seed(seed, job, _source(tmp_path), tmp_path / "out") == "used"
+    assert use_seed(seed, job, _source(tmp_path), tmp_path / "out") == ("used", [])
     assert (tmp_path / "out" / "contract.json").read_bytes() == seed.read_bytes()
+
+    # A traceback that can't be printed never turns a failure into a crash.
+    def fails(destination, source, job):
+        raise RuntimeError("boom-7")
+
+    monkeypatch.setattr(cli, "after_contract", fails)
+    again = tmp_path / "again"
+    assert use_seed(seed, job, _source(tmp_path), again) == ("setup_failed", [])
+    assert not (again / "contract.json").exists()

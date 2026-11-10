@@ -3,7 +3,7 @@
 The reading records what it was made from beside its contract. The build command checks the
 handed file's bytes before anything starts, and the builder installs it only when it was made
 from the same source, folder, eval list and generic flag; otherwise the build reads as it does
-without one.
+without one. The builder decides once, and leaves what it decided for the platform.
 """
 
 from __future__ import annotations
@@ -14,6 +14,8 @@ import os
 import stat
 import sys
 import tempfile
+import traceback
+from collections.abc import Iterable
 from pathlib import Path
 from typing import Any, NamedTuple
 
@@ -33,6 +35,8 @@ RECORD_KEY = "reading_inputs"
 SEED_ACCEPTED = ".futureagi-seed-accepted"
 SEED_CONTRACT_INVALID = "seed_contract_invalid"
 SEED_CONTRACT_TOO_LARGE = "seed_contract_too_large"
+# Beside the harness's other derived records, which never move the environment's identity.
+SEED_RESULT = Path("generic-harness") / "seed-result.json"
 # What a reading may save is what a build may be handed.
 SEED_LIMIT_BYTES = _CONTRACT_LIMIT_BYTES
 
@@ -75,6 +79,32 @@ def _log(line: str) -> None:
     # A closed stderr must not undo a seed that was already used.
     try:
         print(line, file=sys.stderr, flush=True)
+    except (OSError, ValueError):
+        pass
+
+
+def holds_values(exc: BaseException) -> bool:
+    """Whether a ValidationError is anywhere in ``exc``'s chain: its text repeats values."""
+    from pydantic import ValidationError
+
+    seen: set[int] = set()
+    current: BaseException | None = exc
+    while current is not None and id(current) not in seen:
+        if isinstance(current, ValidationError):
+            return True
+        seen.add(id(current))
+        current = current.__cause__ or current.__context__
+    return False
+
+
+def print_trace(exc: BaseException) -> None:
+    """The traceback of an unexpected failure: a class name alone can't be debugged."""
+    # A printed traceback follows the chain, so one holding a ValidationError prints nothing.
+    if holds_values(exc):
+        return
+    try:
+        traceback.print_exception(exc, file=sys.stderr)
+        sys.stderr.flush()
     except (OSError, ValueError):
         pass
 
@@ -128,24 +158,36 @@ def _splice(raw: bytes, record: dict[str, Any], *, empty: bool) -> bytes:
     return raw[:start] + entry + (b"" if empty else b", ") + raw[start:]
 
 
-def record_reading(job: HarnessJob, output: Path) -> None:
-    """Put what the reading was made from into its saved contract."""
-    path = Path(output) / _CONTRACT
-    # Sized before it is read: the reading's own size check refuses what is over.
-    if path.stat().st_size > SEED_LIMIT_BYTES:
-        return
+def with_record(job: HarnessJob, raw: bytes) -> bytes | None:
+    """The saved contract ``raw`` with what the reading was made from put in, or None to keep it."""
+    # Sized before it is parsed: the reading's own size check refuses what is over.
+    if len(raw) > SEED_LIMIT_BYTES:
+        return None
     record = record_for(job)
     if record is None:
-        return
-    raw = path.read_bytes()
+        return None
     body = json.loads(raw.decode("utf-8"))
     if not isinstance(body, dict) or RECORD_KEY in body:
-        return
+        return None
     spliced = _splice(raw, record, empty=not body)
     # A reading at the edge stays as it was rather than crossing the platform's cap.
     if len(spliced) > SEED_LIMIT_BYTES:
-        return
-    _write_whole(path, spliced)
+        return None
+    return spliced
+
+
+def replace_if_unchanged(path: Path, expected: bytes, new: bytes) -> bool:
+    """Write ``new`` over ``path`` only while it still holds ``expected``; ``True`` when written."""
+    with Path(path).open("rb") as handle:
+        current = handle.read(SEED_LIMIT_BYTES + 1)
+    if current != expected:
+        # The session saved again after the read: its save stands, without a record.
+        _log(
+            "reading record not written; the contract was saved again after it was read"
+        )
+        return False
+    _write_whole(Path(path), new)
+    return True
 
 
 def differs(body: dict[str, Any], job: HarnessJob) -> list[str]:
@@ -292,8 +334,37 @@ def accept_seed(path: str | Path, output: str | Path) -> int | None:
     return None
 
 
-def use_seed(seed: str | Path, job: HarnessJob, source: Path, output: Path) -> str:
-    """Install the seed as the build's contract when it matches ``job``, and say what happened.
+def write_result(output: str | Path, seed: str, differs: Iterable[str] = ()) -> None:
+    """Leave what the builder did with the seed, for the platform to read."""
+    try:
+        target = Path(output) / SEED_RESULT
+        target.parent.mkdir(parents=True, exist_ok=True)
+        body = json.dumps(
+            {"seed": seed, "differs": list(differs)}, separators=(",", ":")
+        )
+        _write_whole(target, body.encode())
+    except Exception as exc:
+        # The builder writes it again at its next opening; until then the platform finds none.
+        _log(f"seed result not written; class: {type(exc).__name__}")
+        print_trace(exc)
+
+
+def holds_seed(contract: Path, seed: str | Path) -> bool:
+    """Whether ``contract`` is the seed, byte for byte. Never raises."""
+    try:
+        _, problem, raw = read_seed(seed)
+        if problem is not None or raw is None:
+            return False
+        return contract.stat().st_size == len(raw) and contract.read_bytes() == raw
+    except Exception:  # noqa: BLE001 - a contract that can't be compared isn't claimed as the seed
+        return False
+
+
+def use_seed(
+    seed: str | Path, job: HarnessJob, source: Path, output: Path
+) -> tuple[str, list[str]]:
+    """Install the seed as the build's contract when it matches ``job``, and say what happened:
+    the outcome, and the names that differ when it is a mismatch.
 
     Never fails the build: whatever it can't use is read again, as a build without one does.
     """
@@ -340,18 +411,21 @@ def use_seed(seed: str | Path, job: HarnessJob, source: Path, output: Path) -> s
                     except Exception as exc:
                         _take_back(contract, source_model, had_model)
                         failed = type(exc).__name__
-                        result = "setup_failed"
+                        # A contract left behind opens the world stage, which retries the step.
+                        result = "used" if contract.exists() else "setup_failed"
+                        print_trace(exc)
     except Exception as exc:
         # Nothing is installed by then: a failed write leaves no contract behind.
         failed = type(exc).__name__
         result = "error"
+        print_trace(exc)
     _log(
         f"seed contract: {result}"
         + (f"; differs: {', '.join(names)}" if names else "")
         + (f"; problems: {problems}" if problems else "")
         + (f"; class: {failed}" if failed else "")
     )
-    return result
+    return result, names
 
 
 def _take_back(contract: Path, source_model: Path, had_model: bool) -> None:

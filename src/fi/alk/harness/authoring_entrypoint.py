@@ -740,6 +740,10 @@ def main(argv: list[str] | None = None, *, validate_runtime: bool = False) -> in
         args.source.resolve(), job.source.subfolder, args.output.resolve()
     ):
         return EXIT_REFUSED
+    from .seed_contract import SEED_ACCEPTED
+
+    # Cleared before the seed checks: a mark an earlier command left must not pass for this one's yes.
+    (args.output / SEED_ACCEPTED).unlink(missing_ok=True)
     if args.seed_contract is not None:
         if args.await_harness:
             from .seed_contract import accept_seed
