@@ -489,17 +489,15 @@ def _walked(root: Path, subfolder: str) -> frozenset[Path]:
 
 
 def code_the_agent_reaches(source_root: Path, subfolder: str) -> list[Path]:
-    """The files outside the agent's folder that its code runs, as the browser-tool scan reads
-    them: what the folder imports, and the files directly in the folders above it.
+    """The files outside the agent's folder that its code runs, exactly as the browser-tool scan
+    counts them: what the folder imports and the files directly above it, less test helpers and
+    other people's unpacked packages. It runs that scan; the save reuses the scan it already ran.
 
     Raises ``SubfolderNotFound`` for a folder that can't be used.
     """
-    root = Path(source_root).resolve()
-    folder = agent_folder(root, subfolder)
-    above = [
-        path for parent in folder.parents if is_within(parent, root) for path in _files_in(parent)
-    ]
-    return [*above, *sorted(_walked(root, subfolder))]
+    reached: list[Path] = []
+    browser_tools_in_agent(source_root, subfolder, reached)
+    return reached
 
 
 def browser_tools_in_agent(

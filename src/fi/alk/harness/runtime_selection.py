@@ -268,34 +268,54 @@ def _mounts_outside_folder(
 ) -> bool:
     """True when the service binds or reads an env file from a folder of the repository that is
     neither the agent's nor above it: a sibling's code bound into a stock image runs as surely as
-    one built from it. Paths outside the repository, such as a socket, are the host's."""
+    one built from it. A file counts as its folder, as a build's Dockerfile does, so a root
+    `.env` or config file is the agent's. Paths outside the repository, such as a socket, are the
+    host's."""
     if not isinstance(service, dict):
         return False
-    sources: list[Any] = []
+    # (source, whether it names a file for certain)
+    sources: list[tuple[str, bool]] = []
     envfiles = service.get("env_file") or []
     if isinstance(envfiles, str):
         envfiles = [envfiles]
     for entry in envfiles if isinstance(envfiles, list) else []:
-        sources.append(entry.get("path") if isinstance(entry, dict) else entry)
+        path = entry.get("path") if isinstance(entry, dict) else entry
+        if isinstance(path, str) and (value := _interpolated(path, public_environment)):
+            sources.append((value, True))
     mounts = service.get("volumes") or []
     for mount in mounts if isinstance(mounts, list) else []:
         if isinstance(mount, str):
-            # A named volume has no path; a bind starts with one.
-            source = mount.split(":")[0]
+            # Interpolated first, as Compose does. A named volume has no path; a bind starts
+            # with one, and a bare name at the root would otherwise read as the root's folder.
+            value = _interpolated(mount, public_environment)
+            source = value.split(":")[0] if value else ""
             if source.startswith((".", "/")):
-                sources.append(source)
+                sources.append((source, False))
         elif isinstance(mount, dict) and mount.get("type") == "bind":
-            sources.append(mount.get("source"))
-    for source in sources:
-        if not isinstance(source, str):
-            continue
-        value = _interpolate_structure(source, public_environment)
-        if not isinstance(value, str) or not value or value.startswith("~"):
+            source = mount.get("source")
+            if isinstance(source, str) and (value := _interpolated(source, public_environment)):
+                sources.append((value, False))
+    for value, is_file in sources:
+        if value.startswith("~"):
             continue
         place = _resolved(base, value)
+        if is_file or not place.is_dir():
+            place = place.parent
         if is_within(place, root) and not contains_or_is_above(place, folder):
             return True
     return False
+
+
+def _interpolated(value: str, public_environment: dict[str, str]) -> str:
+    """``value`` with its variables filled in, or "" when one isn't set: the code that reads
+    the file reports that, not this check."""
+    try:
+        built = _interpolate_structure(value, public_environment)
+    except RuntimeSelectionError as unset:
+        if str(unset).startswith("compose_structural_configuration_missing"):
+            return ""
+        raise
+    return built if isinstance(built, str) else ""
 
 
 def _resolved(base: Path, value: str) -> Path:
@@ -871,6 +891,8 @@ def _load_compose(
                 raise RuntimeSelectionError("compose_include_path_invalid")
             child = load(path.parent / include)
             for key, value in child.items():
+                if not isinstance(key, str):
+                    raise RuntimeSelectionError("compose_invalid")
                 if key in {"name", "version"} or key.startswith("x-"):
                     continue
                 if key not in {"services", "volumes", "networks"}:
@@ -904,12 +926,16 @@ def _rebase_service(service, base, destination, root, environment):
         return "./" + os.path.relpath(path, destination)
 
     build = service.get("build")
+    if build and not isinstance(build, (str, dict)):
+        raise RuntimeSelectionError("compose_invalid")
     if build:
         build = {"context": build} if isinstance(build, str) else build
         build["context"] = relative(build.get("context", "."), interpolate=False)
         service["build"] = build
     envfiles = service.get("env_file", [])
     envfiles = [envfiles] if isinstance(envfiles, str) else envfiles
+    if not isinstance(envfiles, list):
+        raise RuntimeSelectionError("compose_env_file_invalid")
     for index, entry in enumerate(envfiles):
         if isinstance(entry, str):
             envfiles[index] = relative(entry)
@@ -920,6 +946,8 @@ def _rebase_service(service, base, destination, root, environment):
     if envfiles:
         service["env_file"] = envfiles
     mounts = service.get("volumes", [])
+    if not isinstance(mounts, list):
+        raise RuntimeSelectionError("compose_invalid")
     for index, mount in enumerate(mounts):
         if isinstance(mount, str):
             parts = mount.split(":")
@@ -927,4 +955,4 @@ def _rebase_service(service, base, destination, root, environment):
                 parts[0] = relative(parts[0], interpolate=False)
                 mounts[index] = ":".join(parts)
         elif isinstance(mount, dict) and mount.get("type") == "bind":
-            mount["source"] = relative(mount["source"], interpolate=False)
+            mount["source"] = relative(mount.get("source"), interpolate=False)

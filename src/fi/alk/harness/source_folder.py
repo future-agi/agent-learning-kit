@@ -84,9 +84,10 @@ def agent_folder(root: Path, subfolder: str | None) -> Path:
         folder = (resolved_root / subfolder).resolve()
         if not _inside(folder, resolved_root):
             raise SubfolderNotFound(subfolder)
-        # A committed link to its own folder or above (`agents/up -> ..`, `self -> .`) would make
-        # every sibling this agent's own while the build is still recorded as a folder build.
-        if _inside((resolved_root / subfolder).parent.resolve(), folder):
+        # A committed link to the root, or to its own folder or above (`agents/up -> ..`,
+        # `self -> .`, or out of the repository and back), would make every sibling this
+        # agent's own while the build is still recorded as a folder build.
+        if folder == resolved_root or _inside((resolved_root / subfolder).parent.resolve(), folder):
             raise SubfolderNotFound(subfolder)
         # Git stores no empty folder, so an empty one is an uninitialised submodule.
         with os.scandir(folder) as entries:

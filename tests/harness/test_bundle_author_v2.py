@@ -5897,6 +5897,8 @@ def test_subfolder_requires_a_named_root_compose_files_values(tmp_path, monkeypa
 
     assert seen["agent_compose_file"] == "compose.yaml"
     assert seen["agent_subfolder"] == "agents/a"
+    # A Compose plan has no source process, so the folder's install root is what's scanned.
+    assert "agents/a" in seen["scan_paths"]
 
 
 def test_subfolder_finds_its_own_compose_with_broker(tmp_path, monkeypatch):

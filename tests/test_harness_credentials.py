@@ -752,8 +752,18 @@ def test_the_import_walk_does_not_follow_a_link_out_or_read_an_oversized_file(tm
     assert credentials.imported_by_agent(root, "agents/a") == frozenset()
 
 
-@pytest.mark.parametrize("limit, stopped", [(10, False), (1, True)])
-def test_the_import_walk_says_when_a_limit_stopped_it(tmp_path, monkeypatch, caplog, limit, stopped):
+@pytest.mark.parametrize(
+    "budget, stopped",
+    [
+        ({}, False),
+        ({"_MAX_WALK_IMPORTS": 1}, True),
+        # The folder's own two files, then nothing left for common/llm.py.
+        ({"_MAX_FILES": 2}, True),
+        ({"_MAX_WALK_BYTES": 1}, True),
+    ],
+    ids=["none", "names", "files", "bytes"],
+)
+def test_the_import_walk_says_when_a_limit_stopped_it(tmp_path, monkeypatch, caplog, budget, stopped):
     from fi.alk.harness import credentials
 
     root = _agents_repo(
@@ -762,9 +772,12 @@ def test_the_import_walk_says_when_a_limit_stopped_it(tmp_path, monkeypatch, cap
             "common/__init__.py": "",
             "common/llm.py": 'import os\nKEY = os.environ["SHARED_API_KEY"]\n',
             "agents/a/agent.py": "import nowhere\nimport common.llm\n",
+            # Read first, so a limit on names leaves no file waiting: only the cut says so.
+            "agents/a/aaa.py": "x = 1\n",
         },
     )
-    monkeypatch.setattr(credentials, "_MAX_WALK_IMPORTS", limit)
+    for name, value in budget.items():
+        monkeypatch.setattr(credentials, name, value)
     said: list[bool] = []
 
     credentials.imported_by_agent(root, "agents/a", stopped=said)
