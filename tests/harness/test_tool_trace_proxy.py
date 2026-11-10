@@ -461,6 +461,15 @@ def test_a_worker_s_action_outside_its_allow_list_is_refused_before_the_world(wo
     assert (row["worker_id"], row["outcome"], row["refusal_code"]) == ("order_lookup", "refused", "not_permitted")
 
 
+def test_a_worker_s_request_for_a_route_that_is_no_world_action_is_refused_before_the_world(worker_proxy):
+    url, rows = worker_proxy
+    # Nothing past the world's own actions is reachable from a limited worker's channel, whatever path it asks for.
+    assert _post(url, "/w/c-lookup/scenarios/answers", {})[0] == 403
+    assert _World.seen == []
+    [row] = rows()
+    assert (row["worker_id"], row["outcome"], row["refusal_code"]) == ("order_lookup", "refused", "not_permitted")
+
+
 def test_a_channel_no_worker_of_this_trial_owns_is_refused(worker_proxy):
     url, rows = worker_proxy
     assert _post(url, "/w/c-stolen/ok", {})[0] == 403

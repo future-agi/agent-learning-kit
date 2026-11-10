@@ -521,3 +521,28 @@ def test_worker_limits_that_cannot_be_read_refuse_and_never_widen():
     door = WorldDoor(executor, MemoryLog(), DictRoster({}), workers=broken)
     assert door.enter(ToolCall(action="refunds.issue", name="issue", worker="refund")).refusal_code == "not_permitted"
     assert executor.ran == []
+
+
+def test_a_worker_naming_an_actor_never_borrows_that_actor_s_permissions():
+    executor = _Executor()
+    door = WorldDoor(
+        executor,
+        MemoryLog(),
+        DictRoster({"manager": {"permitted_actions": ["crm.approve"], "on_behalf_of": None}}),
+        workers=lambda: {"permissions": {"lookup": ["orders.get"]}},
+    )
+    # Over the proxy a request that names an actor is never proven; from a worker's channel it stays the worker's.
+    outcome = door.enter(ToolCall(action="crm.approve", name="approve", actor="manager", proven=False, worker="lookup"))
+    assert (outcome.outcome, outcome.refusal_code) == ("refused", "identity_conflict")
+    assert executor.ran == []
+    [row] = door.events()
+    assert (row["actor_id"], row["worker_id"]) == (AGENT, "lookup")
+
+
+def test_a_limited_worker_s_request_for_anything_that_is_not_a_world_action_never_reaches_the_world():
+    executor = _Executor()
+    door = _worker_door(executor, {"permissions": {"lookup": ["orders.get"]}})
+    # The proxy names a route that is no world action `unknown`: a limited worker reaches only its listed actions.
+    outcome = door.enter(ToolCall(action="unknown", name="scenarios", worker="lookup"))
+    assert (outcome.outcome, outcome.refusal_code) == ("refused", "not_permitted")
+    assert executor.ran == []
