@@ -1337,7 +1337,8 @@ class _Walk:
                     self._in_time()
                 if not _is_side_path(_below(path, subfolder)):
                     facts = self.facts[path]
-                    names = _first_names((names, facts.env))
+                    if facts.env:
+                        names = _first_names((names, facts.env))
                     tools += facts.tools
             at = max(at, skip_end)
         self._owned_by[subfolder] = (names, tools)
@@ -1472,8 +1473,10 @@ def walk_repo(
         logger.warning("agent walk: joining files into agents ran out of time")
         walk.facts.clear()
         return _empty_result(walk, "clock")
-    except _ResultTooBig:
+    except (_ResultTooBig, _CapReached):
         # Too many candidates reach each other to hold: the same end as the walk's other caps.
+        # The join's lookups all meet folders the walk already charged, so none charges again;
+        # if one ever did, past a held stop, it ends here too rather than in the crash path.
         logger.warning("agent walk: joining files into agents passed its edge budget")
         walk.facts.clear()
         return _empty_result(walk, "limit")
@@ -1543,7 +1546,8 @@ def _hazard(
         if found > 1:
             return "agent_py"
         entries += len(directories) + len(files)
-        # What os.walk holds for the folders it has yet to enter: each one's full path.
+        # What os.walk holds for the folders it has yet to enter: each one's full path, counted in
+        # characters (a path of wide characters holds up to four bytes for each).
         listed += sum(len(here) + 1 + len(name) for name in directories)
         if entries > _HAZARD_ENTRIES or listed > _HAZARD_PATH_BYTES:
             return ""
@@ -1698,8 +1702,8 @@ def describe_entry(
         raise
     except Exception:
         # Runs after the model was paid for, so a fault in the kit keeps what was read and
-        # marks the row partial rather than ending in a paid retry. The trace is logged, with the
-        # platform's secret values masked.
+        # marks the row partial rather than ending in a paid retry. The trace is logged, with only
+        # the platform's secret values masked.
         logger.warning("agent description stopped", exc_info=True)
         reading.partial = True
     facts = reading.facts.get(entry)
