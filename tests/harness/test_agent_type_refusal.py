@@ -3116,6 +3116,8 @@ def test_each_folder_above_the_agent_has_its_records_read_once(tmp_path, monkeyp
 
     assert browser_tools_in_agent(repo, "agents/a") == []
     assert read.count(repo.resolve()) == 1
+    # The agent's folder: once here, and once in its own walk's look at its packages.
+    assert read.count((repo / "agents" / "a").resolve()) == 2
 
 
 @pytest.mark.parametrize("coding", ["rot13", "nosuch"])
@@ -3164,3 +3166,65 @@ def test_the_walk_reads_a_file_whose_coding_line_python_cant_read_as_utf8(tmp_pa
     (repo / "agents" / "a" / "odd.py").write_bytes(f"# coding: {coding}\nimport common\n".encode())
 
     assert (repo / "common" / "__init__.py").resolve() in imported_by_agent(repo, "agents/a")
+
+
+@pytest.mark.parametrize("coding", ["punycode", "undefined"])
+def test_a_codec_python_reads_slowly_or_not_at_all_is_not_used(coding):
+    from fi.alk.harness.python_source import source_encoding
+
+    # punycode's decode costs the square of its size: 2.3 s for 128 KB.
+    assert source_encoding(f"# coding: {coding}\nx = 1\n".encode()) is None
+
+
+@pytest.mark.parametrize("coding", ["punycode", "idna", "undefined"])
+def test_the_walk_follows_a_helper_whatever_codec_its_coding_line_names(tmp_path, coding):
+    from fi.alk.harness.credentials import imported_by_agent
+
+    repo = _tree(tmp_path / "repo", {"agents/a/agent.py": "import helper\n", "common/__init__.py": ""})
+    # idna can't replace what it can't read, so its decode raises; the walk reads it as UTF-8.
+    (repo / "agents" / "a" / "helper.py").write_bytes(f"# coding: {coding}\nimport common\n".encode())
+
+    assert (repo / "common" / "__init__.py").resolve() in imported_by_agent(repo, "agents/a")
+
+
+def test_a_record_hides_the_files_it_names_not_their_folders(tmp_path):
+    # A record names files. A row that names a folder, which pip doesn't write, hides nothing.
+    repo = _tree(
+        tmp_path / "repo",
+        {
+            "vend/__init__.py": "",
+            "vend/web.py": "import playwright\n",
+            "x-1.dist-info/METADATA": "",
+            "x-1.dist-info/RECORD": "vend,,\nvend/__init__.py,,\n",
+            "agents/a/agent.py": "import vend.web\n",
+        },
+    )
+
+    assert browser_tools_in_agent(repo, "agents/a") == ["playwright"]
+
+
+def test_an_installed_browser_package_at_the_root_is_not_the_customers_module(
+    tmp_path, monkeypatch
+):
+    # The folder's records spend the budget; the root's are still read, so `playwright` there
+    # stays an installed package and the agent's import of it counts.
+    repo = _tree(
+        tmp_path / "repo",
+        {
+            "playwright/__init__.py": "",
+            "playwright-1.0.dist-info/METADATA": "",
+            "playwright-1.0.dist-info/RECORD": "playwright/__init__.py,,\n",
+            "agents/a/agent.py": "import playwright\n",
+            "agents/a/p/q/y-1.dist-info/METADATA": "",
+            "agents/a/p/q/agent.py": "import playwright\n",
+            "agents/a/p/q/y-1.dist-info/RECORD": "".join(f"r{n:06d}.py,,\n" for n in range(200)),
+            "agents/a/p/z-1.dist-info/METADATA": "",
+            "agents/a/p/z-1.dist-info/RECORD": "".join(f"s{n:06d}.py,,\n" for n in range(200)),
+        },
+    )
+    folder_record = (repo / "agents/a/p/q/y-1.dist-info/RECORD").stat().st_size
+    root_record = (repo / "playwright-1.0.dist-info/RECORD").stat().st_size
+    # Enough for the folder's and the root's records, not for the folder between them.
+    monkeypatch.setattr(agent_type_check, "_RECORDS_AT_AND_ABOVE", folder_record + root_record)
+
+    assert browser_tools_in_agent(repo, "agents/a/p/q") == ["playwright"]

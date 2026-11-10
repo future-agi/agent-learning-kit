@@ -863,7 +863,12 @@ def imported_by_agent(
         # As read_text reads it, line ends included; a .py in the encoding its coding line names,
         # as Python reads it.
         encoding = (source_encoding(raw) if path.suffix == ".py" else None) or "utf-8-sig"
-        content = raw.decode(encoding, errors="replace").replace("\r\n", "\n").replace("\r", "\n")
+        try:
+            text = raw.decode(encoding, errors="replace")
+        except (UnicodeError, LookupError):
+            # Some codecs, such as idna, refuse to replace what they can't read.
+            text = raw.decode("utf-8-sig", errors="replace")
+        content = text.replace("\r\n", "\n").replace("\r", "\n")
         hits: list[Path] = []
         if path.suffix == ".py":
             names = list(dict.fromkeys(_python_imports(content, parse_limit, parse_budget)))

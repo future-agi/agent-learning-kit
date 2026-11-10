@@ -493,10 +493,11 @@ def browser_tools_in_agent(source_root: Path, subfolder: str) -> list[str]:
     # wrote them, relative to that folder: a Path for each row cost ten times as much, and a
     # budget for each folder let a deep folder read many times the limit.
     left = [_RECORDS_AT_AND_ABOVE]
+    # The folder's and the repository's first: their rows also say which modules there are the
+    # customer's own, so a budget spent between them mustn't turn an installed package into one.
+    between = [parent for parent in folder.parents if is_within(parent, root) and parent != root]
     rows_of = {
-        parent: _unpacked_at_top(parent, left)
-        for parent in (folder, *folder.parents)
-        if is_within(parent, root)
+        parent: _unpacked_at_top(parent, left) for parent in dict.fromkeys((folder, root, *between))
     }
     holding = [(parent, rows) for parent, rows in rows_of.items() if rows]
 
@@ -504,7 +505,9 @@ def browser_tools_in_agent(source_root: Path, subfolder: str) -> list[str]:
         for parent, rows in holding:
             if is_within(path, parent):
                 below = path.parts[len(parent.parts) :]
-                if any("/".join(below[:end]) in rows for end in range(1, len(below) + 1)):
+                # A record names files, so the file's own row is the one to find: one join per
+                # folder, where every prefix cost a join each.
+                if "/".join(below) in rows:
                     return True
         return False
 

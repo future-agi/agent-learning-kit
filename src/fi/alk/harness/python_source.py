@@ -38,6 +38,8 @@ LARGEST_TOKENIZED_WORK = 8 * 1024 * 1024
 # of combining marks by insertion, in one call holding the interpreter: about 3.8 s for one name
 # of marks in a 128 KB file. Honest text never runs this many marks together.
 _LONGEST_MARK_RUN = 32
+# Text codecs a coding line may name that are never read: see source_encoding.
+_UNREAD_CODECS = frozenset({"punycode", "undefined"})
 _NON_ASCII_RUN = re.compile(r"[^\x00-\x7f]{2,}")
 
 
@@ -119,8 +121,10 @@ def source_encoding(raw: bytes) -> str | None:
     try:
         encoding, _ = tokenize.detect_encoding(lines)
         # A codec such as rot13 or base64 isn't a text encoding, so decode refuses it: the same
-        # flag decode checks, which an empty input never reaches.
-        if not getattr(codecs.lookup(encoding), "_is_text_encoding", True):
+        # flag decode checks, which an empty input never reaches. punycode is one, but its decode
+        # costs the square of its size, 2.3 s for 128 KB; undefined decodes nothing.
+        info = codecs.lookup(encoding)
+        if not getattr(info, "_is_text_encoding", True) or info.name in _UNREAD_CODECS:
             return None
     except (SyntaxError, UnicodeError, LookupError):
         return None
