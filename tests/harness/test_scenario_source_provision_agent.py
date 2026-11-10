@@ -126,6 +126,25 @@ def test_provision_payload_carries_the_agent_built_from_the_sealed_contract(
     )
 
 
+def test_a_url_urlsplit_refuses_is_registered_redacted_and_logged_by_class_only(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    # A full-width number sign NFKC-normalises to "#", so urlsplit refuses the netloc, and its
+    # error repeats the whole userinfo.
+    leaky = "https://admin:hunter2\uff03x@db.example/"
+    _write_bundle(tmp_path, _contract(leaky))
+
+    with caplog.at_level(logging.DEBUG):
+        payload = _provision(tmp_path, SourceKind.GITHUB)
+
+    assert payload["agent"]["agent"]["behaviour"][0]["instructions"] == "[redacted]"
+    assert "hunter2" not in json.dumps(payload["agent"])
+    [logged] = [record for record in caplog.records if record.name == "fi.alk.providers.agent"]
+    assert logged.getMessage() == "a URL was redacted whole: class=ValueError"
+    assert logged.exc_info is None
+    assert "hunter2" not in caplog.text
+
+
 @pytest.mark.parametrize(
     ("kind", "contract", "build_error", "logged"),
     [

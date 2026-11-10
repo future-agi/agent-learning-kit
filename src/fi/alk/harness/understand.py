@@ -40,6 +40,11 @@ _READER_INSTRUCTIONS = (
     "the contract."
 )
 PROVIDER_IMPORT_PROFILE_PATH_ENV = "ALK_PROVIDER_IMPORT_PROFILE_PATH"
+# Said once when a model ends its turn without saving; every unattended reading uses these words.
+SUBMIT_REMINDER = (
+    "Nothing was saved: you finished without calling submit_contract. Call it now "
+    "with the contract you worked out."
+)
 
 
 def _provider_import_briefing() -> str:
@@ -104,6 +109,23 @@ def _eval_catalogue_briefing(available_evals: list[dict[str, Any]] | None) -> st
         "front of you, never because its name sounds close to the agent's industry.\n\n"
         + "\n\n".join(sections)
     )
+
+
+def reading_settings(job: Any, *, interactive: bool = False) -> dict[str, Any]:
+    """The ``open_stage`` arguments a job's agent is read with, by a build or by a reading alone.
+
+    One choice for both, so a contract a reading saves is one the build's gate would keep. A
+    generic job read unattended must declare its setup, which takes more turns.
+    """
+    metadata = getattr(job, "metadata", None) if job is not None else None
+    metadata = metadata if isinstance(metadata, dict) else {}
+    offered = metadata.get("available_evals")
+    generic = metadata.get("generic_harness_v1") is True and not interactive
+    return {
+        "available_evals": offered if isinstance(offered, list) else None,
+        "require_setup_contract": generic,
+        "max_turns": 140 if generic else 70,
+    }
 
 
 def open_stage(

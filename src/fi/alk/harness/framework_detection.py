@@ -294,12 +294,14 @@ class _Work:
     every time. Python 3.12.3 re-decodes a token's whole line for each token, and one
     name can have thousands of targets: neither shows in the size of a file."""
 
-    def __init__(self) -> None:
+    def __init__(self, limit: int | None = None) -> None:
         self._spent = 0
+        # None follows _MAX_WORK; the agent scan gives each file its own, smaller limit.
+        self._limit = limit
 
     def charge(self, amount: int) -> None:
         self._spent += amount
-        if self._spent > _MAX_WORK:
+        if self._spent > (_MAX_WORK if self._limit is None else self._limit):
             raise _OverBudget()
 
 
@@ -960,7 +962,11 @@ def detect_framework(
     *,
     repo_root: Path | None = None,
     package_dir: Path | None = None,
+    raise_faults: bool = False,
 ) -> dict[str, Any]:
+    """The folder's framework word. A fault in the check is ``unknown`` for a build; the agent
+    scan passes ``raise_faults=True`` to see it, so it can log the trace and mark the row
+    unfinished instead of reporting a finished ``unknown``."""
     try:
         if folder is None or not Path(folder).is_dir():
             logger.info("framework detection: name=%s blockers=%s", "unknown", [])
@@ -978,15 +984,21 @@ def detect_framework(
         )
         return result
     except Exception as exc:
+        if raise_faults:
+            raise
         logger.warning("framework detection failed: class=%s", type(exc).__name__)
         return {"name": "unknown", "version": None}
 
 
-def _contract_workdir(source: Path, bundle_dir: Path) -> Path | None:
+def _contract_workdir(
+    source: Path, bundle_dir: Path, contract_text: str | None = None
+) -> Path | None:
     """`runtime.workdir` from the sealed contract, when it names a real inner folder."""
     try:
         contract = json.loads(
-            (bundle_dir / "contract.json").read_text(encoding="utf-8")
+            contract_text
+            if contract_text is not None
+            else (bundle_dir / "contract.json").read_text(encoding="utf-8")
         )
         runtime = contract.get("runtime") if isinstance(contract, dict) else None
         workdir = runtime.get("workdir") if isinstance(runtime, dict) else None
@@ -1001,20 +1013,27 @@ def _contract_workdir(source: Path, bundle_dir: Path) -> Path | None:
     return None
 
 
+def named_framework_folder(
+    source: Path, bundle_dir: Path, subfolder: str | None, *, contract_text: str | None = None
+) -> Path | None:
+    """The folder the job names, else the sealed contract's own; ``None`` when neither does.
+
+    ``contract_text`` is the contract already read, when the caller has read it.
+    """
+    if subfolder:
+        return agent_folder(source, subfolder)
+    return _contract_workdir(source, bundle_dir, contract_text)
+
+
 def framework_folders_for(
     job: Any, manifest: Any, *, source: Path, bundle_dir: Path, work_directory: Path
 ) -> FrameworkFolders:
     runtime = manifest.runtime
     control_service = runtime.control_service if runtime.kind == "process" else None
-    subfolder = job.source.subfolder
-    folder = source
-    if subfolder:
-        folder = agent_folder(source, subfolder)
-    else:
-        workdir = _contract_workdir(source, bundle_dir)
-        if workdir is not None:
-            folder = workdir
-        elif control_service:
+    folder = named_framework_folder(source, bundle_dir, job.source.subfolder)
+    if folder is None:
+        folder = source
+        if control_service:
             for process in manifest.processes:
                 if process.name == control_service:
                     # The same base the runtime builds the process from.

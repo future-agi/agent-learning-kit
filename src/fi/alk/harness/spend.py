@@ -13,6 +13,7 @@ mid-turn loses that turn only, and the platform reads the file while the sandbox
 from __future__ import annotations
 
 import json
+import logging
 import os
 import tempfile
 from pathlib import Path
@@ -20,16 +21,23 @@ from typing import Any
 
 JOURNAL_ALIAS = "ALK_SPEND_JOURNAL"
 
+logger = logging.getLogger(__name__)
+
 _stages: dict[str, dict[str, Any]] = {}
 _path: Path | None = None
+_complete: bool | None = None
 
 
-def journal_to(path: str | os.PathLike[str] | None) -> None:
-    """Where to keep the ledger. Nothing is written until this is set or the alias names a path."""
-    global _path
+def journal_to(path: str | os.PathLike[str] | None, *, complete: bool | None = None) -> bool:
+    """Where to keep the ledger. Nothing is written until this is set or the alias names a path.
+
+    ``complete`` is written beside the totals only when given: a reading's bill says whether every
+    turn's spend is in it, and a build's ledger has no such key. ``True`` when the file was written.
+    """
+    global _path, _complete
     _path = Path(path) if path else None
-    if _path is not None:
-        _flush()
+    _complete = complete
+    return _flush() if _path is not None else False
 
 
 def _destination() -> Path | None:
@@ -126,10 +134,15 @@ def snapshot() -> dict[str, Any]:
     }
 
 
-def _flush() -> None:
+def _flush() -> bool:
     destination = _destination()
     if destination is None:
-        return
+        return False
+    body = snapshot()
+    if _complete is not None:
+        # A turn with no price makes the total a floor, and a floor billed as the total is wrong.
+        body["complete"] = _complete and body["unpriced_turns"] == 0
+    handle = None
     try:
         destination.parent.mkdir(parents=True, exist_ok=True)
         # Written whole, then moved: a poll that reads mid-write must never see half a total.
@@ -137,8 +150,16 @@ def _flush() -> None:
             "w", dir=destination.parent, prefix=".spend-", suffix=".json", delete=False
         )
         with handle as writing:
-            json.dump(snapshot(), writing, indent=2, sort_keys=True)
+            json.dump(body, writing, indent=2, sort_keys=True)
         os.replace(handle.name, destination)
     except OSError:
         # Accounting must never be the reason a stage fails.
-        pass
+        logger.warning("spend file not written: %s", destination, exc_info=True)
+        if handle is not None:
+            # Left behind, it would sit in a folder the platform reads as the run's output.
+            try:
+                Path(handle.name).unlink(missing_ok=True)
+            except OSError:
+                pass
+        return False
+    return True
