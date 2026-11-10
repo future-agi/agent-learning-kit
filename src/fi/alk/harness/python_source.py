@@ -39,7 +39,7 @@ LARGEST_TOKENIZED_WORK = 8 * 1024 * 1024
 # of marks in a 128 KB file. Honest text never runs this many marks together.
 _LONGEST_MARK_RUN = 32
 # Text codecs a coding line may name that are never read: see source_encoding.
-_UNREAD_CODECS = frozenset({"punycode", "undefined"})
+_UNREAD_CODECS = frozenset({"idna", "punycode", "undefined"})
 _NON_ASCII_RUN = re.compile(r"[^\x00-\x7f]{2,}")
 
 
@@ -121,8 +121,10 @@ def source_encoding(raw: bytes) -> str | None:
     try:
         encoding, _ = tokenize.detect_encoding(lines)
         # A codec such as rot13 or base64 isn't a text encoding, so decode refuses it: the same
-        # flag decode checks, which an empty input never reaches. punycode is one, but its decode
-        # costs the square of its size, 2.3 s for 128 KB; undefined decodes nothing.
+        # flag decode checks, which an empty input never reaches. Three text codecs are refused
+        # by name: punycode's decode costs the square of its size, 2.3 s for 128 KB; idna's runs
+        # in Python for each label, 91 ms for 128 KB; undefined decodes nothing. Of the
+        # standard library's 110 codecs, every other one decodes valid text at 12 ms a MB at most.
         info = codecs.lookup(encoding)
         if not getattr(info, "_is_text_encoding", True) or info.name in _UNREAD_CODECS:
             return None

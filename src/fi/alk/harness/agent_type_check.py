@@ -126,8 +126,11 @@ _LARGEST_SCRIPT_SCAN = 16 * 1024 * 1024
 _LARGEST_RECORD = 1024 * 1024
 # The scripts the walk reads to follow imports, while the conversation waits; bundling reads 32 MB.
 _WALKED_SCRIPTS = 2 * 1024 * 1024
-# The import names it tries then, each a few lookups on disk: about 0.5 s at most.
+# The import names it tries then.
 _WALKED_IMPORTS = 5_000
+# And the lookups on disk it makes then, a file found costing one for each part of its path: a name
+# can resolve a package for each of its parts, and 1,000 crafted names took the save 12 s.
+_WALKED_LOOKUPS = 100_000
 # Per walk. A first scan reads up to three times this: its signature, its files and the packages
 # at the top each walk the records. Every reopen reads it once more, for the signature.
 _LARGEST_RECORDS = 64 * 1024 * 1024
@@ -493,15 +496,17 @@ def browser_tools_in_agent(source_root: Path, subfolder: str) -> list[str]:
     # wrote them, relative to that folder: a Path for each row cost ten times as much, and a
     # budget for each folder let a deep folder read many times the limit.
     left = [_RECORDS_AT_AND_ABOVE]
-    # The folder's and the repository's first: their rows also say which modules there are the
-    # customer's own, so a budget spent between them mustn't turn an installed package into one.
-    between = [parent for parent in folder.parents if is_within(parent, root) and parent != root]
+    # Nearest first.
     rows_of = {
-        parent: _unpacked_at_top(parent, left) for parent in dict.fromkeys((folder, root, *between))
+        parent: _unpacked_at_top(parent, left)
+        for parent in (folder, *(parent for parent in folder.parents if is_within(parent, root)))
     }
     holding = [(parent, rows) for parent, rows in rows_of.items() if rows]
 
     def unpacked(path: Path) -> bool:
+        # The nearest few folders holding the file, as _agent_files checks: a crafted chain of
+        # them would cost its depth for each of thousands of files.
+        nearest = 0
         for parent, rows in holding:
             if is_within(path, parent):
                 below = path.parts[len(parent.parts) :]
@@ -509,6 +514,9 @@ def browser_tools_in_agent(source_root: Path, subfolder: str) -> list[str]:
                 # folder, where every prefix cost a join each.
                 if "/".join(below) in rows:
                     return True
+                nearest += 1
+                if nearest == _NEAREST_RECORD_FOLDERS:
+                    break
         return False
 
     shared = [
@@ -521,6 +529,7 @@ def browser_tools_in_agent(source_root: Path, subfolder: str) -> list[str]:
                 parse_budget=ParseBudget(),
                 script_budget=ParseBudget(_WALKED_SCRIPTS),
                 import_limit=_WALKED_IMPORTS,
+                lookup_limit=_WALKED_LOOKUPS,
             )
         )
         if not _not_the_agent_file(path.name)
@@ -529,6 +538,12 @@ def browser_tools_in_agent(source_root: Path, subfolder: str) -> list[str]:
         # still the agent's own code.
         and not any(_TEST_FOLDER.fullmatch(part.lower()) for part in _below_shared(path, folder))
     ]
+    local = _modules_at_top(folder, rows_of[folder]) | _modules_at_top(root, rows_of[root])
+    if left[0] < 0:
+        # Records left unread can't say a browser package there is installed, not the customer's,
+        # and no read order keeps both the folder's and the root's whole: so it counts as found,
+        # which leads to a second look at the model's reading, not a refusal.
+        local -= BROWSER_IMPORTS
     # A shared script's dependencies are declared in its package, at or above it.
     manifests = [
         parent / "package.json"
@@ -540,7 +555,7 @@ def browser_tools_in_agent(source_root: Path, subfolder: str) -> list[str]:
     return list(
         _tools_in(
             dict.fromkeys((*_agent_files(folder), *above, *shared, *manifests)),
-            _modules_at_top(folder, rows_of[folder]) | _modules_at_top(root, rows_of[root]),
+            local,
         )
     )
 

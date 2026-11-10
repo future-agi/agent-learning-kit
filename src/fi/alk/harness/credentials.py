@@ -10,12 +10,14 @@ from __future__ import annotations
 import ast
 import hashlib
 import json
+import math
+import os
 import re
 import stat
 from collections import deque
 from enum import Enum
 from pathlib import Path, PurePosixPath
-from typing import AbstractSet, Callable, Iterable, Mapping, TYPE_CHECKING, Literal
+from typing import AbstractSet, Callable, Iterable, Iterator, Mapping, TYPE_CHECKING, Literal
 
 from pydantic import BaseModel, Field
 import yaml
@@ -656,12 +658,38 @@ def discover_credentials(
     )
 
 
-def _file_inside(candidate: Path, root: Path, deepest: int) -> Path | None:
-    """``candidate`` resolved, if it's a plain file in ``root`` at most ``deepest`` parts long."""
-    if len(candidate.parts) > deepest or not _plain_file(candidate):
+def _file_inside(
+    candidate: Path, root: Path, deepest: int, left: list[float] | None = None
+) -> Path | None:
+    """``candidate`` resolved, if it's a plain file in ``root`` at most ``deepest`` parts long.
+
+    ``left`` is the lookups on disk still allowed: one for the file, then one for each part of
+    its path, which resolving it looks up in turn.
+    """
+    if len(candidate.parts) > deepest:
         return None
+    if left is not None:
+        left[0] -= 1
+    if not _plain_file(candidate):
+        return None
+    if left is not None:
+        left[0] -= len(candidate.parts)
     resolved = candidate.resolve()
     return resolved if len(resolved.parts) <= deepest and is_within(resolved, root) else None
+
+
+def _code_in(folder: Path) -> Iterator[Path]:
+    """The Python and script files in ``folder``, outside the folders no one's code is in.
+
+    Those folders aren't entered, and each file costs its name: building a parent for each part,
+    as 3.12 does to make a path relative, cost a crafted folder of 31,000 nested packages 2.8 s.
+    """
+    suffixes = {".py", *_SCRIPT_SUFFIXES}
+    for directory, subdirectories, files in os.walk(folder):
+        subdirectories[:] = [name for name in subdirectories if name not in _IGNORED_PARTS]
+        for name in files:
+            if name not in _IGNORED_PARTS and os.path.splitext(name)[1] in suffixes:
+                yield Path(directory, name)
 
 
 def _plain_file(path: Path) -> bool:
@@ -760,6 +788,7 @@ def imported_by_agent(
     parse_budget: ParseBudget | None = None,
     script_budget: ParseBudget | None = None,
     import_limit: int | None = None,
+    lookup_limit: int | None = None,
 ) -> frozenset[Path]:
     """The files the agent's folder imports, followed as far as they go.
 
@@ -768,8 +797,10 @@ def imported_by_agent(
     answer passes tighter parse limits than bundling's: a Python file is followed only if it's
     at most ``parse_limit`` bytes and the walk has parsed under ``parse_budget``, and a script
     only while the walk has matched under ``script_budget``. It tries at most ``import_limit``
-    import names in all (bundling's 20,000 when not given), each costing a few lookups on disk.
-    Nothing more than ``_DEEPEST_FOLLOWED`` folders below the repository is followed.
+    import names in all (bundling's 20,000 when not given), and makes at most ``lookup_limit``
+    lookups on disk (no limit when not given): a file found costs one for each part of its path,
+    and one name can resolve a package for each of its parts. Nothing more than
+    ``_DEEPEST_FOLLOWED`` folders below the repository is followed.
     """
     root = Path(root).resolve()
     try:
@@ -783,13 +814,18 @@ def imported_by_agent(
     # Other misses aren't kept: a script name tries a few dozen places, which 20,000 names would
     # fill gigabytes with. A package is looked up only above a file found, so they stay few.
     looked_up: dict[Path, Path | None] = {}
+    # A name is tried once, but a crafted chain of packages makes it resolve dozens of paths, each
+    # dozens of parts deep: 1,000 names took the save 12 s. What is looked up again costs nothing.
+    lookups_left = [math.inf if lookup_limit is None else float(lookup_limit)]
 
     def found_at(candidates: Iterable[Path]) -> Path | None:
         for candidate in candidates:
             if candidate in looked_up:
                 hit = looked_up[candidate]
+            elif lookups_left[0] <= 0:
+                return None
             else:
-                hit = _file_inside(candidate, root, deepest)
+                hit = _file_inside(candidate, root, deepest, lookups_left)
                 if hit is not None or candidate.name == "__init__.py":
                     looked_up[candidate] = hit
             if hit is not None:
@@ -832,12 +868,7 @@ def imported_by_agent(
         return None
 
     seen: set[Path] = set()
-    pending = deque(
-        path
-        for path in sorted(folder.rglob("*"))
-        if path.suffix in {".py", *_SCRIPT_SUFFIXES}
-        and not any(part in _IGNORED_PARTS for part in path.relative_to(folder).parts)
-    )
+    pending = deque(sorted(_code_in(folder)))
     own = set(pending)  # Read once already, so importing one doesn't queue it again.
     read = bytes_read = imports_tried = 0
     import_limit = _MAX_WALK_IMPORTS if import_limit is None else import_limit
@@ -846,6 +877,7 @@ def imported_by_agent(
         and read < _MAX_FILES
         and bytes_read < _MAX_WALK_BYTES
         and imports_tried < import_limit
+        and lookups_left[0] > 0
     ):
         # The folder's own files first, so the budgets can't spend themselves on a chain.
         path = pending.popleft()
@@ -864,9 +896,12 @@ def imported_by_agent(
         # as Python reads it.
         encoding = (source_encoding(raw) if path.suffix == ".py" else None) or "utf-8-sig"
         try:
-            text = raw.decode(encoding, errors="replace")
+            # Strictly: replacing runs Python's own error handler for each byte in most codecs,
+            # 60 ms a megabyte, where UTF-8's is in C. Python itself refuses such a file.
+            text = raw.decode(encoding)
         except (UnicodeError, LookupError):
-            # Some codecs, such as idna, refuse to replace what they can't read.
+            # Read as UTF-8, as is a codec source_encoding refuses: a crafted file Python reads in
+            # one of those can then give fewer imports here than it does to Python.
             text = raw.decode("utf-8-sig", errors="replace")
         content = text.replace("\r\n", "\n").replace("\r", "\n")
         hits: list[Path] = []

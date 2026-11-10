@@ -3168,12 +3168,31 @@ def test_the_walk_reads_a_file_whose_coding_line_python_cant_read_as_utf8(tmp_pa
     assert (repo / "common" / "__init__.py").resolve() in imported_by_agent(repo, "agents/a")
 
 
-@pytest.mark.parametrize("coding", ["punycode", "undefined"])
+@pytest.mark.parametrize("coding", ["punycode", "PUNYCODE", "idna", "IDNA", "undefined"])
 def test_a_codec_python_reads_slowly_or_not_at_all_is_not_used(coding):
     from fi.alk.harness.python_source import source_encoding
 
-    # punycode's decode costs the square of its size: 2.3 s for 128 KB.
+    # punycode's decode costs the square of its size, 2.3 s for 128 KB, and idna's 91 ms for
+    # 128 KB of valid labels. Python keeps a coding line's spelling, so the codec's own name is
+    # the one compared.
     assert source_encoding(f"# coding: {coding}\nx = 1\n".encode()) is None
+
+
+def test_the_walk_reads_a_file_python_cant_decode_as_utf8(tmp_path):
+    from fi.alk.harness.credentials import imported_by_agent
+
+    repo = _tree(
+        tmp_path / "repo",
+        {"agents/a/agent.py": "import helper\n", "common/__init__.py": "", "common/deep.py": ""},
+    )
+    # cp1252 has no character for \x8d, so Python refuses the file. Decoding it with replacement
+    # runs Python's own error handler for each such byte, 60 ms a MB; read strictly, it fails at
+    # once and is read as UTF-8, where cp1252's \xe9 leaves a name that won't parse.
+    (repo / "agents" / "a" / "helper.py").write_bytes(
+        b"# coding: cp1252\ncaf\xe9 = 1\nimport common.deep\n# \x8d\n"
+    )
+
+    assert (repo / "common" / "deep.py").resolve() not in imported_by_agent(repo, "agents/a")
 
 
 @pytest.mark.parametrize("coding", ["punycode", "idna", "undefined"])
@@ -3203,28 +3222,199 @@ def test_a_record_hides_the_files_it_names_not_their_folders(tmp_path):
     assert browser_tools_in_agent(repo, "agents/a") == ["playwright"]
 
 
-def test_an_installed_browser_package_at_the_root_is_not_the_customers_module(
-    tmp_path, monkeypatch
+def _browser_package_and_records(tmp_path: Path, shape: str) -> tuple[Path, str, int]:
+    """A repository with an installed `playwright`, and records that spend the budget before its
+    own is read. Returns the repository, the agent's folder and the budget."""
+    many = "".join(f"r{n:06d}.py,,\n" for n in range(200))
+    playwright = {"playwright/__init__.py": "", "playwright-1.0.dist-info/METADATA": ""}
+    if shape == "between":
+        # The folder's and the root's records fit; the folder between them spends the rest.
+        files = {
+            **playwright,
+            "playwright-1.0.dist-info/RECORD": "playwright/__init__.py,,\n",
+            "agents/a/p/q/agent.py": "import playwright\n",
+            "agents/a/p/q/y-1.dist-info/METADATA": "",
+            "agents/a/p/q/y-1.dist-info/RECORD": many,
+            "agents/a/p/z-1.dist-info/METADATA": "",
+            "agents/a/p/z-1.dist-info/RECORD": many,
+        }
+        sub, spent = "agents/a/p/q", ["agents/a/p/q/y-1.dist-info/RECORD", "playwright-1.0.dist-info/RECORD"]
+    elif shape == "folder":
+        # Round 5's: the folder's own records spend it all before the root's are read.
+        files = {
+            **playwright,
+            "playwright-1.0.dist-info/RECORD": "playwright/__init__.py,,\n",
+            "agents/a/agent.py": "import playwright\n",
+            "agents/a/y-1.dist-info/METADATA": "",
+            "agents/a/y-1.dist-info/RECORD": many,
+        }
+        sub, spent = "agents/a", ["agents/a/y-1.dist-info/RECORD"]
+    else:
+        # Its mirror: playwright installed in the folder, after records listed before its own.
+        files = {
+            **{f"agents/a/{name}": text for name, text in playwright.items()},
+            "agents/a/playwright-1.0.dist-info/RECORD": "playwright/__init__.py,,\n",
+            "agents/a/agent.py": "import playwright\n",
+            "agents/a/a-1.dist-info/METADATA": "",
+            "agents/a/a-1.dist-info/RECORD": many,
+        }
+        sub, spent = "agents/a", ["agents/a/a-1.dist-info/RECORD"]
+    repo = _tree(tmp_path / "repo", files)
+    return repo, sub, sum((repo / name).stat().st_size for name in spent)
+
+
+@pytest.mark.parametrize("shape", ["between", "folder", "mirror"])
+def test_a_browser_package_whose_record_is_left_unread_is_not_the_customers_module(
+    tmp_path, monkeypatch, shape
 ):
-    # The folder's records spend the budget; the root's are still read, so `playwright` there
-    # stays an installed package and the agent's import of it counts.
+    # No order of reading keeps both the folder's and the root's records whole once the budget
+    # is spent, so a browser package there counts as installed, and the agent's import of it.
+    repo, sub, budget = _browser_package_and_records(tmp_path, shape)
+    monkeypatch.setattr(agent_type_check, "_RECORDS_AT_AND_ABOVE", budget)
+
+    assert browser_tools_in_agent(repo, sub) == ["playwright"]
+
+
+def test_a_customers_own_module_stays_theirs_while_the_records_fit(tmp_path):
+    # Nothing installed it: the customer's own `playwright.py` beside the agent is their module.
     repo = _tree(
         tmp_path / "repo",
         {
-            "playwright/__init__.py": "",
-            "playwright-1.0.dist-info/METADATA": "",
-            "playwright-1.0.dist-info/RECORD": "playwright/__init__.py,,\n",
             "agents/a/agent.py": "import playwright\n",
-            "agents/a/p/q/y-1.dist-info/METADATA": "",
-            "agents/a/p/q/agent.py": "import playwright\n",
-            "agents/a/p/q/y-1.dist-info/RECORD": "".join(f"r{n:06d}.py,,\n" for n in range(200)),
-            "agents/a/p/z-1.dist-info/METADATA": "",
-            "agents/a/p/z-1.dist-info/RECORD": "".join(f"s{n:06d}.py,,\n" for n in range(200)),
+            "agents/a/playwright.py": "",
+            "agents/a/y-1.dist-info/METADATA": "",
+            "agents/a/y-1.dist-info/RECORD": "other.py,,\n",
         },
     )
-    folder_record = (repo / "agents/a/p/q/y-1.dist-info/RECORD").stat().st_size
-    root_record = (repo / "playwright-1.0.dist-info/RECORD").stat().st_size
-    # Enough for the folder's and the root's records, not for the folder between them.
-    monkeypatch.setattr(agent_type_check, "_RECORDS_AT_AND_ABOVE", folder_record + root_record)
 
-    assert browser_tools_in_agent(repo, "agents/a/p/q") == ["playwright"]
+    assert browser_tools_in_agent(repo, "agents/a") == []
+
+
+@pytest.mark.parametrize("naming, expected", [(1, []), (4, []), (5, ["playwright"])])
+def test_a_record_hides_a_file_the_agent_imports_from_the_nearest_four_folders_holding_it(
+    tmp_path, naming, expected
+):
+    # The agent in b/c/d/e/agent imports b/c/d/e/vend/web.py, which sits in e, d, c, b and the
+    # root, nearest first. Each holds a record; the one in the `naming`th names the file, as pip
+    # writes it, relative to its folder. As _agent_files does, only the nearest four are checked:
+    # a crafted chain of them would cost its depth for each of thousands of files.
+    holding = ["b/c/d/e", "b/c/d", "b/c", "b", ""]
+    files = {
+        "b/c/d/e/agent/agent.py": "from ..vend import web\n",
+        "b/c/d/e/vend/__init__.py": "",
+        "b/c/d/e/vend/web.py": "import playwright\n",
+    }
+    for n, folder in enumerate(holding, start=1):
+        record = f"{folder}/x{n}-1.dist-info".lstrip("/")
+        row = "b/c/d/e/vend/web.py".removeprefix(f"{folder}/") if folder else "b/c/d/e/vend/web.py"
+        files[f"{record}/METADATA"] = ""
+        files[f"{record}/RECORD"] = f"{row},,\n" if n == naming else "other.py,,\n"
+    repo = _tree(tmp_path / "repo", files)
+
+    assert browser_tools_in_agent(repo, "b/c/d/e/agent") == expected
+
+
+def test_a_record_between_the_root_and_the_agents_folder_hides_the_files_it_names(tmp_path):
+    repo = _tree(
+        tmp_path / "repo",
+        {
+            "agents/__init__.py": "",
+            "agents/a/__init__.py": "",
+            "agents/a/agent.py": "from ..vend import web\n",
+            "agents/vend/__init__.py": "",
+            "agents/vend/web.py": "import playwright\n",
+            "agents/x-1.dist-info/METADATA": "",
+            "agents/x-1.dist-info/RECORD": "vend/__init__.py,,\nvend/web.py,,\n",
+        },
+    )
+
+    assert browser_tools_in_agent(repo, "agents/a") == []
+    (repo / "agents" / "x-1.dist-info" / "RECORD").unlink()
+    assert browser_tools_in_agent(repo, "agents/a") == ["playwright"]
+
+
+def test_the_walk_charges_a_file_found_for_each_part_of_its_path(tmp_path, monkeypatch):
+    from fi.alk.harness import credentials
+
+    repo = _tree(
+        tmp_path / "repo",
+        {"agents/a/agent.py": "import common.web\n", "common/__init__.py": "", "common/web.py": ""},
+    )
+    charged: list[tuple[Path, float]] = []
+    real = credentials._file_inside
+
+    def spy(candidate, root, deepest, left=None):
+        before = left[0]
+        hit = real(candidate, root, deepest, left)
+        charged.append((candidate, before - left[0]))
+        return hit
+
+    monkeypatch.setattr(credentials, "_file_inside", spy)
+    credentials.imported_by_agent(repo, "agents/a", lookup_limit=10**9)
+
+    # Resolving a file looks up each part of its path in turn; a miss is one lookup.
+    assert any(candidate.is_file() for candidate, _ in charged)
+    assert any(not candidate.exists() for candidate, _ in charged)
+    for candidate, cost in charged:
+        assert cost == (1 + len(candidate.parts) if candidate.is_file() else 1), candidate
+
+
+@pytest.mark.parametrize("limit, followed", [(10**6, True), (1, False)])
+def test_the_walk_while_the_conversation_waits_makes_only_so_many_lookups(
+    tmp_path, monkeypatch, limit, followed
+):
+    from fi.alk.harness.credentials import imported_by_agent
+
+    repo = _tree(
+        tmp_path / "repo",
+        {
+            "agents/a/main.py": "import common.web\n",
+            "common/__init__.py": "",
+            "common/web.py": "import playwright\n",
+        },
+    )
+    monkeypatch.setattr(agent_type_check, "_WALKED_LOOKUPS", limit)
+
+    assert bool(browser_tools_in_agent(repo, "agents/a")) is followed
+    # Bundling has no such limit.
+    assert (repo / "common" / "web.py").resolve() in imported_by_agent(repo, "agents/a")
+
+
+def test_the_walk_starts_from_no_file_in_a_folder_no_ones_code_is_in(tmp_path):
+    from fi.alk.harness.credentials import imported_by_agent
+
+    repo = _tree(
+        tmp_path / "repo",
+        {
+            "agents/a/agent.py": "x = 1\n",
+            "agents/a/.venv/lib/site.py": "import common.web\n",
+            "agents/a/node_modules/x/index.js": 'import "../../../../common/web.js";\n',
+            "common/__init__.py": "",
+            "common/web.py": "",
+            "common/web.js": "",
+        },
+    )
+
+    found = imported_by_agent(repo, "agents/a")
+    assert (repo / "common" / "web.py").resolve() not in found
+    assert (repo / "common" / "web.js").resolve() not in found
+
+
+def test_the_walk_stops_reading_once_its_lookups_are_spent(tmp_path, monkeypatch):
+    from fi.alk.harness import credentials
+
+    repo = _tree(
+        tmp_path / "repo",
+        {"agents/a/a.py": "import nowhere\n", "agents/a/b.py": "import common\n", "common/__init__.py": ""},
+    )
+    parsed: list[str] = []
+    real = credentials._python_imports
+    monkeypatch.setattr(
+        credentials,
+        "_python_imports",
+        lambda content, *rest: parsed.append(content) or real(content, *rest),
+    )
+
+    # a.py's first lookup spends it all; nothing b.py names could be looked up.
+    assert credentials.imported_by_agent(repo, "agents/a", lookup_limit=1) == frozenset()
+    assert parsed == ["import nowhere\n"]
