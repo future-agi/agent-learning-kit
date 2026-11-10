@@ -596,7 +596,7 @@ def test_more_than_fifty_agents_in_one_folder_keeps_fifty(tmp_path: Path) -> Non
     assert not exact.more_than_fifty
 
 
-def test_paths_his_rule_rejects_are_left_out(tmp_path: Path) -> None:
+def test_paths_the_path_rule_rejects_are_left_out(tmp_path: Path) -> None:
     long_folder = "/".join(["d" * 100] * 5)
     _write(
         tmp_path,

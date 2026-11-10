@@ -272,7 +272,8 @@ def _result(
     walk: WalkResult,
     outcome: AiOutcome | None,
 ) -> int:
-    """Steps 6.4 to 9: the one row of an upload, the model's outcome, then the file."""
+    """Turn the rows and the model's outcome into the file: an upload keeps one row, the
+    outcome decides the status and ``truncated``, and the walk's flags add to ``truncated``."""
     if scan.upload:
         rows, others = _one_row(scan.walk_rows, scan.ai_rows)
     else:

@@ -87,7 +87,7 @@ def _confidence(*rows: Row) -> list[str]:
     return [agent["confidence"] for agent in document["agents"]]
 
 
-def test_found_lists_each_agent_in_his_format() -> None:
+def test_found_lists_each_agent_in_the_platform_format() -> None:
     graph = _row(
         "services/support/graph.py",
         "services/support",
@@ -254,7 +254,7 @@ def test_rows_and_an_error_together_keep_the_rows() -> None:
     assert dropped is True
 
 
-def test_names_evidence_and_paths_always_fit_his_rules() -> None:
+def test_names_evidence_and_paths_always_fit_the_platform_rules() -> None:
     def job(agent_name: Any = None, repository: Any = None) -> Any:
         metadata = {} if agent_name is None else {"agent_name": agent_name}
         return SimpleNamespace(metadata=metadata, source=SimpleNamespace(repository=repository))
@@ -334,7 +334,7 @@ def test_clean_name_collapses_every_kind_of_space() -> None:
     )
 
 
-def test_a_sentence_never_names_a_path_his_rule_refuses() -> None:
+def test_a_sentence_never_names_a_path_the_path_rule_refuses() -> None:
     undecodable = os.fsdecode(b"agent\xff.py")
     refused = [
         undecodable,
@@ -457,7 +457,7 @@ def test_the_models_rows_are_chosen_first_only_when_asked() -> None:
     assert written == ["a/graph.py", *(f"h{i:02}/main.py" for i in range(48)), "z/agent.ts"]
 
 
-def test_a_row_his_rules_reject_is_dropped_with_truncated(caplog: pytest.LogCaptureFixture) -> None:
+def test_a_row_the_platform_rules_reject_is_dropped_with_truncated(caplog: pytest.LogCaptureFixture) -> None:
     good = _row("good/main.py", "good")
     bad = [
         _row("bad/../escape.py", "bad"),
@@ -519,7 +519,7 @@ def test_a_bad_top_level_raises(monkeypatch: pytest.MonkeyPatch) -> None:
     ]
 
 
-def test_the_file_matches_his_serializer() -> None:
+def test_the_file_matches_the_platform_serializer() -> None:
     fixture = json.loads(FIXTURE.read_text(encoding="utf-8"))
     assert fixture["serializer_commit"] == "e07d56fcd"
     cases = fixture["cases"]

@@ -102,7 +102,7 @@ _TEMPLATES = {
         "Uses the OpenAI Agents SDK, set aside because a folder named agents/ shadows it."
     ),
     "shares_folder": (
-        "Another agent listed here shares this folder, so a build must name its entry."
+        "Another agent here shares this folder; for now only the folder can be picked."
     ),
     "graphs_may_stop": (
         "This folder's langgraph.json lists more than one graph, so a build may stop."
