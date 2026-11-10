@@ -479,6 +479,18 @@ def test_history_is_written_by_its_actors_in_order_before_the_run_with_keys_of_i
         assert dispatcher.fired[-1]["error"] == "not_listed"
 
 
+def test_a_history_row_carries_its_actor_s_name_so_the_run_view_never_shows_an_id():
+    from fi.alk.harness.actors import ThreadMessage
+
+    actors = {"priya": Actor(id="priya", name="Priya Raman", permitted_actions=["slack.post"])}
+    history = [ThreadMessage(actor="priya", action="slack.post", arguments={"text": "Can we ship Friday?"})]
+    dispatcher, _ = _history_dispatcher(history, actors)
+    asyncio.run(dispatcher.replay())
+    assert [(one["actor"], one["name"]) for one in dispatcher.fired if one["play"] == "history"] == [
+        ("priya", "Priya Raman")
+    ]
+
+
 def test_history_rows_are_the_trial_s_starting_point_never_its_state_changes():
     from fi.alk.harness.call_runner import trial_state_changes
 

@@ -670,6 +670,7 @@ class ActorDispatcher:
                 self.fired.append(
                     {
                         "actor": actor.id,
+                        "name": actor.name,
                         "play": "history",
                         "action": message.action,
                         "arguments": arguments,
