@@ -24,7 +24,6 @@ from .cli import guidance_text
 from .failure_file import FAILURE_FILE
 from .job import FailureDomain, HarnessFailure, HarnessJob, ProviderExecutionMode, SourceKind
 from .reading_entry import (
-    EXIT_DONE,
     EXIT_RETRYABLE,
     READING_JOB_INVALID,
     MaskSecrets,
@@ -35,7 +34,6 @@ from .reading_entry import (
     write_reading_failure,
 )
 from .reading_result import (
-    AGENT_FILE,
     CONTRACT_FILE,
     classify,
     document,
@@ -62,6 +60,10 @@ _DEFAULT_SOFT_LIMIT_SECONDS = 1800.0
 _HARD_LIMIT_MARGIN_SECONDS = 180.0
 _INTERRUPT_SECONDS = 10.0
 _INTERRUPT_WAIT_SECONDS = 60.0
+# The SDK's own close gives up after about 20 s. With it, the decision comes by soft + 90 s, which
+# leaves the saved contract's document (its framework scan, about 70 s at the scanner's cap) room
+# to finish inside the hard limit's margin.
+_CLOSE_SECONDS = 20.0
 
 _COUNTS = ("tokens_in", "tokens_out", "tokens_cached")
 
@@ -183,16 +185,18 @@ async def _stop(
     stopping.set()
     try:
         await asyncio.wait_for(stage.interrupt_response(), _INTERRUPT_SECONDS)
-    except Exception:
+    except (Exception, asyncio.CancelledError):
         # A stop that can't be delivered is still a timeout, not a crash.
         logger.warning("the stop at the time limit was not delivered", exc_info=True)
     await asyncio.wait({task}, timeout=wait)
-    # Closed before the files are read, so no late tool call can save after the decision. The
-    # close is bounded too: a session that hangs closing must not keep the reading from deciding.
+    # Closed before the files are read, so a late tool call is unlikely to save after the
+    # decision. The close is bounded, though: a session that hangs closing must not keep the
+    # reading from deciding, and one that outlives the bound could still act afterwards.
     task.cancel()
-    await asyncio.wait({task}, timeout=wait)
+    closing = min(wait, _CLOSE_SECONDS)
+    await asyncio.wait({task}, timeout=closing)
     if not task.done():
-        logger.warning("the stopped reading's session did not close within %g s", wait)
+        logger.warning("the stopped reading's session did not close within %g s", closing)
     elif not task.cancelled() and task.exception() is not None:
         logger.warning("the stopped reading ended with an error", exc_info=task.exception())
 
@@ -323,15 +327,6 @@ async def _read(job: HarnessJob, source: Path, output: Path, *, interrupt_wait: 
     return code
 
 
-def _at_the_limit(job: HarnessJob, source: Path, output: Path) -> int | None:
-    """At the helper's hard limit: a saved contract still ends as the reading ends one."""
-    if saved_file(output) != CONTRACT_FILE:
-        return None
-    if (output / AGENT_FILE).is_file():
-        return EXIT_DONE
-    return document(job, Path(source), output)
-
-
 def _read_agent(*, interrupt_wait: float = _INTERRUPT_WAIT_SECONDS) -> ReadingMode:
     return ReadingMode(
         name="read_agent",
@@ -345,7 +340,6 @@ def _read_agent(*, interrupt_wait: float = _INTERRUPT_WAIT_SECONDS) -> ReadingMo
         crashed_code=AGENT_READING_CRASHED,
         limit_env=_LIMIT_ENV,
         limit_margin_seconds=_HARD_LIMIT_MARGIN_SECONDS,
-        at_limit=_at_the_limit,
     )
 
 

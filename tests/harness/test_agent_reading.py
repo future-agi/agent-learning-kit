@@ -13,6 +13,8 @@ import json
 import logging
 import os
 import shutil
+import subprocess
+import sys
 import threading
 import types
 import time
@@ -123,7 +125,7 @@ class _Live:
     async def interrupt(self) -> bool:
         self.backend.interrupts.append(time.monotonic())
         if self.backend.interrupt_raises:
-            raise RuntimeError(self.backend.interrupt_says)
+            raise self.backend.interrupt_error(self.backend.interrupt_says)
         self.interrupted.set()
         return True
 
@@ -146,6 +148,7 @@ class _Backend:
         self.seen: list = []
         self.interrupt_raises = False
         self.interrupt_says = "the interrupt control request timed out"
+        self.interrupt_error: type[BaseException] = RuntimeError
         self.start_raises = False
         self.saves_on_start: dict | None = None
         self.close_hangs = False
@@ -590,18 +593,164 @@ def test_a_session_whose_close_hangs_still_ends_with_its_saved_contract(
     assert any("did not close" in record.getMessage() for record in caplog.records)
 
 
-def test_at_the_hard_limit_a_saved_contract_ends_as_the_reading_ends_it(tmp_path):
-    source = _repo(tmp_path)
-    job = HarnessJob.model_validate(_job())
+def test_a_cancel_during_the_stop_is_still_a_timeout(tmp_path, model, monkeypatch):
+    _repo(tmp_path)
+    _short_limit(monkeypatch)
+    fake = model(_quiet)
+    fake.interrupt_raises = True
+    fake.interrupt_error = asyncio.CancelledError
     output = tmp_path / "reading"
-    output.mkdir()
 
-    assert agent_reading._at_the_limit(job, source, output) is None
-    _save(output, CHAT)
-    assert agent_reading._at_the_limit(job, source, output) == 0
-    assert (output / "agent.json").exists()
-    assert agent_reading._at_the_limit(job, source, output) == 0
-    assert agent_reading.READ_AGENT.at_limit is agent_reading._at_the_limit
+    assert _run(tmp_path, wait=0.3) == 78
+
+    failure = _failure_in(output)
+    assert (failure["code"], failure["retryable"]) == ("agent_reading_timed_out", False)
+
+
+def test_an_invalid_saved_contract_logs_no_values_from_it(tmp_path, model, caplog):
+    _repo(tmp_path)
+    marker = "CUSTOMER-MARKER-7f3a db_password=hunter2"
+    model(_writes(text=json.dumps({**CHAT, "tools": marker})))
+    output = tmp_path / "reading"
+
+    with caplog.at_level("WARNING", logger=reading_result.__name__):
+        assert _run(tmp_path) == 78
+
+    assert _failure_in(output)["details"] == {"class": "ValidationError", "code": ""}
+    [logged] = [record for record in caplog.records if record.name == reading_result.__name__]
+    assert logged.exc_text is None
+    assert "hunter2" not in caplog.text
+
+
+def test_the_contract_checked_is_the_contract_used(tmp_path, model, monkeypatch):
+    _repo(tmp_path)
+    model(_writes(CHAT))
+    output = tmp_path / "reading"
+    real = reading_result.detect_framework
+
+    def a_late_save_lands(*args, **kwargs):
+        # The session saves again while the scan runs: a contract over the 5 MiB cap.
+        (output / "contract.json").write_text(
+            json.dumps({**CHAT, "real_use_cases": ["x" * (6 * MIB)]}), encoding="utf-8"
+        )
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(reading_result, "detect_framework", a_late_save_lands)
+
+    assert _run(tmp_path) == 0
+
+    agent = json.loads((output / "agent.json").read_text(encoding="utf-8"))["agent"]
+    assert agent == build_authored_agent(
+        AgentContract.model_validate(CHAT).model_dump(mode="json"),
+        framework=detect_framework(tmp_path / "source", repo_root=tmp_path / "source", package_dir=None),
+    )
+
+
+def test_an_environment_backed_job_is_read(tmp_path):
+    job = HarnessJob.model_validate(
+        {**_job(), "agent": {"connector": "vapi", "mode": "environment_backed", "config": {}}}
+    )
+
+    assert agent_reading._check_job(job) is None
+
+
+_CLOSE_CHILD = r"""
+import asyncio, dataclasses, json, sys, time
+config = json.loads(sys.argv[1])
+sys.path[:0] = config["sys_path"]
+from pathlib import Path
+from fi.alk.harness import agent_reading, reading_entry, session
+from fi.alk.harness.backends import StageDone
+from fi.alk.harness.reading_entry import run_reading_mode
+
+reading_entry._SECRET_FILES = ()
+root = Path(config["root"])
+output = root / "reading"
+
+
+class Live:
+    def __init__(self, spec):
+        self.spec = spec
+
+    async def start(self):
+        pass
+
+    async def send(self, message):
+        pass
+
+    async def interrupt(self):
+        return True
+
+    async def stop(self):
+        # A close that swallows every cancel, the loop's own shutdown's included.
+        while True:
+            try:
+                await asyncio.sleep(3600)
+            except asyncio.CancelledError:
+                pass
+
+    async def replies(self):
+        (output / "contract.json").write_text(json.dumps(config["contract"]))
+        await asyncio.Event().wait()
+        yield StageDone(outcome="success", turns=1, cost_usd=0.0)
+
+
+class Backend:
+    name = "vertex-gemini"
+    default_model = "gemini-2.5-flash"
+
+    def create(self, spec):
+        return Live(spec)
+
+    def can_drive(self, model):
+        return True
+
+
+session.resolve = lambda *a, **k: Backend()
+mode = dataclasses.replace(
+    agent_reading._read_agent(interrupt_wait=0.2), limit_margin_seconds=config["margin"]
+)
+(root / "started").write_text(repr(time.time()))
+sys.exit(run_reading_mode(mode, job_path=root / "job.json", source=root / "source", output=output))
+"""
+
+
+def test_a_close_that_never_ends_still_leaves_the_document_well_inside_the_hard_limit(tmp_path):
+    _repo(tmp_path)
+    (tmp_path / "job.json").write_text(json.dumps(_job()), encoding="utf-8")
+    soft, margin = 0.5, 6.0
+    config = {
+        "sys_path": [entry for entry in sys.path if entry],
+        "root": str(tmp_path),
+        "contract": CHAT,
+        "margin": margin,
+    }
+    env = {
+        **os.environ,
+        _LIMIT_ENV: str(soft),
+        "ALK_HARNESS_MODEL": "gemini-2.5-flash",
+        "OTEL_EXPORTER_OTLP_ENDPOINT": "http://127.0.0.1:9",
+        "OTEL_TRACES_EXPORTER": "none",
+    }
+    env.pop(spend.JOURNAL_ALIAS, None)
+
+    finished = subprocess.run(
+        [sys.executable, "-c", _CLOSE_CHILD, json.dumps(config)],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    output = tmp_path / "reading"
+    started = float((tmp_path / "started").read_text(encoding="utf-8"))
+    assert finished.returncode == 0, finished.stderr
+    assert not (output / "failure.json").exists()
+    # Decided at soft + interrupt + wait + close (about 0.9 s), long before the hard limit
+    # (soft + margin); only the shutdown the close blocks is ended by the limit, with the code.
+    documented = (output / "agent.json").stat().st_mtime - started
+    assert documented < soft + margin - 3.0
+    assert _cost_in(output)["complete"] is False
 
 
 def test_a_failed_document_is_logged_with_its_masked_trace(tmp_path, model, monkeypatch, caplog):
@@ -636,7 +785,11 @@ def test_a_folder_mismatch_is_an_invalid_document(tmp_path, model):
     failure = _failure_in(output)
     assert (failure["code"], failure["retryable"]) == ("agent_document_invalid", False)
     # The build's own code for it, from the build's own document code.
-    assert failure["details"]["code"] == "agent_invalid"
+    assert failure["details"] == {
+        "class": "AgentBuildError",
+        "code": "agent_invalid",
+        "detail": "subfolder_mismatch",
+    }
     assert (output / "contract.json").exists()
     assert not (output / "agent.json").exists()
     _assert_cost(output, 0.11, True)

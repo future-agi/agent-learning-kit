@@ -646,15 +646,14 @@ def load_scenarios(
 
 
 def authored_agent_document(
-    contract_file: Path, *, subfolder: str | None, framework: Any
+    contract_text: str, *, subfolder: str | None, framework: Any
 ) -> dict[str, Any]:
     """The agent document stored for a saved contract, ``{"sdk_version", "agent"}``.
 
-    Both a build and a reading with no build make it here, so the two can't differ.
+    Both a build and a reading with no build make it here, so the two can't differ. The caller
+    reads the contract, so what it checked is what is used.
     """
-    contract = AgentContract.model_validate(
-        json.loads(contract_file.read_text(encoding="utf-8"))
-    ).model_dump(mode="json")
+    contract = AgentContract.model_validate(json.loads(contract_text)).model_dump(mode="json")
     # The echo proves which folder was built, so it comes from the contract.
     built_from = str((contract.get("runtime") or {}).get("source_subfolder") or "")
     if built_from != (subfolder or ""):
@@ -758,7 +757,7 @@ class BundleScenarioSource:
             framework = await self._detect_framework()
             try:
                 authored_agent = authored_agent_document(
-                    bundle_dir / "contract.json",
+                    (bundle_dir / "contract.json").read_text(encoding="utf-8"),
                     subfolder=job.source.subfolder,
                     framework=framework,
                 )

@@ -14,6 +14,8 @@ import tempfile
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from pydantic import ValidationError
+
 from .agent_type_check import EXIT_REFUSED
 from .backends import StageDone
 from .failure_file import FAILURE_FILE
@@ -191,15 +193,20 @@ def document(job: HarnessJob, source: Path, output: Path) -> int:
     """The agent's description from the saved contract, as a build makes it."""
     # One catch over every step: a saved contract is paid for, so nothing after it is retryable.
     try:
-        contract_bytes = (output / CONTRACT_FILE).stat().st_size
+        # Read once, here, so what is checked is what is used: the session may still save while
+        # the framework scan below runs.
+        with (output / CONTRACT_FILE).open("rb") as handle:
+            raw = handle.read(_CONTRACT_LIMIT_BYTES + 1)
+            contract_bytes = max(os.fstat(handle.fileno()).st_size, len(raw))
         if contract_bytes > _CONTRACT_LIMIT_BYTES:
             raise _TooLarge({"contract_bytes": contract_bytes})
+        contract_text = raw.decode("utf-8")
         framework = detect_framework(
             _framework_folder(job, source, output), repo_root=source, package_dir=None
         )
         # The build's own document, made by the build's own code.
         made = authored_agent_document(
-            output / CONTRACT_FILE, subfolder=job.source.subfolder, framework=framework
+            contract_text, subfolder=job.source.subfolder, framework=framework
         )
         body = json.dumps(made, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
         stored = json.dumps(made["agent"], ensure_ascii=False).encode("utf-8")
@@ -228,8 +235,16 @@ def document(job: HarnessJob, source: Path, output: Path) -> int:
     except Exception as exc:
         code = str(getattr(exc, "code", "") or "")
         logger.warning(
-            "agent document not built: class=%s code=%s", type(exc).__name__, code, exc_info=True
+            "agent document not built: class=%s code=%s",
+            type(exc).__name__,
+            code,
+            # pydantic's trace repeats values from the contract, which the mask can't know.
+            exc_info=not isinstance(exc, ValidationError),
         )
+        details = {"class": type(exc).__name__, "code": code}
+        if getattr(exc, "detail", "") == "subfolder_mismatch":
+            # Named as the build names it: the one detail that is ours, not the contract's.
+            details["detail"] = "subfolder_mismatch"
         write_reading_failure(
             reading_failure(
                 FailureDomain.INFRASTRUCTURE,
@@ -237,7 +252,7 @@ def document(job: HarnessJob, source: Path, output: Path) -> int:
                 "The agent's description could not be built from its saved contract "
                 f"({type(exc).__name__}{': ' + code if code else ''}).",
                 retryable=False,
-                details={"class": type(exc).__name__, "code": code},
+                details=details,
             ),
             output,
         )
