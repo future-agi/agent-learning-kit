@@ -2925,3 +2925,62 @@ def test_more_wrong_values_after_round_3_probes(root, file, written, name):
     problems, _, _ = checked(root, {"name": name, "path": file, "line": 2})
 
     assert problems == [not_named(name, 2, file)]
+
+
+# The settled round: pins for rules the plants found unpinned
+
+
+@pytest.mark.parametrize(
+    "written",
+    [
+        pytest.param('curl http://x/v1; MODEL="gpt-4o"', id="a-url"),
+        pytest.param('cp data/* out; MODEL="gpt-4o"', id="a-glob"),
+        pytest.param('n=${#MODELS}; MODEL="gpt-4o"', id="a-length"),
+        pytest.param('echo $#; MODEL="gpt-4o"', id="a-count"),
+    ],
+)
+def test_a_script_without_a_suffix_keeps_its_model(root, written):
+    (root / "start").write_text(f"#!/bin/sh\n{written}\n", encoding="utf-8")
+
+    problems, contract, _ = checked(root, {"name": "gpt-4o", "path": "start", "line": 2})
+
+    assert problems == []
+    assert contract.model is not None and contract.model.name == "gpt-4o"
+
+
+@pytest.mark.parametrize("prefix", ["rt", "tr", "RT"])
+def test_a_raw_template_string_is_a_string(root, prefix):
+    (root / "llm.py").write_text(f"\nx = {prefix}'Agent #{{n}}'; MODEL = \"gpt-4o\"\n", encoding="utf-8")
+
+    problems, _, _ = checked(root, {"name": "gpt-4o", "path": "llm.py", "line": 2})
+
+    assert problems == []
+
+
+def test_a_triple_quote_after_floor_division_opens_a_block(root):
+    (root / "llm.py").write_text(
+        'half = n // 2; DOC = """\nmodel = "gpt-4o"\n"""\n', encoding="utf-8"
+    )
+
+    problems, _, _ = checked(root, {"name": "gpt-4o", "path": "llm.py", "line": 2})
+
+    assert problems == [not_named("gpt-4o", 2, "llm.py")]
+
+
+def test_a_quote_alone_after_lines_alone_were_refused_is_not_asked_for_lines(tmp_path, root):
+    (root / "agent.py").write_text(_BOOKING, encoding="utf-8")
+    destination = tmp_path / "out"
+    submit = submitter(destination, root)
+
+    assert not submit(
+        payload(hard_constraints=["Be polite."], system_prompt_excerpt=_BOOKING_QUOTE,
+                system_prompt_from=[{"path": "agent.py", "start_line": 6, "end_line": 12}])
+    ).get("is_error")
+    assert submit(
+        payload(hard_constraints=["Be polite."],
+                system_prompt_from=[{"path": "agent.py", "start_line": 1, "end_line": 4}])
+    ).get("is_error")
+    third = submit(payload(hard_constraints=["Be polite."], system_prompt_excerpt=_BOOKING_QUOTE))
+
+    assert not third.get("is_error"), third
+    assert saved(destination)["system_prompt_excerpt"] == _BOOKING_QUOTE

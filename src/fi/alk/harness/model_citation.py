@@ -162,14 +162,14 @@ _STRING_PREFIXES = frozenset({"r", "b", "f", "u", "t", "rb", "br", "fr", "rf", "
 def _opens_a_string(line: str, at: int) -> bool:
     """Whether the apostrophe at ``at`` can open a string: not inside a word (Pair's, it's, x'
     in Haskell) and not after a backslash (it\\'s), unless the word is a string prefix (r'...',
-    rb'...'). Looks at three characters at most."""
+    rb'...'). Looks at three characters at most: a prefix is one or two letters, so three letters
+    before the apostrophe are a word, whatever comes before them."""
     start = at
     while start > 0 and at - start < 3 and line[start - 1].isalnum():
         start -= 1
     if start == at:
         return at == 0 or line[at - 1] != "\\"
-    whole = start == 0 or not line[start - 1].isalnum()
-    return whole and line[start:at].lower() in _STRING_PREFIXES
+    return line[start:at].lower() in _STRING_PREFIXES
 
 
 def _line_scan(
