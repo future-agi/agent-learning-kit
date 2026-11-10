@@ -168,7 +168,7 @@ class _ScanStage(Stage):
                     self._on_turn_end()
                 except Exception:
                     # A failed cost note must not turn a paid answer into a retried one. The
-                    # trace is logged masked, so a fault in the cost writer can be found.
+                    # trace is logged (secret values masked), so a fault in the cost writer can be found.
                     logger.warning("find_agents: the cost note after the turn failed", exc_info=True)
 
 
@@ -412,7 +412,7 @@ async def _answered(work: Callable[..., str], *args: Any) -> dict[str, Any]:
     except asyncio.TimeoutError:
         return _error(_TOO_SLOW)
     except Exception:
-        # The model is told only that the call failed; the trace is logged masked.
+        # The model is told only that the call failed; the trace is logged, secret values masked.
         logger.warning("find_agents: a tool call failed", exc_info=True)
         return _error(_FAILED)
 

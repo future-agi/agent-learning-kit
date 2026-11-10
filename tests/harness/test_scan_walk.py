@@ -1227,7 +1227,7 @@ def test_side_folders_cannot_use_up_the_file_cap_before_the_agent(
     assert result.stopped == "limit"
 
 
-@pytest.mark.parametrize("shape", ["linked_template", "unterminated_py", "long_line_py"])
+@pytest.mark.parametrize("shape", ["linked_template", "unterminated_py", "long_line_py", "over_size_py"])
 def test_one_unreadable_file_does_not_stop_an_ai_rows_description(tmp_path: Path, shape: str) -> None:
     """The row was paid for: a bad file marks it partial, and the reading goes on."""
     _write(
@@ -1242,8 +1242,10 @@ def test_one_unreadable_file_does_not_stop_an_ai_rows_description(tmp_path: Path
         (tmp_path / "app/.env.example").symlink_to(tmp_path / "outside.env")
     elif shape == "unterminated_py":
         (tmp_path / "app/a_gen.py").write_text("x = '''never closed\n", encoding="utf-8")
-    else:
+    elif shape == "long_line_py":
         (tmp_path / "app/a_gen.py").write_text("x = 1  # " + "y" * 70_000 + "\n", encoding="utf-8")
+    else:
+        (tmp_path / "app/a_gen.py").write_text("x = 1\n" * 300_000, encoding="utf-8")
 
     candidate = describe_entry(tmp_path, "app/bot.py", "app", deadline=FOREVER)
 
@@ -1314,3 +1316,19 @@ def test_a_reader_fault_on_every_file_logs_one_trace(
     assert result.unread_files == 5
     assert caplog.text.count("a file's reader failed") == 1
     assert "LookupError" in caplog.text
+
+
+def test_a_reader_fault_on_every_described_file_logs_one_trace(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    _write(tmp_path, {"app/bot.py": GRAPH, **{f"app/m{index}.py": "x = 1\n" for index in range(5)}})
+
+    def broken(data: bytes, shadowed: object) -> object:
+        raise LookupError("a fault in the kit's reader")
+
+    monkeypatch.setattr(scan_walk, "_python_facts", broken)
+    with caplog.at_level("WARNING", logger=scan_walk.logger.name):
+        candidate = describe_entry(tmp_path, "app/bot.py", "app", deadline=FOREVER)
+
+    assert candidate is not None and candidate.partial is True
+    assert caplog.text.count("a file's reader failed") == 1

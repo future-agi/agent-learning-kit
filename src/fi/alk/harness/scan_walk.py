@@ -845,7 +845,7 @@ class _Walk:
             raise
         except Exception:
             # A reader fault of a kind not foreseen is still this file's problem, never the
-            # walk's: the file is unread. The first trace is logged masked; the rest are
+            # walk's: the file is unread. The first trace is logged (secret values masked); the rest are
             # counted, so a fault that hits every file can't flood the log.
             if not self.faults:
                 logger.warning("agent walk: a file's reader failed", exc_info=True)
@@ -1260,6 +1260,8 @@ class _Description:
         # One file that couldn't be read or parsed: the counts are short, but the reading
         # goes on, as the walk goes on past an unread file.
         self.short = False
+        # Reader faults of a kind not foreseen; only the first one's trace is logged.
+        self.faults = 0
         self.shadowed = _ShadowedNames(top, self.projects)
 
     def run(self) -> None:
@@ -1283,8 +1285,7 @@ class _Description:
                     except MemoryError:
                         raise
                     except Exception:
-                        logger.warning("agent description: a template's reader failed", exc_info=True)
-                        self.short = True
+                        self._fault("a template's reader failed")
         start = os.path.join(self.top, self.subfolder) if self.subfolder else self.top
         for directory, folder, name in _source_files(self.top, start):
             if self._out_of_time():
@@ -1292,6 +1293,13 @@ class _Description:
             self._take(directory, folder, name)
             if self.partial:
                 return
+
+    def _fault(self, what: str) -> None:
+        # A fault in the kit that hits every file logs one trace, not one per file.
+        if not self.faults:
+            logger.warning("agent description: %s", what, exc_info=True)
+        self.faults += 1
+        self.short = True
 
     def _out_of_time(self) -> bool:
         if self.clock() > self.deadline:
@@ -1322,8 +1330,7 @@ class _Description:
         except MemoryError:
             raise
         except Exception:
-            logger.warning("agent description: a file's reader failed", exc_info=True)
-            self.short = True
+            self._fault("a file's reader failed")
 
     def _read(self, path: str) -> bytes | None:
         """The file's bytes, or None for a file that can't or mustn't be read; sets
@@ -1346,7 +1353,11 @@ class _Description:
         if self.bytes_read > _DESCRIBE_BYTES:
             self.partial = True
             return None
-        return data if len(data) <= _FILE_BYTES else None
+        if len(data) > _FILE_BYTES:
+            # Over the size a file is read at: not read, so the counts are short.
+            self.short = True
+            return None
+        return data
 
 
 def describe_entry(
@@ -1379,7 +1390,8 @@ def describe_entry(
         raise
     except Exception:
         # Runs after the model was paid for, so a fault in the kit keeps what was read and
-        # marks the row partial rather than ending in a paid retry. The trace is logged masked.
+        # marks the row partial rather than ending in a paid retry. The trace is logged, with the
+        # platform's secret values masked.
         logger.warning("agent description stopped", exc_info=True)
         reading.partial = True
     facts = reading.facts.get(entry)
