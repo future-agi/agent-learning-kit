@@ -8,10 +8,12 @@ and it needs no job or session, so a reading can be checked without a build.
 from __future__ import annotations
 
 import ast
+import codecs
 import csv
 import fnmatch
 import io
 import json
+import logging
 import os
 import re
 import tokenize
@@ -23,6 +25,8 @@ from typing import Any, Literal
 from .failure_file import FAILURE_FILE
 from .instrumentation_evidence import _SKIPPED_DIRECTORIES, _imports
 from .job import FailureDomain, HarnessFailure, HarnessStage
+
+logger = logging.getLogger(__name__)
 
 AGENT_TYPE_UNSUPPORTED = "agent_type_unsupported"
 # EX_CONFIG, which the platform doesn't retry even if it can't read the file.
@@ -104,13 +108,19 @@ BROWSER_MODALITIES = frozenset({"browser", "computer_use", "cua"})
 _TOOLKIT = "PlayWrightBrowserToolkit"
 _TEST_FILES = ("test_*.py", "*_test.py", "conftest.py", "*.test.*", "*.spec.*")
 _SCRIPT_SUFFIXES = frozenset({".js", ".ts", ".mjs", ".cjs", ".tsx", ".jsx"})
+_CODE_SUFFIXES = _SCRIPT_SUFFIXES | {".py"}
 _LARGEST_CODE_FILE = 1024 * 1024
+_UNREAD_CODECS = frozenset({"idna", "punycode", "undefined"})
 # Past this a repository holds the conversation up for longer than the rest of the scan is worth.
 _LARGEST_SCAN = 128 * 1024 * 1024
 _LARGEST_RECORD = 1024 * 1024
-# Per walk. A first scan reads up to three times this: its signature, its files and the packages
-# at the top each walk the records. Every reopen reads it once more, for the signature.
-_LARGEST_RECORDS = 64 * 1024 * 1024
+# Per scan, each record read once; a reopen of unchanged files reads none. Each row is parsed and
+# kept, so short rows cost the most: a scan through 16 MiB of 7-byte rows takes 0.9 s. A whole
+# 411-package environment unpacked in one folder came to 6.4 MiB.
+_LARGEST_RECORDS = 16 * 1024 * 1024
+# What each record costs at least, a disk block: an empty one still costs its folder and its
+# look-ups, so the budget bounds how many are opened too.
+_SMALLEST_RECORD = 4 * 1024
 _NEAREST_RECORD_FOLDERS = 4
 # Strings are matched first and kept, so "https://..." or "src/**/*.ts" isn't read as a comment.
 # An unclosed one ends at its line or the file: a start that could fail makes a customer's odd file
@@ -137,25 +147,53 @@ _SCRIPT_COMMENT_OR_STRING = re.compile(
 )
 
 
-# The whole name, its last part, or a test word and a helper word: "functional_tests" and
+# The whole name, test data, or a test word and a helper word: "integration_tests" and
 # "test_utils" hold tests, while "e2e_agent" and "testing_agent" hold agents, and test automation
 # is a main kind of browser agent.
 _TEST_FOLDER = re.compile(
     r"_*(?:(?:unit|integration|e2e)[_-]?)?(?:tests?|testing|test[_-]?data)_*|e2e"
-    r"|.*[_-](?:tests?|testing|test[_-]?data|e2e)_*"
+    r"|.*[_-]test[_-]?data_*"
     r"|(?:tests?|testing)[_.-]?(?:utils?|helpers?|integration|ui|unit|e2e|old|fixtures?|support"
     r"|common|lib|mocks?|selenium|browser|functional|acceptance|scripts?)_*"
 )
+# A test word as the last part names tests in "functional_tests" but an agent in "web_testing" or
+# "qa_e2e", so such a folder is skipped only when its own code is all tests.
+_TESTS_LAST = re.compile(r".*[_-](?:tests?|testing|e2e)_*")
 
 
-def _not_the_agent_dir(name: str) -> bool:
+def _not_the_agent_dir(name: str, parent: str | None = None) -> bool:
     lowered = name.lower()
     return (
         name in _SKIPPED_DIRECTORIES
         or lowered in NOT_THE_AGENT
         or name.startswith(".")
         or _TEST_FOLDER.fullmatch(lowered) is not None
+        or (
+            parent is not None
+            and _TESTS_LAST.fullmatch(lowered) is not None
+            and _only_tests(os.path.join(parent, name))
+        )
     )
+
+
+def _only_tests(folder: str) -> bool:
+    """Whether the code files directly in ``folder`` are all tests, and there is one.
+
+    Helpers below them, as page objects, go with the tests. A package's ``__init__.py`` says
+    nothing either way, and a folder of only folders may be the agent's own package.
+    """
+    try:
+        with os.scandir(folder) as entries:
+            code = [
+                entry.name
+                for entry in entries
+                if entry.name != "__init__.py"
+                and os.path.splitext(entry.name)[1] in _CODE_SUFFIXES
+                and entry.is_file()
+            ]
+    except OSError:
+        return False
+    return bool(code) and all(_not_the_agent_file(name) for name in code)
 
 
 def _not_the_agent_file(name: str) -> bool:
@@ -185,7 +223,7 @@ def _unpacked_at_top(root: Path, left: list[int] | None = None) -> set[str]:
             # A link to a device or a named pipe reports no size, and reading it never ends.
             if not record.is_file() or record.stat().st_size > _LARGEST_RECORD:
                 continue
-            left[0] -= record.stat().st_size
+            left[0] -= max(record.stat().st_size, _SMALLEST_RECORD)
             if left[0] < 0:
                 break
             names.update(
@@ -196,18 +234,23 @@ def _unpacked_at_top(root: Path, left: list[int] | None = None) -> set[str]:
     return names
 
 
-def _agent_files(root: Path) -> Iterator[Path]:
+def _agent_files(
+    root: Path, left: list[int] | None = None, at_top: set[str] | None = None
+) -> Iterator[Path]:
     # Unpacked distributions hold other people's code, whose SDKs name these tools whether or not
     # this agent uses them. Their records name those files wherever they were unpacked, so the
     # agent's own code beside them, as in a Lambda folder, is still read. One budget for the whole
     # walk: a repository can hold any number of folders. Rows stay relative to the folder whose
     # records hold them, as pip wrote them, so what is kept is the rows the budget lets in and that
     # folder's path once: how deep the folder sits doesn't multiply what each row costs.
+    # ``at_top`` gets the rows of the records at the top, for a caller that would read them again.
     unpacked: dict[str, set[str]] = {}
     # The folders above this one whose records gave rows, nearest last. The walk goes top down, so
     # leaving a folder is seeing a directory that isn't under it.
     holding: list[str] = []
-    left = [_LARGEST_RECORDS]
+    if left is None:
+        left = [_LARGEST_RECORDS]
+    top = os.fspath(root)
     for directory, subdirectories, files in os.walk(root):
         while holding and not directory.startswith(holding[-1] + os.sep):
             del unpacked[holding.pop()]
@@ -216,8 +259,10 @@ def _agent_files(root: Path) -> Iterator[Path]:
             if rows:
                 unpacked[directory] = rows
                 holding.append(directory)
+            if at_top is not None and directory == top:
+                at_top |= rows
         subdirectories[:] = [
-            name for name in subdirectories if not _not_the_agent_dir(name)
+            name for name in subdirectories if not _not_the_agent_dir(name, directory)
         ]
         # Once the budget is spent, which folders' packages count mustn't depend on the order the
         # disk lists folders in.
@@ -250,11 +295,28 @@ def _packages_used(path: Path) -> set[str]:
         listed = manifest.get(field)
         if isinstance(listed, dict):
             names.update(listed)
-    return {
-        name
-        for name in names
-        if name in BROWSER_PACKAGES or name.startswith(BROWSER_SCOPES)
-    }
+    found = names & BROWSER_PACKAGES
+    # The scope, not the key: the rest of a scoped name is the customer's, of any length, and only
+    # names from these lists reach the message, its details and the second look.
+    found.update(f"{scope}*" for scope in BROWSER_SCOPES for name in names if name.startswith(scope))
+    return found
+
+
+def _unread_codec(source: bytes) -> bool:
+    """Whether the coding line names a codec the scan won't decode ``source`` in.
+
+    A codec such as rot13 isn't a text encoding, so it can't be read as source. Three text codecs
+    are refused by name: punycode's decode costs the square of its size, about 2 s for 128 KB;
+    idna's runs in Python for each label; undefined decodes nothing. No honest repository writes
+    any of them.
+    """
+    try:
+        encoding, _ = tokenize.detect_encoding(io.BytesIO(source).readline)
+        info = codecs.lookup(encoding)
+    except (SyntaxError, UnicodeError, LookupError):
+        # The reader meets the same error and refuses the file itself.
+        return False
+    return info.name in _UNREAD_CODECS or not getattr(info, "_is_text_encoding", True)
 
 
 def _imports_in(path: Path) -> set[str]:
@@ -263,15 +325,24 @@ def _imports_in(path: Path) -> set[str]:
     try:
         if not path.is_file() or path.stat().st_size > _LARGEST_CODE_FILE:
             return set()
+        source = path.read_bytes()
+        # Python reads a lone CR as a line end, and detect_encoding doesn't: a file of only CRs
+        # would be one line to it, and the coding line the parser honours not found.
+        if _unread_codec(source.replace(b"\r\n", b"\n").replace(b"\r", b"\n")):
+            return set()
         # From bytes, so a BOM or a coding line is honoured as Python itself would.
-        return _imports(ast.parse(path.read_bytes()))
+        return _imports(ast.parse(source))
     except (OSError, ValueError, SyntaxError, RecursionError, MemoryError):
         return set()
 
 
-def _modules_at_top(root: Path) -> set[str]:
-    """What sits ahead of an installed package on the import path, so isn't that package."""
-    unpacked = _unpacked_at_top(root)
+def _modules_at_top(root: Path, unpacked: set[str] | None = None) -> set[str]:
+    """What sits ahead of an installed package on the import path, so isn't that package.
+
+    ``unpacked`` is the folder's record rows, when the caller has read them already.
+    """
+    if unpacked is None:
+        unpacked = _unpacked_at_top(root)
     try:
         return {
             entry.stem if entry.is_file() else entry.name
@@ -285,6 +356,10 @@ def _modules_at_top(root: Path) -> set[str]:
 
 
 def _python_code(source: bytes) -> str:
+    # The tokenizer finds the coding line as detect_encoding does, so it's asked about the same
+    # lines.
+    if _unread_codec(source):
+        return ""
     # From bytes, as imports are read, so a coding line or a BOM is honoured as Python itself would.
     return " ".join(
         token.string
@@ -348,10 +423,20 @@ def _reading_order(path: Path) -> tuple[bool, str]:
 
 
 def _signature(root: Path) -> tuple[int, int, int]:
-    """What changes when the files a scan reads change: a nested edit or a new checkout."""
+    """What changes when the files a scan reads change: a nested edit, a new checkout or a record.
+
+    Every reopen asks, so records are looked at, not read: a record that starts or stops naming a
+    file changes its own size or time. Files a record names count too, which only rescans more.
+    """
     latest = count = size = 0
-    for path in _agent_files(root):
-        if _is_read(path):
+    for directory, subdirectories, files in os.walk(root):
+        subdirectories[:] = [
+            name for name in subdirectories if not _not_the_agent_dir(name, directory)
+        ]
+        for name in files:
+            path = Path(directory, name)
+            if name != "RECORD" and (_not_the_agent_file(name) or not _is_read(path)):
+                continue
             try:
                 info = path.stat()
             except OSError:
@@ -368,7 +453,9 @@ def _scan(root: Path, _files: tuple[int, int, int]) -> tuple[str, ...]:
     found: set[str] = set()
     imported: set[str] = set()
     scanned = 0
-    for path in sorted(filter(_is_read, _agent_files(root)), key=_reading_order):
+    left = [_LARGEST_RECORDS]
+    at_top: set[str] = set()
+    for path in sorted(filter(_is_read, _agent_files(root, left, at_top)), key=_reading_order):
         size = _file_size(path)
         # Never read, so it mustn't use up the limit before the code that is.
         if size > _LARGEST_CODE_FILE:
@@ -387,8 +474,14 @@ def _scan(root: Path, _files: tuple[int, int, int]) -> tuple[str, ...]:
                 found |= markers
                 imported |= names
         except Exception:
+            # A skipped file may be the agent's main one, and the reading then finds nothing.
+            logger.warning("agent type scan skipped %s", path, exc_info=True)
             continue
-    local = _modules_at_top(root)
+    local = _modules_at_top(root, at_top)
+    if left[0] < 0:
+        # The record the budget left unread may be the one naming a browser package unpacked at
+        # the top, so a folder of that name no longer shows the agent wrote it.
+        local -= BROWSER_IMPORTS
     for name in imported:
         top = name.split(".")[0]
         if top in local:
@@ -415,11 +508,94 @@ def is_browser(text: str) -> bool:
 def decide(
     claimed: Any, found: Sequence[str], *, looked_again: bool
 ) -> Literal["refuse", "second_look", "keep"]:
-    """What the model read against what the code check found. Where they disagree the model gets
-    one more look, and its answer then stands."""
+    """What the model read against what the code check found. A browser reading always gets one
+    more look first, and so does a reading the check disagrees with; the answer then stands."""
     if is_browser(modality_text(claimed)):
-        return "refuse" if found or looked_again else "second_look"
+        # Never at once: what was found can be a dev dependency or a helper script of a chat
+        # agent, and a refusal can't be retried.
+        return "refuse" if looked_again else "second_look"
     return "second_look" if found and not looked_again else "keep"
+
+
+SECOND_LOOK_READ = "second_look_read"
+
+
+class SecondLook:
+    """The second looks of one reading, across its submissions.
+
+    Where the model and the code check disagree, the model gets one more look, and its next answer
+    stands. Each look gives a value to send back: calls in one model message run before the model
+    reads any answer, together or one after another, so a call holding the value is the only one
+    known to have read it.
+    """
+
+    def __init__(self) -> None:
+        self._receipts: set[str] = set()
+        # Whether the latest look has had no value back yet. A model that never sends one back
+        # must still be able to answer, or every submission earns another look until the turns run
+        # out.
+        self._unanswered = False
+
+    @property
+    def given(self) -> bool:
+        """Whether a look has gone out. A call takes this as it starts, before waiting on the
+        scan: one already running when a look went out hasn't read it."""
+        return bool(self._receipts)
+
+    def verdict(
+        self, claimed: str, receipt: Any, found: Sequence[str], *, given_before: bool
+    ) -> Literal["refuse", "second_look", "keep"]:
+        # A call holding a value read a look, so its answer stands. Without one, the call after a
+        # look that no value came back for is taken as the answer. Once a value came back, a call
+        # without one that reads the same stands too; one that reads otherwise may have run beside
+        # that answer unread, so it gets a look of its own. A value that came back on a browser
+        # answer was refused and stopped every later call, so the answer that came back read chat.
+        read_it = isinstance(receipt, str) and receipt in self._receipts
+        if read_it:
+            self._unanswered = False
+        same_answer = not is_browser(claimed)
+        return decide(
+            claimed,
+            found,
+            looked_again=read_it or (given_before and (self._unanswered or same_answer)),
+        )
+
+    def issue(self, claimed: str, found: Sequence[str], receipt: str) -> str:
+        """The look's text, with ``receipt`` as the value to send back."""
+        self._receipts.add(receipt)
+        self._unanswered = True
+        return (
+            f"{self.prompt(claimed, found)} When you submit again, set "
+            f'{SECOND_LOOK_READ} to "{receipt}", which shows you read this.'
+        )
+
+    @staticmethod
+    def prompt(claimed: str, found: Sequence[str]) -> str:
+        if is_browser(claimed) and found:
+            return (
+                "second-look: you recorded modality browser, which stops this build as not "
+                f"supported, and the source uses {', '.join(found)}. A chat or voice agent can "
+                "list one for its tests or use one in a helper script. Does a person come to this "
+                "agent for a conversation, or to have it carry out work on websites or a computer? "
+                "For a conversation, submit again as chat or voice. If its main job is that work, "
+                "submit again as browser. Decide this from the source; don't ask anyone."
+            )
+        if is_browser(claimed):
+            return (
+                "second-look: you recorded modality browser, which stops this build as not "
+                "supported, and no browser, crawling or computer-use tool was found in the "
+                "source. Does a person come to this agent for a conversation, or to have it carry "
+                "out work on websites or a computer? For a conversation, submit again as chat or "
+                "voice. If you're sure, submit again as browser. Decide this from the source; "
+                "don't ask anyone."
+            )
+        return (
+            f"second-look: you recorded modality {claimed or 'chat'}, and the source uses "
+            f"{', '.join(found)}. If that's a helper and a person comes to this agent for a "
+            "conversation, submit again as is. If its main job is carrying out work on websites "
+            "or a computer, submit again as browser, which stops this build as not supported. "
+            "Decide this from the source; don't ask anyone."
+        )
 
 
 def agent_type_failure(found: Sequence[str]) -> HarnessFailure:

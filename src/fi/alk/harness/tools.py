@@ -19,9 +19,10 @@ from fi.simulate.agent.wrappers.http_events import (
 )
 
 from .agent_type_check import (
+    SECOND_LOOK_READ,
+    SecondLook,
     agent_type_failure,
     browser_tools_found,
-    decide,
     failure_message,
     is_browser,
     modality_text,
@@ -248,9 +249,6 @@ def _without_nulls(value: Any) -> Any:
 MOST_CHOSEN_EVALS = 6
 
 
-SECOND_LOOK_READ = "second_look_read"
-
-
 def _new_receipt() -> str:
     return secrets.token_hex(4)
 
@@ -258,24 +256,6 @@ def _new_receipt() -> str:
 def _stop_message(destination: Path) -> str:
     said = failure_message(destination) or "This build can't go on."
     return f"{said} Don't submit again or do more work; tell the person."
-
-
-def _second_look(claimed: str, found: list[str]) -> str:
-    if is_browser(claimed):
-        return (
-            "second-look: you recorded modality browser, which stops this build as not "
-            "supported, and no browser, crawling or computer-use tool was found in the source. "
-            "Does a person come to this agent for a conversation, or to have it carry out work "
-            "on websites or a computer? For a conversation, submit again as chat or voice. If "
-            "you're sure, submit again as browser. Decide this from the source; don't ask anyone."
-        )
-    return (
-        f"second-look: you recorded modality {claimed or 'chat'}, and the source uses "
-        f"{', '.join(found)}. If that's a helper and a person comes to this agent for a "
-        "conversation, submit again as is. If its main job is carrying out work on websites or "
-        "a computer, submit again as browser, which stops this build as not supported. Decide "
-        "this from the source; don't ask anyone."
-    )
 
 
 def contract_tools(
@@ -315,12 +295,7 @@ def contract_tools(
     # and this stage cannot tell those two apart from the outside.
     nudged: set[str] = set()
     refused = False
-    # What a call must hold to count as having read a second look. Calls in one model message run
-    # before the model reads any answer, together or one after another, so none of them can know it.
-    second_look_receipts: set[str] = set()
-    # Whether the latest second look has had no value back yet. A model that never sends one back
-    # must still be able to answer, or every submission earns another look until the turns run out.
-    look_unanswered = False
+    second_look = SecondLook()
     found: list[str] | None = None
     # Calls in one message share one scan: each running its own takes that many times longer.
     scan: asyncio.Future[list[str]] | None = None
@@ -1110,9 +1085,9 @@ def contract_tools(
         receipt = payload.pop(SECOND_LOOK_READ, None) or (
             args.get(SECOND_LOOK_READ) if isinstance(args, dict) else None
         )
-        nonlocal refused, found, look_unanswered, scan
+        nonlocal refused, found, scan
         # Taken before the scan's wait: a call already running when a look went out hasn't read it.
-        looked_before = bool(second_look_receipts)
+        looked_before = second_look.given
         if refused or (destination / FAILURE_FILE).is_file():
             return _ok(_stop_message(destination))
         if found is None:
@@ -1138,20 +1113,7 @@ def contract_tools(
                     "job is work on websites or a computer."
                 ]
             )
-        # A call holding a value read a look, so its answer stands. Without one, the call after a
-        # look that no value came back for is taken as the answer. Once a value came back, a call
-        # without one that reads the same stands too; one that reads otherwise may have run beside
-        # that answer unread, so it gets a look of its own. A value that came back on a browser
-        # answer was refused and stopped every later call, so the answer that came back read chat.
-        read_it = isinstance(receipt, str) and receipt in second_look_receipts
-        if read_it:
-            look_unanswered = False
-        same_answer = not is_browser(claimed)
-        verdict = decide(
-            claimed,
-            found,
-            looked_again=read_it or (looked_before and (look_unanswered or same_answer)),
-        )
+        verdict = second_look.verdict(claimed, receipt, found, given_before=looked_before)
         if verdict == "refuse":
             # Set first: if the write fails, the model must not get a resubmission through.
             refused = True
@@ -1163,15 +1125,7 @@ def contract_tools(
                 write_failure_file(agent_type_failure(found), destination)
             return _ok(_stop_message(destination))
         if verdict == "second_look":
-            issued = _new_receipt()
-            second_look_receipts.add(issued)
-            look_unanswered = True
-            return _problems(
-                [
-                    f"{_second_look(claimed, found)} When you submit again, set "
-                    f'{SECOND_LOOK_READ} to "{issued}", which shows you read this.'
-                ]
-            )
+            return _problems([second_look.issue(claimed, found, _new_receipt())])
         data_store = payload.get("data_store")
         if not isinstance(data_store, dict):
             data_store = {}
