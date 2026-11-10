@@ -103,6 +103,9 @@ def _fresh_state(monkeypatch, tmp_path):
     monkeypatch.setattr(reading_entry, "_SECRET_FILES", (tmp_path / "no-secrets.json",))
     monkeypatch.setattr(agent_scan, "CLOCK", 1200.0)
     monkeypatch.setattr(agent_scan, "AI_SECONDS", 600.0)
+    # The scan reads these when it starts, so the machine's own settings mustn't decide a test.
+    monkeypatch.delenv(agent_scan.CLOCK_ENV, raising=False)
+    monkeypatch.delenv(agent_scan.AI_ENV, raising=False)
     spend._stages.clear()
     yield
     spend._stages.clear()

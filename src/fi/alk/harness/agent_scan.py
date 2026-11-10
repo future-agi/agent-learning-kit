@@ -61,7 +61,9 @@ CLOCK_ENV = "ALK_SCAN_MAX_SECONDS"
 # The scan's clock when CLOCK_ENV doesn't name one. The helper reads the same variable for its
 # hard stop, both when the reading starts.
 CLOCK = 1200.0
-AI_SECONDS = limit_seconds("ALK_SCAN_AI_MAX_SECONDS", 600.0)
+AI_ENV = "ALK_SCAN_AI_MAX_SECONDS"
+# The model step's limit when AI_ENV doesn't name one; read when the scan starts, as the clock is.
+AI_SECONDS = 600.0
 # The helper's hard stop comes this long after the scan's own clock, so a scan that stops itself
 # always writes its own file first.
 HARD_LIMIT_MARGIN = 600.0
@@ -492,7 +494,7 @@ async def _scan(job: HarnessJob, source: Path, output: Path, scan: _Scan) -> int
         outcome = await run_ai_step(
             source,
             hints=_hints(walk),
-            seconds=min(AI_SECONDS, deadline - clock() - AI_RESERVE),
+            seconds=min(limit_seconds(AI_ENV, AI_SECONDS), deadline - clock() - AI_RESERVE),
             on_turn_end=lambda: write_reading_cost(output, complete=False),
         )
         if not outcome.complete:

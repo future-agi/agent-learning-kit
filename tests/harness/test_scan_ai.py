@@ -325,7 +325,7 @@ def test_each_ai_outcome_gives_its_result(tmp_path, monkeypatch, quick, name):
     case = _OUTCOMES[name]
     if case.idle is not None:
         monkeypatch.setattr(scan_ai, "IDLE_SECONDS", case.idle)
-    session.STAGE_IDLE_RETRIES = 1
+    monkeypatch.setattr(session, "STAGE_IDLE_RETRIES", 1)
     backend = _Backend(*case.steps, interrupt=case.interrupt)
     ends: list = []
 
@@ -410,7 +410,7 @@ def test_a_gemini_call_limit_is_no_answer(tmp_path, monkeypatch):
 
 
 def test_an_idle_ai_stream_is_not_replayed(tmp_path, monkeypatch, quick):
-    session.STAGE_IDLE_RETRIES = 1
+    monkeypatch.setattr(session, "STAGE_IDLE_RETRIES", 1)
     monkeypatch.setattr(scan_ai, "IDLE_SECONDS", 0.2)
     backend = _Backend(("quiet",))
 

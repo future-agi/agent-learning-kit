@@ -342,7 +342,7 @@ def test_a_broken_langgraph_json_is_unread_not_a_crash(
 def test_the_walk_limit_and_the_clock_stop_it(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    assert (scan_walk._MAX_FILES, scan_walk._MAX_BYTES) == (20_000, 268_435_456)
+    assert (scan_walk._MAX_FILES, scan_walk._MAX_BYTES) == (200_000, 268_435_456)
     _write(tmp_path, {"a.py": GRAPH, "b.py": GRAPH, "c.py": GRAPH})
     calls: list[int] = []
 
@@ -361,7 +361,7 @@ def test_the_walk_limit_and_the_clock_stop_it(
     assert by_count.stopped == "limit"
     assert _entries(by_count) == ["a.py", "b.py"]
 
-    monkeypatch.setattr(scan_walk, "_MAX_FILES", 20_000)
+    monkeypatch.setattr(scan_walk, "_MAX_FILES", 200_000)
     monkeypatch.setattr(scan_walk, "_MAX_BYTES", len(GRAPH))
     by_bytes = _walk(tmp_path)
     assert by_bytes.stopped == "limit"
@@ -1251,3 +1251,66 @@ def test_one_unreadable_file_does_not_stop_an_ai_rows_description(tmp_path: Path
     assert candidate.partial is True
     assert {"OPENAI_API_KEY", "BOT_MODEL"} <= set(candidate.env_names)
     assert "langgraph" in candidate.builds
+
+
+def test_every_file_is_read_in_exactly_one_pass(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The two passes split the files: together they give each file once."""
+    _write(
+        tmp_path,
+        {
+            "agent.py": GRAPH,
+            "app/.env.example": "A=1\n",
+            "app/test_helpers.py": "x = 1\n",
+            "app/conftest.py": "x = 1\n",
+            "tests/test_a.py": "x = 1\n",
+            "tests/.env.example": "B=1\n",
+            "examples/demo/agent.py": GRAPH,
+            "pkg/sub/mod.py": "x = 1\n",
+            "pkg/sub/tests/test_b.py": "x = 1\n",
+        },
+    )
+    seen: list[str] = []
+    take = scan_walk._Walk._take
+
+    def counting(self, directory, folder, name):
+        seen.append(scan_walk._join(folder, name))
+        return take(self, directory, folder, name)
+
+    monkeypatch.setattr(scan_walk._Walk, "_take", counting)
+    _walk(tmp_path)
+
+    every = sorted(p.relative_to(tmp_path).as_posix() for p in tmp_path.rglob("*") if p.is_file())
+    assert sorted(seen) == every
+    assert len(seen) == len(set(seen))
+    # The customer's own code and its settings template come before any side file.
+    own = seen[: seen.index("examples/demo/agent.py")]
+    assert "app/.env.example" in own and "agent.py" in own
+
+
+def test_a_template_beside_the_agent_is_read_before_a_big_tests_folder(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(scan_walk, "_MAX_FILES", 10)
+    _write(tmp_path, {f"tests/test_{index:02}.py": "x = 1\n" for index in range(25)})
+    _write(tmp_path, {"zz_agent/agent.py": GRAPH, "zz_agent/.env.example": "OPENAI_API_KEY=\n"})
+
+    result = _walk(tmp_path)
+
+    assert "OPENAI_API_KEY" in _agent(result, "zz_agent/agent.py").env_names
+
+
+def test_a_reader_fault_on_every_file_logs_one_trace(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    _write(tmp_path, {f"m{index}.py": "x = 1\n" for index in range(5)})
+
+    def broken(data: bytes, shadowed: object) -> object:
+        raise LookupError("a fault in the kit's reader")
+
+    monkeypatch.setattr(scan_walk, "_python_facts", broken)
+    with caplog.at_level("WARNING", logger=scan_walk.logger.name):
+        result = _walk(tmp_path)
+
+    assert result.unread_files == 5
+    assert caplog.text.count("a file's reader failed") == 1
+    assert "LookupError" in caplog.text

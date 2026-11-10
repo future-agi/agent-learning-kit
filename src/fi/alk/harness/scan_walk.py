@@ -56,7 +56,9 @@ _FILE_BYTES = 1_048_576
 # A hundredth of a folder check's allowance: the crafted files that use a whole one
 # take seconds, so one file now costs about a second at most.
 _FILE_WORK = 1_000_000_000
-_MAX_FILES = 20_000
+# Measured 10 Nov: 100,000 tiny source files walk in 13 s at 266 MB, so this sits above any
+# real repo; the byte cap and the clock are what bound the walk.
+_MAX_FILES = 200_000
 _MAX_BYTES = 268_435_456
 _NAMES_PER_FILE = 200
 _IMPORT_DEPTH = 10
@@ -733,8 +735,18 @@ def _source_files(
             directories[:] = [name for name in directories if not _is_side_part(name)]
         folder = "/".join(relative)
         for name in files:
-            if side is None or _is_side_path(_join(folder, name)) is side:
+            if side is None or _read_with_side_files(_join(folder, name)) is side:
                 yield directory, folder, name
+
+
+def _read_with_side_files(path: str) -> bool:
+    """Which pass reads ``path``. A settings template (``.env.example``) starts with a dot, which
+    makes it a side file by name; it belongs to its folder's pass, so a big tests folder can't
+    keep it from being read."""
+    parts = path.split("/")
+    if parts[-1] in _TEMPLATES:
+        return any(_is_side_part(part) for part in parts[:-1])
+    return _is_side_path(path)
 
 
 class _ShadowedNames:
@@ -776,6 +788,8 @@ class _Walk:
         self.templates: dict[str, set[str]] = {}
         self.prompt_paths: list[str] = []
         self.unread = 0
+        # Unread files whose reader raised a kind not foreseen (a kit fault, not the file's).
+        self.faults = 0
         self.files_read = 0
         self.bytes_read = 0
         self.stopped: Literal["", "limit", "clock", "memory"] = ""
@@ -831,8 +845,11 @@ class _Walk:
             raise
         except Exception:
             # A reader fault of a kind not foreseen is still this file's problem, never the
-            # walk's: the file is unread, and the trace is logged masked.
-            logger.warning("agent walk: a file's reader failed", exc_info=True)
+            # walk's: the file is unread. The first trace is logged masked; the rest are
+            # counted, so a fault that hits every file can't flood the log.
+            if not self.faults:
+                logger.warning("agent walk: a file's reader failed", exc_info=True)
+            self.faults += 1
             self.unread += 1
 
     def _read(self, path: str) -> bytes | None:
@@ -1145,9 +1162,10 @@ def walk_repo(
     # path, never to "the repository is larger than the scan reads".
     result = walk.result(upload=upload)
     logger.info(
-        "agent walk: files_read=%d unread=%d agents=%d left_out=%d stopped=%s",
+        "agent walk: files_read=%d unread=%d reader_faults=%d agents=%d left_out=%d stopped=%s",
         walk.files_read,
         result.unread_files,
+        walk.faults,
         len(result.agents),
         result.paths_left_out,
         result.stopped or "no",
