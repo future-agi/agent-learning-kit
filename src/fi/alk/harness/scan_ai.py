@@ -166,12 +166,10 @@ class _ScanStage(Stage):
                 self.done.append(received)
                 try:
                     self._on_turn_end()
-                except Exception as exc:
-                    # A failed cost note must not turn a paid answer into a retried one.
-                    logger.warning(
-                        "find_agents: the cost note after the turn failed (%s)",
-                        type(exc).__name__,
-                    )
+                except Exception:
+                    # A failed cost note must not turn a paid answer into a retried one. The
+                    # trace is logged masked, so a fault in the cost writer can be found.
+                    logger.warning("find_agents: the cost note after the turn failed", exc_info=True)
 
 
 # -- the run -----------------------------------------------------------------------------------

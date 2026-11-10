@@ -8,6 +8,7 @@ its own bound, so a missing bound in the code fails the test instead of hanging 
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import time
 from dataclasses import dataclass, field
@@ -1008,3 +1009,28 @@ def test_glob_reads_a_pattern_as_a_shell_would(tmp_path):
     assert len(scan_ai._pattern_forms("{a,b}" * 20)) <= scan_ai._MAX_FORMS
     found = _said(_call(tools["grep"], {"text": "POST", "glob": "**/*.{ts,tsx}"}))
     assert _listed(found) == {ROUTE}
+
+
+def test_a_failed_cost_note_keeps_the_answer_and_logs_its_trace(tmp_path, monkeypatch, quick, caplog):
+    """A paid answer is never turned into a retry by the cost note, and the note's fault is
+    logged with its trace so it can be found."""
+    backend = _Backend(KEPT, FINISHED)
+    monkeypatch.setattr(session, "resolve", lambda *_args, **_kwargs: backend)
+
+    def broken_note() -> None:
+        raise OSError("cost file not writable")
+
+    with caplog.at_level(logging.WARNING, logger=scan_ai.logger.name):
+        outcome = asyncio.run(
+            asyncio.wait_for(
+                scan_ai.run_ai_step(
+                    _repo(tmp_path), hints="x", seconds=5.0, on_turn_end=broken_note
+                ),
+                TEST_BOUND,
+            )
+        )
+
+    assert outcome.kind == "pairs"
+    assert outcome.pairs == (AGENT,)
+    assert "the cost note after the turn failed" in caplog.text
+    assert "Traceback" in caplog.text and "OSError" in caplog.text
