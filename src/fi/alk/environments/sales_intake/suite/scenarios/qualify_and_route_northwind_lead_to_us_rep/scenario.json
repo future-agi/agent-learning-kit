@@ -1,0 +1,117 @@
+{
+  "name": "qualify_and_route_northwind_lead_to_us_rep",
+  "scenario_key": "qualify-and-route-northwind-lead-to-us-rep",
+  "scenario_id": "",
+  "use_case": "Qualify an inbound enquiry against the rubric",
+  "branch": "Brooke Taylor asks the desk to qualify Northwind's L01 from email thread th_s01_northwind_enquiry and route it to the territory owner; L01 is in US so it routes to A01",
+  "tests": "the agent reads th_s01_northwind_enquiry, qualifies L01, and routes it to US owner A01",
+  "instruction": "You are Brooke Taylor, Sales Development Representative at BrightDesk. You want the sales intake desk to review the email thread th_s01_northwind_enquiry, qualify the lead for Northwind Support (L01), and assign it to the territory owner.\n\nYour details:\n- Name: Brooke Taylor\n- Role: Sales Development Representative\n- Email thread: th_s01_northwind_enquiry\n- Company: Northwind Support Co\n- Lead ID: L01",
+  "keywords": [
+    "qualify_lead"
+  ],
+  "persona": {
+    "name": "Brooke Taylor",
+    "gender": "female",
+    "age_group": "25-32",
+    "occupation": "Sales Representative",
+    "location": "United States",
+    "personality": "Professional and formal",
+    "communication_style": "Direct and concise",
+    "initial_message": "Hi! Can you qualify Northwind's lead (L01) from thread th_s01_northwind_enquiry and route it to the right territory owner?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "origin": "seed",
+    "rep_id": "A01",
+    "thread_id": "th_s01_northwind_enquiry",
+    "lead_id": "L01"
+  },
+  "solution": [
+    {
+      "tool": "get_thread",
+      "arguments": {
+        "messageFormat": "FULL_CONTENT",
+        "threadId": "th_s01_northwind_enquiry"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "threadId": "record: th_s01_northwind_enquiry"
+      }
+    },
+    {
+      "tool": "get_lead",
+      "arguments": {
+        "lead_id": "L01"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "lead_id": "record: L01"
+      }
+    },
+    {
+      "tool": "get_icp_rules",
+      "arguments": {},
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "qualify_lead",
+      "arguments": {
+        "facts": {},
+        "lead_id": "L01"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "lead_id": "record: L01"
+      }
+    },
+    {
+      "tool": "get_routing_rules",
+      "arguments": {
+        "country": "United States"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "assign_owner",
+      "arguments": {
+        "rep_id": "A01",
+        "lead_id": "L01"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "lead_id": "record: L01",
+        "rep_id": "record: A01"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "counterparty": "colleague",
+    "overlay_vector": "none",
+    "task": "qualify_lead",
+    "overlay_intensity": "absent",
+    "disposition": "eligible",
+    "interface": "email_thread",
+    "interaction": "multi_turn",
+    "overlay": "none"
+  },
+  "sub_goals": [
+    "lead_qualified_by_rubric",
+    "owner_assigned_by_territory"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

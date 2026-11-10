@@ -1,0 +1,73 @@
+{
+  "name": "human_draft_preserved_on_sakura_enquiry",
+  "scenario_key": "human-draft-preserved-on-sakura-enquiry",
+  "scenario_id": "",
+  "use_case": "Ask for missing facts instead of inventing them",
+  "branch": "A human-edited draft already exists on thread th_s11_sakura_enquiry, so the desk must list drafts, detect it, and not overwrite or duplicate it",
+  "tests": "the agent inspects the thread and drafts, finds the existing human-edited draft, leaves it intact, and creates no duplicate draft",
+  "instruction": "You are Gemma Thorne, an Account Executive at BrightDesk. You want to check on Haruto Sato's enquiry from Sakura Home Goods (thread th_s11_sakura_enquiry). You ask the sales desk to check if a clarification draft is needed or if one already exists, and to make sure Haruto is taken care of.\n\nYour details:\n- Name: Gemma Thorne\n- Role: Account Executive\n- Prospect: Haruto Sato (haruto.sato@sakurahome.example)\n- Thread ID: th_s11_sakura_enquiry",
+  "keywords": [
+    "draft"
+  ],
+  "persona": {
+    "name": "Gemma Thorne",
+    "gender": "female",
+    "age_group": "32-40",
+    "occupation": "Sales Representative",
+    "location": "United Kingdom",
+    "personality": "Detail-oriented",
+    "communication_style": "Direct and concise",
+    "initial_message": "Can you check thread th_s11_sakura_enquiry for Haruto Sato at Sakura Home Goods? If there isn't a draft response yet, please draft one.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "draft_id": "D-HUMAN-12",
+    "origin": "seed",
+    "thread_id": "th_s11_sakura_enquiry"
+  },
+  "solution": [
+    {
+      "tool": "get_thread",
+      "arguments": {
+        "threadId": "th_s11_sakura_enquiry"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "list_drafts",
+      "arguments": {
+        "query": "haruto"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "overlay": "none",
+    "overlay_vector": "none",
+    "disposition": "human_draft_exists",
+    "interaction": "single_request",
+    "overlay_intensity": "absent",
+    "task": "draft_clarification",
+    "counterparty": "colleague",
+    "interface": "clean_prose"
+  },
+  "sub_goals": [
+    "human_draft_preserved"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

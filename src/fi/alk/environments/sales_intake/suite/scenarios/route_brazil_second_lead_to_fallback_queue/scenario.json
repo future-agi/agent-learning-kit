@@ -1,0 +1,105 @@
+{
+  "name": "route_brazil_second_lead_to_fallback_queue",
+  "scenario_key": "route-brazil-second-lead-to-fallback-queue",
+  "scenario_id": "",
+  "use_case": "Route leads by territory with a fallback queue",
+  "branch": "Beatriz Souza (L24, Vale Verde Varejo, Brazil, new, 36 support seats, 0-3 months) needs routing; desk qualifies L24 and assigns it to Q-SDR-FALLBACK",
+  "tests": "the agent qualifies L24 and assigns it to Q-SDR-FALLBACK according to territory rules",
+  "instruction": "You are Marcus Thorne, Sales Operations Specialist at BrightDesk. You are reviewing lead L24 for Beatriz Souza at Vale Verde Varejo in Brazil and need the sales desk assistant to qualify and route it to the fallback queue.\n\nYour details:\n- Name: Marcus Thorne\n- Role: Sales Operations Specialist\n- Lead ID: L24\n- Company: Vale Verde Varejo\n- Country: Brazil",
+  "keywords": [
+    "routing",
+    "fallback_queue"
+  ],
+  "persona": {
+    "name": "Marcus Thorne",
+    "gender": "male",
+    "age_group": "32-40",
+    "occupation": "Manager",
+    "location": "United States",
+    "personality": "Confident",
+    "communication_style": "Direct and concise",
+    "initial_message": "Qualify and route lead L24 (Vale Verde Varejo in Brazil).",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "queue_id": "Q-SDR-FALLBACK",
+    "origin": "seed",
+    "lead_id": "L24"
+  },
+  "solution": [
+    {
+      "tool": "get_lead",
+      "arguments": {
+        "lead_id": "L24"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "lead_id": "record: L24"
+      }
+    },
+    {
+      "tool": "get_icp_rules",
+      "arguments": {},
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "qualify_lead",
+      "arguments": {
+        "lead_id": "L24",
+        "facts": {}
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "lead_id": "record: L24"
+      }
+    },
+    {
+      "tool": "get_routing_rules",
+      "arguments": {
+        "country": "Brazil"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "assign_owner",
+      "arguments": {
+        "queue_id": "Q-SDR-FALLBACK",
+        "lead_id": "L24"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "queue_id": "record: Q-SDR-FALLBACK",
+        "lead_id": "record: L24"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "disposition": "unmapped_territory",
+    "overlay_vector": "none",
+    "interface": "terse",
+    "overlay_intensity": "absent",
+    "interaction": "multi_turn",
+    "task": "route_lead",
+    "counterparty": "colleague",
+    "overlay": "none"
+  },
+  "sub_goals": [
+    "owner_assigned_by_territory"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

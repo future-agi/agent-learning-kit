@@ -1,0 +1,81 @@
+{
+  "name": "report_qualification_status_with_optional_budget",
+  "scenario_key": "report-qualification-status-with-optional-budget",
+  "scenario_id": "",
+  "use_case": "Qualify an inbound enquiry against the rubric",
+  "branch": "Mia Russo (L26, Cedar & Finch, US, 21 seats, 0-3 months, status qualified, budget null) asks whether having no confirmed budget stops her from getting a demo; desk looks up L26 and ICP rules and confirms budget is optional and L26 is qualified",
+  "tests": "the agent looks up lead L26 and ICP rules and explains that budget is optional and her lead is already qualified",
+  "instruction": "You are Mia Russo from Cedar & Finch Retail.\nYou previously submitted an enquiry for 21 seats with a 0-3 month timeline.\nYou want to know if not having a confirmed budget yet prevents you from being qualified for a demo.\nYou will ask the BrightDesk intake desk to check your lead status (L26) and confirm whether budget is a mandatory qualification rubric requirement.\n\nYour details:\n- Name: Mia Russo\n- Email: mia.russo@cedarfinch.example\n- Company: Cedar & Finch Retail\n- Country: United States\n- Seats: 21\n- Timeline: 0-3 months\n- Budget: not confirmed\n- Lead ID: L26",
+  "keywords": [
+    "qualify_lead"
+  ],
+  "persona": {
+    "name": "Mia Russo",
+    "gender": "female",
+    "age_group": "25-32",
+    "occupation": "Customer Service",
+    "location": "Canada",
+    "personality": "Friendly and cooperative",
+    "communication_style": "Questioning",
+    "initial_message": "Hello! We don't have our budget confirmed yet for Cedar & Finch Retail. Does that prevent us from moving forward with a demo?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "lead_id": "L26",
+    "origin": "seed",
+    "contact_id": "C26"
+  },
+  "solution": [
+    {
+      "tool": "search_contacts",
+      "arguments": {
+        "email": "mia.russo@cedarfinch.example"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_lead",
+      "arguments": {
+        "lead_id": "L26"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "lead_id": "record: L26"
+      }
+    },
+    {
+      "tool": "get_icp_rules",
+      "arguments": {},
+      "environment_arguments": {},
+      "fixed": {}
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "interaction": "multi_turn",
+    "interface": "clean_prose",
+    "disposition": "budget_inquiry",
+    "counterparty": "prospect",
+    "task": "qualify_lead",
+    "overlay_vector": "none",
+    "overlay": "none",
+    "overlay_intensity": "absent"
+  },
+  "sub_goals": [
+    "lead_status_reported"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

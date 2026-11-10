@@ -1,0 +1,97 @@
+{
+  "name": "qualify_lead_after_seat_correction_in_email",
+  "scenario_key": "qualify-lead-after-seat-correction-in-email",
+  "scenario_id": "",
+  "use_case": "Qualify an inbound enquiry against the rubric",
+  "branch": "Noah Bergeron (L16, Prairie Grain Co-op, Canada) wrote 40 seats in smsg_014 then corrected to 60 seats in smsg_015 on thread th_s13_prairie_correction; desk qualifies L16 with seats 60",
+  "tests": "the agent reads thread th_s13_prairie_correction, uses the corrected seat count of 60, and qualifies L16",
+  "instruction": "You are Sarah Jenkins, Inbound SDR at BrightDesk. You want the sales intake desk to process the email enquiry thread th_s13_prairie_correction from Noah Bergeron at Prairie Grain Co-op, note his seat count correction in the thread, and qualify lead L16.\n\nYour details:\n- Name: Sarah Jenkins\n- Role: Inbound SDR\n- Email thread: th_s13_prairie_correction\n- Lead ID: L16\n- Prospect: Noah Bergeron (Prairie Grain Co-op)",
+  "keywords": [
+    "qualify_lead"
+  ],
+  "persona": {
+    "name": "Sarah Jenkins",
+    "gender": "female",
+    "age_group": "25-32",
+    "occupation": "Sales Representative",
+    "location": "United States",
+    "personality": "Professional and formal",
+    "communication_style": "Direct and concise",
+    "initial_message": "Hi, can you review the email thread th_s13_prairie_correction from Noah Bergeron and qualify their lead L16?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "origin": "seed",
+    "lead_id": "L16",
+    "thread_id": "th_s13_prairie_correction"
+  },
+  "solution": [
+    {
+      "tool": "get_thread",
+      "arguments": {
+        "threadId": "th_s13_prairie_correction",
+        "messageFormat": "FULL_CONTENT"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "threadId": "record: th_s13_prairie_correction"
+      }
+    },
+    {
+      "tool": "get_lead",
+      "arguments": {
+        "lead_id": "L16"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "lead_id": "record: L16"
+      }
+    },
+    {
+      "tool": "get_icp_rules",
+      "arguments": {},
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "qualify_lead",
+      "arguments": {
+        "facts": {
+          "seats": 60
+        },
+        "lead_id": "L16"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "lead_id": "record: L16"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "interaction": "multi_turn",
+    "task": "qualify_lead",
+    "overlay_intensity": "absent",
+    "disposition": "self_correction",
+    "overlay": "none",
+    "interface": "email_thread",
+    "counterparty": "colleague",
+    "overlay_vector": "none"
+  },
+  "sub_goals": [
+    "lead_qualified_by_rubric"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

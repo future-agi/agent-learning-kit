@@ -1,0 +1,84 @@
+{
+  "name": "second_person_known_company_fernhill",
+  "scenario_key": "second-person-known-company-fernhill",
+  "scenario_id": "",
+  "use_case": "Recognise known contacts and accounts",
+  "branch": "Ruby Ashford's email th_s04 (Fernhill) — Sarah Jenkins asks whether Fernhill is new; read th_s04, search_accounts for Fernhill, search_contacts by Ruby's email; read-only",
+  "tests": "the agent reads thread th_s04, checks for account Fernhill Logistics and contact Ruby Ashford, detecting that the company is known while Ruby is a second contact",
+  "instruction": "You are Sarah Jenkins, Sales Operations Lead in the UK. Ask the sales desk to check thread th_s04_fernhill_second_contact from Ruby Ashford, and check if Fernhill Logistics is already an existing account in our records.\n\nYour details:\n- Name: Sarah Jenkins\n- Role: Sales Operations Lead (UK)\n- Thread ID: th_s04_fernhill_second_contact\n- Sender: Ruby Ashford\n- Company: Fernhill Logistics",
+  "keywords": [
+    "duplicate",
+    "account"
+  ],
+  "persona": {
+    "name": "Sarah Jenkins",
+    "gender": "female",
+    "age_group": "40-50",
+    "occupation": "Manager",
+    "location": "United Kingdom",
+    "personality": "Professional and formal",
+    "communication_style": "Direct and concise",
+    "initial_message": "We received an email from Ruby Ashford on thread th_s04_fernhill_second_contact. Can you check if Fernhill Logistics is an existing account or new?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "thread_id": "th_s04_fernhill_second_contact",
+    "account_id": "ACC08",
+    "origin": "seed"
+  },
+  "solution": [
+    {
+      "tool": "get_thread",
+      "arguments": {
+        "threadId": "th_s04_fernhill_second_contact"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "threadId": "record: thread th_s04_fernhill_second_contact"
+      }
+    },
+    {
+      "tool": "search_accounts",
+      "arguments": {
+        "name": "Fernhill Logistics"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "search_contacts",
+      "arguments": {
+        "email": "ruby.ashford@fernhill.example"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "task": "deduplicate",
+    "disposition": "duplicate",
+    "overlay_intensity": "absent",
+    "interface": "email_thread",
+    "overlay": "none",
+    "interaction": "multi_turn",
+    "counterparty": "colleague",
+    "overlay_vector": "none"
+  },
+  "sub_goals": [
+    "duplicate_detected"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

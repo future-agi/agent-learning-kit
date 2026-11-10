@@ -1,0 +1,107 @@
+{
+  "name": "slack_mapleridge_handoff_recorded_and_posted",
+  "scenario_key": "slack-mapleridge-handoff-recorded-and-posted",
+  "scenario_id": "",
+  "use_case": "Post an approved handoff summary in Slack",
+  "branch": "Priya Raman asked in SM401 for Maple Ridge Telecom's handoff; with Dana's approval APP-SH-406 the desk creates a rep handoff for L03 and posts in SM401's thread",
+  "tests": "the desk creates a rep_handoff for L03 and posts the approved summary in Priya's asking thread SM401",
+  "instruction": "You want a rep handoff (rep_handoff) created for Maple Ridge Telecom (L03) and posted to your asking thread in #sales-handoffs. Dana Whitfield approved both creating the rep_handoff and posting the summary with approval APP-SH-406.\n\nYour details:\n- Channel: #sales-handoffs (CH_SALESHANDOFF)\n- Your asking message: SM401 (ts: 1794300000.000401)\n- Lead: Maple Ridge Telecom (L03)\n- Handoff kind: rep_handoff\n- Approval ID: APP-SH-406",
+  "keywords": [
+    "slack_handoff"
+  ],
+  "persona": {
+    "name": "Priya Raman",
+    "gender": "female",
+    "age_group": "25-32",
+    "occupation": "Sales Representative",
+    "location": "Canada",
+    "personality": "Friendly and cooperative",
+    "communication_style": "Casual and friendly",
+    "initial_message": "I posted asking for Maple Ridge Telecom (L03) in #sales-handoffs. Dana approved the rep_handoff and post with APP-SH-406. Could you create the handoff and post in my thread?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "message_id": "SM401",
+    "channel_id": "CH_SALESHANDOFF",
+    "approval_id": "APP-SH-406",
+    "origin": "mixed",
+    "lead_id": "L03"
+  },
+  "solution": [
+    {
+      "tool": "slack_read_thread",
+      "arguments": {
+        "message_ts": "1794300000.000401",
+        "channel_id": "CH_SALESHANDOFF"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "channel_id": "record: #sales-handoffs",
+        "message_ts": "record: Priya's message SM401"
+      }
+    },
+    {
+      "tool": "get_lead",
+      "arguments": {
+        "lead_id": "L03"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "create_handoff",
+      "arguments": {
+        "kind": "rep_handoff",
+        "lead_id": "L03",
+        "summary": "Maple Ridge Telecom: 60 seats, customer_service, 3-6 months, budget confirmed."
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "lead_id": "caller: Maple Ridge Telecom (L03)",
+        "kind": "caller: rep_handoff"
+      }
+    },
+    {
+      "tool": "slack_send_message",
+      "arguments": {
+        "message": "Maple Ridge Telecom (L03) handoff created: 60 seats, customer_service, 3-6 months, budget confirmed, assigned to Priya Raman.",
+        "approval_id": "APP-SH-406",
+        "channel_id": "CH_SALESHANDOFF",
+        "thread_ts": "1794300000.000401"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "thread_ts": "record: Priya's thread",
+        "channel_id": "record: #sales-handoffs"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "overlay_vector": "none",
+    "counterparty": "colleague",
+    "overlay": "none",
+    "interaction": "single_turn",
+    "interface": "slack_thread",
+    "overlay_intensity": "absent",
+    "disposition": "eligible",
+    "task": "slack_handoff"
+  },
+  "sub_goals": [
+    "handoff_created_for_lead",
+    "handoff_posted_in_thread"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

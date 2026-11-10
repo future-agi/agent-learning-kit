@@ -1,0 +1,95 @@
+{
+  "name": "qualify_second_kestrel_contact_with_stated_timeline",
+  "scenario_key": "qualify-second-kestrel-contact-with-stated-timeline",
+  "scenario_id": "",
+  "use_case": "Qualify an inbound enquiry against the rubric",
+  "branch": "Katrin Vogel (C27, lead L27 needs_information; helpdesk, 44 seats, Germany) chats and states they want to go live within 3-6 months; desk qualifies L27 with {\"timeline\": \"3-6 months\"}",
+  "tests": "the agent searches contact C27, reads L27, and qualifies L27 with stated timeline 3-6 months",
+  "instruction": "You are Katrin Vogel from Kestrel Mobility GmbH.\nYou previously submitted an enquiry for your team's helpdesk platform, but the timeline was missing so the lead was marked as needing information.\nYou want to provide your timeline (3-6 months) to the BrightDesk sales desk so your open lead (L27) can be qualified.\n\nYour details:\n- Name: Katrin Vogel\n- Email: katrin.vogel@kestrel-mobility.example\n- Company: Kestrel Mobility GmbH\n- Country: Germany\n- Platform use case: helpdesk\n- Seats: 44\n- Timeline: 3-6 months\n- Lead ID: L27",
+  "keywords": [
+    "qualify_lead"
+  ],
+  "persona": {
+    "name": "Katrin Vogel",
+    "gender": "female",
+    "age_group": "32-40",
+    "occupation": "Manager",
+    "location": "United Kingdom",
+    "personality": "Friendly and cooperative",
+    "communication_style": "Direct and concise",
+    "initial_message": "Hello! I previously submitted an enquiry for Kestrel Mobility. We want to go live within 3-6 months. Can you update and qualify our lead?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "lead_id": "L27",
+    "origin": "seed",
+    "contact_id": "C27"
+  },
+  "solution": [
+    {
+      "tool": "search_contacts",
+      "arguments": {
+        "email": "katrin.vogel@kestrel-mobility.example"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_lead",
+      "arguments": {
+        "lead_id": "L27"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "lead_id": "record: L27"
+      }
+    },
+    {
+      "tool": "get_icp_rules",
+      "arguments": {},
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "qualify_lead",
+      "arguments": {
+        "facts": {
+          "timeline": "3-6 months"
+        },
+        "lead_id": "L27"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "lead_id": "record: L27"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "task": "qualify_lead",
+    "interface": "clean_prose",
+    "interaction": "multi_turn",
+    "counterparty": "prospect",
+    "disposition": "missing_information_resolved",
+    "overlay_intensity": "absent",
+    "overlay_vector": "none",
+    "overlay": "none"
+  },
+  "sub_goals": [
+    "lead_qualified_by_rubric",
+    "facts_confirmed_before_write"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

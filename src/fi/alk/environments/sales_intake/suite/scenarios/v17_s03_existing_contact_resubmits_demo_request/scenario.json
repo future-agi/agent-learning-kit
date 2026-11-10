@@ -1,0 +1,93 @@
+{
+  "name": "v17_s03_existing_contact_resubmits_demo_request",
+  "scenario_key": "v17-s03-existing-contact-resubmits-demo-request",
+  "scenario_id": "",
+  "use_case": "Recognise known contacts and accounts",
+  "branch": "Meera Iyer of Finlytics (contact C09, open lead L09) sends her demo request again with her email in different capitals; the desk updates L09 and adds a note instead of creating a contact or lead",
+  "tests": "the agent finds C09 by normalized email, updates open lead L09 with the facts she gives, and records a note, creating nothing new",
+  "instruction": "You are Meera Iyer at Finlytics in India. You asked for a demo two weeks ago and heard nothing, so you are asking again. Give your email exactly as Meera.Iyer@Finlytics.Example. If asked: 22 support agents, you want to go live within 3-6 months.\n\nYour details:\n- Name: Meera Iyer\n- Email: Meera.Iyer@Finlytics.Example\n- Company: Finlytics\n- Country: India",
+  "keywords": [
+    "duplicate",
+    "idempotency",
+    "workbook"
+  ],
+  "persona": {
+    "name": "Meera Iyer",
+    "gender": "female",
+    "age_group": "25-32",
+    "occupation": "Support Operations Lead",
+    "location": "India",
+    "personality": "Detail-oriented",
+    "communication_style": "Detailed and elaborate",
+    "initial_message": "Hello, here is my demo request again. My email is Meera.Iyer@Finlytics.Example.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "contact_id": "C09",
+    "lead_id": "L09",
+    "origin": "seed"
+  },
+  "solution": [
+    {
+      "tool": "search_contacts",
+      "arguments": {
+        "email": "Meera.Iyer@Finlytics.Example"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "upsert_lead",
+      "arguments": {
+        "email": "Meera.Iyer@Finlytics.Example",
+        "seats": 22,
+        "timeline": "3-6 months",
+        "source": "chat",
+        "request_key": "REQ-C09-RESUBMIT"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "email": "caller: Meera.Iyer@Finlytics.Example, the email of C09"
+      }
+    },
+    {
+      "tool": "add_lead_note",
+      "arguments": {
+        "lead_id": "L09",
+        "body": "Meera Iyer asked for a demo again in chat; 22 seats, 3-6 months."
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "lead_id": "record: C09's open lead L09"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "task": "deduplicate",
+    "disposition": "duplicate",
+    "interaction": "multi_turn",
+    "counterparty": "prospect",
+    "interface": "clean_prose",
+    "overlay": "none",
+    "overlay_vector": "none",
+    "overlay_intensity": "absent"
+  },
+  "sub_goals": [
+    "lead_updated_not_duplicated",
+    "lead_note_added"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

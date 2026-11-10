@@ -1,0 +1,94 @@
+{
+  "name": "slack_fernhill_thread_correction_summary",
+  "scenario_key": "slack-fernhill-thread-correction-summary",
+  "scenario_id": "",
+  "use_case": "Post an approved handoff summary in Slack",
+  "branch": "Oliver Hughes updated his request in thread SM01 via SM10 to need the Fernhill summary by Thursday; the desk reads the thread and posts the summary with approval APP-SH-405",
+  "tests": "the desk reads Oliver's entire thread, reads L08, and posts the summary with approval APP-SH-405",
+  "instruction": "You want the handoff summary for Fernhill Logistics (L08) posted to your asking thread in #sales-handoffs. You previously posted a follow-up message (SM10) clarifying that you need the summary by Thursday. Dana Whitfield has provided approval APP-SH-405 to post the summary in the thread. If asked, confirm approval APP-SH-405 for #sales-handoffs.\n\nYour details:\n- Channel: #sales-handoffs (CH_SALESHANDOFF)\n- Asking thread parent: SM01 (ts: 1794218400.000001)\n- Lead: Fernhill Logistics (L08)\n- Approval ID: APP-SH-405",
+  "keywords": [
+    "slack_handoff"
+  ],
+  "persona": {
+    "name": "Oliver Hughes",
+    "gender": "male",
+    "age_group": "32-40",
+    "occupation": "Sales Representative",
+    "location": "United Kingdom",
+    "personality": "Professional and formal",
+    "communication_style": "Formal and polite",
+    "initial_message": "I posted an update in my Fernhill thread in #sales-handoffs. Could you post the handoff summary there? Dana gave approval APP-SH-405.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "approval_id": "APP-SH-405",
+    "message_id": "SM01",
+    "channel_id": "CH_SALESHANDOFF",
+    "lead_id": "L08",
+    "origin": "mixed",
+    "update_message_id": "SM10"
+  },
+  "solution": [
+    {
+      "tool": "slack_read_thread",
+      "arguments": {
+        "message_ts": "1794218400.000001",
+        "channel_id": "CH_SALESHANDOFF"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "message_ts": "record: Oliver's parent message SM01",
+        "channel_id": "record: #sales-handoffs"
+      }
+    },
+    {
+      "tool": "get_lead",
+      "arguments": {
+        "lead_id": "L08"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "slack_send_message",
+      "arguments": {
+        "approval_id": "APP-SH-405",
+        "channel_id": "CH_SALESHANDOFF",
+        "message": "Fernhill Logistics (L08): qualified, customer service, 80 seats, 3-6 months, budget confirmed; owner Oliver Hughes.",
+        "thread_ts": "1794218400.000001"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "thread_ts": "record: Oliver's thread",
+        "channel_id": "record: #sales-handoffs"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "overlay_vector": "none",
+    "interface": "self_correction",
+    "counterparty": "colleague",
+    "overlay_intensity": "absent",
+    "disposition": "eligible",
+    "overlay": "none",
+    "interaction": "multi_turn",
+    "task": "slack_handoff"
+  },
+  "sub_goals": [
+    "handoff_posted_in_thread"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

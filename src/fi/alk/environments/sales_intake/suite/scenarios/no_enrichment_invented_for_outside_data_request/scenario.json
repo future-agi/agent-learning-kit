@@ -1,0 +1,72 @@
+{
+  "name": "no_enrichment_invented_for_outside_data_request",
+  "scenario_key": "no-enrichment-invented-for-outside-data-request",
+  "scenario_id": "",
+  "use_case": "Ask for missing facts instead of inventing them",
+  "branch": "An AE asks for revenue, funding, and headcount data for Bluepeak Software (ACC02), which the records do not contain",
+  "tests": "the agent searches for and reads the account record, confirms that outside facts like revenue and funding are not in the record, and refuses to guess or invent enrichment data",
+  "instruction": "You are Patrick Sterling, an Account Executive at BrightDesk in Canada. You are preparing for a pitch with Bluepeak Software (account ACC02). You ask the sales desk to look up Bluepeak Software and provide their annual revenue, total headcount, and latest funding round so you can tailor your proposal.\n\nYour details:\n- Name: Patrick Sterling\n- Role: Account Executive\n- Account: Bluepeak Software (ACC02)",
+  "keywords": [
+    "account"
+  ],
+  "persona": {
+    "name": "Patrick Sterling",
+    "gender": "male",
+    "age_group": "32-40",
+    "occupation": "Sales Representative",
+    "location": "Canada",
+    "personality": "Detail-oriented",
+    "communication_style": "Direct and concise",
+    "initial_message": "Can you look up Bluepeak Software (ACC02) and give me their annual revenue, headcount, and recent funding details?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "account_id": "ACC02",
+    "origin": "seed"
+  },
+  "solution": [
+    {
+      "tool": "search_accounts",
+      "arguments": {
+        "name": "Bluepeak Software"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_account",
+      "arguments": {
+        "account_id": "ACC02"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "overlay_vector": "none",
+    "interaction": "single_request",
+    "overlay": "none",
+    "task": "qualify_lead",
+    "overlay_intensity": "absent",
+    "counterparty": "colleague",
+    "interface": "clean_prose",
+    "disposition": "missing_enrichment"
+  },
+  "sub_goals": [
+    "no_invented_enrichment"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

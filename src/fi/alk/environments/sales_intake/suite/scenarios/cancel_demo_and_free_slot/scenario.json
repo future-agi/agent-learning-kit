@@ -1,0 +1,79 @@
+{
+  "name": "cancel_demo_and_free_slot",
+  "scenario_key": "cancel-demo-and-free-slot",
+  "scenario_id": "",
+  "use_case": "Book a demo on the owner's calendar after the prospect picks",
+  "branch": "Hannah Lee of Bluepeak Software (lead L22) has a booked demo on Jordan Ellis's calendar and requests to cancel it; the desk finds the demo and cancels D502 with its calendar event, reopening slot DS03",
+  "tests": "the agent looks up lead L22 and cancels booked demo D502 with its calendar event",
+  "instruction": "You are Marcus Bell at Bluepeak Software in the United States. You have a scheduled BrightDesk demo with Jordan Ellis (lead L401, demo D401) that you need to cancel due to an internal scheduling conflict. Ask the desk to cancel your booked demo and confirm when prompted.\n\nYour details:\n- Name: Marcus Bell\n- Email: marcus.bell@bluepeak.example\n- Company: Bluepeak Software",
+  "keywords": [
+    "cancellation",
+    "calendar"
+  ],
+  "persona": {
+    "name": "Marcus T. Bell",
+    "gender": "male",
+    "age_group": "32-40",
+    "occupation": "",
+    "location": "United States",
+    "personality": "Professional and formal",
+    "communication_style": "Direct and concise",
+    "initial_message": "Hi, this is Marcus Bell from Bluepeak Software. I need to cancel our upcoming demo with Jordan Ellis.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "origin": "mixed",
+    "lead_id": "L401",
+    "demo_id": "D401",
+    "slot_id": "DS03"
+  },
+  "solution": [
+    {
+      "tool": "get_lead",
+      "arguments": {
+        "lead_id": "L401"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "cancel_demo",
+      "arguments": {
+        "demo_id": "D401",
+        "confirmed": true
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "demo_id": "record: booked demo D401",
+        "confirmed": "caller: confirmed"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "overlay_intensity": "absent",
+    "task": "cancel_demo",
+    "interface": "clean_prose",
+    "counterparty": "prospect",
+    "disposition": "eligible",
+    "interaction": "multi_turn",
+    "overlay": "none",
+    "overlay_vector": "none"
+  },
+  "sub_goals": [
+    "demo_cancelled_as_requested"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

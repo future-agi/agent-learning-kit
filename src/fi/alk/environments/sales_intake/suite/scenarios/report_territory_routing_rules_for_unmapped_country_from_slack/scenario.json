@@ -1,0 +1,77 @@
+{
+  "name": "report_territory_routing_rules_for_unmapped_country_from_slack",
+  "scenario_key": "report-territory-routing-rules-for-unmapped-country-from-slack",
+  "scenario_id": "",
+  "use_case": "Route leads by territory with a fallback queue",
+  "branch": "Lucas Vance asks about Slack message SM08 in #sales-reps (\"Who owns Brazil leads? Saw one from Vale Verde (L04).\"); desk reads SM08, checks routing rules for Brazil, and reports Brazil goes to fallback queue Q-SDR-FALLBACK without assigning",
+  "tests": "the agent reads Slack message SM08, gets routing rules for Brazil, and explains fallback queue routing without making assignments",
+  "instruction": "You are Lucas Vance, a sales representative at BrightDesk.\nYou saw an inquiry posted in #sales-reps (ts: 1794200400.000008) asking about who owns incoming leads from Brazil.\nYou want the sales intake desk to read that Slack message, consult the territory routing rules, and explain who handles leads from Brazil.\n\nYour details:\n- Name: Lucas Vance\n- Role: Sales Representative\n- Slack Channel: CH_SALESREPS (#sales-reps)\n- Message Timestamp: 1794200400.000008\n- Target Country: Brazil",
+  "keywords": [
+    "territory_rules"
+  ],
+  "persona": {
+    "name": "Lucas Vance",
+    "gender": "male",
+    "age_group": "32-40",
+    "occupation": "Sales Representative",
+    "location": "Australia",
+    "personality": "Easy-going",
+    "communication_style": "Direct and concise",
+    "initial_message": "Hey, can you check the question in #sales-reps (ts: 1794200400.000008) about who owns Brazil leads and tell me what the territory rules say?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "message_ts": "1794200400.000008",
+    "origin": "seed",
+    "channel_id": "CH_SALESREPS"
+  },
+  "solution": [
+    {
+      "tool": "slack_read_thread",
+      "arguments": {
+        "channel_id": "CH_SALESREPS",
+        "message_ts": "1794200400.000008"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "message_ts": "record: 1794200400.000008",
+        "channel_id": "record: CH_SALESREPS"
+      }
+    },
+    {
+      "tool": "get_routing_rules",
+      "arguments": {
+        "country": "Brazil"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "interaction": "multi_turn",
+    "task": "route_lead",
+    "overlay": "none",
+    "disposition": "inquiry",
+    "overlay_intensity": "absent",
+    "overlay_vector": "none",
+    "interface": "slack_thread",
+    "counterparty": "colleague"
+  },
+  "sub_goals": [
+    "routing_rule_reported"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

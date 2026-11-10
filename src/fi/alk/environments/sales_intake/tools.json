@@ -1,0 +1,3020 @@
+[
+  {
+    "name": "search_contacts",
+    "description": "Find contacts by email (matched case- and space-insensitively), by name or by account; returns ids and consent status.",
+    "parameters": {
+      "type": "object",
+      "required": [],
+      "properties": {
+        "email": {
+          "type": "string",
+          "description": "Email address"
+        },
+        "name": {
+          "type": "string",
+          "description": "Part of a name"
+        },
+        "account_id": {
+          "type": "string",
+          "description": "Account id"
+        }
+      }
+    },
+    "mutates_state": false,
+    "returns": {
+      "type": "object",
+      "required": [
+        "contacts",
+        "count"
+      ],
+      "properties": {
+        "contacts": {},
+        "count": {}
+      }
+    }
+  },
+  {
+    "name": "get_contact",
+    "description": "A contact's record: account, title, country, consent status and their leads.",
+    "parameters": {
+      "type": "object",
+      "required": [
+        "contact_id"
+      ],
+      "properties": {
+        "contact_id": {
+          "type": "string",
+          "description": "Contact id, e.g. C01"
+        }
+      }
+    },
+    "mutates_state": false,
+    "returns": {
+      "type": "object",
+      "required": [
+        "contact_id"
+      ],
+      "properties": {
+        "contact_id": {}
+      }
+    }
+  },
+  {
+    "name": "search_accounts",
+    "description": "Find companies by name or email domain.",
+    "parameters": {
+      "type": "object",
+      "required": [],
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Part of the company name"
+        },
+        "domain": {
+          "type": "string",
+          "description": "Email domain"
+        }
+      }
+    },
+    "mutates_state": false,
+    "returns": {
+      "type": "object",
+      "required": [
+        "accounts",
+        "count"
+      ],
+      "properties": {
+        "accounts": {},
+        "count": {}
+      }
+    }
+  },
+  {
+    "name": "get_account",
+    "description": "A company's record with its contacts and leads; only facts the company gave are recorded.",
+    "parameters": {
+      "type": "object",
+      "required": [
+        "account_id"
+      ],
+      "properties": {
+        "account_id": {
+          "type": "string",
+          "description": "Account id, e.g. ACC01"
+        }
+      }
+    },
+    "mutates_state": false,
+    "returns": {
+      "type": "object",
+      "required": [
+        "account_id"
+      ],
+      "properties": {
+        "account_id": {}
+      }
+    }
+  },
+  {
+    "name": "get_lead",
+    "description": "A lead: the rubric facts on file, status, owner or queue, notes and demos.",
+    "parameters": {
+      "type": "object",
+      "required": [
+        "lead_id"
+      ],
+      "properties": {
+        "lead_id": {
+          "type": "string",
+          "description": "Lead id, e.g. L01"
+        }
+      }
+    },
+    "mutates_state": false,
+    "returns": {
+      "type": "object",
+      "required": [
+        "lead_id",
+        "status"
+      ],
+      "properties": {
+        "lead_id": {},
+        "status": {}
+      }
+    }
+  },
+  {
+    "name": "list_open_leads",
+    "description": "Open leads, filtered by contact, account or owner.",
+    "parameters": {
+      "type": "object",
+      "required": [],
+      "properties": {
+        "contact_id": {
+          "type": "string",
+          "description": "Contact id"
+        },
+        "account_id": {
+          "type": "string",
+          "description": "Account id"
+        },
+        "owner_rep_id": {
+          "type": "string",
+          "description": "Rep id"
+        }
+      }
+    },
+    "mutates_state": false,
+    "returns": {
+      "type": "object",
+      "required": [
+        "leads",
+        "count"
+      ],
+      "properties": {
+        "leads": {},
+        "count": {}
+      }
+    }
+  },
+  {
+    "name": "get_icp_rules",
+    "description": "The qualification rubric: its fields, which are required and what qualifies.",
+    "parameters": {
+      "type": "object",
+      "required": [],
+      "properties": {}
+    },
+    "mutates_state": false,
+    "returns": {
+      "type": "object",
+      "required": [
+        "fields"
+      ],
+      "properties": {
+        "fields": {}
+      }
+    }
+  },
+  {
+    "name": "get_routing_rules",
+    "description": "Territory owners by country and the fallback queue for unmapped countries; with country, the owner that applies.",
+    "parameters": {
+      "type": "object",
+      "required": [],
+      "properties": {
+        "country": {
+          "type": "string",
+          "description": "Country name"
+        }
+      }
+    },
+    "mutates_state": false,
+    "returns": {
+      "type": "object",
+      "required": [
+        "territories",
+        "fallback_queue"
+      ],
+      "properties": {
+        "territories": {},
+        "fallback_queue": {}
+      }
+    }
+  },
+  {
+    "name": "upsert_lead",
+    "description": "Record an inbound request: reuses the contact for a known email and updates their open lead instead of creating duplicates; creates contact and lead only for a new person, with only the facts the prospect gave.",
+    "parameters": {
+      "type": "object",
+      "required": [
+        "email"
+      ],
+      "properties": {
+        "email": {
+          "type": "string",
+          "description": "Business email"
+        },
+        "name": {
+          "type": "string",
+          "description": "Person's name, for a new contact"
+        },
+        "company": {
+          "type": "string",
+          "description": "Company name as the prospect gave it, for a new company"
+        },
+        "country": {
+          "type": "string",
+          "description": "Country"
+        },
+        "title": {
+          "type": "string",
+          "description": "Job title"
+        },
+        "use_case": {
+          "type": "string",
+          "description": "What the platform is for",
+          "enum": [
+            "support",
+            "customer_service",
+            "helpdesk",
+            "marketing",
+            "other"
+          ]
+        },
+        "seats": {
+          "type": "integer",
+          "description": "Seats needed"
+        },
+        "timeline": {
+          "type": "string",
+          "description": "Go-live timeline",
+          "enum": [
+            "0-3 months",
+            "3-6 months",
+            "6-12 months",
+            "no plans"
+          ]
+        },
+        "budget": {
+          "type": "string",
+          "description": "Budget status",
+          "enum": [
+            "confirmed",
+            "not confirmed"
+          ]
+        },
+        "source": {
+          "type": "string",
+          "description": "Where the request came from",
+          "enum": [
+            "chat",
+            "email",
+            "web_form",
+            "event"
+          ]
+        },
+        "request_key": {
+          "type": "string",
+          "description": "Idempotency key; reuse it on a retry"
+        }
+      }
+    },
+    "mutates_state": true,
+    "returns": {
+      "type": "object",
+      "required": [
+        "lead_id",
+        "created"
+      ],
+      "properties": {
+        "lead_id": {},
+        "created": {}
+      }
+    }
+  },
+  {
+    "name": "qualify_lead",
+    "description": "Evaluate a lead against the rubric with facts the prospect stated (rubric fields only): qualified, disqualified, or needs_information with the missing fields.",
+    "parameters": {
+      "type": "object",
+      "required": [
+        "lead_id"
+      ],
+      "properties": {
+        "lead_id": {
+          "type": "string",
+          "description": "Lead id, e.g. L01"
+        },
+        "facts": {
+          "type": "object",
+          "description": "Rubric fields stated by the prospect: seats, use_case, timeline, country, budget"
+        }
+      }
+    },
+    "mutates_state": true,
+    "returns": {
+      "type": "object",
+      "required": [
+        "lead_id",
+        "status",
+        "missing_fields"
+      ],
+      "properties": {
+        "lead_id": {},
+        "status": {},
+        "missing_fields": {}
+      }
+    }
+  },
+  {
+    "name": "assign_owner",
+    "description": "Route a qualified lead: to the rep who owns its country, or to the fallback queue when no rep does. Give rep_id or queue_id.",
+    "parameters": {
+      "type": "object",
+      "required": [
+        "lead_id"
+      ],
+      "properties": {
+        "lead_id": {
+          "type": "string",
+          "description": "Lead id, e.g. L01"
+        },
+        "rep_id": {
+          "type": "string",
+          "description": "Rep id, e.g. A01"
+        },
+        "queue_id": {
+          "type": "string",
+          "description": "Queue id, e.g. Q-SDR-FALLBACK"
+        }
+      }
+    },
+    "mutates_state": true,
+    "returns": {
+      "type": "object",
+      "required": [
+        "lead_id"
+      ],
+      "properties": {
+        "lead_id": {}
+      }
+    }
+  },
+  {
+    "name": "add_lead_note",
+    "description": "Add a note to a lead.",
+    "parameters": {
+      "type": "object",
+      "required": [
+        "lead_id",
+        "body"
+      ],
+      "properties": {
+        "lead_id": {
+          "type": "string",
+          "description": "Lead id, e.g. L01"
+        },
+        "body": {
+          "type": "string",
+          "description": "Note text"
+        }
+      }
+    },
+    "mutates_state": true,
+    "returns": {
+      "type": "object",
+      "required": [
+        "note_id"
+      ],
+      "properties": {
+        "note_id": {}
+      }
+    }
+  },
+  {
+    "name": "update_contact_consent",
+    "description": "Record a contact's consent: an opt-out stops every planned follow-up and keeps the audit record. Needs confirmed=true.",
+    "parameters": {
+      "type": "object",
+      "required": [
+        "contact_id",
+        "status",
+        "confirmed"
+      ],
+      "properties": {
+        "contact_id": {
+          "type": "string",
+          "description": "Contact id"
+        },
+        "status": {
+          "type": "string",
+          "description": "New status",
+          "enum": [
+            "opted_out",
+            "opted_in"
+          ]
+        },
+        "source": {
+          "type": "string",
+          "description": "Where it came from, e.g. chat, email, prospect_request"
+        },
+        "confirmed": {
+          "type": "boolean",
+          "description": "The person agreed to the change as read back"
+        }
+      }
+    },
+    "mutates_state": true,
+    "returns": {
+      "type": "object",
+      "required": [
+        "contact_id",
+        "consent_status"
+      ],
+      "properties": {
+        "contact_id": {},
+        "consent_status": {}
+      }
+    }
+  },
+  {
+    "name": "get_owner_availability",
+    "description": "A rep's busy times from their calendar, with their time zone.",
+    "parameters": {
+      "type": "object",
+      "required": [
+        "rep_id"
+      ],
+      "properties": {
+        "rep_id": {
+          "type": "string",
+          "description": "Rep id"
+        },
+        "start_time": {
+          "type": "string",
+          "description": "ISO 8601 start"
+        },
+        "end_time": {
+          "type": "string",
+          "description": "ISO 8601 end"
+        }
+      }
+    },
+    "mutates_state": false,
+    "returns": {
+      "type": "object",
+      "required": [
+        "rep_id",
+        "busy"
+      ],
+      "properties": {
+        "rep_id": {},
+        "busy": {}
+      }
+    }
+  },
+  {
+    "name": "list_demo_slots",
+    "description": "Open demo slots on a rep's calendar (or the lead owner's), free of calendar conflicts.",
+    "parameters": {
+      "type": "object",
+      "required": [],
+      "properties": {
+        "rep_id": {
+          "type": "string",
+          "description": "Rep id"
+        },
+        "lead_id": {
+          "type": "string",
+          "description": "Lead id, to use its owner"
+        }
+      }
+    },
+    "mutates_state": false,
+    "returns": {
+      "type": "object",
+      "required": [
+        "slots",
+        "count"
+      ],
+      "properties": {
+        "slots": {},
+        "count": {}
+      }
+    }
+  },
+  {
+    "name": "book_demo",
+    "description": "Book the slot the prospect chose on the lead owner's calendar: writes the demo and the calendar event together. Needs prospect_confirmed=true.",
+    "parameters": {
+      "type": "object",
+      "required": [
+        "lead_id",
+        "slot_id",
+        "prospect_confirmed"
+      ],
+      "properties": {
+        "lead_id": {
+          "type": "string",
+          "description": "Lead id, e.g. L01"
+        },
+        "slot_id": {
+          "type": "string",
+          "description": "Slot id from list_demo_slots"
+        },
+        "prospect_confirmed": {
+          "type": "boolean",
+          "description": "The prospect picked this slot"
+        },
+        "request_key": {
+          "type": "string",
+          "description": "Idempotency key"
+        }
+      }
+    },
+    "mutates_state": true,
+    "returns": {
+      "type": "object",
+      "required": [
+        "demo_id",
+        "status"
+      ],
+      "properties": {
+        "demo_id": {},
+        "status": {}
+      }
+    }
+  },
+  {
+    "name": "cancel_demo",
+    "description": "Cancel a booked demo and its calendar event; the slot opens again. Needs confirmed=true.",
+    "parameters": {
+      "type": "object",
+      "required": [
+        "demo_id",
+        "confirmed"
+      ],
+      "properties": {
+        "demo_id": {
+          "type": "string",
+          "description": "Demo id, e.g. D01"
+        },
+        "confirmed": {
+          "type": "boolean",
+          "description": "The person confirmed which demo"
+        }
+      }
+    },
+    "mutates_state": true,
+    "returns": {
+      "type": "object",
+      "required": [
+        "demo_id",
+        "status"
+      ],
+      "properties": {
+        "demo_id": {},
+        "status": {}
+      }
+    }
+  },
+  {
+    "name": "create_handoff",
+    "description": "Open a handoff for a lead: to its owner (rep_handoff, qualified leads only), a specialist, or a follow-up (refused after an opt-out).",
+    "parameters": {
+      "type": "object",
+      "required": [
+        "lead_id",
+        "summary"
+      ],
+      "properties": {
+        "lead_id": {
+          "type": "string",
+          "description": "Lead id, e.g. L01"
+        },
+        "summary": {
+          "type": "string",
+          "description": "Facts from the records and the conversation only"
+        },
+        "kind": {
+          "type": "string",
+          "description": "Handoff kind",
+          "enum": [
+            "rep_handoff",
+            "specialist",
+            "follow_up"
+          ]
+        },
+        "request_key": {
+          "type": "string",
+          "description": "Idempotency key"
+        }
+      }
+    },
+    "mutates_state": true,
+    "returns": {
+      "type": "object",
+      "required": [
+        "handoff_id"
+      ],
+      "properties": {
+        "handoff_id": {}
+      }
+    }
+  },
+  {
+    "name": "search_threads",
+    "description": "Lists email threads matching a Gmail search query (label:ID, is:unread, in:inbox, from:, to:, subject:, newer_than:7d, free terms). Full message bodies are not returned; use get_thread for them. Drafts, spam and trash are excluded.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "pageSize": {
+          "type": "integer",
+          "description": "Threads per page; default 20, maximum 50."
+        },
+        "pageToken": {
+          "type": "string"
+        },
+        "query": {
+          "type": "string",
+          "description": "Gmail search syntax."
+        },
+        "includeTrash": {
+          "type": "boolean",
+          "description": "Include trashed threads (default false)."
+        },
+        "view": {
+          "type": "string",
+          "description": "THREAD_VIEW_UNSPECIFIED, THREAD_VIEW_METADATA_ONLY or THREAD_VIEW_MINIMAL (default)."
+        }
+      }
+    },
+    "mutates_state": false,
+    "returns": {
+      "type": "object",
+      "properties": {
+        "threads": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "messages": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "snippet": {
+                      "type": "string"
+                    },
+                    "subject": {
+                      "type": "string"
+                    },
+                    "sender": {
+                      "type": "string"
+                    },
+                    "toRecipients": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "ccRecipients": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "date": {
+                      "type": "string"
+                    },
+                    "plaintextBody": {
+                      "type": "string"
+                    },
+                    "htmlBody": {
+                      "type": "string"
+                    },
+                    "attachmentIds": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "attachments": {
+                      "type": "array",
+                      "items": {
+                        "type": "object"
+                      }
+                    },
+                    "labelIds": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "snippet",
+                    "subject",
+                    "sender",
+                    "toRecipients",
+                    "date",
+                    "labelIds"
+                  ]
+                }
+              }
+            },
+            "required": [
+              "id",
+              "messages"
+            ]
+          }
+        },
+        "nextPageToken": {
+          "type": "string"
+        },
+        "resultCountEstimate": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "threads",
+        "resultCountEstimate"
+      ]
+    }
+  },
+  {
+    "name": "get_thread",
+    "description": "Retrieves an email thread by ID with its messages in date order (bodies under FULL_CONTENT).",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "threadId": {
+          "type": "string",
+          "description": "The unique identifier of the thread."
+        },
+        "messageFormat": {
+          "type": "string",
+          "description": "MESSAGE_FORMAT_UNSPECIFIED, MINIMAL, FULL_CONTENT (default; bodies included) or METADATA_ONLY."
+        }
+      },
+      "required": [
+        "threadId"
+      ]
+    },
+    "mutates_state": false,
+    "returns": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "messages": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "snippet": {
+                "type": "string"
+              },
+              "subject": {
+                "type": "string"
+              },
+              "sender": {
+                "type": "string"
+              },
+              "toRecipients": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "ccRecipients": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "date": {
+                "type": "string"
+              },
+              "plaintextBody": {
+                "type": "string"
+              },
+              "htmlBody": {
+                "type": "string"
+              },
+              "attachmentIds": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "attachments": {
+                "type": "array",
+                "items": {
+                  "type": "object"
+                }
+              },
+              "labelIds": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            },
+            "required": [
+              "id",
+              "snippet",
+              "subject",
+              "sender",
+              "toRecipients",
+              "date",
+              "labelIds"
+            ]
+          }
+        }
+      },
+      "required": [
+        "id",
+        "messages"
+      ]
+    }
+  },
+  {
+    "name": "get_message",
+    "description": "Retrieves one email message by its message ID.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "messageId": {
+          "type": "string",
+          "description": "The unique identifier of the message."
+        },
+        "messageFormat": {
+          "type": "string",
+          "description": "MESSAGE_FORMAT_UNSPECIFIED, MINIMAL, FULL_CONTENT (default; bodies included) or METADATA_ONLY."
+        }
+      },
+      "required": [
+        "messageId"
+      ]
+    },
+    "mutates_state": false,
+    "returns": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "snippet": {
+          "type": "string"
+        },
+        "subject": {
+          "type": "string"
+        },
+        "sender": {
+          "type": "string"
+        },
+        "toRecipients": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "ccRecipients": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "date": {
+          "type": "string"
+        },
+        "plaintextBody": {
+          "type": "string"
+        },
+        "htmlBody": {
+          "type": "string"
+        },
+        "attachmentIds": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "attachments": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        },
+        "labelIds": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "id",
+        "snippet",
+        "subject",
+        "sender",
+        "toRecipients",
+        "date",
+        "labelIds"
+      ]
+    }
+  },
+  {
+    "name": "list_labels",
+    "description": "Lists the user-defined labels of the mailbox with their IDs. System label IDs (INBOX, UNREAD, STARRED, IMPORTANT, SENT, DRAFT, SPAM, TRASH) are usable without listing.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "pageSize": {
+          "type": "integer"
+        },
+        "pageToken": {
+          "type": "string"
+        }
+      }
+    },
+    "mutates_state": false,
+    "returns": {
+      "type": "object",
+      "properties": {
+        "labels": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "labelId": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "threadsTotal": {
+                "type": "integer"
+              },
+              "threadsUnread": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "labelId",
+              "name"
+            ]
+          }
+        },
+        "nextPageToken": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "labels"
+      ]
+    }
+  },
+  {
+    "name": "label_thread",
+    "description": "Adds labels to an entire thread (every message in it). Takes label IDs, not names; use list_labels when unsure of a user label's ID.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "threadId": {
+          "type": "string",
+          "description": "The unique identifier of the thread."
+        },
+        "labelIds": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Label IDs (system IDs such as INBOX, UNREAD, IMPORTANT, or user label IDs from list_labels), never names."
+        }
+      },
+      "required": [
+        "threadId",
+        "labelIds"
+      ]
+    },
+    "mutates_state": true,
+    "returns": {
+      "type": "object",
+      "properties": {}
+    }
+  },
+  {
+    "name": "unlabel_thread",
+    "description": "Removes labels from an entire thread. Takes label IDs, not names.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "threadId": {
+          "type": "string",
+          "description": "The unique identifier of the thread."
+        },
+        "labelIds": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Label IDs (system IDs such as INBOX, UNREAD, IMPORTANT, or user label IDs from list_labels), never names."
+        }
+      },
+      "required": [
+        "threadId",
+        "labelIds"
+      ]
+    },
+    "mutates_state": true,
+    "returns": {
+      "type": "object",
+      "properties": {}
+    }
+  },
+  {
+    "name": "list_drafts",
+    "description": "Lists the mailbox's drafts, newest first. humanEdited marks a draft a person has edited.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "pageSize": {
+          "type": "integer",
+          "description": "Drafts per page; default 20, maximum 50."
+        },
+        "pageToken": {
+          "type": "string"
+        },
+        "query": {
+          "type": "string",
+          "description": "Gmail search syntax."
+        },
+        "view": {
+          "type": "string",
+          "description": "DRAFT_VIEW_UNSPECIFIED, DRAFT_VIEW_METADATA_ONLY or DRAFT_VIEW_FULL (default)."
+        }
+      }
+    },
+    "mutates_state": false,
+    "returns": {
+      "type": "object",
+      "properties": {
+        "drafts": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "subject": {
+                "type": "string"
+              },
+              "threadId": {
+                "type": "string"
+              },
+              "toRecipients": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "ccRecipients": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "bccRecipients": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "plaintextBody": {
+                "type": "string"
+              },
+              "htmlBody": {
+                "type": "string"
+              },
+              "date": {
+                "type": "string"
+              },
+              "humanEdited": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "id",
+              "threadId",
+              "toRecipients",
+              "date"
+            ]
+          }
+        },
+        "nextPageToken": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "drafts"
+      ]
+    }
+  },
+  {
+    "name": "create_draft",
+    "description": "Creates a draft email for a person to review and send. To reply in an existing thread pass the original message's ID as replyToMessageId. Addresses are plain (no 'Name <email>'). Attachments are not supported yet. Nothing is sent.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "to": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Recipient email addresses."
+        },
+        "cc": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "bcc": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "subject": {
+          "type": "string"
+        },
+        "body": {
+          "type": "string",
+          "description": "Plain-text body."
+        },
+        "htmlBody": {
+          "type": "string"
+        },
+        "replyToMessageId": {
+          "type": "string",
+          "description": "The message this draft replies to; the draft joins its thread."
+        },
+        "attachments": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        }
+      }
+    },
+    "mutates_state": true,
+    "returns": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "subject": {
+          "type": "string"
+        },
+        "threadId": {
+          "type": "string"
+        },
+        "toRecipients": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "ccRecipients": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "bccRecipients": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "plaintextBody": {
+          "type": "string"
+        },
+        "htmlBody": {
+          "type": "string"
+        },
+        "date": {
+          "type": "string"
+        },
+        "humanEdited": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "id",
+        "threadId",
+        "toRecipients",
+        "date"
+      ]
+    }
+  },
+  {
+    "name": "list_calendars",
+    "description": "The calendars the user has access to, with their IDs; resolves a calendar name to its calendar_id. accessRole says what the user may do on each.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "pageSize": {
+          "type": "integer",
+          "description": "Max results per page. Default 100, max 250."
+        },
+        "pageToken": {
+          "type": "string"
+        }
+      }
+    },
+    "mutates_state": false,
+    "returns": {
+      "type": "object",
+      "properties": {
+        "calendars": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "summary": {
+                "type": "string"
+              },
+              "description": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "timeZone": {
+                "type": "string"
+              },
+              "accessRole": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "summary",
+              "timeZone",
+              "accessRole"
+            ]
+          }
+        },
+        "nextPageToken": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "calendars"
+      ]
+    }
+  },
+  {
+    "name": "list_events",
+    "description": "Events on a calendar matching the constraints. Set startTime and endTime only when a specific timeframe is requested. For open-ended keyword searches on the primary calendar use search_events.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "calendarId": {
+          "type": "string",
+          "description": "Calendar ID from list_calendars. Default: the primary calendar."
+        },
+        "pageSize": {
+          "type": "integer",
+          "description": "Max events per page (default 100, max 250). Recommended: 10."
+        },
+        "pageToken": {
+          "type": "string"
+        },
+        "startTime": {
+          "type": "string",
+          "description": "Start of the timeframe (ISO 8601, for example '2026-04-30T10:00:00Z')."
+        },
+        "endTime": {
+          "type": "string",
+          "description": "End of the timeframe (ISO 8601, for example '2026-04-30T10:00:00Z')."
+        },
+        "timeZone": {
+          "type": "string",
+          "description": "IANA Time Zone Database name (for example America/Los_Angeles)."
+        },
+        "orderBy": {
+          "type": "string",
+          "description": "default, startTime, startTimeDesc or lastModified."
+        },
+        "fullText": {
+          "type": "string",
+          "description": "Free-form search over title, description, location and attendees (all terms must match)."
+        },
+        "eventType": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "mutates_state": false,
+    "returns": {
+      "type": "object",
+      "properties": {
+        "summary": {
+          "type": "string"
+        },
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "updated": {
+          "type": "string"
+        },
+        "timeZone": {
+          "type": "string"
+        },
+        "accessRole": {
+          "type": "string"
+        },
+        "defaultReminders": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        },
+        "events": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "status": {
+                "type": "string"
+              },
+              "htmlLink": {
+                "type": "string"
+              },
+              "created": {
+                "type": "string"
+              },
+              "updated": {
+                "type": "string"
+              },
+              "summary": {
+                "type": "string"
+              },
+              "description": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "location": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "start": {
+                "type": "object",
+                "properties": {
+                  "dateTime": {
+                    "type": "string"
+                  },
+                  "date": {
+                    "type": "string"
+                  },
+                  "timeZone": {
+                    "type": "string"
+                  }
+                }
+              },
+              "end": {
+                "type": "object",
+                "properties": {
+                  "dateTime": {
+                    "type": "string"
+                  },
+                  "date": {
+                    "type": "string"
+                  },
+                  "timeZone": {
+                    "type": "string"
+                  }
+                }
+              },
+              "recurrence": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "recurringEventId": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "attendees": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "email": {
+                      "type": "string"
+                    },
+                    "displayName": {
+                      "type": "string"
+                    },
+                    "responseStatus": {
+                      "type": "string"
+                    },
+                    "organizer": {
+                      "type": "boolean"
+                    },
+                    "optionalAttendee": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "email",
+                    "responseStatus"
+                  ]
+                }
+              },
+              "eventType": {
+                "type": "string"
+              },
+              "version": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "id",
+              "status",
+              "summary",
+              "start",
+              "end",
+              "attendees",
+              "version"
+            ]
+          }
+        },
+        "nextPageToken": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "summary",
+        "timeZone",
+        "accessRole",
+        "events"
+      ]
+    }
+  },
+  {
+    "name": "get_event",
+    "description": "A single event on a calendar.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "eventId": {
+          "type": "string",
+          "description": "Event ID."
+        },
+        "calendarId": {
+          "type": "string",
+          "description": "Calendar ID from list_calendars. Default: the primary calendar."
+        }
+      },
+      "required": [
+        "eventId"
+      ]
+    },
+    "mutates_state": false,
+    "returns": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "htmlLink": {
+          "type": "string"
+        },
+        "created": {
+          "type": "string"
+        },
+        "updated": {
+          "type": "string"
+        },
+        "summary": {
+          "type": "string"
+        },
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "location": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "start": {
+          "type": "object",
+          "properties": {
+            "dateTime": {
+              "type": "string"
+            },
+            "date": {
+              "type": "string"
+            },
+            "timeZone": {
+              "type": "string"
+            }
+          }
+        },
+        "end": {
+          "type": "object",
+          "properties": {
+            "dateTime": {
+              "type": "string"
+            },
+            "date": {
+              "type": "string"
+            },
+            "timeZone": {
+              "type": "string"
+            }
+          }
+        },
+        "recurrence": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "recurringEventId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "attendees": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "email": {
+                "type": "string"
+              },
+              "displayName": {
+                "type": "string"
+              },
+              "responseStatus": {
+                "type": "string"
+              },
+              "organizer": {
+                "type": "boolean"
+              },
+              "optionalAttendee": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "email",
+              "responseStatus"
+            ]
+          }
+        },
+        "eventType": {
+          "type": "string"
+        },
+        "version": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "id",
+        "status",
+        "summary",
+        "start",
+        "end",
+        "attendees",
+        "version"
+      ]
+    }
+  },
+  {
+    "name": "search_events",
+    "description": "Searches events on the user's primary calendar by keywords (case-insensitive).",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "query": {
+          "type": "string",
+          "description": "Query string to search for events."
+        },
+        "pageSize": {
+          "type": "integer"
+        },
+        "pageToken": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "query"
+      ]
+    },
+    "mutates_state": false,
+    "returns": {
+      "type": "object",
+      "properties": {
+        "events": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "status": {
+                "type": "string"
+              },
+              "htmlLink": {
+                "type": "string"
+              },
+              "created": {
+                "type": "string"
+              },
+              "updated": {
+                "type": "string"
+              },
+              "summary": {
+                "type": "string"
+              },
+              "description": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "location": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "start": {
+                "type": "object",
+                "properties": {
+                  "dateTime": {
+                    "type": "string"
+                  },
+                  "date": {
+                    "type": "string"
+                  },
+                  "timeZone": {
+                    "type": "string"
+                  }
+                }
+              },
+              "end": {
+                "type": "object",
+                "properties": {
+                  "dateTime": {
+                    "type": "string"
+                  },
+                  "date": {
+                    "type": "string"
+                  },
+                  "timeZone": {
+                    "type": "string"
+                  }
+                }
+              },
+              "recurrence": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "recurringEventId": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "attendees": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "email": {
+                      "type": "string"
+                    },
+                    "displayName": {
+                      "type": "string"
+                    },
+                    "responseStatus": {
+                      "type": "string"
+                    },
+                    "organizer": {
+                      "type": "boolean"
+                    },
+                    "optionalAttendee": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "email",
+                    "responseStatus"
+                  ]
+                }
+              },
+              "eventType": {
+                "type": "string"
+              },
+              "version": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "id",
+              "status",
+              "summary",
+              "start",
+              "end",
+              "attendees",
+              "version"
+            ]
+          }
+        },
+        "nextPageToken": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "events"
+      ]
+    }
+  },
+  {
+    "name": "suggest_time",
+    "description": "Suggests free time slots across the attendees' calendars within a query interval, respecting the configured buffer between events. A suggestion reserves nothing: create the event after the user confirms.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "attendeeEmails": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Attendee emails to find free time for."
+        },
+        "startTime": {
+          "type": "string",
+          "description": "Query interval start (ISO 8601, for example '2026-04-30T10:00:00Z')."
+        },
+        "endTime": {
+          "type": "string",
+          "description": "Query interval end (ISO 8601, for example '2026-04-30T10:00:00Z')."
+        },
+        "timeZone": {
+          "type": "string",
+          "description": "IANA Time Zone Database name (for example America/Los_Angeles)."
+        },
+        "durationMinutes": {
+          "type": "integer",
+          "description": "Default 30."
+        },
+        "preferences": {
+          "type": "object",
+          "properties": {
+            "startHour": {
+              "type": "string",
+              "description": "HH:mm, 24-hour."
+            },
+            "endHour": {
+              "type": "string",
+              "description": "HH:mm, 24-hour."
+            },
+            "excludeWeekends": {
+              "type": "boolean"
+            },
+            "pageSize": {
+              "type": "integer",
+              "description": "Number of slots; default 5."
+            }
+          }
+        }
+      },
+      "required": [
+        "attendeeEmails",
+        "startTime",
+        "endTime"
+      ]
+    },
+    "mutates_state": false,
+    "returns": {
+      "type": "object",
+      "properties": {
+        "timeSlots": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "start": {
+                "type": "object",
+                "properties": {
+                  "dateTime": {
+                    "type": "string"
+                  },
+                  "date": {
+                    "type": "string"
+                  },
+                  "timeZone": {
+                    "type": "string"
+                  }
+                }
+              },
+              "end": {
+                "type": "object",
+                "properties": {
+                  "dateTime": {
+                    "type": "string"
+                  },
+                  "date": {
+                    "type": "string"
+                  },
+                  "timeZone": {
+                    "type": "string"
+                  }
+                }
+              }
+            },
+            "required": [
+              "start",
+              "end"
+            ]
+          }
+        }
+      },
+      "required": [
+        "timeSlots"
+      ]
+    }
+  },
+  {
+    "name": "create_event",
+    "description": "Creates an event on a calendar. Attendees must be reachable within the attendee domain policy; conflicts with confirmed events are refused. Needs the user's approval of this exact event (approval_id).",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "summary": {
+          "type": "string",
+          "description": "Title."
+        },
+        "startTime": {
+          "type": "string",
+          "description": "Start time (ISO 8601, for example '2026-04-30T10:00:00Z')."
+        },
+        "endTime": {
+          "type": "string",
+          "description": "End time (ISO 8601, for example '2026-04-30T10:00:00Z')."
+        },
+        "attendees": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "email": {
+                "type": "string"
+              },
+              "displayName": {
+                "type": "string"
+              },
+              "optionalAttendee": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "email"
+            ]
+          }
+        },
+        "attendeeEmails": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Deprecated: use attendees."
+        },
+        "recurrenceData": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "RRULE, RDATE or EXDATE strings (RFC 5545)."
+        },
+        "calendarId": {
+          "type": "string",
+          "description": "Calendar ID from list_calendars. Default: the primary calendar."
+        },
+        "description": {
+          "type": "string"
+        },
+        "location": {
+          "type": "string"
+        },
+        "allDay": {
+          "type": "boolean"
+        },
+        "timeZone": {
+          "type": "string",
+          "description": "IANA Time Zone Database name (for example America/Los_Angeles)."
+        },
+        "notificationLevel": {
+          "type": "string",
+          "description": "NONE, EXTERNAL_ONLY or ALL."
+        },
+        "addGoogleMeetUrl": {
+          "type": "boolean"
+        },
+        "visibility": {
+          "type": "string"
+        },
+        "approval_id": {
+          "type": "string",
+          "description": "The approval authorizing this change; required while the environment requires approval for mutations."
+        }
+      },
+      "required": [
+        "summary",
+        "startTime",
+        "endTime"
+      ]
+    },
+    "mutates_state": true,
+    "returns": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "htmlLink": {
+          "type": "string"
+        },
+        "created": {
+          "type": "string"
+        },
+        "updated": {
+          "type": "string"
+        },
+        "summary": {
+          "type": "string"
+        },
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "location": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "start": {
+          "type": "object",
+          "properties": {
+            "dateTime": {
+              "type": "string"
+            },
+            "date": {
+              "type": "string"
+            },
+            "timeZone": {
+              "type": "string"
+            }
+          }
+        },
+        "end": {
+          "type": "object",
+          "properties": {
+            "dateTime": {
+              "type": "string"
+            },
+            "date": {
+              "type": "string"
+            },
+            "timeZone": {
+              "type": "string"
+            }
+          }
+        },
+        "recurrence": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "recurringEventId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "attendees": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "email": {
+                "type": "string"
+              },
+              "displayName": {
+                "type": "string"
+              },
+              "responseStatus": {
+                "type": "string"
+              },
+              "organizer": {
+                "type": "boolean"
+              },
+              "optionalAttendee": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "email",
+              "responseStatus"
+            ]
+          }
+        },
+        "eventType": {
+          "type": "string"
+        },
+        "version": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "id",
+        "status",
+        "summary",
+        "start",
+        "end",
+        "attendees",
+        "version"
+      ]
+    }
+  },
+  {
+    "name": "update_event",
+    "description": "Updates an event; fields that are not set are not changed. Moving only the start preserves the duration. Needs approval_id, and expected_version must match the event's current version.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "eventId": {
+          "type": "string",
+          "description": "The ID of the event to update."
+        },
+        "calendarId": {
+          "type": "string",
+          "description": "Calendar ID from list_calendars. Default: the primary calendar."
+        },
+        "summary": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "location": {
+          "type": "string"
+        },
+        "startTime": {
+          "type": "string",
+          "description": "New start time (ISO 8601, for example '2026-04-30T10:00:00Z')."
+        },
+        "endTime": {
+          "type": "string",
+          "description": "New end time (ISO 8601, for example '2026-04-30T10:00:00Z')."
+        },
+        "allDay": {
+          "type": "boolean"
+        },
+        "timeZone": {
+          "type": "string",
+          "description": "IANA Time Zone Database name (for example America/Los_Angeles)."
+        },
+        "addedAttendees": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "email": {
+                "type": "string"
+              },
+              "displayName": {
+                "type": "string"
+              },
+              "optionalAttendee": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "email"
+            ]
+          }
+        },
+        "addedAttendeeEmails": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Deprecated: use addedAttendees."
+        },
+        "removedAttendeeEmails": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "notificationLevel": {
+          "type": "string"
+        },
+        "approval_id": {
+          "type": "string",
+          "description": "The approval authorizing this change; required while the environment requires approval for mutations."
+        },
+        "expected_version": {
+          "type": "integer",
+          "description": "The event version the change was decided on; a stale version is refused."
+        }
+      },
+      "required": [
+        "eventId"
+      ]
+    },
+    "mutates_state": true,
+    "returns": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "htmlLink": {
+          "type": "string"
+        },
+        "created": {
+          "type": "string"
+        },
+        "updated": {
+          "type": "string"
+        },
+        "summary": {
+          "type": "string"
+        },
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "location": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "start": {
+          "type": "object",
+          "properties": {
+            "dateTime": {
+              "type": "string"
+            },
+            "date": {
+              "type": "string"
+            },
+            "timeZone": {
+              "type": "string"
+            }
+          }
+        },
+        "end": {
+          "type": "object",
+          "properties": {
+            "dateTime": {
+              "type": "string"
+            },
+            "date": {
+              "type": "string"
+            },
+            "timeZone": {
+              "type": "string"
+            }
+          }
+        },
+        "recurrence": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "recurringEventId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "attendees": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "email": {
+                "type": "string"
+              },
+              "displayName": {
+                "type": "string"
+              },
+              "responseStatus": {
+                "type": "string"
+              },
+              "organizer": {
+                "type": "boolean"
+              },
+              "optionalAttendee": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "email",
+              "responseStatus"
+            ]
+          }
+        },
+        "eventType": {
+          "type": "string"
+        },
+        "version": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "id",
+        "status",
+        "summary",
+        "start",
+        "end",
+        "attendees",
+        "version"
+      ]
+    }
+  },
+  {
+    "name": "delete_event",
+    "description": "Cancels an event. For a recurring event, recurring_action says whether this occurrence (default) or the whole series is cancelled. Needs approval_id.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "eventId": {
+          "type": "string",
+          "description": "The ID of the event to delete."
+        },
+        "calendarId": {
+          "type": "string",
+          "description": "Calendar ID from list_calendars. Default: the primary calendar."
+        },
+        "notificationLevel": {
+          "type": "string"
+        },
+        "approval_id": {
+          "type": "string",
+          "description": "The approval authorizing this change; required while the environment requires approval for mutations."
+        },
+        "recurring_action": {
+          "type": "string",
+          "description": "this_event (default) or all_events."
+        }
+      },
+      "required": [
+        "eventId"
+      ]
+    },
+    "mutates_state": true,
+    "returns": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "htmlLink": {
+          "type": "string"
+        },
+        "created": {
+          "type": "string"
+        },
+        "updated": {
+          "type": "string"
+        },
+        "summary": {
+          "type": "string"
+        },
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "location": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "start": {
+          "type": "object",
+          "properties": {
+            "dateTime": {
+              "type": "string"
+            },
+            "date": {
+              "type": "string"
+            },
+            "timeZone": {
+              "type": "string"
+            }
+          }
+        },
+        "end": {
+          "type": "object",
+          "properties": {
+            "dateTime": {
+              "type": "string"
+            },
+            "date": {
+              "type": "string"
+            },
+            "timeZone": {
+              "type": "string"
+            }
+          }
+        },
+        "recurrence": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "recurringEventId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "attendees": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "email": {
+                "type": "string"
+              },
+              "displayName": {
+                "type": "string"
+              },
+              "responseStatus": {
+                "type": "string"
+              },
+              "organizer": {
+                "type": "boolean"
+              },
+              "optionalAttendee": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "email",
+              "responseStatus"
+            ]
+          }
+        },
+        "eventType": {
+          "type": "string"
+        },
+        "version": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "id",
+        "status",
+        "summary",
+        "start",
+        "end",
+        "attendees",
+        "version"
+      ]
+    }
+  },
+  {
+    "name": "slack_search_channels",
+    "description": "Search for Slack channels by name or topic. Returns channel IDs, names, topics, privacy and membership. Private channels appear only to their members.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "keywords": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Lexical terms that must appear in the channel's name or topic; single words or quoted phrases, all AND'd."
+        },
+        "natural_language_query": {
+          "type": "string",
+          "description": "The user's question in conversational tone."
+        },
+        "channel_types": {
+          "type": "string",
+          "description": "Comma-separated: public_channel, private_channel. Default public_channel."
+        },
+        "cursor": {
+          "type": "string"
+        },
+        "include_archived": {
+          "type": "boolean"
+        },
+        "limit": {
+          "type": "integer",
+          "description": "Up to 20; default 20."
+        },
+        "response_format": {
+          "type": "string"
+        }
+      }
+    },
+    "mutates_state": false,
+    "returns": {
+      "type": "object",
+      "properties": {
+        "channels": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "channel_id": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "topic": {
+                "type": "string"
+              },
+              "purpose": {
+                "type": "string"
+              },
+              "is_private": {
+                "type": "boolean"
+              },
+              "is_member": {
+                "type": "boolean"
+              },
+              "member_count": {
+                "type": "integer"
+              },
+              "is_archived": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "channel_id",
+              "name",
+              "is_private",
+              "is_member"
+            ]
+          }
+        },
+        "next_cursor": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "channels"
+      ]
+    }
+  },
+  {
+    "name": "slack_read_channel",
+    "description": "Reads messages from a channel, newest first. Read-only. Use slack_read_thread with a message's ts to read its replies; use slack_search_channels to find a channel ID.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "channel_id": {
+          "type": "string",
+          "description": "ID of the channel to fetch history for."
+        },
+        "cursor": {
+          "type": "string",
+          "description": "next_cursor from a previous response."
+        },
+        "latest": {
+          "type": "string",
+          "description": "End of the time range (ts)."
+        },
+        "limit": {
+          "type": "integer",
+          "description": "1 to 100; default 100."
+        },
+        "oldest": {
+          "type": "string",
+          "description": "Start of the time range (ts)."
+        },
+        "response_format": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "channel_id"
+      ]
+    },
+    "mutates_state": false,
+    "returns": {
+      "type": "object",
+      "properties": {
+        "channel_id": {
+          "type": "string"
+        },
+        "messages": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "message_id": {
+                "type": "string"
+              },
+              "user_id": {
+                "type": "string"
+              },
+              "text": {
+                "type": "string"
+              },
+              "ts": {
+                "type": "string"
+              },
+              "thread_ts": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "permalink": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "message_id",
+              "user_id",
+              "text",
+              "ts",
+              "permalink"
+            ]
+          }
+        },
+        "has_more": {
+          "type": "boolean"
+        },
+        "next_cursor": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "channel_id",
+        "messages",
+        "has_more"
+      ]
+    }
+  },
+  {
+    "name": "slack_read_thread",
+    "description": "Reads a thread: the parent message and its replies, oldest first. Read-only. message_ts is the parent message's ts.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "channel_id": {
+          "type": "string",
+          "description": "Channel the thread is in."
+        },
+        "message_ts": {
+          "type": "string",
+          "description": "Timestamp of the parent message, e.g. \"1234567890.123456\"."
+        },
+        "cursor": {
+          "type": "string"
+        },
+        "latest": {
+          "type": "string"
+        },
+        "limit": {
+          "type": "integer",
+          "description": "1 to 1000; default 100."
+        },
+        "oldest": {
+          "type": "string"
+        },
+        "response_format": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "channel_id",
+        "message_ts"
+      ]
+    },
+    "mutates_state": false,
+    "returns": {
+      "type": "object",
+      "properties": {
+        "channel_id": {
+          "type": "string"
+        },
+        "message_ts": {
+          "type": "string"
+        },
+        "messages": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "message_id": {
+                "type": "string"
+              },
+              "user_id": {
+                "type": "string"
+              },
+              "text": {
+                "type": "string"
+              },
+              "ts": {
+                "type": "string"
+              },
+              "thread_ts": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "permalink": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "message_id",
+              "user_id",
+              "text",
+              "ts",
+              "permalink"
+            ]
+          }
+        },
+        "has_more": {
+          "type": "boolean"
+        },
+        "next_cursor": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "channel_id",
+        "message_ts",
+        "messages",
+        "has_more"
+      ]
+    }
+  },
+  {
+    "name": "slack_search_public_and_private",
+    "description": "Searches messages in all channels the acting user can access. keywords are lexical terms (all AND'd); filters are Slack search modifiers: in:<#C123>, from:<@U123>, after:YYYY-MM-DD, before:YYYY-MM-DD. Give at least one of keywords or filters.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "keywords": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "filters": {
+          "type": "string"
+        },
+        "natural_language_query": {
+          "type": "string"
+        },
+        "after": {
+          "type": "string",
+          "description": "Only messages after this Unix timestamp."
+        },
+        "before": {
+          "type": "string",
+          "description": "Only messages before this Unix timestamp."
+        },
+        "channel_types": {
+          "type": "string"
+        },
+        "content_types": {
+          "type": "string"
+        },
+        "context_channel_id": {
+          "type": "string"
+        },
+        "cursor": {
+          "type": "string"
+        },
+        "include_bots": {
+          "type": "boolean"
+        },
+        "include_context": {
+          "type": "boolean"
+        },
+        "limit": {
+          "type": "integer",
+          "description": "Up to 20; default 20."
+        },
+        "max_context_length": {
+          "type": "integer"
+        },
+        "only_my_channels": {
+          "type": "boolean"
+        },
+        "response_format": {
+          "type": "string"
+        },
+        "sort": {
+          "type": "string",
+          "description": "score (default) or timestamp."
+        },
+        "sort_dir": {
+          "type": "string",
+          "description": "asc or desc (default)."
+        }
+      }
+    },
+    "mutates_state": false,
+    "returns": {
+      "type": "object",
+      "properties": {
+        "messages": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "message_id": {
+                "type": "string"
+              },
+              "user_id": {
+                "type": "string"
+              },
+              "text": {
+                "type": "string"
+              },
+              "ts": {
+                "type": "string"
+              },
+              "thread_ts": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "permalink": {
+                "type": "string"
+              },
+              "channel_id": {
+                "type": "string"
+              },
+              "channel_name": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "message_id",
+              "channel_id",
+              "user_id",
+              "text",
+              "ts",
+              "permalink"
+            ]
+          }
+        },
+        "has_more": {
+          "type": "boolean"
+        },
+        "next_cursor": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "messages",
+        "has_more"
+      ]
+    }
+  },
+  {
+    "name": "slack_send_message",
+    "description": "Sends a message to a channel, or a thread reply with thread_ts. Posting is approval-gated: approval_id must name an approval of this exact destination and text for the acting user. request_key makes a retry return the message already posted instead of a duplicate. No @channel, @here or @everyone.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "channel_id": {
+          "type": "string",
+          "description": "Destination channel ID."
+        },
+        "message": {
+          "type": "string",
+          "description": "The message text (markdown)."
+        },
+        "thread_ts": {
+          "type": "string",
+          "description": "Parent message ts to reply in its thread."
+        },
+        "reply_broadcast": {
+          "type": "boolean"
+        },
+        "unfurl_app_links": {
+          "type": "boolean"
+        },
+        "draft_id": {
+          "type": "string"
+        },
+        "approval_id": {
+          "type": "string",
+          "description": "The approval authorizing this post."
+        },
+        "request_key": {
+          "type": "string",
+          "description": "Idempotency key for this request."
+        }
+      },
+      "required": [
+        "channel_id",
+        "message"
+      ]
+    },
+    "mutates_state": true,
+    "returns": {
+      "type": "object",
+      "properties": {
+        "channel_id": {
+          "type": "string"
+        },
+        "ts": {
+          "type": "string"
+        },
+        "message_id": {
+          "type": "string"
+        },
+        "permalink": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "request_key": {
+          "type": "string"
+        },
+        "thread_ts": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "channel_id",
+        "ts",
+        "message_id",
+        "permalink",
+        "status"
+      ]
+    }
+  },
+  {
+    "name": "slack_check_message_status",
+    "description": "Check delivery status and idempotency ledger record for a given request_key.",
+    "parameters": {
+      "required": [
+        "request_key"
+      ],
+      "type": "object",
+      "properties": {
+        "request_key": {
+          "type": "string",
+          "description": "The idempotency request key to inspect."
+        }
+      }
+    },
+    "mutates_state": false,
+    "returns": {
+      "type": "object",
+      "properties": {
+        "channel_id": {
+          "type": "string"
+        },
+        "text": {
+          "type": "string"
+        },
+        "created_at": {
+          "type": "string"
+        },
+        "permalink": {
+          "type": "string"
+        },
+        "thread_ts": {
+          "type": "string"
+        },
+        "message_id": {
+          "type": "string"
+        },
+        "request_key": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "channel_id",
+        "created_at",
+        "message_id",
+        "permalink",
+        "request_key",
+        "status",
+        "text"
+      ]
+    }
+  }
+]

@@ -1,0 +1,94 @@
+{
+  "name": "slack_tasman_demo_status_reply",
+  "scenario_key": "slack-tasman-demo-status-reply",
+  "scenario_id": "",
+  "use_case": "Post an approved handoff summary in Slack",
+  "branch": "Chloe Nguyen asked in SM05 whether Tasman Health cancelled their demo; after Dana approves APP-SH-404, the desk reads L10 and replies in SM05's thread that D01 is still booked for 13 November",
+  "tests": "the desk reads SM05, checks lead L10, and posts in SM05's thread with approval APP-SH-404",
+  "instruction": "You want to get a reply posted to Chloe Nguyen's question in #sales-handoffs asking whether Tasman Health (L10) cancelled their demo scheduled for November 13. Dana Whitfield gave approval APP-SH-404 for posting the response. If asked for confirmation, verify that approval APP-SH-404 covers replying to Chloe's thread.\n\nYour details:\n- Channel: #sales-handoffs (CH_SALESHANDOFF)\n- Rep asking: Chloe Nguyen (U_A06)\n- Lead: Tasman Health (L10)\n- Demo ID: D01\n- Approval ID: APP-SH-404",
+  "keywords": [
+    "slack_handoff"
+  ],
+  "persona": {
+    "name": "Jack Henare",
+    "gender": "male",
+    "age_group": "25-32",
+    "occupation": "Sales Representative",
+    "location": "Australia",
+    "personality": "Friendly and cooperative",
+    "communication_style": "Casual and friendly",
+    "initial_message": "Can you respond to Chloe's question in #sales-handoffs about Tasman Health's demo? Dana approved it with APP-SH-404.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "channel_id": "CH_SALESHANDOFF",
+    "lead_id": "L10",
+    "approval_id": "APP-SH-404",
+    "origin": "mixed",
+    "demo_id": "D01",
+    "message_id": "SM05"
+  },
+  "solution": [
+    {
+      "tool": "slack_read_thread",
+      "arguments": {
+        "message_ts": "1794261600.000005",
+        "channel_id": "CH_SALESHANDOFF"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "channel_id": "record: #sales-handoffs",
+        "message_ts": "record: Chloe's message SM05"
+      }
+    },
+    {
+      "tool": "get_lead",
+      "arguments": {
+        "lead_id": "L10"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "slack_send_message",
+      "arguments": {
+        "thread_ts": "1794261600.000005",
+        "message": "Tasman Health (L10) demo D01 is still booked for 13 November.",
+        "channel_id": "CH_SALESHANDOFF",
+        "approval_id": "APP-SH-404"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "thread_ts": "record: Chloe's thread",
+        "channel_id": "record: #sales-handoffs"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "overlay_intensity": "absent",
+    "interaction": "multi_turn",
+    "disposition": "exception",
+    "overlay_vector": "none",
+    "task": "slack_handoff",
+    "counterparty": "colleague",
+    "overlay": "none",
+    "interface": "slack_thread"
+  },
+  "sub_goals": [
+    "handoff_posted_in_thread"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

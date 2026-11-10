@@ -1,0 +1,83 @@
+{
+  "name": "report_disqualification_for_distant_timeline",
+  "scenario_key": "report-disqualification-for-distant-timeline",
+  "scenario_id": "",
+  "use_case": "Qualify an inbound enquiry against the rubric",
+  "branch": "Felix Gruber (L19, Austria, 70 seats, timeline 6-12 months, disqualified) asks why no one contacted him; desk looks up L19, reads ICP rules, and explains the 6-month timeline requirement",
+  "tests": "the agent looks up L19 and ICP rules and explains why a 6-12 month timeline does not qualify for an immediate demo",
+  "instruction": "You are Felix Gruber, Operations Manager at Donau Bank. You submitted a web form enquiry requesting a demo for 70 seats with a planned rollout in 6-12 months, and want to know why no sales rep has reached out yet. If told that BrightDesk requires a 0-6 month timeline to qualify for live rep demos, ask how your team can re-engage when closer to purchasing.\n\nYour details:\n- Name: Felix Gruber\n- Email: felix.gruber@donaubank.example\n- Company: Donau Bank\n- Country: Austria\n- Planned rollout timeline: 6-12 months",
+  "keywords": [
+    "qualify_lead"
+  ],
+  "persona": {
+    "name": "Felix Gruber",
+    "gender": "male",
+    "age_group": "40-50",
+    "occupation": "Manager",
+    "location": "United States",
+    "personality": "Professional and formal",
+    "communication_style": "Formal and polite",
+    "initial_message": "Good day. I am following up on my enquiry for Donau Bank regarding a platform for 70 seats. Could you provide the status of our demo request?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "contact_id": "C19",
+    "origin": "seed",
+    "lead_id": "L19"
+  },
+  "solution": [
+    {
+      "tool": "search_contacts",
+      "arguments": {
+        "email": "felix.gruber@donaubank.example"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_lead",
+      "arguments": {
+        "lead_id": "L19"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "lead_id": "record: L19"
+      }
+    },
+    {
+      "tool": "get_icp_rules",
+      "arguments": {},
+      "environment_arguments": {},
+      "fixed": {}
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "task": "qualify_lead",
+    "overlay": "none",
+    "disposition": "disqualified",
+    "counterparty": "prospect",
+    "overlay_vector": "none",
+    "interface": "formal",
+    "interaction": "multi_turn",
+    "overlay_intensity": "absent"
+  },
+  "sub_goals": [
+    "declined_action_explained",
+    "duplicate_detected",
+    "lead_status_reported"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

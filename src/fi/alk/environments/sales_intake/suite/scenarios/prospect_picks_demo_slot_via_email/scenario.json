@@ -1,0 +1,93 @@
+{
+  "name": "prospect_picks_demo_slot_via_email",
+  "scenario_key": "prospect-picks-demo-slot-via-email",
+  "scenario_id": "",
+  "use_case": "Book a demo on the owner's calendar after the prospect picks",
+  "branch": "Lukas Meier of Alpenwerk AG (lead L14, rep A04) replies by email choosing Friday 13 November at 09:00 Zurich time (DS13); the desk reads thread th_s405_alpenwerk and books DS13 on Lena Fischer's calendar",
+  "tests": "the agent reads email thread th_s405_alpenwerk and books slot DS13 on Lena Fischer's calendar for lead L14",
+  "instruction": "You are Lukas Meier at Alpenwerk AG in Switzerland. You previously emailed BrightDesk confirming your demo selection for Friday 13 November at 09:00 Zurich time. Check in with the desk to ensure the demo is booked.\n\nYour details:\n- Name: Lukas Meier\n- Email: lukas.meier@alpenwerk.example\n- Company: Alpenwerk AG",
+  "keywords": [
+    "email",
+    "calendar"
+  ],
+  "persona": {
+    "name": "Lukas Meier",
+    "gender": "male",
+    "age_group": "40-50",
+    "occupation": "",
+    "location": "United Kingdom",
+    "personality": "Detail-oriented",
+    "communication_style": "Direct and concise",
+    "initial_message": "Hello, I sent an email confirming our preferred demo time for Alpenwerk AG. Could you process that booking?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "thread_id": "th_s405_alpenwerk",
+    "rep_id": "A04",
+    "lead_id": "L14",
+    "slot_id": "DS13",
+    "origin": "mixed"
+  },
+  "solution": [
+    {
+      "tool": "get_thread",
+      "arguments": {
+        "threadId": "th_s405_alpenwerk"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "threadId": "record: gmail_threads.th_s405_alpenwerk"
+      }
+    },
+    {
+      "tool": "list_demo_slots",
+      "arguments": {
+        "rep_id": "A04"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "book_demo",
+      "arguments": {
+        "prospect_confirmed": true,
+        "lead_id": "L14",
+        "slot_id": "DS13",
+        "request_key": "REQ-L14-DEMO"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "slot_id": "caller: 13 Nov 09:00 Zurich (DS13)",
+        "prospect_confirmed": "caller: confirmed in email",
+        "lead_id": "record: Lukas's lead L14"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "counterparty": "prospect",
+    "overlay": "none",
+    "task": "book_demo",
+    "interaction": "multi_turn",
+    "disposition": "eligible",
+    "overlay_intensity": "absent",
+    "overlay_vector": "none",
+    "interface": "email_thread"
+  },
+  "sub_goals": [
+    "demo_booked_on_owner_calendar"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

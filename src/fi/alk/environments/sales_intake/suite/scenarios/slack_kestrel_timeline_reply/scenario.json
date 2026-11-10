@@ -1,0 +1,98 @@
+{
+  "name": "slack_kestrel_timeline_reply",
+  "scenario_key": "slack-kestrel-timeline-reply",
+  "scenario_id": "",
+  "use_case": "Post an approved handoff summary in Slack",
+  "branch": "Lena Fischer asked in SM04 about Kestrel Mobility's timeline; after Dana approves APP-SH-403, the desk reads the email thread and replies in SM04's thread with 0-3 months",
+  "tests": "the desk reads SM04, reads thread th_s02_kestrel_timeline, and posts in SM04's thread with approval APP-SH-403",
+  "instruction": "You want to get a reply posted to Lena Fischer's question in #sales-handoffs regarding whether Kestrel Mobility (L07) has responded about their timeline. Dana Whitfield has provided approval APP-SH-403 for posting the response. If the agent needs details, confirm that approval APP-SH-403 is approved for #sales-handoffs to reply in Lena's thread.\n\nYour details:\n- Channel: #sales-handoffs (CH_SALESHANDOFF)\n- Rep asking: Lena Fischer (U_A04)\n- Lead: Kestrel Mobility (L07)\n- Email thread: th_s02_kestrel_timeline\n- Approval ID: APP-SH-403",
+  "keywords": [
+    "slack_handoff"
+  ],
+  "persona": {
+    "name": "Anna Keller",
+    "gender": "female",
+    "age_group": "25-32",
+    "occupation": "Sales Representative",
+    "location": "United Kingdom",
+    "personality": "Professional and formal",
+    "communication_style": "Formal and polite",
+    "initial_message": "Could you reply to Lena's question in #sales-handoffs regarding Kestrel Mobility's timeline? Dana gave approval APP-SH-403.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {
+      "origin_country": "Germany"
+    },
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "approval_id": "APP-SH-403",
+    "channel_id": "CH_SALESHANDOFF",
+    "thread_id": "th_s02_kestrel_timeline",
+    "lead_id": "L07",
+    "message_id": "SM04",
+    "origin": "mixed"
+  },
+  "solution": [
+    {
+      "tool": "slack_read_thread",
+      "arguments": {
+        "message_ts": "1794236400.000004",
+        "channel_id": "CH_SALESHANDOFF"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "message_ts": "record: Lena's message SM04",
+        "channel_id": "record: #sales-handoffs"
+      }
+    },
+    {
+      "tool": "get_thread",
+      "arguments": {
+        "threadId": "th_s02_kestrel_timeline"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "threadId": "the email the request came in"
+      }
+    },
+    {
+      "tool": "slack_send_message",
+      "arguments": {
+        "message": "Jonas Becker from Kestrel Mobility confirmed in email that their timeline is 0-3 months.",
+        "approval_id": "APP-SH-403",
+        "channel_id": "CH_SALESHANDOFF",
+        "thread_ts": "1794236400.000004"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "thread_ts": "record: Lena's thread",
+        "channel_id": "record: #sales-handoffs"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "interaction": "multi_turn",
+    "interface": "email_thread",
+    "overlay_vector": "none",
+    "task": "slack_handoff",
+    "disposition": "missing_information",
+    "overlay_intensity": "absent",
+    "overlay": "none",
+    "counterparty": "colleague"
+  },
+  "sub_goals": [
+    "handoff_posted_in_thread"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

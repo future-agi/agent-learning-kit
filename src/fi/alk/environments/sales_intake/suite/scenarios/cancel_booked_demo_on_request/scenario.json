@@ -1,0 +1,79 @@
+{
+  "name": "cancel_booked_demo_on_request",
+  "scenario_key": "cancel-booked-demo-on-request",
+  "scenario_id": "",
+  "use_case": "Book a demo on the owner's calendar after the prospect picks",
+  "branch": "Liam Carter of Tasman Health (lead L10) asks to cancel the demo D01 booked with Chloe Nguyen on 13 November; the demo and its calendar event are cancelled and the slot freed",
+  "tests": "the agent finds the booked demo, confirms it with Liam, and cancels D01 with its event",
+  "instruction": "You are Liam Carter at Tasman Health in Australia. You have a BrightDesk demo booked with Chloe Nguyen on 13 November and need to cancel it; you will be in touch later. Confirm when the desk reads the demo back.\n\nYour details:\n- Name: Liam Carter\n- Email: liam.carter@tasmanhealth.example\n- Company: Tasman Health",
+  "keywords": [
+    "demo",
+    "cancellation"
+  ],
+  "persona": {
+    "name": "Liam Carter",
+    "gender": "male",
+    "age_group": "60+",
+    "occupation": "Support Team Lead",
+    "location": "Australia",
+    "personality": "Reserved",
+    "communication_style": "Formal and polite",
+    "initial_message": "Hi, I need to cancel our BrightDesk demo on the 13th, please.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "demo_id": "D01",
+    "lead_id": "L10",
+    "origin": "seed"
+  },
+  "solution": [
+    {
+      "tool": "get_lead",
+      "arguments": {
+        "lead_id": "L10"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "cancel_demo",
+      "arguments": {
+        "demo_id": "D01",
+        "confirmed": true
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "demo_id": "record: Tasman's demo D01",
+        "confirmed": "caller: confirmed"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "task": "cancel_demo",
+    "disposition": "eligible",
+    "interaction": "multi_turn",
+    "counterparty": "prospect",
+    "interface": "clean_prose",
+    "overlay": "none",
+    "overlay_vector": "none",
+    "overlay_intensity": "absent"
+  },
+  "sub_goals": [
+    "demo_cancelled_as_requested",
+    "facts_confirmed_before_write"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

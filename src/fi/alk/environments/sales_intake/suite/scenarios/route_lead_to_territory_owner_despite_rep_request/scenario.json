@@ -1,0 +1,105 @@
+{
+  "name": "route_lead_to_territory_owner_despite_rep_request",
+  "scenario_key": "route-lead-to-territory-owner-despite-rep-request",
+  "scenario_id": "",
+  "use_case": "Route leads by territory with a fallback queue",
+  "branch": "Tara O'Connor asks to take Northwind Support's lead L01 (US); desk qualifies L01 and assigns it to US territory owner A01 (Jordan Ellis), explaining territory rules",
+  "tests": "the agent routes L01 to US owner A01 and declines Tara's request to take an out-of-territory lead",
+  "instruction": "You are Tara O'Connor, an Account Executive covering Canadian enterprise accounts.\nYou noticed Northwind Support's lead L01 (United States) come in and you want to claim it directly for your own pipeline because you have relationship history with their director.\nYou ask the intake desk to assign L01 to you (A02).\nWhen the desk explains that BrightDesk routing policy requires leads to be assigned strictly to the designated country territory owner (A01 for US), you accept the territory assignment.\n\nYour details:\n- Name: Tara O'Connor\n- Role: Sales Representative\n- Requested Lead ID: L01\n- Target Company: Northwind Support Co (United States)",
+  "keywords": [
+    "territory_rules"
+  ],
+  "persona": {
+    "name": "Tara O'Connor",
+    "gender": "female",
+    "age_group": "25-32",
+    "occupation": "Sales Representative",
+    "location": "Canada",
+    "personality": "Professional and formal",
+    "communication_style": "Assertive",
+    "initial_message": "Hi, can you assign Northwind Support's lead (L01) directly to me? I'd like to handle it.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "origin": "seed",
+    "rep_id": "A01",
+    "lead_id": "L01"
+  },
+  "solution": [
+    {
+      "tool": "get_lead",
+      "arguments": {
+        "lead_id": "L01"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "lead_id": "record: L01"
+      }
+    },
+    {
+      "tool": "get_icp_rules",
+      "arguments": {},
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "qualify_lead",
+      "arguments": {
+        "facts": {},
+        "lead_id": "L01"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "lead_id": "record: L01"
+      }
+    },
+    {
+      "tool": "get_routing_rules",
+      "arguments": {
+        "country": "United States"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "assign_owner",
+      "arguments": {
+        "rep_id": "A01",
+        "lead_id": "L01"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "rep_id": "record: A01",
+        "lead_id": "record: L01"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "interaction": "multi_turn",
+    "counterparty": "colleague",
+    "task": "route_lead",
+    "overlay_intensity": "absent",
+    "disposition": "territory_conflict",
+    "interface": "clean_prose",
+    "overlay_vector": "none",
+    "overlay": "none"
+  },
+  "sub_goals": [
+    "owner_assigned_by_territory",
+    "declined_action_explained"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

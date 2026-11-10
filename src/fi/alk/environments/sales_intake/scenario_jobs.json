@@ -1,0 +1,402 @@
+{
+  "approved_handoff_summary_posted_in_thread": {
+    "job": "slack",
+    "mcp": true
+  },
+  "bluepeak_timeline_draft_for_marcus_bell": {
+    "job": "missing_info",
+    "mcp": true
+  },
+  "cancel_booked_demo_on_request": {
+    "job": "demo_booking",
+    "mcp": false
+  },
+  "cancel_demo_and_free_slot": {
+    "job": "demo_booking",
+    "mcp": false
+  },
+  "cancel_demo_requested_by_email": {
+    "job": "demo_booking",
+    "mcp": true
+  },
+  "clarification_draft_for_missing_seat_count": {
+    "job": "missing_info",
+    "mcp": true
+  },
+  "clashing_slot_refused_alternative_demo_booked": {
+    "job": "demo_booking",
+    "mcp": false
+  },
+  "decline_lead_reassignment_outside_territory": {
+    "job": "routing",
+    "mcp": false
+  },
+  "demo_availability_offered_for_qualified_lead": {
+    "job": "demo_booking",
+    "mcp": false
+  },
+  "demo_booked_on_slot_chosen_by_email": {
+    "job": "demo_booking",
+    "mcp": true
+  },
+  "draft_reply_to_opted_out_contact_refused": {
+    "job": "consent",
+    "mcp": true
+  },
+  "duplicate_contact_and_lead_prevented_on_resubmission": {
+    "job": "duplicates",
+    "mcp": false
+  },
+  "duplicate_request_key_retried_noah_bergeron": {
+    "job": "duplicates",
+    "mcp": false
+  },
+  "empty_facts_pricing_request_unqualified": {
+    "job": "missing_info",
+    "mcp": false
+  },
+  "explain_qualification_rubric_and_decline_enrichment": {
+    "job": "qualify",
+    "mcp": false
+  },
+  "finlytics_resubmit_email_lead_note": {
+    "job": "duplicates",
+    "mcp": true
+  },
+  "human_draft_preserved_on_sakura_enquiry": {
+    "job": "missing_info",
+    "mcp": true
+  },
+  "ignore_prompt_injection_in_slack_routing_request": {
+    "job": "routing",
+    "mcp": true
+  },
+  "injected_partnership_email_ignored": {
+    "job": "untrusted",
+    "mcp": true
+  },
+  "kestrel_draft_timeline_question": {
+    "job": "missing_info",
+    "mcp": true
+  },
+  "known_company_contact_without_lead_quillon": {
+    "job": "duplicates",
+    "mcp": false
+  },
+  "lead_status_and_owner_reported_for_northwind": {
+    "job": "qualify",
+    "mcp": false
+  },
+  "london_rep_demo_booked_on_choice": {
+    "job": "demo_booking",
+    "mcp": false
+  },
+  "no_enrichment_invented_for_outside_data_request": {
+    "job": "missing_info",
+    "mcp": false
+  },
+  "northwind_second_contact_colleague_inquiry": {
+    "job": "duplicates",
+    "mcp": false
+  },
+  "offer_demo_times_for_lead": {
+    "job": "demo_booking",
+    "mcp": false
+  },
+  "opt_out_in_chat_cancels_planned_outreach": {
+    "job": "consent",
+    "mcp": false
+  },
+  "opt_out_requested_via_email": {
+    "job": "consent",
+    "mcp": true
+  },
+  "opt_out_with_cancellation_of_planned_items": {
+    "job": "consent",
+    "mcp": false
+  },
+  "opted_out_contact_demo_request_refused": {
+    "job": "consent",
+    "mcp": false
+  },
+  "opted_out_contact_inbound_pricing_refused": {
+    "job": "duplicates",
+    "mcp": false
+  },
+  "prospect_opts_back_in_to_communications": {
+    "job": "consent",
+    "mcp": false
+  },
+  "prospect_picks_demo_slot_via_email": {
+    "job": "demo_booking",
+    "mcp": true
+  },
+  "prospect_picks_offered_demo_slot_in_chat": {
+    "job": "demo_booking",
+    "mcp": false
+  },
+  "qualify_and_route_northwind_lead_to_us_rep": {
+    "job": "qualify",
+    "mcp": true
+  },
+  "qualify_corrected_email_lead_and_assign_canada_owner": {
+    "job": "qualify",
+    "mcp": true
+  },
+  "qualify_fernhill_second_contact_from_email_thread": {
+    "job": "duplicates",
+    "mcp": true
+  },
+  "qualify_india_lead_in_chat_and_assign_territory_rep": {
+    "job": "routing",
+    "mcp": false
+  },
+  "qualify_japanese_enquiry_from_email_thread": {
+    "job": "qualify",
+    "mcp": true
+  },
+  "qualify_kestrel_lead_from_email_followup_and_assign_germany_rep": {
+    "job": "qualify",
+    "mcp": true
+  },
+  "qualify_lead_after_seat_correction_in_email": {
+    "job": "qualify",
+    "mcp": true
+  },
+  "qualify_new_web_form_lead_in_chat": {
+    "job": "qualify",
+    "mcp": false
+  },
+  "qualify_northwind_enquiry_from_email_thread": {
+    "job": "qualify",
+    "mcp": true
+  },
+  "qualify_second_kestrel_contact_with_stated_timeline": {
+    "job": "duplicates",
+    "mcp": false
+  },
+  "quillon_seats_gathered_in_chat": {
+    "job": "missing_info",
+    "mcp": false
+  },
+  "quillon_seats_refused_unknown_in_chat": {
+    "job": "missing_info",
+    "mcp": false
+  },
+  "rep_follow_up_on_opted_out_lead_declined": {
+    "job": "consent",
+    "mcp": false
+  },
+  "rep_handoff_created_for_qualified_uk_lead": {
+    "job": "slack",
+    "mcp": false
+  },
+  "report_already_qualified_lead_status_to_prospect": {
+    "job": "qualify",
+    "mcp": false
+  },
+  "report_disqualification_due_to_small_seat_count": {
+    "job": "qualify",
+    "mcp": false
+  },
+  "report_disqualification_for_distant_timeline": {
+    "job": "qualify",
+    "mcp": false
+  },
+  "report_disqualification_for_unsupported_use_case": {
+    "job": "qualify",
+    "mcp": false
+  },
+  "report_qualification_status_with_optional_budget": {
+    "job": "missing_info",
+    "mcp": false
+  },
+  "report_territory_routing_rules_for_unmapped_country_from_slack": {
+    "job": "routing",
+    "mcp": true
+  },
+  "report_unassigned_new_lead_status_from_slack_inquiry": {
+    "job": "qualify",
+    "mcp": true
+  },
+  "requested_rep_override_declined_owner_slots_offered": {
+    "job": "demo_booking",
+    "mcp": false
+  },
+  "restricted_thread_access_denied_and_withheld": {
+    "job": "untrusted",
+    "mcp": true
+  },
+  "route_brazil_second_lead_to_fallback_queue": {
+    "job": "routing",
+    "mcp": false
+  },
+  "route_irish_lead_to_uk_and_ireland_owner": {
+    "job": "routing",
+    "mcp": false
+  },
+  "route_japanese_lead_to_fallback_queue": {
+    "job": "routing",
+    "mcp": false
+  },
+  "route_lead_to_territory_owner_despite_rep_request": {
+    "job": "routing",
+    "mcp": false
+  },
+  "route_south_africa_lead_to_fallback_queue": {
+    "job": "routing",
+    "mcp": false
+  },
+  "same_email_extra_spaces_bluepeak_update": {
+    "job": "duplicates",
+    "mcp": false
+  },
+  "same_person_uppercase_email_theo_sandoval": {
+    "job": "duplicates",
+    "mcp": false
+  },
+  "second_person_known_company_fernhill": {
+    "job": "duplicates",
+    "mcp": true
+  },
+  "slack_claim_not_authority_to_bypass_rubric": {
+    "job": "untrusted",
+    "mcp": true
+  },
+  "slack_claimed_approval_in_thread_not_authority": {
+    "job": "slack",
+    "mcp": true
+  },
+  "slack_fernhill_post_declined_missing_approval": {
+    "job": "slack",
+    "mcp": true
+  },
+  "slack_fernhill_thread_correction_summary": {
+    "job": "slack",
+    "mcp": true
+  },
+  "slack_instruction_to_skip_choice_refused": {
+    "job": "demo_booking",
+    "mcp": true
+  },
+  "slack_kestrel_timeline_reply": {
+    "job": "slack",
+    "mcp": true
+  },
+  "slack_mapleridge_handoff_recorded_and_posted": {
+    "job": "slack",
+    "mcp": true
+  },
+  "slack_northwind_status_reply": {
+    "job": "slack",
+    "mcp": true
+  },
+  "slack_private_channel_leadership_withheld": {
+    "job": "slack",
+    "mcp": true
+  },
+  "slack_query_on_prospect_opt_out_status": {
+    "job": "consent",
+    "mcp": true
+  },
+  "slack_reps_email_request_filtered_in_reply": {
+    "job": "slack",
+    "mcp": true
+  },
+  "slack_tasman_demo_status_reply": {
+    "job": "slack",
+    "mcp": true
+  },
+  "slack_wrong_channel_redirected_to_asking_thread": {
+    "job": "slack",
+    "mcp": true
+  },
+  "sydney_rep_date_line_demo_booking": {
+    "job": "demo_booking",
+    "mcp": false
+  },
+  "territory_routing_rules_reported_for_nz_and_brazil": {
+    "job": "routing",
+    "mcp": false
+  },
+  "third_party_contact_lookup_refused_for_privacy": {
+    "job": "duplicates",
+    "mcp": false
+  },
+  "timeline_from_email_follow_up_qualifies_lead": {
+    "job": "missing_info",
+    "mcp": true
+  },
+  "unassigned_lead_demo_request_routes_to_fallback_queue": {
+    "job": "demo_booking",
+    "mcp": false
+  },
+  "untrusted_another_prospect_details_privacy_protected": {
+    "job": "untrusted",
+    "mcp": false
+  },
+  "untrusted_guessed_headcount_qualification_refused": {
+    "job": "missing_info",
+    "mcp": false
+  },
+  "untrusted_injected_partnership_email_untrusted": {
+    "job": "untrusted",
+    "mcp": true
+  },
+  "untrusted_injected_slack_system_note_ignored": {
+    "job": "untrusted",
+    "mcp": true
+  },
+  "untrusted_linkedin_scraping_request_refused": {
+    "job": "untrusted",
+    "mcp": false
+  },
+  "untrusted_out_of_scope_direct_email_send_declined": {
+    "job": "untrusted",
+    "mcp": false
+  },
+  "untrusted_out_of_scope_vendor_refund_declined": {
+    "job": "untrusted",
+    "mcp": false
+  },
+  "untrusted_pasted_system_override_prompt_injection": {
+    "job": "untrusted",
+    "mcp": false
+  },
+  "untrusted_prospect_asks_internal_notes_withheld": {
+    "job": "untrusted",
+    "mcp": false
+  },
+  "untrusted_protected_trait_decision_maker_refused": {
+    "job": "untrusted",
+    "mcp": false
+  },
+  "untrusted_restricted_legal_thread_withheld": {
+    "job": "untrusted",
+    "mcp": true
+  },
+  "untrusted_slack_revenue_enrichment_refused": {
+    "job": "untrusted",
+    "mcp": true
+  },
+  "v17_s01_qualified_inbound_lead_demo_offered": {
+    "job": "qualify",
+    "mcp": false
+  },
+  "v17_s02_missing_timeline_not_sales_ready": {
+    "job": "missing_info",
+    "mcp": false
+  },
+  "v17_s03_existing_contact_resubmits_demo_request": {
+    "job": "duplicates",
+    "mcp": false
+  },
+  "v17_s04_unmapped_country_to_fallback_queue": {
+    "job": "routing",
+    "mcp": false
+  },
+  "v17_s05_opt_out_after_qualification": {
+    "job": "consent",
+    "mcp": false
+  }
+}
