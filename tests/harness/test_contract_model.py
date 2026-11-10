@@ -843,12 +843,18 @@ def prose(path: str) -> str:
     )
 
 
-def lines_alone(named: str, quote: str) -> str:
+def lines_alone(named: str, quote: str, *, short: bool = False) -> str:
+    outcome = (
+        "the lines are copied as the prompt and recorded as unconfirmed, since that quote is too "
+        "short to stand for it"
+        if short
+        else "the quote is kept and the lines are recorded as unconfirmed"
+    )
     return (
         f"system_prompt_from: the lines named ({named}) don't hold the quote you gave before "
         f"({' '.join(quote.split())[:80]}); if these lines are the prompt, quote them word for "
-        "word in system_prompt_excerpt, with ... where you leave text out. If they are refused "
-        "again, the quote is kept and the lines are recorded as unconfirmed"
+        f"word in system_prompt_excerpt, with ... where you leave text out. If they are refused "
+        f"again, {outcome}"
     )
 
 
@@ -1422,8 +1428,8 @@ def test_lines_refused_twice_leave_the_quote(tmp_path, root):
         REFUSED
         + not_the_quote("prompt.py 1-2")
         + "\n  - system_prompt_from: lines named later are checked against this quote until you "
-        "give another; a later mismatch, with any quote, keeps the quote and records the lines as "
-        "unconfirmed"
+        "give another; a later mismatch records the lines as unconfirmed and keeps the quote, or the "
+        "lines if the quote is only a few words"
     )
     second = submit(wrong)
     assert not second.get("is_error"), second
@@ -2695,11 +2701,16 @@ def test_a_short_quote_is_held_and_its_lines_asked_about(tmp_path, root):
     )
     assert text_of(first).startswith(REFUSED + not_the_quote("agent.py 1-4"))
     second = submit(payload(hard_constraints=["Be polite."], system_prompt_from=imports))
-    assert text_of(second) == REFUSED + lines_alone("agent.py 1-4", "Be warm and brief.")
+    assert text_of(second) == REFUSED + lines_alone("agent.py 1-4", "Be warm and brief.", short=True)
     third = submit(payload(hard_constraints=["Be polite."], system_prompt_from=imports))
 
-    # A quote this short can't stand for the prompt: the lines go out, on record as unconfirmed.
+    # A quote this short can't stand for the prompt: the lines go out, on record as unconfirmed,
+    # and the reply says so.
     assert not third.get("is_error"), third
+    assert text_of(third).endswith(
+        "\nsystem_prompt_from: the lines named (agent.py 1-4) are recorded as unconfirmed, since "
+        "they don't hold the quote; the lines are the prompt."
+    )
     assert saved(destination)["system_prompt_from"] == imports
     assert saved(destination)["unconfirmed_prompt_from"] == imports
 
@@ -2774,7 +2785,9 @@ def test_two_calls_in_one_message_are_each_asked(tmp_path, root):
 
     first, second = asyncio.run(send_together())
 
-    # Neither had seen a refusal when it was sent, so both are refused.
+    # Neither had seen a refusal when it was sent, so both are refused. This models a dispatcher
+    # that runs one message's calls side by side (ADK, the Vertex backend). The Claude backend runs
+    # them one after another, and there the second sees the first's refusal: a known limit.
     assert first.get("is_error") and second.get("is_error")
     assert not (destination / "contract.json").exists()
 
@@ -3173,3 +3186,159 @@ def test_a_type_projection_does_not_hide_a_triple_quote(root):
     problems, _, _ = checked(root, {"name": "gpt-4o", "path": "agent.scala", "line": 2})
 
     assert problems == [not_named("gpt-4o", 2, "agent.scala")]
+
+
+# The settled round: the flows
+
+
+_SHORT_PROMPT = 'import os\n\nINSTRUCTIONS = "Be warm and brief."\n'
+_PARAPHRASE = "The agent books tables for Acme guests, keeps other bookings private, and confirms first."
+
+
+@pytest.mark.parametrize(
+    "source, lines, quote, paraphrase",
+    [
+        pytest.param(
+            _SHORT_PROMPT, (3, 3), "Be warm and brief.",
+            "The agent is told to be warm and to keep its answers brief.", id="a-whole-short-prompt",
+        ),
+        pytest.param(_BOOKING, (6, 12), "Be warm and brief.", _PARAPHRASE, id="one-sentence-of-a-long-prompt"),
+    ],
+)
+@pytest.mark.parametrize("then", ["the-same-again", "the-lines-alone"])
+def test_a_short_verbatim_quote_after_a_refused_paraphrase_keeps_the_lines(
+    tmp_path, root, source, lines, quote, paraphrase, then
+):
+    (root / "agent.py").write_text(source, encoding="utf-8")
+    destination = tmp_path / "out"
+    submit = submitter(destination, root)
+    named = [{"path": "agent.py", "start_line": lines[0], "end_line": lines[1]}]
+
+    assert submit(
+        payload(hard_constraints=["Be polite."], system_prompt_excerpt=paraphrase, system_prompt_from=named)
+    ).get("is_error")
+    second = submit(
+        payload(hard_constraints=["Be polite."], system_prompt_excerpt=quote, system_prompt_from=named)
+    )
+    assert not second.get("is_error"), second
+    again = (
+        payload(hard_constraints=["Be polite."], system_prompt_excerpt=quote, system_prompt_from=named)
+        if then == "the-same-again"
+        else payload(hard_constraints=["Be polite."], system_prompt_from=named)
+    )
+    third = submit(again)
+
+    assert not third.get("is_error"), third
+    assert saved(destination)["system_prompt_from"] == named
+    assert "unconfirmed_prompt_from" not in saved(destination)
+
+
+def test_a_short_quote_not_in_its_lines_is_still_checked_against_the_held_one(tmp_path, root):
+    (root / "agent.py").write_text(_BOOKING, encoding="utf-8")
+    destination = tmp_path / "out"
+    submit = submitter(destination, root)
+    imports = [{"path": "agent.py", "start_line": 1, "end_line": 4}]
+
+    assert submit(
+        payload(hard_constraints=["Be polite."], system_prompt_excerpt=_PARAPHRASE,
+                system_prompt_from=[{"path": "agent.py", "start_line": 6, "end_line": 12}])
+    ).get("is_error")
+    second = submit(
+        payload(hard_constraints=["Be polite."], system_prompt_excerpt="Be warm and brief.", system_prompt_from=imports)
+    )
+
+    assert text_of(second) == REFUSED + lines_alone("agent.py 1-4", _PARAPHRASE)
+
+
+def test_a_null_in_a_list_quote_is_dropped_before_it_is_held(tmp_path, root):
+    (root / "agent.py").write_text(_BOOKING, encoding="utf-8")
+    destination = tmp_path / "out"
+    submit = submitter(destination, root)
+    right = [{"path": "agent.py", "start_line": 6, "end_line": 12}]
+
+    result = submit(
+        payload(hard_constraints=["Be polite."], system_prompt_excerpt=["Be warm", None, "and brief."],
+                system_prompt_from=right)
+    )
+
+    assert not result.get("is_error"), result
+    assert saved(destination)["system_prompt_from"] == right
+
+
+def test_a_blank_quote_is_no_quote(tmp_path, root):
+    submit = submitter(tmp_path / "out", root)
+
+    result = submit(payload(system_prompt_excerpt="   "))
+
+    assert result.get("is_error")
+    assert "no hard_constraints and no system_prompt_excerpt" in text_of(result)
+    assert PROMPT_LINES not in text_of(result)
+
+
+def test_two_quotes_alone_in_one_message_are_each_asked_for_lines(tmp_path, root):
+    (root / "agent.py").write_text(_BOOKING, encoding="utf-8")
+    destination = tmp_path / "out"
+    server = contract_tools(destination, source_root=root)
+    tool = next(one for one in server.tools if one.name == "submit_contract")
+    both = payload(hard_constraints=["Be polite."], system_prompt_excerpt=_BOOKING_QUOTE)
+
+    async def send_together():
+        return await asyncio.gather(tool.handler(dict(both)), tool.handler(dict(both)))
+
+    first, second = asyncio.run(send_together())
+
+    assert PROMPT_LINES in text_of(first) and PROMPT_LINES in text_of(second)
+    assert not (destination / "contract.json").exists()
+
+
+def test_short_lines_set_aside_in_a_call_refused_for_something_else_are_said(tmp_path, root):
+    (root / "agent.py").write_text(_BOOKING, encoding="utf-8")
+    submit = submitter(tmp_path / "out", root)
+    wrong = payload(
+        hard_constraints=["Be polite."],
+        system_prompt_excerpt="Be warm and brief.",
+        system_prompt_from=[{"path": "agent.py", "start_line": 1, "end_line": 4}],
+    )
+    assert submit(wrong).get("is_error")
+
+    second = submit({**wrong, "model": {"name": "gpt-4o", "path": "agent.py", "line": 1}})
+
+    assert "model: the name gpt-4o is not the value written on line 1" in text_of(second)
+    assert (
+        "system_prompt_from: the lines named (agent.py 1-4) are copied unconfirmed, since they "
+        "don't hold the short quote"
+    ) in text_of(second)
+
+
+@pytest.mark.parametrize(
+    "fields",
+    [
+        pytest.param({"system_prompt_excerpt": ["Be warm", "and brief."]}, id="a-list"),
+        pytest.param({"prompt": ["Be warm", None, "and brief."]}, id="a-list-with-a-null-under-an-alias"),
+        pytest.param({"system_prompt_excerpt": 42}, id="a-number"),
+    ],
+)
+def test_the_held_quote_is_the_quote_the_contract_reads(fields):
+    from fi.alk.harness.contract import prompt_quote
+    from fi.alk.harness.tools import _without_nulls
+
+    contract = AgentContract.model_validate(_without_nulls(payload(**fields)))
+
+    assert prompt_quote(_without_nulls(payload(**fields))) == contract.system_prompt_excerpt
+
+
+def test_a_saved_call_that_kept_the_quote_says_so(tmp_path, root):
+    (root / "agent.py").write_text(_BOOKING, encoding="utf-8")
+    destination = tmp_path / "out"
+    submit = submitter(destination, root)
+    imports = [{"path": "agent.py", "start_line": 1, "end_line": 4}]
+    wrong = payload(hard_constraints=["Be polite."], system_prompt_excerpt=_BOOKING_QUOTE, system_prompt_from=imports)
+
+    assert submit(wrong).get("is_error")
+    second = submit(wrong)
+
+    assert not second.get("is_error"), second
+    assert text_of(second).endswith(
+        "\nsystem_prompt_from: the lines named (agent.py 1-4) are recorded as unconfirmed, since "
+        "they don't hold the quote; the quote is the prompt."
+    )
