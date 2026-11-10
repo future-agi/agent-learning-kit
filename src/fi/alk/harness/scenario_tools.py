@@ -2456,11 +2456,21 @@ def scenario_tools(
                     "a budget we chose, and it hits the hardest scenarios first.",
                 },
                 "worker_budget_seconds": {
-                    "type": "integer",
+                    "anyOf": [
+                        {"type": "integer", "minimum": 1},
+                        {
+                            "type": "object",
+                            "additionalProperties": {"type": "integer", "minimum": 1},
+                            "minProperties": 1,
+                        },
+                    ],
                     "description": "Only for an agent with workers: seconds from the start of the trial after "
-                    "which no worker's call reaches the world. One deadline for all workers, counted from "
-                    "the trial's start, not from each worker's hand-off: a worker still acting then is "
-                    "refused and ends timed out. Leave out to use the run's own limit.",
+                    "which a worker's call no longer reaches the world, counted from the trial's start, not from "
+                    "a hand-off. A number holds every worker to one deadline. An object of worker id to seconds "
+                    "holds only those workers, so one worker can time out while the others finish: to test one "
+                    "timed-out worker, give only that worker a budget shorter than its work, and leave the "
+                    "workers it depends on out. A worker still acting then is refused and ends timed out. Leave "
+                    "out to use the run's own limit.",
                 },
                 "coverage": {
                     "type": "object",

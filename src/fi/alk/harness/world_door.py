@@ -370,9 +370,10 @@ class WorldDoor:
             limits = self.workers() or {}
         except Exception:  # noqa: BLE001 - unreadable limits are no permission
             return "not_permitted", f"{call.action} is not permitted for {call.worker}: its limits could not be read"
-        deadline = limits.get("deadline_at")
-        if isinstance(deadline, (int, float)) and not isinstance(deadline, bool) and time.time() > deadline:
-            return "deadline_passed", f"the deadline for {call.worker} has passed"
+        own = (limits.get("deadlines") or {}).get(call.worker)
+        for deadline in (own, limits.get("deadline_at")):
+            if isinstance(deadline, (int, float)) and not isinstance(deadline, bool) and time.time() > deadline:
+                return "deadline_passed", f"the deadline for {call.worker} has passed"
         if "permissions" in limits:
             allowed = (limits.get("permissions") or {}).get(call.worker)
             if not permitted(allowed, method_action(call.method, call.action), limits.get("routes")):

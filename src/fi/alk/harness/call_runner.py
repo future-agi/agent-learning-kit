@@ -1243,17 +1243,22 @@ def _agent_marks(
 TRIAL_FAULTS_DDL = "CREATE TABLE IF NOT EXISTS _alk_trial_faults (id INT PRIMARY KEY, faults JSONB NOT NULL)"
 # When this trial's workers stop being allowed to act, beside its faults; null when the scenario sets no budget.
 TRIAL_DEADLINE_DDL = "ALTER TABLE _alk_trial_faults ADD COLUMN IF NOT EXISTS worker_deadline_at DOUBLE PRECISION"
+# Each named worker's own deadline, {worker id: epoch seconds}, when the scenario gives a budget per worker.
+TRIAL_WORKER_DEADLINES_DDL = "ALTER TABLE _alk_trial_faults ADD COLUMN IF NOT EXISTS worker_deadlines JSONB"
 
 
 def _write_trial_state(
-    runtime: EnvironmentRuntime, faults: list[Any], worker_deadline_at: float | None = None
+    runtime: EnvironmentRuntime,
+    faults: list[Any],
+    worker_deadline_at: float | None = None,
+    worker_deadlines: Mapping[str, float] | None = None,
 ) -> None:
     """This trial's faults and its workers' deadline, in the world's database where the door in the tool proxy reads
     them; written by the runner only, over its own connection. Past the deadline the world refuses every worker's
     call (`deadline_passed`)."""
     database = _find_postgres_endpoint(runtime)
     if database is None:
-        if worker_deadline_at:
+        if worker_deadline_at or worker_deadlines:
             # Workers would act with no deadline at all: the trial fails rather than grade them as if one held.
             raise RuntimeError("the workers' deadline cannot be set: this world has no database the tool proxy reads")
         if faults:
@@ -1264,10 +1269,12 @@ def _write_trial_state(
     with psycopg.connect(database.address, autocommit=True, connect_timeout=5) as connection:
         connection.execute(TRIAL_FAULTS_DDL)
         connection.execute(TRIAL_DEADLINE_DDL)
+        connection.execute(TRIAL_WORKER_DEADLINES_DDL)
         connection.execute(
-            "INSERT INTO _alk_trial_faults (id, faults, worker_deadline_at) VALUES (1, %s::jsonb, %s) "
-            "ON CONFLICT (id) DO UPDATE SET faults = EXCLUDED.faults, worker_deadline_at = EXCLUDED.worker_deadline_at",
-            (json.dumps(list(faults)), worker_deadline_at),
+            "INSERT INTO _alk_trial_faults (id, faults, worker_deadline_at, worker_deadlines) "
+            "VALUES (1, %s::jsonb, %s, %s::jsonb) ON CONFLICT (id) DO UPDATE SET faults = EXCLUDED.faults, "
+            "worker_deadline_at = EXCLUDED.worker_deadline_at, worker_deadlines = EXCLUDED.worker_deadlines",
+            (json.dumps(list(faults)), worker_deadline_at, json.dumps(dict(worker_deadlines or {}))),
         )
 
 
@@ -1329,21 +1336,38 @@ def _int_or(value: Any, default: int) -> int:
 
 
 def worker_deadline(document: Mapping[str, Any]) -> float | None:
-    """When this trial's workers stop being allowed to act: its start plus the scenario's worker budget, if any."""
+    """When all of this trial's workers stop being allowed to act: its start plus the scenario's worker budget, if it
+    gives one number for all of them."""
     budget = document.get("worker_budget_seconds")
     if isinstance(budget, bool) or not isinstance(budget, (int, float)) or budget <= 0:
         return None
     return time.time() + budget
 
 
+def worker_deadlines(document: Mapping[str, Any]) -> dict[str, float]:
+    """When each named worker stops being allowed to act, where the scenario gives a budget per worker."""
+    budgets = document.get("worker_budget_seconds")
+    if not isinstance(budgets, Mapping):
+        return {}
+    start = time.time()
+    return {
+        str(worker): start + budget
+        for worker, budget in budgets.items()
+        if str(worker).strip() and not isinstance(budget, bool) and isinstance(budget, (int, float)) and budget > 0
+    }
+
+
 def _set_trial_faults(
-    runtime: EnvironmentRuntime, faults: list[Any], worker_deadline_at: float | None = None
+    runtime: EnvironmentRuntime,
+    faults: list[Any],
+    worker_deadline_at: float | None = None,
+    worker_deadlines: Mapping[str, float] | None = None,
 ) -> None:
     """This trial's faults and worker deadline at its start. A trial with either to set fails when they cannot be
     set; one with neither only clears what an earlier trial may have left, so a world database out of reach never
     fails it."""
-    if worker_deadline_at:
-        _write_trial_state(runtime, faults, worker_deadline_at)
+    if worker_deadline_at or worker_deadlines:
+        _write_trial_state(runtime, faults, worker_deadline_at, worker_deadlines)
         return
     if faults:
         try:
@@ -2585,11 +2609,12 @@ class CallRunnerImpl:
         async def place_with_actors() -> SimulationReport:
             faults = list(doc.get("faults") or [])
             deadline = worker_deadline(doc)
+            deadlines = worker_deadlines(doc)
             proxied = runtime.endpoints.get("tool_proxy") is not None
-            if faults or deadline or proxied:
+            if faults or deadline or deadlines or proxied:
                 # Every trial behind a tool proxy writes its own faults and deadline, none included, so nothing an
                 # earlier trial left can apply to this one.
-                _set_trial_faults(runtime, faults, deadline)
+                _set_trial_faults(runtime, faults, deadline, deadlines)
             try:
                 return await place_with_world_actors()
             finally:

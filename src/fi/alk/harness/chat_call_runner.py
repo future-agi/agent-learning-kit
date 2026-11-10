@@ -888,11 +888,14 @@ class HostedChatCallRunner:
         # An agent that runs its own tools reaches them through the tool proxy, which reads this trial's faults from
         # the world's database, as on a voice call.
         if proxied:
-            from .call_runner import _set_trial_faults, worker_deadline
+            from .call_runner import _set_trial_faults, worker_deadline, worker_deadlines
 
             # Every trial writes its own faults, none included, so nothing an earlier trial left can apply to this one.
             _set_trial_faults(
-                runtime, list(document.get("faults") or []), worker_deadline(document)
+                runtime,
+                list(document.get("faults") or []),
+                worker_deadline(document),
+                worker_deadlines(document),
             )
         try:
             if dispatcher is not None:

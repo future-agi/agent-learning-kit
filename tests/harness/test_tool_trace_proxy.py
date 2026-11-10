@@ -494,6 +494,22 @@ def test_past_the_trial_s_worker_deadline_every_worker_call_is_refused_but_the_a
     ]
 
 
+def test_a_worker_past_its_own_deadline_is_refused_while_another_worker_keeps_acting(worker_proxy, store):
+    from types import SimpleNamespace
+
+    from fi.alk.harness.call_runner import _write_trial_state
+
+    runtime = SimpleNamespace(endpoints={"db": SimpleNamespace(protocol="postgres", address=store.dsn())}, metadata={})
+    _write_trial_state(runtime, [], worker_deadlines={"refund": 1.0})
+    url, rows = worker_proxy
+    assert _post(url, "/w/c-refund/records/approve", {"deal": "1"})[0] == 403
+    assert _post(url, "/w/c-lookup/ok", {})[0] == 201
+    assert [(one["worker_id"], one["outcome"], one["refusal_code"]) for one in rows()] == [
+        ("refund", "refused", "deadline_passed"),
+        ("order_lookup", "committed", None),
+    ]
+
+
 def test_a_call_is_logged_with_the_agent_s_own_tool_name_beside_its_route(worker_proxy):
     url, rows = worker_proxy
     assert _post(url, "/w/c-refund/records/approve", {"deal": "1"})[0] == 201

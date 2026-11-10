@@ -2815,12 +2815,25 @@ def test_a_trial_s_worker_deadline_is_its_start_plus_the_scenario_s_worker_budge
     assert cr.worker_deadline({"worker_budget_seconds": budget}) == (1030.0 if expected else None)
 
 
+def test_a_budget_per_worker_gives_each_named_worker_its_own_deadline_and_no_deadline_for_all(monkeypatch):
+    monkeypatch.setattr(cr.time, "time", lambda: 1000.0)
+    document = {"worker_budget_seconds": {"refund": 5, "lookup": 0, "": 3, "audit": True}}
+    assert cr.worker_deadlines(document) == {"refund": 1005.0}
+    assert cr.worker_deadline(document) is None
+    assert cr.worker_deadlines({"worker_budget_seconds": 30}) == {}
+
+
 def test_a_trial_with_a_worker_deadline_writes_it_beside_its_faults(monkeypatch):
     written = []
-    monkeypatch.setattr(cr, "_write_trial_state", lambda runtime, faults, deadline=None: written.append((faults, deadline)))
+    monkeypatch.setattr(
+        cr,
+        "_write_trial_state",
+        lambda runtime, faults, deadline=None, deadlines=None: written.append((faults, deadline, deadlines)),
+    )
     cr._set_trial_faults(None, [], 1030.0)
     cr._set_trial_faults(None, [{"action": "approve"}])
-    assert written == [([], 1030.0), ([{"action": "approve"}], None)]
+    cr._set_trial_faults(None, [], None, {"refund": 1030.0})
+    assert written == [([], 1030.0, None), ([{"action": "approve"}], None, None), ([], None, {"refund": 1030.0})]
 
 
 def test_a_worker_deadline_that_cannot_be_written_fails_the_trial_rather_than_run_without_one(monkeypatch):

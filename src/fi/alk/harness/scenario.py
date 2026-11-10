@@ -345,10 +345,21 @@ class Scenario(BaseModel):
     faults: list[Fault] = Field(default_factory=list)
 
     max_turns: int = 10
-    # Seconds from the trial's start after which no worker's call reaches the world: one deadline for all workers, not
-    # a budget per worker. It can only shorten the run's own limit; a worker still acting then is refused and ends
-    # timed out. None: the run's limit alone.
-    worker_budget_seconds: int | None = Field(default=None, gt=0)
+    # Seconds from the trial's start after which a worker's call no longer reaches the world: one number for all
+    # workers, or {worker id: seconds} for the named workers only, so one worker can time out while the others finish.
+    # It can only shorten the run's own limit; a worker still acting then is refused and ends timed out. None: the
+    # run's limit alone.
+    worker_budget_seconds: int | dict[str, int] | None = None
+
+    @field_validator("worker_budget_seconds", mode="after")
+    @classmethod
+    def _positive_budget(cls, value: int | dict[str, int] | None) -> int | dict[str, int] | None:
+        if value is None:
+            return value
+        budgets = value if isinstance(value, dict) else {"*": value}
+        if not budgets or any(not str(key).strip() or isinstance(one, bool) or one <= 0 for key, one in budgets.items()):
+            raise ValueError("a worker budget is a number of seconds above 0, for all workers or per named worker")
+        return value
 
     # Where this call is made from. A string names the place ("street", "vehicle", "retail"), and
     # True asks for noise while leaving the place to the fixture. Left unset it is decided from

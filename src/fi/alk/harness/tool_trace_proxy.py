@@ -114,10 +114,22 @@ def _worker_deadline() -> float | None:
     return float(value) if isinstance(value, (int, float)) else None
 
 
+def _worker_deadlines() -> dict:
+    """Each named worker's own deadline this trial, {worker id: epoch seconds}; none when the scenario gave no budget
+    per worker. A read that failed raises, so the door refuses workers rather than letting them act with no deadline."""
+    row = _trial_row("worker_deadlines", strict=True)
+    value = row[0] if row else None
+    return {str(worker): float(at) for worker, at in value.items() if isinstance(at, (int, float))} if isinstance(value, dict) else {}
+
+
 def _worker_limits() -> dict:
     """What this trial's workers may do: the sealed allow-lists, when the bundle has them, and the deadline. A seal
     that is present but unreadable is an empty allow-list: it never widens what a worker may do."""
-    limits: dict = {"deadline_at": _worker_deadline(), "routes": list((_read_json(ACTIONS_FILE) or {}).keys())}
+    limits: dict = {
+        "deadline_at": _worker_deadline(),
+        "deadlines": _worker_deadlines(),
+        "routes": list((_read_json(ACTIONS_FILE) or {}).keys()),
+    }
     if os.path.exists(WORKER_PERMISSIONS_FILE):
         sealed = _read_json(WORKER_PERMISSIONS_FILE) or {}
         limits["permissions"] = {

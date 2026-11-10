@@ -286,6 +286,12 @@ def test_a_scenario_s_worker_budget_is_positive_and_absent_from_its_document_whe
     assert document_for(plain.model_copy(update={"worker_budget_seconds": 20}))["worker_budget_seconds"] == 20
     with pytest.raises(ValidationError):
         Scenario(name="a", instruction="x", worker_budget_seconds=0)
+    # One worker can be given its own budget, so one worker times out while the others finish.
+    per_worker = Scenario(name="a", instruction="x", worker_budget_seconds={"refund": 2})
+    assert document_for(per_worker)["worker_budget_seconds"] == {"refund": 2}
+    for bad in ({"refund": 0}, {"": 2}, {}):
+        with pytest.raises(ValidationError):
+            Scenario(name="a", instruction="x", worker_budget_seconds=bad)
 
 
 # The platform's result receipt validates a sub-goal's subject with this pattern
