@@ -74,10 +74,13 @@ class Trigger(BaseModel):
     on_call: int = Field(default=1, ge=1)
     words: list[str] = Field(default_factory=list)
     p: float = 0.0
+    # conditional: the record that brings the actor in.
+    collection: str = ""
+    where: dict[str, Any] = Field(default_factory=dict)
 
     @model_serializer(mode="wrap")
     def _only_what_it_uses(self, handler: Any) -> dict[str, Any]:
-        unused = {"turn": 0, "tool": "", "on_call": 1, "words": [], "p": 0.0}
+        unused = {"turn": 0, "tool": "", "on_call": 1, "words": [], "p": 0.0, "collection": "", "where": {}}
         return {
             key: value
             for key, value in handler(self).items()
@@ -119,7 +122,7 @@ listed records by id), else from the start."""
                 trigger=Trigger.model_validate(
                     {
                         key: trigger[key]
-                        for key in ("kind", "turn", "tool", "on_call", "words", "p")
+                        for key in ("kind", "turn", "tool", "on_call", "words", "p", "collection", "where")
                         if key in trigger
                     }
                 ),
