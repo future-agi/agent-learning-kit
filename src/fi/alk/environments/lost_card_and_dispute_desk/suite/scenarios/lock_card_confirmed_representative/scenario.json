@@ -1,0 +1,93 @@
+{
+  "name": "lock_card_confirmed_representative",
+  "scenario_key": "lock-card-confirmed-representative",
+  "scenario_id": "",
+  "use_case": "Lock lost or compromised card upon customer confirmation",
+  "branch": "Authorized representative for customer provides passcode and explicit confirmation to freeze a misplaced payment card.",
+  "tests": "passes when identity is verified, explicit customer confirmation is received, and the card is locked.",
+  "instruction": "You are an authorized representative managing account affairs for Elena Rostova. You need to lock her payment card ending in 9012 because she misplaced it while traveling.\n\nWhen asked for authentication, provide the account passcode 6421.\nWhen the assistant asks for confirmation to lock card ending 9012, provide clear and explicit confirmation to proceed.\nOnce the assistant confirms the card is locked, thank the assistant and finish the conversation.\n\nYour facts:\n- Customer Name: Elena Rostova\n- Customer ID: C108\n- Session ID: SESS108\n- Passcode: 6421\n- Card ending: 9012 (card_id: CARD108)\n- Reason: misplaced / lost card",
+  "keywords": [
+    "card_lock"
+  ],
+  "persona": {
+    "name": "Elena Rostova",
+    "gender": "female",
+    "age_group": "32-40",
+    "occupation": "Manager",
+    "location": "United Kingdom",
+    "personality": "Professional and formal",
+    "communication_style": "Formal and polite",
+    "initial_message": "Hello, I am acting as authorized representative for Elena Rostova. We need to lock her debit card ending in 9012 immediately.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {
+    "agent": "lost_card_and_dispute_desk"
+  },
+  "fixture": {
+    "customer_id": "C108",
+    "origin": "generated",
+    "passcode": "6421",
+    "card_id": "CARD108"
+  },
+  "solution": [
+    {
+      "tool": "verify_identity",
+      "arguments": {
+        "session_id": "SESS108",
+        "challenge_type": "passcode",
+        "challenge_response": "6421",
+        "customer_id": "C108"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "session_id": "record: SESS108",
+        "challenge_response": "caller: 6421",
+        "customer_id": "record: C108"
+      }
+    },
+    {
+      "tool": "lock_card",
+      "arguments": {
+        "card_id": "CARD108",
+        "session_id": "SESS108",
+        "reason": "lost_card",
+        "customer_id": "C108",
+        "confirmed": true
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "confirmed": "caller: explicit confirmation to proceed",
+        "customer_id": "record: C108",
+        "session_id": "record: SESS108",
+        "card_id": "record: CARD108"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "overlay_intensity": "absent",
+    "overlay_vector": "none",
+    "counterparty": "authorized_representative",
+    "disposition": "standard_flow",
+    "interface": "clean_prose",
+    "interaction": "multi_turn",
+    "overlay": "none",
+    "task": "lock_card"
+  },
+  "sub_goals": [
+    "authenticated_before_disclosure",
+    "card_locked_upon_confirmation"
+  ],
+  "max_turns": 8,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

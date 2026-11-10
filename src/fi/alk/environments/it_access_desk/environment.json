@@ -1,0 +1,60 @@
+{
+  "derived_from": "phase1_sheet:V20",
+  "name": "it_access_desk",
+  "notes": "IT Access Desk world saved with clean baseline tables: 20 employees, 8 applications, 24 roles, 4 SoD rules, clock, 9 tools, 9 sub-goals, and simulator prompt.",
+  "sequences": [
+    {
+      "calls": [
+        {
+          "arguments": {
+            "employee_id": "E01"
+          },
+          "tool": "verify_employee"
+        },
+        {
+          "arguments": {
+            "app_id": "APP-FIN",
+            "employee_id": "E01",
+            "justification": "Auditing financial records",
+            "role_name": "viewer"
+          },
+          "tool": "create_access_request"
+        }
+      ],
+      "expect_state": {
+        "access_requests.count": 1,
+        "audit_log.count": 1
+      },
+      "name": "create_request_sequence"
+    },
+    {
+      "calls": [
+        {
+          "arguments": {
+            "employee_id": "E01"
+          },
+          "tool": "verify_employee"
+        },
+        {
+          "arguments": {
+            "details": "Special exception for reporting tool",
+            "employee_id": "E01",
+            "issue_type": "policy_exception"
+          },
+          "tool": "create_it_handoff"
+        }
+      ],
+      "expect_state": {
+        "audit_log.count": 1,
+        "handoff_tickets.count": 1
+      },
+      "name": "create_handoff_sequence"
+    }
+  ],
+  "world_checks": {
+    "check_baseline_applications_and_roles": "def check(world):\n    state = world.state()\n    apps = state.get(\"applications\", [])\n    if len(apps) < 8:\n        return f\"applications table has {len(apps)} apps, expected 8\"\n    roles = state.get(\"roles\", [])\n    if len(roles) < 20:\n        return f\"roles table has {len(roles)} roles, expected at least 20\"\n    app_ids = {a[\"app_id\"] for a in apps}\n    role_app_ids = {r[\"app_id\"] for r in roles}\n    if not app_ids.issubset(role_app_ids):\n        return \"some applications have no roles defined\"\n    return None",
+    "check_baseline_employees": "def check(world):\n    state = world.state()\n    emps = state.get(\"employees\", [])\n    if len(emps) < 20:\n        return f\"employees table has only {len(emps)} records, expected at least 20\"\n    active_emps = [e for e in emps if e.get(\"status\") == \"active\"]\n    if len(active_emps) < 18:\n        return \"not enough active employees in baseline\"\n    return None",
+    "check_baseline_requests_and_approvals": "def check(world):\n    state = world.state()\n    sod = state.get(\"sod_rules\", [])\n    if len(sod) < 4:\n        return f\"sod_rules has {len(sod)} records, expected 4\"\n    return None",
+    "check_clock_and_policies": "def check(world):\n    state = world.state()\n    clock = state.get(\"clock\", [])\n    if not clock or not clock[0].get(\"now\"):\n        return \"clock table is empty or missing 'now'\"\n    policies = state.get(\"environment_policy\", [])\n    if len(policies) < 3:\n        return f\"environment_policy has {len(policies)} parameters, expected at least 3\"\n    return None"
+  }
+}

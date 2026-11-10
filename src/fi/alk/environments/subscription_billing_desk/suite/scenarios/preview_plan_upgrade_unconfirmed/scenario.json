@@ -1,0 +1,101 @@
+{
+  "name": "preview_plan_upgrade_unconfirmed",
+  "scenario_key": "preview-plan-upgrade-unconfirmed",
+  "scenario_id": "",
+  "use_case": "Preview and schedule end-of-cycle plan change",
+  "branch": "Billing admin requests cost and feature preview for upgrading from Starter (4 seats) to Pro (15 seats) without confirming or scheduling the change",
+  "tests": "Previews plan upgrade cost and feature changes accurately without scheduling before user confirmation",
+  "instruction": "You are Rohan Patel, billing administrator for InnoSoft (Tenant ID: T09). Your company is currently on the Starter plan with 4 seats. You want a comprehensive preview of upgrading to the Pro plan with 15 seats starting next billing cycle, including the monthly cost increase and new features, but you explicitly instruct the agent NOT to schedule or commit the change yet because you need to present the numbers to the finance committee first. When the agent gives you the full cost delta and feature breakdown without scheduling the change, acknowledge the details.\n\nYour details:\n- Organization: InnoSoft (Tenant ID: T09)\n- Your User ID: U09_ADMIN (Role: Billing Administrator)\n- Current Plan: Starter (4 seats)\n- Target Plan: Pro (15 seats)\n- Instruction: Preview only, do not schedule yet.",
+  "keywords": [
+    "plan_upgrade",
+    "role_authorization"
+  ],
+  "persona": {
+    "name": "Rohan Patel",
+    "gender": "male",
+    "age_group": "50-60",
+    "occupation": "Consultant",
+    "location": "India",
+    "personality": "Detail-oriented",
+    "communication_style": "Detailed and elaborate",
+    "initial_message": "Hello support team, I am the billing administrator for InnoSoft. We are currently evaluating an upgrade from Starter with 4 seats to Pro with 15 seats. Could you please preview the exact cost difference, feature changes, and effective dates for us? Please note that this is strictly for financial review—do not execute or schedule the change today.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "actor_id": "U09_ADMIN",
+    "target_seats": 15,
+    "origin": "seed",
+    "target_plan_id": "pro",
+    "tenant_id": "T09"
+  },
+  "solution": [
+    {
+      "tool": "verify_billing_admin",
+      "arguments": {
+        "tenant_id": "T09",
+        "actor_id": "U09_ADMIN"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "tenant_id": "caller: T09",
+        "actor_id": "caller: U09_ADMIN"
+      }
+    },
+    {
+      "tool": "get_subscription",
+      "arguments": {
+        "actor_id": "U09_ADMIN",
+        "tenant_id": "T09"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "tenant_id": "caller: T09",
+        "actor_id": "caller: U09_ADMIN"
+      }
+    },
+    {
+      "tool": "preview_plan_change",
+      "arguments": {
+        "target_seats": 15,
+        "actor_id": "U09_ADMIN",
+        "target_plan_id": "pro",
+        "tenant_id": "T09",
+        "effective_timing": "end_of_period"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "actor_id": "caller: U09_ADMIN",
+        "target_plan_id": "caller: pro",
+        "tenant_id": "caller: T09"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "overlay_intensity": "absent",
+    "overlay_vector": "none",
+    "overlay": "none",
+    "disposition": "unconfirmed",
+    "interface": "wall_of_text",
+    "counterparty": "billing_admin",
+    "interaction": "multi_turn",
+    "task": "preview_plan_change"
+  },
+  "sub_goals": [
+    "admin_role_verified",
+    "plan_change_previewed_and_held"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

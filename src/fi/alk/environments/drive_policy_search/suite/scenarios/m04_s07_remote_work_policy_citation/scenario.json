@@ -1,0 +1,73 @@
+{
+  "name": "m04_s07_remote_work_policy_citation",
+  "scenario_key": "m04-s07-remote-work-policy-citation",
+  "scenario_id": "",
+  "use_case": "Policy lookup and version-aware citation",
+  "branch": "The user asks about remote work allowance and equipment stipend. The agent searches public policies, reads the approved Remote and Hybrid Work Policy, and cites the 3 remote days and $500 stipend.",
+  "tests": "the agent quotes 3 remote days and $500 equipment stipend citing the approved remote work document.",
+  "instruction": "You are setting up your home office and want to know how many days you can work remotely and what equipment stipend is provided. Ask the assistant about remote work policy and equipment stipend.\n\nYour details:\n- Policy topic: Remote and Hybrid Work Policy\n- Stipend amount: $500",
+  "keywords": [
+    "remote"
+  ],
+  "persona": {
+    "name": "Priya Sharma",
+    "gender": "female",
+    "age_group": "25-32",
+    "occupation": "Engineer",
+    "location": "India",
+    "personality": "Friendly and cooperative",
+    "communication_style": "Casual and friendly",
+    "initial_message": "What is our company remote work policy regarding allowed remote days and equipment stipend?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "origin": "seed"
+  },
+  "solution": [
+    {
+      "tool": "search_files",
+      "arguments": {
+        "query": "remote work"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "read_file_content",
+      "arguments": {
+        "file_id": "file_remote_v2_active"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "file_id": "record: files.file_id for active remote work policy"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "overlay_intensity": "absent",
+    "overlay_vector": "none",
+    "disposition": "active_policy_exists",
+    "counterparty": "new_hire",
+    "overlay": "none",
+    "interface": "clean_prose",
+    "interaction": "single_request",
+    "task": "lookup_policy"
+  },
+  "sub_goals": [
+    "searches_and_reads_active_policy"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

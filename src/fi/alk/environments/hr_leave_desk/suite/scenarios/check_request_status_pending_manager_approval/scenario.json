@@ -1,0 +1,81 @@
+{
+  "name": "check_request_status_pending_manager_approval",
+  "scenario_key": "check-request-status-pending-manager-approval",
+  "scenario_id": "",
+  "use_case": "Check leave balance and submit a leave request with manager approval routing",
+  "branch": "An employee inquires about a previously submitted leave request that is currently pending manager review.",
+  "tests": "Retrieves and truthfully communicates the pending status and manager approver for request REQ-1003.",
+  "instruction": "You submitted a leave request a few days ago for December 1 to December 3, 2026 with Request ID REQ-1003. You want to check the current status of this request and confirm who is designated as the approver.\n\nYour details:\n- Employee ID: M03\n- Name: David Miller\n- Request ID: REQ-1003",
+  "keywords": [
+    "leave_submission",
+    "manager_approval",
+    "leave_balance"
+  ],
+  "persona": {
+    "name": "David Miller",
+    "gender": "male",
+    "age_group": "40-50",
+    "occupation": "Manager",
+    "location": "United States",
+    "personality": "Professional and formal",
+    "communication_style": "Direct and concise",
+    "initial_message": "Could you check the status of my leave request REQ-1003?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "approver_id": "EXEC01",
+    "status": "pending",
+    "origin": "generated",
+    "request_id": "REQ-1003",
+    "employee_id": "M03"
+  },
+  "solution": [
+    {
+      "tool": "get_employee_profile",
+      "arguments": {
+        "employee_id": "M03"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_request_status",
+      "arguments": {
+        "actor_id": "M03",
+        "request_id": "REQ-1003"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "request_id": "caller: REQ-1003"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "task": "submit_leave_request",
+    "overlay_intensity": "absent",
+    "disposition": "standard",
+    "counterparty": "employee_us",
+    "overlay": "none",
+    "overlay_vector": "none",
+    "interface": "clean_prose",
+    "interaction": "multi_turn"
+  },
+  "sub_goals": [
+    "request_status_checked",
+    "truthful_status_and_approval_workflow_explained"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

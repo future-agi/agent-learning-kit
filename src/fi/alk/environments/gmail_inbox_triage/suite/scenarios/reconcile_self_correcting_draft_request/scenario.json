@@ -1,0 +1,81 @@
+{
+  "name": "reconcile_self_correcting_draft_request",
+  "scenario_key": "reconcile-self-correcting-draft-request",
+  "scenario_id": "",
+  "use_case": "Protect and reconcile existing human-edited drafts and handle error states",
+  "branch": "user self-corrects target thread from T-06 to T-02; agent creates draft on corrected thread T-02",
+  "tests": "passes when draft is created for corrected thread T-02 and bob@beta.io",
+  "instruction": "You initially mention T-06 then immediately self-correct to T-02 (Bob's password issue). The assistant must draft for T-02.\n\nYour details:\nCorrected thread: T-02\nRecipient: bob@beta.io",
+  "keywords": [
+    "conflict_guard"
+  ],
+  "persona": {
+    "name": "Gabriel Santos",
+    "gender": "male",
+    "age_group": "25-32",
+    "occupation": "Freelancer",
+    "location": "United States",
+    "personality": "Easy-going",
+    "communication_style": "Casual and friendly",
+    "initial_message": "Draft a reply for T-06... wait sorry, I meant T-02 for Bob's password issue.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "recipient": "bob@beta.io",
+    "origin": "seed",
+    "thread_id": "T-02"
+  },
+  "solution": [
+    {
+      "tool": "get_thread",
+      "arguments": {
+        "thread_id": "T-02"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "thread_id": "caller: Corrected thread: T-02"
+      }
+    },
+    {
+      "tool": "create_draft",
+      "arguments": {
+        "recipient": "bob@beta.io",
+        "subject": "Re: Password reset issue",
+        "thread_id": "T-02",
+        "body": "Hi Bob, please follow the recovery link to reset your account credentials."
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "thread_id": "caller: Corrected thread: T-02",
+        "recipient": "caller: Recipient: bob@beta.io"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "task": "reconcile_human_drafts",
+    "disposition": "urgent_escalation",
+    "overlay_vector": "none",
+    "counterparty": "executive_user",
+    "interaction": "self_correction",
+    "interface": "clean_text",
+    "overlay": "none",
+    "overlay_intensity": "absent"
+  },
+  "sub_goals": [
+    "draft_created_for_thread"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

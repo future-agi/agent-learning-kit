@@ -1,0 +1,93 @@
+{
+  "name": "tentative_ideas_filtered_from_commitments",
+  "scenario_key": "tentative-ideas-filtered-from-commitments",
+  "scenario_id": "",
+  "use_case": "Filter tentative suggestions and unassigned ideas from task creation",
+  "branch": "Notes in N-05 contain two tentative 'we could' ideas and one explicit assigned task",
+  "tests": "Agent proposes only the confirmed task for creation and ignores tentative suggestions",
+  "instruction": "You are reviewing the Mobile App Redesign brainstorming notes (page N-05). Ask the assistant to track the action items in our Action Tracker database.\n\nYour details:\nMeeting page ID: N-05\nTarget database: db_action_tracker\nConfirmed task:\n- Title: Finalize Figma UI mockups, Owner: Elena Rostova, Due date: 2026-10-31\nTentative ideas (not tasks):\n- We could maybe experiment with dark mode\n- We might consider adding biometric login",
+  "keywords": [
+    "action_extraction",
+    "schema_compliance",
+    "tentative_filtering"
+  ],
+  "persona": {
+    "name": "Elena Rostova",
+    "gender": "female",
+    "age_group": "25-32",
+    "occupation": "Engineer",
+    "location": "United States",
+    "personality": "Detail-oriented",
+    "communication_style": "Simple and clear",
+    "initial_message": "Can you check page N-05 and track the confirmed action items into our database?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "origin": "seed",
+    "database_id": "db_action_tracker",
+    "page_id": "N-05"
+  },
+  "solution": [
+    {
+      "tool": "notion_fetch_page",
+      "arguments": {
+        "page_id": "N-05"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "notion_get_database_schema",
+      "arguments": {
+        "database_id": "db_action_tracker"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "notion_create_action_record",
+      "arguments": {
+        "source_page_id": "N-05",
+        "title": "Finalize Figma UI mockups",
+        "due_date": "2026-10-31",
+        "database_id": "db_action_tracker",
+        "owner_id": "user_elena_rostova"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "due_date": "caller: 2026-10-31",
+        "source_page_id": "caller: N-05",
+        "owner_id": "record: workspace_users.user_id"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "interface": "clean_prose",
+    "overlay_intensity": "absent",
+    "interaction": "multi_turn",
+    "disposition": "standard",
+    "counterparty": "member",
+    "overlay_vector": "none",
+    "overlay": "none",
+    "task": "filter_tentative_ideas"
+  },
+  "sub_goals": [
+    "approved_commitments_created",
+    "tentative_ideas_not_assigned",
+    "approval_sought_before_creation"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

@@ -1,0 +1,649 @@
+[
+  {
+    "name": "verify_employee",
+    "description": "Verify employee identity and employment status in directory.",
+    "parameters": {
+      "required": [
+        "employee_id"
+      ],
+      "type": "object",
+      "properties": {
+        "employee_id": {
+          "description": "Employee ID (e.g. 'E01') or email address",
+          "type": "string"
+        }
+      }
+    },
+    "mutates_state": false,
+    "returns": {
+      "properties": {
+        "manager_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "employee_id": {
+          "type": "string"
+        },
+        "email": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "department": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "employee_id",
+        "name",
+        "email",
+        "department",
+        "status"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "name": "get_app_catalog",
+    "description": "Retrieve application catalog, descriptions, owners, and available roles for an application or 'ALL'.",
+    "parameters": {
+      "required": [
+        "app_id"
+      ],
+      "type": "object",
+      "properties": {
+        "category": {
+          "description": "Optional category filter (e.g. 'Analytics')",
+          "type": "string"
+        },
+        "app_id": {
+          "type": "string",
+          "description": "Application ID (e.g. 'APP-RPT') or 'ALL' to view all applications"
+        }
+      }
+    },
+    "mutates_state": false,
+    "returns": {
+      "properties": {
+        "count": {
+          "type": "integer"
+        },
+        "applications": {
+          "type": "array",
+          "items": {
+            "required": [
+              "app_id",
+              "name",
+              "description",
+              "owner_id",
+              "category",
+              "roles"
+            ],
+            "properties": {
+              "category": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "roles": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": [
+                    "role_id",
+                    "role_name",
+                    "tier",
+                    "description",
+                    "requires_approval"
+                  ],
+                  "properties": {
+                    "role_name": {
+                      "type": "string"
+                    },
+                    "tier": {
+                      "type": "string"
+                    },
+                    "role_id": {
+                      "type": "string"
+                    },
+                    "requires_approval": {
+                      "type": "string"
+                    },
+                    "description": {
+                      "type": "string"
+                    }
+                  }
+                }
+              },
+              "description": {
+                "type": "string"
+              },
+              "owner_id": {
+                "type": "string"
+              },
+              "app_id": {
+                "type": "string"
+              }
+            },
+            "type": "object"
+          }
+        }
+      },
+      "type": "object",
+      "required": [
+        "applications",
+        "count"
+      ]
+    }
+  },
+  {
+    "name": "get_current_access",
+    "description": "Retrieve active entitlements and pending access requests for an employee.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "app_id": {
+          "description": "Optional application ID (e.g. 'APP-CRM')",
+          "type": "string"
+        },
+        "employee_id": {
+          "type": "string",
+          "description": "Employee ID (e.g. 'E01')"
+        }
+      },
+      "required": [
+        "employee_id"
+      ]
+    },
+    "mutates_state": false,
+    "returns": {
+      "properties": {
+        "active_entitlements": {
+          "type": "array",
+          "items": {
+            "required": [
+              "entitlement_id",
+              "app_id",
+              "role_name",
+              "status",
+              "granted_at",
+              "granted_by"
+            ],
+            "type": "object",
+            "properties": {
+              "granted_at": {
+                "type": "string"
+              },
+              "app_id": {
+                "type": "string"
+              },
+              "entitlement_id": {
+                "type": "string"
+              },
+              "status": {
+                "type": "string"
+              },
+              "expires_at": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "role_name": {
+                "type": "string"
+              },
+              "granted_by": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "pending_requests": {
+          "items": {
+            "type": "object",
+            "required": [
+              "request_id",
+              "app_id",
+              "role_name",
+              "status",
+              "created_at"
+            ],
+            "properties": {
+              "created_at": {
+                "type": "string"
+              },
+              "request_id": {
+                "type": "string"
+              },
+              "role_name": {
+                "type": "string"
+              },
+              "status": {
+                "type": "string"
+              },
+              "approver_id": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "app_id": {
+                "type": "string"
+              }
+            }
+          },
+          "type": "array"
+        },
+        "employee_id": {
+          "type": "string"
+        }
+      },
+      "type": "object",
+      "required": [
+        "employee_id",
+        "active_entitlements",
+        "pending_requests"
+      ]
+    }
+  },
+  {
+    "name": "check_access_policy",
+    "description": "Check access policies, Separation of Duties (SoD) constraints, and approval routing for a proposed role.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "app_id": {
+          "type": "string",
+          "description": "Application ID (e.g. 'APP-FIN')"
+        },
+        "role_name": {
+          "description": "Proposed role name (e.g. 'finance_approver')",
+          "type": "string"
+        },
+        "employee_id": {
+          "type": "string",
+          "description": "Employee ID (e.g. 'E03')"
+        }
+      },
+      "required": [
+        "employee_id",
+        "app_id",
+        "role_name"
+      ]
+    },
+    "mutates_state": false,
+    "returns": {
+      "properties": {
+        "approval_required": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "allowed": {
+          "type": "boolean"
+        },
+        "sod_conflict": {
+          "type": "boolean"
+        },
+        "status": {
+          "type": "string"
+        },
+        "approver_ids": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object",
+      "required": [
+        "allowed",
+        "status",
+        "sod_conflict",
+        "approval_required",
+        "approver_ids",
+        "reason"
+      ]
+    }
+  },
+  {
+    "name": "create_access_request",
+    "description": "Submit an access request ticket with business justification and route to appropriate approver.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "app_id": {
+          "description": "Application ID (e.g. 'APP-FIN')",
+          "type": "string"
+        },
+        "justification": {
+          "description": "Business justification for access request",
+          "type": "string"
+        },
+        "role_name": {
+          "type": "string",
+          "description": "Requested role name (e.g. 'viewer')"
+        },
+        "employee_id": {
+          "description": "Employee ID (e.g. 'E01')",
+          "type": "string"
+        }
+      },
+      "required": [
+        "employee_id",
+        "app_id",
+        "role_name",
+        "justification"
+      ]
+    },
+    "mutates_state": true,
+    "returns": {
+      "properties": {
+        "created_at": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "role_name": {
+          "type": "string"
+        },
+        "approver_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "request_id": {
+          "type": "string"
+        },
+        "message": {
+          "type": "string"
+        },
+        "employee_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "request_id",
+        "employee_id",
+        "role_name",
+        "status",
+        "created_at",
+        "message"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "name": "get_approval_status",
+    "description": "Look up access request details and associated approval token status.",
+    "parameters": {
+      "required": [
+        "request_id"
+      ],
+      "properties": {
+        "request_id": {
+          "description": "Access request ID (e.g. 'AR01')",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "mutates_state": false,
+    "returns": {
+      "type": "object",
+      "required": [
+        "request_id",
+        "employee_id",
+        "app_id",
+        "role_name",
+        "request_status"
+      ],
+      "properties": {
+        "request_id": {
+          "type": "string"
+        },
+        "employee_id": {
+          "type": "string"
+        },
+        "app_id": {
+          "type": "string"
+        },
+        "request_status": {
+          "type": "string"
+        },
+        "approver_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "approval": {
+          "properties": {
+            "status": {
+              "type": "string"
+            },
+            "expires_at": {
+              "type": "string"
+            },
+            "approval_id": {
+              "type": "string"
+            },
+            "created_at": {
+              "type": "string"
+            },
+            "approver_id": {
+              "type": "string"
+            },
+            "token": {
+              "type": "string"
+            }
+          },
+          "type": [
+            "object",
+            "null"
+          ],
+          "required": [
+            "approval_id",
+            "token",
+            "approver_id",
+            "status",
+            "expires_at",
+            "created_at"
+          ]
+        },
+        "role_name": {
+          "type": "string"
+        }
+      }
+    }
+  },
+  {
+    "name": "grant_synthetic_access",
+    "description": "Provision synthetic access entitlement following verification of valid approval token.",
+    "parameters": {
+      "properties": {
+        "request_id": {
+          "description": "Approved access request ID (e.g. 'AR01')",
+          "type": "string"
+        },
+        "approval_token": {
+          "description": "Cryptographic or system approval token bound to the request",
+          "type": "string"
+        }
+      },
+      "type": "object",
+      "required": [
+        "request_id",
+        "approval_token"
+      ]
+    },
+    "mutates_state": true,
+    "returns": {
+      "type": "object",
+      "required": [
+        "entitlement_id",
+        "employee_id",
+        "app_id",
+        "role_name",
+        "status",
+        "granted_at",
+        "granted_by",
+        "message"
+      ],
+      "properties": {
+        "message": {
+          "type": "string"
+        },
+        "granted_at": {
+          "type": "string"
+        },
+        "granted_by": {
+          "type": "string"
+        },
+        "app_id": {
+          "type": "string"
+        },
+        "entitlement_id": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "role_name": {
+          "type": "string"
+        },
+        "employee_id": {
+          "type": "string"
+        },
+        "expires_at": {
+          "type": "string"
+        }
+      }
+    }
+  },
+  {
+    "name": "revoke_synthetic_access",
+    "description": "Revoke an active synthetic access entitlement.",
+    "parameters": {
+      "type": "object",
+      "required": [
+        "entitlement_id",
+        "reason"
+      ],
+      "properties": {
+        "entitlement_id": {
+          "type": "string",
+          "description": "Entitlement ID to revoke (e.g. 'ENT-01')"
+        },
+        "reason": {
+          "description": "Reason for revoking access",
+          "type": "string"
+        }
+      }
+    },
+    "mutates_state": true,
+    "returns": {
+      "required": [
+        "entitlement_id",
+        "employee_id",
+        "app_id",
+        "role_name",
+        "status",
+        "reason",
+        "message"
+      ],
+      "properties": {
+        "entitlement_id": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "role_name": {
+          "type": "string"
+        },
+        "message": {
+          "type": "string"
+        },
+        "app_id": {
+          "type": "string"
+        },
+        "employee_id": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        }
+      },
+      "type": "object"
+    }
+  },
+  {
+    "name": "create_it_handoff",
+    "description": "Escalate policy exceptions, conflicts, or complex access disputes to human IT operations.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "employee_id": {
+          "description": "Employee ID requiring IT escalation",
+          "type": "string"
+        },
+        "details": {
+          "description": "Detailed explanation of the issue and context",
+          "type": "string"
+        },
+        "issue_type": {
+          "type": "string",
+          "description": "Category of issue (e.g. 'policy_exception', 'manual_approval', 'access_dispute')"
+        }
+      },
+      "required": [
+        "employee_id",
+        "issue_type",
+        "details"
+      ]
+    },
+    "mutates_state": true,
+    "returns": {
+      "properties": {
+        "message": {
+          "type": "string"
+        },
+        "issue_type": {
+          "type": "string"
+        },
+        "employee_id": {
+          "type": "string"
+        },
+        "created_at": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "ticket_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "ticket_id",
+        "employee_id",
+        "issue_type",
+        "status",
+        "created_at",
+        "message"
+      ],
+      "type": "object"
+    }
+  }
+]

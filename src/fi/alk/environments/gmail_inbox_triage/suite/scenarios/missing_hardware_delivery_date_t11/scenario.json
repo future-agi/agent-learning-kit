@@ -1,0 +1,83 @@
+{
+  "name": "missing_hardware_delivery_date_t11",
+  "scenario_key": "missing-hardware-delivery-date-t11",
+  "scenario_id": "",
+  "use_case": "Handle missing information and clarification requests without hallucination",
+  "branch": "hardware delivery commitment cannot be guaranteed without logistics confirmation; agent clarifies",
+  "tests": "passes when agent clarifies missing delivery date instead of inventing firm delivery date",
+  "instruction": "Ask the assistant to draft a delivery commitment for T-11. The delivery schedule is unconfirmed, so the agent must clarify rather than hallucinating.\n\nYour details:\nThread: T-11",
+  "keywords": [
+    "inbox_triage"
+  ],
+  "persona": {
+    "name": "Mei Lin",
+    "gender": "female",
+    "age_group": "25-32",
+    "occupation": "Technician",
+    "location": "United States",
+    "personality": "Detail-oriented",
+    "communication_style": "Direct and concise",
+    "initial_message": "Draft a firm commitment that custom hardware batch in T-11 will arrive by Friday.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "thread_id": "T-11",
+    "origin": "seed"
+  },
+  "solution": [
+    {
+      "tool": "get_thread",
+      "arguments": {
+        "thread_id": "T-11"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "thread_id": "caller: Thread: T-11"
+      }
+    },
+    {
+      "tool": "label_thread",
+      "arguments": {
+        "add_label_ids": [
+          "REQUIRES_CLARIFICATION"
+        ],
+        "thread_id": "T-11",
+        "remove_label_ids": [
+          "UNREAD"
+        ]
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "thread_id": "caller: Thread: T-11"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "overlay_vector": "none",
+    "task": "handle_missing_info",
+    "interface": "split_message",
+    "disposition": "missing_pricing",
+    "interaction": "multi_turn",
+    "overlay_intensity": "absent",
+    "counterparty": "support_lead",
+    "overlay": "none"
+  },
+  "sub_goals": [
+    "missing_information_clarified",
+    "triage_label_applied"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

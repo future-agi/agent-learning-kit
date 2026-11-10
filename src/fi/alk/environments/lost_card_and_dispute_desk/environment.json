@@ -1,0 +1,71 @@
+{
+  "derived_from": "phase1_sheet:V01",
+  "name": "lost_card_and_dispute_desk",
+  "notes": "Baseline world frozen with 12 customers, 18 accounts, 24 cards, 100 transactions, clean baseline state (empty in-flight disputes and action logs), 8 tools, 4 system invariants, 5 configurable policies, 5 agent policies, 7 sub-goals, simulator prompt, and 2 stateful sequences.",
+  "sequences": [
+    {
+      "calls": [
+        {
+          "arguments": {
+            "card_id": "CARD01",
+            "context": "Multiple unauthorized transactions reported",
+            "customer_id": "C01",
+            "department": "fraud_specialist",
+            "reason": "complex_dispute",
+            "session_id": "SESS01",
+            "transaction_id": "TX17"
+          },
+          "tool": "create_handoff"
+        }
+      ],
+      "expect_state": {
+        "handoffs.count": 1
+      },
+      "name": "handoff_escalation_flow"
+    },
+    {
+      "calls": [
+        {
+          "arguments": {
+            "challenge_response": "5371",
+            "challenge_type": "passcode",
+            "customer_id": "C02",
+            "session_id": "SESS02"
+          },
+          "tool": "verify_identity"
+        },
+        {
+          "arguments": {
+            "card_id": "CARD03",
+            "confirmed": true,
+            "customer_id": "C02",
+            "reason": "lost_card",
+            "session_id": "SESS02"
+          },
+          "tool": "lock_card"
+        },
+        {
+          "arguments": {
+            "customer_id": "C02",
+            "customer_notes": "Fraudulent charge on lost card",
+            "dispute_reason": "unrecognized_charge",
+            "request_key": "REQ-C02-SEQ1",
+            "session_id": "SESS02",
+            "transaction_id": "TX04"
+          },
+          "tool": "create_dispute"
+        }
+      ],
+      "expect_state": {
+        "disputes.count": 1,
+        "handoffs.count": 0
+      },
+      "name": "verify_lock_and_dispute_flow"
+    }
+  ],
+  "world_checks": {
+    "check_clock_and_sessions": "def check(world):\n    state = world.state()\n    clock = state.get(\"clock\", [])\n    sessions = state.get(\"sessions\", [])\n    if not clock or not clock[0].get(\"now\"):\n        return \"Clock table is missing or empty\"\n    if len(sessions) < 12:\n        return f\"Expected at least 12 sessions, found {len(sessions)}\"\n    return None\n",
+    "check_customers_and_accounts": "def check(world):\n    state = world.state()\n    custs = state.get(\"customers\", [])\n    accs = state.get(\"accounts\", [])\n    cards = state.get(\"cards\", [])\n    if len(custs) < 12:\n        return f\"Expected at least 12 customers, found {len(custs)}\"\n    if len(accs) < 18:\n        return f\"Expected at least 18 accounts, found {len(accs)}\"\n    if len(cards) < 24:\n        return f\"Expected at least 24 cards, found {len(cards)}\"\n    cust_ids = {c[\"customer_id\"] for c in custs}\n    acc_cust_ids = {a[\"customer_id\"] for a in accs}\n    if not cust_ids.issubset(acc_cust_ids):\n        return \"Some customers do not have accounts\"\n    return None\n",
+    "check_transactions_and_disputes": "def check(world):\n    state = world.state()\n    txs = state.get(\"transactions\", [])\n    if len(txs) < 100:\n        return f\"Expected at least 100 transactions, found {len(txs)}\"\n    statuses = {t[\"status\"] for t in txs}\n    if \"posted\" not in statuses or \"pending\" not in statuses:\n        return \"Transactions must include both posted and pending statuses\"\n    return None\n"
+  }
+}

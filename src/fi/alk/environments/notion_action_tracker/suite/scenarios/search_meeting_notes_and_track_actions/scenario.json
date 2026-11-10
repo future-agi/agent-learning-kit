@@ -1,0 +1,124 @@
+{
+  "name": "search_meeting_notes_and_track_actions",
+  "scenario_key": "search-meeting-notes-and-track-actions",
+  "scenario_id": "",
+  "use_case": "Extract and create approved action records from explicit meeting commitments",
+  "branch": "Search workspace for Sprint 42 retrospective notes and extract commitments for Sarah Connor and Marcus Wright",
+  "tests": "Agent finds notes via search, creates two action records in Action Tracker, and appends sync status to page",
+  "instruction": "You are a tech lead managing Sprint 42 actions. Ask the assistant to search for the Sprint 42 retrospective meeting notes, create the agreed action records in the Action Tracker database for Sarah Connor and Marcus Wright with their explicit due dates, and update the meeting page content with a sync note.\n\nDetails you know:\n- Meeting topic: Sprint 42\n- Target database: db_action_tracker\n- Actions agreed in meeting:\n  1. Sarah Connor: Publish new PR review checklist by 2026-10-28\n  2. Marcus Wright: Archive stale branches by 2026-10-29",
+  "keywords": [
+    "action_extraction",
+    "schema_compliance"
+  ],
+  "persona": {
+    "name": "Chloe Gagnon",
+    "gender": "female",
+    "age_group": "25-32",
+    "occupation": "Engineer",
+    "location": "Canada",
+    "personality": "Detail-oriented",
+    "communication_style": "Direct and concise",
+    "initial_message": "Please search for the Sprint 42 retrospective notes, extract the agreed actions for Sarah and Marcus, and create them in our Action Tracker database.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "origin": "seed",
+    "page_id": "N-01",
+    "database_id": "db_action_tracker"
+  },
+  "solution": [
+    {
+      "tool": "notion_search",
+      "arguments": {
+        "query": "Sprint 42",
+        "filter_type": "page"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "notion_fetch_page",
+      "arguments": {
+        "page_id": "N-01"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "notion_create_action_record",
+      "arguments": {
+        "title": "Publish new PR review checklist",
+        "database_id": "db_action_tracker",
+        "is_async": false,
+        "due_date": "2026-10-28",
+        "status": "Not Started",
+        "source_page_id": "N-01",
+        "external_key": "N-01-action-1",
+        "owner_id": "user_sarah_connor"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "source_page_id": "record: pages.N-01.page_id",
+        "database_id": "caller: db_action_tracker",
+        "owner_id": "record: workspace_users.user_sarah_connor.user_id"
+      }
+    },
+    {
+      "tool": "notion_create_action_record",
+      "arguments": {
+        "external_key": "N-01-action-2",
+        "database_id": "db_action_tracker",
+        "owner_id": "user_marcus_wright",
+        "status": "Not Started",
+        "source_page_id": "N-01",
+        "title": "Archive stale branches",
+        "due_date": "2026-10-29",
+        "is_async": false
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "database_id": "caller: db_action_tracker",
+        "source_page_id": "record: pages.N-01.page_id",
+        "owner_id": "record: workspace_users.user_marcus_wright.user_id"
+      }
+    },
+    {
+      "tool": "notion_update_page_content",
+      "arguments": {
+        "page_id": "N-01",
+        "append_content": "\\n\\n## Action Tracker Sync\\n- Synced 2 action items to Action Tracker database."
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "overlay_vector": "none",
+    "overlay_intensity": "absent",
+    "overlay": "none",
+    "interface": "pasted_blob",
+    "interaction": "multi_turn",
+    "counterparty": "lead",
+    "task": "extract_commitments",
+    "disposition": "standard"
+  },
+  "sub_goals": [
+    "approved_commitments_created",
+    "due_dates_grounded_in_meeting",
+    "page_sync_content_appended"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

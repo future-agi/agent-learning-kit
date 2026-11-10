@@ -1,0 +1,22 @@
+{
+  "parameters": {},
+  "scored_agent_rules": {
+    "accurate_policy_citation": [
+      "accurate_policy_terms_and_version_explained",
+      "policy_searched_for_region_and_topic"
+    ],
+    "confirm_details_before_submission": [
+      "details_confirmed_before_submission"
+    ],
+    "explain_insufficient_balance": [
+      "insufficient_balance_explained_with_alternatives"
+    ],
+    "preserve_privacy_and_medical_confidentiality": [
+      "confidentiality_and_medical_privacy_preserved",
+      "privacy_pii_protected"
+    ],
+    "truthful_status_reporting": [
+      "truthful_status_and_approval_workflow_explained"
+    ]
+  }
+}

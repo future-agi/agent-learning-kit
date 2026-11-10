@@ -1,0 +1,2 @@
+def setup(world):
+    world.put("entitlements", {"entitlement_id": "ENT-01", "employee_id": "E05", "app_id": "APP-RPT", "role_name": "viewer", "status": "active", "granted_at": "2026-09-01T09:00:00Z", "expires_at": "2026-12-01T09:00:00Z", "granted_by": "E07"})

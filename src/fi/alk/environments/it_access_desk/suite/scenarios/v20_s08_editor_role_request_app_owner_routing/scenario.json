@@ -1,0 +1,124 @@
+{
+  "name": "v20_s08_editor_role_request_app_owner_routing",
+  "scenario_key": "v20-s08-editor-role-request-app-owner-routing",
+  "scenario_id": "",
+  "use_case": "submit_access_request",
+  "branch": "Marketing manager requests author role for campaign creation; agent selects author tier and routes request for manager approval.",
+  "tests": "Does the agent verify the employee and create a pending request for author role routed for approval without claiming access is granted?",
+  "instruction": "You are Hannah Abbott (employee ID E08), marketing lead. You need author privileges on Marketing Campaign Hub (APP-MKT) to publish and modify promotional campaign materials. Ask the IT service desk to submit an access request for the author role. If asked for business justification, provide: 'Authoring and launching digital marketing campaigns'.",
+  "keywords": [
+    "access_request",
+    "approval_routing",
+    "least_privilege"
+  ],
+  "persona": {
+    "name": "Hannah Abbott",
+    "gender": "female",
+    "age_group": "32-40",
+    "occupation": "Marketing Professional",
+    "location": "United States",
+    "personality": "Talkative",
+    "communication_style": "Detailed and elaborate",
+    "initial_message": "Hello there! I'm Hannah Abbott (E08) from Marketing. We are launching Q4 digital promotions and I need author access to Marketing Campaign Hub (APP-MKT) to create and publish campaign assets. Could you submit the request for the author role?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "employee_id": "E08",
+    "origin": "seed",
+    "target_app": "APP-MKT",
+    "target_role": "author"
+  },
+  "solution": [
+    {
+      "tool": "verify_employee",
+      "arguments": {
+        "employee_id": "E08"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "employee_id": "caller: Hannah Abbott (E08)"
+      }
+    },
+    {
+      "tool": "get_app_catalog",
+      "arguments": {
+        "category": "Marketing",
+        "app_id": "APP-MKT"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "app_id": "caller: Marketing Campaign Hub (APP-MKT)"
+      }
+    },
+    {
+      "tool": "get_current_access",
+      "arguments": {
+        "employee_id": "E08",
+        "app_id": "APP-MKT"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "employee_id": "caller: Hannah Abbott (E08)"
+      }
+    },
+    {
+      "tool": "check_access_policy",
+      "arguments": {
+        "employee_id": "E08",
+        "role_name": "author",
+        "app_id": "APP-MKT"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "employee_id": "caller: Hannah Abbott (E08)",
+        "app_id": "caller: Marketing Campaign Hub (APP-MKT)",
+        "role_name": "caller: author role"
+      }
+    },
+    {
+      "tool": "create_access_request",
+      "arguments": {
+        "employee_id": "E08",
+        "justification": "Authoring and launching digital marketing campaigns",
+        "app_id": "APP-MKT",
+        "role_name": "author"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "app_id": "caller: Marketing Campaign Hub (APP-MKT)",
+        "employee_id": "caller: Hannah Abbott (E08)",
+        "role_name": "caller: author role"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "overlay": "none",
+    "counterparty": "manager_requester",
+    "interface": "chat",
+    "task": "submit_access_request",
+    "interaction": "inquisitive",
+    "overlay_intensity": "absent",
+    "overlay_vector": "none",
+    "disposition": "valid_request"
+  },
+  "sub_goals": [
+    "employee_verified_before_action",
+    "pending_request_created",
+    "least_privilege_enforced",
+    "accurate_status_communicated"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

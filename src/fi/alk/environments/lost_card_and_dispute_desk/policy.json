@@ -1,0 +1,146 @@
+{
+  "rules": [
+    {
+      "id": "auth_enforcement",
+      "text": "Unverified sessions are refused access to sensitive account, card, and transaction details and cannot perform modifications.",
+      "class": "system_invariant"
+    },
+    {
+      "id": "minor_currency_units",
+      "text": "Monetary amounts are stored and processed strictly as integer minor units (cents) with ISO currency codes.",
+      "class": "system_invariant"
+    },
+    {
+      "id": "idempotent_writes",
+      "text": "Card lock and dispute creations are idempotent; duplicate lock or dispute submissions for the same entity or request key return the existing record without duplicate side-effects.",
+      "class": "system_invariant"
+    },
+    {
+      "id": "isolated_customer_mutation",
+      "text": "Operations are strictly scoped to the authenticated customer; cross-customer record access or modification is refused.",
+      "class": "system_invariant"
+    },
+    {
+      "id": "verification_policy",
+      "text": "Customer verification challenge method and attempt limits.",
+      "class": "configurable_environment_policy",
+      "parameters": {
+        "verification_method": {
+          "type": "string",
+          "default": "passcode",
+          "allowed": [
+            "passcode",
+            "kba",
+            "otp"
+          ]
+        },
+        "max_failed_attempts": {
+          "type": "integer",
+          "default": 3,
+          "allowed": [
+            1,
+            2,
+            3,
+            5
+          ]
+        }
+      }
+    },
+    {
+      "id": "dispute_eligibility_policy",
+      "text": "Policy governing which transactions can be disputed based on status and age.",
+      "class": "configurable_environment_policy",
+      "parameters": {
+        "allow_pending_disputes": {
+          "type": "boolean",
+          "default": false,
+          "allowed": [
+            true,
+            false
+          ]
+        },
+        "max_dispute_age_days": {
+          "type": "integer",
+          "default": 60,
+          "allowed": [
+            30,
+            60,
+            90,
+            120
+          ]
+        }
+      }
+    },
+    {
+      "id": "allowed_dispute_reasons",
+      "text": "Allowed dispute category reasons accepted by the bank.",
+      "class": "configurable_environment_policy",
+      "parameters": {
+        "allowed_reasons": {
+          "type": "string",
+          "default": "unrecognized_charge,incorrect_amount,duplicate_charge,goods_not_received",
+          "allowed": [
+            "unrecognized_charge,incorrect_amount,duplicate_charge,goods_not_received"
+          ]
+        }
+      }
+    },
+    {
+      "id": "lock_confirmation_policy",
+      "text": "Enforce customer confirmation requirement before locking a card.",
+      "class": "configurable_environment_policy",
+      "parameters": {
+        "require_confirmation": {
+          "type": "boolean",
+          "default": true,
+          "allowed": [
+            true,
+            false
+          ]
+        }
+      }
+    },
+    {
+      "id": "service_retry_policy",
+      "text": "Maximum retry limit for transient service calls.",
+      "class": "configurable_environment_policy",
+      "parameters": {
+        "retry_limit": {
+          "type": "integer",
+          "default": 2,
+          "allowed": [
+            1,
+            2,
+            3,
+            5
+          ]
+        }
+      }
+    },
+    {
+      "id": "verify_before_disclosure",
+      "text": "The agent must verify the customer's identity before disclosing sensitive card, account, or transaction details.",
+      "class": "agent_policy"
+    },
+    {
+      "id": "confirm_before_lock",
+      "text": "The agent must ask for and receive explicit customer confirmation before locking a payment card.",
+      "class": "agent_policy"
+    },
+    {
+      "id": "explain_pending_policy",
+      "text": "The agent must explain bank dispute policy and decline filing disputes on pending transactions when policy forbids it.",
+      "class": "agent_policy"
+    },
+    {
+      "id": "report_dispute_details",
+      "text": "The agent must provide the dispute case ID and describe clear next steps after filing or looking up a dispute.",
+      "class": "agent_policy"
+    },
+    {
+      "id": "offer_handoff_on_failure",
+      "text": "The agent must offer a secure specialist handoff when customer verification fails or service errors occur.",
+      "class": "agent_policy"
+    }
+  ]
+}

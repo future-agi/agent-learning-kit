@@ -1,0 +1,93 @@
+{
+  "name": "explain_invoice_seat_increase",
+  "scenario_key": "explain-invoice-seat-increase",
+  "scenario_id": "",
+  "use_case": "Explain invoice charge and line-item changes",
+  "branch": "The October invoice increased by $82.50 due to 3 additional seats and 10% tax",
+  "tests": "Explains line-level delta and tax breakdown from invoice data without inventing charges",
+  "instruction": "You are the billing administrator for Acme Corp. You noticed that your October invoice total was higher than September's invoice and want to know why. Ask support to explain what changed on the bill. If asked for your details or invoice references, provide them.\n\nYour details:\n- Organization: Acme Corp (Tenant ID: T01)\n- Your User ID: U01_ADMIN (Role: Billing Administrator)\n- October Invoice ID: inv_01_curr\n- September Invoice ID: inv_01_prev",
+  "keywords": [
+    "invoice_breakdown",
+    "role_authorization"
+  ],
+  "persona": {
+    "name": "Alice Miller",
+    "gender": "female",
+    "age_group": "32-40",
+    "occupation": "Manager",
+    "location": "United States",
+    "personality": "Confident",
+    "communication_style": "Direct and concise",
+    "initial_message": "Why did our October invoice increase compared to September?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "current_invoice_id": "inv_01_curr",
+    "actor_id": "U01_ADMIN",
+    "tenant_id": "T01",
+    "previous_invoice_id": "inv_01_prev",
+    "origin": "seed"
+  },
+  "solution": [
+    {
+      "tool": "verify_billing_admin",
+      "arguments": {
+        "tenant_id": "T01",
+        "actor_id": "U01_ADMIN"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "tenant_id": "caller: T01",
+        "actor_id": "caller: U01_ADMIN"
+      }
+    },
+    {
+      "tool": "get_invoice_lines",
+      "arguments": {
+        "tenant_id": "T01",
+        "invoice_id": "inv_01_curr",
+        "actor_id": "U01_ADMIN"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_invoice_lines",
+      "arguments": {
+        "invoice_id": "inv_01_prev",
+        "actor_id": "U01_ADMIN",
+        "tenant_id": "T01"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "interface": "clean_chat",
+    "interaction": "multi_turn",
+    "counterparty": "billing_admin",
+    "task": "explain_invoice",
+    "overlay": "none",
+    "overlay_vector": "none",
+    "disposition": "standard",
+    "overlay_intensity": "absent"
+  },
+  "sub_goals": [
+    "admin_role_verified",
+    "invoice_breakdown_explained"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

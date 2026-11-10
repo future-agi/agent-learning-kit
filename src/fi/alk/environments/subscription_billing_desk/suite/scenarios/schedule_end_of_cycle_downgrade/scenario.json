@@ -1,0 +1,109 @@
+{
+  "name": "schedule_end_of_cycle_downgrade",
+  "scenario_key": "schedule-end-of-cycle-downgrade",
+  "scenario_id": "",
+  "use_case": "Preview and schedule end-of-cycle plan change",
+  "branch": "Tenant T01 requests downgrade to Basic effective Nov 1; agent previews changes and schedules one change",
+  "tests": "Previews impact and schedules end-of-cycle plan downgrade with confirmed request key",
+  "instruction": "You are Alice Admin, the billing administrator for Acme Corp (Tenant ID: T01). Your company is currently on the Pro plan with 6 seats. You want to switch to the Basic plan on November 1, 2026 (the end of your current billing period) with 6 seats. Ask the agent to preview the change and schedule it for November 1. When the agent previews the feature differences and effective date and asks for your confirmation, confirm by providing confirmation code 'confirmed' with request key 'req_downgrade_01'.\n\nYour details:\n- Organization: Acme Corp (Tenant ID: T01)\n- Your User ID: U01_ADMIN (Role: Billing Administrator)\n- Target Plan: Basic (Plan ID: basic)\n- Target Seats: 6 seats\n- Timing: End of billing period (2026-11-01)\n- Confirmation Code: confirmed\n- Request Key: req_downgrade_01",
+  "keywords": [
+    "plan_downgrade",
+    "proration",
+    "role_authorization"
+  ],
+  "persona": {
+    "name": "Alice Admin",
+    "gender": "female",
+    "age_group": "32-40",
+    "occupation": "Manager",
+    "location": "United States",
+    "personality": "Friendly and cooperative",
+    "communication_style": "Direct and concise",
+    "initial_message": "Hi, I'm the billing admin for Acme Corp. We'd like to switch our subscription to the Basic plan on Nov 1 with 6 seats. Can you preview the cost and schedule this change?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "effective_at": "2026-11-01T00:00:00Z",
+    "origin": "seed",
+    "actor_id": "U01_ADMIN",
+    "target_seats": 6,
+    "tenant_id": "T01",
+    "target_plan_id": "basic"
+  },
+  "solution": [
+    {
+      "tool": "verify_billing_admin",
+      "arguments": {
+        "tenant_id": "T01",
+        "actor_id": "U01_ADMIN"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "actor_id": "caller: U01_ADMIN",
+        "tenant_id": "caller: T01"
+      }
+    },
+    {
+      "tool": "get_subscription",
+      "arguments": {
+        "tenant_id": "T01",
+        "actor_id": "U01_ADMIN"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "preview_plan_change",
+      "arguments": {
+        "effective_timing": "end_of_period",
+        "tenant_id": "T01",
+        "target_plan_id": "basic",
+        "target_seats": 6,
+        "actor_id": "U01_ADMIN"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "schedule_plan_change",
+      "arguments": {
+        "target_plan_id": "basic",
+        "target_seats": 6,
+        "confirmation_code": "confirmed",
+        "effective_timing": "end_of_period",
+        "tenant_id": "T01",
+        "request_key": "req_downgrade_01",
+        "actor_id": "U01_ADMIN"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "counterparty": "billing_admin",
+    "overlay_intensity": "absent",
+    "disposition": "standard",
+    "overlay_vector": "none",
+    "interaction": "multi_turn",
+    "interface": "clean_chat",
+    "task": "schedule_plan_change",
+    "overlay": "none"
+  },
+  "sub_goals": [
+    "plan_change_scheduled"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

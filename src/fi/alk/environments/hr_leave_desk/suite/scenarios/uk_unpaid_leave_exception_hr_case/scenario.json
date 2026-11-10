@@ -1,0 +1,95 @@
+{
+  "name": "uk_unpaid_leave_exception_hr_case",
+  "scenario_key": "uk-unpaid-leave-exception-hr-case",
+  "scenario_id": "",
+  "use_case": "Handle leave request boundaries such as insufficient balance, overlaps, or exceptions via HR case",
+  "branch": "An employee requests 25 days of extended sabbatical leave exceeding their 15 available annual days, requiring balance explanation and filing an HR exception case.",
+  "tests": "Identifies leave balance shortage (15 available vs 25 requested) and creates an HR exception case for sabbatical leave.",
+  "instruction": "You want to take 25 days of extended leave for a sabbatical in 2027. You know your annual leave balance has only 15 available days. In split messages, you ask if you can take 25 days of leave and, upon learning about the 10-day shortage, ask the assistant to create an HR support case for an unpaid sabbatical policy exception.\n\nYour details:\n- Employee ID: HR02\n- Name: James Bond\n- Region: UK\n- Leave Type: annual\n- Requested Duration: 25 days\n- Available Balance: 15 days\n- Case Category: policy_exception\n- Subject: Extended sabbatical unpaid leave exception",
+  "keywords": [
+    "insufficient_balance",
+    "unpaid_leave",
+    "hr_case",
+    "leave_balance"
+  ],
+  "persona": {
+    "name": "James Bond",
+    "gender": "male",
+    "age_group": "32-40",
+    "occupation": "Customer Service",
+    "location": "United Kingdom",
+    "personality": "Professional and formal",
+    "communication_style": "Formal and polite",
+    "initial_message": "Good day. I am inquiring about taking a 25-day sabbatical leave next year. Can you check my balance?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "region": "UK",
+    "origin": "seed",
+    "employee_id": "HR02",
+    "requested_days": 25,
+    "available_balance": 15
+  },
+  "solution": [
+    {
+      "tool": "get_employee_profile",
+      "arguments": {
+        "employee_id": "HR02"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_leave_balance",
+      "arguments": {
+        "leave_type": "annual",
+        "employee_id": "HR02"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "create_hr_case",
+      "arguments": {
+        "description": "Request for 25 days extended sabbatical unpaid leave exceeding available balance",
+        "actor_id": "HR02",
+        "employee_id": "HR02",
+        "category": "policy_exception",
+        "subject": "Extended sabbatical unpaid leave exception"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "employee_id": "caller: HR02",
+        "category": "caller: policy_exception"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "overlay_vector": "none",
+    "interface": "split_message",
+    "overlay": "none",
+    "counterparty": "employee_uk",
+    "disposition": "insufficient_balance",
+    "task": "handle_boundary_exception",
+    "interaction": "correction_after_reply",
+    "overlay_intensity": "absent"
+  },
+  "sub_goals": [
+    "hr_case_created_for_exception",
+    "insufficient_balance_explained_with_alternatives"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

@@ -1,0 +1,48 @@
+{
+  "derived_from": "phase1_sheet:M01",
+  "name": "slack_channel_digest",
+  "notes": "Slack digest world initialized in baseline state with users, channels, ACLs, clock, tools, sub-goals, and simulator prompt.",
+  "sequences": [
+    {
+      "calls": [
+        {
+          "arguments": {
+            "actor_id": "U03",
+            "approval_id": "APP-101",
+            "channel_id": "C01",
+            "request_key": "REQ-SEQ-001",
+            "text": "Status digest for proj-launch: PostgreSQL chosen, OAuth2 standardized, Launch on Monday Nov 02."
+          },
+          "tool": "slack_post_message"
+        },
+        {
+          "arguments": {
+            "request_key": "REQ-SEQ-001"
+          },
+          "tool": "slack_check_message_status"
+        },
+        {
+          "arguments": {
+            "actor_id": "U03",
+            "approval_id": "APP-101",
+            "channel_id": "C01",
+            "request_key": "REQ-SEQ-001",
+            "text": "Status digest for proj-launch: PostgreSQL chosen, OAuth2 standardized, Launch on Monday Nov 02."
+          },
+          "tool": "slack_post_message"
+        }
+      ],
+      "expect_state": {
+        "message_ledger.count": 1,
+        "messages.count": 1
+      },
+      "name": "post_check_and_deduplicate"
+    }
+  ],
+  "world_checks": {
+    "acls_and_memberships_populated": "def check(world):\n    st = world.state()\n    members = st.get(\"channel_members\", [])\n    if len(members) < 20:\n        return f\"expected at least 20 channel membership entries, got {len(members)}\"\n    c04_members = [m for m in members if m.get(\"channel_id\") == \"C04\"]\n    if len(c04_members) != 2:\n        return f\"expected exactly 2 leadership members for C04, got {len(c04_members)}\"\n    return None\n",
+    "channels_and_users_populated": "def check(world):\n    st = world.state()\n    channels = st.get(\"channels\", [])\n    users = st.get(\"users\", [])\n    if len(channels) < 4:\n        return f\"expected at least 4 channels, got {len(channels)}\"\n    if len(users) < 8:\n        return f\"expected at least 8 users, got {len(users)}\"\n    return None\n",
+    "clock_and_approvals_ready": "def check(world):\n    st = world.state()\n    clock = st.get(\"clock\", [])\n    if not clock or not clock[0].get(\"now\"):\n        return \"clock is not initialized\"\n    approvals = st.get(\"approvals\", [])\n    if not approvals:\n        return \"approvals collection is empty\"\n    return None\n",
+    "messages_and_threads_populated": "def check(world):\n    st = world.state()\n    users = st.get(\"users\", [])\n    roles = set(u.get(\"role\") for u in users)\n    expected_roles = {\"director\", \"engineer\", \"product_manager\", \"designer\", \"qa_engineer\", \"devops_engineer\", \"technical_writer\", \"vp_engineering\"}\n    if not expected_roles.issubset(roles):\n        return f\"missing required roles in users collection: {expected_roles - roles}\"\n    return None\n"
+  }
+}

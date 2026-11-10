@@ -1,0 +1,21 @@
+{
+  "parameters": {},
+  "scored_agent_rules": {
+    "confirm_before_lock": [
+      "card_locked_upon_confirmation"
+    ],
+    "explain_pending_policy": [
+      "pending_charge_policy_explained"
+    ],
+    "offer_handoff_on_failure": [
+      "specialist_handoff_created"
+    ],
+    "report_dispute_details": [
+      "dispute_filed_and_reported",
+      "dispute_status_retrieved"
+    ],
+    "verify_before_disclosure": [
+      "authenticated_before_disclosure"
+    ]
+  }
+}

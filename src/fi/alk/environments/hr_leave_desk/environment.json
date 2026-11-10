@@ -1,0 +1,36 @@
+{
+  "derived_from": "phase1_sheet:V13",
+  "name": "hr_leave_desk",
+  "notes": "Clean base world with 20 employees across US, UK, and APAC, regional effective policies, holiday calendars, 40 leave balance records, 7 tools, 10 sub-goals, policy rules, and simulator prompt.",
+  "sequences": [
+    {
+      "calls": [
+        {
+          "arguments": {
+            "employee_id": "E03",
+            "end_date": "2026-12-03",
+            "leave_type": "annual",
+            "reason": "Short break",
+            "start_date": "2026-12-01"
+          },
+          "tool": "submit_leave_request"
+        },
+        {
+          "arguments": {
+            "request_id": "REQ-2001"
+          },
+          "tool": "get_request_status"
+        }
+      ],
+      "expect_state": {
+        "leave_requests.count": 1
+      },
+      "name": "submit_and_check_status"
+    }
+  ],
+  "world_checks": {
+    "check_employees_and_reporting_lines": "def check(world):\n    state = world.state()\n    employees = state.get(\"employees\", [])\n    if len(employees) < 20:\n        return f\"expected at least 20 employees, got {len(employees)}\"\n    emp_ids = {e[\"employee_id\"] for e in employees}\n    regions = {e[\"region\"] for e in employees}\n    for req_reg in (\"US\", \"UK\", \"APAC\"):\n        if req_reg not in regions:\n            return f\"missing region {req_reg} in employees\"\n    for e in employees:\n        if e[\"manager_id\"] not in emp_ids:\n            return f\"employee {e['employee_id']} has manager {e['manager_id']} not in employee roster\"\n    return None\n",
+    "check_leave_balances_and_requests": "def check(world):\n    state = world.state()\n    balances = state.get(\"leave_balances\", [])\n    if len(balances) < 30:\n        return f\"expected at least 30 leave balance records, got {len(balances)}\"\n    for b in balances:\n        allocated = float(b[\"allocated_days\"])\n        used = float(b[\"used_days\"])\n        reserved = float(b[\"reserved_days\"])\n        avail = float(b[\"available_days\"])\n        if abs((used + reserved + avail) - allocated) > 0.01:\n            return f\"balance mismatch for {b.get('balance_id')}: {allocated} != {used} + {reserved} + {avail}\"\n    return None\n",
+    "check_policies_and_holidays": "def check(world):\n    state = world.state()\n    policies = state.get(\"hr_policies\", [])\n    if len(policies) < 5:\n        return f\"expected at least 5 policy entries, got {len(policies)}\"\n    regions_with_policies = {p[\"region\"] for p in policies}\n    for r in (\"US\", \"UK\", \"APAC\"):\n        if r not in regions_with_policies:\n            return f\"missing policy for region {r}\"\n    holidays = state.get(\"holiday_calendars\", [])\n    if len(holidays) < 10:\n        return f\"expected at least 10 holidays, got {len(holidays)}\"\n    return None\n"
+  }
+}

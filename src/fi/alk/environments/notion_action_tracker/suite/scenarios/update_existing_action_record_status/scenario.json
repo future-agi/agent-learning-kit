@@ -1,0 +1,83 @@
+{
+  "name": "update_existing_action_record_status",
+  "scenario_key": "update-existing-action-record-status",
+  "scenario_id": "",
+  "use_case": "Deduplicate and reconcile repeat meeting note imports",
+  "branch": "Update an existing action item status to Completed for Elena Rostova following Q4 Product Strategy review",
+  "tests": "Agent verifies existing action record for SOC2 roadmap and updates status to Completed",
+  "instruction": "You are reviewing the Q4 Product Strategy commitments. The SOC2 roadmap task for Elena Rostova was completed ahead of schedule. Ask the assistant to query the Action Tracker database for existing actions linked to N-02, and update the status of action ACT-101 to Completed.\n\nDetails:\nMeeting page ID: N-02\nAction ID: ACT-101\nTarget database: db_action_tracker\nNew status: Completed",
+  "keywords": [
+    "action_extraction",
+    "schema_compliance"
+  ],
+  "persona": {
+    "name": "Sven Lindholm",
+    "gender": "male",
+    "age_group": "32-40",
+    "occupation": "Manager",
+    "location": "United Kingdom",
+    "personality": "Professional and formal",
+    "communication_style": "Formal and polite",
+    "initial_message": "Please check the action tracker for N-02 and update the status of action ACT-101 to Completed.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "action_id": "ACT-101",
+    "database_id": "db_action_tracker",
+    "origin": "mixed",
+    "page_id": "N-02"
+  },
+  "solution": [
+    {
+      "tool": "notion_query_database",
+      "arguments": {
+        "source_page_id": "N-02",
+        "database_id": "db_action_tracker"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "notion_update_action_record",
+      "arguments": {
+        "title": "Draft SOC2 roadmap",
+        "status": "Completed",
+        "due_date": "2026-11-15",
+        "action_id": "ACT-101",
+        "owner_id": "user_elena_rostova"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "status": "caller: Completed",
+        "action_id": "caller: ACT-101"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "task": "deduplicate_imports",
+    "interface": "clean_prose",
+    "overlay_intensity": "absent",
+    "counterparty": "admin",
+    "disposition": "repeat",
+    "interaction": "single_turn",
+    "overlay": "none",
+    "overlay_vector": "none"
+  },
+  "sub_goals": [
+    "action_record_properties_updated"
+  ],
+  "max_turns": 8,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

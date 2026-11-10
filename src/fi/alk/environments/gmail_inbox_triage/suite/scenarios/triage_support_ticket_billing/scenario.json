@@ -1,0 +1,83 @@
+{
+  "name": "triage_support_ticket_billing",
+  "scenario_key": "triage-support-ticket-billing",
+  "scenario_id": "",
+  "use_case": "Triage and classify inbox threads by urgency and apply labels",
+  "branch": "billing discrepancy thread is triaged and marked with TRIAGED label",
+  "tests": "passes when billing inquiry thread T-06 is retrieved and labeled TRIAGED",
+  "instruction": "You are a customer support lead. Ask the assistant to retrieve thread T-06 and apply the TRIAGED label to it.\n\nYour details:\nTarget thread: T-06\nTarget label: TRIAGED",
+  "keywords": [
+    "inbox_triage"
+  ],
+  "persona": {
+    "name": "Elena Rostova",
+    "gender": "female",
+    "age_group": "25-32",
+    "occupation": "Customer Service",
+    "location": "Canada",
+    "personality": "Detail-oriented",
+    "communication_style": "Simple and clear",
+    "initial_message": "Could you check thread T-06 regarding the billing discrepancy and mark it as triaged?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "thread_id": "T-06",
+    "origin": "seed",
+    "target_label": "TRIAGED"
+  },
+  "solution": [
+    {
+      "tool": "get_thread",
+      "arguments": {
+        "thread_id": "T-06"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "thread_id": "caller: Target thread: T-06"
+      }
+    },
+    {
+      "tool": "label_thread",
+      "arguments": {
+        "thread_id": "T-06",
+        "add_label_ids": [
+          "TRIAGED"
+        ],
+        "remove_label_ids": [
+          "UNREAD"
+        ]
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "thread_id": "caller: Target thread: T-06"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "counterparty": "support_lead",
+    "task": "triage_and_classify",
+    "interaction": "single_request",
+    "overlay_vector": "none",
+    "interface": "split_message",
+    "overlay_intensity": "absent",
+    "disposition": "standard_request",
+    "overlay": "none"
+  },
+  "sub_goals": [
+    "triage_label_applied"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

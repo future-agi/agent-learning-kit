@@ -1,0 +1,61 @@
+{
+  "derived_from": "phase1_sheet:V16",
+  "name": "subscription_billing_desk",
+  "notes": "World saved for subscription billing desk with 12 tenants, 4 plans, 20 subscriptions, 40 invoices, 12 usage records, 24 users, 8 tools, 7 sub-goals, policy rules, and simulator prompt.",
+  "sequences": [
+    {
+      "calls": [
+        {
+          "arguments": {
+            "actor_id": "U01_ADMIN",
+            "confirmation_code": "confirmed",
+            "effective_timing": "end_of_period",
+            "request_key": "req_seq_01",
+            "target_plan_id": "basic",
+            "target_seats": 6,
+            "tenant_id": "T01"
+          },
+          "tool": "schedule_plan_change"
+        }
+      ],
+      "expect_state": {
+        "scheduled_changes.count": 1
+      },
+      "name": "schedule_plan_sequence"
+    },
+    {
+      "calls": [
+        {
+          "arguments": {
+            "actor_id": "U01_ADMIN",
+            "confirmation_code": "confirmed",
+            "effective_timing": "end_of_period",
+            "request_key": "req_seq_02",
+            "target_plan_id": "basic",
+            "target_seats": 6,
+            "tenant_id": "T01"
+          },
+          "tool": "schedule_plan_change"
+        },
+        {
+          "arguments": {
+            "actor_id": "U01_ADMIN",
+            "change_id": "PC1001",
+            "tenant_id": "T01"
+          },
+          "tool": "cancel_scheduled_change"
+        }
+      ],
+      "expect_state": {
+        "scheduled_changes.count": 1
+      },
+      "name": "schedule_and_cancel_sequence"
+    }
+  ],
+  "world_checks": {
+    "active_subscriptions_valid": "def check(world):\n    subs = world.state().get(\"subscriptions\", [])\n    active = [s for s in subs if s.get(\"status\") == \"active\"]\n    if len(active) < 10:\n        return f\"Expected at least 10 active subscriptions, found {len(active)}\"\n    return None\n",
+    "admin_users_exist": "def check(world):\n    users = world.state().get(\"users\", [])\n    admins = [u for u in users if u.get(\"role\") == \"billing_admin\"]\n    if len(admins) < 10:\n        return f\"Expected at least 10 billing admins across tenants, found {len(admins)}\"\n    return None\n",
+    "clock_set": "def check(world):\n    clock = world.state().get(\"clock\", [])\n    if not clock or not clock[0].get(\"now\"):\n        return \"World clock is missing or empty\"\n    return None\n",
+    "plans_populated": "def check(world):\n    plans = world.state().get(\"plans\", [])\n    if len(plans) < 4:\n        return f\"World must have at least 4 plans, found {len(plans)}\"\n    plan_ids = {p[\"plan_id\"] for p in plans}\n    for required_id in [\"starter\", \"basic\", \"pro\", \"enterprise\"]:\n        if required_id not in plan_ids:\n            return f\"Missing required plan {required_id!r}\"\n    return None\n"
+  }
+}

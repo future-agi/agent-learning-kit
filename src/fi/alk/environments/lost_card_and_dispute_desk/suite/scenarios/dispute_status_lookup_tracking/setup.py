@@ -1,0 +1,7 @@
+def setup(world):
+    world.put("customers", {"customer_id": "C106", "first_name": "Fiona", "last_name": "Miller", "email": "fiona.m@example.com", "phone": "+15551234106", "passcode": "6295", "kba_answer": "Charlie", "otp_code": "740182"})
+    world.put("accounts", {"account_id": "ACC106", "customer_id": "C106", "account_number": "1000000106", "account_type": "checking", "balance": 720000, "currency": "USD", "status": "active"})
+    world.put("cards", {"card_id": "CARD106", "account_id": "ACC106", "customer_id": "C106", "card_number_masked": "••••••••••••9901", "last_four": "9901", "card_type": "debit", "status": "active", "expiration_date": "2029-01-31", "locked_at": None})
+    world.put("sessions", {"session_id": "SESS106", "customer_id": "C106", "channel": "chat", "is_verified": False, "verified_at": None, "failed_attempts": 0, "created_at": "2026-10-26T11:50:00Z"})
+    world.put("transactions", {"transaction_id": "TX106", "account_id": "ACC106", "card_id": "CARD106", "merchant_name": "Home Depot", "amount": 5400, "currency": "USD", "status": "posted", "transaction_time": "2026-10-20T11:00:00Z", "description": "Home improvement"})
+    world.put("disputes", {"dispute_id": "D106", "transaction_id": "TX106", "customer_id": "C106", "amount": 5400, "currency": "USD", "dispute_reason": "incorrect_amount", "status": "under_review", "created_at": "2026-10-22T09:00:00Z", "updated_at": "2026-10-22T09:00:00Z", "request_key": "REQ-C106-TX106", "notes": "Incorrect amount billed"})

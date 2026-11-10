@@ -1,0 +1,794 @@
+[
+  {
+    "name": "list_calendars",
+    "description": "List Google Calendars accessible to the user with their timezone and access permissions.",
+    "parameters": {
+      "required": [
+        "min_access_role"
+      ],
+      "type": "object",
+      "properties": {
+        "min_access_role": {
+          "enum": [
+            "reader",
+            "writer",
+            "owner"
+          ],
+          "description": "Filter calendars with at least this access level (reader, writer, owner).",
+          "type": "string"
+        }
+      }
+    },
+    "mutates_state": false,
+    "returns": {
+      "required": [
+        "calendars"
+      ],
+      "properties": {
+        "calendars": {
+          "items": {
+            "properties": {
+              "summary": {
+                "type": "string"
+              },
+              "primary": {
+                "type": "boolean"
+              },
+              "time_zone": {
+                "type": "string"
+              },
+              "calendar_id": {
+                "type": "string"
+              },
+              "access_role": {
+                "type": "string"
+              },
+              "description": {
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    }
+  },
+  {
+    "name": "list_events",
+    "description": "List events from a specified calendar within an optional time window with pagination.",
+    "parameters": {
+      "properties": {
+        "time_max": {
+          "type": "string",
+          "description": "Upper bound (inclusive/exclusive boundary ISO-8601 string) for event filtering."
+        },
+        "calendar_id": {
+          "description": "ID of the calendar to fetch events from.",
+          "type": "string"
+        },
+        "time_min": {
+          "type": "string",
+          "description": "Lower bound (inclusive/exclusive boundary ISO-8601 string) for event filtering."
+        },
+        "max_results": {
+          "description": "Maximum number of events to return (default: 50).",
+          "type": "integer"
+        },
+        "page_token": {
+          "type": "string",
+          "description": "Token specifying the page offset to retrieve."
+        }
+      },
+      "required": [
+        "calendar_id"
+      ],
+      "type": "object"
+    },
+    "mutates_state": false,
+    "returns": {
+      "type": "object",
+      "properties": {
+        "nextPageToken": {
+          "type": "string"
+        },
+        "items": {
+          "items": {
+            "properties": {
+              "recurringEventId": {
+                "type": "string"
+              },
+              "summary": {
+                "type": "string"
+              },
+              "id": {
+                "type": "string"
+              },
+              "start": {
+                "properties": {
+                  "dateTime": {
+                    "type": "string"
+                  },
+                  "timeZone": {
+                    "type": "string"
+                  }
+                },
+                "type": "object"
+              },
+              "version": {
+                "type": "integer"
+              },
+              "status": {
+                "type": "string"
+              },
+              "location": {
+                "type": "string"
+              },
+              "end": {
+                "properties": {
+                  "timeZone": {
+                    "type": "string"
+                  },
+                  "dateTime": {
+                    "type": "string"
+                  }
+                },
+                "type": "object"
+              },
+              "recurrence": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "description": {
+                "type": "string"
+              },
+              "attendees": {
+                "type": "array",
+                "items": {
+                  "type": "object"
+                }
+              }
+            },
+            "type": "object"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "items"
+      ]
+    }
+  },
+  {
+    "name": "get_event",
+    "description": "Get details for a specific calendar event by ID.",
+    "parameters": {
+      "properties": {
+        "calendar_id": {
+          "type": "string",
+          "description": "ID of the calendar hosting the event."
+        },
+        "event_id": {
+          "description": "Unique ID of the event to retrieve.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "calendar_id",
+        "event_id"
+      ],
+      "type": "object"
+    },
+    "mutates_state": false,
+    "returns": {
+      "required": [
+        "id",
+        "calendarId",
+        "summary",
+        "start",
+        "end",
+        "status",
+        "version"
+      ],
+      "type": "object",
+      "properties": {
+        "created": {
+          "type": "string"
+        },
+        "calendarId": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "version": {
+          "type": "integer"
+        },
+        "attendees": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        },
+        "start": {
+          "type": "object",
+          "properties": {
+            "dateTime": {
+              "type": "string"
+            },
+            "timeZone": {
+              "type": "string"
+            }
+          }
+        },
+        "id": {
+          "type": "string"
+        },
+        "end": {
+          "properties": {
+            "timeZone": {
+              "type": "string"
+            },
+            "dateTime": {
+              "type": "string"
+            }
+          },
+          "type": "object"
+        },
+        "recurringEventId": {
+          "type": "string"
+        },
+        "location": {
+          "type": "string"
+        },
+        "recurrence": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "updated": {
+          "type": "string"
+        },
+        "summary": {
+          "type": "string"
+        }
+      }
+    }
+  },
+  {
+    "name": "search_events",
+    "description": "Search events across calendars matching query keywords, attendee emails, and time filters.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "time_max": {
+          "type": "string",
+          "description": "Filter events starting before this ISO-8601 timestamp."
+        },
+        "attendee_email": {
+          "description": "Filter events including this attendee.",
+          "type": "string"
+        },
+        "max_results": {
+          "type": "integer",
+          "description": "Maximum number of events to return (default: 20)."
+        },
+        "calendar_id": {
+          "type": "string",
+          "description": "Filter events on a specific calendar."
+        },
+        "time_min": {
+          "type": "string",
+          "description": "Filter events ending after this ISO-8601 timestamp."
+        },
+        "query": {
+          "type": "string",
+          "description": "Text search term for summary, description, or location."
+        }
+      }
+    },
+    "mutates_state": false,
+    "returns": {
+      "required": [
+        "items"
+      ],
+      "type": "object",
+      "properties": {
+        "items": {
+          "items": {
+            "properties": {
+              "description": {
+                "type": "string"
+              },
+              "calendarId": {
+                "type": "string"
+              },
+              "attendees": {
+                "type": "array",
+                "items": {
+                  "type": "object"
+                }
+              },
+              "location": {
+                "type": "string"
+              },
+              "status": {
+                "type": "string"
+              },
+              "start": {
+                "properties": {
+                  "timeZone": {
+                    "type": "string"
+                  },
+                  "dateTime": {
+                    "type": "string"
+                  }
+                },
+                "type": "object"
+              },
+              "end": {
+                "type": "object",
+                "properties": {
+                  "timeZone": {
+                    "type": "string"
+                  },
+                  "dateTime": {
+                    "type": "string"
+                  }
+                }
+              },
+              "version": {
+                "type": "integer"
+              },
+              "id": {
+                "type": "string"
+              },
+              "summary": {
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "type": "array"
+        }
+      }
+    }
+  },
+  {
+    "name": "suggest_time",
+    "description": "Suggest candidate meeting slots considering attendee schedules, working hours, and buffer times.",
+    "parameters": {
+      "type": "object",
+      "required": [
+        "attendees",
+        "duration_minutes",
+        "time_min",
+        "time_max"
+      ],
+      "properties": {
+        "time_zone": {
+          "type": "string",
+          "description": "Preferred output timezone string (e.g. UTC, America/New_York)."
+        },
+        "time_max": {
+          "description": "End of search window in ISO-8601 format.",
+          "type": "string"
+        },
+        "duration_minutes": {
+          "type": "integer",
+          "description": "Meeting duration in minutes."
+        },
+        "attendees": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "List of attendee email addresses to check overlapping availability for."
+        },
+        "time_min": {
+          "description": "Start of search window in ISO-8601 format.",
+          "type": "string"
+        },
+        "max_candidates": {
+          "type": "integer",
+          "description": "Maximum number of candidate slots to suggest (default: 5)."
+        }
+      }
+    },
+    "mutates_state": false,
+    "returns": {
+      "properties": {
+        "searchWindow": {
+          "properties": {
+            "end": {
+              "type": "string"
+            },
+            "start": {
+              "type": "string"
+            }
+          },
+          "type": "object"
+        },
+        "candidates": {
+          "type": "array",
+          "items": {
+            "properties": {
+              "start": {
+                "type": "string"
+              },
+              "timeZone": {
+                "type": "string"
+              },
+              "attendees": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "durationMinutes": {
+                "type": "integer"
+              },
+              "end": {
+                "type": "string"
+              }
+            },
+            "type": "object"
+          }
+        },
+        "bufferMinutesApplied": {
+          "type": "integer"
+        }
+      },
+      "type": "object",
+      "required": [
+        "candidates"
+      ]
+    }
+  },
+  {
+    "name": "create_event",
+    "description": "Create a new calendar event on a writable calendar after obtaining required approval.",
+    "parameters": {
+      "type": "object",
+      "required": [
+        "calendar_id",
+        "summary",
+        "start",
+        "end"
+      ],
+      "properties": {
+        "end": {
+          "description": "End time object or ISO string.",
+          "type": "object",
+          "properties": {
+            "dateTime": {
+              "type": "string"
+            },
+            "timeZone": {
+              "type": "string"
+            }
+          }
+        },
+        "attendees": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          },
+          "description": "List of attendee email strings or objects."
+        },
+        "description": {
+          "type": "string",
+          "description": "Optional description of the event."
+        },
+        "calendar_id": {
+          "type": "string",
+          "description": "Target calendar ID."
+        },
+        "location": {
+          "description": "Optional meeting location or URL.",
+          "type": "string"
+        },
+        "approval_id": {
+          "description": "Approval token authorizing the creation.",
+          "type": "string"
+        },
+        "summary": {
+          "type": "string",
+          "description": "Title or summary of the meeting."
+        },
+        "recurrence": {
+          "type": "string",
+          "description": "Optional recurrence rule (e.g. RRULE:FREQ=WEEKLY)."
+        },
+        "start": {
+          "description": "Start time object or ISO string.",
+          "type": "object",
+          "properties": {
+            "timeZone": {
+              "type": "string"
+            },
+            "dateTime": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    },
+    "mutates_state": true,
+    "returns": {
+      "required": [
+        "id",
+        "calendarId",
+        "summary",
+        "start",
+        "end",
+        "status",
+        "version"
+      ],
+      "type": "object",
+      "properties": {
+        "calendarId": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "created": {
+          "type": "string"
+        },
+        "summary": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "start": {
+          "properties": {
+            "dateTime": {
+              "type": "string"
+            },
+            "timeZone": {
+              "type": "string"
+            }
+          },
+          "type": "object"
+        },
+        "end": {
+          "properties": {
+            "dateTime": {
+              "type": "string"
+            },
+            "timeZone": {
+              "type": "string"
+            }
+          },
+          "type": "object"
+        },
+        "version": {
+          "type": "integer"
+        },
+        "updated": {
+          "type": "string"
+        },
+        "location": {
+          "type": "string"
+        },
+        "attendees": {
+          "items": {
+            "type": "object"
+          },
+          "type": "array"
+        }
+      }
+    }
+  },
+  {
+    "name": "update_event",
+    "description": "Update or reschedule an existing calendar event with concurrency control and conflict rechecking.",
+    "parameters": {
+      "required": [
+        "calendar_id",
+        "event_id"
+      ],
+      "properties": {
+        "description": {
+          "type": "string",
+          "description": "Updated event description."
+        },
+        "start": {
+          "properties": {
+            "timeZone": {
+              "type": "string"
+            },
+            "dateTime": {
+              "type": "string"
+            }
+          },
+          "description": "Updated start time object or ISO string.",
+          "type": "object"
+        },
+        "location": {
+          "description": "Updated location or video URL.",
+          "type": "string"
+        },
+        "end": {
+          "type": "object",
+          "properties": {
+            "dateTime": {
+              "type": "string"
+            },
+            "timeZone": {
+              "type": "string"
+            }
+          },
+          "description": "Updated end time object or ISO string."
+        },
+        "attendees": {
+          "items": {
+            "type": "object"
+          },
+          "description": "Updated list of attendee objects or email strings.",
+          "type": "array"
+        },
+        "calendar_id": {
+          "description": "Calendar hosting the event.",
+          "type": "string"
+        },
+        "event_id": {
+          "description": "ID of the event to update.",
+          "type": "string"
+        },
+        "approval_id": {
+          "description": "Approval token authorizing the update.",
+          "type": "string"
+        },
+        "expected_version": {
+          "type": "integer",
+          "description": "Expected current version for optimistic locking."
+        },
+        "summary": {
+          "description": "Updated event summary.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "mutates_state": true,
+    "returns": {
+      "required": [
+        "id",
+        "calendarId",
+        "summary",
+        "start",
+        "end",
+        "status",
+        "version"
+      ],
+      "properties": {
+        "end": {
+          "properties": {
+            "dateTime": {
+              "type": "string"
+            },
+            "timeZone": {
+              "type": "string"
+            }
+          },
+          "type": "object"
+        },
+        "id": {
+          "type": "string"
+        },
+        "start": {
+          "type": "object",
+          "properties": {
+            "timeZone": {
+              "type": "string"
+            },
+            "dateTime": {
+              "type": "string"
+            }
+          }
+        },
+        "summary": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "updated": {
+          "type": "string"
+        },
+        "location": {
+          "type": "string"
+        },
+        "version": {
+          "type": "integer"
+        },
+        "description": {
+          "type": "string"
+        },
+        "attendees": {
+          "items": {
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "calendarId": {
+          "type": "string"
+        }
+      },
+      "type": "object"
+    }
+  },
+  {
+    "name": "delete_event",
+    "description": "Cancel or delete a calendar event or occurrence after obtaining approval.",
+    "parameters": {
+      "properties": {
+        "recurring_action": {
+          "enum": [
+            "this_event",
+            "all_events"
+          ],
+          "description": "For recurring events: this_event (single instance) or all_events (series).",
+          "type": "string"
+        },
+        "event_id": {
+          "type": "string",
+          "description": "ID of the event to cancel or delete."
+        },
+        "calendar_id": {
+          "type": "string",
+          "description": "Target calendar ID."
+        },
+        "approval_id": {
+          "type": "string",
+          "description": "Approval token authorizing the deletion."
+        }
+      },
+      "required": [
+        "calendar_id",
+        "event_id"
+      ],
+      "type": "object"
+    },
+    "mutates_state": true,
+    "returns": {
+      "required": [
+        "deleted",
+        "eventId",
+        "calendarId",
+        "status"
+      ],
+      "properties": {
+        "calendarId": {
+          "type": "string"
+        },
+        "deleted": {
+          "type": "boolean"
+        },
+        "recurringAction": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "eventId": {
+          "type": "string"
+        }
+      },
+      "type": "object"
+    }
+  }
+]

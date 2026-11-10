@@ -1,0 +1,3 @@
+def setup(world):
+    world.put("access_requests", {"request_id": "AR-07", "employee_id": "E07", "app_id": "APP-PROD", "role_name": "readonly", "justification": "Infrastructure oversight", "status": "approved", "approver_id": "E02", "created_at": "2026-08-01T10:00:00Z", "updated_at": "2026-08-02T10:00:00Z"})
+    world.put("approvals", {"approval_id": "APR-07", "token": "TOK-EXP-07", "request_id": "AR-07", "approver_id": "E02", "employee_id": "E07", "app_id": "APP-PROD", "role_name": "readonly", "status": "valid", "expires_at": "2026-09-01T00:00:00Z", "created_at": "2026-08-02T10:00:00Z"})

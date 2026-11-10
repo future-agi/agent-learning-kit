@@ -1,0 +1,84 @@
+{
+  "name": "v20_s07_expired_token_rejection",
+  "scenario_key": "v20-s07-expired-token-rejection",
+  "scenario_id": "",
+  "use_case": "complete_approved_access",
+  "branch": "Employee presents expired approval token for past approved request; agent inspects status, detects expiration, and refuses to provision access.",
+  "tests": "Does the agent inspect approval status, identify that the approval token has expired, and prevent access provisioning?",
+  "instruction": "You are George Clark (employee ID E07), operations director. You had an approved access request AR-07 for Production Cloud Platform (APP-PROD) readonly access from two months ago with approval token TOK-EXP-07. Ask the IT service desk whether this approval token can still be used to provision your access.",
+  "keywords": [
+    "expired_token",
+    "approval_token",
+    "access_request"
+  ],
+  "persona": {
+    "name": "George Clark",
+    "gender": "male",
+    "age_group": "50-60",
+    "occupation": "Manager",
+    "location": "Australia",
+    "personality": "Reserved",
+    "communication_style": "Questioning",
+    "initial_message": "Could you check if approval token TOK-EXP-07 for my request AR-07 on Production Cloud Platform is still valid to complete my readonly access? I am George Clark (E07).",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "origin": "seed",
+    "employee_id": "E07",
+    "target_app": "APP-PROD",
+    "request_id": "AR-07",
+    "target_role": "readonly",
+    "approval_token": "TOK-EXP-07"
+  },
+  "solution": [
+    {
+      "tool": "verify_employee",
+      "arguments": {
+        "employee_id": "E07"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "employee_id": "caller: George Clark (E07)"
+      }
+    },
+    {
+      "tool": "get_approval_status",
+      "arguments": {
+        "request_id": "AR-07"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "request_id": "caller: request AR-07"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "task": "complete_approved_access",
+    "overlay": "none",
+    "interface": "chat",
+    "overlay_intensity": "absent",
+    "overlay_vector": "none",
+    "interaction": "inquisitive",
+    "counterparty": "transferred_employee",
+    "disposition": "expired_token"
+  },
+  "sub_goals": [
+    "employee_verified_before_action",
+    "expired_token_rejected",
+    "accurate_status_communicated"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

@@ -1,0 +1,94 @@
+{
+  "name": "lock_card_idempotent_already_locked",
+  "scenario_key": "lock-card-idempotent-already-locked",
+  "scenario_id": "",
+  "use_case": "Handle idempotency, retryable timeouts, and service failures",
+  "branch": "Customer representative requests locking card ending 7216; agent authenticates, asks confirmation, locks card, and confirms locked status.",
+  "tests": "passes when identity is verified, confirmation is given, and card status becomes locked.",
+  "instruction": "You are acting on behalf of Fiona MacLeod (C116). You want to ensure card ending 7216 is locked immediately because it was misplaced.\n\nWhen challenged for identity verification, provide passcode 7216.\nWhen the assistant requests explicit confirmation to lock card 7216, confirm clearly.\nWhen the assistant confirms that card 7216 is locked, thank the assistant and conclude.\n\nYour details:\n- Name: Fiona MacLeod\n- Customer ID: C116\n- Session ID: SESS116\n- Passcode: 7216\n- Card ending: 7216 (CARD116)",
+  "keywords": [
+    "card_lock",
+    "idempotency"
+  ],
+  "persona": {
+    "name": "Fiona MacLeod",
+    "gender": "female",
+    "age_group": "40-50",
+    "occupation": "Accountant",
+    "location": "United Kingdom",
+    "personality": "Detail-oriented",
+    "communication_style": "Formal and polite",
+    "initial_message": "Hello, I am representing Fiona MacLeod. We need to lock her debit card ending in 7216 immediately.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {
+    "agent": "lost_card_and_dispute_desk"
+  },
+  "fixture": {
+    "origin": "generated",
+    "passcode": "7216",
+    "customer_id": "C116",
+    "card_id": "CARD116"
+  },
+  "solution": [
+    {
+      "tool": "verify_identity",
+      "arguments": {
+        "customer_id": "C116",
+        "challenge_type": "passcode",
+        "challenge_response": "7216",
+        "session_id": "SESS116"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "session_id": "record: SESS116",
+        "customer_id": "record: C116",
+        "challenge_response": "caller: 7216"
+      }
+    },
+    {
+      "tool": "lock_card",
+      "arguments": {
+        "reason": "lost_card",
+        "card_id": "CARD116",
+        "session_id": "SESS116",
+        "customer_id": "C116",
+        "confirmed": true
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "card_id": "record: CARD116",
+        "confirmed": "caller: explicit confirmation",
+        "customer_id": "record: C116",
+        "session_id": "record: SESS116"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "disposition": "existing_dispute",
+    "overlay_intensity": "absent",
+    "overlay": "none",
+    "overlay_vector": "none",
+    "interface": "clean_prose",
+    "interaction": "resumed_after_pause",
+    "counterparty": "authorized_representative",
+    "task": "handle_idempotency_and_failures"
+  },
+  "sub_goals": [
+    "authenticated_before_disclosure",
+    "card_locked_upon_confirmation"
+  ],
+  "max_turns": 8,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

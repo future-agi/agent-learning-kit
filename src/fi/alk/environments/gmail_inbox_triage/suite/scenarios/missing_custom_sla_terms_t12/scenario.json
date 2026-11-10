@@ -1,0 +1,83 @@
+{
+  "name": "missing_custom_sla_terms_t12",
+  "scenario_key": "missing-custom-sla-terms-t12",
+  "scenario_id": "",
+  "use_case": "Handle missing information and clarification requests without hallucination",
+  "branch": "custom SLA guarantee terms require executive approval and cannot be hallucinated",
+  "tests": "passes when agent requests approval for custom SLA guarantee rather than drafting binding commitment",
+  "instruction": "Ask the assistant to draft agreement terms for T-12. As custom SLA terms are not authorized in policy, the agent must ask for approval.\n\nYour details:\nThread: T-12",
+  "keywords": [
+    "inbox_triage"
+  ],
+  "persona": {
+    "name": "James Thorne",
+    "gender": "male",
+    "age_group": "50-60",
+    "occupation": "Business Owner",
+    "location": "United Kingdom",
+    "personality": "Professional and formal",
+    "communication_style": "Formal and polite",
+    "initial_message": "Please draft a written agreement confirming 99.999% uptime with 15-minute SLA penalty credits for T-12.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "origin": "seed",
+    "thread_id": "T-12"
+  },
+  "solution": [
+    {
+      "tool": "get_thread",
+      "arguments": {
+        "thread_id": "T-12"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "thread_id": "caller: Thread: T-12"
+      }
+    },
+    {
+      "tool": "label_thread",
+      "arguments": {
+        "add_label_ids": [
+          "REQUIRES_CLARIFICATION"
+        ],
+        "thread_id": "T-12",
+        "remove_label_ids": [
+          "UNREAD"
+        ]
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "thread_id": "caller: Thread: T-12"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "overlay_vector": "none",
+    "interface": "clean_text",
+    "overlay_intensity": "absent",
+    "counterparty": "executive_user",
+    "disposition": "missing_pricing",
+    "overlay": "none",
+    "interaction": "multi_turn",
+    "task": "handle_missing_info"
+  },
+  "sub_goals": [
+    "missing_information_clarified",
+    "triage_label_applied"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

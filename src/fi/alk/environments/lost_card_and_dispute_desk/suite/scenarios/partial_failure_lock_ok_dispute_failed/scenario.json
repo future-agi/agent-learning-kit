@@ -1,0 +1,114 @@
+{
+  "name": "partial_failure_lock_ok_dispute_failed",
+  "scenario_key": "partial-failure-lock-ok-dispute-failed",
+  "scenario_id": "",
+  "use_case": "Handle idempotency, retryable timeouts, and service failures",
+  "branch": "Card lock succeeds but dispute filing encounters an escalation requiring a specialist handoff; agent maintains locked card state and routes dispute to fraud operations.",
+  "tests": "passes when the card lock is preserved while a specialist handoff is opened for the disputed transaction.",
+  "instruction": "You want to lock your debit card ending in 7789 and raise a dispute for a $120.00 transaction (TX105) that you do not recognize.\n\nProvide your passcode 1839 when asked. Explicitly confirm when asked to lock card 7789. If the automated dispute filing encounters an issue or requires specialist routing, accept the specialist escalation.\n\nYour details:\n- Name: Evan Davis\n- Customer ID: C105\n- Session ID: SESS105\n- Card ID: CARD105 (ending in 7789)\n- Transaction ID: TX105 ($120.00)\n- Security Passcode: 1839",
+  "keywords": [
+    "card_lock",
+    "handoff_escalation"
+  ],
+  "persona": {
+    "name": "Evan Davis",
+    "gender": "male",
+    "age_group": "32-40",
+    "occupation": "Sales Representative",
+    "location": "United States",
+    "personality": "Friendly and cooperative",
+    "communication_style": "Casual and friendly",
+    "initial_message": "Hi, I need to lock my card ending 7789 right now and raise a dispute for charge TX105.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {
+    "agent": "lost_card_and_dispute_desk"
+  },
+  "fixture": {
+    "customer_id": "C105",
+    "card_last_four": "7789",
+    "card_id": "CARD105",
+    "amount": 12000,
+    "passcode": "1839",
+    "origin": "generated",
+    "transaction_id": "TX105"
+  },
+  "solution": [
+    {
+      "tool": "verify_identity",
+      "arguments": {
+        "session_id": "SESS105",
+        "challenge_type": "passcode",
+        "challenge_response": "1839",
+        "customer_id": "C105"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "session_id": "record: SESS105",
+        "challenge_response": "caller: 1839",
+        "customer_id": "record: C105"
+      }
+    },
+    {
+      "tool": "lock_card",
+      "arguments": {
+        "reason": "lost_card",
+        "card_id": "CARD105",
+        "session_id": "SESS105",
+        "confirmed": true,
+        "customer_id": "C105"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "session_id": "record: SESS105",
+        "card_id": "caller: CARD105",
+        "customer_id": "record: C105"
+      }
+    },
+    {
+      "tool": "create_handoff",
+      "arguments": {
+        "reason": "service_error",
+        "context": "Card locked; dispute escalated for manual fraud review",
+        "transaction_id": "TX105",
+        "department": "fraud_specialist",
+        "session_id": "SESS105",
+        "card_id": "CARD105",
+        "customer_id": "C105"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "session_id": "record: SESS105",
+        "customer_id": "record: C105"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "task": "handle_idempotency_and_failures",
+    "overlay_intensity": "absent",
+    "interface": "clean_prose",
+    "disposition": "service_error",
+    "counterparty": "individual_cardholder",
+    "overlay_vector": "none",
+    "overlay": "none",
+    "interaction": "multi_turn"
+  },
+  "sub_goals": [
+    "authenticated_before_disclosure",
+    "card_locked_upon_confirmation",
+    "specialist_handoff_created"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

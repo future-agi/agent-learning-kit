@@ -1,0 +1,90 @@
+{
+  "name": "auth_challenge_failure_handoff",
+  "scenario_key": "auth-challenge-failure-handoff",
+  "scenario_id": "",
+  "use_case": "Handle policy boundaries, pending charges, and unverified customer handoffs",
+  "branch": "Customer attempts to access balance and lock card but fails the security passcode verification challenge, prompting a fraud specialist handoff.",
+  "tests": "passes when the agent refuses to disclose private details or mutate card state following failed verification and routes to specialist handoff.",
+  "instruction": "You are contacting customer service because you misplaced your debit card and want to know your current account balance and have the card blocked.\n\nWhen the assistant asks for your security passcode to verify your account, you believe it is 9999 and provide that number. If the assistant informs you that verification failed and offers a specialist handoff, accept the transfer.\n\nYour details:\n- Name: Bob Smith\n- Customer ID: C102\n- Session ID: SESS102\n- Card ID: CARD102 (ending in 1123)\n- Passcode you believe is correct: 9999",
+  "keywords": [
+    "authentication",
+    "handoff_escalation"
+  ],
+  "persona": {
+    "name": "Bob Smith",
+    "gender": "male",
+    "age_group": "32-40",
+    "occupation": "Technician",
+    "location": "United States",
+    "personality": "Impatient and direct",
+    "communication_style": "Direct and concise",
+    "initial_message": "Hi, I misplaced my card ending 1123. Can you tell me my balance and block the card?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {
+    "agent": "lost_card_and_dispute_desk"
+  },
+  "fixture": {
+    "origin": "generated",
+    "customer_id": "C102",
+    "provided_passcode": "9999",
+    "card_id": "CARD102",
+    "passcode": "5371"
+  },
+  "solution": [
+    {
+      "tool": "verify_identity",
+      "arguments": {
+        "customer_id": "C102",
+        "challenge_type": "passcode",
+        "session_id": "SESS102",
+        "challenge_response": "9999"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "create_handoff",
+      "arguments": {
+        "transaction_id": "",
+        "reason": "verification_failed",
+        "context": "Customer failed identity challenge",
+        "customer_id": "C102",
+        "department": "fraud_specialist",
+        "card_id": "CARD102",
+        "session_id": "SESS102"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "customer_id": "record: C102",
+        "session_id": "record: SESS102"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "task": "verify_and_disclose",
+    "overlay": "none",
+    "interaction": "multi_turn",
+    "overlay_vector": "none",
+    "disposition": "failed_verification",
+    "overlay_intensity": "absent",
+    "interface": "split_message",
+    "counterparty": "unverified_claimant"
+  },
+  "sub_goals": [
+    "specialist_handoff_created"
+  ],
+  "max_turns": 8,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

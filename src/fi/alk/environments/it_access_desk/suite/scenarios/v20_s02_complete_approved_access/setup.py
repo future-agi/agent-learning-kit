@@ -1,0 +1,3 @@
+def setup(world):
+    world.put("access_requests", {"request_id": "AR-01", "employee_id": "E02", "app_id": "APP-CODE", "role_name": "read", "justification": "Repository read access for code reviews", "status": "approved", "approver_id": "E05", "created_at": "2026-10-25T10:00:00Z", "updated_at": "2026-10-25T14:00:00Z"})
+    world.put("approvals", {"approval_id": "APR-01", "token": "TOK-APP-01", "request_id": "AR-01", "approver_id": "E05", "employee_id": "E02", "app_id": "APP-CODE", "role_name": "read", "status": "valid", "expires_at": "2026-11-25T14:00:00Z", "created_at": "2026-10-25T14:00:00Z"})

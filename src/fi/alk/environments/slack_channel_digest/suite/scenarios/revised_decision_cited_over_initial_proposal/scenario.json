@@ -1,0 +1,83 @@
+{
+  "name": "revised_decision_cited_over_initial_proposal",
+  "scenario_key": "revised-decision-cited-over-initial-proposal",
+  "scenario_id": "",
+  "use_case": "synthesis_and_correction_handling",
+  "branch": "An initial message proposed Friday as the launch date, but a later authorized revision corrected the launch date to Monday.",
+  "tests": "The agent searches the channel, retrieves the thread, and cites the final corrected date (Monday November 4th) rather than the earlier superseded proposal.",
+  "instruction": "You want to find out the final confirmed launch date from the discussion in the proj-launch channel (C01). There was an earlier proposal and a subsequent update. Ask the assistant what the final launch date is and to cite the source.\n\nYour details:\n- Your user ID: U02 (Bob Engineer)\n- Channel: C01 (proj-launch)\n- Topic: Launch schedule",
+  "keywords": [
+    "correction_handling"
+  ],
+  "persona": {
+    "name": "Bob Engineer",
+    "gender": "male",
+    "age_group": "25-32",
+    "occupation": "Engineer",
+    "location": "United States",
+    "personality": "Detail-oriented",
+    "communication_style": "Simple and clear",
+    "initial_message": "What is the final confirmed launch date according to the discussions in proj-launch?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "channel_id": "C01",
+    "thread_ts": "1729840000.000100",
+    "origin": "generated",
+    "user_id": "U02"
+  },
+  "solution": [
+    {
+      "tool": "slack_search_messages",
+      "arguments": {
+        "actor_id": "U02",
+        "cursor": "0",
+        "limit": 10,
+        "channel_id": "C01"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "channel_id": "caller: C01"
+      }
+    },
+    {
+      "tool": "slack_get_thread",
+      "arguments": {
+        "thread_ts": "1729840000.000100",
+        "channel_id": "C01",
+        "cursor": "0",
+        "limit": 10,
+        "actor_id": "U02"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "interaction": "correction",
+    "overlay_vector": "none",
+    "counterparty": "team_member",
+    "overlay": "none",
+    "task": "synthesis_correction",
+    "overlay_intensity": "absent",
+    "disposition": "revised",
+    "interface": "clean_prose"
+  },
+  "sub_goals": [
+    "correction_accurately_cited"
+  ],
+  "max_turns": 6,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

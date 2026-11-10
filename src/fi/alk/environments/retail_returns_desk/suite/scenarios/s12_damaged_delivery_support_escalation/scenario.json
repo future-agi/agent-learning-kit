@@ -1,0 +1,89 @@
+{
+  "name": "s12_damaged_delivery_support_escalation",
+  "scenario_key": "s12-damaged-delivery-support-escalation",
+  "scenario_id": "",
+  "use_case": "Support case escalation and service error recovery",
+  "branch": "Customer reports delivered package for order O12 was damaged in transit; agent verifies identity and creates support escalation ticket",
+  "tests": "the agent verifies order ownership on order O12 and creates an escalated support case for transit damage",
+  "instruction": "You received order O12 yesterday, but the packaging and items arrived damaged during transit. You want the agent to verify your order and open a formal support ticket for a replacement review.\n\nYour details:\n- Name: Leo Fitz\n- Email: leo.fitz@example.com\n- Postal Code: 75001\n- Order ID: O12\n- Issue: Damaged in transit",
+  "keywords": [
+    "support_escalation"
+  ],
+  "persona": {
+    "name": "Leo Fitz",
+    "gender": "male",
+    "age_group": "32-40",
+    "occupation": "Technician",
+    "location": "India",
+    "personality": "Anxious",
+    "communication_style": "Detailed and elaborate",
+    "initial_message": "Hello support desk. I received my package for order O12 yesterday, but the box was severely crushed and the contents were damaged during transit. I need someone to review this right away.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "origin": "seed",
+    "order_id": "O12",
+    "customer_id": "C12"
+  },
+  "solution": [
+    {
+      "tool": "verify_order_owner",
+      "arguments": {
+        "customer_id": "C12",
+        "postal_code": "75001",
+        "order_id": "O12",
+        "email": "leo.fitz@example.com"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_order",
+      "arguments": {
+        "order_id": "O12"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "create_support_case",
+      "arguments": {
+        "customer_id": "C12",
+        "subject": "Damaged goods upon delivery for order O12",
+        "details": "Customer received damaged package and goods for order O12; requesting expedited replacement or supervisor review.",
+        "order_id": "O12"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "customer_id": "record: customer C12"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "task": "escalate_service_failure",
+    "counterparty": "verified_owner",
+    "disposition": "disputing_policy",
+    "overlay": "none",
+    "interface": "wall_of_text",
+    "interaction": "correction_mid_turn",
+    "overlay_vector": "none",
+    "overlay_intensity": "absent"
+  },
+  "sub_goals": [
+    "subgoal_support_case_created"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

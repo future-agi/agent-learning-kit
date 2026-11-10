@@ -1,0 +1,75 @@
+{
+  "name": "ambiguous_owner_name_clarification",
+  "scenario_key": "ambiguous-owner-name-clarification",
+  "scenario_id": "",
+  "use_case": "Disambiguate workspace user owners and resolve grounded due dates",
+  "branch": "Notes in N-06 mention an action assigned to 'Alex' with two matching users in the workspace",
+  "tests": "Agent fetches notes, notices ambiguous owner Alex, and asks for clarification before creating records",
+  "instruction": "You are checking the Operations Triage meeting notes (page N-06). Ask the assistant to assign Alex the follow-up task. You will clarify which Alex (Alex Rivera vs Alex Chen) only if the assistant asks.\n\nYour details:\nMeeting page ID: N-06\nTarget database: db_action_tracker\nAmbiguous assignment in notes: Alex\nAvailable users: Alex Rivera (user_alex_rivera), Alex Chen (user_alex_chen)\nIntended assignee if asked: Alex Rivera",
+  "keywords": [
+    "action_extraction",
+    "owner_disambiguation",
+    "schema_compliance"
+  ],
+  "persona": {
+    "name": "Marcus Wright",
+    "gender": "male",
+    "age_group": "32-40",
+    "occupation": "Technician",
+    "location": "United States",
+    "personality": "Impatient and direct",
+    "communication_style": "Casual and friendly",
+    "initial_message": "Hey, can you assign Alex the follow-up task from our triage meeting notes on N-06?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "database_id": "db_action_tracker",
+    "page_id": "N-06",
+    "origin": "seed"
+  },
+  "solution": [
+    {
+      "tool": "notion_fetch_page",
+      "arguments": {
+        "page_id": "N-06"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "notion_get_database_schema",
+      "arguments": {
+        "database_id": "db_action_tracker"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "overlay_vector": "none",
+    "overlay": "none",
+    "overlay_intensity": "absent",
+    "task": "disambiguate_owners",
+    "counterparty": "member",
+    "interface": "clean_prose",
+    "disposition": "ambiguous",
+    "interaction": "multi_turn"
+  },
+  "sub_goals": [
+    "ambiguous_owner_disambiguated"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

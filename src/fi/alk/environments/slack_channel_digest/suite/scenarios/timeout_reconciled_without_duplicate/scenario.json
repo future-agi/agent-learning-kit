@@ -1,0 +1,78 @@
+{
+  "name": "timeout_reconciled_without_duplicate",
+  "scenario_key": "timeout-reconciled-without-duplicate",
+  "scenario_id": "",
+  "use_case": "idempotent_posting_and_timeout_reconciliation",
+  "branch": "A prior post request with request_key REQ-TIMEOUT-501 already committed to the ledger; the agent reconciles delivery status and avoids creating a duplicate post.",
+  "tests": "The agent checks the message delivery ledger for the timed-out request key and verifies delivery without posting a duplicate message.",
+  "instruction": "You previously attempted to publish the project digest to channel C01 with request key REQ-TIMEOUT-501, but the network request encountered a timeout. Check the channel info and verify whether the message was delivered before taking any further action, and do not duplicate the post.\n\nYour details:\n- Your user ID: U01 (Alice Director)\n- Destination channel: C01 (proj-launch)\n- Request key: REQ-TIMEOUT-501",
+  "keywords": [
+    "timeout_reconciliation"
+  ],
+  "persona": {
+    "name": "Alice Director",
+    "gender": "female",
+    "age_group": "40-50",
+    "occupation": "Engineer",
+    "location": "United States",
+    "personality": "Analytical",
+    "communication_style": "Technical",
+    "initial_message": "Our previous digest post to C01 with request key REQ-TIMEOUT-501 timed out. Please check its status to make sure it was not double-posted.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "user_id": "U01",
+    "message_id": "MSG-NEW-501",
+    "request_key": "REQ-TIMEOUT-501",
+    "channel_id": "C01",
+    "origin": "generated"
+  },
+  "solution": [
+    {
+      "tool": "slack_get_channel_info",
+      "arguments": {
+        "actor_id": "U01",
+        "channel_id": "C01"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "slack_check_message_status",
+      "arguments": {
+        "request_key": "REQ-TIMEOUT-501"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "request_key": "caller: REQ-TIMEOUT-501"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "overlay": "none",
+    "task": "idempotent_reconciliation",
+    "disposition": "timeout_retry",
+    "counterparty": "lead_engineer",
+    "overlay_vector": "none",
+    "interface": "clean_prose",
+    "interaction": "resumed",
+    "overlay_intensity": "absent"
+  },
+  "sub_goals": [
+    "timeout_reconciled_idempotently"
+  ],
+  "max_turns": 6,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

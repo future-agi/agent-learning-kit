@@ -1,0 +1,76 @@
+{
+  "name": "ambiguous_dst_booking",
+  "scenario_key": "ambiguous-dst-booking",
+  "scenario_id": "",
+  "use_case": "Handle Conflicts, Timezone Ambiguity & Stale Availability",
+  "branch": "Requested local time falls on the fall daylight saving transition boundary where 1:30 AM occurs twice; agent must clarify before booking.",
+  "tests": "the agent asks for clarification on ambiguous daylight-saving transition times before booking.",
+  "instruction": "You need to schedule an event on your primary calendar for November 1, 2026 at 1:30 AM (Eastern Time).\nNovember 1 is the daylight saving time fall transition in New York where clocks roll back from 2:00 AM to 1:00 AM, making 1:30 AM occur twice (EDT UTC-4 and EST UTC-5).\nAsk the assistant to book 1:30 AM on that transition date.\nIf the assistant asks whether you mean the first 1:30 AM (EDT) or second 1:30 AM (EST), clarify that you mean the first occurrence (EDT).\n\nYour details:\n- Event: System Maintenance Window\n- Requested date: 2026-11-01\n- Requested time: 1:30 AM Eastern Time\n- Calendar: CAL-PRIMARY",
+  "keywords": [
+    "dst_transition"
+  ],
+  "persona": {
+    "name": "David Miller",
+    "gender": "male",
+    "age_group": "40-50",
+    "occupation": "Engineer",
+    "location": "United States",
+    "personality": "Analytical",
+    "communication_style": "Technical",
+    "initial_message": "Please schedule a System Maintenance Window on my primary calendar for November 1, 2026 at 1:30 AM Eastern Time.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "requested_time": "2026-11-01T01:30:00",
+    "origin": "seed",
+    "calendar_id": "CAL-PRIMARY",
+    "timezone": "America/New_York"
+  },
+  "solution": [
+    {
+      "tool": "list_calendars",
+      "arguments": {
+        "min_access_role": "writer"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "list_events",
+      "arguments": {
+        "time_min": "2026-11-01T00:00:00Z",
+        "calendar_id": "CAL-PRIMARY",
+        "time_max": "2026-11-01T23:59:59Z"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "overlay_intensity": "absent",
+    "interface": "clean_text",
+    "overlay": "none",
+    "disposition": "dst_boundary",
+    "overlay_vector": "none",
+    "counterparty": "self",
+    "task": "handle_conflicts_and_dst",
+    "interaction": "single_request"
+  },
+  "sub_goals": [
+    "clarifies_ambiguous_dst_time"
+  ],
+  "max_turns": 6,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

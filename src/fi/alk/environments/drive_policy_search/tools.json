@@ -1,0 +1,249 @@
+[
+  {
+    "name": "search_files",
+    "description": "Search accessible Google Drive policy files by keyword query and optional folder filter with pagination.",
+    "parameters": {
+      "properties": {
+        "query": {
+          "type": "string"
+        },
+        "page_token": {
+          "type": "string"
+        },
+        "folder_id": {
+          "type": "string"
+        },
+        "page_size": {
+          "type": "integer"
+        }
+      },
+      "type": "object",
+      "required": [
+        "query"
+      ]
+    },
+    "mutates_state": false,
+    "returns": {
+      "type": "object",
+      "properties": {
+        "files": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        },
+        "next_page_token": {
+          "type": "string"
+        },
+        "total_results": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "files",
+        "total_results"
+      ]
+    }
+  },
+  {
+    "name": "list_recent_files",
+    "description": "List recently modified accessible files in Google Drive within a folder, with pagination.",
+    "parameters": {
+      "required": [
+        "folder_id"
+      ],
+      "properties": {
+        "folder_id": {
+          "type": "string"
+        },
+        "page_size": {
+          "type": "integer"
+        },
+        "page_token": {
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "mutates_state": false,
+    "returns": {
+      "required": [
+        "files",
+        "total_results"
+      ],
+      "type": "object",
+      "properties": {
+        "files": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        },
+        "next_page_token": {
+          "type": "string"
+        },
+        "total_results": {
+          "type": "integer"
+        }
+      }
+    }
+  },
+  {
+    "name": "get_file_metadata",
+    "description": "Retrieve metadata for a Google Drive file, including version, status, effective date, and folder placement. Enforces ACLs and refuses deleted files.",
+    "parameters": {
+      "properties": {
+        "file_id": {
+          "type": "string"
+        }
+      },
+      "type": "object",
+      "required": [
+        "file_id"
+      ]
+    },
+    "mutates_state": false,
+    "returns": {
+      "required": [
+        "file_id",
+        "folder_id",
+        "mime_type",
+        "status",
+        "title",
+        "version"
+      ],
+      "properties": {
+        "created_at": {
+          "type": "string"
+        },
+        "file_id": {
+          "type": "string"
+        },
+        "effective_date": {
+          "type": "string"
+        },
+        "policy_family": {
+          "type": "string"
+        },
+        "mime_type": {
+          "type": "string"
+        },
+        "modified_at": {
+          "type": "string"
+        },
+        "folder_id": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "version": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "owner_id": {
+          "type": "string"
+        }
+      },
+      "type": "object"
+    }
+  },
+  {
+    "name": "get_file_permissions",
+    "description": "Get access control list (ACL) and permissions for a Google Drive file and its parent folder. Enforces ACL check on caller.",
+    "parameters": {
+      "properties": {
+        "file_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "file_id"
+      ],
+      "type": "object"
+    },
+    "mutates_state": false,
+    "returns": {
+      "properties": {
+        "owner_id": {
+          "type": "string"
+        },
+        "permissions": {
+          "items": {
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "file_id": {
+          "type": "string"
+        },
+        "folder_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "file_id",
+        "permissions"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "name": "read_file_content",
+    "description": "Read the text content of a Google Drive document or specific revision. Enforces ACLs, version metadata, and refuses binary or deleted files.",
+    "parameters": {
+      "required": [
+        "file_id"
+      ],
+      "properties": {
+        "file_id": {
+          "type": "string"
+        },
+        "revision_id": {
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "mutates_state": false,
+    "returns": {
+      "properties": {
+        "mime_type": {
+          "type": "string"
+        },
+        "effective_date": {
+          "type": "string"
+        },
+        "file_id": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "revision_id": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "version": {
+          "type": "string"
+        },
+        "content": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "content",
+        "file_id",
+        "mime_type",
+        "status",
+        "title",
+        "version"
+      ],
+      "type": "object"
+    }
+  }
+]

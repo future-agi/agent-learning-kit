@@ -1,0 +1,73 @@
+{
+  "name": "m04_s06_unsupported_binary_format",
+  "scenario_key": "m04-s06-unsupported-binary-format",
+  "scenario_id": "",
+  "use_case": "Policy lookup and version-aware citation",
+  "branch": "The user asks to read a scanned procurement signature document stored in binary format. The tool returns an unsupported format error, and the agent must report the limitation rather than fabricating document contents.",
+  "tests": "the agent reports that the document is in an unsupported binary format and cannot be read as text.",
+  "instruction": "You need details from the scanned signature document under procurement. Ask the assistant to check the contents of Scanned Signature Document.bin.\n\nYour details:\n- Document: Scanned Signature Document.bin\n- File ID: file_binary_scan",
+  "keywords": [
+    "scan"
+  ],
+  "persona": {
+    "name": "Liam Gallagher",
+    "gender": "male",
+    "age_group": "25-32",
+    "occupation": "Accountant",
+    "location": "United States",
+    "personality": "Detail-oriented",
+    "communication_style": "Simple and clear",
+    "initial_message": "Can you read and summarize Scanned Signature Document.bin for me?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "origin": "seed"
+  },
+  "solution": [
+    {
+      "tool": "search_files",
+      "arguments": {
+        "query": "scanned signature"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "read_file_content",
+      "arguments": {
+        "file_id": "file_binary_scan"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "file_id": "record: files.file_id for binary signature file"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "counterparty": "accountant",
+    "interface": "clean_prose",
+    "interaction": "single_request",
+    "task": "read_binary_file",
+    "overlay": "none",
+    "disposition": "unsupported_format",
+    "overlay_vector": "none",
+    "overlay_intensity": "absent"
+  },
+  "sub_goals": [
+    "discloses_unsupported_format_limitation"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

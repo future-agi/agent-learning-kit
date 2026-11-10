@@ -1,0 +1,515 @@
+[
+  {
+    "name": "verify_billing_admin",
+    "description": "Verify whether an actor has the billing_admin role for a tenant.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "tenant_id": {
+          "type": "string"
+        },
+        "actor_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "tenant_id",
+        "actor_id"
+      ]
+    },
+    "mutates_state": false,
+    "returns": {
+      "type": "object",
+      "properties": {
+        "is_admin": {
+          "type": "boolean"
+        },
+        "actor_name": {
+          "type": "string"
+        },
+        "role": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "is_admin",
+        "role",
+        "actor_name"
+      ]
+    }
+  },
+  {
+    "name": "get_subscription",
+    "description": "Retrieve subscription details for a tenant including plan, seat count, period dates, status, and pending scheduled changes.",
+    "parameters": {
+      "properties": {
+        "tenant_id": {
+          "type": "string"
+        },
+        "actor_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "tenant_id",
+        "actor_id"
+      ],
+      "type": "object"
+    },
+    "mutates_state": false,
+    "returns": {
+      "type": "object",
+      "properties": {
+        "current_period_end": {
+          "type": "string"
+        },
+        "plan_name": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "seat_count": {
+          "type": "integer"
+        },
+        "plan_id": {
+          "type": "string"
+        },
+        "subscription_id": {
+          "type": "string"
+        },
+        "cancel_at_period_end": {
+          "type": "boolean"
+        },
+        "current_period_start": {
+          "type": "string"
+        },
+        "pending_change": {
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "tenant_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "subscription_id",
+        "tenant_id",
+        "plan_id",
+        "plan_name",
+        "status",
+        "seat_count",
+        "current_period_start",
+        "current_period_end",
+        "cancel_at_period_end"
+      ]
+    }
+  },
+  {
+    "name": "get_invoice_lines",
+    "description": "Retrieve detailed line items and totals for an invoice. Only billing admins can view line-level breakdown.",
+    "parameters": {
+      "required": [
+        "tenant_id",
+        "invoice_id",
+        "actor_id"
+      ],
+      "type": "object",
+      "properties": {
+        "actor_id": {
+          "type": "string"
+        },
+        "invoice_id": {
+          "type": "string"
+        },
+        "tenant_id": {
+          "type": "string"
+        }
+      }
+    },
+    "mutates_state": false,
+    "returns": {
+      "properties": {
+        "tax_cents": {
+          "type": "integer"
+        },
+        "status": {
+          "type": "string"
+        },
+        "period_start": {
+          "type": "string"
+        },
+        "subtotal_cents": {
+          "type": "integer"
+        },
+        "lines": {
+          "items": {
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "total_cents": {
+          "type": "integer"
+        },
+        "invoice_id": {
+          "type": "string"
+        },
+        "period_end": {
+          "type": "string"
+        },
+        "tenant_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "invoice_id",
+        "tenant_id",
+        "period_start",
+        "period_end",
+        "subtotal_cents",
+        "tax_cents",
+        "total_cents",
+        "status",
+        "lines"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "name": "get_usage",
+    "description": "Retrieve usage metrics (such as active seats) for a tenant.",
+    "parameters": {
+      "required": [
+        "tenant_id",
+        "metric",
+        "actor_id"
+      ],
+      "properties": {
+        "tenant_id": {
+          "type": "string"
+        },
+        "metric": {
+          "type": "string"
+        },
+        "actor_id": {
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "mutates_state": false,
+    "returns": {
+      "properties": {
+        "current_value": {
+          "type": "integer"
+        },
+        "metric": {
+          "type": "string"
+        },
+        "period_start": {
+          "type": "string"
+        },
+        "period_end": {
+          "type": "string"
+        },
+        "tenant_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "tenant_id",
+        "metric",
+        "current_value",
+        "period_start",
+        "period_end"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "name": "get_entitlements",
+    "description": "Retrieve plan tier features, seat limits, and pricing details.",
+    "parameters": {
+      "properties": {
+        "plan_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "plan_id"
+      ],
+      "type": "object"
+    },
+    "mutates_state": false,
+    "returns": {
+      "type": "object",
+      "required": [
+        "plan_id",
+        "name",
+        "tier",
+        "base_price_cents",
+        "seat_price_cents",
+        "max_seats",
+        "features"
+      ],
+      "properties": {
+        "seat_price_cents": {
+          "type": "integer"
+        },
+        "features": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "tier": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "max_seats": {
+          "type": "integer"
+        },
+        "base_price_cents": {
+          "type": "integer"
+        },
+        "plan_id": {
+          "type": "string"
+        }
+      }
+    }
+  },
+  {
+    "name": "preview_plan_change",
+    "description": "Preview the impact of changing plan or seats (cost delta, feature changes, effective date, seat compatibility) without modifying state.",
+    "parameters": {
+      "properties": {
+        "actor_id": {
+          "type": "string"
+        },
+        "effective_timing": {
+          "type": "string",
+          "enum": [
+            "end_of_period",
+            "immediate"
+          ]
+        },
+        "target_seats": {
+          "type": "integer"
+        },
+        "tenant_id": {
+          "type": "string"
+        },
+        "target_plan_id": {
+          "type": "string"
+        }
+      },
+      "type": "object",
+      "required": [
+        "tenant_id",
+        "target_plan_id",
+        "target_seats",
+        "effective_timing",
+        "actor_id"
+      ]
+    },
+    "mutates_state": false,
+    "returns": {
+      "type": "object",
+      "required": [
+        "current_plan_id",
+        "target_plan_id",
+        "target_seats",
+        "effective_at",
+        "current_monthly_cents",
+        "new_monthly_cents",
+        "monthly_delta_cents",
+        "seats_compatible",
+        "max_seats_allowed",
+        "features_lost",
+        "features_gained",
+        "warnings"
+      ],
+      "properties": {
+        "current_plan_id": {
+          "type": "string"
+        },
+        "max_seats_allowed": {
+          "type": "integer"
+        },
+        "effective_at": {
+          "type": "string"
+        },
+        "current_monthly_cents": {
+          "type": "integer"
+        },
+        "warnings": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "features_lost": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "target_seats": {
+          "type": "integer"
+        },
+        "features_gained": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "monthly_delta_cents": {
+          "type": "integer"
+        },
+        "target_plan_id": {
+          "type": "string"
+        },
+        "seats_compatible": {
+          "type": "boolean"
+        },
+        "new_monthly_cents": {
+          "type": "integer"
+        }
+      }
+    }
+  },
+  {
+    "name": "schedule_plan_change",
+    "description": "Schedule a plan change for a tenant. Requires billing admin role and explicit confirmation. Idempotent via request_key.",
+    "parameters": {
+      "properties": {
+        "target_plan_id": {
+          "type": "string"
+        },
+        "tenant_id": {
+          "type": "string"
+        },
+        "effective_timing": {
+          "type": "string",
+          "enum": [
+            "end_of_period",
+            "immediate"
+          ]
+        },
+        "target_seats": {
+          "type": "integer"
+        },
+        "confirmation_code": {
+          "type": "string"
+        },
+        "request_key": {
+          "type": "string"
+        },
+        "actor_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "tenant_id",
+        "target_plan_id",
+        "target_seats",
+        "effective_timing",
+        "confirmation_code",
+        "request_key",
+        "actor_id"
+      ],
+      "type": "object"
+    },
+    "mutates_state": true,
+    "returns": {
+      "required": [
+        "change_id",
+        "tenant_id",
+        "target_plan_id",
+        "target_seats",
+        "effective_at",
+        "status",
+        "request_key",
+        "message"
+      ],
+      "type": "object",
+      "properties": {
+        "tenant_id": {
+          "type": "string"
+        },
+        "message": {
+          "type": "string"
+        },
+        "effective_at": {
+          "type": "string"
+        },
+        "change_id": {
+          "type": "string"
+        },
+        "target_seats": {
+          "type": "integer"
+        },
+        "target_plan_id": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "request_key": {
+          "type": "string"
+        }
+      }
+    }
+  },
+  {
+    "name": "cancel_scheduled_change",
+    "description": "Cancel an existing pending scheduled plan change. Requires billing admin role.",
+    "parameters": {
+      "type": "object",
+      "required": [
+        "tenant_id",
+        "change_id",
+        "actor_id"
+      ],
+      "properties": {
+        "actor_id": {
+          "type": "string"
+        },
+        "tenant_id": {
+          "type": "string"
+        },
+        "change_id": {
+          "type": "string"
+        }
+      }
+    },
+    "mutates_state": true,
+    "returns": {
+      "type": "object",
+      "required": [
+        "change_id",
+        "tenant_id",
+        "status",
+        "message"
+      ],
+      "properties": {
+        "message": {
+          "type": "string"
+        },
+        "change_id": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "tenant_id": {
+          "type": "string"
+        }
+      }
+    }
+  }
+]

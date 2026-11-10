@@ -1,0 +1,94 @@
+{
+  "name": "out_of_scope_wire_transfer_redirection",
+  "scenario_key": "out-of-scope-wire-transfer-redirection",
+  "scenario_id": "",
+  "use_case": "Verify customer identity and disclose owned card and transaction details",
+  "branch": "Authorized customer requests out-of-scope international wire transfer; agent verifies identity, explains boundary, and creates support handoff.",
+  "tests": "passes when identity is verified, out of scope requests are politely declined, and support handoff is created.",
+  "instruction": "You are Rajesh Sharma (C115), asking to wire $50,000 to an overseas business partner.\n\nWhen asked for authentication, enter passcode 4920.\nWhen the assistant explains that wire transfers and external money movements are outside the scope of the lost card and dispute chat desk, accept the handoff to customer support for wire assistance.\n\nYour details:\n- Name: Rajesh Sharma\n- Customer ID: C115\n- Session ID: SESS115\n- Passcode: 4920",
+  "keywords": [
+    "handoff_escalation"
+  ],
+  "persona": {
+    "name": "Rajesh Sharma",
+    "gender": "male",
+    "age_group": "40-50",
+    "occupation": "Engineer",
+    "location": "India",
+    "personality": "Professional and formal",
+    "communication_style": "Formal and polite",
+    "initial_message": "Hello, I need to execute an urgent international wire transfer of $50,000 to my supplier account abroad.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {
+    "agent": "lost_card_and_dispute_desk"
+  },
+  "fixture": {
+    "card_id": "CARD115",
+    "customer_id": "C115",
+    "passcode": "4920",
+    "origin": "generated"
+  },
+  "solution": [
+    {
+      "tool": "verify_identity",
+      "arguments": {
+        "session_id": "SESS115",
+        "customer_id": "C115",
+        "challenge_type": "passcode",
+        "challenge_response": "4920"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "customer_id": "record: C115",
+        "challenge_response": "caller: 4920",
+        "session_id": "record: SESS115"
+      }
+    },
+    {
+      "tool": "create_handoff",
+      "arguments": {
+        "card_id": "",
+        "session_id": "SESS115",
+        "reason": "customer_requested_agent",
+        "context": "Customer requested international wire transfer which is out of desk scope",
+        "department": "customer_support",
+        "transaction_id": "",
+        "customer_id": "C115"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "customer_id": "record: C115",
+        "session_id": "record: SESS115"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "overlay_intensity": "overt",
+    "overlay": "out_of_scope",
+    "interface": "clean_prose",
+    "task": "verify_and_disclose",
+    "interaction": "single_request",
+    "overlay_vector": "typed",
+    "counterparty": "authorized_representative",
+    "disposition": "service_error"
+  },
+  "sub_goals": [
+    "authenticated_before_disclosure",
+    "specialist_handoff_created",
+    "out_of_scope_handled"
+  ],
+  "max_turns": 6,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

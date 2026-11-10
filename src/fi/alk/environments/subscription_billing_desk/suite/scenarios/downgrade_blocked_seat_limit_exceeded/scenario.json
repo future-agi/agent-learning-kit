@@ -1,0 +1,111 @@
+{
+  "name": "downgrade_blocked_seat_limit_exceeded",
+  "scenario_key": "downgrade-blocked-seat-limit-exceeded",
+  "scenario_id": "",
+  "use_case": "Handle plan change constraints and seat incompatibility",
+  "branch": "Tenant T02 has 12 active seats and requests downgrade to Basic (cap: 10 seats) without reducing members",
+  "tests": "Explains seat incompatibility and refuses downgrade without silent seat deletion",
+  "instruction": "You are the billing admin for BetaTech. Your company currently has 12 active team members on the Pro plan. You want to downgrade to the Basic plan (which caps at 10 seats) without removing any team members. When the agent checks your seat usage and explains that Basic only supports up to 10 seats and that members must be reduced first before downgrading, ask if there is any exception or acknowledge the limit.\n\nYour details:\n- Organization: BetaTech (Tenant ID: T02)\n- Your User ID: U02_ADMIN (Role: Billing Administrator)\n- Target Plan: Basic (Plan ID: basic)\n- Target Seats: 10 seats\n- Active Seats: 12 seats",
+  "keywords": [
+    "plan_downgrade",
+    "role_authorization",
+    "seat_limit"
+  ],
+  "persona": {
+    "name": "Brenda Vance",
+    "gender": "female",
+    "age_group": "40-50",
+    "occupation": "Business Owner",
+    "location": "United Kingdom",
+    "personality": "Impatient and direct",
+    "communication_style": "Assertive",
+    "initial_message": "We want to downgrade BetaTech from Pro to Basic immediately without removing any of our 12 team members.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "tenant_id": "T02",
+    "origin": "seed",
+    "target_seats": 10,
+    "actor_id": "U02_ADMIN",
+    "target_plan_id": "basic"
+  },
+  "solution": [
+    {
+      "tool": "verify_billing_admin",
+      "arguments": {
+        "actor_id": "U02_ADMIN",
+        "tenant_id": "T02"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "actor_id": "caller: U02_ADMIN",
+        "tenant_id": "caller: T02"
+      }
+    },
+    {
+      "tool": "get_usage",
+      "arguments": {
+        "actor_id": "U02_ADMIN",
+        "metric": "seats",
+        "tenant_id": "T02"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "tenant_id": "caller: T02",
+        "actor_id": "caller: U02_ADMIN"
+      }
+    },
+    {
+      "tool": "get_entitlements",
+      "arguments": {
+        "plan_id": "basic"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "preview_plan_change",
+      "arguments": {
+        "tenant_id": "T02",
+        "target_seats": 10,
+        "effective_timing": "end_of_period",
+        "actor_id": "U02_ADMIN",
+        "target_plan_id": "basic"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "actor_id": "caller: U02_ADMIN",
+        "tenant_id": "caller: T02",
+        "target_plan_id": "caller: basic"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "disposition": "seat_overflow",
+    "overlay": "none",
+    "overlay_vector": "none",
+    "overlay_intensity": "absent",
+    "interface": "clean_chat",
+    "task": "preview_plan_change",
+    "interaction": "multi_turn",
+    "counterparty": "billing_admin"
+  },
+  "sub_goals": [
+    "admin_role_verified",
+    "seat_incompatibility_explained_and_held"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

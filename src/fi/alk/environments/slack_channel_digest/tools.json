@@ -1,0 +1,370 @@
+[
+  {
+    "name": "slack_get_channel_info",
+    "description": "Resolve channel metadata, topic, privacy status, and member access for a given actor.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "actor_id": {
+          "description": "The user ID requesting channel metadata.",
+          "type": "string"
+        },
+        "channel_id": {
+          "type": "string",
+          "description": "The channel ID to resolve."
+        }
+      },
+      "required": [
+        "actor_id",
+        "channel_id"
+      ]
+    },
+    "mutates_state": false,
+    "returns": {
+      "properties": {
+        "is_member": {
+          "type": "boolean"
+        },
+        "name": {
+          "type": "string"
+        },
+        "topic": {
+          "type": "string"
+        },
+        "is_private": {
+          "type": "boolean"
+        },
+        "member_count": {
+          "type": "integer"
+        },
+        "channel_id": {
+          "type": "string"
+        }
+      },
+      "type": "object",
+      "required": [
+        "channel_id",
+        "name",
+        "topic",
+        "is_private",
+        "is_member",
+        "member_count"
+      ]
+    }
+  },
+  {
+    "name": "slack_search_messages",
+    "description": "Search messages within an accessible channel with optional text filter and cursor pagination.",
+    "parameters": {
+      "properties": {
+        "cursor": {
+          "type": "string",
+          "description": "Pagination offset cursor string (e.g. '0', '10')."
+        },
+        "actor_id": {
+          "type": "string",
+          "description": "The user ID initiating the search."
+        },
+        "limit": {
+          "type": "integer",
+          "description": "Maximum number of messages to return."
+        },
+        "query": {
+          "description": "Optional search query substring to filter messages.",
+          "type": "string"
+        },
+        "channel_id": {
+          "description": "The channel ID to search within.",
+          "type": "string"
+        }
+      },
+      "type": "object",
+      "required": [
+        "actor_id",
+        "channel_id",
+        "limit",
+        "cursor"
+      ]
+    },
+    "mutates_state": false,
+    "returns": {
+      "required": [
+        "channel_id",
+        "messages",
+        "has_more",
+        "total_returned"
+      ],
+      "properties": {
+        "next_cursor": {
+          "type": "string"
+        },
+        "has_more": {
+          "type": "boolean"
+        },
+        "total_returned": {
+          "type": "integer"
+        },
+        "channel_id": {
+          "type": "string"
+        },
+        "messages": {
+          "items": {
+            "type": "object",
+            "properties": {
+              "thread_ts": {
+                "type": "string"
+              },
+              "permalink": {
+                "type": "string"
+              },
+              "ts": {
+                "type": "string"
+              },
+              "user_id": {
+                "type": "string"
+              },
+              "message_id": {
+                "type": "string"
+              },
+              "text": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "message_id",
+              "user_id",
+              "text",
+              "ts",
+              "permalink"
+            ]
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    }
+  },
+  {
+    "name": "slack_get_thread",
+    "description": "Retrieve complete message history and permalinks for a specific thread in a channel.",
+    "parameters": {
+      "required": [
+        "actor_id",
+        "channel_id",
+        "thread_ts",
+        "limit",
+        "cursor"
+      ],
+      "type": "object",
+      "properties": {
+        "channel_id": {
+          "type": "string",
+          "description": "The channel ID where the thread exists."
+        },
+        "limit": {
+          "type": "integer",
+          "description": "Maximum number of thread replies to return."
+        },
+        "actor_id": {
+          "description": "The user ID requesting thread history.",
+          "type": "string"
+        },
+        "cursor": {
+          "type": "string",
+          "description": "Pagination offset cursor string (e.g. '0', '5')."
+        },
+        "thread_ts": {
+          "description": "Timestamp ID of the root message of the thread.",
+          "type": "string"
+        }
+      }
+    },
+    "mutates_state": false,
+    "returns": {
+      "type": "object",
+      "required": [
+        "channel_id",
+        "thread_ts",
+        "messages",
+        "has_more",
+        "total_returned"
+      ],
+      "properties": {
+        "messages": {
+          "items": {
+            "properties": {
+              "text": {
+                "type": "string"
+              },
+              "permalink": {
+                "type": "string"
+              },
+              "thread_ts": {
+                "type": "string"
+              },
+              "ts": {
+                "type": "string"
+              },
+              "user_id": {
+                "type": "string"
+              },
+              "message_id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "message_id",
+              "user_id",
+              "text",
+              "ts",
+              "permalink"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "thread_ts": {
+          "type": "string"
+        },
+        "has_more": {
+          "type": "boolean"
+        },
+        "next_cursor": {
+          "type": "string"
+        },
+        "total_returned": {
+          "type": "integer"
+        },
+        "channel_id": {
+          "type": "string"
+        }
+      }
+    }
+  },
+  {
+    "name": "slack_post_message",
+    "description": "Post an approved message or digest to a channel or thread with idempotency tracking.",
+    "parameters": {
+      "required": [
+        "actor_id",
+        "approval_id",
+        "channel_id",
+        "request_key",
+        "text"
+      ],
+      "properties": {
+        "text": {
+          "description": "The text of the message or digest to post.",
+          "type": "string"
+        },
+        "approval_id": {
+          "type": "string",
+          "description": "The approval ID authorizing the post."
+        },
+        "actor_id": {
+          "description": "The user ID posting the message.",
+          "type": "string"
+        },
+        "request_key": {
+          "type": "string",
+          "description": "Idempotency request key."
+        },
+        "channel_id": {
+          "type": "string",
+          "description": "The destination channel ID."
+        },
+        "thread_ts": {
+          "description": "Optional thread timestamp to post as a reply.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "mutates_state": true,
+    "returns": {
+      "required": [
+        "channel_id",
+        "message_id",
+        "permalink",
+        "request_key",
+        "status"
+      ],
+      "properties": {
+        "request_key": {
+          "type": "string"
+        },
+        "thread_ts": {
+          "type": "string"
+        },
+        "channel_id": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "permalink": {
+          "type": "string"
+        },
+        "message_id": {
+          "type": "string"
+        }
+      },
+      "type": "object"
+    }
+  },
+  {
+    "name": "slack_check_message_status",
+    "description": "Check delivery status and idempotency ledger record for a given request_key.",
+    "parameters": {
+      "required": [
+        "request_key"
+      ],
+      "type": "object",
+      "properties": {
+        "request_key": {
+          "type": "string",
+          "description": "The idempotency request key to inspect."
+        }
+      }
+    },
+    "mutates_state": false,
+    "returns": {
+      "type": "object",
+      "properties": {
+        "channel_id": {
+          "type": "string"
+        },
+        "text": {
+          "type": "string"
+        },
+        "created_at": {
+          "type": "string"
+        },
+        "permalink": {
+          "type": "string"
+        },
+        "thread_ts": {
+          "type": "string"
+        },
+        "message_id": {
+          "type": "string"
+        },
+        "request_key": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "channel_id",
+        "created_at",
+        "message_id",
+        "permalink",
+        "request_key",
+        "status",
+        "text"
+      ]
+    }
+  }
+]

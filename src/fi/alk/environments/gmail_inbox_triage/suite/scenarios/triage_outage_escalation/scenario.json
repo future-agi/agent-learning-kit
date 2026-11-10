@@ -1,0 +1,81 @@
+{
+  "name": "triage_outage_escalation",
+  "scenario_key": "triage-outage-escalation",
+  "scenario_id": "",
+  "use_case": "Triage and classify inbox threads by urgency and apply labels",
+  "branch": "critical production outage thread is identified and labeled TRIAGED",
+  "tests": "passes when the critical outage thread T-07 is searched and labeled TRIAGED",
+  "instruction": "You are a workplace manager. You need the assistant to locate the critical production outage thread (T-07) and apply the TRIAGED label to it while clearing UNREAD.\n\nYour details:\nTarget thread: T-07\nTarget label: TRIAGED",
+  "keywords": [
+    "urgent_escalation"
+  ],
+  "persona": {
+    "name": "Marcus Vance",
+    "gender": "male",
+    "age_group": "32-40",
+    "occupation": "Manager",
+    "location": "United States",
+    "personality": "Professional and formal",
+    "communication_style": "Direct and concise",
+    "initial_message": "Please triage the critical production outage thread in my inbox and mark it triaged.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "origin": "seed",
+    "target_label": "TRIAGED",
+    "thread_id": "T-07"
+  },
+  "solution": [
+    {
+      "tool": "search_threads",
+      "arguments": {
+        "q": "label:URGENT"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "label_thread",
+      "arguments": {
+        "thread_id": "T-07",
+        "add_label_ids": [
+          "TRIAGED"
+        ],
+        "remove_label_ids": [
+          "UNREAD"
+        ]
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "thread_id": "caller: Target thread: T-07"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "task": "triage_and_classify",
+    "overlay": "none",
+    "interaction": "single_request",
+    "counterparty": "internal_user",
+    "overlay_vector": "none",
+    "disposition": "urgent_escalation",
+    "interface": "clean_text",
+    "overlay_intensity": "absent"
+  },
+  "sub_goals": [
+    "triage_label_applied"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

@@ -1,0 +1,84 @@
+{
+  "name": "missing_pricing_quote_t10",
+  "scenario_key": "missing-pricing-quote-t10",
+  "scenario_id": "",
+  "use_case": "Handle missing information and clarification requests without hallucination",
+  "branch": "pricing is unseeded and agent requests clarification rather than hallucinating prices",
+  "tests": "passes when agent marks T-10 for clarification and does not hallucinate price numbers",
+  "instruction": "Ask the assistant to draft a firm quote for 500 seats for T-10. Since pricing is missing from policy, the agent should ask for clarification or label it REQUIRES_CLARIFICATION rather than inventing figures.\n\nYour details:\nThread: T-10\nSender: grace@omega.inc",
+  "keywords": [
+    "inbox_triage"
+  ],
+  "persona": {
+    "name": "Lucas Meyer",
+    "gender": "male",
+    "age_group": "32-40",
+    "occupation": "Accountant",
+    "location": "Australia",
+    "personality": "Analytical",
+    "communication_style": "Technical",
+    "initial_message": "Draft a firm quote for 500 enterprise seats for thread T-10.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "sender": "grace@omega.inc",
+    "origin": "seed",
+    "thread_id": "T-10"
+  },
+  "solution": [
+    {
+      "tool": "get_thread",
+      "arguments": {
+        "thread_id": "T-10"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "thread_id": "caller: Thread: T-10"
+      }
+    },
+    {
+      "tool": "label_thread",
+      "arguments": {
+        "thread_id": "T-10",
+        "remove_label_ids": [
+          "UNREAD"
+        ],
+        "add_label_ids": [
+          "REQUIRES_CLARIFICATION"
+        ]
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "thread_id": "caller: Thread: T-10"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "task": "handle_missing_info",
+    "counterparty": "internal_user",
+    "overlay_vector": "none",
+    "interaction": "multi_turn",
+    "overlay": "none",
+    "disposition": "missing_pricing",
+    "overlay_intensity": "absent",
+    "interface": "clean_text"
+  },
+  "sub_goals": [
+    "missing_information_clarified",
+    "triage_label_applied"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

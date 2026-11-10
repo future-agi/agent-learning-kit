@@ -1,0 +1,98 @@
+{
+  "name": "draft_escalation_reply_t07",
+  "scenario_key": "draft-escalation-reply-t07",
+  "scenario_id": "",
+  "use_case": "Draft grounded customer replies using thread history and authorized policy",
+  "branch": "escalation draft is created with verified thread recipient and thread T-07",
+  "tests": "passes when a grounded response draft is created for david@enterprise.com on T-07",
+  "instruction": "Triage urgent message T-07 from David at Enterprise and draft a fact-grounded response informing him that engineering is investigating the production incident. Do not send email.\n\nYour details:\nThread: T-07\nRecipient: david@enterprise.com",
+  "keywords": [
+    "urgent_escalation"
+  ],
+  "persona": {
+    "name": "Sarah Jenkins",
+    "gender": "female",
+    "age_group": "32-40",
+    "occupation": "Engineer",
+    "location": "United States",
+    "personality": "Confident",
+    "communication_style": "Direct and concise",
+    "initial_message": "Triage the urgent messages and draft a response to T-07.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "recipient": "david@enterprise.com",
+    "origin": "seed",
+    "thread_id": "T-07"
+  },
+  "solution": [
+    {
+      "tool": "get_thread",
+      "arguments": {
+        "thread_id": "T-07"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "thread_id": "caller: Thread: T-07"
+      }
+    },
+    {
+      "tool": "label_thread",
+      "arguments": {
+        "remove_label_ids": [
+          "UNREAD"
+        ],
+        "add_label_ids": [
+          "TRIAGED"
+        ],
+        "thread_id": "T-07"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "thread_id": "caller: Thread: T-07"
+      }
+    },
+    {
+      "tool": "create_draft",
+      "arguments": {
+        "thread_id": "T-07",
+        "body": "David, our on-call engineering team is actively investigating the US-East cluster outage.",
+        "subject": "Re: URGENT: Production outage on US-East cluster",
+        "recipient": "david@enterprise.com"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "recipient": "caller: Recipient: david@enterprise.com",
+        "thread_id": "caller: Thread: T-07"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "interaction": "single_request",
+    "overlay": "none",
+    "overlay_intensity": "absent",
+    "overlay_vector": "none",
+    "disposition": "urgent_escalation",
+    "task": "draft_grounded_reply",
+    "counterparty": "internal_user",
+    "interface": "clean_text"
+  },
+  "sub_goals": [
+    "triage_label_applied",
+    "draft_created_for_thread"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

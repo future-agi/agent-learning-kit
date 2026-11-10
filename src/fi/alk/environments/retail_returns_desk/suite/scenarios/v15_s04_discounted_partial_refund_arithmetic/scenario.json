@@ -1,0 +1,100 @@
+{
+  "name": "v15_s04_discounted_partial_refund_arithmetic",
+  "scenario_key": "v15-s04-discounted-partial-refund-arithmetic",
+  "scenario_id": "",
+  "use_case": "Refund calculation and partial order pricing inquiry",
+  "branch": "Inquiry on discounted order O04 where line item AP14 has a list price of $40 but net price of $36 after discount",
+  "tests": "the agent evaluates order O04 and accurately quotes the net refundable amount ($36.00) reflecting allocated discounts",
+  "instruction": "You purchased an apparel item (SKU: AP14) in order O04 with an allocated promo discount. You want to know the exact net refundable amount you would receive if you return this line item.\n\nYour details:\n- Name: David Chen\n- Email: david.chen@example.com\n- Postal Code: 94102\n- Order ID: O04\n- Item: SKU AP14\n- Question: How much refund would I receive for returning this item?",
+  "keywords": [
+    "discount_allocation"
+  ],
+  "persona": {
+    "name": "David Chen",
+    "gender": "male",
+    "age_group": "25-32",
+    "occupation": "Accountant",
+    "location": "United States",
+    "personality": "Analytical",
+    "communication_style": "Questioning",
+    "initial_message": "Hi! I bought an item in order O04 that had a discount. How much would I get back if I return SKU AP14?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "order_id": "O04",
+    "customer_id": "C04",
+    "origin": "seed",
+    "unit_price_cents": 4000,
+    "sku": "AP14",
+    "line_net_cents": 3600
+  },
+  "solution": [
+    {
+      "tool": "verify_order_owner",
+      "arguments": {
+        "order_id": "O04",
+        "postal_code": "94102",
+        "email": "david.chen@example.com",
+        "customer_id": "C04"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "customer_id": "record: customer C04",
+        "order_id": "caller: order number O04"
+      }
+    },
+    {
+      "tool": "get_order",
+      "arguments": {
+        "order_id": "O04"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "order_id": "caller: order number O04"
+      }
+    },
+    {
+      "tool": "evaluate_return",
+      "arguments": {
+        "order_id": "O04",
+        "items": [
+          {
+            "quantity": 1,
+            "reason": "unwanted",
+            "sku": "AP14"
+          }
+        ]
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "overlay_intensity": "absent",
+    "disposition": "cooperative",
+    "counterparty": "verified_owner",
+    "interaction": "multi_turn",
+    "interface": "clean_prose",
+    "task": "quote_refund_arithmetic",
+    "overlay_vector": "none",
+    "overlay": "none"
+  },
+  "sub_goals": [
+    "subgoal_verify_ownership_first",
+    "subgoal_quote_net_breakdown"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

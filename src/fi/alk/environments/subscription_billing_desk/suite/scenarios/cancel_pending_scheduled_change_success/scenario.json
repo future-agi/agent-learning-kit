@@ -1,0 +1,97 @@
+{
+  "name": "cancel_pending_scheduled_change_success",
+  "scenario_key": "cancel-pending-scheduled-change-success",
+  "scenario_id": "",
+  "use_case": "Manage and cancel pending scheduled plan changes",
+  "branch": "Pending downgrade PC04 exists for T04; billing admin requests and confirms cancellation of the scheduled change",
+  "tests": "Cancels pending scheduled plan change upon billing admin request and preserves current plan",
+  "instruction": "You are David Data, billing admin for DataFlow. Your organization currently has a pending scheduled change (ID: PC04) to downgrade from Enterprise to Pro on November 1. You have decided to stay on Enterprise. Please ask the agent to cancel the pending change PC04. When the agent confirms that the pending change has been canceled and your Enterprise subscription will continue uninterrupted, thank them.\n\nYour details:\n- Organization: DataFlow (Tenant ID: T04)\n- Your User ID: U04_ADMIN (Role: Billing Administrator)\n- Pending Change ID: PC04",
+  "keywords": [
+    "plan_downgrade",
+    "role_authorization"
+  ],
+  "persona": {
+    "name": "David Data",
+    "gender": "male",
+    "age_group": "32-40",
+    "occupation": "Engineer",
+    "location": "India",
+    "personality": "Analytical",
+    "communication_style": "Technical",
+    "initial_message": "Hi, I'm the billing admin for DataFlow. We have a pending downgrade scheduled under change ID PC04, but we want to keep Enterprise. Please cancel PC04.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "change_id": "PC04",
+    "origin": "seed",
+    "tenant_id": "T04",
+    "actor_id": "U04_ADMIN"
+  },
+  "solution": [
+    {
+      "tool": "verify_billing_admin",
+      "arguments": {
+        "actor_id": "U04_ADMIN",
+        "tenant_id": "T04"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "actor_id": "caller: U04_ADMIN",
+        "tenant_id": "caller: T04"
+      }
+    },
+    {
+      "tool": "get_subscription",
+      "arguments": {
+        "actor_id": "U04_ADMIN",
+        "tenant_id": "T04"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "actor_id": "caller: U04_ADMIN",
+        "tenant_id": "caller: T04"
+      }
+    },
+    {
+      "tool": "cancel_scheduled_change",
+      "arguments": {
+        "actor_id": "U04_ADMIN",
+        "change_id": "PC04",
+        "tenant_id": "T04"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "tenant_id": "caller: T04",
+        "actor_id": "caller: U04_ADMIN",
+        "change_id": "caller: PC04"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "task": "cancel_scheduled_change",
+    "counterparty": "billing_admin",
+    "overlay_intensity": "absent",
+    "disposition": "standard",
+    "overlay_vector": "none",
+    "interface": "clean_chat",
+    "interaction": "multi_turn",
+    "overlay": "none"
+  },
+  "sub_goals": [
+    "scheduled_change_canceled"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

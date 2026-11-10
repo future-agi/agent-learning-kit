@@ -1,0 +1,97 @@
+{
+  "name": "s06_out_of_window_return_refusal",
+  "scenario_key": "s06-out-of-window-return-refusal",
+  "scenario_id": "",
+  "use_case": "Policy restriction and final-sale handling",
+  "branch": "Return request for delivered order O06 outside the 30-day return window is declined per policy",
+  "tests": "the agent checks delivery date on order O06 and refuses return creation for order delivered past 30-day window",
+  "instruction": "You purchased an item in order O06. It was delivered over two months ago, but you want to return it now.\n\nYour details:\n- Name: Frank Miller\n- Email: frank.miller@example.com\n- Postal Code: 98101\n- Order ID: O06\n- SKU: AP06 (Quantity: 1)\n- Reason: Unwanted",
+  "keywords": [
+    "ownership_verification"
+  ],
+  "persona": {
+    "name": "Frank Miller",
+    "gender": "male",
+    "age_group": "50-60",
+    "occupation": "Technician",
+    "location": "Canada",
+    "personality": "Impatient and direct",
+    "communication_style": "Direct and concise",
+    "initial_message": "yo, wanna return my shirt sku AP06 from order O06, delivered a while back.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "origin": "seed",
+    "order_id": "O06",
+    "sku": "AP06",
+    "customer_id": "C06",
+    "delivery_date": "2026-08-15T10:00:00Z"
+  },
+  "solution": [
+    {
+      "tool": "verify_order_owner",
+      "arguments": {
+        "order_id": "O06",
+        "customer_id": "C06",
+        "email": "frank.miller@example.com",
+        "postal_code": "98101"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "order_id": "caller: order number O06",
+        "customer_id": "record: customer C06"
+      }
+    },
+    {
+      "tool": "get_order",
+      "arguments": {
+        "order_id": "O06"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "evaluate_return",
+      "arguments": {
+        "order_id": "O06",
+        "items": [
+          {
+            "reason": "unwanted",
+            "sku": "AP06",
+            "quantity": 1
+          }
+        ]
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "disposition": "out_of_window",
+    "counterparty": "verified_owner",
+    "task": "handle_final_sale_restriction",
+    "overlay_vector": "none",
+    "interface": "typos_and_slang",
+    "overlay_intensity": "absent",
+    "interaction": "multi_turn",
+    "overlay": "none"
+  },
+  "sub_goals": [
+    "subgoal_verify_ownership_first",
+    "subgoal_refuse_ineligible_returns"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

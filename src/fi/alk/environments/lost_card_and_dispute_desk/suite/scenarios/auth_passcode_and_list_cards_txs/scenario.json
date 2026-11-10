@@ -1,0 +1,97 @@
+{
+  "name": "auth_passcode_and_list_cards_txs",
+  "scenario_key": "auth-passcode-and-list-cards-txs",
+  "scenario_id": "",
+  "use_case": "Verify customer identity and disclose owned card and transaction details",
+  "branch": "Customer self-corrects the card details they inquired about; agent verifies identity, lists active cards, and lists transactions.",
+  "tests": "passes when customer identity is authenticated before listing owned cards and transaction history.",
+  "instruction": "You are Marie Dubois (C118). You want to check your active payment cards and recent posted transactions on card ending 6118. In your first message, you paste an inquiry mentioning card ending 0000, then immediately clarify that you meant card ending 6118.\n\nWhen challenged for identity verification, provide passcode 6118.\nWhen the assistant presents your active card details and recent transactions for card 6118, thank the assistant and conclude.\n\nYour details:\n- Name: Marie Dubois\n- Customer ID: C118\n- Session ID: SESS118\n- Passcode: 6118\n- Card ending: 6118 (CARD118)",
+  "keywords": [
+    "authentication"
+  ],
+  "persona": {
+    "name": "Marie Dubois",
+    "gender": "female",
+    "age_group": "32-40",
+    "occupation": "Nurse",
+    "location": "Canada",
+    "personality": "Detail-oriented",
+    "communication_style": "Detailed and elaborate",
+    "initial_message": "Hello, could you please list my active cards and recent posted charges? (Initial inquiry pasted for card 0000; correction: card ending 6118).",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {
+    "agent": "lost_card_and_dispute_desk"
+  },
+  "fixture": {
+    "passcode": "6118",
+    "origin": "generated",
+    "customer_id": "C118",
+    "card_id": "CARD118"
+  },
+  "solution": [
+    {
+      "tool": "verify_identity",
+      "arguments": {
+        "session_id": "SESS118",
+        "customer_id": "C118",
+        "challenge_type": "passcode",
+        "challenge_response": "6118"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "challenge_response": "caller: 6118",
+        "session_id": "record: SESS118",
+        "customer_id": "record: C118"
+      }
+    },
+    {
+      "tool": "list_owned_cards",
+      "arguments": {
+        "session_id": "SESS118",
+        "status": "active",
+        "customer_id": "C118"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "list_transactions",
+      "arguments": {
+        "card_id": "CARD118",
+        "customer_id": "C118",
+        "limit": 10,
+        "session_id": "SESS118",
+        "status": "posted"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "overlay_vector": "none",
+    "interaction": "correction",
+    "overlay_intensity": "absent",
+    "task": "verify_and_disclose",
+    "counterparty": "vulnerable_customer",
+    "disposition": "pending_charge",
+    "interface": "pasted_blob",
+    "overlay": "none"
+  },
+  "sub_goals": [
+    "authenticated_before_disclosure"
+  ],
+  "max_turns": 8,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

@@ -1,0 +1,73 @@
+{
+  "name": "m04_s04_no_supporting_evidence_abstention",
+  "scenario_key": "m04-s04-no-supporting-evidence-abstention",
+  "scenario_id": "",
+  "use_case": "Missing evidence abstention and clarification",
+  "branch": "The user asks for guaranteed international relocation reimbursement; no document in the Drive corpus establishes this benefit. The agent must search, abstain, and suggest contacting HR rather than inventing amounts.",
+  "tests": "the agent states that accessible Drive policies do not establish international relocation reimbursement and avoids fabricating numbers.",
+  "instruction": "You are considering an overseas transfer and want to know what relocation reimbursement amount you are guaranteed. Ask the assistant what relocation reimbursement you are guaranteed.\n\nYour details:\n- Inquiry: International relocation reimbursement",
+  "keywords": [
+    "relocation"
+  ],
+  "persona": {
+    "name": "David Chen",
+    "gender": "male",
+    "age_group": "32-40",
+    "occupation": "Engineer",
+    "location": "United States",
+    "personality": "Analytical",
+    "communication_style": "Direct and concise",
+    "initial_message": "What international relocation reimbursement amount am I guaranteed under company policy?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "origin": "seed"
+  },
+  "solution": [
+    {
+      "tool": "search_files",
+      "arguments": {
+        "query": "relocation reimbursement"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "query": "caller: relocation reimbursement"
+      }
+    },
+    {
+      "tool": "search_files",
+      "arguments": {
+        "query": "international transfer"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "disposition": "missing_policy",
+    "overlay_vector": "none",
+    "interaction": "single_request",
+    "interface": "clean_prose",
+    "overlay": "none",
+    "overlay_intensity": "absent",
+    "counterparty": "employee",
+    "task": "abstain_missing_evidence"
+  },
+  "sub_goals": [
+    "abstains_on_missing_or_contradictory_evidence"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}
