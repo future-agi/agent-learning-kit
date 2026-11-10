@@ -22,7 +22,7 @@ from .agent_type_check import EXIT_REFUSED
 from .backends import StageDone
 from .cli import guidance_text
 from .failure_file import FAILURE_FILE
-from .job import FailureDomain, HarnessFailure, HarnessJob, SourceKind
+from .job import FailureDomain, HarnessFailure, HarnessJob, ProviderExecutionMode, SourceKind
 from .reading_entry import (
     EXIT_RETRYABLE,
     READING_JOB_INVALID,
@@ -55,11 +55,16 @@ AGENT_READING_CRASHED = "agent_reading_crashed"
 
 _LIMIT_ENV = "ALK_READING_MAX_DURATION_SECONDS"
 _DEFAULT_SOFT_LIMIT_SECONDS = 1800.0
-# The hard limit outlasts the soft one by the interrupt, the wait after it, and a margin, so a
-# reading that stops itself is never cut off by the helper first.
-_HARD_LIMIT_MARGIN_SECONDS = 180.0
+# The hard limit outlasts the soft one by the longest stop (the interrupt, the wait after it and
+# the close: 90 s) and room for the saved contract's document after it, whose framework scan can
+# take well over a minute on a crafted repository, so a reading that stops itself is never cut
+# off by the helper first.
+_HARD_LIMIT_MARGIN_SECONDS = 300.0
 _INTERRUPT_SECONDS = 10.0
 _INTERRUPT_WAIT_SECONDS = 60.0
+# Ours, not the SDK's: its close is shielded and has no bound of its own. With it the decision
+# comes by soft + 90 s, which leaves the rest of the margin to the document.
+_CLOSE_SECONDS = 20.0
 
 _COUNTS = ("tokens_in", "tokens_out", "tokens_cached")
 
@@ -70,6 +75,15 @@ def _soft_limit() -> float:
 
 
 def _check_job(job: HarnessJob) -> HarnessFailure | None:
+    if job.agent.mode in (ProviderExecutionMode.PROVIDER_IMPORT, ProviderExecutionMode.CONNECT_ONLY):
+        # The build reads these agents from the provider's definition, which a reading never loads.
+        return reading_failure(
+            FailureDomain.PLATFORM_SYNC,
+            READING_JOB_INVALID,
+            "A reading without a build reads an agent from its repository only. A "
+            f"{job.agent.mode.value} job's agent is defined by its provider, so it needs a build.",
+            retryable=False,
+        )
     if job.source.kind in (SourceKind.GITHUB, SourceKind.ARCHIVE):
         return None
     return reading_failure(
@@ -170,20 +184,31 @@ async def _stop(
 ) -> None:
     # Set first, so a turn ending now doesn't earn the reminder.
     stopping.set()
-    try:
-        await asyncio.wait_for(stage.interrupt_response(), _INTERRUPT_SECONDS)
-    except Exception:
+    # Its own task, waited on with a bound: wait_for would wait again for a cancel the interrupt
+    # swallows. A Ctrl-C here reaches `_read`, which lets it through.
+    interrupting = asyncio.ensure_future(stage.interrupt_response())
+    bound = min(wait, _INTERRUPT_SECONDS)
+    await asyncio.wait({interrupting}, timeout=bound)
+    if not interrupting.done():
+        interrupting.cancel()
+        logger.warning("the stop at the time limit was not delivered within %g s", bound)
+    elif interrupting.cancelled() or interrupting.exception() is not None:
         # A stop that can't be delivered is still a timeout, not a crash.
-        logger.warning("the stop at the time limit was not delivered", exc_info=True)
+        logger.warning(
+            "the stop at the time limit was not delivered",
+            exc_info=None if interrupting.cancelled() else interrupting.exception(),
+        )
     await asyncio.wait({task}, timeout=wait)
-    # Closed before the files are read, so no late tool call can save after the decision.
+    # Closed before the files are read, so a late tool call is unlikely to save after the
+    # decision. The close is bounded, though: a session that hangs closing must not keep the
+    # reading from deciding, and one that outlives the bound could still act afterwards.
     task.cancel()
-    try:
-        await task
-    except asyncio.CancelledError:
-        pass
-    except Exception:
-        logger.warning("the stopped reading ended with an error", exc_info=True)
+    closing = min(wait, _CLOSE_SECONDS)
+    await asyncio.wait({task}, timeout=closing)
+    if not task.done():
+        logger.warning("the stopped reading's session did not close within %g s", closing)
+    elif not task.cancelled() and task.exception() is not None:
+        logger.warning("the stopped reading ended with an error", exc_info=task.exception())
 
 
 def _timed_out(output: Path, soft_limit: float) -> int:
@@ -297,9 +322,16 @@ async def _read(job: HarnessJob, source: Path, output: Path, *, interrupt_wait: 
             code, complete = await _reading(
                 job, Path(source), output, started, _soft_limit(), interrupt_wait
             )
-        except Exception as exc:
+        except (Exception, asyncio.CancelledError) as exc:
             # A contract the gate saved is paid for; a crash would have the platform pay again.
-            if saved_file(output) != CONTRACT_FILE:
+            # A cancel leaking out of the session is the same: the saved contract still stands.
+            # A cancel of this task itself (a Ctrl-C) is let through, the saved files as they are.
+            # (3.10 has no `cancelling`, and there a Ctrl-C is raised as itself, not as a cancel.)
+            current = asyncio.current_task()
+            if saved_file(output) != CONTRACT_FILE or (
+                isinstance(exc, asyncio.CancelledError)
+                and getattr(current, "cancelling", lambda: 0)()
+            ):
                 raise
             logger.warning(
                 "reading fault after a saved contract: class=%s", type(exc).__name__, exc_info=True

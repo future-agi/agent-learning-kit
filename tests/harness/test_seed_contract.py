@@ -464,8 +464,12 @@ def test_adjustments_mode_ignores_the_seed(tmp_path, monkeypatch, capsys):
 
 @pytest.mark.parametrize(
     "flags",
-    [["--certify-only", "--bundle-output", "x"], ["--read-agent-only"]],
-    ids=["certify_only", "read_agent_only"],
+    [
+        ["--certify-only", "--bundle-output", "x"],
+        ["--read-agent-only"],
+        ["--find-agents"],
+    ],
+    ids=["certify_only", "read_agent_only", "find_agents"],
 )
 def test_the_seed_cannot_be_combined(tmp_path, monkeypatch, flags):
     def never(*_args, **_kwargs):

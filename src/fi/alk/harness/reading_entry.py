@@ -361,11 +361,15 @@ def run_reading_mode(mode: ReadingMode, *, job_path: Path, source: Path, output:
     # Read now, not when the mode was made, so it is the same limit the work reads as it starts.
     seconds = _hard_limit(mode)
     limit = None if seconds is None else _HardLimit(mode, output, seconds)
-    crash: Exception | None = None
+    crash: BaseException | None = None
     try:
         logger.info("reading started at %s", datetime.now(timezone.utc).isoformat())
         code = asyncio.run(_work_then_stop_the_clock(mode, job, source, output, limit))
-    except Exception as exc:
+    except BaseException as exc:
+        # A cancel or a group of them leaking out of the work is a crash too; an interrupt or an
+        # exit is let through.
+        if isinstance(exc, (KeyboardInterrupt, SystemExit)):
+            raise
         logger.error("the %s reading crashed", mode.name, exc_info=True)
         crash = exc
     finally:

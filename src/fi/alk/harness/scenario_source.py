@@ -645,6 +645,27 @@ def load_scenarios(
     return scenarios
 
 
+def authored_agent_document(
+    contract_text: str, *, subfolder: str | None, framework: Any
+) -> dict[str, Any]:
+    """The agent document stored for a saved contract, ``{"sdk_version", "agent"}``.
+
+    Both a build and a reading with no build make it here, so the two can't differ. The caller
+    reads the contract, so what it checked is what is used.
+    """
+    contract = AgentContract.model_validate(json.loads(contract_text)).model_dump(mode="json")
+    # The echo proves which folder was built, so it comes from the contract.
+    built_from = str((contract.get("runtime") or {}).get("source_subfolder") or "")
+    if built_from != (subfolder or ""):
+        raise AgentBuildError("agent_invalid", "subfolder_mismatch")
+    return {
+        "sdk_version": _sdk_version,
+        "agent": build_authored_agent(
+            contract, subfolder=built_from or None, framework=framework
+        ),
+    }
+
+
 class BundleScenarioSource:
     """The real `ScenarioSource`: reads and compiles the bundle's own scenario documents.
     `hosted_entrypoint.run_job` wires this in only when the injected source is still the default
@@ -735,22 +756,11 @@ class BundleScenarioSource:
         if source_kind in (SourceKind.GITHUB, SourceKind.ARCHIVE):
             framework = await self._detect_framework()
             try:
-                contract_file = bundle_dir / "contract.json"
-                contract = AgentContract.model_validate(
-                    json.loads(contract_file.read_text(encoding="utf-8"))
-                ).model_dump(mode="json")
-                # The echo proves which folder was built, so it comes from the contract.
-                built_from = str(
-                    (contract.get("runtime") or {}).get("source_subfolder") or ""
+                authored_agent = authored_agent_document(
+                    (bundle_dir / "contract.json").read_text(encoding="utf-8"),
+                    subfolder=job.source.subfolder,
+                    framework=framework,
                 )
-                if built_from != (job.source.subfolder or ""):
-                    raise AgentBuildError("agent_invalid", "subfolder_mismatch")
-                authored_agent = {
-                    "sdk_version": _sdk_version,
-                    "agent": build_authored_agent(
-                        contract, subfolder=built_from or None, framework=framework
-                    ),
-                }
             except Exception as exc:
                 # A field path can name the customer's own keys, so only the mismatch is named.
                 mismatch = getattr(exc, "detail", "") == "subfolder_mismatch"

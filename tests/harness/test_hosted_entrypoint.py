@@ -5093,12 +5093,14 @@ def test_bad_subfolder_fails_terminal_before_compose(monkeypatch):
 
 def _harness_with_a_packaged_agent(
     packaged_main: bytes = b"from crewai import Crew\nCrew()\n",
+    source_origin: str = "bundle",
 ) -> Harness:
     real_body = _base_manifest_body
 
     def packaged_body() -> dict[str, Any]:
         body = real_body()
         body["processes"][1]["working_directory"] = "generated/source/agent"
+        body["processes"][1]["source_origin"] = source_origin
         return body
 
     files = {
@@ -5173,6 +5175,30 @@ def test_run_job_gives_bundle_source_its_folders(caplog) -> None:
         lines = _framework_log_lines(caplog)
         assert any("name=crewai" in line for line in lines)
         assert not any("0.86.0" in line for line in lines)
+
+    with caplog.at_level("INFO", logger="fi.alk.harness"):
+        asyncio.run(scenario())
+
+
+def test_run_job_gives_repository_source_its_folders(caplog) -> None:
+    async def scenario() -> None:
+        # The crew only in `source`: scanning the bundle's copy would find none.
+        harness = _harness_with_a_packaged_agent(
+            packaged_main=b"print('plain')\n", source_origin="repository"
+        )
+        agent = harness.source / "generated" / "source" / "agent"
+        agent.mkdir(parents=True)
+        (agent / "main.py").write_text(
+            "from crewai import Crew\nCrew()\n", encoding="utf-8"
+        )
+        _install_crewai(harness.work / "build" / "agent")
+
+        code = await he.run_job(
+            harness.job_path, harness.source, harness.output, deps=harness.deps
+        )
+
+        assert code == he.EXIT_OK
+        assert _posted_framework(harness) == {"name": "crewai", "version": "0.86.0"}
 
     with caplog.at_level("INFO", logger="fi.alk.harness"):
         asyncio.run(scenario())
