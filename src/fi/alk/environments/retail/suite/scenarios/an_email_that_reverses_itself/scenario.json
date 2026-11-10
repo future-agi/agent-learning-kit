@@ -5,7 +5,7 @@
   "use_case": "Pick up a case that started by email and continue it with the store's tools",
   "branch": "Customer's email thread contains a cancellation request followed by a subsequent message reversing the cancellation, requiring the later instruction to govern",
   "tests": "the agent reads Lucas Chen's email thread th_r470_cancel_then_keep, follows the later message to keep order O473 active without calling cancel_order, and drafts a confirmation reply on the thread for human review",
-  "instruction": "You sent two emails to customer support earlier regarding your processing order O473: first you asked to cancel it, but then an hour later you sent a follow-up saying 'never mind, keep O473 and ship it'. In chat, ask support to check your email and confirm that the order is being kept active and not cancelled.\n\nYour details:\n- Name: Lucas Chen\n- Email: lucas.chen@example.com\n- Postal Code: 94107\n- Order ID: O473",
+  "instruction": "You sent two emails to customer support earlier regarding your processing order O473: first you asked to cancel it, but then an hour later you sent a follow-up saying 'never mind, keep O473 and ship it'. In chat, ask support to check your email and confirm that the order is being kept active and not cancelled. Also ask them to reply to your email thread with that confirmation, so you have it in writing.\n\nYour details:\n- Name: Lucas Chen\n- Email: lucas.chen@example.com\n- Postal Code: 94107\n- Order ID: O473",
   "keywords": [
     "email_handling",
     "draft_reply",

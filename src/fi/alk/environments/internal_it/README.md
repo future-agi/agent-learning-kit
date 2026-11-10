@@ -294,6 +294,8 @@ Evidence-aware checks read their target from the scenario's fixed values and req
 | Conversations (`e2e-harness/live/hosted_agent_smoke.py`) | Gemini 3.7 Flash as the employee against a Gemini 3.7 Flash agent running `sample_agent.md` over MCP, 12 scenarios across the jobs, graded by the deterministic checks on the final world | 12/12 held |
 | E2B | Retail, HR, Internal IT and SaaS built and sealed in one sandbox from the hosted runtime template (`alk-prebuilt-envs-20261022-mcp`), this branch's `fi.alk` on the image's venv, a scratch PostgreSQL 16 from the image's binaries | 100/100 on SQLite and 100/100 on PostgreSQL 16.15 inside the sandbox for each of the four |
 
+After the distinct-scenario pass, 8 of the new scenarios were run again: the MCP smoke passed every reference solution over `/mcp` with Claude Code at 8/8, the Gemini conversations held 8/8, and E2B built and sealed the package at 100/100 on SQLite and on PostgreSQL 16.
+
 ## Known gaps
 
 - 37 scenarios use Slack or Drive against the plan's estimate of 42; job counts match the plan's grid exactly.

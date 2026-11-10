@@ -55,9 +55,7 @@
         "actor_id": "M04"
       },
       "environment_arguments": {},
-      "fixed": {
-        "employee_id": "caller: E10"
-      }
+      "fixed": {}
     }
   ],
   "alternatives": [],
