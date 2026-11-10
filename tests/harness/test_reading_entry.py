@@ -27,7 +27,7 @@ _DEFAULT_SECRET_FILES = reading_entry._SECRET_FILES
 
 READ_AGENT_VALUES = {
     "name": "read_agent",
-    "time_limit_seconds": 1980.0,
+    "time_limit_seconds": 2100.0,
     "timed_out_code": "agent_reading_timed_out",
     "timed_out_retryable": False,
     "crashed_code": "agent_reading_crashed",

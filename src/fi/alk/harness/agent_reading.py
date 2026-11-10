@@ -55,14 +55,15 @@ AGENT_READING_CRASHED = "agent_reading_crashed"
 
 _LIMIT_ENV = "ALK_READING_MAX_DURATION_SECONDS"
 _DEFAULT_SOFT_LIMIT_SECONDS = 1800.0
-# The hard limit outlasts the soft one by the interrupt, the wait after it, and a margin, so a
-# reading that stops itself is never cut off by the helper first.
-_HARD_LIMIT_MARGIN_SECONDS = 180.0
+# The hard limit outlasts the soft one by the longest stop (the interrupt, the wait after it and
+# the close: 90 s) and room for the saved contract's document after it, whose framework scan can
+# take well over a minute on a crafted repository, so a reading that stops itself is never cut
+# off by the helper first.
+_HARD_LIMIT_MARGIN_SECONDS = 300.0
 _INTERRUPT_SECONDS = 10.0
 _INTERRUPT_WAIT_SECONDS = 60.0
-# The SDK's own close gives up after about 20 s. With it, the decision comes by soft + 90 s, which
-# leaves the saved contract's document (its framework scan, about 70 s at the scanner's cap) room
-# to finish inside the hard limit's margin.
+# Ours, not the SDK's: its close is shielded and has no bound of its own. With it the decision
+# comes by soft + 90 s, which leaves the rest of the margin to the document.
 _CLOSE_SECONDS = 20.0
 
 _COUNTS = ("tokens_in", "tokens_out", "tokens_cached")
@@ -183,11 +184,20 @@ async def _stop(
 ) -> None:
     # Set first, so a turn ending now doesn't earn the reminder.
     stopping.set()
-    try:
-        await asyncio.wait_for(stage.interrupt_response(), _INTERRUPT_SECONDS)
-    except (Exception, asyncio.CancelledError):
+    # Its own task, waited on with a bound: wait_for would wait again for a cancel the interrupt
+    # swallows, and catching the cancel around it would swallow a Ctrl-C too.
+    interrupting = asyncio.ensure_future(stage.interrupt_response())
+    bound = min(wait, _INTERRUPT_SECONDS)
+    await asyncio.wait({interrupting}, timeout=bound)
+    if not interrupting.done():
+        interrupting.cancel()
+        logger.warning("the stop at the time limit was not delivered within %g s", bound)
+    elif interrupting.cancelled() or interrupting.exception() is not None:
         # A stop that can't be delivered is still a timeout, not a crash.
-        logger.warning("the stop at the time limit was not delivered", exc_info=True)
+        logger.warning(
+            "the stop at the time limit was not delivered",
+            exc_info=None if interrupting.cancelled() else interrupting.exception(),
+        )
     await asyncio.wait({task}, timeout=wait)
     # Closed before the files are read, so a late tool call is unlikely to save after the
     # decision. The close is bounded, though: a session that hangs closing must not keep the

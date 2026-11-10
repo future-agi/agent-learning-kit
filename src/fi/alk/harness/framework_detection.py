@@ -969,11 +969,15 @@ def detect_framework(
         return {"name": "unknown", "version": None}
 
 
-def _contract_workdir(source: Path, bundle_dir: Path) -> Path | None:
+def _contract_workdir(
+    source: Path, bundle_dir: Path, contract_text: str | None = None
+) -> Path | None:
     """`runtime.workdir` from the sealed contract, when it names a real inner folder."""
     try:
         contract = json.loads(
-            (bundle_dir / "contract.json").read_text(encoding="utf-8")
+            contract_text
+            if contract_text is not None
+            else (bundle_dir / "contract.json").read_text(encoding="utf-8")
         )
         runtime = contract.get("runtime") if isinstance(contract, dict) else None
         workdir = runtime.get("workdir") if isinstance(runtime, dict) else None
@@ -989,12 +993,15 @@ def _contract_workdir(source: Path, bundle_dir: Path) -> Path | None:
 
 
 def named_framework_folder(
-    source: Path, bundle_dir: Path, subfolder: str | None
+    source: Path, bundle_dir: Path, subfolder: str | None, *, contract_text: str | None = None
 ) -> Path | None:
-    """The folder the job names, else the sealed contract's own; ``None`` when neither does."""
+    """The folder the job names, else the sealed contract's own; ``None`` when neither does.
+
+    ``contract_text`` is the contract already read, when the caller has read it.
+    """
     if subfolder:
         return agent_folder(source, subfolder)
-    return _contract_workdir(source, bundle_dir)
+    return _contract_workdir(source, bundle_dir, contract_text)
 
 
 def framework_folders_for(

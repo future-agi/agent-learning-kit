@@ -170,9 +170,14 @@ class _TooLarge(Exception):
         self.sizes = sizes
 
 
-def _framework_folder(job: HarnessJob, source: Path, output: Path) -> Path:
+def _framework_folder(job: HarnessJob, source: Path, output: Path, contract_text: str) -> Path:
     # As a build chooses it when there is no build: the named folder, else the contract's own.
-    return named_framework_folder(source, output, job.source.subfolder) or source
+    return (
+        named_framework_folder(
+            source, output, job.source.subfolder, contract_text=contract_text
+        )
+        or source
+    )
 
 
 def _write_whole(path: Path, body: bytes) -> None:
@@ -202,7 +207,9 @@ def document(job: HarnessJob, source: Path, output: Path) -> int:
             raise _TooLarge({"contract_bytes": contract_bytes})
         contract_text = raw.decode("utf-8")
         framework = detect_framework(
-            _framework_folder(job, source, output), repo_root=source, package_dir=None
+            _framework_folder(job, source, output, contract_text),
+            repo_root=source,
+            package_dir=None,
         )
         # The build's own document, made by the build's own code.
         made = authored_agent_document(
