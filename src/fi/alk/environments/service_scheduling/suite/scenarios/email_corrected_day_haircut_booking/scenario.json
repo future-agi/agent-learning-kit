@@ -1,0 +1,93 @@
+{
+  "name": "email_corrected_day_haircut_booking",
+  "scenario_key": "email-corrected-day-haircut-booking",
+  "scenario_id": "",
+  "use_case": "Pick up a booking request from the bookings mailbox",
+  "branch": "Chloe Park emailed asking for a haircut with Lucia on Tuesday 3 November at 10 am, then corrected it to Wednesday 4 November in a reply; the booking is for Wednesday 10:00 New York time (UTC-05:00 after the clocks go back)",
+  "tests": "the agent reads the whole thread, books Wednesday not Tuesday, and reads back the time with its time zone",
+  "instruction": "You emailed the bookings desk about a haircut with Lucia and then corrected the day in a second email. Ask the desk to go ahead with what you settled on by email (Wednesday 4 November at 10 am). Confirm when read back.\n\nYour details:\n- Name: Chloe Park\n- Email: chloe.park@example.com\n- Phone: +1 212 555 0103",
+  "keywords": [],
+  "persona": {
+    "name": "Chloe Park",
+    "gender": "female",
+    "age_group": "25-32",
+    "occupation": "Consultant",
+    "location": "India",
+    "personality": "Detail-oriented",
+    "communication_style": "Detailed and elaborate",
+    "initial_message": "Hi, I emailed you about a haircut with Lucia, can you book it?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "origin": "seed"
+  },
+  "solution": [
+    {
+      "tool": "get_thread",
+      "arguments": {
+        "threadId": "th_s03_day_correction"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "threadId": "the customer's email thread"
+      }
+    },
+    {
+      "tool": "get_customer",
+      "arguments": {
+        "email": "chloe.park@example.com",
+        "phone": "+1 212 555 0103"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "book_appointment",
+      "arguments": {
+        "customer_id": "CU03",
+        "service_id": "SV3",
+        "staff_id": "ST02",
+        "location_id": "L1",
+        "start_time": "2026-11-04T10:00",
+        "confirmed": true,
+        "request_key": "REQ-CU03-SV3-1104"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "customer_id": "caller",
+        "service_id": "the service confirmed",
+        "staff_id": "the staff member confirmed",
+        "location_id": "the studio",
+        "start_time": "the local time confirmed",
+        "confirmed": "the customer agreed"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "task": "pickup_email_case",
+    "disposition": "self_correction",
+    "interaction": "correction",
+    "counterparty": "individual_customer",
+    "interface": "email_thread",
+    "overlay": "none",
+    "overlay_vector": "none",
+    "overlay_intensity": "absent"
+  },
+  "sub_goals": [
+    "appointment_booked_as_confirmed"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

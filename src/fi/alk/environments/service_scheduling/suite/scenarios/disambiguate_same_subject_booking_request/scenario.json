@@ -1,0 +1,116 @@
+{
+  "name": "disambiguate_same_subject_booking_request",
+  "scenario_key": "disambiguate-same-subject-booking-request",
+  "scenario_id": "",
+  "use_case": "Pick up a booking request from the bookings mailbox",
+  "branch": "Two threads share the subject 'Booking request'; the agent identifies Emma Schultz's thread th_s12 (not Jack's th_s11) and books her consultation with Olivia on Monday 2 Nov at 10 am at Midtown",
+  "tests": "the agent finds the right thread among same-subject emails, reads Emma's booking request, and books her consultation",
+  "instruction": "You sent an email to Northlight Studios with the subject line 'Booking request' asking for an Initial Consultation with Olivia Bennett at Midtown on Monday 2 November 2026-11-02T10:00. You want the desk to find your email and book your consultation. Confirm the details when read back.\n\nYour details:\n- Name: Emma Schultz\n- Email: emma.schultz@example.com\n- Phone: +1 212 555 0105",
+  "keywords": [
+    "booking",
+    "consultation"
+  ],
+  "persona": {
+    "name": "Emma K. Schultz",
+    "gender": "",
+    "age_group": "",
+    "occupation": "",
+    "location": "Canada",
+    "personality": "Friendly and cooperative",
+    "communication_style": "Direct and concise",
+    "initial_message": "Hi, I sent an email earlier with the subject 'Booking request' about getting a haircut. Can you check my email emma.schultz@example.com and book the haircut for me?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "email": "emma.schultz@example.com",
+    "origin": "seed",
+    "customer_id": "CU05",
+    "thread_id": "th_s12_booking_request_emma"
+  },
+  "solution": [
+    {
+      "tool": "get_customer",
+      "arguments": {
+        "email": "emma.schultz@example.com",
+        "phone": "+1 212 555 0105"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "search_threads",
+      "arguments": {
+        "query": "Booking request"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_thread",
+      "arguments": {
+        "threadId": "th_s12_booking_request_emma"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "list_slots",
+      "arguments": {
+        "service_id": "SV1",
+        "staff_id": "ST01",
+        "date": "2026-11-02",
+        "location_id": "L1"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "book_appointment",
+      "arguments": {
+        "staff_id": "ST01",
+        "confirmed": true,
+        "location_id": "L1",
+        "customer_id": "CU05",
+        "service_id": "SV1",
+        "start_time": "2026-11-02T10:00",
+        "request_key": "REQ-CU05-SV1-1102"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "start_time": "caller: 2026-11-02T10:00",
+        "service_id": "record: services service_id for Initial Consultation",
+        "confirmed": "caller: confirms when read back",
+        "staff_id": "record: staff staff_id for Olivia Bennett",
+        "customer_id": "record: customers customer_id for CU05",
+        "location_id": "record: locations location_id for Midtown Studio"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "overlay_vector": "none",
+    "overlay": "none",
+    "interaction": "multi_turn",
+    "counterparty": "individual_customer",
+    "interface": "clean_prose",
+    "disposition": "same_subject_disambiguation",
+    "overlay_intensity": "absent",
+    "task": "pickup_email_case"
+  },
+  "sub_goals": [
+    "appointment_booked_as_confirmed"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

@@ -1,0 +1,92 @@
+{
+  "name": "resend_sms_confirmation_existing_booking",
+  "scenario_key": "resend-sms-confirmation-existing-booking",
+  "scenario_id": "",
+  "use_case": "Waitlist and confirmations",
+  "branch": "Customer asks to resend the confirmation for their existing appointment A415 via SMS.",
+  "tests": "passes when an SMS confirmation is queued for Dylan Thomas's existing booked appointment A415.",
+  "instruction": "You have an upcoming appointment (A415) for Massage Therapy at Shoreditch Studio on Wednesday 28 October at 10:00 AM. You would like an SMS confirmation message to be resent to your mobile number.\n\nYour details:\n- Name: Dylan Thomas\n- Email: dylan.thomas@example.com\n- Phone: +44 20 7946 0415\n- Appointment ID: A415\n- Requested channel: SMS",
+  "keywords": [
+    "confirmation",
+    "sms",
+    "resend",
+    "appointment"
+  ],
+  "persona": {
+    "name": "Dylan Thomas",
+    "gender": "male",
+    "age_group": "32-40",
+    "occupation": "Customer Service",
+    "location": "United Kingdom",
+    "personality": "Friendly and cooperative",
+    "communication_style": "Simple and clear",
+    "initial_message": "Hello, could you please resend me the confirmation for my upcoming appointment A415 via SMS?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "appointment_id": "A415",
+    "origin": "generated",
+    "customer_id": "CU415"
+  },
+  "solution": [
+    {
+      "tool": "get_customer",
+      "arguments": {
+        "phone": "+44 20 7946 0415",
+        "email": "dylan.thomas@example.com"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_appointment",
+      "arguments": {
+        "appointment_id": "A415",
+        "customer_id": "CU415"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "queue_confirmation",
+      "arguments": {
+        "customer_id": "CU415",
+        "channel": "sms",
+        "kind": "booked",
+        "appointment_id": "A415"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "appointment_id": "record: appointments.appointment_id where customer_id='CU415' and status='booked'",
+        "customer_id": "record: customers.customer_id where email='dylan.thomas@example.com'"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "disposition": "resend_confirmation",
+    "interface": "clean_prose",
+    "task": "queue_confirmation",
+    "interaction": "single_request",
+    "overlay": "none",
+    "overlay_vector": "none",
+    "overlay_intensity": "absent",
+    "counterparty": "returning_customer"
+  },
+  "sub_goals": [
+    "confirmation_queued_after_commit"
+  ],
+  "max_turns": 6,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

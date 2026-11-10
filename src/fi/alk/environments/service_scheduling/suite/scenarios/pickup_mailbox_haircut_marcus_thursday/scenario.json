@@ -1,0 +1,120 @@
+{
+  "name": "pickup_mailbox_haircut_marcus_thursday",
+  "scenario_key": "pickup-mailbox-haircut-marcus-thursday",
+  "scenario_id": "",
+  "use_case": "Book an appointment by service, staff, language, location and time zone",
+  "branch": "agent picks up email booking request th_s11_booking_request_jack from Jack Turner sent as a wall of text and books Marcus for a haircut on Thursday 29 October at 11:00",
+  "tests": "the agent reads email thread th_s11_booking_request_jack and books Marcus for Jack Turner on 29 October 11:00",
+  "instruction": "You are Jack Turner. You sent an email (thread th_s11_booking_request_jack) requesting a haircut with Marcus on Thursday 29 October at 11:00 am. You paste your full request in chat asking the desk to review the thread, confirm availability, and complete the booking for you at Midtown.\n\nYour details:\n- Name: Jack Turner\n- Email: jack.turner@example.com\n- Phone: +1 212 555 0110\n- Service: Haircut (SV3)\n- Staff: Marcus Hale (ST03)\n- Location: Midtown Studio (L1)\n- Date and time: Thursday 29 October 2026 at 11:00 am (2026-10-29T11:00)\n- Time zone: America/New_York (-04:00)",
+  "keywords": [
+    "book_appointment",
+    "mailbox_request",
+    "haircut"
+  ],
+  "persona": {
+    "name": "Jack Turner",
+    "gender": "male",
+    "age_group": "25-32",
+    "occupation": "Customer Service",
+    "location": "United Kingdom",
+    "personality": "Friendly and cooperative",
+    "communication_style": "Direct and concise",
+    "initial_message": "Hi, I sent an email earlier (thread th_s11_booking_request_jack) asking to book a haircut with Marcus on Thursday 29 October at 11 am. Here is my request again: Jack Turner, jack.turner@example.com, +1 212 555 0110, Midtown studio, haircut with Marcus at 11:00 am Thursday Oct 29. Can you please check the thread and book it?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "thread_id": "th_s11_booking_request_jack",
+    "email": "jack.turner@example.com",
+    "name": "Jack Turner",
+    "staff_id": "ST03",
+    "service_id": "SV3",
+    "origin": "seed",
+    "time": "2026-10-29T11:00",
+    "customer_id": "CU10",
+    "location_id": "L1",
+    "phone": "+1 212 555 0110"
+  },
+  "solution": [
+    {
+      "tool": "get_thread",
+      "arguments": {
+        "threadId": "th_s11_booking_request_jack",
+        "messageFormat": "FULL_CONTENT"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "threadId": "record: th_s11_booking_request_jack"
+      }
+    },
+    {
+      "tool": "get_customer",
+      "arguments": {
+        "email": "jack.turner@example.com",
+        "phone": "+1 212 555 0110"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "list_slots",
+      "arguments": {
+        "location_id": "L1",
+        "service_id": "SV3",
+        "date": "2026-10-29",
+        "staff_id": "ST03"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "book_appointment",
+      "arguments": {
+        "request_key": "REQ-TH11-BOOK",
+        "utc_offset": "-04:00",
+        "location_id": "L1",
+        "customer_id": "CU10",
+        "start_time": "2026-10-29T11:00",
+        "staff_id": "ST03",
+        "confirmed": true,
+        "service_id": "SV3"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "utc_offset": "caller: -04:00",
+        "staff_id": "record: ST03",
+        "start_time": "caller: 2026-10-29T11:00",
+        "location_id": "record: L1",
+        "customer_id": "record: CU10",
+        "service_id": "record: SV3"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "interface": "wall_of_text",
+    "overlay_vector": "none",
+    "overlay": "none",
+    "task": "book_appointment",
+    "counterparty": "returning_customer",
+    "overlay_intensity": "absent",
+    "disposition": "mailbox_request",
+    "interaction": "multi_turn"
+  },
+  "sub_goals": [
+    "appointment_booked_as_confirmed",
+    "timezone_and_instant_confirmed"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

@@ -1,0 +1,82 @@
+{
+  "name": "lucia_availability_tuesday_slots",
+  "scenario_key": "lucia-availability-tuesday-slots",
+  "scenario_id": "",
+  "use_case": "Answer availability from the staff calendars and hold slots",
+  "branch": "Check Lucia Fernandez's free slots for Tuesday 27 October at Midtown.",
+  "tests": "the agent looks up Lucia's available slots from her calendar for the requested date and reports them in local time",
+  "instruction": "You want to find out when Lucia Fernandez has free slots for an Initial Consultation at Midtown Studio on Tuesday 27 October (2026-10-27).\n\nYour details:\n- Name: Maya Campbell\n- Email: maya.campbell@example.com\n- Phone: +1 416 555 0201",
+  "keywords": [
+    "availability",
+    "staff_calendar",
+    "slot_lookup"
+  ],
+  "persona": {
+    "name": "Maya Campbell",
+    "gender": "female",
+    "age_group": "25-32",
+    "occupation": "Consultant",
+    "location": "Canada",
+    "personality": "Friendly and cooperative",
+    "communication_style": "Casual and friendly",
+    "initial_message": "Hi, could you check when Lucia Fernandez is free on Tuesday 27 October for an Initial Consultation at the Midtown studio?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "email": "maya.campbell@example.com",
+    "customer_id": "CU101",
+    "phone": "+1 416 555 0201",
+    "origin": "generated"
+  },
+  "solution": [
+    {
+      "tool": "get_customer",
+      "arguments": {
+        "email": "maya.campbell@example.com",
+        "phone": "+1 416 555 0201"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "list_slots",
+      "arguments": {
+        "service_id": "SV1",
+        "staff_id": "ST02",
+        "date": "2026-10-27",
+        "location_id": "L1"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "staff_id": "record: staff.staff_id where name='Lucia Fernandez'"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "overlay": "none",
+    "task": "availability",
+    "counterparty": "returning_customer",
+    "interaction": "multi_turn",
+    "overlay_vector": "none",
+    "interface": "clean_prose",
+    "disposition": "specific_staff",
+    "overlay_intensity": "absent"
+  },
+  "sub_goals": [
+    "availability_reported_from_calendar"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

@@ -1,0 +1,97 @@
+{
+  "name": "cancel_late_fee_declined_appointment_kept",
+  "scenario_key": "cancel-late-fee-declined-appointment-kept",
+  "scenario_id": "",
+  "use_case": "Reschedule or cancel an appointment",
+  "branch": "customer inquires about cancelling an appointment starting today, is told the $25 late fee, declines the fee, and keeps the appointment",
+  "tests": "the agent discloses the late fee, the customer declines, and the appointment remains booked",
+  "instruction": "You have a Massage Therapy appointment (A424) with Olivia at Midtown today at 12:00 pm. You ask to cancel it. When the agent informs you about the $25.00 late cancellation fee, you decline to pay the fee and choose to keep your appointment.\n\nYour details:\n- Name: Sunil Kumar\n- Email: sunil.kumar@example.com\n- Phone: +1 212 555 0424\n- Appointment: A424\n- Scheduled time: Today (Monday 26 October 2026) at 12:00 pm (12:00)",
+  "keywords": [
+    "cancel_appointment",
+    "late_fee",
+    "fee_declined"
+  ],
+  "persona": {
+    "name": "Sunil Kumar",
+    "gender": "male",
+    "age_group": "40-50",
+    "occupation": "Consultant",
+    "location": "India",
+    "personality": "Cautious and skeptical",
+    "communication_style": "Direct and concise",
+    "initial_message": "Hi, I would like to cancel my massage appointment today at noon (A424).",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "name": "Sunil Kumar",
+    "location_id": "L1",
+    "phone": "+1 212 555 0424",
+    "origin": "mixed",
+    "customer_id": "CU424",
+    "email": "sunil.kumar@example.com",
+    "staff_id": "ST01",
+    "time": "2026-10-26T12:00",
+    "appointment_id": "A424",
+    "service_id": "SV2"
+  },
+  "solution": [
+    {
+      "tool": "get_customer",
+      "arguments": {
+        "email": "sunil.kumar@example.com",
+        "phone": "+1 212 555 0424"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_appointment",
+      "arguments": {
+        "customer_id": "CU424",
+        "appointment_id": "A424"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "appointment_id": "record: A424",
+        "customer_id": "record: CU424"
+      }
+    },
+    {
+      "tool": "get_cancellation_policy",
+      "arguments": {
+        "customer_id": "CU424",
+        "appointment_id": "A424"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "interface": "clean_prose",
+    "overlay_vector": "none",
+    "disposition": "fee_declined",
+    "task": "cancel_appointment",
+    "overlay": "none",
+    "interaction": "confirmation",
+    "overlay_intensity": "absent",
+    "counterparty": "returning_customer"
+  },
+  "sub_goals": [
+    "appointment_status_reported",
+    "fee_disclosed_before_cancel"
+  ],
+  "max_turns": 6,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

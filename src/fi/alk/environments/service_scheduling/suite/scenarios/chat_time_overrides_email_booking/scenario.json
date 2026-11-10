@@ -1,0 +1,110 @@
+{
+  "name": "chat_time_overrides_email_booking",
+  "scenario_key": "chat-time-overrides-email-booking",
+  "scenario_id": "",
+  "use_case": "Pick up a booking request from the bookings mailbox",
+  "branch": "The customer emailed asking for a 2 pm massage but clarifies in chat that she wants 3 pm instead; the agent reads the thread and books 3 pm (15:00) at Shoreditch",
+  "tests": "the agent reads the customer email thread but honors the updated time given in chat and books the confirmed appointment",
+  "instruction": "You sent an email asking for a 2 pm massage with Priya at Shoreditch on Tuesday 3 November, but your schedule changed. In chat, ask to book at 3 pm (2026-11-03T15:00) instead. Confirm the details when read back.\n\nYour details:\n- Name: Farah Haddad\n- Email: farah.haddad@example.com\n- Phone: +44 20 7946 0106",
+  "keywords": [
+    "booking",
+    "massage"
+  ],
+  "persona": {
+    "name": "Farah M. Haddad",
+    "gender": "",
+    "age_group": "",
+    "occupation": "",
+    "location": "United Kingdom",
+    "personality": "Confident",
+    "communication_style": "Direct and concise",
+    "initial_message": "Hi, I sent an email about booking a massage for Thursday 29 October. In the email I asked for 2 pm, but my schedule changed—can we make it 3 pm instead at Shoreditch? My email is farah.haddad@example.com and phone is +44 20 7946 0106.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "email": "farah.haddad@example.com",
+    "origin": "seed",
+    "thread_id": "th_s06_london_massage",
+    "customer_id": "CU06"
+  },
+  "solution": [
+    {
+      "tool": "get_customer",
+      "arguments": {
+        "email": "farah.haddad@example.com",
+        "phone": "+44 20 7946 0106"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_thread",
+      "arguments": {
+        "threadId": "th_s06_london_massage"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "threadId": "the email the request came in"
+      }
+    },
+    {
+      "tool": "list_slots",
+      "arguments": {
+        "location_id": "L2",
+        "service_id": "SV2",
+        "staff_id": "ST04",
+        "date": "2026-11-03"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "book_appointment",
+      "arguments": {
+        "start_time": "2026-11-03T15:00",
+        "location_id": "L2",
+        "staff_id": "ST04",
+        "service_id": "SV2",
+        "customer_id": "CU06",
+        "confirmed": true,
+        "request_key": "REQ-CU06-SV2-1103-15"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "staff_id": "record: staff staff_id for Priya Desai",
+        "confirmed": "caller: confirms when read back",
+        "customer_id": "record: customers customer_id for CU06",
+        "location_id": "record: locations location_id for Shoreditch Studio",
+        "service_id": "record: services service_id for Massage Therapy",
+        "start_time": "caller: 2026-11-03T15:00"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "overlay_intensity": "absent",
+    "overlay": "none",
+    "interface": "clean_prose",
+    "task": "pickup_email_case",
+    "counterparty": "individual_customer",
+    "overlay_vector": "none",
+    "disposition": "chat_override_email",
+    "interaction": "multi_turn"
+  },
+  "sub_goals": [
+    "appointment_booked_as_confirmed"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

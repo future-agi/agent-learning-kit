@@ -1,0 +1,88 @@
+{
+  "name": "london_tom_times_in_ny_timezone",
+  "scenario_key": "london-tom-times-in-ny-timezone",
+  "scenario_id": "",
+  "use_case": "Answer availability from the staff calendars and hold slots",
+  "branch": "Customer asks for Tom Whitaker's London times on Monday 2 November converted to Eastern Time.",
+  "tests": "passes when the agent checks Tom Whitaker's London availability and explains the times with their New York time equivalents.",
+  "instruction": "You want to find out Tom Whitaker's available times for a Haircut at the London Shoreditch studio on Monday 2 November 2026. Because you coordinate with colleagues in New York, you specifically want to know what those London slot times are in New York (Eastern) time.\n\nYour details:\n- Name: Priya Nair\n- Email: priya.nair@example.com\n- Phone: +91 98200 00402\n- Service: Haircut\n- Staff: Tom Whitaker\n- Location: London Shoreditch Studio\n- Date: Monday 2 November 2026",
+  "keywords": [
+    "availability",
+    "timezone",
+    "london",
+    "new_york"
+  ],
+  "persona": {
+    "name": "Priya Nair",
+    "gender": "female",
+    "age_group": "25-32",
+    "occupation": "Marketing Professional",
+    "location": "India",
+    "personality": "Friendly and cooperative",
+    "communication_style": "Detailed and elaborate",
+    "initial_message": "Hello, I'd like to check Tom Whitaker's available times for a Haircut at the London Shoreditch studio on Monday 2 November. Could you also tell me what those times correspond to in New York time?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "origin": "generated",
+    "location": "Shoreditch Studio (L2)",
+    "phone": "+91 98200 00402",
+    "staff": "Tom Whitaker (ST05)",
+    "email": "priya.nair@example.com",
+    "date": "2026-11-02",
+    "customer_id": "CU402",
+    "service": "Haircut (SV3)"
+  },
+  "solution": [
+    {
+      "tool": "get_customer",
+      "arguments": {
+        "email": "priya.nair@example.com",
+        "phone": "+91 98200 00402"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "list_slots",
+      "arguments": {
+        "location_id": "L2",
+        "service_id": "SV3",
+        "date": "2026-11-02",
+        "staff_id": "ST05"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "staff_id": "record: staff.staff_id where name='Tom Whitaker'"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "overlay_vector": "none",
+    "disposition": "timezone_conversion",
+    "task": "answer_availability",
+    "overlay_intensity": "absent",
+    "overlay": "none",
+    "interaction": "single_request",
+    "counterparty": "individual",
+    "interface": "clean_prose"
+  },
+  "sub_goals": [
+    "availability_reported_from_calendar",
+    "timezone_and_instant_confirmed"
+  ],
+  "max_turns": 6,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

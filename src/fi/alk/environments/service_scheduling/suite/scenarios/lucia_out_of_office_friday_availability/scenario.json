@@ -1,0 +1,111 @@
+{
+  "name": "lucia_out_of_office_friday_availability",
+  "scenario_key": "lucia-out-of-office-friday-availability",
+  "scenario_id": "",
+  "use_case": "Answer availability from the staff calendars and hold slots",
+  "branch": "Customer asks for Lucia Fernandez on Friday 30 October when she is marked out of office on her calendar.",
+  "tests": "passes when the agent checks Lucia Fernandez's schedule and accurately reports that she is out of office on Friday 30 October.",
+  "instruction": "You are checking if Lucia Fernandez is available for an Initial Consultation at the Midtown Studio on Friday 30 October 2026.\n\nYour details:\n- Name: Lucas Silva\n- Email: lucas.silva@example.com\n- Phone: +61 2 9555 0407\n- Service: Initial Consultation\n- Staff: Lucia Fernandez\n- Studio location: Midtown Studio\n- Date: Friday 30 October 2026",
+  "keywords": [
+    "availability",
+    "out_of_office",
+    "calendar",
+    "staff"
+  ],
+  "persona": {
+    "name": "Lucas Silva",
+    "gender": "male",
+    "age_group": "18-25",
+    "occupation": "Student",
+    "location": "Australia",
+    "personality": "Easy-going",
+    "communication_style": "Casual and friendly",
+    "initial_message": "Hey, is Lucia Fernandez available for an Initial Consultation at Midtown on Friday 30 October?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "service": "Initial Consultation (SV1)",
+    "phone": "+61 2 9555 0407",
+    "staff": "Lucia Fernandez (ST02)",
+    "customer_id": "CU407",
+    "origin": "generated",
+    "location": "Midtown Studio (L1)",
+    "email": "lucas.silva@example.com",
+    "date": "2026-10-30"
+  },
+  "solution": [
+    {
+      "tool": "get_customer",
+      "arguments": {
+        "phone": "+61 2 9555 0407",
+        "email": "lucas.silva@example.com"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "list_slots",
+      "arguments": {
+        "date": "2026-10-30",
+        "location_id": "L1",
+        "staff_id": "ST02",
+        "service_id": "SV1"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "staff_id": "record: staff.staff_id where name='Lucia Fernandez'"
+      }
+    }
+  ],
+  "alternatives": [
+    [
+      {
+        "tool": "get_customer",
+        "arguments": {
+          "phone": "+61 2 9555 0407",
+          "email": "lucas.silva@example.com"
+        },
+        "environment_arguments": {},
+        "fixed": {}
+      },
+      {
+        "tool": "list_events",
+        "arguments": {
+          "startTime": "2026-10-30T00:00:00Z",
+          "endTime": "2026-10-30T23:59:59Z",
+          "calendarId": "CAL-ST02"
+        },
+        "environment_arguments": {},
+        "fixed": {
+          "calendarId": "record: staff.calendar_id where name='Lucia Fernandez'"
+        }
+      }
+    ]
+  ],
+  "coverage": {
+    "overlay_vector": "none",
+    "overlay": "none",
+    "overlay_intensity": "absent",
+    "disposition": "staff_out_of_office",
+    "interaction": "single_request",
+    "interface": "clean_prose",
+    "task": "answer_availability",
+    "counterparty": "individual"
+  },
+  "sub_goals": [
+    "availability_reported_from_calendar"
+  ],
+  "max_turns": 6,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

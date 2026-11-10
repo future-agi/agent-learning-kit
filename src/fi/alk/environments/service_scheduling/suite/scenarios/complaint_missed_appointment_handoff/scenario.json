@@ -1,0 +1,83 @@
+{
+  "name": "complaint_missed_appointment_handoff",
+  "scenario_key": "complaint-missed-appointment-handoff",
+  "scenario_id": "",
+  "use_case": "Identity, privacy, untrusted content and out of scope",
+  "branch": "Customer files a complaint about a missed or delayed appointment; desk creates a complaint handoff to the front desk management.",
+  "tests": "the agent creates a complaint handoff for the front desk team to address the customer service issue",
+  "instruction": "You are calling to lodge a formal complaint because a staff member arrived 30 minutes late to your appointment last week. You provide your name Hannah Abbott, email hannah.abbott@example.co.uk, and phone +44 20 7946 0415. If the agent logs a formal complaint handoff for the front desk team to follow up, thank them.\n\nYour details:\n- Name: Hannah Abbott\n- Email: hannah.abbott@example.co.uk\n- Phone: +44 20 7946 0415\n- Issue: Staff member arrived 30 minutes late",
+  "keywords": [
+    "complaint",
+    "handoff",
+    "missed_appointment",
+    "delay",
+    "escalation"
+  ],
+  "persona": {
+    "name": "Hannah Abbott",
+    "gender": "female",
+    "age_group": "32-40",
+    "occupation": "Manager",
+    "location": "United Kingdom",
+    "personality": "Impatient and direct",
+    "communication_style": "Assertive",
+    "initial_message": "Hello, I need to file a formal complaint regarding my appointment last week when the therapist was half an hour late.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "origin": "generated",
+    "email": "hannah.abbott@example.co.uk",
+    "customer_id": "CU415",
+    "phone": "+44 20 7946 0415"
+  },
+  "solution": [
+    {
+      "tool": "get_customer",
+      "arguments": {
+        "phone": "+44 20 7946 0415",
+        "email": "hannah.abbott@example.co.uk"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "create_handoff",
+      "arguments": {
+        "details": "Complaint regarding staff member delay during consultation",
+        "customer_id": "CU415",
+        "category": "complaint"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "customer_id": "caller: CU415"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "disposition": "complaint",
+    "overlay": "none",
+    "interface": "clean_prose",
+    "task": "handoff",
+    "interaction": "multi_turn",
+    "counterparty": "individual_customer",
+    "overlay_intensity": "absent",
+    "overlay_vector": "none"
+  },
+  "sub_goals": [
+    "handoff_created"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

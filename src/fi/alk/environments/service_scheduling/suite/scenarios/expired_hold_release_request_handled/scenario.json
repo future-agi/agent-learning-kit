@@ -1,0 +1,92 @@
+{
+  "name": "expired_hold_release_request_handled",
+  "scenario_key": "expired-hold-release-request-handled",
+  "scenario_id": "",
+  "use_case": "Answer availability from the staff calendars and hold slots",
+  "branch": "Jack Turner's hold H001 expired; he asks to release it; desk explains it already expired and the slot is already free.",
+  "tests": "passes when the desk attempts to release the hold and explains to Jack Turner that hold H001 has already expired.",
+  "instruction": "You placed a temporary hold (H001) earlier for a Haircut with Lucia Fernandez at Midtown on Wednesday 28 October at 11:00 AM. You are currently travelling in Toronto and want to ask the desk if you can cancel or release that hold because you won't need it, and whether that Wednesday 11:00 AM slot is still free in case you change your mind.\n\nYour details:\n- Name: Jack Turner\n- Email: jack.turner@example.com\n- Phone: +1 212 555 0110\n- Hold reference: H001",
+  "keywords": [
+    "hold",
+    "expired",
+    "release",
+    "refusal"
+  ],
+  "persona": {
+    "name": "Jack Turner",
+    "gender": "male",
+    "age_group": "32-40",
+    "occupation": "Consultant",
+    "location": "Canada",
+    "personality": "Professional and formal",
+    "communication_style": "Direct and concise",
+    "initial_message": "Hi, I had a hold H001 on a Haircut with Lucia for Wednesday 28 October at 11:00 AM. Can I release that hold?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "hold_id": "H001",
+    "origin": "seed",
+    "customer_id": "CU10"
+  },
+  "solution": [
+    {
+      "tool": "get_customer",
+      "arguments": {
+        "email": "jack.turner@example.com",
+        "phone": "+1 212 555 0110"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "list_slots",
+      "arguments": {
+        "staff_id": "ST02",
+        "location_id": "L1",
+        "service_id": "SV3",
+        "date": "2026-10-28"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "staff_id": "record: staff.staff_id where name='Lucia Fernandez'"
+      }
+    },
+    {
+      "tool": "release_hold",
+      "arguments": {
+        "customer_id": "CU10",
+        "hold_id": "H001"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "disposition": "expired_hold",
+    "interaction": "single_request",
+    "interface": "clean_prose",
+    "overlay_intensity": "absent",
+    "overlay_vector": "none",
+    "task": "release_hold",
+    "counterparty": "returning_customer",
+    "overlay": "none"
+  },
+  "sub_goals": [
+    "availability_reported_from_calendar",
+    "declined_action_explained"
+  ],
+  "max_turns": 6,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

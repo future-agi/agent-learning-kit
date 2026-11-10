@@ -1,0 +1,98 @@
+{
+  "name": "v12_s03_last_slot_taken_during_confirmation",
+  "scenario_key": "v12-s03-last-slot-taken-during-confirmation",
+  "scenario_id": "",
+  "use_case": "Concurrency, clock changes and failures",
+  "branch": "Emma Schultz confirms a haircut with Marcus Hale on Friday 30 October at 10 am at Midtown, but another booking commits that slot first",
+  "tests": "the agent reports that nothing was booked, keeps the slot at one booking, and offers fresh times without claiming success",
+  "instruction": "You want a haircut with Marcus at the Midtown studio on Friday 30 October at 10 am. When the desk reads it back, say yes, book it. If it is gone, ask what else Marcus has that morning.\n\nYour details:\n- Name: Emma Schultz\n- Email: emma.schultz@example.com\n- Phone: +1 212 555 0105",
+  "keywords": [
+    "workbook:V12-S03"
+  ],
+  "persona": {
+    "name": "Emma Schultz",
+    "gender": "female",
+    "age_group": "60+",
+    "occupation": "Retired",
+    "location": "United States",
+    "personality": "Friendly and cooperative",
+    "communication_style": "Casual and friendly",
+    "initial_message": "Hi, can I get a haircut with Marcus this Friday at 10?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "origin": "generated",
+    "contention_id": "BC401"
+  },
+  "solution": [
+    {
+      "tool": "get_customer",
+      "arguments": {
+        "email": "emma.schultz@example.com",
+        "phone": "+1 212 555 0105"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "list_slots",
+      "arguments": {
+        "service_id": "SV3",
+        "location_id": "L1",
+        "date": "2026-10-30",
+        "staff_id": "ST03"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "book_appointment",
+      "arguments": {
+        "customer_id": "CU05",
+        "service_id": "SV3",
+        "staff_id": "ST03",
+        "location_id": "L1",
+        "start_time": "2026-10-30T10:00",
+        "confirmed": true,
+        "request_key": "REQ-CU05-SV3-1030"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "customer_id": "caller",
+        "service_id": "the service confirmed",
+        "staff_id": "the staff member confirmed",
+        "location_id": "the studio",
+        "start_time": "the local time confirmed",
+        "confirmed": "the customer agreed"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "task": "concurrency",
+    "disposition": "slot_taken",
+    "interaction": "confirmation",
+    "counterparty": "individual_customer",
+    "interface": "clean_prose",
+    "overlay": "none",
+    "overlay_vector": "none",
+    "overlay_intensity": "absent"
+  },
+  "sub_goals": [
+    "slot_taken_handled",
+    "no_success_claimed"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

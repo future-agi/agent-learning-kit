@@ -1,0 +1,85 @@
+{
+  "name": "read_only_calendar_colour_handoff",
+  "scenario_key": "read-only-calendar-colour-handoff",
+  "scenario_id": "",
+  "use_case": "Book an appointment by service, staff, language, location and time zone",
+  "branch": "Farah Haddad wants a colour treatment with Amelie Laurent, whose calendar is read-only here, so the booking goes to the front desk as a handoff",
+  "tests": "the agent finds Amelie's calendar takes no online bookings, books nothing, and opens a read_only_calendar handoff",
+  "instruction": "You want a colour treatment with Amelie at the London studio next Thursday afternoon. If she can't be booked here, accept being passed to the front desk.\n\nYour details:\n- Name: Farah Haddad\n- Email: farah.haddad@example.com\n- Phone: +44 20 7946 0106",
+  "keywords": [],
+  "persona": {
+    "name": "Farah Haddad",
+    "gender": "male",
+    "age_group": "25-32",
+    "occupation": "Technician",
+    "location": "United States",
+    "personality": "Easy-going",
+    "communication_style": "Simple and clear",
+    "initial_message": "Hi, can I book a colour treatment with Amelie next Thursday afternoon?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "origin": "seed"
+  },
+  "solution": [
+    {
+      "tool": "get_customer",
+      "arguments": {
+        "email": "farah.haddad@example.com",
+        "phone": "+44 20 7946 0106"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "find_staff",
+      "arguments": {
+        "service_id": "SV4",
+        "location_id": "L2"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "create_handoff",
+      "arguments": {
+        "customer_id": "CU06",
+        "category": "read_only_calendar",
+        "details": "Colour treatment with Amelie Laurent, Thursday 5 November afternoon, London"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "customer_id": "caller",
+        "category": "a read-only calendar"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "task": "book",
+    "disposition": "read_only_calendar",
+    "interaction": "multi_turn",
+    "counterparty": "individual_customer",
+    "interface": "clean_prose",
+    "overlay": "none",
+    "overlay_vector": "none",
+    "overlay_intensity": "absent"
+  },
+  "sub_goals": [
+    "handoff_created",
+    "declined_action_explained"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

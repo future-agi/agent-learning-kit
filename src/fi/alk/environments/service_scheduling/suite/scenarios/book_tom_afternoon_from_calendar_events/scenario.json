@@ -1,0 +1,118 @@
+{
+  "name": "book_tom_afternoon_from_calendar_events",
+  "scenario_key": "book-tom-afternoon-from-calendar-events",
+  "scenario_id": "",
+  "use_case": "Book an appointment by service, staff, language, location and time zone",
+  "branch": "customer asks for the first available afternoon slot with Tom at Shoreditch on Thursday 29 October and is booked for 14:00 London time",
+  "tests": "the agent checks calendar events for Tom on 29 October, identifies the 14:00 afternoon opening, and completes the booking with confirmation",
+  "instruction": "You want to book a haircut with Tom Whitaker at the Shoreditch Studio on Thursday 29 October 2026. You want his first available opening in the afternoon (from 12:00 pm onwards), and you will accept 2:00 pm (14:00).\n\nYour details:\n- Name: Cameron Murray\n- Email: cameron.murray@example.com\n- Phone: +44 20 7946 0411\n- Service: Haircut\n- Staff: Tom Whitaker\n- Location: Shoreditch Studio (22 Rivington St, London)\n- Date and time: Thursday 29 October 2026 at 2:00 pm (2026-10-29T14:00)\n- Time zone: Europe/London (+00:00)",
+  "keywords": [
+    "book_appointment",
+    "calendar_events",
+    "haircut"
+  ],
+  "persona": {
+    "name": "Cameron Murray",
+    "gender": "male",
+    "age_group": "25-32",
+    "occupation": "Architect",
+    "location": "United Kingdom",
+    "personality": "Friendly and cooperative",
+    "communication_style": "Direct and concise",
+    "initial_message": "Hello, I'd like to book a haircut with Tom at Shoreditch next Thursday 29 October. What is his first opening in the afternoon?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "name": "Cameron Murray",
+    "phone": "+44 20 7946 0411",
+    "staff_id": "ST05",
+    "customer_id": "CU411",
+    "location_id": "L2",
+    "origin": "mixed",
+    "time": "2026-10-29T14:00",
+    "email": "cameron.murray@example.com",
+    "service_id": "SV3"
+  },
+  "solution": [
+    {
+      "tool": "get_customer",
+      "arguments": {
+        "email": "cameron.murray@example.com",
+        "phone": "+44 20 7946 0411"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "list_events",
+      "arguments": {
+        "calendarId": "CAL-ST05",
+        "startTime": "2026-10-29T12:00:00Z",
+        "endTime": "2026-10-29T18:00:00Z"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "list_slots",
+      "arguments": {
+        "location_id": "L2",
+        "date": "2026-10-29",
+        "service_id": "SV3",
+        "staff_id": "ST05"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "book_appointment",
+      "arguments": {
+        "request_key": "REQ-CU411-SV3",
+        "confirmed": true,
+        "service_id": "SV3",
+        "utc_offset": "+00:00",
+        "start_time": "2026-10-29T14:00",
+        "customer_id": "CU411",
+        "location_id": "L2",
+        "staff_id": "ST05"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "start_time": "caller: 2026-10-29T14:00",
+        "staff_id": "record: ST05",
+        "location_id": "record: L2",
+        "customer_id": "record: CU411",
+        "service_id": "record: SV3",
+        "utc_offset": "caller: +00:00"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "overlay_intensity": "absent",
+    "disposition": "calendar_events",
+    "interaction": "multi_turn",
+    "counterparty": "returning_customer",
+    "overlay_vector": "none",
+    "task": "book_appointment",
+    "interface": "clean_prose",
+    "overlay": "none"
+  },
+  "sub_goals": [
+    "appointment_booked_as_confirmed",
+    "timezone_and_instant_confirmed"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

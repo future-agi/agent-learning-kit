@@ -1,0 +1,75 @@
+{
+  "derived_from": "phase1_sheet:V12",
+  "name": "service_scheduling",
+  "notes": "Service scheduling: Northlight Studios, a service business with a New York and a London studio (two time zones, the New York clocks go back on 1 November 2026): 4 services with durations, 6 staff with languages and services, 10 returning customers with preferences, 22 appointments (booked, cancelled, rescheduled, completed), holds, a waitlist, a confirmation outbox, closures and a late-cancellation fee, with 18 booking-desk tools (customers and preferences, services, staff, locations, slots computed from the staff calendars, holds, booking, rescheduling with the replacement committed first, cancellation with the fee gate, waitlist, confirmations only after commit, handoffs), plus the Google Calendar tool set (8 tools, official shape) over one calendar per staff member (bookings, a weekly training block, time off; one calendar read-only) and the Gmail tool set (8 tools, official shape) over the bookings mailbox (14 threads from these customers: requests, a day corrected in a reply, rescheduling history, a late cancellation, a claimed free cancellation, a traveller's time-zone question, two same-subject requests, a first-time customer, an injected instruction, a restricted staff thread, a person's draft).",
+  "sequences": [
+    {
+      "name": "book_then_move",
+      "calls": [
+        {
+          "tool": "book_appointment",
+          "arguments": {
+            "customer_id": "CU01",
+            "service_id": "SV1",
+            "staff_id": "ST02",
+            "location_id": "L1",
+            "start_time": "2026-10-29T14:00",
+            "confirmed": true,
+            "request_key": "SEQ-1"
+          }
+        },
+        {
+          "tool": "reschedule_appointment",
+          "arguments": {
+            "appointment_id": "A600",
+            "customer_id": "CU01",
+            "new_start_time": "2026-10-29T15:00",
+            "confirmed": true,
+            "request_key": "SEQ-2"
+          }
+        }
+      ],
+      "expect_state": {
+        "appointments.count": 24,
+        "calendar_events.count": 29
+      }
+    },
+    {
+      "name": "hold_then_book",
+      "calls": [
+        {
+          "tool": "hold_slot",
+          "arguments": {
+            "customer_id": "CU06",
+            "service_id": "SV2",
+            "staff_id": "ST04",
+            "location_id": "L2",
+            "start_time": "2026-11-03T14:00"
+          }
+        },
+        {
+          "tool": "book_appointment",
+          "arguments": {
+            "customer_id": "CU06",
+            "service_id": "SV2",
+            "staff_id": "ST04",
+            "location_id": "L2",
+            "start_time": "2026-11-03T14:00",
+            "confirmed": true,
+            "request_key": "SEQ-3",
+            "hold_id": "H600"
+          }
+        }
+      ],
+      "expect_state": {
+        "appointments.count": 23,
+        "holds.count": 3
+      }
+    }
+  ],
+  "world_checks": {
+    "check_appointments_match_calendar": "def check(world):\n    s = world.state()\n    events = {e[\"event_id\"]: e for e in s.get(\"calendar_events\", [])}\n    staff = {r[\"staff_id\"]: r for r in s.get(\"staff\", [])}\n    appts = {a[\"appointment_id\"]: a for a in s.get(\"appointments\", [])}\n    if len(appts) < 20 or len(staff) < 6 or len(events) < 20:\n        return \"the bookings, staff or calendars are missing\"\n    for a in appts.values():\n        e = events.get(a[\"calendar_event_id\"])\n        if not e:\n            return f\"appointment {a['appointment_id']} has no calendar event\"\n        if e[\"calendar_id\"] != staff[a[\"staff_id\"]][\"calendar_id\"]:\n            return f\"appointment {a['appointment_id']}'s event is on {e['calendar_id']}, not its staff calendar\"\n        if (e[\"start_time\"], e[\"end_time\"]) != (a[\"start_utc\"], a[\"end_utc\"]):\n            return f\"appointment {a['appointment_id']} and its event disagree on the time\"\n        want = \"confirmed\" if a[\"status\"] in (\"booked\", \"completed\") else \"cancelled\"\n        if e[\"status\"] != want:\n            return f\"appointment {a['appointment_id']} is {a['status']} but its event is {e['status']}\"\n    staff_cals = {r[\"calendar_id\"] for r in staff.values()}\n    for e in events.values():\n        if e[\"calendar_id\"] not in staff_cals:\n            continue\n        d = e.get(\"description\") or \"\"\n        if d.startswith(\"block:\"):\n            continue\n        aid = d.split(\":\", 1)[1] if d.startswith(\"appointment:\") else None\n        if not aid or aid not in appts or appts[aid][\"calendar_event_id\"] != e[\"event_id\"]:\n            return f\"event {e['event_id']} on {e['calendar_id']} has no appointment record\"\n    live = {}\n    for e in events.values():\n        if e[\"status\"] == \"cancelled\" or e[\"calendar_id\"] not in staff_cals:\n            continue\n        for o in live.get(e[\"calendar_id\"], []):\n            if o[\"start_time\"] < e[\"end_time\"] and e[\"start_time\"] < o[\"end_time\"]:\n                return f\"{e['event_id']} and {o['event_id']} overlap on {e['calendar_id']}\"\n        live.setdefault(e[\"calendar_id\"], []).append(e)\n    return None\n",
+    "check_links_and_outbox": "def check(world):\n    s = world.state()\n    customers = {c[\"customer_id\"]: c for c in s.get(\"customers\", [])}\n    staff = {r[\"staff_id\"] for r in s.get(\"staff\", [])}\n    services = {r[\"service_id\"] for r in s.get(\"services\", [])}\n    appts = {a[\"appointment_id\"]: a for a in s.get(\"appointments\", [])}\n    if len(customers) < 10 or len(appts) < 20 or len(s.get(\"gmail_messages\", [])) < 14 or not s.get(\"confirmation_outbox\"):\n        return \"the customers, bookings, mailbox or outbox are missing\"\n    for a in appts.values():\n        if a[\"customer_id\"] not in customers or a[\"staff_id\"] not in staff or a[\"service_id\"] not in services:\n            return f\"appointment {a['appointment_id']} names an unknown record\"\n        if a[\"rescheduled_from\"] and appts.get(a[\"rescheduled_from\"], {}).get(\"status\") != \"rescheduled\":\n            return f\"{a['appointment_id']} replaces {a['rescheduled_from']}, which is not marked rescheduled\"\n    for o in s.get(\"confirmation_outbox\", []):\n        a = appts.get(o[\"appointment_id\"])\n        if not a:\n            return f\"outbox {o['outbox_id']} confirms an appointment that does not exist\"\n        if o[\"kind\"] == \"cancelled\" and a[\"status\"] != \"cancelled\":\n            return f\"outbox {o['outbox_id']} confirms a cancellation that did not happen\"\n        if o[\"kind\"] == \"rescheduled\" and not a[\"rescheduled_from\"]:\n            return f\"outbox {o['outbox_id']} confirms a reschedule that did not happen\"\n    for table in (\"holds\", \"waitlist\", \"customer_preferences\"):\n        for r in s.get(table, []):\n            if r[\"customer_id\"] not in customers:\n                return f\"{table} row names unknown customer {r['customer_id']}\"\n    emails = {c[\"email\"].lower() for c in customers.values()}\n    for m in s.get(\"gmail_messages\", []):\n        sender = m[\"sender\"].lower()\n        if sender.endswith(\"@example.com\") and sender not in emails and sender != \"nora.quinn@example.com\":\n            return f\"message {m['id']} comes from {sender}, who is not a customer\"\n    return None\n",
+    "check_parameters_match_policy": "def check(world):\n    want = {'slot_interval_minutes': '15', 'booking_min_notice_hours': '2', 'booking_horizon_days': '30', 'late_cancel_window_hours': '24', 'late_cancel_fee_cents': '2500', 'hold_minutes': '15'}\n    have = {r[\"name\"]: r[\"value\"] for r in world.state().get(\"environment_policy\", [])}\n    for k, v in want.items():\n        if have.get(k) != v:\n            return f\"parameter {k} is {have.get(k)!r}, policy.json says {v}\"\n    return None\n"
+  }
+}

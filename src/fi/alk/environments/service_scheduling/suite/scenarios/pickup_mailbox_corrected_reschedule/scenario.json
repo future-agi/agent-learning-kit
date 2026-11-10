@@ -1,0 +1,113 @@
+{
+  "name": "pickup_mailbox_corrected_reschedule",
+  "scenario_key": "pickup-mailbox-corrected-reschedule",
+  "scenario_id": "",
+  "use_case": "Reschedule or cancel an appointment",
+  "branch": "agent reads email thread th_s401 where customer asked for Thursday and then corrected to Friday, and reschedules appointment A430 to the corrected Friday time",
+  "tests": "the agent reads the full thread th_s401 including the correction and moves appointment A430 to Friday 6 November 11:00",
+  "instruction": "You are Toby Marshall. You sent an email asking to move your haircut with Tom (appointment A430) to Thursday, and then immediately sent a follow-up correcting it to Friday 6 November at 11:00 am (thread th_s401). In chat, you ask the desk to review the thread and reschedule to your corrected time (Friday 6 November at 11:00 am).\n\nYour details:\n- Name: Toby Marshall\n- Email: toby.marshall@example.com\n- Phone: +44 20 7946 0430\n- Existing appointment ID: A430\n- Thread ID: th_s401\n- Target time: Friday 6 November 2026 at 11:00 am (2026-11-06T11:00)\n- Time zone: Europe/London (+00:00)",
+  "keywords": [
+    "reschedule_appointment",
+    "self_correction",
+    "mailbox_request"
+  ],
+  "persona": {
+    "name": "Toby Marshall",
+    "gender": "male",
+    "age_group": "32-40",
+    "occupation": "Technician",
+    "location": "United Kingdom",
+    "personality": "Friendly and cooperative",
+    "communication_style": "Direct and concise",
+    "initial_message": "Hi, I sent an email thread with a correction about moving my haircut with Tom (thread th_s401). Could you please reschedule it to Friday?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "thread_id": "th_s401",
+    "email": "toby.marshall@example.com",
+    "new_time": "2026-11-06T11:00",
+    "origin": "mixed",
+    "location_id": "L2",
+    "service_id": "SV3",
+    "customer_id": "CU430",
+    "name": "Toby Marshall",
+    "staff_id": "ST05",
+    "appointment_id": "A430",
+    "phone": "+44 20 7946 0430"
+  },
+  "solution": [
+    {
+      "tool": "get_thread",
+      "arguments": {
+        "messageFormat": "FULL_CONTENT",
+        "threadId": "th_s401"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "threadId": "record: th_s401"
+      }
+    },
+    {
+      "tool": "get_customer",
+      "arguments": {
+        "email": "toby.marshall@example.com",
+        "phone": "+44 20 7946 0430"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_appointment",
+      "arguments": {
+        "appointment_id": "A430",
+        "customer_id": "CU430"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "reschedule_appointment",
+      "arguments": {
+        "appointment_id": "A430",
+        "utc_offset": "+00:00",
+        "confirmed": true,
+        "new_start_time": "2026-11-06T11:00",
+        "request_key": "REQ-TH401-RESCHED",
+        "customer_id": "CU430"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "utc_offset": "caller: +00:00",
+        "new_start_time": "caller: 2026-11-06T11:00",
+        "appointment_id": "record: A430"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "task": "reschedule_appointment",
+    "counterparty": "returning_customer",
+    "overlay": "none",
+    "disposition": "self_correction",
+    "interaction": "correction",
+    "interface": "clean_prose",
+    "overlay_vector": "none",
+    "overlay_intensity": "absent"
+  },
+  "sub_goals": [
+    "appointment_rescheduled_atomically"
+  ],
+  "max_turns": 6,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

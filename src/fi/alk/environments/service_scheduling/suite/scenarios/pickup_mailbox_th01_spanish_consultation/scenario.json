@@ -1,0 +1,120 @@
+{
+  "name": "pickup_mailbox_th01_spanish_consultation",
+  "scenario_key": "pickup-mailbox-th01-spanish-consultation",
+  "scenario_id": "",
+  "use_case": "Book an appointment by service, staff, language, location and time zone",
+  "branch": "agent picks up booking request email th_s01_spanish_consultation from Valeria Gomez and books Lucia for Thursday 29 October at 14:00",
+  "tests": "the agent reads email thread th_s01_spanish_consultation and books Lucia for Valeria Gomez on 29 October 14:00",
+  "instruction": "You are Valeria Gomez. You sent an email (thread th_s01_spanish_consultation) requesting an Initial Consultation at Midtown with someone who speaks Spanish next Thursday afternoon (29 October 2026) around 2 pm. You want the desk to confirm and book your appointment with Lucia Fernandez on Thursday 29 October at 2:00 pm (14:00).\n\nYour details:\n- Name: Valeria Gomez\n- Email: valeria.gomez@example.com\n- Phone: +1 212 555 0418\n- Service: Initial Consultation (SV1)\n- Staff: Lucia Fernandez (ST02)\n- Location: Midtown Studio (L1)\n- Date and time: Thursday 29 October 2026 at 2:00 pm (2026-10-29T14:00)\n- Time zone: America/New_York (-04:00)",
+  "keywords": [
+    "book_appointment",
+    "mailbox_request",
+    "consultation"
+  ],
+  "persona": {
+    "name": "Valeria Gomez",
+    "gender": "female",
+    "age_group": "25-32",
+    "occupation": "Teacher",
+    "location": "Canada",
+    "personality": "Friendly and cooperative",
+    "communication_style": "Direct and concise",
+    "initial_message": "Hola, I sent an email regarding booking an Initial Consultation in Spanish next Thursday 29 October around 2 pm (thread th_s01_spanish_consultation). Could you please book that for me?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "time": "2026-10-29T14:00",
+    "staff_id": "ST02",
+    "origin": "mixed",
+    "location_id": "L1",
+    "customer_id": "CU418",
+    "email": "valeria.gomez@example.com",
+    "name": "Valeria Gomez",
+    "thread_id": "th_s01_spanish_consultation",
+    "phone": "+1 212 555 0418",
+    "service_id": "SV1"
+  },
+  "solution": [
+    {
+      "tool": "get_thread",
+      "arguments": {
+        "messageFormat": "FULL_CONTENT",
+        "threadId": "th_s01_spanish_consultation"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "threadId": "record: th_s01_spanish_consultation"
+      }
+    },
+    {
+      "tool": "get_customer",
+      "arguments": {
+        "email": "valeria.gomez@example.com",
+        "phone": "+1 212 555 0418"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "list_slots",
+      "arguments": {
+        "location_id": "L1",
+        "date": "2026-10-29",
+        "staff_id": "ST02",
+        "service_id": "SV1"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "book_appointment",
+      "arguments": {
+        "confirmed": true,
+        "staff_id": "ST02",
+        "start_time": "2026-10-29T14:00",
+        "request_key": "REQ-TH01-BOOK",
+        "service_id": "SV1",
+        "location_id": "L1",
+        "utc_offset": "-04:00",
+        "customer_id": "CU418"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "staff_id": "record: ST02",
+        "location_id": "record: L1",
+        "customer_id": "record: CU418",
+        "utc_offset": "caller: -04:00",
+        "service_id": "record: SV1",
+        "start_time": "caller: 2026-10-29T14:00"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "task": "book_appointment",
+    "interaction": "single_request",
+    "overlay_vector": "none",
+    "overlay_intensity": "absent",
+    "interface": "clean_prose",
+    "counterparty": "returning_customer",
+    "overlay": "none",
+    "disposition": "mailbox_request"
+  },
+  "sub_goals": [
+    "appointment_booked_as_confirmed",
+    "timezone_and_instant_confirmed"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

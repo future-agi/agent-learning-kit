@@ -1,0 +1,106 @@
+{
+  "name": "priya_availability_thursday_lunch_block",
+  "scenario_key": "priya-availability-thursday-lunch-block",
+  "scenario_id": "",
+  "use_case": "Answer availability from the staff calendars and hold slots",
+  "branch": "Check Priya Desai's availability on Thursday 29 October accounting for her lunch block (12:00-13:00).",
+  "tests": "the agent reads Priya's calendar/slots and reports her availability excluding her lunch block",
+  "instruction": "You want to know when Priya Desai is available for a 60-minute Massage Therapy session at Shoreditch Studio on Thursday 29 October 2026.\n\nYour details:\n- Name: Amina Al-Mansoor\n- Email: amina.mansoor@example.com\n- Phone: +44 20 7946 0202",
+  "keywords": [
+    "availability",
+    "staff_calendar",
+    "slot_lookup"
+  ],
+  "persona": {
+    "name": "Amina Al-Mansoor",
+    "gender": "female",
+    "age_group": "32-40",
+    "occupation": "Manager",
+    "location": "United Kingdom",
+    "personality": "Friendly and cooperative",
+    "communication_style": "Casual and friendly",
+    "initial_message": "Hello, could you check when Priya Desai has availability for Massage Therapy at Shoreditch Studio on Thursday 29 October?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "origin": "generated",
+    "email": "amina.mansoor@example.com",
+    "phone": "+44 20 7946 0202",
+    "customer_id": "CU102"
+  },
+  "solution": [
+    {
+      "tool": "get_customer",
+      "arguments": {
+        "email": "amina.mansoor@example.com",
+        "phone": "+44 20 7946 0202"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "list_slots",
+      "arguments": {
+        "date": "2026-10-29",
+        "service_id": "SV2",
+        "staff_id": "ST04",
+        "location_id": "L2"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "staff_id": "record: staff.staff_id where name='Priya Desai'"
+      }
+    }
+  ],
+  "alternatives": [
+    [
+      {
+        "tool": "get_customer",
+        "arguments": {
+          "email": "amina.mansoor@example.com",
+          "phone": "+44 20 7946 0202"
+        },
+        "environment_arguments": {},
+        "fixed": {}
+      },
+      {
+        "tool": "list_events",
+        "arguments": {
+          "startTime": "2026-10-29T00:00:00Z",
+          "endTime": "2026-10-29T23:59:59Z",
+          "calendarId": "CAL-ST04"
+        },
+        "environment_arguments": {},
+        "fixed": {
+          "calendarId": "record: staff.calendar_id where name='Priya Desai'"
+        }
+      }
+    ]
+  ],
+  "coverage": {
+    "interface": "clean_prose",
+    "task": "availability",
+    "overlay_intensity": "absent",
+    "overlay": "none",
+    "disposition": "calendar_block",
+    "counterparty": "returning_customer",
+    "overlay_vector": "none",
+    "interaction": "multi_turn"
+  },
+  "sub_goals": [
+    "availability_reported_from_calendar"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

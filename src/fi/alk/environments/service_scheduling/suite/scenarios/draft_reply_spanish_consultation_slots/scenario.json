@@ -1,0 +1,94 @@
+{
+  "name": "draft_reply_spanish_consultation_slots",
+  "scenario_key": "draft-reply-spanish-consultation-slots",
+  "scenario_id": "",
+  "use_case": "Pick up a booking request from the bookings mailbox",
+  "branch": "Front desk staff asks for a draft reply to Ana Morales on thread th_s01 with Lucia's free Thursday 29 Oct afternoon times for an initial consultation; the agent creates a draft on her thread addressed to her",
+  "tests": "the agent drafts a grounded reply on the customer's thread with available times without sending it",
+  "instruction": "You are on the front desk team. Ask the assistant to prepare a draft reply on Ana Morales's email thread (th_s01_spanish_consultation) addressed to ana.morales@example.com listing Lucia Fernandez's available afternoon appointment slots for an Initial Consultation at Midtown on Thursday 29 October 2026. Do not send the email.",
+  "keywords": [
+    "draft",
+    "consultation"
+  ],
+  "persona": {
+    "name": "Jordan Brooks",
+    "gender": "",
+    "age_group": "",
+    "occupation": "Customer Service",
+    "location": "Australia",
+    "personality": "Professional and formal",
+    "communication_style": "Direct and concise",
+    "initial_message": "Hi, could you draft a reply for Ana Morales on thread th_s01_spanish_consultation with Lucia's free Thursday 29 October afternoon consultation slots?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "thread_id": "th_s01_spanish_consultation",
+    "origin": "seed"
+  },
+  "solution": [
+    {
+      "tool": "get_thread",
+      "arguments": {
+        "threadId": "th_s01_spanish_consultation"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "threadId": "the email the request came in"
+      }
+    },
+    {
+      "tool": "list_slots",
+      "arguments": {
+        "date": "2026-10-29",
+        "service_id": "SV1",
+        "location_id": "L1",
+        "staff_id": "ST02"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "create_draft",
+      "arguments": {
+        "to": [
+          "ana.morales@example.com"
+        ],
+        "body": "Hi Ana, Lucia Fernandez has availability on Thursday 29 October at 2:00 PM and 2:45 PM for an Initial Consultation. - Front Desk",
+        "subject": "Re: Consultation in Spanish",
+        "replyToMessageId": "smsg_001"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "replyToMessageId": "record: gmail_messages id smsg_001",
+        "to": "record: gmail_messages sender for smsg_001"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "counterparty": "staff_member",
+    "interface": "clean_prose",
+    "interaction": "multi_turn",
+    "overlay": "none",
+    "task": "draft_reply",
+    "overlay_vector": "none",
+    "overlay_intensity": "absent",
+    "disposition": "availability_draft"
+  },
+  "sub_goals": [
+    "draft_created_for_review"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

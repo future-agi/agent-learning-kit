@@ -1,0 +1,104 @@
+{
+  "name": "reschedule_haircut_switch_to_marcus",
+  "scenario_key": "reschedule-haircut-switch-to-marcus",
+  "scenario_id": "",
+  "use_case": "Reschedule or cancel an appointment",
+  "branch": "customer reschedules an existing haircut appointment to switch staff from Lucia to Marcus at the same time on Friday 6 November",
+  "tests": "the agent reschedules haircut appointment A422 to switch staff to Marcus at 15:30 on Friday 6 November and updates calendar events",
+  "instruction": "You have an existing Haircut appointment (A422) booked with Lucia Fernandez at Midtown on Friday 6 November 2026 at 3:30 pm (15:30). You want to switch staff to Marcus Hale at the same time (Friday 6 November 2026 at 15:30).\n\nYour details:\n- Name: Declan Murphy\n- Email: declan.murphy@example.com\n- Phone: +1 212 555 0422\n- Existing appointment ID: A422\n- Service: Haircut\n- Current staff: Lucia Fernandez\n- Requested staff: Marcus Hale (ST03)\n- Location: Midtown Studio (410 Lexington Ave)\n- Requested time: Friday 6 November 2026 at 3:30 pm (2026-11-06T15:30)\n- Time zone: America/New_York (-05:00)",
+  "keywords": [
+    "reschedule_appointment",
+    "haircut",
+    "move_staff"
+  ],
+  "persona": {
+    "name": "Declan Murphy",
+    "gender": "male",
+    "age_group": "32-40",
+    "occupation": "Technician",
+    "location": "Australia",
+    "personality": "Friendly and cooperative",
+    "communication_style": "Direct and concise",
+    "initial_message": "Hi, I have a haircut appointment A422 with Lucia on Friday November 6th at 3:30 pm. Could I switch that over to Marcus at the exact same time?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "email": "declan.murphy@example.com",
+    "service_id": "SV3",
+    "new_staff_id": "ST03",
+    "staff_id": "ST02",
+    "phone": "+1 212 555 0422",
+    "location_id": "L1",
+    "appointment_id": "A422",
+    "origin": "mixed",
+    "new_time": "2026-11-06T15:30",
+    "customer_id": "CU422",
+    "name": "Declan Murphy"
+  },
+  "solution": [
+    {
+      "tool": "get_customer",
+      "arguments": {
+        "email": "declan.murphy@example.com",
+        "phone": "+1 212 555 0422"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_appointment",
+      "arguments": {
+        "appointment_id": "A422",
+        "customer_id": "CU422"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "reschedule_appointment",
+      "arguments": {
+        "new_staff_id": "ST03",
+        "customer_id": "CU422",
+        "request_key": "REQ-RESCHED-A422",
+        "confirmed": true,
+        "appointment_id": "A422",
+        "new_start_time": "2026-11-06T15:30",
+        "utc_offset": "-05:00"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "new_staff_id": "record: ST03",
+        "utc_offset": "caller: -05:00",
+        "appointment_id": "record: A422",
+        "new_start_time": "caller: 2026-11-06T15:30"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "disposition": "move_staff",
+    "counterparty": "returning_customer",
+    "task": "reschedule_appointment",
+    "interaction": "single_request",
+    "interface": "clean_prose",
+    "overlay_vector": "none",
+    "overlay_intensity": "absent",
+    "overlay": "none"
+  },
+  "sub_goals": [
+    "appointment_rescheduled_atomically"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

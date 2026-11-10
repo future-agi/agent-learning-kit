@@ -1,0 +1,87 @@
+{
+  "name": "record_accessibility_preference_from_email",
+  "scenario_key": "record-accessibility-preference-from-email",
+  "scenario_id": "",
+  "use_case": "New and returning customers and their preferences",
+  "branch": "Front desk asks to process Victor Lindqvist's email request th_s404 and record an accessibility preference for step-free access on his customer profile",
+  "tests": "the agent reads the customer email and records the accessibility preference on their profile",
+  "instruction": "You are on the front desk team. Ask the assistant to check Victor Lindqvist's email request (thread th_s404_step_free) and record his accessibility preference (kind: accessibility, value: step_free) on his customer profile.\n\nDetails you have:\n- Customer: Victor Lindqvist\n- Email: victor.lindqvist@example.com\n- Phone on file: +44 20 7946 0407\n- Thread: th_s404_step_free",
+  "keywords": [
+    "preference"
+  ],
+  "persona": {
+    "name": "Rowan Sterling",
+    "gender": "",
+    "age_group": "",
+    "occupation": "Customer Service",
+    "location": "United Kingdom",
+    "personality": "Professional and formal",
+    "communication_style": "Direct and concise",
+    "initial_message": "Please process Victor Lindqvist's email in thread th_s404_step_free and record his accessibility preference for step-free access on his profile.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "thread_id": "th_s404_step_free",
+    "origin": "generated"
+  },
+  "solution": [
+    {
+      "tool": "get_thread",
+      "arguments": {
+        "threadId": "th_s404_step_free"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_customer",
+      "arguments": {
+        "phone": "+44 20 7946 0407",
+        "email": "victor.lindqvist@example.com"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "record_customer_preference",
+      "arguments": {
+        "customer_id": "CU407",
+        "value": "step_free",
+        "kind": "accessibility"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "customer_id": "record: customers customer_id for CU407",
+        "kind": "caller: accessibility",
+        "value": "caller: step_free"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "disposition": "accessibility_preference",
+    "overlay_intensity": "absent",
+    "overlay_vector": "none",
+    "counterparty": "staff_member",
+    "interface": "clean_prose",
+    "overlay": "none",
+    "interaction": "multi_turn",
+    "task": "record_preference"
+  },
+  "sub_goals": [
+    "preference_recorded"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

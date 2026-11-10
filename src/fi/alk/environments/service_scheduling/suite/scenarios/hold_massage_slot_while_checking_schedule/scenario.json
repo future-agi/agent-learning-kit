@@ -1,0 +1,92 @@
+{
+  "name": "hold_massage_slot_while_checking_schedule",
+  "scenario_key": "hold-massage-slot-while-checking-schedule",
+  "scenario_id": "",
+  "use_case": "Answer availability from the staff calendars and hold slots",
+  "branch": "Customer places a temporary hold on Olivia Bennett for Massage Therapy on Wednesday 4 November at 11:00 Midtown while checking with work.",
+  "tests": "passes when an active hold is placed for Aisha Patel with Olivia Bennett at Midtown on Wednesday 4 November at 11:00.",
+  "instruction": "You want to place a temporary hold on a slot with Olivia Bennett for a 60-minute Massage Therapy session at Midtown Studio on Wednesday 4 November 2026 at 11:00 AM while you verify your hospital clinic schedule.\n\nYour details:\n- Name: Aisha Patel\n- Email: aisha.patel@example.com\n- Phone: +91 98200 00408\n- Service: Massage Therapy\n- Staff: Olivia Bennett\n- Studio location: Midtown Studio\n- Date: Wednesday 4 November 2026\n- Requested time: 11:00 AM",
+  "keywords": [
+    "hold",
+    "slot",
+    "massage",
+    "midtown"
+  ],
+  "persona": {
+    "name": "Aisha Patel",
+    "gender": "female",
+    "age_group": "32-40",
+    "occupation": "Doctor",
+    "location": "India",
+    "personality": "Detail-oriented",
+    "communication_style": "Formal and polite",
+    "initial_message": "Hello. Could you please put a temporary hold on the 11:00 AM slot with Olivia Bennett for Massage Therapy at Midtown on Wednesday 4 November while I check my schedule?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "staff": "Olivia Bennett (ST01)",
+    "phone": "+91 98200 00408",
+    "location": "Midtown Studio (L1)",
+    "start_time": "2026-11-04T11:00",
+    "origin": "generated",
+    "date": "2026-11-04",
+    "customer_id": "CU408",
+    "email": "aisha.patel@example.com",
+    "service": "Massage Therapy (SV2)"
+  },
+  "solution": [
+    {
+      "tool": "get_customer",
+      "arguments": {
+        "phone": "+91 98200 00408",
+        "email": "aisha.patel@example.com"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "hold_slot",
+      "arguments": {
+        "utc_offset": "-05:00",
+        "service_id": "SV2",
+        "staff_id": "ST01",
+        "customer_id": "CU408",
+        "location_id": "L1",
+        "start_time": "2026-11-04T11:00"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "customer_id": "caller: Aisha Patel (CU408)",
+        "staff_id": "record: staff.staff_id where name='Olivia Bennett'",
+        "start_time": "caller: Wednesday 4 November at 11:00"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "counterparty": "individual",
+    "interaction": "single_request",
+    "task": "hold_slot",
+    "interface": "clean_prose",
+    "overlay_vector": "none",
+    "disposition": "hold_request",
+    "overlay_intensity": "absent",
+    "overlay": "none"
+  },
+  "sub_goals": [
+    "hold_placed"
+  ],
+  "max_turns": 6,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

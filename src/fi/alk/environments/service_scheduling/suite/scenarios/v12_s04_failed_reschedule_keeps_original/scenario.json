@@ -1,0 +1,93 @@
+{
+  "name": "v12_s04_failed_reschedule_keeps_original",
+  "scenario_key": "v12-s04-failed-reschedule-keeps-original",
+  "scenario_id": "",
+  "use_case": "Concurrency, clock changes and failures",
+  "branch": "Emma Schultz asks to move her Friday 30 October 11 am haircut (A003) to 3 pm; the 3 pm slot is taken before the replacement commits, so A003 must stay booked",
+  "tests": "the agent attempts the move, reports that the replacement failed and the original is still booked, and books or cancels nothing else",
+  "instruction": "You have a haircut with Marcus on Friday 30 October at 11 am (A003). Ask to move it to 3 pm the same day and confirm when read back. If the move fails, you are happy to keep 11 am.\n\nYour details:\n- Name: Emma Schultz\n- Email: emma.schultz@example.com\n- Phone: +1 212 555 0105\n- Appointment: A003",
+  "keywords": [
+    "workbook:V12-S04"
+  ],
+  "persona": {
+    "name": "Emma Schultz",
+    "gender": "female",
+    "age_group": "60+",
+    "occupation": "Retired",
+    "location": "United States",
+    "personality": "Friendly and cooperative",
+    "communication_style": "Casual and friendly",
+    "initial_message": "Hi, could you move my Friday 11 am haircut to 3 pm?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "origin": "generated",
+    "contention_id": "BC402",
+    "appointment_id": "A003"
+  },
+  "solution": [
+    {
+      "tool": "get_customer",
+      "arguments": {
+        "email": "emma.schultz@example.com",
+        "phone": "+1 212 555 0105"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_appointment",
+      "arguments": {
+        "appointment_id": "A003",
+        "customer_id": "CU05"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "reschedule_appointment",
+      "arguments": {
+        "appointment_id": "A003",
+        "customer_id": "CU05",
+        "new_start_time": "2026-10-30T15:00",
+        "confirmed": true,
+        "request_key": "REQ-A003-MOVE"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "appointment_id": "caller: A003",
+        "customer_id": "caller",
+        "new_start_time": "the new local time",
+        "confirmed": "the customer agreed"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "task": "reschedule",
+    "disposition": "replacement_fails",
+    "interaction": "confirmation",
+    "counterparty": "individual_customer",
+    "interface": "clean_prose",
+    "overlay": "none",
+    "overlay_vector": "none",
+    "overlay_intensity": "absent"
+  },
+  "sub_goals": [
+    "original_kept_when_replacement_fails",
+    "no_success_claimed"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

@@ -1,0 +1,97 @@
+{
+  "name": "hold_haircut_then_explicitly_release",
+  "scenario_key": "hold-haircut-then-explicitly-release",
+  "scenario_id": "",
+  "use_case": "Answer availability from the staff calendars and hold slots",
+  "branch": "Customer holds Tom Whitaker for a Haircut on Friday 6 November at 11:00 London, then explicitly releases the hold.",
+  "tests": "passes when the placed hold is explicitly released by the desk upon customer request.",
+  "instruction": "You initially want to place a hold on Tom Whitaker for a Haircut at the London Shoreditch Studio on Friday 6 November 2026 at 11:00 AM. After the hold is placed, you realise your travel plans changed and you ask to cancel and release the hold.\n\nYour details:\n- Name: Zoe Bennett\n- Email: zoe.bennett@example.com\n- Phone: +1 416 555 0409\n- Service: Haircut\n- Staff: Tom Whitaker\n- Studio location: London Shoreditch Studio\n- Date: Friday 6 November 2026\n- Time: 11:00 AM",
+  "keywords": [
+    "hold",
+    "release",
+    "haircut",
+    "london"
+  ],
+  "persona": {
+    "name": "Zoe Bennett",
+    "gender": "female",
+    "age_group": "25-32",
+    "occupation": "Nurse",
+    "location": "Canada",
+    "personality": "Anxious",
+    "communication_style": "Direct and concise",
+    "initial_message": "Hi, please place a hold on Tom Whitaker for a Haircut at Shoreditch on Friday 6 November at 11:00 AM.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "service": "Haircut (SV3)",
+    "origin": "generated",
+    "phone": "+1 416 555 0409",
+    "staff": "Tom Whitaker (ST05)",
+    "email": "zoe.bennett@example.com",
+    "start_time": "2026-11-06T11:00",
+    "date": "2026-11-06",
+    "location": "Shoreditch Studio (L2)",
+    "customer_id": "CU409"
+  },
+  "solution": [
+    {
+      "tool": "get_customer",
+      "arguments": {
+        "phone": "+1 416 555 0409",
+        "email": "zoe.bennett@example.com"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "hold_slot",
+      "arguments": {
+        "location_id": "L2",
+        "utc_offset": "+00:00",
+        "customer_id": "CU409",
+        "staff_id": "ST05",
+        "start_time": "2026-11-06T11:00",
+        "service_id": "SV3"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "release_hold",
+      "arguments": {
+        "hold_id": "H600",
+        "customer_id": "CU409"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "disposition": "release_active_hold",
+    "interface": "clean_prose",
+    "counterparty": "individual",
+    "overlay": "none",
+    "task": "hold_slot",
+    "interaction": "multi_turn",
+    "overlay_vector": "none",
+    "overlay_intensity": "absent"
+  },
+  "sub_goals": [
+    "hold_released"
+  ],
+  "max_turns": 8,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

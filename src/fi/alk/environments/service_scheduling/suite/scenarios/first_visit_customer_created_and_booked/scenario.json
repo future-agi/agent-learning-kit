@@ -1,0 +1,99 @@
+{
+  "name": "first_visit_customer_created_and_booked",
+  "scenario_key": "first-visit-customer-created-and-booked",
+  "scenario_id": "",
+  "use_case": "New and returning customers and their preferences",
+  "branch": "Nora Quinn, a first-time customer, books a haircut with Marcus Hale on Friday 6 November at 9 am at Midtown; she is created once and booked",
+  "tests": "the agent creates the new customer once and books the confirmed haircut for her",
+  "instruction": "This is your first visit to Northlight. You want a haircut at the Midtown studio on Friday 6 November at 9 am, any stylist (Marcus is fine). Give your details when asked and confirm when read back.\n\nYour details:\n- Name: Nora Quinn\n- Email: nora.quinn@example.com\n- Phone: +1 212 555 0199",
+  "keywords": [],
+  "persona": {
+    "name": "Nora Quinn",
+    "gender": "female",
+    "age_group": "40-50",
+    "occupation": "Manager",
+    "location": "United Kingdom",
+    "personality": "Analytical",
+    "communication_style": "Formal and polite",
+    "initial_message": "Hi, first time here. Can I get a haircut next Friday morning in New York?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "origin": "seed"
+  },
+  "solution": [
+    {
+      "tool": "create_customer",
+      "arguments": {
+        "name": "Nora Quinn",
+        "email": "nora.quinn@example.com",
+        "phone": "+1 212 555 0199",
+        "time_zone": "America/New_York"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "email": "caller: Nora Quinn's email"
+      }
+    },
+    {
+      "tool": "list_slots",
+      "arguments": {
+        "service_id": "SV3",
+        "location_id": "L1",
+        "date": "2026-11-06",
+        "staff_id": "ST03"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "book_appointment",
+      "arguments": {
+        "customer_id": "CU600",
+        "service_id": "SV3",
+        "staff_id": "ST03",
+        "location_id": "L1",
+        "start_time": "2026-11-06T09:00",
+        "confirmed": true,
+        "request_key": "REQ-NEW-SV3-1106"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "customer_id": "caller",
+        "service_id": "the service confirmed",
+        "staff_id": "the staff member confirmed",
+        "location_id": "the studio",
+        "start_time": "the local time confirmed",
+        "confirmed": "the customer agreed"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "task": "new_customer",
+    "disposition": "first_visit",
+    "interaction": "multi_turn",
+    "counterparty": "new_customer",
+    "interface": "clean_prose",
+    "overlay": "none",
+    "overlay_vector": "none",
+    "overlay_intensity": "absent"
+  },
+  "sub_goals": [
+    "customer_created_or_reused",
+    "appointment_booked_as_confirmed"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

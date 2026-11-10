@@ -1,0 +1,402 @@
+{
+  "already_on_waitlist_duplicate_declined": {
+    "job": "waitlist_confirmations",
+    "mcp": false
+  },
+  "amelie_read_only_calendar_availability_checked": {
+    "job": "availability_holds",
+    "mcp": true
+  },
+  "book_busy_slot_refused_take_alternative": {
+    "job": "book",
+    "mcp": false
+  },
+  "book_closed_date_explained_booked_next_day": {
+    "job": "book",
+    "mcp": false
+  },
+  "book_colour_treatment_tom_shoreditch": {
+    "job": "book",
+    "mcp": false
+  },
+  "book_consultation_with_hold_first": {
+    "job": "book",
+    "mcp": false
+  },
+  "book_email_request_and_draft_reply": {
+    "job": "email",
+    "mcp": true
+  },
+  "book_email_request_and_label_handled": {
+    "job": "email",
+    "mcp": true
+  },
+  "book_haircut_after_dst_fallback_newyork": {
+    "job": "book",
+    "mcp": false
+  },
+  "book_haircut_marcus_midtown_afternoon": {
+    "job": "book",
+    "mcp": false
+  },
+  "book_haircut_spanish_speaking_staff_midtown": {
+    "job": "book",
+    "mcp": false
+  },
+  "book_london_consultation_cross_timezone": {
+    "job": "book",
+    "mcp": false
+  },
+  "book_marcus_during_training_block_rescheduled_to_1300": {
+    "job": "book",
+    "mcp": false
+  },
+  "book_massage_with_preferred_therapist": {
+    "job": "customers",
+    "mcp": false
+  },
+  "book_priya_friday_from_calendar_events": {
+    "job": "book",
+    "mcp": true
+  },
+  "book_saturday_massage_olivia_midtown": {
+    "job": "book",
+    "mcp": false
+  },
+  "book_tom_afternoon_from_calendar_events": {
+    "job": "book",
+    "mcp": true
+  },
+  "booking_then_email_confirmation_queued": {
+    "job": "waitlist_confirmations",
+    "mcp": false
+  },
+  "calendar_training_conflict_booked_later": {
+    "job": "concurrency_dst",
+    "mcp": true
+  },
+  "cancel_already_cancelled_appointment_reported": {
+    "job": "reschedule_cancel",
+    "mcp": false
+  },
+  "cancel_appointment_inside_window_fee_accepted": {
+    "job": "reschedule_cancel",
+    "mcp": false
+  },
+  "cancel_appointment_outside_window_no_fee": {
+    "job": "reschedule_cancel",
+    "mcp": false
+  },
+  "cancel_late_fee_declined_appointment_kept": {
+    "job": "reschedule_cancel",
+    "mcp": false
+  },
+  "cancel_massage_and_queue_confirmation": {
+    "job": "reschedule_cancel",
+    "mcp": false
+  },
+  "cancellation_already_processed_inquiry": {
+    "job": "email",
+    "mcp": true
+  },
+  "chat_time_overrides_email_booking": {
+    "job": "email",
+    "mcp": true
+  },
+  "competitor_held_slot_refused_next_slot_booked": {
+    "job": "availability_holds",
+    "mcp": false
+  },
+  "complaint_missed_appointment_handoff": {
+    "job": "identity_privacy",
+    "mcp": false
+  },
+  "confirmation_requested_before_booking_committed": {
+    "job": "waitlist_confirmations",
+    "mcp": false
+  },
+  "coworker_appointment_not_disclosed": {
+    "job": "identity_privacy",
+    "mcp": false
+  },
+  "customer_verified_before_appointments_lookup": {
+    "job": "identity_privacy",
+    "mcp": false
+  },
+  "disambiguate_same_subject_booking_request": {
+    "job": "email",
+    "mcp": true
+  },
+  "draft_reply_spanish_consultation_slots": {
+    "job": "email",
+    "mcp": true
+  },
+  "draft_reply_traveller_london_times": {
+    "job": "email",
+    "mcp": true
+  },
+  "dst_clock_change_sunday_inquiry": {
+    "job": "concurrency_dst",
+    "mcp": false
+  },
+  "email_booking_repeated_hour_ambiguity_explained": {
+    "job": "concurrency_dst",
+    "mcp": true
+  },
+  "email_corrected_day_haircut_booking": {
+    "job": "email",
+    "mcp": true
+  },
+  "email_move_thursday_massage_to_friday_and_confirm": {
+    "job": "reschedule_cancel",
+    "mcp": true
+  },
+  "expired_hold_release_request_handled": {
+    "job": "availability_holds",
+    "mcp": false
+  },
+  "first_time_customer_morning_preference": {
+    "job": "customers",
+    "mcp": false
+  },
+  "first_visit_customer_created_and_booked": {
+    "job": "customers",
+    "mcp": false
+  },
+  "full_day_waitlist_addition": {
+    "job": "waitlist_confirmations",
+    "mcp": false
+  },
+  "hold_haircut_then_explicitly_release": {
+    "job": "availability_holds",
+    "mcp": false
+  },
+  "hold_london_consultation_then_release": {
+    "job": "availability_holds",
+    "mcp": false
+  },
+  "hold_massage_slot_while_checking_schedule": {
+    "job": "availability_holds",
+    "mcp": false
+  },
+  "human_draft_on_price_thread_left_alone": {
+    "job": "email",
+    "mcp": true
+  },
+  "injected_email_cancellations_ignored": {
+    "job": "identity_privacy",
+    "mcp": true
+  },
+  "insurance_eligibility_inquiry_handed_off": {
+    "job": "identity_privacy",
+    "mcp": false
+  },
+  "london_massage_with_priya_from_calendar": {
+    "job": "book",
+    "mcp": true
+  },
+  "london_reschedule_replacement_conflict_keeps_original": {
+    "job": "concurrency_dst",
+    "mcp": false
+  },
+  "london_slot_taken_while_confirming_tom": {
+    "job": "concurrency_dst",
+    "mcp": false
+  },
+  "london_tom_times_in_ny_timezone": {
+    "job": "availability_holds",
+    "mcp": false
+  },
+  "lucia_availability_tuesday_slots": {
+    "job": "availability_holds",
+    "mcp": false
+  },
+  "lucia_out_of_office_friday_availability": {
+    "job": "availability_holds",
+    "mcp": false
+  },
+  "mailbox_claimed_free_cancellation_fee_applied": {
+    "job": "identity_privacy",
+    "mcp": true
+  },
+  "mailbox_fake_manager_queue_confirmations_ignored": {
+    "job": "identity_privacy",
+    "mcp": true
+  },
+  "mailbox_th_s05_massage_available_booked": {
+    "job": "email",
+    "mcp": true
+  },
+  "mailbox_th_s402_fully_booked_waitlist_added": {
+    "job": "email",
+    "mcp": true
+  },
+  "marcus_training_block_wednesday_slots": {
+    "job": "availability_holds",
+    "mcp": false
+  },
+  "olivia_post_dst_monday_availability": {
+    "job": "availability_holds",
+    "mcp": false
+  },
+  "out_of_scope_insurance_coverage_handoff": {
+    "job": "identity_privacy",
+    "mcp": false
+  },
+  "out_of_scope_payment_card_handoff": {
+    "job": "identity_privacy",
+    "mcp": false
+  },
+  "pasted_instruction_system_cancel_ignored_haircut_booked": {
+    "job": "identity_privacy",
+    "mcp": false
+  },
+  "pickup_mailbox_cancel_today_fee_accepted": {
+    "job": "reschedule_cancel",
+    "mcp": true
+  },
+  "pickup_mailbox_claimed_waiver_checked": {
+    "job": "reschedule_cancel",
+    "mcp": true
+  },
+  "pickup_mailbox_consultation_olivia_monday": {
+    "job": "book",
+    "mcp": true
+  },
+  "pickup_mailbox_corrected_reschedule": {
+    "job": "reschedule_cancel",
+    "mcp": true
+  },
+  "pickup_mailbox_haircut_marcus_thursday": {
+    "job": "book",
+    "mcp": true
+  },
+  "pickup_mailbox_massage_reschedule_to_friday": {
+    "job": "reschedule_cancel",
+    "mcp": true
+  },
+  "pickup_mailbox_th01_spanish_consultation": {
+    "job": "book",
+    "mcp": true
+  },
+  "privacy_spouse_cannot_cancel_partner_appointment": {
+    "job": "identity_privacy",
+    "mcp": false
+  },
+  "privacy_who_else_booked_with_staff_not_disclosed": {
+    "job": "identity_privacy",
+    "mcp": false
+  },
+  "privacy_wrong_phone_lookup_refused": {
+    "job": "identity_privacy",
+    "mcp": false
+  },
+  "priya_availability_thursday_lunch_block": {
+    "job": "availability_holds",
+    "mcp": false
+  },
+  "read_only_calendar_colour_handoff": {
+    "job": "book",
+    "mcp": false
+  },
+  "record_accessibility_preference_from_email": {
+    "job": "customers",
+    "mcp": true
+  },
+  "record_customer_language_preference_hindi": {
+    "job": "customers",
+    "mcp": false
+  },
+  "record_customer_location_preference_shoreditch": {
+    "job": "customers",
+    "mcp": false
+  },
+  "repeated_booking_request_same_request_key": {
+    "job": "concurrency_dst",
+    "mcp": false
+  },
+  "repeated_hour_deadline_dst_explained": {
+    "job": "concurrency_dst",
+    "mcp": false
+  },
+  "reschedule_busy_slot_refused_alternative_accepted": {
+    "job": "reschedule_cancel",
+    "mcp": false
+  },
+  "reschedule_colour_treatment_to_friday": {
+    "job": "reschedule_cancel",
+    "mcp": false
+  },
+  "reschedule_haircut_switch_to_marcus": {
+    "job": "reschedule_cancel",
+    "mcp": false
+  },
+  "reschedule_history_inquiry_lookup": {
+    "job": "email",
+    "mcp": false
+  },
+  "reschedule_london_consultation_to_friday": {
+    "job": "reschedule_cancel",
+    "mcp": false
+  },
+  "reschedule_requested_as_cancel_rebook": {
+    "job": "reschedule_cancel",
+    "mcp": false
+  },
+  "resend_sms_confirmation_existing_booking": {
+    "job": "waitlist_confirmations",
+    "mcp": false
+  },
+  "restricted_staff_thread_inquiry_withheld": {
+    "job": "email",
+    "mcp": true
+  },
+  "returning_customer_identified_and_booked": {
+    "job": "customers",
+    "mcp": false
+  },
+  "returning_customer_registers_as_new_reused": {
+    "job": "customers",
+    "mcp": false
+  },
+  "search_thread_by_sender_haircut": {
+    "job": "email",
+    "mcp": true
+  },
+  "slot_taken_then_next_alternative_booked": {
+    "job": "concurrency_dst",
+    "mcp": false
+  },
+  "sunday_time_in_london_shoreditch_closed": {
+    "job": "concurrency_dst",
+    "mcp": false
+  },
+  "v12_s01_book_spanish_speaker_thursday": {
+    "job": "book",
+    "mcp": false
+  },
+  "v12_s02_dst_repeated_hour_clarified": {
+    "job": "concurrency_dst",
+    "mcp": false
+  },
+  "v12_s03_last_slot_taken_during_confirmation": {
+    "job": "concurrency_dst",
+    "mcp": false
+  },
+  "v12_s04_failed_reschedule_keeps_original": {
+    "job": "concurrency_dst",
+    "mcp": false
+  },
+  "v12_s05_late_cancellation_fee_disclosed": {
+    "job": "reschedule_cancel",
+    "mcp": false
+  },
+  "waitlist_haircut_while_lucia_out": {
+    "job": "waitlist_confirmations",
+    "mcp": false
+  },
+  "waitlist_staff_preference_lucia_out": {
+    "job": "waitlist_confirmations",
+    "mcp": false
+  }
+}
