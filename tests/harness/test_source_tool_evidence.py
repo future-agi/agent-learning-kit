@@ -952,6 +952,13 @@ def test_the_tokenize_limits_are_shared_by_the_named_modules(tmp_path, monkeypat
     assert len(tool_evidence_problems(contract, source)) == 1
 
 
+@pytest.mark.parametrize("coding", ["rot13", "nosuch"])
+def test_a_module_with_a_coding_line_python_cant_read_is_unproven(tmp_path, coding):
+    source = _commented_source(tmp_path, f"# coding: {coding}\n" + _COMMENTED_METHOD)
+
+    assert tool_evidence_problems(AgentContract.model_validate(payload()), source) == []
+
+
 def test_a_module_without_the_line_in_a_comment_is_not_tokenized(tmp_path, monkeypatch):
     import tokenize
 

@@ -927,6 +927,12 @@ BLOCKER_CASES: list[tuple[str, dict[str, str], str, str]] = [
     ),
     (fd._OTHER_SOURCE, {"agent/main.py": PLAIN, "agent/ui.ts": ""}, "agent", ""),
     (fd._OTHER_SOURCE, {"agent/main.py": PLAIN, "agent/ui.tsx": ""}, "agent", ""),
+    (fd._OTHER_SOURCE, {"agent/main.py": PLAIN, "agent/x.mts": ""}, "agent", ""),
+    (fd._OTHER_SOURCE, {"agent/main.py": PLAIN, "agent/x.cts": ""}, "agent", ""),
+    (fd._OTHER_SOURCE, {"agent/main.py": PLAIN, "agent/x.js": ""}, "agent", ""),
+    (fd._OTHER_SOURCE, {"agent/main.py": PLAIN, "agent/x.jsx": ""}, "agent", ""),
+    (fd._OTHER_SOURCE, {"agent/main.py": PLAIN, "agent/x.mjs": ""}, "agent", ""),
+    (fd._OTHER_SOURCE, {"agent/main.py": PLAIN, "agent/x.cjs": ""}, "agent", ""),
     (fd._OTHER_SOURCE, {"agent/main.py": PLAIN, "agent/n.ipynb": ""}, "agent", ""),
     (
         fd._OTHER_SOURCE,
@@ -950,6 +956,12 @@ BLOCKER_CASES: list[tuple[str, dict[str, str], str, str]] = [
         "outside_import_from_and_comma",
         "other_source_ts",
         "other_source_tsx",
+        "other_source_mts",
+        "other_source_cts",
+        "other_source_js",
+        "other_source_jsx",
+        "other_source_mjs",
+        "other_source_cjs",
         "other_source_ipynb",
         "other_source_root_agent",
         "no_python",
@@ -964,7 +976,14 @@ def test_blockers_stop_none(
     assert blocker in folder_findings(tmp_path / folder, repo_root=root).blockers
     assert detect_framework(tmp_path / folder, repo_root=root) == UNKNOWN
 
-    # A blocker stops `none` and nothing else.
+    # Anything that blocks may hide what builds the agent, so a chat model names nothing.
+    if blocker != fd._NO_PYTHON:
+        _write(tmp_path, {f"{folder}/model.py": CHAT_OPENAI})
+        found = folder_findings(tmp_path / folder, repo_root=root)
+        assert any(f.strength == "model" for f in found.findings)
+        assert detect_framework(tmp_path / folder, repo_root=root) == UNKNOWN
+
+    # What the scan saw being built still names the framework.
     _write(tmp_path, {f"{folder}/crew.py": CREW})
     assert detect_framework(tmp_path / folder, repo_root=root) == _named("crewai")
 
@@ -1009,6 +1028,39 @@ def test_blockers_stop_none_no_outside_import_when_folder_is_the_root(
     _write(tmp_path, {"main.py": "import shared\n", "shared.py": PLAIN})
 
     assert detect_framework(tmp_path, repo_root=tmp_path) == NONE
+
+
+AGENT_JS = (
+    "import { Agent, run } from '@openai/agents';\n"
+    "const agent = new Agent({ name: 'x' });\n"
+    "await run(agent, 'hi');\n"
+)
+HEALTHCHECK = "import urllib.request\n"
+
+
+@pytest.mark.parametrize(
+    "files",
+    [
+        {"tests/index.js": AGENT_JS, "healthcheck.py": HEALTHCHECK},
+        {"tests/x.jsx": AGENT_JS, "healthcheck.py": HEALTHCHECK},
+        {"examples/node/x.mjs": AGENT_JS, "healthcheck.py": HEALTHCHECK},
+    ],
+    ids=["js_in_tests", "jsx_in_tests", "mjs_in_examples"],
+)
+def test_javascript_in_test_and_example_folders_does_not_block(
+    tmp_path: Path, files: dict[str, str]
+) -> None:
+    _write(tmp_path, files)
+
+    assert fd._OTHER_SOURCE not in folder_findings(tmp_path).blockers
+    assert detect_framework(tmp_path) == NONE
+
+
+def test_a_label_beside_a_blocker_stays_other(tmp_path: Path) -> None:
+    _write(tmp_path, {"main.py": AUTOGEN, "ui.js": ""})
+
+    assert fd._OTHER_SOURCE in folder_findings(tmp_path).blockers
+    assert detect_framework(tmp_path) == _named("other", "autogen")
 
 
 SIDE_WORDS = [
@@ -1350,12 +1402,16 @@ def test_metadata_read_stops_at_64_kib(tmp_path: Path) -> None:
     assert detect_framework(folder, package_dir=package_dir) == _named("crewai")
 
 
-def _process_manifest() -> SimpleNamespace:
+def _process_manifest(source_origin: str = "bundle") -> SimpleNamespace:
     return SimpleNamespace(
         runtime=SimpleNamespace(kind="process", control_service="agent"),
         processes=[
             SimpleNamespace(name="postgres", working_directory=None),
-            SimpleNamespace(name="agent", working_directory="generated/source/agent"),
+            SimpleNamespace(
+                name="agent",
+                working_directory="generated/source/agent",
+                source_origin=source_origin,
+            ),
         ],
     )
 
@@ -1405,6 +1461,12 @@ def _compose_manifest() -> SimpleNamespace:
         (None, None, _process_manifest(), "bundle/generated/source/agent"),
         (None, "{not json", _process_manifest(), "bundle/generated/source/agent"),
         (None, ["a", "list"], _process_manifest(), "bundle/generated/source/agent"),
+        (
+            None,
+            None,
+            _process_manifest("repository"),
+            "source/generated/source/agent",
+        ),
         (None, None, _compose_manifest(), "source"),
     ],
     ids=[
@@ -1419,6 +1481,7 @@ def _compose_manifest() -> SimpleNamespace:
         "missing_contract",
         "corrupt_contract",
         "contract_not_an_object",
+        "repository_origin_process",
         "compose_falls_to_source",
     ],
 )

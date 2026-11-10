@@ -9,6 +9,7 @@ case is a fraction of a second, and a scan parses only up to a total.
 from __future__ import annotations
 
 import ast
+import codecs
 import functools
 import io
 import re
@@ -37,6 +38,8 @@ LARGEST_TOKENIZED_WORK = 8 * 1024 * 1024
 # of combining marks by insertion, in one call holding the interpreter: about 3.8 s for one name
 # of marks in a 128 KB file. Honest text never runs this many marks together.
 _LONGEST_MARK_RUN = 32
+# Text codecs a coding line may name that are never read: see source_encoding.
+_UNREAD_CODECS = frozenset({"idna", "punycode", "undefined"})
 _NON_ASCII_RUN = re.compile(r"[^\x00-\x7f]{2,}")
 
 
@@ -100,13 +103,34 @@ def read_module(
     # such as a fullwidth `ｐlaywright`, isn't found.
     if needles and not any(needle in raw for needle in needles):
         return None
+    encoding = source_encoding(raw)
+    if encoding is None:
+        return None
     try:
-        # As Python reads it: a coding line or a byte-order mark names the encoding, and the mark
-        # isn't part of the code.
-        encoding, _ = tokenize.detect_encoding(io.BytesIO(raw).readline)
         return raw.decode(encoding)
+    except (UnicodeError, LookupError):
+        return None
+
+
+def source_encoding(raw: bytes) -> str | None:
+    """The encoding Python reads ``raw`` in: a coding line or a byte-order mark names it, and
+    it's UTF-8 without one. None for a coding line no codec reads text in."""
+    # Python reads a lone CR as a line end, and detect_encoding doesn't: a file with only CRs
+    # would be one line, and its coding line not found.
+    lines = io.BytesIO(raw.replace(b"\r\n", b"\n").replace(b"\r", b"\n")).readline
+    try:
+        encoding, _ = tokenize.detect_encoding(lines)
+        # A codec such as rot13 or base64 isn't a text encoding, so decode refuses it: the same
+        # flag decode checks, which an empty input never reaches. Three text codecs are refused
+        # by name: punycode's decode costs the square of its size, 2.3 s for 128 KB; idna's runs
+        # in Python for each label, 91 ms for 128 KB; undefined decodes nothing. Of the
+        # standard library's 110 codecs, every other one decodes valid text at 12 ms a MB at most.
+        info = codecs.lookup(encoding)
+        if not getattr(info, "_is_text_encoding", True) or info.name in _UNREAD_CODECS:
+            return None
     except (SyntaxError, UnicodeError, LookupError):
         return None
+    return encoding
 
 
 def parsed(text: str) -> ast.Module | None:

@@ -34,7 +34,11 @@ def _write_in_place(path: Path, body: str) -> None:
 
 
 def write_failure_file(failure: HarnessFailure, output: Path) -> Path:
-    """Write ``failure`` whole, in one step. The first failure of a build stands."""
+    """Write ``failure``. The first failure of a build stands.
+
+    Whole, in one step, on a disk with hard links. On one without, it's written in place, where a
+    reader could catch it part-written.
+    """
     output = Path(output)
     output.mkdir(parents=True, exist_ok=True)
     path = output / FAILURE_FILE

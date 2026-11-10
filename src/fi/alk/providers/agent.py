@@ -245,7 +245,11 @@ def _redact(value: Any, key: str = "") -> Any:
     if isinstance(value, list):
         return [_redact(item, key) for item in value]
     if isinstance(value, str) and "://" in value:
-        parsed = urlsplit(value)
+        try:
+            parsed = urlsplit(value)
+        except ValueError:
+            # A netloc urlsplit refuses may still hold credentials, so none of it is kept.
+            return _REDACTED
         if parsed.scheme and parsed.netloc:
             hostname = parsed.hostname or ""
             try:

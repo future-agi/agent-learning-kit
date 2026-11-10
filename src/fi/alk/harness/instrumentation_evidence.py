@@ -3,8 +3,10 @@ from __future__ import annotations
 import ast
 import os
 from pathlib import Path
+from typing import Iterable
 
 from .python_source import ParseBudget, parsed, read_module
+from .source_folder import is_within
 
 _SKIPPED_DIRECTORIES = {
     ".git",
@@ -28,10 +30,13 @@ _OTEL_OTLP_EXPORTER = "opentelemetry.exporter.otlp"
 _OTEL_GRPC_EXPORTER = "opentelemetry.exporter.otlp.proto.grpc"
 
 
-def detect_instrumentation(source_root: Path | None) -> str:
+def detect_instrumentation(source_root: Path | None, reached: Iterable[Path] = ()) -> str:
+    """How the agent is traced, from its imports: the files in ``source_root``, and the Python
+    files in ``reached``, the code it imports from elsewhere in the repository, under one budget.
+    """
     if source_root is None:
         return "none"
-    imported = _python_imports(source_root.resolve())
+    imported = _python_imports(source_root.resolve(), reached)
     if any(
         name.split(".")[0] == "fi_instrumentation"
         or name.split(".")[0].startswith("traceai_")
@@ -53,7 +58,7 @@ def detect_instrumentation(source_root: Path | None) -> str:
     return "opentelemetry"
 
 
-def _python_imports(root: Path) -> set[str]:
+def _python_imports(root: Path, reached: Iterable[Path] = ()) -> set[str]:
     imported: set[str] = set()
     local: set[str] = set()
     budget = ParseBudget()
@@ -78,12 +83,20 @@ def _python_imports(root: Path) -> set[str]:
                 # Only a module at the top of the repository sits ahead of the
                 # installed package on the import path.
                 local.add(file_name[: -len(".py")])
-            text = read_module(Path(directory) / file_name, needles=_NAMES)
-            if text is None or not budget.spend(text):
-                continue
-            if (tree := parsed(text)) is not None:
-                imported.update(_imports(tree))
+            _read_imports(Path(directory) / file_name, budget, imported)
+    for path in sorted(reached):
+        # The folder's own files were read above.
+        if path.suffix == ".py" and not is_within(path, root):
+            _read_imports(path, budget, imported)
     return {name for name in imported if name.split(".")[0] not in local}
+
+
+def _read_imports(path: Path, budget: ParseBudget, imported: set[str]) -> None:
+    text = read_module(path, needles=_NAMES)
+    if text is None or not budget.spend(text):
+        return
+    if (tree := parsed(text)) is not None:
+        imported.update(_imports(tree))
 
 
 def _imports(tree: ast.AST) -> set[str]:

@@ -9,9 +9,9 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import secrets
-import sys
 import threading
 from pathlib import Path
 from typing import Any
@@ -22,10 +22,12 @@ from fi.simulate.agent.wrappers.http_events import (
 )
 
 from .agent_type_check import (
+    SECOND_LOOK_READ,
+    SecondLook,
     agent_type_failure,
     browser_tools_found,
     browser_tools_in_agent,
-    decide,
+    code_the_agent_reaches,
     failure_message,
     is_browser,
     modality_text,
@@ -53,11 +55,16 @@ from .failure_file import FAILURE_FILE, write_failure_file
 from .instrumentation_evidence import detect_instrumentation
 from .runtime_selection import (
     COMPOSE_SERVICE_OUTSIDE_FOLDER,
+    PathLookupsSpent,
     RuntimeSelectionError,
+    charged_path,
+    path_lookup_budget,
     select_runtime,
 )
 from .python_source import utf8_size
 from .source_folder import SubfolderNotFound, agent_folder, bind_runtime, is_within
+
+_LOG = logging.getLogger(__name__)
 
 CONTRACT_SERVER = "contract"
 
@@ -190,9 +197,11 @@ def _checked_contract(
     source_root: Path | None,
     require_setup_contract: bool,
     subfolder: str | None,
+    reached: list[Path] | None = None,
 ) -> AgentContract | dict[str, Any]:
     """The contract to save, or the problems to send back. It reads the customer's files and
-    writes nothing, so the tool runs it off the event loop."""
+    writes nothing, so the tool runs it off the event loop. ``reached`` is the code outside the
+    folder the browser scan found the agent reaches, when it has run."""
     arrived = sorted(payload) if isinstance(payload, dict) else [type(payload).__name__]
     payload = _without_nulls(unwrapped(payload))
     try:
@@ -215,11 +224,29 @@ def _checked_contract(
     if require_setup_contract and contract.modality == "chat":
         if problem := generated_chat_interface_problem(contract.runtime):
             problems.append(problem)
+    with path_lookup_budget():
+        return _checked_against_source(
+            contract, problems, arrived, source_root, subfolder, reached
+        )
+
+
+def _checked_against_source(
+    contract: AgentContract,
+    problems: list[str],
+    arrived: list[str],
+    source_root: Path | None,
+    subfolder: str | None,
+    reached: list[Path] | None = None,
+) -> AgentContract | dict[str, Any]:
+    """The checks that read the customer's files, under the save's one path lookup budget."""
     if source_root is not None:
         from .source_tool_evidence import tool_evidence_problems
 
-        problems.extend(tool_evidence_problems(contract, source_root, subfolder))
-        problems.extend(_copy_prompt(contract, source_root))
+        try:
+            problems.extend(tool_evidence_problems(contract, source_root, subfolder))
+            problems.extend(_copy_prompt(contract, source_root))
+        except PathLookupsSpent as spent:
+            return _problems([*problems, str(spent)], arrived)
     runtime = contract.runtime
     if subfolder and source_root is not None:
         try:
@@ -246,6 +273,8 @@ def _checked_contract(
                 f"subfolder_not_found: {subfolder} is not a folder with files in the source, "
                 "so no description of it can be saved."
             )
+        except PathLookupsSpent as spent:
+            problems.append(str(spent))
         except ValueError as invalid:
             problems.append(str(invalid))
     elif runtime is not None and runtime.source_subfolder:
@@ -254,11 +283,13 @@ def _checked_contract(
         return _problems(problems, arrived)
     return contract.model_copy(
         update={
+            # With a folder, what it imports from elsewhere is read too, as the other scans do.
             "instrumentation": detect_instrumentation(
-                agent_folder(source_root, subfolder)
-                if source_root and subfolder
-                else source_root
-            ),
+                agent_folder(source_root, subfolder),
+                code_the_agent_reaches(source_root, subfolder) if reached is None else reached,
+            )
+            if source_root and subfolder
+            else detect_instrumentation(source_root),
             "runtime": runtime,
         }
     )
@@ -302,10 +333,22 @@ def _copy_prompt(contract: AgentContract, source_root: Path) -> list[str]:
     lines_of: dict[Path, list[str]] = {}
     # A file past the limit is read once too, and what was read of it counts.
     too_large: set[Path] = set()
+    # Each path named is resolved once, however many entries name it.
+    found_at: dict[str, Path | None] = {}
     read = copied = 0
     for index, where in enumerate(contract.system_prompt_from):
-        path = (root / where.path).resolve()
-        if not is_within(path, root) or not path.is_file():
+        if where.path not in found_at:
+            try:
+                # Through links, resolving one path can cost a lookup for each part of every
+                # target; each is charged to the save's budget.
+                resolved = charged_path(root / where.path)
+                found_at[where.path] = (
+                    resolved if is_within(resolved, root) and resolved.is_file() else None
+                )
+            except (OSError, RuntimeError, ValueError):
+                found_at[where.path] = None
+        path = found_at[where.path]
+        if path is None:
             problems.append(f"system_prompt_from[{index}]: {where.path} is not a file in the source")
             continue
         if path not in lines_of and path not in too_large:
@@ -366,9 +409,6 @@ def _without_nulls(value: Any) -> Any:
 MOST_CHOSEN_EVALS = 6
 
 
-SECOND_LOOK_READ = "second_look_read"
-
-
 def _new_receipt() -> str:
     return secrets.token_hex(4)
 
@@ -376,24 +416,6 @@ def _new_receipt() -> str:
 def _stop_message(destination: Path) -> str:
     said = failure_message(destination) or "This build can't go on."
     return f"{said} Don't submit again or do more work; tell the person."
-
-
-def _second_look(claimed: str, found: list[str]) -> str:
-    if is_browser(claimed):
-        return (
-            "second-look: you recorded modality browser, which stops this build as not "
-            "supported, and no browser, crawling or computer-use tool was found in the source. "
-            "Does a person come to this agent for a conversation, or to have it carry out work "
-            "on websites or a computer? For a conversation, submit again as chat or voice. If "
-            "you're sure, submit again as browser. Decide this from the source; don't ask anyone."
-        )
-    return (
-        f"second-look: you recorded modality {claimed or 'chat'}, and the source uses "
-        f"{', '.join(found)}. If that's a helper and a person comes to this agent for a "
-        "conversation, submit again as is. If its main job is carrying out work on websites or "
-        "a computer, submit again as browser, which stops this build as not supported. Decide "
-        "this from the source; don't ask anyone."
-    )
 
 
 # alk.yaml and the Compose files together; the largest real Compose file seen is 53 KB.
@@ -433,19 +455,23 @@ def _builds_a_sibling(source_root: Path, runtime: Runtime, subfolder: str) -> st
     except RuntimeSelectionError as refused:
         if str(refused).startswith(f"{COMPOSE_SERVICE_OUTSIDE_FOLDER}:"):
             return str(refused)
-    except Exception as exc:  # noqa: BLE001 - bundling selects again and owns the failure
-        # Logged, so a bug here doesn't switch the check off unseen; the type only, as the
-        # message can quote a line of the customer's file.
-        print(f"sibling check skipped: {type(exc).__name__}", file=sys.stderr)
+    except (ValueError, OSError, RuntimeError) as exc:
+        # What the customer's files can make selecting raise; bundling selects again and owns
+        # that failure. Anything else is a bug and isn't caught here. The type only: the message
+        # can quote a line of the customer's file.
+        _LOG.warning("sibling check skipped: %s", type(exc).__name__)
     return None
 
 
-def _tools_in_agent_folder(scan_root: Path | None, subfolder: str | None) -> list[str]:
-    """The browser tools this agent uses, which a sibling's aren't."""
+def _tools_in_agent_folder(
+    scan_root: Path | None, subfolder: str | None, reached: list[Path] | None = None
+) -> list[str]:
+    """The browser tools this agent uses, which a sibling's aren't. ``reached`` is filled with
+    the code it reaches outside its folder."""
     if not scan_root or not subfolder:
         return browser_tools_found(scan_root)
     try:
-        return browser_tools_in_agent(scan_root, subfolder)
+        return browser_tools_in_agent(scan_root, subfolder, reached)
     except SubfolderNotFound:
         # The folder check reports this; the model's reading shouldn't be refused for it too.
         return []
@@ -489,18 +515,16 @@ def contract_tools(
     # and this stage cannot tell those two apart from the outside.
     nudged: set[str] = set()
     refused = False
-    # What a call must hold to count as having read a second look. Calls in one model message run
-    # before the model reads any answer, together or one after another, so none of them can know it.
-    second_look_receipts: set[str] = set()
-    # Whether the latest second look has had no value back yet. A model that never sends one back
-    # must still be able to answer, or every submission earns another look until the turns run out.
-    look_unanswered = False
+    second_look = SecondLook()
     found: list[str] | None = None
     # Calls in one message check side by side, so the one sent last can finish first; it's the
     # model's last word, and an earlier call that finishes later mustn't write over it.
     sent = saved = 0
     # Calls in one message share one scan: each running its own takes that many times longer.
     scan: asyncio.Future[list[str]] | None = None
+    # The code outside the folder the scan found the agent reaches, for the instrumentation
+    # check, so the save walks the imports once.
+    reach: list[Path] = []
 
     @tool(
         "submit_contract",
@@ -1287,9 +1311,9 @@ def contract_tools(
         receipt = payload.pop(SECOND_LOOK_READ, None) or (
             args.get(SECOND_LOOK_READ) if isinstance(args, dict) else None
         )
-        nonlocal refused, found, look_unanswered, sent, saved, scan
+        nonlocal refused, found, sent, saved, scan
         # Taken before the scan's wait: a call already running when a look went out hasn't read it.
-        looked_before = bool(second_look_receipts)
+        looked_before = second_look.given
         sent += 1
         mine = sent
         if refused or (destination / FAILURE_FILE).is_file():
@@ -1303,7 +1327,10 @@ def contract_tools(
                 or scan.get_loop() is not asyncio.get_running_loop()
                 or (scan.done() and (scan.cancelled() or scan.exception() is not None))
             ):
-                scan = asyncio.ensure_future(asyncio.to_thread(_tools_in_agent_folder, scan_root, subfolder))
+                reach.clear()
+                scan = asyncio.ensure_future(
+                    asyncio.to_thread(_tools_in_agent_folder, scan_root, subfolder, reach)
+                )
             # Shielded: one call cancelled mustn't cancel the scan the others wait on.
             found = await asyncio.shield(scan)
             # A call running alongside this one may have refused while this one waited.
@@ -1317,20 +1344,7 @@ def contract_tools(
                     "job is work on websites or a computer."
                 ]
             )
-        # A call holding a value read a look, so its answer stands. Without one, the call after a
-        # look that no value came back for is taken as the answer. Once a value came back, a call
-        # without one that reads the same stands too; one that reads otherwise may have run beside
-        # that answer unread, so it gets a look of its own. A value that came back on a browser
-        # answer was refused and stopped every later call, so the answer that came back read chat.
-        read_it = isinstance(receipt, str) and receipt in second_look_receipts
-        if read_it:
-            look_unanswered = False
-        same_answer = not is_browser(claimed)
-        verdict = decide(
-            claimed,
-            found,
-            looked_again=read_it or (looked_before and (look_unanswered or same_answer)),
-        )
+        verdict = second_look.verdict(claimed, receipt, found, given_before=looked_before)
         if verdict == "refuse":
             # Set first: if the write fails, the model must not get a resubmission through.
             refused = True
@@ -1342,15 +1356,7 @@ def contract_tools(
                 write_failure_file(agent_type_failure(found), destination)
             return _ok(_stop_message(destination))
         if verdict == "second_look":
-            issued = _new_receipt()
-            second_look_receipts.add(issued)
-            look_unanswered = True
-            return _problems(
-                [
-                    f"{_second_look(claimed, found)} When you submit again, set "
-                    f'{SECOND_LOOK_READ} to "{issued}", which shows you read this.'
-                ]
-            )
+            return _problems([second_look.issue(claimed, found, _new_receipt())])
         data_store = payload.get("data_store")
         if not isinstance(data_store, dict):
             data_store = {}
@@ -1587,6 +1593,8 @@ def contract_tools(
             source_root=source_root,
             require_setup_contract=require_setup_contract,
             subfolder=subfolder,
+            # The scan's answer is for scan_root; another root's code is found again.
+            reached=reach if scan_root == source_root else None,
         )
         if isinstance(checked, dict):
             return checked

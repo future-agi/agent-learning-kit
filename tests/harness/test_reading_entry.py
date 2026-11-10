@@ -27,7 +27,7 @@ _DEFAULT_SECRET_FILES = reading_entry._SECRET_FILES
 
 READ_AGENT_VALUES = {
     "name": "read_agent",
-    "time_limit_seconds": 1980.0,
+    "time_limit_seconds": 2100.0,
     "timed_out_code": "agent_reading_timed_out",
     "timed_out_retryable": False,
     "crashed_code": "agent_reading_crashed",
@@ -41,8 +41,22 @@ FIND_AGENTS_VALUES = {
 }
 
 
+class _LoudExit:
+    """``os`` for the helper under test: its hard limit ending this test process is a failure,
+    never the silent exit 0 its backstop gives a finished reading."""
+
+    def __getattr__(self, name):
+        return getattr(os, name)
+
+    @staticmethod
+    def _exit(_code):
+        os.write(2, b"a reading's hard limit ended the test process\n")
+        os._exit(97)
+
+
 @pytest.fixture(autouse=True)
 def _fresh_state(monkeypatch, tmp_path):
+    monkeypatch.setattr(reading_entry, "os", _LoudExit())
     monkeypatch.delenv(spend.JOURNAL_ALIAS, raising=False)
     # The machine's own secrets files must not decide what a test sees masked.
     monkeypatch.setattr(reading_entry, "_SECRET_FILES", (tmp_path / "no-secrets.json",))
