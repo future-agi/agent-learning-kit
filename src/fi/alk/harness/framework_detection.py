@@ -284,12 +284,14 @@ class _Work:
     every time. Python 3.12.3 re-decodes a token's whole line for each token, and one
     name can have thousands of targets: neither shows in the size of a file."""
 
-    def __init__(self) -> None:
+    def __init__(self, limit: int | None = None) -> None:
         self._spent = 0
+        # None follows _MAX_WORK; the agent scan gives each file its own, smaller limit.
+        self._limit = limit
 
     def charge(self, amount: int) -> None:
         self._spent += amount
-        if self._spent > _MAX_WORK:
+        if self._spent > (_MAX_WORK if self._limit is None else self._limit):
             raise _OverBudget()
 
 

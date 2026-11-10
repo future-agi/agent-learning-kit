@@ -27,7 +27,6 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
 
-from . import session
 from .backends import SessionSpec, StageDone, ToolServer, ToolSpec
 from .backends.files import SECRET_REFUSAL, above_secrets, secret_path
 from .config import chosen_model, load_skill
@@ -151,7 +150,9 @@ class _ScanStage(Stage):
     def __init__(
         self, spec: SessionSpec, *, name: str, on_turn_end: Callable[[], None]
     ) -> None:
-        super().__init__(spec, name=name)
+        # A replayed quiet stream would be a second paid opening, and its first spend is
+        # never recorded.
+        super().__init__(spec, name=name, idle_retries=0)
         self.done: list[StageDone] = []
         self._on_turn_end = on_turn_end
 
@@ -180,8 +181,6 @@ async def run_ai_step(
     source: Path, *, hints: str, seconds: float, on_turn_end: Callable[[], None]
 ) -> AiOutcome:
     """Ask the model once for the repository's agents, within ``seconds``."""
-    # A replayed quiet stream is a second paid opening.
-    session.STAGE_IDLE_RETRIES = 0
     answer = _Answer()
     spec = SessionSpec(
         system_prompt=load_skill("find-agents"),

@@ -324,6 +324,7 @@ def test_each_ai_outcome_gives_its_result(tmp_path, monkeypatch, quick, name):
     case = _OUTCOMES[name]
     if case.idle is not None:
         monkeypatch.setattr(scan_ai, "IDLE_SECONDS", case.idle)
+    session.STAGE_IDLE_RETRIES = 1
     backend = _Backend(*case.steps, interrupt=case.interrupt)
     ends: list = []
 
@@ -334,7 +335,8 @@ def test_each_ai_outcome_gives_its_result(tmp_path, monkeypatch, quick, name):
     assert outcome.complete is case.complete
     assert outcome.retryable is case.retryable
     assert len(ends) == case.ends
-    assert session.STAGE_IDLE_RETRIES == 0
+    # The scan's stage turns replay off for itself, never for the whole process.
+    assert session.STAGE_IDLE_RETRIES == 1
     assert len(backend.sent) == 1
     if case.kind == "timed_out":
         assert backend.interrupts == 1
@@ -417,7 +419,8 @@ def test_an_idle_ai_stream_is_not_replayed(tmp_path, monkeypatch, quick):
     assert outcome.retryable is True
     assert len(backend.specs) == 1
     assert len(backend.sent) == 1
-    assert session.STAGE_IDLE_RETRIES == 0
+    # The scan's stage turns replay off for itself, never for the whole process.
+    assert session.STAGE_IDLE_RETRIES == 1
 
 
 def test_pairs_submitted_before_an_idle_stream_are_kept(tmp_path, monkeypatch, quick):

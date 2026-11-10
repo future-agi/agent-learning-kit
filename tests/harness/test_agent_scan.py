@@ -266,21 +266,13 @@ def test_the_mode_settings(monkeypatch) -> None:
     assert FIND_AGENTS.check_job is _check_job
     assert FIND_AGENTS.work is _work
     assert inspect.iscoroutinefunction(FIND_AGENTS.work)
-    # The environment hasn't changed since import, so this is the clock the mode was built with.
-    clock = agent_scan._seconds("ALK_SCAN_MAX_SECONDS", 1200.0)
-    assert FIND_AGENTS.time_limit_seconds == clock + 600
+    # The helper reads the scan's own clock variable for its hard stop, as the scan does.
+    assert FIND_AGENTS.time_limit_seconds == agent_scan.CLOCK == 1200.0
+    assert FIND_AGENTS.limit_env == agent_scan.CLOCK_ENV == "ALK_SCAN_MAX_SECONDS"
+    assert FIND_AGENTS.limit_margin_seconds == 600.0
     assert FIND_AGENTS.timed_out_code == "scan_hard_limit_reached"
     assert FIND_AGENTS.timed_out_retryable is False
     assert FIND_AGENTS.crashed_code == "scan_crashed"
-
-    for name, default in (("ALK_SCAN_MAX_SECONDS", 1200.0), ("ALK_SCAN_AI_MAX_SECONDS", 600.0)):
-        monkeypatch.delenv(name, raising=False)
-        assert agent_scan._seconds(name, default) == default
-        for raw in ("", "abc", "-5", "0", "inf", "nan"):
-            monkeypatch.setenv(name, raw)
-            assert agent_scan._seconds(name, default) == default
-        monkeypatch.setenv(name, "900")
-        assert agent_scan._seconds(name, default) == 900.0
 
 
 def test_a_missing_or_empty_source_is_a_retryable_failure(tmp_path, ai) -> None:

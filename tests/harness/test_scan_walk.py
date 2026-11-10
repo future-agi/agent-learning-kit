@@ -140,11 +140,6 @@ def test_the_private_detector_names_it_uses_exist() -> None:
         "work",
     ]
     assert "read_uses" in inspect.signature(fd._scan_file).parameters
-    from fi.alk.harness import bundle_author_v2
-
-    assert scan_walk._BUILD_IGNORED == frozenset(
-        bundle_author_v2._IGNORED_ARTIFACT_PARTS
-    )
 
 
 @pytest.mark.parametrize(

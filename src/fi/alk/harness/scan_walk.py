@@ -40,7 +40,9 @@ from .framework_detection import (
     _read_file,
     _scan_file,
     _visible_tokens,
+    _Work,
 )
+from .bundle_author_v2 import _IGNORED_ARTIFACT_PARTS as _BUILD_IGNORED
 from .reading_entry import MaskSecrets
 from .source_folder import _FOLDER_FORM, _FOLDER_MAX
 
@@ -86,9 +88,6 @@ _SOURCE_SUFFIXES = (".py", ".ipynb", *_SCRIPT_SUFFIXES)
 _BUILT_FOLDERS = frozenset({"dist", "build", "static", "vendor", "node_modules"})
 _BUILT_ENDINGS = (".min.js", ".d.ts", ".d.mts", ".d.cts")
 _CONFIG_ENDINGS = tuple(".config" + suffix for suffix in _SCRIPT_SUFFIXES)
-# What a build's fallback ignores when it counts `agent.py`. A copy, because the build's
-# module is heavy to import; a test holds the two equal.
-_BUILD_IGNORED = frozenset({".git", ".venv", "__pycache__", "node_modules"})
 
 _CLIENTS = {
     ("OpenAI",): "openai",
@@ -208,19 +207,6 @@ _FILE_ERRORS = (
     _OverBudget,
     _Unread,
 )
-
-
-class _FileWork:
-    """One file's own allowance, so a heavy file can't spend another's. A count and not
-    a clock, so the same file is read or unread every time."""
-
-    def __init__(self) -> None:
-        self._spent = 0
-
-    def charge(self, amount: int) -> None:
-        self._spent += amount
-        if self._spent > _FILE_WORK:
-            raise _OverBudget()
 
 
 def fits_path_rule(path: str) -> bool:
@@ -459,15 +445,15 @@ def _python_facts(data: bytes, shadowed: frozenset[str]) -> _Facts:
     """Raises for a file that has to count as unread."""
     if _has_long_line(data):
         raise _Unread()
-    work = _FileWork()
-    scan = _FileScan(shadowed, frozenset(), work)  # type: ignore[arg-type]
+    work = _Work(_FILE_WORK)
+    scan = _FileScan(shadowed, frozenset(), work)
     if _scan_file(data, scan, read_uses=True):
         raise _Unread()
     own = _OwnReader()
     with warnings.catch_warnings():
         # On 3.12 `tokenize` and `literal_eval` warn once per `\{`, which floods stderr.
         warnings.simplefilter("ignore")
-        own.read(_visible_tokens(data, work))  # type: ignore[arg-type]
+        own.read(_visible_tokens(data, work))
     builds = sorted(
         (framework, line)
         for (framework, strength), line in scan.found.items()
@@ -727,6 +713,42 @@ def _components(nodes: list[str], edges: dict[str, list[str]]) -> list[list[str]
     return components
 
 
+def _source_files(top: str, start: str) -> Iterator[tuple[str, str, str]]:
+    """Every file below ``start`` the scan may read, as (directory, folder relative to
+    ``top``, name), in sorted order so that a walk stopped by a limit stops at the same file.
+    Installed trees and the folders a build skips are never entered."""
+    for directory, directories, files in os.walk(start, followlinks=False):
+        directories.sort()
+        files.sort()
+        relative = directory[len(top) :].split(os.sep)[1:]
+        if relative and any(name.endswith(".dist-info") for name in directories):
+            # An installed tree, not the customer's code.
+            directories[:] = []
+            continue
+        directories[:] = _folders_to_enter(directory, directories, at_top=not relative)
+        folder = "/".join(relative)
+        for name in files:
+            yield directory, folder, name
+
+
+class _ShadowedNames:
+    """Each project's own module names, read once per project, so an import of the
+    customer's own ``agents`` package isn't read as a framework."""
+
+    def __init__(self, top: str, projects: _Projects) -> None:
+        self._top = top
+        self._projects = projects
+        self._by_project: dict[str, frozenset[str]] = {}
+
+    def for_folder(self, folder: str) -> frozenset[str]:
+        project = self._projects.nearest(folder) or ""
+        if project not in self._by_project:
+            self._by_project[project] = _own_modules(
+                Path(self._top, project) if project else Path(self._top), set()
+            )
+        return self._by_project[project]
+
+
 class _Walk:
     """One walk of the source. Holds every file's facts until the agents are decided."""
 
@@ -754,31 +776,18 @@ class _Walk:
         self.source_outside_side = False
         self.script_outside_side = False
         self.projects = _Projects(self.top, _PROJECT_FILES)
-        self._shadowed: dict[str, frozenset[str]] = {}
+        self.shadowed = _ShadowedNames(self.top, self.projects)
         self._roots: dict[str, list[str]] = {}
         self._edges: dict[str, tuple[str, ...]] = {}
 
     def run(self) -> None:
-        for directory, directories, files in os.walk(self.top, followlinks=False):
-            # Sorted, so that a walk stopped by a limit stops at the same file.
-            directories.sort()
-            files.sort()
-            relative = directory[len(self.top) :].split(os.sep)[1:]
-            if relative and any(name.endswith(".dist-info") for name in directories):
-                # An installed tree, not the customer's code.
-                directories[:] = []
-                continue
-            directories[:] = _folders_to_enter(
-                directory, directories, at_top=not relative
-            )
-            folder = "/".join(relative)
-            for name in files:
-                if self.clock() > self.deadline:
-                    self.stopped = "clock"
-                    return
-                self._take(directory, folder, name)
-                if self.stopped:
-                    return
+        for directory, folder, name in _source_files(self.top, self.top):
+            if self.clock() > self.deadline:
+                self.stopped = "clock"
+                return
+            self._take(directory, folder, name)
+            if self.stopped:
+                return
 
     def _take(self, directory: str, folder: str, name: str) -> None:
         path = _join(folder, name)
@@ -802,7 +811,7 @@ class _Walk:
             if data is None:
                 return
             if name.endswith(".py"):
-                self.facts[path] = _python_facts(data, self._shadowed_for(folder))
+                self.facts[path] = _python_facts(data, self.shadowed.for_folder(folder))
             elif name == _LANGGRAPH:
                 self._read_graphs(folder, path, data)
             else:
@@ -845,14 +854,6 @@ class _Walk:
             target = posixpath.normpath(_join(folder, file_name))
             if target not in (".", "..") and not target.startswith(("../", "/")):
                 self.graphs.setdefault(target, path)
-
-    def _shadowed_for(self, folder: str) -> frozenset[str]:
-        project = self.projects.nearest(folder) or ""
-        if project not in self._shadowed:
-            self._shadowed[project] = _own_modules(
-                Path(self.top, project) if project else Path(self.top), set()
-            )
-        return self._shadowed[project]
 
     def _import_roots(self, folder: str) -> list[str]:
         """Where an absolute import from ``folder`` is looked for, nearest first."""
@@ -1226,7 +1227,7 @@ class _Description:
         self.files_read = 0
         self.bytes_read = 0
         self.partial = False
-        self._shadowed: dict[str, frozenset[str]] = {}
+        self.shadowed = _ShadowedNames(top, self.projects)
 
     def run(self) -> None:
         if _has_link(self.top, self.subfolder):
@@ -1252,23 +1253,12 @@ class _Description:
                         logger.warning("agent description: a template's reader failed", exc_info=True)
                         self.partial = True
         start = os.path.join(self.top, self.subfolder) if self.subfolder else self.top
-        for directory, directories, files in os.walk(start, followlinks=False):
-            directories.sort()
-            files.sort()
-            relative = directory[len(self.top) :].split(os.sep)[1:]
-            if relative and any(name.endswith(".dist-info") for name in directories):
-                directories[:] = []
-                continue
-            directories[:] = _folders_to_enter(
-                directory, directories, at_top=not relative
-            )
-            folder = "/".join(relative)
-            for name in files:
-                if self._out_of_time():
-                    return
-                self._take(directory, folder, name)
-                if self.partial:
-                    return
+        for directory, folder, name in _source_files(self.top, start):
+            if self._out_of_time():
+                return
+            self._take(directory, folder, name)
+            if self.partial:
+                return
 
     def _out_of_time(self) -> bool:
         if self.clock() > self.deadline:
@@ -1290,7 +1280,7 @@ class _Description:
             return
         try:
             if name.endswith(".py"):
-                self.facts[path] = _python_facts(data, self._shadowed_for(folder))
+                self.facts[path] = _python_facts(data, self.shadowed.for_folder(folder))
             else:
                 self.script_env |= _script_names(data)
         except _FILE_ERRORS:
@@ -1324,14 +1314,6 @@ class _Description:
             self.partial = True
             return None
         return data if len(data) <= _FILE_BYTES else None
-
-    def _shadowed_for(self, folder: str) -> frozenset[str]:
-        project = self.projects.nearest(folder) or ""
-        if project not in self._shadowed:
-            self._shadowed[project] = _own_modules(
-                Path(self.top, project) if project else Path(self.top), set()
-            )
-        return self._shadowed[project]
 
 
 def describe_entry(

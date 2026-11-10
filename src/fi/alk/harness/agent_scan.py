@@ -13,7 +13,6 @@ may be missing from it.
 from __future__ import annotations
 
 import logging
-import math
 import os
 import stat
 import time
@@ -21,8 +20,18 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
-from .job import FailureDomain, HarnessFailure, HarnessJob, HarnessStage, SourceKind
-from .reading_entry import MaskSecrets, ReadingMode, write_reading_cost, write_reading_failure
+from .job import FailureDomain, HarnessFailure, HarnessJob, SourceKind
+from .agent_type_check import EXIT_REFUSED
+from .reading_entry import (
+    EXIT_DONE,
+    EXIT_RETRYABLE,
+    MaskSecrets,
+    ReadingMode,
+    limit_seconds,
+    reading_failure,
+    write_reading_cost,
+    write_reading_failure,
+)
 from .scan_ai import AiOutcome, run_ai_step
 from .scan_document import Row, ScanResultInvalid, finish, root_name, write_agents_json
 from .scan_folders import ClockRanOut, FolderChecker, FolderCheckerBroken
@@ -48,21 +57,11 @@ SCAN_AI_NO_ANSWER = "scan_ai_no_answer"
 SCAN_FAILED_AFTER_AI = "scan_failed_after_ai"
 AGENT_PATH_UNSUPPORTED = "agent_path_unsupported"
 
-_EXIT_DONE = 0
-_EXIT_RETRYABLE = 1
-_EXIT_REFUSED = 78
-
-
-def _seconds(name: str, default: float) -> float:
-    try:
-        value = float(os.environ.get(name, ""))
-    except ValueError:
-        return default
-    return value if math.isfinite(value) and value > 0 else default
-
-
-CLOCK = _seconds("ALK_SCAN_MAX_SECONDS", 1200.0)
-AI_SECONDS = _seconds("ALK_SCAN_AI_MAX_SECONDS", 600.0)
+CLOCK_ENV = "ALK_SCAN_MAX_SECONDS"
+# The scan's clock when CLOCK_ENV doesn't name one. The helper reads the same variable for its
+# hard stop, both when the reading starts.
+CLOCK = 1200.0
+AI_SECONDS = limit_seconds("ALK_SCAN_AI_MAX_SECONDS", 600.0)
 # The helper's hard stop comes this long after the scan's own clock, so a scan that stops itself
 # always writes its own file first.
 HARD_LIMIT_MARGIN = 600.0
@@ -117,28 +116,18 @@ class _Scan:
     models_first: bool = False
 
 
-def _failure(domain: FailureDomain, code: str, message: str, *, retryable: bool) -> HarnessFailure:
-    return HarnessFailure(
-        domain=domain,
-        stage=HarnessStage.UNDERSTANDING_AGENT,
-        code=code,
-        message=message,
-        retryable=retryable,
-    )
-
-
 def _fail(
     output: Path, domain: FailureDomain, code: str, message: str, *, retryable: bool
 ) -> int:
-    write_reading_failure(_failure(domain, code, message, retryable=retryable), output)
+    write_reading_failure(reading_failure(domain, code, message, retryable=retryable), output)
     logger.warning("agent scan: failed, code=%s retryable=%s", code, retryable)
-    return _EXIT_RETRYABLE if retryable else _EXIT_REFUSED
+    return EXIT_RETRYABLE if retryable else EXIT_REFUSED
 
 
 def _check_job(job: HarnessJob) -> HarnessFailure | None:
     source = job.source
     if source.kind in (SourceKind.REMOTE, SourceKind.PROVIDER) or source.subfolder:
-        return _failure(
+        return reading_failure(
             FailureDomain.PLATFORM_SYNC,
             SCAN_JOB_INVALID,
             "The agent scan reads a whole GitHub repository or an upload; this job names a "
@@ -273,7 +262,7 @@ def _write(
         truncated,
         error or "none",
     )
-    return _EXIT_DONE
+    return EXIT_DONE
 
 
 def _result(
@@ -422,7 +411,7 @@ def _keep_what_was_paid_for(
             models_first=scan.models_first,
         )
         write_agents_json(output, body)
-        return _EXIT_DONE
+        return EXIT_DONE
     except Exception:
         logger.error("agent scan: the kept rows could not be written", exc_info=True)
     try:
@@ -434,7 +423,7 @@ def _keep_what_was_paid_for(
             error=(SCAN_FAILED_AFTER_AI, _ERROR_MESSAGES[SCAN_FAILED_AFTER_AI]),
         )
         write_agents_json(output, body)
-        return _EXIT_DONE
+        return EXIT_DONE
     except Exception:
         logger.error("agent scan: the fixed error could not be written", exc_info=True)
     raise crash
@@ -443,7 +432,7 @@ def _keep_what_was_paid_for(
 async def _scan(job: HarnessJob, source: Path, output: Path, scan: _Scan) -> int:
     clock = time.monotonic
     # Taken first, so the source check counts against the clock too.
-    deadline = clock() + CLOCK
+    deadline = clock() + limit_seconds(CLOCK_ENV, CLOCK)
     if not _holds_a_file(source):
         return _fail(
             output,
@@ -536,7 +525,9 @@ FIND_AGENTS = ReadingMode(
     name="find_agents",
     check_job=_check_job,
     work=_work,
-    time_limit_seconds=CLOCK + HARD_LIMIT_MARGIN,
+    time_limit_seconds=CLOCK,
+    limit_env=CLOCK_ENV,
+    limit_margin_seconds=HARD_LIMIT_MARGIN,
     timed_out_code=SCAN_HARD_LIMIT_REACHED,
     timed_out_retryable=False,
     crashed_code=SCAN_CRASHED,
