@@ -21,6 +21,7 @@ from typing import Any, Callable
 
 from fi.simulate.simulation.call_actors import declined_line
 
+from ..actor_model import ActorModelFailed
 from ..backends import SessionSpec
 
 from ..config import chosen_model
@@ -376,7 +377,14 @@ class ChatActors:
                 seen=self._own_actions(key) if self.act else None,
                 actions={one: self.about.get(one, "") for one in actor.get("permitted_actions") or []} if self.act else {},
             )
-            decision = read_decision(await self._write(actor, brief))
+            try:
+                decision = read_decision(await self._write(actor, brief))
+            except ActorModelFailed as failed:
+                # A model that did not answer is never the actor's line: the actor says nothing more this trial.
+                self.done.add(key)
+                self.events.append({"actor": key, "kind": "dropped", "reason": "its model did not answer",
+                                    "detail": str(failed)[:300]})
+                continue
             if follow_up and (decision.line or decision.action):
                 self.follow_ups[key] = self.follow_ups.get(key, 0) + 1
             if decision.action and self._already_committed(key, decision.action, decision.arguments):

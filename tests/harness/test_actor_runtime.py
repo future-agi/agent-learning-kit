@@ -181,6 +181,31 @@ def test_an_actor_writes_in_the_chat_when_its_trigger_fires_and_the_agent_reads_
     ]
 
 
+def test_an_actor_whose_model_fails_says_nothing_and_the_conversation_goes_on(monkeypatch):
+    from fi.alk.harness.actor_model import ActorModelFailed
+
+    cast = _cast({"kind": "always"}, monkeypatch)
+
+    async def failing(actor, brief):
+        raise ActorModelFailed("manager's model gemini-3.8-flash did not answer: api_error: 403")
+
+    monkeypatch.setattr(cast, "_write", failing)
+    agent = _Agent(["Hello, what can I do?", "Moved to Friday."])
+    person = _Person(["Hi, I want to move my order.", conv.DONE])
+    transcript = _run(monkeypatch, cast, agent, person)
+    assert [one for one in transcript.canonical_messages() if one["role"] == "actor"] == []
+    assert not any("403" in one for one in agent.heard)
+    assert cast.summary() == [
+        {
+            "actor": "manager",
+            "name": "Mia",
+            "triggered": True,
+            "delivered": 0,
+            "dropped": ["its model did not answer"],
+        }
+    ]
+
+
 def test_an_actor_the_agent_answers_goes_back_and_forth_with_it_until_its_live_turns_run_out(monkeypatch):
     # One person's turn: the actor writes, the agent answers, the actor answers that, up to its own live turns.
     lines = ["20% is too high.", "Why not 14%?", "16% then, final.", "Fine, approved.", "One more thing."]

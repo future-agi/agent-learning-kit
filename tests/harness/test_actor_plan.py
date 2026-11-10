@@ -860,6 +860,42 @@ def test_one_decider_serves_every_runtime_on_the_actor_s_model_and_meters_each_c
     ]
 
 
+def test_an_actor_s_model_is_routed_like_the_harness_s_own_and_a_failed_call_is_never_its_line(monkeypatch):
+    from types import SimpleNamespace
+
+    from fi.alk.harness import session
+    from fi.alk.harness.actor_model import ActorModelFailed, decider
+
+    asked: list = []
+    answers = iter(
+        [
+            SimpleNamespace(text="Approved at 18%.", error="", tokens_in=1, tokens_out=1, cost_usd=0.0),
+            SimpleNamespace(text="Failed to authenticate. API Error: 403", error="api_error: 403", tokens_in=0, tokens_out=0, cost_usd=0.0),
+        ]
+    )
+
+    class _Stage:
+        def __init__(self, spec, name):
+            asked.append(spec.model)
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return None
+
+        async def say(self, text):
+            return next(answers)
+
+    monkeypatch.setattr(session, "Stage", _Stage)
+    monkeypatch.setenv("ALK_HARNESS_MODEL", "vertex_ai/gemini-3.7-flash")
+    decide = decider(None, "gemini-3.7-flash")
+    assert asyncio.run(decide("brief", "mia", "gemini-3.8-flash")) == "Approved at 18%."
+    with pytest.raises(ActorModelFailed):
+        asyncio.run(decide("brief", "mia", None))
+    assert asked == ["vertex_ai/gemini-3.8-flash", "vertex_ai/gemini-3.7-flash"]
+
+
 def test_actors_triggered_by_the_agent_s_calls_never_form_a_cycle_whatever_they_may_do():
     actors = {
         "rep": Actor(id="rep", name="R", permitted_actions=["crm.request"]),
