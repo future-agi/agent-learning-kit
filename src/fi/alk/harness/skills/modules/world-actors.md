@@ -27,7 +27,9 @@ agent's own actions; give an actor an action the agent takes only when an actor 
 the decision (no record its rule reads), the scenario cannot test it: say so rather than give the actor the agent's
 own change. Give each
 actor its `identities` in each service (its Slack handle, its CRM user) so the agent can reach it and it can name
-itself where an action asks who it is. When an action depends on someone else's, write that rule into the world, as
+itself where an action asks who it is. Every action an actor takes in a service reaches that service's tools with
+the header `X-ALK-Actor-Identity` set to its identity there (its own id when it has none); a tool that records or
+checks who acted reads that header, never assuming the caller is the agent. When an action depends on someone else's, write that rule into the world, as
 a record the dependent action checks for, so the world refuses it until a permitted actor has acted. Someone saying
 they have done it is not the record. Access works the same way: who is in which channel, who may see a document or a
 record, is seeded per scenario as world records the world's own actions check, and it can change during the run (the
