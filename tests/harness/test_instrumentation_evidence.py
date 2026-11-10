@@ -489,6 +489,12 @@ def test_a_file_with_a_byte_order_mark_is_read_as_python_reads_it(tmp_path: Path
     assert detect_instrumentation(source) == "traceai"
 
 
+def test_a_file_with_a_byte_order_mark_and_a_coding_line_is_read(tmp_path: Path) -> None:
+    (tmp_path / "agent.py").write_bytes(b"\xef\xbb\xbf# coding: utf-8\nimport traceai_openai\n")
+
+    assert detect_instrumentation(tmp_path) == "traceai"
+
+
 @pytest.mark.parametrize("coding", ["rot13", "nosuch"])
 def test_a_coding_line_python_cant_read_leaves_the_file_unread(tmp_path: Path, coding) -> None:
     (tmp_path / "agent.py").write_bytes(f"# coding: {coding}\nimport traceai_openai\n".encode())

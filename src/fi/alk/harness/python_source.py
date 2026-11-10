@@ -45,8 +45,6 @@ LARGEST_ESCAPED_TOTAL = 4 * 1024 * 1024
 _LONGEST_MARK_RUN = 32
 # Text codecs a coding line may name that aren't read: see _coding.
 _UNREAD_CODECS = frozenset({"idna", "punycode", "undefined", "unicode-escape"})
-# Reads every non-ASCII byte as "?", in one C pass over the bytes.
-_ASCII_ONLY = bytes(range(0x80)) + b"?" * 0x80
 _NON_ASCII_RUN = re.compile(r"[^\x00-\x7f]{2,}")
 
 
@@ -167,31 +165,103 @@ def read_module(
 
 def source_encoding(raw: bytes) -> str | None:
     """The encoding Python reads ``raw`` in: a coding line or a byte-order mark names it, and
-    it's UTF-8 without one. None for a coding line no codec reads text in, or one refused by
-    name."""
+    it's UTF-8 without one. None for a coding line no codec is found for, or one refused by name.
+    A codec that turns text into text, such as rot13, is named: bytes can't be decoded in it, so
+    the caller reads the file as UTF-8."""
     coding = _coding(raw)
     if coding is None:
         return None
     encoding, info = coding
-    if info.name in _UNREAD_CODECS or not getattr(info, "_is_text_encoding", True):
+    if info.name in _UNREAD_CODECS:
         return None
     return encoding
+
+
+def _first_lines(raw: bytes) -> bytes:
+    """The first two lines of ``raw``, each ended as Python ends a line (LF, CRLF or a lone CR),
+    joined by LF: found where they end, so the rest of the file is never rewritten."""
+    lines: list[bytes] = []
+    start = 0
+    for _ in range(2):
+        ends = [at for at in (raw.find(b"\n", start), raw.find(b"\r", start)) if at != -1]
+        if not ends:
+            lines.append(raw[start:])
+            break
+        end = min(ends)
+        lines.append(raw[start:end])
+        start = end + (2 if raw[end : end + 2] == b"\r\n" else 1)
+    return b"\n".join(lines)
+
+
+# What tokenize's cookie pattern, ``coding[:=][ \t]*([-\w.]+)``, reads after a line's "#", in two
+# steps that never backtrack: a run of spaces before a missing name cost the square of its length.
+_COOKIE_SPACE = re.compile(rb"[ \t]*")
+_COOKIE_NAME = re.compile(rb"[-\w.]+", re.ASCII)
+# The places on a line that look like a cookie's start but aren't one, at most, before the cookie:
+# each is tried in turn, and 3,000 files of 16,000 held the save 2.4 s (round 4 reviewer A). An
+# honest file has none. What follows a cookie isn't counted: Python reads the file in its codec.
+_COOKIE_WORDS = 64
+
+
+def _cookie_part(line: bytes) -> bytes | None:
+    """``line`` as short as says the same to detect_encoding: a comment line becomes "#" and its
+    cookie, any other line "x", a blank line nothing; None past ``_COOKIE_WORDS`` failed places.
+    detect_encoding's own pattern, ``#.*?coding``, would try each place up to the cookie on the
+    whole line, 0.75 ms on a 128 KB line, on every file (round 3 reviewer A)."""
+    mark = line.find(b"#")
+    if mark == -1:
+        return b"x" if line.strip(b" \t\f") else b""
+    if line[:mark].strip(b" \t\f"):
+        return b"x"
+    # Each place the cookie's word is, first to last, found by bytes.find, each kind looked for
+    # again only past the one just tried (a kind the line lacks was read to its end each time: 21 s
+    # for 3,000 files); the first with a name after it is the cookie.
+    colon, equal, failed = line.find(b"coding:", mark), line.find(b"coding=", mark), 0
+    while colon != -1 or equal != -1:
+        start = colon if equal == -1 or colon != -1 and colon < equal else equal
+        name = _COOKIE_NAME.match(line, _COOKIE_SPACE.match(line, start + 7).end())
+        if name:
+            return b"#" + line[start : start + 7] + name.group()
+        failed += 1
+        if failed > _COOKIE_WORDS:
+            return None
+        if start == colon:
+            colon = line.find(b"coding:", start + 1)
+        else:
+            equal = line.find(b"coding=", start + 1)
+    return b"#"
 
 
 def _coding(raw: bytes) -> tuple[str, codecs.CodecInfo] | None:
     """The codec Python reads ``raw`` in, as detect_encoding names it and its codec info.
 
     Asked about the first two lines as Python reads them: a lone CR ends a line, which
-    detect_encoding doesn't know, and a non-ASCII byte on them is read as "?" after any
-    byte-order mark, since detect_encoding refuses such a line while the parser still decodes the
-    file in the codec it names (`# coding: latin-1` then a name in it). Four text codecs are
-    refused by name: punycode's decode costs the square of its size, 2.3 s for 128 KB; idna's
-    runs in Python for each label, 91 ms for 128 KB; undefined decodes nothing; unicode-escape is
-    decoded only under a scan's total (``read_module``).
+    detect_encoding doesn't know, and after any byte-order mark each is cut to the ASCII that says
+    the same to it (``_cookie_part``), since it refuses a line holding a non-ASCII byte while the
+    parser still decodes the file in the codec it names (`# coding: latin-1` then a name in it).
+    A line it reads with more failed places than an honest one reads as a refused codec's file.
+    Four text codecs are refused by name: punycode's decode costs the square of its size, 2.3 s
+    for 128 KB; idna's runs in Python for each label, 91 ms for 128 KB; undefined decodes nothing;
+    unicode-escape is decoded only under a scan's total (``read_module``).
     """
-    head = b"\n".join(raw.replace(b"\r\n", b"\n").replace(b"\r", b"\n").split(b"\n", 2)[:2])
+    head = _first_lines(raw)
     bom = len(codecs.BOM_UTF8) if head.startswith(codecs.BOM_UTF8) else 0
-    lines = io.BytesIO(head[:bom] + head[bom:].translate(_ASCII_ONLY)).readline
+    if b"coding:" not in head and b"coding=" not in head:
+        # No cookie: detect_encoding would only run its pattern over the lines to say so.
+        encoding = "utf-8-sig" if bom else "utf-8"
+        return encoding, codecs.lookup(encoding)
+    # Each line cut to what says the same, ASCII alone, so a non-ASCII byte elsewhere on it can't
+    # make detect_encoding refuse it; the second only when it reads one, after a blank line or a
+    # comment with no cookie in it.
+    lines_read = head[bom:].split(b"\n")
+    parts = [_cookie_part(lines_read[0])]
+    if len(lines_read) > 1 and parts[0] in (b"", b"#"):
+        parts.append(_cookie_part(lines_read[1]))
+    if None in parts:
+        # Read as a file in a refused codec is: searched raw, never decoded.
+        return "undefined", codecs.lookup("undefined")
+    cut = b"\n".join(parts)
+    lines = io.BytesIO(head[:bom] + cut).readline
     try:
         encoding, _ = tokenize.detect_encoding(lines)
         return encoding, codecs.lookup(encoding)

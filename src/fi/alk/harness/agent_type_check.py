@@ -120,10 +120,14 @@ _MARKER_START = re.compile(
 )
 _TOOLKIT = "PlayWrightBrowserToolkit"
 # A whole name: no letter, digit or "_" before or after it. In a unicode-escape file read as bytes,
-# an escape such as \t or \x20 just before it counts as a boundary too.
+# an escape such as \t, \x20, \040 or \u0020 just before it counts as a boundary too.
 _WHOLE_NAMES = {
     name: re.compile(
-        rf"(?:(?<!\w)|(?<=\\[abfnrtv])|(?<=\\x[0-9A-Fa-f]{{2}})){re.escape(name)}(?!\w)", re.ASCII
+        # The name looked for first, so only the places it starts at are tried: eight lookbehinds
+        # at every byte held the save 2.8 s (round 3 reviewer A).
+        rf"(?={re.escape(name)})(?:(?<!\w)|(?<=\\[abfnrtv])|(?<=\\x[0-9A-Fa-f]{{2}})|(?<=\\[0-7])|(?<=\\[0-7]{{2}})"
+        rf"|(?<=\\[0-7]{{3}})|(?<=\\u[0-9A-Fa-f]{{4}})|(?<=\\U[0-9A-Fa-f]{{8}})){re.escape(name)}(?!\w)",
+        re.ASCII,
     )
     for name in BROWSER_IMPORTS
 }
@@ -144,6 +148,10 @@ _LARGEST_SCAN = 128 * 1024 * 1024
 # Scripts are read by regular expressions that call back for every string or comment: 128 MB of
 # crafted ones held the save 13 s. An agent's own scripts are far smaller.
 _LARGEST_SCRIPT_SCAN = 16 * 1024 * 1024
+# And the Python searched for the names it may hold: each file is searched once for each of
+# about 35 names, and 128 MB of crafted ones held the save 1.7 s. An agent's own Python is far
+# smaller.
+_LARGEST_PYTHON_SCAN = 32 * 1024 * 1024
 _LARGEST_RECORD = 1024 * 1024
 # The scripts the walk reads to follow imports, while the conversation waits; bundling reads 32 MB.
 _WALKED_SCRIPTS = 2 * 1024 * 1024
@@ -529,15 +537,22 @@ def _scan(root: Path, _files: tuple[int, int, int]) -> tuple[str, ...]:
     return _tools_in(files, local)
 
 
-def _tools_in(paths: Iterable[Path], local: set[str]) -> tuple[str, ...]:
+def _tools_in(
+    paths: Iterable[Path], local: set[str], first: Path | None = None
+) -> tuple[str, ...]:
+    """The browser tools ``paths`` import or name, the files in ``first`` read before the rest:
+    the totals below cut the files read last, and the agent's own mustn't be those."""
     found: set[str] = set()
     imported: set[str] = set()
-    scanned = scripts = 0
+    scanned = scripts = python = 0
     budget = ParseBudget()
     tokens = TokenBudget()
     escapes = EscapeBudget()
     searched = ParseBudget(_LARGEST_RAW_SEARCH)
-    for path in sorted(filter(_is_read, paths), key=_reading_order):
+    for path in sorted(
+        filter(_is_read, paths),
+        key=lambda path: (first is not None and not is_within(path, first), *_reading_order(path)),
+    ):
         size = _file_size(path)
         # Never read, so it mustn't use up the limit before the code that is.
         if size > _largest_read(path):
@@ -548,6 +563,10 @@ def _tools_in(paths: Iterable[Path], local: set[str]) -> tuple[str, ...]:
         if path.suffix in _SCRIPT_SUFFIXES:
             scripts += size
             if scripts > _LARGEST_SCRIPT_SCAN:
+                continue
+        elif path.suffix == ".py":
+            python += size
+            if python > _LARGEST_PYTHON_SCAN:
                 continue
         # One file at a time: the tokenizer raises more than it documents (SystemError on a NUL
         # byte in 3.12), and one odd file mustn't stop every reading from being checked.
@@ -615,8 +634,11 @@ def _below_shared(path: Path, folder: Path) -> tuple[str, ...]:
 
 
 def _walked(root: Path, subfolder: str) -> frozenset[Path]:
-    """What the agent's folder imports, followed with the save's limits."""
-    return imported_by_agent(
+    """What the agent's folder imports, followed with the save's limits. A walk a limit stopped
+    is logged: what it didn't reach, the save's checks don't see, and bundling's walk, with no
+    limit, may."""
+    stopped: list[bool] = []
+    found = imported_by_agent(
         root,
         subfolder,
         parse_limit=LARGEST_PARSED_MODULE,
@@ -624,13 +646,22 @@ def _walked(root: Path, subfolder: str) -> frozenset[Path]:
         script_budget=ParseBudget(_WALKED_SCRIPTS),
         import_limit=_WALKED_IMPORTS,
         lookup_limit=_WALKED_LOOKUPS,
+        stopped=stopped,
     )
+    if stopped and stopped[0]:
+        logger.warning(
+            "the save's import walk for %s stopped at its limits; %d files reached",
+            subfolder,
+            len(found),
+        )
+    return found
 
 
 def code_the_agent_reaches(source_root: Path, subfolder: str) -> list[Path]:
-    """The files outside the agent's folder that its code runs, exactly as the browser-tool scan
-    counts them: what the folder imports and the files directly above it, less test helpers and
-    other people's unpacked packages. It runs that scan; the save reuses the scan it already ran.
+    """The files outside the agent's folder that its code runs: the files directly above it,
+    less test helpers, and everything its imports lead to, as the credential scan reads them
+    (test-named and unpacked packages included, which the browser-tool scan leaves out). It runs
+    that scan; the save reuses the scan it already ran.
 
     Raises ``SubfolderNotFound`` for a folder that can't be used.
     """
@@ -645,8 +676,9 @@ def browser_tools_in_agent(
     """What one agent of a repository uses: its folder, what it imports, and the files directly
     in the folders above it. A sibling's browser tool says nothing about this agent.
 
-    Given ``reached``, it's filled with those files outside the folder, so another scan can read
-    them without walking the imports again.
+    Given ``reached``, it's filled with the files outside the folder the agent reaches: those
+    above it, and every file its imports lead to, filtered or not, so another scan can read them
+    without walking the imports again.
 
     Raises ``SubfolderNotFound`` for a folder that can't be used.
     """
@@ -688,11 +720,10 @@ def browser_tools_in_agent(
                     break
         return False
 
+    walked = sorted(_walked(root, subfolder))
     shared = [
         path
-        for path in sorted(
-            _walked(root, subfolder)
-        )
+        for path in walked
         if not _not_the_agent_file(path.name)
         and not unpacked(path)
         # Only the folders the agent reaches it through: a whole repository under `e2e/` is
@@ -707,7 +738,10 @@ def browser_tools_in_agent(
         # model's reading, not a refusal.
         local = set()
     if reached is not None:
-        reached[:] = [*above, *shared]
+        # Everything the walk followed, as the credential scan reads it: a test-named package the
+        # agent imports still runs (Dileep's third review). The files above stay filtered: a root
+        # conftest.py isn't the agent's code.
+        reached[:] = [*above, *walked]
     # A shared script's dependencies are declared in its package, at or above it.
     manifests = [
         parent / "package.json"
@@ -720,6 +754,7 @@ def browser_tools_in_agent(
         _tools_in(
             dict.fromkeys((*_agent_files(folder), *above, *shared, *manifests)),
             local,
+            folder,
         )
     )
 
