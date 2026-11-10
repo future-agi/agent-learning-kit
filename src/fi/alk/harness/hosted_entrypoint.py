@@ -55,6 +55,7 @@ from .hosted_scheduler import (
     WorldPool,
     WorldProvisioner,
 )
+from .agent_skills import job_skills
 from .job import (
     ArtifactLevel,
     ExecutionMode,
@@ -1562,6 +1563,9 @@ class OutboundAdapter:
             target_metrics = getattr(receipt.call, "target_metrics", None)
             if target_metrics:
                 call["target_metrics"] = target_metrics
+            skill_loads = getattr(receipt.call, "skill_loads", None)
+            if skill_loads:
+                call["skill_loads"] = list(skill_loads)
         elif receipt.call is not None:
             # `hosted_scheduler.CallSummary.started_at` is `str | None`, but
             # `outbound.CallSummary.started_at` requires a real timestamp -- per the contract a
@@ -2832,6 +2836,7 @@ async def run_job(
             joint_judge=functools.partial(
                 _judge_sub_goals_jointly, agent_instructions=_agent_instructions(job, bundle_dir)
             ),
+            skills=job_skills(work_directory),
         )
         result: RunResult = await scheduler.run(scenarios)
 

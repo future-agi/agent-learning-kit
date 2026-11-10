@@ -2515,6 +2515,17 @@ class TargetMetrics(BaseModel):
     provider_end_reason: str | None = Field(default=None, min_length=1, max_length=255)
 
 
+class SkillLoad(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(min_length=1, max_length=64)
+    origin: Literal["library", "repo"] = "library"
+    version_number: int | None = Field(default=None, ge=1)
+    observed: bool
+    loaded: Literal["yes", "no", "unknown"]
+    at: float | None = None
+
+
 class CallSummary(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -2528,6 +2539,7 @@ class CallSummary(BaseModel):
     # The agent under test's own provider-reported figures (`provider`, `usage`, `cost_cents`,
     # `latency`), never the simulator's.
     target_metrics: dict[str, Any] | None = None
+    skill_loads: list[SkillLoad] | None = None
 
     @model_validator(mode="after")
     def _validate(self) -> "CallSummary":

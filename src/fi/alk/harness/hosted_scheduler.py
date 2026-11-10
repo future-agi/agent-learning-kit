@@ -45,7 +45,8 @@ from pathlib import Path
 from typing import Any, Awaitable, Callable, Protocol, Sequence
 
 from . import observability
-from .job import FailureDomain, HarnessStage
+from .agent_skills import collect_skill_loads
+from .job import FailureDomain, HarnessStage, JobSkill
 from .checks import reference_of, takes_reference
 from .joint_judge import OFF_SCRIPT
 from .judge import judge_sub_goal as _judge
@@ -252,6 +253,7 @@ class CallOutcome:
     target_metrics: dict[str, Any] | None = None
     # A local path the judge can play; the artifacts above are ids the sandbox cannot read back.
     recording: str | None = None
+    skill_loads: tuple[dict[str, Any], ...] | None = None
 
 
 class CallAborted(RuntimeError):
@@ -285,6 +287,15 @@ class CallRunner(Protocol):
         *,
         world: World | None = None,
     ) -> CallOutcome: ...
+
+
+def _skill_loads(
+    runtime: EnvironmentRuntime, skills: tuple[JobSkill, ...]
+) -> tuple[dict[str, Any], ...] | None:
+    raw = runtime.metadata.get("tool_trace_path")
+    trace = Path(raw) if isinstance(raw, str) and raw.strip() else None
+    loads = collect_skill_loads(trace, skills)
+    return tuple(loads) if loads else None
 
 
 async def _run_call(
@@ -342,6 +353,7 @@ class CallSummary:
     recording_artifacts: tuple[str, ...] = ()
     stop_reason: str | None = None
     target_metrics: dict[str, Any] | None = None
+    skill_loads: tuple[dict[str, Any], ...] | None = None
 
 
 @dataclass(frozen=True)
@@ -1646,8 +1658,10 @@ class HostedScheduler:
         judge: JudgeFn | None = None,
         require_tool_workflow: bool = False,
         joint_judge: JointJudgeFn | None = None,
+        skills: tuple[JobSkill, ...] = (),
     ) -> None:
         self._pool = pool
+        self._skills = skills
         self._world_factory = world_factory
         self._call_runner = call_runner
         self._outbound = outbound
@@ -2195,6 +2209,11 @@ class HostedScheduler:
 
         try:
             call_outcome = await _run_call(self._call_runner, scenario, runtime, world)
+            if self._skills:
+                call_outcome = replace(
+                    call_outcome,
+                    skill_loads=_skill_loads(runtime, self._skills),
+                )
         except WorldUnavailable as exc:
             return _Retry(
                 _failure("world_unavailable", str(exc)),
@@ -2463,6 +2482,7 @@ class HostedScheduler:
             recording_artifacts=outcome.recording_artifacts,
             stop_reason=outcome.stop_reason,
             target_metrics=outcome.target_metrics,
+            skill_loads=outcome.skill_loads,
         )
 
     def _fault(
