@@ -21,7 +21,7 @@ Start the unmodified upstream dojo from the materialized `examples` directory:
 
 ```bash
 export GOOGLE_APPLICATION_CREDENTIALS="/path/to/Vertex_AI_Creds.json"
-export VERTEXAI_PROJECT=futureagiprimary
+export VERTEXAI_PROJECT="your-vertex-project-id"
 export VERTEXAI_LOCATION=global
 export MODEL=vertex_ai/gemini-3.7-flash
 uv sync
@@ -63,8 +63,10 @@ or re-execute the streamed call until a declarative pairing proves the source to
 The live Vertex run observed exactly one `get_weather` start/result sequence, so source execution is
 proven; normalized ALK retention of that split evidence is the remaining gap.
 
-Client disconnect proves that ALK closes its socket. It does not prove CrewAI stopped provider work;
-the upstream conversational worker may continue after its client disconnects.
+On caller cancellation, ALK waits for the in-flight request to reach its terminal event before it
+returns the cancellation. The configured total deadline, or the request timeout when no total
+deadline exists, bounds this wait. If that deadline expires, ALK closes the connection. An endpoint
+may still continue provider work after its client disconnects.
 
 ## Ten-case E2B matrix
 
@@ -80,7 +82,7 @@ deterministic transport cases in one private sandbox:
 7. explicit completion before EOF
 8. terminal application error
 9. EOF before completion
-10. cancellation, socket close, and recovery
+10. cancellation, in-flight target drain, and recovery
 
 The three frameworks come from the official AG-UI repository at the same commit pinned by the
 CrewAI reference. CrewAI and Google ADK call `gemini-3.7-flash` through Vertex. LangGraph uses a
@@ -93,7 +95,7 @@ Run the matrix from the ALK checkout:
 
 ```bash
 export E2B_API_KEY=...
-export VERTEXAI_PROJECT=futureagiprimary
+export VERTEXAI_PROJECT="your-vertex-project-id"
 export GOOGLE_APPLICATION_CREDENTIALS="/path/to/Vertex_AI_Creds.json"
 uv run --with e2b==2.37.1 \
   python examples/harness/sse_transport_compatibility/e2b_qualify.py \
@@ -106,6 +108,7 @@ exactly ten sanitized receipts, and kills the sandbox in `finally`. Use
 `ALK_E2B_TEMPLATE_REFERENCE` to select an existing ALK template; otherwise the E2B `base` template
 is used and dependencies are installed for the run.
 
-The sanitized successful run from 2026-11-05 is retained at
-`results/e2b-2026-11-05.json`. It contains package versions, event/response counts, source hashes,
-the E2B template reference, and cleanup status, but no prompts, responses, headers, or credentials.
+The sanitized successful run from 2026-11-10 is retained at
+`results/e2b-2026-11-10.json`. It contains package versions, event and response counts, source
+hashes, and cleanup status, but no prompts, responses, headers, credentials, sandbox IDs, or
+template references.

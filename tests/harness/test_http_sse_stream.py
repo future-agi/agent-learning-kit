@@ -3,6 +3,7 @@ import json
 import runpy
 import socket
 import threading
+import time
 from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -13,9 +14,12 @@ from pydantic import ValidationError
 from fi.alk.harness.chat_transport import create_chat_wrapper
 from fi.alk.harness.contract import RuntimeInterface
 from fi.simulate.agent.wrapper import AgentInput
-from fi.simulate.agent.wrappers.http import HTTPAgentWrapper
+from fi.simulate.agent.wrappers.http import HTTPAgentWrapper, _ResponseFailure
 from fi.simulate.agent.wrappers.http_stream import (
     HTTPStreamSpec,
+    MAX_STREAM_BYTES,
+    MAX_STREAM_EVENT_BYTES,
+    MAX_STREAM_EVENTS,
     SSEDecoder,
     SSEProtocolError,
     SSEReducer,
@@ -84,7 +88,7 @@ def test_reducer_assembles_declared_text_modes(mode, events, expected):
     assert _reduce(raw, spec).text == expected
 
 
-def test_decoder_handles_comments_multiline_data_and_duplicate_ids():
+def test_decoder_handles_comments_multiline_data_and_repeated_ids():
     decoder = SSEDecoder()
     reducer = SSEReducer(
         HTTPStreamSpec.model_validate(
@@ -111,8 +115,7 @@ def test_decoder_handles_comments_multiline_data_and_duplicate_ids():
         decoder.feed(b"event: done\ndata: null\n\n")[0],
         bytes_received=decoder.bytes_received,
     )
-    assert done.text == "hello\nworld"
-    assert done.duplicate_events == 1
+    assert done.text == "hello\nworldhello\nworld"
 
 
 def test_decoder_preserves_crlf_fields_across_byte_boundaries():
@@ -126,6 +129,11 @@ def test_decoder_preserves_crlf_fields_across_byte_boundaries():
     assert frames[0].event == "update"
     assert frames[0].event_id == "seven"
     assert frames[0].data == "hello\nworld"
+
+
+def test_decoder_accepts_bom_before_the_first_data_field():
+    frames = SSEDecoder().feed(b'\xef\xbb\xbfdata: {"type":"RUN_FINISHED"}\n\n')
+    assert frames[0].data == {"type": "RUN_FINISHED"}
 
 
 def test_decoder_rejects_invalid_utf8_json_and_bounds(monkeypatch):
@@ -153,19 +161,64 @@ def test_decoder_counts_processed_and_pending_bytes_toward_event_limit(monkeypat
         decoder.feed(b"data: bc")
 
 
-def test_reducer_rejects_conflicting_ids_and_event_limit(monkeypatch):
+def test_reducer_accepts_reused_ids_and_enforces_event_limit(monkeypatch):
     spec = HTTPStreamSpec.model_validate(SPEC)
     reducer = SSEReducer(spec)
     first = SSEDecoder().feed(b'id: same\ndata: {"type":"OTHER"}\n\n')[0]
     reducer.accept(first, bytes_received=30)
     changed = SSEDecoder().feed(b'id: same\ndata: {"type":"CHANGED"}\n\n')[0]
-    with pytest.raises(SSEProtocolError, match="reused"):
-        reducer.accept(changed, bytes_received=60)
+    reducer.accept(changed, bytes_received=60)
+    assert reducer.last_event_id == "same"
     monkeypatch.setattr("fi.simulate.agent.wrappers.http_stream.MAX_STREAM_EVENTS", 1)
     limited = SSEReducer(spec)
     limited.accept(first, bytes_received=30)
-    with pytest.raises(SSEProtocolError, match="4096 events"):
+    with pytest.raises(SSEProtocolError, match="exceeds 1 events"):
         limited.accept(changed, bytes_received=60)
+
+
+def test_common_agent_stream_sizes_fit_default_limits():
+    assert MAX_STREAM_EVENTS >= 4_100
+    assert MAX_STREAM_BYTES >= 1_600 * 1_024
+    assert MAX_STREAM_EVENT_BYTES >= 70 * 1_024
+
+
+def test_null_text_is_ignored_and_message_ids_separate_delta_groups():
+    spec = {
+        "completion": {"path": "data.type", "values": ["RUN_FINISHED"]},
+        "text": [
+            {
+                "mode": "delta",
+                "path": "data.delta",
+                "message_id_path": "data.messageId",
+                "when": {
+                    "path": "data.type",
+                    "values": ["TEXT_MESSAGE_CONTENT"],
+                },
+            }
+        ],
+    }
+    raw = b"".join(
+        _event(payload)
+        for payload in (
+            {"type": "TEXT_MESSAGE_CONTENT", "messageId": "one", "delta": "Let me check."},
+            {"type": "TEXT_MESSAGE_CONTENT", "messageId": "one", "delta": None},
+            {"type": "TEXT_MESSAGE_CONTENT", "messageId": "two", "delta": "It is done."},
+            {"type": "RUN_FINISHED"},
+        )
+    )
+    assert _reduce(raw, spec).text == "Let me check.\nIt is done."
+
+
+def test_reducer_rejects_one_event_matching_multiple_text_rules():
+    spec = {
+        "completion": {"path": "data.type", "values": ["RUN_FINISHED"]},
+        "text": [
+            {"mode": "delta", "path": "data.text"},
+            {"mode": "cumulative", "path": "data.text"},
+        ],
+    }
+    with pytest.raises(SSEProtocolError, match="multiple text rules"):
+        _reduce(_event({"type": "RUN_FINISHED", "text": "hello"}), spec)
 
 
 @contextmanager
@@ -176,6 +229,7 @@ def sse_server():
         "disconnected": threading.Event(),
         "requests": [],
         "cookie_headers": [],
+        "mutated": threading.Event(),
     }
 
     class Handler(BaseHTTPRequestHandler):
@@ -201,6 +255,12 @@ def sse_server():
             case = body.get("message", "delta")
             state["requests"].append(("POST", self.path))
             state["cookie_headers"].append(self.headers.get("Cookie", ""))
+            if case == "redirect":
+                self.send_response(307)
+                self.send_header("Location", "/redirected")
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
             self.send_response(200)
             self.send_header(
                 "Content-Type",
@@ -209,6 +269,8 @@ def sse_server():
                 else "text/event-stream",
             )
             self.send_header("Cache-Control", "no-cache")
+            if case == "compressed":
+                self.send_header("Content-Encoding", "gzip")
             if case == "events":
                 self.send_header("X-Conversation-ID", "conversation-1")
             self.end_headers()
@@ -224,6 +286,17 @@ def sse_server():
                         state["disconnected"].set()
                 except (ConnectionError, socket.timeout):
                     pass
+                return
+            if case == "cancel_mutates":
+                self.wfile.write(
+                    _event({"type": "TEXT_MESSAGE_CONTENT", "delta": "partial"})
+                )
+                self.wfile.flush()
+                state["cancel_started"].set()
+                time.sleep(0.2)
+                state["mutated"].set()
+                self.wfile.write(_event({"type": "RUN_FINISHED"}))
+                self.wfile.flush()
                 return
             if case == "error":
                 self.wfile.write(
@@ -248,6 +321,55 @@ def sse_server():
                 )
                 self.wfile.flush()
                 state["release"].wait(3)
+                return
+            if case == "slow_active":
+                for value in "hello":
+                    self.wfile.write(
+                        _event({"type": "TEXT_MESSAGE_CONTENT", "delta": value})
+                    )
+                    self.wfile.flush()
+                    time.sleep(0.06)
+                self.wfile.write(_event({"type": "RUN_FINISHED"}))
+                self.wfile.flush()
+                return
+            if case == "terminal_tools":
+                for index in range(2):
+                    self.wfile.write(
+                        _event(
+                            {
+                                "type": "CHUNK",
+                                "tool_calls": [
+                                    {
+                                        "id": f"partial-{index}",
+                                        "name": "",
+                                        "arguments": {},
+                                    }
+                                ],
+                            }
+                        )
+                    )
+                self.wfile.write(
+                    _event(
+                        {
+                            "type": "RUN_FINISHED",
+                            "tool_calls": [
+                                {
+                                    "id": "final-1",
+                                    "name": "weather",
+                                    "arguments": {"city": "Pune"},
+                                }
+                            ],
+                            "tool_responses": [
+                                {
+                                    "tool_call_id": "final-1",
+                                    "name": "weather",
+                                    "result": "20C",
+                                }
+                            ],
+                        }
+                    )
+                )
+                self.wfile.flush()
                 return
             if case == "tools":
                 self.wfile.write(
@@ -399,10 +521,25 @@ def test_cancellation_closes_stream_and_next_call_succeeds():
         assert response.content == "hello"
 
 
+def test_cancellation_waits_for_the_inflight_target_before_returning():
+    async def exercise(endpoint, state):
+        task = asyncio.create_task(_wrapper(endpoint).call(_input("cancel_mutates")))
+        await asyncio.to_thread(state["cancel_started"].wait, 1)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert state["mutated"].is_set()
+
+    with sse_server() as (endpoint, state):
+        asyncio.run(exercise(endpoint, state))
+
+
 def test_live_stream_has_an_absolute_deadline():
     with sse_server() as (endpoint, _state):
         response = asyncio.run(
-            _wrapper(endpoint, timeout=0.1, secret_values={}).call(
+            _wrapper(
+                endpoint, timeout=0.1, total_timeout=0.1, secret_values={}
+            ).call(
                 _input("partial_idle")
             )
         )
@@ -415,6 +552,33 @@ def test_live_stream_has_an_absolute_deadline():
         assert trace["response_excerpt"] == "partial"
 
 
+def test_regular_stream_timeout_is_idle_not_absolute():
+    with sse_server() as (endpoint, _state):
+        response = asyncio.run(
+            _wrapper(endpoint, timeout=0.1, secret_values={}).call(
+                _input("slow_active")
+            )
+        )
+        assert response.content == "hello"
+        assert response.metadata["external_agent"]["success"] is True
+
+
+def test_only_terminal_payload_contributes_executable_tool_evidence():
+    with sse_server() as (endpoint, _state):
+        response = asyncio.run(_wrapper(endpoint).call(_input("terminal_tools")))
+        assert [call["function"]["name"] for call in response.tool_calls] == [
+            "weather"
+        ]
+        assert response.tool_responses == [
+            {
+                "tool_call_id": "final-1",
+                "name": "weather",
+                "result": "20C",
+                "error": None,
+            }
+        ]
+
+
 def test_live_stream_rejects_content_type_prefixes():
     with sse_server() as (endpoint, _state):
         response = asyncio.run(
@@ -424,6 +588,42 @@ def test_live_stream_rejects_content_type_prefixes():
         assert trace["success"] is False
         assert trace["failure_stage"] == "stream"
         assert response.content == ""
+
+
+def test_stream_rejects_compression_and_does_not_use_environment_proxy(monkeypatch):
+    monkeypatch.setenv("HTTP_PROXY", "http://127.0.0.1:1")
+    monkeypatch.setenv("HTTPS_PROXY", "http://127.0.0.1:1")
+    with sse_server() as (endpoint, _state):
+        successful = asyncio.run(_wrapper(endpoint).call(_input("delta")))
+        compressed = asyncio.run(_wrapper(endpoint).call(_input("compressed")))
+    assert successful.content == "hello"
+    assert compressed.metadata["external_agent"]["success"] is False
+    assert compressed.metadata["external_agent"]["stream_reason"] == "sse_encoding"
+
+
+def test_stream_does_not_follow_redirects():
+    with sse_server() as (endpoint, state):
+        redirected = asyncio.run(_wrapper(endpoint).call(_input("redirect")))
+    assert redirected.metadata["external_agent"]["status_code"] == 307
+    assert state["requests"] == [("POST", "/chat")]
+
+
+def test_stream_disconnect_is_reported_as_a_network_error(monkeypatch):
+    wrapper = _wrapper("http://127.0.0.1:1/chat")
+
+    async def disconnect(*_args, **_kwargs):
+        wrapper._response_status = 200
+        wrapper._stream_trace = {
+            "stream_state": "incomplete",
+            "stream_reason": "sse_disconnect",
+        }
+        raise _ResponseFailure("stream", 200, "SSE connection ended unexpectedly")
+
+    monkeypatch.setattr(wrapper, "_post_sse", disconnect)
+    response = asyncio.run(wrapper.call(_input("delta")))
+    trace = response.metadata["external_agent"]
+    assert trace["network_error"] is True
+    assert trace["failure_stage"] == "stream"
 
 
 def test_completed_response_tools_are_retained_only_after_success():

@@ -76,6 +76,23 @@ def test_report_requires_exactly_ten_ordered_receipts_and_branch_hash():
     with pytest.raises(ValueError, match="exactly ten"):
         qualifier.validate_report(json.dumps(report).encode(), "a" * 64)
 
+
+def test_retained_report_matches_the_current_sse_module():
+    qualifier = _module("sse_e2b_qualify_retained", "e2b_qualify.py")
+    raw = json.loads(
+        (ROOT / "results/e2b-2026-11-10.json").read_text(encoding="utf-8")
+    )
+    sandbox = raw.pop("sandbox")
+    validated = qualifier.validate_report(
+        json.dumps(raw).encode(), qualifier._sha256(qualifier.SSE_MODULE)
+    )
+    assert validated["passed"] is True
+    assert sandbox == {
+        "id": "redacted",
+        "template": "redacted",
+        "cleanup_succeeded": True,
+    }
+
     report = _passing_report(qualifier)
     report["provenance"]["imported_sha256"] = "c" * 64
     with pytest.raises(ValueError, match="different ALK"):

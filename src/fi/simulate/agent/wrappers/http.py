@@ -270,7 +270,7 @@ class HTTPAgentWrapper(AgentWrapper):
             time.monotonic() + self.total_timeout
             if self.total_timeout is not None
             else time.monotonic() + self.timeout
-            if self.completed_tool_events or self.sse
+            if self.completed_tool_events
             else None
         )
         headers: dict[str, str] = {}
@@ -305,9 +305,10 @@ class HTTPAgentWrapper(AgentWrapper):
             stream_result = None
             if self.sse:
                 try:
-                    status_code, response_payload, stream_result = await asyncio.wait_for(
-                        self._post_sse(request_payload, headers, endpoint=endpoint),
-                        timeout=self._remaining_timeout(),
+                    status_code, response_payload, stream_result = (
+                        await self._run_stream_request(
+                            request_payload, headers, endpoint=endpoint
+                        )
                     )
                 except (TimeoutError, asyncio.TimeoutError) as exc:
                     self._stream_trace = {
@@ -338,6 +339,11 @@ class HTTPAgentWrapper(AgentWrapper):
             response = self._agent_response_from_payload(
                 response_payload,
                 content_override=stream_result.text if stream_result else None,
+                evidence_payload=(
+                    stream_result.payloads[-1]
+                    if stream_result and stream_result.payloads
+                    else None
+                ),
             )
             if self.completed_tool_events or self.completed_tools:
                 stage = "tool_events"
@@ -362,7 +368,7 @@ class HTTPAgentWrapper(AgentWrapper):
             network_error = isinstance(
                 exc,
                 (urllib.error.URLError, httpx.HTTPError, TimeoutError, ConnectionError),
-            )
+            ) or self._stream_trace.get("stream_reason") == "sse_disconnect"
             timeout_error = (
                 isinstance(
                     exc, (TimeoutError, asyncio.TimeoutError, httpx.TimeoutException)
@@ -500,6 +506,36 @@ class HTTPAgentWrapper(AgentWrapper):
                     break
             if not task.cancelled():
                 task.exception()
+            raise
+
+    async def _run_stream_request(self, payload, headers, *, endpoint):
+        task = asyncio.create_task(self._post_sse(payload, headers, endpoint=endpoint))
+        try:
+            if self._deadline is None:
+                return await asyncio.shield(task)
+            return await asyncio.wait_for(
+                asyncio.shield(task), timeout=self._remaining_timeout()
+            )
+        except asyncio.CancelledError:
+            try:
+                await asyncio.wait_for(
+                    asyncio.shield(task), timeout=self._remaining_timeout()
+                )
+            except (TimeoutError, asyncio.TimeoutError):
+                task.cancel()
+                try:
+                    await task
+                except (Exception, asyncio.CancelledError):
+                    pass
+            except (Exception, asyncio.CancelledError):
+                pass
+            raise
+        except (TimeoutError, asyncio.TimeoutError):
+            task.cancel()
+            try:
+                await task
+            except (Exception, asyncio.CancelledError):
+                pass
             raise
 
     def _remaining_timeout(self):
@@ -720,6 +756,9 @@ class HTTPAgentWrapper(AgentWrapper):
                         .lower()
                     )
                     if content_type != "text/event-stream":
+                        self._record_incomplete_stream(
+                            decoder, reducer, reason="sse_content_type"
+                        )
                         raise _ResponseFailure(
                             "stream", status, "SSE endpoint did not return text/event-stream"
                         )
@@ -727,6 +766,9 @@ class HTTPAgentWrapper(AgentWrapper):
                         "",
                         "identity",
                     }:
+                        self._record_incomplete_stream(
+                            decoder, reducer, reason="sse_encoding"
+                        )
                         raise _ResponseFailure(
                             "stream", status, "Compressed SSE responses are not supported"
                         )
@@ -755,7 +797,6 @@ class HTTPAgentWrapper(AgentWrapper):
                 "stream_reason": "sse_cancelled",
                 "stream_bytes_received": decoder.bytes_received,
                 "stream_events_received": reducer.events_received,
-                "stream_duplicate_events": reducer.duplicate_events,
                 "stream_last_event_id": reducer.last_event_id,
             }
             raise
@@ -766,7 +807,6 @@ class HTTPAgentWrapper(AgentWrapper):
                 "stream_reason": "sse_deadline",
                 "stream_bytes_received": decoder.bytes_received,
                 "stream_events_received": reducer.events_received,
-                "stream_duplicate_events": reducer.duplicate_events,
                 "stream_last_event_id": reducer.last_event_id,
             }
             raise _ResponseFailure(
@@ -781,7 +821,6 @@ class HTTPAgentWrapper(AgentWrapper):
                 "stream_reason": "sse_disconnect",
                 "stream_bytes_received": decoder.bytes_received,
                 "stream_events_received": reducer.events_received,
-                "stream_duplicate_events": reducer.duplicate_events,
                 "stream_last_event_id": reducer.last_event_id,
             }
             raise _ResponseFailure(
@@ -794,7 +833,6 @@ class HTTPAgentWrapper(AgentWrapper):
                 "stream_reason": exc.code,
                 "stream_bytes_received": exc.bytes_received or decoder.bytes_received,
                 "stream_events_received": exc.events_received or reducer.events_received,
-                "stream_duplicate_events": exc.duplicate_events or reducer.duplicate_events,
                 "stream_last_event_id": exc.last_event_id or reducer.last_event_id,
             }
             raise _ResponseFailure("stream", self._response_status, str(exc)) from exc
@@ -819,8 +857,18 @@ class HTTPAgentWrapper(AgentWrapper):
             "stream_reason": None,
             "stream_bytes_received": complete.bytes_received,
             "stream_events_received": complete.events_received,
-            "stream_duplicate_events": complete.duplicate_events,
             "stream_last_event_id": complete.last_event_id,
+        }
+
+    def _record_incomplete_stream(
+        self, decoder: SSEDecoder, reducer: SSEReducer, *, reason: str
+    ) -> None:
+        self._stream_trace = {
+            "stream_state": "incomplete",
+            "stream_reason": reason,
+            "stream_bytes_received": decoder.bytes_received,
+            "stream_events_received": reducer.events_received,
+            "stream_last_event_id": reducer.last_event_id,
         }
 
     def _request_json(
@@ -1197,7 +1245,11 @@ class HTTPAgentWrapper(AgentWrapper):
         return b"".join(chunks)
 
     def _agent_response_from_payload(
-        self, payload: Any, *, content_override: str | None = None
+        self,
+        payload: Any,
+        *,
+        content_override: str | None = None,
+        evidence_payload: Any = None,
     ) -> AgentResponse:
         if self.protocol == "json_template":
             selected = (
@@ -1224,7 +1276,9 @@ class HTTPAgentWrapper(AgentWrapper):
                     )
                 tool_calls, tool_responses = [], []
             else:
-                tool_calls, tool_responses = _nested_tool_evidence(payload)
+                tool_calls, tool_responses = _nested_tool_evidence(
+                    evidence_payload if evidence_payload is not None else payload
+                )
             return AgentResponse(
                 content=_content_text(selected),
                 tool_calls=tool_calls,

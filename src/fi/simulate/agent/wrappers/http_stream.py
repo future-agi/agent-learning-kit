@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import codecs
-import hashlib
 import json
 from dataclasses import dataclass
 from typing import Any, Literal, Mapping, Sequence
@@ -11,9 +10,9 @@ from typing import Any, Literal, Mapping, Sequence
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
-MAX_STREAM_BYTES = 1024 * 1024
-MAX_STREAM_EVENT_BYTES = 64 * 1024
-MAX_STREAM_EVENTS = 4096
+MAX_STREAM_BYTES = 16 * 1024 * 1024
+MAX_STREAM_EVENT_BYTES = 1024 * 1024
+MAX_STREAM_EVENTS = 32_768
 
 
 class HTTPStreamMatch(BaseModel):
@@ -38,7 +37,14 @@ class HTTPStreamText(BaseModel):
 
     mode: Literal["delta", "cumulative", "final"]
     path: str = Field(min_length=1, max_length=512)
+    message_id_path: str | None = Field(default=None, min_length=1, max_length=512)
     when: HTTPStreamMatch | None = None
+
+    @model_validator(mode="after")
+    def _message_groups_only_apply_to_deltas(self) -> "HTTPStreamText":
+        if self.message_id_path is not None and self.mode != "delta":
+            raise ValueError("HTTP stream message IDs require delta text mode")
+        return self
 
 
 class HTTPStreamSpec(BaseModel):
@@ -73,7 +79,6 @@ class SSEComplete:
     text: str
     bytes_received: int
     events_received: int
-    duplicate_events: int
     last_event_id: str | None
 
 
@@ -86,7 +91,6 @@ class SSEProtocolError(ValueError):
         partial_text: str = "",
         bytes_received: int = 0,
         events_received: int = 0,
-        duplicate_events: int = 0,
         last_event_id: str | None = None,
     ) -> None:
         super().__init__(message)
@@ -94,7 +98,6 @@ class SSEProtocolError(ValueError):
         self.partial_text = partial_text
         self.bytes_received = bytes_received
         self.events_received = events_received
-        self.duplicate_events = duplicate_events
         self.last_event_id = last_event_id
 
 
@@ -112,7 +115,9 @@ class SSEDecoder:
     def feed(self, chunk: bytes) -> list[SSEFrame]:
         self.bytes_received += len(chunk)
         if self.bytes_received > MAX_STREAM_BYTES:
-            raise SSEProtocolError("sse_limit", "SSE response exceeds 1048576 bytes")
+            raise SSEProtocolError(
+                "sse_limit", f"SSE response exceeds {MAX_STREAM_BYTES} bytes"
+            )
         try:
             self._buffer += self._decoder.decode(chunk)
         except UnicodeDecodeError as exc:
@@ -169,7 +174,9 @@ class SSEDecoder:
             self._decoder.getstate()[0]
         )
         if self._event_bytes + pending_bytes > MAX_STREAM_EVENT_BYTES:
-            raise SSEProtocolError("sse_limit", "SSE event exceeds 65536 bytes")
+            raise SSEProtocolError(
+                "sse_limit", f"SSE event exceeds {MAX_STREAM_EVENT_BYTES} bytes"
+            )
         return frames
 
     def _line(self, line: str, *, delimiter_bytes: int) -> SSEFrame | None:
@@ -180,7 +187,9 @@ class SSEDecoder:
             return None
         self._event_bytes += len(line.encode("utf-8")) + delimiter_bytes
         if self._event_bytes > MAX_STREAM_EVENT_BYTES:
-            raise SSEProtocolError("sse_limit", "SSE event exceeds 65536 bytes")
+            raise SSEProtocolError(
+                "sse_limit", f"SSE event exceeds {MAX_STREAM_EVENT_BYTES} bytes"
+            )
         if not line:
             return self._dispatch()
         self._event_lines.append(line)
@@ -254,32 +263,19 @@ class SSEReducer:
         self.payloads: list[Any] = []
         self.text = ""
         self.events_received = 0
-        self.duplicate_events = 0
         self.last_event_id: str | None = None
-        self._event_ids: dict[str, str] = {}
+        self._message_ids: dict[int, Any] = {}
 
     def accept(self, frame: SSEFrame, *, bytes_received: int) -> SSEComplete | None:
         self.events_received += 1
         if self.events_received > MAX_STREAM_EVENTS:
-            self._fail("sse_limit", "SSE response exceeds 4096 events", bytes_received)
+            self._fail(
+                "sse_limit",
+                f"SSE response exceeds {MAX_STREAM_EVENTS} events",
+                bytes_received,
+            )
         envelope = {"event": frame.event, "data": frame.data, "id": frame.event_id}
         if frame.event_id:
-            digest = hashlib.sha256(
-                json.dumps(
-                    envelope, sort_keys=True, separators=(",", ":"), default=str
-                ).encode()
-            ).hexdigest()
-            prior = self._event_ids.get(frame.event_id)
-            if prior == digest:
-                self.duplicate_events += 1
-                return None
-            if prior is not None:
-                self._fail(
-                    "sse_decode",
-                    "SSE event ID was reused with different data",
-                    bytes_received,
-                )
-            self._event_ids[frame.event_id] = digest
             self.last_event_id = frame.event_id
         if _matches(envelope, self.spec.failure):
             message = _select(envelope, "data.message")
@@ -290,24 +286,36 @@ class SSEReducer:
                 else "SSE endpoint declared failure",
                 bytes_received,
             )
-        matched: list[tuple[HTTPStreamText, str]] = []
-        for rule in self.spec.text:
+        matched: list[tuple[int, HTTPStreamText, str]] = []
+        for index, rule in enumerate(self.spec.text):
             if rule.when is not None and not _matches(envelope, rule.when):
                 continue
             value = _select(envelope, rule.path)
-            if value is _MISSING:
+            if value is _MISSING or value is None:
                 continue
             if not isinstance(value, str):
                 self._fail(
                     "sse_decode", "SSE text value must be a string", bytes_received
                 )
-            matched.append((rule, value))
+            matched.append((index, rule, value))
         if len(matched) > 1:
             self._fail(
                 "sse_decode", "SSE event matched multiple text rules", bytes_received
             )
         if matched:
-            rule, value = matched[0]
+            index, rule, value = matched[0]
+            if rule.message_id_path is not None:
+                message_id = _select(envelope, rule.message_id_path)
+                prior = self._message_ids.get(index, _MISSING)
+                if (
+                    prior is not _MISSING
+                    and message_id is not _MISSING
+                    and message_id != prior
+                    and self.text
+                ):
+                    self.text += "\n"
+                if message_id is not _MISSING:
+                    self._message_ids[index] = message_id
             self.text = self.text + value if rule.mode == "delta" else value
         self.payloads.append(frame.data)
         if _matches(envelope, self.spec.completion):
@@ -316,7 +324,6 @@ class SSEReducer:
                 text=self.text,
                 bytes_received=bytes_received,
                 events_received=self.events_received,
-                duplicate_events=self.duplicate_events,
                 last_event_id=self.last_event_id,
             )
         return None
@@ -328,7 +335,6 @@ class SSEReducer:
             partial_text=self.text,
             bytes_received=bytes_received,
             events_received=self.events_received,
-            duplicate_events=self.duplicate_events,
             last_event_id=self.last_event_id,
         )
 
@@ -339,6 +345,5 @@ class SSEReducer:
             partial_text=self.text,
             bytes_received=bytes_received,
             events_received=self.events_received,
-            duplicate_events=self.duplicate_events,
             last_event_id=self.last_event_id,
         )

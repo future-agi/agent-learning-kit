@@ -18,6 +18,13 @@ def _failure_code(trace):
         return "chat_ingress_timeout"
     status = trace.get("status_code", 0)
     stage = trace.get("failure_stage")
+    stream_reason = trace.get("stream_reason")
+    if stage == "stream" and stream_reason in {
+        "sse_content_type",
+        "sse_encoding",
+        "sse_incomplete",
+    }:
+        return "chat_ingress_configuration_invalid"
     if stage in {"setup", "http"} and status in {400, 404, 405, 415, 422}:
         return "chat_ingress_configuration_invalid"
     if status in {401, 403}:

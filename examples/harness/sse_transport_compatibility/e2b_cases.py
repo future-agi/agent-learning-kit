@@ -98,7 +98,7 @@ def _event(payload: dict[str, Any]) -> bytes:
 def fixture_server() -> Iterator[tuple[str, dict[str, Any]]]:
     state: dict[str, Any] = {
         "cancel_started": threading.Event(),
-        "disconnected": threading.Event(),
+        "cancel_finished": threading.Event(),
     }
 
     class Handler(BaseHTTPRequestHandler):
@@ -119,12 +119,10 @@ def fixture_server() -> Iterator[tuple[str, dict[str, Any]]]:
                 self.wfile.write(_event({"type": "TEXT", "text": "partial"}))
                 self.wfile.flush()
                 state["cancel_started"].set()
-                self.connection.settimeout(4)
-                try:
-                    if self.connection.recv(1) == b"":
-                        state["disconnected"].set()
-                except (ConnectionError, socket.timeout):
-                    pass
+                time.sleep(0.1)
+                state["cancel_finished"].set()
+                self.wfile.write(_event({"type": "RUN_FINISHED"}))
+                self.wfile.flush()
                 return
             if case == "error":
                 self.wfile.write(_event({"type": "RUN_ERROR"}))
@@ -289,14 +287,14 @@ async def run_transport_cases() -> list[Receipt]:
             await task
         except asyncio.CancelledError:
             cancelled = True
-        disconnected = await asyncio.to_thread(state["disconnected"].wait, 3)
+        finished = state["cancel_finished"].is_set()
         recovered = await _wrapper(base_url).call(_input("delta"))
         recovered_trace = _trace(recovered)
         receipts.append(
             _receipt(
                 "cancellation_recovery",
                 passed=cancelled
-                and disconnected
+                and finished
                 and recovered.content == "hello"
                 and recovered_trace.get("success") is True,
                 reason="cancellation_not_observed",
@@ -469,6 +467,7 @@ def _agui_wrapper(endpoint: str) -> Any:
                 {
                     "mode": "delta",
                     "path": "data.delta",
+                    "message_id_path": "data.messageId",
                     "when": {
                         "path": "data.type",
                         "values": ["TEXT_MESSAGE_CONTENT"],

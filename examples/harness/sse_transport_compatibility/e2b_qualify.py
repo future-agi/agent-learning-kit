@@ -24,10 +24,6 @@ from typing import Any, Callable, Mapping
 HERE = Path(__file__).resolve().parent
 REPOSITORY = HERE.parents[2]
 SSE_MODULE = REPOSITORY / "src/fi/simulate/agent/wrappers/http_stream.py"
-DEFAULT_CREDENTIAL = Path(
-    "/Users/rishavhada/Documents/futureagi/oss/future-agi/"
-    "futureagi/Vertex_AI_Creds.json"
-)
 REMOTE_ROOT = "/work/sse-qualification"
 CASE_IDS = (
     "crewai_backend_tool_stream",
@@ -409,8 +405,10 @@ def main() -> None:
     parser.add_argument(
         "--credential",
         type=Path,
-        default=Path(
-            os.environ.get("GOOGLE_APPLICATION_CREDENTIALS", DEFAULT_CREDENTIAL)
+        default=(
+            Path(os.environ["GOOGLE_APPLICATION_CREDENTIALS"])
+            if os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")
+            else None
         ),
     )
     parser.add_argument(
@@ -419,6 +417,10 @@ def main() -> None:
     )
     parser.add_argument("--timeout-seconds", type=int, default=3600)
     args = parser.parse_args()
+    if args.credential is None:
+        parser.error(
+            "--credential or GOOGLE_APPLICATION_CREDENTIALS is required"
+        )
     if not 600 <= args.timeout_seconds <= 3600:
         parser.error("--timeout-seconds must be between 600 and 3600")
     raise SystemExit(

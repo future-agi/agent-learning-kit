@@ -82,7 +82,6 @@
       "the last assistant content in MESSAGES_SNAPSHOT becomes the answer for each turn",
       "the second answer depends on the first turn under the same threadId",
       "get_weather executes exactly once and its source-owned result is retained",
-      "client cancellation closes the SSE connection",
       "explicit completion returns without waiting for response EOF"
     ],
     "tool_event_status": "pending",

@@ -1,8 +1,8 @@
 {
   "schema_version": "futureagi.sse-e2b-qualification.v1",
   "provenance": {
-    "expected_sha256": "1d7e85300849e5a702cfe8b328f515988fbf73d9c66a2de664324597b2cf1e20",
-    "imported_sha256": "1d7e85300849e5a702cfe8b328f515988fbf73d9c66a2de664324597b2cf1e20",
+    "expected_sha256": "ac50a54b91bccc4d9c0ff2153e18da39c1afbfe407730297f0b5cef5cf7a37b3",
+    "imported_sha256": "ac50a54b91bccc4d9c0ff2153e18da39c1afbfe407730297f0b5cef5cf7a37b3",
     "imported_from_branch": true
   },
   "receipts": [
@@ -11,7 +11,7 @@
       "status": "passed",
       "reason": "ok",
       "framework": "crewai",
-      "response_characters": 183,
+      "response_characters": 181,
       "stream_events": 24,
       "terminal": "RUN_FINISHED",
       "source": {
@@ -57,7 +57,7 @@
       "status": "passed",
       "reason": "ok",
       "framework": "google_adk",
-      "response_characters": 7,
+      "response_characters": 6,
       "stream_events": 6,
       "terminal": "RUN_FINISHED",
       "source": {
@@ -148,8 +148,8 @@
   ],
   "passed": true,
   "sandbox": {
-    "id": "ih9y086db06snyl39cxeh",
-    "template": "alk-tanvi-dev-20261104-r1:254f9fe3-22c2-4ed3-98d9-7913e63ad9a1",
+    "id": "redacted",
+    "template": "redacted",
     "cleanup_succeeded": true
   }
 }
