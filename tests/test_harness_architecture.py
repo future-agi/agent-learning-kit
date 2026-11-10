@@ -1339,7 +1339,7 @@ def test_public_github_branch_url_clones_the_branch(
     ]
 
 
-def _recording_git(pinned_output: str):
+def _recording_git(head_output: str):
     calls = []
 
     # Every call is recorded before it is answered, so rev-parse's arguments, folder and
@@ -1347,7 +1347,7 @@ def _recording_git(pinned_output: str):
     def run(command, **kwargs):
         calls.append((command, kwargs["cwd"], kwargs["env"]))
         if command[1] == "rev-parse":
-            return SimpleNamespace(returncode=0, stdout=pinned_output + "\n", stderr="")
+            return SimpleNamespace(returncode=0, stdout=head_output + "\n", stderr="")
         Path(command[-1]).mkdir()
         return SimpleNamespace(returncode=0, stdout="", stderr="")
 
