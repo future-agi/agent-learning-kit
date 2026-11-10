@@ -484,6 +484,23 @@ def test_a_world_tool_that_asks_who_acts_gets_the_actor_s_identity_there():
     assert sent[0][2] == {"text": "hi", "actor_id": "U-priya"}
 
 
+def test_a_world_tool_that_asks_who_acts_gets_the_actor_s_own_id_when_it_has_no_identity_there():
+    sent: list = []
+    actor = Actor(id="priya", name="Priya", permitted_actions=["slack.post"])
+    dispatcher = ActorDispatcher(
+        {"priya": actor},
+        [ScenarioActor.model_validate({"id": "priya", "actions": [{"action": "slack.post", "arguments": {"text": "hi"}}]})],
+        act=door_acts(_sent_to(sent)),
+        trial_id="t",
+        read_log=list,
+        seed="t",
+        names_actor={"slack.post"},
+    )
+    asyncio.run(dispatcher.tick())
+    # Left empty, the tool would record the call as the agent's.
+    assert sent[0][2] == {"text": "hi", "actor_id": "priya"}
+
+
 def test_an_actor_s_identity_goes_with_its_service_action_but_never_with_a_record_change():
     sent = []
     actor = Actor(
@@ -967,7 +984,7 @@ def test_a_chat_actor_that_does_not_answer_in_time_gets_its_fallback(
     clock = _Clock()
     sent: list = []
 
-    async def act(actor_id, action, arguments, *, key, parent):
+    async def act(actor_id, action, arguments, *, key, parent, **kwargs):
         sent.append(action)
         return {"outcome": "committed"}
 
@@ -1627,6 +1644,31 @@ def test_a_speaking_chat_actor_s_record_fallback_is_taken_with_its_arguments_and
     assert sent == [("approvals.change", {"where": {"status": "pending"}, "set": {"status": "declined"}}, "record")]
     timeout = next(one for one in cast.events if one["kind"] == "timeout")
     assert timeout["action_outcome"] == "committed"
+
+
+def test_a_speaking_chat_actor_s_tool_fallback_is_taken_as_the_actor_never_as_the_agent():
+    from fi.alk.harness.actors import acting_fields
+    from fi.alk.harness.run import conversation as conv
+
+    actor = Actor.model_validate({
+        "id": "manager", "name": "Mia", "role": "manager", "channel": "chat_message",
+        "permitted_actions": ["crm.reject_discount"],
+        "activation": {"timeout_seconds": 1, "fallback": "crm.reject_discount", "fallback_arguments": {"deal_id": 8}},
+    })
+    sent: list = []
+
+    async def act(actor_id, action, arguments, **kwargs):
+        sent.append((action, kwargs.get("identity", "")))
+        return {"status": 200, "outcome": "committed"}
+
+    clock = _Clock()
+    entry = {"id": "manager", "name": "Mia", "trigger": {"kind": "always"}, **acting_fields(actor)}
+    cast = conv.ChatActors([entry], seed="t", model=None, act=act, clock=clock)
+    cast.waits.due(entry)
+    clock.now = 5
+    asyncio.run(cast._fall_back())
+    # Without an identity the world fills in its own default, and that default is the agent.
+    assert sent == [("crm.reject_discount", "manager")]
 
 
 def _manager_chat(history, sent, briefs):

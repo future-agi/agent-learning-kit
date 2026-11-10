@@ -2932,3 +2932,23 @@ def test_a_logged_call_is_graded_under_the_agent_s_own_tool_name_when_the_world_
     monkeypatch.setitem(sys.modules, "psycopg", _FakePsycopg(rows, columns))
     calls = cr._collect_tool_trace_calls(_runtime(endpoints={"database": _postgres_endpoint()}))
     assert [one.name for one in calls] == ["list_refunds", "get_deal"]
+
+
+def test_a_voice_call_with_no_words_still_seals_the_notice_for_a_fault_it_never_reached(tmp_path, monkeypatch) -> None:
+    _job_obj, context = _context(tmp_path=tmp_path, evidence_seam=EvidenceSeam.TOOL_TRACE)
+    _write_scenario_doc(context.bundle_dir, scenario_key="k1")
+    document = context.bundle_dir / "scenarios" / "k1" / "scenario.json"
+    body = json.loads(document.read_text())
+    body["faults"] = [{"action": "approve", "mode": "timeout_before_commit"}]
+    document.write_text(json.dumps(body))
+    monkeypatch.setattr(cr, "_write_trial_state", lambda runtime, faults: None)
+
+    async def place_call(spec):
+        return _report(transcript="", messages=[])
+
+    adapter = FakeAdapter()
+    runner = cr.CallRunnerImpl(adapter, context, place_call=place_call)
+    _run(runner, _FakeScenario("k1"), _runtime(metadata={"livekit_agent_name": "agent-w0"}))
+    sealed = {kind: data for kind, _key, data in adapter.uploads}
+    # The trial ran without its fault; with no words, that is the only place the person learns it.
+    assert json.loads(sealed[cr.ArtifactKind.TRANSCRIPT])["notices"][0]["code"] in ("fault_not_applied", "fault_not_triggered")

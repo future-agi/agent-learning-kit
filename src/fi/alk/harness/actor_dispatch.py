@@ -322,13 +322,9 @@ class ActorDispatcher:
         from .world_door import record_action
 
         service = action.split(".", 1)[0]
-        if (
-            action in self.names_actor
-            and "actor_id" not in arguments
-            and actor.identities.get(service)
-        ):
-            # A world that checks who acts takes the actor's id in the call: it is the actor's identity there.
-            arguments = {**arguments, "actor_id": actor.identities[service]}
+        if action in self.names_actor and "actor_id" not in arguments:
+            # A world that checks who acts takes the actor's id in the call: its identity there, else its own id.
+            arguments = {**arguments, "actor_id": actor.identities.get(service) or actor.id}
         # Every service the actor acts in learns who it is beside the call, so its action is never the agent's.
         # Without an identity there the actor still acts as itself, so the world never credits it to the agent.
         identity = (actor.identities.get(service, "") or actor.id) if record_action(action) is None else ""

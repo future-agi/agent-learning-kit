@@ -338,9 +338,10 @@ def _world_actors_record(
              **({"action": one.get("fallback")} if one.get("outcome") == "fallback_action" else {}),
              "fallback": one.get("fallback"), "outcome": one.get("outcome"),
              **({"status": one["status"]} if one.get("status") is not None else {}),
-             **({"action_outcome": one["action_outcome"]} if one.get("action_outcome") else {})}
+             **({"action_outcome": one["action_outcome"]} if one.get("action_outcome") else {}),
+             **({"timeout_seconds": one["timeout_seconds"]} if one.get("timeout_seconds") else {})}
             for one in cast.events
-            if one.get("kind") == "timeout" and one.get("fallback")
+            if one.get("kind") == "timeout"
         ]
     acted = actor_rows(log, listed, decisions)
     changes = trial_state_changes(log, listed, decisions)

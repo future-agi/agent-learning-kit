@@ -1799,3 +1799,20 @@ def test_a_chat_actor_s_timeout_and_the_fallback_taken_for_it_are_among_what_the
         {"actor": "manager", "play": "timeout", "action": "approvals.change", "fallback": "approvals.change",
          "outcome": "fallback_action", "status": 200, "action_outcome": "committed"}
     ]
+
+
+def test_a_chat_actor_s_wait_still_open_at_the_end_is_recorded_with_its_timeout() -> None:
+    from fi.alk.harness.actors import Actor, ActorList
+    from fi.alk.harness.world_door import MemoryLog
+
+    listing = ActorList(actors=[Actor(id="manager", name="Mia", permitted_actions=["approvals.change"])])
+    door = SimpleNamespace(log=MemoryLog())
+    cast = SimpleNamespace(events=[
+        {"actor": "manager", "kind": "timeout", "outcome": "unresolved_at_end",
+         "reason": "no answer in time: unresolved_at_end", "timeout_seconds": 30},
+    ])
+    record = chat._world_actors_record(door, listing, None, cast, SimpleNamespace(rows=list), {}, since=9.0)
+    # Voice records a wait the call ended on; chat must too, with the wait it was given.
+    assert record["decisions"] == [
+        {"actor": "manager", "play": "timeout", "fallback": None, "outcome": "unresolved_at_end", "timeout_seconds": 30}
+    ]
