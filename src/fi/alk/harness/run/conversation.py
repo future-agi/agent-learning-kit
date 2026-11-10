@@ -446,7 +446,7 @@ class ChatActors:
             key = str(actor["id"])
             self.done.add(key)
             event = {"actor": key, "kind": "timeout", "fallback": fallback, "outcome": outcome,
-                     "reason": f"no answer in time: {outcome}"}
+                     "reason": f"no answer in time: {outcome}", "timeout_seconds": actor.get("timeout_seconds")}
             self.events.append(event)
             if outcome == "declined":
                 out.append((actor, declined_line(actor)))
@@ -457,6 +457,10 @@ class ChatActors:
                 # Taken with its own arguments, and as a record change when it is one this actor may make, exactly as
                 # the world's dispatcher takes a fallback, so a decline writes its record on chat too.
                 record = record_action(fallback) is not None and fallback in (actor.get("permitted_actions") or [])
+                # A tool fallback is taken as the actor, never as the agent, like the actor's own decisions.
+                identity = "" if record_action(fallback) is not None else (
+                    (actor.get("identities") or {}).get(fallback.split(".", 1)[0], "") or key
+                )
                 sent = await self.act(
                     key,
                     fallback,
@@ -464,6 +468,7 @@ class ChatActors:
                     key=f"{self.seed}:{key}:fallback",
                     parent=None,
                     **({"form": "record"} if record else {}),
+                    **({"identity": identity} if identity else {}),
                 )
                 if isinstance(sent, dict):
                     event["status"] = sent.get("status")
@@ -477,9 +482,10 @@ class ChatActors:
 
     def end(self) -> None:
         """The conversation is over: a wait still open is recorded as such, as the world records its own."""
+        seconds = {str(one["id"]): one.get("timeout_seconds") for one in self.actors}
         for key in self.waits.open():
             self.events.append({"actor": key, "kind": "timeout", "outcome": "unresolved_at_end",
-                                "reason": "no answer in time: unresolved_at_end"})
+                                "reason": "no answer in time: unresolved_at_end", "timeout_seconds": seconds.get(key)})
             self.waits.settled.add(key)
 
     async def _write(self, actor: dict[str, Any], brief: str) -> str:
