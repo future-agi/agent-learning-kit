@@ -941,6 +941,9 @@ _INHERITED_ENV_ALLOWLIST = (
     "CURL_CA_BUNDLE",
     "PIP_CERT",
     "NODE_EXTRA_CA_CERTS",
+    # Whether a world's environment-authored handlers run in the isolated child (handler_host):
+    # a run's tool server must keep the isolation the image turns on.
+    "ALK_HANDLER_ISOLATION",
 )
 _GOOGLE_ADC_JSON_ALIAS = "GOOGLE_APPLICATION_CREDENTIALS_JSON"
 _GOOGLE_ADC_PATH_ALIAS = "GOOGLE_APPLICATION_CREDENTIALS"
