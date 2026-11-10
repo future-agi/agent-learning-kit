@@ -15,6 +15,7 @@ import os
 import sys
 import time
 import uuid
+from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
 
@@ -39,7 +40,7 @@ from .scenarios import opening as scenario_opening
 from .session import TEXT, Event
 from .sessions import Session, new_id, save as save_session
 from .sources import resolve, supported
-from .understand import load, open_stage, opening
+from .understand import SUBMIT_REMINDER, load, open_stage, opening, reading_settings
 from .world.snapshot import saved as world_saved
 
 
@@ -168,11 +169,12 @@ async def _ask_operator(_tool_name: str, payload: dict[str, Any], _context: Any)
 
 
 def _guidance(args: argparse.Namespace) -> str:
-    instructions = [
-        str(item).strip()
-        for item in (getattr(args, "guidance", None) or [])
-        if str(item).strip()
-    ]
+    return guidance_text(getattr(args, "guidance", None) or [])
+
+
+def guidance_text(guidance: Iterable[Any]) -> str:
+    """A job's guidance as every stage that reads it is told it; empty when there is none."""
+    instructions = [str(item).strip() for item in guidance if str(item).strip()]
     if not instructions:
         return ""
     return (
@@ -287,23 +289,13 @@ async def _understand(args: argparse.Namespace) -> int:
         )
     else:
         source = resolve(args.kind, name=args.name, root=args.path, subfolder=subfolder)
-    offered = (
-        (getattr(job, "metadata", None) or {}).get("available_evals") if job else None
-    )
-    generic = bool(
-        job is not None
-        and isinstance(getattr(job, "metadata", None), dict)
-        and job.metadata.get("generic_harness_v1") is True
-    )
     stage, destination = open_stage(
         source,
         out=Path(args.out) if args.out else None,
         # Unattended, there is nobody to answer, so the model records what it could not
         # resolve in open_questions rather than blocking on a prompt nobody will see.
         ask=permission_gate(_ask_operator) if args.interactive else None,
-        available_evals=offered if isinstance(offered, list) else None,
-        require_setup_contract=generic and not args.interactive,
-        max_turns=140 if generic and not args.interactive else 70,
+        **reading_settings(job, interactive=args.interactive),
     )
 
     print(f"agent: {source.name}  ({source.kind})")
@@ -320,10 +312,7 @@ async def _understand(args: argparse.Namespace) -> int:
         interactive=args.interactive,
         until=lambda: load(destination) is not None
         or (destination / FAILURE_FILE).is_file(),
-        nudge=(
-            "Nothing was saved: you finished without calling submit_contract. Call it now "
-            "with the contract you worked out."
-        ),
+        nudge=SUBMIT_REMINDER,
     )
 
     if (destination / FAILURE_FILE).is_file():

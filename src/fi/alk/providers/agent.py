@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from collections.abc import Mapping, Sequence
 from typing import Any, Literal
 from urllib.parse import urlsplit, urlunsplit
@@ -7,6 +8,8 @@ from urllib.parse import urlsplit, urlunsplit
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 from .setup_hash import compute_setup_hash
+
+logger = logging.getLogger(__name__)
 
 AGENT_SCHEMA_VERSION = "1.0"
 MAIN_UNIT_ID = "main"
@@ -245,7 +248,13 @@ def _redact(value: Any, key: str = "") -> Any:
     if isinstance(value, list):
         return [_redact(item, key) for item in value]
     if isinstance(value, str) and "://" in value:
-        parsed = urlsplit(value)
+        try:
+            parsed = urlsplit(value)
+        except ValueError as refused:
+            # A netloc urlsplit refuses may still hold credentials, so none of it is kept, and
+            # only the error's class is logged: its text repeats the netloc.
+            logger.warning("a URL was redacted whole: class=%s", type(refused).__name__)
+            return _REDACTED
         if parsed.scheme and parsed.netloc:
             hostname = parsed.hostname or ""
             try:
