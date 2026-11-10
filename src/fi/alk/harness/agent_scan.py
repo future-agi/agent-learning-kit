@@ -485,7 +485,7 @@ async def _scan(job: HarnessJob, source: Path, output: Path, scan: _Scan) -> int
     if looked in ("limit", "clock"):
         # No regular file was found before the look's own bound or the clock: the same end as a
         # walk stopped with nothing found, and no model is asked.
-        logger.warning(
+        logger.info(
             "agent scan: the source look stopped, stopped=%s folders=%d held=%d",
             looked,
             folders,
