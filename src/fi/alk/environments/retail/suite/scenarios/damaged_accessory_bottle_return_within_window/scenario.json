@@ -41,7 +41,9 @@
         "threadId": "th_r16_damaged_bottle"
       },
       "environment_arguments": {},
-      "fixed": {}
+      "fixed": {
+        "threadId": "the email the request came in"
+      }
     },
     {
       "tool": "get_shipment_tracking",

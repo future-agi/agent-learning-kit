@@ -42,7 +42,9 @@
         "messageFormat": "FULL_CONTENT"
       },
       "environment_arguments": {},
-      "fixed": {}
+      "fixed": {
+        "threadId": "the email the request came in"
+      }
     },
     {
       "tool": "verify_order_owner",

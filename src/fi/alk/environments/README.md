@@ -18,10 +18,10 @@ Each package's `README.md` lists its tools, scenarios, coverage map and known ga
 |---|---|---|---|---|---|
 | `banking` | V01 Banking | 17 + Gmail 8 + Drive 5 | 100 | 5/5 | Wave A increment 2 done: linked mailbox (21 threads) and policy library (15 files), 100 scenarios across 8 jobs, positive and negative runs in `tests/harness/test_banking_validation.py`; live sample-agent and E2B runs are increment 11 |
 | `appointment_booking` | V02 Clinic scheduling | 9, `sql` and `filesystem` attached | 10 | 1/5 (S03, S05 partial) | No referral data or slot hold; red-flag and no-medical-advice rules unscored |
-| `hr` | V13 HR | 7 | 18 | 5/5 | No C15 failure cases |
-| `retail` | V15 Retail | 8 | 12 | 5/5 | No C15 timeout-after-commit case |
-| `saas_subscriptions` | V16 SaaS subscriptions | 8 | 10 | 5/5 | No C15 failure cases |
-| `internal_it` | V20 Internal IT | 9 | 12 | 5/5 | No C15 failure cases |
+| `hr` | V13 HR | 16 + Slack 6 + Drive 5 | 100 | 5/5 | Wave A increment 4: linked Slack workspace and HR policy library, 100 scenarios across 8 jobs, `tests/harness/test_hr_validation.py`; 37 scenarios use Slack or Drive against the plan's estimate of 48 |
+| `retail` | V15 Retail | 17 + Gmail 8 + Drive 5 | 100 | 5/5 | Wave A increment 3: linked support mailbox and policy library, 100 scenarios across 8 jobs, `tests/harness/test_retail_validation.py` |
+| `saas_subscriptions` | V16 SaaS subscriptions | 18 + Gmail 8 + Slack 6 | 100 | 5/5 | Wave A increment 6: Gmail and Slack in one world, 100 scenarios across 8 jobs, `tests/harness/test_saas_subscriptions_validation.py` |
+| `internal_it` | V20 Internal IT | 17 + Slack 6 + Drive 5 | 100 | 5/5 | Wave A increment 5: linked #it-access workspace and access-policy library, 100 scenarios across 8 jobs, `tests/harness/test_internal_it_validation.py`; 37 scenarios use Slack or Drive against the plan's estimate of 42 |
 
 Not yet built: V11 Internal knowledge, V12 Service scheduling, V17 Sales intake (plan stage 4).
 

@@ -44,7 +44,9 @@
         "threadId": "th_r03_return_request_bob"
       },
       "environment_arguments": {},
-      "fixed": {}
+      "fixed": {
+        "threadId": "the email the request came in"
+      }
     },
     {
       "tool": "verify_order_owner",

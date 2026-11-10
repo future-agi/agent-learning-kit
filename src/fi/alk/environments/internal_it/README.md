@@ -292,6 +292,7 @@ Evidence-aware checks read their target from the scenario's fixed values and req
 |---|---|---|
 | MCP smoke (`e2e-harness/local/mcp_vertical_smoke.py`) | Every reference solution over the world's `/mcp` endpoint, 6 refusal probes (a grant on a Slack "approved" without a token, a token from another request, a separation-of-duties conflict, the restricted playbook, the private security channel, a post without an approval), 2 wrong runs, then Claude Code as `sample_agent.md` over `--mcp-config` on 12 scenarios across the jobs | 120/120. All 100 reference solutions hold over MCP; every probe is refused; both wrong runs fail their checks; Claude Code held all 12 scenarios |
 | Conversations (`e2e-harness/live/hosted_agent_smoke.py`) | Gemini 3.7 Flash as the employee against a Gemini 3.7 Flash agent running `sample_agent.md` over MCP, 12 scenarios across the jobs, graded by the deterministic checks on the final world | 12/12 held |
+| E2B | Retail, HR, Internal IT and SaaS built and sealed in one sandbox from the hosted runtime template (`alk-prebuilt-envs-20261022-mcp`), this branch's `fi.alk` on the image's venv, a scratch PostgreSQL 16 from the image's binaries | 100/100 on SQLite and 100/100 on PostgreSQL 16.15 inside the sandbox for each of the four |
 
 ## Known gaps
 

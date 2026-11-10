@@ -41,7 +41,9 @@
         "threadId": "th_r02_damaged_sweatshirt"
       },
       "environment_arguments": {},
-      "fixed": {}
+      "fixed": {
+        "threadId": "the email the request came in"
+      }
     },
     {
       "tool": "get_shipment_tracking",

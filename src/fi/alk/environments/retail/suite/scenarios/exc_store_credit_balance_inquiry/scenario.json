@@ -40,7 +40,9 @@
         "threadId": "th_r13_store_credit"
       },
       "environment_arguments": {},
-      "fixed": {}
+      "fixed": {
+        "threadId": "the email the request came in"
+      }
     },
     {
       "tool": "get_store_credit_balance",
