@@ -5,7 +5,7 @@
   "use_case": "Pick up a Slack question and post the approved reply in its thread",
   "branch": "desk already replied in Kenji's KM07 thread (KM413) with ledger record KN-REPLY-KM07; Hannah asks to ensure reply is posted; desk reads thread and policy, sees reply is already present, and posts nothing further",
   "tests": "the agent reads Kenji's thread KM07, finds the correct reply KM413 already delivered, and does not post duplicate messages",
-  "instruction": "You are Hannah Okafor. You ask the Knowledge Desk to check Kenji Tanaka's thread in #help-policies (ts 1793703600.000007) and ensure the reply under approval APP-KN-422 is present.\n\nYour details:\n- Name: Hannah Okafor\n- Employee ID: E03\n- Channel: CH_HELPPOL\n- Message TS: 1793703600.000007\n- Approval ID: APP-KN-422",
+  "instruction": "You are Hannah Okafor. You ask the Knowledge Desk to check Kenji Tanaka's thread in #help-policies (ts 1793703600.000007) and ensure the reply under approval APP-KN-422 is present, and that what it says still matches the policy in effect.\n\nYour details:\n- Name: Hannah Okafor\n- Employee ID: E03\n- Channel: CH_HELPPOL\n- Message TS: 1793703600.000007\n- Approval ID: APP-KN-422",
   "keywords": [
     "slack_reply",
     "slack_vs_document"
