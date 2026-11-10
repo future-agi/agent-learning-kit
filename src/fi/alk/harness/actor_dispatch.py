@@ -149,8 +149,12 @@ class ActorDispatcher:
 
         given = limits or {}
         # Live turns this trial may take, per actor and in all; a scenario's or the environment's limits set them.
-        self.turns_per_actor = given.get("live_turns_per_actor") or LIMIT_DEFAULTS["live_turns_per_actor"]
-        self.turns_per_trial = given.get("live_turns_per_trial") or LIMIT_DEFAULTS["live_turns_per_trial"]
+        self.turns_per_actor = (
+            given.get("live_turns_per_actor") or LIMIT_DEFAULTS["live_turns_per_actor"]
+        )
+        self.turns_per_trial = (
+            given.get("live_turns_per_trial") or LIMIT_DEFAULTS["live_turns_per_trial"]
+        )
         self.act = act
         # Writes a `per_trial` pre-run session's messages inside this trial, from each actor's own brief.
         self.write_session = write_session
@@ -200,7 +204,9 @@ class ActorDispatcher:
         ]
         self.live_turns: dict[str, int] = {one.id: 0 for one in self.live}
         # What each live actor has already sent: the same action again is a loop, not a new turn.
-        self.live_sent: dict[str, list[tuple[str, str]]] = {one.id: [] for one in self.live}
+        self.live_sent: dict[str, list[tuple[str, str]]] = {
+            one.id: [] for one in self.live
+        }
         # Live turns the trial's end cut short, with what called for them: taken again when the trial settles.
         self.cut: list[tuple[Actor, str]] = []
         self.looped: set[str] = set()
@@ -324,10 +330,17 @@ class ActorDispatcher:
         service = action.split(".", 1)[0]
         if action in self.names_actor and "actor_id" not in arguments:
             # A world that checks who acts takes the actor's id in the call: its identity there, else its own id.
-            arguments = {**arguments, "actor_id": actor.identities.get(service) or actor.id}
+            arguments = {
+                **arguments,
+                "actor_id": actor.identities.get(service) or actor.id,
+            }
         # Every service the actor acts in learns who it is beside the call, so its action is never the agent's.
         # Without an identity there the actor still acts as itself, so the world never credits it to the agent.
-        identity = (actor.identities.get(service, "") or actor.id) if record_action(action) is None else ""
+        identity = (
+            (actor.identities.get(service, "") or actor.id)
+            if record_action(action) is None
+            else ""
+        )
         try:
             return await self.act(
                 actor.id,
@@ -402,7 +415,9 @@ class ActorDispatcher:
         seen = [
             json.dumps(
                 {
-                    "by": "you" if r.get("actor_id") == actor.id else (r.get("actor_id") or AGENT),
+                    "by": "you"
+                    if r.get("actor_id") == actor.id
+                    else (r.get("actor_id") or AGENT),
                     "action": r.get("name"),
                     "arguments": r.get("arguments"),
                     "outcome": r.get("outcome"),
@@ -473,13 +488,22 @@ class ActorDispatcher:
                 }
             )
             return
-        said = (decision.action, json.dumps(decision.arguments, sort_keys=True, default=str))
+        said = (
+            decision.action,
+            json.dumps(decision.arguments, sort_keys=True, default=str),
+        )
         if said in self.live_sent[actor.id]:
             # The same action again is a loop between actors: it is not sent, and this actor takes no more turns.
             self.looped.add(actor.id)
             self.fired.append(
-                {"actor": actor.id, "play": "live", "turn": turn, "decided": None,
-                 "why": "repeated its own earlier action", "parent": cause or None}
+                {
+                    "actor": actor.id,
+                    "play": "live",
+                    "turn": turn,
+                    "decided": None,
+                    "why": "repeated its own earlier action",
+                    "parent": cause or None,
+                }
             )
             return
         self.live_sent[actor.id].append(said)
@@ -670,6 +694,7 @@ class ActorDispatcher:
                 self.fired.append(
                     {
                         "actor": actor.id,
+                        "name": actor.name,
                         "play": "history",
                         "action": message.action,
                         "arguments": arguments,
@@ -919,10 +944,15 @@ def described_with_units(tool: dict[str, Any]) -> str:
     units = tool.get("arg_units") or {}
     units = units if isinstance(units, dict) else {}
     said = str(tool.get("description") or "")
-    fields = [str(one) for one in tool.get("args") or []] + sorted(str(one) for one in units if one not in (tool.get("args") or []))
+    fields = [str(one) for one in tool.get("args") or []] + sorted(
+        str(one) for one in units if one not in (tool.get("args") or [])
+    )
     if not fields:
         return said
-    named = "; ".join(f"{field} in {units[field]}" if str(units.get(field) or "").strip() else field for field in fields)
+    named = "; ".join(
+        f"{field} in {units[field]}" if str(units.get(field) or "").strip() else field
+        for field in fields
+    )
     return f"{said} (fields: {named})" if said else f"Fields: {named}"
 
 
@@ -966,8 +996,14 @@ def record_descriptions(contract: dict[str, Any]) -> dict[str, str]:
         if not isinstance(columns, dict) or not columns:
             continue
         # A column the world fills itself (a serial id, a default) need not be sent.
-        given = [name for name, kind in columns.items() if not re.search(r"SERIAL|DEFAULT", str(kind), re.I)]
-        named = "; ".join(f"{name} ({str(columns[name]).split()[0].lower()})" for name in given)
+        given = [
+            name
+            for name, kind in columns.items()
+            if not re.search(r"SERIAL|DEFAULT", str(kind), re.I)
+        ]
+        named = "; ".join(
+            f"{name} ({str(columns[name]).split()[0].lower()})" for name in given
+        )
         out[f"{collection}.put"] = f"Add a record to {collection}. Fields: {named}"
         out[f"{collection}.change"] = (
             f"Change {collection} records: `where` picks them and `set` gives the new values, both by these fields: "
