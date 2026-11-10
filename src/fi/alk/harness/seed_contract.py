@@ -37,6 +37,9 @@ SEED_CONTRACT_INVALID = "seed_contract_invalid"
 SEED_CONTRACT_TOO_LARGE = "seed_contract_too_large"
 # Beside the harness's other derived records, which never move the environment's identity.
 SEED_RESULT = Path("generic-harness") / "seed-result.json"
+# Left once an install is whole, so a restart knows the build began on the seed even after
+# a contract edit has rewritten the bytes.
+SEED_INSTALLED = Path("generic-harness") / ".seed-installed"
 # What a reading may save is what a build may be handed.
 SEED_LIMIT_BYTES = _CONTRACT_LIMIT_BYTES
 
@@ -91,6 +94,12 @@ def holds_values(exc: BaseException) -> bool:
     current: BaseException | None = exc
     while current is not None and id(current) not in seen:
         if isinstance(current, ValidationError):
+            return True
+        # An exception group (3.11+, or its backport) prints every exception it holds.
+        held = getattr(current, "exceptions", None)
+        if isinstance(held, (list, tuple)) and any(
+            isinstance(one, BaseException) and holds_values(one) for one in held
+        ):
             return True
         seen.add(id(current))
         current = current.__cause__ or current.__context__
@@ -407,13 +416,23 @@ def use_seed(
                     _write_whole(contract, raw)
                     try:
                         after_contract(output, source, job)
-                        result = "used"
                     except Exception as exc:
-                        _take_back(contract, source_model, had_model)
+                        _take_back(output, had_model)
                         failed = type(exc).__name__
                         # A contract left behind opens the world stage, which retries the step.
                         result = "used" if contract.exists() else "setup_failed"
                         print_trace(exc)
+                    else:
+                        result = "used"
+                    if result == "used":
+                        try:
+                            _write_whole(output / SEED_INSTALLED, b"")
+                        except Exception as exc:
+                            # Unrecorded, a later edit and a restart would hide that it was used.
+                            _take_back(output, had_model)
+                            failed = type(exc).__name__
+                            result = "used" if contract.exists() else "error"
+                            print_trace(exc)
     except Exception as exc:
         # Nothing is installed by then: a failed write leaves no contract behind.
         failed = type(exc).__name__
@@ -428,11 +447,11 @@ def use_seed(
     return result, names
 
 
-def _take_back(contract: Path, source_model: Path, had_model: bool) -> None:
+def _take_back(output: Path, had_model: bool) -> None:
     # A half-installed seed would open the world stage on a contract nothing followed up.
     try:
-        contract.unlink(missing_ok=True)
+        (output / _CONTRACT).unlink(missing_ok=True)
         if not had_model:
-            source_model.unlink(missing_ok=True)
+            (output / _SOURCE_MODEL).unlink(missing_ok=True)
     except OSError:
         pass
