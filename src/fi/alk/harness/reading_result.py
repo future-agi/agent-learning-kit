@@ -196,13 +196,6 @@ def _write_whole(path: Path, body: bytes) -> None:
 
 def document(job: HarnessJob, source: Path, output: Path) -> int:
     """The agent's description from the saved contract, as a build makes it."""
-    try:
-        from .seed_contract import record_reading
-
-        # What the reading was made from, so a build can tell whether it may reuse it.
-        record_reading(job, output)
-    except Exception as exc:
-        logger.warning("reading record not written: class=%s", type(exc).__name__)
     # One catch over every step: a saved contract is paid for, so nothing after it is retryable.
     try:
         # Read once, here, so what is checked is what is used: the session may still save while
@@ -212,6 +205,18 @@ def document(job: HarnessJob, source: Path, output: Path) -> int:
             contract_bytes = max(os.fstat(handle.fileno()).st_size, len(raw))
         if contract_bytes > _CONTRACT_LIMIT_BYTES:
             raise _TooLarge({"contract_bytes": contract_bytes})
+        try:
+            from .seed_contract import replace_if_unchanged, with_record
+
+            # What the reading was made from, so a build can tell whether it may reuse it. Made
+            # from these bytes and written only over them, so a later save is never lost.
+            recorded = with_record(job, raw)
+            if recorded is not None:
+                replace_if_unchanged(output / CONTRACT_FILE, raw, recorded)
+        except Exception:
+            # A paid reading never fails for its record. The mask covers the trace, and
+            # nothing here runs pydantic.
+            logger.warning("reading record not written", exc_info=True)
         contract_text = raw.decode("utf-8")
         framework = detect_framework(
             _framework_folder(job, source, output, contract_text),
