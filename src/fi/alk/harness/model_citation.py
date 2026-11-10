@@ -44,18 +44,20 @@ CONFIG_SUFFIXES = frozenset(
 )
 _CONFIG_NAMES = frozenset({"makefile", "gnumakefile", ".flaskenv"})
 # Languages where # isn't a comment: C and C++ (#define), JavaScript and TypeScript (#field),
-# Java, Go, Rust (#[attr]), Swift (#if), Kotlin, C#, Scala, Dart, Objective-C, Groovy, Gradle,
-# Lua (#t is a length).
+# Java, Go, Rust (#[attr]), Swift (#if), Kotlin, C#, Scala (A#B), Dart, Objective-C, Groovy,
+# Gradle, Lua (#t is a length).
 _NO_HASH_COMMENT_SUFFIXES = frozenset(
     {
         ".c", ".h", ".cc", ".cpp", ".cxx", ".hpp", ".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx",
         ".java", ".go", ".rs", ".swift", ".kt", ".kts", ".cs", ".scala", ".dart", ".m", ".mm",
-        ".groovy", ".gradle", ".lua",
+        ".groovy", ".gradle", ".lua", ".mts", ".cts", ".sc",
     }
 )
 # Files where # starts a comment only at a line's start or after a space: YAML, shell, Makefile
 # and Dockerfile (a#b is a word there), and .env files.
-_SPACED_HASH_SUFFIXES = frozenset({".yaml", ".yml", ".sh", ".bash", ".zsh", ".mk", ".dockerfile"})
+_SPACED_HASH_SUFFIXES = frozenset(
+    {".yaml", ".yml", ".sh", ".bash", ".zsh", ".mk", ".dockerfile", ".env"}
+)
 # Files with no block comments, nor //: there `* ` starts no comment (a Python continuation
 # line), and /* and // are text (ls /*, a // 2).
 _NO_BLOCK_COMMENT_SUFFIXES = frozenset(
@@ -91,6 +93,7 @@ _CHAR_ESCAPE = re.compile(
     r"|([0-7]{1,3}))"
 )
 _NOT_A_LETTER = re.compile(r"[\W_]+")
+_SURROGATE = re.compile("[\ud800-\udfff]")
 # Full-width letters and digits (３, Ａ) as their ASCII forms: what NFKC would do for them,
 # without NFKC's growth elsewhere.
 _FULL_WIDTH = {code: code - 0xFEE0 for code in range(0xFF01, 0xFF5F)}
@@ -162,10 +165,10 @@ _STRING_PREFIXES = frozenset({"r", "b", "f", "u", "t", "rb", "br", "fr", "rf", "
 def _opens_a_string(line: str, at: int) -> bool:
     """Whether the apostrophe at ``at`` can open a string: not inside a word (Pair's, it's, x'
     in Haskell) and not after a backslash (it\\'s), unless the word is a string prefix (r'...',
-    rb'...'). Looks at three characters at most: a prefix is one or two letters, so three letters
-    before the apostrophe are a word, whatever comes before them."""
+    rb'...'). Looks at three characters at most: a prefix is one or two letters, so three word
+    characters before the apostrophe (letters, digits, _) are a word, whatever comes before."""
     start = at
-    while start > 0 and at - start < 3 and line[start - 1].isalnum():
+    while start > 0 and at - start < 3 and (line[start - 1].isalnum() or line[start - 1] == "_"):
         start -= 1
     if start == at:
         return at == 0 or line[at - 1] != "\\"
@@ -310,8 +313,14 @@ def read_source(path: Path, limit: int) -> bytes | None:
 
 def source_lines(raw: bytes) -> list[str]:
     """The file's lines, whatever coding line it carries: no codec the file names gets to run
-    on it, and one file has one numbering wherever it is read."""
-    return raw.decode("utf-8", errors="replace").splitlines()
+    on it, and one file has one numbering wherever it is read. Numbered as the reading's Read and
+    Grep number them: at each \\n, with a \\r before it dropped. Not at the other characters
+    str.splitlines breaks at (a form feed, a lone \\r, U+2028), which would move every line
+    after them."""
+    lines = raw.decode("utf-8", errors="replace").split("\n")
+    if lines[-1] == "":
+        lines.pop()
+    return [line[:-1] if line.endswith("\r") else line for line in lines]
 
 
 def _bare_after_key(line: str, at: int, *, yaml: bool) -> bool:
@@ -466,11 +475,13 @@ def is_config_file(path: Path) -> bool:
         suffix in CONFIG_SUFFIXES
         or name in _CONFIG_NAMES
         or (not code and name.startswith((".env", "env.", "dockerfile")))
-        or name.endswith(".env")
     )
 
 
 def is_prose_file(path: Path) -> bool:
+    if path.suffix.lower() in _TEMPLATE_SUFFIXES and is_config_file(path):
+        # A template that renders configuration by its name: .env.j2, Dockerfile.j2.
+        return False
     return kind_suffix(path) in PROSE_SUFFIXES or (
         not path.suffix and path.name.lower() in _PROSE_STEMS
     )
@@ -566,13 +577,15 @@ def model_problems(contract: AgentContract, source_root: Path) -> list[str]:
     elif (
         suffix in _SPACED_HASH_SUFFIXES
         or name_lower in _CONFIG_NAMES
-        or name_lower.startswith((".env", "dockerfile"))
+        # dockerfile_gen.py and .env_loader.py are Python: # anywhere there.
+        or (config and name_lower.startswith((".env", "dockerfile")))
     ):
         hash_comments = _HASH_SPACED
     else:
         hash_comments = _HASH_ANYWHERE
-    # Configuration files have no block comments either.
-    block_comments = not (config or suffix in _NO_BLOCK_COMMENT_SUFFIXES)
+    # Configuration files have no block comments, but JSON read as JSONC (appsettings.json,
+    # tsconfig.json) has: outside a string, // and /* can only be comments there.
+    block_comments = suffix == ".json" or not (config or suffix in _NO_BLOCK_COMMENT_SUFFIXES)
     if not named_on(
         lines[model.line - 1],
         name,
@@ -620,6 +633,9 @@ def _comparable(text: str) -> str:
     """``text`` as a quote and the lines it was quoted from both read it: escapes decoded, HTML
     entities decoded, one Unicode form (NFC, which never grows the text much), case set aside."""
     unescaped = _CHAR_ESCAPE.sub(_escape, text)
+    if _SURROGATE.search(unescaped):
+        # json.dump writes a character past U+FFFF as two escapes, one per half of its pair.
+        unescaped = unescaped.encode("utf-16", "surrogatepass").decode("utf-16", "replace")
     return unicodedata.normalize("NFC", html.unescape(unescaped)).translate(_FULL_WIDTH).casefold()
 
 

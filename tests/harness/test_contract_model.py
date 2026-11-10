@@ -527,7 +527,8 @@ def test_model_on_the_cited_line_is_saved_stripped(tmp_path, root):
 @pytest.mark.parametrize(
     "written, line",
     [
-        pytest.param(b'# head\nA = 1\x0cB = 2\nMODEL = "gpt-4o"\n', 4, id="form-feed"),
+        # A form feed is no line break to the reading's Read, nor to the save.
+        pytest.param(b'# head\nA = 1\x0cB = 2\nMODEL = "gpt-4o"\n', 3, id="form-feed"),
         # Read as latin-1, \x85 is a line break and the model's line moves down one.
         pytest.param(b'# coding: latin-1\nA = "\x85"\nMODEL = "gpt-4o"\n', 3, id="latin-1-c1"),
     ],
@@ -2984,3 +2985,191 @@ def test_a_quote_alone_after_lines_alone_were_refused_is_not_asked_for_lines(tmp
 
     assert not third.get("is_error"), third
     assert saved(destination)["system_prompt_excerpt"] == _BOOKING_QUOTE
+
+
+# The settled round: lines numbered as the reading numbers them, and the reviewers' pins
+
+
+@pytest.mark.parametrize(
+    "written, prompt_line, model_line",
+    [
+        pytest.param(
+            b'# head\nA = 1\x0cB = 2\rC = 3\nNOTE = "a\xe2\x80\xa8b"\n'
+            b'PROMPT = "You are Acme\'s booking agent."\nMODEL = "gpt-4o"\n',
+            4, 5, id="form-feed-lone-cr-and-u2028",
+        ),
+        pytest.param(
+            b'# head\r\nPROMPT = "You are Acme\'s booking agent."\r\nMODEL = "gpt-4o"\r\n',
+            2, 3, id="crlf",
+        ),
+        pytest.param(
+            b'# head\nPROMPT = "You are Acme\'s booking agent."\nMODEL = "gpt-4o"',
+            2, 3, id="no-newline-at-the-end",
+        ),
+    ],
+)
+def test_lines_are_numbered_at_each_newline(tmp_path, root, written, prompt_line, model_line):
+    (root / "agent.py").write_bytes(written)
+    destination = tmp_path / "out"
+
+    result = accept_contract(
+        payload(
+            system_prompt_from=[{"path": "agent.py", "start_line": prompt_line, "end_line": prompt_line}],
+            model={"name": "gpt-4o", "path": "agent.py", "line": model_line},
+        ),
+        destination,
+        source_root=root,
+    )
+
+    assert not result.get("is_error"), result
+    assert saved(destination)["system_prompt_excerpt"] == 'PROMPT = "You are Acme\'s booking agent."'
+    assert saved(destination)["model"]["line"] == model_line
+
+
+def test_a_file_ending_in_a_newline_has_no_line_after_it(root):
+    (root / "agent.py").write_text('\nMODEL = "gpt-4o"\n', encoding="utf-8")
+
+    problems, _, _ = checked(root, {"name": "gpt-4o", "path": "agent.py", "line": 3})
+
+    assert problems == ["model: line 3 is outside agent.py, which has 2 lines"]
+
+
+@pytest.mark.parametrize(
+    "letter, escaped",
+    [
+        pytest.param("\U00020000", "\\ud840\\udc00", id="cjk-extension-b"),
+        pytest.param("\U0001d400", "\\ud835\\udc00", id="math-bold"),
+    ],
+)
+def test_a_json_escaped_letter_past_ffff_holds_its_quote(letter, escaped):
+    from fi.alk.harness.model_citation import quote_problem
+
+    quote = f"Greet each guest as {letter} and seat them at once."
+    written = '{"prompt": "' + quote.replace(letter, escaped) + '"}'
+
+    assert quote_problem(quote, written, "prompt.json 1-1") is None
+
+
+def test_an_escape_past_the_last_character_is_kept_as_written():
+    from fi.alk.harness.model_citation import quote_problem
+
+    quote = "Order a table \\U00110000 for two guests tonight."
+
+    assert quote_problem(quote, 'PROMPT = "' + quote + '"', "prompt.py 1-1") is None
+
+
+@pytest.mark.parametrize(
+    "quote, says",
+    [
+        # 6 letters is the floor of a quote that says something, looked for whole.
+        pytest.param("Be kind", True, id="six-letters"),
+        pytest.param("Be wry", False, id="five-letters"),
+    ],
+)
+def test_six_letters_say_something(quote, says):
+    from fi.alk.harness.model_citation import quote_problem
+
+    assert (quote_problem(quote, 'x = "nothing here"', "a.py 1-1") is not None) == says
+
+
+def test_sixteen_letters_are_searched_with_gaps():
+    from fi.alk.harness.model_citation import quote_pieces, quote_problem
+
+    # 16 letters: words in order, with code between them. 15 would be looked for whole.
+    quote = "Be warm and kind now"
+    written = 'P = "Be warm " + tone + " and kind now"'
+
+    assert quote_pieces(quote)
+    assert quote_problem(quote, written, "a.py 1-1") is None
+    assert not quote_pieces("Be warm and kind no")
+
+
+def test_a_pipe_is_logged_as_not_a_regular_file(tmp_path, caplog):
+    from fi.alk.harness.model_citation import read_source
+
+    if not hasattr(os, "mkfifo"):
+        pytest.skip("no named pipes here")
+    pipe = tmp_path / "pipe"
+    os.mkfifo(pipe)
+    answer: list[bytes | None] = []
+    with caplog.at_level("INFO", logger="fi.alk.harness.model_citation"):
+        reading = threading.Thread(target=lambda: answer.append(read_source(pipe, 10)), daemon=True)
+        reading.start()
+        reading.join(timeout=2)
+
+    assert answer == [None]
+    assert [record.getMessage() for record in caplog.records] == [
+        "source file not read (not a regular file)"
+    ]
+
+
+@pytest.mark.parametrize(
+    "file, written, name",
+    [
+        pytest.param("init.lua", 'local n = a // 2; model = "gpt-4o"', "gpt-4o", id="lua-floor-division"),
+        pytest.param("Makefile", "\techo a#b; MODEL=gpt-4o", "gpt-4o", id="makefile-hash-in-a-word"),
+        pytest.param(".flaskenv", "URL=http://x/#a MODEL=gpt-4o", "gpt-4o", id="flaskenv-hash-in-a-word"),
+        pytest.param(".env.local", "URL=http://x/#a MODEL=gpt-4o", "gpt-4o", id="env-name-hash-in-a-word"),
+        pytest.param("Dockerfile.dev", "ENV A=a#b MODEL=gpt-4o", "gpt-4o", id="dockerfile-name-hash-in-a-word"),
+        pytest.param("run.bash", "echo a#b; MODEL=gpt-4o", "gpt-4o", id="bash-hash-in-a-word"),
+        pytest.param("run.zsh", "echo a#b; MODEL=gpt-4o", "gpt-4o", id="zsh-hash-in-a-word"),
+        pytest.param("rules.mk", "\techo a#b; MODEL=gpt-4o", "gpt-4o", id="mk-hash-in-a-word"),
+        pytest.param("app.dockerfile", "ENV A=a#b MODEL=gpt-4o", "gpt-4o", id="dockerfile-suffix-hash-in-a-word"),
+        pytest.param("prod.env", "URL=http://x/#a MODEL=gpt-4o", "gpt-4o", id="env-suffix-hash-in-a-word"),
+        pytest.param("agent.mts", 'class A { #model = "gpt-4o"; }', "gpt-4o", id="mts-private-field"),
+        pytest.param("agent.cts", 'this.#model = "gpt-4o";', "gpt-4o", id="cts-private-field"),
+        pytest.param("agent.sc", 'val t: A#B = x; val model = "gpt-4o"', "gpt-4o", id="scala-script-type-projection"),
+        pytest.param(".env.j2", "MODEL=gpt-4o", "gpt-4o", id="env-template"),
+        pytest.param("Dockerfile.j2", "ENV MODEL=gpt-4o", "gpt-4o", id="dockerfile-template"),
+        pytest.param("config.yaml.j2", "  - gpt-4o", "gpt-4o", id="yaml-template-list-item"),
+        pytest.param("appsettings.json", '"ModelId": "gpt-4o", // the default', "gpt-4o", id="json-comment-after"),
+        pytest.param("agent.json", '"url": "http://x//y", "model": "gpt-4o"', "gpt-4o", id="json-slashes-in-a-string"),
+    ],
+)
+def test_more_honest_lines_after_the_settled_round(root, file, written, name):
+    (root / file).write_text(f"\n{written}\n", encoding="utf-8")
+
+    problems, contract, _ = checked(root, {"name": name, "path": file, "line": 2})
+
+    assert problems == []
+    assert contract.model is not None and contract.model.name == name
+
+
+@pytest.mark.parametrize(
+    "file, written, name",
+    [
+        pytest.param("appsettings.json", '// "ModelId": "gpt-35-turbo",', "gpt-35-turbo", id="json-line-comment"),
+        pytest.param("appsettings.json", '"ModelId": "gpt-4o" /* was "gpt-35-turbo" */', "gpt-35-turbo", id="json-block-comment"),
+        pytest.param("agent.json", '"model": "gpt-4o", // "gpt-4-turbo" is slower', "gpt-4-turbo", id="json-comment-after-a-value"),
+        pytest.param("agent.json", '* "model": "gpt-4",', "gpt-4", id="json-block-comment-middle-line"),
+        pytest.param("dockerfile_gen.py", 'MODEL = DEFAULT#"gpt-4"', "gpt-4", id="python-named-like-a-dockerfile"),
+        pytest.param(".env_loader.py", 'MODEL = DEFAULT#"gpt-4"', "gpt-4", id="python-named-like-an-env-file"),
+        pytest.param("cfg.yaml", "note: the cart's total # model: 'gpt-4'", "gpt-4", id="a-word-ending-like-a-prefix"),
+        pytest.param("cfg.yaml", "note: it_t's ok # model: 'gpt-4'", "gpt-4", id="an-underscore-before-a-prefix"),
+        pytest.param("env.rb", "MODEL = gpt-4o", "gpt-4o", id="env-rb-is-code"),
+    ],
+)
+def test_more_wrong_values_after_the_settled_round(root, file, written, name):
+    (root / file).write_text(f"\n{written}\n", encoding="utf-8")
+
+    problems, _, _ = checked(root, {"name": name, "path": file, "line": 2})
+
+    assert problems == [not_named(name, 2, file)]
+
+
+def test_a_python_template_is_text(root):
+    (root / "agent.py.j2").write_text('MODEL = "gpt-4o"\n', encoding="utf-8")
+
+    problems, _, _ = checked(root, {"name": "gpt-4o", "path": "agent.py.j2", "line": 1})
+
+    assert problems == [prose("agent.py.j2")]
+
+
+def test_a_type_projection_does_not_hide_a_triple_quote(root):
+    (root / "agent.scala").write_text(
+        'val t: A#B = x; val p = """\nmodel = "gpt-4o"\n"""\n', encoding="utf-8"
+    )
+
+    problems, _, _ = checked(root, {"name": "gpt-4o", "path": "agent.scala", "line": 2})
+
+    assert problems == [not_named("gpt-4o", 2, "agent.scala")]

@@ -114,10 +114,11 @@ Find, in roughly this order:
    `system_prompt_from`, every part it is assembled from: it is copied into the contract as written,
    and every later stage decides what the agent should do from it. If the prompt is built or
    fetched at run time and has no lines to name, quote it in `system_prompt_excerpt`; the save
-   asks once whether lines can be named. A quote is word for word from the prompt, with ... where
-   you leave text out. The lines you name are checked against your last quote, given with them or
-   before; lines that don't hold it are asked about once more, and after that the quote is kept
-   and the lines are recorded as unconfirmed.
+   asks once whether lines can be named. A quote is word for word from the prompt, a sentence or
+   more, with ... where you leave text out. The lines you name are checked against your latest
+   such quote, given with them or before. Lines that don't hold it are refused; the next time,
+   the quote is kept and the lines are recorded as unconfirmed (with a quote of a few words, the
+   lines are kept, also recorded as unconfirmed).
 
 7. **The modality.** How this agent is run: a voice session, a text conversation, or work it
    carries out on websites or a computer. This decides how it is later run, so getting it wrong
