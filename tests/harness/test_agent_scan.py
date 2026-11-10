@@ -398,7 +398,9 @@ def test_an_uploads_ai_row_is_at_the_root(tmp_path, ai) -> None:
     assert document["commit_sha"] is None
 
 
-def test_the_ai_runs_only_when_nothing_is_found(tmp_path, monkeypatch, ai) -> None:
+def test_the_ai_runs_unless_an_agent_is_found_outside_side_folders(tmp_path, monkeypatch, ai) -> None:
+    """Agents only in test or example folders still ask the model, given the time; an agent
+    outside them doesn't. The weak-sign-beside-TS/JS case has its own tests below."""
     side_only = _write(tmp_path / "side-only", SIDE_ONLY)
 
     monkeypatch.setattr(agent_scan, "CLOCK", 1000.0)
