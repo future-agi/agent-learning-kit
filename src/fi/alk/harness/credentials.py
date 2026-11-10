@@ -26,7 +26,7 @@ import yaml
 
 from fi.simulate.runtime.spec import SecretRef
 
-from .python_source import ParseBudget, parsed, source_encoding, utf8_size
+from .python_source import EscapeBudget, ParseBudget, decoded_first, parsed, utf8_size
 from .secrets import process_secret_environment_names
 from .source_folder import SubfolderNotFound, agent_folder, agent_scope, in_agent_scope, is_within
 
@@ -1434,6 +1434,10 @@ def imported_by_agent(
                 return hit
         return None
 
+    # One total for the whole walk: bundling has no lookup limit and no parse total, so this is
+    # all that bounds what decoding first costs there, a unicode-escape file's second reading
+    # included (at most this much more parsing per walk).
+    escapes = EscapeBudget()
     seen: set[Path] = set()
     pending = deque(sorted(_code_in(folder)))
     own = set(pending)  # Read once already, so importing one doesn't queue it again.
@@ -1460,25 +1464,62 @@ def imported_by_agent(
         if len(raw) > _MAX_FILE_BYTES:
             continue  # Grew since it was looked at.
         bytes_read += len(raw)
-        # As read_text reads it, line ends included; a .py in the encoding its coding line names,
-        # as Python reads it.
-        encoding = (source_encoding(raw) if path.suffix == ".py" else None) or "utf-8-sig"
-        try:
-            # Strictly: replacing runs Python's own error handler for each byte in most codecs,
-            # 60 ms a megabyte, where UTF-8's is in C. Python itself refuses such a file.
-            text = raw.decode(encoding)
-        except (UnicodeError, LookupError):
-            # Read as UTF-8, as is a codec source_encoding refuses: a crafted file Python reads in
-            # one of those can then give fewer imports here than it does to Python.
-            text = raw.decode("utf-8-sig", errors="replace")
-        content = text.replace("\r\n", "\n").replace("\r", "\n")
+        # A .py in a codec that can spell a name in other bytes is read as Python reads it while
+        # the walk's total lasts: decoded after its line ends, so hz's `~` before a CRLF joins.
+        taken, decoded, encoding = (
+            decoded_first(raw, escapes) if path.suffix == ".py" else (False, None, None)
+        )
+        read_before = None
+        if taken:
+            if decoded is None:
+                # Python refuses the file, so it imports nothing.
+                continue
+            content = decoded.replace("\r\n", "\n").replace("\r", "\n")
+            if encoding is None and "\r" in decoded:
+                # unicode-escape is also read as UTF-8, where `\r` is two characters: decoded, it's
+                # a CR the parser ends a comment or a string at where Python reads on, so what that
+                # reading imports is followed too.
+                read_before = raw.decode("utf-8-sig", errors="replace")
+                read_before = read_before.replace("\r\n", "\n").replace("\r", "\n")
+        else:
+            # As read_text reads it, line ends included; a .py in the encoding its coding line
+            # names, as Python reads it.
+            encoding = encoding or "utf-8-sig"
+            try:
+                # Strictly: replacing runs Python's own error handler for each byte in most
+                # codecs, 60 ms a megabyte, where UTF-8's is in C. Python itself refuses such a
+                # file.
+                text = raw.decode(encoding)
+            except (UnicodeError, LookupError):
+                # Read as UTF-8, as is a codec refused by name (and unicode-escape past the
+                # total): a crafted file Python reads in one of those can then give fewer imports
+                # here than it does to Python.
+                text = raw.decode("utf-8-sig", errors="replace")
+            content = text.replace("\r\n", "\n").replace("\r", "\n")
         hits: list[Path] = []
         if path.suffix == ".py":
             # A file with no import in it can't lead anywhere, so it doesn't use up the parse total
             # before the files that do (Pine's TH-9490 review); a file the total cuts says so.
             if "import" not in content:
                 continue
-            names = list(dict.fromkeys(_python_imports(content, parse_limit, parse_budget)))
+            readings = [content] if read_before is None else [content, read_before]
+            larger = max(readings, key=utf8_size)
+            if len(readings) == 1 or utf8_size(larger) > parse_limit:
+                # Each reading is charged as it's parsed; one past the limit is neither.
+                found = [
+                    name
+                    for reading in readings
+                    for name in _python_imports(reading, parse_limit, parse_budget)
+                ]
+            elif parse_budget is None or parse_budget.spend(larger):
+                # One file read two ways is charged once, as the larger reading, so it spends no
+                # more of the total than it did read one way.
+                found = [
+                    name for reading in readings for name in _python_imports(reading, parse_limit)
+                ]
+            else:
+                found = []
+            names = list(dict.fromkeys(found))
             cut |= parse_budget is not None and parse_budget.left < 0
             # One file can hold more names than the walk may try; the rest aren't tried.
             cut |= len(names) > import_limit - imports_tried

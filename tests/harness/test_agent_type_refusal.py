@@ -701,9 +701,11 @@ def test_a_file_in_a_refused_codec_still_names_its_tools(
     assert (decoded, labels, parsed) == ([], [], [])
 
 
-def test_an_escaped_import_in_a_unicode_escape_file_is_found(tmp_path):
+@pytest.mark.parametrize("ending", [b"\n", b""], ids=["final-lf", "no-final-lf"])
+def test_an_escaped_import_in_a_unicode_escape_file_is_found(tmp_path, ending):
     # Python decodes the escapes before it parses, so the import is real and so is the finding.
-    (tmp_path / "helper.py").write_bytes(b"# coding: unicode-escape\nimport \\x70laywright\n")
+    # It ends the last line itself, so a file without a final line end runs the same.
+    (tmp_path / "helper.py").write_bytes(b"# coding: unicode-escape\nimport \\x70laywright" + ending)
     assert browser_tools_found(tmp_path) == ["playwright"]
 
 
