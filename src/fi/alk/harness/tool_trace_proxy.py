@@ -140,6 +140,11 @@ def _worker_limits() -> dict:
     return limits
 
 
+def _channels_given() -> bool:
+    """Whether this trial gave its workers channels."""
+    return bool(WORKER_CHANNELS_FILE) and bool(_read_json(WORKER_CHANNELS_FILE))
+
+
 def _channel_worker(token: str) -> str:
     """The worker a channel token belongs to in this trial, or "" for none."""
     if not token or not WORKER_CHANNELS_FILE:
@@ -190,7 +195,9 @@ class Handler(BaseHTTPRequestHandler):
         except ValueError:
             arguments = {"_raw": body.decode("utf-8", errors="replace")}
         worker = None
-        if self.path.startswith(_CHANNEL_PREFIX):
+        # `/w/<token>/...` is a worker's channel only in a trial that gave its workers channels; an app's own `/w/`
+        # routes run as before otherwise.
+        if self.path.startswith(_CHANNEL_PREFIX) and _channels_given():
             token, _, rest = self.path[len(_CHANNEL_PREFIX) :].partition("/")
             # The token is the channel's credential: stripped here, never logged or forwarded.
             self.path = "/" + rest

@@ -42,6 +42,7 @@ class _World(BaseHTTPRequestHandler):
             "/records/approve": (201, {"approval": "ap-1"}),
             "/no": (403, {"detail": "a change needs an approval first"}),
             "/records/hold": (403, {"detail": "nothing to hold"}),
+            "/w/export": (201, {"exported": True}),
         }.get(self.path, (500, {"detail": "boom"}))
         content = json.dumps(payload).encode()
         self.send_response(status)
@@ -564,3 +565,11 @@ def test_a_templated_route_s_path_values_are_logged_with_the_call_s_arguments(wo
     _post(url, "/w/c-refund/records/8/approve", {"deal": "body wins"})
     first, second = rows()
     assert (first["arguments"], second["arguments"]) == ({"deal": "7", "note": "ok"}, {"deal": "body wins"})
+
+
+def test_an_app_s_own_w_route_runs_as_before_in_a_trial_that_gave_no_worker_channels(proxy, monkeypatch):
+    url, rows = proxy
+    monkeypatch.delenv("WORKER_CHANNELS_FILE", raising=False)
+    # `/w/` is a worker's channel only when the trial gave its workers channels.
+    assert _post(url, "/w/export", {})[0] == 201
+    assert _World.seen == ["/w/export"]
