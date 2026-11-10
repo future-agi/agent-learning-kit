@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 import pytest
 
 from fi.alk.harness.provider_import import _safe_profile_value
-from fi.alk.providers.agent import _redact
+from fi.alk.providers.agent import _redact, build_authored_agent
 
 PLAIN_DOCUMENTS: list[Any] = [
     {"name": "Support line", "voice": {"voiceId": "marissa", "speed": 1.0}},
@@ -101,3 +102,28 @@ def test_a_refused_url_inside_prose_becomes_redacted_and_the_rest_stays(
 )
 def test_a_string_without_a_url_is_unchanged(text: str) -> None:
     assert _redact(text) == text
+
+
+def test_many_refused_urls_in_one_document_log_one_line(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    # A full-width number sign NFKC-normalises to "#", and "[" opens an IPv6 host that never
+    # closes: urlsplit refuses both.
+    leaky = "https://admin:hunter2\uff03x@db.example/"
+    refused = [leaky, *(["a://["] * 1000)]
+    document = {
+        "agent": "support",
+        "modality": "chat",
+        "system_prompt_excerpt": leaky,
+        "tools": [{"name": "add", "args": ["k"], "arg_values": {"k": refused}}],
+    }
+
+    with caplog.at_level(logging.DEBUG, logger="fi.alk.providers.agent"):
+        agent = build_authored_agent(document)
+
+    assert agent["behaviour"][0]["instructions"] == "[redacted]"
+    assert agent["tools"][0]["parameters"]["properties"]["k"]["enum"] == ["[redacted]"] * 1001
+    [logged] = [record for record in caplog.records if record.name == "fi.alk.providers.agent"]
+    assert logged.getMessage() == "a URL was redacted whole: class=ValueError"
+    assert logged.exc_info is None
+    assert "hunter2" not in caplog.text
