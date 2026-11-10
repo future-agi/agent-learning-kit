@@ -220,3 +220,18 @@ def test_exit_never_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> N
             real_kill(alive, signal.SIGKILL)
         except ProcessLookupError:
             pass
+
+
+def test_a_fault_in_the_check_comes_back_as_a_trace(tmp_path, monkeypatch) -> None:
+    """Only a folder the build refuses is a plain ``unknown``; any other fault is sent back
+    with its trace, so the parent logs it and marks the row unfinished."""
+
+    def broken(*args, **kwargs):
+        raise KeyError("a fault in the check")
+
+    monkeypatch.setattr(scan_folders, "detect_framework", broken)
+    answer = scan_folders._answer(tmp_path, "")
+    assert set(answer) == {scan_folders._FAILED}
+    assert "KeyError" in answer[scan_folders._FAILED]
+
+    assert scan_folders._answer(tmp_path, "no/such/folder") == {"name": "unknown", "version": None}

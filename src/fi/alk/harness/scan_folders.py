@@ -8,6 +8,7 @@ child the system kills costs that folder's word rather than the whole scan.
 from __future__ import annotations
 
 import logging
+import traceback
 import multiprocessing
 import os
 import time
@@ -19,14 +20,18 @@ from pathlib import Path
 from typing import Any
 
 from .framework_detection import detect_framework
-from .source_folder import agent_folder
+from .reading_entry import MaskSecrets
+from .source_folder import SubfolderNotFound, agent_folder
 
 logger = logging.getLogger(__name__)
+logger.addFilter(MaskSecrets())
 
 # Loaded once in the fork server, so a restarted child doesn't import the kit again.
 _PRELOAD = ["fi.alk.harness.framework_detection"]
 # A killed child is gone almost at once; the bound only stops a wedged reap holding the scan.
 _JOIN_SECONDS = 5.0
+# The key of a child's answer that carries a failed check's trace instead of a framework.
+_FAILED = "failed"
 
 
 @dataclass(frozen=True)
@@ -56,9 +61,13 @@ def _answer(source: Path, subfolder: str) -> dict[str, Any]:
             repo_root=source,
             package_dir=None,
         )
-    except Exception:
+    except SubfolderNotFound:
         # A folder the build would refuse has no word; it is not a reason to end the child.
         return {"name": "unknown", "version": None}
+    except Exception:
+        # A fault in the check itself. The child stays up for the next folder, and sends the
+        # trace so the parent logs it masked and marks the row unfinished.
+        return {_FAILED: traceback.format_exc()}
 
 
 def _serve(conn: Connection) -> None:
@@ -72,6 +81,7 @@ def _serve(conn: Connection) -> None:
 
 
 def _framework(answer: Any) -> dict[str, Any]:
+    """The answer's framework, in the platform's shape; anything malformed is ``unknown``."""
     name = answer.get("name") if isinstance(answer, dict) else None
     if not isinstance(name, str):
         return _unknown()
@@ -135,6 +145,9 @@ class FolderChecker:
             answer = conn.recv()
         except (EOFError, OSError):
             return self._keep(key, self._ended())
+        if isinstance(answer, dict) and _FAILED in answer:
+            logger.warning("folder checker: the check failed in the child\n%s", answer[_FAILED])
+            return self._keep(key, FolderWord(_unknown(), finished=False))
         return self._keep(key, FolderWord(_framework(answer), finished=True))
 
     def _keep(self, key: tuple[str, str], word: FolderWord) -> FolderWord:
@@ -153,10 +166,7 @@ class FolderChecker:
         except Exception as error:
             if parent is not None:
                 parent.close()
-            logger.warning(
-                "folder checker: the child could not start, class=%s",
-                type(error).__name__,
-            )
+            logger.warning("folder checker: the child could not start", exc_info=True)
             raise FolderCheckerBroken(
                 "The folder checker's child process could not start."
             ) from error
@@ -175,7 +185,9 @@ class FolderChecker:
             # The exit code is only known once the child is reaped.
             process.join(_JOIN_SECONDS)
             code = process.exitcode
-        except Exception:
+        except (OSError, ValueError, AssertionError):
+            # multiprocessing raises these for a child that is already closed or never started.
+            logger.warning("folder checker: the child's exit code could not be read", exc_info=True)
             code = None
         self._end_child()
         if code is not None and code < 0:
@@ -201,13 +213,10 @@ class FolderChecker:
                 process.kill()
                 process.join(_JOIN_SECONDS)
                 process.close()
-            except Exception as error:
-                logger.warning(
-                    "folder checker: the child could not be ended, class=%s",
-                    type(error).__name__,
-                )
+            except Exception:
+                logger.warning("folder checker: the child could not be ended", exc_info=True)
         if conn is not None:
             try:
                 conn.close()
-            except Exception:
-                pass
+            except OSError:
+                logger.debug("folder checker: the pipe was already closed", exc_info=True)

@@ -22,13 +22,14 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 from .job import FailureDomain, HarnessFailure, HarnessJob, HarnessStage, SourceKind
-from .reading_entry import ReadingMode, write_reading_cost, write_reading_failure
+from .reading_entry import MaskSecrets, ReadingMode, write_reading_cost, write_reading_failure
 from .scan_ai import AiOutcome, run_ai_step
 from .scan_document import Row, ScanResultInvalid, finish, root_name, write_agents_json
 from .scan_folders import ClockRanOut, FolderChecker, FolderCheckerBroken
 from .scan_walk import _WEAKEST, Candidate, Hazard, WalkResult, describe_entry, walk_repo
 
 logger = logging.getLogger(__name__)
+logger.addFilter(MaskSecrets())
 
 # Failures, written to failure.json.
 SCAN_JOB_INVALID = "scan_job_invalid"
@@ -292,24 +293,19 @@ def _result(
     if outcome is not None:
         if outcome.kind == "model_error":
             logger.warning("agent scan: model step failed, %s", outcome.message)
-            if outcome.retryable:
-                return _fail(
-                    output,
-                    FailureDomain.INFRASTRUCTURE,
-                    SCAN_MODEL_ERROR,
-                    "The model failed while looking for agents; a retry may get through.",
-                    retryable=True,
-                )
             if not rows:
                 return _fail(
                     output,
                     FailureDomain.INFRASTRUCTURE,
                     SCAN_MODEL_ERROR,
-                    "The model refused the request to look for agents; a retry would be "
+                    "The model failed while looking for agents; a retry may get through."
+                    if outcome.retryable
+                    else "The model refused the request to look for agents; a retry would be "
                     "refused the same way.",
-                    retryable=False,
+                    retryable=outcome.retryable,
                 )
-            # The walk's rows are already checked, and a retry would be refused again.
+            # The walk's rows are already checked and cost nothing. A retry would pay for the
+            # model again to add at most what it missed, so the rows are kept, marked partial.
             truncated = True
         elif outcome.kind == "forbidden":
             return _fail(
@@ -403,8 +399,8 @@ def _keep_what_was_paid_for(
     job: HarnessJob, output: Path, scan: _Scan, crash: Exception
 ) -> int:
     """After the model was paid for, a crash still ends in a file, never in a paid retry."""
-    # The class only: a message could carry a path or a value from the repository.
-    logger.error("agent scan: failed after the model step, class=%s", type(crash).__name__)
+    # Logged masked, as the reading helper logs a crash.
+    logger.error("agent scan: failed after the model step", exc_info=crash)
     checked = {row.candidate.entry for row in scan.ai_rows}
     ai_rows = [
         *scan.ai_rows,
@@ -427,8 +423,8 @@ def _keep_what_was_paid_for(
         )
         write_agents_json(output, body)
         return _EXIT_DONE
-    except Exception as failed:
-        logger.error("agent scan: the kept rows could not be written, class=%s", type(failed).__name__)
+    except Exception:
+        logger.error("agent scan: the kept rows could not be written", exc_info=True)
     try:
         body, _ = finish(
             rows=[],
@@ -439,8 +435,8 @@ def _keep_what_was_paid_for(
         )
         write_agents_json(output, body)
         return _EXIT_DONE
-    except Exception as failed:
-        logger.error("agent scan: the fixed error could not be written, class=%s", type(failed).__name__)
+    except Exception:
+        logger.error("agent scan: the fixed error could not be written", exc_info=True)
     raise crash
 
 

@@ -32,10 +32,12 @@ from .backends import SessionSpec, StageDone, ToolServer, ToolSpec
 from .backends.files import SECRET_REFUSAL, above_secrets, secret_path
 from .config import chosen_model, load_skill
 from .framework_detection import _ALWAYS_SKIPPED, _TOP_ONLY_SKIPS
+from .reading_entry import MaskSecrets
 from .scan_walk import fits_path_rule
 from .session import Stage, StageIdleTimeout, Turn
 
 logger = logging.getLogger(__name__)
+logger.addFilter(MaskSecrets())
 
 STAGE_NAME = "find_agents"
 MAX_TURNS = 40
@@ -215,6 +217,7 @@ async def _run(stage: _ScanStage, answer: _Answer, hints: str, seconds: float) -
     try:
         await asyncio.wait_for(stage.__aenter__(), OPEN_SECONDS)
     except Exception as exc:
+        logger.warning("find_agents: the model session did not open", exc_info=True)
         return AiOutcome(
             "model_error",
             (),
@@ -243,8 +246,11 @@ def _opening(hints: str) -> str:
 async def _stop(stage: _ScanStage, task: asyncio.Task[Any]) -> None:
     try:
         await asyncio.wait_for(stage.interrupt_response(), INTERRUPT_SECONDS)
+    except asyncio.TimeoutError:
+        logger.warning("find_agents: the interrupt got no answer in %ss", INTERRUPT_SECONDS)
     except Exception:
-        pass
+        # The session may already be gone; the wait for its bill below still runs.
+        logger.warning("find_agents: the interrupt failed", exc_info=True)
     # The turn's bill arrives after the interrupt, if it arrives at all.
     await asyncio.wait({task}, timeout=SPEND_WAIT_SECONDS)
     if not task.done():
@@ -255,8 +261,11 @@ async def _stop(stage: _ScanStage, task: asyncio.Task[Any]) -> None:
 async def _leave(stage: _ScanStage) -> None:
     try:
         await asyncio.wait_for(stage.__aexit__(None, None, None), EXIT_SECONDS)
+    except asyncio.TimeoutError:
+        logger.warning("find_agents: the session did not close in %ss", EXIT_SECONDS)
     except Exception:
-        pass
+        # The answer is already kept; a session that fails to close doesn't change it.
+        logger.warning("find_agents: the session failed to close", exc_info=True)
 
 
 def _outcome(
@@ -404,6 +413,8 @@ async def _answered(work: Callable[..., str], *args: Any) -> dict[str, Any]:
     except asyncio.TimeoutError:
         return _error(_TOO_SLOW)
     except Exception:
+        # The model is told only that the call failed; the trace is logged masked.
+        logger.warning("find_agents: a tool call failed", exc_info=True)
         return _error(_FAILED)
 
 
@@ -423,6 +434,7 @@ def rooted_file_tools(
                 return _error(TOOLS_AFTER_SUBMIT)
             return await _answered(work, base, arguments)
         except Exception:
+            logger.warning("find_agents: a tool call failed", exc_info=True)
             return _error(_FAILED)
 
     # Each looks its worker up when called, not when built.
@@ -933,6 +945,7 @@ def _submit_server(source: Path, answer: _Answer) -> ToolServer:
         except asyncio.TimeoutError:
             return _error(_TOO_SLOW)
         except Exception:
+            logger.warning("find_agents: a tool call failed", exc_info=True)
             return _error(_FAILED)
 
     return ToolServer(

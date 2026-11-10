@@ -569,8 +569,9 @@ def test_an_upload_prefers_a_non_side_ai_row_to_a_side_walk_row(tmp_path, ai) ->
     assert document["truncated"] is True
 
 
-def test_a_4xx_with_walk_rows_keeps_them(tmp_path, ai) -> None:
-    ai.outcome = _outcome("model_error", retryable=False)
+@pytest.mark.parametrize("retryable", [False, True], ids=["refused", "retryable"])
+def test_a_model_error_with_walk_rows_keeps_them(tmp_path, ai, retryable) -> None:
+    ai.outcome = _outcome("model_error", retryable=retryable)
     with_rows = _write(tmp_path / "with-rows", SIDE_ONLY)
 
     assert _scan(_job(), with_rows, tmp_path / "out-rows") == 0
@@ -582,10 +583,10 @@ def test_a_4xx_with_walk_rows_keeps_them(tmp_path, ai) -> None:
 
     without = _write(tmp_path / "without", {"app/main.py": PLAIN})
 
-    assert _scan(_job(), without, tmp_path / "out-none") == 78
+    assert _scan(_job(), without, tmp_path / "out-none") == (1 if retryable else 78)
 
     failure = _read(tmp_path / "out-none", "failure.json")
-    assert (failure["code"], failure["retryable"]) == ("scan_model_error", False)
+    assert (failure["code"], failure["retryable"]) == ("scan_model_error", retryable)
     assert not (tmp_path / "out-none" / "agents.json").exists()
 
 
@@ -811,23 +812,24 @@ def test_a_refused_pair_in_the_kept_submit_sets_truncated(tmp_path, ai) -> None:
         assert document["truncated"] is truncated
 
 
-def test_a_crash_after_the_ai_step_logs_its_class_name_only(
-    tmp_path, monkeypatch, caplog, ai
-) -> None:
+def test_a_crash_after_the_ai_step_logs_its_trace_masked(tmp_path, monkeypatch, caplog, ai) -> None:
     source = _write(tmp_path / "source", SIDE_ONLY)
     ai.outcome = _outcome("pairs", [("app", "app/main.py")])
-    sentinel = "/repo/app/.env FAKE_VALUE_123"
+    secret = "FAKE_SECRET_VALUE_123"
+    secrets = tmp_path / "secrets.json"
+    secrets.write_text(json.dumps({"SIMULATOR_OPENAI_API_KEY": secret}), encoding="utf-8")
+    monkeypatch.setattr(reading_entry, "_SECRET_FILES", (secrets,))
 
     def crash(*args, **kwargs):
-        raise RuntimeError(sentinel)
+        raise RuntimeError(f"bad value {secret}")
 
     monkeypatch.setattr(agent_scan, "describe_entry", crash)
     with caplog.at_level(logging.DEBUG, logger=agent_scan.logger.name):
         assert _scan(_job(), source, tmp_path / "out") == 0
 
-    logged = [record.getMessage() for record in caplog.records if record.name == agent_scan.logger.name]
-    assert any("RuntimeError" in line for line in logged)
-    assert not any("FAKE_VALUE" in line or "/repo/" in line for line in logged)
+    assert "failed after the model step" in caplog.text
+    assert "Traceback" in caplog.text and "RuntimeError" in caplog.text
+    assert secret not in caplog.text
     assert _agents(tmp_path / "out")["status"] == "found"
 
 
@@ -1172,3 +1174,22 @@ def test_an_agent_at_a_path_the_platform_cannot_carry_is_never_reported_as_none(
     assert _entries(document) == ["app/main.py"]
     assert document["truncated"] is True
     assert document["error"] is None
+
+
+@pytest.mark.parametrize("step", ["run", "result"])
+def test_a_fault_in_the_walk_is_a_crash_not_a_big_repository(tmp_path, monkeypatch, ai, step) -> None:
+    """A bug in the walk must not be told to the person as "the repository is too large"."""
+    source = _write(tmp_path / "source", {"app/graph.py": GRAPH})
+
+    def broken(*args, **kwargs):
+        raise KeyError("a fault in the kit")
+
+    monkeypatch.setattr(scan_walk._Walk, step, broken)
+    output = tmp_path / "out"
+
+    assert _read_mode("github", source, output) == 1
+
+    failure = _read(output, "failure.json")
+    assert (failure["code"], failure["retryable"]) == ("scan_crashed", True)
+    assert not (output / "agents.json").exists()
+    assert len(ai.calls) == 0

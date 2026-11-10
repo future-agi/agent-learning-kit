@@ -41,9 +41,11 @@ from .framework_detection import (
     _scan_file,
     _visible_tokens,
 )
+from .reading_entry import MaskSecrets
 from .source_folder import _FOLDER_FORM, _FOLDER_MAX
 
 logger = logging.getLogger(__name__)
+logger.addFilter(MaskSecrets())
 
 Sign = Literal["framework", "graph", "agent_py", "client", "model"]
 Hazard = Literal["", "graphs", "agent_py"]
@@ -193,6 +195,19 @@ class _Agent:
 
 class _Unread(Exception):
     pass
+
+
+# What reading or parsing one file can raise: that file's problem, never the walk's. Anything
+# else is a fault in the kit and reaches the scan's crash path.
+_FILE_ERRORS = (
+    OSError,
+    ValueError,  # UnicodeError and json's decode errors too
+    SyntaxError,
+    RecursionError,
+    tokenize.TokenError,
+    _OverBudget,
+    _Unread,
+)
 
 
 class _FileWork:
@@ -792,9 +807,14 @@ class _Walk:
                 self._read_graphs(folder, path, data)
             else:
                 self.templates.setdefault(folder, set()).update(_template_names(data))
+        except _FILE_ERRORS:
+            self.unread += 1
         except MemoryError:
             raise
         except Exception:
+            # A reader fault of a kind not foreseen is still this file's problem, never the
+            # walk's: the file is unread, and the trace is logged masked.
+            logger.warning("agent walk: a file's reader failed", exc_info=True)
             self.unread += 1
 
     def _read(self, path: str) -> bytes | None:
@@ -1109,17 +1129,9 @@ def walk_repo(
         walk.prompt_paths.clear()
         logger.warning("agent walk: stopped=memory unread=%d", walk.unread)
         return _empty_result(walk, "memory")
-    except Exception as exc:
-        # A fault outside any one file; what was read before it stands.
-        logger.warning("agent walk: stopped=limit class=%s", type(exc).__name__)
-        walk.stopped = "limit"
-    try:
-        result = walk.result(upload=upload)
-    except MemoryError:
-        raise
-    except Exception as exc:
-        logger.warning("agent walk failed: class=%s", type(exc).__name__)
-        result = _empty_result(walk, "limit")
+    # Any other fault here is the kit's, not the repository's: it goes to the scan's crash
+    # path, never to "the repository is larger than the scan reads".
+    result = walk.result(upload=upload)
     logger.info(
         "agent walk: files_read=%d unread=%d agents=%d left_out=%d stopped=%s",
         walk.files_read,
@@ -1166,35 +1178,26 @@ def _hazard(
         graphs = document.get("graphs") if isinstance(document, dict) else None
         if isinstance(graphs, dict) and len(graphs) > 1:
             return "graphs"
-    except MemoryError:
-        raise
-    except Exception:
-        pass
+    except (OSError, ValueError, RecursionError):
+        # No readable langgraph.json, so it declares no second graph; the agent.py count follows.
+        logger.debug("hazard: langgraph.json not read", exc_info=True)
     # The build counts every `agent.py` below, side folders and the scan's skipped
     # folders included, ignoring only its own short list.
     found = 0
     entries = 0
-    try:
-        for index, (_, directories, files) in enumerate(
-            os.walk(folder, followlinks=False)
-        ):
-            # The folder's own listing is one read and always looked at; the clock bounds
-            # the folders below it.
-            if index and clock() > deadline:
-                return ""
-            directories[:] = [
-                name for name in directories if name not in _BUILD_IGNORED
-            ]
-            found += files.count("agent.py")
-            if found > 1:
-                return "agent_py"
-            entries += len(directories) + len(files)
-            if entries > _HAZARD_ENTRIES:
-                return ""
-    except MemoryError:
-        raise
-    except Exception:
-        return ""
+    # os.walk reports no listing errors unless asked, so nothing here is expected to raise.
+    for index, (_, directories, files) in enumerate(os.walk(folder, followlinks=False)):
+        # The folder's own listing is one read and always looked at; the clock bounds the
+        # folders below it.
+        if index and clock() > deadline:
+            return ""
+        directories[:] = [name for name in directories if name not in _BUILD_IGNORED]
+        found += files.count("agent.py")
+        if found > 1:
+            return "agent_py"
+        entries += len(directories) + len(files)
+        if entries > _HAZARD_ENTRIES:
+            return ""
     return ""
 
 
@@ -1240,10 +1243,14 @@ class _Description:
                 if data is not None:
                     try:
                         self.templates |= _template_names(data)
+                    except _FILE_ERRORS:
+                        # Its names are missing, so the row's settings are short.
+                        self.partial = True
                     except MemoryError:
                         raise
                     except Exception:
-                        pass
+                        logger.warning("agent description: a template's reader failed", exc_info=True)
+                        self.partial = True
         start = os.path.join(self.top, self.subfolder) if self.subfolder else self.top
         for directory, directories, files in os.walk(start, followlinks=False):
             directories.sort()
@@ -1286,10 +1293,14 @@ class _Description:
                 self.facts[path] = _python_facts(data, self._shadowed_for(folder))
             else:
                 self.script_env |= _script_names(data)
+        except _FILE_ERRORS:
+            # Its facts are missing, so the row's counts are short.
+            self.partial = True
         except MemoryError:
             raise
         except Exception:
-            pass
+            logger.warning("agent description: a file's reader failed", exc_info=True)
+            self.partial = True
 
     def _read(self, path: str) -> bytes | None:
         """The file's bytes, or None for a file that can't or mustn't be read; sets
@@ -1299,9 +1310,13 @@ class _Description:
             return None
         try:
             data = _read_file(path, _FILE_BYTES + 1)
-        except MemoryError:
-            raise
-        except Exception:
+        except FileNotFoundError:
+            # A settings template that isn't there is the usual case, not a short count.
+            return None
+        except (OSError, ValueError):
+            # Unreadable, a link, or a name the system can't open: not read, so the counts
+            # are short.
+            self.partial = True
             return None
         self.files_read += 1
         self.bytes_read += len(data)
@@ -1347,9 +1362,10 @@ def describe_entry(
         reading.run()
     except MemoryError:
         raise
-    except Exception as exc:
-        # A fault outside any one file: what was read stands, and the row says so.
-        logger.warning("agent description stopped: class=%s", type(exc).__name__)
+    except Exception:
+        # Runs after the model was paid for, so a fault in the kit keeps what was read and
+        # marks the row partial rather than ending in a paid retry. The trace is logged masked.
+        logger.warning("agent description stopped", exc_info=True)
         reading.partial = True
     facts = reading.facts.get(entry)
     code = {name for found in reading.facts.values() for name in found.env}
