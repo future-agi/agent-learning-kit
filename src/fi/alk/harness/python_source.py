@@ -250,10 +250,9 @@ def _coding(raw: bytes) -> tuple[str, codecs.CodecInfo] | None:
         # No cookie: detect_encoding would only run its pattern over the lines to say so.
         encoding = "utf-8-sig" if bom else "utf-8"
         return encoding, codecs.lookup(encoding)
-    # Each line cut to what says the same: ASCII alone, so a non-ASCII byte elsewhere on the line
-    # can't make detect_encoding refuse it.
-    # The second line only when detect_encoding reads it: after a blank line or a comment with no
-    # cookie in it.
+    # Each line cut to what says the same, ASCII alone, so a non-ASCII byte elsewhere on it can't
+    # make detect_encoding refuse it; the second only when it reads one, after a blank line or a
+    # comment with no cookie in it.
     lines_read = head[bom:].split(b"\n")
     parts = [_cookie_part(lines_read[0])]
     if len(lines_read) > 1 and parts[0] in (b"", b"#"):

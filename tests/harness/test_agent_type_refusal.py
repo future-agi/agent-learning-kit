@@ -5536,7 +5536,7 @@ def test_what_follows_a_cookie_isnt_counted_against_it():
     from fi.alk.harness import python_source
 
     # Pine's TH-9490 review: Python runs this file as utf-7, however many "coding" follow.
-    assert python_source._coding(b"# coding: utf-7 " + b" coding" * 65 + b"\nimport x\n")[0] == "utf-7"
+    assert python_source._coding(b"# coding: utf-7 " + b" coding:" * 65 + b"\nimport x\n")[0] == "utf-7"
     failing = b"coding:# " * python_source._COOKIE_WORDS
     assert python_source._coding(b"# " + failing + b"coding: latin-1\n")[0] == "iso-8859-1"
     assert python_source._coding(b"# " + failing + b"coding:# coding: latin-1\n")[0] == "undefined"
@@ -5590,7 +5590,7 @@ def test_a_script_the_script_total_cuts_says_the_walk_stopped(tmp_path):
 
 
 @pytest.mark.parametrize("size", [1_000, 60_000])
-def test_a_requirement_full_of_brackets_is_read_once(tmp_path, monkeypatch, size):
+def test_a_requirement_full_of_brackets_is_read_once(monkeypatch, size):
     from fi.alk.harness import credentials
 
     # Round 5 reviewer A, H2: findall tried every "[" in turn, the square of the length.
@@ -5607,7 +5607,7 @@ def test_a_requirement_full_of_brackets_is_read_once(tmp_path, monkeypatch, size
     assert asked == {"a": set(), "common": {"llm", "fast-x"}} and len(tried) == 2
 
 
-def test_a_second_line_python_doesnt_read_isnt_asked_about(tmp_path):
+def test_a_second_line_python_doesnt_read_isnt_asked_about():
     from fi.alk.harness import python_source
 
     # Round 5 reviewer A, L1: Python reads line two for a cookie only after a blank or comment line.
@@ -5666,3 +5666,79 @@ def test_a_members_extras_are_indexed_as_uv_reads_them(tmp_path, optional, found
     reached = imported_by_agent(repo, "agents/a", lookup_limit=100_000)
 
     assert (repo / "libs/llmlib/src/llmlib/__init__.py" in reached) is found
+
+
+def test_each_cookie_word_is_looked_for_past_the_last_one_only():
+    from fi.alk.harness import python_source
+
+    # Round 6 reviewer A, L1: a word the line lacks was looked for to its end once a candidate,
+    # 64 times (3,000 such files held the save 8.1 s).
+    scanned: list[int] = []
+
+    class Counting(bytes):
+        def find(self, sub, start=0, *rest):
+            at = bytes.find(self, sub, start, *rest)
+            scanned.append((len(self) if at == -1 else at) - start)
+            return at
+
+    line = Counting(b"#" + b"coding:#" * python_source._COOKIE_WORDS + b"x" * 100_000)
+    assert python_source._cookie_part(line) == b"#"
+    assert sum(scanned) < 3 * len(line)
+
+
+def test_a_one_line_head_is_read():
+    from fi.alk.harness import python_source
+
+    # Round 6 reviewer A, L3: a file of one line with no newline.
+    assert python_source._coding(b"# coding: !!!")[0] == "utf-8"
+    assert python_source._coding(b"# coding: latin-1")[0] == "iso-8859-1"
+
+
+def test_the_last_file_the_parse_total_cuts_still_says_the_walk_stopped(tmp_path):
+    from fi.alk.harness.credentials import imported_by_agent
+    from fi.alk.harness.python_source import ParseBudget
+
+    # Round 6 reviewer B, L1: the cut is read after the file's own parse, so the walk's last
+    # file counts too.
+    repo = _tree(tmp_path / "repo", {"agents/a/a.py": "import os\n" + "x = 1\n" * 50})
+    said: list[bool] = []
+    imported_by_agent(repo, "agents/a", lookup_limit=100_000, parse_budget=ParseBudget(100), stopped=said)
+    assert said == [True]
+
+
+def test_an_import_written_without_a_space_is_still_read(tmp_path):
+    from fi.alk.harness.credentials import imported_by_agent
+
+    # Round 6 reviewer B, L1: the skip looks for the keyword, not the keyword and a space.
+    repo = _tree(
+        tmp_path / "repo",
+        {"agents/a/a.py": "from common import(web)\n", "common/__init__.py": "", "common/web.py": ""},
+    ).resolve()
+
+    assert repo / "common" / "web.py" in imported_by_agent(repo, "agents/a", lookup_limit=100_000)
+
+
+def test_a_source_with_no_table_in_it_isnt_a_source():
+    from fi.alk.harness import credentials
+
+    # Round 6 reviewer B, L2.
+    table = {"tool": {"uv": {"sources": {"a": [1, "x"], "b": {"path": "libs/b"}, "c": []}}}}
+    assert credentials._sources(table) == {"b": [{"path": "libs/b"}]}
+
+
+def test_a_path_source_to_a_folder_with_no_project_isnt_followed(tmp_path):
+    from fi.alk.harness import credentials
+
+    # Round 6 reviewer B, L2: uv refuses it; the walk follows nothing there.
+    repo = _tree(
+        tmp_path / "repo",
+        {
+            "agents/a/pyproject.toml": "[project]\nname='agent-a'\nversion='1'\ndependencies=['common']\n"
+            "[tool.uv.sources]\ncommon={path='../../libs/common'}\n",
+            "agents/a/agent.py": "x = 1\n",
+            "libs/common/common/__init__.py": "",
+        },
+    ).resolve()
+
+    _, followed, _ = credentials._workspace_dependencies(repo, repo / "agents" / "a", [1e9], {})
+    assert followed == []

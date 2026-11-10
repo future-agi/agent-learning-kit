@@ -713,7 +713,11 @@ _PROJECT_NAME = re.compile(r"\s*([A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?)")
 def _project_name(value: object) -> str | None:
     """A distribution's name as uv compares it, from a name or a requirement string."""
     found = _PROJECT_NAME.match(value) if isinstance(value, str) else None
-    return re.sub(r"[-_.]+", "-", found.group(1)).lower() if found else None
+    return _normal_name(found.group(1)) if found else None
+
+
+def _normal_name(name: str) -> str:
+    return re.sub(r"[-_.]+", "-", name).lower()
 
 
 class _Workspace:
@@ -881,17 +885,17 @@ class _Requirements:
     def asked(self, plain: bool, extras: Iterable[str]) -> dict[str, set[str]]:
         """The distributions these requirements install, by name, each with the extras asked of
         it: the plain ones if ``plain``, and those of ``extras``."""
-        found = [*(self.plain if plain else ())]
+        found = list(self.plain) if plain else []
         for extra in extras:
             found.extend(self.by_extra.get(extra, ()))
         asked: dict[str, set[str]] = {}
         for value in found:
-            if not (name := _project_name(value)):
+            if not isinstance(value, str) or not (named := _PROJECT_NAME.match(value)):
                 continue
-            wanted = asked.setdefault(name, set())
+            wanted = asked.setdefault(_normal_name(named.group(1)), set())
             # Matched once, where the name ends: a search tried every "[" in turn, the square of
             # the requirement's length (150 KB held the save 51 s; round 5 reviewer A).
-            if listed := _REQUESTED_EXTRAS.match(value, _PROJECT_NAME.match(value).end()):
+            if listed := _REQUESTED_EXTRAS.match(value, named.end()):
                 wanted |= {
                     extra for part in listed.group(1).split(",") if (extra := _project_name(part))
                 }
