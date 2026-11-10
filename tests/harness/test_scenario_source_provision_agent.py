@@ -419,3 +419,36 @@ def test_a_password_in_a_prompt_url_is_redacted_for_a_source_with_no_document(
 
     assert "agent" not in payload
     assert payload["agent_prompt"] == "Use https://hooks.example/v1 to log."
+
+
+def test_only_the_urls_in_a_prompt_change_on_their_way_to_the_platform(tmp_path: Path) -> None:
+    """B1: whitespace and the tokens without a scheme start are byte-identical."""
+    prompt = (
+        "You book visits.\n\n\tRules:  never share https://u:pw@h.example/x?key=sk-1#f\n"
+        "Then  call postgres://db:hunter2@db.example:5432/app?ssl=1,　and stop."
+    )
+    _write_bundle(tmp_path, _contract(prompt))
+
+    payload = _provision(tmp_path, SourceKind.GITHUB)
+
+    assert payload["agent_prompt"] == (
+        "You book visits.\n\n\tRules:  never share https://h.example/x\n"
+        "Then  call postgres://db.example:5432/app　and stop."
+    )
+
+
+def test_the_document_and_the_reading_hold_the_same_cleaned_prompt(tmp_path: Path) -> None:
+    """B2: the provision document, the reading's agent.json and agent_prompt agree."""
+    prompt = "Post to https://bot:hunter2@hooks.example/v1?key=sk-1 after each."
+    _write_bundle(tmp_path, _contract(prompt))
+
+    payload = _provision(tmp_path, SourceKind.GITHUB)
+    reading = ss.authored_agent_document(
+        (tmp_path / "contract.json").read_text(encoding="utf-8"), subfolder=None, framework=None
+    )
+
+    cleaned = "Post to https://hooks.example/v1 after each."
+    assert payload["agent_prompt"] == cleaned
+    assert payload["agent"]["agent"]["behaviour"][0]["instructions"] == cleaned
+    assert reading["agent"]["behaviour"][0]["instructions"] == cleaned
+    assert "hunter2" not in json.dumps(reading) and "sk-1" not in json.dumps(reading)

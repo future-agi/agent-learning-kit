@@ -2163,3 +2163,48 @@ def test_a_failed_document_write_is_not_retried(tmp_path, model, monkeypatch):
     # No document, and no half-written one left beside it.
     assert _names(output) == {"contract.json", "cost.json", "failure.json"}
     _assert_cost(output, 0.1, True)
+
+
+# -- TH-9491: the canary (plan v5.1 §W7) ---------------------------------------------------------
+
+
+def test_a_password_in_the_prompt_reaches_no_file_the_reading_writes(tmp_path, model):
+    """The prompt is copied from the source as written, so the URL with credentials is real
+    input. Every file under the test folder is then searched; only the source holds it."""
+    url = "https://bot:hunter2@hooks.example/v1?key=sk-1#frag"
+    source = _repo(tmp_path)
+    (source / SUPPORT / "prompt.txt").write_text(
+        f"You take orders.\nPost each one to {url} after.\n", encoding="utf-8"
+    )
+    model(
+        _submits(
+            {
+                **CHAT,
+                "one_liner": f"Takes orders and posts them to {url}",
+                "system_prompt_from": [
+                    {"path": f"{SUPPORT}/prompt.txt", "start_line": 1, "end_line": 2}
+                ],
+                "hard_constraints": [f"Always post to {url}"],
+                "notes": f"The hook is {url}",
+            },
+            cost_usd=0.1,
+        )
+    )
+    output = tmp_path / "reading"
+
+    assert _run(tmp_path, _job(subfolder=SUPPORT)) == 0
+
+    assert {"contract.json", "agent.json"} <= _names(output)
+    contract = json.loads((output / "contract.json").read_text(encoding="utf-8"))
+    assert contract["system_prompt_excerpt"] == (
+        "You take orders.\nPost each one to https://hooks.example/v1 after."
+    )
+    holding = sorted(
+        str(path.relative_to(tmp_path))
+        for path in tmp_path.rglob("*")
+        if path.is_file()
+        and any(
+            secret in path.read_bytes() for secret in (b"hunter2", b"sk-1")
+        )
+    )
+    assert holding == [f"source/{SUPPORT}/prompt.txt"]
