@@ -1,0 +1,44 @@
+{
+  "gmail_inbox_triage": {
+    "server": "Google Gmail MCP server (Developer Preview)",
+    "recorded": "2026-11-04",
+    "tools": [
+      "search_threads",
+      "get_thread",
+      "get_message",
+      "list_labels",
+      "label_thread",
+      "unlabel_thread",
+      "list_drafts",
+      "create_draft"
+    ],
+    "tables": [
+      "gmail_drafts",
+      "gmail_labels",
+      "gmail_messages",
+      "gmail_thread_labels",
+      "gmail_threads"
+    ]
+  },
+  "slack_channel_digest": {
+    "server": "Slack MCP server (official, hosted)",
+    "recorded": "2026-11-04",
+    "tools": [
+      "slack_search_channels",
+      "slack_read_channel",
+      "slack_read_thread",
+      "slack_search_public_and_private",
+      "slack_send_message",
+      "slack_check_message_status"
+    ],
+    "tables": [
+      "slack_approvals",
+      "slack_channel_members",
+      "slack_channels",
+      "slack_message_ledger",
+      "slack_messages",
+      "slack_users",
+      "current_actor"
+    ]
+  }
+}

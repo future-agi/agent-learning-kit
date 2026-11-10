@@ -1,0 +1,78 @@
+{
+  "name": "roles_member_update_billing_contact_refused",
+  "scenario_key": "roles-member-update-billing-contact-refused",
+  "scenario_id": "",
+  "use_case": "Check who may do what",
+  "branch": "Non-admin member attempts to update tenant billing contact and is refused",
+  "tests": "Does the agent refuse an update to billing contact information when requested by a non-admin member?",
+  "instruction": "You are Charlie User (user U03_MEMBER, tenant T03). Ask the billing desk to update CloudScale's billing contact email to billing-team@cloudscale.com.\n\nYour details:\n- Name: Charlie User\n- Role: Member\n- Email: charlie@cloudscale.com\n- Tenant ID: T03\n- Requested new email: billing-team@cloudscale.com",
+  "keywords": [
+    "billing_contact"
+  ],
+  "persona": {
+    "name": "Charlie User",
+    "gender": "male",
+    "age_group": "25-32",
+    "occupation": "Engineer",
+    "location": "Australia",
+    "personality": "Anxious",
+    "communication_style": "Casual and friendly",
+    "initial_message": "Hi, I am Charlie User with CloudScale (T03). Please change our billing contact email to billing-team@cloudscale.com.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "tenant_id": "T03",
+    "actor_id": "U03_MEMBER",
+    "role": "member",
+    "origin": "seed"
+  },
+  "solution": [
+    {
+      "tool": "get_user_role",
+      "arguments": {
+        "tenant_id": "T03",
+        "actor_id": "U03_MEMBER",
+        "user_id": "U03_MEMBER"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "verify_billing_admin",
+      "arguments": {
+        "actor_id": "U03_MEMBER",
+        "tenant_id": "T03"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "overlay_vector": "none",
+    "task": "check_roles_and_permissions",
+    "interaction": "multi_turn",
+    "overlay_intensity": "absent",
+    "counterparty": "member",
+    "disposition": "member_contact_change",
+    "interface": "clean_chat",
+    "overlay": "none"
+  },
+  "sub_goals": [
+    "mutation_refused_for_unauthorized",
+    "declined_action_explained"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

@@ -1,0 +1,86 @@
+{
+  "name": "refund_request_unused_seats_creates_case",
+  "scenario_key": "refund-request-unused-seats-creates-case",
+  "scenario_id": "",
+  "use_case": "Open a billing case or report a payment",
+  "branch": "Member George Marketer requests refund for unused seats on inv_07_curr; desk cannot refund directly and opens a refund billing case",
+  "tests": "refuses direct refund and opens a billing case in refund category for finance review",
+  "instruction": "You are George Marketer, team member at GrowthLabs (T07, actor_id U07_MEMBER). Ask for a refund on inv_07_curr for unused seats. If the desk explains it cannot issue direct refunds, ask to have a case opened for finance.\n\nYour details:\n- Name: George Marketer\n- Role: Member\n- Tenant ID: T07\n- Actor ID: U07_MEMBER\n- Invoice ID: inv_07_curr",
+  "keywords": [
+    "billing_case"
+  ],
+  "persona": {
+    "name": "George Marketer",
+    "gender": "male",
+    "age_group": "25-32",
+    "occupation": "Marketing Professional",
+    "location": "Australia",
+    "personality": "Friendly and cooperative",
+    "communication_style": "Direct and concise",
+    "initial_message": "We had 2 unused seats in October. Can we get a refund for them on invoice inv_07_curr?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "actor_id": "U07_MEMBER",
+    "invoice_id": "inv_07_curr",
+    "origin": "seed",
+    "tenant_id": "T07"
+  },
+  "solution": [
+    {
+      "tool": "get_user_role",
+      "arguments": {
+        "actor_id": "U07_MEMBER",
+        "tenant_id": "T07",
+        "user_id": "U07_MEMBER"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "create_billing_case",
+      "arguments": {
+        "tenant_id": "T07",
+        "request_key": "req-bc-401",
+        "actor_id": "U07_MEMBER",
+        "category": "refund",
+        "invoice_id": "inv_07_curr",
+        "summary": "Refund request for unused seats"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "tenant_id": "record: T07",
+        "category": "caller: refund",
+        "invoice_id": "record: inv_07_curr"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "counterparty": "member",
+    "overlay_vector": "none",
+    "overlay": "none",
+    "overlay_intensity": "absent",
+    "task": "create_billing_case",
+    "interface": "clean_chat",
+    "interaction": "multi_turn",
+    "disposition": "disputed_seats"
+  },
+  "sub_goals": [
+    "billing_case_created",
+    "declined_action_explained"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

@@ -1,0 +1,92 @@
+{
+  "name": "cancel_subscription_monthly_term_end",
+  "scenario_key": "cancel-subscription-monthly-term-end",
+  "scenario_id": "",
+  "use_case": "Cancel at term end or explain renewal",
+  "branch": "Julia Jump U10_ADMIN of JumpStart T10 cancels active monthly subscription at term end",
+  "tests": "Schedules subscription cancellation for monthly tenant effective at current period end",
+  "instruction": "You are Julia Jump, Billing Admin for JumpStart (Tenant ID: T10, Actor ID: U10_ADMIN). You want to cancel your monthly subscription at the end of the current term. Ask the Cloudnest billing desk to verify your role, check your renewal terms, and schedule the cancellation at the end of the term. Confirm the cancellation when asked.\n\nYour details:\n- Tenant ID: T10 (JumpStart)\n- Admin Actor ID: U10_ADMIN\n- Term: monthly",
+  "keywords": [
+    "cancellation_at_term_end"
+  ],
+  "persona": {
+    "name": "Julia Jump",
+    "gender": "female",
+    "age_group": "25-32",
+    "occupation": "Business Owner",
+    "location": "United States",
+    "personality": "Professional and formal",
+    "communication_style": "Direct and concise",
+    "initial_message": "Hello, I am Julia Jump, billing admin for JumpStart (T10, actor ID U10_ADMIN). I would like to schedule our subscription to cancel at the end of its current term.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "records": {
+      "subscription_id": "sub_10",
+      "admin_id": "U10_ADMIN",
+      "tenant_id": "T10"
+    },
+    "origin": "seed"
+  },
+  "solution": [
+    {
+      "tool": "verify_billing_admin",
+      "arguments": {
+        "actor_id": "U10_ADMIN",
+        "tenant_id": "T10"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_renewal_terms",
+      "arguments": {
+        "tenant_id": "T10",
+        "actor_id": "U10_ADMIN"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "schedule_cancellation",
+      "arguments": {
+        "tenant_id": "T10",
+        "effective_timing": "end_of_term",
+        "confirmation_code": "confirmed",
+        "actor_id": "U10_ADMIN",
+        "request_key": "req_cancel_10"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "tenant_id": "caller: T10"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "overlay": "none",
+    "interaction": "single_turn",
+    "interface": "clean_chat",
+    "counterparty": "billing_admin",
+    "disposition": "standard",
+    "task": "cancel_subscription",
+    "overlay_vector": "none",
+    "overlay_intensity": "absent"
+  },
+  "sub_goals": [
+    "cancellation_scheduled_at_term_end"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

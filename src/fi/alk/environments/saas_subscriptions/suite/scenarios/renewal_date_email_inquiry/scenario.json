@@ -1,0 +1,82 @@
+{
+  "name": "renewal_date_email_inquiry",
+  "scenario_key": "renewal-date-email-inquiry",
+  "scenario_id": "",
+  "use_case": "Cancel at term end or explain renewal",
+  "branch": "Renewal question in email thread th_b07_renewal_question for JumpStart T10; assistant reads thread and checks renewal terms",
+  "tests": "Retrieves renewal terms for customer after reading inquiry email thread",
+  "instruction": "You are Sam Billing, Billing Support at Cloudnest. You are reviewing customer email thread th_b07_renewal_question from Julia Jump at JumpStart (T10, admin U10_ADMIN) asking about their renewal terms. Ask the assistant to read the email thread th_b07_renewal_question and look up JumpStart's renewal terms.\n\nYour details:\n- Tenant ID: T10 (JumpStart)\n- Admin Actor ID: U10_ADMIN\n- Email Thread ID: th_b07_renewal_question",
+  "keywords": [
+    "renewal_terms"
+  ],
+  "persona": {
+    "name": "Sam Billing",
+    "gender": "male",
+    "age_group": "25-32",
+    "occupation": "Customer Service",
+    "location": "Canada",
+    "personality": "Friendly and cooperative",
+    "communication_style": "Simple and clear",
+    "initial_message": "Hi, could you check email thread th_b07_renewal_question for JumpStart (T10, admin U10_ADMIN) and see what their renewal terms are?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "records": {
+      "tenant_id": "T10",
+      "admin_id": "U10_ADMIN",
+      "thread_id": "th_b07_renewal_question"
+    },
+    "origin": "seed"
+  },
+  "solution": [
+    {
+      "tool": "get_thread",
+      "arguments": {
+        "threadId": "th_b07_renewal_question",
+        "messageFormat": "FULL_CONTENT"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "threadId": "caller: th_b07_renewal_question"
+      }
+    },
+    {
+      "tool": "get_renewal_terms",
+      "arguments": {
+        "actor_id": "U10_ADMIN",
+        "tenant_id": "T10"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "tenant_id": "caller: T10"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "overlay": "none",
+    "disposition": "renewal_inquiry",
+    "interface": "clean_chat",
+    "task": "explain_renewal",
+    "counterparty": "member",
+    "overlay_intensity": "absent",
+    "interaction": "resumed",
+    "overlay_vector": "none"
+  },
+  "sub_goals": [
+    "renewal_terms_reported"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

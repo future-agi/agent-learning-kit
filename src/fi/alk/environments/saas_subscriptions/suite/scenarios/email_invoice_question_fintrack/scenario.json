@@ -1,0 +1,93 @@
+{
+  "name": "email_invoice_question_fintrack",
+  "scenario_key": "email-invoice-question-fintrack",
+  "scenario_id": "",
+  "use_case": "Explain an invoice or a bill increase",
+  "branch": "Account manager Priya Shah reviews customer email thread th_b04_invoice_question about FinTrack's 20-seat charge and pending credit note",
+  "tests": "reads email thread th_b04_invoice_question and checks invoice lines and credit notes",
+  "instruction": "You are Priya Shah, account manager for FinTrack (T06). Ask the billing desk to check email thread th_b04_invoice_question regarding invoice inv_06_curr. Frank Fin emailed asking why they were billed for 20 seats when two seats were deactivated earlier in the month, and whether a credit note was issued.\n\nYour details:\n- Name: Priya Shah\n- Role: Account Manager\n- Client: FinTrack (Tenant ID: T06)\n- Thread ID: th_b04_invoice_question\n- Invoice ID: inv_06_curr",
+  "keywords": [
+    "email_integration"
+  ],
+  "persona": {
+    "name": "Priya Shah",
+    "gender": "female",
+    "age_group": "25-32",
+    "occupation": "Sales Representative",
+    "location": "United Kingdom",
+    "personality": "Professional and formal",
+    "communication_style": "Direct and concise",
+    "initial_message": "Can you check email thread th_b04_invoice_question from Frank Fin about FinTrack's October invoice?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "invoice_id": "inv_06_curr",
+    "origin": "seed",
+    "tenant_id": "T06",
+    "thread_id": "th_b04_invoice_question"
+  },
+  "solution": [
+    {
+      "tool": "get_thread",
+      "arguments": {
+        "messageFormat": "FULL_CONTENT",
+        "threadId": "th_b04_invoice_question"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "threadId": "record: th_b04_invoice_question"
+      }
+    },
+    {
+      "tool": "get_invoice_lines",
+      "arguments": {
+        "invoice_id": "inv_06_curr",
+        "actor_id": "U06_ADMIN",
+        "tenant_id": "T06"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_credit_notes",
+      "arguments": {
+        "invoice_id": "inv_06_curr",
+        "actor_id": "U06_ADMIN",
+        "tenant_id": "T06"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "tenant_id": "record: T06",
+        "invoice_id": "record: inv_06_curr"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "counterparty": "account_manager",
+    "overlay_intensity": "absent",
+    "interaction": "multi_turn",
+    "disposition": "disputed_seats",
+    "task": "explain_invoice",
+    "overlay": "none",
+    "overlay_vector": "none",
+    "interface": "clean_chat"
+  },
+  "sub_goals": [
+    "credit_note_reported",
+    "invoice_breakdown_explained"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

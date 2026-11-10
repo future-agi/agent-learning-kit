@@ -1,0 +1,96 @@
+{
+  "name": "cancel_subscription_slack_escalation_request",
+  "scenario_key": "cancel-subscription-slack-escalation-request",
+  "scenario_id": "",
+  "use_case": "Cancel at term end or explain renewal",
+  "branch": "Cancellation request received in Slack message SM401 for KiteWorks T11; assistant reads thread and schedules term-end cancellation for Karen Kite U11_ADMIN",
+  "tests": "Reads cancellation request from Slack escalation and schedules term-end cancellation for verified billing admin",
+  "instruction": "You are Karen Kite, Billing Admin for KiteWorks (Tenant ID: T11, Actor ID: U11_ADMIN). An account manager noted in Slack message SM401 (ts: '1792000000.000401') in #billing-escalations that you want to cancel at term end. You are chatting with the billing desk to schedule the cancellation at term end. Confirm the cancellation when asked.\n\nYour details:\n- Tenant ID: T11 (KiteWorks)\n- Admin Actor ID: U11_ADMIN\n- Slack Channel: CH_BILLESC\n- Message Timestamp: 1792000000.000401",
+  "keywords": [
+    "slack_escalation"
+  ],
+  "persona": {
+    "name": "Karen Kite",
+    "gender": "female",
+    "age_group": "32-40",
+    "occupation": "Business Owner",
+    "location": "India",
+    "personality": "Confident",
+    "communication_style": "Direct and concise",
+    "initial_message": "Hi, I am Karen Kite, billing admin for KiteWorks (T11, U11_ADMIN). As mentioned in Slack thread SM401, please schedule our subscription to cancel at the end of our current term.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "origin": "generated",
+    "records": {
+      "tenant_id": "T11",
+      "subscription_id": "sub_11",
+      "channel_id": "CH_BILLESC",
+      "message_ts": "1792000000.000401",
+      "admin_id": "U11_ADMIN"
+    }
+  },
+  "solution": [
+    {
+      "tool": "slack_read_thread",
+      "arguments": {
+        "channel_id": "CH_BILLESC",
+        "message_ts": "1792000000.000401"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "message_ts": "caller: 1792000000.000401"
+      }
+    },
+    {
+      "tool": "verify_billing_admin",
+      "arguments": {
+        "actor_id": "U11_ADMIN",
+        "tenant_id": "T11"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "schedule_cancellation",
+      "arguments": {
+        "effective_timing": "end_of_term",
+        "confirmation_code": "confirmed",
+        "request_key": "req_cancel_11",
+        "tenant_id": "T11",
+        "actor_id": "U11_ADMIN"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "tenant_id": "caller: T11"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "overlay": "none",
+    "interaction": "resumed",
+    "disposition": "standard",
+    "overlay_vector": "none",
+    "overlay_intensity": "absent",
+    "interface": "clean_chat",
+    "counterparty": "member",
+    "task": "cancel_subscription"
+  },
+  "sub_goals": [
+    "cancellation_scheduled_at_term_end"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

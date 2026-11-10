@@ -1,0 +1,77 @@
+{
+  "name": "tax_calculation_on_invoice",
+  "scenario_key": "tax-calculation-on-invoice",
+  "scenario_id": "",
+  "use_case": "Explain an invoice or a bill increase",
+  "branch": "The caller asks how the tax amount was computed on invoice inv_05_curr",
+  "tests": "explains the subtotal and 10% tax calculation from invoice line items",
+  "instruction": "You are Eva Echo, billing admin for EchoSystems. You initially type invoice inv_05_prev but immediately self-correct to inv_05_curr. You want to understand how the 10% tax was computed on your October invoice inv_05_curr.\n\nYour details:\n- Tenant ID: T05\n- Tenant Name: EchoSystems\n- Your Name: Eva Echo\n- Your User ID: U05_ADMIN\n- Your Role: billing_admin\n- Invoice ID: inv_05_curr",
+  "keywords": [
+    "invoice_explanation"
+  ],
+  "persona": {
+    "name": "Eva Echo",
+    "gender": "female",
+    "age_group": "25-32",
+    "occupation": "Accountant",
+    "location": "United States",
+    "personality": "Analytical",
+    "communication_style": "Direct and concise",
+    "initial_message": "How was the tax calculated on inv_05_prev, sorry I mean inv_05_curr?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "invoice_id": "inv_05_curr",
+    "tenant_id": "T05",
+    "origin": "seed",
+    "user_id": "U05_ADMIN"
+  },
+  "solution": [
+    {
+      "tool": "verify_billing_admin",
+      "arguments": {
+        "tenant_id": "T05",
+        "actor_id": "U05_ADMIN"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_invoice_lines",
+      "arguments": {
+        "invoice_id": "inv_05_curr",
+        "actor_id": "U05_ADMIN",
+        "tenant_id": "T05"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "disposition": "standard",
+    "overlay_intensity": "absent",
+    "overlay": "none",
+    "interaction": "multi_turn",
+    "overlay_vector": "none",
+    "interface": "self_correction",
+    "counterparty": "billing_admin",
+    "task": "explain_invoice"
+  },
+  "sub_goals": [
+    "invoice_breakdown_explained"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

@@ -1,0 +1,76 @@
+{
+  "name": "roles_admin_lists_tenant_users_and_admins",
+  "scenario_key": "roles-admin-lists-tenant-users-and-admins",
+  "scenario_id": "",
+  "use_case": "Check who may do what",
+  "branch": "Billing admin lists all tenant users to identify billing admins",
+  "tests": "Can a verified billing admin list users in their tenant to identify who holds the billing admin role?",
+  "instruction": "You are Alice Admin (user U01_ADMIN, tenant T01). Ask the billing desk to list all users in your tenant T01 to check who has billing admin permissions.\n\nYour details:\n- Name: Alice Admin\n- Role: Billing Admin\n- Email: alice@acme.com\n- Tenant ID: T01",
+  "keywords": [
+    "check_roles_and_permissions"
+  ],
+  "persona": {
+    "name": "Alice Admin",
+    "gender": "female",
+    "age_group": "32-40",
+    "occupation": "Manager",
+    "location": "Canada",
+    "personality": "Professional and formal",
+    "communication_style": "Direct and concise",
+    "initial_message": "Hello, could you list all users in Acme Corp and show me who our billing admins are?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "origin": "seed",
+    "tenant_id": "T01",
+    "role": "billing_admin",
+    "actor_id": "U01_ADMIN"
+  },
+  "solution": [
+    {
+      "tool": "verify_billing_admin",
+      "arguments": {
+        "tenant_id": "T01",
+        "actor_id": "U01_ADMIN"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "list_tenant_users",
+      "arguments": {
+        "tenant_id": "T01",
+        "actor_id": "U01_ADMIN"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "overlay": "none",
+    "overlay_vector": "none",
+    "counterparty": "billing_admin",
+    "overlay_intensity": "absent",
+    "interface": "clean_chat",
+    "disposition": "list_admins",
+    "interaction": "multi_turn",
+    "task": "check_roles_and_permissions"
+  },
+  "sub_goals": [
+    "admin_role_verified"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

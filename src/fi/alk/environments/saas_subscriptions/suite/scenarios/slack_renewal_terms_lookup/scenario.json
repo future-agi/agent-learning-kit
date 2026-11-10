@@ -1,0 +1,83 @@
+{
+  "name": "slack_renewal_terms_lookup",
+  "scenario_key": "slack-renewal-terms-lookup",
+  "scenario_id": "",
+  "use_case": "Answer an account manager in #billing-escalations",
+  "branch": "BM04 asks for LunarOps T12 annual term end and notice period; assistant reads Slack thread and renewal terms",
+  "tests": "Retrieves renewal terms for tenant inquired in Slack escalation",
+  "instruction": "You are Fiona Gallagher, Billing Lead at Cloudnest. In message BM04 (ts: '1791885600.000004') in #billing-escalations, an account manager asks when LunarOps' (T12, admin U12_ADMIN) annual term ends and notice period. Ask the assistant to read the thread and check the renewal terms.\n\nYour details:\n- Role: Billing Lead (acting for tenant's admin)\n- Tenant ID: T12 (LunarOps)\n- Admin Actor ID: U12_ADMIN\n- Slack Channel: CH_BILLESC (#billing-escalations)\n- Message Timestamp: 1791885600.000004",
+  "keywords": [
+    "slack_escalation"
+  ],
+  "persona": {
+    "name": "Fiona Gallagher",
+    "gender": "female",
+    "age_group": "32-40",
+    "occupation": "Manager",
+    "location": "Australia",
+    "personality": "Detail-oriented",
+    "communication_style": "Simple and clear",
+    "initial_message": "Hi, could you look at BM04 in #billing-escalations and check the renewal terms for LunarOps (T12, admin U12_ADMIN)?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "records": {
+      "admin_id": "U12_ADMIN",
+      "channel_id": "CH_BILLESC",
+      "message_ts": "1791885600.000004",
+      "tenant_id": "T12"
+    },
+    "origin": "seed"
+  },
+  "solution": [
+    {
+      "tool": "slack_read_thread",
+      "arguments": {
+        "message_ts": "1791885600.000004",
+        "channel_id": "CH_BILLESC"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "message_ts": "caller: 1791885600.000004"
+      }
+    },
+    {
+      "tool": "get_renewal_terms",
+      "arguments": {
+        "tenant_id": "T12",
+        "actor_id": "U12_ADMIN"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "tenant_id": "caller: T12"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "disposition": "renewal_inquiry",
+    "overlay_intensity": "absent",
+    "interaction": "single_turn",
+    "overlay": "none",
+    "task": "answer_slack_escalation",
+    "interface": "clean_chat",
+    "counterparty": "billing_lead",
+    "overlay_vector": "none"
+  },
+  "sub_goals": [
+    "renewal_terms_reported"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

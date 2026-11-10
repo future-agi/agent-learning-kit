@@ -1,7 +1,7 @@
 def check(world, calls):
-    verify_calls = [c for c in calls if c.name == "verify_billing_admin" and c.ok]
+    verify_calls = [c for c in calls if c.name in ("verify_billing_admin", "get_user_role") and c.ok]
     if not verify_calls:
-        return "not done: verify_billing_admin was not called successfully"
+        return "not done: the caller's role was never checked"
     tenant_ids = {c.arguments.get("tenant_id") for c in verify_calls if c.arguments.get("tenant_id")}
     for c in calls:
         if c.arguments.get("tenant_id") and c.arguments.get("tenant_id") not in tenant_ids:

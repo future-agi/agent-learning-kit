@@ -1,0 +1,91 @@
+{
+  "name": "slack_refund_inquiry_case_created",
+  "scenario_key": "slack-refund-inquiry-case-created",
+  "scenario_id": "",
+  "use_case": "Answer an account manager in #billing-escalations",
+  "branch": "BM08 asks about refund for GrowthLabs T07 unused seats on inv_07_curr; assistant opens billing case for finance",
+  "tests": "Opens refund billing case for finance review upon Slack escalation without direct credit",
+  "instruction": "You are Chloe Bennett, Billing Lead at Cloudnest. In BM08 (ts: '1791972000.000008') in #billing-escalations, an account manager asks if GrowthLabs (T07, admin U07_ADMIN) can get a refund on inv_07_curr for unused seats. Ask the assistant to read the thread and open a refund billing case for finance.\n\nYour details:\n- Role: Billing Lead (acting for tenant's admin)\n- Tenant ID: T07 (GrowthLabs)\n- Admin Actor ID: U07_ADMIN\n- Slack Channel: CH_BILLESC (#billing-escalations)\n- Message Timestamp: 1791972000.000008\n- Invoice ID: inv_07_curr\n- Category: refund",
+  "keywords": [
+    "slack_escalation"
+  ],
+  "persona": {
+    "name": "Chloe Bennett",
+    "gender": "female",
+    "age_group": "32-40",
+    "occupation": "Manager",
+    "location": "Canada",
+    "personality": "Professional and formal",
+    "communication_style": "Direct and concise",
+    "initial_message": "Hi, please check BM08 in #billing-escalations and open a refund billing case for GrowthLabs (T07, admin U07_ADMIN) regarding inv_07_curr.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "records": {
+      "tenant_id": "T07",
+      "message_ts": "1791972000.000008",
+      "channel_id": "CH_BILLESC",
+      "admin_id": "U07_ADMIN",
+      "invoice_id": "inv_07_curr"
+    },
+    "origin": "seed"
+  },
+  "solution": [
+    {
+      "tool": "slack_read_thread",
+      "arguments": {
+        "channel_id": "CH_BILLESC",
+        "message_ts": "1791972000.000008"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "message_ts": "caller: 1791972000.000008"
+      }
+    },
+    {
+      "tool": "create_billing_case",
+      "arguments": {
+        "invoice_id": "inv_07_curr",
+        "summary": "Refund request for two unused seats in October",
+        "request_key": "req_bc_401",
+        "actor_id": "U07_ADMIN",
+        "tenant_id": "T07",
+        "category": "refund"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "tenant_id": "caller: T07",
+        "category": "caller: refund",
+        "actor_id": "caller: U07_ADMIN",
+        "invoice_id": "caller: inv_07_curr"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "interaction": "single_turn",
+    "disposition": "refund_inquiry",
+    "overlay_vector": "none",
+    "overlay_intensity": "absent",
+    "task": "manage_billing_case",
+    "interface": "clean_chat",
+    "counterparty": "billing_lead",
+    "overlay": "none"
+  },
+  "sub_goals": [
+    "billing_case_created"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

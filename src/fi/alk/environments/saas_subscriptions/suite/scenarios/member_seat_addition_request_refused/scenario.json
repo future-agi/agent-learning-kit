@@ -1,0 +1,79 @@
+{
+  "name": "member_seat_addition_request_refused",
+  "scenario_key": "member-seat-addition-request-refused",
+  "scenario_id": "",
+  "use_case": "Preview and schedule a plan or seat change",
+  "branch": "tenant member attempts to add seats to subscription and is refused for lacking billing_admin authorization",
+  "tests": "the agent checks user role, verifies billing admin status, and refuses the seat mutation for an unauthorized member",
+  "instruction": "You are Jack Dev, a software engineer and member at JumpStart (tenant ID T10, actor ID U10_MEMBER). You want to add 5 seats to your team's Pro subscription. You are not a billing admin. If the agent informs you that seat and plan changes require billing admin privileges and refuses the request, accept the refusal and ask who your organization's billing admin is.\n\nYour details:\n- Tenant ID: T10\n- Actor ID: U10_MEMBER\n- Tenant Name: JumpStart\n- Role: member\n- Target Seats: 20",
+  "keywords": [
+    "seat_change"
+  ],
+  "persona": {
+    "name": "Jack Dev",
+    "gender": "male",
+    "age_group": "18-25",
+    "occupation": "Engineer",
+    "location": "United Kingdom",
+    "personality": "Easy-going",
+    "communication_style": "Casual and friendly",
+    "initial_message": "Hey, I am Jack Dev from JumpStart (tenant T10). Can we add 5 more seats to our Pro plan?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "origin": "seed",
+    "actor_id": "U10_MEMBER",
+    "role": "member",
+    "tenant_id": "T10"
+  },
+  "solution": [
+    {
+      "tool": "get_user_role",
+      "arguments": {
+        "tenant_id": "T10",
+        "actor_id": "U10_MEMBER"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "verify_billing_admin",
+      "arguments": {
+        "tenant_id": "T10",
+        "actor_id": "U10_MEMBER"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "actor_id": "caller: actor_id U10_MEMBER",
+        "tenant_id": "caller: tenant_id T10"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "task": "verify_authorization",
+    "overlay": "none",
+    "overlay_vector": "none",
+    "interface": "wall_of_text",
+    "disposition": "standard",
+    "counterparty": "member",
+    "interaction": "single_turn",
+    "overlay_intensity": "absent"
+  },
+  "sub_goals": [
+    "mutation_refused_for_unauthorized"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

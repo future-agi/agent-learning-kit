@@ -11,7 +11,7 @@
     "role_authorization"
   ],
   "persona": {
-    "name": "Alice Miller",
+    "name": "Alice Admin",
     "gender": "female",
     "age_group": "32-40",
     "occupation": "Manager",

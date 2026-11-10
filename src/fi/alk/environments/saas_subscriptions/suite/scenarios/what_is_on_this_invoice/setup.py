@@ -1,0 +1,10 @@
+def setup(world):
+    world.put("tenants", {"tenant_id": "T403", "name": "CloudScale Ops", "created_at": "2025-01-01T00:00:00Z"})
+    world.put("users", {"actor_id": "U403_ADMIN", "tenant_id": "T403", "name": "Clara Vance", "email": "clara@cloudscaleops.example", "role": "billing_admin"})
+    world.put("subscriptions", {"subscription_id": "sub_403", "tenant_id": "T403", "plan_id": "pro", "seat_count": 8, "status": "active", "current_period_start": "2026-10-01T00:00:00Z", "current_period_end": "2026-11-01T00:00:00Z", "cancel_at_period_end": 0, "version": 1})
+    world.put("renewal_terms", {"subscription_id": "sub_403", "tenant_id": "T403", "term": "monthly", "term_end": "2026-11-01T00:00:00Z", "auto_renew": 1, "notice_days": 0, "renewal_price_cents": 27400})
+    world.put("billing_contacts", {"tenant_id": "T403", "name": "Clara Vance", "email": "clara@cloudscaleops.example", "updated_at": "2026-10-01T00:00:00Z", "updated_by": "U403_ADMIN"})
+    world.put("invoices", {"invoice_id": "inv_403_curr", "tenant_id": "T403", "subscription_id": "sub_403", "period_start": "2026-10-01T00:00:00Z", "period_end": "2026-11-01T00:00:00Z", "subtotal_cents": 27400, "tax_cents": 2740, "total_cents": 30140, "status": "paid", "created_at": "2026-10-01T00:00:00Z"})
+    world.put("invoice_lines", {"line_id": "line_403_1", "invoice_id": "inv_403_curr", "description": "Pro Plan Base Subscription", "quantity": 1, "unit_amount_cents": 19900, "amount_cents": 19900, "line_type": "plan_base"})
+    world.put("invoice_lines", {"line_id": "line_403_2", "invoice_id": "inv_403_curr", "description": "Additional User Seats (3 seats)", "quantity": 3, "unit_amount_cents": 2500, "amount_cents": 7500, "line_type": "seat_addon"})
+    world.put("payments", {"payment_id": "PAY-inv_403_curr", "invoice_id": "inv_403_curr", "tenant_id": "T403", "amount_cents": 30140, "status": "succeeded", "method": "card", "card_last4": "6124", "attempted_at": "2026-10-01T00:05:00Z", "next_retry_at": None, "failure_reason": None})

@@ -1,0 +1,94 @@
+{
+  "name": "email_contact_change_updated",
+  "scenario_key": "email-contact-change-updated",
+  "scenario_id": "",
+  "use_case": "Pick up a billing request that arrived by email",
+  "branch": "David Data requests billing contact update via email th_b09_contact_change; agent verifies, reads back details, and updates billing contact after confirmation",
+  "tests": "Updates tenant billing contact email following verification and explicit confirmation",
+  "instruction": "You are David Data, billing administrator for DataFlow (T04). You sent an email (thread th_b09_contact_change) asking for DataFlow's invoices to be sent to accounts@dataflow.com (attention Priya Raman).\n\nIn this chat, ask the billing desk to process this billing contact update. When the agent reads back the new name (Priya Raman) and email (accounts@dataflow.com) and asks for confirmation, explicitly confirm.\n\nYour details:\n- Name: David Data / David Data\n- Tenant ID: T04 (DataFlow)\n- User / Actor ID: U04_ADMIN\n- Email: david@dataflow.com\n- Thread ID: th_b09_contact_change\n- New Billing Contact Name: Priya Raman\n- New Billing Contact Email: accounts@dataflow.com",
+  "keywords": [
+    "billing_contact"
+  ],
+  "persona": {
+    "name": "David Data",
+    "gender": "male",
+    "age_group": "32-40",
+    "occupation": "Manager",
+    "location": "United Kingdom",
+    "personality": "Professional and formal",
+    "communication_style": "Direct and concise",
+    "initial_message": "Hi, I sent email thread th_b09_contact_change requesting our billing contact be updated to accounts@dataflow.com (attention Priya Raman). Can you process this?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "actor_id": "U04_ADMIN",
+    "thread_id": "th_b09_contact_change",
+    "origin": "seed",
+    "tenant_id": "T04",
+    "new_contact_name": "Priya Raman",
+    "new_contact_email": "accounts@dataflow.com"
+  },
+  "solution": [
+    {
+      "tool": "get_thread",
+      "arguments": {
+        "threadId": "th_b09_contact_change"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "threadId": "caller: th_b09_contact_change"
+      }
+    },
+    {
+      "tool": "verify_billing_admin",
+      "arguments": {
+        "tenant_id": "T04",
+        "actor_id": "U04_ADMIN"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "update_billing_contact",
+      "arguments": {
+        "email": "accounts@dataflow.com",
+        "tenant_id": "T04",
+        "confirmation_code": "confirmed",
+        "actor_id": "U04_ADMIN",
+        "name": "Priya Raman"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "email": "caller: accounts@dataflow.com",
+        "tenant_id": "caller: T04"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "overlay_vector": "none",
+    "interaction": "multi_turn",
+    "task": "verify_authorization",
+    "counterparty": "billing_admin",
+    "interface": "clean_chat",
+    "disposition": "contact_change",
+    "overlay_intensity": "absent",
+    "overlay": "none"
+  },
+  "sub_goals": [
+    "billing_contact_updated"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

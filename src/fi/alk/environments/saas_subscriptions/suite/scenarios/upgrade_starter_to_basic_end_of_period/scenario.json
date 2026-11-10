@@ -1,0 +1,117 @@
+{
+  "name": "upgrade_starter_to_basic_end_of_period",
+  "scenario_key": "upgrade-starter-to-basic-end-of-period",
+  "scenario_id": "",
+  "use_case": "Preview and schedule a plan or seat change",
+  "branch": "billing admin upgrades tenant from Starter to Basic with 4 seats effective at end of current period",
+  "tests": "the agent previews the plan change and schedules the upgrade to Basic for the end of period after confirmation",
+  "instruction": "You are Ian Inno, the billing admin for InnoSoft (tenant ID T09, actor ID U09_ADMIN). You currently have an active Starter subscription with 4 seats. You want to upgrade InnoSoft to the Basic plan keeping 4 seats, taking effect at the end of the current billing cycle (1 November 2026). You want to preview the cost and feature changes first, and then confirm scheduling the change.\n\nYour details:\n- Tenant ID: T09\n- Actor ID: U09_ADMIN\n- Tenant Name: InnoSoft\n- Current Plan: Starter\n- Target Plan: Basic\n- Target Seats: 4\n- Effective Timing: end of period (2026-11-01)\n- Role: billing_admin",
+  "keywords": [
+    "plan_upgrade"
+  ],
+  "persona": {
+    "name": "Ian Inno",
+    "gender": "male",
+    "age_group": "32-40",
+    "occupation": "Business Owner",
+    "location": "United States",
+    "personality": "Professional and formal",
+    "communication_style": "Direct and concise",
+    "initial_message": "Hello, I am Ian Inno, billing admin for InnoSoft (tenant T09). We want to upgrade from Starter to the Basic plan with 4 seats starting at the end of our current billing cycle. Please preview and schedule this change.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "seats": 4,
+    "tenant_id": "T09",
+    "target_plan": "basic",
+    "actor_id": "U09_ADMIN",
+    "origin": "seed",
+    "current_plan": "starter"
+  },
+  "solution": [
+    {
+      "tool": "verify_billing_admin",
+      "arguments": {
+        "tenant_id": "T09",
+        "actor_id": "U09_ADMIN"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "actor_id": "caller: actor_id U09_ADMIN",
+        "tenant_id": "caller: tenant_id T09"
+      }
+    },
+    {
+      "tool": "get_subscription",
+      "arguments": {
+        "actor_id": "U09_ADMIN",
+        "tenant_id": "T09"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "preview_plan_change",
+      "arguments": {
+        "effective_timing": "end_of_period",
+        "target_plan_id": "basic",
+        "tenant_id": "T09",
+        "actor_id": "U09_ADMIN",
+        "target_seats": 4
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "target_seats": "caller: 4 seats",
+        "effective_timing": "caller: end of period",
+        "target_plan_id": "caller: Basic plan"
+      }
+    },
+    {
+      "tool": "schedule_plan_change",
+      "arguments": {
+        "confirmation_code": "confirmed",
+        "target_seats": 4,
+        "effective_timing": "end_of_period",
+        "request_key": "req_up_09",
+        "actor_id": "U09_ADMIN",
+        "target_plan_id": "basic",
+        "tenant_id": "T09"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "tenant_id": "caller: tenant_id T09",
+        "target_plan_id": "caller: Basic plan",
+        "actor_id": "caller: actor_id U09_ADMIN",
+        "target_seats": "what the admin confirmed",
+        "effective_timing": "what the admin confirmed"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "overlay": "none",
+    "disposition": "standard",
+    "interface": "wall_of_text",
+    "task": "schedule_plan_change",
+    "overlay_vector": "none",
+    "interaction": "multi_turn",
+    "overlay_intensity": "absent",
+    "counterparty": "billing_admin"
+  },
+  "sub_goals": [
+    "plan_change_scheduled"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

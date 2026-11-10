@@ -1,0 +1,10 @@
+def setup(world):
+    world.put("slack_messages", {
+        "message_id": "SM401",
+        "channel_id": "CH_BILLESC",
+        "user_id": "U_AM1",
+        "text": "KiteWorks (T11) admin Karen Kite confirmed they want to cancel at the end of their current term.",
+        "ts": "1792000000.000401",
+        "thread_ts": None,
+        "permalink": "https://cloudnest.slack.example.com/archives/CH_BILLESC/p1792000000000401"
+    })

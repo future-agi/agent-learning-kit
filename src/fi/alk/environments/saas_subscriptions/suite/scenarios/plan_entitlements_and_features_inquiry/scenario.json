@@ -1,0 +1,87 @@
+{
+  "name": "plan_entitlements_and_features_inquiry",
+  "scenario_key": "plan-entitlements-and-features-inquiry",
+  "scenario_id": "",
+  "use_case": "Preview and schedule a plan or seat change",
+  "branch": "billing admin asks for complete list of features and entitlements included in their active Basic plan",
+  "tests": "the agent verifies billing admin authorization and retrieves plan entitlements to list all Basic features",
+  "instruction": "You are Karen Kite, the billing admin for KiteWorks (tenant ID T11, actor ID U11_ADMIN). You want to verify what features are included with your organization's current Basic plan tier.\n\nYour details:\n- Tenant ID: T11\n- Actor ID: U11_ADMIN\n- Tenant Name: KiteWorks\n- Current Plan: Basic\n- Role: billing_admin",
+  "keywords": [
+    "entitlements"
+  ],
+  "persona": {
+    "name": "Karen Kite",
+    "gender": "female",
+    "age_group": "40-50",
+    "occupation": "Manager",
+    "location": "United States",
+    "personality": "Analytical",
+    "communication_style": "Formal and polite",
+    "initial_message": "Hello, I am Karen Kite from KiteWorks (tenant T11). Could you check our subscription and list all features included in our Basic plan?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "actor_id": "U11_ADMIN",
+    "tenant_id": "T11",
+    "origin": "seed",
+    "current_plan": "basic"
+  },
+  "solution": [
+    {
+      "tool": "verify_billing_admin",
+      "arguments": {
+        "actor_id": "U11_ADMIN",
+        "tenant_id": "T11"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "tenant_id": "caller: tenant_id T11",
+        "actor_id": "caller: actor_id U11_ADMIN"
+      }
+    },
+    {
+      "tool": "get_subscription",
+      "arguments": {
+        "tenant_id": "T11",
+        "actor_id": "U11_ADMIN"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_entitlements",
+      "arguments": {
+        "plan_id": "basic"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "interaction": "single_turn",
+    "disposition": "standard",
+    "overlay_vector": "none",
+    "overlay": "none",
+    "overlay_intensity": "absent",
+    "interface": "clean_chat",
+    "counterparty": "impersonator",
+    "task": "verify_authorization"
+  },
+  "sub_goals": [
+    "admin_role_verified"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

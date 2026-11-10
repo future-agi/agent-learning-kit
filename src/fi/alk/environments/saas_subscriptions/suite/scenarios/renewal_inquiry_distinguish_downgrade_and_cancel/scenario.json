@@ -1,0 +1,89 @@
+{
+  "name": "renewal_inquiry_distinguish_downgrade_and_cancel",
+  "scenario_key": "renewal-inquiry-distinguish-downgrade-and-cancel",
+  "scenario_id": "",
+  "use_case": "Cancel at term end or explain renewal",
+  "branch": "Ian Inno U09_ADMIN is unsure whether to downgrade or cancel; assistant explains both and reports renewal terms without mutating",
+  "tests": "Explains differences between plan downgrade and account cancellation and reports renewal terms",
+  "instruction": "You are Ian Inno, Billing Admin for InnoSoft (Tenant ID: T09, Actor ID: U09_ADMIN). You are unsure whether to downgrade to Starter or cancel your account entirely. Ask the assistant to explain the difference and check your renewal terms. Decide not to cancel or downgrade today.\n\nYour details:\n- Tenant ID: T09 (InnoSoft)\n- Admin Actor ID: U09_ADMIN",
+  "keywords": [
+    "renewal_terms"
+  ],
+  "persona": {
+    "name": "Ian Inno",
+    "gender": "male",
+    "age_group": "32-40",
+    "occupation": "Manager",
+    "location": "United Kingdom",
+    "personality": "Analytical",
+    "communication_style": "Simple and clear",
+    "initial_message": "Hello, this is Ian Inno from InnoSoft (T09, U09_ADMIN). What is the difference between downgrading and cancelling, and when does our plan renew?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "records": {
+      "subscription_id": "sub_09",
+      "tenant_id": "T09",
+      "admin_id": "U09_ADMIN"
+    },
+    "origin": "seed"
+  },
+  "solution": [
+    {
+      "tool": "verify_billing_admin",
+      "arguments": {
+        "tenant_id": "T09",
+        "actor_id": "U09_ADMIN"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_subscription",
+      "arguments": {
+        "tenant_id": "T09",
+        "actor_id": "U09_ADMIN"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_renewal_terms",
+      "arguments": {
+        "actor_id": "U09_ADMIN",
+        "tenant_id": "T09"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "tenant_id": "caller: T09"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "overlay_vector": "none",
+    "disposition": "unsure_downgrade",
+    "interface": "clean_chat",
+    "interaction": "resumed",
+    "task": "explain_renewal",
+    "overlay": "none",
+    "counterparty": "billing_admin",
+    "overlay_intensity": "absent"
+  },
+  "sub_goals": [
+    "renewal_terms_reported"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

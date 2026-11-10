@@ -1,0 +1,80 @@
+{
+  "name": "invoice_list_asked_by_email",
+  "scenario_key": "invoice-list-asked-by-email",
+  "scenario_id": "",
+  "use_case": "Explain an invoice or a bill increase",
+  "branch": "Account manager asks to inspect email thread th_b11_invoice_list from Leo Lunar requesting LunarOps invoices",
+  "tests": "reads email thread th_b11_invoice_list and retrieves invoice list for LunarOps",
+  "instruction": "You are Sophie Martin, account manager for LunarOps (T12). Ask the billing desk to read thread th_b11_invoice_list and list all paid invoices for LunarOps.\n\nYour details:\n- Name: Sophie Martin\n- Role: Account Manager\n- Client: LunarOps (Tenant ID: T12)\n- Thread ID: th_b11_invoice_list",
+  "keywords": [
+    "email_integration"
+  ],
+  "persona": {
+    "name": "Sophie Martin",
+    "gender": "female",
+    "age_group": "25-32",
+    "occupation": "Sales Representative",
+    "location": "United Kingdom",
+    "personality": "Friendly and cooperative",
+    "communication_style": "Direct and concise",
+    "initial_message": "Could you look at email thread th_b11_invoice_list from LunarOps and list their invoices?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "thread_id": "th_b11_invoice_list",
+    "tenant_id": "T12",
+    "origin": "seed"
+  },
+  "solution": [
+    {
+      "tool": "get_thread",
+      "arguments": {
+        "messageFormat": "FULL_CONTENT",
+        "threadId": "th_b11_invoice_list"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "threadId": "record: th_b11_invoice_list"
+      }
+    },
+    {
+      "tool": "list_invoices",
+      "arguments": {
+        "status": "paid",
+        "actor_id": "U12_ADMIN",
+        "tenant_id": "T12"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "tenant_id": "record: T12"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "interface": "clean_chat",
+    "task": "list_invoices",
+    "counterparty": "account_manager",
+    "overlay_intensity": "absent",
+    "overlay_vector": "none",
+    "interaction": "multi_turn",
+    "overlay": "none",
+    "disposition": "missing_charge"
+  },
+  "sub_goals": [
+    "invoice_history_reported"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

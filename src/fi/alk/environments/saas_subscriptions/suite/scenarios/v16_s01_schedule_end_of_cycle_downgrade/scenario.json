@@ -83,7 +83,12 @@
         "actor_id": "U01_ADMIN"
       },
       "environment_arguments": {},
-      "fixed": {}
+      "fixed": {
+        "tenant_id": "what the admin confirmed",
+        "target_plan_id": "what the admin confirmed",
+        "target_seats": "what the admin confirmed",
+        "effective_timing": "what the admin confirmed"
+      }
     }
   ],
   "alternatives": [],

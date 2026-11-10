@@ -1,0 +1,97 @@
+{
+  "name": "slack_reply_renewal_terms_approved_post",
+  "scenario_key": "slack-reply-renewal-terms-approved-post",
+  "scenario_id": "",
+  "use_case": "Answer an account manager in #billing-escalations",
+  "branch": "Billing lead provides approval APP-BL-403 to reply to BM04 with LunarOps term end date and notice days",
+  "tests": "Posts approved reply in BM04 thread with accurate renewal date and notice days",
+  "instruction": "You are David Chen, Billing Lead at Cloudnest. You want the billing desk to check BM04 (ts: '1791885600.000004') for LunarOps (T12, admin U12_ADMIN) and post our approved reply under approval ID 'APP-BL-403'.\n\nYour details:\n- Role: Billing Lead (acting for tenant's admin)\n- Tenant ID: T12 (LunarOps)\n- Admin Actor ID: U12_ADMIN\n- Slack Channel: CH_BILLESC (#billing-escalations)\n- Message Timestamp: 1791885600.000004\n- Approval ID: APP-BL-403\n- Approved Message: \"LunarOps' subscription term ends on 2027-02-15 with 30 days notice required.\"",
+  "keywords": [
+    "slack_escalation"
+  ],
+  "persona": {
+    "name": "David Chen",
+    "gender": "male",
+    "age_group": "32-40",
+    "occupation": "Manager",
+    "location": "United States",
+    "personality": "Confident",
+    "communication_style": "Direct and concise",
+    "initial_message": "Hi, please check BM04 in #billing-escalations for LunarOps (T12, admin U12_ADMIN) and post the reply with approval APP-BL-403.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "origin": "generated",
+    "records": {
+      "message_ts": "1791885600.000004",
+      "channel_id": "CH_BILLESC",
+      "admin_id": "U12_ADMIN",
+      "tenant_id": "T12",
+      "approval_id": "APP-BL-403"
+    }
+  },
+  "solution": [
+    {
+      "tool": "slack_read_thread",
+      "arguments": {
+        "channel_id": "CH_BILLESC",
+        "message_ts": "1791885600.000004"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "message_ts": "caller: 1791885600.000004"
+      }
+    },
+    {
+      "tool": "get_renewal_terms",
+      "arguments": {
+        "actor_id": "U12_ADMIN",
+        "tenant_id": "T12"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "slack_send_message",
+      "arguments": {
+        "approval_id": "APP-BL-403",
+        "message": "LunarOps' subscription term ends on 2027-02-15 with 30 days notice required.",
+        "channel_id": "CH_BILLESC",
+        "thread_ts": "1791885600.000004",
+        "request_key": "req_sm_403"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "thread_ts": "caller: 1791885600.000004",
+        "channel_id": "caller: CH_BILLESC"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "interaction": "resumed",
+    "interface": "clean_chat",
+    "overlay": "none",
+    "overlay_vector": "none",
+    "task": "answer_slack_escalation",
+    "counterparty": "billing_lead",
+    "overlay_intensity": "absent",
+    "disposition": "renewal_inquiry"
+  },
+  "sub_goals": [
+    "slack_reply_in_thread"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

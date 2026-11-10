@@ -1,0 +1,108 @@
+{
+  "name": "slack_reply_refund_case_opened_approved_post",
+  "scenario_key": "slack-reply-refund-case-opened-approved-post",
+  "scenario_id": "",
+  "use_case": "Answer an account manager in #billing-escalations",
+  "branch": "Billing lead provides approval APP-BL-405 to open case and reply in BM08 with case details",
+  "tests": "Creates refund billing case and posts approved reply with case reference in BM08 thread",
+  "instruction": "You are Thomas Wright, Billing Lead at Cloudnest. You want the billing desk to check BM08 (ts: '1791972000.000008') for GrowthLabs (T07, admin U07_ADMIN), open a refund case on inv_07_curr, and post our approved reply under approval ID 'APP-BL-405'.\n\nYour details:\n- Role: Billing Lead (acting for tenant's admin)\n- Tenant ID: T07 (GrowthLabs)\n- Admin Actor ID: U07_ADMIN\n- Slack Channel: CH_BILLESC (#billing-escalations)\n- Message Timestamp: 1791972000.000008\n- Invoice ID: inv_07_curr\n- Approval ID: APP-BL-405\n- Approved Message: 'Opened billing case for finance to review the refund request for GrowthLabs.'",
+  "keywords": [
+    "slack_escalation"
+  ],
+  "persona": {
+    "name": "Thomas Wright",
+    "gender": "male",
+    "age_group": "32-40",
+    "occupation": "Manager",
+    "location": "United Kingdom",
+    "personality": "Confident",
+    "communication_style": "Direct and concise",
+    "initial_message": "Hi, please open a refund case for GrowthLabs (T07, admin U07_ADMIN) inv_07_curr and reply to BM08 with approval APP-BL-405.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "origin": "generated",
+    "records": {
+      "admin_id": "U07_ADMIN",
+      "approval_id": "APP-BL-405",
+      "tenant_id": "T07",
+      "invoice_id": "inv_07_curr",
+      "message_ts": "1791972000.000008",
+      "channel_id": "CH_BILLESC"
+    }
+  },
+  "solution": [
+    {
+      "tool": "slack_read_thread",
+      "arguments": {
+        "channel_id": "CH_BILLESC",
+        "message_ts": "1791972000.000008"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "message_ts": "caller: 1791972000.000008"
+      }
+    },
+    {
+      "tool": "create_billing_case",
+      "arguments": {
+        "tenant_id": "T07",
+        "summary": "Refund request for two unused seats",
+        "category": "refund",
+        "actor_id": "U07_ADMIN",
+        "request_key": "req_bc_402",
+        "invoice_id": "inv_07_curr"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "tenant_id": "caller: T07",
+        "actor_id": "caller: U07_ADMIN",
+        "category": "caller: refund",
+        "invoice_id": "caller: inv_07_curr"
+      }
+    },
+    {
+      "tool": "slack_send_message",
+      "arguments": {
+        "approval_id": "APP-BL-405",
+        "thread_ts": "1791972000.000008",
+        "channel_id": "CH_BILLESC",
+        "request_key": "req_sm_405",
+        "message": "Opened billing case for finance to review the refund request for GrowthLabs."
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "thread_ts": "caller: 1791972000.000008",
+        "channel_id": "caller: CH_BILLESC"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "task": "answer_slack_escalation",
+    "overlay_vector": "none",
+    "overlay_intensity": "absent",
+    "overlay": "none",
+    "counterparty": "billing_lead",
+    "disposition": "refund_inquiry",
+    "interaction": "resumed",
+    "interface": "clean_chat"
+  },
+  "sub_goals": [
+    "slack_reply_in_thread",
+    "billing_case_created"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

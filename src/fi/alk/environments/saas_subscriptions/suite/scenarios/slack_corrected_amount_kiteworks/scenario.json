@@ -1,0 +1,84 @@
+{
+  "name": "slack_corrected_amount_kiteworks",
+  "scenario_key": "slack-corrected-amount-kiteworks",
+  "scenario_id": "",
+  "use_case": "Explain an invoice or a bill increase",
+  "branch": "Slack thread BM05 mentions $30.00 and BM06 corrects to $33.00 with tax for inv_11_addon payment",
+  "tests": "reads Slack thread BM05, checks payment status of inv_11_addon and verifies $33.00 payment",
+  "instruction": "You are Noah Tremblay, account manager. Ask the billing desk to check Slack thread BM05 (ts: 1791968400.000005) in CH_BILLESC regarding KiteWorks (T11) inv_11_addon payment status.\n\nYour details:\n- Name: Noah Tremblay\n- Role: Account Manager\n- Channel ID: CH_BILLESC\n- Message TS: 1791968400.000005\n- Tenant ID: T11\n- Invoice ID: inv_11_addon",
+  "keywords": [
+    "slack_integration"
+  ],
+  "persona": {
+    "name": "Noah Tremblay",
+    "gender": "male",
+    "age_group": "32-40",
+    "occupation": "Customer Service",
+    "location": "Canada",
+    "personality": "Detail-oriented",
+    "communication_style": "Direct and concise",
+    "initial_message": "Please check Slack thread BM05 in #billing-escalations regarding KiteWorks payment amount.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "message_ts": "1791968400.000005",
+    "tenant_id": "T11",
+    "invoice_id": "inv_11_addon",
+    "channel_id": "CH_BILLESC",
+    "origin": "seed"
+  },
+  "solution": [
+    {
+      "tool": "slack_read_thread",
+      "arguments": {
+        "channel_id": "CH_BILLESC",
+        "message_ts": "1791968400.000005"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "message_ts": "record: 1791968400.000005",
+        "channel_id": "record: CH_BILLESC"
+      }
+    },
+    {
+      "tool": "get_payment_status",
+      "arguments": {
+        "tenant_id": "T11",
+        "actor_id": "U11_ADMIN",
+        "invoice_id": "inv_11_addon"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "invoice_id": "record: inv_11_addon",
+        "tenant_id": "record: T11"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "disposition": "retry_pending",
+    "interface": "clean_chat",
+    "counterparty": "account_manager",
+    "overlay_intensity": "absent",
+    "task": "report_payment",
+    "overlay_vector": "none",
+    "interaction": "multi_turn",
+    "overlay": "none"
+  },
+  "sub_goals": [
+    "payment_status_reported"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

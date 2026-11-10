@@ -10,7 +10,7 @@
     "role_authorization"
   ],
   "persona": {
-    "name": "Bob Clark",
+    "name": "Bob Member",
     "gender": "male",
     "age_group": "25-32",
     "occupation": "Engineer",

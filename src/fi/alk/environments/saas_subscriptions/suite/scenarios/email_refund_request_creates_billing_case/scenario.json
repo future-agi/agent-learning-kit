@@ -1,0 +1,86 @@
+{
+  "name": "email_refund_request_creates_billing_case",
+  "scenario_key": "email-refund-request-creates-billing-case",
+  "scenario_id": "",
+  "use_case": "Open a billing case or report a payment",
+  "branch": "Customer email thread th_b10_refund_request requests refund for unused seats; desk opens refund billing case",
+  "tests": "reads email thread th_b10_refund_request and opens a refund billing case for GrowthLabs",
+  "instruction": "You are Kavita Patel, account manager. Ask the billing desk to read thread th_b10_refund_request and open a billing case for finance to review Grace Growth's refund request on inv_07_curr.\n\nYour details:\n- Name: Kavita Patel\n- Role: Account Manager\n- Client: GrowthLabs (Tenant ID: T07)\n- Thread ID: th_b10_refund_request\n- Invoice ID: inv_07_curr",
+  "keywords": [
+    "email_integration"
+  ],
+  "persona": {
+    "name": "Kavita Patel",
+    "gender": "female",
+    "age_group": "25-32",
+    "occupation": "Sales Representative",
+    "location": "India",
+    "personality": "Professional and formal",
+    "communication_style": "Direct and concise",
+    "initial_message": "Please check email thread th_b10_refund_request from Grace Growth and open a case for finance.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "tenant_id": "T07",
+    "origin": "seed",
+    "thread_id": "th_b10_refund_request",
+    "invoice_id": "inv_07_curr"
+  },
+  "solution": [
+    {
+      "tool": "get_thread",
+      "arguments": {
+        "threadId": "th_b10_refund_request",
+        "messageFormat": "FULL_CONTENT"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "threadId": "record: th_b10_refund_request"
+      }
+    },
+    {
+      "tool": "create_billing_case",
+      "arguments": {
+        "category": "refund",
+        "summary": "Refund request for unused seats on inv_07_curr",
+        "invoice_id": "inv_07_curr",
+        "request_key": "req-bc-402",
+        "actor_id": "U07_ADMIN",
+        "tenant_id": "T07"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "category": "caller: refund",
+        "tenant_id": "record: T07",
+        "invoice_id": "record: inv_07_curr"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "counterparty": "account_manager",
+    "interaction": "multi_turn",
+    "overlay_intensity": "absent",
+    "task": "create_billing_case",
+    "disposition": "disputed_seats",
+    "overlay": "none",
+    "overlay_vector": "none",
+    "interface": "clean_chat"
+  },
+  "sub_goals": [
+    "billing_case_created"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}
