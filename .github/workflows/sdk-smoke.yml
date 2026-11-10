@@ -49,9 +49,9 @@ jobs:
         # pre-existing failures unrelated to the voice engine (CLI golden-path,
         # init presets, plus test_config_and_facades hangs) — track those
         # separately so this gate stays green and meaningful.
-        # Deselected below, failing on dev too: the two sandbox-server tests are TH-8978, and
-        # the nine test_harness_architecture.py tests are TH-9444. (The run is one folded line,
-        # so the tickets are named here rather than beside each --deselect.)
+        # Deselected below, failing on dev too: the two sandbox-server tests are TH-8978. (The
+        # run is one folded line, so the ticket is named here rather than beside each
+        # --deselect.)
         run: >-
           python -m pytest -q
           tests/runtime/test_livekit_engine.py
@@ -68,15 +68,6 @@ jobs:
           --deselect tests/test_harness_sandbox_server.py::test_private_github_submission_becomes_hosted_job
           --deselect tests/test_harness_sandbox_server.py::test_public_github_branch_url_populates_job_ref
           tests/test_harness_architecture.py
-          --deselect tests/test_harness_architecture.py::test_executor_freezes_the_resolved_github_commit_before_building
-          --deselect tests/test_harness_architecture.py::test_executor_understands_a_materialized_archive_as_a_repository
-          --deselect tests/test_harness_architecture.py::test_hosted_github_checkout_keeps_token_out_of_process_arguments
-          --deselect tests/test_harness_architecture.py::test_hosted_job_rejects_unsafe_security_policy
-          --deselect tests/test_harness_architecture.py::test_job_carries_references_but_rejects_resolved_secrets
-          --deselect tests/test_harness_architecture.py::test_public_github_branch_url_clones_the_branch
-          --deselect tests/test_harness_architecture.py::test_public_github_branch_url_is_normalized_into_repository_and_ref
-          --deselect tests/test_harness_architecture.py::test_public_github_checkout_does_not_request_or_inject_token
-          --deselect tests/test_harness_architecture.py::test_public_github_job_needs_no_installation_but_is_commit_pinnable
           tests/test_harness_credentials.py
           tests/harness/test_runtime_repair.py
           tests/harness/test_runtime_selection_admission.py
