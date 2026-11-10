@@ -854,7 +854,7 @@ def lines_alone(named: str, quote: str, *, short: bool = False) -> str:
         f"system_prompt_from: the lines named ({named}) don't hold the quote you gave before "
         f"({' '.join(quote.split())[:80]}); if these lines are the prompt, quote them word for "
         f"word in system_prompt_excerpt, with ... where you leave text out. If they are refused "
-        f"again, {outcome}"
+        f"again against it, {outcome}"
     )
 
 
@@ -1429,7 +1429,7 @@ def test_lines_refused_twice_leave_the_quote(tmp_path, root):
         + not_the_quote("prompt.py 1-2")
         + "\n  - system_prompt_from: lines named later are checked against this quote until you "
         "give another; a later mismatch records the lines as unconfirmed and keeps the quote, or the "
-        "lines if the quote is only a few words"
+        "lines if the quote has fewer than 16 letters"
     )
     second = submit(wrong)
     assert not second.get("is_error"), second
@@ -3134,6 +3134,8 @@ def test_a_pipe_is_logged_as_not_a_regular_file(tmp_path, caplog):
         pytest.param("agent.sc", 'val t: A#B = x; val model = "gpt-4o"', "gpt-4o", id="scala-script-type-projection"),
         pytest.param(".env.j2", "MODEL=gpt-4o", "gpt-4o", id="env-template"),
         pytest.param("Dockerfile.j2", "ENV MODEL=gpt-4o", "gpt-4o", id="dockerfile-template"),
+        pytest.param(".env.local.j2", "MODEL=gpt-4o", "gpt-4o", id="env-local-template"),
+        pytest.param("Dockerfile.dev.j2", "ENV MODEL=gpt-4o", "gpt-4o", id="dockerfile-dev-template"),
         pytest.param("config.yaml.j2", "  - gpt-4o", "gpt-4o", id="yaml-template-list-item"),
         pytest.param("appsettings.json", '"ModelId": "gpt-4o", // the default', "gpt-4o", id="json-comment-after"),
         pytest.param("agent.json", '"url": "http://x//y", "model": "gpt-4o"', "gpt-4o", id="json-slashes-in-a-string"),
@@ -3203,6 +3205,8 @@ _PARAPHRASE = "The agent books tables for Acme guests, keeps other bookings priv
             "The agent is told to be warm and to keep its answers brief.", id="a-whole-short-prompt",
         ),
         pytest.param(_BOOKING, (6, 12), "Be warm and brief.", _PARAPHRASE, id="one-sentence-of-a-long-prompt"),
+        pytest.param(_BOOKING, (6, 12), "be warm and brief", _PARAPHRASE, id="another-case-no-full-stop"),
+        pytest.param(_BOOKING, (6, 12), "Be warm ... brief.", _PARAPHRASE, id="a-short-elided-quote"),
     ],
 )
 @pytest.mark.parametrize("then", ["the-same-again", "the-lines-alone"])
@@ -3347,3 +3351,115 @@ def test_a_saved_call_that_kept_the_quote_says_so(tmp_path, root):
         "\nsystem_prompt_from: the lines named (agent.py 1-4) are recorded as unconfirmed, since "
         "they don't hold the quote; the quote is the prompt."
     )
+
+
+# The settled round 2: a short quote on its own lines, and its limits
+
+
+@pytest.mark.parametrize(
+    "first_lines, short, line",
+    [
+        # The quote held from a call with no lines; then a name on the prompt's first line.
+        pytest.param(None, "PROMPT", 6, id="a-name-after-a-quote-alone"),
+        pytest.param(None, "SYSTEM_PROMPT", 6, id="a-setting-name-after-a-quote-alone"),
+        # The quote held from lines that held it; then a sentence repeated in a comment.
+        pytest.param((6, 12), "Be warm and brief.", 14, id="a-comment-after-a-confirmed-quote"),
+    ],
+)
+def test_a_short_quote_on_its_own_lines_does_not_replace_a_stronger_one(
+    tmp_path, root, first_lines, short, line
+):
+    (root / "agent.py").write_text(_BOOKING + "\n# Style: Be warm and brief.\n", encoding="utf-8")
+    destination = tmp_path / "out"
+    submit = submitter(destination, root)
+    named = [{"path": "agent.py", "start_line": line, "end_line": line}]
+    first = payload(hard_constraints=["Be polite."], system_prompt_excerpt=_BOOKING_QUOTE)
+    if first_lines:
+        first["system_prompt_from"] = [{"path": "agent.py", "start_line": first_lines[0], "end_line": first_lines[1]}]
+    submit(first)
+
+    second = submit(payload(hard_constraints=["Be polite."], system_prompt_excerpt=short, system_prompt_from=named))
+    assert text_of(second).startswith(REFUSED + lines_alone(f"agent.py {line}-{line}", _BOOKING_QUOTE))
+    third = submit(payload(hard_constraints=["Be polite."], system_prompt_excerpt=short, system_prompt_from=named))
+
+    assert not third.get("is_error"), third
+    assert saved(destination)["system_prompt_excerpt"] == _BOOKING_QUOTE
+    assert saved(destination)["unconfirmed_prompt_from"] == named
+
+
+def test_a_padded_short_quote_is_this_calls_own(tmp_path, root):
+    (root / "agent.py").write_text(_BOOKING, encoding="utf-8")
+    submit = submitter(tmp_path / "out", root)
+
+    result = submit(
+        payload(hard_constraints=["Be polite."], system_prompt_excerpt="  Be warm and brief.  ",
+                system_prompt_from=[{"path": "agent.py", "start_line": 1, "end_line": 4}])
+    )
+
+    assert text_of(result).startswith(REFUSED + not_the_quote("agent.py 1-4"))
+
+
+@pytest.mark.parametrize(
+    "quote, held",
+    [
+        pytest.param("Be warm ... brief.", True, id="pieces-in-order"),
+        pytest.param("brief ... Be warm", False, id="pieces-out-of-order"),
+    ],
+)
+def test_a_short_elided_quote_is_looked_for_piece_by_piece(quote, held):
+    from fi.alk.harness.model_citation import quote_problem
+
+    assert (quote_problem(quote, 'P = "Be warm and brief."', "a.py 1-1") is None) == held
+
+
+def test_the_quote_under_its_own_name_comes_before_an_alias():
+    from fi.alk.harness.contract import prompt_quote
+
+    both = payload(system_prompt_excerpt="You are Acme's booking agent.", prompt="Something else entirely.")
+
+    assert prompt_quote(both) == "You are Acme's booking agent."
+    assert AgentContract.model_validate(both).system_prompt_excerpt == "You are Acme's booking agent."
+
+
+@pytest.mark.parametrize(
+    "file",
+    ["prompts/dockerfile_writer.j2", "prompts/env.system.j2", "prompts/system.prompt.j2", "dockerfile.md"],
+)
+def test_a_prompt_named_like_configuration_is_text(root, file):
+    (root / file).parent.mkdir(parents=True, exist_ok=True)
+    (root / file).write_text("You write the deployment.\nmodel: gpt-4o\n", encoding="utf-8")
+
+    problems, _, _ = checked(root, {"name": "gpt-4o", "path": file, "line": 2})
+
+    assert problems == [prose(file)]
+
+
+def test_a_conf_file_has_no_block_comments(root):
+    (root / "site.conf").write_text('\nrewrite ^/(.*)//$ /$1 permanent; set $m "gpt-4o";\n', encoding="utf-8")
+
+    problems, contract, _ = checked(root, {"name": "gpt-4o", "path": "site.conf", "line": 2})
+
+    assert problems == []
+    assert contract.model is not None and contract.model.name == "gpt-4o"
+
+
+def test_a_json_template_keeps_its_comments(root):
+    (root / "config.json.j2").write_text('\n// "model": "gpt-4-turbo",\n', encoding="utf-8")
+
+    problems, _, _ = checked(root, {"name": "gpt-4-turbo", "path": "config.json.j2", "line": 2})
+
+    assert problems == [not_named("gpt-4-turbo", 2, "config.json.j2")]
+
+
+@pytest.mark.parametrize("nothing", ["n / a", "- -", "a b"])
+def test_words_that_say_nothing_do_not_replace_the_held_quote(tmp_path, root, nothing):
+    (root / "agent.py").write_text(_BOOKING, encoding="utf-8")
+    submit = submitter(tmp_path / "out", root)
+    submit(payload(hard_constraints=["Be polite."], system_prompt_excerpt=_BOOKING_QUOTE))
+
+    result = submit(
+        payload(hard_constraints=["Be polite."], system_prompt_excerpt=nothing,
+                system_prompt_from=[{"path": "agent.py", "start_line": 1, "end_line": 4}])
+    )
+
+    assert text_of(result) == REFUSED + lines_alone("agent.py 1-4", _BOOKING_QUOTE)

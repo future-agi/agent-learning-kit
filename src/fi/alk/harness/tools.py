@@ -288,19 +288,25 @@ def _checked_against_source(
                     for where in contract.system_prompt_from
                 )
                 mismatch = quote_problem(quote, contract.system_prompt_excerpt, named)
+                confirmed = None if mismatch else quote
                 if (
                     mismatch
                     # Only lines checked against a held quote can hold their own instead (and
                     # the second search is spent only then).
                     and alone
                     and says_something(own)
+                    # Words, not a name: PROMPT or SYSTEM_PROMPT is on almost any prompt's lines.
+                    and len(own.split()) > 1
+                    # A quote some lines already held stands: a short one doesn't replace it.
+                    and held.get("prompt-quote-confirmed") != quote
                     and quote_problem(own, contract.system_prompt_excerpt, named) is None
                 ):
                     # The call's own short quote is in its lines letter for letter: that is this
                     # call's evidence, and the quote it passed with is the reading's latest now.
                     mismatch = None
-                    if held is not None:
-                        held["prompt-quote"] = own
+                    held["prompt-quote"] = confirmed = own
+                if held is not None and confirmed and says_something(confirmed):
+                    held["prompt-quote-confirmed"] = confirmed
                 if mismatch:
                     if asked is None:
                         problems.append(mismatch)
@@ -319,7 +325,7 @@ def _checked_against_source(
                             f"system_prompt_from: the lines named ({named}) don't hold the quote "
                             f"you gave before ({shown}); if these lines are the prompt, quote "
                             "them word for word in system_prompt_excerpt, with ... where you "
-                            f"leave text out. If they are refused again, {outcome}"
+                            f"leave text out. If they are refused again against it, {outcome}"
                         )
                     elif asked & {"prompt-quote", "prompt-lines-alone"}:
                         # Either way the lines are kept on record as unconfirmed.
@@ -346,8 +352,8 @@ def _checked_against_source(
                         problems.append(
                             "system_prompt_from: lines named later are checked against this "
                             "quote until you give another; a later mismatch records the lines as "
-                            "unconfirmed and keeps the quote, or the lines if the quote is only a "
-                            "few words"
+                            "unconfirmed and keeps the quote, or the lines if the quote has fewer "
+                            "than 16 letters"
                         )
             if cited := model_problems(contract, source_root):
                 if asked is not None and "model" in asked:

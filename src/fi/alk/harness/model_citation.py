@@ -461,7 +461,8 @@ def kind_suffix(path: Path) -> str:
     suffix = path.suffix.lower()
     if suffix in _TEMPLATE_SUFFIXES:
         inner = Path(path.stem).suffix.lower()
-        if inner in CONFIG_SUFFIXES:
+        # Not .prompt: system.prompt.j2 is a Jinja prompt, not a Dotprompt file.
+        if inner in CONFIG_SUFFIXES and inner != ".prompt":
             return inner
     return suffix
 
@@ -478,9 +479,20 @@ def is_config_file(path: Path) -> bool:
     )
 
 
+def _names_configuration(name: str) -> bool:
+    """A file name that is configuration by itself: Makefile, .env, .env.local, Dockerfile,
+    Dockerfile.dev."""
+    return (
+        name in _CONFIG_NAMES
+        or name in (".env", "dockerfile")
+        or name.startswith((".env.", "dockerfile."))
+    )
+
+
 def is_prose_file(path: Path) -> bool:
-    if path.suffix.lower() in _TEMPLATE_SUFFIXES and is_config_file(path):
-        # A template that renders configuration by its name: .env.j2, Dockerfile.j2.
+    if path.suffix.lower() in _TEMPLATE_SUFFIXES and _names_configuration(Path(path.stem).name.lower()):
+        # A template that renders configuration by its name: .env.j2, Dockerfile.j2 (not
+        # dockerfile_writer.j2 or env.system.j2, which are prompts).
         return False
     return kind_suffix(path) in PROSE_SUFFIXES or (
         not path.suffix and path.name.lower() in _PROSE_STEMS
@@ -697,19 +709,33 @@ def _holds(found: str, pieces: list[list[str]]) -> bool:
     return True
 
 
+def _in_order(pieces: list[str], found: str) -> bool:
+    """Whether each piece is in ``found``, each after the one before."""
+    at = 0
+    for piece in pieces:
+        start = found.find(piece, at)
+        if start < 0:
+            return False
+        at = start + len(piece)
+    return True
+
+
 def quote_problem(quote: str, copied: str, named: str) -> str | None:
     """A problem when the lines named for the prompt don't hold the quote given for it: they
     replace the quote, so lines that miss any of it (a range that stops short, or the wrong
     lines) would send other text as the agent's instructions. A quote of fewer than
-    _SHORTEST_QUOTE letters is looked for whole, with no gaps. Lines that hold more than the quote
+    _SHORTEST_QUOTE letters is looked for whole, with no gaps but at its `...`. Lines that hold more than the quote
     are not caught."""
     pieces = quote_pieces(quote)
     if pieces:
         held = _holds(_letters(copied), pieces)
     else:
-        # A quote too short to search for with gaps must be in the lines letter for letter; one
-        # that says nothing isn't looked for.
-        held = not says_something(quote) or _letters(quote) in _letters(copied)
+        # A quote too short to search for with gaps must be in the lines letter for letter, each
+        # piece between its ... after the one before; one that says nothing isn't looked for.
+        held = not says_something(quote) or _in_order(
+            [letters for piece in _ELISION.split(quote) if (letters := _letters(piece))],
+            _letters(copied),
+        )
     if held:
         return None
     return (
