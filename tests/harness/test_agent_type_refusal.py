@@ -4054,7 +4054,68 @@ def test_a_toolkit_whose_record_is_left_unread_is_not_the_customers_module(tmp_p
     assert browser_tools_in_agent(repo, "agents/a") == ["PlayWrightBrowserToolkit"]
 
 
-def test_the_save_does_not_follow_an_import_through_a_folder_link(tmp_path):
+@pytest.mark.parametrize(
+    "members, found, stopped",
+    [
+        ('["libs/*"]', True, False),
+        ('["libs/common"]', True, False),
+        ('["libs/*"]\nexclude=["libs/common"]', False, False),
+        ('["**/common"]', False, True),
+        ('["/abs/*", "../out/*", 5]', False, False),
+    ],
+    ids=["glob", "literal", "excluded", "double-star-not-expanded", "invalid"],
+)
+def test_the_walk_looks_in_the_workspaces_members(tmp_path, members, found, stopped):
+    from fi.alk.harness.credentials import imported_by_agent
+
+    repo = _tree(
+        tmp_path / "repo",
+        {
+            "pyproject.toml": f"[tool.uv.workspace]\nmembers={members}\n",
+            "agents/a/agent.py": "from common import llm\n",
+            "libs/common/pyproject.toml": "",
+            "libs/common/src/common/__init__.py": "",
+            "libs/common/src/common/llm.py": "",
+        },
+    )
+    llm = (repo / "libs" / "common" / "src" / "common" / "llm.py").resolve()
+    said: list[bool] = []
+
+    assert (llm in imported_by_agent(repo, "agents/a", lookup_limit=100_000, stopped=said)) is found
+    assert said == [stopped]
+
+
+def test_a_workspace_pattern_out_of_the_root_isnt_listed(tmp_path, monkeypatch):
+    from fi.alk.harness import credentials
+
+    repo = _tree(
+        tmp_path / "repo",
+        {"pyproject.toml": '[tool.uv.workspace]\nmembers=["../*", "/*"]\n', "agents/a/agent.py": "x = 1\n"},
+    )
+    listed: list[str] = []
+    real = credentials.os.scandir
+    monkeypatch.setattr(credentials.os, "scandir", lambda path: listed.append(str(path)) or real(path))
+
+    credentials.imported_by_agent(repo, "agents/a", lookup_limit=100_000)
+    assert not [path for path in listed if not Path(path).resolve().is_relative_to(repo.resolve())]
+
+
+def test_the_walk_adds_at_most_so_many_workspace_members(tmp_path, monkeypatch):
+    from fi.alk.harness import credentials
+
+    monkeypatch.setattr(credentials, "_WORKSPACE_MEMBERS", 3)
+    files = {"pyproject.toml": '[tool.uv.workspace]\nmembers=["libs/*"]\n', "agents/a/agent.py": "x = 1\n"}
+    files |= {f"libs/m{n}/pyproject.toml": "" for n in range(5)}
+    repo = _tree(tmp_path / "repo", files)
+    said: list[bool] = []
+
+    credentials.imported_by_agent(repo, "agents/a", lookup_limit=100_000, stopped=said)
+    assert said == [True]
+    members, cut = credentials._workspace_members(repo.resolve(), (repo / "agents" / "a").resolve(), [1e9])
+    assert len(members) == 3 and cut
+
+
+def test_the_save_follows_an_import_through_a_folder_link_as_bundling_does(tmp_path):
     from fi.alk.harness.credentials import imported_by_agent
 
     repo = _tree(
@@ -4064,13 +4125,24 @@ def test_the_save_does_not_follow_an_import_through_a_folder_link(tmp_path):
     (repo / "shared").symlink_to("common")
     web = (repo / "common" / "web.py").resolve()
 
-    # Resolving through a link costs lookups the save can't charge, so at the save it's a miss;
-    # bundling still follows it.
-    assert web not in imported_by_agent(repo, "agents/a", lookup_limit=100_000)
+    # The link is followed to its target inside the repository, its lookups charged (Dileep's
+    # third review: instrumentation and the browser check are derived from this reach).
+    assert web in imported_by_agent(repo, "agents/a", lookup_limit=100_000)
     assert web in imported_by_agent(repo, "agents/a")
 
 
-def test_the_save_does_not_follow_an_import_through_a_link_two_folders_up(tmp_path, monkeypatch):
+@pytest.mark.parametrize("absolute", [True, False])
+def test_the_save_does_not_follow_a_folder_link_out_of_the_repository(tmp_path, absolute):
+    from fi.alk.harness.credentials import imported_by_agent
+
+    outside = _tree(tmp_path / "outside", {"web.py": "", "__init__.py": ""})
+    repo = _tree(tmp_path / "repo", {"agents/a/agent.py": "import shared.web\n"})
+    (repo / "shared").symlink_to(outside if absolute else "../outside")
+
+    assert imported_by_agent(repo, "agents/a", lookup_limit=100_000) == frozenset()
+
+
+def test_the_save_follows_a_link_two_folders_up_looking_each_folder_up_once(tmp_path, monkeypatch):
     from fi.alk.harness.credentials import imported_by_agent
 
     repo = _tree(
@@ -4089,11 +4161,110 @@ def test_the_save_does_not_follow_an_import_through_a_link_two_folders_up(tmp_pa
     real = Path.lstat
     monkeypatch.setattr(Path, "lstat", lambda self: looked.update([self]) or real(self))
     # The candidate's own folder isn't a link, the one above it is.
-    assert web not in imported_by_agent(repo, "agents/a", lookup_limit=100_000)
+    assert web in imported_by_agent(repo, "agents/a", lookup_limit=100_000)
     folders = {path: count for path, count in looked.items() if path.is_dir()}
     assert folders and max(folders.values()) == 1
-    monkeypatch.undo()
-    assert web in imported_by_agent(repo, "agents/a")
+
+
+@pytest.mark.parametrize("target", ["loop", "missing", "file"])
+def test_the_save_takes_a_folder_link_it_cant_follow_as_a_miss(tmp_path, target):
+    from fi.alk.harness.credentials import imported_by_agent
+
+    repo = _tree(tmp_path / "repo", {"agents/a/agent.py": "import shared.web\n", "notes.txt": ""})
+    if target == "loop":
+        (repo / "other").symlink_to("shared")
+        (repo / "shared").symlink_to("other")
+    elif target == "missing":
+        (repo / "shared").symlink_to("nowhere")
+    else:
+        (repo / "shared").symlink_to("notes.txt")
+
+    assert imported_by_agent(repo, "agents/a", lookup_limit=100_000) == frozenset()
+
+
+def test_the_save_follows_a_link_out_of_the_repository_and_back_in(tmp_path):
+    from fi.alk.harness.credentials import imported_by_agent
+
+    repo = _tree(
+        tmp_path / "repo",
+        {"agents/a/agent.py": "import shared.web\n", "common/__init__.py": "", "common/web.py": ""},
+    )
+    (repo / "shared").symlink_to("../repo/common")
+
+    assert (repo / "common" / "web.py").resolve() in imported_by_agent(
+        repo, "agents/a", lookup_limit=100_000
+    )
+
+
+def test_a_name_under_a_link_that_leads_nowhere_still_spends_the_lookups(tmp_path):
+    from fi.alk.harness.credentials import imported_by_agent
+
+    names = "".join(f"import gone.m{n}\n" for n in range(300))
+    repo = _tree(tmp_path / "repo", {"agents/a/agent.py": names})
+    (repo / "gone").symlink_to("nowhere")
+    said: list[bool] = []
+
+    # The folder is looked up once, but each name tried under it is still charged a miss.
+    imported_by_agent(repo, "agents/a", lookup_limit=200, stopped=said)
+    assert said == [True]
+
+
+def test_a_candidate_past_the_depth_cut_isnt_walked_folder_by_folder(tmp_path, monkeypatch):
+    from fi.alk.harness import credentials
+
+    deep = "/".join(["a"] * 2_000)
+    repo = _tree(tmp_path / "repo", {"agents/a/index.js": f'import "./{deep}/x";\n'})
+    deepest = len(repo.resolve().parts) + credentials._DEEPEST_FOLLOWED
+    walked: list[int] = []
+    real = credentials._real_folder
+    monkeypatch.setattr(
+        credentials,
+        "_real_folder",
+        lambda folder, *rest: walked.append(len(folder.parts)) or real(folder, *rest),
+    )
+
+    credentials.imported_by_agent(repo, "agents/a", lookup_limit=100_000)
+    # Each would keep a path for each of its 2,000 folders, for every such name.
+    assert all(parts < deepest for parts in walked)
+
+
+def test_each_folder_and_each_link_is_charged_once(tmp_path):
+    from fi.alk.harness.credentials import _real_folder
+
+    repo = _tree(tmp_path / "repo", {"real/deep/x.py": ""}).resolve()
+    (repo / "link").symlink_to("real")
+    known: dict = {}
+    left = [100.0]
+
+    # One for each folder below the root.
+    assert _real_folder(repo / "real" / "deep", repo, known, left) == repo / "real" / "deep"
+    assert left == [98.0]
+    # The link: one for it, one for its target, whose folder is known already.
+    assert _real_folder(repo / "link" / "deep", repo, known, left) == repo / "real" / "deep"
+    assert left == [95.0]
+    # Known: nothing more.
+    assert _real_folder(repo / "link" / "deep", repo, known, left) == repo / "real" / "deep"
+    assert left == [95.0]
+
+
+def test_the_save_follows_a_chain_of_links_once_each(tmp_path, monkeypatch):
+    from fi.alk.harness import credentials
+
+    files = {"agents/a/agent.py": "".join(f"import l0.m{n}\n" for n in range(200))}
+    files |= {f"real/m{n}.py": "" for n in range(200)}
+    repo = _tree(tmp_path / "repo", files)
+    for n in range(30):
+        (repo / f"l{n}").symlink_to(f"l{n + 1}" if n < 29 else "real")
+    read: Counter[str] = Counter()
+    real_readlink = os.readlink
+    monkeypatch.setattr(
+        credentials.os, "readlink", lambda path: read.update([str(path)]) or real_readlink(path)
+    )
+
+    found = credentials.imported_by_agent(repo, "agents/a", lookup_limit=100_000)
+    assert (repo / "real" / "m199.py").resolve() in found
+    # Each link read once in the whole walk, however many imports go through it.
+    assert read and max(read.values()) == 1
 
 
 def test_a_script_import_naming_thousands_of_folders_does_not_raise_at_the_save(tmp_path):

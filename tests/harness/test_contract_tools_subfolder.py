@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import sys
 from pathlib import Path
 
 import pytest
@@ -1511,8 +1512,10 @@ def test_a_link_loop_is_refused_as_resolve_refuses_it(tmp_path):
     (tmp_path / "one").symlink_to("two")
     (tmp_path / "two").symlink_to("one")
 
-    with pytest.raises(RuntimeError, match="Symlink loop"):
-        (tmp_path / "one" / "x").resolve()
+    if sys.version_info < (3, 13):
+        # 3.13's non-strict resolve no longer raises on a loop; the charged one still does.
+        with pytest.raises(RuntimeError, match="Symlink loop"):
+            (tmp_path / "one" / "x").resolve()
     with pytest.raises(RuntimeError, match="Symlink loop"):
         runtime_selection._charged_resolve(tmp_path / "one" / "x")
 
@@ -1897,6 +1900,70 @@ def test_the_folders_instrumentation_counts_the_shared_code_it_imports(tmp_path,
 
     assert not result.get("is_error"), result
     assert _saved(tmp_path / "out")["instrumentation"] == expected
+
+
+@pytest.mark.parametrize("package", ["testing_utils", "tests_shared", "e2e"])
+def test_the_folders_instrumentation_counts_a_test_named_package_it_imports(tmp_path, repo, package):
+    # The walk follows it and the credential scan reads it, so instrumentation does too (Dileep's
+    # third review): the root build says traceai.
+    (repo / "agents" / "a" / "agent.py").write_text(f"from {package} import tracing\n")
+    (repo / package).mkdir()
+    (repo / package / "__init__.py").write_text("")
+    (repo / package / "tracing.py").write_text("import traceai_openai\n")
+
+    result = accept_contract(
+        payload(runtime={"language": "python"}),
+        tmp_path / "out",
+        source_root=repo,
+        subfolder="agents/a",
+    )
+
+    assert not result.get("is_error"), result
+    assert _saved(tmp_path / "out")["instrumentation"] == "traceai"
+
+
+def test_the_folders_instrumentation_counts_another_workspace_members_code(tmp_path, repo):
+    (repo / "pyproject.toml").write_text('[tool.uv.workspace]\nmembers=["agents/*", "libs/*"]\n')
+    (repo / "agents" / "a" / "agent.py").write_text("from common import tracing\n")
+    shared = repo / "libs" / "common" / "src" / "common"
+    shared.mkdir(parents=True)
+    (repo / "libs" / "common" / "pyproject.toml").write_text("[project]\nname='common'\nversion='1'\n")
+    (shared / "__init__.py").write_text("")
+    (shared / "tracing.py").write_text("import traceai_openai\n")
+
+    result = accept_contract(
+        payload(runtime={"language": "python"}),
+        tmp_path / "out",
+        source_root=repo,
+        subfolder="agents/a",
+    )
+
+    assert not result.get("is_error"), result
+    assert _saved(tmp_path / "out")["instrumentation"] == "traceai"
+
+
+def test_the_save_follows_a_committed_folder_link_to_the_shared_code(tmp_path, repo):
+    # common -> libs/common: bundling follows it, so the save does too, and instrumentation and the
+    # browser check read what's behind it (Dileep's third review).
+    (repo / "agents" / "a" / "agent.py").write_text("from common import tracing, browse\n")
+    shared = repo / "libs" / "common"
+    shared.mkdir(parents=True)
+    (shared / "__init__.py").write_text("")
+    (shared / "tracing.py").write_text("import traceai_openai\n")
+    (shared / "browse.py").write_text("import playwright\n")
+    (repo / "common").symlink_to("libs/common")
+
+    from fi.alk.harness.agent_type_check import browser_tools_in_agent
+
+    assert browser_tools_in_agent(repo, "agents/a") == ["playwright"]
+    result = accept_contract(
+        payload(runtime={"language": "python"}),
+        tmp_path / "out",
+        source_root=repo,
+        subfolder="agents/a",
+    )
+    assert not result.get("is_error"), result
+    assert _saved(tmp_path / "out")["instrumentation"] == "traceai"
 
 
 def test_the_save_walks_the_agents_imports_once(tmp_path, repo, monkeypatch):

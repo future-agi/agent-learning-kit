@@ -8,6 +8,7 @@ platform can use to ask for missing secrets before a build or provider call star
 from __future__ import annotations
 
 import ast
+import fnmatch
 import hashlib
 import json
 import logging
@@ -690,20 +691,166 @@ def _file_inside(
     return resolved if len(resolved.parts) <= deepest and is_within(resolved, root) else None
 
 
-def _no_link_above(folder: Path, root: Path, known: dict[Path, bool]) -> bool:
-    """No folder between ``root`` and ``folder`` is a link, each folder looked up once a walk."""
-    if len(folder.parts) <= len(root.parts):
-        return True
-    if folder not in known:
-        # Its parent first, so nothing below a link is looked up.
-        plain = _no_link_above(folder.parent, root, known)
-        if plain:
-            try:
-                plain = stat.S_ISDIR(folder.lstat().st_mode)
-            except (OSError, ValueError):
-                plain = False
-        known[folder] = plain
-    return known[folder]
+# A uv workspace's members, at most: each is two more places every Python import is looked for.
+_WORKSPACE_MEMBERS = 128
+# The largest pyproject.toml read for its workspace.
+_LARGEST_PYPROJECT = 256 * 1024
+
+
+def _workspace_members(
+    root: Path, folder: Path, left: list[float]
+) -> tuple[list[Path], bool]:
+    """The members of the nearest uv workspace at or above ``folder`` inside ``root``, and
+    whether some weren't looked for.
+
+    ``uv run`` installs them, so an agent imports one by its package name. Each folder entry
+    looked at is charged to ``left``. A ``**`` pattern isn't expanded, and past
+    ``_WORKSPACE_MEMBERS`` members the rest aren't added: both say so.
+    """
+    for workspace in (folder, *folder.parents):
+        if not is_within(workspace, root):
+            return [], False
+        document = workspace / "pyproject.toml"
+        # Not charged: one look per folder up to the root, which the depth cut bounds.
+        try:
+            if not document.is_file() or document.stat().st_size > _LARGEST_PYPROJECT:
+                continue
+            import tomllib
+
+            table = tomllib.loads(document.read_text(encoding="utf-8"))
+        except (OSError, ValueError, ImportError):
+            continue
+        uv = table.get("tool", {}).get("uv", {}) if isinstance(table.get("tool"), dict) else {}
+        found = uv.get("workspace") if isinstance(uv, dict) else None
+        if isinstance(found, dict):
+            break
+    else:
+        return [], False
+    cut = False
+
+    def expand(patterns: object) -> list[Path]:
+        nonlocal cut
+        matched: list[Path] = []
+        for pattern in patterns if isinstance(patterns, list) else []:
+            parts = PurePosixPath(pattern).parts if isinstance(pattern, str) else ()
+            if not parts or PurePosixPath(pattern).is_absolute() or ".." in parts:
+                continue
+            if "**" in parts:
+                cut = True
+                continue
+            level = [workspace]
+            for part in parts:
+                below: list[Path] = []
+                for base in level:
+                    if not any(mark in part for mark in "*?["):
+                        left[0] -= 1
+                        if (base / part).is_dir():
+                            below.append(base / part)
+                        continue
+                    try:
+                        with os.scandir(base) as entries:
+                            for entry in entries:
+                                left[0] -= 1
+                                if left[0] <= 0:
+                                    cut = True
+                                    break
+                                if fnmatch.fnmatchcase(entry.name, part) and entry.is_dir(
+                                    follow_symlinks=False
+                                ):
+                                    below.append(base / entry.name)
+                    except OSError:
+                        continue
+                level = sorted(below)
+            matched.extend(level)
+        return matched
+
+    excluded = set(expand(found.get("exclude", [])))
+    members = sorted(
+        member
+        for member in dict.fromkeys(expand(found.get("members", [])))
+        if member not in excluded and member != workspace
+    )
+    if len(members) > _WORKSPACE_MEMBERS:
+        members, cut = members[:_WORKSPACE_MEMBERS], True
+    return members, cut
+
+
+# Links one folder lookup may follow, as the kernel allows about as many in one path.
+_LINKS_FOLLOWED = 40
+
+
+def _real_folder(
+    folder: Path,
+    root: Path,
+    known: dict[Path, Path | None],
+    left: list[float],
+    hops: list[int] | None = None,
+) -> Path | None:
+    """``folder`` with each link in it followed, if it's a folder inside ``root``; else None.
+
+    Each folder below ``root`` is looked up once a walk, charged one lookup to ``left``, and a
+    link one more for its target, whose parts are looked up the same way: the kernel follows the
+    links of a path uncharged, and a chain of them held the save 11.6 s. A link that leaves
+    ``root``, a missing folder, a loop and a chain past ``_LINKS_FOLLOWED`` give None.
+    """
+    hops = [0] if hops is None else hops
+    if not is_within(folder, root):
+        return None
+    # The nearest folder already known, then each one below it in turn.
+    pending: list[Path] = []
+    place = folder
+    while place != root and place not in known:
+        pending.append(place)
+        place = place.parent
+    real = root if place == root else known[place]
+    for literal in reversed(pending):
+        if real is None:
+            known[literal] = None
+            continue
+        # Marked first, so a link back to it reads as a loop.
+        known[literal] = None
+        real = _followed(real / literal.name, root, known, left, hops)
+        known[literal] = real
+    return real
+
+
+def _followed(
+    place: Path, root: Path, known: dict[Path, Path | None], left: list[float], hops: list[int]
+) -> Path | None:
+    """``place``, a name in a folder with no link in it, as a folder: itself, or its link's
+    target followed, if that's a folder inside ``root``."""
+    left[0] -= 1
+    try:
+        mode = place.lstat().st_mode
+    except (OSError, ValueError):
+        return None
+    if stat.S_ISDIR(mode):
+        return place
+    if not stat.S_ISLNK(mode) or hops[0] >= _LINKS_FOLLOWED:
+        return None
+    hops[0] += 1
+    left[0] -= 1
+    try:
+        target = Path(os.readlink(place))
+    except (OSError, ValueError):
+        return None
+    real = root if target.is_absolute() else place.parent
+    if target.is_absolute():
+        if not is_within(target, root):
+            return None
+        target = target.relative_to(root)
+    for part in target.parts:
+        if part in ("", "."):
+            continue
+        if part == "..":
+            # The folder reached so far has no link in it, so its parent is the real one. Out of
+            # the root and back in is followed, as the kernel follows it; staying out isn't.
+            real = real.parent
+            continue
+        real = _real_folder(real / part, root, known, left, hops)
+        if real is None:
+            return None
+    return real
 
 
 def _code_in(folder: Path) -> Iterator[Path]:
@@ -837,7 +984,6 @@ def imported_by_agent(
         folder = agent_folder(root, subfolder)
     except SubfolderNotFound:
         return frozenset()
-    python_bases = (folder, folder / "src", root, root / "src")
     deepest = len(root.parts) + _DEEPEST_FOLLOWED
     # Each package and each file found is looked up once in the whole walk: resolving one costs a
     # lookup for each folder in it, and a chain of packages names the same ones from every file.
@@ -847,28 +993,46 @@ def imported_by_agent(
     # A name is tried once, but a crafted chain of packages makes it resolve dozens of paths, each
     # dozens of parts deep: 1,000 names took the save 12 s. What is looked up again costs nothing.
     lookups_left = [math.inf if lookup_limit is None else float(lookup_limit)]
-    # At the save, a candidate under a folder link (or a folder that isn't there) is a charged
-    # miss, not resolved: the kernel and resolve() follow every link in a path uncharged, and a
-    # chain of them took 2,300 imports 11.6 s. Each folder is looked at once a walk. Bundling,
-    # with no limit, still follows such links.
-    plain_folders: dict[Path, bool] | None = None if lookup_limit is None else {}
+    # A uv workspace's members are installed with the agent, so an import names one by its package
+    # (Dileep's third review): each member's folder and its src/ are looked in too.
+    members, members_cut = _workspace_members(root, folder, lookups_left)
+    python_bases = (
+        folder,
+        folder / "src",
+        root,
+        root / "src",
+        *(base for member in members for base in (member / "src", member)),
+    )
+    # At the save, a candidate's folders are looked up one by one, each once a walk, and a folder
+    # link is followed to its target inside the repository, charged: the kernel and resolve()
+    # follow every link in a path uncharged, and a chain of them took 2,300 imports 11.6 s. So the
+    # save reaches what bundling, which resolves as the kernel does, reaches.
+    real_folders: dict[Path, Path | None] | None = None if lookup_limit is None else {}
+    spent = [False]
 
     def found_at(candidates: Iterable[Path]) -> Path | None:
         for candidate in candidates:
             if candidate in looked_up:
                 hit = looked_up[candidate]
             elif lookups_left[0] <= 0:
+                # A name left untried: the walk didn't reach all it could.
+                spent[0] = True
                 return None
-            elif (
-                plain_folders is not None
-                # The depth cut first: a script's import can name about 2,000 folders.
-                and len(candidate.parts) <= deepest
-                and not _no_link_above(candidate.parent, root, plain_folders)
-            ):
-                lookups_left[0] -= 1
-                hit = None
             else:
-                hit = _file_inside(candidate, root, deepest, lookups_left)
+                place = candidate
+                if (
+                    real_folders is not None
+                    # The depth cut first: a script's import can name about 2,000 folders.
+                    and len(candidate.parts) <= deepest
+                ):
+                    # Through its folders' links, each followed once and charged.
+                    folder_found = _real_folder(candidate.parent, root, real_folders, lookups_left)
+                    place = None if folder_found is None else folder_found / candidate.name
+                if place is None:
+                    lookups_left[0] -= 1
+                    hit = None
+                else:
+                    hit = _file_inside(place, root, deepest, lookups_left)
                 if hit is not None or candidate.name == "__init__.py":
                     looked_up[candidate] = hit
             if hit is not None:
@@ -914,7 +1078,7 @@ def imported_by_agent(
     pending = deque(sorted(_code_in(folder)))
     own = set(pending)  # Read once already, so importing one doesn't queue it again.
     read = bytes_read = imports_tried = 0
-    cut = False
+    cut = members_cut
     import_limit = _MAX_WALK_IMPORTS if import_limit is None else import_limit
     while (
         pending
@@ -979,7 +1143,7 @@ def imported_by_agent(
                     pending.append(hit)
     if stopped is not None:
         # The loop ends with files left only when a limit ended it.
-        stopped[:] = [cut or bool(pending)]
+        stopped[:] = [cut or spent[0] or bool(pending)]
     return frozenset(seen)
 
 

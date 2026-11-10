@@ -645,8 +645,9 @@ def browser_tools_in_agent(
     """What one agent of a repository uses: its folder, what it imports, and the files directly
     in the folders above it. A sibling's browser tool says nothing about this agent.
 
-    Given ``reached``, it's filled with those files outside the folder, so another scan can read
-    them without walking the imports again.
+    Given ``reached``, it's filled with the files outside the folder the agent reaches: those
+    above it, and every file its imports lead to, filtered or not, so another scan can read them
+    without walking the imports again.
 
     Raises ``SubfolderNotFound`` for a folder that can't be used.
     """
@@ -688,11 +689,10 @@ def browser_tools_in_agent(
                     break
         return False
 
+    walked = sorted(_walked(root, subfolder))
     shared = [
         path
-        for path in sorted(
-            _walked(root, subfolder)
-        )
+        for path in walked
         if not _not_the_agent_file(path.name)
         and not unpacked(path)
         # Only the folders the agent reaches it through: a whole repository under `e2e/` is
@@ -707,7 +707,10 @@ def browser_tools_in_agent(
         # model's reading, not a refusal.
         local = set()
     if reached is not None:
-        reached[:] = [*above, *shared]
+        # Everything the walk followed, as the credential scan reads it: a test-named package the
+        # agent imports still runs (Dileep's third review). The files above stay filtered: a root
+        # conftest.py isn't the agent's code.
+        reached[:] = [*above, *walked]
     # A shared script's dependencies are declared in its package, at or above it.
     manifests = [
         parent / "package.json"
