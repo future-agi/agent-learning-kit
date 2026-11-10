@@ -1361,6 +1361,25 @@ def _records_the_agent_cannot_see(scenario: Scenario, world_root: Path) -> list[
     return out
 
 
+def _budgets_for_unknown_workers(scenario: Scenario, world_root: Path) -> str:
+    """A budget per worker names only the contract's workers: a misspelt id would leave that worker with no deadline."""
+    budgets = scenario.worker_budget_seconds
+    if not isinstance(budgets, dict):
+        return ""
+    try:
+        contract = json.loads((Path(world_root) / "contract.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return ""
+    declared = {str(one.get("id")) for one in contract.get("workers") or [] if isinstance(one, dict)}
+    unknown = sorted(str(worker) for worker in budgets if str(worker) not in declared)
+    if not unknown:
+        return ""
+    return (
+        f"worker_budget_seconds: {', '.join(unknown)} {'is' if len(unknown) == 1 else 'are'} not one of the contract's "
+        f"workers ({', '.join(sorted(declared)) or 'none declared'}); name a declared worker or give one number for all"
+    )
+
+
 def _steps_the_contract_refuses(scenario: Scenario, world_root: Path) -> list[str]:
     """Solution steps that call a tool, argument or declared value the agent's contract does not have."""
     try:
@@ -1580,6 +1599,8 @@ def accept_scenario(
         return _err(f"Not kept. {invalid}"[:600])
     if unlisted := _unlisted_actors(scenario, world_root):
         return _err("Not kept. " + " ".join(unlisted))
+    if unknown := _budgets_for_unknown_workers(scenario, world_root):
+        return _err("Not kept. " + unknown)
     if scenario.starts_with is not None and spoken:
         # No transport delivers an event to a voice agent: the scenario would run as an ordinary call instead.
         return _err(
