@@ -1001,3 +1001,71 @@ def test_a_task_driven_run_s_task_reaches_the_platform_as_the_person_s_message()
     from fi.alk.harness.platform import SPEAKERS
 
     assert SPEAKERS["task"] == "user"
+
+
+def test_a_start_message_from_no_one_is_read_back_with_the_actors_who_could_send_it(tmp_path):
+    from fi.alk.harness.scenario import Scenario
+    from fi.alk.harness.scenario_tools import cast_read_back
+
+    save_actors(tmp_path, ActorList(actors=[Actor(id="manager", name="Alex Vance", permitted_actions=["chat.post_message"])]))
+    unsent = Scenario.model_validate({"name": "x", "instruction": "A deal was approved.", "starts_with": {"text": "Apply it."}})
+    said = cast_read_back(unsent, tmp_path)
+    assert "Started by: the scenario's own task" in said
+    assert "The start message comes from no one" in said and "Alex Vance (manager)" in said
+    sent = Scenario.model_validate(
+        {"name": "x", "instruction": "A deal was approved.", "starts_with": {"actor": "manager", "text": "Apply it."}}
+    )
+    assert "comes from no one" not in cast_read_back(sent, tmp_path)
+
+
+def test_an_actor_whose_role_names_one_caller_is_read_back_as_written_for_one_scenario(tmp_path):
+    from fi.alk.harness.scenario import Scenario
+    from fi.alk.harness.scenario_tools import cast_read_back
+
+    save_actors(
+        tmp_path,
+        ActorList(actors=[Actor(id="spouse", name="Sam Whitfield", role="Spouse of caller Dana Whitfield", channel="audio_mix")]),
+    )
+    other_caller = Scenario.model_validate(
+        {"name": "x", "instruction": "Ask about the claim.", "persona": {"name": "Chloe Park"}, "actors": [{"id": "spouse"}]}
+    )
+    said = cast_read_back(other_caller, tmp_path, {"dana whitfield", "chloe park"})
+    assert "Sam Whitfield's role names Dana Whitfield, a caller in this suite" in said
+    assert "never by one scenario's names" in said
+    # The same caller's own scenario is caught too: the actor is shared by every scenario.
+    assert "names Dana Whitfield" in cast_read_back(
+        Scenario.model_validate({**other_caller.model_dump(), "persona": {"name": "Dana Whitfield"}}), tmp_path
+    )
+    # A role that names people by their part, or a single shared first name, is fine.
+    save_actors(tmp_path, ActorList(actors=[Actor(id="spouse", name="Sam Whitfield", role="The caller's spouse, Dana's husband", channel="audio_mix")]))
+    assert "role names" not in cast_read_back(other_caller, tmp_path, {"dana whitfield", "chloe park"})
+
+
+def test_a_caller_instruction_that_states_what_an_actor_decides_is_read_back_as_settled(tmp_path):
+    from fi.alk.harness.actors import Constraints
+    from fi.alk.harness.scenario import Scenario
+    from fi.alk.harness.scenario_tools import cast_read_back
+
+    save_actors(
+        tmp_path,
+        ActorList(
+            actors=[
+                Actor(
+                    id="manager",
+                    name="Alex Vance",
+                    play="live",
+                    permitted_actions=["approvals.change"],
+                    constraints=Constraints(may_agree=["Up to 18% on deals over $50,000"]),
+                )
+            ]
+        ),
+    )
+    settled = Scenario.model_validate(
+        {"name": "x", "instruction": "The manager agreed 18% on deal 9; apply it.", "actors": [{"id": "manager"}]}
+    )
+    said = cast_read_back(settled, tmp_path)
+    assert "The caller's instruction already states 18%, which Alex Vance decides" in said
+    asked = Scenario.model_validate(
+        {"name": "x", "instruction": "Ask for 25% on deal 9.", "actors": [{"id": "manager"}]}
+    )
+    assert "already states" not in cast_read_back(asked, tmp_path)

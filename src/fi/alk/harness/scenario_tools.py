@@ -422,10 +422,41 @@ def _folded_actors(scenario: Scenario, listed: dict[str, Actor]) -> list[str]:
     ]
 
 
-def cast_read_back(scenario: Scenario, world_root: Path) -> str:
+def _names_a_caller(actor: Actor, caller_names: set[str]) -> str:
+    """The suite caller's full name this environment-wide actor's own text names, or "": an actor is the same in every
+    scenario, so text written for one caller is wrong in every scenario with another."""
+    text = " ".join([actor.role, actor.goal, actor.prompt]).lower()
+    for name in sorted(caller_names):
+        words = name.split()
+        if len(words) >= 2 and re.search(r"\b" + r"\s+".join(map(re.escape, words)) + r"\b", text):
+            return name
+    return ""
+
+
+def _decided_values_the_caller_states(scenario: Scenario, listed: dict[str, Actor]) -> list[tuple[str, list[str]]]:
+    """Per live or speaking actor, the figures its limits decide that the caller's instruction already states: the
+    caller would arrive with the outcome settled, so the actor has nothing left to decide."""
+    said = set(_FIGURE.findall(scenario.instruction or ""))
+    found = []
+    for entry in scenario.actors:
+        actor = listed.get(entry.id)
+        if actor is None or not (actor.channel or actor.play != "mocked" or entry.instruction):
+            continue
+        limits = " ".join([*actor.constraints.may_agree, *actor.constraints.private, entry.instruction])
+        shared = sorted(said & set(_FIGURE.findall(limits)))
+        if shared:
+            found.append((actor.name or actor.id, shared))
+    return found
+
+
+# A figure an actor can decide: an amount, a percentage or a number of two or more digits, never a lone digit.
+_FIGURE = re.compile(r"[$€£]\d+(?:[.,]\d+)?|\d+(?:[.,]\d+)?%|\b\d{2,}(?:[.,]\d+)?\b")
+
+
+def cast_read_back(scenario: Scenario, world_root: Path, caller_names: set[str] | None = None) -> str:
     """Who this scenario plays and how, beside the environment's actors it leaves out, for the writer to compare with
     the request before moving on: each action as a record change or a message, whether anyone talked before the run,
-    and who starts it."""
+    and who starts it. ``caller_names`` are the suite's callers' full names, lowercased."""
     from .world_door import record_action
 
     listed = load_actors(world_root).by_id()
@@ -472,6 +503,17 @@ def cast_read_back(scenario: Scenario, world_root: Path) -> str:
     answering = [
         entry.id for entry in scenario.actors if entry.id in listed and listed[entry.id].channel == "chat_message"
     ]
+    persona = scenario.persona
+    raw_name = persona.get("name") if isinstance(persona, dict) else getattr(persona, "name", "")
+    persona_name = " ".join(str(raw_name or "").lower().split())
+    callers = set(caller_names or set()) | ({persona_name} if persona_name else set())
+    written_for_one = [
+        f"{actor.name}'s role names {named.title()}, a caller in this suite"
+        for actor in (listed.get(one) for one in sorted(_in_scenario(scenario)))
+        if actor is not None and (named := _names_a_caller(actor, callers))
+    ]
+    unsent = scenario.starts_with is not None and not scenario.starts_with.actor
+    decided = _decided_values_the_caller_states(scenario, listed)
     return (
         "\nCast: the caller" + "".join(f"; {one}" for one in parts)
         + f". Talked before the run: {'; '.join(sessions) if sessions else 'nobody (no `pre_run`)'}. Started by: {starter}."
@@ -497,6 +539,27 @@ def cast_read_back(scenario: Scenario, world_root: Path) -> str:
             "caller closes it: keep what they decide out of the caller's instruction, or the caller closes before "
             "they have decided."
             if answering
+            else ""
+        )
+        + (
+            " The start message comes from no one, so the agent reads it as a task, not as anyone's message: if the "
+            f"request says someone sends it ({', '.join(f'{one.name} ({one.id})' for one in others)}), give "
+            "`starts_with` that actor."
+            if unsent
+            else ""
+        )
+        + (
+            " " + "; ".join(written_for_one) + ". An actor is the same in every scenario, so its role names people "
+            "by their part (the caller, the caller's spouse), never by one scenario's names: change it with `add_actor`."
+            if written_for_one
+            else ""
+        )
+        + (
+            " The caller's instruction already states "
+            + "; ".join(f"{', '.join(values)}, which {name} decides" for name, values in decided)
+            + ": the caller would arrive with it settled and nothing is left to negotiate. Give the caller only what "
+            "they ask for, and keep the outcome in that actor's limits."
+            if decided
             else ""
         )
     )
@@ -2523,7 +2586,9 @@ def scenario_tools(
         if not result.get("is_error"):
             exploration["since_submit"] = 0
             try:
-                result["content"][0]["text"] += cast_read_back(Scenario.model_validate(args), world_root)
+                result["content"][0]["text"] += cast_read_back(
+                    Scenario.model_validate(args), world_root, _first_names_on_disk(destination)
+                )
             except Exception:  # noqa: BLE001 - the read-back never changes whether a scenario was kept
                 pass
             try:
