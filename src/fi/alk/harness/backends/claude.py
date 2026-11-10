@@ -470,6 +470,10 @@ class ClaudeBackend:
         )
         if spec.cwd is not None:
             options.cwd = spec.cwd
+        if not spec.granted_anywhere():
+            # A session given no tools sees none: otherwise the CLI's own built-ins are offered, a model may call
+            # one, and a one-turn decision ends at its turn limit with no answer.
+            options.tools = []
         if spec.gated:
             # Not acceptEdits: that auto-approves Edit and Write before the permission callback
             # is consulted, so a stage could rewrite an artifact by hand and skip the tool whose
