@@ -513,6 +513,17 @@ def cast_read_back(scenario: Scenario, world_root: Path, caller_names: set[str] 
         if actor is not None and (named := _names_a_caller(actor, callers))
     ]
     unsent = scenario.starts_with is not None and not scenario.starts_with.actor
+    # Decisions that reach the world only as a record, from an actor who never writes to the agent.
+    silent_deciders = [
+        listed[entry.id].name or entry.id
+        for entry in scenario.actors
+        if entry.id in listed
+        and not listed[entry.id].channel
+        and not entry.instruction
+        and entry.actions
+        and all(record_action(one.action) for one in entry.actions)
+        and any(one.trigger is not None and one.trigger.kind == "on_tool" for one in entry.actions)
+    ]
     decided = _decided_values_the_caller_states(scenario, listed)
     return (
         "\nCast: the caller" + "".join(f"; {one}" for one in parts)
@@ -539,6 +550,13 @@ def cast_read_back(scenario: Scenario, world_root: Path, caller_names: set[str] 
             "caller closes it: keep what they decide out of the caller's instruction, or the caller closes before "
             "they have decided."
             if answering
+            else ""
+        )
+        + (
+            f" {', '.join(silent_deciders)} decide only by writing a record after the agent's call, and say nothing "
+            "to the agent: it learns the decision only from a tool that reads that record or from the person asking "
+            "again. A check that the agent tells the person the outcome needs one of those in the scenario."
+            if silent_deciders
             else ""
         )
         + (

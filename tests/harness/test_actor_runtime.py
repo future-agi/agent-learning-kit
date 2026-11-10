@@ -1092,3 +1092,20 @@ def test_an_actor_with_no_identity_in_a_service_still_acts_there_as_itself():
     asyncio.run(cast.due_lines(agent_turns=1, last_text="", tools_called=[], conversation=[]))
     # With no identity the world would fill in its own default, and that default is the agent.
     assert acted == [("chat.post_message", "manager")]
+
+
+def test_a_decision_written_only_as_a_record_after_the_agent_s_call_is_read_back_as_unseen_by_the_agent(tmp_path):
+    from fi.alk.harness.scenario import Scenario
+    from fi.alk.harness.scenario_tools import cast_read_back
+
+    save_actors(tmp_path, ActorList(actors=[Actor(id="manager", name="Alex Vance", permitted_actions=["approvals.put"])]))
+    on_request = {"action": "approvals.put", "arguments": {"status": "rejected"},
+                  "trigger": {"kind": "on_tool", "tool": "request_discount"}}
+    silent = Scenario.model_validate({"name": "x", "instruction": "Ask for 25%.", "actors": [{"id": "manager", "actions": [on_request]}]})
+    assert "Alex Vance decide only by writing a record after the agent's call" in cast_read_back(silent, tmp_path)
+    # An actor who also tells the agent is heard; no note.
+    told = Scenario.model_validate(
+        {"name": "x", "instruction": "Ask for 25%.",
+         "actors": [{"id": "manager", "instruction": "Say you rejected it.", "actions": [on_request]}]}
+    )
+    assert "decide only by writing a record" not in cast_read_back(told, tmp_path)
