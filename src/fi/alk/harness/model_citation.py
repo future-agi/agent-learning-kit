@@ -10,6 +10,7 @@ and every check of a line costs at most a few passes over it.
 
 from __future__ import annotations
 
+import functools
 import html
 import logging
 import os
@@ -43,12 +44,22 @@ CONFIG_SUFFIXES = frozenset(
 )
 _CONFIG_NAMES = frozenset({"makefile", "gnumakefile", ".flaskenv"})
 # Languages where # isn't a comment: C and C++ (#define), JavaScript and TypeScript (#field),
-# Java, Go, Rust (#[attr]), Swift (#if), Kotlin, C#, Scala, Dart, Objective-C.
+# Java, Go, Rust (#[attr]), Swift (#if), Kotlin, C#, Scala, Dart, Objective-C, Groovy, Gradle,
+# Lua (#t is a length).
 _NO_HASH_COMMENT_SUFFIXES = frozenset(
     {
         ".c", ".h", ".cc", ".cpp", ".cxx", ".hpp", ".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx",
         ".java", ".go", ".rs", ".swift", ".kt", ".kts", ".cs", ".scala", ".dart", ".m", ".mm",
+        ".groovy", ".gradle", ".lua",
     }
+)
+# Files where # starts a comment only at a line's start or after a space: YAML, shell, Makefile
+# and Dockerfile (a#b is a word there), and .env files.
+_SPACED_HASH_SUFFIXES = frozenset({".yaml", ".yml", ".sh", ".bash", ".zsh", ".mk", ".dockerfile"})
+# Files with no block comments, nor //: there `* ` starts no comment (a Python continuation
+# line), and /* and // are text (ls /*, a // 2).
+_NO_BLOCK_COMMENT_SUFFIXES = frozenset(
+    {".py", ".pyi", ".pyw", ".rb", ".pl", ".r", ".jl", ".ex", ".exs", ".nim", ".lua"}
 )
 _YAML_SUFFIXES = frozenset({".yaml", ".yml"})
 # INI files: a line starting with ; is a comment.
@@ -64,8 +75,8 @@ PROSE_SUFFIXES = frozenset(
         ".jinja2", ".hbs", ".mustache",
     }
 )
-# Files written for people, by name: README, CHANGELOG, LICENSE, CONTRIBUTING, with or without a
-# suffix (not readme_writer.py).
+# Files written for people, by name with no suffix: README, CHANGELOG, LICENSE, CONTRIBUTING
+# (README.md is prose by its suffix; readme.py is code).
 _PROSE_STEMS = frozenset({"readme", "changelog", "license", "contributing"})
 # Words a setting is named with, never a model: `cfg.get("model")`, OPENAI_MODEL, llm.model.
 # Not "deployment": an Azure deployment's own name often has it (gpt-4o_deployment).
@@ -88,11 +99,15 @@ _FULL_WIDTH = {code: code - 0xFEE0 for code in range(0xFF01, 0xFF5F)}
 # characters there too.
 _UNSPACED = "\u0e00-\u0eff\u1000-\u109f\u1780-\u17ff\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff"
 _UNSPACED_CHAR = re.compile(f"[{_UNSPACED}]")
-_WORD = re.compile(f"[{_UNSPACED}]|[^\\W_{_UNSPACED}]+")
+# Only a letter of those scripts is a word: their vowel signs and tone marks, and ・, are not.
+_WORD = re.compile(f"(?![\\W_])[{_UNSPACED}]|[^\\W_{_UNSPACED}]+")
 # A quote of fewer letters than this says nothing to check lines against ("n/a", "TBD", "see
 # lines"): a few short words are found in almost any lines. A character of an unspaced script
 # counts as three.
 _SHORTEST_QUOTE = 16
+# Fewer letters than this and a quote says nothing at all ("n/a", "TBD", "none"): it isn't held
+# and isn't checked.
+_SAYS_NOTHING = 6
 # Languages with triple-quoted strings ("""...""" or '''...'''): Python, TOML, Kotlin, Scala,
 # Swift, Groovy and Gradle, Java and C# text blocks, Julia, Dart, Elixir.
 _TRIPLE_SUFFIXES = frozenset(
@@ -113,37 +128,35 @@ _WORD_GAP = 24
 _HASH_ANYWHERE, _HASH_SPACED, _HASH_NONE = "anywhere", "spaced", "none"
 
 
-def _comment_tokens(*, dashes: bool, triple: bool, hash_comments: str) -> re.Pattern[str]:
+@functools.cache
+def _comment_tokens(
+    *, dashes: bool, triple: bool, hash_comments: str, block_comments: bool
+) -> re.Pattern[str]:
     """What the line scan stops at: a triple quote (in languages that have them), a
     double-quoted or backticked string, matched whole (to the line's end if it isn't closed); an
     apostrophe, which the scan pairs itself; or a comment marker. # not in $# (a shell count),
-    &# (an HTML character) or ${# (a shell length); // not in a URL (http://), floor division
-    (x//2) or after a name; /* not in a glob (data/*)."""
+    &# (an HTML character) or ${# (a shell length)."""
     alternatives = ['"""', "'''"] if triple else []
     alternatives += [r'"(?:[^"\\]|\\.)*"?', r"`(?:[^`\\]|\\.)*`?", "'"]
     if hash_comments == _HASH_ANYWHERE:
         alternatives.append(r"(?<!\$\{)(?<![$&])#")
     elif hash_comments == _HASH_SPACED:
         alternatives.append(r"(?<![^ \t])#")
-    alternatives += [r"(?<![:)\]\w])//", r"(?<![\w.*/])/\*", "<!--"]
+    if block_comments:
+        # // and /* only where block comments are: not in Python (a // 2), shell or YAML. // not
+        # in a URL (http://); /* not in a glob (data/*).
+        alternatives += [r"(?<!:)//", r"(?<![\w.*/])/\*"]
+    alternatives.append("<!--")
     if dashes:
         # In SQL, Lua and Haskell, -- starts a comment wherever it is.
         alternatives.append("--")
     return re.compile("|".join(alternatives))
 
 
-_TOKENS = {
-    (dashes, triple, hash_comments): _comment_tokens(
-        dashes=dashes, triple=triple, hash_comments=hash_comments
-    )
-    for dashes in (False, True)
-    for triple in (False, True)
-    for hash_comments in (_HASH_ANYWHERE, _HASH_SPACED, _HASH_NONE)
-}
 # The rest of a string an apostrophe opens, to the apostrophe that closes it.
 _REST_OF_SINGLE = re.compile(r"(?:[^'\\]|\\.)*'")
 # Python's string prefixes: an apostrophe right after one of these opens a string.
-_STRING_PREFIXES = frozenset({"r", "b", "f", "u", "rb", "br", "fr", "rf"})
+_STRING_PREFIXES = frozenset({"r", "b", "f", "u", "t", "rb", "br", "fr", "rf", "tr", "rt"})
 
 
 def _opens_a_string(line: str, at: int) -> bool:
@@ -155,7 +168,7 @@ def _opens_a_string(line: str, at: int) -> bool:
         start -= 1
     if start == at:
         return at == 0 or line[at - 1] != "\\"
-    whole = start == 0 or not (line[start - 1].isalnum() or line[start - 1] == "_")
+    whole = start == 0 or not line[start - 1].isalnum()
     return whole and line[start:at].lower() in _STRING_PREFIXES
 
 
@@ -167,6 +180,7 @@ def _line_scan(
     ini: bool = False,
     triple: bool = False,
     hash_comments: str = _HASH_ANYWHERE,
+    block_comments: bool = True,
 ) -> tuple[int, list[tuple[int, int]], str | None]:
     """One pass over a line: where its comment starts (or its length), the stretches of it that
     are text (inside a triple-quoted string, or a block comment closed on the line), and the
@@ -184,9 +198,13 @@ def _line_scan(
         at = close + 3
     else:
         stripped = line.lstrip()
-        if stripped.startswith(("* ", "*\t")) or (ini and stripped.startswith(";")):
+        if (block_comments and stripped.startswith(("* ", "*\t"))) or (
+            ini and stripped.startswith(";")
+        ):
             return 0, inside, None
-    tokens = _TOKENS[dashes, triple, hash_comments]
+    tokens = _comment_tokens(
+        dashes=dashes, triple=triple, hash_comments=hash_comments, block_comments=block_comments
+    )
     while (found := tokens.search(line, at)) is not None:
         token, start = found.group(), found.start()
         at = found.end()
@@ -218,7 +236,7 @@ def _line_scan(
 
 
 def block_open_before(
-    lines: list[str], *, dashes: bool = False, ini: bool = False, hash_comments: str = _HASH_ANYWHERE
+    lines: list[str], *, hash_comments: str = _HASH_ANYWHERE, block_comments: bool = True
 ) -> str | None:
     """The triple quote open where the line after ``lines`` starts, the lines read with the same
     scan as the cited one. A line with no triple quote, outside a block, is passed over without
@@ -230,7 +248,11 @@ def block_open_before(
         if block is not None and block not in line:
             continue
         _, _, block = _line_scan(
-            line, block, dashes=dashes, ini=ini, triple=True, hash_comments=hash_comments
+            line,
+            block,
+            triple=True,
+            hash_comments=hash_comments,
+            block_comments=block_comments,
         )
     return block
 
@@ -371,6 +393,7 @@ def named_on(
     ini: bool = False,
     triple: bool = False,
     hash_comments: str = _HASH_ANYWHERE,
+    block_comments: bool = True,
     block: str | None = None,
 ) -> bool:
     """Whether ``name`` is the value written on ``line``: whole, outside a comment and outside
@@ -385,7 +408,13 @@ def named_on(
         # find("") matches at every position without moving on.
         return False
     comment, inside, _ = _line_scan(
-        line, block, dashes=dashes, ini=ini, triple=triple, hash_comments=hash_comments
+        line,
+        block,
+        dashes=dashes,
+        ini=ini,
+        triple=triple,
+        hash_comments=hash_comments,
+        block_comments=block_comments,
     )
     stretches = iter(inside)
     stretch = next(stretches, None)
@@ -413,18 +442,38 @@ def named_on(
     return False
 
 
+# Prompt and page templates: what they hold is text, unless the name says they render a
+# configuration file (config.yaml.j2), which is then read as that file.
+_TEMPLATE_SUFFIXES = frozenset({".j2", ".jinja", ".jinja2", ".hbs", ".mustache"})
+
+
+def kind_suffix(path: Path) -> str:
+    """The suffix that says what a file is: config.yaml.j2 is YAML."""
+    suffix = path.suffix.lower()
+    if suffix in _TEMPLATE_SUFFIXES:
+        inner = Path(path.stem).suffix.lower()
+        if inner in CONFIG_SUFFIXES:
+            return inner
+    return suffix
+
+
 def is_config_file(path: Path) -> bool:
     name = path.name.lower()
+    suffix = kind_suffix(path)
+    # env.py and dockerfile_gen.py are code, whatever their names start with.
+    code = suffix in _TRIPLE_SUFFIXES | _NO_HASH_COMMENT_SUFFIXES | _NO_BLOCK_COMMENT_SUFFIXES
     return (
-        path.suffix.lower() in CONFIG_SUFFIXES
+        suffix in CONFIG_SUFFIXES
         or name in _CONFIG_NAMES
-        or name.startswith((".env", "env.", "dockerfile"))
+        or (not code and name.startswith((".env", "env.", "dockerfile")))
         or name.endswith(".env")
     )
 
 
 def is_prose_file(path: Path) -> bool:
-    return path.suffix.lower() in PROSE_SUFFIXES or path.stem.lower() in _PROSE_STEMS
+    return kind_suffix(path) in PROSE_SUFFIXES or (
+        not path.suffix and path.name.lower() in _PROSE_STEMS
+    )
 
 
 def _reads_as_a_setting(name: str) -> bool:
@@ -507,28 +556,38 @@ def model_problems(contract: AgentContract, source_root: Path) -> list[str]:
     lines = source_lines(raw)
     if model.line > len(lines):
         return [f"model: line {model.line} is outside {shown_path}, which has {len(lines)} lines"]
-    suffix = resolved.suffix.lower()
+    suffix = kind_suffix(resolved)
     dashes, ini = suffix in _DASH_COMMENT_SUFFIXES, suffix in _INI_SUFFIXES
     triple = suffix in _TRIPLE_SUFFIXES
-    hash_comments = (
-        _HASH_NONE
-        if suffix in _NO_HASH_COMMENT_SUFFIXES
-        else _HASH_SPACED
-        if suffix in _YAML_SUFFIXES
-        else _HASH_ANYWHERE
-    )
+    config = is_config_file(resolved)
+    name_lower = resolved.name.lower()
+    if suffix in _NO_HASH_COMMENT_SUFFIXES:
+        hash_comments = _HASH_NONE
+    elif (
+        suffix in _SPACED_HASH_SUFFIXES
+        or name_lower in _CONFIG_NAMES
+        or name_lower.startswith((".env", "dockerfile"))
+    ):
+        hash_comments = _HASH_SPACED
+    else:
+        hash_comments = _HASH_ANYWHERE
+    # Configuration files have no block comments either.
+    block_comments = not (config or suffix in _NO_BLOCK_COMMENT_SUFFIXES)
     if not named_on(
         lines[model.line - 1],
         name,
-        config=is_config_file(resolved),
+        config=config,
         yaml=suffix in _YAML_SUFFIXES,
         dashes=dashes,
         ini=ini,
         triple=triple,
         hash_comments=hash_comments,
+        block_comments=block_comments,
         block=(
             block_open_before(
-                lines[: model.line - 1], dashes=dashes, ini=ini, hash_comments=hash_comments
+                lines[: model.line - 1],
+                hash_comments=hash_comments,
+                block_comments=block_comments,
             )
             if triple
             else None
@@ -575,10 +634,20 @@ def quote_pieces(quote: str) -> list[list[str]]:
     quote has fewer than _SHORTEST_QUOTE letters: then it says nothing to check lines against."""
     pieces = [_WORD.findall(_comparable(piece)) for piece in _ELISION.split(quote)]
     pieces = [words for words in pieces if words]
-    letters = sum(
+    return pieces if _weighed(pieces) >= _SHORTEST_QUOTE else []
+
+
+def _weighed(pieces: list[list[str]]) -> int:
+    """How many letters a quote's words come to, a character of an unspaced script as three."""
+    return sum(
         3 if _UNSPACED_CHAR.fullmatch(word) else len(word) for words in pieces for word in words
     )
-    return pieces if letters >= _SHORTEST_QUOTE else []
+
+
+def says_something(quote: str) -> bool:
+    """Whether a quote has enough letters to say anything: "n/a" and "TBD" don't."""
+    pieces = [_WORD.findall(_comparable(piece)) for piece in _ELISION.split(quote)]
+    return _weighed([words for words in pieces if words]) >= _SAYS_NOTHING
 
 
 def _holds(found: str, pieces: list[list[str]]) -> bool:
@@ -622,9 +691,9 @@ def quote_problem(quote: str, copied: str, named: str) -> str | None:
     if pieces:
         held = _holds(_letters(copied), pieces)
     else:
-        # A quote too short to search for with gaps must be in the lines letter for letter.
-        letters = _letters(quote)
-        held = not letters or letters in _letters(copied)
+        # A quote too short to search for with gaps must be in the lines letter for letter; one
+        # that says nothing isn't looked for.
+        held = not says_something(quote) or _letters(quote) in _letters(copied)
     if held:
         return None
     return (

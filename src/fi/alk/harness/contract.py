@@ -1084,6 +1084,20 @@ def _reached(one: Dependency) -> str:
     return "; ".join(said)
 
 
+def prompt_quote(payload: Any) -> str:
+    """The quote of the prompt as AgentContract reads it from a payload: under its own name or
+    the first alias that has one, a list joined by lines. The save holds it before validating."""
+    if not isinstance(payload, dict):
+        return ""
+    for key in ("system_prompt_excerpt", *_ALIASES["system_prompt_excerpt"]):
+        value = payload.get(key)
+        if value:
+            if isinstance(value, list):
+                return "\n".join(str(item) for item in value)
+            return value if isinstance(value, str) else str(value)
+    return ""
+
+
 class AgentContract(BaseModel):
     """What the agent verifiably is. Nothing downstream may contradict this."""
 
@@ -1143,7 +1157,8 @@ class AgentContract(BaseModel):
     # When given, the excerpt is replaced by these lines copied from the source as written.
     system_prompt_from: list[PromptSource] = Field(default_factory=list)
     # Set by the save, never by the reading: lines named for the prompt that twice didn't hold
-    # the quote given for it, so the quote went out instead. Empty for nearly every contract.
+    # the quote given for it. The quote went out instead, or, when the quote was too short to
+    # stand for the prompt, the lines did, unconfirmed. Empty for nearly every contract.
     unconfirmed_prompt_from: list[PromptSource] = Field(default_factory=list)
     # None is unknown. Kept only when its name was found on the line cited in the source.
     model: ModelSource | None = None

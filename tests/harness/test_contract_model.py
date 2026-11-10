@@ -1421,8 +1421,8 @@ def test_lines_refused_twice_leave_the_quote(tmp_path, root):
         REFUSED
         + not_the_quote("prompt.py 1-2")
         + "\n  - system_prompt_from: lines named later are checked against this quote until you "
-        "give another; given again with lines that don't hold it, the quote is kept and the lines "
-        "are recorded as unconfirmed"
+        "give another; a later mismatch, with any quote, keeps the quote and records the lines as "
+        "unconfirmed"
     )
     second = submit(wrong)
     assert not second.get("is_error"), second
@@ -2357,6 +2357,10 @@ def test_a_crafted_long_word_costs_little(root):
         pytest.param('PROMPT = ("你是一个乐于助人的订餐" f"助手，今天是{today}。")', "你是一个乐于助人的订餐助手，今天是{today}。", id="chinese-prefix-mid-clause"),
         pytest.param('PROMPT = ("你是一个乐于助人的订餐"  # 角色\n    "助手，请礼貌地回答。")', "你是一个乐于助人的订餐助手，请礼貌地回答。", id="chinese-comment-mid-clause"),
         pytest.param('PROMPT = ("あなたは親切な予約" f"アシスタントです。{name}")', "あなたは親切な予約アシスタントです。", id="japanese-prefix-mid-clause"),
+        pytest.param('PROMPT = "あなたは予約・案内のアシスタントです。"', "あなたは予約・案内のアシスタントです。", id="japanese-middle-dot"),
+        pytest.param('PROMPT = ("คุณเป็นผู้ช่วย" f"จองโต๊ะที่สุภาพ")', "คุณเป็นผู้ช่วยจองโต๊ะที่สุภาพ", id="thai"),
+        pytest.param('PROMPT = "သင်သည် စားပွဲ ကြိုတင်မှာယူမှု အကူအညီပေးသူ ဖြစ်သည်။"', "သင်သည် စားပွဲ ကြိုတင်မှာယူမှု အကူအညီပေးသူ ဖြစ်သည်။", id="burmese"),
+        pytest.param('PROMPT = "អ្នកគឺជាជំនួយការកក់តុដែលគួរសម។"', "អ្នកគឺជាជំនួយការកក់តុដែលគួរសម។", id="khmer"),
     ],
 )
 def test_an_unspaced_prompt_holds_its_quote(tmp_path, root, written, quote):
@@ -2478,7 +2482,7 @@ def test_a_crafted_file_of_one_byte_lines_and_triple_quotes_costs_little(root):
 
 @pytest.mark.parametrize(
     "file",
-    ["notes.org", "rules.mdc", "CHANGELOG", "CHANGELOG.md", "LICENSE", "CONTRIBUTING.rst"],
+    ["notes.org", "rules.mdc", "CHANGELOG", "CHANGELOG.md", "LICENSE", "CONTRIBUTING", "README"],
 )
 def test_more_prose_files_hold_no_model(root, file):
     (root / file).write_text('# notes\nmodel: "claude-3-opus"\n', encoding="utf-8")
@@ -2501,7 +2505,8 @@ def test_a_file_named_after_readme_is_code(root):
     [
         pytest.param("You are pair.", (1, 4), True, id="short-and-not-in-the-lines"),
         pytest.param("Be warm and brief.", (6, 12), False, id="short-and-in-the-lines"),
-        pytest.param("TBD", (1, 4), True, id="a-placeholder-with-nothing-held"),
+        # Too few letters to say anything: not looked for, like no quote at all.
+        pytest.param("TBD", (1, 4), False, id="a-placeholder-with-nothing-held"),
     ],
 )
 def test_a_short_quote_is_looked_for_whole(tmp_path, root, quote, lines, refused):
@@ -2673,3 +2678,250 @@ def test_lines_without_a_triple_quote_are_not_scanned(root, monkeypatch):
     assert problems == []
     # The block's opening and closing lines, and the cited line: nothing between.
     assert scanned == ['"""', '"""', 'MODEL = "gpt-4o"']
+
+
+# Round 3: a short or list quote is held like any other
+
+
+def test_a_short_quote_is_held_and_its_lines_asked_about(tmp_path, root):
+    (root / "agent.py").write_text(_BOOKING, encoding="utf-8")
+    destination = tmp_path / "out"
+    submit = submitter(destination, root)
+    imports = [{"path": "agent.py", "start_line": 1, "end_line": 4}]
+
+    first = submit(
+        payload(hard_constraints=["Be polite."], system_prompt_excerpt="Be warm and brief.", system_prompt_from=imports)
+    )
+    assert text_of(first).startswith(REFUSED + not_the_quote("agent.py 1-4"))
+    second = submit(payload(hard_constraints=["Be polite."], system_prompt_from=imports))
+    assert text_of(second) == REFUSED + lines_alone("agent.py 1-4", "Be warm and brief.")
+    third = submit(payload(hard_constraints=["Be polite."], system_prompt_from=imports))
+
+    # A quote this short can't stand for the prompt: the lines go out, on record as unconfirmed.
+    assert not third.get("is_error"), third
+    assert saved(destination)["system_prompt_from"] == imports
+    assert saved(destination)["unconfirmed_prompt_from"] == imports
+
+
+@pytest.mark.parametrize(
+    "fields",
+    [
+        pytest.param({"system_prompt_excerpt": _BOOKING_QUOTE.split(". ")}, id="a-list"),
+        pytest.param({"prompt": _BOOKING_QUOTE.split(". ")}, id="a-list-under-an-alias"),
+        pytest.param({"system_prompt": _BOOKING_QUOTE}, id="an-alias"),
+    ],
+)
+def test_a_quote_in_another_shape_is_held(tmp_path, root, fields):
+    (root / "agent.py").write_text(_BOOKING, encoding="utf-8")
+    submit = submitter(tmp_path / "out", root)
+    imports = [{"path": "agent.py", "start_line": 1, "end_line": 4}]
+
+    first = submit(payload(hard_constraints=["Be polite."], system_prompt_from=imports, **fields))
+    assert text_of(first).startswith(REFUSED + not_the_quote("agent.py 1-4"))
+    second = submit(payload(hard_constraints=["Be polite."], system_prompt_from=imports))
+
+    assert text_of(second).startswith(REFUSED + "system_prompt_from: the lines named (agent.py 1-4) don't hold the quote you gave before")
+
+
+def test_a_list_quote_that_passes_replaces_the_held_one(tmp_path, root):
+    (root / "agent.py").write_text(_BOOKING, encoding="utf-8")
+    destination = tmp_path / "out"
+    submit = submitter(destination, root)
+    prompt = [{"path": "agent.py", "start_line": 6, "end_line": 12}]
+    paraphrase = "Acme booking agent: helps guests reserve tables and never shares bookings."
+
+    assert submit(payload(hard_constraints=["Be polite."], system_prompt_excerpt=paraphrase, system_prompt_from=prompt)).get("is_error")
+    assert not submit(
+        payload(hard_constraints=["Be polite."], prompt=_BOOKING_QUOTE.split(". "), system_prompt_from=prompt)
+    ).get("is_error")
+    third = submit(payload(hard_constraints=["Be polite."], system_prompt_from=prompt))
+
+    assert not third.get("is_error"), third
+    assert saved(destination)["system_prompt_from"] == prompt
+    assert "unconfirmed_prompt_from" not in saved(destination)
+
+
+def test_a_placeholder_with_the_right_lines_keeps_the_lines(tmp_path, root):
+    (root / "agent.py").write_text(_BOOKING, encoding="utf-8")
+    destination = tmp_path / "out"
+    submit = submitter(destination, root)
+    prompt = [{"path": "agent.py", "start_line": 6, "end_line": 12}]
+    again = payload(hard_constraints=["Be polite."], system_prompt_excerpt="see lines", system_prompt_from=prompt)
+
+    assert submit(again).get("is_error")
+    second = submit(again)
+
+    assert not second.get("is_error"), second
+    assert saved(destination)["system_prompt_excerpt"] == "\n".join(_BOOKING.splitlines()[5:12])
+    assert saved(destination)["unconfirmed_prompt_from"] == prompt
+
+
+def test_two_calls_in_one_message_are_each_asked(tmp_path, root):
+    (root / "agent.py").write_text(_BOOKING, encoding="utf-8")
+    destination = tmp_path / "out"
+    server = contract_tools(destination, source_root=root)
+    tool = next(one for one in server.tools if one.name == "submit_contract")
+    paraphrase = "Acme booking agent: helps guests reserve tables and never shares bookings."
+    both = payload(
+        hard_constraints=["Be polite."],
+        system_prompt_excerpt=paraphrase,
+        system_prompt_from=[{"path": "agent.py", "start_line": 6, "end_line": 12}],
+    )
+
+    async def send_together():
+        return await asyncio.gather(tool.handler(dict(both)), tool.handler(dict(both)))
+
+    first, second = asyncio.run(send_together())
+
+    # Neither had seen a refusal when it was sent, so both are refused.
+    assert first.get("is_error") and second.get("is_error")
+    assert not (destination / "contract.json").exists()
+
+
+def test_a_quote_sent_alone_after_its_lines_were_refused_is_not_asked_for_lines(tmp_path, root):
+    (root / "agent.py").write_text(_BOOKING, encoding="utf-8")
+    destination = tmp_path / "out"
+    submit = submitter(destination, root)
+
+    assert submit(
+        payload(hard_constraints=["Be polite."], system_prompt_excerpt=_BOOKING_QUOTE,
+                system_prompt_from=[{"path": "agent.py", "start_line": 1, "end_line": 4}])
+    ).get("is_error")
+    second = submit(payload(hard_constraints=["Be polite."], system_prompt_excerpt=_BOOKING_QUOTE))
+
+    assert not second.get("is_error"), second
+    assert saved(destination)["system_prompt_excerpt"] == _BOOKING_QUOTE
+
+
+def test_a_new_quote_with_wrong_lines_after_lines_alone_were_refused_is_kept(tmp_path, root):
+    (root / "agent.py").write_text(_BOOKING, encoding="utf-8")
+    destination = tmp_path / "out"
+    submit = submitter(destination, root)
+    imports = [{"path": "agent.py", "start_line": 1, "end_line": 4}]
+    quote = "You are Acme's booking agent. Help guests book tables."
+
+    assert not submit(
+        payload(hard_constraints=["Be polite."], system_prompt_excerpt=_BOOKING_QUOTE,
+                system_prompt_from=[{"path": "agent.py", "start_line": 6, "end_line": 12}])
+    ).get("is_error")
+    assert submit(payload(hard_constraints=["Be polite."], system_prompt_from=imports)).get("is_error")
+    third = submit(payload(hard_constraints=["Be polite."], system_prompt_excerpt=quote, system_prompt_from=imports))
+
+    assert not third.get("is_error"), third
+    assert saved(destination)["system_prompt_excerpt"] == quote
+    assert saved(destination)["unconfirmed_prompt_from"] == imports
+
+
+def test_lines_set_aside_in_a_call_refused_for_something_else_are_said(tmp_path, root):
+    (root / "agent.py").write_text(_BOOKING, encoding="utf-8")
+    submit = submitter(tmp_path / "out", root)
+    wrong = payload(
+        hard_constraints=["Be polite."],
+        system_prompt_excerpt=_BOOKING_QUOTE,
+        system_prompt_from=[{"path": "agent.py", "start_line": 1, "end_line": 4}],
+    )
+    assert submit(wrong).get("is_error")
+
+    second = submit({**wrong, "model": {"name": "gpt-4o", "path": "agent.py", "line": 1}})
+
+    assert "model: the name gpt-4o is not the value written on line 1" in text_of(second)
+    assert (
+        "system_prompt_from: the lines named (agent.py 1-4) are left out and the quote is kept, "
+        "since they don't hold it"
+    ) in text_of(second)
+
+
+# Round 3: pins for the line scan
+
+
+@pytest.mark.parametrize("quote", ['x = "' + '\\"' * 40_000, "x = `" + "\\`" * 40_000])
+def test_an_unclosed_string_of_escapes_costs_one_pass(root, quote):
+    (root / "crafted.ts").write_text(quote + "\n", encoding="utf-8")
+
+    _, _, took = checked(root, {"name": "gpt-4o", "path": "crafted.ts", "line": 1})
+
+    assert took < 0.25
+
+
+@pytest.mark.parametrize(
+    "file, written, name",
+    [
+        pytest.param("agent.ts", 'const model = "gpt-4o"; /* fast */', "gpt-4o", id="ts-comment-after"),
+        pytest.param("Agent.java", 'String model = "gpt-4o"; /* the default */', "gpt-4o", id="java-comment-after"),
+        pytest.param("llm.py", 'MODEL = "gpt-4o"; PROMPT = """', "gpt-4o", id="a-block-opening-after"),
+        pytest.param("llm.py", '    * 2, model="gpt-4o")', "gpt-4o", id="python-continuation-star"),
+        pytest.param("run.sh", "echo a#b; MODEL=gpt-4o", "gpt-4o", id="shell-hash-in-a-word"),
+        pytest.param("run.sh", "ls /*; MODEL=gpt-4o", "gpt-4o", id="shell-slash-star"),
+        pytest.param("build.groovy", 'a #b; def model = "gpt-4o"', "gpt-4o", id="groovy-hash"),
+        pytest.param("license.py", 'MODEL = "gpt-4o"', "gpt-4o", id="license-py-is-code"),
+        pytest.param("readme.py", 'MODEL = "gpt-4o"', "gpt-4o", id="readme-py-is-code"),
+        pytest.param("llm.py", "x = rb'Agent #1'; MODEL = \"gpt-4o\"", "gpt-4o", id="two-letter-prefix"),
+        pytest.param("llm.py", "x = 'a\\'b # c'; MODEL = \"gpt-4o\"", "gpt-4o", id="escaped-apostrophe"),
+        pytest.param("agent.ts", 'u = `${b}//v1`; m = "gpt-4o"', "gpt-4o", id="backtick-string"),
+    ],
+)
+def test_more_honest_lines_after_round_3(root, file, written, name):
+    (root / file).write_text(f"\n{written}\n", encoding="utf-8")
+
+    problems, contract, _ = checked(root, {"name": name, "path": file, "line": 2})
+
+    assert problems == []
+    assert contract.model is not None and contract.model.name == name
+
+
+@pytest.mark.parametrize(
+    "suffix",
+    [".c", ".h", ".cc", ".cpp", ".cxx", ".hpp", ".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx",
+     ".java", ".go", ".rs", ".swift", ".kt", ".kts", ".cs", ".scala", ".dart", ".m", ".mm",
+     ".groovy", ".gradle"],
+)
+def test_hash_is_no_comment_in_these_languages(root, suffix):
+    (root / f"agent{suffix}").write_text('\na = b #c; m = "gpt-4o"\n', encoding="utf-8")
+
+    problems, _, _ = checked(root, {"name": "gpt-4o", "path": f"agent{suffix}", "line": 2})
+
+    assert problems == []
+
+
+def test_a_tab_before_hash_starts_a_yaml_comment(root):
+    (root / "cfg.yaml").write_text('\nnote: a\t# "gpt-4o"\n', encoding="utf-8")
+
+    problems, _, _ = checked(root, {"name": "gpt-4o", "path": "cfg.yaml", "line": 2})
+
+    assert problems == [not_named("gpt-4o", 2, "cfg.yaml")]
+
+
+@pytest.mark.parametrize(
+    "file, written, name",
+    [
+        pytest.param("llm.py", 'n = a // 2; model = "gpt-4o"', "gpt-4o", id="python-floor-division-spaced"),
+        pytest.param("init.lua", 'local n = #t; model = "gpt-4o"', "gpt-4o", id="lua-length"),
+        pytest.param("llm.py", "x = t'Agent #{n}'; MODEL = \"gpt-4o\"", "gpt-4o", id="python-t-string"),
+        pytest.param("config.yaml.j2", "model: gpt-4o", "gpt-4o", id="a-config-template"),
+    ],
+)
+def test_more_honest_lines_after_round_3_probes(root, file, written, name):
+    (root / file).write_text(f"\n{written}\n", encoding="utf-8")
+
+    problems, contract, _ = checked(root, {"name": name, "path": file, "line": 2})
+
+    assert problems == []
+    assert contract.model is not None and contract.model.name == name
+
+
+@pytest.mark.parametrize(
+    "file, written, name",
+    [
+        pytest.param("env.py", "model = gpt-4o", "gpt-4o", id="env-py-is-code"),
+        pytest.param("dockerfile_gen.py", "MODEL = gpt-4o", "gpt-4o", id="dockerfile-py-is-code"),
+        pytest.param("agent.js", 'call()// "gpt-4o"', "gpt-4o", id="js-comment-after-a-call"),
+        pytest.param("agent.js", 'x = 1// "gpt-4o"', "gpt-4o", id="js-comment-after-a-number"),
+        pytest.param("agent.ts", 'x = a[1]// "gpt-4o"', "gpt-4o", id="js-comment-after-a-subscript"),
+    ],
+)
+def test_more_wrong_values_after_round_3_probes(root, file, written, name):
+    (root / file).write_text(f"\n{written}\n", encoding="utf-8")
+
+    problems, _, _ = checked(root, {"name": name, "path": file, "line": 2})
+
+    assert problems == [not_named(name, 2, file)]
