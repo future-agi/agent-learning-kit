@@ -182,6 +182,15 @@ def _matches(allowed: str, action: str) -> bool:
     )
 
 
+def plain_route(action: str) -> bool:
+    """Whether a world action names one route as written: no encoded separator, backslash or `..` segment that the
+    service behind the proxy would decode into a different route than the one checked."""
+    lowered = str(action or "").lower()
+    if any(mark in lowered for mark in ("%2f", "%5c", "\\", "%2e")):
+        return False
+    return ".." not in lowered.split("?", 1)[0]
+
+
 def permitted(permitted_actions: object, action: str, routes: object = ()) -> bool:
     """Whether an actor or worker with these permitted actions may take this world action. A path that is one of the
     world's own routes (`routes`, the sealed route map) is that route's action, never a value of a template."""
@@ -327,7 +336,7 @@ class WorldDoor:
                     call, "unknown_actor", f"{call.actor} is not an actor in this world"
                 )
             on_behalf_of = listed.get("on_behalf_of")
-            if not permitted(listed.get("permitted_actions"), call.action):
+            if not permitted(listed.get("permitted_actions"), method_action(call.method, call.action), self._routes()):
                 return self._refused(
                     call,
                     "not_permitted",
@@ -380,9 +389,19 @@ class WorldDoor:
                 return "deadline_passed", f"the deadline for {call.worker} has passed"
         if "permissions" in limits:
             allowed = (limits.get("permissions") or {}).get(call.worker)
+            if not plain_route(call.action):
+                # An encoded separator or `..` would be read as another route by the service behind the proxy.
+                return "not_permitted", f"{call.action} is not a plain route, so it is not permitted for {call.worker}"
             if not permitted(allowed, method_action(call.method, call.action), limits.get("routes")):
                 return "not_permitted", f"{call.action} is not permitted for {call.worker}"
         return None
+
+    def _routes(self) -> list[str]:
+        """The world's own sealed routes, so a templated permission never reaches another tool's route."""
+        try:
+            return list((self.workers() or {}).get("routes") or [])
+        except Exception:  # noqa: BLE001 - unreadable routes leave only the template check
+            return []
 
     def _refused(
         self, call: ToolCall, code: str, reason: str, on_behalf_of: str | None = None

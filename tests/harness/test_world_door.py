@@ -566,3 +566,35 @@ def test_a_templated_allowance_never_reaches_another_tool_s_own_route_or_another
     # The same path with another method is another action.
     assert enter("DELETE", "orders.1043").refusal_code == "not_permitted"
     assert len(executor.ran) == 1
+
+
+def test_a_templated_allowance_never_reaches_a_route_hidden_behind_an_encoded_separator_or_dots():
+    executor = _Executor()
+    limits = {"permissions": {"lookup": ["GET orders.{order_id}"]}, "routes": ["GET orders.{order_id}"]}
+    door = _worker_door(executor, limits)
+
+    def enter(action):
+        return door.enter(ToolCall(action=action, name="x", method="GET", worker="lookup"))
+
+    # The service behind the proxy decodes these into another route than the one the door checked.
+    for action in ("orders.1043%2Fpayment", "orders.1043%2fpayment", "orders.%2E%2E", "orders....admin"):
+        assert enter(action).refusal_code == "not_permitted", action
+    assert enter("orders.1043").outcome == "committed"
+    assert len(executor.ran) == 1
+
+
+def test_an_actor_s_templated_permission_never_reaches_another_tool_s_own_route():
+    executor = _Executor()
+    door = WorldDoor(
+        executor,
+        MemoryLog(),
+        DictRoster({"manager": {"permitted_actions": ["crm.{deal_id}"], "on_behalf_of": None}}),
+        workers=lambda: {"routes": ["GET crm.{deal_id}", "POST crm.delete_all"]},
+    )
+
+    def enter(action, method="GET"):
+        return door.enter(ToolCall(action=action, name="x", actor="manager", method=method, key=f"t:m:{action}"))
+
+    assert enter("crm.8").outcome == "committed"
+    # `crm.delete_all` is the world's own route, never a deal id.
+    assert enter("crm.delete_all", "POST").refusal_code == "not_permitted"
