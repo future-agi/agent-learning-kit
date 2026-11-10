@@ -123,7 +123,9 @@ _TOOLKIT = "PlayWrightBrowserToolkit"
 # an escape such as \t, \x20, \040 or \u0020 just before it counts as a boundary too.
 _WHOLE_NAMES = {
     name: re.compile(
-        rf"(?:(?<!\w)|(?<=\\[abfnrtv])|(?<=\\x[0-9A-Fa-f]{{2}})|(?<=\\[0-7])|(?<=\\[0-7]{{2}})"
+        # The name looked for first, so only the places it starts at are tried: eight lookbehinds
+        # at every byte held the save 2.8 s (round 3 reviewer A).
+        rf"(?={re.escape(name)})(?:(?<!\w)|(?<=\\[abfnrtv])|(?<=\\x[0-9A-Fa-f]{{2}})|(?<=\\[0-7])|(?<=\\[0-7]{{2}})"
         rf"|(?<=\\[0-7]{{3}})|(?<=\\u[0-9A-Fa-f]{{4}})|(?<=\\U[0-9A-Fa-f]{{8}})){re.escape(name)}(?!\w)",
         re.ASCII,
     )
@@ -535,7 +537,11 @@ def _scan(root: Path, _files: tuple[int, int, int]) -> tuple[str, ...]:
     return _tools_in(files, local)
 
 
-def _tools_in(paths: Iterable[Path], local: set[str]) -> tuple[str, ...]:
+def _tools_in(
+    paths: Iterable[Path], local: set[str], first: Path | None = None
+) -> tuple[str, ...]:
+    """The browser tools ``paths`` import or name, the files in ``first`` read before the rest:
+    the totals below cut the files read last, and the agent's own mustn't be those."""
     found: set[str] = set()
     imported: set[str] = set()
     scanned = scripts = python = 0
@@ -543,7 +549,10 @@ def _tools_in(paths: Iterable[Path], local: set[str]) -> tuple[str, ...]:
     tokens = TokenBudget()
     escapes = EscapeBudget()
     searched = ParseBudget(_LARGEST_RAW_SEARCH)
-    for path in sorted(filter(_is_read, paths), key=_reading_order):
+    for path in sorted(
+        filter(_is_read, paths),
+        key=lambda path: (first is not None and not is_within(path, first), *_reading_order(path)),
+    ):
         size = _file_size(path)
         # Never read, so it mustn't use up the limit before the code that is.
         if size > _largest_read(path):
@@ -745,6 +754,7 @@ def browser_tools_in_agent(
         _tools_in(
             dict.fromkeys((*_agent_files(folder), *above, *shared, *manifests)),
             local,
+            folder,
         )
     )
 

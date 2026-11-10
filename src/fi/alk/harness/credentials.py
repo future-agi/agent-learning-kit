@@ -702,6 +702,11 @@ _LARGEST_PYPROJECT = 256 * 1024
 _PYPROJECTS_READ = 1024 * 1024
 # The folder entries a member pattern's globs look at, at most.
 _WORKSPACE_ENTRIES = 20_000
+# The places the member walk reads for what they install, at most: a member reached again with
+# more extras is read again.
+_WORKSPACE_READS = 4 * _WORKSPACE_DEPENDENCIES
+# The longest folder name a file system holds, in bytes.
+_LONGEST_FOLDER_NAME = 255
 _PROJECT_NAME = re.compile(r"\s*([A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?)")
 
 
@@ -740,8 +745,6 @@ class _Workspace:
                 # follow it anywhere, uncharged.
                 self.left[0] -= 1
                 target = folder / os.readlink(document)
-                if len(target.parts) > len(self.root.parts) + _LONGEST_TARGET:
-                    return None
                 place = _real_folder(target.parent, self.root, self.known, self.left)
                 if place is None:
                     return None
@@ -778,6 +781,9 @@ class _Workspace:
                 continue
             if "**" in parts:
                 self.cut = True
+                continue
+            if any(len(part) > _LONGEST_FOLDER_NAME for part in parts):
+                # No folder name is longer; fnmatch would compile it, a second for 250 KB.
                 continue
             level = [workspace]
             for part in parts:
@@ -820,11 +826,32 @@ class _Workspace:
 _REQUESTED_EXTRAS = re.compile(r"\[([^\]]*)\]")
 
 
-def _requirements(table: dict, extras: set[str] | None) -> set[str]:
-    """The names of the distributions installed with ``table``'s project by the build's
-    ``uv sync --no-dev --package``: its dependencies, its extras (all of them for the agent's own
-    project, given ``extras=None``, since which ones the build asks for isn't known here; for a
-    dependency, those its requirement names), and its default groups other than ``dev``."""
+def _groups(groups: dict, chosen: list) -> list[object]:
+    """The requirements of the dependency groups ``chosen``, each ``{include-group = ...}`` in
+    them taken in turn, a group once."""
+    found: list[object] = []
+    seen: set[str] = set()
+    pending = [group for group in reversed(chosen) if group != "dev"]
+    while pending:
+        group = pending.pop()
+        if group in seen or not isinstance(groups.get(group), list):
+            continue
+        seen.add(group)
+        for item in groups[group]:
+            if isinstance(item, dict) and isinstance(item.get("include-group"), str):
+                pending.append(item["include-group"])
+            else:
+                found.append(item)
+    return found
+
+
+def _requested(table: dict, extras: set[str] | None) -> dict[str, set[str]]:
+    """The distributions installed with ``table``'s project by the build's
+    ``uv sync --no-dev --package``, by name, each with the extras asked of it: its dependencies,
+    its extras (all of them for the agent's own project, given ``extras=None``, since which ones
+    the build asks for isn't known here; for a dependency, those its requirement names), and its
+    default groups other than ``dev``. One pass, so a requirement list of thousands costs its
+    length, not its square."""
     project = table.get("project") if isinstance(table.get("project"), dict) else {}
     found: list[object] = list(project.get("dependencies") or [])
     optional = project.get("optional-dependencies")
@@ -836,20 +863,14 @@ def _requirements(table: dict, extras: set[str] | None) -> set[str]:
         groups = table.get("dependency-groups") if isinstance(table.get("dependency-groups"), dict) else {}
         default = uv.get("default-groups", ["dev"])
         chosen = list(groups) if default == "all" else default if isinstance(default, list) else []
-        for group in chosen:
-            if group != "dev" and isinstance(groups.get(group), list):
-                found.extend(groups[group])
-    return {name for value in found if (name := _project_name(value))}
-
-
-def _requested_extras(table: dict, name: str) -> set[str]:
-    """The extras ``table``'s project asks of the dependency ``name``."""
-    project = table.get("project") if isinstance(table.get("project"), dict) else {}
-    asked: set[str] = set()
-    for value in project.get("dependencies") or []:
-        if isinstance(value, str) and _project_name(value) == name:
-            for found in _REQUESTED_EXTRAS.findall(value.split(";", 1)[0]):
-                asked |= {extra for part in found.split(",") if (extra := _project_name(part))}
+        found.extend(_groups(groups, chosen))
+    asked: dict[str, set[str]] = {}
+    for value in found:
+        if not (name := _project_name(value)):
+            continue
+        wanted = asked.setdefault(name, set())
+        for listed in _REQUESTED_EXTRAS.findall(value.split(";", 1)[0]):
+            wanted |= {extra for part in listed.split(",") if (extra := _project_name(part))}
     return asked
 
 
@@ -882,7 +903,7 @@ def _workspace_dependencies(
     whether some weren't looked for.
 
     The project is the nearest pyproject.toml at or above ``folder``. The build installs it with
-    what it asks for (``_requirements``); a requirement whose source is the uv workspace
+    what it asks for (``_requested``); a requirement whose source is the uv workspace
     (``{workspace = true}``, in the project or the workspace root, the nearest pyproject.toml
     above the project that names it a member) is that member's folder, one whose source is a
     ``path`` inside the repository is that folder, and what each of those asks for is followed
@@ -928,17 +949,28 @@ def _workspace_dependencies(
                 if name:
                     by_name.setdefault(name, member)
 
+    # Each place's sources, worked out once, each with the folder that declares it: a requirement
+    # list and a sources table of thousands each would otherwise cost their product.
+    merged: dict[Path, dict[str, tuple[Path, list[dict]]]] = {}
+    members_by_place = set(by_name.values())
+
     def installed(place: Path, table: dict, name: str) -> Path | None:
         """The folder of the local package ``name``, as ``place``'s project gets it, or None."""
-        sources = _sources(table)
-        if place == project[0] or place in by_name.values():
-            # The workspace root's sources apply to every member, under the member's own.
-            sources = {**shared, **sources}
-        for source in sources.get(name, []):
+        sources = merged.get(place)
+        if sources is None:
+            sources = {}
+            if workspace is not None and (place == project[0] or place in members_by_place):
+                # The workspace root's sources apply to every member, under the member's own; a
+                # path in one is the root's, as uv reads it.
+                sources = {key: (workspace[0], items) for key, items in shared.items()}
+            sources.update({key: (place, items) for key, items in _sources(table).items()})
+            merged[place] = sources
+        declared, items = sources.get(name, (place, []))
+        for source in items:
             if source.get("workspace") is True:
                 return by_name.get(name)
             if isinstance(source.get("path"), str):
-                target = place / source["path"]
+                target = declared / source["path"]
                 found = _real_folder(target, root, known, left)
                 if found is not None and found not in tables and (read := reader.table(found)) is not None:
                     tables[found] = read
@@ -946,19 +978,34 @@ def _workspace_dependencies(
         return None
 
     followed: list[Path] = []
+    # The extras asked of each member so far: one reached again with more is read again for them.
+    asked: dict[Path, set[str]] = {}
     queue: list[tuple[Path, set[str] | None]] = [(project[0], None)]
+    reads = 0
     while queue and left[0] > 0:
+        if reads == _WORKSPACE_READS:
+            reader.cut = True
+            break
+        reads += 1
         place, extras = queue.pop(0)
         table = tables.get(place, {})
-        for name in sorted(_requirements(table, extras)):
+        requested = _requested(table, extras)
+        for name in sorted(requested):
             member = installed(place, table, name)
-            if member is None or member in followed or member == project[0]:
+            if member is None or member == project[0]:
+                continue
+            wanted = requested[name]
+            if member in asked:
+                if wanted - asked[member]:
+                    asked[member] |= wanted
+                    queue.append((member, set(asked[member])))
                 continue
             if len(followed) == _WORKSPACE_DEPENDENCIES:
                 reader.cut = True
                 break
             followed.append(member)
-            queue.append((member, _requested_extras(table, name)))
+            asked[member] = set(wanted)
+            queue.append((member, set(wanted)))
     return project[0], followed, reader.cut
 
 
@@ -1004,7 +1051,9 @@ def _real_folder(
     # it, and can be kept; a link's target is walked by _step, which keeps only what it didn't cut.
     capped = [False]
     parts, top = folder.parts, len(root.parts)
-    if parts[:top] != root.parts:
+    # A path longer than a link target may be (a uv ``path`` source is written by the customer)
+    # isn't walked: each of its prefixes is a key, so its length would cost its square.
+    if len(parts) > top + _LONGEST_TARGET or parts[:top] != root.parts:
         return None
     # From the deepest folder already known (most candidates share their folder with the last),
     # each one below it looked up in turn, stopping at the first that isn't there: a crafted name
@@ -1016,19 +1065,15 @@ def _real_folder(
     for end in range(known_end + 1, len(parts) + 1):
         if real is None:
             return None
-        key = parts[:end]
-        if key in known:
-            real = known[key]
+        name = parts[end - 1]
+        if name == "..":
+            real = real.parent
+        elif not is_within(real, root):
+            # Above the root, as written: the way back in is by the same names.
+            real = real / name
         else:
-            name = parts[end - 1]
-            if name == "..":
-                real = real.parent
-            elif not is_within(real, root):
-                # Above the root, as written: the way back in is by the same names.
-                real = real / name
-            else:
-                real = _step(real / name, root, known, left, 0, capped)
-            known[key] = real
+            real = _step(real / name, root, known, left, 0, capped)
+        known[parts[:end]] = real
     return real if real is not None and is_within(real, root) else None
 
 

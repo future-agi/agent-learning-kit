@@ -194,6 +194,25 @@ def _first_lines(raw: bytes) -> bytes:
     return b"\n".join(lines)
 
 
+# What tokenize's cookie pattern finds after a line's "#": its first match is the cookie.
+_COOKIE = re.compile(rb"coding[:=][ \t]*[-\w.]+", re.ASCII)
+
+
+def _cookie_part(line: bytes) -> bytes:
+    """``line`` as short as says the same to detect_encoding: a comment line becomes "#" and its
+    cookie, any other line "x", a blank line nothing. Its pattern, ``#.*?coding``, would try each
+    place up to the cookie, 0.75 ms on a 128 KB line, on every file (round 3 reviewer A)."""
+    mark = line.find(b"#")
+    if mark == -1:
+        return b"x" if line.strip(b" \t\f") else b""
+    if line[:mark].strip(b" \t\f"):
+        return b"x"
+    # The pattern's search starts where the cookie's word first is, found by bytes.find.
+    starts = [at for at in (line.find(b"coding:", mark), line.find(b"coding=", mark)) if at != -1]
+    found = _COOKIE.search(line, min(starts)) if starts else None
+    return b"#" + (found.group() if found else b"")
+
+
 def _coding(raw: bytes) -> tuple[str, codecs.CodecInfo] | None:
     """The codec Python reads ``raw`` in, as detect_encoding names it and its codec info.
 
@@ -211,7 +230,9 @@ def _coding(raw: bytes) -> tuple[str, codecs.CodecInfo] | None:
         # No cookie: detect_encoding would only run its pattern over the lines to say so.
         encoding = "utf-8-sig" if bom else "utf-8"
         return encoding, codecs.lookup(encoding)
-    lines = io.BytesIO(head[:bom] + head[bom:].translate(_ASCII_ONLY)).readline
+    # Cut, then masked: a byte "?" stands for is neither a space, "#" nor part of a codec's name.
+    cut = b"\n".join(map(_cookie_part, head[bom:].split(b"\n")))
+    lines = io.BytesIO(head[:bom] + cut.translate(_ASCII_ONLY)).readline
     try:
         encoding, _ = tokenize.detect_encoding(lines)
         return encoding, codecs.lookup(encoding)
