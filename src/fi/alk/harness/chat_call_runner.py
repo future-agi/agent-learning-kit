@@ -331,6 +331,16 @@ def _world_actors_record(
             for one in cast.events
             if one.get("kind") == "acted"
         ]
+        # A wait that ran out, and what was taken for the actor, as the world's dispatcher records its own.
+        decisions += [
+            {"actor": one["actor"], "play": "timeout",
+             **({"action": one.get("fallback")} if one.get("outcome") == "fallback_action" else {}),
+             "fallback": one.get("fallback"), "outcome": one.get("outcome"),
+             **({"status": one["status"]} if one.get("status") is not None else {}),
+             **({"action_outcome": one["action_outcome"]} if one.get("action_outcome") else {})}
+            for one in cast.events
+            if one.get("kind") == "timeout" and one.get("fallback")
+        ]
     acted = actor_rows(log, listed, decisions)
     if not acted and not decisions:
         return None
