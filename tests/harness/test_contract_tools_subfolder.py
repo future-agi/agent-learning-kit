@@ -1616,3 +1616,155 @@ def test_links_whose_leftovers_unwind_past_the_limit_are_refused(repo, links, re
             _select_compose(repo, {})
     else:
         _select_compose(repo, {})
+
+
+def _link_fan(root: Path, heads: int = 4, chain: int = 3, pad: int = 50) -> str:
+    """Hawk's shape, small: each head is a chain of links whose targets are "." and many slashes
+    and the next link, the last one back to the root. A path through them names the root, and
+    resolving it costs a lookup for each part of every target. Under the kernel's link limit, so
+    the system resolves it too. Returns the heads, as a path."""
+    for head in range(heads):
+        for link in range(chain + 1):
+            name = f"H{head}" if link == 0 else f"H{head}_{link}"
+            after = f"H{head}_{link + 1}" if link < chain else "."
+            (root / name).symlink_to("." + "/" * pad + after)
+    return "/".join(f"H{head}" for head in range(heads))
+
+
+def _lookups(monkeypatch, refused: bool) -> None:
+    from fi.alk.harness import runtime_selection
+
+    # The fan above costs about 900 lookups.
+    monkeypatch.setattr(runtime_selection, "_SAVE_PATH_LOOKUPS", 300 if refused else 20_000)
+
+
+@pytest.mark.parametrize("refused", [False, True])
+def test_a_prompt_path_through_links_is_charged_to_the_saves_budget(
+    tmp_path, repo, monkeypatch, refused
+):
+    _lookups(monkeypatch, refused)
+    (repo / "agents" / "a" / "prompt.txt").write_text("Be polite.\n")
+    fan = _link_fan(repo)
+
+    result = accept_contract(
+        payload(
+            runtime={"language": "python"},
+            system_prompt_from=[
+                {"path": f"{fan}/agents/a/prompt.txt", "start_line": 1, "end_line": 1}
+            ],
+        ),
+        tmp_path / "out",
+        source_root=repo,
+        subfolder="agents/a",
+    )
+
+    assert bool(result.get("is_error")) is refused, result
+    if refused:
+        assert "path_lookup_limit:" in result["content"][0]["text"]
+    else:
+        assert _saved(tmp_path / "out")["system_prompt_excerpt"] == "Be polite."
+
+
+@pytest.mark.parametrize("refused", [False, True])
+@pytest.mark.parametrize("where", ["compose_file", "command", "workdir"])
+def test_a_runtime_path_through_links_is_charged_to_the_saves_budget(
+    tmp_path, repo, monkeypatch, where, refused
+):
+    _lookups(monkeypatch, refused)
+    (repo / "agents" / "a" / "compose.yaml").write_text("services:\n  agent:\n    build: .\n")
+    fan = _link_fan(repo)
+    runtime = {
+        "compose_file": {"language": "python", "compose_file": f"{fan}/agents/a/compose.yaml"},
+        # From the folder, out through the links and back into it: past the budget the check
+        # can't say where it leads, so it mustn't pass.
+        "command": {"language": "python", "command": ["python", f"../../{fan}/agents/a/agent.py"]},
+        "workdir": {"language": "python", "workdir": f"{fan}/agents/a"},
+    }[where]
+
+    result = accept_contract(
+        payload(runtime=runtime), tmp_path / "out", source_root=repo, subfolder="agents/a"
+    )
+
+    assert bool(result.get("is_error")) is refused, result
+    if refused:
+        assert "path_lookup_limit:" in result["content"][0]["text"]
+
+
+@pytest.mark.parametrize("refused", [False, True])
+def test_a_tool_module_through_links_is_charged_to_the_saves_budget(
+    tmp_path, repo, monkeypatch, refused
+):
+    _lookups(monkeypatch, refused)
+    (repo / "agents" / "a" / "tools.py").write_text("def add(item_id):\n    return item_id\n")
+    fan = _link_fan(repo)
+
+    result = accept_contract(
+        payload(
+            runtime={"language": "python"},
+            tool_entrypoints=[
+                {
+                    "tool": "add",
+                    "mode": "import",
+                    "module": fan.replace("/", ".") + ".agents.a.tools",
+                    "callable": "add",
+                }
+            ],
+        ),
+        tmp_path / "out",
+        source_root=repo,
+        subfolder="agents/a",
+    )
+
+    assert bool(result.get("is_error")) is refused, result
+    if refused:
+        assert "path_lookup_limit:" in result["content"][0]["text"]
+
+
+def test_a_prompt_path_named_again_is_resolved_once(tmp_path, repo, monkeypatch):
+    from fi.alk.harness import tools
+
+    (repo / "agents" / "a" / "prompt.txt").write_text("Be polite.\nBe brief.\n")
+    resolved: list[Path] = []
+    real = tools.charged_path
+    monkeypatch.setattr(tools, "charged_path", lambda path: resolved.append(path) or real(path))
+
+    result = accept_contract(
+        payload(
+            runtime={"language": "python"},
+            system_prompt_from=[
+                {"path": "agents/a/prompt.txt", "start_line": line, "end_line": line}
+                for line in (1, 2, 1, 2)
+            ],
+        ),
+        tmp_path / "out",
+        source_root=repo,
+        subfolder="agents/a",
+    )
+
+    assert not result.get("is_error"), result
+    assert len(resolved) == 1
+
+
+@pytest.mark.parametrize(
+    "named",
+    [
+        {"system_prompt_from": [{"path": "x/" * 2500 + "p.txt", "start_line": 1, "end_line": 1}]},
+        {"system_prompt_from": [{"path": "agents/a/p\x00.txt", "start_line": 1, "end_line": 1}]},
+        {"tool_entrypoints": [{"tool": "add", "mode": "import", "module": "x." * 2500 + "t", "callable": "add"}]},
+        {"tool_entrypoints": [{"tool": "add", "mode": "import", "module": "x\x00.t", "callable": "add"}]},
+        {"runtime": {"language": "python", "compose_file": "x/" * 2500 + "compose.yaml"}},
+        {"runtime": {"language": "python", "command": ["python", "x/" * 2500 + "a.py"]}},
+        {"runtime": {"language": "python", "command": ["python", "a\x00.py"]}},
+    ],
+    ids=["prompt-long", "prompt-nul", "module-long", "module-nul", "compose-long", "command-long", "command-nul"],
+)
+def test_a_path_no_system_can_open_is_answered_not_raised(tmp_path, repo, named):
+    # A path past the system's limit, or holding a NUL, raised out of the save before.
+    result = accept_contract(
+        payload(**{"runtime": {"language": "python"}, **named}),
+        tmp_path / "out",
+        source_root=repo,
+        subfolder="agents/a",
+    )
+
+    assert "content" in result

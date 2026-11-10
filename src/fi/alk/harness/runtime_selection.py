@@ -4,11 +4,12 @@ import errno
 import re
 import os
 import stat
+from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
 from graphlib import CycleError, TopologicalSorter
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 from urllib.parse import urlsplit
 
 import yaml
@@ -22,6 +23,21 @@ COMPOSE_SERVICE_OUTSIDE_FOLDER = "runtime_compose_service_outside_subfolder"
 
 class RuntimeSelectionError(ValueError):
     pass
+
+
+class PathLookupsSpent(Exception):
+    """The paths a contract names took more lookups on disk than the save allows.
+
+    Not a ValueError, so a check that reads a path it can't resolve as "not there" doesn't read
+    this as "not there" too: past the budget nothing is answered.
+    """
+
+    def __init__(self) -> None:
+        super().__init__(
+            f"path_lookup_limit: the paths this contract names took more than "
+            f"{_SAVE_PATH_LOOKUPS:,} lookups on disk to find; name the files themselves, not "
+            "through links"
+        )
 
 
 @dataclass(frozen=True)
@@ -524,6 +540,37 @@ _LARGEST_STRING = 65536
 _BRACE = re.compile(r"\$\{|\}")
 _VARIABLE = re.compile(r"\$([A-Za-z_][A-Za-z0-9_]*)")
 _SELECTION_BUDGET: ContextVar[list[int] | None] = ContextVar("_SELECTION_BUDGET", default=None)
+# The lookups on disk the save may make resolving the paths a contract names: the prompt's files,
+# the runtime's folder, command and Compose file, and the tools' modules. Through links, one short
+# path can cost a lookup for each part of every target it follows: 32,800 crafted links took one
+# prompt path 2.1 s, and the contract can name any number of them.
+_SAVE_PATH_LOOKUPS = 20_000
+
+
+@contextmanager
+def path_lookup_budget() -> Iterator[None]:
+    """One budget for every path the save's checks resolve with ``charged_path``."""
+    token = _SELECTION_BUDGET.set([_SAVE_PATH_LOOKUPS])
+    try:
+        yield
+    finally:
+        _SELECTION_BUDGET.reset(token)
+
+
+def charged_path(path: Path) -> Path:
+    """``path.resolve()``, each lookup charged to the budget set around it, if one is.
+
+    Raises ``PathLookupsSpent`` once that budget is spent, ``ValueError`` for a path no system
+    can open (past twice its limit, or holding a NUL), ``OSError`` for one past the system's
+    limit, and ``RuntimeError`` for a link loop, as ``Path.resolve()`` does.
+    """
+    try:
+        return _charged_resolve(path)
+    except RuntimeSelectionError:
+        budget = _SELECTION_BUDGET.get()
+        if budget is not None and budget[0] < 0:
+            raise PathLookupsSpent() from None
+        raise
 
 
 def _interpolate_structure(

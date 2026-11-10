@@ -53,7 +53,10 @@ from .failure_file import FAILURE_FILE, write_failure_file
 from .instrumentation_evidence import detect_instrumentation
 from .runtime_selection import (
     COMPOSE_SERVICE_OUTSIDE_FOLDER,
+    PathLookupsSpent,
     RuntimeSelectionError,
+    charged_path,
+    path_lookup_budget,
     select_runtime,
 )
 from .python_source import utf8_size
@@ -215,11 +218,26 @@ def _checked_contract(
     if require_setup_contract and contract.modality == "chat":
         if problem := generated_chat_interface_problem(contract.runtime):
             problems.append(problem)
+    with path_lookup_budget():
+        return _checked_against_source(contract, problems, arrived, source_root, subfolder)
+
+
+def _checked_against_source(
+    contract: AgentContract,
+    problems: list[str],
+    arrived: list[str],
+    source_root: Path | None,
+    subfolder: str | None,
+) -> AgentContract | dict[str, Any]:
+    """The checks that read the customer's files, under the save's one path lookup budget."""
     if source_root is not None:
         from .source_tool_evidence import tool_evidence_problems
 
-        problems.extend(tool_evidence_problems(contract, source_root, subfolder))
-        problems.extend(_copy_prompt(contract, source_root))
+        try:
+            problems.extend(tool_evidence_problems(contract, source_root, subfolder))
+            problems.extend(_copy_prompt(contract, source_root))
+        except PathLookupsSpent as spent:
+            return _problems([*problems, str(spent)], arrived)
     runtime = contract.runtime
     if subfolder and source_root is not None:
         try:
@@ -246,6 +264,8 @@ def _checked_contract(
                 f"subfolder_not_found: {subfolder} is not a folder with files in the source, "
                 "so no description of it can be saved."
             )
+        except PathLookupsSpent as spent:
+            problems.append(str(spent))
         except ValueError as invalid:
             problems.append(str(invalid))
     elif runtime is not None and runtime.source_subfolder:
@@ -302,10 +322,22 @@ def _copy_prompt(contract: AgentContract, source_root: Path) -> list[str]:
     lines_of: dict[Path, list[str]] = {}
     # A file past the limit is read once too, and what was read of it counts.
     too_large: set[Path] = set()
+    # Each path named is resolved once, however many entries name it.
+    found_at: dict[str, Path | None] = {}
     read = copied = 0
     for index, where in enumerate(contract.system_prompt_from):
-        path = (root / where.path).resolve()
-        if not is_within(path, root) or not path.is_file():
+        if where.path not in found_at:
+            try:
+                # Through links, resolving one path can cost a lookup for each part of every
+                # target; each is charged to the save's budget.
+                resolved = charged_path(root / where.path)
+                found_at[where.path] = (
+                    resolved if is_within(resolved, root) and resolved.is_file() else None
+                )
+            except (OSError, RuntimeError, ValueError):
+                found_at[where.path] = None
+        path = found_at[where.path]
+        if path is None:
             problems.append(f"system_prompt_from[{index}]: {where.path} is not a file in the source")
             continue
         if path not in lines_of and path not in too_large:
