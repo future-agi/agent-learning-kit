@@ -199,6 +199,15 @@ class _Unread(Exception):
     pass
 
 
+class _ResultOutOfTime(Exception):
+    """The step after the walk (joining files into agents) passed its deadline."""
+
+
+# The step after the walk may run this long past the walk's own deadline. It stays well inside
+# the helper's margin before the hard stop (600 s), so a slow join ends in the scan's own file.
+_RESULT_GRACE = 120.0
+
+
 # What reading or parsing one file can raise: that file's problem, never the walk's. Anything
 # else is a fault in the kit and reaches the scan's crash path.
 _FILE_ERRORS = (
@@ -791,6 +800,8 @@ class _Walk:
         self.unread = 0
         # Unread files whose reader raised a kind not foreseen (a kit fault, not the file's).
         self.faults = 0
+        # When the step after the walk must give up: see _RESULT_GRACE.
+        self.result_deadline = deadline + _RESULT_GRACE
         self.files_read = 0
         self.bytes_read = 0
         self.stopped: Literal["", "limit", "clock", "memory"] = ""
@@ -929,6 +940,10 @@ class _Walk:
             self._edges[path] = tuple(found)
         return self._edges[path]
 
+    def _in_time(self) -> None:
+        if self.clock() > self.result_deadline:
+            raise _ResultOutOfTime()
+
     def _reached(self, start: str, candidates: dict[str, Sign]) -> list[str]:
         """The candidates ``start`` imports, through files that aren't candidates."""
         reached: list[str] = []
@@ -937,6 +952,7 @@ class _Walk:
         for _ in range(_IMPORT_DEPTH):
             following: list[str] = []
             for path in frontier:
+                self._in_time()
                 for target in self._imported(path):
                     if target in seen:
                         continue
@@ -988,6 +1004,7 @@ class _Walk:
         ]
         kept = []
         for entry in sorted(entries):
+            self._in_time()
             side = _is_side_path(entry)
             if signs[entry] in _WEAKEST:
                 project = self._project_of(entry)
@@ -998,10 +1015,11 @@ class _Walk:
                 ):
                     continue
             kept.append((entry, side))
-        return [
-            _Agent(entry, signs[entry], side, self._subfolder(entry, side, kept))
-            for entry, side in kept
-        ]
+        agents = []
+        for entry, side in kept:
+            self._in_time()
+            agents.append(_Agent(entry, signs[entry], side, self._subfolder(entry, side, kept)))
+        return agents
 
     def _project_of(self, path: str) -> str:
         return self.projects.nearest(posixpath.dirname(path)) or ""
@@ -1096,10 +1114,12 @@ class _Walk:
         )
         listed = agents[:1] if upload else agents[:_MAX_AGENTS]
         outside = {sign for path, sign in signs.items() if not _is_side_path(path)}
+        rows = []
+        for agent in listed:
+            self._in_time()
+            rows.append(self.candidate(agent, listed, upload=upload))
         return WalkResult(
-            agents=tuple(
-                self.candidate(agent, listed, upload=upload) for agent in listed
-            ),
+            agents=tuple(rows),
             more_than_fifty=not upload and len(agents) > _MAX_AGENTS,
             stopped=self.stopped,
             unread_files=self.unread,
@@ -1123,7 +1143,7 @@ def _prompt_count(paths: list[str], subfolder: str) -> int:
     )
 
 
-def _empty_result(walk: _Walk, stopped: Literal["limit", "memory"]) -> WalkResult:
+def _empty_result(walk: _Walk, stopped: Literal["limit", "memory", "clock"]) -> WalkResult:
     return WalkResult(
         agents=(),
         more_than_fifty=False,
@@ -1161,7 +1181,14 @@ def walk_repo(
         return _empty_result(walk, "memory")
     # Any other fault here is the kit's, not the repository's: it goes to the scan's crash
     # path, never to "the repository is larger than the scan reads".
-    result = walk.result(upload=upload)
+    try:
+        result = walk.result(upload=upload)
+    except _ResultOutOfTime:
+        # Joining a huge import graph into agents ran past its deadline: the scan ends in its
+        # own file (scan_timed_out), never at the helper's hard stop.
+        logger.warning("agent walk: joining files into agents ran out of time")
+        walk.facts.clear()
+        return _empty_result(walk, "clock")
     logger.info(
         "agent walk: files_read=%d unread=%d reader_faults=%d agents=%d left_out=%d stopped=%s",
         walk.files_read,

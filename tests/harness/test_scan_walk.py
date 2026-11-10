@@ -354,7 +354,8 @@ def test_the_walk_limit_and_the_clock_stop_it(
 
     assert timed.stopped == "clock"
     assert _entries(timed) == ["a.py"]
-    assert len(calls) == 2
+    # The walk checked before each of its two files; the join after it checks the clock too.
+    assert len(calls) >= 2
 
     monkeypatch.setattr(scan_walk, "_MAX_FILES", 2)
     by_count = _walk(tmp_path)
@@ -1269,6 +1270,7 @@ def test_every_file_is_read_in_exactly_one_pass(tmp_path: Path, monkeypatch: pyt
             "examples/demo/agent.py": GRAPH,
             "pkg/sub/mod.py": "x = 1\n",
             "pkg/sub/tests/test_b.py": "x = 1\n",
+            "zz_app/.env.example": "C=1\n",
         },
     )
     seen: list[str] = []
@@ -1284,9 +1286,10 @@ def test_every_file_is_read_in_exactly_one_pass(tmp_path: Path, monkeypatch: pyt
     every = sorted(p.relative_to(tmp_path).as_posix() for p in tmp_path.rglob("*") if p.is_file())
     assert sorted(seen) == every
     assert len(seen) == len(set(seen))
-    # The customer's own code and its settings template come before any side file.
-    own = seen[: seen.index("examples/demo/agent.py")]
-    assert "app/.env.example" in own and "agent.py" in own
+    # A settings template is read with its folder's own code, before every side file: here
+    # one in a folder that sorts after tests/, which a side-pass template would follow.
+    assert seen.index("zz_app/.env.example") < seen.index("tests/test_a.py")
+    assert seen.index("app/.env.example") < seen.index("app/test_helpers.py")
 
 
 def test_a_template_beside_the_agent_is_read_before_a_big_tests_folder(
@@ -1332,3 +1335,38 @@ def test_a_reader_fault_on_every_described_file_logs_one_trace(
 
     assert candidate is not None and candidate.partial is True
     assert caplog.text.count("a file's reader failed") == 1
+
+
+def test_the_step_after_the_walk_watches_the_clock(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Dileep's shape, small: many files that build a client, each importing a web of modules.
+    Joining them into agents must stop at its deadline and end as a clock stop, never run on
+    to the helper's hard stop."""
+    files = {
+        f"pkg/m{index}.py": "".join(f"from .m{(index * 7 + step) % 200} import x\n" for step in range(1, 6))
+        for index in range(200)
+    }
+    files.update(
+        {
+            f"pkg/c{index}.py": CLIENT + "".join(f"from .m{(index * 3 + step) % 200} import x\n" for step in range(5))
+            for index in range(50)
+        }
+    )
+    _write(tmp_path, files)
+
+    complete = _walk(tmp_path)
+    assert complete.stopped == "" and complete.agents
+
+    monkeypatch.setattr(scan_walk, "_RESULT_GRACE", 0.0)
+    calls: list[int] = []
+
+    def clock() -> float:
+        calls.append(1)
+        return float(len(calls))
+
+    # Each file read checks the clock once, so this deadline lets the walk finish and then
+    # gives the join only a few checks.
+    timed = walk_repo(tmp_path, deadline=float(len(files) + 5), clock=clock)
+
+    assert timed.stopped == "clock"
+    assert timed.agents == ()
+    assert len(calls) < len(files) + 50
