@@ -2093,3 +2093,16 @@ def test_a_rows_names_leave_out_a_deeper_listed_folder_and_a_sibling_with_the_sa
         "app": {"APP_KEY"},
         "plugins/x": {"PLUGIN_KEY"},
     }
+
+
+def test_the_estimate_rounds_each_object_up_to_its_block() -> None:
+    """The estimate's sizes are 3.12's, each rounded as the allocator rounds it. The whole-walk
+    comparison has margins beside the rounding, so the rounding is held here on its own."""
+    import sys
+
+    for size in range(1, 4_097):
+        assert scan_walk._block(size) >= _allocated(size), size
+    for name in ("", "a", "abcdefgh", "x" * 255, "変数", "модуль", "\U0001d400" * 3):
+        assert scan_walk._text(name) >= _allocated(sys.getsizeof(name)), name
+    for items in range(0, 210):
+        assert scan_walk._tuple(items) >= _allocated(sys.getsizeof(tuple(range(items)))), items
