@@ -752,6 +752,44 @@ def test_the_import_walk_does_not_follow_a_link_out_or_read_an_oversized_file(tm
     assert credentials.imported_by_agent(root, "agents/a") == frozenset()
 
 
+@pytest.mark.parametrize(
+    "budget, stopped",
+    [
+        ({}, False),
+        ({"_MAX_WALK_IMPORTS": 1}, True),
+        # The folder's own two files, then nothing left for common/llm.py.
+        ({"_MAX_FILES": 2}, True),
+        ({"_MAX_WALK_BYTES": 1}, True),
+    ],
+    ids=["none", "names", "files", "bytes"],
+)
+def test_the_import_walk_says_when_a_limit_stopped_it(tmp_path, monkeypatch, caplog, budget, stopped):
+    from fi.alk.harness import credentials
+
+    root = _agents_repo(
+        tmp_path,
+        {
+            "common/__init__.py": "",
+            "common/llm.py": 'import os\nKEY = os.environ["SHARED_API_KEY"]\n',
+            "agents/a/agent.py": "import nowhere\nimport common.llm\n",
+            # Read first, so a limit on names leaves no file waiting: only the cut says so.
+            "agents/a/aaa.py": "x = 1\n",
+        },
+    )
+    for name, value in budget.items():
+        monkeypatch.setattr(credentials, name, value)
+    said: list[bool] = []
+
+    credentials.imported_by_agent(root, "agents/a", stopped=said)
+    with caplog.at_level("WARNING", logger="fi.alk.harness.credentials"):
+        manifest = credentials.discover_credentials(root, agent_subfolder="agents/a")
+
+    assert said == [stopped]
+    # The key in the file it didn't reach is optional, and the manifest says the scan was cut.
+    assert manifest.truncated is stopped
+    assert ("stopped at its limits" in caplog.text) is stopped
+
+
 def test_the_import_walk_stops_at_the_file_limit(tmp_path, monkeypatch):
     from fi.alk.harness import credentials
 

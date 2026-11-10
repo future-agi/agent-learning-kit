@@ -5266,6 +5266,29 @@ def test_subfolder_requires_what_its_shared_code_reads(tmp_path):
     assert required["SHARED_API_KEY"] is True
 
 
+def test_a_workspace_member_requires_what_its_shared_code_reads(tmp_path):
+    # It ships from the workspace root, so the shared code it imports is shipped, and read.
+    source = _repo(
+        tmp_path,
+        {
+            "pyproject.toml": '[tool.uv.workspace]\nmembers=["agents/*"]\n',
+            "agents/a/pyproject.toml": "[project]\nname='agent-a'\nversion='1'\n",
+            "agents/b/pyproject.toml": "[project]\nname='agent-b'\nversion='1'\n",
+            "common/__init__.py": "",
+            "common/llm.py": 'import os\nKEY = os.environ["SHARED_API_KEY"]\n',
+            "agents/a/agent.py": "from common import llm\n" + _callback(),
+            "agents/b/agent.py": _callback("B_ONLY_API_KEY"),
+        },
+    )
+
+    _, output = _bundle(tmp_path, source, "agents/a")
+
+    manifest = json.loads((output / "credentials.json").read_text())
+    required = {item["environment_name"]: item["required"] for item in manifest["requirements"]}
+    assert required["SHARED_API_KEY"] is True
+    assert required.get("B_ONLY_API_KEY") is not True
+
+
 def test_callable_without_its_own_callback_ignores_a_siblings(tmp_path):
     source = _repo(
         tmp_path,
@@ -5874,6 +5897,8 @@ def test_subfolder_requires_a_named_root_compose_files_values(tmp_path, monkeypa
 
     assert seen["agent_compose_file"] == "compose.yaml"
     assert seen["agent_subfolder"] == "agents/a"
+    # A Compose plan has no source process, so the folder's install root is what's scanned.
+    assert "agents/a" in seen["scan_paths"]
 
 
 def test_subfolder_finds_its_own_compose_with_broker(tmp_path, monkeypatch):

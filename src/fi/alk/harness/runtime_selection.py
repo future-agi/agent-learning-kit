@@ -4,11 +4,12 @@ import errno
 import re
 import os
 import stat
+from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
 from graphlib import CycleError, TopologicalSorter
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 from urllib.parse import urlsplit
 
 import yaml
@@ -22,6 +23,21 @@ COMPOSE_SERVICE_OUTSIDE_FOLDER = "runtime_compose_service_outside_subfolder"
 
 class RuntimeSelectionError(ValueError):
     pass
+
+
+class PathLookupsSpent(Exception):
+    """The paths a contract names took more lookups on disk than the save allows.
+
+    Not a ValueError, so a check that reads a path it can't resolve as "not there" doesn't read
+    this as "not there" too: past the budget nothing is answered.
+    """
+
+    def __init__(self) -> None:
+        super().__init__(
+            f"path_lookup_limit: the paths this contract names took more than "
+            f"{_SAVE_PATH_LOOKUPS:,} lookups on disk to find; name the files themselves, not "
+            "through links"
+        )
 
 
 @dataclass(frozen=True)
@@ -165,6 +181,7 @@ def _select_runtime(
     if runtime.source_subfolder:
         # Every service the stack runs, not only the control one: a helper that builds a sibling
         # ships the sibling's files, and its keys go unasked.
+        resolved_root = root.resolve()
         folder = (root / runtime.source_subfolder).resolve()
         # Services that share a build (a YAML alias costs nothing to repeat) are checked once.
         checked: dict[tuple[Path, str, str], bool] = {}
@@ -180,13 +197,11 @@ def _select_runtime(
                 and not (isinstance(profiles, list) and asked & {str(value) for value in profiles})
             ):
                 continue
+            base = service_bases.get(name, compose.parent)
+            environment = public_environment or {}
             if _builds_outside_folder(
-                service,
-                service_bases.get(name, compose.parent),
-                folder,
-                public_environment or {},
-                checked,
-            ):
+                service, base, folder, environment, checked
+            ) or _mounts_outside_folder(service, base, resolved_root, folder, environment):
                 raise RuntimeSelectionError(f"{COMPOSE_SERVICE_OUTSIDE_FOLDER}: {name}")
     services = {
         name: {
@@ -248,6 +263,61 @@ def _builds_outside_folder(
     return outside
 
 
+def _mounts_outside_folder(
+    service: Any, base: Path, root: Path, folder: Path, public_environment: dict[str, str]
+) -> bool:
+    """True when the service binds or reads an env file from a folder of the repository that is
+    neither the agent's nor above it: a sibling's code bound into a stock image runs as surely as
+    one built from it. A file counts as its folder, as a build's Dockerfile does, so a root
+    `.env` or config file is the agent's. Paths outside the repository, such as a socket, are the
+    host's."""
+    if not isinstance(service, dict):
+        return False
+    # (source, whether it names a file for certain)
+    sources: list[tuple[str, bool]] = []
+    envfiles = service.get("env_file") or []
+    if isinstance(envfiles, str):
+        envfiles = [envfiles]
+    for entry in envfiles if isinstance(envfiles, list) else []:
+        path = entry.get("path") if isinstance(entry, dict) else entry
+        if isinstance(path, str) and (value := _interpolated(path, public_environment)):
+            sources.append((value, True))
+    mounts = service.get("volumes") or []
+    for mount in mounts if isinstance(mounts, list) else []:
+        if isinstance(mount, str):
+            # Interpolated first, as Compose does. A named volume has no path; a bind starts
+            # with one, and a bare name at the root would otherwise read as the root's folder.
+            value = _interpolated(mount, public_environment)
+            source = value.split(":")[0] if value else ""
+            if source.startswith((".", "/")):
+                sources.append((source, False))
+        elif isinstance(mount, dict) and mount.get("type") == "bind":
+            source = mount.get("source")
+            if isinstance(source, str) and (value := _interpolated(source, public_environment)):
+                sources.append((value, False))
+    for value, is_file in sources:
+        if value.startswith("~"):
+            continue
+        place = _resolved(base, value)
+        if is_file or not place.is_dir():
+            place = place.parent
+        if is_within(place, root) and not contains_or_is_above(place, folder):
+            return True
+    return False
+
+
+def _interpolated(value: str, public_environment: dict[str, str]) -> str:
+    """``value`` with its variables filled in, or "" when one isn't set: the code that reads
+    the file reports that, not this check."""
+    try:
+        built = _interpolate_structure(value, public_environment)
+    except RuntimeSelectionError as unset:
+        if str(unset).startswith("compose_structural_configuration_missing"):
+            return ""
+        raise
+    return built if isinstance(built, str) else ""
+
+
 def _resolved(base: Path, value: str) -> Path:
     """``base / value`` resolved, each lookup on disk charged to the selection's budget.
 
@@ -274,6 +344,11 @@ def _charged_resolve(path: Path) -> Path:
     budget = _SELECTION_BUDGET.get()
 
     def charge(looked_up: str) -> None:
+        # Links whose targets leave parts behind as they unwind grow the path a level at a time,
+        # and each step copies it. Nothing can open a path past the system's limit, so twice
+        # that is refused, whatever the budget.
+        if len(looked_up) > 2 * _LONGEST_PATH:
+            raise RuntimeSelectionError("compose_source_path_invalid")
         if budget is None:
             return
         budget[0] -= 1 + looked_up.count("/") // 256
@@ -302,8 +377,8 @@ def _join_resolved(
     while rest:
         name, _, rest = rest.partition("/")
         if not name or name in (".", ".."):
-            # Walked without a lookup, but walked: a link's target can hold a thousand of these,
-            # read again on every resolve.
+            # Walked without a lookup, but walked: a link's target can hold thousands of these
+            # (4,094 on Linux), read again on every resolve.
             charge("")
         if not name or name == ".":
             continue
@@ -519,6 +594,37 @@ _LARGEST_STRING = 65536
 _BRACE = re.compile(r"\$\{|\}")
 _VARIABLE = re.compile(r"\$([A-Za-z_][A-Za-z0-9_]*)")
 _SELECTION_BUDGET: ContextVar[list[int] | None] = ContextVar("_SELECTION_BUDGET", default=None)
+# The lookups on disk the save may make resolving the paths a contract names: the prompt's files,
+# the runtime's folder, command and Compose file, and the tools' modules. Through links, one short
+# path can cost a lookup for each part of every target it follows: 32,800 crafted links took one
+# prompt path 2.1 s, and the contract can name any number of them.
+_SAVE_PATH_LOOKUPS = 20_000
+
+
+@contextmanager
+def path_lookup_budget() -> Iterator[None]:
+    """One budget for every path the save's checks resolve with ``charged_path``."""
+    token = _SELECTION_BUDGET.set([_SAVE_PATH_LOOKUPS])
+    try:
+        yield
+    finally:
+        _SELECTION_BUDGET.reset(token)
+
+
+def charged_path(path: Path) -> Path:
+    """``path.resolve()``, each lookup charged to the budget set around it, if one is.
+
+    Raises ``PathLookupsSpent`` once that budget is spent, ``ValueError`` for a path no system
+    can open (past twice its limit, or holding a NUL), ``OSError`` for one past the system's
+    limit, and ``RuntimeError`` for a link loop, as ``Path.resolve()`` does.
+    """
+    try:
+        return _charged_resolve(path)
+    except RuntimeSelectionError:
+        budget = _SELECTION_BUDGET.get()
+        if budget is not None and budget[0] < 0:
+            raise PathLookupsSpent() from None
+        raise
 
 
 def _interpolate_structure(
@@ -785,6 +891,8 @@ def _load_compose(
                 raise RuntimeSelectionError("compose_include_path_invalid")
             child = load(path.parent / include)
             for key, value in child.items():
+                if not isinstance(key, str):
+                    raise RuntimeSelectionError("compose_invalid")
                 if key in {"name", "version"} or key.startswith("x-"):
                     continue
                 if key not in {"services", "volumes", "networks"}:
@@ -818,12 +926,16 @@ def _rebase_service(service, base, destination, root, environment):
         return "./" + os.path.relpath(path, destination)
 
     build = service.get("build")
+    if build and not isinstance(build, (str, dict)):
+        raise RuntimeSelectionError("compose_invalid")
     if build:
         build = {"context": build} if isinstance(build, str) else build
         build["context"] = relative(build.get("context", "."), interpolate=False)
         service["build"] = build
     envfiles = service.get("env_file", [])
     envfiles = [envfiles] if isinstance(envfiles, str) else envfiles
+    if not isinstance(envfiles, list):
+        raise RuntimeSelectionError("compose_env_file_invalid")
     for index, entry in enumerate(envfiles):
         if isinstance(entry, str):
             envfiles[index] = relative(entry)
@@ -834,6 +946,8 @@ def _rebase_service(service, base, destination, root, environment):
     if envfiles:
         service["env_file"] = envfiles
     mounts = service.get("volumes", [])
+    if not isinstance(mounts, list):
+        raise RuntimeSelectionError("compose_invalid")
     for index, mount in enumerate(mounts):
         if isinstance(mount, str):
             parts = mount.split(":")
@@ -841,4 +955,4 @@ def _rebase_service(service, base, destination, root, environment):
                 parts[0] = relative(parts[0], interpolate=False)
                 mounts[index] = ":".join(parts)
         elif isinstance(mount, dict) and mount.get("type") == "bind":
-            mount["source"] = relative(mount["source"], interpolate=False)
+            mount["source"] = relative(mount.get("source"), interpolate=False)

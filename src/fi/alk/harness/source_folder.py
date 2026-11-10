@@ -84,6 +84,11 @@ def agent_folder(root: Path, subfolder: str | None) -> Path:
         folder = (resolved_root / subfolder).resolve()
         if not _inside(folder, resolved_root):
             raise SubfolderNotFound(subfolder)
+        # A committed link to the root, or to its own folder or above (`agents/up -> ..`,
+        # `self -> .`, or out of the repository and back), would make every sibling this
+        # agent's own while the build is still recorded as a folder build.
+        if folder == resolved_root or _inside((resolved_root / subfolder).parent.resolve(), folder):
+            raise SubfolderNotFound(subfolder)
         # Git stores no empty folder, so an empty one is an uninitialised submodule.
         with os.scandir(folder) as entries:
             if next(entries, None) is None:
@@ -200,9 +205,11 @@ def recorded_root(root: Path, runtime: Mapping[str, Any] | None) -> Path:
 
 
 def _climbs_out(root: Path, workdir: Path, folder: Path, item: str) -> bool:
+    from .runtime_selection import charged_path
+
     try:
         path = Path(item)
-        target = (path if path.is_absolute() else workdir / path).resolve()
+        target = charged_path(path if path.is_absolute() else workdir / path)
         if not target.exists() or _inside(target, folder):
             return False
         # An absolute path outside the repository is a system program, not repository content.
@@ -223,23 +230,26 @@ def bind_runtime(
         if runtime is not None and "source_subfolder" in runtime:
             return {key: value for key, value in runtime.items() if key != "source_subfolder"}
         return runtime
+    # Each path the runtime names is resolved charged: through links, one can cost a lookup for
+    # each part of every target it follows. Past the save's budget, PathLookupsSpent says so.
+    from .runtime_selection import charged_path
+
     runtime = dict(runtime or {})
     folder = agent_folder(root, subfolder)
     resolved_root = Path(root).resolve()
     workdir = str(runtime.get("workdir") or "")
     if workdir in ("", "."):
         workdir = subfolder
-    else:
-        try:
-            inside = _inside((resolved_root / workdir).resolve(), folder)
-        except (OSError, RuntimeError, ValueError):
-            inside = False
-        if not inside:
-            raise ValueError(
-                f"runtime_workdir_outside_subfolder: {workdir}; expected {subfolder} or a "
-                "folder inside it, relative to the repository root"
-            )
-    start = (resolved_root / workdir).resolve()
+    try:
+        start = charged_path(resolved_root / workdir)
+        inside = _inside(start, folder)
+    except (OSError, RuntimeError, ValueError):
+        inside = False
+    if not inside:
+        raise ValueError(
+            f"runtime_workdir_outside_subfolder: {workdir}; expected {subfolder} or a "
+            "folder inside it, relative to the repository root"
+        )
     for item in (str(one) for one in runtime.get("command") or []):
         # `--directory=../b` is the same command as `--directory ../b`.
         if any(
@@ -250,7 +260,7 @@ def bind_runtime(
     compose_file = str(runtime.get("compose_file") or "")
     if compose_file:
         try:
-            parent = (resolved_root / compose_file).resolve().parent
+            parent = charged_path(resolved_root / compose_file).parent
             reachable = contains_or_is_above(parent, folder)
         except (OSError, RuntimeError, ValueError):
             reachable = False

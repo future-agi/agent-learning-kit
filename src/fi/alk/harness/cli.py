@@ -317,6 +317,8 @@ async def _understand(args: argparse.Namespace) -> int:
 
     if (destination / FAILURE_FILE).is_file():
         _report_failure_file(destination)
+        # A refused reading still cost what its turns did.
+        print(f"spent:    ${stage.spent_usd:.4f}")
         return EXIT_REFUSED
     contract = load(destination)
     if contract is None:

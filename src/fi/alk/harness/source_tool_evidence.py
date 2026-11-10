@@ -13,11 +13,21 @@ from pathlib import Path
 
 from .contract import AgentContract
 from .python_source import ParseBudget, TokenBudget, parsed, read_module
-from .source_folder import SubfolderNotFound, agent_folder
+from .runtime_selection import charged_path
+from .source_folder import SubfolderNotFound, agent_folder, is_within
 
 _NOT_AGENT_CODE = {"tests", "test", "node_modules", "site-packages", "venv", "__pycache__"}
 # Certification runs in the job, not while a conversation waits, so it reads what bundling reads.
 _LARGEST_TOOL_MODULE = 1024 * 1024
+
+
+def _file_in(candidate: Path, root: Path) -> bool:
+    """A file, resolving inside ``root``. The resolve is charged to the save's path budget: a
+    module's name can be dozens of links. A name past the system's limit can't be a file."""
+    try:
+        return candidate.is_file() and is_within(charged_path(candidate), root)
+    except (OSError, RuntimeError, ValueError):
+        return False
 
 
 def tool_evidence_problems(
@@ -51,10 +61,7 @@ def tool_evidence_problems(
             for base in bases
             for relative in (module.with_suffix(".py"), module / "__init__.py")
         ]
-        path = next(
-            (p for p in candidates if p.is_file() and p.resolve().is_relative_to(root)),
-            None,
-        )
+        path = next((p for p in candidates if _file_in(p, root)), None)
         if path is None:
             continue
         if path not in read:
