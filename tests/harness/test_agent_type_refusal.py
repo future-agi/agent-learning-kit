@@ -3127,7 +3127,7 @@ def test_the_walk_while_the_conversation_waits_follows_only_small_files(tmp_path
 def test_the_walk_while_the_conversation_waits_parses_only_up_to_its_total(
     tmp_path, monkeypatch, total, expected
 ):
-    from fi.alk.harness import python_source
+    from fi.alk.harness import agent_type_check
 
     repo = _tree(
         tmp_path / "repo",
@@ -3137,7 +3137,8 @@ def test_the_walk_while_the_conversation_waits_parses_only_up_to_its_total(
             "common/web.py": "import playwright\n",
         },
     )
-    monkeypatch.setattr(python_source, "LARGEST_PARSED_TOTAL", total)
+    # The walk's own total: the browser scan's stays as it is.
+    monkeypatch.setattr(agent_type_check, "_WALKED_PARSED", total)
 
     assert browser_tools_in_agent(repo, "agents/a") == expected
 
@@ -3548,9 +3549,9 @@ def test_the_walk_looks_up_each_package_once(tmp_path, monkeypatch):
     looked: list[Path] = []
     look_up = credentials._file_inside
 
-    def counted(candidate, *args):
+    def counted(candidate, *args, **named):
         looked.append(candidate)
-        return look_up(candidate, *args)
+        return look_up(candidate, *args, **named)
 
     monkeypatch.setattr(credentials, "_file_inside", counted)
 
@@ -3566,9 +3567,9 @@ def _counted_lookups(monkeypatch) -> list[Path]:
     looked: list[Path] = []
     look_up = credentials._file_inside
 
-    def counted(candidate, *args):
+    def counted(candidate, *args, **named):
         looked.append(candidate)
-        return look_up(candidate, *args)
+        return look_up(candidate, *args, **named)
 
     monkeypatch.setattr(credentials, "_file_inside", counted)
     return looked
@@ -4025,9 +4026,9 @@ def test_the_walk_charges_a_file_found_for_each_part_of_its_path(tmp_path, monke
     charged: list[tuple[Path, float]] = []
     real = credentials._file_inside
 
-    def spy(candidate, root, deepest, left=None):
+    def spy(candidate, root, deepest, left=None, unread=None):
         before = left[0]
-        hit = real(candidate, root, deepest, left)
+        hit = real(candidate, root, deepest, left, unread)
         charged.append((candidate, before - left[0]))
         return hit
 
@@ -4318,7 +4319,7 @@ def test_a_member_is_looked_in_only_for_its_own_package_names(tmp_path, monkeypa
     repo = _tree(tmp_path / "repo", files)
     tried: list[Path] = []
     real = credentials._file_inside
-    monkeypatch.setattr(credentials, "_file_inside", lambda place, *rest: tried.append(place) or real(place, *rest))
+    monkeypatch.setattr(credentials, "_file_inside", lambda place, *rest, **named: tried.append(place) or real(place, *rest, **named))
 
     found = credentials.imported_by_agent(repo, "agents/a", lookup_limit=100_000)
     assert (repo / "libs" / "m7" / "m7" / "core.py").resolve() in found
@@ -4775,7 +4776,7 @@ def test_a_candidate_past_the_depth_cut_isnt_walked_folder_by_folder(tmp_path, m
     monkeypatch.setattr(
         credentials,
         "_real_folder",
-        lambda folder, *rest: walked.append(len(folder.parts)) or real(folder, *rest),
+        lambda folder, *rest, **named: walked.append(len(folder.parts)) or real(folder, *rest, **named),
     )
 
     credentials.imported_by_agent(repo, "agents/a", lookup_limit=100_000)
@@ -4845,7 +4846,7 @@ def test_each_folder_on_the_way_to_a_candidate_is_walked_once(tmp_path, monkeypa
     (repo / "link").symlink_to("p")
     stepped: list[Path] = []
     real = credentials._step
-    monkeypatch.setattr(credentials, "_step", lambda name, *rest: stepped.append(name) or real(name, *rest))
+    monkeypatch.setattr(credentials, "_step", lambda name, *rest, **named: stepped.append(name) or real(name, *rest, **named))
 
     credentials.imported_by_agent(repo, "agents/a", lookup_limit=100_000)
     # Each folder from the root down is stepped through once, whatever the number of names in it.
@@ -5547,15 +5548,13 @@ def test_what_follows_a_cookie_isnt_counted_against_it():
 def test_plain_files_ahead_of_the_agents_imports_dont_use_up_the_parse_total(tmp_path):
     from fi.alk.harness import agent_type_check
 
-    # Pine's TH-9490 review: three plain 126 KB files that sort first spent the 256 KB total, and
-    # the walk lost common/web.py with no word.
+    # Plain 126 KB files that sort first spent the parse total, and the walk lost common/web.py
+    # with no word: five of them are more than the save walk's 512 KB.
     pad = "x = 1\n" * 21_000
     repo = _tree(
         tmp_path / "repo",
         {
-            "agents/a/a0.py": pad,
-            "agents/a/a1.py": pad,
-            "agents/a/a2.py": pad,
+            **{f"agents/a/a{n}.py": pad for n in range(5)},
             "agents/a/main.py": "from common import web\n",
             "common/__init__.py": "",
             "common/web.py": "",
@@ -5744,3 +5743,340 @@ def test_a_path_source_to_a_folder_with_no_project_isnt_followed(tmp_path):
 
     _, followed, _ = credentials._workspace_dependencies(repo, repo / "agents" / "a", [1e9], {})
     assert followed == []
+
+
+def _save_walk(repo: Path, subfolder: str = "agents/a"):
+    """The walk with the save's limits, as _walked runs it: the files reached, and stopped."""
+    from fi.alk.harness import agent_type_check
+    from fi.alk.harness.credentials import imported_by_agent
+    from fi.alk.harness.python_source import LARGEST_PARSED_MODULE, ParseBudget
+
+    stopped: list[bool] = []
+    found = imported_by_agent(
+        repo,
+        subfolder,
+        parse_limit=LARGEST_PARSED_MODULE,
+        parse_budget=ParseBudget(agent_type_check._WALKED_PARSED),
+        script_budget=ParseBudget(agent_type_check._WALKED_SCRIPTS),
+        import_limit=agent_type_check._WALKED_IMPORTS,
+        lookup_limit=agent_type_check._WALKED_LOOKUPS,
+        stopped=stopped,
+    )
+    return found, stopped[0]
+
+
+def _behind(tmp_path: Path, helper: bytes) -> Path:
+    """agents/a/main.py imports common.helpers (``helper``), which may import common.web."""
+    repo = _tree(
+        tmp_path / "repo",
+        {"agents/a/main.py": "import common.helpers\n", "common/__init__.py": "", "common/web.py": "import playwright\n"},
+    ).resolve()
+    (repo / "common" / "helpers.py").write_bytes(helper)
+    return repo
+
+
+@pytest.mark.parametrize(
+    "helper",
+    [
+        pytest.param(
+            b"from common import web\ndef first[T = int](x: T) -> T:\n    return x\n",
+            id="3.13-syntax",
+            marks=pytest.mark.skipif(sys.version_info >= (3, 13), reason="parses on 3.13"),
+        ),
+        pytest.param(b"from common import web\nNAME = 'a" + "\u0301".encode() * 40 + b"'\n", id="marks"),
+        pytest.param(
+            b"# coding: latin-1\nfrom common import web\n# " + b"\xe9" * 70_000 + b"\n", id="oversize-as-utf8"
+        ),
+    ],
+)
+def test_a_file_the_walk_cant_parse_says_it_stopped(tmp_path, helper):
+    repo = _behind(tmp_path, helper)
+
+    found, stopped = _save_walk(repo)
+    assert stopped and repo / "common" / "web.py" not in found
+
+
+def test_a_file_past_the_parse_total_says_the_walk_stopped(tmp_path, monkeypatch):
+    from fi.alk.harness import agent_type_check
+
+    repo = _behind(tmp_path, b"from common import web\n" + b"x = 1\n" * 50)
+    monkeypatch.setattr(agent_type_check, "_WALKED_PARSED", 40)
+
+    found, stopped = _save_walk(repo)
+    assert stopped and repo / "common" / "web.py" not in found
+
+
+_ESCAPED_LINE = b"# coding: unicode-escape\n"
+
+
+@pytest.mark.parametrize(
+    "helper, stopped_too, reached",
+    [
+        # Decoded, the CR ends the comment and Python runs the import; read as UTF-8 the comment
+        # runs on and the file parses, with only os.
+        (_ESCAPED_LINE + b"import os  # c\\r; import common.web\n", True, False),
+        # Decoded, it's two imports; read as UTF-8, a stray backslash: only the decoded parses.
+        (_ESCAPED_LINE + b"import os\\rimport common.web\n", False, True),
+        # Both readings parse.
+        (_ESCAPED_LINE + b"import common.web  # see \\r\n", False, True),
+    ],
+    ids=["decoded-refused", "utf8-refused", "both-parse"],
+)
+def test_a_file_read_two_ways_is_judged_by_its_decoded_reading(tmp_path, helper, stopped_too, reached):
+    repo = _behind(tmp_path, helper)
+
+    found, stopped = _save_walk(repo)
+    assert stopped is stopped_too
+    assert (repo / "common" / "web.py" in found) is reached
+
+
+def test_files_read_two_ways_base_parsed_are_still_parsed(tmp_path):
+    # Base charged each such file once, as its larger reading, against 256 KB; each reading is
+    # charged now, against 512 KB, so whatever base's total let through still fits.
+    pad = b"# " + b"x" * 76 + b"\n"
+    repo = _tree(
+        tmp_path / "repo",
+        {"agents/a/main.py": "import common.one\nimport common.two\n", "common/__init__.py": "", "common/web.py": "", "common/page.py": ""},
+    ).resolve()
+    for name, target in (("one", "web"), ("two", "page")):
+        (repo / "common" / f"{name}.py").write_bytes(
+            _ESCAPED_LINE + f"import common.{target}  # c\\r\n".encode() + pad * 1_500
+        )
+    larger = sum(len((repo / "common" / f"{n}.py").read_bytes()) for n in ("one", "two"))
+    assert larger < 256 * 1024
+
+    found, stopped = _save_walk(repo)
+    assert not stopped and {repo / "common" / "web.py", repo / "common" / "page.py"} <= found
+
+
+@pytest.mark.parametrize("where", ["own-py", "imported-py", "imported-script", "grew-since"])
+def test_a_file_over_the_read_limit_says_the_walk_stopped(tmp_path, monkeypatch, where):
+    from fi.alk.harness import credentials
+
+    big = b"import common.web\n" + b"# " + b"x" * 1_000_100 + b"\n"
+    repo = _tree(tmp_path / "repo", {"common/__init__.py": "", "common/web.py": ""}).resolve()
+    (repo / "agents" / "a").mkdir(parents=True)
+    if where == "own-py":
+        (repo / "agents" / "a" / "main.py").write_bytes(big)
+    elif where == "imported-py":
+        (repo / "agents" / "a" / "main.py").write_text("import common.big\n")
+        (repo / "common" / "big.py").write_bytes(big)
+    elif where == "imported-script":
+        (repo / "agents" / "a" / "index.js").write_text('import "./big.js";\n')
+        (repo / "agents" / "a" / "big.js").write_bytes(b'import "../../common/web.py";\n' + b"//" + b"x" * 1_000_100 + b"\n")
+    else:
+        (repo / "agents" / "a" / "main.py").write_bytes(big)
+        real = credentials._plain_file
+        # Small when looked at, past the limit once read.
+        monkeypatch.setattr(
+            credentials, "_plain_file", lambda path, unread=None: path.name == "main.py" or real(path, unread)
+        )
+
+    found, stopped = _save_walk(repo)
+    assert stopped
+
+
+def test_a_large_data_file_a_script_imports_doesnt_say_stopped(tmp_path):
+    repo = _tree(tmp_path / "repo", {"agents/a/index.js": 'import data from "./data.json";\n'}).resolve()
+    (repo / "agents" / "a" / "data.json").write_bytes(b"[" + b"1," * 600_000 + b"1]")
+
+    _, stopped = _save_walk(repo)
+    assert not stopped
+
+
+@pytest.mark.parametrize("where", ["own-link", "imported-link"])
+def test_a_file_link_to_code_says_the_walk_stopped(tmp_path, where):
+    repo = _tree(
+        tmp_path / "repo",
+        {"shared/main.py": "import common.web\n", "common/__init__.py": "", "common/web.py": "", "common/real.py": "import common.web\n"},
+    ).resolve()
+    (repo / "agents" / "a").mkdir(parents=True)
+    if where == "own-link":
+        (repo / "agents" / "a" / "main.py").symlink_to(repo / "shared" / "main.py")
+    else:
+        (repo / "agents" / "a" / "main.py").write_text("import common.helpers\n")
+        (repo / "common" / "helpers.py").symlink_to("real.py")
+
+    found, stopped = _save_walk(repo)
+    # The link isn't followed (Python would follow it), so the walk says what it left.
+    assert stopped and repo / "common" / "web.py" not in found
+
+
+@pytest.mark.parametrize(
+    "case", ["python-parts", "python-long", "python-deep-base", "script-long", "script-deep", "own-file-deep"]
+)
+def test_a_name_dropped_for_its_length_or_depth_says_the_walk_stopped(tmp_path, case):
+    from fi.alk.harness import credentials
+
+    repo = (tmp_path / "repo").resolve()
+    agent = repo / "agents" / "a"
+    agent.mkdir(parents=True)
+    deep = credentials._DEEPEST_FOLLOWED
+    if case == "python-parts":
+        (agent / "main.py").write_text("import " + ".".join(["a"] * (deep + 1)) + "\n")
+    elif case == "python-long":
+        (agent / "main.py").write_text("import " + "a" * (credentials._LONGEST_NAME + 1) + "\n")
+    elif case == "python-deep-base":
+        # From a folder four parts below the root the module path is past the cut, while from the
+        # root's src/ even its __init__.py is within it: only the base's depth cuts it.
+        agent = repo / "agents" / "x" / "y" / "a"
+        agent.mkdir(parents=True)
+        (agent / "main.py").write_text("import " + ".".join(["a"] * (deep - 2)) + "\n")
+    elif case == "script-long":
+        (agent / "index.js").write_text('import "./' + "a" * (credentials._LONGEST_NAME + 1) + '";\n')
+    elif case == "script-deep":
+        (agent / "index.js").write_text('import "./' + "/".join(["a"] * (deep + 2)) + '";\n')
+    else:
+        (agent.joinpath(*["d"] * (deep + 1))).mkdir(parents=True)
+        (agent.joinpath(*["d"] * (deep + 1)) / "x.py").write_text("import os\n")
+        (agent / "main.py").write_text("import os\n")
+
+    _, stopped = _save_walk(repo, str(agent.relative_to(repo)))
+    assert stopped
+
+
+def test_a_name_whose_file_resolves_past_the_depth_cut_says_bundlings_walk_stopped(tmp_path):
+    from fi.alk.harness import credentials
+    from fi.alk.harness.credentials import imported_by_agent
+
+    # Bundling looks files up as the kernel does, so a link can take a shallow name deep.
+    repo = (tmp_path / "repo").resolve()
+    far = repo.joinpath(*["d"] * (credentials._DEEPEST_FOLLOWED + 1))
+    far.mkdir(parents=True)
+    (far / "mod.py").write_text("")
+    (repo / "agents" / "a").mkdir(parents=True)
+    (repo / "agents" / "a" / "main.py").write_text("import lib.mod\n")
+    (repo / "agents" / "a" / "lib").symlink_to(far)
+    stopped: list[bool] = []
+
+    imported_by_agent(repo, "agents/a", stopped=stopped)
+    assert stopped == [True]
+
+
+def test_a_link_target_past_so_many_parts_says_the_walk_stopped(tmp_path):
+    from fi.alk.harness import credentials
+
+    repo = _tree(tmp_path / "repo", {"common/__init__.py": "", "common/web.py": "", "x/keep": ""}).resolve()
+    (repo / "agents" / "a").mkdir(parents=True)
+    (repo / "agents" / "a" / "main.py").write_text("import shared.web\n")
+    target = "/".join(["..", "..", *(["x", ".."] * (credentials._LONGEST_TARGET // 2)), "common"])
+    (repo / "agents" / "a" / "shared").symlink_to(target)
+
+    found, stopped = _save_walk(repo)
+    assert stopped and repo / "common" / "web.py" not in found
+
+
+def test_a_chain_past_the_link_limit_doesnt_say_the_walk_stopped(tmp_path):
+    from fi.alk.harness import credentials
+
+    # The kernel refuses such a chain too, so nothing runs behind it.
+    repo = _tree(tmp_path / "repo", {"real/__init__.py": "", "real/web.py": ""}).resolve()
+    links = credentials._LINKS_FOLLOWED + 1
+    for n in range(links):
+        (repo / f"c{n}").symlink_to(f"c{n + 1}" if n < links - 1 else "real")
+    (repo / "agents" / "a").mkdir(parents=True)
+    (repo / "agents" / "a" / "main.py").write_text("import c0.web\n")
+
+    _, stopped = _save_walk(repo)
+    assert not stopped
+
+
+def test_a_spent_decode_total_says_the_walk_stopped(tmp_path, monkeypatch):
+    from fi.alk.harness import python_source
+
+    # The import is spelled in escapes, so read without decoding the file names nothing.
+    repo = _behind(tmp_path, _ESCAPED_LINE + b"\\x69mport common.web\n")
+    monkeypatch.setattr(python_source, "LARGEST_ESCAPED_TOTAL", 10)
+
+    _, stopped = _save_walk(repo)
+    assert stopped
+
+
+@pytest.mark.parametrize(
+    "helper",
+    [
+        b"x = 1\n",
+        b"# no imports here, though the word import is in this comment\nx = 1\n",
+        b"# coding: utf-7\nimport os\n# +\xff\n",
+        b"import os\nimport json\n",
+    ],
+    ids=["no-import", "parses-empty", "python-refuses", "stdlib-name"],
+)
+def test_files_that_lead_nowhere_dont_say_the_walk_stopped(tmp_path, helper):
+    repo = _behind(tmp_path, helper)
+
+    _, stopped = _save_walk(repo)
+    assert not stopped
+
+
+def test_a_folder_where_a_module_would_be_doesnt_say_the_walk_stopped(tmp_path):
+    repo = _tree(tmp_path / "repo", {"agents/a/main.py": "import common.web\n", "common/__init__.py": ""}).resolve()
+    (repo / "common" / "web.py").mkdir()
+
+    _, stopped = _save_walk(repo)
+    assert not stopped
+
+
+@pytest.mark.parametrize("extra, stopped_too", [(0, False), (1, True)])
+def test_the_save_walk_reads_its_own_total(tmp_path, caplog, extra, stopped_too):
+    from fi.alk.harness import agent_type_check
+
+    # What the walk charges, main.py included, comes to exactly 512 KB, or one byte more.
+    main = "".join(f"import common.m{n}\n" for n in range(5))
+    total = 512 * 1024 + extra
+    each, rest = divmod(total - len(main), 5)
+    files = {"agents/a/main.py": main, "common/__init__.py": ""}
+    for n in range(5):
+        size = each + (rest if n == 4 else 0)
+        head = "import os\n"
+        files[f"common/m{n}.py"] = head + "#" * (size - len(head) - 1) + "\n"
+    repo = _tree(tmp_path / "repo", files).resolve()
+    assert sum(len(v) for k, v in files.items() if k != "common/__init__.py") == total
+
+    with caplog.at_level("WARNING", logger=agent_type_check.__name__):
+        agent_type_check._walked(repo, "agents/a")
+    assert ("stopped at its limits" in caplog.text) is stopped_too
+
+
+def test_the_save_walk_total_is_its_own(tmp_path, monkeypatch):
+    from fi.alk.harness import agent_type_check
+    from fi.alk.harness.python_source import LARGEST_PARSED_TOTAL, ParseBudget
+
+    totals: list[object] = []
+
+    class Recorded(ParseBudget):
+        def __init__(self, total=None):
+            totals.append(total)
+            super().__init__(total)
+
+    monkeypatch.setattr(agent_type_check, "ParseBudget", Recorded)
+    repo = _tree(tmp_path / "repo", {"agents/a/main.py": "import os\n"}).resolve()
+
+    agent_type_check.browser_tools_in_agent(repo, "agents/a")
+    assert agent_type_check._WALKED_PARSED == 2 * LARGEST_PARSED_TOTAL
+    assert totals.count(agent_type_check._WALKED_PARSED) == 1 and None in totals
+
+
+def test_a_second_reading_the_parse_total_refuses_says_the_walk_stopped(tmp_path):
+    from fi.alk.harness.credentials import imported_by_agent
+    from fi.alk.harness.python_source import (
+        LARGEST_PARSED_MODULE,
+        EscapeBudget,
+        ParseBudget,
+        decoded_first,
+    )
+
+    # Both readings parse, but the total has room only for the first.
+    helper = _ESCAPED_LINE + b"import common.web  # see \\r\n"
+    repo = _behind(tmp_path, helper)
+    # Nothing after it to spend the total: the second reading's refusal is the only one.
+    (repo / "common" / "web.py").write_text("")
+    main = (repo / "agents" / "a" / "main.py").read_text()
+    taken, text, _ = decoded_first(helper, EscapeBudget())
+    first = len(main) + len(text.replace("\r\n", "\n").replace("\r", "\n").encode())
+    stopped: list[bool] = []
+
+    found = imported_by_agent(
+        repo, "agents/a", parse_limit=LARGEST_PARSED_MODULE, parse_budget=ParseBudget(first), stopped=stopped
+    )
+    assert taken and repo / "common" / "web.py" in found and stopped == [True]

@@ -157,6 +157,10 @@ _LARGEST_RECORD = 1024 * 1024
 _WALKED_SCRIPTS = 2 * 1024 * 1024
 # The import names it tries then.
 _WALKED_IMPORTS = 5_000
+# And the Python it parses then, each reading of a file charged: twice the other scans' total, so an
+# agent's own code of a few hundred KB isn't cut, while crafted files that only this walk parses
+# hold the save about 1.3 s on 3.12 and 3.1 s on 3.11.
+_WALKED_PARSED = 512 * 1024
 # And the lookups on disk it makes then, a file found costing one for each part of its path: a name
 # can resolve a package for each of its parts, and 1,000 crafted names took the save 12 s.
 _WALKED_LOOKUPS = 100_000
@@ -642,7 +646,7 @@ def _walked(root: Path, subfolder: str) -> frozenset[Path]:
         root,
         subfolder,
         parse_limit=LARGEST_PARSED_MODULE,
-        parse_budget=ParseBudget(),
+        parse_budget=ParseBudget(_WALKED_PARSED),
         script_budget=ParseBudget(_WALKED_SCRIPTS),
         import_limit=_WALKED_IMPORTS,
         lookup_limit=_WALKED_LOOKUPS,

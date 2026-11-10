@@ -672,23 +672,38 @@ def discover_credentials(
 
 
 def _file_inside(
-    candidate: Path, root: Path, deepest: int, left: list[float] | None = None
+    candidate: Path,
+    root: Path,
+    deepest: int,
+    left: list[float] | None = None,
+    unread: list[bool] | None = None,
 ) -> Path | None:
     """``candidate`` resolved, if it's a plain file in ``root`` at most ``deepest`` parts long.
 
     ``left`` is the lookups on disk still allowed: one for the file, then one for each part of
-    its path, which resolving it looks up in turn.
+    its path, which resolving it looks up in turn. Given ``unread``, its one item is set when a
+    candidate is refused for its depth, or as a code file too big to read or a link to one: code
+    may be there that the walk doesn't follow.
     """
     if len(candidate.parts) > deepest:
+        _mark(unread)
         return None
     if left is not None:
         left[0] -= 1
-    if not _plain_file(candidate):
+    if not _plain_file(candidate, unread):
         return None
     if left is not None:
         left[0] -= len(candidate.parts)
     resolved = candidate.resolve()
-    return resolved if len(resolved.parts) <= deepest and is_within(resolved, root) else None
+    if len(resolved.parts) > deepest:
+        _mark(unread)
+        return None
+    return resolved if is_within(resolved, root) else None
+
+
+def _mark(unread: list[bool] | None) -> None:
+    if unread is not None:
+        unread[0] = True
 
 
 # A uv workspace's members read for their names, at most.
@@ -1071,7 +1086,11 @@ _LINKS_FOLLOWED = 40
 
 
 def _real_folder(
-    folder: Path, root: Path, known: dict[tuple[str, ...], Path | None], left: list[float]
+    folder: Path,
+    root: Path,
+    known: dict[tuple[str, ...], Path | None],
+    left: list[float],
+    unread: list[bool] | None = None,
 ) -> Path | None:
     """``folder`` with each link in it followed, if it's a folder inside ``root``; else None.
 
@@ -1082,11 +1101,13 @@ def _real_folder(
     which has no link in it, so it costs nothing; above ``root`` nothing is looked up, and a path
     that stays out gives None. So do a missing folder, a loop and a chain of links past
     ``_LINKS_FOLLOWED``; what that limit cut isn't kept, since the same link reached by a shorter
-    chain may be followed.
+    chain may be followed. A link whose target is past ``_LONGEST_TARGET`` parts isn't followed
+    either, though the kernel would follow it: given ``unread``, its one item says so.
     """
     # Each name here is reached first, so what the chain limit cuts below it is cut for any way to
     # it, and can be kept; a link's target is walked by _step, which keeps only what it didn't cut.
-    capped = [False]
+    # The second item: a link target refused for its length.
+    capped = [False, False]
     parts, top = folder.parts, len(root.parts)
     # A path longer than a link target may be (a uv ``path`` source is written by the customer)
     # isn't walked: each of its prefixes is a key, so its length would cost its square.
@@ -1104,7 +1125,7 @@ def _real_folder(
             # Kept for the whole path too: each candidate in this folder (a name has 13, in two
             # folders) would otherwise search back down to the missing one again, uncharged.
             known[parts] = None
-            return None
+            break
         name = parts[end - 1]
         if name == "..":
             real = real.parent
@@ -1114,6 +1135,8 @@ def _real_folder(
         else:
             real = _step(real / name, root, known, left, 0, capped)
         known[parts[:end]] = real
+    if capped[1]:
+        _mark(unread)
     return real if real is not None and is_within(real, root) else None
 
 
@@ -1173,6 +1196,7 @@ def _followed(
     except (OSError, ValueError):
         return None
     if len(target.parts) > _LONGEST_TARGET:
+        capped[1] = True
         return None
     # Each part is a step on the way, charged as a lookup is.
     left[0] -= len(target.parts)
@@ -1206,24 +1230,34 @@ def _code_in(folder: Path) -> Iterator[Path]:
                 yield Path(directory, name)
 
 
-def _plain_file(path: Path) -> bool:
-    """A regular file small enough to read: a committed link can point at anything."""
+def _plain_file(path: Path, unread: list[bool] | None = None) -> bool:
+    """A regular file small enough to read: a committed link can point at anything, so it isn't
+    followed. Given ``unread``, its one item is set when a code file is refused for its size or
+    for being a link, since Python and Node run what one holds or points at."""
     try:
         details = path.lstat()
     except (OSError, ValueError):
         return False
-    return stat.S_ISREG(details.st_mode) and details.st_size <= _MAX_FILE_BYTES
+    if stat.S_ISREG(details.st_mode) and details.st_size <= _MAX_FILE_BYTES:
+        return True
+    if (stat.S_ISREG(details.st_mode) or stat.S_ISLNK(details.st_mode)) and (
+        path.suffix == ".py" or path.suffix in _SCRIPT_SUFFIXES
+    ):
+        _mark(unread)
+    return False
 
 
 def _python_imports(
     content: str, limit: int = _MAX_FILE_BYTES, budget: ParseBudget | None = None
-) -> list[tuple[int, str]]:
+) -> list[tuple[int, str]] | None:
+    """The names ``content`` imports, each with its level; None when it isn't parsed: over
+    ``limit``, past ``budget``, or not Python the parser reads."""
     # In bytes, as the file's size is: the parser's cost follows them, not the characters.
     if utf8_size(content) > limit or (budget is not None and not budget.spend(content)):
-        return []
+        return None
     tree = parsed(content)
     if tree is None:
-        return []
+        return None
     names: list[tuple[int, str]] = []
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
@@ -1316,7 +1350,9 @@ def imported_by_agent(
     lookups on disk (no limit when not given): a file found costs one for each part of its path,
     and one name can resolve a package for each of its parts. Nothing more than
     ``_DEEPEST_FOLLOWED`` folders below the repository is followed. Given ``stopped``, its one
-    item says whether a limit stopped the walk with files or names left to follow.
+    item says whether the walk left code it reached unfollowed: a limit stopped it with files or
+    names left, a name was dropped for its length or depth, or a code file was too big to read,
+    a link, or not parsed in the reading Python runs.
     """
     root = Path(root).resolve()
     try:
@@ -1333,7 +1369,7 @@ def imported_by_agent(
     # dozens of parts deep: 1,000 names took the save 12 s. What is looked up again costs nothing.
     lookups_left = [math.inf if lookup_limit is None else float(lookup_limit)]
     # The uv workspace members the agent's project depends on are installed with it, so an import
-    # names one by its package (Dileep's third review): each one's folder and its src/ are looked
+    # names one by its package: each one's folder and its src/ are looked
     # in too.
     project, members, members_cut = _workspace_dependencies(root, folder, lookups_left, {})
     # The agent's own project, when the folder is below it, is installed too, src/ layout or not.
@@ -1354,7 +1390,9 @@ def imported_by_agent(
     # follow every link in a path uncharged, and a chain of them took 2,300 imports 11.6 s. So the
     # save reaches what bundling, which resolves as the kernel does, reaches.
     real_folders: dict[tuple[str, ...], Path | None] | None = None if lookup_limit is None else {}
-    spent = [False]
+    # Whether the walk left code it reached unfollowed: a limit, a name dropped for its length or
+    # depth, or a file it couldn't read or parse.
+    unread = [members_cut]
 
     def found_at(candidates: Iterable[Path]) -> Path | None:
         for candidate in candidates:
@@ -1362,7 +1400,7 @@ def imported_by_agent(
                 hit = looked_up[candidate]
             elif lookups_left[0] <= 0:
                 # A name left untried: the walk didn't reach all it could.
-                spent[0] = True
+                unread[0] = True
                 return None
             else:
                 place = candidate
@@ -1372,13 +1410,15 @@ def imported_by_agent(
                     and len(candidate.parts) <= deepest
                 ):
                     # Through its folders' links, each followed once and charged.
-                    folder_found = _real_folder(candidate.parent, root, real_folders, lookups_left)
+                    folder_found = _real_folder(
+                        candidate.parent, root, real_folders, lookups_left, unread
+                    )
                     place = None if folder_found is None else folder_found / candidate.name
                 if place is None:
                     lookups_left[0] -= 1
                     hit = None
                 else:
-                    hit = _file_inside(place, root, deepest, lookups_left)
+                    hit = _file_inside(place, root, deepest, lookups_left, unread)
                 if hit is not None or candidate.name == "__init__.py":
                     looked_up[candidate] = hit
             if hit is not None:
@@ -1389,6 +1429,7 @@ def imported_by_agent(
         module = name.split(".")
         # A path past the system's limit can't be opened, so it isn't built.
         if len(module) > _DEEPEST_FOLLOWED or len(name) > _LONGEST_NAME:
+            unread[0] = True
             return []
         starts = (
             (path.parents[level - 1],)
@@ -1398,10 +1439,11 @@ def imported_by_agent(
         for start in starts:
             if lookups_left[0] <= 0:
                 # Spent: each place left would be refused uncharged.
-                spent[0] = True
+                unread[0] = True
                 return []
             if len(start.parts) + len(module) > deepest:
                 # Past the depth cut wherever it's looked for: not built at all.
+                unread[0] = True
                 continue
             target = start.joinpath(*module)
             if hit := found_at((target.with_suffix(".py"), target / "__init__.py")):
@@ -1417,6 +1459,7 @@ def imported_by_agent(
 
     def script_module(path: Path, name: str) -> Path | None:
         if len(name) > _LONGEST_NAME:
+            unread[0] = True
             return None
         for start in (path.parent,) if name.startswith(".") else (folder, root):
             # Joined as written, as Node joins it before it reads the disk: a ".." after a folder
@@ -1442,7 +1485,6 @@ def imported_by_agent(
     pending = deque(sorted(_code_in(folder)))
     own = set(pending)  # Read once already, so importing one doesn't queue it again.
     read = bytes_read = imports_tried = 0
-    cut = members_cut
     import_limit = _MAX_WALK_IMPORTS if import_limit is None else import_limit
     while (
         pending
@@ -1453,7 +1495,10 @@ def imported_by_agent(
     ):
         # The folder's own files first, so the budgets can't spend themselves on a chain.
         path = pending.popleft()
-        if len(path.parts) > deepest or not _plain_file(path):
+        if len(path.parts) > deepest:
+            unread[0] = True
+            continue
+        if not _plain_file(path, unread):
             continue
         read += 1
         try:
@@ -1462,6 +1507,7 @@ def imported_by_agent(
         except OSError:
             continue
         if len(raw) > _MAX_FILE_BYTES:
+            unread[0] = True
             continue  # Grew since it was looked at.
         bytes_read += len(raw)
         # A .py in a codec that can spell a name in other bytes is read as Python reads it while
@@ -1499,30 +1545,20 @@ def imported_by_agent(
         hits: list[Path] = []
         if path.suffix == ".py":
             # A file with no import in it can't lead anywhere, so it doesn't use up the parse total
-            # before the files that do (Pine's TH-9490 review); a file the total cuts says so.
+            # before the files that do; a file the total cuts says so.
             if "import" not in content:
                 continue
             readings = [content] if read_before is None else [content, read_before]
-            larger = max(readings, key=utf8_size)
-            if len(readings) == 1 or utf8_size(larger) > parse_limit:
-                # Each reading is charged as it's parsed; one past the limit is neither.
-                found = [
-                    name
-                    for reading in readings
-                    for name in _python_imports(reading, parse_limit, parse_budget)
-                ]
-            elif parse_budget is None or parse_budget.spend(larger):
-                # One file read two ways is charged once, as the larger reading, so it spends no
-                # more of the total than it did read one way.
-                found = [
-                    name for reading in readings for name in _python_imports(reading, parse_limit)
-                ]
-            else:
-                found = []
-            names = list(dict.fromkeys(found))
-            cut |= parse_budget is not None and parse_budget.left < 0
+            # Each reading is charged as it's parsed: a file parsed twice and charged once let a
+            # crafted pair cost the walk twice its total.
+            results = [_python_imports(reading, parse_limit, parse_budget) for reading in readings]
+            # The decoded reading is the one Python runs: refused, the walk left code unfollowed,
+            # whatever the other reading gives. A refusal of the other alone says nothing.
+            unread[0] |= results[0] is None
+            unread[0] |= parse_budget is not None and parse_budget.left < 0
+            names = list(dict.fromkeys(name for found in results if found for name in found))
             # One file can hold more names than the walk may try; the rest aren't tried.
-            cut |= len(names) > import_limit - imports_tried
+            unread[0] |= len(names) > import_limit - imports_tried
             names = names[: import_limit - imports_tried]
             imports_tried += len(names)
             for level, name in names:
@@ -1531,11 +1567,11 @@ def imported_by_agent(
                 except (IndexError, ValueError, OSError):
                     continue  # An import that can't be a path in this repository.
         elif script_budget is not None and not script_budget.spend(content):
-            cut = True
+            unread[0] = True
             continue
         else:
             names = list(dict.fromkeys(_script_imports(content)))
-            cut |= len(names) > import_limit - imports_tried
+            unread[0] |= len(names) > import_limit - imports_tried
             names = names[: import_limit - imports_tried]
             imports_tried += len(names)
             for name in names:
@@ -1548,9 +1584,11 @@ def imported_by_agent(
                 seen.add(hit)
                 if hit not in own:
                     pending.append(hit)
+    # A file in a codec decoded first, read without decoding once the total ran out.
+    unread[0] |= escapes.left < 0
     if stopped is not None:
         # The loop ends with files left only when a limit ended it.
-        stopped[:] = [cut or spent[0] or bool(pending)]
+        stopped[:] = [unread[0] or bool(pending)]
     return frozenset(seen)
 
 

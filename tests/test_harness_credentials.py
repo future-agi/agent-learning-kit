@@ -1056,3 +1056,16 @@ def test_an_odd_script_import_does_not_stop_the_files_other_imports(tmp_path):
     )
 
     assert (root / "common/util.js").resolve() in imported_by_agent(root, "agents/a")
+
+
+def test_a_walk_that_cant_parse_a_file_marks_the_manifest_truncated(tmp_path):
+    root = tmp_path.resolve()
+    (root / "agents" / "a").mkdir(parents=True)
+    (root / "agents" / "a" / "main.py").write_text("import common.helpers\n")
+    (root / "common").mkdir()
+    (root / "common" / "__init__.py").write_text("")
+    (root / "common" / "helpers.py").write_text("from common import web\nNAME = 'a" + "\u0301" * 40 + "'\n")
+    (root / "common" / "web.py").write_text("import os\nKEY = os.environ['WEB_API_KEY']\n")
+
+    manifest = discover_credentials(root, agent_subfolder="agents/a")
+    assert manifest.truncated
