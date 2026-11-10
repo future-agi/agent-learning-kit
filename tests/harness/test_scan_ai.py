@@ -1034,3 +1034,19 @@ def test_a_failed_cost_note_keeps_the_answer_and_logs_its_trace(tmp_path, monkey
     assert outcome.pairs == (AGENT,)
     assert "the cost note after the turn failed" in caplog.text
     assert "Traceback" in caplog.text and "OSError" in caplog.text
+
+
+def test_a_tool_fault_logs_the_workers_own_error(tmp_path, monkeypatch, caplog):
+    """The model is told only that the call failed; the log carries the worker's real fault."""
+
+    def broken(root, arguments):
+        raise KeyError("a fault in the glob worker")
+
+    monkeypatch.setattr(scan_ai, "_glob_files", broken)
+    tools = _tools(_repo(tmp_path))
+    with caplog.at_level(logging.WARNING, logger=scan_ai.logger.name):
+        said = _said(_call(tools["glob"], {"pattern": "*"}))
+
+    assert said == scan_ai._FAILED
+    assert "a tool call failed" in caplog.text
+    assert "KeyError" in caplog.text and "a fault in the glob worker" in caplog.text

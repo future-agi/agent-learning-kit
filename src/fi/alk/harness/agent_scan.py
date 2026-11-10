@@ -389,7 +389,8 @@ def _keep_what_was_paid_for(
     job: HarnessJob, output: Path, scan: _Scan, crash: Exception
 ) -> int:
     """After the model was paid for, a crash still ends in a file, never in a paid retry."""
-    # Logged masked, as the reading helper logs a crash.
+    # Logged with its trace, as the reading helper logs a crash. Only the platform's secret
+    # values are masked; a repo path in the message is not.
     logger.error("agent scan: failed after the model step", exc_info=crash)
     checked = {row.candidate.entry for row in scan.ai_rows}
     ai_rows = [

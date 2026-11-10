@@ -1187,3 +1187,24 @@ def test_a_fault_in_the_walk_is_a_crash_not_a_big_repository(tmp_path, monkeypat
     assert (failure["code"], failure["retryable"]) == ("scan_crashed", True)
     assert not (output / "agents.json").exists()
     assert len(ai.calls) == 0
+
+
+def test_the_scan_reads_its_clock_variable_when_it_starts(tmp_path, monkeypatch, ai) -> None:
+    """The helper's hard stop and the scan's own clock read ALK_SCAN_MAX_SECONDS at the same
+    moment, so a shorter clock set at run time ends the scan in its own file."""
+    source = _write(tmp_path / "source", {"a/graph.py": GRAPH})
+    monkeypatch.setattr(agent_scan, "CLOCK", 1200.0)
+    monkeypatch.setenv("ALK_SCAN_MAX_SECONDS", "0.000001")
+
+    assert _scan(_job(), source, tmp_path / "out") == 0
+
+    assert _agents(tmp_path / "out")["error"]["code"] == "scan_timed_out"
+    assert ai.calls == []
+
+
+def test_every_scan_logger_masks_secrets() -> None:
+    from fi.alk.harness import scan_ai, scan_folders
+    from fi.alk.harness.reading_entry import MaskSecrets
+
+    for module in (agent_scan, scan_walk, scan_folders, scan_ai):
+        assert any(isinstance(f, MaskSecrets) for f in module.logger.filters), module.__name__

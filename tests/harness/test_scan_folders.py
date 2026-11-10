@@ -223,15 +223,49 @@ def test_exit_never_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> N
 
 
 def test_a_fault_in_the_check_comes_back_as_a_trace(tmp_path, monkeypatch) -> None:
-    """Only a folder the build refuses is a plain ``unknown``; any other fault is sent back
-    with its trace, so the parent logs it and marks the row unfinished."""
+    """Only a folder the build refuses is a plain ``unknown``; a fault inside the framework
+    check itself (here in ``folder_findings``, below detect_framework's own catch) is sent
+    back with its trace, so the parent logs it and marks the row unfinished."""
+    import fi.alk.harness.framework_detection as fd
 
     def broken(*args, **kwargs):
         raise KeyError("a fault in the check")
 
-    monkeypatch.setattr(scan_folders, "detect_framework", broken)
+    monkeypatch.setattr(fd, "folder_findings", broken)
+    (tmp_path / "agent.py").write_text(CREW, encoding="utf-8")
+    assert fd.detect_framework(tmp_path) == {"name": "unknown", "version": None}
     answer = scan_folders._answer(tmp_path, "")
     assert set(answer) == {scan_folders._FAILED}
     assert "KeyError" in answer[scan_folders._FAILED]
 
     assert scan_folders._answer(tmp_path, "no/such/folder") == {"name": "unknown", "version": None}
+
+
+def test_a_failed_answer_marks_the_row_unfinished_and_logs_the_trace(tmp_path, caplog) -> None:
+    """The parent's half: a child answer carrying a trace becomes an unfinished ``unknown``,
+    kept for the folder, with the trace in the log."""
+
+    class _Conn:
+        def send(self, message: object) -> None:
+            pass
+
+        def poll(self, timeout: float) -> bool:
+            return True
+
+        def recv(self) -> object:
+            return {scan_folders._FAILED: "Traceback (most recent call last):\nKeyError: 'x'"}
+
+    checker = FolderChecker()
+    checker._process = object()  # a started child, as far as check() can tell
+    checker._conn = _Conn()
+    try:
+        with caplog.at_level("WARNING", logger=scan_folders.logger.name):
+            word = checker.check(tmp_path, "", deadline=time.monotonic() + 30)
+    finally:
+        checker._process = None
+        checker._conn = None
+
+    assert word.finished is False
+    assert word.framework["name"] == "unknown"
+    assert "the check failed in the child" in caplog.text and "KeyError" in caplog.text
+    assert checker.check(tmp_path, "", deadline=time.monotonic() + 30).finished is False

@@ -60,6 +60,7 @@ def _answer(source: Path, subfolder: str) -> dict[str, Any]:
             agent_folder(source, subfolder) if subfolder else source,
             repo_root=source,
             package_dir=None,
+            raise_faults=True,
         )
     except SubfolderNotFound:
         # A folder the build would refuse has no word; it is not a reason to end the child.

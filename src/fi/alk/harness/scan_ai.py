@@ -391,8 +391,10 @@ async def _in_thread(work: Callable[..., Any], *args: Any) -> Any:
             result = work(*args)
         except _Refused as refused:
             error = refused
-        except BaseException:
+        except BaseException as exc:
             error = _ToolFailed()
+            # Kept as the cause, so the logged trace shows the worker's own fault.
+            error.__cause__ = exc
         try:
             loop.call_soon_threadsafe(settle, result, error)
         except RuntimeError:

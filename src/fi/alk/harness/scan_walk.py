@@ -1237,7 +1237,11 @@ class _Description:
         self.prompt_files = 0
         self.files_read = 0
         self.bytes_read = 0
+        # A cap or the clock: the reading stops here.
         self.partial = False
+        # One file that couldn't be read or parsed: the counts are short, but the reading
+        # goes on, as the walk goes on past an unread file.
+        self.short = False
         self.shadowed = _ShadowedNames(top, self.projects)
 
     def run(self) -> None:
@@ -1257,12 +1261,12 @@ class _Description:
                         self.templates |= _template_names(data)
                     except _FILE_ERRORS:
                         # Its names are missing, so the row's settings are short.
-                        self.partial = True
+                        self.short = True
                     except MemoryError:
                         raise
                     except Exception:
                         logger.warning("agent description: a template's reader failed", exc_info=True)
-                        self.partial = True
+                        self.short = True
         start = os.path.join(self.top, self.subfolder) if self.subfolder else self.top
         for directory, folder, name in _source_files(self.top, start):
             if self._out_of_time():
@@ -1296,12 +1300,12 @@ class _Description:
                 self.script_env |= _script_names(data)
         except _FILE_ERRORS:
             # Its facts are missing, so the row's counts are short.
-            self.partial = True
+            self.short = True
         except MemoryError:
             raise
         except Exception:
             logger.warning("agent description: a file's reader failed", exc_info=True)
-            self.partial = True
+            self.short = True
 
     def _read(self, path: str) -> bytes | None:
         """The file's bytes, or None for a file that can't or mustn't be read; sets
@@ -1317,7 +1321,7 @@ class _Description:
         except (OSError, ValueError):
             # Unreadable, a link, or a name the system can't open: not read, so the counts
             # are short.
-            self.partial = True
+            self.short = True
             return None
         self.files_read += 1
         self.bytes_read += len(data)
@@ -1364,7 +1368,8 @@ def describe_entry(
     code = {name for found in reading.facts.values() for name in found.env}
     code |= reading.script_env
     project_file = projects.file_in(subfolder)
-    if not reading.partial:
+    partial = reading.partial or reading.short
+    if not partial:
         logger.info("agent description: files_read=%d", reading.files_read)
     else:
         logger.info("agent description: files_read=%d partial=yes", reading.files_read)
@@ -1377,7 +1382,7 @@ def describe_entry(
         build_may_stop=build_hazard(
             source, subfolder, deadline=deadline, clock=clock, hazards=hazards
         ),
-        partial=reading.partial,
+        partial=partial,
         env_names=(*sorted(code), *sorted(reading.templates - code)),
         tools=sum(found.tools for found in reading.facts.values()),
         prompt_files=reading.prompt_files,

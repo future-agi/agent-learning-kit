@@ -1225,3 +1225,29 @@ def test_side_folders_cannot_use_up_the_file_cap_before_the_agent(
 
     assert "zz_agent/agent.py" in _entries(result)
     assert result.stopped == "limit"
+
+
+@pytest.mark.parametrize("shape", ["linked_template", "unterminated_py", "long_line_py"])
+def test_one_unreadable_file_does_not_stop_an_ai_rows_description(tmp_path: Path, shape: str) -> None:
+    """The row was paid for: a bad file marks it partial, and the reading goes on."""
+    _write(
+        tmp_path,
+        {
+            "app/bot.py": GRAPH + "import os\nos.getenv('OPENAI_API_KEY')\n",
+            "app/z_tool.py": "import os\nos.getenv('BOT_MODEL')\n",
+        },
+    )
+    if shape == "linked_template":
+        (tmp_path / "outside.env").write_text("SEARCH_KEY=x\n", encoding="utf-8")
+        (tmp_path / "app/.env.example").symlink_to(tmp_path / "outside.env")
+    elif shape == "unterminated_py":
+        (tmp_path / "app/a_gen.py").write_text("x = '''never closed\n", encoding="utf-8")
+    else:
+        (tmp_path / "app/a_gen.py").write_text("x = 1  # " + "y" * 70_000 + "\n", encoding="utf-8")
+
+    candidate = describe_entry(tmp_path, "app/bot.py", "app", deadline=FOREVER)
+
+    assert candidate is not None
+    assert candidate.partial is True
+    assert {"OPENAI_API_KEY", "BOT_MODEL"} <= set(candidate.env_names)
+    assert "langgraph" in candidate.builds

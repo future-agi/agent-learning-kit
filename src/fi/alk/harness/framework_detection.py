@@ -949,7 +949,11 @@ def detect_framework(
     *,
     repo_root: Path | None = None,
     package_dir: Path | None = None,
+    raise_faults: bool = False,
 ) -> dict[str, Any]:
+    """The folder's framework word. A fault in the check is ``unknown`` for a build; the agent
+    scan passes ``raise_faults=True`` to see it, so it can log the trace and mark the row
+    unfinished instead of reporting a finished ``unknown``."""
     try:
         if folder is None or not Path(folder).is_dir():
             logger.info("framework detection: name=%s blockers=%s", "unknown", [])
@@ -967,6 +971,8 @@ def detect_framework(
         )
         return result
     except Exception as exc:
+        if raise_faults:
+            raise
         logger.warning("framework detection failed: class=%s", type(exc).__name__)
         return {"name": "unknown", "version": None}
 
