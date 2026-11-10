@@ -294,12 +294,14 @@ class _Work:
     every time. Python 3.12.3 re-decodes a token's whole line for each token, and one
     name can have thousands of targets: neither shows in the size of a file."""
 
-    def __init__(self) -> None:
+    def __init__(self, limit: int | None = None) -> None:
         self._spent = 0
+        # None follows _MAX_WORK; the agent scan gives each file its own, smaller limit.
+        self._limit = limit
 
     def charge(self, amount: int) -> None:
         self._spent += amount
-        if self._spent > _MAX_WORK:
+        if self._spent > (_MAX_WORK if self._limit is None else self._limit):
             raise _OverBudget()
 
 
@@ -960,7 +962,11 @@ def detect_framework(
     *,
     repo_root: Path | None = None,
     package_dir: Path | None = None,
+    raise_faults: bool = False,
 ) -> dict[str, Any]:
+    """The folder's framework word. A fault in the check is ``unknown`` for a build; the agent
+    scan passes ``raise_faults=True`` to see it, so it can log the trace and mark the row
+    unfinished instead of reporting a finished ``unknown``."""
     try:
         if folder is None or not Path(folder).is_dir():
             logger.info("framework detection: name=%s blockers=%s", "unknown", [])
@@ -978,6 +984,8 @@ def detect_framework(
         )
         return result
     except Exception as exc:
+        if raise_faults:
+            raise
         logger.warning("framework detection failed: class=%s", type(exc).__name__)
         return {"name": "unknown", "version": None}
 

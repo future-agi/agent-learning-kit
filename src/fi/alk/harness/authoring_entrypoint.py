@@ -679,10 +679,16 @@ def main(argv: list[str] | None = None, *, validate_runtime: bool = False) -> in
         type=Path,
         help="Directory the sealed bundle is written to in --certify-only mode",
     )
-    parser.add_argument(
+    reading = parser.add_mutually_exclusive_group()
+    reading.add_argument(
         "--read-agent-only",
         action="store_true",
         help="Read the agent and leave its description in --output; build nothing",
+    )
+    reading.add_argument(
+        "--find-agents",
+        action="store_true",
+        help="Find the agents in the source and leave their list in --output; build nothing",
     )
     args = parser.parse_args(argv)
     if args.certify_only:
@@ -703,6 +709,16 @@ def main(argv: list[str] | None = None, *, validate_runtime: bool = False) -> in
             reading_log.addHandler(logging.StreamHandler())
         return run_reading_mode(
             READ_AGENT,
+            job_path=args.job,
+            source=args.source.resolve(),
+            output=args.output.resolve(),
+        )
+    if args.find_agents:
+        from .agent_scan import FIND_AGENTS
+        from .reading_entry import run_reading_mode
+
+        return run_reading_mode(
+            FIND_AGENTS,
             job_path=args.job,
             source=args.source.resolve(),
             output=args.output.resolve(),
