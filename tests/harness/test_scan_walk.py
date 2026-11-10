@@ -1510,7 +1510,8 @@ def _shape(root: Path, shape: str) -> None:
     if shape == "empty":
         _files(root, {f"p{index % 3}/m{index:03}.py": "" for index in range(300)})
     elif shape == "plain_imports":
-        _files(root, {f"m{i:02}.py": "".join(f"import m{i}_{n}\n" for n in range(200)) for i in range(60)})
+        # Nine-character names: the allocator gives each 64 bytes, more than its size asked for.
+        _files(root, {f"m{i:02}.py": "".join(f"import mod{i:02}_{n:03}\n" for n in range(200)) for i in range(60)})
     elif shape == "dotted_imports":
         _files(
             root,
