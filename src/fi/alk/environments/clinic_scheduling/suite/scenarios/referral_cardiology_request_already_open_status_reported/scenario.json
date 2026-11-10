@@ -1,0 +1,82 @@
+{
+  "name": "referral_cardiology_request_already_open_status_reported",
+  "scenario_key": "referral-cardiology-request-already-open-status-reported",
+  "scenario_id": "",
+  "use_case": "Referral and eligibility constraints",
+  "branch": "P402 asks about the status of her existing cardiology referral request; desk checks and reports it as requested",
+  "tests": "passes when the agent verifies Pooja Banerjee, looks up cardiology referral records, and reports the current requested status",
+  "instruction": "You requested a cardiology referral request yesterday from St Mary Medical practice. You want to know the current status of that referral request. Provide your name and date of birth when asked, and listen to the status report.\n\nYour details:\n- Full name: Pooja Banerjee\n- Date of birth: 1990-11-03\n- Insurance: AXA Health, Member ID: AX-200402\n- Specialty: Cardiology\n- Referral requested from: St Mary Medical (status: requested)",
+  "keywords": [
+    "cardiology",
+    "referral_status",
+    "requested_referral"
+  ],
+  "persona": {
+    "name": "Pooja Banerjee",
+    "gender": "female",
+    "age_group": "32-40",
+    "occupation": "Consultant",
+    "location": "India",
+    "personality": "Impatient and direct",
+    "communication_style": "Direct and concise",
+    "initial_message": "Hi, I requested a cardiology referral yesterday. Can you tell me the current status of that request?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "origin": "generated",
+    "created_records": [
+      "patients.P402",
+      "insurance.P402",
+      "referrals.RF402"
+    ]
+  },
+  "solution": [
+    {
+      "tool": "verify_patient",
+      "arguments": {
+        "full_name": "Pooja Banerjee",
+        "dob": "1990-11-03"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_referral_status",
+      "arguments": {
+        "patient_id": "P402",
+        "specialty": "cardiology"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "patient_id": "record: patients.patient_id P402"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "interface": "clean",
+    "task": "get_referral_status",
+    "interaction": "single_request",
+    "disposition": "pending_referral",
+    "overlay_vector": "none",
+    "overlay": "none",
+    "counterparty": "patient",
+    "overlay_intensity": "absent"
+  },
+  "sub_goals": [
+    "referral_status_reported"
+  ],
+  "max_turns": 6,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

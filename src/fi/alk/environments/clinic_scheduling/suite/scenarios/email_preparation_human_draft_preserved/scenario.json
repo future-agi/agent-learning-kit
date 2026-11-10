@@ -1,0 +1,82 @@
+{
+  "name": "email_preparation_human_draft_preserved",
+  "scenario_key": "email-preparation-human-draft-preserved",
+  "scenario_id": "",
+  "use_case": "Email requests and corrections",
+  "branch": "Mei Tanaka asks for a reply to her email th_c11_prep_p12 about preparation for knee appointment; a colleague's human-edited draft already exists on the thread, so the desk leaves it",
+  "tests": "the agent reads thread th_c11_prep_p12 and lists drafts, sees existing human-edited draft cdraft_001, and creates no new draft",
+  "instruction": "You sent an email asking what to bring for your knee orthopaedic appointment A05 on Friday 30 October. You are now contacting the clinic desk on chat to see if there is any update or response to your email.\n\nYour details:\n- Full name: Mei Tanaka\n- Date of birth: 1971-02-27\n- Email: mei.tanaka@example.com\n- Appointment: A05 (orthopaedics)\n- Email subject: What to bring for my knee appointment",
+  "keywords": [
+    "preparation"
+  ],
+  "persona": {
+    "name": "Mei Tanaka",
+    "gender": "female",
+    "age_group": "50-60",
+    "occupation": "Consultant",
+    "location": "United Kingdom",
+    "personality": "Friendly and cooperative",
+    "communication_style": "Direct and concise",
+    "initial_message": "Hello, I sent an email asking what to bring for my knee appointment A05. Could you check if someone has replied to it?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "thread_id": "th_c11_prep_p12",
+    "origin": "seed",
+    "appointment_id": "A05",
+    "full_name": "Mei Tanaka",
+    "draft_id": "cdraft_001",
+    "patient_id": "P12",
+    "email": "mei.tanaka@example.com",
+    "dob": "1971-02-27"
+  },
+  "solution": [
+    {
+      "tool": "get_thread",
+      "arguments": {
+        "messageFormat": "FULL_CONTENT",
+        "threadId": "th_c11_prep_p12"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "list_drafts",
+      "arguments": {
+        "view": null,
+        "pageToken": null,
+        "pageSize": 10,
+        "query": "th_c11_prep_p12"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "overlay": "none",
+    "interaction": "multi_turn",
+    "overlay_vector": "none",
+    "overlay_intensity": "absent",
+    "counterparty": "proxy",
+    "task": "preparation",
+    "interface": "email_thread",
+    "disposition": "happy_path"
+  },
+  "sub_goals": [
+    "human_draft_preserved"
+  ],
+  "max_turns": 8,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

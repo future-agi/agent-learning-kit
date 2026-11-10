@@ -1,0 +1,94 @@
+{
+  "name": "referral_orthopedics_request_created_for_knee_pain",
+  "scenario_key": "referral-orthopedics-request-created-for-knee-pain",
+  "scenario_id": "",
+  "use_case": "Referral and eligibility constraints",
+  "branch": "P4012 has knee pain and asks for orthopedics; has no referral; desk creates referral request to Harbour Family Practice",
+  "tests": "passes when the agent verifies Declan Murphy, checks orthopedics referral status, and creates a referral request for Harbour Family Practice",
+  "instruction": "You are experiencing persistent knee pain and want to see an orthopedics specialist. You do not have a referral letter yet. When the agent asks for your details, provide your name and date of birth and mention that your GP is at Harbour Family Practice so they can request the referral.\n\nYour details:\n- Full name: Declan Murphy\n- Date of birth: 1982-04-12\n- Insurance: Bupa, Member ID: BU-100412\n- Specialty needed: orthopedics\n- GP Practice: Harbour Family Practice",
+  "keywords": [
+    "orthopedics",
+    "referral_request",
+    "missing_referral"
+  ],
+  "persona": {
+    "name": "Declan Murphy",
+    "gender": "male",
+    "age_group": "40-50",
+    "occupation": "Manager",
+    "location": "Australia",
+    "personality": "Detail-oriented",
+    "communication_style": "Direct and concise",
+    "initial_message": "Hello, I have knee pain and would like to see an orthopedics specialist. I don't have a referral letter yet.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "created_records": [
+      "patients.P4012",
+      "insurance.P4012"
+    ],
+    "origin": "generated"
+  },
+  "solution": [
+    {
+      "tool": "verify_patient",
+      "arguments": {
+        "dob": "1982-04-12",
+        "full_name": "Declan Murphy"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_referral_status",
+      "arguments": {
+        "patient_id": "P4012",
+        "specialty": "orthopedics"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "create_referral_request",
+      "arguments": {
+        "specialty": "orthopedics",
+        "patient_id": "P4012",
+        "referring_practice": "Harbour Family Practice",
+        "request_key": "REQ-P4012-ORTH-REF"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "specialty": "caller: orthopedics",
+        "patient_id": "record: patients.patient_id P4012"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "disposition": "none",
+    "counterparty": "patient",
+    "overlay": "none",
+    "interface": "clean",
+    "overlay_vector": "none",
+    "task": "create_referral_request",
+    "interaction": "single_request",
+    "overlay_intensity": "absent"
+  },
+  "sub_goals": [
+    "referral_request_created",
+    "referral_required_enforced"
+  ],
+  "max_turns": 6,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

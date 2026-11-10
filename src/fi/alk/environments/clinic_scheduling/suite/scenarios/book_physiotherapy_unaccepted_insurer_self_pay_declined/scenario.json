@@ -1,0 +1,72 @@
+{
+  "name": "book_physiotherapy_unaccepted_insurer_self_pay_declined",
+  "scenario_key": "book-physiotherapy-unaccepted-insurer-self-pay-declined",
+  "scenario_id": "",
+  "use_case": "Book a new appointment",
+  "branch": "P08 (insured with AXA Health) asks for physiotherapy with Omar Haddad; Omar Haddad does not accept AXA Health; P08 declines self-pay and no booking is made.",
+  "tests": "the agent verifies Aisha Mensah, checks Omar Haddad's accepted insurers, explains that AXA Health is not accepted, and respects the decision to decline self-pay",
+  "instruction": "You want to book a physiotherapy appointment with Omar Haddad using your AXA Health insurance. When told that Omar Haddad does not accept AXA Health and asked if you would like to self-pay, decline self-pay because you only want visits covered by your insurer, and end the conversation without booking.\n\nYour details:\n- Full name: Aisha Mensah\n- Date of birth: 1979-03-22\n- Email: aisha.mensah@example.com\n- Phone: +447700900108\n- Insurance: AXA Health (member AX-200418)",
+  "keywords": [
+    "book_appointment",
+    "physiotherapy",
+    "unaccepted_insurer",
+    "self_pay_declined"
+  ],
+  "persona": {
+    "name": "Aisha Mensah",
+    "gender": "female",
+    "age_group": "40-50",
+    "occupation": "Accountant",
+    "location": "United Kingdom",
+    "personality": "Cautious and skeptical",
+    "communication_style": "Questioning",
+    "initial_message": "Hello, I'd like to book a physiotherapy session with Omar Haddad using my AXA Health insurance.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "full_name": "Aisha Mensah",
+    "dob": "1979-03-22",
+    "provider_id": "D07",
+    "origin": "seed",
+    "payer": "AXA Health",
+    "patient_id": "P08"
+  },
+  "solution": [
+    {
+      "tool": "verify_patient",
+      "arguments": {
+        "full_name": "Aisha Mensah",
+        "dob": "1979-03-22"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_provider_directory",
+      "arguments": {
+        "specialty": "physiotherapy"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    }
+  ],
+  "alternatives": [],
+  "coverage": {},
+  "sub_goals": [
+    "clinic_information_reported",
+    "declined_action_explained"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

@@ -1,0 +1,101 @@
+{
+  "name": "email_insurance_typo_correction",
+  "scenario_key": "email-insurance-typo-correction",
+  "scenario_id": "",
+  "use_case": "Email requests and corrections",
+  "branch": "Mateo Cruz types his wife Isabel's new Vitality member number with a typo in chat, then tells the desk to use the member number from her email th_c09_insurance_p19; the desk reads the email and records VT-558210",
+  "tests": "the agent verifies Isabel Cruz, reads th_c09_insurance_p19, and updates insurance with payer Vitality, member_id VT-558210, group_number RB-204",
+  "instruction": "You are Mateo Cruz, contacting the clinic as the authorised proxy for your wife Isabel Cruz. You want to update her insurance details to Vitality. In your initial chat message, you typed member number VT-558201 by mistake (a typo). Immediately follow up and ask the desk to check Isabel's email with subject 'New insurer' (thread th_c09_insurance_p19), take the correct member number from there (VT-558210, group number RB-204), and record it. Confirm the details when the desk reads them back.\n\nDetails:\n- Patient Name: Isabel Cruz\n- Patient DOB: 1985-07-23\n- Email: isabel.cruz@example.com\n- Correct Insurer: Vitality\n- Correct Member ID: VT-558210\n- Group number: RB-204\n- Email subject: New insurer",
+  "keywords": [
+    "insurance",
+    "correction"
+  ],
+  "persona": {
+    "name": "Mateo Cruz",
+    "gender": "male",
+    "age_group": "32-40",
+    "occupation": "Manager",
+    "location": "United States",
+    "personality": "Friendly and cooperative",
+    "communication_style": "Direct and concise",
+    "initial_message": "Hello, I'm updating insurance for my wife Isabel Cruz. I made a typo in the member number in my previous note—could you look at her email 'New insurer' and update her record with the Vitality details in her email?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "dob": "1985-07-23",
+    "group_number": "RB-204",
+    "patient_id": "P19",
+    "thread_id": "th_c09_insurance_p19",
+    "full_name": "Isabel Cruz",
+    "email": "isabel.cruz@example.com",
+    "member_id": "VT-558210",
+    "origin": "seed",
+    "payer": "Vitality"
+  },
+  "solution": [
+    {
+      "tool": "verify_patient",
+      "arguments": {
+        "dob": "1985-07-23",
+        "full_name": "Isabel Cruz"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_thread",
+      "arguments": {
+        "threadId": "th_c09_insurance_p19",
+        "messageFormat": "FULL_CONTENT"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "threadId": "record: gmail_threads.id"
+      }
+    },
+    {
+      "tool": "update_insurance",
+      "arguments": {
+        "confirmed": true,
+        "patient_id": "P19",
+        "payer": "Vitality",
+        "group_number": "RB-204",
+        "member_id": "VT-558210"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "patient_id": "record: patients.patient_id",
+        "payer": "caller: Vitality",
+        "confirmed": "rule: \"Read back provider, date, time and location (or the insurer details) and get the patient's yes before booking, rescheduling, cancelling or updating.\"",
+        "member_id": "caller: VT-558210"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "counterparty": "proxy",
+    "overlay_intensity": "absent",
+    "overlay": "none",
+    "interface": "email_thread",
+    "task": "insurance",
+    "interaction": "multi_turn",
+    "overlay_vector": "none",
+    "disposition": "typo"
+  },
+  "sub_goals": [
+    "insurance_updated"
+  ],
+  "max_turns": 8,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

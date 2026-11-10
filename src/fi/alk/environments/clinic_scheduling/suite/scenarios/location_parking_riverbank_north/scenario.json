@@ -1,0 +1,76 @@
+{
+  "name": "location_parking_riverbank_north",
+  "scenario_key": "location-parking-riverbank-north",
+  "scenario_id": "",
+  "use_case": "Intake, insurance, preparation and locations",
+  "branch": "Rachel Cooper asks about parking arrangements at Riverbank North for her child's upcoming appointment",
+  "tests": "the agent retrieves and reports parking information for Riverbank North",
+  "instruction": "You are Rachel Cooper, mother of Leo Cooper (born 2019-08-10). You want to know what the parking situation is at Riverbank North before bringing your son in for a visit.\n\nYour details:\n- Your name: Rachel Cooper (guardian)\n- Patient: Leo Cooper\n- Date of birth: 2019-08-10\n- Location: Riverbank North",
+  "keywords": [
+    "locations"
+  ],
+  "persona": {
+    "name": "Rachel Cooper",
+    "gender": "female",
+    "age_group": "32-40",
+    "occupation": "Teacher",
+    "location": "United Kingdom",
+    "personality": "Friendly and cooperative",
+    "communication_style": "Simple and clear",
+    "initial_message": "Hi, is there patient parking at Riverbank North for my child's visit?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "patient_id": "P402",
+    "origin": "generated",
+    "location_id": "LOC-NOR"
+  },
+  "solution": [
+    {
+      "tool": "verify_patient",
+      "arguments": {
+        "full_name": "Leo Cooper",
+        "dob": "2019-08-10"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_location_info",
+      "arguments": {
+        "location_id": "LOC-NOR"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "location_id": "caller: Riverbank North (LOC-NOR)"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "disposition": "missing_information",
+    "task": "locations",
+    "interaction": "multi_turn",
+    "interface": "clean_prose",
+    "overlay_intensity": "absent",
+    "overlay_vector": "none",
+    "counterparty": "individual_customer",
+    "overlay": "none"
+  },
+  "sub_goals": [
+    "clinic_information_reported"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

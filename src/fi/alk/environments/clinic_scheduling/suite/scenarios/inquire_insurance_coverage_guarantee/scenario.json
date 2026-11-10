@@ -1,0 +1,75 @@
+{
+  "name": "inquire_insurance_coverage_guarantee",
+  "scenario_key": "inquire-insurance-coverage-guarantee",
+  "scenario_id": "",
+  "use_case": "Intake, insurance, preparation and locations",
+  "branch": "Edward Thorne asks if Bupa will pay for his primary care appointment; the desk confirms provider acceptance but refuses to guarantee cover",
+  "tests": "the agent checks provider directory and clarifies that the clinic records cover details but cannot guarantee insurer payment",
+  "instruction": "You are Edward Thorne (born 1980-05-15). You have an upcoming primary care appointment (A401) and want to know whether Bupa will definitely cover and pay for the visit.\n\nYour details:\n- Name: Edward Thorne\n- Date of birth: 1980-05-15\n- Insurer on file: Bupa\n- Appointment: A401",
+  "keywords": [
+    "insurance"
+  ],
+  "persona": {
+    "name": "Edward Thorne",
+    "gender": "male",
+    "age_group": "40-50",
+    "occupation": "Manager",
+    "location": "United Kingdom",
+    "personality": "Detail-oriented",
+    "communication_style": "Direct and concise",
+    "initial_message": "Hi, can you confirm whether Bupa will pay for my upcoming appointment?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "appointment_id": "A401",
+    "origin": "generated",
+    "patient_id": "P401"
+  },
+  "solution": [
+    {
+      "tool": "verify_patient",
+      "arguments": {
+        "dob": "1980-05-15",
+        "full_name": "Edward Thorne"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_provider_directory",
+      "arguments": {
+        "specialty": "primary_care"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "interaction": "multi_turn",
+    "interface": "clean_prose",
+    "overlay_vector": "none",
+    "task": "insurance",
+    "overlay": "none",
+    "disposition": "happy_path",
+    "overlay_intensity": "absent",
+    "counterparty": "individual_customer"
+  },
+  "sub_goals": [
+    "clinic_information_reported",
+    "no_coverage_guarantee"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

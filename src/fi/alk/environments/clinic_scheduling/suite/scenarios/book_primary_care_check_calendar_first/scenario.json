@@ -1,0 +1,108 @@
+{
+  "name": "book_primary_care_check_calendar_first",
+  "scenario_key": "book-primary-care-check-calendar-first",
+  "scenario_id": "",
+  "use_case": "Book a new appointment",
+  "branch": "P407 asks for Dr. Nguyen's availability on Wednesday 28 October; agent reads CAL-D01 calendar and books 10:30",
+  "tests": "passes when the agent checks Dr. Nguyen's calendar for Wednesday 28 October, reports open slots, and books the 10:30 slot confirmed by Arthur Pendelton",
+  "instruction": "You want to know when Dr. Alicia Nguyen has open slots on Wednesday 28 October for an annual wellness check. Provide your name and date of birth when asked. When presented with the available times on her schedule, select and confirm the 10:30 slot at Riverbank Central.\n\nYour details:\n- Full name: Arthur Pendelton\n- Date of birth: 1958-09-15\n- Insurance: Bupa, Member ID: BU-100407\n- Preferred provider: Dr. Alicia Nguyen\n- Preferred date: Wednesday 28 October 2026\n- Selected time: 10:30 (Riverbank Central)",
+  "keywords": [
+    "primary_care",
+    "calendar_query",
+    "booking"
+  ],
+  "persona": {
+    "name": "Arthur Pendelton",
+    "gender": "male",
+    "age_group": "60+",
+    "occupation": "Retired",
+    "location": "United States",
+    "personality": "Friendly and cooperative",
+    "communication_style": "Questioning",
+    "initial_message": "Hello, could you check Dr. Alicia Nguyen's schedule and let me know when she is free on Wednesday 28 October?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "created_records": [
+      "patients.P407",
+      "insurance.P407"
+    ],
+    "calendar_id": "CAL-D01",
+    "origin": "generated"
+  },
+  "solution": [
+    {
+      "tool": "verify_patient",
+      "arguments": {
+        "full_name": "Arthur Pendelton",
+        "dob": "1958-09-15"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "list_events",
+      "arguments": {
+        "startTime": "2026-10-28T08:00:00Z",
+        "endTime": "2026-10-28T13:00:00Z",
+        "calendarId": "CAL-D01"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "find_available_slots",
+      "arguments": {
+        "provider_id": "D01",
+        "date_to": "2026-10-28",
+        "date_from": "2026-10-28",
+        "patient_id": "P407"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "book_appointment",
+      "arguments": {
+        "reason": "Annual wellness check",
+        "request_key": "req-p407-d01-1028",
+        "slot_id": "SL-D01-20261028-1030",
+        "confirmed": true,
+        "patient_id": "P407",
+        "self_pay": false
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "patient_id": "record: patients.patient_id P407",
+        "slot_id": "the slot the patient confirmed"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "overlay_vector": "none",
+    "task": "book_appointment",
+    "interface": "clean",
+    "counterparty": "patient",
+    "overlay": "none",
+    "overlay_intensity": "absent",
+    "disposition": "calendar_query",
+    "interaction": "multi_turn"
+  },
+  "sub_goals": [
+    "appointment_booked_as_confirmed"
+  ],
+  "max_turns": 8,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

@@ -1,0 +1,81 @@
+{
+  "name": "intake_forms_by_sms",
+  "scenario_key": "intake-forms-by-sms",
+  "scenario_id": "",
+  "use_case": "Intake, insurance, preparation and locations",
+  "branch": "Mei Tanaka asks for the intake forms for her orthopaedics appointment to be sent by text message",
+  "tests": "the agent sends the intake forms for appointment A05 via SMS to Mei Tanaka",
+  "instruction": "You are Mei Tanaka (born 1971-02-27). Ask the desk to send you the intake forms for your upcoming orthopaedics appointment (A05) by text message / SMS.\n\nYour details:\n- Name: Mei Tanaka\n- Date of birth: 1971-02-27\n- Appointment: A05",
+  "keywords": [
+    "intake",
+    "sms"
+  ],
+  "persona": {
+    "name": "Mei Tanaka",
+    "gender": "female",
+    "age_group": "50-60",
+    "occupation": "Accountant",
+    "location": "Canada",
+    "personality": "Detail-oriented",
+    "communication_style": "Direct and concise",
+    "initial_message": "Hi, could you send me the intake forms for my orthopaedics appointment by text?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "appointment_id": "A05",
+    "origin": "seed",
+    "patient_id": "P12"
+  },
+  "solution": [
+    {
+      "tool": "verify_patient",
+      "arguments": {
+        "full_name": "Mei Tanaka",
+        "dob": "1971-02-27"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "send_intake_forms",
+      "arguments": {
+        "appointment_id": "A05",
+        "patient_id": "P12",
+        "channel": "sms"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "patient_id": "caller: Mei Tanaka",
+        "channel": "caller: sms requested by patient",
+        "appointment_id": "record: appointments A05"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "disposition": "happy_path",
+    "interaction": "multi_turn",
+    "interface": "clean_prose",
+    "overlay_vector": "none",
+    "counterparty": "individual_customer",
+    "overlay_intensity": "absent",
+    "task": "intake",
+    "overlay": "none"
+  },
+  "sub_goals": [
+    "intake_forms_sent"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

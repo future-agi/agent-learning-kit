@@ -1,0 +1,92 @@
+{
+  "name": "book_primary_care_named_provider_west",
+  "scenario_key": "book-primary-care-named-provider-west",
+  "scenario_id": "",
+  "use_case": "Book a new appointment",
+  "branch": "P04 asks for Dr. Rohan Patel on Thursday 29 October in the morning at West; books the earliest free slot (09:00).",
+  "tests": "the agent verifies Daniel Kim, finds Dr. Rohan Patel's slots at Riverbank West for 29 October, and books the confirmed 09:00 slot",
+  "instruction": "You want to book a primary care appointment with Dr. Rohan Patel on Thursday morning, 29 October 2026, at Riverbank West. When offered the available morning times, choose the earliest slot at 09:00 and confirm the booking when details are read back.\n\nYour details:\n- Full name: Daniel Kim\n- Date of birth: 2001-02-14\n- Email: daniel.kim@example.com\n- Phone: +447700900104\n- Insurance: Bupa (member BU-100234)",
+  "keywords": [
+    "book_appointment",
+    "primary_care",
+    "named_provider",
+    "west"
+  ],
+  "persona": {
+    "name": "Daniel Kim",
+    "gender": "male",
+    "age_group": "25-32",
+    "occupation": "Student",
+    "location": "United States",
+    "personality": "Friendly and cooperative",
+    "communication_style": "Simple and clear",
+    "initial_message": "Hi, I'd like to book an appointment with Dr. Rohan Patel on Thursday morning 29 October at Riverbank West.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "patient_id": "P04",
+    "provider_id": "D02",
+    "dob": "2001-02-14",
+    "full_name": "Daniel Kim",
+    "location_id": "LOC-WES",
+    "origin": "seed"
+  },
+  "solution": [
+    {
+      "tool": "verify_patient",
+      "arguments": {
+        "dob": "2001-02-14",
+        "full_name": "Daniel Kim"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "find_available_slots",
+      "arguments": {
+        "date_from": "2026-10-29",
+        "provider_id": "D02",
+        "patient_id": "P04",
+        "date_to": "2026-10-29",
+        "location_id": "LOC-WES"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "book_appointment",
+      "arguments": {
+        "confirmed": true,
+        "patient_id": "P04",
+        "self_pay": false,
+        "reason": "Primary care appointment",
+        "slot_id": "SL-D02-20261029-0900",
+        "request_key": "req-p04-d02-1029"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "patient_id": "record: patients.patient_id P04",
+        "slot_id": "the slot the patient confirmed"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {},
+  "sub_goals": [
+    "appointment_booked_as_confirmed",
+    "confirmation_obtained_before_change"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

@@ -1,0 +1,53 @@
+def setup(world):
+    world.put("patients", {
+        "patient_id": "P4022",
+        "full_name": "Sunita Sharma",
+        "dob": "1988-03-14",
+        "email": "sunita.sharma@example.com",
+        "phone": "+447700900422",
+        "is_new_patient": 0,
+        "guardian_name": None,
+    })
+    world.put("insurance", {
+        "patient_id": "P4022",
+        "payer": "AXA Health",
+        "member_id": "AX-200422",
+        "group_number": "",
+        "updated_at": "2026-01-05T09:00:00Z",
+    })
+    world.put("appointments", {
+        "appointment_id": "A4022",
+        "patient_id": "P4022",
+        "provider_id": "D01",
+        "location_id": "LOC-CEN",
+        "specialty": "primary_care",
+        "start_time": "2026-10-28T10:00:00Z",
+        "end_time": "2026-10-28T10:30:00Z",
+        "reason": "Medication review",
+        "status": "scheduled",
+        "calendar_event_id": "EVT-A4022",
+        "self_pay": 0,
+        "request_key": "seed-A4022",
+        "reschedule_count": 0,
+        "cancel_reason": None,
+        "cancelled_at": None,
+        "created_at": "2026-10-12T10:00:00Z",
+        "updated_at": "2026-10-12T10:00:00Z",
+    })
+    world.put("calendar_events", {
+        "event_id": "EVT-A4022",
+        "calendar_id": "CAL-D01",
+        "summary": "Clinic appointment A4022",
+        "description": "appointment_id: A4022",
+        "location": "LOC-CEN",
+        "start_time": "2026-10-28T10:00:00Z",
+        "end_time": "2026-10-28T10:30:00Z",
+        "time_zone": "Europe/London",
+        "status": "confirmed",
+        "recurring_event_id": None,
+        "recurrence_rule": None,
+        "original_start_time": None,
+        "version": 1,
+        "created_at": "2026-10-12T10:00:00Z",
+        "updated_at": "2026-10-12T10:00:00Z",
+    })

@@ -1,0 +1,92 @@
+{
+  "name": "calendar_earliest_primary_care_this_week",
+  "scenario_key": "calendar-earliest-primary-care-this-week",
+  "scenario_id": "",
+  "use_case": "Provider availability questions from Calendar",
+  "branch": "Patient asks for the earliest available primary care slot this week; the desk checks open slots across primary care providers from 26 to 30 October and reports the earliest",
+  "tests": "the agent queries find_available_slots for primary_care from 26 to 30 October and reports open slots",
+  "instruction": "You are inquiring as the proxy for your spouse to find the earliest available primary care appointment this week (26 to 30 October) across all Riverbank clinic locations. Ask the assistant what is the earliest primary care slot open this week. When given the options (such as Monday or Wednesday slots with Dr. Nguyen or Dr. Patel), thank the assistant and let them know you will confirm the preferred time with your spouse.\n\nYour details:\n- Caller: Ananya Sharma (proxy/spouse)\n- Specialty: Primary Care\n- Timeframe: Current week (26 October to 30 October 2026)",
+  "keywords": [
+    "availability"
+  ],
+  "persona": {
+    "name": "Ananya Sharma",
+    "gender": "female",
+    "age_group": "32-40",
+    "occupation": "Consultant",
+    "location": "India",
+    "personality": "Professional and formal",
+    "communication_style": "Direct and concise",
+    "initial_message": "Hello, what is the earliest primary care appointment available across any of your clinics this week?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "origin": "seed"
+  },
+  "solution": [
+    {
+      "tool": "get_provider_directory",
+      "arguments": {
+        "specialty": "primary_care"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "find_available_slots",
+      "arguments": {
+        "date_to": "2026-10-30",
+        "date_from": "2026-10-26",
+        "specialty": "primary_care"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    }
+  ],
+  "alternatives": [
+    [
+      {
+        "tool": "list_calendars",
+        "arguments": {},
+        "environment_arguments": {},
+        "fixed": {}
+      },
+      {
+        "tool": "find_available_slots",
+        "arguments": {
+          "date_from": "2026-10-26",
+          "date_to": "2026-10-30",
+          "specialty": "primary_care"
+        },
+        "environment_arguments": {},
+        "fixed": {}
+      }
+    ]
+  ],
+  "coverage": {
+    "overlay_vector": "none",
+    "disposition": "happy_path",
+    "overlay_intensity": "absent",
+    "task": "availability",
+    "interface": "clean_prose",
+    "overlay": "none",
+    "counterparty": "proxy",
+    "interaction": "multi_turn"
+  },
+  "sub_goals": [
+    "availability_reported_from_calendar"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

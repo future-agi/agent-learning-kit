@@ -1,0 +1,132 @@
+{
+  "name": "email_two_corrections_reschedule_and_draft",
+  "scenario_key": "email-two-corrections-reschedule-and-draft",
+  "scenario_id": "",
+  "use_case": "Email requests and corrections",
+  "branch": "Aisha Mensah emailed to move cardiology appointment A03 from 13:00 to 15:00, then corrected to 15:30 on Wednesday 28 October; the desk moves A03 to 15:30 and drafts a reply",
+  "tests": "the agent reads th_c13_two_corrections_p08, reschedules A03 to 15:30 slot SL-D04-20261028-1530, and creates a reply draft confirming 15:30",
+  "instruction": "You sent an email asking to move your cardiology appointment A03 on Wednesday 28 October from 13:00 to 15:00, but then sent a follow-up correction email saying 15:30 suits you better than 15:00. You are now contacting the clinic desk on chat to ensure your appointment is rescheduled to 15:30 on Wednesday 28 October, and you want them to draft a reply confirming the change.\n\nYour details:\n- Full name: Aisha Mensah\n- Date of birth: 1979-03-22\n- Email: aisha.mensah@example.com\n- Appointment reference: A03\n- Preferred new time: Wednesday 28 October at 15:30\n- Email thread subject: Changing the time of A03",
+  "keywords": [
+    "reschedule",
+    "correction"
+  ],
+  "persona": {
+    "name": "Aisha Boateng",
+    "gender": "female",
+    "age_group": "40-50",
+    "occupation": "Accountant",
+    "location": "Canada",
+    "personality": "Friendly and cooperative",
+    "communication_style": "Direct and concise",
+    "initial_message": "Hello, I sent an email and a follow-up correction about moving my cardiology appointment A03 on Wednesday 28 October to 15:30. Could you reschedule it and draft a reply to my email?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "full_name": "Aisha Mensah",
+    "provider_id": "D04",
+    "origin": "seed",
+    "date": "2026-10-28",
+    "dob": "1979-03-22",
+    "patient_id": "P08",
+    "appointment_id": "A03",
+    "email": "aisha.mensah@example.com",
+    "thread_id": "th_c13_two_corrections_p08"
+  },
+  "solution": [
+    {
+      "tool": "get_thread",
+      "arguments": {
+        "threadId": "th_c13_two_corrections_p08",
+        "messageFormat": "FULL_CONTENT"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "threadId": "record: gmail_threads.id"
+      }
+    },
+    {
+      "tool": "verify_patient",
+      "arguments": {
+        "full_name": "Aisha Mensah",
+        "dob": "1979-03-22"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "find_available_slots",
+      "arguments": {
+        "specialty": "cardiology",
+        "provider_id": "D04",
+        "date_from": "2026-10-28",
+        "patient_id": "P08",
+        "location_id": null,
+        "date_to": "2026-10-28"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "reschedule_appointment",
+      "arguments": {
+        "confirmed": true,
+        "request_key": "REQ-P08-RESCHED",
+        "new_slot_id": "SL-D04-20261028-1530",
+        "appointment_id": "A03"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "appointment_id": "record: appointments.appointment_id",
+        "confirmed": "rule: \"Read back provider, date, time and location (or the insurer details) and get the patient's yes before booking, rescheduling, cancelling or updating.\""
+      }
+    },
+    {
+      "tool": "create_draft",
+      "arguments": {
+        "body": "Dear Aisha Mensah, your cardiology appointment A03 on Wednesday 28 October has been moved to 15:30 as requested. Riverbank Appointments Desk",
+        "subject": "Re: Changing the time of A03",
+        "bcc": null,
+        "to": [
+          "aisha.mensah@example.com"
+        ],
+        "cc": null,
+        "htmlBody": null,
+        "replyToMessageId": "cmsg_016",
+        "attachments": null
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "to": "record: gmail_messages.sender",
+        "replyToMessageId": "record: gmail_messages.id"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "task": "reschedule",
+    "overlay_vector": "none",
+    "interaction": "multi_turn",
+    "disposition": "correction",
+    "overlay_intensity": "absent",
+    "overlay": "none",
+    "interface": "email_thread",
+    "counterparty": "proxy"
+  },
+  "sub_goals": [
+    "appointment_rescheduled_atomically",
+    "draft_created_for_review"
+  ],
+  "max_turns": 8,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

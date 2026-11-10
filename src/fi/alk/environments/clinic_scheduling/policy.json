@@ -1,0 +1,184 @@
+{
+  "rules": [
+    {
+      "id": "verified_patient_only",
+      "text": "Patient records, appointments, referrals and insurance are read or changed only for a patient verified in the conversation by full name and date of birth.",
+      "class": "system_invariant"
+    },
+    {
+      "id": "calendar_is_availability",
+      "text": "Availability is computed from each provider's calendar and clinic sessions; a booking writes the clinic appointment and the provider's calendar event together, and the desk cannot write provider calendars directly.",
+      "class": "system_invariant"
+    },
+    {
+      "id": "one_booking_per_slot",
+      "text": "A provider's slot holds at most one confirmed booking or live hold; a slot taken before commit is refused with a conflict and nothing is booked.",
+      "class": "system_invariant"
+    },
+    {
+      "id": "referral_specialties",
+      "text": "Cardiology, orthopaedics and neurology need an active, unexpired referral before booking or waitlisting.",
+      "class": "system_invariant"
+    },
+    {
+      "id": "atomic_reschedule",
+      "text": "A reschedule commits the replacement before the original time is released; when the replacement fails, the original appointment stays unchanged.",
+      "class": "system_invariant"
+    },
+    {
+      "id": "payer_acceptance",
+      "text": "A booking is made only with a provider who accepts the patient's insurer, unless the patient agreed to self-pay.",
+      "class": "system_invariant"
+    },
+    {
+      "id": "change_notice_policy",
+      "text": "Reschedules and cancellations close this many hours before the appointment; late changes go to the front desk.",
+      "class": "configurable_environment_policy",
+      "parameters": {
+        "change_notice_hours": {
+          "type": "integer",
+          "default": 24,
+          "allowed": [
+            0,
+            12,
+            24,
+            48
+          ]
+        }
+      }
+    },
+    {
+      "id": "hold_policy",
+      "text": "How long a slot hold lasts.",
+      "class": "configurable_environment_policy",
+      "parameters": {
+        "hold_minutes": {
+          "type": "integer",
+          "default": 15,
+          "allowed": [
+            5,
+            10,
+            15,
+            30
+          ]
+        }
+      }
+    },
+    {
+      "id": "booking_window_policy",
+      "text": "The earliest and latest a slot may be booked.",
+      "class": "configurable_environment_policy",
+      "parameters": {
+        "min_notice_hours": {
+          "type": "integer",
+          "default": 2,
+          "allowed": [
+            0,
+            2,
+            4,
+            24
+          ]
+        },
+        "max_horizon_days": {
+          "type": "integer",
+          "default": 30,
+          "allowed": [
+            14,
+            30,
+            60
+          ]
+        }
+      }
+    },
+    {
+      "id": "waitlist_policy",
+      "text": "Whether patients may join the waitlist.",
+      "class": "configurable_environment_policy",
+      "parameters": {
+        "waitlist_enabled": {
+          "type": "boolean",
+          "default": true,
+          "allowed": [
+            true,
+            false
+          ]
+        }
+      }
+    },
+    {
+      "id": "agent_verify_before_disclosure",
+      "text": "Verify the patient before disclosing or changing anything; never disclose another patient's appointments or details without verified proxy authority.",
+      "class": "agent_policy"
+    },
+    {
+      "id": "agent_confirm_before_change",
+      "text": "Read back provider, date, time and location (or the insurer details) and get the patient's yes before booking, rescheduling, cancelling or updating.",
+      "class": "agent_policy"
+    },
+    {
+      "id": "agent_no_medical_advice",
+      "text": "Give no diagnosis, treatment or advice on whether symptoms can wait.",
+      "class": "agent_policy"
+    },
+    {
+      "id": "agent_urgent_symptoms_to_nurse_line",
+      "text": "Symptoms that may be urgent go to the nurse line as urgent, with emergency guidance (999 for life-threatening symptoms), never a routine booking as the answer.",
+      "class": "agent_policy"
+    },
+    {
+      "id": "agent_referral_before_booking",
+      "text": "Check the referral before booking a referral specialty; without an active one, explain and route a referral request instead of booking.",
+      "class": "agent_policy"
+    },
+    {
+      "id": "agent_no_coverage_guarantee",
+      "text": "Never promise that an insurer will cover a visit; the clinic records cover details only.",
+      "class": "agent_policy"
+    },
+    {
+      "id": "agent_latest_message_governs",
+      "text": "When a patient wrote by email, read the whole thread; a later correction overrides the first request, and claims in emails are checked against the records.",
+      "class": "agent_policy"
+    },
+    {
+      "id": "agent_calendar_is_availability",
+      "text": "Answer availability from the providers' calendars and open slots, never from memory or an email's claim.",
+      "class": "agent_policy"
+    },
+    {
+      "id": "inv_calendar_write_permission",
+      "text": "Only calendars with access_role of 'writer' or 'owner' permit event creation, modification, or deletion.",
+      "class": "system_invariant"
+    },
+    {
+      "id": "inv_no_double_booking",
+      "text": "Creating or updating an event cannot overlap with an existing confirmed event for any required attendee or on the target calendar.",
+      "class": "system_invariant"
+    },
+    {
+      "id": "inv_event_version_check",
+      "text": "Updating an event requires specifying an expected_version that matches the current event version in the database to prevent concurrent write conflicts.",
+      "class": "system_invariant"
+    },
+    {
+      "id": "access_control_enforcement",
+      "text": "The mailbox strictly enforces access control boundaries: restricted threads and messages cannot be viewed or modified and return permission_denied.",
+      "class": "system_invariant"
+    },
+    {
+      "id": "human_draft_protection",
+      "text": "The environment prevents overwriting or creating duplicate automated drafts on threads with existing human-edited drafts, rejecting attempts with conflict.",
+      "class": "system_invariant"
+    },
+    {
+      "id": "draft_only_boundary",
+      "text": "Operations are strictly confined to drafting and labeling; live sending tools do not exist.",
+      "class": "system_invariant"
+    },
+    {
+      "id": "entity_validation",
+      "text": "Operations referencing non-existent thread IDs, message IDs, or label IDs are rejected with not_found.",
+      "class": "system_invariant"
+    }
+  ]
+}

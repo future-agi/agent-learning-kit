@@ -1,0 +1,105 @@
+{
+  "name": "email_tuesday_corrected_to_thursday_booking",
+  "scenario_key": "email-tuesday-corrected-to-thursday-booking",
+  "scenario_id": "",
+  "use_case": "Email requests and corrections",
+  "branch": "Sofia Rossi emailed for a Tuesday dermatology slot, then corrected to Thursday 29 October afternoon at Central; the desk books Thursday",
+  "tests": "the agent reads the whole thread, follows the correction and books Thursday afternoon with Dr. Morales, not Tuesday",
+  "instruction": "You emailed the clinic asking for a dermatology appointment, then wrote again to correct the day. Ask the desk to book what you asked for in your emails. When offered Thursday 29 October times, take the earliest afternoon one.\n\nYour details:\n- Name: Sofia Rossi\n- Date of birth: 1996-06-06\n- Email: sofia.rossi@example.com",
+  "keywords": [
+    "email",
+    "correction"
+  ],
+  "persona": {
+    "name": "Sofia Rossi",
+    "gender": "female",
+    "age_group": "25-32",
+    "occupation": "Student",
+    "location": "United States",
+    "personality": "Anxious",
+    "communication_style": "Passive",
+    "initial_message": "Hi, I emailed you about a dermatology appointment, can you book it?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "patient_id": "P13",
+    "thread_id": "th_c01_tuesday_thursday",
+    "origin": "seed"
+  },
+  "solution": [
+    {
+      "tool": "get_thread",
+      "arguments": {
+        "threadId": "th_c01_tuesday_thursday"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "threadId": "the patient's thread"
+      }
+    },
+    {
+      "tool": "verify_patient",
+      "arguments": {
+        "full_name": "Sofia Rossi",
+        "dob": "1996-06-06"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "find_available_slots",
+      "arguments": {
+        "provider_id": "D03",
+        "date_from": "2026-10-29",
+        "date_to": "2026-10-29",
+        "location_id": "LOC-CEN",
+        "patient_id": "P13"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "book_appointment",
+      "arguments": {
+        "patient_id": "P13",
+        "slot_id": "SL-D03-20261029-1300",
+        "reason": "Dermatology appointment",
+        "confirmed": true,
+        "request_key": "REQ-P13-D03-1029"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "patient_id": "caller",
+        "slot_id": "the corrected day: Thursday 29 October 13:00"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "task": "book",
+    "disposition": "correction",
+    "interaction": "multi_turn",
+    "counterparty": "individual_customer",
+    "interface": "email_thread",
+    "overlay": "none",
+    "overlay_vector": "none",
+    "overlay_intensity": "absent"
+  },
+  "sub_goals": [
+    "appointment_booked_as_confirmed",
+    "confirmation_obtained_before_change"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

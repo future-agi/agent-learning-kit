@@ -1,0 +1,88 @@
+{
+  "name": "cancel_inside_notice_window_escalated",
+  "scenario_key": "cancel-inside-notice-window-escalated",
+  "scenario_id": "",
+  "use_case": "Reschedule and cancel",
+  "branch": "Jonas Schmidt wants to cancel A411 scheduled for today 14:00; inside 24h notice window, desk escalates to front_desk",
+  "tests": "the agent identifies A411 is inside the notice window, refuses direct cancellation, and escalates to front_desk",
+  "instruction": "You are Jonas Schmidt (born 1991-03-12). You have an appointment A411 today at 14:00 with Dr. Alicia Nguyen at Riverbank Central, and you need to cancel it.\n\nYour details:\n- Name: Jonas Schmidt\n- Date of birth: 1991-03-12\n- Appointment ID: A411\n- Current time: Today at 14:00\n- Location: Riverbank Central",
+  "keywords": [
+    "cancel",
+    "notice_window"
+  ],
+  "persona": {
+    "name": "Jonas Schmidt",
+    "gender": "male",
+    "age_group": "32-40",
+    "occupation": "Technician",
+    "location": "United Kingdom",
+    "personality": "Impatient and direct",
+    "communication_style": "Direct and concise",
+    "initial_message": "Hello, I need to cancel my appointment A411 scheduled for 2 pm today.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "appointment_id": "A411",
+    "patient_id": "P411",
+    "origin": "generated"
+  },
+  "solution": [
+    {
+      "tool": "verify_patient",
+      "arguments": {
+        "dob": "1991-03-12",
+        "full_name": "Jonas Schmidt"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_appointment",
+      "arguments": {
+        "appointment_id": "A411"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "escalate_to_staff",
+      "arguments": {
+        "reason": "Late cancellation inside notice window",
+        "team": "front_desk",
+        "urgency": "routine",
+        "patient_id": "P411"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "team": "record: escalation_routes"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "overlay_vector": "none",
+    "interface": "clean_prose",
+    "counterparty": "first_time",
+    "overlay_intensity": "absent",
+    "interaction": "single_turn",
+    "disposition": "late_notice",
+    "overlay": "none",
+    "task": "cancel"
+  },
+  "sub_goals": [
+    "staff_escalation_created"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

@@ -1,0 +1,102 @@
+{
+  "name": "reschedule_calendar_check_before_moving",
+  "scenario_key": "reschedule-calendar-check-before-moving",
+  "scenario_id": "",
+  "use_case": "Reschedule and cancel",
+  "branch": "Mei Tanaka asks when Dr. Kowalski is free next week; the desk reads list_events on CAL-D05 and reschedules A05 to Friday 6 November 10:00",
+  "tests": "the agent reads CAL-D05 events, verifies Mei Tanaka, and moves A05 to SL-D05-20261106-1000",
+  "instruction": "You are Mei Tanaka (born 1971-02-27). You have an orthopaedics appointment A05 with Dr. Mira Kowalski. You want to know her availability next week (2 to 6 November) and reschedule A05 to Friday 6 November at 10:00 at Riverbank West. Confirm when asked.\n\nYour details:\n- Name: Mei Tanaka\n- Date of birth: 1971-02-27\n- Appointment ID: A05\n- Provider: Dr. Mira Kowalski\n- Desired date and time: Friday 6 November 2026 at 10:00\n- Location: Riverbank West",
+  "keywords": [
+    "reschedule",
+    "calendar"
+  ],
+  "persona": {
+    "name": "Mei Tanaka",
+    "gender": "female",
+    "age_group": "50-60",
+    "occupation": "Nurse",
+    "location": "United Kingdom",
+    "personality": "Detail-oriented",
+    "communication_style": "Questioning",
+    "initial_message": "Hello, when is Dr. Kowalski free next week? I'd like to reschedule my appointment A05 to Friday 6 November at 10:00.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "calendar_id": "CAL-D05",
+    "appointment_id": "A05",
+    "patient_id": "P12",
+    "origin": "seed"
+  },
+  "solution": [
+    {
+      "tool": "list_events",
+      "arguments": {
+        "fullText": "",
+        "timeZone": "",
+        "endTime": "2026-11-07T00:00:00Z",
+        "pageToken": "",
+        "pageSize": 10,
+        "eventType": "",
+        "calendarId": "CAL-D05",
+        "orderBy": "",
+        "startTime": "2026-11-02T00:00:00Z"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "calendarId": "record: CAL-D05"
+      }
+    },
+    {
+      "tool": "verify_patient",
+      "arguments": {
+        "full_name": "Mei Tanaka",
+        "dob": "1971-02-27"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "full_name": "caller: Mei Tanaka",
+        "dob": "caller: 1971-02-27"
+      }
+    },
+    {
+      "tool": "reschedule_appointment",
+      "arguments": {
+        "confirmed": true,
+        "request_key": "req_resched_p12",
+        "new_slot_id": "SL-D05-20261106-1000",
+        "appointment_id": "A05"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "appointment_id": "caller: A05"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "overlay": "none",
+    "interface": "clean_prose",
+    "overlay_intensity": "absent",
+    "task": "reschedule",
+    "disposition": "missing_information",
+    "interaction": "multi_turn",
+    "overlay_vector": "none",
+    "counterparty": "first_time"
+  },
+  "sub_goals": [
+    "appointment_rescheduled_atomically"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

@@ -1,0 +1,101 @@
+{
+  "name": "email_waitlist_for_earlier_dermatology",
+  "scenario_key": "email-waitlist-for-earlier-dermatology",
+  "scenario_id": "",
+  "use_case": "Waitlist, concurrency and failure recovery",
+  "branch": "Elena Ortiz emailed for an earlier dermatology slot than A10; she can only come 2 to 4 November, when no dermatology slot is open, so she joins the waitlist and keeps A10",
+  "tests": "the agent checks availability for her dates, finds none, adds her to the waitlist for dermatology and keeps A10",
+  "instruction": "You emailed asking to be seen earlier than your mole review A10 on 5 November. You can only come between 2 and 4 November. If nothing is free then, ask to go on the waiting list and keep A10.\n\nYour details:\n- Name: Elena Ortiz\n- Date of birth: 1975-06-21",
+  "keywords": [
+    "waitlist",
+    "email"
+  ],
+  "persona": {
+    "name": "Elena Ortiz",
+    "gender": "female",
+    "age_group": "50-60",
+    "occupation": "Freelancer",
+    "location": "Canada",
+    "personality": "Talkative",
+    "communication_style": "Casual and friendly",
+    "initial_message": "Hello, I emailed about an earlier dermatology appointment.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "patient_id": "P03",
+    "thread_id": "th_c12_waitlist_p03",
+    "origin": "seed"
+  },
+  "solution": [
+    {
+      "tool": "get_thread",
+      "arguments": {
+        "threadId": "th_c12_waitlist_p03"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "verify_patient",
+      "arguments": {
+        "full_name": "Elena Ortiz",
+        "dob": "1975-06-21"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "find_available_slots",
+      "arguments": {
+        "specialty": "dermatology",
+        "date_from": "2026-11-02",
+        "date_to": "2026-11-04",
+        "patient_id": "P03"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "add_to_waitlist",
+      "arguments": {
+        "patient_id": "P03",
+        "specialty": "dermatology",
+        "earliest_date": "2026-11-02",
+        "latest_date": "2026-11-04",
+        "request_key": "REQ-P03-DERM-WAIT"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "patient_id": "caller",
+        "specialty": "dermatology"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "task": "waitlist",
+    "disposition": "no_availability",
+    "interaction": "multi_turn",
+    "counterparty": "individual_customer",
+    "interface": "email_thread",
+    "overlay": "none",
+    "overlay_vector": "none",
+    "overlay_intensity": "absent"
+  },
+  "sub_goals": [
+    "waitlist_added"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

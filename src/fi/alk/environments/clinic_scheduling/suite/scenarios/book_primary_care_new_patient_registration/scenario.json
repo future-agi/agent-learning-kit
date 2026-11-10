@@ -1,0 +1,97 @@
+{
+  "name": "book_primary_care_new_patient_registration",
+  "scenario_key": "book-primary-care-new-patient-registration",
+  "scenario_id": "",
+  "use_case": "Book a new appointment",
+  "branch": "P401 (new patient with Bupa) registers and books a primary-care consultation",
+  "tests": "passes when the agent verifies new patient Gemma O'Connor and books a primary care appointment for her",
+  "instruction": "You are a new patient registering with Riverbank Clinics and want to book a primary care appointment. Provide your registration details when asked and confirm a booking for Tuesday 27 October afternoon.\n\nYour details:\n- Full name: Gemma O'Connor\n- Date of birth: 1995-08-20\n- Email: gemma.oconnor@example.com\n- Phone: +447700900401\n- Insurance: Bupa, Member ID: BU-401921\n- Specialty: Primary care\n- Preferred slot: Tuesday 27 October 2026, 14:30 (Dr. Rohan Patel at Riverbank Central)",
+  "keywords": [
+    "primary_care",
+    "booking",
+    "new_patient"
+  ],
+  "persona": {
+    "name": "Gemma O'Connor",
+    "gender": "female",
+    "age_group": "25-32",
+    "occupation": "Nurse",
+    "location": "United Kingdom",
+    "personality": "Friendly and cooperative",
+    "communication_style": "Simple and clear",
+    "initial_message": "Hello, I am a new patient and would like to register and book a primary care appointment.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "created_records": [
+      "patients.P401",
+      "insurance.P401"
+    ],
+    "origin": "generated"
+  },
+  "solution": [
+    {
+      "tool": "verify_patient",
+      "arguments": {
+        "dob": "1995-08-20",
+        "full_name": "Gemma O'Connor"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "find_available_slots",
+      "arguments": {
+        "specialty": "primary_care",
+        "date_to": "2026-11-06",
+        "patient_id": "P401",
+        "date_from": "2026-10-26"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "book_appointment",
+      "arguments": {
+        "patient_id": "P401",
+        "self_pay": false,
+        "slot_id": "SL-D02-20261027-1430",
+        "request_key": "req-p401-d02-1027",
+        "reason": "New patient registration",
+        "confirmed": true
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "patient_id": "record: patients.patient_id P401",
+        "slot_id": "the slot the patient confirmed"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "overlay_intensity": "absent",
+    "overlay": "none",
+    "disposition": "new_patient",
+    "task": "book_appointment",
+    "overlay_vector": "none",
+    "counterparty": "first_time",
+    "interface": "clean",
+    "interaction": "multi_turn"
+  },
+  "sub_goals": [
+    "appointment_booked_as_confirmed"
+  ],
+  "max_turns": 8,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

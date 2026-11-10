@@ -1,0 +1,76 @@
+{
+  "name": "waitlist_duplicate_entry_reported",
+  "scenario_key": "waitlist-duplicate-entry-reported",
+  "scenario_id": "",
+  "use_case": "Waitlist, concurrency and failure recovery",
+  "branch": "Divya Menon is already active on the waitlist for Dr. Patel (W402); she asks to be added again and the desk reports the existing entry",
+  "tests": "the agent verifies Divya Menon, checks her appointments and waitlist, explains she is already on the waitlist W402, and creates no duplicate",
+  "instruction": "You are Divya Menon (born 1990-11-03). You want to join the waitlist for an earlier primary care slot with Dr. Rohan Patel.\n\nYour details:\n- Name: Divya Menon\n- Date of birth: 1990-11-03\n- Provider: Dr. Rohan Patel\n- Specialty: Primary care",
+  "keywords": [
+    "waitlist"
+  ],
+  "persona": {
+    "name": "Divya Menon",
+    "gender": "female",
+    "age_group": "32-40",
+    "occupation": "Manager",
+    "location": "India",
+    "personality": "Analytical",
+    "communication_style": "Simple and clear",
+    "initial_message": "Hi, I'd like to get on the waitlist for an earlier appointment with Dr. Patel.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "origin": "generated",
+    "waitlist_id": "W402",
+    "patient_id": "P402"
+  },
+  "solution": [
+    {
+      "tool": "verify_patient",
+      "arguments": {
+        "dob": "1990-11-03",
+        "full_name": "Divya Menon"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "list_appointments",
+      "arguments": {
+        "patient_id": "P402"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "patient_id": "record: patients"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "counterparty": "first_time",
+    "overlay": "none",
+    "interaction": "single_turn",
+    "overlay_vector": "none",
+    "interface": "clean_prose",
+    "disposition": "duplicate_request",
+    "overlay_intensity": "absent",
+    "task": "waitlist"
+  },
+  "sub_goals": [
+    "appointment_details_reported"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

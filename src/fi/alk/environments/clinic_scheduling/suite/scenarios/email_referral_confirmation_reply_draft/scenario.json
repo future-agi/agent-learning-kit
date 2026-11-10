@@ -1,0 +1,111 @@
+{
+  "name": "email_referral_confirmation_reply_draft",
+  "scenario_key": "email-referral-confirmation-reply-draft",
+  "scenario_id": "",
+  "use_case": "Email requests and corrections",
+  "branch": "Oliver Grant's practice administrator asks the desk to check and reply to email th_c03_referral_p11 confirming whether his cardiology referral is active; the desk checks referral status and drafts a reply confirming active status",
+  "tests": "the agent verifies Oliver Grant, reads th_c03_referral_p11, checks referral status (RF04 cardiology active), and creates a reply draft",
+  "instruction": "You are Edward Collins, practice manager at Harbour Family Practice calling on behalf of patient Oliver Grant. You previously emailed confirming Oliver Grant's cardiology referral (thread th_c03_referral_p11). You are now contacting Riverbank Clinics appointments desk on chat to ask them to check Oliver's referral status in the system and draft a reply to the practice email confirming that the cardiology referral RF04 is recorded as active.\n\nDetails:\n- Patient Name: Oliver Grant\n- Patient DOB: 1950-10-10\n- Practice Email: admin@harbour-family-practice.example\n- Specialty: cardiology\n- Email subject: Referral confirmed: Oliver Grant, cardiology",
+  "keywords": [
+    "referral"
+  ],
+  "persona": {
+    "name": "Edward Collins",
+    "gender": "male",
+    "age_group": "40-50",
+    "occupation": "Manager",
+    "location": "United States",
+    "personality": "Professional and formal",
+    "communication_style": "Formal and polite",
+    "initial_message": "Hello, I'm Edward Collins from Harbour Family Practice. We sent an email regarding Oliver Grant's cardiology referral. Could you verify his referral status and draft a reply to our email confirming it's active?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "thread_id": "th_c03_referral_p11",
+    "email": "admin@harbour-family-practice.example",
+    "specialty": "cardiology",
+    "referral_id": "RF04",
+    "patient_id": "P11",
+    "dob": "1950-10-10",
+    "full_name": "Oliver Grant",
+    "origin": "seed"
+  },
+  "solution": [
+    {
+      "tool": "get_thread",
+      "arguments": {
+        "messageFormat": "FULL_CONTENT",
+        "threadId": "th_c03_referral_p11"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "threadId": "record: gmail_threads.id"
+      }
+    },
+    {
+      "tool": "verify_patient",
+      "arguments": {
+        "dob": "1950-10-10",
+        "full_name": "Oliver Grant"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_referral_status",
+      "arguments": {
+        "specialty": "cardiology",
+        "patient_id": "P11"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "create_draft",
+      "arguments": {
+        "attachments": null,
+        "htmlBody": null,
+        "to": [
+          "admin@harbour-family-practice.example"
+        ],
+        "bcc": null,
+        "subject": "Re: Referral confirmed: Oliver Grant, cardiology",
+        "cc": null,
+        "body": "Dear Harbour Family Practice, thank you for confirming the cardiology referral RF04 for Oliver Grant. We have recorded it as active in our clinic system valid until 31 January 2027. Riverbank Appointments Desk",
+        "replyToMessageId": "cmsg_004"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "to": "record: gmail_messages.sender",
+        "replyToMessageId": "record: gmail_messages.id"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "disposition": "authorization",
+    "overlay_vector": "none",
+    "counterparty": "third_party",
+    "overlay_intensity": "absent",
+    "interaction": "multi_turn",
+    "task": "referral",
+    "interface": "email_thread",
+    "overlay": "none"
+  },
+  "sub_goals": [
+    "draft_created_for_review"
+  ],
+  "max_turns": 8,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

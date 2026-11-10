@@ -1,0 +1,96 @@
+{
+  "name": "referral_neurology_waitlist_blocked_request_created",
+  "scenario_key": "referral-neurology-waitlist-blocked-request-created",
+  "scenario_id": "",
+  "use_case": "Referral and eligibility constraints",
+  "branch": "P410 asks to waitlist for Dr. Grace Liu in neurology; expired referral RF410 blocks it; desk opens referral request",
+  "tests": "passes when the agent checks neurology referral status, identifies it as expired, refuses waitlist, and opens a new referral request",
+  "instruction": "You would like to join the waitlist for Dr. Grace Liu in neurology. When asked, provide your details and note that your previous referral from Canonbury Health Centre expired on 1 October. When the agent explains that waitlisting for neurology requires an active referral and offers to request a new referral from Canonbury Health Centre, accept.\n\nYour details:\n- Full name: Chloe Tremblay\n- Date of birth: 1993-08-15\n- Insurance: Aviva, Member ID: AV-400110\n- Specialty: neurology\n- Referring practice: Canonbury Health Centre",
+  "keywords": [
+    "neurology",
+    "expired_referral",
+    "waitlist_blocked",
+    "referral_request"
+  ],
+  "persona": {
+    "name": "Chloe Tremblay",
+    "gender": "female",
+    "age_group": "32-40",
+    "occupation": "Teacher",
+    "location": "Canada",
+    "personality": "Reserved",
+    "communication_style": "Formal and polite",
+    "initial_message": "Hello, can you add me to the waitlist for Dr. Grace Liu in neurology? My previous referral from Canonbury Health Centre expired.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "created_records": [
+      "patients.P410",
+      "insurance.P410",
+      "referrals.RF410"
+    ],
+    "origin": "generated"
+  },
+  "solution": [
+    {
+      "tool": "verify_patient",
+      "arguments": {
+        "dob": "1993-08-15",
+        "full_name": "Chloe Tremblay"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_referral_status",
+      "arguments": {
+        "specialty": "neurology",
+        "patient_id": "P410"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "create_referral_request",
+      "arguments": {
+        "referring_practice": "Canonbury Health Centre",
+        "request_key": "REQ-P410-NEUR-WL",
+        "specialty": "neurology",
+        "patient_id": "P410"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "specialty": "caller: neurology",
+        "patient_id": "record: patients.patient_id P410"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "task": "create_referral_request",
+    "disposition": "expired_referral",
+    "interaction": "single_request",
+    "overlay": "none",
+    "overlay_vector": "none",
+    "counterparty": "patient",
+    "overlay_intensity": "absent",
+    "interface": "clean"
+  },
+  "sub_goals": [
+    "referral_request_created",
+    "referral_required_enforced"
+  ],
+  "max_turns": 6,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

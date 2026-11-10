@@ -1,0 +1,91 @@
+{
+  "name": "v02_s02_referral_required",
+  "scenario_key": "v02-s02-referral-required",
+  "scenario_id": "",
+  "use_case": "Referral and eligibility constraints",
+  "branch": "Priya Raman asks for cardiology tomorrow without a referral; the desk explains the referral rule and opens a referral request instead of booking",
+  "tests": "the agent checks the referral, books nothing, opens a referral request for cardiology and promises no cover",
+  "instruction": "You want a cardiology appointment tomorrow because you have been told to get your heart checked. You do not have a referral and did not know you needed one. If the desk explains, agree to whatever referral route it offers and ask whether your insurance will pay.\n\nYour details:\n- Name: Priya Raman\n- Date of birth: 1990-11-03",
+  "keywords": [
+    "referral",
+    "workbook"
+  ],
+  "persona": {
+    "name": "Priya Raman",
+    "gender": "female",
+    "age_group": "32-40",
+    "occupation": "Consultant",
+    "location": "India",
+    "personality": "Detail-oriented",
+    "communication_style": "Detailed and elaborate",
+    "initial_message": "Hello, can I book a cardiology appointment for tomorrow?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "patient_id": "P02",
+    "specialty": "cardiology",
+    "origin": "seed"
+  },
+  "solution": [
+    {
+      "tool": "verify_patient",
+      "arguments": {
+        "full_name": "Priya Raman",
+        "dob": "1990-11-03"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_referral_status",
+      "arguments": {
+        "patient_id": "P02",
+        "specialty": "cardiology"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "create_referral_request",
+      "arguments": {
+        "patient_id": "P02",
+        "specialty": "cardiology",
+        "request_key": "REQ-P02-CARD-REF"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "patient_id": "caller",
+        "specialty": "caller: cardiology"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "task": "referral",
+    "disposition": "missing_information",
+    "interaction": "multi_turn",
+    "counterparty": "individual_customer",
+    "interface": "clean_prose",
+    "overlay": "none",
+    "overlay_vector": "none",
+    "overlay_intensity": "absent"
+  },
+  "sub_goals": [
+    "referral_request_created",
+    "referral_required_enforced",
+    "no_coverage_guarantee"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

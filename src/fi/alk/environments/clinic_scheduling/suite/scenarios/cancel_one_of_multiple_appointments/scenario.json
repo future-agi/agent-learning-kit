@@ -1,0 +1,90 @@
+{
+  "name": "cancel_one_of_multiple_appointments",
+  "scenario_key": "cancel-one-of-multiple-appointments",
+  "scenario_id": "",
+  "use_case": "Reschedule and cancel",
+  "branch": "Calum Vance has appointments A402 and A403; he cancels A402 only while keeping A403",
+  "tests": "the agent lists Calum Vance's appointments, verifies which appointment he wants cancelled, and cancels A402 without touching A403",
+  "instruction": "You are Calum Vance (born 1982-04-12). You have two appointments booked: A403 on 2 November and A402 on 9 November. You only want to cancel the one on 9 November (A402), keeping your appointment on 2 November intact. Confirm when asked.\n\nYour details:\n- Name: Calum Vance\n- Date of birth: 1982-04-12\n- Appointment ID to cancel: A402 (9 November 2026 at 13:30)\n- Appointment ID to keep: A403 (2 November 2026 at 13:30)\n- Location: Riverbank Central",
+  "keywords": [
+    "cancel"
+  ],
+  "persona": {
+    "name": "Calum Vance",
+    "gender": "male",
+    "age_group": "40-50",
+    "occupation": "Engineer",
+    "location": "United Kingdom",
+    "personality": "Detail-oriented",
+    "communication_style": "Simple and clear",
+    "initial_message": "Hello, I have two appointments booked and I'd like to cancel the one on 9 November (A402).",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "appointment_id": "A402",
+    "patient_id": "P401",
+    "origin": "generated"
+  },
+  "solution": [
+    {
+      "tool": "verify_patient",
+      "arguments": {
+        "full_name": "Calum Vance",
+        "dob": "1982-04-12"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "full_name": "caller: Calum Vance",
+        "dob": "caller: 1982-04-12"
+      }
+    },
+    {
+      "tool": "list_appointments",
+      "arguments": {
+        "patient_id": "P401"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "cancel_appointment",
+      "arguments": {
+        "confirmed": true,
+        "reason": "Patient request",
+        "appointment_id": "A402"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "appointment_id": "caller: A402",
+        "confirmed": "rule: \"Read back provider, date, time and location (or the insurer details) and get the patient's yes before booking, rescheduling, cancelling or updating.\""
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "interface": "clean_prose",
+    "overlay": "none",
+    "counterparty": "first_time",
+    "interaction": "single_turn",
+    "task": "cancel",
+    "overlay_intensity": "absent",
+    "disposition": "happy_path",
+    "overlay_vector": "none"
+  },
+  "sub_goals": [
+    "appointment_cancelled_as_requested"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

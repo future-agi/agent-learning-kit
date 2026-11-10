@@ -1,0 +1,118 @@
+{
+  "name": "email_cancellation_confirmation_draft",
+  "scenario_key": "email-cancellation-confirmation-draft",
+  "scenario_id": "",
+  "use_case": "Email requests and corrections",
+  "branch": "Laura Becker emailed to cancel her physiotherapy A09 and asks the desk in chat for a reply draft confirming it is cancelled after cancelling it",
+  "tests": "the agent cancels A09 and drafts a reply on th_c05_cancel_p15 confirming the cancellation",
+  "instruction": "You sent an email yesterday asking to cancel your physiotherapy appointment A09 on Friday 30 October because your shoulder is feeling much better. You are now contacting the clinic desk on chat to make sure the appointment has actually been cancelled, and you want them to create a reply draft on your email thread confirming the cancellation so you have written confirmation.\n\nYour details:\n- Full name: Laura Becker\n- Date of birth: 1988-09-09\n- Email: laura.becker@example.com\n- Appointment reference: A09\n- Email subject: Cancel physio A09",
+  "keywords": [
+    "cancel"
+  ],
+  "persona": {
+    "name": "Laura Hoffman",
+    "gender": "female",
+    "age_group": "32-40",
+    "occupation": "Manager",
+    "location": "United Kingdom",
+    "personality": "Friendly and cooperative",
+    "communication_style": "Direct and concise",
+    "initial_message": "Hello, I sent an email yesterday asking to cancel my physio appointment A09. Could you please cancel it and draft a reply to my email confirming it's done?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "dob": "1988-09-09",
+    "origin": "seed",
+    "patient_id": "P15",
+    "full_name": "Laura Becker",
+    "email": "laura.becker@example.com",
+    "thread_id": "th_c05_cancel_p15",
+    "appointment_id": "A09"
+  },
+  "solution": [
+    {
+      "tool": "get_thread",
+      "arguments": {
+        "messageFormat": "FULL_CONTENT",
+        "threadId": "th_c05_cancel_p15"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "threadId": "record: gmail_threads.id"
+      }
+    },
+    {
+      "tool": "verify_patient",
+      "arguments": {
+        "dob": "1988-09-09",
+        "full_name": "Laura Becker"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "full_name": "caller: Laura Becker",
+        "dob": "caller: 1988-09-09"
+      }
+    },
+    {
+      "tool": "cancel_appointment",
+      "arguments": {
+        "confirmed": true,
+        "reason": "Shoulder is better",
+        "appointment_id": "A09"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "appointment_id": "record: appointments.appointment_id",
+        "confirmed": "rule: \"Read back provider, date, time and location (or the insurer details) and get the patient's yes before booking, rescheduling, cancelling or updating.\""
+      }
+    },
+    {
+      "tool": "create_draft",
+      "arguments": {
+        "replyToMessageId": "cmsg_006",
+        "attachments": null,
+        "to": [
+          "laura.becker@example.com"
+        ],
+        "cc": null,
+        "bcc": null,
+        "subject": "Re: Cancel physio A09",
+        "htmlBody": null,
+        "body": "Dear Laura Becker, your physiotherapy appointment A09 on Friday 30 October has been cancelled as requested. Riverbank Appointments Desk"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "to": "record: gmail_messages.sender",
+        "replyToMessageId": "record: gmail_messages.id"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "overlay_vector": "none",
+    "overlay_intensity": "absent",
+    "overlay": "none",
+    "interaction": "multi_turn",
+    "task": "cancel",
+    "disposition": "happy_path",
+    "interface": "email_thread",
+    "counterparty": "individual_customer"
+  },
+  "sub_goals": [
+    "appointment_cancelled_as_requested",
+    "draft_created_for_review"
+  ],
+  "max_turns": 8,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

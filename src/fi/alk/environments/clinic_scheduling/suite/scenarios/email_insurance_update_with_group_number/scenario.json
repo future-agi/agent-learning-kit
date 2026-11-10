@@ -1,0 +1,93 @@
+{
+  "name": "email_insurance_update_with_group_number",
+  "scenario_key": "email-insurance-update-with-group-number",
+  "scenario_id": "",
+  "use_case": "Intake, insurance, preparation and locations",
+  "branch": "Fiona Gallagher emailed her new insurance details including group number; the desk reads the thread and records payer, member ID, and group number",
+  "tests": "the agent reads the email thread and updates the patient's insurance with payer, member ID, and group number",
+  "instruction": "You emailed the clinic with your new insurance details: AXA Health, member ID AX-994112, group number GRP-881. Ask the desk to check your email and update your insurance record with the insurer, member number, and group number you sent.\n\nYour details:\n- Name: Fiona Gallagher\n- Date of birth: 1986-11-20\n- Insurer: AXA Health\n- Member ID: AX-994112\n- Group Number: GRP-881",
+  "keywords": [
+    "email",
+    "insurance"
+  ],
+  "persona": {
+    "name": "Fiona Gallagher",
+    "gender": "female",
+    "age_group": "32-40",
+    "occupation": "Consultant",
+    "location": "United Kingdom",
+    "personality": "Detail-oriented",
+    "communication_style": "Direct and concise",
+    "initial_message": "Hi, I sent an email with my new insurance details and group number. Can you update my record?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "patient_id": "P404",
+    "origin": "generated",
+    "thread_id": "th_c404_insurance"
+  },
+  "solution": [
+    {
+      "tool": "get_thread",
+      "arguments": {
+        "threadId": "th_c404_insurance"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "threadId": "record: gmail_threads th_c404_insurance"
+      }
+    },
+    {
+      "tool": "verify_patient",
+      "arguments": {
+        "dob": "1986-11-20",
+        "full_name": "Fiona Gallagher"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "update_insurance",
+      "arguments": {
+        "confirmed": true,
+        "group_number": "GRP-881",
+        "patient_id": "P404",
+        "member_id": "AX-994112",
+        "payer": "AXA Health"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "member_id": "caller: AX-994112",
+        "payer": "caller: AXA Health",
+        "patient_id": "caller: Fiona Gallagher"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "interface": "email_thread",
+    "task": "insurance",
+    "disposition": "happy_path",
+    "overlay_vector": "none",
+    "overlay": "none",
+    "interaction": "multi_turn",
+    "counterparty": "individual_customer",
+    "overlay_intensity": "absent"
+  },
+  "sub_goals": [
+    "insurance_updated"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}
