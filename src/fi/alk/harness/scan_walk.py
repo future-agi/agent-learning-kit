@@ -208,7 +208,7 @@ class _ResultTooBig(Exception):
 
 
 # Candidates that reach each other hold one entry each per pair, which grows with the square of
-# the candidates. About 17.5 bytes an entry (Dileep's measurement, 10 Nov), so this is ~90 MB.
+# the candidates. About 17.5 bytes an entry, so this is ~90 MB.
 _MAX_EDGES = 5_000_000
 
 # The step after the walk may run this long past the walk's own deadline. It stays well inside

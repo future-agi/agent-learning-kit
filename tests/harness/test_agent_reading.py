@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import builtins
 import dataclasses
 import json
 import logging
@@ -105,6 +106,8 @@ class _Live:
     async def start(self) -> None:
         if self.backend.saves_on_start is not None:
             _save(self.backend.output, self.backend.saves_on_start)
+        if self.backend.start_error is not None:
+            raise self.backend.start_error
         if self.backend.start_raises:
             raise FileNotFoundError("the Claude CLI was not found")
 
@@ -153,6 +156,7 @@ class _Backend:
         self.start_raises = False
         self.saves_on_start: dict | None = None
         self.close_hangs = False
+        self.start_error: BaseException | None = None
         self.submissions = 0
 
     def create(self, spec) -> _Live:
@@ -723,6 +727,9 @@ class Live:
     async def replies(self):
         if config["contract"] is not None:
             (output / "contract.json").write_text(json.dumps(config["contract"]))
+        if config.get("after_save") == "sigint":
+            # A Ctrl-C just after the save, before the reading has decided anything.
+            os.kill(os.getpid(), signal.SIGINT)
         await asyncio.Event().wait()
         yield StageDone(outcome="success", turns=1, cost_usd=0.0)
 
@@ -816,15 +823,47 @@ def test_a_ctrl_c_during_the_stop_passes_through(tmp_path):
     assert _cost_in(output)["complete"] is False
 
 
+def test_a_ctrl_c_after_the_save_passes_through_and_leaves_the_files(tmp_path):
+    finished, _ = _read_in_a_child(tmp_path, soft=5.0, margin=6.0, after_save="sigint")
+
+    output = tmp_path / "reading"
+    assert finished.returncode in (-signal.SIGINT, 130), finished.stderr
+    assert "KeyboardInterrupt" in finished.stderr
+    # The saved contract is left as it is; nothing is written over it or after it.
+    assert (output / "contract.json").exists()
+    assert not (output / "failure.json").exists()
+    assert not (output / "agent.json").exists()
+
+
+@pytest.mark.skipif(sys.version_info < (3, 11), reason="exception groups arrived in 3.11")
+def test_a_group_of_cancels_before_the_session_opens_is_a_crash_with_its_file(tmp_path, model):
+    _repo(tmp_path)
+    fake = model()
+    group = getattr(builtins, "BaseExceptionGroup")
+    # The shape an anyio task group gives when a child task is cancelled.
+    fake.start_error = group("the session's tasks failed", [asyncio.CancelledError()])
+    output = tmp_path / "reading"
+
+    assert _run(tmp_path) == 1
+
+    failure = _failure_in(output)
+    assert (failure["code"], failure["retryable"]) == ("agent_reading_crashed", True)
+    assert failure["message"].startswith("BaseExceptionGroup")
+    _assert_cost(output, 0.0, False)
+
+
 def test_the_longest_stop_leaves_room_for_the_document_inside_the_margin():
-    # The stop's own bounds, then the saved contract's document, whose framework scan can take
-    # over a minute on a crafted repository: about 150 s is kept for it.
-    stop = (
-        agent_reading._INTERRUPT_SECONDS
-        + agent_reading._INTERRUPT_WAIT_SECONDS
-        + agent_reading._CLOSE_SECONDS
+    # The stop's own bounds, exactly: the interrupt, the wait after it, and the close.
+    bounds = (
+        agent_reading._INTERRUPT_SECONDS,
+        agent_reading._INTERRUPT_WAIT_SECONDS,
+        agent_reading._CLOSE_SECONDS,
     )
-    assert stop + 150.0 < agent_reading._HARD_LIMIT_MARGIN_SECONDS
+    assert bounds == (10.0, 60.0, 20.0)
+    assert sum(bounds) == 90.0
+    # Then the saved contract's document, whose framework scan can take over a minute on a
+    # crafted repository: at least 150 s of the margin stays for it.
+    assert sum(bounds) + 150.0 < agent_reading._HARD_LIMIT_MARGIN_SECONDS
     assert agent_reading.READ_AGENT.limit_margin_seconds == agent_reading._HARD_LIMIT_MARGIN_SECONDS
 
 

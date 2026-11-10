@@ -185,7 +185,7 @@ async def _stop(
     # Set first, so a turn ending now doesn't earn the reminder.
     stopping.set()
     # Its own task, waited on with a bound: wait_for would wait again for a cancel the interrupt
-    # swallows, and catching the cancel around it would swallow a Ctrl-C too.
+    # swallows. A Ctrl-C here reaches `_read`, which lets it through.
     interrupting = asyncio.ensure_future(stage.interrupt_response())
     bound = min(wait, _INTERRUPT_SECONDS)
     await asyncio.wait({interrupting}, timeout=bound)
@@ -325,7 +325,13 @@ async def _read(job: HarnessJob, source: Path, output: Path, *, interrupt_wait: 
         except (Exception, asyncio.CancelledError) as exc:
             # A contract the gate saved is paid for; a crash would have the platform pay again.
             # A cancel leaking out of the session is the same: the saved contract still stands.
-            if saved_file(output) != CONTRACT_FILE:
+            # A cancel of this task itself (a Ctrl-C) is let through, the saved files as they are.
+            # (3.10 has no `cancelling`, and there a Ctrl-C is raised as itself, not as a cancel.)
+            current = asyncio.current_task()
+            if saved_file(output) != CONTRACT_FILE or (
+                isinstance(exc, asyncio.CancelledError)
+                and getattr(current, "cancelling", lambda: 0)()
+            ):
                 raise
             logger.warning(
                 "reading fault after a saved contract: class=%s", type(exc).__name__, exc_info=True

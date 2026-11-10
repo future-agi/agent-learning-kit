@@ -365,8 +365,11 @@ def run_reading_mode(mode: ReadingMode, *, job_path: Path, source: Path, output:
     try:
         logger.info("reading started at %s", datetime.now(timezone.utc).isoformat())
         code = asyncio.run(_work_then_stop_the_clock(mode, job, source, output, limit))
-    except (Exception, asyncio.CancelledError) as exc:
-        # A cancel leaking out of the work is a crash too; an interrupt or exit is let through.
+    except BaseException as exc:
+        # A cancel or a group of them leaking out of the work is a crash too; an interrupt or an
+        # exit is let through.
+        if isinstance(exc, (KeyboardInterrupt, SystemExit)):
+            raise
         logger.error("the %s reading crashed", mode.name, exc_info=True)
         crash = exc
     finally:
