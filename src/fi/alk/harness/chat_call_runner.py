@@ -108,6 +108,19 @@ async def _record_text_usage(
 DEFAULT_CHAT_TARGET_TIMEOUT_SECONDS = 300.0
 
 
+def _unproxied_worker_notices(document: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """A chat agent whose tool calls the harness runs itself has no tool proxy, so nothing holds a worker's budget:
+    the trial says so rather than read as if it were held."""
+    budget = document.get("worker_budget_seconds")
+    if not budget or isinstance(budget, bool):
+        return []
+    return [{
+        "code": "worker_limits_not_enforced",
+        "message": "This agent's tools are not reached through the world's tool proxy, so no worker's deadline was "
+        "enforced in this trial.",
+    }]
+
+
 def _chat_target_timeout_seconds() -> float:
     """Return the per-turn target deadline without accepting unusable values."""
     raw = os.getenv("ALK_CHAT_TARGET_TIMEOUT_SECONDS", "").strip()
@@ -905,6 +918,8 @@ class HostedChatCallRunner:
             deadline, deadlines, deadline_notices = trial_worker_deadlines(document, self._context.bundle_dir)
             # Every trial writes its own faults, none included, so nothing an earlier trial left can apply to this one.
             _set_trial_faults(runtime, list(document.get("faults") or []), deadline, deadlines)
+        else:
+            deadline_notices = _unproxied_worker_notices(document)
         try:
             if dispatcher is not None:
                 # What the actors wrote before T0 is in the world before the conversation starts.

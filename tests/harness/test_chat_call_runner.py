@@ -1816,3 +1816,10 @@ def test_a_chat_actor_s_wait_still_open_at_the_end_is_recorded_with_its_timeout(
     assert record["decisions"] == [
         {"actor": "manager", "play": "timeout", "fallback": None, "outcome": "unresolved_at_end", "timeout_seconds": 30}
     ]
+
+
+def test_a_chat_agent_without_a_tool_proxy_says_its_workers_budgets_were_not_held() -> None:
+    [notice] = chat._unproxied_worker_notices({"worker_budget_seconds": {"refund": 2}})
+    assert notice["code"] == "worker_limits_not_enforced"
+    assert chat._unproxied_worker_notices({"worker_budget_seconds": 30})
+    assert chat._unproxied_worker_notices({}) == []
