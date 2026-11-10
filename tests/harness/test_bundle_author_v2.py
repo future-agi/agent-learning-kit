@@ -645,7 +645,8 @@ def test_bundle_compiles_discovered_source_tool_entrypoint(tmp_path: Path) -> No
 
     handler = (output / "handlers" / "lookup_account.py").read_text(encoding="utf-8")
     assert "from customer_tools import lookup_account" in handler
-    assert "return settled(lookup_account(**args))" in handler
+    # The adopted tool is called the way its own signature expects (keywords here), through the shared caller.
+    assert "return settled(call_agent_tool(lookup_account, args, db, state=False))" in handler
     load_bundle_v2(output)
     world = GeneratedWorld(":memory:")
     world.handlers["lookup_account"] = handler
