@@ -231,6 +231,9 @@ def _message(turn: Exchange) -> dict[str, Any]:
             "name": turn.actor.get("name"),
             "content": turn.text,
         }
+    if turn.speaker == "task":
+        # A scenario's own start message: no person sent it, so it is never shown as one.
+        return {"role": "task", "content": turn.text}
     return {"role": "assistant" if turn.speaker == "agent" else "user", "content": turn.text}
 
 

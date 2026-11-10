@@ -497,7 +497,7 @@ def test_a_task_driven_run_needs_no_actor_and_the_scenario_sends_the_task(monkey
     scenario = SimpleNamespace(instruction="", max_turns=4, starts_with=StartsWith(text="Summarize the launch thread"))
     transcript = asyncio.run(conv.converse(agent, scenario, SimpleNamespace()))
     assert agent.heard == ["Summarize the launch thread"]
-    assert [one["role"] for one in transcript.canonical_messages()] == ["user", "assistant"]
+    assert [one["role"] for one in transcript.canonical_messages()] == ["task", "assistant"]
     assert transcript.exchanges[0].speaker == "task" and transcript.exchanges[0].actor is None
 
 
@@ -997,10 +997,10 @@ def test_a_unit_for_a_field_the_tool_does_not_have_is_a_contract_problem():
     assert "units: refund_amount in cents, USD" in named.brief()
 
 
-def test_a_task_driven_run_s_task_reaches_the_platform_as_the_person_s_message():
+def test_a_task_driven_run_s_task_reaches_the_platform_as_its_own_turn():
     from fi.alk.harness.platform import SPEAKERS
 
-    assert SPEAKERS["task"] == "user"
+    assert SPEAKERS["task"] == "task"
 
 
 def test_a_start_message_from_no_one_is_read_back_with_the_actors_who_could_send_it(tmp_path):
@@ -1109,3 +1109,16 @@ def test_a_decision_written_only_as_a_record_after_the_agent_s_call_is_read_back
          "actors": [{"id": "manager", "instruction": "Say you rejected it.", "actions": [on_request]}]}
     )
     assert "decide only by writing a record" not in cast_read_back(told, tmp_path)
+
+
+def test_a_scenario_s_own_start_message_is_the_task_s_turn_not_the_person_s():
+    from fi.alk.harness.run.conversation import Exchange, Transcript
+
+    transcript = Transcript(exchanges=[Exchange("task", "Nightly reconciliation: post deal 9."), Exchange("agent", "Posted.")])
+    assert transcript.canonical_messages() == [
+        {"role": "task", "content": "Nightly reconciliation: post deal 9."},
+        {"role": "assistant", "content": "Posted."},
+    ]
+    assert json.loads(transcript.artifact())["messages"][0]["role"] == "task"
+    # The person's own turn is unchanged.
+    assert Transcript(exchanges=[Exchange("customer", "Hi")]).canonical_messages() == [{"role": "user", "content": "Hi"}]

@@ -305,8 +305,8 @@ SPEAKERS = {
     "caller": "user",
     "user": "user",
     "tester": "user",
-    # The task a task-driven scenario hands the agent: shown as the person's message, the agent's input.
-    "task": "user",
+    # The task a task-driven scenario hands the agent: its own turn, never the person's.
+    "task": "task",
 }
 
 
