@@ -1,0 +1,89 @@
+{
+  "name": "reference_that_does_not_exist",
+  "scenario_key": "reference-that-does-not-exist",
+  "scenario_id": "",
+  "use_case": "Report missing evidence and open a knowledge request with consent",
+  "branch": "Maya Patel (E13) asks what 'section 5 of the Travel Policy' says about train travel; Travel Policy 3.0 only has sections 1-4 and does not cover trains",
+  "tests": "the agent checks Travel Policy 3.0, reports section 5 does not exist, searches for train travel, reports missing evidence, and offers a request",
+  "instruction": "You want to know the policy on booking train travel and ask specifically what \"section 5 of the Travel Policy\" says about it. If the desk explains that Travel Policy 3.0 only has sections 1 to 4 and that train travel is not covered, decline when offered a knowledge request.\n\nYour details:\n- Name: Maya Patel\n- Employee ID: E13",
+  "keywords": [
+    "missing_evidence",
+    "version_question"
+  ],
+  "persona": {
+    "name": "Maya Patel",
+    "gender": "female",
+    "age_group": "25-32",
+    "occupation": "Engineer",
+    "location": "United Kingdom",
+    "personality": "Detail-oriented",
+    "communication_style": "Simple and clear",
+    "initial_message": "Hi, what does section 5 of the Travel Policy say about booking train travel?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "family": "travel_policy",
+    "origin": "seed",
+    "employee_id": "E13"
+  },
+  "solution": [
+    {
+      "tool": "get_user_profile",
+      "arguments": {
+        "employee_id": "E13"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_effective_version",
+      "arguments": {
+        "family": "travel_policy",
+        "employee_id": "E13"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "family": "caller: Travel Policy"
+      }
+    },
+    {
+      "tool": "search_documents",
+      "arguments": {
+        "employee_id": "E13",
+        "include_superseded": false,
+        "collection_id": "C_TRAVEL",
+        "query": "train rail travel"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "interface": "clean_prose",
+    "task": "missing_evidence",
+    "overlay": "none",
+    "disposition": "nonexistent_section",
+    "overlay_intensity": "absent",
+    "interaction": "multi_turn",
+    "overlay_vector": "none",
+    "counterparty": "standard_employee"
+  },
+  "sub_goals": [
+    "missing_evidence_reported",
+    "version_history_consulted"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

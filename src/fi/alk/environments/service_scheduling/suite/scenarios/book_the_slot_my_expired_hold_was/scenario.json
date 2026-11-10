@@ -1,0 +1,104 @@
+{
+  "name": "book_the_slot_my_expired_hold_was",
+  "scenario_key": "book-the-slot-my-expired-hold-was",
+  "scenario_id": "",
+  "use_case": "Book an appointment by service, staff, language, location and time zone",
+  "branch": "Book the slot my expired hold was on: CU10 Jack Turner asks the desk to 'book the haircut with Lucia I was holding for Wednesday at 11 am'. His hold H001 (Lucia, 28 October 15:00 UTC) expired at 08:00 today.",
+  "tests": "the desk explains the hold expired, checks availability, and books 11:00 am with Lucia upon confirmation",
+  "instruction": "You want to book the haircut appointment with Lucia Fernandez at Midtown that you previously held for Wednesday 28 October at 11:00 am (2026-10-28T11:00). When the desk explains that your hold expired at 8:00 am today, verify if the 11:00 am slot is still available. When the desk confirms it is free and reads back Wednesday 28 October at 11:00 am New York time (UTC-04:00), confirm the booking.\n\nYour details:\n- Name: Jack Holloway\n- Email: jack.turner@example.com\n- Phone: +1 212 555 0110\n- Service: Haircut\n- Staff: Lucia Fernandez\n- Studio: Midtown Studio (New York)\n- Date: Wednesday 28 October 2026\n- Requested time: 11:00 am (2026-10-28T11:00)",
+  "keywords": [
+    "booking",
+    "expired_hold",
+    "haircut",
+    "midtown"
+  ],
+  "persona": {
+    "name": "Jack Holloway",
+    "gender": "male",
+    "age_group": "32-40",
+    "occupation": "Engineer",
+    "location": "United States",
+    "personality": "Friendly and cooperative",
+    "communication_style": "Direct and concise",
+    "initial_message": "Hi, I had a hold on a haircut with Lucia for Wednesday at 11 am. Could you please go ahead and book that for me? My email is jack.turner@example.com and phone is +1 212 555 0110.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "customer": "CU10",
+    "origin": "seed"
+  },
+  "solution": [
+    {
+      "tool": "get_customer",
+      "arguments": {
+        "phone": "+1 212 555 0110",
+        "email": "jack.turner@example.com"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "list_slots",
+      "arguments": {
+        "language": null,
+        "location_id": "L1",
+        "staff_id": "ST02",
+        "service_id": "SV3",
+        "date": "2026-10-28"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "book_appointment",
+      "arguments": {
+        "utc_offset": "-04:00",
+        "confirmed": true,
+        "staff_id": "ST02",
+        "start_time": "2026-10-28T11:00",
+        "customer_id": "CU10",
+        "hold_id": null,
+        "service_id": "SV3",
+        "request_key": "REQ-CU10-01",
+        "location_id": "L1"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "utc_offset": "record: locations[L1].utc_offset -04:00",
+        "start_time": "caller: 2026-10-28T11:00",
+        "customer_id": "record: customers[CU10].customer_id",
+        "service_id": "record: services[SV3].service_id",
+        "staff_id": "record: staff[ST02].staff_id",
+        "location_id": "record: locations[L1].location_id"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "overlay_intensity": "absent",
+    "interaction": "multi_turn",
+    "overlay": "none",
+    "counterparty": "returning",
+    "interface": "clean_prose",
+    "overlay_vector": "none",
+    "task": "book_an_appointment_by_service_staff_language_location_and_time_zone",
+    "disposition": "expired_hold"
+  },
+  "sub_goals": [
+    "appointment_booked_as_confirmed",
+    "timezone_and_instant_confirmed"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

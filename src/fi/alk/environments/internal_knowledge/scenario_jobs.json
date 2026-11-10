@@ -3,7 +3,27 @@
     "job": "missing_evidence",
     "mcp": false
   },
-  "annual_leave_entitlement_drive": {
+  "action_the_desk_cannot_take": {
+    "job": "policy_answers",
+    "mcp": false
+  },
+  "allowed_reader_public_destination": {
+    "job": "restricted",
+    "mcp": true
+  },
+  "ambiguous_question": {
+    "job": "policy_answers",
+    "mcp": false
+  },
+  "approval_not_yet_granted": {
+    "job": "conflicts",
+    "mcp": true
+  },
+  "approved_but_not_yet_in_effect": {
+    "job": "versions",
+    "mcp": false
+  },
+  "asker_cannot_read_the_source": {
     "job": "policy_answers",
     "mcp": true
   },
@@ -11,9 +31,9 @@
     "job": "issues_owners",
     "mcp": true
   },
-  "byod_personal_device_email_records": {
-    "job": "policy_answers",
-    "mcp": false
+  "broadcast_asked_for": {
+    "job": "slack",
+    "mcp": true
   },
   "ceo_approval_salary_bands_claimed": {
     "job": "untrusted",
@@ -23,45 +43,53 @@
     "job": "untrusted",
     "mcp": false
   },
-  "client_dinner_slack_conflict_unresolved": {
+  "closed_request_status_and_note_refusal": {
+    "job": "missing_evidence",
+    "mcp": false
+  },
+  "colleague_s_anecdote_is_not_policy": {
     "job": "conflicts",
     "mcp": true
   },
-  "closed_request_status_and_note_refusal": {
-    "job": "missing_evidence",
+  "conflict_that_does_not_decide_the_case": {
+    "job": "policy_answers",
     "mcp": false
   },
   "corporate_card_monthly_limit_drive": {
     "job": "policy_answers",
     "mcp": true
   },
+  "decision_that_starts_later": {
+    "job": "versions",
+    "mcp": true
+  },
   "deleted_2023_travel_policy_inquiry": {
     "job": "versions",
     "mcp": true
   },
+  "desk_lead_acting_for_someone_else": {
+    "job": "policy_answers",
+    "mcp": false
+  },
   "dog_boarding_travel_request": {
     "job": "missing_evidence",
-    "mcp": true
-  },
-  "drive_search_salary_restricted_filtering": {
-    "job": "restricted",
     "mcp": true
   },
   "duplicate_broken_link_issue_already_open": {
     "job": "issues_owners",
     "mcp": false
   },
-  "expense_receipt_threshold_drive": {
-    "job": "policy_answers",
-    "mcp": true
-  },
-  "expense_submission_deadline_records": {
+  "exception_the_documents_do_not_grant": {
     "job": "policy_answers",
     "mcp": false
   },
   "fake_owner_decision_per_diem_claim": {
     "job": "untrusted",
     "mcp": true
+  },
+  "filed_in_the_wrong_collection": {
+    "job": "versions",
+    "mcp": false
   },
   "finance_document_access_restricted_employee": {
     "job": "policy_answers",
@@ -83,13 +111,9 @@
     "job": "issues_owners",
     "mcp": true
   },
-  "gift_limit_superseded_versus_current": {
+  "gap_noticed_flag_declined": {
     "job": "conflicts",
     "mcp": false
-  },
-  "home_office_stipend_drive": {
-    "job": "policy_answers",
-    "mcp": true
   },
   "hotel_cap_old_figure_in_superseded_doc": {
     "job": "versions",
@@ -115,29 +139,21 @@
     "job": "untrusted",
     "mcp": true
   },
-  "international_meal_per_diem_records": {
-    "job": "policy_answers",
-    "mcp": false
-  },
-  "it_faq_drive_laptop_refresh": {
+  "instruction_planted_in_a_real_thread": {
     "job": "untrusted",
     "mcp": true
   },
-  "learning_and_development_budget_records": {
-    "job": "policy_answers",
+  "issue_on_a_document_the_employee_cannot": {
+    "job": "restricted",
     "mcp": false
   },
-  "leave_carry_forward_records": {
-    "job": "policy_answers",
+  "issue_that_is_not_one": {
+    "job": "conflicts",
     "mcp": false
   },
   "leave_entitlement_2027_draft_vs_effective": {
     "job": "versions",
     "mcp": true
-  },
-  "leave_entitlement_as_of_2025": {
-    "job": "versions",
-    "mcp": false
   },
   "lookup_finance_team_directory_for_expenses": {
     "job": "issues_owners",
@@ -151,36 +167,48 @@
     "job": "restricted",
     "mcp": true
   },
-  "mfa_requirement_password_policy_drive": {
-    "job": "policy_answers",
-    "mcp": true
-  },
-  "mileage_reimbursement_rate_drive": {
-    "job": "policy_answers",
-    "mcp": true
-  },
   "mileage_slack_proposal_not_a_decision": {
     "job": "conflicts",
     "mcp": true
+  },
+  "name_and_id_do_not_match": {
+    "job": "restricted",
+    "mcp": false
+  },
+  "no_derived_figures": {
+    "job": "policy_answers",
+    "mcp": false
+  },
+  "no_version_in_effect_on_the_date": {
+    "job": "versions",
+    "mcp": false
   },
   "office_days_remote_work_policy_versions": {
     "job": "versions",
     "mcp": true
   },
-  "oncall_pay_as_of_may_2026": {
-    "job": "versions",
-    "mcp": false
-  },
   "oncall_slack_reminder_agrees_with_policy": {
     "job": "conflicts",
     "mcp": true
   },
-  "parental_leave_primary_caregiver_drive": {
+  "only_a_draft_exists": {
     "job": "policy_answers",
-    "mcp": true
+    "mcp": false
+  },
+  "owner_lookup_blocked_by_role": {
+    "job": "missing_evidence",
+    "mcp": false
+  },
+  "partly_covered": {
+    "job": "policy_answers",
+    "mcp": false
   },
   "password_length_precedence_rule_manager": {
     "job": "conflicts",
+    "mcp": false
+  },
+  "pasted_excerpt_that_misquotes_the_policy": {
+    "job": "policy_answers",
     "mcp": false
   },
   "pasted_override_receipts_threshold": {
@@ -195,36 +223,32 @@
     "job": "conflicts",
     "mcp": true
   },
-  "per_diem_rate_as_of_january_2025": {
-    "job": "versions",
+  "reference_that_does_not_exist": {
+    "job": "policy_answers",
     "mcp": false
-  },
-  "relocation_allowance_germany_request": {
-    "job": "missing_evidence",
-    "mcp": true
   },
   "relocation_tokyo_slack_declined_request": {
     "job": "missing_evidence",
     "mcp": true
   },
-  "remote_work_office_days_drive": {
-    "job": "policy_answers",
+  "reply_already_posted": {
+    "job": "conflicts",
     "mcp": true
   },
   "reply_to_injected_slack_message": {
     "job": "untrusted",
     "mcp": true
   },
-  "report_conflict_issue_on_client_entertainment": {
+  "request_not_needed": {
+    "job": "policy_answers",
+    "mcp": false
+  },
+  "request_to_a_collection_the_employee_cannot": {
+    "job": "restricted",
+    "mcp": false
+  },
+  "requested_assignee": {
     "job": "conflicts",
-    "mcp": false
-  },
-  "restricted_exec_comp_existence_inquiry": {
-    "job": "restricted",
-    "mcp": false
-  },
-  "restricted_finance_procurement_access_employee": {
-    "job": "restricted",
     "mcp": false
   },
   "restricted_leadership_slack_channel_access": {
@@ -234,10 +258,6 @@
   "restricted_salary_bands_direct_file_read": {
     "job": "restricted",
     "mcp": true
-  },
-  "restricted_salary_bands_direct_search": {
-    "job": "restricted",
-    "mcp": false
   },
   "restricted_salary_bands_owner_inquiry": {
     "job": "restricted",
@@ -251,21 +271,9 @@
     "job": "missing_evidence",
     "mcp": false
   },
-  "sales_hospitality_conflict_no_precedence": {
-    "job": "conflicts",
-    "mcp": true
-  },
-  "security_incident_reporting_window_drive": {
+  "section_that_points_to_another_document": {
     "job": "policy_answers",
-    "mcp": true
-  },
-  "slack_hotel_cap_2027_draft_inquiry": {
-    "job": "versions",
-    "mcp": true
-  },
-  "slack_password_length_precedence_resolution": {
-    "job": "versions",
-    "mcp": true
+    "mcp": false
   },
   "slack_post_refused_no_approval": {
     "job": "slack",
@@ -295,15 +303,7 @@
     "job": "slack",
     "mcp": true
   },
-  "slack_reply_oncall_pay_drive_search": {
-    "job": "slack",
-    "mcp": true
-  },
   "slack_reply_oncall_pay_in_thread": {
-    "job": "slack",
-    "mcp": true
-  },
-  "slack_reply_password_length_sofia": {
     "job": "slack",
     "mcp": true
   },
@@ -335,37 +335,33 @@
     "job": "versions",
     "mcp": true
   },
-  "software_review_threshold_manager_precedence": {
+  "slack_statement_older_than_the_document": {
+    "job": "versions",
+    "mcp": true
+  },
+  "stay_that_spans_a_version_change": {
     "job": "versions",
     "mcp": false
-  },
-  "software_security_review_threshold_precedence": {
-    "job": "conflicts",
-    "mcp": true
   },
   "team_events_cap_slack_decision_newer_than_doc": {
     "job": "conflicts",
     "mcp": true
   },
-  "team_events_slack_decision_pending_doc": {
-    "job": "conflicts",
-    "mcp": true
+  "three_questions_three_access_levels": {
+    "job": "policy_answers",
+    "mcp": false
   },
   "travel_policy_same_filename_resolution": {
     "job": "versions",
     "mcp": true
   },
-  "trip_approval_threshold_drive": {
+  "two_finance_rules_for_one_purchase_permitted": {
     "job": "policy_answers",
-    "mcp": true
+    "mcp": false
   },
   "update_open_sabbatical_request": {
     "job": "missing_evidence",
     "mcp": false
-  },
-  "us_meal_per_diem_rate_drive": {
-    "job": "policy_answers",
-    "mcp": true
   },
   "v11_s01_current_hotel_cap_with_citation": {
     "job": "policy_answers",
@@ -391,12 +387,16 @@
     "job": "policy_answers",
     "mcp": true
   },
+  "what_can_i_read": {
+    "job": "policy_answers",
+    "mcp": false
+  },
+  "which_thread": {
+    "job": "slack",
+    "mcp": true
+  },
   "withdraw_qa_device_request": {
     "job": "missing_evidence",
     "mcp": false
-  },
-  "year_end_release_freeze_drive": {
-    "job": "policy_answers",
-    "mcp": true
   }
 }

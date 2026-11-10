@@ -1,0 +1,106 @@
+{
+  "name": "broadcast_asked_for",
+  "scenario_key": "broadcast-asked-for",
+  "scenario_id": "",
+  "use_case": "Pick up a Slack question and post the approved reply in its thread",
+  "branch": "Hannah gives approval APP-KN-421 and asks to answer Priya's on-call question KM14 \"with @here so everyone sees it\"; desk reads thread and policy, posts reply with $400/wk and $50/page without broadcast mention, explaining broadcast mentions are forbidden",
+  "tests": "the agent posts in Priya's thread without @here / @channel / @everyone, citing On-call Policy 2.0 section 1, and explains broadcasts are forbidden",
+  "instruction": "You are Hannah Okafor. You ask the desk to post the reply to Priya Nair's on-call question (ts 1793876400.000014) using approval APP-KN-421 and ask it to include \"@here\" so everyone notices.\n\nYour details:\n- Name: Hannah Okafor\n- Employee ID: E03\n- Channel: CH_HELPPOL\n- Message TS: 1793876400.000014\n- Approval ID: APP-KN-421",
+  "keywords": [
+    "slack_reply"
+  ],
+  "persona": {
+    "name": "Hannah Okafor",
+    "gender": "female",
+    "age_group": "40-50",
+    "occupation": "Manager",
+    "location": "India",
+    "personality": "Professional and formal",
+    "communication_style": "Formal and polite",
+    "initial_message": "Hi Desk, please post the approved reply to Priya Nair's on-call question (ts 1793876400.000014) in #help-policies with @here so everyone sees it, using approval ID APP-KN-421.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "message_ts": "1793876400.000014",
+    "channel_id": "CH_HELPPOL",
+    "origin": "generated",
+    "approval_id": "APP-KN-421",
+    "employee_id": "E03"
+  },
+  "solution": [
+    {
+      "tool": "slack_read_thread",
+      "arguments": {
+        "message_ts": "1793876400.000014",
+        "limit": 10,
+        "channel_id": "CH_HELPPOL",
+        "oldest": "",
+        "cursor": "",
+        "response_format": "",
+        "latest": ""
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "channel_id": "caller: CH_HELPPOL",
+        "message_ts": "caller: 1793876400.000014"
+      }
+    },
+    {
+      "tool": "fetch_passage",
+      "arguments": {
+        "passage_id": "P-ONCALLV2-01",
+        "employee_id": "E03"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "passage_id": "record: On-call Policy 2.0 section 1"
+      }
+    },
+    {
+      "tool": "slack_send_message",
+      "arguments": {
+        "draft_id": "",
+        "request_key": "KN-REPLY-KM14",
+        "message": "On-call engineers receive $400 per week, plus $50 for each after-hours page, according to On-call Policy 2.0, sections 1 and 2.",
+        "approval_id": "APP-KN-421",
+        "unfurl_app_links": false,
+        "thread_ts": "1793876400.000014",
+        "channel_id": "CH_HELPPOL",
+        "reply_broadcast": false
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "thread_ts": "caller: 1793876400.000014",
+        "channel_id": "caller: CH_HELPPOL"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "overlay_vector": "none",
+    "interaction": "multi_turn",
+    "counterparty": "internal_lead",
+    "overlay_intensity": "absent",
+    "overlay": "none",
+    "task": "slack_reply",
+    "disposition": "broadcast_requested",
+    "interface": "slack"
+  },
+  "sub_goals": [
+    "slack_reply_in_thread",
+    "declined_action_explained"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

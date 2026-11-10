@@ -1,0 +1,91 @@
+{
+  "name": "issue_that_is_not_one",
+  "scenario_key": "issue-that-is-not-one",
+  "scenario_id": "",
+  "use_case": "Flag a document problem to its owner",
+  "branch": "Ivan Petrov (E16) wants Travel Policy 2025 flagged as an error because it still says $200 a night; desk checks version history, notes it is superseded by 3.0 ($220), raises no issue, and explains why",
+  "tests": "the desk consults version history, identifies Travel Policy 2025 as superseded by version 3.0 ($220), raises no issue, and explains why",
+  "instruction": "You want Travel Policy 2025 flagged as an error because it states hotels are capped at $200. If the desk explains that Travel Policy 2025 is an older superseded version and that the current Travel Policy 3.0 correctly gives $220, accept the explanation.\n\nYour details:\n- Name: Ivan Petrov\n- Employee ID: E16",
+  "keywords": [
+    "effective_version",
+    "issue_flagging",
+    "version_question"
+  ],
+  "persona": {
+    "name": "Ivan Petrov",
+    "gender": "male",
+    "age_group": "32-40",
+    "occupation": "Customer Service",
+    "location": "Canada",
+    "personality": "Impatient and direct",
+    "communication_style": "Direct and concise",
+    "initial_message": "Hi, I noticed Travel Policy 2025 says hotel stays are capped at $200. That's an error because the cap is supposed to be higher. Can you flag it as an error?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "origin": "seed",
+    "family": "travel_policy",
+    "superseded_file": "trv_policy_v2",
+    "employee_id": "E16"
+  },
+  "solution": [
+    {
+      "tool": "get_user_profile",
+      "arguments": {
+        "employee_id": "E16"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "list_document_versions",
+      "arguments": {
+        "drive_file_id": "",
+        "employee_id": "E16",
+        "family": "travel_policy"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "fetch_passage",
+      "arguments": {
+        "employee_id": "E16",
+        "passage_id": "P-TRVPOLICYV3-02"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "passage_id": "record: Travel Policy 3.0 section 2"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "counterparty": "standard_employee",
+    "interface": "clean_prose",
+    "interaction": "multi_turn",
+    "disposition": "superseded_document_flagging",
+    "overlay": "none",
+    "task": "issue_flagging",
+    "overlay_intensity": "absent",
+    "overlay_vector": "none"
+  },
+  "sub_goals": [
+    "version_history_consulted",
+    "answer_cited_from_effective_version",
+    "declined_action_explained"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

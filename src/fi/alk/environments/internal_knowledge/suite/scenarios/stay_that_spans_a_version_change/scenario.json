@@ -1,0 +1,114 @@
+{
+  "name": "stay_that_spans_a_version_change",
+  "scenario_key": "stay-that-spans-a-version-change",
+  "scenario_id": "",
+  "use_case": "Answer what applied on a past date from the version then in effect",
+  "branch": "Grace Kim (E05) claims US hotel nights spanning 2026-02-28 and 2026-03-01; Travel Policy 2.1 ($210) applied in February and 3.0 ($220) from 1 March; desk cites both versions for their respective dates",
+  "tests": "the desk checks effective versions on 2026-02-28 ($210 per Travel Policy 2.1) and 2026-03-01 ($220 per Travel Policy 3.0) and answers each night correctly",
+  "instruction": "You are claiming hotel expenses for a 3-night US business trip covering February 27, February 28, and March 1, 2026 (2026-02-28 and 2026-03-01). You ask what reimbursement caps apply across those nights.\n\nYour details:\n- Name: Grace Kim\n- Employee ID: E05\n- Trip Dates: 2026-02-28 and 2026-03-01",
+  "keywords": [
+    "citation",
+    "effective_version",
+    "version_question"
+  ],
+  "persona": {
+    "name": "Grace Kim",
+    "gender": "female",
+    "age_group": "40-50",
+    "occupation": "Sales Representative",
+    "location": "Australia",
+    "personality": "Analytical",
+    "communication_style": "Detailed and elaborate",
+    "initial_message": "Hi Desk, I'm submitting an expense report for a US hotel stay covering the nights of 2026-02-27, 2026-02-28, and 2026-03-01. What hotel caps applied on those dates?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "origin": "seed",
+    "employee_id": "E05",
+    "family": "travel_policy",
+    "dates": [
+      "2026-02-28",
+      "2026-03-01"
+    ]
+  },
+  "solution": [
+    {
+      "tool": "get_user_profile",
+      "arguments": {
+        "employee_id": "E05"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_effective_version",
+      "arguments": {
+        "as_of_date": "2026-02-28",
+        "family": "travel_policy",
+        "employee_id": "E05"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "fetch_passage",
+      "arguments": {
+        "passage_id": "P-TRVPOLICYV21-02",
+        "employee_id": "E05"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "passage_id": "record: Travel Policy 2.1 section 2"
+      }
+    },
+    {
+      "tool": "get_effective_version",
+      "arguments": {
+        "employee_id": "E05",
+        "as_of_date": "2026-03-01",
+        "family": "travel_policy"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "fetch_passage",
+      "arguments": {
+        "passage_id": "P-TRVPOLICYV3-02",
+        "employee_id": "E05"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "passage_id": "record: Travel Policy 3.0 section 2"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "interaction": "multi_turn",
+    "interface": "clean_prose",
+    "overlay_vector": "none",
+    "counterparty": "standard_employee",
+    "task": "version_question",
+    "overlay": "none",
+    "disposition": "version_transition_span",
+    "overlay_intensity": "absent"
+  },
+  "sub_goals": [
+    "version_history_consulted",
+    "answer_cited_from_effective_version"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

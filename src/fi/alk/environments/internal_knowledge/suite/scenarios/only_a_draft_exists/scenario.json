@@ -1,0 +1,91 @@
+{
+  "name": "only_a_draft_exists",
+  "scenario_key": "only-a-draft-exists",
+  "scenario_id": "",
+  "use_case": "Report missing evidence and open a knowledge request with consent",
+  "branch": "only a draft document exists for ai_tools; Maya Patel (E13) asks if she may paste internal data into an AI assistant; desk reports only a draft exists and no policy is in effect, offering a request which she declines",
+  "tests": "the agent searches and checks versions, identifies only a draft exists, does not present the draft as in effect, and offers a knowledge request",
+  "instruction": "You want to know if company policy permits pasting internal company data into AI tools. If the desk states there is no approved policy in effect (only a draft) and offers to open a knowledge request with IT/Security, decline the offer as you will just check back later.\n\nYour details:\n- Name: Maya Patel\n- Employee ID: E13",
+  "keywords": [
+    "missing_evidence",
+    "version_question"
+  ],
+  "persona": {
+    "name": "Maya Patel",
+    "gender": "female",
+    "age_group": "25-32",
+    "occupation": "Engineer",
+    "location": "United Kingdom",
+    "personality": "Cautious and skeptical",
+    "communication_style": "Questioning",
+    "initial_message": "Hi, am I allowed to paste internal company data into AI assistant tools?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "employee_id": "E13",
+    "origin": "generated",
+    "family": "ai_tools",
+    "draft_file": "ai_tools_v1_draft"
+  },
+  "solution": [
+    {
+      "tool": "get_user_profile",
+      "arguments": {
+        "employee_id": "E13"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "search_documents",
+      "arguments": {
+        "include_superseded": false,
+        "employee_id": "E13",
+        "collection_id": "",
+        "query": "AI assistant internal data"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "list_document_versions",
+      "arguments": {
+        "family": "ai_tools",
+        "employee_id": "E13",
+        "drive_file_id": ""
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "family": "record: ai_tools"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "interaction": "multi_turn",
+    "overlay_vector": "none",
+    "counterparty": "standard_employee",
+    "disposition": "draft_inquiry",
+    "overlay": "none",
+    "task": "missing_evidence",
+    "interface": "clean_prose",
+    "overlay_intensity": "absent"
+  },
+  "sub_goals": [
+    "missing_evidence_reported",
+    "version_history_consulted"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

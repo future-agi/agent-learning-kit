@@ -1,4 +1,8 @@
 {
+  "a_cancelled_event_still_shows_on_the": {
+    "job": "availability",
+    "mcp": true
+  },
   "book_cardiology_active_referral_follow_up": {
     "job": "book",
     "mcp": false
@@ -20,14 +24,6 @@
     "mcp": false
   },
   "book_dermatology_unaccepted_insurer_self_pay_agreed": {
-    "job": "book",
-    "mcp": false
-  },
-  "book_neurology_active_referral_friday": {
-    "job": "book",
-    "mcp": false
-  },
-  "book_orthopedics_active_referral_west": {
     "job": "book",
     "mcp": false
   },
@@ -55,15 +51,7 @@
     "job": "book",
     "mcp": false
   },
-  "book_primary_care_location_preference_north": {
-    "job": "book",
-    "mcp": false
-  },
   "book_primary_care_named_provider_west": {
-    "job": "book",
-    "mcp": false
-  },
-  "book_primary_care_new_patient_registration": {
     "job": "book",
     "mcp": false
   },
@@ -72,6 +60,10 @@
     "mcp": false
   },
   "book_primary_care_slot_held_alternative_booked": {
+    "job": "book",
+    "mcp": false
+  },
+  "book_the_slot_i_held_yesterday": {
     "job": "book",
     "mcp": false
   },
@@ -99,14 +91,6 @@
     "job": "availability",
     "mcp": true
   },
-  "calendar_patel_training_block_check": {
-    "job": "availability",
-    "mcp": true
-  },
-  "calendar_pediatrics_dr_lee_north_availability": {
-    "job": "availability",
-    "mcp": true
-  },
   "cancel_appointment_confirmed": {
     "job": "reschedule_cancel",
     "mcp": false
@@ -127,8 +111,8 @@
     "job": "reschedule_cancel",
     "mcp": false
   },
-  "cancel_unauthorized_other_patient_appointment": {
-    "job": "reschedule_cancel",
+  "change_my_contact_details_and_send_my": {
+    "job": "urgent_privacy",
     "mcp": false
   },
   "chat_insurance_update_bupa": {
@@ -223,12 +207,24 @@
     "job": "urgent_privacy",
     "mcp": false
   },
+  "free_on_the_calendar_but_not_yet": {
+    "job": "availability",
+    "mcp": true
+  },
+  "hold_first_then_book_in_the_same": {
+    "job": "book",
+    "mcp": false
+  },
   "hold_slot_while_patient_decides": {
     "job": "waitlist_concurrency",
     "mcp": false
   },
   "inquire_insurance_coverage_guarantee": {
     "job": "intake_insurance",
+    "mcp": false
+  },
+  "insurer_not_taken_by_the_named_gp": {
+    "job": "book",
     "mcp": false
   },
   "intake_forms_by_sms": {
@@ -243,11 +239,15 @@
     "job": "intake_insurance",
     "mcp": false
   },
-  "location_parking_riverbank_north": {
+  "lookup_appointment_details_and_location": {
     "job": "intake_insurance",
     "mcp": false
   },
-  "lookup_appointment_details_and_location": {
+  "move_to_a_provider_who_does_not": {
+    "job": "reschedule_cancel",
+    "mcp": false
+  },
+  "new_insurer_that_my_booked_provider_does": {
     "job": "intake_insurance",
     "mcp": false
   },
@@ -258,6 +258,10 @@
   "preparation_instructions_cardiology": {
     "job": "intake_insurance",
     "mcp": false
+  },
+  "red_flag_symptom_found_only_in_an": {
+    "job": "urgent_privacy",
+    "mcp": true
   },
   "referral_cardiology_claimed_exemption_verified_against_records": {
     "job": "referral",
@@ -343,12 +347,12 @@
     "job": "waitlist_concurrency",
     "mcp": false
   },
-  "restricted_safeguarding_thread_withheld": {
-    "job": "urgent_privacy",
-    "mcp": true
-  },
   "symptom_diagnosis_inquiry_to_nurse_line": {
     "job": "urgent_privacy",
+    "mcp": false
+  },
+  "too_soon_to_book_this_morning": {
+    "job": "book",
     "mcp": false
   },
   "unauthorized_spouse_proxy_request_escalation": {
@@ -364,10 +368,6 @@
     "mcp": false
   },
   "urgent_child_fever_and_rash_escalation": {
-    "job": "urgent_privacy",
-    "mcp": false
-  },
-  "urgent_stroke_symptoms_escalation": {
     "job": "urgent_privacy",
     "mcp": false
   },

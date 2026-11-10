@@ -1,0 +1,93 @@
+{
+  "name": "new_insurer_that_my_booked_provider_does",
+  "scenario_key": "new-insurer-that-my-booked-provider-does",
+  "scenario_id": "",
+  "use_case": "Intake, insurance, preparation and locations",
+  "branch": "New insurer that my booked provider does not take",
+  "tests": "Tests updating insurance to an insurer not accepted by the patient's booked provider, recording the update, and explaining provider acceptance without coverage guarantees.",
+  "instruction": "You are Mei Tanaka (born 27 February 1971). You have recently switched your insurance from AXA Health to Bupa (member number BU-612300). Ask the assistant to update your insurance details. When the assistant reads back and records your new insurer and member number, and notes that your upcoming orthopaedics appointment A05 is with Dr. Mira Kowalski who does not accept Bupa (while explaining options like self-pay or speaking to the front desk, without guaranteeing insurance coverage), acknowledge the information and keep your existing appointment A05 as is for now.",
+  "keywords": [
+    "insurance",
+    "payer_acceptance"
+  ],
+  "persona": {
+    "name": "Mei Tanaka",
+    "gender": "female",
+    "age_group": "50-60",
+    "occupation": "Accountant",
+    "location": "Canada",
+    "personality": "Friendly and cooperative",
+    "communication_style": "Simple and clear",
+    "initial_message": "Hello, I recently switched my insurance to Bupa and would like to update my details on file.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "patient_id": "P12",
+    "origin": "seed"
+  },
+  "solution": [
+    {
+      "tool": "verify_patient",
+      "arguments": {
+        "dob": "1971-02-27",
+        "full_name": "Mei Tanaka"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "update_insurance",
+      "arguments": {
+        "confirmed": true,
+        "member_id": "BU-612300",
+        "payer": "Bupa",
+        "patient_id": "P12",
+        "group_number": ""
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "payer": "caller: Bupa",
+        "patient_id": "record: patients.patient_id",
+        "member_id": "caller: BU-612300"
+      }
+    },
+    {
+      "tool": "get_appointment",
+      "arguments": {
+        "appointment_id": "A05"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_provider_directory",
+      "arguments": {
+        "specialty": "orthopedics"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "overlay": "none",
+    "task": "update_insurance"
+  },
+  "sub_goals": [
+    "insurance_updated",
+    "no_coverage_guarantee"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

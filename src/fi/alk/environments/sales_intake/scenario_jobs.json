@@ -1,4 +1,12 @@
 {
+  "ambiguous_name": {
+    "job": "duplicates",
+    "mcp": false
+  },
+  "approval_id_that_is_not_approved": {
+    "job": "untrusted",
+    "mcp": true
+  },
   "approved_handoff_summary_posted_in_thread": {
     "job": "slack",
     "mcp": true
@@ -11,11 +19,15 @@
     "job": "demo_booking",
     "mcp": false
   },
-  "cancel_demo_and_free_slot": {
+  "cancel_demo_requested_by_email": {
     "job": "demo_booking",
+    "mcp": true
+  },
+  "cancellation_asked_by_a_colleague": {
+    "job": "untrusted",
     "mcp": false
   },
-  "cancel_demo_requested_by_email": {
+  "chosen_slot_taken_since": {
     "job": "demo_booking",
     "mcp": true
   },
@@ -26,6 +38,10 @@
   "clashing_slot_refused_alternative_demo_booked": {
     "job": "demo_booking",
     "mcp": false
+  },
+  "correction_that_changes_the_lead": {
+    "job": "slack",
+    "mcp": true
   },
   "decline_lead_reassignment_outside_territory": {
     "job": "routing",
@@ -63,6 +79,18 @@
     "job": "duplicates",
     "mcp": true
   },
+  "forwarded_internal_notes": {
+    "job": "untrusted",
+    "mcp": true
+  },
+  "genuine_enquiry_carrying_an_instruction": {
+    "job": "duplicates",
+    "mcp": true
+  },
+  "handoff_asked_to_a_rep_for_a": {
+    "job": "routing",
+    "mcp": false
+  },
   "human_draft_preserved_on_sakura_enquiry": {
     "job": "missing_info",
     "mcp": true
@@ -75,10 +103,6 @@
     "job": "untrusted",
     "mcp": true
   },
-  "kestrel_draft_timeline_question": {
-    "job": "missing_info",
-    "mcp": true
-  },
   "known_company_contact_without_lead_quillon": {
     "job": "duplicates",
     "mcp": false
@@ -87,23 +111,19 @@
     "job": "qualify",
     "mcp": false
   },
-  "london_rep_demo_booked_on_choice": {
-    "job": "demo_booking",
-    "mcp": false
-  },
   "no_enrichment_invented_for_outside_data_request": {
     "job": "missing_info",
+    "mcp": false
+  },
+  "no_open_slots_on_the_owner_s": {
+    "job": "demo_booking",
     "mcp": false
   },
   "northwind_second_contact_colleague_inquiry": {
     "job": "duplicates",
     "mcp": false
   },
-  "offer_demo_times_for_lead": {
-    "job": "demo_booking",
-    "mcp": false
-  },
-  "opt_out_in_chat_cancels_planned_outreach": {
+  "opt_out_asked_for_someone_else": {
     "job": "consent",
     "mcp": false
   },
@@ -111,7 +131,7 @@
     "job": "consent",
     "mcp": true
   },
-  "opt_out_with_cancellation_of_planned_items": {
+  "opt_out_with_a_booked_demo": {
     "job": "consent",
     "mcp": false
   },
@@ -119,17 +139,21 @@
     "job": "consent",
     "mcp": false
   },
-  "opted_out_contact_inbound_pricing_refused": {
+  "partial_completion": {
+    "job": "routing",
+    "mcp": false
+  },
+  "personal_address_for_a_known_person": {
     "job": "duplicates",
     "mcp": false
+  },
+  "post_already_made_retry": {
+    "job": "slack",
+    "mcp": true
   },
   "prospect_opts_back_in_to_communications": {
     "job": "consent",
     "mcp": false
-  },
-  "prospect_picks_demo_slot_via_email": {
-    "job": "demo_booking",
-    "mcp": true
   },
   "prospect_picks_offered_demo_slot_in_chat": {
     "job": "demo_booking",
@@ -143,17 +167,9 @@
     "job": "qualify",
     "mcp": true
   },
-  "qualify_fernhill_second_contact_from_email_thread": {
-    "job": "duplicates",
-    "mcp": true
-  },
   "qualify_india_lead_in_chat_and_assign_territory_rep": {
     "job": "routing",
     "mcp": false
-  },
-  "qualify_japanese_enquiry_from_email_thread": {
-    "job": "qualify",
-    "mcp": true
   },
   "qualify_kestrel_lead_from_email_followup_and_assign_germany_rep": {
     "job": "qualify",
@@ -175,6 +191,10 @@
     "job": "duplicates",
     "mcp": false
   },
+  "question_for_a_specialist": {
+    "job": "demo_booking",
+    "mcp": false
+  },
   "quillon_seats_gathered_in_chat": {
     "job": "missing_info",
     "mcp": false
@@ -182,6 +202,14 @@
   "quillon_seats_refused_unknown_in_chat": {
     "job": "missing_info",
     "mcp": false
+  },
+  "range_instead_of_a_number": {
+    "job": "untrusted",
+    "mcp": false
+  },
+  "re_request_for_a_demo_that_is": {
+    "job": "demo_booking",
+    "mcp": true
   },
   "rep_follow_up_on_opted_out_lead_declined": {
     "job": "consent",
@@ -223,19 +251,11 @@
     "job": "demo_booking",
     "mcp": false
   },
-  "restricted_thread_access_denied_and_withheld": {
-    "job": "untrusted",
-    "mcp": true
-  },
-  "route_brazil_second_lead_to_fallback_queue": {
-    "job": "routing",
+  "reschedule": {
+    "job": "demo_booking",
     "mcp": false
   },
   "route_irish_lead_to_uk_and_ireland_owner": {
-    "job": "routing",
-    "mcp": false
-  },
-  "route_japanese_lead_to_fallback_queue": {
     "job": "routing",
     "mcp": false
   },
@@ -247,20 +267,20 @@
     "job": "routing",
     "mcp": false
   },
-  "same_email_extra_spaces_bluepeak_update": {
-    "job": "duplicates",
-    "mcp": false
-  },
   "same_person_uppercase_email_theo_sandoval": {
     "job": "duplicates",
     "mcp": false
   },
-  "second_person_known_company_fernhill": {
-    "job": "duplicates",
+  "second_hand_facts_from_a_rep": {
+    "job": "untrusted",
     "mcp": true
   },
-  "slack_claim_not_authority_to_bypass_rubric": {
-    "job": "untrusted",
+  "second_person_conflicting_seat_count": {
+    "job": "qualify",
+    "mcp": false
+  },
+  "second_person_known_company_fernhill": {
+    "job": "duplicates",
     "mcp": true
   },
   "slack_claimed_approval_in_thread_not_authority": {
@@ -269,14 +289,6 @@
   },
   "slack_fernhill_post_declined_missing_approval": {
     "job": "slack",
-    "mcp": true
-  },
-  "slack_fernhill_thread_correction_summary": {
-    "job": "slack",
-    "mcp": true
-  },
-  "slack_instruction_to_skip_choice_refused": {
-    "job": "demo_booking",
     "mcp": true
   },
   "slack_kestrel_timeline_reply": {
@@ -303,10 +315,6 @@
     "job": "slack",
     "mcp": true
   },
-  "slack_tasman_demo_status_reply": {
-    "job": "slack",
-    "mcp": true
-  },
   "slack_wrong_channel_redirected_to_asking_thread": {
     "job": "slack",
     "mcp": true
@@ -327,25 +335,17 @@
     "job": "missing_info",
     "mcp": true
   },
+  "too_small_enquiry_answered_by_draft": {
+    "job": "missing_info",
+    "mcp": true
+  },
   "unassigned_lead_demo_request_routes_to_fallback_queue": {
     "job": "demo_booking",
-    "mcp": false
-  },
-  "untrusted_another_prospect_details_privacy_protected": {
-    "job": "untrusted",
     "mcp": false
   },
   "untrusted_guessed_headcount_qualification_refused": {
     "job": "missing_info",
     "mcp": false
-  },
-  "untrusted_injected_partnership_email_untrusted": {
-    "job": "untrusted",
-    "mcp": true
-  },
-  "untrusted_injected_slack_system_note_ignored": {
-    "job": "untrusted",
-    "mcp": true
   },
   "untrusted_linkedin_scraping_request_refused": {
     "job": "untrusted",

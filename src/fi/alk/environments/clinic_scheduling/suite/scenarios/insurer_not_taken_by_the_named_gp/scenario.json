@@ -1,0 +1,100 @@
+{
+  "name": "insurer_not_taken_by_the_named_gp",
+  "scenario_key": "insurer-not-taken-by-the-named-gp",
+  "scenario_id": "",
+  "use_case": "Book a new appointment",
+  "branch": "Insurer not taken by the named GP, switch to one who takes it",
+  "tests": "Tests booking with an alternate provider when the requested provider does not accept the patient's insurance.",
+  "instruction": "You are Kofi Asante (born 19 May 1987). You are insured with WPA (member number WP-500420). You want to book a primary care appointment with Dr. Alicia Nguyen on Wednesday morning, 28 October. If the assistant informs you that Dr. Nguyen does not accept WPA and offers you either self-pay with Dr. Nguyen or booking with Dr. Rohan Patel who accepts WPA, state that you want your insurance to cover the visit and ask for Dr. Patel. When offered Dr. Patel's earliest slot on Tuesday 27 October at 14:30 at Riverbank Central, confirm the booking when asked.",
+  "keywords": [
+    "insurance",
+    "payer_acceptance",
+    "primary_care"
+  ],
+  "persona": {
+    "name": "Kofi Asante",
+    "gender": "male",
+    "age_group": "32-40",
+    "occupation": "Consultant",
+    "location": "Canada",
+    "personality": "Friendly and cooperative",
+    "communication_style": "Simple and clear",
+    "initial_message": "Hello, I would like to book a primary care appointment with Dr. Alicia Nguyen on Wednesday morning, 28 October.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "payer": "WPA",
+    "origin": "generated",
+    "dob": "1987-05-19",
+    "patient_id": "P420",
+    "full_name": "Kofi Asante",
+    "member_id": "WP-500420"
+  },
+  "solution": [
+    {
+      "tool": "verify_patient",
+      "arguments": {
+        "dob": "1987-05-19",
+        "full_name": "Kofi Asante"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_provider_directory",
+      "arguments": {
+        "specialty": "primary_care"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "find_available_slots",
+      "arguments": {
+        "date_to": "2026-10-27",
+        "date_from": "2026-10-27",
+        "provider_id": "D02",
+        "patient_id": "P420"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "book_appointment",
+      "arguments": {
+        "self_pay": false,
+        "request_key": "req_book_p420",
+        "patient_id": "P420",
+        "slot_id": "SL-D02-20261027-1430",
+        "confirmed": true,
+        "reason": "Primary care consultation"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "patient_id": "record: patients.patient_id"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "task": "book_appointment",
+    "overlay": "none"
+  },
+  "sub_goals": [
+    "appointment_booked_as_confirmed",
+    "no_coverage_guarantee"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

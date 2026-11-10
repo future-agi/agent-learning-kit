@@ -1,0 +1,85 @@
+{
+  "name": "correction_that_changes_the_lead",
+  "scenario_key": "correction-that-changes-the-lead",
+  "scenario_id": "",
+  "use_case": "Post an approved handoff summary in Slack",
+  "branch": "Slack thread query corrected to a different lead with valid approval",
+  "tests": "the agent posts the approved handoff summary in the asking thread for the corrected lead",
+  "instruction": "You are Rachel Holloway, Sales Operations Manager. Tell the sales desk to answer Oliver Hughes's recent thread in #sales-handoffs (CH_SALESHANDOFF) with the approved summary, using approval ID APP-SH-412. If asked, confirm you authorized APP-SH-412.\n\nYour details:\n- Name: Rachel Holloway\n- Role: Sales Operations Manager\n- Channel: #sales-handoffs (CH_SALESHANDOFF)\n- Approval ID: APP-SH-412",
+  "keywords": [
+    "slack",
+    "handoff",
+    "correction"
+  ],
+  "persona": {
+    "name": "Rachel Holloway",
+    "gender": "female",
+    "age_group": "40-50",
+    "occupation": "Manager",
+    "location": "United States",
+    "personality": "Professional and formal",
+    "communication_style": "Direct and concise",
+    "initial_message": "Please post the approved handoff summary in Oliver's thread in #sales-handoffs using approval APP-SH-412.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "identity": "Rachel Holloway",
+    "origin": "mixed",
+    "records": "SM412, SM413, APP-SH-412, L25"
+  },
+  "solution": [
+    {
+      "tool": "slack_read_thread",
+      "arguments": {
+        "channel_id": "CH_SALESHANDOFF",
+        "message_ts": "1794300000.000412"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "channel_id": "record: slack_messages[SM412].channel_id",
+        "message_ts": "record: slack_messages[SM412].ts"
+      }
+    },
+    {
+      "tool": "get_lead",
+      "arguments": {
+        "lead_id": "L25"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "slack_send_message",
+      "arguments": {
+        "request_key": "REQ-SH-412",
+        "thread_ts": "1794300000.000412",
+        "message": "Harbourline Insurance: 55 seats, customer service, 3-6 months, budget confirmed.",
+        "approval_id": "APP-SH-412",
+        "channel_id": "CH_SALESHANDOFF"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "channel_id": "record: slack_messages[SM412].channel_id",
+        "thread_ts": "record: slack_messages[SM412].ts"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {},
+  "sub_goals": [
+    "handoff_posted_in_thread"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

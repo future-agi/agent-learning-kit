@@ -1,0 +1,88 @@
+{
+  "name": "ambiguous_name",
+  "scenario_key": "ambiguous-name",
+  "scenario_id": "",
+  "use_case": "Recognise known contacts and accounts",
+  "branch": "Contact search by name yields multiple matches requiring email disambiguation",
+  "tests": "the desk searches contacts by name, asks for email to disambiguate two Sean Doyles, and confirms no open lead for C33 without creating duplicate records",
+  "instruction": "You are Sean Doyle from Liffey Analytics (email sean.doyle@liffey.example, contact C33). Initially say 'I'm Sean Doyle, did my enquiry come through?' without giving your email. When the sales desk asks for your email address to disambiguate from another Sean Doyle, provide sean.doyle@liffey.example. When told no enquiry/open lead is currently on file, thank the desk.\n\nYour details:\n- Name: Sean Doyle\n- Company: Liffey Analytics\n- Email: sean.doyle@liffey.example\n- Title: Head of Support\n- Country: Ireland",
+  "keywords": [
+    "ambiguous_name",
+    "duplicate_detected",
+    "contact_search",
+    "liffey_analytics"
+  ],
+  "persona": {
+    "name": "Sean Doyle",
+    "gender": "male",
+    "age_group": "32-40",
+    "occupation": "Manager",
+    "location": "United Kingdom",
+    "personality": "Professional and formal",
+    "communication_style": "Direct and concise",
+    "initial_message": "Hello, I'm Sean Doyle, did my enquiry come through?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "contacts": [
+      {
+        "account_id": "ACC411",
+        "name": "Sean Doyle",
+        "contact_id": "C411",
+        "email": "sean.doyle@doylemarine.example"
+      }
+    ],
+    "origin": "mixed",
+    "accounts": [
+      {
+        "country": "Ireland",
+        "name": "Doyle Marine",
+        "account_id": "ACC411"
+      }
+    ]
+  },
+  "solution": [
+    {
+      "tool": "search_contacts",
+      "arguments": {
+        "name": "Sean Doyle"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "search_contacts",
+      "arguments": {
+        "email": "sean.doyle@liffey.example"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_contact",
+      "arguments": {
+        "contact_id": "C33"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    }
+  ],
+  "alternatives": [],
+  "coverage": {},
+  "sub_goals": [
+    "duplicate_detected"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

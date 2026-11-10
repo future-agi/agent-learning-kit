@@ -5,16 +5,22 @@ def check(world, calls, reference=None):
     if not made:
         return "not done: no hold was placed"
     holds = {h["hold_id"]: h for h in s.get("holds", [])}
+    live = 0
     for c in made:
         h = holds.get((c.result or {}).get("hold_id"))
         if not h:
             return "not done: the hold is not in the records"
+        if h["status"] == "released":
+            continue  # a hold the customer let go of before settling on another time
+        live += 1
         if want.get("staff_id") and h["staff_id"] != want["staff_id"]:
             return f"done wrong: held {h['staff_id']}, the customer asked for {want['staff_id']}"
         if want.get("customer_id") and h["customer_id"] != want["customer_id"]:
             return f"done wrong: held for {h['customer_id']}"
         if want.get("start_time") and (c.result or {}).get("start_local") != str(want["start_time"])[:16]:
             return f"done wrong: held {(c.result or {}).get('start_local')}, the customer asked for {str(want['start_time'])[:16]}"
+    if not live:
+        return "not done: every hold placed was released"
     return _blind(world, calls, reference)
 
 

@@ -1,0 +1,104 @@
+{
+  "name": "booking_time_taken_from_the_profile",
+  "scenario_key": "booking-time-taken-from-the-profile",
+  "scenario_id": "",
+  "use_case": "New and returning customers and their preferences",
+  "branch": "Booking time taken from the profile: CU08 Hana Sato (preference time_of_day = morning) asks for an Initial Consultation with Priya Desai at Shoreditch on Monday 2 November, 'whenever suits me, you have my preferences'. She does not give a time.",
+  "tests": "the desk reads the customer's morning preference and offers only morning slots, booking 10:00 am upon confirmation",
+  "instruction": "You want to book an Initial Consultation with Priya Desai at the Shoreditch studio on Monday 2 November 2026. You do not state a specific time, telling the desk to check your file because they have your preferences on file (you prefer mornings). When the desk offers morning slots, choose 10:00 am (2026-11-02T10:00) and confirm when the details are read back in London time (UTC+00:00).\n\nYour details:\n- Name: Hana Aoi\n- Email: hana.sato@example.com\n- Phone: +44 20 7946 0108\n- Service: Initial Consultation\n- Staff: Priya Desai\n- Studio: Shoreditch Studio (London)\n- Date: Monday 2 November 2026\n- Time: Morning (agree to 10:00 am / 2026-11-02T10:00)",
+  "keywords": [
+    "booking",
+    "customer_preference",
+    "time_of_day",
+    "shoreditch"
+  ],
+  "persona": {
+    "name": "Hana Aoi",
+    "gender": "female",
+    "age_group": "25-32",
+    "occupation": "Marketing Professional",
+    "location": "United Kingdom",
+    "personality": "Friendly and cooperative",
+    "communication_style": "Direct and concise",
+    "initial_message": "Hello, I would like to book an Initial Consultation with Priya Desai at Shoreditch on Monday 2 November. Whenever suits me—you have my preferences on file. My email is hana.sato@example.com and phone is +44 20 7946 0108.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "customer": "CU08",
+    "origin": "seed"
+  },
+  "solution": [
+    {
+      "tool": "get_customer",
+      "arguments": {
+        "phone": "+44 20 7946 0108",
+        "email": "hana.sato@example.com"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "list_slots",
+      "arguments": {
+        "language": null,
+        "service_id": "SV1",
+        "staff_id": "ST04",
+        "location_id": "L2",
+        "date": "2026-11-02"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "book_appointment",
+      "arguments": {
+        "request_key": "REQ-CU08-01",
+        "confirmed": true,
+        "location_id": "L2",
+        "customer_id": "CU08",
+        "start_time": "2026-11-02T10:00",
+        "service_id": "SV1",
+        "utc_offset": "+00:00",
+        "staff_id": "ST04",
+        "hold_id": null
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "start_time": "caller: 2026-11-02T10:00",
+        "customer_id": "record: customers[CU08].customer_id",
+        "staff_id": "record: staff[ST04].staff_id",
+        "location_id": "record: locations[L2].location_id",
+        "service_id": "record: services[SV1].service_id",
+        "utc_offset": "record: locations[L2].utc_offset +00:00"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "task": "new_and_returning_customers_and_their_preferences",
+    "overlay_vector": "none",
+    "overlay": "none",
+    "disposition": "profile_preference",
+    "interaction": "multi_turn",
+    "interface": "clean_prose",
+    "counterparty": "returning",
+    "overlay_intensity": "absent"
+  },
+  "sub_goals": [
+    "appointment_booked_as_confirmed",
+    "timezone_and_instant_confirmed"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

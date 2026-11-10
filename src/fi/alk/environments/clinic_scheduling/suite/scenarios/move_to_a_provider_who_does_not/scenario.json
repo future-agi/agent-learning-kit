@@ -1,0 +1,98 @@
+{
+  "name": "move_to_a_provider_who_does_not",
+  "scenario_key": "move-to-a-provider-who-does-not",
+  "scenario_id": "",
+  "use_case": "Reschedule and cancel",
+  "branch": "Move to a provider who does not take my insurer",
+  "tests": "Tests attempting to reschedule to a provider who does not accept the patient's insurance, declining the switch, and rescheduling with an accepting provider.",
+  "instruction": "You are Priya Raman (born 3 November 1990, insured with AXA Health). You have an existing primary care appointment (A08) with Dr. Alicia Nguyen on Wednesday 28 October at 10:00 at Riverbank Central. You want to reschedule it to Dr. Rohan Patel on Tuesday 3 November at 14:00. When the assistant informs you that Dr. Patel does not accept AXA Health and appointments cannot be switched to self-pay during reschedule, and offers Dr. Nguyen's available slots instead, accept Dr. Nguyen's slot on Monday 2 November at 13:00 at Riverbank Central, and confirm the reschedule when details are read back.",
+  "keywords": [
+    "declined_action",
+    "payer_acceptance",
+    "primary_care"
+  ],
+  "persona": {
+    "name": "Priya Raman",
+    "gender": "female",
+    "age_group": "32-40",
+    "occupation": "Consultant",
+    "location": "Canada",
+    "personality": "Friendly and cooperative",
+    "communication_style": "Collaborative",
+    "initial_message": "Hello, I have an appointment A08 with Dr. Nguyen on Wednesday 28 October, and I would like to move it to Dr. Rohan Patel on Tuesday 3 November at 14:00.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "appointment_id": "A08",
+    "patient_id": "P02",
+    "payer": "AXA Health",
+    "full_name": "Priya Raman",
+    "origin": "seed",
+    "dob": "1990-11-03"
+  },
+  "solution": [
+    {
+      "tool": "verify_patient",
+      "arguments": {
+        "dob": "1990-11-03",
+        "full_name": "Priya Raman"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_provider_directory",
+      "arguments": {
+        "specialty": "primary_care"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "find_available_slots",
+      "arguments": {
+        "patient_id": "P02",
+        "date_from": "2026-11-02",
+        "date_to": "2026-11-02",
+        "provider_id": "D01"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "reschedule_appointment",
+      "arguments": {
+        "new_slot_id": "SL-D01-20261102-1300",
+        "appointment_id": "A08",
+        "confirmed": true,
+        "request_key": "req_resched_p02"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "appointment_id": "record: appointments.appointment_id A08"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "task": "reschedule_appointment",
+    "overlay": "none"
+  },
+  "sub_goals": [
+    "appointment_rescheduled_atomically",
+    "declined_action_explained"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

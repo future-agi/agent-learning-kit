@@ -1,0 +1,105 @@
+{
+  "name": "which_thread",
+  "scenario_key": "which-thread",
+  "scenario_id": "",
+  "use_case": "Pick up a Slack question and post the approved reply in its thread",
+  "branch": "Hannah Okafor gives approval APP-KN-424 and asks to \"answer Sofia's question in #help-policies\"; Sofia Rossi has two there, KM03 (team events) and KM15 (password length), so desk asks which; Hannah says the password one; desk reads KM15, fetches P-PWDV2-01, and posts 14 characters per Password Policy 2.0 section 1",
+  "tests": "the agent asks which thread before posting the 14-character password answer into Sofia's KM15 thread",
+  "instruction": "You are Hannah Okafor. You ask the Knowledge Desk to answer Sofia's question in #help-policies using approval ID APP-KN-424. If the desk asks which question (since Sofia asked about team events and password length), clarify that you mean her password question.\n\nYour details:\n- Name: Hannah Okafor\n- Employee ID: E03\n- Channel: CH_HELPPOL\n- Message TS: 1793955600.000015\n- Approval ID: APP-KN-424",
+  "keywords": [
+    "slack_reply"
+  ],
+  "persona": {
+    "name": "Hannah Okafor",
+    "gender": "female",
+    "age_group": "40-50",
+    "occupation": "Manager",
+    "location": "United States",
+    "personality": "Professional and formal",
+    "communication_style": "Formal and polite",
+    "initial_message": "Hi Desk, please answer Sofia's question in #help-policies using approval ID APP-KN-424.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "message_ts": "1793955600.000015",
+    "approval_id": "APP-KN-424",
+    "origin": "generated",
+    "employee_id": "E03",
+    "channel_id": "CH_HELPPOL"
+  },
+  "solution": [
+    {
+      "tool": "slack_read_thread",
+      "arguments": {
+        "cursor": "",
+        "channel_id": "CH_HELPPOL",
+        "limit": 10,
+        "latest": "",
+        "response_format": "",
+        "oldest": "",
+        "message_ts": "1793955600.000015"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "channel_id": "caller: CH_HELPPOL",
+        "message_ts": "caller: 1793955600.000015"
+      }
+    },
+    {
+      "tool": "fetch_passage",
+      "arguments": {
+        "passage_id": "P-PWDV2-01",
+        "employee_id": "E03"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "passage_id": "record: Password Policy 2.0 section 1"
+      }
+    },
+    {
+      "tool": "slack_send_message",
+      "arguments": {
+        "request_key": "KN-REPLY-KM15",
+        "channel_id": "CH_HELPPOL",
+        "thread_ts": "1793955600.000015",
+        "message": "Passwords must be at least 14 characters per Password Policy 2.0, section 1.",
+        "draft_id": "",
+        "approval_id": "APP-KN-424",
+        "unfurl_app_links": false,
+        "reply_broadcast": false
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "thread_ts": "caller: 1793955600.000015",
+        "channel_id": "caller: CH_HELPPOL"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "task": "slack_reply",
+    "overlay_vector": "none",
+    "overlay": "none",
+    "overlay_intensity": "absent",
+    "counterparty": "internal_lead",
+    "interface": "slack",
+    "interaction": "multi_turn",
+    "disposition": "ambiguous_thread"
+  },
+  "sub_goals": [
+    "slack_reply_in_thread"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

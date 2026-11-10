@@ -1,0 +1,89 @@
+{
+  "name": "book_the_slot_i_held_yesterday",
+  "scenario_key": "book-the-slot-i-held-yesterday",
+  "scenario_id": "",
+  "use_case": "Book a new appointment",
+  "branch": "Book the slot I held yesterday",
+  "tests": "Tests booking a slot after an earlier hold on it has expired, confirming the slot is still free before booking.",
+  "instruction": "You are Sofia Rossi (born 6 June 1996, insured with Vitality). You held Dr. Sofia Morales's Thursday 29 October 13:00 slot at Riverbank Central yesterday and now want to confirm it as a booking. If the assistant informs you that your hold expired but the slot is still free, confirm the booking when details (Dr. Morales, Thursday 29 October, 13:00, Riverbank Central) are read back to you.",
+  "keywords": [
+    "book_appointment"
+  ],
+  "persona": {
+    "name": "Sofia Rossi",
+    "gender": "female",
+    "age_group": "25-32",
+    "occupation": "Marketing Professional",
+    "location": "United States",
+    "personality": "Friendly and cooperative",
+    "communication_style": "Casual and friendly",
+    "initial_message": "Hi, you held Dr. Sofia Morales's Thursday 29 October 13:00 slot at Riverbank Central for me yesterday. I'd like to confirm that as a booking now.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "dob": "1996-06-06",
+    "full_name": "Sofia Rossi",
+    "patient_id": "P13",
+    "hold_id": "H02",
+    "origin": "seed"
+  },
+  "solution": [
+    {
+      "tool": "verify_patient",
+      "arguments": {
+        "full_name": "Sofia Rossi",
+        "dob": "1996-06-06"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "find_available_slots",
+      "arguments": {
+        "patient_id": "P13",
+        "provider_id": "D03",
+        "date_from": "2026-10-29",
+        "date_to": "2026-10-29"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "book_appointment",
+      "arguments": {
+        "patient_id": "P13",
+        "self_pay": false,
+        "confirmed": true,
+        "reason": "Skin check",
+        "slot_id": "SL-D03-20261029-1300",
+        "request_key": "req_book_p13"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "patient_id": "record: patients.patient_id"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "overlay": "none",
+    "task": "book_appointment"
+  },
+  "sub_goals": [
+    "appointment_booked_as_confirmed",
+    "confirmation_obtained_before_change"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

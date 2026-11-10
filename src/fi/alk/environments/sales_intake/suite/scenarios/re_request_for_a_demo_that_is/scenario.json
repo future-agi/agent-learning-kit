@@ -1,0 +1,90 @@
+{
+  "name": "re_request_for_a_demo_that_is",
+  "scenario_key": "re-request-for-a-demo-that-is",
+  "scenario_id": "",
+  "use_case": "Book a demo on the owner's calendar after the prospect picks",
+  "branch": "Prospect with an already confirmed demo requests rebooking due to missing invite",
+  "tests": "the desk checks lead L418 and CAL-A06 events, confirms demo D418 on Friday 13 November 09:00 Sydney time without duplicate booking",
+  "instruction": "You are Callum O'Donnell from Tasman Health (email callum.odonnell@tasmanhealth.example, lead L418). You booked a demo previously (demo D418 with Chloe Nguyen) but never received the calendar invitation. Ask the sales desk to check if your demo is confirmed and book it again if needed. When the desk confirms the existing demo is already booked for Friday 13 November at 09:00 Sydney time (2026-11-12T22:00:00Z), thank them.\n\nYour details:\n- Name: Callum O'Donnell\n- Company: Tasman Health\n- Email: callum.odonnell@tasmanhealth.example\n- Lead ID: L418\n- Assigned Rep: Chloe Nguyen (A06)",
+  "keywords": [
+    "demo_confirmation",
+    "calendar_events",
+    "tasman_health",
+    "time_zone"
+  ],
+  "persona": {
+    "name": "Callum O'Donnell",
+    "gender": "male",
+    "age_group": "40-50",
+    "occupation": "Manager",
+    "location": "Australia",
+    "personality": "Friendly and cooperative",
+    "communication_style": "Direct and concise",
+    "initial_message": "Hi, Callum O'Donnell from Tasman Health here (callum.odonnell@tasmanhealth.example). I never got my calendar invite for our demo, could you book it for me?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "leads": [
+      {
+        "owner_rep_id": "A06",
+        "country": "Australia",
+        "lead_id": "L418",
+        "status": "demo_booked"
+      }
+    ],
+    "contacts": [
+      {
+        "name": "Callum O'Donnell",
+        "contact_id": "C418",
+        "email": "callum.odonnell@tasmanhealth.example"
+      }
+    ],
+    "demos": [
+      {
+        "lead_id": "L418",
+        "demo_id": "D418",
+        "slot_id": "DS17"
+      }
+    ],
+    "origin": "generated"
+  },
+  "solution": [
+    {
+      "tool": "get_lead",
+      "arguments": {
+        "lead_id": "L418"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "lead_id": "record: leads[L418].lead_id"
+      }
+    },
+    {
+      "tool": "list_events",
+      "arguments": {
+        "calendarId": "CAL-A06"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    }
+  ],
+  "alternatives": [],
+  "coverage": {},
+  "sub_goals": [
+    "lead_status_reported",
+    "demo_time_in_prospect_timezone"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

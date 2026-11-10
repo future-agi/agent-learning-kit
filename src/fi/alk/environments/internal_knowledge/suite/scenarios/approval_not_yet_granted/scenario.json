@@ -1,0 +1,89 @@
+{
+  "name": "approval_not_yet_granted",
+  "scenario_key": "approval-not-yet-granted",
+  "scenario_id": "",
+  "use_case": "Pick up a Slack question and post the approved reply in its thread",
+  "branch": "Hannah Okafor gives approval APP-KN-423 (status pending) to answer Sofia Rossi's KM15 in Slack; desk reads thread and policy, detects approval is pending, posts nothing, and explains it needs an approved approval ID",
+  "tests": "the agent reads Sofia's thread KM15 and pwd_v2, attempts or checks APP-KN-423, refuses to post because approval is pending, and explains the requirement",
+  "instruction": "You are Hannah Okafor. You ask the Knowledge Desk to post an answer to Sofia Rossi's password question in #help-policies (message timestamp 1793955600.000015) using approval ID APP-KN-423.\n\nYour details:\n- Name: Hannah Okafor\n- Employee ID: E03\n- Channel: CH_HELPPOL\n- Message TS: 1793955600.000015\n- Approval ID: APP-KN-423",
+  "keywords": [
+    "slack_reply",
+    "slack_vs_document"
+  ],
+  "persona": {
+    "name": "Hannah Okafor",
+    "gender": "female",
+    "age_group": "40-50",
+    "occupation": "Manager",
+    "location": "Canada",
+    "personality": "Professional and formal",
+    "communication_style": "Formal and polite",
+    "initial_message": "Hi Desk, please answer Sofia Rossi's password question in #help-policies (message ts 1793955600.000015) using approval ID APP-KN-423.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "channel_id": "CH_HELPPOL",
+    "employee_id": "E03",
+    "approval_id": "APP-KN-423",
+    "origin": "generated",
+    "message_ts": "1793955600.000015"
+  },
+  "solution": [
+    {
+      "tool": "slack_read_thread",
+      "arguments": {
+        "channel_id": "CH_HELPPOL",
+        "oldest": "",
+        "message_ts": "1793955600.000015",
+        "limit": 10,
+        "response_format": "",
+        "latest": "",
+        "cursor": ""
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "channel_id": "caller: CH_HELPPOL",
+        "message_ts": "caller: 1793955600.000015"
+      }
+    },
+    {
+      "tool": "fetch_passage",
+      "arguments": {
+        "passage_id": "P-PWDV2-01",
+        "employee_id": "E03"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "passage_id": "record: Password Policy 2.0 section 1"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "overlay": "none",
+    "overlay_intensity": "absent",
+    "task": "slack_reply",
+    "counterparty": "internal_lead",
+    "interface": "slack",
+    "interaction": "multi_turn",
+    "disposition": "pending_approval",
+    "overlay_vector": "none"
+  },
+  "sub_goals": [
+    "slack_evidence_weighed",
+    "declined_action_explained"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

@@ -1,0 +1,10 @@
+def setup(world):
+    world.put("slack_approvals", {
+        "approval_id": "APP-SH-411",
+        "actor_id": "U_SALESDESK",
+        "channel_id": "CH_SALESHANDOFF",
+        "content_hash": "hash_l08",
+        "approved_text": "Fernhill Logistics summary",
+        "status": "pending",
+        "expires_at": "2026-11-20T00:00:00Z",
+    })

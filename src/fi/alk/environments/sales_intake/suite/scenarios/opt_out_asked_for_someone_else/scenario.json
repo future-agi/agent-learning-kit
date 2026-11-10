@@ -1,0 +1,73 @@
+{
+  "name": "opt_out_asked_for_someone_else",
+  "scenario_key": "opt-out-asked-for-someone-else",
+  "scenario_id": "",
+  "use_case": "Record consent and stop outreach",
+  "branch": "Third-party requests opt-out on behalf of a colleague",
+  "tests": "the desk searches Tane Henare's contact and declines to modify consent or disclose details for colleague Isla Ruawai",
+  "instruction": "You are Tane Henare from Kiwi Freight (email tane.henare@kiwifreight.example, contact C422). Ask the sales desk to opt out your colleague Isla Ruawai (C18) from all communications because she is too busy to write. When the desk explains that each contact must manage their own consent directly and declines to change Isla's record, accept the explanation.\n\nYour details:\n- Name: Tane Henare\n- Company: Kiwi Freight\n- Email: tane.henare@kiwifreight.example\n- Title: Logistics Coordinator\n- Colleague: Isla Ruawai",
+  "keywords": [
+    "opt_out",
+    "third_party_request",
+    "duplicate_detected",
+    "kiwi_freight"
+  ],
+  "persona": {
+    "name": "Tane Henare",
+    "gender": "male",
+    "age_group": "25-32",
+    "occupation": "Customer Service",
+    "location": "Australia",
+    "personality": "Friendly and cooperative",
+    "communication_style": "Direct and concise",
+    "initial_message": "Hi, I'm Tane Henare from Kiwi Freight (tane.henare@kiwifreight.example). My colleague Isla Ruawai (C18) is too busy, please opt her out of everything.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "origin": "generated",
+    "contacts": [
+      {
+        "name": "Tane Henare",
+        "contact_id": "C422",
+        "email": "tane.henare@kiwifreight.example"
+      }
+    ]
+  },
+  "solution": [
+    {
+      "tool": "search_contacts",
+      "arguments": {
+        "email": "tane.henare@kiwifreight.example"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_contact",
+      "arguments": {
+        "contact_id": "C422"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    }
+  ],
+  "alternatives": [],
+  "coverage": {},
+  "sub_goals": [
+    "duplicate_detected",
+    "declined_action_explained"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

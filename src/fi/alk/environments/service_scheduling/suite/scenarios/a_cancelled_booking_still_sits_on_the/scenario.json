@@ -1,0 +1,80 @@
+{
+  "name": "a_cancelled_booking_still_sits_on_the",
+  "scenario_key": "a-cancelled-booking-still-sits-on-the",
+  "scenario_id": "",
+  "use_case": "Answer availability from the staff calendars and hold slots",
+  "branch": "A cancelled booking still sits on the calendar: CU443 Tomas Lindgren asks whether Olivia Bennett is free for an Initial Consultation at 9 am on Wednesday 28 October at Midtown. CAL-ST01 still lists EV-A017 at that time, but its status is cancelled (A017 was cancelled). Expected: the desk treats the cancelled event as free, confirms 9:00 is open from the slot query (UTC-04:00) and names no other customer.",
+  "tests": "the desk verifies that cancelled events do not block availability, confirming 9:00 am is available via slot query",
+  "instruction": "You want to check whether Olivia Bennett is available for an Initial Consultation at 9:00 am on Wednesday 28 October 2026 at the Midtown studio. Give your details and ask whether that specific slot is free.\n\nYour details:\n- Name: Tomas Lindgren\n- Email: tomas.lindgren@example.com\n- Phone: +1 212 555 0443\n- Service: Initial Consultation (SV1)\n- Staff: Olivia Bennett (ST01)\n- Location: Midtown Studio (L1)\n- Requested Time: Wednesday 28 October 2026 at 9:00 am (2026-10-28T09:00)",
+  "keywords": [
+    "availability",
+    "cancelled_event",
+    "calendar_status",
+    "consultation"
+  ],
+  "persona": {
+    "name": "Tomas Lindgren",
+    "gender": "male",
+    "age_group": "32-40",
+    "occupation": "Engineer",
+    "location": "United States",
+    "personality": "Friendly and cooperative",
+    "communication_style": "Direct and concise",
+    "initial_message": "Hello, is Olivia Bennett free for an Initial Consultation at Midtown on Wednesday 28 October at 9 am? My email is tomas.lindgren@example.com and phone is +1 212 555 0443.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "origin": "mixed",
+    "customer": "CU443"
+  },
+  "solution": [
+    {
+      "tool": "get_customer",
+      "arguments": {
+        "email": "tomas.lindgren@example.com",
+        "phone": "+1 212 555 0443"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "list_events",
+      "arguments": {
+        "calendarId": "CAL-ST01",
+        "startTime": "2026-10-28T00:00:00Z",
+        "endTime": "2026-10-28T23:59:59Z"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "calendarId": "the calendarId the outcome rests on"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "task": "answer_availability_from_the_staff_calendars_and_hold_slots",
+    "interaction": "single_request",
+    "overlay": "none",
+    "disposition": "cancelled_calendar_event_status",
+    "overlay_vector": "none",
+    "interface": "clean_prose",
+    "overlay_intensity": "absent",
+    "counterparty": "returning"
+  },
+  "sub_goals": [
+    "availability_reported_from_calendar"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

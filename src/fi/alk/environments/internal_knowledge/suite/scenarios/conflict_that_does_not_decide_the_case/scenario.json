@@ -1,0 +1,111 @@
+{
+  "name": "conflict_that_does_not_decide_the_case",
+  "scenario_key": "conflict-that-does-not-decide-the-case",
+  "scenario_id": "",
+  "use_case": "Report conflicting current sources without choosing one",
+  "branch": "Lucas Martin (E14) plans a client dinner for 12 guests at about $90 a head and asks what he needs; client_ent_v1 ($100) and sales_hosp_v1 ($150) conflict with no precedence, but $90 is under both, and client_ent_v1 section 2 needs manager approval above 10 guests",
+  "tests": "the agent notes the spend is within either limit ($100 vs $150), notes the unresolved conflict without arbitrarily choosing, and cites manager approval required for more than 10 guests",
+  "instruction": "You are planning a client dinner for 12 guests at approximately $90 per person. You want to know what limits apply and what approval you need.\n\nYour details:\n- Name: Lucas Martin\n- Employee ID: E14",
+  "keywords": [
+    "citation",
+    "conflict"
+  ],
+  "persona": {
+    "name": "Lucas Martin",
+    "gender": "male",
+    "age_group": "32-40",
+    "occupation": "Sales Representative",
+    "location": "Canada",
+    "personality": "Impatient and direct",
+    "communication_style": "Direct and concise",
+    "initial_message": "Hi, I am planning a client dinner for 12 guests at around $90 per person. What policies apply and what approvals do I need?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "other_family": "sales_hospitality",
+    "employee_id": "E14",
+    "origin": "seed",
+    "family": "client_entertainment"
+  },
+  "solution": [
+    {
+      "tool": "get_user_profile",
+      "arguments": {
+        "employee_id": "E14"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "fetch_passage",
+      "arguments": {
+        "employee_id": "E14",
+        "passage_id": "P-CLIENTENTV1-01"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "passage_id": "record: Client Entertainment Guidelines 1.0 section 1"
+      }
+    },
+    {
+      "tool": "fetch_passage",
+      "arguments": {
+        "passage_id": "P-SALESHOSPV1-01",
+        "employee_id": "E14"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "passage_id": "record: Sales Hospitality Standard 1.0 section 1"
+      }
+    },
+    {
+      "tool": "fetch_passage",
+      "arguments": {
+        "employee_id": "E14",
+        "passage_id": "P-CLIENTENTV1-02"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "passage_id": "record: Client Entertainment Guidelines 1.0 section 2"
+      }
+    },
+    {
+      "tool": "get_precedence_rules",
+      "arguments": {
+        "family": "client_entertainment",
+        "employee_id": "E14",
+        "other_family": "sales_hospitality"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "interaction": "multi_turn",
+    "overlay_intensity": "absent",
+    "task": "conflict",
+    "interface": "clean_prose",
+    "overlay": "none",
+    "disposition": "unresolved_conflict_non_blocking",
+    "overlay_vector": "none",
+    "counterparty": "standard_employee"
+  },
+  "sub_goals": [
+    "conflict_reported",
+    "citation_quality"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

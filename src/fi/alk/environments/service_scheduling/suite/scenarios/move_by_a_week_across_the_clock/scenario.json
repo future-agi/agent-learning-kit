@@ -1,0 +1,110 @@
+{
+  "name": "move_by_a_week_across_the_clock",
+  "scenario_key": "move-by-a-week-across-the-clock",
+  "scenario_id": "",
+  "use_case": "Concurrency, clock changes and failures",
+  "branch": "Move by a week across the clock change: CU440 Ruth Abara has A440, a massage with Olivia Bennett on Thursday 29 October at 3 pm New York (19:00 UTC, UTC-04:00). She wants the same time one week later, Thursday 5 November at 3 pm. New York is UTC-05:00 by then, so the instant is 20:00 UTC, not 19:00.",
+  "tests": "the desk reschedules across the daylight saving boundary, confirming the new UTC-05:00 offset and replacing atomically",
+  "instruction": "You have an upcoming Massage Therapy appointment with Olivia Bennett at Midtown on Thursday 29 October at 3:00 pm (A440). You want to move it to exactly one week later at the same time: Thursday 5 November at 3:00 pm. When the desk checks availability, calculates the post-DST time (which is UTC-05:00 / 20:00 UTC), and asks for confirmation to reschedule, confirm.\n\nYour details:\n- Name: Ruth Abara\n- Email: ruth.abara@example.com\n- Phone: +1 212 555 0440\n- Current appointment: A440 (Massage with Olivia Bennett on Thursday 29 October at 3 pm)\n- Desired new time: Thursday 5 November 2026 at 3:00 pm (2026-11-05T15:00)",
+  "keywords": [
+    "reschedule",
+    "dst_transition",
+    "timezone",
+    "massage"
+  ],
+  "persona": {
+    "name": "Ruth Abara",
+    "gender": "female",
+    "age_group": "32-40",
+    "occupation": "Engineer",
+    "location": "United States",
+    "personality": "Friendly and cooperative",
+    "communication_style": "Direct and concise",
+    "initial_message": "Hi, I have a massage booked with Olivia on Thursday 29 October at 3 pm. Can I move it to the same time next week, Thursday 5 November at 3 pm? My email is ruth.abara@example.com and phone is +1 212 555 0440.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "customer": "CU440",
+    "origin": "mixed",
+    "appointment": "A440"
+  },
+  "solution": [
+    {
+      "tool": "get_customer",
+      "arguments": {
+        "email": "ruth.abara@example.com",
+        "phone": "+1 212 555 0440"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_appointment",
+      "arguments": {
+        "customer_id": "CU440",
+        "appointment_id": "A440"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "list_slots",
+      "arguments": {
+        "service_id": "SV2",
+        "staff_id": "ST01",
+        "date": "2026-11-05",
+        "location_id": "L1",
+        "language": null
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "reschedule_appointment",
+      "arguments": {
+        "new_staff_id": "ST01",
+        "new_start_time": "2026-11-05T15:00",
+        "customer_id": "CU440",
+        "request_key": "REQ-A440-RESCHED",
+        "appointment_id": "A440",
+        "utc_offset": "-05:00",
+        "confirmed": true
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "appointment_id": "record: appointments[A440].appointment_id",
+        "utc_offset": "record: locations[L1].utc_offset -05:00",
+        "new_start_time": "caller: 2026-11-05T15:00",
+        "new_staff_id": "the new staff id the outcome rests on"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "counterparty": "returning",
+    "overlay_intensity": "absent",
+    "overlay": "none",
+    "interface": "clean_prose",
+    "interaction": "multi_turn",
+    "task": "concurrency_clock_changes_and_failures",
+    "disposition": "dst_reschedule",
+    "overlay_vector": "none"
+  },
+  "sub_goals": [
+    "appointment_rescheduled_atomically",
+    "timezone_and_instant_confirmed"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

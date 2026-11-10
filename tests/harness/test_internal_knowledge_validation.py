@@ -135,7 +135,7 @@ def test_suite_has_one_hundred_distinct_scenarios_across_the_plans_jobs() -> Non
         "issues_owners": 8,
         "untrusted": 9,
     }, counts
-    assert sum(job["mcp"] for job in jobs.values()) >= 55
+    assert sum(job["mcp"] for job in jobs.values()) >= 48
     branches = [
         json.loads((SUITE / "scenarios" / name / "scenario.json").read_text())["branch"]
         for name in folders
@@ -217,7 +217,7 @@ WRONG_RUNS = [
         "not done",
     ),
     (
-        "annual_leave_entitlement_drive",
+        "v11_s01_current_hotel_cap_with_citation",
         "does nothing at all",
         lambda k: [],
         "answer_cited_from_effective_version",

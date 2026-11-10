@@ -1,4 +1,8 @@
 {
+  "a_cancelled_booking_still_sits_on_the": {
+    "job": "availability_holds",
+    "mcp": true
+  },
   "already_on_waitlist_duplicate_declined": {
     "job": "waitlist_confirmations",
     "mcp": false
@@ -7,15 +11,15 @@
     "job": "availability_holds",
     "mcp": true
   },
+  "asks_for_a_staff_member_s_personal": {
+    "job": "identity_privacy",
+    "mcp": false
+  },
   "book_busy_slot_refused_take_alternative": {
     "job": "book",
     "mcp": false
   },
   "book_closed_date_explained_booked_next_day": {
-    "job": "book",
-    "mcp": false
-  },
-  "book_colour_treatment_tom_shoreditch": {
     "job": "book",
     "mcp": false
   },
@@ -39,10 +43,6 @@
     "job": "book",
     "mcp": false
   },
-  "book_haircut_spanish_speaking_staff_midtown": {
-    "job": "book",
-    "mcp": false
-  },
   "book_london_consultation_cross_timezone": {
     "job": "book",
     "mcp": false
@@ -51,15 +51,11 @@
     "job": "book",
     "mcp": false
   },
-  "book_massage_with_preferred_therapist": {
-    "job": "customers",
+  "book_someone_else_now_and_wait_for": {
+    "job": "waitlist_confirmations",
     "mcp": false
   },
-  "book_priya_friday_from_calendar_events": {
-    "job": "book",
-    "mcp": true
-  },
-  "book_saturday_massage_olivia_midtown": {
+  "book_the_slot_my_expired_hold_was": {
     "job": "book",
     "mcp": false
   },
@@ -71,15 +67,15 @@
     "job": "waitlist_confirmations",
     "mcp": false
   },
+  "booking_time_taken_from_the_profile": {
+    "job": "customers",
+    "mcp": false
+  },
   "calendar_training_conflict_booked_later": {
     "job": "concurrency_dst",
     "mcp": true
   },
   "cancel_already_cancelled_appointment_reported": {
-    "job": "reschedule_cancel",
-    "mcp": false
-  },
-  "cancel_appointment_inside_window_fee_accepted": {
     "job": "reschedule_cancel",
     "mcp": false
   },
@@ -135,10 +131,6 @@
     "job": "email",
     "mcp": true
   },
-  "dst_clock_change_sunday_inquiry": {
-    "job": "concurrency_dst",
-    "mcp": false
-  },
   "email_booking_repeated_hour_ambiguity_explained": {
     "job": "concurrency_dst",
     "mcp": true
@@ -163,12 +155,12 @@
     "job": "customers",
     "mcp": false
   },
-  "full_day_waitlist_addition": {
-    "job": "waitlist_confirmations",
+  "first_visit_on_a_family_email_that": {
+    "job": "customers",
     "mcp": false
   },
-  "hold_haircut_then_explicitly_release": {
-    "job": "availability_holds",
+  "full_day_waitlist_addition": {
+    "job": "waitlist_confirmations",
     "mcp": false
   },
   "hold_london_consultation_then_release": {
@@ -184,6 +176,10 @@
     "mcp": true
   },
   "injected_email_cancellations_ignored": {
+    "job": "identity_privacy",
+    "mcp": true
+  },
+  "instruction_planted_in_a_calendar_entry": {
     "job": "identity_privacy",
     "mcp": true
   },
@@ -205,6 +201,10 @@
   },
   "london_tom_times_in_ny_timezone": {
     "job": "availability_holds",
+    "mcp": false
+  },
+  "long_service_does_not_fit_before_a": {
+    "job": "book",
     "mcp": false
   },
   "lucia_availability_tuesday_slots": {
@@ -231,20 +231,20 @@
     "job": "email",
     "mcp": true
   },
-  "marcus_training_block_wednesday_slots": {
-    "job": "availability_holds",
+  "move_by_a_week_across_the_clock": {
+    "job": "concurrency_dst",
     "mcp": false
   },
   "olivia_post_dst_monday_availability": {
     "job": "availability_holds",
     "mcp": false
   },
-  "out_of_scope_insurance_coverage_handoff": {
+  "out_of_scope_payment_card_handoff": {
     "job": "identity_privacy",
     "mcp": false
   },
-  "out_of_scope_payment_card_handoff": {
-    "job": "identity_privacy",
+  "past_the_booking_horizon": {
+    "job": "book",
     "mcp": false
   },
   "pasted_instruction_system_cancel_ignored_haircut_booked": {
@@ -267,21 +267,9 @@
     "job": "reschedule_cancel",
     "mcp": true
   },
-  "pickup_mailbox_haircut_marcus_thursday": {
-    "job": "book",
-    "mcp": true
-  },
   "pickup_mailbox_massage_reschedule_to_friday": {
     "job": "reschedule_cancel",
     "mcp": true
-  },
-  "pickup_mailbox_th01_spanish_consultation": {
-    "job": "book",
-    "mcp": true
-  },
-  "privacy_spouse_cannot_cancel_partner_appointment": {
-    "job": "identity_privacy",
-    "mcp": false
   },
   "privacy_who_else_booked_with_staff_not_disclosed": {
     "job": "identity_privacy",
@@ -289,10 +277,6 @@
   },
   "privacy_wrong_phone_lookup_refused": {
     "job": "identity_privacy",
-    "mcp": false
-  },
-  "priya_availability_thursday_lunch_block": {
-    "job": "availability_holds",
     "mcp": false
   },
   "read_only_calendar_colour_handoff": {
@@ -304,10 +288,6 @@
     "mcp": true
   },
   "record_customer_language_preference_hindi": {
-    "job": "customers",
-    "mcp": false
-  },
-  "record_customer_location_preference_shoreditch": {
     "job": "customers",
     "mcp": false
   },
@@ -359,6 +339,10 @@
     "job": "customers",
     "mcp": false
   },
+  "saturday_s_short_hours_set_the_last": {
+    "job": "availability_holds",
+    "mcp": false
+  },
   "search_thread_by_sender_haircut": {
     "job": "email",
     "mcp": true
@@ -367,8 +351,24 @@
     "job": "concurrency_dst",
     "mcp": false
   },
+  "staff_member_does_not_offer_the_service": {
+    "job": "book",
+    "mcp": false
+  },
   "sunday_time_in_london_shoreditch_closed": {
     "job": "concurrency_dst",
+    "mcp": false
+  },
+  "switch_the_hold_to_another_time": {
+    "job": "availability_holds",
+    "mcp": false
+  },
+  "time_given_in_the_customer_s_own": {
+    "job": "book",
+    "mcp": false
+  },
+  "today_too_soon": {
+    "job": "book",
     "mcp": false
   },
   "v12_s01_book_spanish_speaker_thursday": {
@@ -395,8 +395,8 @@
     "job": "waitlist_confirmations",
     "mcp": false
   },
-  "waitlist_staff_preference_lucia_out": {
-    "job": "waitlist_confirmations",
+  "which_appointment_to_cancel_same_staff": {
+    "job": "reschedule_cancel",
     "mcp": false
   }
 }

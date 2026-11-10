@@ -1,0 +1,30 @@
+def setup(world):
+    world.put("contacts", {
+        "contact_id": "C415",
+        "account_id": "ACC10",
+        "name": "Hamish Gallagher",
+        "email": "hamish.gallagher@tasmanhealth.example",
+        "email_normalized": "hamish.gallagher@tasmanhealth.example",
+        "title": "Support Team Lead",
+        "country": "Australia",
+        "consent_status": "opted_in",
+        "created_at": "2026-09-01T10:00:00Z",
+        "updated_at": "2026-09-01T10:00:00Z",
+    })
+    world.put("leads", {
+        "lead_id": "L415",
+        "contact_id": "C415",
+        "account_id": "ACC10",
+        "source": "chat",
+        "use_case": "support",
+        "seats": 26,
+        "timeline": "3-6 months",
+        "country": "Australia",
+        "budget": None,
+        "status": "new",
+        "owner_rep_id": None,
+        "queue_id": None,
+        "request_key": None,
+        "created_at": "2026-11-03T12:00:00Z",
+        "updated_at": "2026-11-05T12:00:00Z",
+    })

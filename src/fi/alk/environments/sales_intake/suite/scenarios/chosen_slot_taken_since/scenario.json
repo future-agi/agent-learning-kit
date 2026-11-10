@@ -1,0 +1,118 @@
+{
+  "name": "chosen_slot_taken_since",
+  "scenario_key": "chosen-slot-taken-since",
+  "scenario_id": "",
+  "use_case": "Book a demo on the owner's calendar after the prospect picks",
+  "branch": "Prospect's requested slot has become unavailable due to a calendar conflict",
+  "tests": "the desk notices requested slot DS06 is blocked, offers remaining open slots on Priya Raman's calendar, and books DS07 on prospect choice",
+  "instruction": "You are Genevieve Bouchard from St. Laurent Telecom (lead L420, owner Priya Raman A02). You previously requested Thursday Nov 12 at 3:00 PM Toronto time (slot DS06) via email thread th_s410_mapleridge_pick. When the sales desk explains that slot DS06 is no longer available and offers alternatives, choose Friday Nov 13 at 10:00 AM Toronto time (slot DS07) and confirm the booking.\n\nYour details:\n- Name: Genevieve Bouchard\n- Company: St. Laurent Telecom\n- Email: genevieve.bouchard@stlaurent.example\n- Lead ID: L420\n- Assigned Rep: Priya Raman (A02)",
+  "keywords": [
+    "slot_conflict",
+    "reschedule",
+    "book_demo",
+    "st_laurent"
+  ],
+  "persona": {
+    "name": "Genevieve Bouchard",
+    "gender": "female",
+    "age_group": "32-40",
+    "occupation": "Customer Service",
+    "location": "Canada",
+    "personality": "Friendly and cooperative",
+    "communication_style": "Direct and concise",
+    "initial_message": "Hi, following up on thread th_s410_mapleridge_pick, I wanted to confirm my demo booking for St. Laurent Telecom.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "accounts": [
+      {
+        "country": "Canada",
+        "account_id": "ACC420",
+        "name": "St. Laurent Telecom"
+      }
+    ],
+    "leads": [
+      {
+        "lead_id": "L420",
+        "status": "qualified",
+        "country": "Canada",
+        "owner_rep_id": "A02"
+      }
+    ],
+    "threads": [
+      {
+        "subject": "Re: St. Laurent Demo times",
+        "sender": "genevieve.bouchard@stlaurent.example",
+        "id": "th_s410_mapleridge_pick"
+      }
+    ],
+    "calendar_events": [
+      {
+        "calendar_id": "CAL-A02",
+        "summary": "Customer escalation",
+        "event_id": "EV-S410"
+      }
+    ],
+    "origin": "generated",
+    "contacts": [
+      {
+        "contact_id": "C420",
+        "email": "genevieve.bouchard@stlaurent.example",
+        "name": "Genevieve Bouchard"
+      }
+    ]
+  },
+  "solution": [
+    {
+      "tool": "get_thread",
+      "arguments": {
+        "threadId": "th_s410_mapleridge_pick"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "threadId": "the email the request came in"
+      }
+    },
+    {
+      "tool": "list_demo_slots",
+      "arguments": {
+        "rep_id": "A02"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "book_demo",
+      "arguments": {
+        "lead_id": "L420",
+        "request_key": "REQ-L420-DS07",
+        "prospect_confirmed": true,
+        "slot_id": "DS07"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "slot_id": "record: demo_slots[DS07].slot_id",
+        "lead_id": "record: leads[L420].lead_id"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {},
+  "sub_goals": [
+    "demo_booked_on_owner_calendar",
+    "demo_time_in_prospect_timezone"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

@@ -1,0 +1,109 @@
+{
+  "name": "gap_noticed_flag_declined",
+  "scenario_key": "gap-noticed-flag-declined",
+  "scenario_id": "",
+  "use_case": "Flag a document problem to its owner",
+  "branch": "Maya Patel (E13) asks what counts as a 'client data system' under AUP section 1; no passage defines it; desk looks up owner Aisha Rahman, offers to flag missing section; Maya declines so nothing is flagged",
+  "tests": "the desk identifies no definition for client data system, identifies owner Aisha Rahman, offers to flag missing section, and raises nothing when Maya declines",
+  "instruction": "You want to know what qualifies as a \"client data system\" under section 1 of the Acceptable Use Policy. If the desk states that the term is not defined in the policy and offers to flag a missing section issue to the document owner Aisha Rahman, decline the offer and note you will contact Aisha directly.\n\nYour details:\n- Name: Maya Patel\n- Employee ID: E13",
+  "keywords": [
+    "issue_flagging",
+    "missing_evidence"
+  ],
+  "persona": {
+    "name": "Maya Patel",
+    "gender": "female",
+    "age_group": "25-32",
+    "occupation": "Engineer",
+    "location": "India",
+    "personality": "Cautious and skeptical",
+    "communication_style": "Questioning",
+    "initial_message": "Hi, what counts as a 'client data system' under section 1 of the Acceptable Use Policy?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "doc_file": "aup_v2",
+    "employee_id": "E13",
+    "origin": "seed",
+    "owner_id": "E07",
+    "family": "acceptable_use"
+  },
+  "solution": [
+    {
+      "tool": "get_user_profile",
+      "arguments": {
+        "employee_id": "E13"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_effective_version",
+      "arguments": {
+        "family": "acceptable_use",
+        "employee_id": "E13"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "fetch_passage",
+      "arguments": {
+        "passage_id": "P-AUPV2-01",
+        "employee_id": "E13"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "search_documents",
+      "arguments": {
+        "query": "client data system",
+        "include_superseded": false,
+        "collection_id": "C_IT",
+        "employee_id": "E13"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_document_owner",
+      "arguments": {
+        "employee_id": "E13",
+        "drive_file_id": "aup_v2"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "drive_file_id": "record: aup_v2"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "counterparty": "standard_employee",
+    "task": "issue_flagging",
+    "overlay_vector": "none",
+    "overlay": "none",
+    "disposition": "gap_noticed_flag_declined",
+    "interface": "clean_prose",
+    "overlay_intensity": "absent",
+    "interaction": "multi_turn"
+  },
+  "sub_goals": [
+    "owner_identified",
+    "missing_evidence_reported"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}
