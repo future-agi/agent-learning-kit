@@ -1,7 +1,25 @@
 def check(world, calls):
-    verify_calls = [c for c in calls if c.name == "verify_order_owner" and c.arguments.get("order_id") and (c.arguments.get("email") or c.arguments.get("postal_code") or c.arguments.get("customer_id")) and c.ok]
-    if not verify_calls:
-        return "not done: verify_order_owner was not called with order_id and verification credentials"
+    proofs = []
+    for c in calls:
+        if not c.ok:
+            continue
+        if c.name == "verify_order_owner" and c.arguments.get("order_id") and (c.arguments.get("email") or c.arguments.get("postal_code") or c.arguments.get("customer_id")):
+            proofs.append((calls.index(c), (c.result or {}).get("customer_id")))
+        elif c.name == "search_orders" and c.arguments.get("postal_code"):
+            proofs.append((calls.index(c), (c.result or {}).get("customer_id")))
+        elif c.name in ("get_customer_profile", "get_store_credit_balance") and (c.arguments.get("email") or c.arguments.get("postal_code")):
+            proofs.append((calls.index(c), (c.result or {}).get("customer_id")))
+    if not proofs:
+        return "not done: the customer was never verified (verify_order_owner, or search_orders with the postal code)"
+    verified = {who for _, who in proofs if who}
+    first = min(at for at, _ in proofs)
+    for c in calls:
+        if c.ok and c.name in ("create_return", "create_exchange", "cancel_order", "update_shipping_address", "cancel_return", "get_shipment_tracking", "get_order_invoice", "get_return_status", "create_support_case"):
+            if calls.index(c) < first:
+                return f"not done: {c.name} ran before the customer was verified"
+            who = c.arguments.get("customer_id")
+            if who and verified and who not in verified:
+                return f"done wrong: {c.name} acted for {who}, who was not the customer verified in this conversation"
     return None
 
 

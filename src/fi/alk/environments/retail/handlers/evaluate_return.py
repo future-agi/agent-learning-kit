@@ -19,14 +19,17 @@ def handle(args, db):
     policy_rows = db.query("SELECT name, value FROM environment_policy")
     policy_map = {row["name"]: json.loads(row["value"]) for row in policy_rows}
     window_days = policy_map.get("return_window_days", 30)
+    accessories_window = int(policy_map.get("accessories_return_window_days", 14))
     fee_rate = float(policy_map.get("restocking_fee_rate", 0.0))
     final_sale_enforced = bool(policy_map.get("final_sale_enforced", True))
     
     is_delivered = (order["status"] == "delivered" and order["delivery_date"] is not None)
     out_of_window = False
+    age_days = 0
     if is_delivered:
         delivery_dt = datetime.fromisoformat(order["delivery_date"].replace("Z", "+00:00"))
-        if (now_dt - delivery_dt).days > window_days:
+        age_days = (now_dt - delivery_dt).days
+        if age_days > window_days:
             out_of_window = True
             
     items_eval = []
@@ -61,9 +64,18 @@ def handle(args, db):
             eligible = False
             ineligibility_reason = f"SKU {sku} is marked as final sale and cannot be returned."
             unit_net = int(round(ord_item["line_net_cents"] / ord_item["quantity"]))
+        elif prod and prod["category"] == "Accessories" and age_days > accessories_window:
+            eligible = False
+            ineligibility_reason = f"SKU {sku} is an accessory with a {accessories_window}-day return window; order {order_id} was delivered {age_days} days ago."
+            unit_net = int(round(ord_item["line_net_cents"] / ord_item["quantity"]))
         else:
             unit_net = int(round(ord_item["line_net_cents"] / ord_item["quantity"]))
-            returnable_qty = max(0, ord_item["quantity"] - ord_item["returned_quantity"])
+            on_returns = db.one(
+                "SELECT COALESCE(SUM(ri.quantity), 0) AS q FROM return_items ri JOIN returns r ON r.return_id = ri.return_id "
+                "WHERE ri.item_id = ? AND r.status != 'cancelled'",
+                [ord_item["item_id"]],
+            )
+            returnable_qty = max(0, ord_item["quantity"] - max(ord_item["returned_quantity"], int(on_returns["q"] if on_returns else 0)))
             if returnable_qty == 0:
                 eligible = False
                 ineligibility_reason = f"All purchased units of SKU {sku} have already been returned."

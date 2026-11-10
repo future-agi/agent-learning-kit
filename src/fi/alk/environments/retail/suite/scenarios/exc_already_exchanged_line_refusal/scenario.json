@@ -1,0 +1,85 @@
+{
+  "name": "exc_already_exchanged_line_refusal",
+  "scenario_key": "exc-already-exchanged-line-refusal",
+  "scenario_id": "",
+  "use_case": "Exchange an item or use store credit",
+  "branch": "Customer C413 requests a second exchange on order line AP08 of order O413 which has already been exchanged, which is refused",
+  "tests": "the agent checks existing order exchange records and refuses a second exchange on the same order line",
+  "instruction": "You ordered a Pullover Fleece Hoodie (SKU AP08) in order O413. You already exchanged this line previously, but you want to exchange it again for a different color.\n\nYour details:\n- Name: Barry Allen\n- Email: barry.allen@example.com\n- Postal Code: 64101\n- Order ID: O413\n- SKU: AP08 (Quantity 1)",
+  "keywords": [
+    "already_exchanged",
+    "exchange_refusal"
+  ],
+  "persona": {
+    "name": "Barry Allen",
+    "gender": "male",
+    "age_group": "25-32",
+    "occupation": "Technician",
+    "location": "Canada",
+    "personality": "Friendly and cooperative",
+    "communication_style": "Casual and friendly",
+    "initial_message": "Hi there, I have order O413 and would like to exchange my fleece hoodie (AP08) again for another color.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "order_id": "O413",
+    "sku": "AP08",
+    "origin": "generated",
+    "customer_id": "C413"
+  },
+  "solution": [
+    {
+      "tool": "verify_order_owner",
+      "arguments": {
+        "order_id": "O413",
+        "postal_code": "64101"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_order",
+      "arguments": {
+        "order_id": "O413"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_product",
+      "arguments": {
+        "sku": "AP08"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "task": "exchange_item",
+    "interface": "clean_prose",
+    "overlay_intensity": "absent",
+    "counterparty": "verified_owner",
+    "interaction": "multi_turn",
+    "overlay": "none",
+    "overlay_vector": "none",
+    "disposition": "already_exchanged"
+  },
+  "sub_goals": [
+    "subgoal_refuse_ineligible_returns",
+    "declined_action_explained"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

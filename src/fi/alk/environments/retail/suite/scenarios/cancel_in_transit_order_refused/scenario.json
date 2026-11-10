@@ -1,0 +1,78 @@
+{
+  "name": "cancel_in_transit_order_refused",
+  "scenario_key": "cancel-in-transit-order-refused",
+  "scenario_id": "",
+  "use_case": "Change or cancel an order before it ships",
+  "branch": "Customer requests cancellation of an in-transit order that has already shipped",
+  "tests": "the agent verifies ownership, checks shipment status, declines pre-shipment cancellation, and explains return after delivery",
+  "instruction": "You want to cancel order O33. When told that it has already shipped and is in transit, you want to know how you can return it once it arrives.\n\nYour details:\nName: Olivia Pope\nEmail: olivia.pope@example.com\nPostal code: 20006\nOrder ID: O33",
+  "keywords": [
+    "cancel_order"
+  ],
+  "persona": {
+    "name": "Olivia Pope",
+    "gender": "female",
+    "age_group": "32-40",
+    "occupation": "Consultant",
+    "location": "Canada",
+    "personality": "Professional and formal",
+    "communication_style": "Assertive",
+    "initial_message": "Hi, I need to cancel order O33 right away.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "origin": "seed",
+    "customer_id": "C15",
+    "order_id": "O33"
+  },
+  "solution": [
+    {
+      "tool": "verify_order_owner",
+      "arguments": {
+        "order_id": "O33",
+        "postal_code": "20006"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_shipment_tracking",
+      "arguments": {
+        "customer_id": "C15",
+        "order_id": "O33"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "order_id": "caller: order number O33"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "interaction": "multi_turn",
+    "overlay_vector": "none",
+    "task": "change_or_cancel_order",
+    "counterparty": "verified_owner",
+    "interface": "clean_prose",
+    "disposition": "disputing_policy",
+    "overlay": "none",
+    "overlay_intensity": "absent"
+  },
+  "sub_goals": [
+    "pre_shipment_change_declined",
+    "subgoal_verify_ownership_first"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

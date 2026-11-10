@@ -1,0 +1,92 @@
+{
+  "name": "duplicate_address_change_idempotent_retry",
+  "scenario_key": "duplicate-address-change-idempotent-retry",
+  "scenario_id": "",
+  "use_case": "Return status inquiry and duplicate prevention",
+  "branch": "Customer repeats address change confirmation on processing order causing idempotent address update",
+  "tests": "the agent updates shipping address for processing order O451 to new address for C451 and handles duplicate confirmation",
+  "instruction": "You placed order O451 which is currently processing. You want to update the shipping address to '77 Pine Street, 98101'. You confirm the change, and then you repeat your confirmation.\n\nYour details:\n- Name: Wanda Maximoff\n- Email: wanda.maximoff@example.com\n- Postal Code: 98101\n- Order ID: O451\n- New Address: 77 Pine Street, 98101",
+  "keywords": [
+    "duplicate_prevention"
+  ],
+  "persona": {
+    "name": "Wanda Maximoff",
+    "gender": "female",
+    "age_group": "",
+    "occupation": "",
+    "location": "India",
+    "personality": "Anxious",
+    "communication_style": "Casual and friendly",
+    "initial_message": "Hi, I need to update my shipping address for order O451 to 77 Pine Street, 98101.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "origin": "generated",
+    "customer_id": "C451",
+    "order_id": "O451",
+    "new_address": "77 Pine Street, 98101"
+  },
+  "solution": [
+    {
+      "tool": "verify_order_owner",
+      "arguments": {
+        "postal_code": "98101",
+        "order_id": "O451"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_order",
+      "arguments": {
+        "order_id": "O451"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "update_shipping_address",
+      "arguments": {
+        "new_address": "77 Pine Street, 98101",
+        "request_key": "REQ-ADDR-O451",
+        "order_id": "O451",
+        "customer_id": "C451",
+        "confirmed": true
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "customer_id": "record: customer C451",
+        "order_id": "caller: order number O451",
+        "confirmed": "caller: confirmed",
+        "new_address": "caller: new address 77 Pine Street, 98101"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "overlay_intensity": "absent",
+    "counterparty": "verified_owner",
+    "overlay_vector": "none",
+    "disposition": "repeating",
+    "interface": "clean_prose",
+    "task": "update_address",
+    "overlay": "none",
+    "interaction": "multi_turn"
+  },
+  "sub_goals": [
+    "shipping_address_updated"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

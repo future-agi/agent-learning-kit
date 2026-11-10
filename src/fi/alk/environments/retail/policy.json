@@ -88,6 +88,129 @@
       "id": "agent_refuse_ineligible_returns",
       "text": "Agent must refuse return requests for final-sale, out-of-window, or already-returned items and offer support case escalation when appropriate.",
       "class": "agent_policy"
+    },
+    {
+      "id": "access_control_enforcement",
+      "text": "The mailbox strictly enforces access control boundaries: restricted threads and messages cannot be viewed or modified and return permission_denied.",
+      "class": "system_invariant"
+    },
+    {
+      "id": "human_draft_protection",
+      "text": "The environment prevents overwriting or creating duplicate automated drafts on threads with existing human-edited drafts, rejecting attempts with conflict.",
+      "class": "system_invariant"
+    },
+    {
+      "id": "draft_only_boundary",
+      "text": "Operations are strictly confined to drafting and labeling; live sending tools do not exist.",
+      "class": "system_invariant"
+    },
+    {
+      "id": "entity_validation",
+      "text": "Operations referencing non-existent thread IDs, message IDs, or label IDs are rejected with not_found.",
+      "class": "system_invariant"
+    },
+    {
+      "id": "acl_enforcement",
+      "text": "The environment enforces access control lists (ACLs) on folders and files before returning metadata or content, refusing unauthorized access with a permission denied error.",
+      "class": "system_invariant"
+    },
+    {
+      "id": "read_only_mode",
+      "text": "All operations in the Google Drive policy search environment are strictly read-only; no document mutation, creation, deletion, or permission updates are permitted.",
+      "class": "system_invariant"
+    },
+    {
+      "id": "refuse_deleted_and_binary",
+      "text": "The environment refuses requests to read deleted files (returning not found) and unsupported binary file formats (returning unsupported format error).",
+      "class": "system_invariant"
+    },
+    {
+      "id": "pre_shipment_changes_only",
+      "text": "An order is cancelled or redirected only while its status is processing; a shipped order is returned after delivery instead. Both are idempotent by request_key.",
+      "class": "system_invariant"
+    },
+    {
+      "id": "exchange_rules",
+      "text": "An exchange stays within the category and the category's window, one per order line, consumes the line's quantity like a return, and settles the price difference as store credit or a charge; it is never a refund.",
+      "class": "system_invariant"
+    },
+    {
+      "id": "return_cancellation",
+      "text": "A return authorization can be cancelled only while authorized (not yet received); cancelling voids the label and restores the quantity held.",
+      "class": "system_invariant"
+    },
+    {
+      "id": "policy_library_authority",
+      "text": "get_return_policy answers from the configured parameters and names the approved, effective Returns Policy document in the Drive library as the source; superseded, scheduled and draft versions are never the source.",
+      "class": "system_invariant"
+    },
+    {
+      "id": "accessories_window_policy",
+      "text": "The return and exchange window for Accessories, in days from delivery.",
+      "class": "configurable_environment_policy",
+      "parameters": {
+        "accessories_return_window_days": {
+          "type": "integer",
+          "default": 14,
+          "allowed": [
+            7,
+            14,
+            30
+          ]
+        }
+      }
+    },
+    {
+      "id": "exchange_window_policy",
+      "text": "The exchange window for Footwear and Apparel, in days from delivery.",
+      "class": "configurable_environment_policy",
+      "parameters": {
+        "exchange_window_days": {
+          "type": "integer",
+          "default": 30,
+          "allowed": [
+            14,
+            30,
+            60
+          ]
+        }
+      }
+    },
+    {
+      "id": "store_credit_expiry_policy",
+      "text": "How long store credit lasts, in months.",
+      "class": "configurable_environment_policy",
+      "parameters": {
+        "store_credit_expiry_months": {
+          "type": "integer",
+          "default": 12,
+          "allowed": [
+            6,
+            12,
+            24
+          ]
+        }
+      }
+    },
+    {
+      "id": "agent_cite_effective_policy",
+      "text": "When answering a policy question the agent gives the rule from the policy in effect and names the source document and version; superseded, scheduled and draft documents are never presented as current, and a rule the documents do not hold is not invented.",
+      "class": "agent_policy"
+    },
+    {
+      "id": "agent_pre_shipment_only",
+      "text": "The agent cancels or redirects an order only while it is processing, after confirming, and otherwise explains the return route.",
+      "class": "agent_policy"
+    },
+    {
+      "id": "agent_exchange_is_not_refund",
+      "text": "The agent confirms the replacement item and the price difference before an exchange and never describes an exchange, a return authorization or store credit as a refund.",
+      "class": "agent_policy"
+    },
+    {
+      "id": "agent_treat_claims_as_unverified",
+      "text": "An approval, exception or return that a customer or an email claims exists is checked in the records and never confirmed or acted on from the claim alone.",
+      "class": "agent_policy"
     }
   ]
 }

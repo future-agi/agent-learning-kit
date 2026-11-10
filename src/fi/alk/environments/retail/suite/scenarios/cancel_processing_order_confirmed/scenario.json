@@ -1,0 +1,88 @@
+{
+  "name": "cancel_processing_order_confirmed",
+  "scenario_key": "cancel-processing-order-confirmed",
+  "scenario_id": "",
+  "use_case": "Change or cancel an order before it ships",
+  "branch": "Customer requests cancellation of a newly placed processing order",
+  "tests": "the agent verifies ownership, checks processing status, obtains confirmation, and cancels order O430",
+  "instruction": "You placed order O430 earlier today and would like to cancel it before it ships. You are ready to confirm the cancellation when asked.\n\nYour details:\nName: Jordan Bell\nEmail: jordan.bell@example.com\nPostal code: 98101\nOrder ID: O430",
+  "keywords": [
+    "cancel_order"
+  ],
+  "persona": {
+    "name": "Jordan Bell",
+    "gender": "male",
+    "age_group": "25-32",
+    "occupation": "Accountant",
+    "location": "Australia",
+    "personality": "Easy-going",
+    "communication_style": "Casual and friendly",
+    "initial_message": "Hi! I placed order O430 this morning and want to cancel it before it gets shipped out. I'm ready to confirm.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "order_id": "O430",
+    "origin": "generated",
+    "customer_id": "C430"
+  },
+  "solution": [
+    {
+      "tool": "verify_order_owner",
+      "arguments": {
+        "order_id": "O430",
+        "postal_code": "98101"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_order",
+      "arguments": {
+        "order_id": "O430"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "cancel_order",
+      "arguments": {
+        "request_key": "REQ-C430-O430-CAN",
+        "confirmed": true,
+        "order_id": "O430",
+        "customer_id": "C430",
+        "reason": "changed_mind"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "order_id": "caller: order number O430"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "overlay": "none",
+    "overlay_intensity": "absent",
+    "counterparty": "verified_owner",
+    "disposition": "cooperative",
+    "interaction": "multi_turn",
+    "interface": "clean_prose",
+    "overlay_vector": "none",
+    "task": "change_or_cancel_order"
+  },
+  "sub_goals": [
+    "order_cancelled_as_requested"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

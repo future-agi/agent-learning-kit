@@ -1,0 +1,2 @@
+def setup(world):
+    world.put("customers", {"customer_id": "C424", "name": "Sam Rivera", "email": "sam.rivera@example.com", "phone": "+15550424", "postal_code": "90210", "address": "123 Maple St, Toronto", "store_credit_cents": 0})

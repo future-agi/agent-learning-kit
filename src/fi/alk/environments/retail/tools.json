@@ -221,7 +221,7 @@
   },
   {
     "name": "get_return_policy",
-    "description": "Retrieve the active return policy rules, return window duration, restocking fees, and exclusions for a product category.",
+    "description": "The return and exchange rules in effect for a product category (Footwear, Apparel, Accessories, Clearance): window, fee, final-sale rule, refund basis, and the policy library document and version they come from.",
     "parameters": {
       "type": "object",
       "properties": {
@@ -236,33 +236,47 @@
     },
     "mutates_state": false,
     "returns": {
-      "required": [
-        "return_window_days",
-        "restocking_fee_rate",
-        "final_sale_enforced",
-        "label_service_available",
-        "policy_summary",
-        "category"
-      ],
       "type": "object",
+      "required": [
+        "category",
+        "return_window_days",
+        "policy_summary",
+        "source"
+      ],
       "properties": {
-        "label_service_available": {
-          "type": "boolean"
-        },
-        "policy_summary": {
-          "type": "string"
-        },
-        "final_sale_enforced": {
-          "type": "boolean"
-        },
-        "restocking_fee_rate": {
-          "type": "number"
-        },
         "category": {
           "type": "string"
         },
         "return_window_days": {
           "type": "integer"
+        },
+        "exchange_window_days": {
+          "type": "integer"
+        },
+        "restocking_fee_rate": {
+          "type": "number"
+        },
+        "final_sale_enforced": {
+          "type": "boolean"
+        },
+        "is_final_sale_category": {
+          "type": "boolean"
+        },
+        "label_service_available": {
+          "type": "boolean"
+        },
+        "refund_basis": {
+          "type": "string"
+        },
+        "policy_summary": {
+          "type": "string"
+        },
+        "source": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "description": "The approved policy document in effect: file_id, title, version, effective_date"
         }
       }
     }
@@ -386,7 +400,7 @@
   },
   {
     "name": "create_return",
-    "description": "Authorize a return for eligible order items, allocate refund estimation, and generate a synthetic return label.",
+    "description": "Authorize a return for eligible order items, allocate refund estimation, and generate a synthetic return label. A repeated request_key returns the existing return instead of a second one.",
     "parameters": {
       "type": "object",
       "required": [
@@ -428,6 +442,10 @@
             },
             "type": "object"
           }
+        },
+        "request_key": {
+          "type": "string",
+          "description": "Idempotency key for this return request, e.g. REQ-C01-O01-SH01"
         }
       }
     },
@@ -506,6 +524,9 @@
             "object",
             "null"
           ]
+        },
+        "idempotent": {
+          "type": "boolean"
         }
       },
       "type": "object",
@@ -720,6 +741,1568 @@
         }
       },
       "type": "object"
+    }
+  },
+  {
+    "name": "search_orders",
+    "description": "The orders of a customer identified by email and postal code (or by customer_id), newest first, with each line's quantity and what was already returned. Use it when the customer does not have their order number.",
+    "parameters": {
+      "type": "object",
+      "required": [],
+      "properties": {
+        "email": {
+          "type": "string",
+          "description": "The customer's email on file"
+        },
+        "postal_code": {
+          "type": "string",
+          "description": "The postal code on file, required with the email"
+        },
+        "customer_id": {
+          "type": "string",
+          "description": "The customer identifier, e.g. C01"
+        },
+        "status": {
+          "type": "string",
+          "description": "Only orders in this status",
+          "enum": [
+            "processing",
+            "in_transit",
+            "delivered",
+            "cancelled"
+          ]
+        }
+      }
+    },
+    "mutates_state": false,
+    "returns": {
+      "type": "object",
+      "required": [
+        "customer_id",
+        "orders",
+        "count"
+      ],
+      "properties": {
+        "customer_id": {
+          "type": "string"
+        },
+        "customer_name": {
+          "type": "string"
+        },
+        "orders": {
+          "type": "array"
+        },
+        "count": {
+          "type": "integer"
+        }
+      }
+    }
+  },
+  {
+    "name": "get_customer_profile",
+    "description": "The verified customer's profile: name, email, phone, postal code, address on file, store credit balance and order count. Verified by email or postal code.",
+    "parameters": {
+      "type": "object",
+      "required": [
+        "customer_id"
+      ],
+      "properties": {
+        "customer_id": {
+          "type": "string",
+          "description": "The customer identifier"
+        },
+        "email": {
+          "type": "string",
+          "description": "The customer's email, to verify"
+        },
+        "postal_code": {
+          "type": "string",
+          "description": "The postal code on file, to verify"
+        }
+      }
+    },
+    "mutates_state": false,
+    "returns": {
+      "type": "object",
+      "required": [
+        "customer_id",
+        "name",
+        "email",
+        "store_credit_cents"
+      ],
+      "properties": {
+        "customer_id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "email": {
+          "type": "string"
+        },
+        "phone": {
+          "type": "string"
+        },
+        "postal_code": {
+          "type": "string"
+        },
+        "address": {
+          "type": "string"
+        },
+        "store_credit_cents": {
+          "type": "integer"
+        },
+        "orders_count": {
+          "type": "integer"
+        }
+      }
+    }
+  },
+  {
+    "name": "get_shipment_tracking",
+    "description": "Carrier, tracking number, status and last event of the verified customer's order shipment, with the shipping address on the order.",
+    "parameters": {
+      "type": "object",
+      "required": [
+        "order_id",
+        "customer_id"
+      ],
+      "properties": {
+        "order_id": {
+          "type": "string",
+          "description": "The order"
+        },
+        "customer_id": {
+          "type": "string",
+          "description": "The verified owner of the order"
+        }
+      }
+    },
+    "mutates_state": false,
+    "returns": {
+      "type": "object",
+      "required": [
+        "order_id",
+        "carrier",
+        "tracking_number",
+        "status",
+        "last_event"
+      ],
+      "properties": {
+        "order_id": {
+          "type": "string"
+        },
+        "order_status": {
+          "type": "string"
+        },
+        "shipment_id": {
+          "type": "string"
+        },
+        "carrier": {
+          "type": "string"
+        },
+        "tracking_number": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "shipped_at": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "delivered_at": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "last_event": {
+          "type": "string"
+        },
+        "last_event_at": {
+          "type": "string"
+        },
+        "shipping_address": {
+          "type": "string"
+        }
+      }
+    }
+  },
+  {
+    "name": "get_order_invoice",
+    "description": "The invoice of the verified customer's order: lines with unit price, discount and net, totals and the PDF link.",
+    "parameters": {
+      "type": "object",
+      "required": [
+        "order_id",
+        "customer_id"
+      ],
+      "properties": {
+        "order_id": {
+          "type": "string",
+          "description": "The order"
+        },
+        "customer_id": {
+          "type": "string",
+          "description": "The verified owner of the order"
+        }
+      }
+    },
+    "mutates_state": false,
+    "returns": {
+      "type": "object",
+      "required": [
+        "invoice_id",
+        "order_id",
+        "total_cents",
+        "lines"
+      ],
+      "properties": {
+        "invoice_id": {
+          "type": "string"
+        },
+        "order_id": {
+          "type": "string"
+        },
+        "issued_at": {
+          "type": "string"
+        },
+        "total_cents": {
+          "type": "integer"
+        },
+        "currency": {
+          "type": "string"
+        },
+        "pdf_url": {
+          "type": "string"
+        },
+        "lines": {
+          "type": "array"
+        },
+        "total_discount_cents": {
+          "type": "integer"
+        },
+        "total_net_cents": {
+          "type": "integer"
+        }
+      }
+    }
+  },
+  {
+    "name": "cancel_order",
+    "description": "Cancel the verified customer's order after they confirmed. Only an order still processing can be cancelled; once it has shipped it is returned after delivery instead. A repeated request_key returns the existing cancellation.",
+    "parameters": {
+      "type": "object",
+      "required": [
+        "order_id",
+        "customer_id",
+        "reason",
+        "confirmed"
+      ],
+      "properties": {
+        "order_id": {
+          "type": "string",
+          "description": "The order to cancel"
+        },
+        "customer_id": {
+          "type": "string",
+          "description": "The verified owner"
+        },
+        "reason": {
+          "type": "string",
+          "description": "Why, in the customer's words"
+        },
+        "confirmed": {
+          "type": "boolean",
+          "description": "True only after the customer confirmed the cancellation"
+        },
+        "request_key": {
+          "type": "string",
+          "description": "Idempotency key, e.g. REQ-C13-O31-CANCEL"
+        }
+      }
+    },
+    "mutates_state": true,
+    "returns": {
+      "type": "object",
+      "required": [
+        "order_id",
+        "status"
+      ],
+      "properties": {
+        "cancellation_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "order_id": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "idempotent": {
+          "type": "boolean"
+        },
+        "cancelled_at": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "refund_note": {
+          "type": "string"
+        }
+      }
+    }
+  },
+  {
+    "name": "update_shipping_address",
+    "description": "Change the shipping address of the verified customer's order after they confirmed it. Only while the order is processing; a shipped order cannot be redirected. A repeated request_key returns the existing change.",
+    "parameters": {
+      "type": "object",
+      "required": [
+        "order_id",
+        "customer_id",
+        "new_address",
+        "confirmed"
+      ],
+      "properties": {
+        "order_id": {
+          "type": "string",
+          "description": "The order"
+        },
+        "customer_id": {
+          "type": "string",
+          "description": "The verified owner"
+        },
+        "new_address": {
+          "type": "string",
+          "description": "The full new postal address, exactly as confirmed"
+        },
+        "confirmed": {
+          "type": "boolean",
+          "description": "True only after the customer confirmed the address"
+        },
+        "request_key": {
+          "type": "string",
+          "description": "Idempotency key, e.g. REQ-C14-O32-ADDR"
+        }
+      }
+    },
+    "mutates_state": true,
+    "returns": {
+      "type": "object",
+      "required": [
+        "change_id",
+        "order_id",
+        "new_address"
+      ],
+      "properties": {
+        "change_id": {
+          "type": "string"
+        },
+        "order_id": {
+          "type": "string"
+        },
+        "old_address": {
+          "type": "string"
+        },
+        "new_address": {
+          "type": "string"
+        },
+        "idempotent": {
+          "type": "boolean"
+        }
+      }
+    }
+  },
+  {
+    "name": "create_exchange",
+    "description": "Exchange a delivered item for another item of the same category, within the category's return window, after the customer confirmed. One exchange per order line; the price difference is issued as store credit or charged before the replacement ships. An exchange is not a refund. A repeated request_key returns the existing exchange.",
+    "parameters": {
+      "type": "object",
+      "required": [
+        "order_id",
+        "customer_id",
+        "original_sku",
+        "replacement_sku",
+        "quantity",
+        "confirmed"
+      ],
+      "properties": {
+        "order_id": {
+          "type": "string",
+          "description": "The delivered order"
+        },
+        "customer_id": {
+          "type": "string",
+          "description": "The verified owner"
+        },
+        "original_sku": {
+          "type": "string",
+          "description": "The SKU being sent back"
+        },
+        "replacement_sku": {
+          "type": "string",
+          "description": "The SKU wanted instead, same category"
+        },
+        "quantity": {
+          "type": "integer",
+          "description": "Units exchanged"
+        },
+        "confirmed": {
+          "type": "boolean",
+          "description": "True only after the customer confirmed the exchange and any price difference"
+        },
+        "request_key": {
+          "type": "string",
+          "description": "Idempotency key, e.g. REQ-C16-O16-EX"
+        }
+      }
+    },
+    "mutates_state": true,
+    "returns": {
+      "type": "object",
+      "required": [
+        "exchange_id",
+        "order_id",
+        "original_sku",
+        "replacement_sku",
+        "quantity",
+        "status"
+      ],
+      "properties": {
+        "exchange_id": {
+          "type": "string"
+        },
+        "order_id": {
+          "type": "string"
+        },
+        "original_sku": {
+          "type": "string"
+        },
+        "replacement_sku": {
+          "type": "string"
+        },
+        "quantity": {
+          "type": "integer"
+        },
+        "price_difference_cents": {
+          "type": "integer"
+        },
+        "difference_note": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "idempotent": {
+          "type": "boolean"
+        }
+      }
+    }
+  },
+  {
+    "name": "cancel_return",
+    "description": "Cancel one of the verified customer's return authorizations that has not been received yet, after they confirmed; the label is voided and the units count as held again.",
+    "parameters": {
+      "type": "object",
+      "required": [
+        "return_id",
+        "customer_id",
+        "confirmed"
+      ],
+      "properties": {
+        "return_id": {
+          "type": "string",
+          "description": "The return to cancel, e.g. R03"
+        },
+        "customer_id": {
+          "type": "string",
+          "description": "The verified owner"
+        },
+        "confirmed": {
+          "type": "boolean",
+          "description": "True only after the customer confirmed"
+        }
+      }
+    },
+    "mutates_state": true,
+    "returns": {
+      "type": "object",
+      "required": [
+        "return_id",
+        "status"
+      ],
+      "properties": {
+        "return_id": {
+          "type": "string"
+        },
+        "order_id": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "idempotent": {
+          "type": "boolean"
+        },
+        "cancelled_at": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "label_status": {
+          "type": "string"
+        }
+      }
+    }
+  },
+  {
+    "name": "get_store_credit_balance",
+    "description": "The verified customer's store credit balance and the credits it is made of, with their expiry dates. Verified by email or postal code.",
+    "parameters": {
+      "type": "object",
+      "required": [
+        "customer_id"
+      ],
+      "properties": {
+        "customer_id": {
+          "type": "string",
+          "description": "The customer identifier"
+        },
+        "email": {
+          "type": "string",
+          "description": "The customer's email, to verify"
+        },
+        "postal_code": {
+          "type": "string",
+          "description": "The postal code on file, to verify"
+        }
+      }
+    },
+    "mutates_state": false,
+    "returns": {
+      "type": "object",
+      "required": [
+        "customer_id",
+        "balance_cents",
+        "credits"
+      ],
+      "properties": {
+        "customer_id": {
+          "type": "string"
+        },
+        "balance_cents": {
+          "type": "integer"
+        },
+        "currency": {
+          "type": "string"
+        },
+        "credits": {
+          "type": "array"
+        }
+      }
+    }
+  },
+  {
+    "name": "search_threads",
+    "description": "Lists email threads matching a Gmail search query (label:ID, is:unread, in:inbox, from:, to:, subject:, newer_than:7d, free terms). Full message bodies are not returned; use get_thread for them. Drafts, spam and trash are excluded.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "pageSize": {
+          "type": "integer",
+          "description": "Threads per page; default 20, maximum 50."
+        },
+        "pageToken": {
+          "type": "string"
+        },
+        "query": {
+          "type": "string",
+          "description": "Gmail search syntax."
+        },
+        "includeTrash": {
+          "type": "boolean",
+          "description": "Include trashed threads (default false)."
+        },
+        "view": {
+          "type": "string",
+          "description": "THREAD_VIEW_UNSPECIFIED, THREAD_VIEW_METADATA_ONLY or THREAD_VIEW_MINIMAL (default)."
+        }
+      }
+    },
+    "mutates_state": false,
+    "returns": {
+      "type": "object",
+      "properties": {
+        "threads": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "messages": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "snippet": {
+                      "type": "string"
+                    },
+                    "subject": {
+                      "type": "string"
+                    },
+                    "sender": {
+                      "type": "string"
+                    },
+                    "toRecipients": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "ccRecipients": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "date": {
+                      "type": "string"
+                    },
+                    "plaintextBody": {
+                      "type": "string"
+                    },
+                    "htmlBody": {
+                      "type": "string"
+                    },
+                    "attachmentIds": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "attachments": {
+                      "type": "array",
+                      "items": {
+                        "type": "object"
+                      }
+                    },
+                    "labelIds": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "snippet",
+                    "subject",
+                    "sender",
+                    "toRecipients",
+                    "date",
+                    "labelIds"
+                  ]
+                }
+              }
+            },
+            "required": [
+              "id",
+              "messages"
+            ]
+          }
+        },
+        "nextPageToken": {
+          "type": "string"
+        },
+        "resultCountEstimate": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "threads",
+        "resultCountEstimate"
+      ]
+    }
+  },
+  {
+    "name": "get_thread",
+    "description": "Retrieves an email thread by ID with its messages in date order (bodies under FULL_CONTENT).",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "threadId": {
+          "type": "string",
+          "description": "The unique identifier of the thread."
+        },
+        "messageFormat": {
+          "type": "string",
+          "description": "MESSAGE_FORMAT_UNSPECIFIED, MINIMAL, FULL_CONTENT (default; bodies included) or METADATA_ONLY."
+        }
+      },
+      "required": [
+        "threadId"
+      ]
+    },
+    "mutates_state": false,
+    "returns": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "messages": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "snippet": {
+                "type": "string"
+              },
+              "subject": {
+                "type": "string"
+              },
+              "sender": {
+                "type": "string"
+              },
+              "toRecipients": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "ccRecipients": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "date": {
+                "type": "string"
+              },
+              "plaintextBody": {
+                "type": "string"
+              },
+              "htmlBody": {
+                "type": "string"
+              },
+              "attachmentIds": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "attachments": {
+                "type": "array",
+                "items": {
+                  "type": "object"
+                }
+              },
+              "labelIds": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            },
+            "required": [
+              "id",
+              "snippet",
+              "subject",
+              "sender",
+              "toRecipients",
+              "date",
+              "labelIds"
+            ]
+          }
+        }
+      },
+      "required": [
+        "id",
+        "messages"
+      ]
+    }
+  },
+  {
+    "name": "get_message",
+    "description": "Retrieves one email message by its message ID.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "messageId": {
+          "type": "string",
+          "description": "The unique identifier of the message."
+        },
+        "messageFormat": {
+          "type": "string",
+          "description": "MESSAGE_FORMAT_UNSPECIFIED, MINIMAL, FULL_CONTENT (default; bodies included) or METADATA_ONLY."
+        }
+      },
+      "required": [
+        "messageId"
+      ]
+    },
+    "mutates_state": false,
+    "returns": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "snippet": {
+          "type": "string"
+        },
+        "subject": {
+          "type": "string"
+        },
+        "sender": {
+          "type": "string"
+        },
+        "toRecipients": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "ccRecipients": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "date": {
+          "type": "string"
+        },
+        "plaintextBody": {
+          "type": "string"
+        },
+        "htmlBody": {
+          "type": "string"
+        },
+        "attachmentIds": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "attachments": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        },
+        "labelIds": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "id",
+        "snippet",
+        "subject",
+        "sender",
+        "toRecipients",
+        "date",
+        "labelIds"
+      ]
+    }
+  },
+  {
+    "name": "list_labels",
+    "description": "Lists the user-defined labels of the mailbox with their IDs. System label IDs (INBOX, UNREAD, STARRED, IMPORTANT, SENT, DRAFT, SPAM, TRASH) are usable without listing.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "pageSize": {
+          "type": "integer"
+        },
+        "pageToken": {
+          "type": "string"
+        }
+      }
+    },
+    "mutates_state": false,
+    "returns": {
+      "type": "object",
+      "properties": {
+        "labels": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "labelId": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "threadsTotal": {
+                "type": "integer"
+              },
+              "threadsUnread": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "labelId",
+              "name"
+            ]
+          }
+        },
+        "nextPageToken": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "labels"
+      ]
+    }
+  },
+  {
+    "name": "label_thread",
+    "description": "Adds labels to an entire thread (every message in it). Takes label IDs, not names; use list_labels when unsure of a user label's ID.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "threadId": {
+          "type": "string",
+          "description": "The unique identifier of the thread."
+        },
+        "labelIds": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Label IDs (system IDs such as INBOX, UNREAD, IMPORTANT, or user label IDs from list_labels), never names."
+        }
+      },
+      "required": [
+        "threadId",
+        "labelIds"
+      ]
+    },
+    "mutates_state": true,
+    "returns": {
+      "type": "object",
+      "properties": {}
+    }
+  },
+  {
+    "name": "unlabel_thread",
+    "description": "Removes labels from an entire thread. Takes label IDs, not names.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "threadId": {
+          "type": "string",
+          "description": "The unique identifier of the thread."
+        },
+        "labelIds": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Label IDs (system IDs such as INBOX, UNREAD, IMPORTANT, or user label IDs from list_labels), never names."
+        }
+      },
+      "required": [
+        "threadId",
+        "labelIds"
+      ]
+    },
+    "mutates_state": true,
+    "returns": {
+      "type": "object",
+      "properties": {}
+    }
+  },
+  {
+    "name": "list_drafts",
+    "description": "Lists the mailbox's drafts, newest first. humanEdited marks a draft a person has edited.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "pageSize": {
+          "type": "integer",
+          "description": "Drafts per page; default 20, maximum 50."
+        },
+        "pageToken": {
+          "type": "string"
+        },
+        "query": {
+          "type": "string",
+          "description": "Gmail search syntax."
+        },
+        "view": {
+          "type": "string",
+          "description": "DRAFT_VIEW_UNSPECIFIED, DRAFT_VIEW_METADATA_ONLY or DRAFT_VIEW_FULL (default)."
+        }
+      }
+    },
+    "mutates_state": false,
+    "returns": {
+      "type": "object",
+      "properties": {
+        "drafts": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "subject": {
+                "type": "string"
+              },
+              "threadId": {
+                "type": "string"
+              },
+              "toRecipients": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "ccRecipients": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "bccRecipients": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "plaintextBody": {
+                "type": "string"
+              },
+              "htmlBody": {
+                "type": "string"
+              },
+              "date": {
+                "type": "string"
+              },
+              "humanEdited": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "id",
+              "threadId",
+              "toRecipients",
+              "date"
+            ]
+          }
+        },
+        "nextPageToken": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "drafts"
+      ]
+    }
+  },
+  {
+    "name": "create_draft",
+    "description": "Creates a draft email for a person to review and send. To reply in an existing thread pass the original message's ID as replyToMessageId. Addresses are plain (no 'Name <email>'). Attachments are not supported yet. Nothing is sent.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "to": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Recipient email addresses."
+        },
+        "cc": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "bcc": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "subject": {
+          "type": "string"
+        },
+        "body": {
+          "type": "string",
+          "description": "Plain-text body."
+        },
+        "htmlBody": {
+          "type": "string"
+        },
+        "replyToMessageId": {
+          "type": "string",
+          "description": "The message this draft replies to; the draft joins its thread."
+        },
+        "attachments": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        }
+      }
+    },
+    "mutates_state": true,
+    "returns": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "subject": {
+          "type": "string"
+        },
+        "threadId": {
+          "type": "string"
+        },
+        "toRecipients": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "ccRecipients": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "bccRecipients": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "plaintextBody": {
+          "type": "string"
+        },
+        "htmlBody": {
+          "type": "string"
+        },
+        "date": {
+          "type": "string"
+        },
+        "humanEdited": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "id",
+        "threadId",
+        "toRecipients",
+        "date"
+      ]
+    }
+  },
+  {
+    "name": "search_files",
+    "description": "Search for Drive files using a structured query (syntax: `query_term operator values`). Clauses are joined with `and`; string values are single-quoted. Terms: title (contains, =, !=), fullText (contains), mimeType (contains, =, !=), parentId (=, !=), owner (=, !=; 'me' is the requesting user). Use nextPageToken to paginate.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "query": {
+          "type": "string",
+          "description": "The search query."
+        },
+        "pageToken": {
+          "type": "string",
+          "description": "The page token to use for pagination."
+        },
+        "pageSize": {
+          "type": "integer",
+          "description": "The maximum number of files to return in each page."
+        },
+        "excludeContentSnippets": {
+          "type": "boolean",
+          "description": "If true, the content snippet will be excluded from the response."
+        }
+      },
+      "required": [
+        "query"
+      ]
+    },
+    "mutates_state": false,
+    "returns": {
+      "type": "object",
+      "properties": {
+        "files": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "title": {
+                "type": "string"
+              },
+              "parentId": {
+                "type": "string"
+              },
+              "mimeType": {
+                "type": "string"
+              },
+              "fileSize": {
+                "type": "string"
+              },
+              "description": {
+                "type": "string"
+              },
+              "fileExtension": {
+                "type": "string"
+              },
+              "contentSnippet": {
+                "type": "string"
+              },
+              "viewUrl": {
+                "type": "string"
+              },
+              "createdTime": {
+                "type": "string"
+              },
+              "modifiedTime": {
+                "type": "string"
+              },
+              "owner": {
+                "type": "string"
+              },
+              "canAddChildren": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "id",
+              "title",
+              "parentId",
+              "mimeType",
+              "fileSize",
+              "description",
+              "viewUrl",
+              "createdTime",
+              "modifiedTime",
+              "owner",
+              "canAddChildren"
+            ]
+          }
+        },
+        "nextPageToken": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "files"
+      ]
+    }
+  },
+  {
+    "name": "list_recent_files",
+    "description": "Find recent files for the user in a sort order: recency (default), lastModified or lastModifiedByMe. The default page size is 10; use nextPageToken to paginate.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "orderBy": {
+          "type": "string",
+          "description": "The sort order for the files."
+        },
+        "pageToken": {
+          "type": "string",
+          "description": "The page token to use for pagination."
+        },
+        "pageSize": {
+          "type": "integer",
+          "description": "The maximum number of files to return in each page."
+        },
+        "excludeContentSnippets": {
+          "type": "boolean",
+          "description": "If true, the content snippet will be excluded from the response."
+        }
+      }
+    },
+    "mutates_state": false,
+    "returns": {
+      "type": "object",
+      "properties": {
+        "files": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "title": {
+                "type": "string"
+              },
+              "parentId": {
+                "type": "string"
+              },
+              "mimeType": {
+                "type": "string"
+              },
+              "fileSize": {
+                "type": "string"
+              },
+              "description": {
+                "type": "string"
+              },
+              "fileExtension": {
+                "type": "string"
+              },
+              "contentSnippet": {
+                "type": "string"
+              },
+              "viewUrl": {
+                "type": "string"
+              },
+              "createdTime": {
+                "type": "string"
+              },
+              "modifiedTime": {
+                "type": "string"
+              },
+              "owner": {
+                "type": "string"
+              },
+              "canAddChildren": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "id",
+              "title",
+              "parentId",
+              "mimeType",
+              "fileSize",
+              "description",
+              "viewUrl",
+              "createdTime",
+              "modifiedTime",
+              "owner",
+              "canAddChildren"
+            ]
+          }
+        },
+        "nextPageToken": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "files"
+      ]
+    }
+  },
+  {
+    "name": "get_file_metadata",
+    "description": "General metadata about a Drive file. The description carries the policy family, status, version and effective date.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "fileId": {
+          "type": "string",
+          "description": "The ID of the file to retrieve."
+        },
+        "excludeContentSnippets": {
+          "type": "boolean",
+          "description": "If true, the content snippet will be excluded from the response."
+        }
+      },
+      "required": [
+        "fileId"
+      ]
+    },
+    "mutates_state": false,
+    "returns": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "parentId": {
+          "type": "string"
+        },
+        "mimeType": {
+          "type": "string"
+        },
+        "fileSize": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "fileExtension": {
+          "type": "string"
+        },
+        "contentSnippet": {
+          "type": "string"
+        },
+        "viewUrl": {
+          "type": "string"
+        },
+        "createdTime": {
+          "type": "string"
+        },
+        "modifiedTime": {
+          "type": "string"
+        },
+        "owner": {
+          "type": "string"
+        },
+        "canAddChildren": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "id",
+        "title",
+        "parentId",
+        "mimeType",
+        "fileSize",
+        "description",
+        "viewUrl",
+        "createdTime",
+        "modifiedTime",
+        "owner",
+        "canAddChildren"
+      ]
+    }
+  },
+  {
+    "name": "get_file_permissions",
+    "description": "List the permissions of a Drive file (its own and its folder's).",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "fileId": {
+          "type": "string",
+          "description": "The ID of the file to get permissions for."
+        }
+      },
+      "required": [
+        "fileId"
+      ]
+    },
+    "mutates_state": false,
+    "returns": {
+      "type": "object",
+      "properties": {
+        "permissions": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "role": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string"
+              },
+              "emailAddress": {
+                "type": "string"
+              },
+              "displayName": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "role",
+              "type",
+              "emailAddress"
+            ]
+          }
+        }
+      },
+      "required": [
+        "permissions"
+      ]
+    }
+  },
+  {
+    "name": "read_file_content",
+    "description": "Fetch a natural language representation of a Drive file, and optionally its comments. fileId must come from search_files or list_recent_files. An unsupported format returns textFormattingNotSupported=true with empty fileContent. revisionId reads an earlier revision of the file.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "fileId": {
+          "type": "string",
+          "description": "The ID of the file to retrieve."
+        },
+        "includeComments": {
+          "type": "boolean",
+          "description": "Whether to include comments in the response."
+        },
+        "revisionId": {
+          "type": "string",
+          "description": "An earlier revision of the file to read instead of the current content."
+        }
+      },
+      "required": [
+        "fileId"
+      ]
+    },
+    "mutates_state": false,
+    "returns": {
+      "type": "object",
+      "properties": {
+        "fileContent": {
+          "type": "string"
+        },
+        "textFormattingNotSupported": {
+          "type": "boolean"
+        },
+        "contentAnchoredComments": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        },
+        "unanchoredComments": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        },
+        "commentsNotSupported": {
+          "type": "boolean"
+        },
+        "revisionId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "fileContent",
+        "textFormattingNotSupported"
+      ]
     }
   }
 ]

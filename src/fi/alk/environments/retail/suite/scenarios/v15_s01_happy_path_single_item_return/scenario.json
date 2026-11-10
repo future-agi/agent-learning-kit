@@ -84,7 +84,8 @@
       "environment_arguments": {},
       "fixed": {
         "customer_id": "record: customer C01",
-        "order_id": "caller: order number O01"
+        "order_id": "caller: order number O01",
+        "items": "the items and quantities the customer settled on"
       }
     }
   ],

@@ -1,11 +1,14 @@
 def check(world, calls, reference):
-    eval_calls = [c for c in calls if c.name in ("evaluate_return", "get_return_policy", "get_order", "verify_order_owner") and c.ok]
+    eval_calls = [c for c in calls if c.name in ("evaluate_return", "get_return_policy", "get_order", "verify_order_owner", "get_product") and c.ok]
     if not eval_calls:
         return "not done: agent did not evaluate return eligibility or check order/policy"
-    create_calls = [c for c in calls if c.name == "create_return" and c.ok]
-    ref_creates = [s for s in reference if s["tool"] == "create_return"]
-    if not ref_creates and create_calls:
-        return f"done wrong: create_return was called ({len(create_calls)} times) when no return was eligible"
+    for tool in ("create_return", "create_exchange"):
+        made = [c for c in calls if c.name == tool and c.ok]
+        if made and not [s for s in reference if s["tool"] == tool]:
+            return f"done wrong: {tool} was called ({len(made)} times) when the request was not eligible"
+    wanted = [(s["tool"], s["arguments"]["order_id"]) for s in reference if s["tool"] in ("evaluate_return", "get_order") and s.get("arguments", {}).get("order_id")]
+    if wanted and not any((c.name, c.arguments.get("order_id")) in wanted for c in eval_calls):
+        return f"done wrong: order {wanted[0][1]} was never evaluated before declining"
     return None
 
 

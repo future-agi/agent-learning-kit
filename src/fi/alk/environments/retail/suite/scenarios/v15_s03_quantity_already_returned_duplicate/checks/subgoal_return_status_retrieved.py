@@ -1,8 +1,53 @@
-def check(world, calls):
+def check(world, calls, reference=None):
+    wanted_order = wanted_return = None
+    for step in reference or ():
+        if step.get("tool") == "get_return_status":
+            wanted_order = step.get("arguments", {}).get("order_id") or wanted_order
+            wanted_return = step.get("arguments", {}).get("return_id") or wanted_return
     status_calls = [c for c in calls if c.name == "get_return_status" and (c.arguments.get("order_id") or c.arguments.get("return_id")) and c.ok]
     if not status_calls:
         return "not done: get_return_status was not called with return_id or order_id"
+    if wanted_order or wanted_return:
+        if not any((wanted_order and c.arguments.get("order_id") == wanted_order) or (wanted_return and c.arguments.get("return_id") == wanted_return) for c in status_calls):
+            return f"done wrong: the return asked about ({wanted_return or wanted_order}) was never looked up"
+    missing = _evidence_missing(world, calls, reference)
+    if missing:
+        return f"done blind: the decision rests on {', '.join(missing)}, which was never read"
     return None
+
+def _evidence_missing(world, calls, reference):
+    """The evidence the reference fixes (a get_thread, get_message or read_file_content target) that
+    this run never retrieved by any valid path: a direct read, or a search that listed it."""
+    state = world.state()
+    thread_of = {m["id"]: m["thread_id"] for m in state.get("gmail_messages", [])}
+    wanted = []
+    for step in reference or ():
+        a = step.get("arguments", {})
+        if step.get("tool") == "get_thread" and a.get("threadId"):
+            wanted.append(("thread", a["threadId"]))
+        elif step.get("tool") == "get_message" and a.get("messageId"):
+            wanted.append(("thread", thread_of.get(a["messageId"], a["messageId"])))
+        elif step.get("tool") == "read_file_content" and a.get("fileId"):
+            wanted.append(("file", a["fileId"]))
+    missing = []
+    for kind, target in wanted:
+        seen = False
+        for c in calls:
+            if not c.ok:
+                continue
+            if kind == "thread" and (
+                (c.name == "get_thread" and c.arguments.get("threadId") == target)
+                or (c.name == "get_message" and thread_of.get(c.arguments.get("messageId")) == target)
+                or (c.name == "search_threads" and isinstance(c.result, dict) and any(isinstance(t, dict) and t.get("id") == target for t in c.result.get("threads") or []))
+            ):
+                seen = True
+            elif kind == "file" and c.name == "read_file_content" and c.arguments.get("fileId") == target:
+                seen = True
+            if seen:
+                break
+        if not seen:
+            missing.append(f"{kind} {target}")
+    return missing
 
 
 if __name__ == "__main__":

@@ -5,6 +5,7 @@ def handle(args, db):
     order_id = args.get("order_id")
     customer_id = args.get("customer_id")
     items = args.get("items")
+    request_key = args.get("request_key")
     
     if not order_id:
         raise ToolError("order_id is required.", category="invalid_input")
@@ -25,16 +26,25 @@ def handle(args, db):
         
     clock_row = db.one("SELECT now FROM clock")
     now_dt = datetime.fromisoformat(clock_row["now"].replace("Z", "+00:00"))
+
+    if request_key:
+        existing = db.one("SELECT * FROM returns WHERE request_key = ?", [request_key])
+        if existing:
+            lbl = db.one("SELECT * FROM return_labels WHERE return_id = ?", [existing["return_id"]])
+            ex_items = db.query("SELECT sku, quantity, refunded_amount_cents FROM return_items WHERE return_id = ?", [existing["return_id"]])
+            return {"return_id": existing["return_id"], "order_id": existing["order_id"], "customer_id": existing["customer_id"], "status": existing["status"], "estimated_refund_cents": existing["estimated_refund_cents"], "restocking_fee_cents": existing["restocking_fee_cents"], "label": ({"label_id": lbl["label_id"], "tracking_number": lbl["tracking_number"], "carrier": lbl["carrier"], "label_url": lbl["label_url"], "status": lbl["status"]} if lbl else None), "label_status": lbl["status"] if lbl else "unavailable", "items": [dict(i) for i in ex_items], "idempotent": True}
     
     policy_rows = db.query("SELECT name, value FROM environment_policy")
     policy_map = {row["name"]: json.loads(row["value"]) for row in policy_rows}
     window_days = policy_map.get("return_window_days", 30)
+    accessories_window = int(policy_map.get("accessories_return_window_days", 14))
     fee_rate = float(policy_map.get("restocking_fee_rate", 0.0))
     final_sale_enforced = bool(policy_map.get("final_sale_enforced", True))
     label_avail = bool(policy_map.get("label_service_available", True))
     
     delivery_dt = datetime.fromisoformat(order["delivery_date"].replace("Z", "+00:00"))
-    if (now_dt - delivery_dt).days > window_days:
+    age_days = (now_dt - delivery_dt).days
+    if age_days > window_days:
         raise ToolError(f"Order {order_id} exceeds return window of {window_days} days.", category="policy_blocked")
         
     validated_items = []
@@ -55,8 +65,16 @@ def handle(args, db):
         prod = db.one("SELECT * FROM products WHERE sku = ?", [sku])
         if prod and prod["is_final_sale"] and final_sale_enforced:
             raise ToolError(f"SKU {sku} is final sale and cannot be returned.", category="policy_blocked")
+        if prod and prod["category"] == "Accessories" and age_days > accessories_window:
+            raise ToolError(f"SKU {sku} is an accessory: its return window is {accessories_window} days from delivery, and order {order_id} was delivered {age_days} days ago.", category="policy_blocked")
             
-        avail_qty = ord_item["quantity"] - ord_item["returned_quantity"]
+        on_returns = db.one(
+            "SELECT COALESCE(SUM(ri.quantity), 0) AS q FROM return_items ri JOIN returns r ON r.return_id = ri.return_id "
+            "WHERE ri.item_id = ? AND r.status != 'cancelled'",
+            [ord_item["item_id"]],
+        )
+        # Units already on an active return count even where the line's counter lags behind them.
+        avail_qty = ord_item["quantity"] - max(ord_item["returned_quantity"], int(on_returns["q"] if on_returns else 0))
         if qty > avail_qty:
             raise ToolError(f"Requested quantity {qty} exceeds available returnable quantity {avail_qty} for SKU {sku}.", category="conflict")
             
@@ -88,8 +106,8 @@ def handle(args, db):
         
     created_at = clock_row["now"]
     db.execute(
-        "INSERT INTO returns (return_id, order_id, customer_id, created_at, status, estimated_refund_cents, restocking_fee_cents, return_reason) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-        [return_id, order_id, customer_id, created_at, "authorized", total_net, total_fee, "; ".join(combined_reason)]
+        "INSERT INTO returns (return_id, order_id, customer_id, created_at, status, estimated_refund_cents, restocking_fee_cents, return_reason, request_key, cancelled_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)",
+        [return_id, order_id, customer_id, created_at, "authorized", total_net, total_fee, "; ".join(combined_reason), request_key]
     )
     
     res_items = []
@@ -149,5 +167,6 @@ def handle(args, db):
         "restocking_fee_cents": total_fee,
         "label": label_obj,
         "label_status": label_status,
-        "items": res_items
+        "items": res_items,
+        "idempotent": False
     }

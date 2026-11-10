@@ -1,7 +1,13 @@
-def check(world, calls):
-    eval_calls = [c for c in calls if c.name in ("evaluate_return", "get_order") and c.arguments.get("order_id") and c.ok]
-    if not eval_calls:
+def check(world, calls, reference=None):
+    wanted = None
+    for step in reference or ():
+        if step.get("tool") in ("evaluate_return", "get_order", "get_order_invoice") and step.get("arguments", {}).get("order_id"):
+            wanted = (step["tool"], step["arguments"]["order_id"])
+    looks = [c for c in calls if c.name in ("evaluate_return", "get_order", "get_order_invoice") and c.arguments.get("order_id") and c.ok]
+    if not looks:
         return "not done: neither evaluate_return nor get_order was called with order_id"
+    if wanted and not any(c.name == wanted[0] and c.arguments.get("order_id") == wanted[1] for c in looks):
+        return f"done wrong: the amounts quoted were not read from order {wanted[1]} ({wanted[0]})"
     return None
 
 

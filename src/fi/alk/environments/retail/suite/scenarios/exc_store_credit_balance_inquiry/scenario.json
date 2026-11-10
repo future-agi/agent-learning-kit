@@ -1,0 +1,80 @@
+{
+  "name": "exc_store_credit_balance_inquiry",
+  "scenario_key": "exc-store-credit-balance-inquiry",
+  "scenario_id": "",
+  "use_case": "Exchange an item or use store credit",
+  "branch": "Customer Rachel Green C18 asks via email thread th_r13_store_credit about her store credit balance and expiration date",
+  "tests": "the agent reads email thread th_r13_store_credit, looks up store credit balance for C18, and accurately reports balance and expiry without calling it a refund",
+  "instruction": "You sent an email to customer support inquiring about your current store credit balance and when it expires.\n\nYour details:\n- Name: Rachel Green\n- Email: rachel.green@example.com\n- Postal Code: 10014\n- Thread: th_r13_store_credit",
+  "keywords": [
+    "email_support",
+    "store_credit_balance"
+  ],
+  "persona": {
+    "name": "Rachel Green",
+    "gender": "female",
+    "age_group": "25-32",
+    "occupation": "Marketing Professional",
+    "location": "Australia",
+    "personality": "Friendly and cooperative",
+    "communication_style": "Questioning",
+    "initial_message": "Hi, I am following up on email thread th_r13_store_credit. Can you tell me what my store credit balance is and when it expires?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "customer_id": "C18",
+    "origin": "seed",
+    "thread_id": "th_r13_store_credit"
+  },
+  "solution": [
+    {
+      "tool": "get_thread",
+      "arguments": {
+        "threadId": "th_r13_store_credit"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_store_credit_balance",
+      "arguments": {
+        "email": "rachel.green@example.com",
+        "customer_id": "C18",
+        "postal_code": "10014"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "postal_code": "record: customer postal code 10014",
+        "customer_id": "record: customer C18"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "overlay_vector": "none",
+    "disposition": "store_credit_inquiry",
+    "counterparty": "verified_owner",
+    "overlay": "none",
+    "interaction": "multi_turn",
+    "interface": "clean_prose",
+    "task": "store_credit_inquiry",
+    "overlay_intensity": "absent"
+  },
+  "sub_goals": [
+    "store_credit_reported",
+    "exchange_not_called_refund"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

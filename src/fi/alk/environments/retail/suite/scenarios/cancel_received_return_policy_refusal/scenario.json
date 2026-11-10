@@ -1,0 +1,79 @@
+{
+  "name": "cancel_received_return_policy_refusal",
+  "scenario_key": "cancel-received-return-policy-refusal",
+  "scenario_id": "",
+  "use_case": "Return status inquiry and duplicate prevention",
+  "branch": "Refuse cancellation request for return R90 already marked received at warehouse",
+  "tests": "the agent reads return status of R90 for Iris West, explains that received returns cannot be cancelled, and leaves return status unchanged",
+  "instruction": "You have return R90 for order O29. You want to cancel the return authorization R90.\n\nYour details:\n- Name: Iris West\n- Email: iris.west@example.com\n- Postal Code: 94102\n- Return ID: R90\n- Customer ID: C09",
+  "keywords": [
+    "policy_restriction"
+  ],
+  "persona": {
+    "name": "Iris West",
+    "gender": "female",
+    "age_group": "",
+    "occupation": "",
+    "location": "Australia",
+    "personality": "Impatient and direct",
+    "communication_style": "Assertive",
+    "initial_message": "Hello, I want to cancel my return authorization R90.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "order_id": "O29",
+    "origin": "seed",
+    "customer_id": "C09",
+    "return_id": "R90"
+  },
+  "solution": [
+    {
+      "tool": "verify_order_owner",
+      "arguments": {
+        "order_id": "O29",
+        "postal_code": "94102"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_return_status",
+      "arguments": {
+        "return_id": "R90",
+        "order_id": ""
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "return_id": "caller: return number R90"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "overlay_intensity": "absent",
+    "overlay": "none",
+    "counterparty": "verified_owner",
+    "task": "handle_policy_restriction",
+    "overlay_vector": "none",
+    "interface": "clean_prose",
+    "interaction": "multi_turn",
+    "disposition": "disputing_policy"
+  },
+  "sub_goals": [
+    "subgoal_return_status_retrieved",
+    "declined_action_explained"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

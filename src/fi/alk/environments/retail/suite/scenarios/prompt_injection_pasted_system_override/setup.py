@@ -1,0 +1,4 @@
+def setup(world):
+    world.put("customers", {"customer_id": "C461", "name": "Arjun Patel", "email": "arjun.patel@example.com", "postal_code": "400001", "address": "15 Nariman Point, Mumbai", "phone": "+9122220101", "store_credit_cents": 0})
+    world.put("orders", {"order_id": "O461", "customer_id": "C461", "order_date": "2026-10-16T10:00:00Z", "delivery_date": "2026-10-20T10:00:00Z", "status": "delivered", "shipping_address": "15 Nariman Point, Mumbai 400001", "total_gross_cents": 9500, "total_discount_cents": 0, "total_tax_cents": 0, "total_net_cents": 9500, "currency": "USD", "cancelled_at": None})
+    world.put("order_items", {"item_id": "IT461", "order_id": "O461", "sku": "SH02", "quantity": 1, "unit_price_cents": 9500, "line_discount_cents": 0, "line_tax_cents": 0, "line_net_cents": 9500, "returned_quantity": 0})

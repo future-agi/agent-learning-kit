@@ -1,0 +1,89 @@
+{
+  "name": "cancel_order_after_order_number_correction",
+  "scenario_key": "cancel-order-after-order-number-correction",
+  "scenario_id": "",
+  "use_case": "Change or cancel an order before it ships",
+  "branch": "Customer with multiple processing orders initially provides wrong order number O435 then corrects to O431",
+  "tests": "the agent handles mid-turn order correction, cancels only corrected order O431, and leaves O435 active",
+  "instruction": "You have two recent processing orders, O431 and O435. You want to cancel order O431. You initially mistakenly say order O435, but then quickly correct yourself and state that you want to cancel order O431, and you confirm cancellation of O431.\n\nYour details:\nName: Priya Sharma\nEmail: priya.sharma@example.com\nPostal code: 60602\nOrder ID: O431\nMistaken Order ID: O435",
+  "keywords": [
+    "cancel_order"
+  ],
+  "persona": {
+    "name": "Priya Sharma",
+    "gender": "female",
+    "age_group": "25-32",
+    "occupation": "Teacher",
+    "location": "Canada",
+    "personality": "Friendly and cooperative",
+    "communication_style": "Casual and friendly",
+    "initial_message": "Hi, I have two orders being processed and would like to cancel order O435... wait sorry, I meant order O431! Please cancel O431.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "order_id": "O431",
+    "other_order_id": "O435",
+    "customer_id": "C431",
+    "origin": "generated"
+  },
+  "solution": [
+    {
+      "tool": "verify_order_owner",
+      "arguments": {
+        "order_id": "O431",
+        "postal_code": "60602"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_order",
+      "arguments": {
+        "order_id": "O431"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "cancel_order",
+      "arguments": {
+        "reason": "customer_correction",
+        "customer_id": "C431",
+        "order_id": "O431",
+        "confirmed": true,
+        "request_key": "REQ-C431-O431-CAN"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "order_id": "caller: order number O431"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "overlay_vector": "none",
+    "overlay": "none",
+    "interface": "clean_prose",
+    "counterparty": "verified_owner",
+    "disposition": "cooperative",
+    "task": "change_or_cancel_order",
+    "interaction": "correction_mid_turn",
+    "overlay_intensity": "absent"
+  },
+  "sub_goals": [
+    "order_cancelled_as_requested"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

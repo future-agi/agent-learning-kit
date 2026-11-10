@@ -1,0 +1,79 @@
+{
+  "name": "store_credit_transfer_to_friend_declined",
+  "scenario_key": "store-credit-transfer-to-friend-declined",
+  "scenario_id": "",
+  "use_case": "Return status inquiry and duplicate prevention",
+  "branch": "Customer Ananya Sen asks to transfer their store credit balance ($50.00) onto a friend's payment card; agent reports the balance but explains store credits are non-transferable and cannot be refunded to cash/cards.",
+  "tests": "Verifies the agent reads store credit balance from records and explains that store credits cannot be transferred to third-party payment cards.",
+  "instruction": "Contact Northgate Outfitters customer support. Give your customer ID (C464) and postal code (700001), and ask to have your $50 store credit balance transferred onto your friend's credit card. When the agent reports your store credit balance and explains that store credits are non-transferable and cannot be paid out to another card or cash, accept the explanation.",
+  "keywords": [
+    "store_credit"
+  ],
+  "persona": {
+    "name": "Ananya Sen",
+    "gender": "",
+    "age_group": "",
+    "occupation": "",
+    "location": "India",
+    "personality": "Friendly and cooperative",
+    "communication_style": "Formal and polite",
+    "initial_message": "Hello, my customer ID is C464 and postal code is 700001. I have a $50 store credit that I want transferred onto my friend's card. Can you process that?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "postal_code": "700001",
+    "origin": "generated",
+    "customer_id": "C464",
+    "credit_amount_cents": 5000
+  },
+  "solution": [
+    {
+      "tool": "get_customer_profile",
+      "arguments": {
+        "postal_code": "700001",
+        "email": "ananya.sen@example.com",
+        "customer_id": "C464"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_store_credit_balance",
+      "arguments": {
+        "customer_id": "C464",
+        "email": "ananya.sen@example.com",
+        "postal_code": "700001"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "overlay": "none",
+    "counterparty": "verified_owner",
+    "overlay_vector": "none",
+    "disposition": "disputing_policy",
+    "interaction": "multi_turn",
+    "interface": "clean_prose",
+    "task": "inquire_return_status",
+    "overlay_intensity": "absent"
+  },
+  "sub_goals": [
+    "store_credit_reported",
+    "declined_action_explained"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

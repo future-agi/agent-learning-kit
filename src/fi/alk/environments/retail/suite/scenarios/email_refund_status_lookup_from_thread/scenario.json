@@ -1,0 +1,88 @@
+{
+  "name": "email_refund_status_lookup_from_thread",
+  "scenario_key": "email-refund-status-lookup-from-thread",
+  "scenario_id": "",
+  "use_case": "Return status inquiry and duplicate prevention",
+  "branch": "Iris West references email thread th_r05_refund_status to check refund status of received return R90",
+  "tests": "the agent reads thread th_r05_refund_status, verifies order O29, and retrieves return status for return R90",
+  "instruction": "You sent an email earlier (thread subject 'Refund status') regarding return R90 for order O29. You want to check the status of your refund in chat.\n\nYour details:\n- Name: Iris West\n- Email: iris.west@example.com\n- Postal Code: 94102\n- Return ID: R90\n- Order ID: O29",
+  "keywords": [
+    "email_pickup"
+  ],
+  "persona": {
+    "name": "Iris W.",
+    "gender": "female",
+    "age_group": "",
+    "occupation": "",
+    "location": "Canada",
+    "personality": "Anxious",
+    "communication_style": "Casual and friendly",
+    "initial_message": "Hi, I sent an email about my return R90 for order O29. Could you check the status of my refund?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "return_id": "R90",
+    "origin": "seed",
+    "thread_id": "th_r05_refund_status",
+    "order_id": "O29",
+    "customer_id": "C09"
+  },
+  "solution": [
+    {
+      "tool": "get_thread",
+      "arguments": {
+        "threadId": "th_r05_refund_status",
+        "messageFormat": "FULL_CONTENT"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "verify_order_owner",
+      "arguments": {
+        "postal_code": "94102",
+        "order_id": "O29"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_return_status",
+      "arguments": {
+        "return_id": "R90",
+        "order_id": ""
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "return_id": "caller: return number R90"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "overlay_vector": "none",
+    "interaction": "multi_turn",
+    "task": "inquire_return_status",
+    "overlay_intensity": "absent",
+    "interface": "clean_prose",
+    "overlay": "none",
+    "disposition": "refund_inquiry",
+    "counterparty": "verified_owner"
+  },
+  "sub_goals": [
+    "subgoal_return_status_retrieved"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

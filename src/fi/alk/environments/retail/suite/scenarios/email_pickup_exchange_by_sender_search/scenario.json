@@ -1,0 +1,120 @@
+{
+  "name": "email_pickup_exchange_by_sender_search",
+  "scenario_key": "email-pickup-exchange-by-sender-search",
+  "scenario_id": "",
+  "use_case": "Pick up a case that started by email and continue it with the store's tools",
+  "branch": "Search email by customer address without reference number and create requested exchange AP10 for AP09",
+  "tests": "the agent searches threads for Peter Parker's email, reads exchange request in th_r06_exchange_turtleneck, verifies order O16, and creates exchange of AP10 for AP09",
+  "instruction": "You sent an email earlier to request an exchange of the Cashmere Turtleneck Sweater (SKU AP10) from order O16 for the Merino Wool Crewneck Sweater (SKU AP09). You don't have your email reference number handy. You are contacting support in chat asking them to look up your email and process the exchange.\n\nYour details:\n- Name: Peter Parker\n- Email: peter.parker@example.com\n- Postal Code: 11375\n- Order ID: O16\n- Original Item: Cashmere Turtleneck Sweater (SKU: AP10)\n- Replacement Item: Merino Wool Crewneck Sweater (SKU: AP09)\n- Quantity: 1",
+  "keywords": [
+    "email_pickup",
+    "item_exchange"
+  ],
+  "persona": {
+    "name": "Peter B. Parker",
+    "gender": "male",
+    "age_group": "",
+    "occupation": "",
+    "location": "Canada",
+    "personality": "Friendly and cooperative",
+    "communication_style": "Casual and friendly",
+    "initial_message": "Hi! I sent an email earlier from peter.parker@example.com about exchanging AP10 for AP09 on order O16. Could you find my email and set up the exchange for me?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "origin": "seed",
+    "original_sku": "AP10",
+    "customer_id": "C16",
+    "replacement_sku": "AP09",
+    "order_id": "O16",
+    "thread_id": "th_r06_exchange_turtleneck"
+  },
+  "solution": [
+    {
+      "tool": "search_threads",
+      "arguments": {
+        "view": "FULL",
+        "query": "from:peter.parker@example.com",
+        "pageToken": "",
+        "includeTrash": false,
+        "pageSize": 10
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_thread",
+      "arguments": {
+        "threadId": "th_r06_exchange_turtleneck",
+        "messageFormat": "FULL_CONTENT"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "verify_order_owner",
+      "arguments": {
+        "postal_code": "11375",
+        "order_id": "O16"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_order",
+      "arguments": {
+        "order_id": "O16"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "create_exchange",
+      "arguments": {
+        "order_id": "O16",
+        "request_key": "REQ-EXCH-O16-AP10",
+        "confirmed": true,
+        "quantity": 1,
+        "original_sku": "AP10",
+        "customer_id": "C16",
+        "replacement_sku": "AP09"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "order_id": "caller: order number O16",
+        "replacement_sku": "caller: replacement item AP09",
+        "quantity": "caller: quantity 1",
+        "original_sku": "caller: original item AP10",
+        "customer_id": "record: customer C16",
+        "confirmed": "caller: confirmed"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "task": "create_exchange",
+    "overlay": "none",
+    "overlay_intensity": "absent",
+    "interaction": "multi_turn",
+    "counterparty": "verified_owner",
+    "disposition": "exchange_request",
+    "interface": "clean_prose",
+    "overlay_vector": "none"
+  },
+  "sub_goals": [
+    "exchange_created_as_confirmed"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

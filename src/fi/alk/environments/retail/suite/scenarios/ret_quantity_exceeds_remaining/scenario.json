@@ -1,0 +1,112 @@
+{
+  "name": "ret_quantity_exceeds_remaining",
+  "scenario_key": "ret-quantity-exceeds-remaining",
+  "scenario_id": "",
+  "use_case": "Eligible item return and label generation",
+  "branch": "Customer C403 asks to return 2 units of AP14 from order O403 where 2 of 3 units were already returned, and accepts returning the 1 remaining unit",
+  "tests": "the agent identifies that only 1 unit of AP14 remains returnable on order O403 and creates a return for 1 unit",
+  "instruction": "You bought three Classic Polo Shirts (SKU AP14) in order O403. You previously returned two of them. You initially ask to return two shirts, but since only one remains available to return, you agree to return the 1 remaining shirt.\n\nYour details:\n- Name: Julian Thorne\n- Email: julian.thorne@example.com\n- Postal Code: 75001\n- Order ID: O403\n- SKU: AP14\n- Final Return Quantity: 1\n- Reason: No longer needed",
+  "keywords": [
+    "return_authorization",
+    "quantity_limit"
+  ],
+  "persona": {
+    "name": "Julian Thorne",
+    "gender": "male",
+    "age_group": "40-50",
+    "occupation": "Manager",
+    "location": "United States",
+    "personality": "Friendly and cooperative",
+    "communication_style": "Direct and concise",
+    "initial_message": "Hi, I'd like to return 2 of the classic polo shirts (AP14) from my order O403. If only 1 is left available to return, please process that one.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "order_id": "O403",
+    "customer_id": "C403",
+    "origin": "generated",
+    "sku": "AP14"
+  },
+  "solution": [
+    {
+      "tool": "verify_order_owner",
+      "arguments": {
+        "postal_code": "75001",
+        "order_id": "O403"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_order",
+      "arguments": {
+        "order_id": "O403"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "evaluate_return",
+      "arguments": {
+        "items": [
+          {
+            "reason": "not_needed",
+            "quantity": 1,
+            "sku": "AP14"
+          }
+        ],
+        "order_id": "O403"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "create_return",
+      "arguments": {
+        "customer_id": "C403",
+        "order_id": "O403",
+        "items": [
+          {
+            "reason": "not_needed",
+            "quantity": 1,
+            "sku": "AP14"
+          }
+        ]
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "customer_id": "record: customer C403",
+        "order_id": "caller: order number O403",
+        "items": "the items and quantities the customer settled on"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "overlay_vector": "none",
+    "interaction": "correction_mid_turn",
+    "overlay": "none",
+    "task": "return_eligible_item",
+    "interface": "clean_prose",
+    "overlay_intensity": "absent",
+    "counterparty": "verified_owner",
+    "disposition": "already_returned"
+  },
+  "sub_goals": [
+    "subgoal_return_created",
+    "subgoal_accurate_refund_status"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

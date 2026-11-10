@@ -1,0 +1,81 @@
+{
+  "name": "policy_store_credit_cash_conversion_inquiry",
+  "scenario_key": "policy-store-credit-cash-conversion-inquiry",
+  "scenario_id": "",
+  "use_case": "Answer return and exchange policy questions with citations",
+  "branch": "Customer asks whether Northgate store credit can be cashed out or refunded to a bank card.",
+  "tests": "Verifies the agent reads Store Credit Terms from Drive and explains store credit cannot be redeemed for cash or refunded to payment cards.",
+  "instruction": "Ask Northgate Outfitters customer support if store credit balances can be converted into cash or refunded back to an original payment method.",
+  "keywords": [
+    "policy_inquiry",
+    "store_credit"
+  ],
+  "persona": {
+    "name": "Karen Scott",
+    "gender": "",
+    "age_group": "",
+    "occupation": "",
+    "location": "United Kingdom",
+    "personality": "Friendly and cooperative",
+    "communication_style": "Simple and clear",
+    "initial_message": "Hi, can I cash out my Northgate store credit or transfer the balance directly to my debit card?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "origin": "seed",
+    "document": "store_credit_terms"
+  },
+  "solution": [
+    {
+      "tool": "search_files",
+      "arguments": {
+        "excludeContentSnippets": false,
+        "query": "title contains 'Store Credit Terms'",
+        "pageSize": 10,
+        "pageToken": null
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "read_file_content",
+      "arguments": {
+        "includeComments": false,
+        "fileId": "store_credit_terms",
+        "revisionId": null
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "fileId": "record: drive_files.file_id for store credit terms policy"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "disposition": "cooperative",
+    "counterparty": "prospective_buyer",
+    "interface": "split_message",
+    "overlay": "none",
+    "overlay_vector": "none",
+    "overlay_intensity": "absent",
+    "task": "answer_policy_questions",
+    "interaction": "single_turn"
+  },
+  "sub_goals": [
+    "effective_policy_consulted",
+    "policy_source_cited"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

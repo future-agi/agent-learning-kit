@@ -1,0 +1,117 @@
+{
+  "name": "email_draft_net_refundable_amount_calculation",
+  "scenario_key": "email-draft-net-refundable-amount-calculation",
+  "scenario_id": "",
+  "use_case": "Draft a reply on a customer's email thread for a person to review",
+  "branch": "Draft a reply confirming the net refundable amount reflecting discounts rather than list price",
+  "tests": "the agent reads Rachel Green's email thread th_r04_return_request_rachel, verifies order O18, and drafts a reply quoting the net amount $50.00 rather than $58.00 list price",
+  "instruction": "You emailed support earlier asking about returning the Slim-Fit Oxford Button-Down (SKU AP03) from order O18. You bought it on sale and want to make sure of the refund amount before returning. You are asking support in chat to draft a reply to your email thread stating the exact refund amount.\n\nYour details:\n- Name: Rachel Green\n- Email: rachel.green@example.com\n- Postal Code: 10014\n- Order ID: O18\n- Item: Slim-Fit Oxford Button-Down (SKU: AP03)",
+  "keywords": [
+    "email_draft"
+  ],
+  "persona": {
+    "name": "Rachel G.",
+    "gender": "female",
+    "age_group": "",
+    "occupation": "",
+    "location": "United States",
+    "personality": "Friendly and cooperative",
+    "communication_style": "Casual and friendly",
+    "initial_message": "Hi! I sent an email about returning AP03 from order O18. Could you reply to my email thread confirming the exact refund amount I will receive?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "origin": "seed",
+    "thread_id": "th_r04_return_request_rachel",
+    "order_id": "O18",
+    "customer_id": "C18",
+    "sku": "AP03"
+  },
+  "solution": [
+    {
+      "tool": "get_thread",
+      "arguments": {
+        "threadId": "th_r04_return_request_rachel"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "threadId": "record: thread th_r04_return_request_rachel"
+      }
+    },
+    {
+      "tool": "verify_order_owner",
+      "arguments": {
+        "order_id": "O18",
+        "postal_code": "10014"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_order",
+      "arguments": {
+        "order_id": "O18"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "evaluate_return",
+      "arguments": {
+        "items": [
+          {
+            "sku": "AP03",
+            "quantity": 1,
+            "reason": "wrong_size"
+          }
+        ],
+        "order_id": "O18"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "create_draft",
+      "arguments": {
+        "subject": "Re: Return request",
+        "to": [
+          "rachel.green@example.com"
+        ],
+        "body": "Hello Rachel, the net refundable amount for AP03 from order O18 is $50.00 after applying the $8.00 line discount.",
+        "replyToMessageId": "rmsg_006"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "replyToMessageId": "record: message rmsg_006 in thread th_r04_return_request_rachel",
+        "to": "caller: rachel.green@example.com"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "counterparty": "verified_owner",
+    "interface": "clean_prose",
+    "overlay": "none",
+    "interaction": "multi_turn",
+    "disposition": "discounted_pricing",
+    "task": "draft_email_reply",
+    "overlay_vector": "none",
+    "overlay_intensity": "absent"
+  },
+  "sub_goals": [
+    "draft_created_for_review"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

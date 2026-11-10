@@ -35,20 +35,21 @@
   },
   "solution": [
     {
-      "tool": "get_order",
-      "arguments": {
-        "order_id": "O01"
-      },
-      "environment_arguments": {},
-      "fixed": {}
-    },
-    {
       "tool": "verify_order_owner",
       "arguments": {
         "postal_code": "00000",
         "email": "grace.kelly@external.org",
         "order_id": "O01",
         "customer_id": "C99"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "search_orders",
+      "arguments": {
+        "email": "grace.kelly@external.org",
+        "postal_code": "00000"
       },
       "environment_arguments": {},
       "fixed": {}

@@ -1,0 +1,5 @@
+def setup(world):
+    world.put("customers", {"customer_id": "C451", "name": "Bob Higgins", "email": "bob.higgins@example.com", "postal_code": "M2 2BB", "address": "20 Victoria St, Manchester", "phone": "+44161001", "store_credit_cents": 0})
+    world.put("customers", {"customer_id": "C452", "name": "Claire Higgins", "email": "claire.higgins@example.com", "postal_code": "M1 1AA", "address": "10 Market St, Manchester", "phone": "+44161002", "store_credit_cents": 0})
+    world.put("orders", {"order_id": "O452", "customer_id": "C451", "order_date": "2026-10-14T09:15:00Z", "delivery_date": "2026-10-18T11:00:00Z", "status": "delivered", "shipping_address": "20 Victoria St, Manchester M2 2BB", "total_gross_cents": 9500, "total_discount_cents": 0, "total_tax_cents": 0, "total_net_cents": 9500, "currency": "USD", "cancelled_at": None})
+    world.put("order_items", {"item_id": "IT452", "order_id": "O452", "sku": "SH02", "quantity": 1, "unit_price_cents": 9500, "line_discount_cents": 0, "line_tax_cents": 0, "line_net_cents": 9500, "returned_quantity": 0})

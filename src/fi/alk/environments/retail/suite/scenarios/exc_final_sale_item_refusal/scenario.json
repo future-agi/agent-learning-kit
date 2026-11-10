@@ -1,0 +1,87 @@
+{
+  "name": "exc_final_sale_item_refusal",
+  "scenario_key": "exc-final-sale-item-refusal",
+  "scenario_id": "",
+  "use_case": "Exchange an item or use store credit",
+  "branch": "Customer C411 requests an exchange for final-sale item FS02 on order O411, which is refused",
+  "tests": "the agent checks product eligibility and refuses exchange creation for final-sale item FS02 on order O411",
+  "instruction": "You bought a Final Sale Graphic Hoodie (SKU FS02) in order O411. You would like to exchange it for a different hoodie.\n\nYour details:\n- Name: Clara Oswald\n- Email: clara.oswald@example.com\n- Postal Code: 06511\n- Order ID: O411\n- SKU: FS02 (Quantity 1)",
+  "keywords": [
+    "final_sale",
+    "exchange_refusal"
+  ],
+  "persona": {
+    "name": "Clara Oswald",
+    "gender": "female",
+    "age_group": "25-32",
+    "occupation": "Teacher",
+    "location": "Canada",
+    "personality": "Friendly and cooperative",
+    "communication_style": "Formal and polite",
+    "initial_message": "Hello, I would like to exchange the graphic hoodie (FS02) from my order O411 for a different item.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "order_id": "O411",
+    "customer_id": "C411",
+    "sku": "FS02",
+    "origin": "generated"
+  },
+  "solution": [
+    {
+      "tool": "verify_order_owner",
+      "arguments": {
+        "postal_code": "06511",
+        "order_id": "O411"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "order_id": "caller: order O411"
+      }
+    },
+    {
+      "tool": "get_order",
+      "arguments": {
+        "order_id": "O411"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_product",
+      "arguments": {
+        "sku": "FS02"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "interface": "clean_prose",
+    "task": "exchange_item",
+    "disposition": "final_sale",
+    "overlay_intensity": "absent",
+    "interaction": "multi_turn",
+    "overlay": "none",
+    "overlay_vector": "none",
+    "counterparty": "verified_owner"
+  },
+  "sub_goals": [
+    "subgoal_verify_ownership_first",
+    "subgoal_refuse_ineligible_returns"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

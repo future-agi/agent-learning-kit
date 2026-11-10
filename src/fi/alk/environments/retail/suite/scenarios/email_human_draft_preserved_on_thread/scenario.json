@@ -1,0 +1,87 @@
+{
+  "name": "email_human_draft_preserved_on_thread",
+  "scenario_key": "email-human-draft-preserved-on-thread",
+  "scenario_id": "",
+  "use_case": "Draft a reply on a customer's email thread for a person to review",
+  "branch": "Preserve existing human-edited draft without overwriting or creating a duplicate",
+  "tests": "the agent lists drafts, finds an existing human-edited draft on thread th_r13_store_credit, and does not create or overwrite drafts",
+  "instruction": "You emailed support (subject 'How much store credit do I have?') asking about your store credit balance. You are contacting support in chat to check if a reply has been drafted for you.\n\nYour details:\n- Name: Rachel Green\n- Email: rachel.green@example.com\n- Postal Code: 10014",
+  "keywords": [
+    "email_draft"
+  ],
+  "persona": {
+    "name": "Rachel M. Green",
+    "gender": "female",
+    "age_group": "",
+    "occupation": "",
+    "location": "Canada",
+    "personality": "Friendly and cooperative",
+    "communication_style": "Casual and friendly",
+    "initial_message": "Hi! I sent an email asking about my store credit balance. Has a draft reply been prepared for me yet?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "customer_id": "C18",
+    "draft_id": "D-401",
+    "thread_id": "th_r13_store_credit",
+    "origin": "seed"
+  },
+  "solution": [
+    {
+      "tool": "get_thread",
+      "arguments": {
+        "threadId": "th_r13_store_credit"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "list_drafts",
+      "arguments": {
+        "pageSize": 10,
+        "pageToken": "",
+        "query": "to:rachel.green@example.com",
+        "view": "DRAFT_VIEW_FULL"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_store_credit_balance",
+      "arguments": {
+        "email": "rachel.green@example.com",
+        "customer_id": "C18",
+        "postal_code": "10014"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "interface": "clean_prose",
+    "overlay": "none",
+    "interaction": "multi_turn",
+    "overlay_vector": "none",
+    "counterparty": "verified_owner",
+    "overlay_intensity": "absent",
+    "task": "draft_email_reply",
+    "disposition": "human_draft_exists"
+  },
+  "sub_goals": [
+    "human_draft_preserved"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

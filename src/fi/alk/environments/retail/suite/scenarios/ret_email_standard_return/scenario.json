@@ -1,0 +1,123 @@
+{
+  "name": "ret_email_standard_return",
+  "scenario_key": "ret-email-standard-return",
+  "scenario_id": "",
+  "use_case": "Eligible item return and label generation",
+  "branch": "Customer Bob Smith C02 follows up on email thread th_r03_return_request_bob to confirm return authorization for AP04 on order O22",
+  "tests": "the agent reads email thread th_r03_return_request_bob, confirms with the customer, and creates a return for AP04 on order O22",
+  "instruction": "You emailed customer support asking to return the Linen Long-Sleeve Shirt (SKU AP04) from order O22 because it is too large. You are ready to confirm the return creation.\n\nYour details:\n- Name: Bob S. Smith\n- Email: bob.smith@example.com\n- Postal Code: 10001\n- Thread: th_r03_return_request_bob\n- Order ID: O22\n- Item: SKU AP04 (Quantity 1)\n- Reason: Too large",
+  "keywords": [
+    "email_support",
+    "return_confirmation"
+  ],
+  "persona": {
+    "name": "Bob S. Smith",
+    "gender": "male",
+    "age_group": "40-50",
+    "occupation": "Technician",
+    "location": "Australia",
+    "personality": "Friendly and cooperative",
+    "communication_style": "Direct and concise",
+    "initial_message": "Hello, I am following up on email thread th_r03_return_request_bob to confirm my return for the shirt on order O22.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "thread_id": "th_r03_return_request_bob",
+    "sku": "AP04",
+    "customer_id": "C02",
+    "order_id": "O22",
+    "origin": "seed"
+  },
+  "solution": [
+    {
+      "tool": "get_thread",
+      "arguments": {
+        "threadId": "th_r03_return_request_bob"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "threadId": "caller: email thread th_r03_return_request_bob"
+      }
+    },
+    {
+      "tool": "verify_order_owner",
+      "arguments": {
+        "order_id": "O22",
+        "postal_code": "10001"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_order",
+      "arguments": {
+        "order_id": "O22"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "evaluate_return",
+      "arguments": {
+        "items": [
+          {
+            "reason": "too_large",
+            "sku": "AP04",
+            "quantity": 1
+          }
+        ],
+        "order_id": "O22"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "create_return",
+      "arguments": {
+        "order_id": "O22",
+        "customer_id": "C02",
+        "items": [
+          {
+            "sku": "AP04",
+            "quantity": 1,
+            "reason": "too_large"
+          }
+        ]
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "order_id": "caller: order O22",
+        "customer_id": "record: customer C02",
+        "items": "the items and quantities the customer settled on"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "interaction": "multi_turn",
+    "disposition": "email_request",
+    "task": "return_eligible_item",
+    "counterparty": "verified_owner",
+    "interface": "clean_prose",
+    "overlay_vector": "none",
+    "overlay_intensity": "absent",
+    "overlay": "none"
+  },
+  "sub_goals": [
+    "subgoal_return_created",
+    "subgoal_confirm_before_creation"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

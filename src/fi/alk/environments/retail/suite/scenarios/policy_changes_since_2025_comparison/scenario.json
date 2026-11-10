@@ -1,0 +1,82 @@
+{
+  "name": "policy_changes_since_2025_comparison",
+  "scenario_key": "policy-changes-since-2025-comparison",
+  "scenario_id": "",
+  "use_case": "Answer return and exchange policy questions with citations",
+  "branch": "Customer asks what terms changed in the return policy between the 2025 policy and the current 2026 policy.",
+  "tests": "Verifies the agent reads both the superseded 2025 policy and the current version 3.0 policy from Drive to accurately explain the differences.",
+  "instruction": "Ask Northgate Outfitters customer support what changed between the 2025 return policy (version 2.0) and the current 2026 return policy (version 3.0), specifically regarding return windows and restocking fees.",
+  "keywords": [
+    "policy_inquiry"
+  ],
+  "persona": {
+    "name": "Daniel Thorne",
+    "gender": "",
+    "age_group": "",
+    "occupation": "",
+    "location": "United States",
+    "personality": "Detail-oriented",
+    "communication_style": "Detailed and elaborate",
+    "initial_message": "Hello! I am reviewing past store policies and would like to know what specifically changed between the 2025 returns policy (v2.0) and the current version 3.0 policy.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "document_2025": "ret_pol_v2",
+    "origin": "seed",
+    "document_current": "ret_pol_v3"
+  },
+  "solution": [
+    {
+      "tool": "read_file_content",
+      "arguments": {
+        "includeComments": false,
+        "revisionId": null,
+        "fileId": "ret_pol_v2"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "fileId": "record: drive_files.file_id for 2025 superseded return policy"
+      }
+    },
+    {
+      "tool": "read_file_content",
+      "arguments": {
+        "includeComments": false,
+        "fileId": "ret_pol_v3",
+        "revisionId": null
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "fileId": "record: drive_files.file_id for current return policy"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "overlay": "none",
+    "counterparty": "prospective_buyer",
+    "interaction": "multi_turn",
+    "disposition": "cooperative",
+    "overlay_vector": "none",
+    "overlay_intensity": "absent",
+    "task": "answer_policy_questions",
+    "interface": "clean_prose"
+  },
+  "sub_goals": [
+    "policy_document_read_from_drive",
+    "policy_source_cited"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}
