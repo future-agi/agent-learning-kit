@@ -184,6 +184,13 @@ def _write_whole(path: Path, body: bytes) -> None:
 
 def document(job: HarnessJob, source: Path, output: Path) -> int:
     """The agent's description from the saved contract, as a build makes it."""
+    try:
+        from .seed_contract import record_reading
+
+        # What the reading was made from, so a build can tell whether it may reuse it.
+        record_reading(job, output)
+    except Exception as exc:
+        logger.warning("reading record not written: class=%s", type(exc).__name__)
     # One catch over every step: a saved contract is paid for, so nothing after it is retryable.
     try:
         contract_bytes = (output / CONTRACT_FILE).stat().st_size

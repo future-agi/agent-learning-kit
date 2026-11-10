@@ -7,6 +7,8 @@ import traceback
 import json
 import os
 import signal
+import sys
+import threading
 import time
 import uuid
 from collections.abc import Awaitable
@@ -57,6 +59,8 @@ _AUTHORING_BASIS = ".futureagi-authoring-basis.json"
 _PUBLISHED = ".futureagi-published.json"
 _LEDGER = ".futureagi-ledger.json"
 _LEDGER_NOTES = 40
+# One install at a time: an opening cancelled mid-install leaves its thread running.
+_SEED_LOCK = threading.Lock()
 # Tools whose effect the person confirms before it happens.
 _NEEDS_CONFIRMATION = frozenset(
     {
@@ -341,9 +345,21 @@ class HostedChatRuntime:
         from .understand import load as load_contract
 
         policy_job = guest_booking_policy_job(self.job)
+        # A reading the platform handed this build is used before anything opens.
+        await asyncio.to_thread(self._take_seed)
         contract = load_contract(self.workspace)
         self._opened_with = self._what_exists()
         if not self._opened_with[1]:
+            if contract is not None:
+                try:
+                    # What follows a saved contract is done before the world stage opens.
+                    await asyncio.to_thread(self._after_saved)
+                except Exception as exc:  # noqa: BLE001 - the stage opens as it did before
+                    print(
+                        f"source model not written before the world stage; class: {type(exc).__name__}",
+                        file=sys.stderr,
+                        flush=True,
+                    )
             stage = self._open_for_building(contract)
         else:
             try:
@@ -1262,6 +1278,27 @@ class HostedChatRuntime:
             after_contract(self.workspace, self.source, job)
         if has_world and (world_changed or not (self.workspace / "environment-bundle" / "manifest.json").is_file()):
             after_world(self.source if self.source.is_dir() else None, self.workspace, load_contract(self.workspace))
+
+    def _take_seed(self) -> None:
+        """Use the reading the platform handed this build, before the first stage opens."""
+        from .job import HarnessJob
+        from .seed_contract import SEED_ACCEPTED, seed_beside, use_seed
+
+        with _SEED_LOCK:
+            if (
+                not (self.workspace / SEED_ACCEPTED).is_file()
+                or (self.workspace / "contract.json").exists()
+                or (self.workspace / FAILURE_FILE).exists()
+                or self._what_exists()[1]
+                or self._build_is_over()
+            ):
+                return
+            try:
+                job = HarnessJob.model_validate(self.job)
+            except Exception as exc:  # noqa: BLE001 - an unreadable job reads the agent as today
+                print(f"seed contract: not used; class: {type(exc).__name__}", file=sys.stderr, flush=True)
+                return
+            use_seed(seed_beside(self.workspace), job, self.source, self.workspace)
 
     async def _handle(self, command: dict[str, Any]) -> None:
         if str(command["kind"]) != "nudge":
