@@ -4934,6 +4934,21 @@ def test_a_worker_s_failed_check_is_reported_beside_the_task_s_verdict_not_folde
     assert failed.status == "failed"
 
 
+def test_a_worker_s_broken_check_is_unmeasured_on_that_worker_and_never_faults_the_call() -> None:
+    calls = (hs.Call(name="get_order", arguments={}, worker_id="order_lookup"),)
+    receipt = _graded(
+        [
+            _WorkerGoal("lookup_read_only", lambda w, c: 42, worker="order_lookup"),
+            _WorkerGoal("reply_truthful", lambda w, c: None),
+        ],
+        _call_outcome(turns=2, calls=calls),
+    )
+    worker, task = receipt.sub_goals
+    # One worker's broken check must not stop the task's own sub-goals being graded.
+    assert (worker.verdict, task.verdict, receipt.status) == ("unmeasured", "pass", "passed")
+    assert "check returned 42" in worker.reason
+
+
 def test_a_worker_that_passed_its_deadline_has_its_own_checks_inconclusive_and_the_task_still_graded() -> None:
     calls = (
         hs.Call(name="get_order", arguments={}, worker_id="order_lookup"),

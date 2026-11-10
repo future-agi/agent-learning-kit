@@ -339,6 +339,11 @@ class SubGoalResult:
         object.__setattr__(self, "verdict", verdict_named(self.held, self.reason))
 
 
+def _worker_unmeasured(goal: Any, why: str) -> "SubGoalResult":
+    """A worker's own check that could not measure: unmeasured, with why, never a fault of the whole call."""
+    return SubGoalResult(name=goal.name, held=None, reason=f"{UNMEASURED}{why}", judged=goal.judged != "")
+
+
 @dataclass(frozen=True)
 class Evaluation:
     name: str
@@ -2418,6 +2423,10 @@ class HostedScheduler:
                         call=self._call_summary(call_outcome),
                         mark_unhealthy=True,
                     )
+                if worker:
+                    # A worker's own check that could not run says so on that worker; it never faults the call.
+                    sub_goal_results.append(_worker_unmeasured(goal, f"its check failed to run: {outcome.failure.message}"))
+                    continue
                 broken_failure = outcome.failure
                 sub_goal_results.append(
                     SubGoalResult(
@@ -2428,6 +2437,9 @@ class HostedScheduler:
             verdict = _classify_check(outcome.value)
             both = bool(goal.judged) and getattr(goal, "both", False)
             if verdict.broken and (both or not goal.judged):
+                if worker:
+                    sub_goal_results.append(_worker_unmeasured(goal, f"its check returned {outcome.value!r}"))
+                    continue
                 broken_failure = _failure(
                     "check_broken", f"{goal.name}: check() returned {outcome.value!r}"
                 )
