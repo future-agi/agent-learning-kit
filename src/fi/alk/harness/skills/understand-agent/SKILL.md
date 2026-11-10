@@ -114,7 +114,12 @@ Find, in roughly this order:
    `system_prompt_from`, every part it is assembled from: it is copied into the contract as written,
    and every later stage decides what the agent should do from it. If the prompt is built or
    fetched at run time and has no lines to name, quote it in `system_prompt_excerpt`; the save
-   asks once whether lines can be named.
+   asks once whether lines can be named. A quote is word for word from the prompt, a sentence or
+   more, with ... where you leave text out. The lines you name are checked against your latest
+   such quote, given with them or before. Lines that don't hold it are refused, and asked about
+   once more if they come without a quote; after that, the quote is kept and the lines are
+   recorded as unconfirmed (with a quote of fewer than 16 letters, the lines are kept, also
+   recorded as unconfirmed).
 
 7. **The modality.** How this agent is run: a voice session, a text conversation, or work it
    carries out on websites or a computer. This decides how it is later run, so getting it wrong
@@ -185,7 +190,8 @@ Find, in roughly this order:
    This is not who speaks first: an outbound agent usually still greets. It decides how the
    simulated person is briefed, and briefing someone who did not dial as though they had an errand
    to raise tests nothing about how the agent opens a call it placed. Two builds of the same agent
-   can differ only in this, so quote the line you read it from in `system_prompt_excerpt`.
+   can differ only in this, so quote the line you read it from in `notes`, unless it is already in
+   the prompt you name or quote.
 
 9. **What it depends on.** Everything the agent reaches for that has to exist before it can
    work: a datastore, a service it calls over HTTP, a file it reads, a queue. Record each one,
