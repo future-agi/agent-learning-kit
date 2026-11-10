@@ -713,10 +713,13 @@ def _components(nodes: list[str], edges: dict[str, list[str]]) -> list[list[str]
     return components
 
 
-def _source_files(top: str, start: str) -> Iterator[tuple[str, str, str]]:
+def _source_files(
+    top: str, start: str, *, side: bool | None = None
+) -> Iterator[tuple[str, str, str]]:
     """Every file below ``start`` the scan may read, as (directory, folder relative to
     ``top``, name), in sorted order so that a walk stopped by a limit stops at the same file.
-    Installed trees and the folders a build skips are never entered."""
+    Installed trees and the folders a build skips are never entered. ``side`` False gives only
+    files outside test, example and other side folders; True gives only the files in them."""
     for directory, directories, files in os.walk(start, followlinks=False):
         directories.sort()
         files.sort()
@@ -726,9 +729,12 @@ def _source_files(top: str, start: str) -> Iterator[tuple[str, str, str]]:
             directories[:] = []
             continue
         directories[:] = _folders_to_enter(directory, directories, at_top=not relative)
+        if side is False:
+            directories[:] = [name for name in directories if not _is_side_part(name)]
         folder = "/".join(relative)
         for name in files:
-            yield directory, folder, name
+            if side is None or _is_side_path(_join(folder, name)) is side:
+                yield directory, folder, name
 
 
 class _ShadowedNames:
@@ -781,13 +787,16 @@ class _Walk:
         self._edges: dict[str, tuple[str, ...]] = {}
 
     def run(self) -> None:
-        for directory, folder, name in _source_files(self.top, self.top):
-            if self.clock() > self.deadline:
-                self.stopped = "clock"
-                return
-            self._take(directory, folder, name)
-            if self.stopped:
-                return
+        # The customer's own code first, then side folders, so tests and examples can't use
+        # up the file cap before the agent is reached.
+        for side in (False, True):
+            for directory, folder, name in _source_files(self.top, self.top, side=side):
+                if self.clock() > self.deadline:
+                    self.stopped = "clock"
+                    return
+                self._take(directory, folder, name)
+                if self.stopped:
+                    return
 
     def _take(self, directory: str, folder: str, name: str) -> None:
         path = _join(folder, name)
@@ -986,10 +995,12 @@ class _Walk:
         project = self.projects.nearest(folder)
         if project is None:
             return folder
+        # Only agents of this same project count: one in a deeper project of its own
+        # doesn't move this agent's folder.
         sharing = sum(
             1
             for other, other_side in agents
-            if not other_side and _under(other, project)
+            if not other_side and self._project_of(other) == project
         )
         return project if sharing == 1 else folder
 

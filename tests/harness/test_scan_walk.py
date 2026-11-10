@@ -1194,3 +1194,34 @@ def test_a_chat_model_beside_a_stronger_agent_is_not_listed(tmp_path: Path) -> N
         "svc/graph.py": "framework",
         "other/chain.py": "model",
     }
+
+
+def test_a_deeper_project_does_not_move_an_agents_folder(tmp_path: Path) -> None:
+    """The platform keys an agent on repo and subfolder, so adding an unrelated project with
+    its own agent must not move the first agent's folder."""
+    project = "[project]\nname = 'x'\n"
+    _write(tmp_path, {"pyproject.toml": project, "src/app/agent.py": GRAPH})
+    alone = _walk(tmp_path)
+    assert {agent.entry: agent.subfolder for agent in alone.agents} == {"src/app/agent.py": ""}
+
+    _write(tmp_path, {"plugins/x/pyproject.toml": project, "plugins/x/agent.py": GRAPH})
+    beside = _walk(tmp_path)
+    assert {agent.entry: agent.subfolder for agent in beside.agents} == {
+        "src/app/agent.py": "",
+        "plugins/x/agent.py": "plugins/x",
+    }
+
+
+def test_side_folders_cannot_use_up_the_file_cap_before_the_agent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The customer's own code is read first; a big tests folder sorted ahead of the agent
+    no longer hides it behind the file cap."""
+    monkeypatch.setattr(scan_walk, "_MAX_FILES", 10)
+    _write(tmp_path, {f"tests/test_{index:02}.py": "x = 1\n" for index in range(25)})
+    _write(tmp_path, {"zz_agent/agent.py": GRAPH})
+
+    result = _walk(tmp_path)
+
+    assert "zz_agent/agent.py" in _entries(result)
+    assert result.stopped == "limit"
