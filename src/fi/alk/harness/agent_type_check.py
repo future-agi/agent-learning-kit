@@ -110,7 +110,7 @@ _TEST_FILES = ("test_*.py", "*_test.py", "conftest.py", "*.test.*", "*.spec.*")
 _SCRIPT_SUFFIXES = frozenset({".js", ".ts", ".mjs", ".cjs", ".tsx", ".jsx"})
 _CODE_SUFFIXES = _SCRIPT_SUFFIXES | {".py"}
 _LARGEST_CODE_FILE = 1024 * 1024
-_UNREAD_CODECS = frozenset({"idna", "punycode", "undefined"})
+_UNREAD_CODECS = frozenset({"idna", "punycode", "undefined", "unicode-escape"})
 # Past this a repository holds the conversation up for longer than the rest of the scan is worth.
 _LARGEST_SCAN = 128 * 1024 * 1024
 _LARGEST_RECORD = 1024 * 1024
@@ -176,24 +176,45 @@ def _not_the_agent_dir(name: str, parent: str | None = None) -> bool:
     )
 
 
-def _only_tests(folder: str) -> bool:
-    """Whether the code files directly in ``folder`` are all tests, and there is one.
+def _listed(folder: str) -> tuple[list[str], list[str]]:
+    """The code files directly in ``folder``, and the folders in it the walk would enter.
 
-    Helpers below them, as page objects, go with the tests. A package's ``__init__.py`` says
-    nothing either way, and a folder of only folders may be the agent's own package.
+    A ``package.json`` is code here: it lists what the folder's scripts run. A package's
+    ``__init__.py`` says nothing either way.
+    """
+    code: list[str] = []
+    folders: list[str] = []
+    with os.scandir(folder) as entries:
+        for entry in entries:
+            if entry.is_dir():
+                if not _not_the_agent_dir(entry.name):
+                    folders.append(entry.name)
+            elif entry.is_file() and entry.name != "__init__.py" and (
+                entry.name == "package.json" or os.path.splitext(entry.name)[1] in _CODE_SUFFIXES
+            ):
+                code.append(entry.name)
+    return code, folders
+
+
+def _only_tests(folder: str) -> bool:
+    """Whether ``folder`` holds tests alone: its own code files are all tests, one of them more
+    than a ``conftest.py``, and no folder in it that holds code is other than named for tests.
+
+    A folder of only folders may be the agent's own package. A folder in it holds code if it has
+    a code file or a folder of its own: one level is looked at, and deeper is taken as code.
     """
     try:
-        with os.scandir(folder) as entries:
-            code = [
-                entry.name
-                for entry in entries
-                if entry.name != "__init__.py"
-                and os.path.splitext(entry.name)[1] in _CODE_SUFFIXES
-                and entry.is_file()
-            ]
+        code, folders = _listed(folder)
+        for name in folders:
+            if _TESTS_LAST.fullmatch(name.lower()) is None and any(
+                _listed(os.path.join(folder, name))
+            ):
+                return False
     except OSError:
         return False
-    return bool(code) and all(_not_the_agent_file(name) for name in code)
+    return any(name.lower() != "conftest.py" for name in code) and all(
+        _not_the_agent_file(name) for name in code
+    )
 
 
 def _not_the_agent_file(name: str) -> bool:
@@ -305,10 +326,11 @@ def _packages_used(path: Path) -> set[str]:
 def _unread_codec(source: bytes) -> bool:
     """Whether the coding line names a codec the scan won't decode ``source`` in.
 
-    A codec such as rot13 isn't a text encoding, so it can't be read as source. Three text codecs
+    A codec such as rot13 isn't a text encoding, so it can't be read as source. Four text codecs
     are refused by name: punycode's decode costs the square of its size, about 2 s for 128 KB;
-    idna's runs in Python for each label; undefined decodes nothing. No honest repository writes
-    any of them.
+    idna's runs in Python for each label; undefined decodes nothing; unicode-escape is refused
+    with them so this check and the save's agree. Python runs an idna or unicode-escape file, so
+    the readers then look for the names in its bytes instead (``_named_raw``).
     """
     try:
         # A non-ASCII byte on the coding line makes detection fail while the parser still decodes
@@ -321,6 +343,29 @@ def _unread_codec(source: bytes) -> bool:
     return info.name in _UNREAD_CODECS or not getattr(info, "_is_text_encoding", True)
 
 
+def _lines(source: bytes) -> bytes:
+    # Python reads a lone CR as a line end, and detect_encoding and the tokenizer don't: to them a
+    # file of only CRs is one line, so a "coding:" anywhere after a first "#" would be its cookie.
+    return source.replace(b"\r\n", b"\n").replace(b"\r", b"\n")
+
+
+def _named_raw(source: bytes) -> tuple[set[str], set[str]]:
+    """The browser imports and tool markers whose bytes appear in ``source``, before any decode.
+
+    For a file in a refused codec: its names are counted rather than lost, which can only bring a
+    second look, never a refusal. One search over bytes already read.
+    """
+    imports = {name for name in BROWSER_IMPORTS if name.encode() in source}
+    text = source.decode("latin-1")
+    markers = {
+        "Playwright MCP" if "playwright" in hit.group() else "computer-use tool"
+        for hit in TOOL_MARKER.finditer(text)
+    }
+    if _TOOLKIT in text:
+        markers.add(_TOOLKIT)
+    return imports, markers
+
+
 def _imports_in(path: Path) -> set[str]:
     # One file at a time: a customer's odd file can run the parser out of memory, and that mustn't
     # take the rest of the scan, or the reading it serves, down with it.
@@ -328,13 +373,12 @@ def _imports_in(path: Path) -> set[str]:
         if not path.is_file() or path.stat().st_size > _LARGEST_CODE_FILE:
             return set()
         source = path.read_bytes()
-        # Python reads a lone CR as a line end, and detect_encoding doesn't: a file of only CRs
-        # would be one line to it, and the coding line the parser honours not found.
-        if _unread_codec(source.replace(b"\r\n", b"\n").replace(b"\r", b"\n")):
-            return set()
+        if _unread_codec(_lines(source)):
+            return _named_raw(source)[0]
         # From bytes, so a BOM or a coding line is honoured as Python itself would.
         return _imports(ast.parse(source))
     except (OSError, ValueError, SyntaxError, RecursionError, MemoryError):
+        logger.debug("agent type scan read no imports from %s", path, exc_info=True)
         return set()
 
 
@@ -358,14 +402,11 @@ def _modules_at_top(root: Path, unpacked: set[str] | None = None) -> set[str]:
 
 
 def _python_code(source: bytes) -> str:
-    # The tokenizer finds the coding line as detect_encoding does, so it's asked about the same
-    # lines.
-    if _unread_codec(source):
-        return ""
-    # From bytes, as imports are read, so a coding line or a BOM is honoured as Python itself would.
+    # From bytes, as imports are read, so a coding line or a BOM is honoured as Python itself would,
+    # and on the same lines Python reads. The caller has refused a codec it won't decode.
     return " ".join(
         token.string
-        for token in tokenize.tokenize(io.BytesIO(source).readline)
+        for token in tokenize.tokenize(io.BytesIO(_lines(source)).readline)
         if token.type not in (tokenize.COMMENT, tokenize.ENCODING)
     )
 
@@ -382,12 +423,17 @@ def _markers_in(path: Path) -> set[str]:
     try:
         if not path.is_file() or path.stat().st_size > _LARGEST_CODE_FILE:
             return set()
-        code = (
-            _python_code(path.read_bytes())
-            if path.suffix == ".py"
-            else _SCRIPT_COMMENT_OR_STRING.sub(_script_kept, path.read_text(encoding="utf-8"))
-        )
+        if path.suffix == ".py":
+            source = path.read_bytes()
+            if _unread_codec(_lines(source)):
+                return _named_raw(source)[1]
+            code = _python_code(source)
+        else:
+            # As Node reads it: a stray byte that isn't UTF-8 becomes a replacement character.
+            text = path.read_text(encoding="utf-8", errors="replace")
+            code = _SCRIPT_COMMENT_OR_STRING.sub(_script_kept, text)
     except (OSError, ValueError, SyntaxError, tokenize.TokenError):
+        logger.debug("agent type scan read no markers from %s", path, exc_info=True)
         return set()
     return {
         "Playwright MCP" if "playwright" in hit.group() else "computer-use tool"
