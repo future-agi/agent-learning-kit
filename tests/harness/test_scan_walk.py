@@ -1391,3 +1391,86 @@ def test_the_step_after_the_walk_holds_a_bounded_number_of_edges(
 
     assert bounded.stopped == "limit"
     assert bounded.agents == ()
+
+
+# A UTF-16 byte-order mark followed by an odd number of bytes: the decoder can't read it. The
+# same template with its last byte pair whole can.
+ODD_UTF16_TEMPLATE = b"\xff\xfeA\x00=\x001\x00\n"
+EVEN_UTF16_TEMPLATE = ODD_UTF16_TEMPLATE + b"\x00"
+
+
+def test_a_template_the_decoder_rejects_marks_the_row_short(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    with pytest.raises(UnicodeDecodeError):
+        scan_walk._template_names(ODD_UTF16_TEMPLATE)
+    # The entry, and a file after the template that is still read: its setting is kept.
+    _write(tmp_path, {"app/bot.py": CLIENT, "app/tool.py": "import os\nos.getenv('TOOL_KEY')\n"})
+    (tmp_path / "app" / ".env.example").write_bytes(EVEN_UTF16_TEMPLATE)
+    readable = describe_entry(tmp_path, "app/bot.py", "app", deadline=FOREVER)
+    (tmp_path / "app" / ".env.example").write_bytes(ODD_UTF16_TEMPLATE)
+
+    with caplog.at_level("WARNING", logger=scan_walk.logger.name):
+        rejected = describe_entry(tmp_path, "app/bot.py", "app", deadline=FOREVER)
+
+    assert readable is not None and readable.partial is False
+    assert set(readable.env_names) == {"A", "TOOL_KEY"}
+    assert rejected is not None and rejected.partial is True
+    assert set(rejected.env_names) == {"TOOL_KEY"}
+    # Short because the decoder rejected it, not because the kit's reader failed.
+    assert "agent description:" not in caplog.text
+
+
+def test_the_walks_summary_line_counts_reader_faults_apart_from_unread_files(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    _write(tmp_path, {f"m{index}.py": "x = 1\n" for index in range(3)})
+    # An ordinary unreadable file: the tokenizer rejects it, which is no fault of the kit's.
+    _write(tmp_path, {"unterminated.py": "x = '''never closed\n"})
+    real = scan_walk._python_facts
+
+    def broken(data: bytes, shadowed: frozenset[str]) -> object:
+        if data == b"x = 1\n":
+            raise LookupError("a fault in the kit's reader")
+        return real(data, shadowed)
+
+    monkeypatch.setattr(scan_walk, "_python_facts", broken)
+    with caplog.at_level("INFO", logger=scan_walk.logger.name):
+        _walk(tmp_path)
+
+    assert "unread=4 reader_faults=3 " in caplog.text
+
+
+def test_a_fault_in_the_description_keeps_what_was_read_and_logs_the_trace(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The description runs after the model was paid for, so a fault in the kit that escapes
+    it keeps what was read, as a partial row, instead of ending the scan in a paid retry. The
+    fault raised is outside the per-file catch, so only `describe_entry`'s own catch holds it."""
+    _write(
+        tmp_path,
+        {
+            "app/bot.py": CLIENT,
+            "app/a_first.py": "import os\nos.getenv('FIRST_KEY')\n",
+            "app/z_last.py": "x = 1\n",
+        },
+    )
+    take = scan_walk._Description._take
+    calls: list[str] = []
+
+    def failing_after_the_first(self: object, directory: str, folder: str, name: str) -> None:
+        calls.append(name)
+        if len(calls) > 1:
+            raise RuntimeError("a fault in the kit")
+        take(self, directory, folder, name)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(scan_walk._Description, "_take", failing_after_the_first)
+    with caplog.at_level("WARNING", logger=scan_walk.logger.name):
+        candidate = describe_entry(tmp_path, "app/bot.py", "app", deadline=FOREVER)
+
+    assert calls[0] == "a_first.py"
+    assert candidate is not None
+    assert (candidate.entry, candidate.subfolder, candidate.partial) == ("app/bot.py", "app", True)
+    assert "FIRST_KEY" in candidate.env_names
+    assert "agent description stopped" in caplog.text
+    assert "RuntimeError: a fault in the kit" in caplog.text
