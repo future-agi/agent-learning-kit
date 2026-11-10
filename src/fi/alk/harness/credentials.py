@@ -783,7 +783,12 @@ class _Workspace:
                 self.cut = True
                 continue
             if any(len(part) > _LONGEST_FOLDER_NAME for part in parts):
-                # No folder name is longer; fnmatch would compile it, a second for 250 KB.
+                # Not compiled: fnmatch takes a second for 250 KB. A literal part that long names
+                # no folder; a pattern may still match one, so the walk says it was cut.
+                self.cut = self.cut or any(
+                    len(part) > _LONGEST_FOLDER_NAME and any(mark in part for mark in "*?[")
+                    for part in parts
+                )
                 continue
             level = [workspace]
             for part in parts:
@@ -845,33 +850,41 @@ def _groups(groups: dict, chosen: list) -> list[object]:
     return found
 
 
-def _requested(table: dict, extras: set[str] | None) -> dict[str, set[str]]:
-    """The distributions installed with ``table``'s project by the build's
-    ``uv sync --no-dev --package``, by name, each with the extras asked of it: its dependencies,
-    its extras (all of them for the agent's own project, given ``extras=None``, since which ones
-    the build asks for isn't known here; for a dependency, those its requirement names), and its
-    default groups other than ``dev``. One pass, so a requirement list of thousands costs its
-    length, not its square."""
-    project = table.get("project") if isinstance(table.get("project"), dict) else {}
-    found: list[object] = list(project.get("dependencies") or [])
-    optional = project.get("optional-dependencies")
-    for key, values in optional.items() if isinstance(optional, dict) else ():
-        if extras is None or _project_name(key) in extras:
-            found.extend(values if isinstance(values, list) else [])
-    if extras is None:
-        uv = _uv_table(table)
-        groups = table.get("dependency-groups") if isinstance(table.get("dependency-groups"), dict) else {}
-        default = uv.get("default-groups", ["dev"])
-        chosen = list(groups) if default == "all" else default if isinstance(default, list) else []
-        found.extend(_groups(groups, chosen))
-    asked: dict[str, set[str]] = {}
-    for value in found:
-        if not (name := _project_name(value)):
-            continue
-        wanted = asked.setdefault(name, set())
-        for listed in _REQUESTED_EXTRAS.findall(value.split(";", 1)[0]):
-            wanted |= {extra for part in listed.split(",") if (extra := _project_name(part))}
-    return asked
+class _Requirements:
+    """What ``table``'s project installs with it under the build's ``uv sync --no-dev --package``,
+    indexed once: its dependencies and, for the agent's own project, its default groups other than
+    ``dev`` (``plain``), and each extra's requirements by its name (``by_extra``). Reading it again
+    for more extras reads only theirs: a member reached again with one more extra each time would
+    otherwise read its whole list each time (round 4 reviewer A)."""
+
+    def __init__(self, table: dict, own: bool) -> None:
+        project = table.get("project") if isinstance(table.get("project"), dict) else {}
+        dependencies = project.get("dependencies")
+        self.plain: list[object] = list(dependencies) if isinstance(dependencies, list) else []
+        self.by_extra: dict[str, list[object]] = {}
+        optional = project.get("optional-dependencies")
+        for key, values in optional.items() if isinstance(optional, dict) else ():
+            if (name := _project_name(key)) and isinstance(values, list):
+                self.by_extra.setdefault(name, []).extend(values)
+        if own:
+            uv = _uv_table(table)
+            groups = table.get("dependency-groups") if isinstance(table.get("dependency-groups"), dict) else {}
+            default = uv.get("default-groups", ["dev"])
+            chosen = list(groups) if default == "all" else default if isinstance(default, list) else []
+            self.plain.extend(_groups(groups, [group for group in chosen if isinstance(group, str)]))
+
+    def asked(self, plain: bool, extras: Iterable[str]) -> dict[str, set[str]]:
+        """The distributions these requirements install, by name, each with the extras asked of
+        it: the plain ones if ``plain``, and those of ``extras``."""
+        found = [*(self.plain if plain else ()), *(value for extra in extras for value in self.by_extra.get(extra, ()))]
+        asked: dict[str, set[str]] = {}
+        for value in found:
+            if not (name := _project_name(value)):
+                continue
+            wanted = asked.setdefault(name, set())
+            for listed in _REQUESTED_EXTRAS.findall(value.split(";", 1)[0]):
+                wanted |= {extra for part in listed.split(",") if (extra := _project_name(part))}
+        return asked
 
 
 def _uv_table(table: dict) -> dict:
@@ -903,7 +916,7 @@ def _workspace_dependencies(
     whether some weren't looked for.
 
     The project is the nearest pyproject.toml at or above ``folder``. The build installs it with
-    what it asks for (``_requested``); a requirement whose source is the uv workspace
+    what it asks for (``_Requirements``); a requirement whose source is the uv workspace
     (``{workspace = true}``, in the project or the workspace root, the nearest pyproject.toml
     above the project that names it a member) is that member's folder, one whose source is a
     ``path`` inside the repository is that folder, and what each of those asks for is followed
@@ -978,34 +991,41 @@ def _workspace_dependencies(
         return None
 
     followed: list[Path] = []
-    # The extras asked of each member so far: one reached again with more is read again for them.
+    # The extras asked of each member so far: one reached again with more is read again for them
+    # alone.
     asked: dict[Path, set[str]] = {}
-    queue: list[tuple[Path, set[str] | None]] = [(project[0], None)]
+    indexed: dict[Path, _Requirements] = {}
+    # The agent's own project installs all its extras: which the build asks for isn't known here.
+    own = _Requirements(project[1], own=True)
+    indexed[project[0]] = own
+    queue: list[tuple[Path, bool, set[str]]] = [(project[0], True, set(own.by_extra))]
     reads = 0
     while queue and left[0] > 0:
         if reads == _WORKSPACE_READS:
             reader.cut = True
             break
         reads += 1
-        place, extras = queue.pop(0)
+        place, plain, extras = queue.pop(0)
         table = tables.get(place, {})
-        requested = _requested(table, extras)
+        if place not in indexed:
+            indexed[place] = _Requirements(table, own=False)
+        requested = indexed[place].asked(plain, extras)
         for name in sorted(requested):
             member = installed(place, table, name)
             if member is None or member == project[0]:
                 continue
             wanted = requested[name]
             if member in asked:
-                if wanted - asked[member]:
-                    asked[member] |= wanted
-                    queue.append((member, set(asked[member])))
+                if more := wanted - asked[member]:
+                    asked[member] |= more
+                    queue.append((member, False, more))
                 continue
             if len(followed) == _WORKSPACE_DEPENDENCIES:
                 reader.cut = True
                 break
             followed.append(member)
             asked[member] = set(wanted)
-            queue.append((member, set(wanted)))
+            queue.append((member, True, set(wanted)))
     return project[0], followed, reader.cut
 
 
@@ -1064,6 +1084,9 @@ def _real_folder(
     real: Path | None = root if known_end == top else known[parts[:known_end]]
     for end in range(known_end + 1, len(parts) + 1):
         if real is None:
+            # Kept for the whole path too: each candidate in this folder (a name has 13, in two
+            # folders) would otherwise search back down to the missing one again, uncharged.
+            known[parts] = None
             return None
         name = parts[end - 1]
         if name == "..":

@@ -728,7 +728,7 @@ def test_a_slow_codec_named_after_a_lone_cr_is_not_read(tmp_path, monkeypatch):
     assert decoded == []
 
 
-def test_the_coding_line_is_masked_without_a_python_pass_over_it(tmp_path, monkeypatch):
+def test_the_coding_line_is_cut_without_a_python_pass_over_it(tmp_path, monkeypatch):
     from fi.alk.harness import python_source
 
     # Every file's first two lines are looked at, and one line can be the whole 128 KB: a
@@ -5298,7 +5298,10 @@ def test_a_member_pattern_part_longer_than_a_folder_name_isnt_compiled(tmp_path,
     monkeypatch.setattr(credentials.fnmatch, "fnmatchcase", lambda name, pattern: matched.append(pattern) or real(name, pattern))
     reader = credentials._Workspace(repo, [1e9], {})
 
-    assert reader.expand(repo, ["*a" * 200]) == [] and matched == []
+    assert reader.expand(repo, ["x" * 300]) == [] and not reader.cut
+    # A pattern that long may still match a folder: not looked at, so the walk says it was cut.
+    assert reader.expand(repo, ["*a" * 200]) == [] and matched == [] and reader.cut
+    reader.cut = False
     assert reader.expand(repo, ["agent*"]) == [repo / "agents"] and set(matched) == {"agent*"}
 
 
@@ -5360,3 +5363,160 @@ def test_detect_encoding_is_handed_the_cookie_not_the_whole_line(monkeypatch):
 
     assert python_source._coding(b"#" + b"codin" * 26_000 + b"coding: latin-1\nimport x\n")[0] == "iso-8859-1"
     assert sum(read) < 64
+
+
+def test_a_missing_deep_folder_is_searched_for_once_for_all_its_candidates(tmp_path, monkeypatch):
+    from fi.alk.harness import credentials
+
+    # Round 4 reviewer B: each of a name's candidates searched back down a 62-part path to the
+    # missing folder, uncharged: 5,000 such script imports held the save 1.9 s.
+    repo = (tmp_path / "repo").resolve()
+    (repo / "agents" / "a").mkdir(parents=True)
+    deep = repo.joinpath("agents", "a", "gone", *["b"] * 60)
+    known: dict = {}
+    credentials._real_folder(deep, repo, known, [1e9])
+    probes: list[int] = []
+
+    class Counting(dict):
+        def __contains__(self, key):
+            probes.append(1)
+            return dict.__contains__(self, key)
+
+    counted = Counting(known)
+    for _ in range(13):
+        assert credentials._real_folder(deep, repo, counted, [1e9]) is None
+    # Found at once, each time: a probe a candidate, not one for each of the 60 folders.
+    assert len(probes) == 13
+
+
+def test_two_names_under_a_chain_past_the_limit_walk_it_once(tmp_path):
+    from fi.alk.harness import credentials
+
+    # Round 4 reviewer B, L3: the lexical key keeps a chain the limit cut, which _step drops.
+    repo = (tmp_path / "repo").resolve()
+    (repo / "real").mkdir(parents=True)
+    for n in range(credentials._LINKS_FOLLOWED + 1):
+        (repo / f"c{n}").symlink_to(f"c{n + 1}" if n < credentials._LINKS_FOLLOWED else "real")
+    known: dict = {}
+    first, second = [1e9], [1e9]
+
+    assert credentials._real_folder(repo / "c0" / "x", repo, known, first) is None
+    assert credentials._real_folder(repo / "c0" / "y", repo, known, second) is None
+    assert 1e9 - second[0] < 5 < 1e9 - first[0]
+
+
+def test_a_bom_with_a_coding_line_naming_another_codec_is_refused_as_python_refuses_it():
+    from fi.alk.harness import python_source
+
+    # The byte-order mark is kept out of the cut, so detect_encoding still sees both and refuses.
+    assert python_source._coding(b"\xef\xbb\xbf# coding: latin-1\nimport x\n") is None
+    assert python_source._coding(b"\xef\xbb\xbf# coding: utf-8\nimport x\n")[0] == "utf-8-sig"
+
+
+def test_a_head_with_more_cookie_words_than_an_honest_one_is_read_as_a_refused_codec():
+    from fi.alk.harness import python_source
+
+    # Round 4 reviewer A, H2: each failing candidate was tried in turn.
+    many = b"#" + b"coding:#" * 16_000 + b"\nimport x\n"
+    assert python_source._coding(many)[0] == "undefined"
+    assert python_source.source_encoding(many) is None
+    edge = b"#" + b"coding:#" * python_source._COOKIE_WORDS + b"\n"
+    assert python_source._coding(edge)[0] == "utf-8"
+
+
+def test_the_first_cookie_on_the_line_is_the_one_read():
+    from fi.alk.harness import python_source
+
+    # Round 4 reviewer A, L3 (M26): the search starts at the first candidate, not the last.
+    assert python_source._coding(b"# coding=latin-1 coding: !!!\n")[0] == "iso-8859-1"
+    assert python_source._coding(b"# coding: !!! coding=latin-1\n")[0] == "iso-8859-1"
+
+
+def test_a_cyclic_include_group_is_read_once(tmp_path):
+    from fi.alk.harness.credentials import imported_by_agent
+
+    # Round 4 reviewer A, L3 (M28): without the guard the save loops for ever.
+    repo = _ws_member_tree(
+        tmp_path,
+        "[tool.uv.workspace]\nmembers=['agents/*', 'libs/*']\n",
+        "[dependency-groups]\nrun=[{include-group='more'}, 'common']\nmore=[{include-group='run'}]\n"
+        "[tool.uv]\ndefault-groups=['run']\n[tool.uv.sources]\ncommon={workspace=true}\n",
+    )
+
+    import signal
+
+    def stuck(*_):
+        raise TimeoutError("the include-group walk didn't end")
+
+    previous = signal.signal(signal.SIGALRM, stuck)
+    signal.alarm(20)
+    try:
+        assert repo / "libs/common/src/common/llm.py" in imported_by_agent(repo, "agents/a", lookup_limit=100_000)
+    finally:
+        signal.alarm(0)
+        signal.signal(signal.SIGALRM, previous)
+
+
+@pytest.mark.parametrize(
+    "requirement, extra_key, found",
+    [
+        # M13: an extra's key compared as uv compares names.
+        ("common[llm-x]", "LLM_X", True),
+        # M22: brackets in a marker name no extra.
+        ("common; python_version >= '3' and platform_machine != 'x[llm]'", "llm", False),
+    ],
+    ids=["extra-name-normalised", "marker-not-read"],
+)
+def test_a_members_extra_is_found_as_uv_finds_it(tmp_path, requirement, extra_key, found):
+    from fi.alk.harness.credentials import imported_by_agent
+
+    repo = _ws_member_tree(
+        tmp_path,
+        "[tool.uv.workspace]\nmembers=['agents/*', 'libs/*']\n[tool.uv.sources]\n"
+        "common={workspace=true}\nllmlib={workspace=true}\n",
+        f"dependencies=[{requirement!r}]\n",
+        {"libs/common/pyproject.toml": f"[project]\nname='common'\nversion='1'\n"
+         f"[project.optional-dependencies]\n{extra_key}=['llmlib']\n"},
+    )
+    reached = imported_by_agent(repo, "agents/a", lookup_limit=100_000)
+
+    assert repo / "libs/common/src/common/llm.py" in reached
+    assert (repo / "libs/llmlib/src/llmlib/__init__.py" in reached) is found
+
+
+@pytest.mark.parametrize(
+    "agent_extra",
+    ["dependencies=5\n", "[tool.uv]\ndefault-groups=[{x=1}]\n[dependency-groups]\nrun=['x']\n"],
+    ids=["dependencies-not-a-list", "group-not-a-name"],
+)
+def test_a_malformed_requirement_list_is_read_as_empty(tmp_path, agent_extra):
+    from fi.alk.harness.credentials import imported_by_agent
+
+    # Round 4 reviewer A, L1: these raised TypeError out of the save; uv refuses them, loudly.
+    repo = _ws_member_tree(tmp_path, "[tool.uv.workspace]\nmembers=['agents/*', 'libs/*']\n", agent_extra)
+
+    assert imported_by_agent(repo, "agents/a", lookup_limit=100_000) is not None
+
+
+def test_a_member_reached_again_reads_only_its_new_extras(tmp_path, monkeypatch):
+    from fi.alk.harness import credentials
+
+    # Round 4 reviewer A, H1: each new extra read the member's whole list again.
+    chain = "".join(f"e{n}=['m[e{n + 1}]']\n" for n in range(60))
+    repo = _tree(
+        tmp_path / "repo",
+        {
+            "pyproject.toml": "[tool.uv.workspace]\nmembers=['agents/*', 'libs/*']\n[tool.uv.sources]\nm={workspace=true}\n",
+            "agents/a/pyproject.toml": "[project]\nname='agent-a'\nversion='1'\ndependencies=['m[e0]']\n",
+            "agents/a/agent.py": "x = 1\n",
+            "libs/m/pyproject.toml": "[project]\nname='m'\nversion='1'\ndependencies="
+            + repr([f"d{n}" for n in range(200)]) + "\n[project.optional-dependencies]\n" + chain,
+        },
+    ).resolve()
+    names: list[int] = []
+    real = credentials._project_name
+    monkeypatch.setattr(credentials, "_project_name", lambda value: names.append(1) or real(value))
+
+    credentials._workspace_dependencies(repo, repo / "agents" / "a", [1e9], {})
+    # The 200 plain ones once, not once for each of the 60 extras.
+    assert len(names) < 1_200
