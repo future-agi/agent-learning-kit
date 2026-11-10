@@ -752,18 +752,66 @@ def test_save_leaves_compose_overlays_to_bundling(tmp_path, repo, capsys, monkey
     assert capsys.readouterr().err == ""
 
 
-def test_a_skipped_check_names_the_error_type_alone(tmp_path, repo, capsys):
+def test_a_skipped_check_names_the_error_type_alone(tmp_path, repo, caplog):
     (repo / "agents" / "a" / "alk.yaml").write_text("runtime: [customer-line-42\n")
 
-    result = accept_contract(
-        payload(runtime={"language": "python"}),
-        tmp_path / "out",
-        source_root=repo,
-        subfolder="agents/a",
-    )
+    with caplog.at_level("WARNING", logger="fi.alk.harness.tools"):
+        result = accept_contract(
+            payload(runtime={"language": "python"}),
+            tmp_path / "out",
+            source_root=repo,
+            subfolder="agents/a",
+        )
 
     assert not result.get("is_error"), result
-    assert capsys.readouterr().err == "sibling check skipped: BundleAuthorError\n"
+    assert [record.getMessage() for record in caplog.records] == [
+        "sibling check skipped: BundleAuthorError"
+    ]
+    assert "customer-line-42" not in caplog.text
+
+
+def test_a_bug_in_the_sibling_check_is_not_swallowed(tmp_path, repo, monkeypatch):
+    from fi.alk.harness import tools
+
+    def broken(*args, **kwargs):
+        raise TypeError("a bug")
+
+    monkeypatch.setattr(tools, "select_runtime", broken)
+
+    with pytest.raises(TypeError, match="a bug"):
+        accept_contract(
+            payload(runtime={"language": "python"}),
+            tmp_path / "out",
+            source_root=repo,
+            subfolder="agents/a",
+        )
+
+
+@pytest.mark.parametrize(
+    "link, target, named",
+    [
+        ("agents/up", "..", "agents/up"),
+        ("self", ".", "self"),
+        ("agents/a/x", "..", "agents/a/x"),
+        # Out of the repository and back in, to the root.
+        ("ext", "..", "ext/repo"),
+    ],
+)
+def test_a_folder_that_links_to_its_own_folder_or_above_is_not_a_folder(repo, link, target, named):
+    from fi.alk.harness.source_folder import SubfolderNotFound, agent_folder
+
+    (repo / link).symlink_to(target)
+
+    with pytest.raises(SubfolderNotFound):
+        agent_folder(repo, named)
+
+
+def test_a_folder_that_links_to_a_sibling_is_still_a_folder(repo):
+    from fi.alk.harness.source_folder import agent_folder
+
+    (repo / "agents" / "current").symlink_to("b")
+
+    assert agent_folder(repo, "agents/current") == (repo / "agents" / "b").resolve()
 
 
 @pytest.mark.parametrize("shell", ["sh", "/bin/sh"])
@@ -948,7 +996,10 @@ def test_a_refusal_during_the_check_wins_though_its_failure_file_is_not_written(
         raise OSError("disk full")
 
     monkeypatch.setattr(tools, "_checked_contract", checked)
-    monkeypatch.setattr(tools, "decide", lambda claimed, *args, **kwargs: "refuse" if claimed == "browser" else "keep")
+    from fi.alk.harness import agent_type_check
+
+    # The reading's verdict, as SecondLook asks for it.
+    monkeypatch.setattr(agent_type_check, "decide", lambda claimed, *args, **kwargs: "refuse" if claimed == "browser" else "keep")
     monkeypatch.setattr(tools, "write_failure_file", unwritable)
 
     async def both():
@@ -1768,3 +1819,170 @@ def test_a_path_no_system_can_open_is_answered_not_raised(tmp_path, repo, named)
     )
 
     assert "content" in result
+
+
+@pytest.mark.parametrize(
+    "helper, refused",
+    [
+        ('    volumes: ["../b:/app"]\n', True),
+        ("    volumes:\n      - type: bind\n        source: ../b\n        target: /app\n", True),
+        ('    env_file: ["../b/.env"]\n', True),
+        ("    env_file:\n      - path: ../b/.env\n", True),
+        ('    volumes: ["./data:/data"]\n', False),
+        ('    volumes: ["../..:/repo"]\n', False),
+        ('    volumes: ["/var/run/docker.sock:/var/run/docker.sock"]\n', False),
+        ('    volumes: ["cache:/cache", "~/.aws:/root/.aws"]\n', False),
+        ('    env_file: [".env"]\n', False),
+        ("    env_file: ../b/.env\n", True),
+        ('    volumes: ["../b/agent.py:/app/main.py:ro"]\n', True),
+        ('    volumes: ["${SRC:-../b}:/app"]\n', True),
+        ("    env_file: ../../.env\n", False),
+        ('    env_file: ["../shared.env"]\n', False),
+        ('    volumes: ["../../config.yaml:/app/config.yaml:ro"]\n', False),
+        ("    env_file:\n      - path: .env.local\n        required: false\n", False),
+        ("    env_file: ${ENV_FILE}\n", False),
+    ],
+    ids=["bind-sibling", "long-bind-sibling", "env-file-sibling", "env-path-sibling", "bind-own",
+         "bind-root", "bind-host", "named-and-home", "env-own", "env-string-sibling",
+         "file-bind-sibling", "interpolated-bind-sibling", "env-root-file", "env-above-file",
+         "file-bind-root", "env-optional-missing", "env-unset-variable"],
+)
+def test_a_service_that_binds_or_reads_a_siblings_files_is_refused(repo, helper, refused):
+    from fi.alk.harness.runtime_selection import COMPOSE_SERVICE_OUTSIDE_FOLDER, RuntimeSelectionError, select_runtime
+
+    (repo / "agents" / "b" / ".env").write_text("SIBLING_KEY=x\n")
+    # A root .env or config file, and one beside the agents, are the agent's to read, as a
+    # Dockerfile's folder is what a build check counts.
+    (repo / ".env").write_text("ROOT_KEY=x\n")
+    (repo / "config.yaml").write_text("a: 1\n")
+    (repo / "agents" / "shared.env").write_text("SHARED=x\n")
+    (repo / "agents" / "a" / "compose.yaml").write_text(
+        "services:\n  agent:\n    build: .\n"
+        "  helper:\n    image: python:3.12\n    command: [python, /app/main.py]\n" + helper
+    )
+    runtime = {
+        "language": "python",
+        "execution": "auto",
+        "source_subfolder": "agents/a",
+        "workdir": "agents/a",
+    }
+
+    if refused:
+        with pytest.raises(RuntimeSelectionError, match=f"^{COMPOSE_SERVICE_OUTSIDE_FOLDER}: helper$"):
+            select_runtime(repo, runtime, validate_environment_dependencies=False)
+    else:
+        select_runtime(repo, runtime, validate_environment_dependencies=False)
+
+
+@pytest.mark.parametrize("imports, expected", [("from common import tracing\n", "traceai"), ("x = 1\n", "none")])
+def test_the_folders_instrumentation_counts_the_shared_code_it_imports(tmp_path, repo, imports, expected):
+    # agents/b's own traced.py says nothing about agents/a.
+    (repo / "agents" / "a" / "agent.py").write_text(imports)
+    (repo / "common").mkdir()
+    (repo / "common" / "__init__.py").write_text("")
+    (repo / "common" / "tracing.py").write_text("import traceai_openai\n")
+
+    result = accept_contract(
+        payload(runtime={"language": "python"}),
+        tmp_path / "out",
+        source_root=repo,
+        subfolder="agents/a",
+    )
+
+    assert not result.get("is_error"), result
+    assert _saved(tmp_path / "out")["instrumentation"] == expected
+
+
+def test_the_save_walks_the_agents_imports_once(tmp_path, repo, monkeypatch):
+    from fi.alk.harness import agent_type_check
+
+    (repo / "agents" / "a" / "agent.py").write_text("from common import tracing\n")
+    (repo / "common").mkdir()
+    (repo / "common" / "__init__.py").write_text("")
+    (repo / "common" / "tracing.py").write_text("import traceai_openai\n")
+    walks: list[str] = []
+    real = agent_type_check.imported_by_agent
+    monkeypatch.setattr(
+        agent_type_check,
+        "imported_by_agent",
+        lambda root, subfolder, **limits: walks.append(subfolder) or real(root, subfolder, **limits),
+    )
+    destination = tmp_path / "out"
+    server = contract_tools(destination, source_root=repo, scan_root=repo, subfolder="agents/a")
+
+    _submit(server, payload(runtime={"language": "python"}), destination)
+
+    # The browser scan's walk also tells the instrumentation check what the folder reaches.
+    assert walks == ["agents/a"]
+    assert _saved(destination)["instrumentation"] == "traceai"
+
+
+def test_a_root_compose_file_may_read_the_roots_env_file_and_name_a_volume(repo):
+    from fi.alk.harness.runtime_selection import select_runtime
+
+    (repo / ".env").write_text("ROOT_KEY=x\n")
+    (repo / "compose.yaml").write_text(
+        "services:\n  agent:\n    build: ./agents/a\n    env_file: .env\n"
+        "    volumes: [\"data:/data\", \"./config.yaml:/app/config.yaml:ro\"]\n"
+    )
+    (repo / "config.yaml").write_text("a: 1\n")
+    # A bare name is a named volume, not the root folder of that name.
+    (repo / "data").mkdir()
+
+    select_runtime(
+        repo,
+        {
+            "language": "python",
+            "execution": "auto",
+            "source_subfolder": "agents/a",
+            "workdir": "agents/a",
+            "compose_file": "compose.yaml",
+        },
+        validate_environment_dependencies=False,
+    )
+
+
+@pytest.mark.parametrize(
+    "files, runtime",
+    [
+        ({"agents/a/compose.yaml": "services:\n  agent:\n    build: .\ninclude: [more.yaml]\n",
+          "agents/a/more.yaml": "services:\n  extra:\n    image: redis\n1: x\n"}, {}),
+        ({"agents/a/compose.yaml": "services:\n  agent:\n    build: .\ninclude: [sub/more.yaml]\n",
+          "agents/a/sub/more.yaml": "services:\n  extra:\n    build: 5\n"}, {}),
+        ({"agents/a/compose.yaml": "services:\n  agent:\n    build: .\ninclude: [sub/more.yaml]\n",
+          "agents/a/sub/more.yaml": "services:\n  extra:\n    image: redis\n    volumes: ./data:/data\n"}, {}),
+        ({"agents/a/compose.yaml": "services:\n  agent:\n    build: .\ninclude: [sub/more.yaml]\n",
+          "agents/a/sub/more.yaml": "services:\n  extra:\n    image: redis\n    volumes:\n      - type: bind\n        target: /x\n"}, {}),
+    ],
+    ids=["int-key", "build-int", "volumes-string", "bind-without-source"],
+)
+def test_a_compose_file_docker_refuses_is_left_to_bundling_not_raised(tmp_path, repo, files, runtime):
+    # The sibling check catches only what the customer's files can cause; reading a malformed
+    # file must raise the selection's own error, not a Python one out of the save.
+    for name, text in files.items():
+        (repo / name).parent.mkdir(parents=True, exist_ok=True)
+        (repo / name).write_text(text)
+
+    result = accept_contract(
+        payload(runtime={"language": "python", "compose_file": "agents/a/compose.yaml", **runtime}),
+        tmp_path / "out",
+        source_root=repo,
+        subfolder="agents/a",
+    )
+
+    assert "content" in result
+
+
+def test_a_test_helper_above_the_folder_says_nothing_of_its_instrumentation(tmp_path, repo):
+    # As the browser scan counts it: a root conftest.py is the tests', not the agent's.
+    (repo / "conftest.py").write_text(
+        "from opentelemetry.sdk.trace import TracerProvider\n"
+        "from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter\n"
+    )
+
+    result = accept_contract(
+        payload(runtime={"language": "python"}), tmp_path / "out", source_root=repo, subfolder="agents/a"
+    )
+
+    assert not result.get("is_error"), result
+    assert _saved(tmp_path / "out")["instrumentation"] == "none"
