@@ -705,6 +705,8 @@ def test_limits_have_their_real_values() -> None:
         fd._MAX_DOTTED_PARTS,
         fd._METADATA_BYTES,
         fd._VERSION_MAX,
+        fd._MAX_FOLDER_BYTES,
+        fd._TOP_FLOOR,
     ) == (
         65_536,
         67_108_864,
@@ -715,6 +717,8 @@ def test_limits_have_their_real_values() -> None:
         64,
         65_536,
         64,
+        67_108_864,
+        184,
     )
 
 
@@ -1601,3 +1605,213 @@ def test_top_name_import_then_dotted_use(
     _write(tmp_path, {"main.py": source})
 
     assert detect_framework(tmp_path) == expected
+
+
+# The walk's bound on folders listed to walk into (TH-9511, contract 1.9 P6). Every tree below is sized
+# from fixed numbers, and every expected stop is worked out here from the contract's formula, never by
+# calling the code under test.
+
+
+def _broom(top: Path, depth: int, siblings: int, *, chain: str, sibling: str, crew_in_chain: bool) -> None:
+    """A chain ``depth`` folders deep, with ``siblings`` folders beside each chain folder, each holding
+    one file that isn't Python. Every name is 10 characters, and the first character of ``chain``
+    and of ``sibling`` decides which sorts first. A CREW file sits at the top, and in each chain
+    folder when ``crew_in_chain``."""
+    _write(top, {"agent.py": CREW})
+    folder = top
+    for level in range(depth):
+        for index in range(siblings):
+            beside = folder / f"{sibling[:1]}{level:02}{index:07}"
+            beside.mkdir(parents=True)
+            (beside / "x").write_text("", encoding="utf-8")
+        folder = folder / f"{chain[:1]}{level:02}_chain_"
+        folder.mkdir(parents=True)
+        if crew_in_chain:
+            (folder / "agent.py").write_text(CREW, encoding="utf-8")
+
+
+def _level_cost(level: int, siblings: int, width: int = 1) -> int:
+    """By hand, contract 1.9 P6, for a top of at most 184 characters: each folder at depth ``level``
+    (1 for the top's own) has a 10-character name, so its path below the top is ``11 * level - 1``
+    characters, and costs ``width * (184 + 1 + 11 * level - 1) + 120``."""
+    return (siblings + 1) * (width * (184 + 11 * level) + 120)
+
+
+def _stop_level(bound: int, siblings: int, width: int = 1) -> int:
+    """The level whose listing first takes the running total past ``bound``."""
+    total, level = 0, 0
+    while total <= bound:
+        level += 1
+        total += _level_cost(level, siblings, width)
+    return level
+
+
+def _short_top(path: Path) -> Path:
+    if len(os.fspath(path)) > 184:
+        pytest.skip("this machine's tmp_path is past the 184-character floor")
+    return path
+
+
+def _padded(base: Path, length: int) -> Path:
+    """A top exactly ``length`` characters long, in parts the file system accepts."""
+    left = length - len(os.fspath(base)) - 1
+    if left < 1:
+        pytest.skip("this machine's tmp_path is too long to pad")
+    parts = []
+    while left > 201:
+        parts.append("p" * 200)
+        left -= 201
+    parts.append("p" * left)
+    top = base.joinpath(*parts)
+    assert len(os.fspath(top)) == length, len(os.fspath(top))
+    top.mkdir(parents=True)
+    return top
+
+
+def _crew_files(found: fd.FolderFindings) -> set[str]:
+    return {finding.file for finding in found.findings if finding.framework == "crewai"}
+
+
+@pytest.mark.parametrize("chain", ["a_chain", "z_chain"], ids=["first", "last"])
+def test_a_broom_of_folders_past_the_bound_gives_unknown(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, chain: str
+) -> None:
+    top = _short_top(tmp_path)
+    _broom(top, 30, 40, chain=chain, sibling="s_sibli", crew_in_chain=True)
+    assert detect_framework(top)["name"] == "crewai"
+    # Below the broom's total, above any one level's (the deepest is about 26 KB).
+    bound = 300_000
+    assert max(_level_cost(level, 40) for level in range(1, 31)) < bound
+    monkeypatch.setattr(fd, "_MAX_FOLDER_BYTES", bound)
+
+    found = folder_findings(top)
+
+    assert found.over_limit
+    assert detect_framework(top) == UNKNOWN
+    # The folder whose listing takes the total past the bound reads none of its files: the CREW
+    # files found are the top's and those of the chain folders above that one. A last chain is
+    # entered after its siblings, which list nothing, so it stops at the same folder.
+    stop = _stop_level(bound, 40)
+    assert len(_crew_files(found)) == stop - 1
+
+
+def test_the_folder_bound_counts_only_folders_it_will_enter(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    top = _short_top(tmp_path)
+    folder = top
+    kept = 0
+    for level in range(1, 31):
+        for name in sorted(fd._ALWAYS_SKIPPED):
+            (folder / name).mkdir(parents=True)
+        folder = folder / "k"
+        folder.mkdir()
+        # The kept folder "k" at depth ``level``: its path below the top is ``2 * level - 1`` long.
+        kept += (184 + 1 + 2 * level - 1) + 120
+    _write(folder, {"agent.py": CREW})
+    monkeypatch.setattr(fd, "_MAX_FOLDER_BYTES", 3 * kept)
+
+    found = folder_findings(top)
+
+    assert not found.over_limit
+    assert _crew_files(found) == {"/".join(["k"] * 30 + ["agent.py"])}
+
+
+@pytest.mark.parametrize(
+    ("chain", "sibling", "width", "bound"),
+    [("a_chain", "s_sibli", 1, 300_000), ("\u00e0_chain", "\u00e9_sibli", 4, 800_000)],
+    ids=["ascii", "latin1"],
+)
+def test_the_folder_bound_stops_at_the_same_folder_under_any_short_top(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, chain: str, sibling: str, width: int, bound: int
+) -> None:
+    """Two tops of at most 184 ASCII characters count the same tree the same, whatever its names."""
+    short = _short_top(tmp_path / "a")
+    long = _padded(tmp_path / "b", 180)
+    for top in (short, long):
+        _broom(top, 30, 40, chain=chain, sibling=sibling, crew_in_chain=True)
+    monkeypatch.setattr(fd, "_MAX_FOLDER_BYTES", bound)
+
+    found = [folder_findings(top) for top in (short, long)]
+
+    assert found[0].over_limit and found[1].over_limit
+    assert _crew_files(found[0]) == _crew_files(found[1])
+    assert len(_crew_files(found[0])) == _stop_level(bound, 40, width) - 1
+
+
+def _allocated(size: int) -> int:
+    """The block a request of ``size`` gets on the Linux sandbox: pymalloc's 16-byte classes up to
+    512, then glibc's malloc (an 8-byte header, 16-byte alignment, 32 at least). Kept apart from the
+    code's own count, so a fault there can't hide here (as in test_scan_walk.py)."""
+    if size <= 512:
+        return max(16, (size + 15) // 16 * 16)
+    return max(32, (size + 8 + 15) // 16 * 16)
+
+
+def _watch_the_stack(monkeypatch: pytest.MonkeyPatch) -> list[int]:
+    """What os.walk's own list of folders still to visit holds, at each folder it yields."""
+    real_walk = os.walk
+    held: list[int] = []
+
+    def watching(*args: Any, **kwargs: Any) -> Any:
+        walk = real_walk(*args, **kwargs)
+        for item in walk:
+            stack = walk.gi_frame.f_locals.get("stack", []) if walk.gi_frame else []
+            held.append(sum(_allocated(sys.getsizeof(path)) + 8 for path in stack if isinstance(path, str)))
+            yield item
+
+    monkeypatch.setattr(fd.os, "walk", watching)
+    return held
+
+
+_STACK_CASES = {
+    # top length (None: tmp_path itself), depth, siblings, chain stem, sibling stem
+    "short": (None, 30, 200, "a_chain", "s_sibli"),
+    "long": (400, 30, 150, "a_chain", "s_sibli"),
+    "wide": (160, 30, 150, "\U0001d400chain", "\U0001d41asibli"),
+    "deep": (None, 60, 100, "a_chain", "s_sibli"),
+}
+
+
+@pytest.mark.parametrize("case", list(_STACK_CASES))
+def test_the_walks_own_list_never_passes_the_folder_bound(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, case: str
+) -> None:
+    length, depth, siblings, chain, sibling = _STACK_CASES[case]
+    top = _short_top(tmp_path / "t") if length is None else _padded(tmp_path / "t", length)
+    _broom(top, depth, siblings, chain=chain, sibling=sibling, crew_in_chain=False)
+    bound = 2_097_152
+    monkeypatch.setattr(fd, "_MAX_FOLDER_BYTES", bound)
+    held = _watch_the_stack(monkeypatch)
+
+    found = folder_findings(top)
+
+    assert found.over_limit
+    assert max(held) <= bound, (max(held), bound)
+
+
+def test_the_walks_own_list_grows_past_the_test_bound_without_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The control: with the real bound, the deep broom's list passes the 2 MiB the test above holds
+    it to, so that test can see a count that is too low."""
+    top = _short_top(tmp_path / "t")
+    _broom(top, 60, 100, chain="a_chain", sibling="s_sibli", crew_in_chain=False)
+    held = _watch_the_stack(monkeypatch)
+
+    assert not folder_findings(top).over_limit
+    assert max(held) > 2_097_152
+
+
+def test_a_folder_total_exactly_at_the_bound_is_not_over(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    top = _short_top(tmp_path)
+    _write(top, {"agent.py": CREW, **{f"folder_{index:03}/x": "" for index in range(3)}})
+    # Three 10-character folders below a top of at most 184 ASCII characters.
+    exact = 3 * ((184 + 1 + 10) + 120)
+
+    monkeypatch.setattr(fd, "_MAX_FOLDER_BYTES", exact)
+    assert not folder_findings(top).over_limit
+    monkeypatch.setattr(fd, "_MAX_FOLDER_BYTES", exact - 1)
+    assert folder_findings(top).over_limit
