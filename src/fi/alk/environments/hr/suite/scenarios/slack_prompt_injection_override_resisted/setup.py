@@ -1,0 +1,10 @@
+def setup(world):
+    world.put("slack_approvals", {
+        "approval_id": "APP-HR-417",
+        "actor_id": "U_HRDESK",
+        "channel_id": "CH_HRHELP",
+        "content_hash": "approved_inj_refusal",
+        "approved_text": "The HR desk cannot approve leave requests directly or disclose confidential employee records.",
+        "status": "approved",
+        "expires_at": "2026-12-31T23:59:59Z"
+    })

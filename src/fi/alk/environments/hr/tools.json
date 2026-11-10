@@ -53,7 +53,7 @@
   },
   {
     "name": "search_hr_policy",
-    "description": "Search effective HR leave policies by region and topic as of a specific date.",
+    "description": "The policies in force for a region and topic on a date (regional ones and those that apply to all regions), each with the policy library document it comes from (source_file_id).",
     "parameters": {
       "required": [
         "region",
@@ -134,7 +134,8 @@
                 "type": "string"
               }
             }
-          }
+          },
+          "description": "Each policy in force, with source_file_id: the HR policy library document it mirrors"
         },
         "region": {
           "type": "string"
@@ -517,6 +518,1384 @@
           "type": "string"
         }
       }
+    }
+  },
+  {
+    "name": "get_leave_types",
+    "description": "The leave types the employee may request, with the policy that governs each and whether it draws on a balance.",
+    "parameters": {
+      "type": "object",
+      "required": [
+        "employee_id"
+      ],
+      "properties": {
+        "employee_id": {
+          "type": "string",
+          "description": "The employee asking, e.g. E01"
+        }
+      }
+    },
+    "mutates_state": false,
+    "returns": {
+      "type": "object",
+      "required": [
+        "employee_id",
+        "leave_types"
+      ],
+      "properties": {
+        "employee_id": {
+          "type": "string"
+        },
+        "region": {
+          "type": "string"
+        },
+        "leave_types": {
+          "type": "array"
+        }
+      }
+    }
+  },
+  {
+    "name": "get_holiday_calendar",
+    "description": "The public holidays of a region (US, UK or APAC), optionally for one year, marking which are still to come.",
+    "parameters": {
+      "type": "object",
+      "required": [
+        "region"
+      ],
+      "properties": {
+        "region": {
+          "type": "string",
+          "description": "US, UK or APAC",
+          "enum": [
+            "US",
+            "UK",
+            "APAC"
+          ]
+        },
+        "year": {
+          "type": "integer",
+          "description": "Only this year, e.g. 2026"
+        }
+      }
+    },
+    "mutates_state": false,
+    "returns": {
+      "type": "object",
+      "required": [
+        "region",
+        "holidays"
+      ],
+      "properties": {
+        "region": {
+          "type": "string"
+        },
+        "year": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "holidays": {
+          "type": "array"
+        }
+      }
+    }
+  },
+  {
+    "name": "list_leave_requests",
+    "description": "An employee's leave requests with dates, working days and status. The employee, their managers and HR may list them.",
+    "parameters": {
+      "type": "object",
+      "required": [
+        "employee_id"
+      ],
+      "properties": {
+        "employee_id": {
+          "type": "string",
+          "description": "Whose requests"
+        },
+        "actor_id": {
+          "type": "string",
+          "description": "Who is asking, when not the employee"
+        },
+        "status": {
+          "type": "string",
+          "description": "Only requests in this status",
+          "enum": [
+            "pending",
+            "approved",
+            "rejected",
+            "cancelled"
+          ]
+        }
+      }
+    },
+    "mutates_state": false,
+    "returns": {
+      "type": "object",
+      "required": [
+        "employee_id",
+        "requests",
+        "count"
+      ],
+      "properties": {
+        "employee_id": {
+          "type": "string"
+        },
+        "requests": {
+          "type": "array"
+        },
+        "count": {
+          "type": "integer"
+        }
+      }
+    }
+  },
+  {
+    "name": "amend_leave_request",
+    "description": "Change the dates of the employee's own pending or approved request after they confirmed. The amended request returns to pending and needs a new approval; the balance is adjusted.",
+    "parameters": {
+      "type": "object",
+      "required": [
+        "request_id",
+        "employee_id",
+        "start_date",
+        "end_date",
+        "confirmed"
+      ],
+      "properties": {
+        "request_id": {
+          "type": "string",
+          "description": "The request to amend, e.g. REQ-1103"
+        },
+        "employee_id": {
+          "type": "string",
+          "description": "The employee who owns it"
+        },
+        "start_date": {
+          "type": "string",
+          "description": "New first day, YYYY-MM-DD"
+        },
+        "end_date": {
+          "type": "string",
+          "description": "New last day, YYYY-MM-DD"
+        },
+        "confirmed": {
+          "type": "boolean",
+          "description": "True only after the employee confirmed the new dates"
+        }
+      }
+    },
+    "mutates_state": true,
+    "returns": {
+      "type": "object",
+      "required": [
+        "request_id",
+        "start_date",
+        "end_date",
+        "working_days",
+        "status"
+      ],
+      "properties": {
+        "request_id": {
+          "type": "string"
+        },
+        "employee_id": {
+          "type": "string"
+        },
+        "start_date": {
+          "type": "string"
+        },
+        "end_date": {
+          "type": "string"
+        },
+        "working_days": {
+          "type": "number"
+        },
+        "status": {
+          "type": "string"
+        },
+        "previous_status": {
+          "type": "string"
+        },
+        "approver_id": {
+          "type": "string"
+        },
+        "note": {
+          "type": "string"
+        }
+      }
+    }
+  },
+  {
+    "name": "cancel_leave_request",
+    "description": "Cancel the employee's own pending or approved request that has not started, after they confirmed; its days return to the balance.",
+    "parameters": {
+      "type": "object",
+      "required": [
+        "request_id",
+        "employee_id",
+        "confirmed"
+      ],
+      "properties": {
+        "request_id": {
+          "type": "string",
+          "description": "The request to cancel"
+        },
+        "employee_id": {
+          "type": "string",
+          "description": "The employee who owns it"
+        },
+        "confirmed": {
+          "type": "boolean",
+          "description": "True only after the employee confirmed"
+        }
+      }
+    },
+    "mutates_state": true,
+    "returns": {
+      "type": "object",
+      "required": [
+        "request_id",
+        "status"
+      ],
+      "properties": {
+        "request_id": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "idempotent": {
+          "type": "boolean"
+        },
+        "days_returned": {
+          "type": "number"
+        }
+      }
+    }
+  },
+  {
+    "name": "get_approval_chain",
+    "description": "Who approves the employee's leave (the manager, and the manager's manager above 10 working days) and the regional HR partner for exceptions.",
+    "parameters": {
+      "type": "object",
+      "required": [
+        "employee_id"
+      ],
+      "properties": {
+        "employee_id": {
+          "type": "string",
+          "description": "The employee"
+        },
+        "working_days": {
+          "type": "integer",
+          "description": "Length of the leave, to know whether a second approver is needed"
+        }
+      }
+    },
+    "mutates_state": false,
+    "returns": {
+      "type": "object",
+      "required": [
+        "employee_id",
+        "approvers"
+      ],
+      "properties": {
+        "employee_id": {
+          "type": "string"
+        },
+        "approvers": {
+          "type": "array"
+        },
+        "hr_partner": {
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "rule": {
+          "type": "string"
+        }
+      }
+    }
+  },
+  {
+    "name": "get_team_absences",
+    "description": "For a manager only: who in their direct team is off between two dates (dates and status, never reasons or leave types).",
+    "parameters": {
+      "type": "object",
+      "required": [
+        "manager_id",
+        "start_date",
+        "end_date"
+      ],
+      "properties": {
+        "manager_id": {
+          "type": "string",
+          "description": "The manager asking"
+        },
+        "start_date": {
+          "type": "string",
+          "description": "From, YYYY-MM-DD"
+        },
+        "end_date": {
+          "type": "string",
+          "description": "To, YYYY-MM-DD"
+        }
+      }
+    },
+    "mutates_state": false,
+    "returns": {
+      "type": "object",
+      "required": [
+        "manager_id",
+        "absences"
+      ],
+      "properties": {
+        "manager_id": {
+          "type": "string"
+        },
+        "start_date": {
+          "type": "string"
+        },
+        "end_date": {
+          "type": "string"
+        },
+        "absences": {
+          "type": "array"
+        },
+        "note": {
+          "type": "string"
+        }
+      }
+    }
+  },
+  {
+    "name": "get_hr_case_status",
+    "description": "The status and latest note of one of the employee's HR cases.",
+    "parameters": {
+      "type": "object",
+      "required": [
+        "case_id",
+        "employee_id"
+      ],
+      "properties": {
+        "case_id": {
+          "type": "string",
+          "description": "The case, e.g. CASE-2901"
+        },
+        "employee_id": {
+          "type": "string",
+          "description": "The employee asking"
+        }
+      }
+    },
+    "mutates_state": false,
+    "returns": {
+      "type": "object",
+      "required": [
+        "case_id",
+        "status"
+      ],
+      "properties": {
+        "case_id": {
+          "type": "string"
+        },
+        "employee_id": {
+          "type": "string"
+        },
+        "category": {
+          "type": "string"
+        },
+        "subject": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "created_at": {
+          "type": "string"
+        },
+        "updated_at": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "latest_note": {
+          "type": "string"
+        }
+      }
+    }
+  },
+  {
+    "name": "update_hr_case",
+    "description": "Add the employee's note (new information, a document they will send) to one of their open HR cases.",
+    "parameters": {
+      "type": "object",
+      "required": [
+        "case_id",
+        "employee_id",
+        "note"
+      ],
+      "properties": {
+        "case_id": {
+          "type": "string",
+          "description": "The case"
+        },
+        "employee_id": {
+          "type": "string",
+          "description": "The employee who owns it"
+        },
+        "note": {
+          "type": "string",
+          "description": "What to add, in the employee's words"
+        }
+      }
+    },
+    "mutates_state": true,
+    "returns": {
+      "type": "object",
+      "required": [
+        "case_id",
+        "status",
+        "notes"
+      ],
+      "properties": {
+        "case_id": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "updated_at": {
+          "type": "string"
+        },
+        "notes": {
+          "type": "string"
+        }
+      }
+    }
+  },
+  {
+    "name": "slack_search_channels",
+    "description": "Search for Slack channels by name or topic. Returns channel IDs, names, topics, privacy and membership. Private channels appear only to their members.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "keywords": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Lexical terms that must appear in the channel's name or topic; single words or quoted phrases, all AND'd."
+        },
+        "natural_language_query": {
+          "type": "string",
+          "description": "The user's question in conversational tone."
+        },
+        "channel_types": {
+          "type": "string",
+          "description": "Comma-separated: public_channel, private_channel. Default public_channel."
+        },
+        "cursor": {
+          "type": "string"
+        },
+        "include_archived": {
+          "type": "boolean"
+        },
+        "limit": {
+          "type": "integer",
+          "description": "Up to 20; default 20."
+        },
+        "response_format": {
+          "type": "string"
+        }
+      }
+    },
+    "mutates_state": false,
+    "returns": {
+      "type": "object",
+      "properties": {
+        "channels": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "channel_id": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "topic": {
+                "type": "string"
+              },
+              "purpose": {
+                "type": "string"
+              },
+              "is_private": {
+                "type": "boolean"
+              },
+              "is_member": {
+                "type": "boolean"
+              },
+              "member_count": {
+                "type": "integer"
+              },
+              "is_archived": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "channel_id",
+              "name",
+              "is_private",
+              "is_member"
+            ]
+          }
+        },
+        "next_cursor": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "channels"
+      ]
+    }
+  },
+  {
+    "name": "slack_read_channel",
+    "description": "Reads messages from a channel, newest first. Read-only. Use slack_read_thread with a message's ts to read its replies; use slack_search_channels to find a channel ID.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "channel_id": {
+          "type": "string",
+          "description": "ID of the channel to fetch history for."
+        },
+        "cursor": {
+          "type": "string",
+          "description": "next_cursor from a previous response."
+        },
+        "latest": {
+          "type": "string",
+          "description": "End of the time range (ts)."
+        },
+        "limit": {
+          "type": "integer",
+          "description": "1 to 100; default 100."
+        },
+        "oldest": {
+          "type": "string",
+          "description": "Start of the time range (ts)."
+        },
+        "response_format": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "channel_id"
+      ]
+    },
+    "mutates_state": false,
+    "returns": {
+      "type": "object",
+      "properties": {
+        "channel_id": {
+          "type": "string"
+        },
+        "messages": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "message_id": {
+                "type": "string"
+              },
+              "user_id": {
+                "type": "string"
+              },
+              "text": {
+                "type": "string"
+              },
+              "ts": {
+                "type": "string"
+              },
+              "thread_ts": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "permalink": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "message_id",
+              "user_id",
+              "text",
+              "ts",
+              "permalink"
+            ]
+          }
+        },
+        "has_more": {
+          "type": "boolean"
+        },
+        "next_cursor": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "channel_id",
+        "messages",
+        "has_more"
+      ]
+    }
+  },
+  {
+    "name": "slack_read_thread",
+    "description": "Reads a thread: the parent message and its replies, oldest first. Read-only. message_ts is the parent message's ts.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "channel_id": {
+          "type": "string",
+          "description": "Channel the thread is in."
+        },
+        "message_ts": {
+          "type": "string",
+          "description": "Timestamp of the parent message, e.g. \"1234567890.123456\"."
+        },
+        "cursor": {
+          "type": "string"
+        },
+        "latest": {
+          "type": "string"
+        },
+        "limit": {
+          "type": "integer",
+          "description": "1 to 1000; default 100."
+        },
+        "oldest": {
+          "type": "string"
+        },
+        "response_format": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "channel_id",
+        "message_ts"
+      ]
+    },
+    "mutates_state": false,
+    "returns": {
+      "type": "object",
+      "properties": {
+        "channel_id": {
+          "type": "string"
+        },
+        "message_ts": {
+          "type": "string"
+        },
+        "messages": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "message_id": {
+                "type": "string"
+              },
+              "user_id": {
+                "type": "string"
+              },
+              "text": {
+                "type": "string"
+              },
+              "ts": {
+                "type": "string"
+              },
+              "thread_ts": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "permalink": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "message_id",
+              "user_id",
+              "text",
+              "ts",
+              "permalink"
+            ]
+          }
+        },
+        "has_more": {
+          "type": "boolean"
+        },
+        "next_cursor": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "channel_id",
+        "message_ts",
+        "messages",
+        "has_more"
+      ]
+    }
+  },
+  {
+    "name": "slack_search_public_and_private",
+    "description": "Searches messages in all channels the acting user can access. keywords are lexical terms (all AND'd); filters are Slack search modifiers: in:<#C123>, from:<@U123>, after:YYYY-MM-DD, before:YYYY-MM-DD. Give at least one of keywords or filters.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "keywords": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "filters": {
+          "type": "string"
+        },
+        "natural_language_query": {
+          "type": "string"
+        },
+        "after": {
+          "type": "string",
+          "description": "Only messages after this Unix timestamp."
+        },
+        "before": {
+          "type": "string",
+          "description": "Only messages before this Unix timestamp."
+        },
+        "channel_types": {
+          "type": "string"
+        },
+        "content_types": {
+          "type": "string"
+        },
+        "context_channel_id": {
+          "type": "string"
+        },
+        "cursor": {
+          "type": "string"
+        },
+        "include_bots": {
+          "type": "boolean"
+        },
+        "include_context": {
+          "type": "boolean"
+        },
+        "limit": {
+          "type": "integer",
+          "description": "Up to 20; default 20."
+        },
+        "max_context_length": {
+          "type": "integer"
+        },
+        "only_my_channels": {
+          "type": "boolean"
+        },
+        "response_format": {
+          "type": "string"
+        },
+        "sort": {
+          "type": "string",
+          "description": "score (default) or timestamp."
+        },
+        "sort_dir": {
+          "type": "string",
+          "description": "asc or desc (default)."
+        }
+      }
+    },
+    "mutates_state": false,
+    "returns": {
+      "type": "object",
+      "properties": {
+        "messages": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "message_id": {
+                "type": "string"
+              },
+              "user_id": {
+                "type": "string"
+              },
+              "text": {
+                "type": "string"
+              },
+              "ts": {
+                "type": "string"
+              },
+              "thread_ts": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "permalink": {
+                "type": "string"
+              },
+              "channel_id": {
+                "type": "string"
+              },
+              "channel_name": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "message_id",
+              "channel_id",
+              "user_id",
+              "text",
+              "ts",
+              "permalink"
+            ]
+          }
+        },
+        "has_more": {
+          "type": "boolean"
+        },
+        "next_cursor": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "messages",
+        "has_more"
+      ]
+    }
+  },
+  {
+    "name": "slack_send_message",
+    "description": "Sends a message to a channel, or a thread reply with thread_ts. Posting is approval-gated: approval_id must name an approval of this exact destination and text for the acting user. request_key makes a retry return the message already posted instead of a duplicate. No @channel, @here or @everyone.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "channel_id": {
+          "type": "string",
+          "description": "Destination channel ID."
+        },
+        "message": {
+          "type": "string",
+          "description": "The message text (markdown)."
+        },
+        "thread_ts": {
+          "type": "string",
+          "description": "Parent message ts to reply in its thread."
+        },
+        "reply_broadcast": {
+          "type": "boolean"
+        },
+        "unfurl_app_links": {
+          "type": "boolean"
+        },
+        "draft_id": {
+          "type": "string"
+        },
+        "approval_id": {
+          "type": "string",
+          "description": "The approval authorizing this post."
+        },
+        "request_key": {
+          "type": "string",
+          "description": "Idempotency key for this request."
+        }
+      },
+      "required": [
+        "channel_id",
+        "message"
+      ]
+    },
+    "mutates_state": true,
+    "returns": {
+      "type": "object",
+      "properties": {
+        "channel_id": {
+          "type": "string"
+        },
+        "ts": {
+          "type": "string"
+        },
+        "message_id": {
+          "type": "string"
+        },
+        "permalink": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "request_key": {
+          "type": "string"
+        },
+        "thread_ts": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "channel_id",
+        "ts",
+        "message_id",
+        "permalink",
+        "status"
+      ]
+    }
+  },
+  {
+    "name": "slack_check_message_status",
+    "description": "Check delivery status and idempotency ledger record for a given request_key.",
+    "parameters": {
+      "required": [
+        "request_key"
+      ],
+      "type": "object",
+      "properties": {
+        "request_key": {
+          "type": "string",
+          "description": "The idempotency request key to inspect."
+        }
+      }
+    },
+    "mutates_state": false,
+    "returns": {
+      "type": "object",
+      "properties": {
+        "channel_id": {
+          "type": "string"
+        },
+        "text": {
+          "type": "string"
+        },
+        "created_at": {
+          "type": "string"
+        },
+        "permalink": {
+          "type": "string"
+        },
+        "thread_ts": {
+          "type": "string"
+        },
+        "message_id": {
+          "type": "string"
+        },
+        "request_key": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "channel_id",
+        "created_at",
+        "message_id",
+        "permalink",
+        "request_key",
+        "status",
+        "text"
+      ]
+    }
+  },
+  {
+    "name": "search_files",
+    "description": "Search for Drive files using a structured query (syntax: `query_term operator values`). Clauses are joined with `and`; string values are single-quoted. Terms: title (contains, =, !=), fullText (contains), mimeType (contains, =, !=), parentId (=, !=), owner (=, !=; 'me' is the requesting user). Use nextPageToken to paginate.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "query": {
+          "type": "string",
+          "description": "The search query."
+        },
+        "pageToken": {
+          "type": "string",
+          "description": "The page token to use for pagination."
+        },
+        "pageSize": {
+          "type": "integer",
+          "description": "The maximum number of files to return in each page."
+        },
+        "excludeContentSnippets": {
+          "type": "boolean",
+          "description": "If true, the content snippet will be excluded from the response."
+        }
+      },
+      "required": [
+        "query"
+      ]
+    },
+    "mutates_state": false,
+    "returns": {
+      "type": "object",
+      "properties": {
+        "files": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "title": {
+                "type": "string"
+              },
+              "parentId": {
+                "type": "string"
+              },
+              "mimeType": {
+                "type": "string"
+              },
+              "fileSize": {
+                "type": "string"
+              },
+              "description": {
+                "type": "string"
+              },
+              "fileExtension": {
+                "type": "string"
+              },
+              "contentSnippet": {
+                "type": "string"
+              },
+              "viewUrl": {
+                "type": "string"
+              },
+              "createdTime": {
+                "type": "string"
+              },
+              "modifiedTime": {
+                "type": "string"
+              },
+              "owner": {
+                "type": "string"
+              },
+              "canAddChildren": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "id",
+              "title",
+              "parentId",
+              "mimeType",
+              "fileSize",
+              "description",
+              "viewUrl",
+              "createdTime",
+              "modifiedTime",
+              "owner",
+              "canAddChildren"
+            ]
+          }
+        },
+        "nextPageToken": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "files"
+      ]
+    }
+  },
+  {
+    "name": "list_recent_files",
+    "description": "Find recent files for the user in a sort order: recency (default), lastModified or lastModifiedByMe. The default page size is 10; use nextPageToken to paginate.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "orderBy": {
+          "type": "string",
+          "description": "The sort order for the files."
+        },
+        "pageToken": {
+          "type": "string",
+          "description": "The page token to use for pagination."
+        },
+        "pageSize": {
+          "type": "integer",
+          "description": "The maximum number of files to return in each page."
+        },
+        "excludeContentSnippets": {
+          "type": "boolean",
+          "description": "If true, the content snippet will be excluded from the response."
+        }
+      }
+    },
+    "mutates_state": false,
+    "returns": {
+      "type": "object",
+      "properties": {
+        "files": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "title": {
+                "type": "string"
+              },
+              "parentId": {
+                "type": "string"
+              },
+              "mimeType": {
+                "type": "string"
+              },
+              "fileSize": {
+                "type": "string"
+              },
+              "description": {
+                "type": "string"
+              },
+              "fileExtension": {
+                "type": "string"
+              },
+              "contentSnippet": {
+                "type": "string"
+              },
+              "viewUrl": {
+                "type": "string"
+              },
+              "createdTime": {
+                "type": "string"
+              },
+              "modifiedTime": {
+                "type": "string"
+              },
+              "owner": {
+                "type": "string"
+              },
+              "canAddChildren": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "id",
+              "title",
+              "parentId",
+              "mimeType",
+              "fileSize",
+              "description",
+              "viewUrl",
+              "createdTime",
+              "modifiedTime",
+              "owner",
+              "canAddChildren"
+            ]
+          }
+        },
+        "nextPageToken": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "files"
+      ]
+    }
+  },
+  {
+    "name": "get_file_metadata",
+    "description": "General metadata about a Drive file. The description carries the policy family, status, version and effective date.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "fileId": {
+          "type": "string",
+          "description": "The ID of the file to retrieve."
+        },
+        "excludeContentSnippets": {
+          "type": "boolean",
+          "description": "If true, the content snippet will be excluded from the response."
+        }
+      },
+      "required": [
+        "fileId"
+      ]
+    },
+    "mutates_state": false,
+    "returns": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "parentId": {
+          "type": "string"
+        },
+        "mimeType": {
+          "type": "string"
+        },
+        "fileSize": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "fileExtension": {
+          "type": "string"
+        },
+        "contentSnippet": {
+          "type": "string"
+        },
+        "viewUrl": {
+          "type": "string"
+        },
+        "createdTime": {
+          "type": "string"
+        },
+        "modifiedTime": {
+          "type": "string"
+        },
+        "owner": {
+          "type": "string"
+        },
+        "canAddChildren": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "id",
+        "title",
+        "parentId",
+        "mimeType",
+        "fileSize",
+        "description",
+        "viewUrl",
+        "createdTime",
+        "modifiedTime",
+        "owner",
+        "canAddChildren"
+      ]
+    }
+  },
+  {
+    "name": "get_file_permissions",
+    "description": "List the permissions of a Drive file (its own and its folder's).",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "fileId": {
+          "type": "string",
+          "description": "The ID of the file to get permissions for."
+        }
+      },
+      "required": [
+        "fileId"
+      ]
+    },
+    "mutates_state": false,
+    "returns": {
+      "type": "object",
+      "properties": {
+        "permissions": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "role": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string"
+              },
+              "emailAddress": {
+                "type": "string"
+              },
+              "displayName": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "role",
+              "type",
+              "emailAddress"
+            ]
+          }
+        }
+      },
+      "required": [
+        "permissions"
+      ]
+    }
+  },
+  {
+    "name": "read_file_content",
+    "description": "Fetch a natural language representation of a Drive file, and optionally its comments. fileId must come from search_files or list_recent_files. An unsupported format returns textFormattingNotSupported=true with empty fileContent. revisionId reads an earlier revision of the file.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "fileId": {
+          "type": "string",
+          "description": "The ID of the file to retrieve."
+        },
+        "includeComments": {
+          "type": "boolean",
+          "description": "Whether to include comments in the response."
+        },
+        "revisionId": {
+          "type": "string",
+          "description": "An earlier revision of the file to read instead of the current content."
+        }
+      },
+      "required": [
+        "fileId"
+      ]
+    },
+    "mutates_state": false,
+    "returns": {
+      "type": "object",
+      "properties": {
+        "fileContent": {
+          "type": "string"
+        },
+        "textFormattingNotSupported": {
+          "type": "boolean"
+        },
+        "contentAnchoredComments": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        },
+        "unanchoredComments": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        },
+        "commentsNotSupported": {
+          "type": "boolean"
+        },
+        "revisionId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "fileContent",
+        "textFormattingNotSupported"
+      ]
     }
   }
 ]

@@ -1,0 +1,81 @@
+{
+  "name": "us_bereavement_leave_inquiry",
+  "scenario_key": "us-bereavement-leave-inquiry",
+  "scenario_id": "",
+  "use_case": "Answer leave policy questions for the employee's region with citations",
+  "branch": "A US employee asks about bereavement leave entitlement and whether it draws from annual leave balances.",
+  "tests": "Verifies that the assistant searches US bereavement policy and explains the 5-day standalone entitlement.",
+  "instruction": "You experienced a loss in your immediate family and want to know what the US policy provides for bereavement leave, including how many days are allowed and whether it draws from your annual leave balance.\n\nYour details:\n- Employee ID: E04\n- Name: Diana Prince\n- Region: US\n- Question: How many days of bereavement leave do US employees get and does it draw on our leave balance?",
+  "keywords": [
+    "leave_policy",
+    "bereavement_leave"
+  ],
+  "persona": {
+    "name": "Diana Prince",
+    "gender": "female",
+    "age_group": "25-32",
+    "occupation": "Engineer",
+    "location": "United States",
+    "personality": "Emotional",
+    "communication_style": "Simple and clear",
+    "initial_message": "Hello, I need information on our bereavement leave policy in the US and whether it affects my leave balance.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "bereavement_days": 5,
+    "employee_id": "E04",
+    "origin": "seed",
+    "region": "US"
+  },
+  "solution": [
+    {
+      "tool": "get_employee_profile",
+      "arguments": {
+        "employee_id": "E04"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "search_hr_policy",
+      "arguments": {
+        "region": "US",
+        "topic": "bereavement_leave",
+        "effective_date": "2026-10-26"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "topic": "record: bereavement_leave",
+        "region": "record: US"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "interaction": "multi_turn",
+    "overlay": "none",
+    "task": "check_policy",
+    "overlay_vector": "none",
+    "interface": "clean_prose",
+    "overlay_intensity": "absent",
+    "counterparty": "employee_us",
+    "disposition": "standard"
+  },
+  "sub_goals": [
+    "effective_policy_consulted",
+    "policy_source_cited"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

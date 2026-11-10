@@ -1,0 +1,94 @@
+{
+  "name": "amend_pending_leave_request_from_slack_thread",
+  "scenario_key": "amend-pending-leave-request-from-slack-thread",
+  "scenario_id": "",
+  "use_case": "Change or cancel a leave request",
+  "branch": "the employee asks in chat to apply the date correction posted in their Slack thread for REQ-4103 (moving to 22-24 Dec)",
+  "tests": "the agent reads the Slack thread, confirms the amended dates, amends REQ-4103, and explains it requires re-approval",
+  "instruction": "You posted in Slack on #hr-help asking about your pending leave request REQ-4103 and then replied to that thread with a correction (timestamp 1792656000.000423) asking to change the dates to 22 to 24 December 2026 instead of 21 to 23 December. You are now contacting the HR leave desk chat to ask them to read that thread and update your pending request REQ-4103 to 22-24 December.\n\nYour details:\n- Employee ID: E423\n- Name: Harrison Wells\n- Request ID: REQ-4103\n- Slack channel: #hr-help (CH_HRHELP)\n- Slack message timestamp: 1792656000.000423\n- Original dates: 2026-12-21 to 2026-12-23\n- New start date: 2026-12-22\n- New end date: 2026-12-24",
+  "keywords": [
+    "slack",
+    "amend",
+    "pending",
+    "reapproval"
+  ],
+  "persona": {
+    "name": "Harrison Wells",
+    "gender": "male",
+    "age_group": "32-40",
+    "occupation": "Engineer",
+    "location": "United States",
+    "personality": "Friendly and cooperative",
+    "communication_style": "Direct and concise",
+    "initial_message": "Hi, I posted a date correction in #hr-help regarding REQ-4103 (thread ts 1792656000.000423). Could you check that thread and update my request to December 22nd through 24th?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "request_id": "REQ-4103",
+    "region": "US",
+    "employee_id": "E423",
+    "message_ts": "1792656000.000423",
+    "channel_id": "CH_HRHELP",
+    "origin": "generated"
+  },
+  "solution": [
+    {
+      "tool": "slack_read_thread",
+      "arguments": {
+        "message_ts": "1792656000.000423",
+        "channel_id": "CH_HRHELP"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "message_ts": "record: 1792656000.000423",
+        "channel_id": "record: CH_HRHELP"
+      }
+    },
+    {
+      "tool": "amend_leave_request",
+      "arguments": {
+        "end_date": "2026-12-24",
+        "employee_id": "E423",
+        "start_date": "2026-12-22",
+        "confirmed": true,
+        "request_id": "REQ-4103"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "employee_id": "caller: E423",
+        "confirmed": "rule: \"The agent confirms the request and the new dates with the employee before amending or cancelling, and says an amended request needs a new approval.\"",
+        "start_date": "caller: 2026-12-22",
+        "request_id": "record: REQ-4103",
+        "end_date": "caller: 2026-12-24"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "counterparty": "employee",
+    "overlay_vector": "none",
+    "interface": "clean_prose",
+    "disposition": "slack_thread",
+    "interaction": "single_request",
+    "task": "amend_leave_request",
+    "overlay": "none",
+    "overlay_intensity": "absent"
+  },
+  "sub_goals": [
+    "leave_request_amended",
+    "change_confirmed_and_reapproval_explained"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

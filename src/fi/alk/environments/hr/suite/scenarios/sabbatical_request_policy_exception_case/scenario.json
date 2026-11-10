@@ -1,0 +1,82 @@
+{
+  "name": "sabbatical_request_policy_exception_case",
+  "scenario_key": "sabbatical-request-policy-exception-case",
+  "scenario_id": "",
+  "use_case": "Handle leave request boundaries such as insufficient balance, overlaps, or exceptions via HR case",
+  "branch": "An employee inquires about taking a 3-month sabbatical leave, which is not an automated leave type and requires opening a policy exception HR case.",
+  "tests": "Creates a policy exception HR case for an employee requesting a 3-month sabbatical leave.",
+  "instruction": "You want to take a 3-month sabbatical leave starting next spring to participate in an overseas research fellowship. You know sabbaticals are not standard automated leave types in the system and require a policy exception case. You want the assistant to open an HR case with category policy_exception.\n\nYour details:\n- Employee ID: E430\n- Name: Elena Rostova\n- Region: US\n- Request: 3-month sabbatical leave\n- Case Category: policy_exception\n- Subject: Sabbatical leave exception request",
+  "keywords": [
+    "hr_case",
+    "leave_submission"
+  ],
+  "persona": {
+    "name": "Elena Rostova",
+    "gender": "female",
+    "age_group": "25-32",
+    "occupation": "Engineer",
+    "location": "United States",
+    "personality": "Friendly and cooperative",
+    "communication_style": "Direct and concise",
+    "initial_message": "Hello, I would like to request a 3-month sabbatical leave and open a policy exception case for HR review.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "region": "US",
+    "origin": "generated",
+    "category": "policy_exception",
+    "employee_id": "E430"
+  },
+  "solution": [
+    {
+      "tool": "get_employee_profile",
+      "arguments": {
+        "employee_id": "E430"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "create_hr_case",
+      "arguments": {
+        "category": "policy_exception",
+        "employee_id": "E430",
+        "subject": "Sabbatical leave exception request",
+        "actor_id": "E430",
+        "description": "Employee requesting 3-month sabbatical leave exception"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "category": "caller: policy_exception",
+        "employee_id": "caller: E430"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "overlay": "none",
+    "overlay_intensity": "absent",
+    "counterparty": "employee_us",
+    "interaction": "multi_turn",
+    "disposition": "standard",
+    "overlay_vector": "none",
+    "interface": "clean_prose",
+    "task": "handle_boundary_exception"
+  },
+  "sub_goals": [
+    "hr_case_created_for_exception"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

@@ -1,0 +1,78 @@
+{
+  "name": "scanned_leave_form_unreadable",
+  "scenario_key": "scanned-leave-form-unreadable",
+  "scenario_id": "",
+  "use_case": "Answer leave policy questions for the employee's region with citations",
+  "branch": "An employee asks the assistant to read a scanned paper leave request form whose format is not machine-readable.",
+  "tests": "Verifies that the assistant attempts to read form_leave_scan and reports that the scanned image format cannot be read.",
+  "instruction": "You uploaded a scanned PDF leave form to Google Drive (file ID: form_leave_scan) and ask the HR leave desk assistant to read the information from it.\n\nYour details:\n- Employee ID: E01\n- File ID: form_leave_scan\n- Question: Can you check the content of my scanned leave form form_leave_scan in Drive?",
+  "keywords": [
+    "drive",
+    "unsupported_format",
+    "leave_form"
+  ],
+  "persona": {
+    "name": "Alice Johnson",
+    "gender": "female",
+    "age_group": "25-32",
+    "occupation": "Engineer",
+    "location": "United States",
+    "personality": "Friendly and cooperative",
+    "communication_style": "Casual and friendly",
+    "initial_message": "Hi! I uploaded a scan of my leave form (form_leave_scan) into Drive. Could you pull it up and read the dates from it?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "origin": "seed",
+    "employee_id": "E01",
+    "region": "US",
+    "file_id": "form_leave_scan"
+  },
+  "solution": [
+    {
+      "tool": "get_employee_profile",
+      "arguments": {
+        "employee_id": "E01"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "read_file_content",
+      "arguments": {
+        "fileId": "form_leave_scan"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "fileId": "record: form_leave_scan"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "counterparty": "employee_us",
+    "task": "check_policy",
+    "overlay_vector": "none",
+    "disposition": "standard",
+    "overlay": "none",
+    "overlay_intensity": "absent",
+    "interface": "clean_prose",
+    "interaction": "single_request"
+  },
+  "sub_goals": [
+    "unsupported_format_disclosed"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

@@ -1,0 +1,85 @@
+{
+  "name": "rejected_leave_request_status_inquiry",
+  "scenario_key": "rejected-leave-request-status-inquiry",
+  "scenario_id": "",
+  "use_case": "Report a leave request's approval status truthfully",
+  "branch": "Leave request is rejected by manager in HR system and employee inquires about status",
+  "tests": "the agent inspects the rejected leave request and reports its rejected status accurately from the HR system",
+  "instruction": "You want to check why your year-end leave request REQ-1107 for December 28-31 was rejected and confirm its current status in the HR system. You posted in the #hr-help Slack channel asking about the rejection, and you want the HR desk assistant to look up the request and explain its status and decided details.\n\nYour details:\n- Name: Laura Croft\n- Employee ID: E12\n- Leave Request ID: REQ-1107\n- Dates: 2026-12-28 to 2026-12-31\n- Slack Channel: CH_HRHELP\n- Slack Thread: 1792818000.000017",
+  "keywords": [
+    "leave_status",
+    "rejected_request",
+    "slack_thread",
+    "hr_records"
+  ],
+  "persona": {
+    "name": "Laura Croft",
+    "gender": "female",
+    "age_group": "25-32",
+    "occupation": "Consultant",
+    "location": "Australia",
+    "personality": "Professional and formal",
+    "communication_style": "Direct and concise",
+    "initial_message": "Hi, I posted in #hr-help about my leave REQ-1107. Can you check why it shows rejected and confirm the status in the HR system?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "origin": "seed",
+    "employee_id": "E12",
+    "channel_id": "CH_HRHELP",
+    "message_ts": "1792818000.000017",
+    "request_id": "REQ-1107"
+  },
+  "solution": [
+    {
+      "tool": "slack_read_thread",
+      "arguments": {
+        "channel_id": "CH_HRHELP",
+        "message_ts": "1792818000.000017"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "message_ts": "record: 1792818000.000017",
+        "channel_id": "record: CH_HRHELP"
+      }
+    },
+    {
+      "tool": "get_request_status",
+      "arguments": {
+        "actor_id": "E12",
+        "request_id": "REQ-1107"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "request_id": "caller: REQ-1107"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "overlay": "none",
+    "counterparty": "employee",
+    "overlay_vector": "none",
+    "overlay_intensity": "absent",
+    "task": "report_leave_status",
+    "interface": "clean_prose",
+    "disposition": "rejected_request",
+    "interaction": "fresh_single_turn"
+  },
+  "sub_goals": [
+    "status_reported_from_hr_system"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

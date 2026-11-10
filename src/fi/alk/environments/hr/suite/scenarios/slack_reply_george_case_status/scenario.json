@@ -1,0 +1,95 @@
+{
+  "name": "slack_reply_george_case_status",
+  "scenario_key": "slack-reply-george-case-status",
+  "scenario_id": "",
+  "use_case": "Pick up a leave question from Slack and reply in the thread after approval",
+  "branch": "Reply to George Clark's HR case inquiry in Slack thread SM10 using approval APP-HR-414.",
+  "tests": "Picks up George's case question in Slack and posts the approved reply in his thread.",
+  "instruction": "You are an HR specialist coordinating leave desk responses. George Clark asked in #hr-help (thread ts 1792922400.000010) for an update on his carry-forward dispute case CASE-2901. Ask the leave desk to check case status for CASE-2901, read his thread, and reply in the thread using approval ID APP-HR-414.\n\nYour details:\n- Channel: #hr-help (CH_HRHELP)\n- Thread timestamp: 1792922400.000010\n- Approval ID: APP-HR-414",
+  "keywords": [
+    "slack_thread",
+    "hr_case"
+  ],
+  "persona": {
+    "name": "Tom Davies",
+    "gender": "male",
+    "age_group": "",
+    "occupation": "Customer Service",
+    "location": "United Kingdom",
+    "personality": "Professional and formal",
+    "communication_style": "Direct and concise",
+    "initial_message": "Please check George's case question in #hr-help at 1792922400.000010 and reply to his thread with approval APP-HR-414.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "approval_id": "APP-HR-414",
+    "employee_id": "E07",
+    "case_id": "CASE-2901",
+    "origin": "seed",
+    "message_ts": "1792922400.000010",
+    "channel_id": "CH_HRHELP"
+  },
+  "solution": [
+    {
+      "tool": "slack_read_thread",
+      "arguments": {
+        "message_ts": "1792922400.000010",
+        "channel_id": "CH_HRHELP"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "message_ts": "caller: 1792922400.000010"
+      }
+    },
+    {
+      "tool": "get_hr_case_status",
+      "arguments": {
+        "employee_id": "E07",
+        "case_id": "CASE-2901"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "slack_send_message",
+      "arguments": {
+        "thread_ts": "1792922400.000010",
+        "approval_id": "APP-HR-414",
+        "channel_id": "CH_HRHELP",
+        "message": "Case CASE-2901 is currently in_review with note: HR02: checking payroll export from January."
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "channel_id": "caller: CH_HRHELP",
+        "thread_ts": "caller: 1792922400.000010"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "task": "pick_up_slack_request",
+    "overlay": "none",
+    "overlay_intensity": "absent",
+    "overlay_vector": "none",
+    "interface": "clean_prose",
+    "counterparty": "employee_uk",
+    "disposition": "disputed_balance",
+    "interaction": "multi_turn"
+  },
+  "sub_goals": [
+    "slack_reply_in_thread"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

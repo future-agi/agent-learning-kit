@@ -1,0 +1,111 @@
+{
+  "name": "slack_bob_submit_leave_request",
+  "scenario_key": "slack-bob-submit-leave-request",
+  "scenario_id": "",
+  "use_case": "Pick up a leave question from Slack and reply in the thread after approval",
+  "branch": "An HR specialist processes Bob Smith's leave request posted in Slack thread SM401 to submit 2 days of annual leave.",
+  "tests": "Processes a leave request submitted via Slack and records the pending request in the system.",
+  "instruction": "You are Rachel Green (HR01), the HR business partner. Bob Smith (E02) posted a message in Slack #hr-help (message SM401 at timestamp 1792600000.000401) asking to submit an annual leave request for November 30 to December 1, 2026. Ask the leave desk to read the thread and submit the annual leave request for Bob.\n\nYour details:\n- Your ID: HR01\n- Employee: Bob Smith, E02\n- Leave type: annual\n- Dates: 2026-11-30 to 2026-12-01\n- Slack message ts: 1792600000.000401",
+  "keywords": [
+    "slack_thread",
+    "leave_submission",
+    "leave_balance"
+  ],
+  "persona": {
+    "name": "Rachel Green",
+    "gender": "female",
+    "age_group": "",
+    "occupation": "Customer Service",
+    "location": "United States",
+    "personality": "Professional and formal",
+    "communication_style": "Direct and concise",
+    "initial_message": "Hi, Bob Smith posted in Slack #hr-help at 1792600000.000401 requesting annual leave for Nov 30 to Dec 1. Please process and submit this request.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "employee_id": "E02",
+    "start_date": "2026-11-30",
+    "message_id": "SM401",
+    "leave_type": "annual",
+    "end_date": "2026-12-01",
+    "origin": "mixed"
+  },
+  "solution": [
+    {
+      "tool": "slack_read_thread",
+      "arguments": {
+        "channel_id": "CH_HRHELP",
+        "message_ts": "1792600000.000401"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "message_ts": "the Slack message the request came in"
+      }
+    },
+    {
+      "tool": "calculate_working_days",
+      "arguments": {
+        "start_date": "2026-11-30",
+        "end_date": "2026-12-01",
+        "region": "US"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_leave_balance",
+      "arguments": {
+        "employee_id": "E02",
+        "actor_id": "E02",
+        "leave_type": "annual"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "submit_leave_request",
+      "arguments": {
+        "end_date": "2026-12-01",
+        "leave_type": "annual",
+        "start_date": "2026-11-30",
+        "reason": "Personal time off",
+        "employee_id": "E02",
+        "actor_id": "E02"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "leave_type": "caller: annual",
+        "employee_id": "caller: E02",
+        "end_date": "caller: 2026-12-01",
+        "start_date": "caller: 2026-11-30"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "overlay_vector": "none",
+    "overlay_intensity": "absent",
+    "task": "pick_up_slack_request",
+    "interaction": "single_request",
+    "interface": "wall_of_text",
+    "counterparty": "employee_us",
+    "overlay": "none",
+    "disposition": "disputed_balance"
+  },
+  "sub_goals": [
+    "leave_request_submitted_correctly"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

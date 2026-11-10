@@ -1,29 +1,58 @@
 def check(world, calls, reference=None):
+    made = [c for c in calls if c.name == "submit_leave_request" and c.ok]
+    if not made:
+        return "not done: submit_leave_request was not called successfully"
     state = world.state()
-    requests = state.get("leave_requests", [])
-    if not requests:
-        return "not done: no leave request was recorded in the world"
-        
+    now = (state.get("clock") or [{"now": ""}])[0]["now"]
+    new = [r for r in state.get("leave_requests", []) if r.get("created_at") == now]
+    if not new:
+        return "not done: no leave request was recorded in the world by this run"
     wanted = {}
-    if reference:
-        for step in reference:
-            if step["tool"] == "submit_leave_request":
-                for k in ("employee_id", "leave_type", "start_date", "end_date"):
-                    if k in step.get("arguments", {}):
-                        wanted[k] = step["arguments"][k]
-    
-    for req in requests:
-        matches = True
-        for field, expected in wanted.items():
-            if str(req.get(field, "")).strip().lower() != str(expected).strip().lower():
-                matches = False
+    for step in reference or ():
+        if step["tool"] == "submit_leave_request":
+            for k in ("employee_id", "leave_type", "start_date", "end_date"):
+                if k in step.get("arguments", {}):
+                    wanted[k] = step["arguments"][k]
+    matching = [r for r in new if all(str(r.get(f, "")).strip().lower() == str(v).strip().lower() for f, v in wanted.items())]
+    if not matching:
+        return f"done wrong: no new leave request matched {wanted}; the run created {[(r['employee_id'], r['start_date'], r['end_date']) for r in new]}"
+    if len(new) != 1:
+        return f"done wrong: {len(new)} requests were created, the employee asked for one"
+    if matching[0].get("status") != "pending":
+        return f"done wrong: request status expected 'pending', got {matching[0].get('status')!r}"
+    missing = _evidence_missing(world, calls, reference)
+    if missing:
+        return f"done blind: the decision rests on {', '.join(missing)}, which was never read"
+    return None
+
+def _evidence_missing(world, calls, reference):
+    """The Slack thread or library document the reference fixes, and whether the run retrieved it:
+    a direct read, a channel read or search that listed the message, or the document read."""
+    wanted = []
+    for step in reference or ():
+        a = step.get("arguments", {})
+        if step.get("tool") == "slack_read_thread" and a.get("message_ts"):
+            wanted.append(("thread", a.get("channel_id"), a["message_ts"]))
+        elif step.get("tool") == "read_file_content" and a.get("fileId"):
+            wanted.append(("file", None, a["fileId"]))
+    missing = []
+    for kind, channel, target in wanted:
+        seen = False
+        for c in calls:
+            if not c.ok:
+                continue
+            if kind == "thread":
+                if c.name == "slack_read_thread" and c.arguments.get("message_ts") == target:
+                    seen = True
+                elif c.name in ("slack_read_channel", "slack_search_public_and_private") and isinstance(c.result, dict) and any(isinstance(m, dict) and (m.get("ts") == target or m.get("thread_ts") == target) for m in c.result.get("messages") or []):
+                    seen = True
+            elif c.name == "read_file_content" and c.arguments.get("fileId") == target:
+                seen = True
+            if seen:
                 break
-        if matches:
-            if req.get("status") != "pending":
-                return f"done wrong: request status expected 'pending', got {req.get('status')!r}"
-            return None
-            
-    return f"done wrong: no recorded leave request matched expected fields {wanted}"
+        if not seen:
+            missing.append(f"{kind} {target}")
+    return missing
 
 
 if __name__ == "__main__":

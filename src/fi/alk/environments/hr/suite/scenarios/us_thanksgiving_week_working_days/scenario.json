@@ -1,0 +1,84 @@
+{
+  "name": "us_thanksgiving_week_working_days",
+  "scenario_key": "us-thanksgiving-week-working-days",
+  "scenario_id": "",
+  "use_case": "Calculate working days for a requested date range accounting for regional holidays",
+  "branch": "A US employee calculates working days across Thanksgiving week (November 23 to 27, 2026), excluding two public holidays.",
+  "tests": "Verifies that working days are calculated accurately across US Thanksgiving holidays.",
+  "instruction": "You are planning leave during Thanksgiving week and want to calculate the number of net working days between 23 November 2026 and 27 November 2026 for the US region.\n\nYour details:\n- Employee ID: E401\n- Name: Sarah Thornton\n- Region: US\n- Dates: 2026-11-23 to 2026-11-27\n- Question: How many working days are in the period from 23 to 27 November 2026?",
+  "keywords": [
+    "working_days",
+    "holidays",
+    "thanksgiving"
+  ],
+  "persona": {
+    "name": "Sarah Thornton",
+    "gender": "female",
+    "age_group": "32-40",
+    "occupation": "Engineer",
+    "location": "United States",
+    "personality": "Analytical",
+    "communication_style": "Direct and concise",
+    "initial_message": "Hi, could you calculate how many working days I would be taking off from 23 November to 27 November 2026 in the US?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "origin": "mixed",
+    "employee_id": "E401",
+    "start_date": "2026-11-23",
+    "region": "US",
+    "net_working_days": 3,
+    "end_date": "2026-11-27"
+  },
+  "solution": [
+    {
+      "tool": "get_employee_profile",
+      "arguments": {
+        "employee_id": "E401"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "calculate_working_days",
+      "arguments": {
+        "region": "US",
+        "end_date": "2026-11-27",
+        "start_date": "2026-11-23"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "end_date": "caller: 2026-11-27",
+        "start_date": "caller: 2026-11-23",
+        "region": "record: US"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "interface": "clean_prose",
+    "overlay": "none",
+    "task": "calculate_working_days",
+    "overlay_intensity": "absent",
+    "disposition": "standard",
+    "interaction": "multi_turn",
+    "overlay_vector": "none",
+    "counterparty": "employee_us"
+  },
+  "sub_goals": [
+    "working_days_calculated_accurately"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

@@ -1,0 +1,87 @@
+{
+  "name": "old_handbook_carry_forward_superseded",
+  "scenario_key": "old-handbook-carry-forward-superseded",
+  "scenario_id": "",
+  "use_case": "Answer leave policy questions for the employee's region with citations",
+  "branch": "An employee asks about carry-forward rules based on the 2022 handbook, requiring the assistant to read the old handbook and the current US policy.",
+  "tests": "Verifies that the assistant reads both the 2022 handbook and current 2026 US policy, confirming the 5-day limit.",
+  "instruction": "You read in the 2022 employee handbook that employees could carry forward up to 10 days of annual leave. You want to know if that 10-day rule is still active or what the current US annual leave carry-forward limit is under the 2026 policy.\n\nYour details:\n- Employee ID: E02\n- Name: Bob Smith\n- Region: US\n- Question: I read 10 days in the 2022 handbook, what is our current carry-forward limit for US annual leave?",
+  "keywords": [
+    "leave_policy",
+    "carry_forward",
+    "handbook"
+  ],
+  "persona": {
+    "name": "Bob Smith",
+    "gender": "male",
+    "age_group": "25-32",
+    "occupation": "Engineer",
+    "location": "United States",
+    "personality": "Analytical",
+    "communication_style": "Questioning",
+    "initial_message": "I remember reading in the 2022 handbook that we can carry over 10 days of leave. Is that still the current policy for US employees?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "employee_id": "E02",
+    "region": "US",
+    "carry_forward_days": 5,
+    "origin": "seed"
+  },
+  "solution": [
+    {
+      "tool": "get_employee_profile",
+      "arguments": {
+        "employee_id": "E02"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "read_file_content",
+      "arguments": {
+        "fileId": "handbook_2022"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "read_file_content",
+      "arguments": {
+        "fileId": "pol_us_annual_2026"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "fileId": "record: pol_us_annual_2026"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "overlay_vector": "none",
+    "interface": "clean_prose",
+    "counterparty": "employee_us",
+    "interaction": "multi_turn",
+    "overlay": "none",
+    "overlay_intensity": "absent",
+    "disposition": "outdated_policy_belief",
+    "task": "check_policy"
+  },
+  "sub_goals": [
+    "effective_policy_consulted",
+    "policy_source_cited"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

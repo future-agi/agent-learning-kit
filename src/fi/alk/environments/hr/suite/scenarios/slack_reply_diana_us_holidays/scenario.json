@@ -1,0 +1,94 @@
+{
+  "name": "slack_reply_diana_us_holidays",
+  "scenario_key": "slack-reply-diana-us-holidays",
+  "scenario_id": "",
+  "use_case": "Pick up a leave question from Slack and reply in the thread after approval",
+  "branch": "Reply to Diana Prince's US remaining holidays inquiry in Slack thread SM08 using approval APP-HR-412.",
+  "tests": "Picks up Diana's holiday question in Slack and posts the approved reply in her thread.",
+  "instruction": "You are an HR specialist coordinating leave desk responses. Diana Prince asked in #hr-help (thread ts 1792854000.000008) which public holidays remain this year in the US. Ask the leave desk to check the US holiday calendar, read her thread, and post the approved reply in the thread using approval ID APP-HR-412.\n\nYour details:\n- Channel: #hr-help (CH_HRHELP)\n- Thread timestamp: 1792854000.000008\n- Approval ID: APP-HR-412",
+  "keywords": [
+    "slack_thread",
+    "holiday_calendar"
+  ],
+  "persona": {
+    "name": "Jessica Taylor",
+    "gender": "female",
+    "age_group": "",
+    "occupation": "Customer Service",
+    "location": "United States",
+    "personality": "Friendly and cooperative",
+    "communication_style": "Casual and friendly",
+    "initial_message": "Hi! Diana asked in #hr-help at 1792854000.000008 about US holidays left this year. Can you check and post the approved response with approval APP-HR-412?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "employee_id": "E04",
+    "message_ts": "1792854000.000008",
+    "origin": "seed",
+    "approval_id": "APP-HR-412",
+    "channel_id": "CH_HRHELP"
+  },
+  "solution": [
+    {
+      "tool": "slack_read_thread",
+      "arguments": {
+        "message_ts": "1792854000.000008",
+        "channel_id": "CH_HRHELP"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "message_ts": "caller: 1792854000.000008"
+      }
+    },
+    {
+      "tool": "get_holiday_calendar",
+      "arguments": {
+        "region": "US",
+        "year": 2026
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "slack_send_message",
+      "arguments": {
+        "message": "The remaining US public holidays for 2026 are Thanksgiving Day (Nov 26), Day After Thanksgiving (Nov 27), and Christmas Day (Dec 25).",
+        "channel_id": "CH_HRHELP",
+        "approval_id": "APP-HR-412",
+        "thread_ts": "1792854000.000008"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "channel_id": "caller: CH_HRHELP",
+        "thread_ts": "caller: 1792854000.000008"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "overlay_vector": "none",
+    "counterparty": "employee_us",
+    "interface": "split_message",
+    "task": "pick_up_slack_request",
+    "disposition": "standard",
+    "interaction": "multi_turn",
+    "overlay": "none",
+    "overlay_intensity": "absent"
+  },
+  "sub_goals": [
+    "slack_reply_in_thread"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

@@ -1,0 +1,82 @@
+{
+  "name": "long_leave_duration_approval_chain_inquiry",
+  "scenario_key": "long-leave-duration-approval-chain-inquiry",
+  "scenario_id": "",
+  "use_case": "Report a leave request's approval status truthfully",
+  "branch": "Employee asks who approves consecutive leave exceeding 10 working days",
+  "tests": "the agent checks employee profile and reports the two-tier manager approval chain required for leave exceeding 10 working days",
+  "instruction": "You are planning to take an extended holiday of 12 consecutive working days and want to find out who in management will need to approve your leave request before submitting it. You want the desk to look up your profile and provide the full approval chain for a 12-day absence.\n\nYour details:\n- Name: Daniel Evans\n- Employee ID: E420\n- Region: UK\n- Direct Manager: M02\n- Planned Duration: 12 working days",
+  "keywords": [
+    "approval_chain",
+    "extended_leave",
+    "manager_approval",
+    "leave_policy"
+  ],
+  "persona": {
+    "name": "Daniel Evans",
+    "gender": "male",
+    "age_group": "32-40",
+    "occupation": "Engineer",
+    "location": "United Kingdom",
+    "personality": "Analytical",
+    "communication_style": "Detailed and elaborate",
+    "initial_message": "Hi, I am planning to take 12 working days of consecutive leave. Who needs to approve a leave request of that duration?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "origin": "mixed",
+    "employee_id": "E420"
+  },
+  "solution": [
+    {
+      "tool": "get_employee_profile",
+      "arguments": {
+        "employee_id": "E420",
+        "actor_id": "E420"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "employee_id": "caller: E420"
+      }
+    },
+    {
+      "tool": "get_approval_chain",
+      "arguments": {
+        "working_days": 12,
+        "employee_id": "E420"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "employee_id": "caller: E420"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "interaction": "fresh_single_turn",
+    "counterparty": "employee",
+    "interface": "clean_prose",
+    "overlay_intensity": "absent",
+    "task": "report_leave_status",
+    "disposition": "extended_leave_approval_chain",
+    "overlay": "none",
+    "overlay_vector": "none"
+  },
+  "sub_goals": [
+    "employee_profile_retrieved",
+    "approval_chain_reported"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

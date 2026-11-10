@@ -1,0 +1,402 @@
+{
+  "add_note_to_open_hr_case": {
+    "job": "cases",
+    "mcp": false
+  },
+  "amend_approved_leave_request_dates": {
+    "job": "requests",
+    "mcp": false
+  },
+  "amend_pending_leave_request_from_slack_thread": {
+    "job": "requests",
+    "mcp": true
+  },
+  "amend_pending_request_self_corrected_dates": {
+    "job": "requests",
+    "mcp": false
+  },
+  "apac_carry_forward_policy_tool_only": {
+    "job": "policy",
+    "mcp": false
+  },
+  "apac_culture_day_span_working_days": {
+    "job": "days_and_balances",
+    "mcp": false
+  },
+  "apac_policy_citation_and_carry_forward": {
+    "job": "policy",
+    "mcp": false
+  },
+  "apac_working_days_culture_day_calculation": {
+    "job": "days_and_balances",
+    "mcp": false
+  },
+  "approved_leave_request_status_confirmation": {
+    "job": "approvals",
+    "mcp": false
+  },
+  "available_leave_types_uk_employee": {
+    "job": "days_and_balances",
+    "mcp": false
+  },
+  "cancel_started_leave_routed_to_hr_case": {
+    "job": "requests",
+    "mcp": false
+  },
+  "chat_self_correction_dates_submission": {
+    "job": "requests",
+    "mcp": false
+  },
+  "chat_split_message_apac_policy_inquiry": {
+    "job": "policy",
+    "mcp": false
+  },
+  "chat_wall_of_text_multi_slot_request": {
+    "job": "requests",
+    "mcp": false
+  },
+  "check_and_update_open_hr_case": {
+    "job": "cases",
+    "mcp": false
+  },
+  "check_request_status_pending_manager_approval": {
+    "job": "approvals",
+    "mcp": false
+  },
+  "coworker_balance_by_email_lookup_refused": {
+    "job": "privacy",
+    "mcp": false
+  },
+  "coworker_sick_days_inquiry_refused": {
+    "job": "privacy",
+    "mcp": false
+  },
+  "create_hr_case_balance_dispute": {
+    "job": "cases",
+    "mcp": false
+  },
+  "false_authority_executive_lunch_approval_claim": {
+    "job": "privacy",
+    "mcp": false
+  },
+  "handbook_2022_carry_forward_balance_dispute_case": {
+    "job": "cases",
+    "mcp": true
+  },
+  "hr_case_status_from_slack_inquiry": {
+    "job": "cases",
+    "mcp": true
+  },
+  "in_person_manager_approval_claimed_in_chat": {
+    "job": "approvals",
+    "mcp": false
+  },
+  "injected_faq_notes_document_ignored_and_handbook_consulted": {
+    "job": "privacy",
+    "mcp": true
+  },
+  "injected_slack_message_ignored_and_policy_consulted": {
+    "job": "privacy",
+    "mcp": true
+  },
+  "leave_approval_matrix_inquiry": {
+    "job": "policy",
+    "mcp": true
+  },
+  "leave_balance_with_pending_reservation": {
+    "job": "days_and_balances",
+    "mcp": false
+  },
+  "list_employee_all_leave_requests_status": {
+    "job": "approvals",
+    "mcp": false
+  },
+  "long_leave_duration_approval_chain_inquiry": {
+    "job": "approvals",
+    "mcp": false
+  },
+  "manager_inquiry_medical_diagnosis_withheld": {
+    "job": "privacy",
+    "mcp": false
+  },
+  "manager_slack_intent_leave_pending": {
+    "job": "approvals",
+    "mcp": true
+  },
+  "manager_team_absences_apac_fortnight": {
+    "job": "manager_views",
+    "mcp": false
+  },
+  "manager_team_absences_channel_request_thanksgiving": {
+    "job": "manager_views",
+    "mcp": true
+  },
+  "manager_team_absences_cross_team_withheld": {
+    "job": "manager_views",
+    "mcp": false
+  },
+  "manager_team_absences_desk_approval_refused": {
+    "job": "manager_views",
+    "mcp": false
+  },
+  "manager_team_absences_manager_own_balance": {
+    "job": "manager_views",
+    "mcp": false
+  },
+  "manager_team_absences_medical_reasons_withheld": {
+    "job": "privacy",
+    "mcp": false
+  },
+  "manager_team_absences_non_manager_refused": {
+    "job": "manager_views",
+    "mcp": false
+  },
+  "manager_team_absences_uk_december": {
+    "job": "manager_views",
+    "mcp": false
+  },
+  "manager_team_absences_us_november": {
+    "job": "manager_views",
+    "mcp": false
+  },
+  "manager_team_absences_weekly_coverage": {
+    "job": "manager_views",
+    "mcp": false
+  },
+  "non_manager_team_absences_view_refused": {
+    "job": "manager_views",
+    "mcp": false
+  },
+  "old_handbook_carry_forward_superseded": {
+    "job": "policy",
+    "mcp": true
+  },
+  "overlapping_leave_request_rejected_and_escalated": {
+    "job": "requests",
+    "mcp": false
+  },
+  "pasted_system_override_ignored_and_balance_checked": {
+    "job": "privacy",
+    "mcp": false
+  },
+  "private_leadership_channel_bonus_inquiry_withheld": {
+    "job": "privacy",
+    "mcp": true
+  },
+  "prompt_injection_system_override_attempt": {
+    "job": "privacy",
+    "mcp": false
+  },
+  "rejected_leave_request_status_inquiry": {
+    "job": "approvals",
+    "mcp": true
+  },
+  "reply_to_slack_leave_inquiry_thread": {
+    "job": "approvals",
+    "mcp": true
+  },
+  "resolved_hr_case_update_refused": {
+    "job": "cases",
+    "mcp": false
+  },
+  "restricted_compensation_document_withheld": {
+    "job": "privacy",
+    "mcp": true
+  },
+  "restricted_salary_bands_inquiry": {
+    "job": "policy",
+    "mcp": true
+  },
+  "sabbatical_request_policy_exception_case": {
+    "job": "cases",
+    "mcp": false
+  },
+  "scanned_leave_form_unreadable": {
+    "job": "policy",
+    "mcp": true
+  },
+  "sick_leave_balance_only_inquiry": {
+    "job": "days_and_balances",
+    "mcp": false
+  },
+  "slack_apac_sick_certificate_policy": {
+    "job": "policy",
+    "mcp": true
+  },
+  "slack_bob_submit_leave_request": {
+    "job": "slack_replies",
+    "mcp": true
+  },
+  "slack_charlie_amend_request_dates": {
+    "job": "slack_replies",
+    "mcp": true
+  },
+  "slack_claimed_verbal_approval_pending": {
+    "job": "approvals",
+    "mcp": true
+  },
+  "slack_inquiry_leave_approver_chain": {
+    "job": "approvals",
+    "mcp": true
+  },
+  "slack_manager_approval_pending_in_system": {
+    "job": "approvals",
+    "mcp": true
+  },
+  "slack_post_refused_without_approval": {
+    "job": "slack_replies",
+    "mcp": true
+  },
+  "slack_post_wrong_channel_redirected": {
+    "job": "slack_replies",
+    "mcp": true
+  },
+  "slack_prompt_injection_override_resisted": {
+    "job": "slack_replies",
+    "mcp": true
+  },
+  "slack_reply_alice_approver_chain": {
+    "job": "slack_replies",
+    "mcp": true
+  },
+  "slack_reply_diana_us_holidays": {
+    "job": "slack_replies",
+    "mcp": true
+  },
+  "slack_reply_fiona_carry_forward": {
+    "job": "slack_replies",
+    "mcp": true
+  },
+  "slack_reply_george_case_status": {
+    "job": "slack_replies",
+    "mcp": true
+  },
+  "slack_reply_ian_sick_certificate": {
+    "job": "slack_replies",
+    "mcp": true
+  },
+  "slack_reply_laura_rejected_request": {
+    "job": "slack_replies",
+    "mcp": true
+  },
+  "slack_search_cancel_request_status": {
+    "job": "slack_replies",
+    "mcp": true
+  },
+  "slack_uk_carry_forward_policy_inquiry": {
+    "job": "policy",
+    "mcp": true
+  },
+  "slack_us_holiday_question": {
+    "job": "days_and_balances",
+    "mcp": true
+  },
+  "social_engineering_executive_exemption_claim": {
+    "job": "privacy",
+    "mcp": false
+  },
+  "submit_annual_leave_after_balance_check": {
+    "job": "requests",
+    "mcp": false
+  },
+  "submit_leave_request_after_chat_date_correction": {
+    "job": "requests",
+    "mcp": false
+  },
+  "submit_leave_request_from_slack_message": {
+    "job": "requests",
+    "mcp": true
+  },
+  "submit_unpaid_leave_request": {
+    "job": "requests",
+    "mcp": false
+  },
+  "uk_annual_leave_submission_bank_holiday": {
+    "job": "requests",
+    "mcp": false
+  },
+  "uk_carry_forward_from_library": {
+    "job": "policy",
+    "mcp": true
+  },
+  "uk_christmas_span_working_days": {
+    "job": "days_and_balances",
+    "mcp": false
+  },
+  "uk_parental_leave_policy_inquiry": {
+    "job": "policy",
+    "mcp": false
+  },
+  "uk_policy_carry_forward_and_sick_leave": {
+    "job": "policy",
+    "mcp": false
+  },
+  "uk_superseded_policy_comparison": {
+    "job": "policy",
+    "mcp": true
+  },
+  "uk_unpaid_leave_exception_hr_case": {
+    "job": "cases",
+    "mcp": false
+  },
+  "uk_year_end_bank_holidays_and_working_days": {
+    "job": "days_and_balances",
+    "mcp": false
+  },
+  "unauthorized_co_worker_balance_lookup_refused": {
+    "job": "privacy",
+    "mcp": false
+  },
+  "unauthorized_coworker_hr_case_status_refused": {
+    "job": "cases",
+    "mcp": false
+  },
+  "unlimited_leave_draft_inquiry": {
+    "job": "policy",
+    "mcp": true
+  },
+  "us_bereavement_leave_inquiry": {
+    "job": "policy",
+    "mcp": false
+  },
+  "us_remaining_holidays_inquiry": {
+    "job": "days_and_balances",
+    "mcp": false
+  },
+  "us_sick_leave_certificate_policy": {
+    "job": "policy",
+    "mcp": false
+  },
+  "us_thanksgiving_week_working_days": {
+    "job": "days_and_balances",
+    "mcp": false
+  },
+  "v13_s01_three_working_days_requested": {
+    "job": "requests",
+    "mcp": false
+  },
+  "v13_s02_calendar_holiday_inside_date_range": {
+    "job": "days_and_balances",
+    "mcp": false
+  },
+  "v13_s03_insufficient_leave_balance": {
+    "job": "requests",
+    "mcp": false
+  },
+  "v13_s04_outdated_carry_forward_policy": {
+    "job": "policy",
+    "mcp": false
+  },
+  "v13_s05_authorization_coworker_leave_details": {
+    "job": "privacy",
+    "mcp": false
+  },
+  "weekend_only_span_working_days": {
+    "job": "days_and_balances",
+    "mcp": false
+  },
+  "zero_annual_leave_balance_inquiry": {
+    "job": "days_and_balances",
+    "mcp": false
+  }
+}

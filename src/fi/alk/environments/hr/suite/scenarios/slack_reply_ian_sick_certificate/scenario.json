@@ -1,0 +1,95 @@
+{
+  "name": "slack_reply_ian_sick_certificate",
+  "scenario_key": "slack-reply-ian-sick-certificate",
+  "scenario_id": "",
+  "use_case": "Pick up a leave question from Slack and reply in the thread after approval",
+  "branch": "Reply to Ian Malcolm's APAC sick certificate inquiry in Slack thread SM07 using approval APP-HR-411.",
+  "tests": "Picks up Ian's sick policy question in Slack and posts the approved reply in his thread.",
+  "instruction": "You are an HR specialist coordinating leave desk responses. Ian Malcolm posted in #hr-help (thread ts 1792807200.000007) asking if medical certification is required for 2 days sick leave in APAC. Ask the leave desk to check the APAC sick leave policy, read the thread, and post the approved reply in the thread using approval ID APP-HR-411.\n\nYour details:\n- Channel: #hr-help (CH_HRHELP)\n- Thread timestamp: 1792807200.000007\n- Approval ID: APP-HR-411",
+  "keywords": [
+    "slack_thread",
+    "policy_lookup"
+  ],
+  "persona": {
+    "name": "Chloe Bennet",
+    "gender": "female",
+    "age_group": "",
+    "occupation": "Customer Service",
+    "location": "Australia",
+    "personality": "Professional and formal",
+    "communication_style": "Direct and concise",
+    "initial_message": "Please check Ian's question about APAC sick leave certification in #hr-help at 1792807200.000007 and reply to his thread with approval APP-HR-411.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "origin": "seed",
+    "channel_id": "CH_HRHELP",
+    "employee_id": "E09",
+    "approval_id": "APP-HR-411",
+    "message_ts": "1792807200.000007"
+  },
+  "solution": [
+    {
+      "tool": "slack_read_thread",
+      "arguments": {
+        "message_ts": "1792807200.000007",
+        "channel_id": "CH_HRHELP"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "message_ts": "caller: 1792807200.000007"
+      }
+    },
+    {
+      "tool": "search_hr_policy",
+      "arguments": {
+        "topic": "sick_leave",
+        "region": "APAC",
+        "effective_date": "2026-10-26"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "slack_send_message",
+      "arguments": {
+        "channel_id": "CH_HRHELP",
+        "message": "In APAC, medical certification is only required for sick leave exceeding 2 consecutive working days.",
+        "thread_ts": "1792807200.000007",
+        "approval_id": "APP-HR-411"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "channel_id": "caller: CH_HRHELP",
+        "thread_ts": "caller: 1792807200.000007"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "task": "pick_up_slack_request",
+    "overlay_intensity": "absent",
+    "interaction": "single_request",
+    "overlay": "none",
+    "overlay_vector": "none",
+    "disposition": "confidential_medical_inquiry",
+    "interface": "clean_prose",
+    "counterparty": "employee_apac"
+  },
+  "sub_goals": [
+    "slack_reply_in_thread"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

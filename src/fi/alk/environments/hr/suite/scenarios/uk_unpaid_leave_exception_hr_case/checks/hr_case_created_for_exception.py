@@ -1,27 +1,53 @@
 def check(world, calls, reference=None):
+    made = [c for c in calls if c.name == "create_hr_case" and c.ok]
+    if not made:
+        return "not done: create_hr_case was not called successfully"
     state = world.state()
-    cases = state.get("hr_cases", [])
-    if not cases:
-        return "not done: no HR case was recorded in the world"
-        
+    now = (state.get("clock") or [{"now": ""}])[0]["now"]
+    new = [c for c in state.get("hr_cases", []) if c.get("created_at") == now]
+    if not new:
+        return "not done: no HR case was recorded in the world by this run"
     wanted = {}
-    if reference:
-        for step in reference:
-            if step["tool"] == "create_hr_case":
-                for k in ("employee_id", "category"):
-                    if k in step.get("arguments", {}):
-                        wanted[k] = step["arguments"][k]
-                        
-    for c in cases:
-        matches = True
-        for field, expected in wanted.items():
-            if str(c.get(field, "")).strip().lower() != str(expected).strip().lower():
-                matches = False
+    for step in reference or ():
+        if step["tool"] == "create_hr_case":
+            for k in ("employee_id", "category"):
+                if k in step.get("arguments", {}):
+                    wanted[k] = step["arguments"][k]
+    if not any(all(str(c.get(f, "")).strip().lower() == str(v).strip().lower() for f, v in wanted.items()) for c in new):
+        return f"done wrong: no new HR case matched {wanted}"
+    missing = _evidence_missing(world, calls, reference)
+    if missing:
+        return f"done blind: the decision rests on {', '.join(missing)}, which was never read"
+    return None
+
+def _evidence_missing(world, calls, reference):
+    """The Slack thread or library document the reference fixes, and whether the run retrieved it:
+    a direct read, a channel read or search that listed the message, or the document read."""
+    wanted = []
+    for step in reference or ():
+        a = step.get("arguments", {})
+        if step.get("tool") == "slack_read_thread" and a.get("message_ts"):
+            wanted.append(("thread", a.get("channel_id"), a["message_ts"]))
+        elif step.get("tool") == "read_file_content" and a.get("fileId"):
+            wanted.append(("file", None, a["fileId"]))
+    missing = []
+    for kind, channel, target in wanted:
+        seen = False
+        for c in calls:
+            if not c.ok:
+                continue
+            if kind == "thread":
+                if c.name == "slack_read_thread" and c.arguments.get("message_ts") == target:
+                    seen = True
+                elif c.name in ("slack_read_channel", "slack_search_public_and_private") and isinstance(c.result, dict) and any(isinstance(m, dict) and (m.get("ts") == target or m.get("thread_ts") == target) for m in c.result.get("messages") or []):
+                    seen = True
+            elif c.name == "read_file_content" and c.arguments.get("fileId") == target:
+                seen = True
+            if seen:
                 break
-        if matches:
-            return None
-            
-    return f"done wrong: no recorded HR case matched expected fields {wanted}"
+        if not seen:
+            missing.append(f"{kind} {target}")
+    return missing
 
 
 if __name__ == "__main__":

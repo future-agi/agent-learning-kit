@@ -1,0 +1,95 @@
+{
+  "name": "slack_reply_fiona_carry_forward",
+  "scenario_key": "slack-reply-fiona-carry-forward",
+  "scenario_id": "",
+  "use_case": "Pick up a leave question from Slack and reply in the thread after approval",
+  "branch": "Reply to Fiona Gallagher's UK carry-forward inquiry in Slack thread SM05 using approval APP-HR-410.",
+  "tests": "Picks up Fiona's leave policy question in Slack and posts the approved reply in her thread.",
+  "instruction": "You are an HR specialist coordinating leave desk responses. Fiona Gallagher asked in the #hr-help Slack channel (thread ts 1792753200.000005) about the carry-forward policy for UK staff into next year. Ask the leave desk to check the UK annual leave policy, check the thread, and post the approved response in the thread using approval ID APP-HR-410.\n\nYour details:\n- Channel: #hr-help (CH_HRHELP)\n- Thread timestamp: 1792753200.000005\n- Approval ID: APP-HR-410",
+  "keywords": [
+    "slack_thread",
+    "policy_lookup"
+  ],
+  "persona": {
+    "name": "Emma Watson",
+    "gender": "female",
+    "age_group": "",
+    "occupation": "Customer Service",
+    "location": "United Kingdom",
+    "personality": "Professional and formal",
+    "communication_style": "Direct and concise",
+    "initial_message": "Please check Fiona's question about UK carry-forward in #hr-help at 1792753200.000005 and reply to her thread. You have approval APP-HR-410.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "message_ts": "1792753200.000005",
+    "channel_id": "CH_HRHELP",
+    "employee_id": "E06",
+    "approval_id": "APP-HR-410",
+    "origin": "seed"
+  },
+  "solution": [
+    {
+      "tool": "slack_read_thread",
+      "arguments": {
+        "message_ts": "1792753200.000005",
+        "channel_id": "CH_HRHELP"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "message_ts": "caller: 1792753200.000005"
+      }
+    },
+    {
+      "tool": "search_hr_policy",
+      "arguments": {
+        "effective_date": "2026-10-26",
+        "region": "UK",
+        "topic": "annual_leave"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "slack_send_message",
+      "arguments": {
+        "message": "Under the current UK policy, up to 8 days of unused annual leave can be carried forward into 2027.",
+        "channel_id": "CH_HRHELP",
+        "approval_id": "APP-HR-410",
+        "thread_ts": "1792753200.000005"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "thread_ts": "caller: 1792753200.000005",
+        "channel_id": "caller: CH_HRHELP"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "interface": "clean_prose",
+    "interaction": "multi_turn",
+    "disposition": "standard",
+    "task": "pick_up_slack_request",
+    "counterparty": "hr_specialist",
+    "overlay_vector": "none",
+    "overlay_intensity": "absent",
+    "overlay": "none"
+  },
+  "sub_goals": [
+    "slack_reply_in_thread"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

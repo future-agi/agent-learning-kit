@@ -1,0 +1,99 @@
+{
+  "name": "apac_culture_day_span_working_days",
+  "scenario_key": "apac-culture-day-span-working-days",
+  "scenario_id": "",
+  "use_case": "Calculate working days for a requested date range accounting for regional holidays",
+  "branch": "An APAC employee calculates working days across Culture Day (November 2 to 6, 2026) and checks their available annual leave balance.",
+  "tests": "Verifies that the assistant calculates 4 working days accounting for Culture Day and checks annual leave balance for E403.",
+  "instruction": "You want to know how many working days you need for 2 to 6 November 2026 in APAC (accounting for Culture Day) and what your current available annual leave balance is.\n\nYour details:\n- Employee ID: E403\n- Name: Haruto Tanaka\n- Region: APAC\n- Dates: 2026-11-02 to 2026-11-06\n- Leave Type: annual\n- Question: How many working days is 2 to 6 November 2026 in APAC, and what is my annual leave balance?",
+  "keywords": [
+    "working_days",
+    "leave_balance",
+    "culture_day"
+  ],
+  "persona": {
+    "name": "Haruto Tanaka",
+    "gender": "male",
+    "age_group": "25-32",
+    "occupation": "Engineer",
+    "location": "Australia",
+    "personality": "Analytical",
+    "communication_style": "Direct and concise",
+    "initial_message": "Hi, I'm planning time off from 2 November to 6 November 2026 in APAC. Can you calculate the working days and check my annual leave balance?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "region": "APAC",
+    "net_working_days": 4,
+    "available_days": 14,
+    "employee_id": "E403",
+    "start_date": "2026-11-02",
+    "origin": "mixed",
+    "end_date": "2026-11-06",
+    "leave_type": "annual"
+  },
+  "solution": [
+    {
+      "tool": "get_employee_profile",
+      "arguments": {
+        "employee_id": "E403"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "calculate_working_days",
+      "arguments": {
+        "start_date": "2026-11-02",
+        "end_date": "2026-11-06",
+        "region": "APAC"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "region": "record: APAC",
+        "end_date": "caller: 2026-11-06",
+        "start_date": "caller: 2026-11-02"
+      }
+    },
+    {
+      "tool": "get_leave_balance",
+      "arguments": {
+        "employee_id": "E403",
+        "leave_type": "annual"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "employee_id": "caller: E403",
+        "leave_type": "caller: annual"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "task": "calculate_working_days",
+    "overlay": "none",
+    "counterparty": "employee_apac",
+    "overlay_intensity": "absent",
+    "overlay_vector": "none",
+    "interaction": "single_request",
+    "interface": "clean_prose",
+    "disposition": "standard"
+  },
+  "sub_goals": [
+    "working_days_calculated_accurately",
+    "leave_balance_checked"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}
