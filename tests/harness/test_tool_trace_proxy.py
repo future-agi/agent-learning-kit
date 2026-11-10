@@ -428,7 +428,7 @@ def worker_proxy(proxy, monkeypatch, tmp_path):
     (shipped / "world_door.py").write_bytes(_PROXY.with_name("world_door.py").read_bytes())
     (shipped / "permissions.json").write_text(json.dumps(PERMISSIONS), encoding="utf-8")
     # The tool each world action is, as the bundle seals it from the contract's routes.
-    (shipped / "actions.json").write_text(json.dumps({"records.approve": "approve_record"}), encoding="utf-8")
+    (shipped / "actions.json").write_text(json.dumps({"POST records.approve": "approve_record"}), encoding="utf-8")
     (tmp_path / "channels.json").write_text(json.dumps(CHANNELS), encoding="utf-8")
     monkeypatch.setenv("WORKER_CHANNELS_FILE", str(tmp_path / "channels.json"))
     url, rows = proxy

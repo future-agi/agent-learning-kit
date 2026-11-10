@@ -5896,15 +5896,15 @@ def test_each_declared_worker_is_sealed_with_the_world_actions_its_tools_call():
     }
     # A worker holding more than it may use is sealed with what it may use.
     assert _worker_permissions(contract) == {
-        "worker:order_lookup": {"allow": ["list_refunds", "orders.get"]},
-        "worker:refund": {"allow": ["list_refunds", "refunds.issue"]},
+        "worker:order_lookup": {"allow": ["POST orders.get", "list_refunds"]},
+        "worker:refund": {"allow": ["POST refunds.issue", "list_refunds"]},
     }
     assert _worker_permissions({"tools": [{"name": "a"}]}) == {}
 
 
 def test_a_worker_allowed_a_templated_or_queried_route_is_permitted_its_real_calls():
     from fi.alk.harness.bundle_author_v2 import _worker_permissions
-    from fi.alk.harness.world_door import permitted, world_action
+    from fi.alk.harness.world_door import method_action, permitted, world_action
 
     contract = {
         "tools": [{"name": "get_order"}, {"name": "create_refund"}],
@@ -5916,12 +5916,38 @@ def test_a_worker_allowed_a_templated_or_queried_route_is_permitted_its_real_cal
     }
     allow = _worker_permissions(contract)["worker:lookup"]["allow"]
     # The proxy names the action from the real request: these are the calls the worker may make.
-    assert permitted(allow, world_action("/orders/1043"))
-    assert permitted(allow, world_action("/refunds/create?amount=5"))
+    assert permitted(allow, method_action("POST", world_action("/orders/1043")))
+    assert permitted(allow, method_action("POST", world_action("/refunds/create?amount=5")))
     # One segment per template value, nothing wider.
-    assert not permitted(allow, world_action("/orders/1043/cancel"))
-    assert not permitted(allow, world_action("/orders"))
-    assert not permitted(allow, world_action("/refunds/delete"))
+    assert not permitted(allow, method_action("POST", world_action("/orders/1043/cancel")))
+    assert not permitted(allow, method_action("POST", world_action("/orders")))
+    assert not permitted(allow, method_action("POST", world_action("/refunds/delete")))
+
+
+def test_workers_and_routes_are_sealed_by_method_and_path_so_two_tools_on_one_path_stay_apart():
+    from fi.alk.harness.bundle_author_v2 import _tool_actions, _worker_permissions
+    from fi.alk.harness.world_door import permitted
+
+    contract = {
+        "tools": [{"name": "get_order"}, {"name": "update_order"}, {"name": "cancel_order"}],
+        "tool_entrypoints": [
+            {"tool": "get_order", "mode": "service", "service": "api", "endpoint": "/orders/{order_id}", "method": "GET"},
+            {"tool": "update_order", "mode": "service", "service": "api", "endpoint": "/orders/{order_id}", "method": "PUT"},
+            {"tool": "cancel_order", "mode": "service", "service": "api", "endpoint": "/orders/cancel"},
+        ],
+        "workers": [{"id": "lookup", "tools": ["get_order"]}],
+    }
+    actions = _tool_actions(contract)
+    assert actions == {
+        "GET orders.{order_id}": "get_order",
+        "PUT orders.{order_id}": "update_order",
+        "POST orders.cancel": "cancel_order",
+    }
+    allow = _worker_permissions(contract)["worker:lookup"]["allow"]
+    assert allow == ["GET orders.{order_id}"]
+    assert permitted(allow, "GET orders.1043", actions)
+    assert not permitted(allow, "PUT orders.1043", actions)
+    assert not permitted(allow, "GET orders.cancel", actions)
 
 
 def test_limited_workers_seed_the_action_log_that_keeps_whose_attempt_was_refused(tmp_path: Path) -> None:
@@ -5967,15 +5993,15 @@ def test_each_routed_tool_is_sealed_under_the_world_action_its_route_names():
         ],
     }
     assert _tool_actions(contract) == {
-        "orders.get": "get_order",
-        "refunds.list": "list_refunds",
-        "orders.{id}": "lookup",
+        "POST orders.get": "get_order",
+        "POST refunds.list": "list_refunds",
+        "POST orders.{id}": "lookup",
     }
 
 
 def test_a_templated_route_s_real_call_is_logged_under_its_tool_s_own_name():
     from fi.alk.harness.bundle_author_v2 import _tool_actions
-    from fi.alk.harness.world_door import action_tool, world_action
+    from fi.alk.harness.world_door import action_tool, method_action, world_action
 
     contract = {
         "tools": [{"name": "get_order"}, {"name": "issue_refund"}],
@@ -5985,11 +6011,11 @@ def test_a_templated_route_s_real_call_is_logged_under_its_tool_s_own_name():
         ],
     }
     actions = _tool_actions(contract)
-    assert action_tool(actions, world_action("/refunds/1043/issue?x=1")) == "issue_refund"
-    assert action_tool(actions, world_action("/orders/get")) == "get_order"
+    assert action_tool(actions, method_action("POST", world_action("/refunds/1043/issue?x=1"))) == "issue_refund"
+    assert action_tool(actions, method_action("POST", world_action("/orders/get"))) == "get_order"
     # One segment per template value, nothing wider, and an unknown route names no tool.
-    assert action_tool(actions, world_action("/refunds/1043/issue/now")) == ""
-    assert action_tool(actions, world_action("/refunds/issue")) == ""
+    assert action_tool(actions, method_action("POST", world_action("/refunds/1043/issue/now"))) == ""
+    assert action_tool(actions, method_action("POST", world_action("/refunds/issue"))) == ""
     assert action_tool({}, "orders.get") == ""
     assert action_tool(None, "orders.get") == ""
 

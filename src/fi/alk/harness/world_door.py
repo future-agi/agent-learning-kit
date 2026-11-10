@@ -146,23 +146,48 @@ def world_action(route: str) -> str:
     return str(route or "").split("?", 1)[0].strip("/").replace("/", ".")
 
 
+_METHODS = frozenset({"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"})
+
+
+def method_action(method: str, action: str) -> str:
+    """A world action with the HTTP method that takes it (`GET orders.{order_id}`): two tools on one path are two
+    actions. Sealed routes and worker allow-lists are named this way."""
+    return f"{(method or 'POST').upper()} {action}"
+
+
+def _split(value: str) -> tuple[str, str]:
+    """The method and path of `GET orders.get`, or no method for a bare action (`orders.get`), which any method takes."""
+    method, _, path = str(value).partition(" ")
+    return (method, path) if path and method in _METHODS else ("", str(value))
+
+
 def _matches(allowed: str, action: str) -> bool:
     """An allowed action matches the same action, and a templated route (`orders.{order_id}`) matches any value in
-    each of its `{...}` segments."""
-    if allowed == action:
-        return True
-    if "{" not in allowed:
+    each of its `{...}` segments. When both name a method, the methods must agree."""
+    allowed_method, want = _split(allowed)
+    action_method, have = _split(action)
+    if allowed_method and action_method and allowed_method != action_method:
         return False
-    want, have = allowed.split("."), action.split(".")
-    return len(want) == len(have) and all(
-        (w.startswith("{") and w.endswith("}") and h) or w == h for w, h in zip(want, have)
+    if want == have:
+        return True
+    if "{" not in want:
+        return False
+    wants, haves = want.split("."), have.split(".")
+    return len(wants) == len(haves) and all(
+        (w.startswith("{") and w.endswith("}") and h) or w == h for w, h in zip(wants, haves)
     )
 
 
-def permitted(permitted_actions: object, action: str) -> bool:
-    """Whether an actor or worker with these permitted actions may take this world action."""
-    return isinstance(permitted_actions, list) and any(
-        _matches(str(allowed), action) for allowed in permitted_actions
+def permitted(permitted_actions: object, action: str, routes: object = ()) -> bool:
+    """Whether an actor or worker with these permitted actions may take this world action. A path that is one of the
+    world's own routes (`routes`, the sealed route map) is that route's action, never a value of a template."""
+    if not isinstance(permitted_actions, list):
+        return False
+    literal = {_split(str(route))[1] for route in routes or () if "{" not in str(route)}
+    path = _split(action)[1]
+    return any(
+        _matches(str(allowed), action) and ("{" not in str(allowed) or path not in literal or _split(str(allowed))[1] == path)
+        for allowed in permitted_actions
     )
 
 
@@ -173,8 +198,14 @@ def action_tool(actions: object, action: str) -> str:
         return ""
     tool = actions.get(action)
     if tool is None:
-        tool = next((name for route, name in actions.items() if "{" in str(route) and _matches(str(route), action)), "")
+        tool = next((name for route, name in actions.items() if _templated_match(actions, str(route), action)), "")
     return tool if isinstance(tool, str) else ""
+
+
+def _templated_match(actions: Mapping[str, Any], route: str, action: str) -> bool:
+    """A templated route matches an action whose path is not one of the map's own literal routes."""
+    literal = {_split(str(one))[1] for one in actions if "{" not in str(one)}
+    return "{" in route and _split(action)[1] not in literal and _matches(route, action)
 
 
 def route_values(actions: object, action: str) -> dict[str, str]:
@@ -183,10 +214,10 @@ def route_values(actions: object, action: str) -> dict[str, str]:
     if not isinstance(actions, dict) or action in actions:
         return {}
     for route in actions:
-        if "{" in str(route) and _matches(str(route), action):
+        if _templated_match(actions, str(route), action):
             return {
                 want[1:-1]: have
-                for want, have in zip(str(route).split("."), action.split("."))
+                for want, have in zip(_split(str(route))[1].split("."), _split(action)[1].split("."))
                 if want.startswith("{") and want.endswith("}")
             }
     return {}
@@ -344,7 +375,7 @@ class WorldDoor:
             return "deadline_passed", f"the deadline for {call.worker} has passed"
         if "permissions" in limits:
             allowed = (limits.get("permissions") or {}).get(call.worker)
-            if not permitted(allowed, call.action):
+            if not permitted(allowed, method_action(call.method, call.action), limits.get("routes")):
                 return "not_permitted", f"{call.action} is not permitted for {call.worker}"
         return None
 

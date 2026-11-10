@@ -24,6 +24,7 @@ try:  # Beside the proxy in a bundle; the harness package when run from source.
         ToolCall,
         WorldDoor,
         action_tool,
+        method_action,
         permitted,
         route_values,
         world_action,
@@ -40,6 +41,7 @@ except ImportError:  # pragma: no cover - imported as part of the package
         ToolCall,
         WorldDoor,
         action_tool,
+        method_action,
         permitted,
         route_values,
         world_action,
@@ -115,7 +117,7 @@ def _worker_deadline() -> float | None:
 def _worker_limits() -> dict:
     """What this trial's workers may do: the sealed allow-lists, when the bundle has them, and the deadline. A seal
     that is present but unreadable is an empty allow-list: it never widens what a worker may do."""
-    limits: dict = {"deadline_at": _worker_deadline()}
+    limits: dict = {"deadline_at": _worker_deadline(), "routes": list((_read_json(ACTIONS_FILE) or {}).keys())}
     if os.path.exists(WORKER_PERMISSIONS_FILE):
         sealed = _read_json(WORKER_PERMISSIONS_FILE) or {}
         limits["permissions"] = {
@@ -188,9 +190,11 @@ class Handler(BaseHTTPRequestHandler):
         proven = not actor
         action = world_action(route) or "unknown"
         actions = _read_json(ACTIONS_FILE)
+        # Sealed routes are named with their method: two tools on one path are two actions.
+        sealed = method_action(self.command, action)
         if isinstance(arguments, dict):
             # The values a templated route's path carries are the call's arguments too; the body's own win.
-            arguments = {**route_values(actions, action), **arguments}
+            arguments = {**route_values(actions, sealed), **arguments}
         return ToolCall(
             action=action,
             name=route.rstrip("/").rsplit("/", 1)[-1] or "unknown",
@@ -205,7 +209,7 @@ class Handler(BaseHTTPRequestHandler):
             body=body,
             content_type=self.headers.get("content-type", "application/json"),
             worker=worker,
-            tool=action_tool(actions, action),
+            tool=action_tool(actions, sealed),
         )
 
     def _enter(self) -> None:

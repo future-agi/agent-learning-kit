@@ -546,3 +546,23 @@ def test_a_limited_worker_s_request_for_anything_that_is_not_a_world_action_neve
     outcome = door.enter(ToolCall(action="unknown", name="scenarios", worker="lookup"))
     assert (outcome.outcome, outcome.refusal_code) == ("refused", "not_permitted")
     assert executor.ran == []
+
+
+def test_a_templated_allowance_never_reaches_another_tool_s_own_route_or_another_method():
+    executor = _Executor()
+    limits = {
+        "permissions": {"lookup": ["GET orders.{order_id}"]},
+        "routes": ["GET orders.{order_id}", "POST orders.update_status", "POST orders.cancel"],
+    }
+    door = _worker_door(executor, limits)
+
+    def enter(method, action):
+        return door.enter(ToolCall(action=action, name=action.rsplit(".", 1)[-1], method=method, worker="lookup"))
+
+    assert enter("GET", "orders.1043").outcome == "committed"
+    # A path that is another tool's own route is that tool, never a value of the template.
+    assert enter("POST", "orders.update_status").refusal_code == "not_permitted"
+    assert enter("GET", "orders.cancel").refusal_code == "not_permitted"
+    # The same path with another method is another action.
+    assert enter("DELETE", "orders.1043").refusal_code == "not_permitted"
+    assert len(executor.ran) == 1

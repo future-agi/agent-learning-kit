@@ -88,7 +88,7 @@ from .provision import source_fingerprint
 from .provider_lifecycle import ProviderRepositoryManifest, load_provider_manifest
 from .provider_import import ProviderImportSpec
 from .world.tools import _binding
-from .world_door import world_action
+from .world_door import method_action, world_action
 
 
 class BundleAuthorError(RuntimeError):
@@ -2033,22 +2033,22 @@ def _tool_actions(contract_body: dict[str, Any] | None) -> dict[str, str]:
     tool's own name: a route is often named otherwise (`get_order` -> `orders/get`)."""
     contract = AgentContract.model_validate(contract_body or {})
     return {
-        world_action(entry.endpoint): entry.tool
+        method_action(entry.method, world_action(entry.endpoint)): entry.tool
         for entry in contract.tool_entrypoints
         if entry.endpoint.strip()
     }
 
 
 def _worker_permissions(contract_body: dict[str, Any] | None) -> dict[str, dict[str, list[str]]]:
-    """Each declared worker's allow-list, as the tool proxy names world actions: the path its tool calls, dotted."""
+    """Each declared worker's allow-list, as the tool proxy names world actions: the method and the path its tool calls, dotted."""
     contract = AgentContract.model_validate(contract_body or {})
-    endpoints = {entry.tool: entry.endpoint for entry in contract.tool_entrypoints if entry.endpoint.strip()}
+    routes = {
+        entry.tool: method_action(entry.method, world_action(entry.endpoint))
+        for entry in contract.tool_entrypoints
+        if entry.endpoint.strip()
+    }
     return {
-        f"worker:{worker.id}": {
-            "allow": sorted(
-                {world_action(endpoints.get(tool, tool)) for tool in worker.allowed_tools or worker.tools}
-            )
-        }
+        f"worker:{worker.id}": {"allow": sorted({routes.get(tool, tool) for tool in worker.allowed_tools or worker.tools})}
         for worker in contract.workers
     }
 
