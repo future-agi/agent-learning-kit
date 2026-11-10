@@ -342,7 +342,7 @@ def test_a_broken_langgraph_json_is_unread_not_a_crash(
 def test_the_walk_limit_and_the_clock_stop_it(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    assert (scan_walk._MAX_FILES, scan_walk._MAX_BYTES) == (200_000, 268_435_456)
+    assert (scan_walk._MAX_FILES, scan_walk._MAX_BYTES) == (40_000, 268_435_456)
     _write(tmp_path, {"a.py": GRAPH, "b.py": GRAPH, "c.py": GRAPH})
     calls: list[int] = []
 
@@ -361,7 +361,7 @@ def test_the_walk_limit_and_the_clock_stop_it(
     assert by_count.stopped == "limit"
     assert _entries(by_count) == ["a.py", "b.py"]
 
-    monkeypatch.setattr(scan_walk, "_MAX_FILES", 200_000)
+    monkeypatch.setattr(scan_walk, "_MAX_FILES", 40_000)
     monkeypatch.setattr(scan_walk, "_MAX_BYTES", len(GRAPH))
     by_bytes = _walk(tmp_path)
     assert by_bytes.stopped == "limit"

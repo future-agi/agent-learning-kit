@@ -56,9 +56,10 @@ _FILE_BYTES = 1_048_576
 # A hundredth of a folder check's allowance: the crafted files that use a whole one
 # take seconds, so one file now costs about a second at most.
 _FILE_WORK = 1_000_000_000
-# Measured 10 Nov: 100,000 tiny source files walk in 13 s at 266 MB, so this sits above any
-# real repo; the byte cap and the clock are what bound the walk.
-_MAX_FILES = 200_000
+# What the walk holds grows with the names each file imports, not its bytes: about 33 KB a
+# file for files that each import 200 names (measured 10 Nov, 1,389 MB peak at 40,000 such
+# files), which leaves room for the folder check's child in a 4,096 MB sandbox.
+_MAX_FILES = 40_000
 _MAX_BYTES = 268_435_456
 _NAMES_PER_FILE = 200
 _IMPORT_DEPTH = 10

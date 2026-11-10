@@ -109,7 +109,7 @@ _TEMPLATES = {
     ),
     "agent_py_may_stop": "More than one agent.py sits under this folder, so a build may stop.",
     "not_finished": "The framework check for this folder did not finish.",
-    "partial": "Not every file under this folder was read in time, so counts may be short.",
+    "partial": "Not every file under this folder could be read, so counts may be short.",
     "found_by_ai": "Found by the AI step, not by the code check.",
 }
 _LONGEST_TEMPLATE = max(len(template) for template in _TEMPLATES.values())

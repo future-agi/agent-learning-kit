@@ -62,7 +62,7 @@ CLOCK_ENV = "ALK_SCAN_MAX_SECONDS"
 # hard stop, both when the reading starts.
 CLOCK = 1200.0
 AI_ENV = "ALK_SCAN_AI_MAX_SECONDS"
-# The model step's limit when AI_ENV doesn't name one; read when the scan starts, as the clock is.
+# The model step's limit when AI_ENV doesn't name one; read when the model step is asked.
 AI_SECONDS = 600.0
 # The helper's hard stop comes this long after the scan's own clock, so a scan that stops itself
 # always writes its own file first.

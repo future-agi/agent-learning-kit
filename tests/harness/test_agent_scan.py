@@ -1211,3 +1211,12 @@ def test_every_scan_logger_masks_secrets() -> None:
 
     for module in (agent_scan, scan_walk, scan_folders, scan_ai):
         assert any(isinstance(f, MaskSecrets) for f in module.logger.filters), module.__name__
+
+
+def test_the_model_steps_limit_is_read_when_it_is_asked(tmp_path, monkeypatch, ai) -> None:
+    source = _write(tmp_path / "source", SIDE_ONLY)
+    monkeypatch.setenv(agent_scan.AI_ENV, "100")
+
+    assert _scan(_job(), source, tmp_path / "out") == 0
+
+    assert [call["seconds"] for call in ai.calls] == [100.0]
