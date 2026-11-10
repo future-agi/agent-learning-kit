@@ -499,11 +499,18 @@ def _tools_in(paths: Iterable[Path], local: set[str]) -> tuple[str, ...]:
                 found |= _packages_used(path)
             elif path.suffix != ".py":
                 found |= _markers_in(path)
-            elif (text := read_module(path, _largest_read(path), _PYTHON_NAMES)) is not None:
+            elif (
+                text := read_module(path, _largest_read(path), _PYTHON_NAMES, undecoded := [])
+            ) is not None:
                 markers = _python_markers(text, tokens)
                 names = _imports_in(text) if budget.spend(text) else set()
                 found |= markers
                 imported |= names
+            elif undecoded:
+                # A codec refused by name, which Python still runs the file in: a browser package
+                # it names, as bytes, counts. That leads to a second look, never a refusal on its
+                # own. #224 does the same.
+                found |= {name for name in BROWSER_IMPORTS if name.encode() in undecoded[0]}
         except Exception:
             # A skipped file may be the agent's main one, and the reading then finds nothing.
             logger.warning("agent type scan skipped %s", path, exc_info=True)
@@ -624,10 +631,11 @@ def browser_tools_in_agent(
     ]
     local = _modules_at_top(folder, rows_of[folder]) | _modules_at_top(root, rows_of[root])
     if left[0] < 0:
-        # Records left unread can't say a browser package there is installed, not the customer's,
-        # and no read order keeps both the folder's and the root's whole: so it counts as found,
-        # which leads to a second look at the model's reading, not a refusal.
-        local -= BROWSER_IMPORTS
+        # Records left unread can't say a package there is installed, not the customer's, and no
+        # read order keeps both the folder's and the root's whole: so every import counts, as in
+        # the scan with no folder. A browser one is found, which leads to a second look at the
+        # model's reading, not a refusal.
+        local = set()
     if reached is not None:
         reached[:] = [*above, *shared]
     # A shared script's dependencies are declared in its package, at or above it.

@@ -690,6 +690,22 @@ def _file_inside(
     return resolved if len(resolved.parts) <= deepest and is_within(resolved, root) else None
 
 
+def _no_link_above(folder: Path, root: Path, known: dict[Path, bool]) -> bool:
+    """No folder between ``root`` and ``folder`` is a link, each folder looked up once a walk."""
+    if len(folder.parts) <= len(root.parts):
+        return True
+    if folder not in known:
+        # Its parent first, so nothing below a link is looked up.
+        plain = _no_link_above(folder.parent, root, known)
+        if plain:
+            try:
+                plain = stat.S_ISDIR(folder.lstat().st_mode)
+            except (OSError, ValueError):
+                plain = False
+        known[folder] = plain
+    return known[folder]
+
+
 def _code_in(folder: Path) -> Iterator[Path]:
     """The Python and script files in ``folder``, outside the folders no one's code is in.
 
@@ -831,6 +847,11 @@ def imported_by_agent(
     # A name is tried once, but a crafted chain of packages makes it resolve dozens of paths, each
     # dozens of parts deep: 1,000 names took the save 12 s. What is looked up again costs nothing.
     lookups_left = [math.inf if lookup_limit is None else float(lookup_limit)]
+    # At the save, a candidate under a folder link (or a folder that isn't there) is a charged
+    # miss, not resolved: the kernel and resolve() follow every link in a path uncharged, and a
+    # chain of them took 2,300 imports 11.6 s. Each folder is looked at once a walk. Bundling,
+    # with no limit, still follows such links.
+    plain_folders: dict[Path, bool] | None = None if lookup_limit is None else {}
 
     def found_at(candidates: Iterable[Path]) -> Path | None:
         for candidate in candidates:
@@ -838,6 +859,11 @@ def imported_by_agent(
                 hit = looked_up[candidate]
             elif lookups_left[0] <= 0:
                 return None
+            elif plain_folders is not None and not _no_link_above(
+                candidate.parent, root, plain_folders
+            ):
+                lookups_left[0] -= 1
+                hit = None
             else:
                 hit = _file_inside(candidate, root, deepest, lookups_left)
                 if hit is not None or candidate.name == "__init__.py":

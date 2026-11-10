@@ -39,7 +39,7 @@ LARGEST_TOKENIZED_WORK = 8 * 1024 * 1024
 # of marks in a 128 KB file. Honest text never runs this many marks together.
 _LONGEST_MARK_RUN = 32
 # Text codecs a coding line may name that are never read: see source_encoding.
-_UNREAD_CODECS = frozenset({"idna", "punycode", "undefined"})
+_UNREAD_CODECS = frozenset({"idna", "punycode", "undefined", "unicode-escape"})
 _NON_ASCII_RUN = re.compile(r"[^\x00-\x7f]{2,}")
 
 
@@ -84,11 +84,19 @@ class TokenBudget(ParseBudget):
 
 
 def read_module(
-    path: Path, limit: int = LARGEST_PARSED_MODULE, needles: Iterable[bytes] = ()
+    path: Path,
+    limit: int = LARGEST_PARSED_MODULE,
+    needles: Iterable[bytes] = (),
+    undecoded: list[bytes] | None = None,
 ) -> str | None:
     """The file as text, or None: not a regular file, larger than ``limit`` bytes, not readable
     in the encoding its coding line or byte-order mark names (UTF-8 without one), or, given
-    ``needles``, naming none of them."""
+    ``needles``, naming none of them.
+
+    Given ``undecoded``, a file that names a needle but isn't read because its coding line names a
+    codec refused by name is put there as bytes: Python still runs it (plain ASCII under idna as
+    it would without the line), so a scan looking for names can still find them.
+    """
     try:
         # A link can name a device or a pipe, which reads without end.
         if not path.is_file():
@@ -104,12 +112,14 @@ def read_module(
     if needles and not any(needle in raw for needle in needles):
         return None
     encoding = source_encoding(raw)
-    if encoding is None:
-        return None
     try:
-        return raw.decode(encoding)
+        if encoding is not None:
+            return raw.decode(encoding)
     except (UnicodeError, LookupError):
-        return None
+        pass
+    if undecoded is not None and _refused_by_name(raw):
+        undecoded.append(raw)
+    return None
 
 
 def source_encoding(raw: bytes) -> str | None:
@@ -123,14 +133,28 @@ def source_encoding(raw: bytes) -> str | None:
         # A codec such as rot13 or base64 isn't a text encoding, so decode refuses it: the same
         # flag decode checks, which an empty input never reaches. Three text codecs are refused
         # by name: punycode's decode costs the square of its size, 2.3 s for 128 KB; idna's runs
-        # in Python for each label, 91 ms for 128 KB; undefined decodes nothing. Of the
-        # standard library's 110 codecs, every other one decodes valid text at 12 ms a MB at most.
+        # in Python for each label, 91 ms for 128 KB; unicode-escape looks up each \N{...} name,
+        # 3,000 such files 7 s; undefined decodes nothing.
         info = codecs.lookup(encoding)
         if not getattr(info, "_is_text_encoding", True) or info.name in _UNREAD_CODECS:
             return None
     except (SyntaxError, UnicodeError, LookupError):
         return None
     return encoding
+
+
+def _refused_by_name(raw: bytes) -> bool:
+    """Whether the coding line names a text codec refused by name, which Python still runs the
+    file in. Read with non-ASCII bytes on the first two lines as "?": detect_encoding refuses
+    such a line, but the parser still decodes the file in the codec it names."""
+    head = b"\n".join(raw.replace(b"\r\n", b"\n").replace(b"\r", b"\n").split(b"\n", 2)[:2])
+    try:
+        encoding, _ = tokenize.detect_encoding(
+            io.BytesIO(re.sub(rb"[\x80-\xff]", b"?", head)).readline
+        )
+        return codecs.lookup(encoding).name in _UNREAD_CODECS
+    except (SyntaxError, UnicodeError, LookupError):
+        return False
 
 
 def parsed(text: str) -> ast.Module | None:

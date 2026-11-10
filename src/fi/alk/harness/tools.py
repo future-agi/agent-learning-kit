@@ -1327,7 +1327,6 @@ def contract_tools(
                 or scan.get_loop() is not asyncio.get_running_loop()
                 or (scan.done() and (scan.cancelled() or scan.exception() is not None))
             ):
-                reach.clear()
                 scan = asyncio.ensure_future(
                     asyncio.to_thread(_tools_in_agent_folder, scan_root, subfolder, reach)
                 )
