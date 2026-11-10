@@ -1705,7 +1705,7 @@ def describe_entry(
     facts = reading.facts.get(entry)
     code = sorted(
         {name for found in reading.facts.values() for name in found.env} | reading.script_env
-    )[:ENV_NAMES_KEPT]
+    )
     project_file = projects.file_in(subfolder)
     partial = reading.partial or reading.short
     if not partial:

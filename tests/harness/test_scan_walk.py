@@ -1543,7 +1543,13 @@ def _shape(root: Path, shape: str) -> None:
             },
         )
     elif shape == "wide_names":
-        _files(root, {f"m{i:02}.py": "".join(f"import 変数{i}_{n}.модуль{n}\n" for n in range(200)) for i in range(60)})
+        _files(
+            root,
+            {
+                f"m{i:02}.py": "".join(f"import 変数変数変数変数{i}_{n}.модульмодуль{n}\n" for n in range(200))
+                for i in range(60)
+            },
+        )
     elif shape == "crafted":
         parts = _unique_parts()
         _files(root, {f"m{i:02}.py": _crafted(parts) for i in range(12)})
@@ -1624,8 +1630,17 @@ SHAPES = [
 ORDINARY = SHAPES[1:7]
 
 
+def _allocated(size: int) -> int:
+    """The block a request of ``size`` gets: pymalloc's 16-byte classes up to 512, then glibc's
+    malloc (an 8-byte header, 16-byte alignment, 32 at least), as on the Linux sandbox. Kept
+    apart from the code's own `_block`, so a fault in that can't hide here."""
+    if size <= 512:
+        return max(16, (size + 15) // 16 * 16)
+    return max(32, (size + 8 + 15) // 16 * 16)
+
+
 def _rounded_live() -> int:
-    return sum(scan_walk._block(trace.size) for trace in tracemalloc.take_snapshot().traces)
+    return sum(_allocated(trace.size) for trace in tracemalloc.take_snapshot().traces)
 
 
 def _largest_parse_peak(root: Path) -> int:
@@ -1754,7 +1769,6 @@ KEPT = {
     "templates": "live",
     "graphs": "live",
     "prompt_paths": "live",
-    "folder_lookups": "live",
     "project_sets": "live",
     "pending_folders": "walk_peak",
     "edges": "join",
@@ -1773,9 +1787,6 @@ def _kept_pair(with_it: Path, without: Path, structure: str) -> None:
     elif structure == "prompt_paths":
         _files(with_it, {f"prompts/prompt_{n:04}_{'p' * 60}.txt": "" for n in range(500)})
         _files(without, {f"others/other_{n:04}_{'p' * 60}.txt": "" for n in range(500)})
-    elif structure == "folder_lookups":
-        _files(with_it, {"/".join(f"c{c}d{d}" for d in range(60)) + "/m.py": "" for c in range(30)})
-        _files(without, {f"c{c}/m.py": "" for c in range(30)})
     elif structure == "project_sets":
         for index in range(200):
             _files(with_it, {f"p{index:03}/pyproject.toml": "", f"p{index:03}/m.py": "", f"p{index:03}/n.py": ""})
@@ -2003,10 +2014,81 @@ def test_a_rows_pass_over_many_files_watches_the_clock(
             now[0] = 10_000.0  # past the result's deadline, mid-pass
         return side_checks(path)
 
-    monkeypatch.setattr(scan_walk, "_is_side_path", counting)
     walk = scan_walk._Walk(tmp_path, deadline=100.0, clock=lambda: now[0])
     walk.run()
-    seen[0] = 0
+    assert walk.stopped == ""
+    monkeypatch.setattr(scan_walk, "_is_side_path", counting)
 
     with pytest.raises(scan_walk._ResultOutOfTime):
         walk.result(upload=False)
+
+
+def test_a_project_lookup_is_charged_at_least_what_it_keeps(tmp_path: Path) -> None:
+    """Each folder the lookup keeps, with its link to its nearest project, measured on the
+    lookup alone: the walk also charges these folders as ones to enter, which would hide it."""
+    folders = ["/".join(f"c{c}d{d}" for d in range(60)) for c in range(30)]
+    for folder in folders:
+        (tmp_path / folder).mkdir(parents=True)
+    (tmp_path / "pyproject.toml").touch()
+    charged = [0]
+
+    def charge(size: int) -> None:
+        charged[0] += size
+
+    projects = scan_walk._Projects(os.fspath(tmp_path), scan_walk._PROJECT_FILES, charge)
+    gc.collect()
+    tracemalloc.start()
+    try:
+        for folder in folders:
+            projects.nearest(folder)
+        gc.collect()
+        kept = _rounded_live()
+    finally:
+        tracemalloc.stop()
+
+    assert projects.nearest(folders[0]) == ""
+    assert kept <= charged[0]
+
+
+def test_the_first_names_hold_no_more_than_fifty_and_stop_early() -> None:
+    names = [f"N{n:04}" for n in range(300)]
+    taken: list[str] = []
+
+    def group(start: int) -> Iterator[str]:
+        for name in names[start:]:
+            taken.append(name)
+            yield name
+
+    first = scan_walk._first_names([group(100), group(0), group(250)])
+
+    assert first == names[:50]
+    # Each group stops at its first name past the last of 50 kept: the first fills to 50 and
+    # stops at its 51st, the second replaces them all and stops at its 51st, and the third's
+    # first name is already past.
+    assert len(taken) == 51 + 51 + 1
+
+
+def test_a_rows_names_leave_out_a_deeper_listed_folder_and_a_sibling_with_the_same_start(
+    tmp_path: Path,
+) -> None:
+    _files(
+        tmp_path,
+        {
+            "bot.py": GRAPH + "import os\nos.getenv('ROOT_KEY')\n",
+            "app/pyproject.toml": "",
+            "app/agent.py": GRAPH + "import os\nos.getenv('APP_KEY')\n",
+            # Not under app/, though its name starts the same way.
+            "app2/helper.py": "import os\nos.getenv('APP2_KEY')\n",
+            "plugins/x/pyproject.toml": "",
+            "plugins/x/agent.py": GRAPH + "import os\nos.getenv('PLUGIN_KEY')\n",
+        },
+    )
+
+    result = _walk(tmp_path)
+    by_folder = {agent.subfolder: set(agent.env_names) for agent in result.agents}
+
+    assert by_folder == {
+        "": {"ROOT_KEY", "APP2_KEY"},
+        "app": {"APP_KEY"},
+        "plugins/x": {"PLUGIN_KEY"},
+    }
