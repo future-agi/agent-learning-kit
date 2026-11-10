@@ -2823,25 +2823,25 @@ def test_a_budget_per_worker_gives_each_named_worker_its_own_deadline_and_no_dea
     assert cr.worker_deadlines({"worker_budget_seconds": 30}) == {}
 
 
-def test_a_budget_per_worker_on_a_door_sealed_before_it_holds_every_worker_to_the_shortest_and_says_so(
-    monkeypatch, tmp_path
-):
+def test_worker_budgets_on_a_door_sealed_before_worker_limits_are_said_not_enforced(monkeypatch, tmp_path):
     monkeypatch.setattr(cr.time, "time", lambda: 1000.0)
     document = {"worker_budget_seconds": {"refund": 5, "lookup": 9}}
-    # Sealed by a door that enforces deadlines per worker: each worker its own, nothing said.
+    # Sealed by a door that holds worker limits: each worker its own deadline, nothing said.
     door = tmp_path / "generated" / "tool-proxy"
     door.mkdir(parents=True)
     (door / "door.json").write_text('{"worker_deadlines": "per_worker"}')
     assert cr.trial_worker_deadlines(document, tmp_path) == (None, {"refund": 1005.0, "lookup": 1009.0}, [])
-    # Sealed before: never no deadline. Every worker gets the shortest budget, and the trial says why.
+    # Sealed before: that proxy has no worker limits at all, for either budget shape, and the trial says so.
     (door / "door.json").unlink()
-    deadline, deadlines, notices = cr.trial_worker_deadlines(document, tmp_path)
-    assert (deadline, deadlines) == (1005.0, {})
-    [notice] = notices
-    assert notice["code"] == "worker_deadlines_not_per_worker"
-    assert "shortest" in notice["message"] and "rebuild" in notice["message"].lower()
-    # A number for all workers is the same on either door.
-    assert cr.trial_worker_deadlines({"worker_budget_seconds": 30}, tmp_path) == (1030.0, {}, [])
+    for budget in ({"refund": 5}, 30):
+        *_, notices = cr.trial_worker_deadlines({"worker_budget_seconds": budget}, tmp_path)
+        [notice] = notices
+        assert notice["code"] == "worker_limits_not_enforced"
+        assert "rebuild" in notice["message"].lower()
+    # No budget asked: nothing to say.
+    assert cr.trial_worker_deadlines({}, tmp_path) == (None, {}, [])
+    # No sealed bundle (the harness's own proxy): enforced, nothing said.
+    assert cr.trial_worker_deadlines({"worker_budget_seconds": 30}, None) == (1030.0, {}, [])
 
 
 def test_a_trial_with_a_worker_deadline_writes_it_beside_its_faults(monkeypatch):

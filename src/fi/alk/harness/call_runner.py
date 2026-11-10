@@ -1360,27 +1360,27 @@ def worker_deadlines(document: Mapping[str, Any]) -> dict[str, float]:
 def trial_worker_deadlines(
     document: Mapping[str, Any], bundle_dir: Path | str | None
 ) -> tuple[float | None, dict[str, float], list[dict[str, Any]]]:
-    """This trial's deadline for all workers, each named worker's own, and what the person should be told. A door sealed
-    before deadlines per worker cannot tell the workers apart, so every worker gets the shortest budget instead of
-    none, and the trial says so."""
+    """This trial's deadline for all workers, each named worker's own, and what the person should be told. A tool
+    proxy sealed before this release has no worker limits at all, so no budget is enforced there: the trial says so
+    rather than read as if it were."""
     deadline, deadlines = worker_deadline(document), worker_deadlines(document)
-    if not deadlines or _door_enforces_per_worker(bundle_dir):
+    if not (deadline or deadlines) or _door_holds_worker_limits(bundle_dir):
         return deadline, deadlines, []
-    shortest_worker = min(deadlines, key=deadlines.__getitem__)
-    shortest = deadlines[shortest_worker]
     notice = {
-        "code": "worker_deadlines_not_per_worker",
-        "message": "This environment was sealed before deadlines per worker, so every worker was held to the shortest "
-        f"budget ({shortest_worker}'s) instead of its own. Rebuild the environment to hold each worker to its own.",
+        "code": "worker_limits_not_enforced",
+        "message": "This environment was sealed before worker limits, so no worker's deadline or permitted actions "
+        "were enforced in this trial. Rebuild the environment to enforce them.",
     }
-    return min(shortest, deadline) if deadline else shortest, {}, [notice]
+    return deadline, deadlines, [notice]
 
 
-def _door_enforces_per_worker(bundle_dir: Path | str | None) -> bool:
+def _door_holds_worker_limits(bundle_dir: Path | str | None) -> bool:
+    """Whether this bundle's tool proxy enforces workers' limits: only one sealed with its capabilities file does."""
     from .world_door import DOOR_FILE
 
     if bundle_dir is None:
-        return False
+        # No sealed bundle: the proxy is this harness's own, which holds every limit.
+        return True
     try:
         sealed = json.loads((Path(bundle_dir) / "generated" / "tool-proxy" / DOOR_FILE).read_text(encoding="utf-8"))
     except (OSError, ValueError):
