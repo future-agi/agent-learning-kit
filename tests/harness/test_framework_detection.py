@@ -1766,10 +1766,14 @@ def _watch_the_stack(monkeypatch: pytest.MonkeyPatch) -> list[int]:
 
 _STACK_CASES = {
     # top length (None: tmp_path itself), depth, siblings, chain stem, sibling stem
-    "short": (None, 30, 200, "a_chain", "s_sibli"),
+    # Sized so the whole list passes 2 MiB even under a Linux tmp_path of about 50 characters, and
+    # so each broom passes the bound under the plant aimed at it.
+    "short": (None, 30, 300, "a_chain", "s_sibli"),
     "long": (400, 30, 150, "a_chain", "s_sibli"),
     "wide": (160, 30, 150, "\U0001d400chain", "\U0001d41asibli"),
-    "deep": (None, 60, 100, "a_chain", "s_sibli"),
+    # A top with one wide character in it, and ASCII names below: the top alone makes every path wide.
+    "wide_top": (-160, 30, 150, "a_chain", "s_sibli"),
+    "deep": (None, 60, 115, "a_chain", "s_sibli"),
 }
 
 
@@ -1778,7 +1782,13 @@ def test_the_walks_own_list_never_passes_the_folder_bound(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, case: str
 ) -> None:
     length, depth, siblings, chain, sibling = _STACK_CASES[case]
-    top = _short_top(tmp_path / "t") if length is None else _padded(tmp_path / "t", length)
+    if length is None:
+        top = _short_top(tmp_path / "t")
+    elif length < 0:
+        top = _padded(tmp_path / "\U0001d400", -length)
+        assert not os.fspath(top).isascii()
+    else:
+        top = _padded(tmp_path / "t", length)
     _broom(top, depth, siblings, chain=chain, sibling=sibling, crew_in_chain=False)
     bound = 2_097_152
     monkeypatch.setattr(fd, "_MAX_FOLDER_BYTES", bound)
@@ -1796,7 +1806,7 @@ def test_the_walks_own_list_grows_past_the_test_bound_without_it(
     """The control: with the real bound, the deep broom's list passes the 2 MiB the test above holds
     it to, so that test can see a count that is too low."""
     top = _short_top(tmp_path / "t")
-    _broom(top, 60, 100, chain="a_chain", sibling="s_sibli", crew_in_chain=False)
+    _broom(top, 60, 115, chain="a_chain", sibling="s_sibli", crew_in_chain=False)
     held = _watch_the_stack(monkeypatch)
 
     assert not folder_findings(top).over_limit
@@ -1815,3 +1825,35 @@ def test_a_folder_total_exactly_at_the_bound_is_not_over(
     assert not folder_findings(top).over_limit
     monkeypatch.setattr(fd, "_MAX_FOLDER_BYTES", exact - 1)
     assert folder_findings(top).over_limit
+
+
+def test_a_folder_total_below_the_top_is_exact(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Below depth 1 the path below the top is joined with a "/" at each level: a 10-character folder
+    whose three 10-character subfolders sit at depth 2, each 21 characters below the top."""
+    top = _short_top(tmp_path)
+    _write(top, {"agent.py": CREW, **{f"d000000001/folder_{index:03}/x": "" for index in range(3)}})
+    exact = ((184 + 1 + 10) + 120) + 3 * ((184 + 1 + 21) + 120)
+
+    monkeypatch.setattr(fd, "_MAX_FOLDER_BYTES", exact)
+    assert not folder_findings(top).over_limit
+    monkeypatch.setattr(fd, "_MAX_FOLDER_BYTES", exact - 1)
+    assert folder_findings(top).over_limit
+
+
+def test_an_installed_tree_adds_none_of_its_folders(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A folder holding a .dist-info is an installed tree: the walk enters none of its folders, so they
+    add nothing. What is counted: the top's listing, "pkg" and "zzz", then "zzz"'s one folder, whose
+    listing comes after "pkg" and is where a total that counted "pkg"'s folders would be seen."""
+    top = _short_top(tmp_path)
+    _write(
+        top,
+        {
+            "agent.py": CREW,
+            **{f"pkg/{name}/x": "" for name in ("x-1.0.dist-info", "alpha", "beta", "gamma")},
+            "zzz/c/x": "",
+        },
+    )
+    exact = 2 * ((184 + 1 + 3) + 120) + ((184 + 1 + 5) + 120)
+    monkeypatch.setattr(fd, "_MAX_FOLDER_BYTES", exact)
+
+    assert not folder_findings(top).over_limit
