@@ -119,8 +119,13 @@ _MARKER_START = re.compile(
     r"computer[_-]?[uU]se|ComputerUse|computer_\d{8}|@playwright/mcp|mcp-server-playwright"
 )
 _TOOLKIT = "PlayWrightBrowserToolkit"
+# A whole name: no letter, digit or "_" before or after it. In a unicode-escape file read as bytes,
+# an escape such as \t or \x20 just before it counts as a boundary too.
 _WHOLE_NAMES = {
-    name: re.compile(rf"(?<!\w){re.escape(name)}(?!\w)", re.ASCII) for name in BROWSER_IMPORTS
+    name: re.compile(
+        rf"(?:(?<!\w)|(?<=\\[abfnrtv])|(?<=\\x[0-9A-Fa-f]{{2}})){re.escape(name)}(?!\w)", re.ASCII
+    )
+    for name in BROWSER_IMPORTS
 }
 # A Python file that names none of these holds no browser import or tool marker, so it isn't parsed.
 _PYTHON_NAMES = (

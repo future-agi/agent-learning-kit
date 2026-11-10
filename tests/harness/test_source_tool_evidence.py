@@ -827,6 +827,15 @@ def test_tool_check_with_a_bad_folder_reads_the_root(tmp_path):
     assert not tool_evidence_problems(_entry_contract(), tmp_path, "agents/missing")
 
 
+def test_tool_check_decodes_a_unicode_escape_module_as_python_does(tmp_path):
+    # \x23 is "#": Python reads both lines as comments, so no lookup is defined.
+    (tmp_path / "agent.py").write_bytes(
+        b"# coding: unicode_escape\n\\x23 def lookup():\n\\x23     return 1\n"
+    )
+
+    assert tool_evidence_problems(_entry_contract(), tmp_path)
+
+
 _COMMENTED_METHOD = (
     "class Assistant:\n    def __init__(self): pass\n"
     "    # async def lookup_weather(self, location): pass\n"

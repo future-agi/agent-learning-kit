@@ -728,6 +728,58 @@ def test_a_slow_codec_named_after_a_lone_cr_is_not_read(tmp_path, monkeypatch):
     assert decoded == []
 
 
+def test_the_coding_line_is_masked_without_a_python_pass_over_it(tmp_path, monkeypatch):
+    from fi.alk.harness import python_source
+
+    # Every file's first two lines are looked at, and one line can be the whole 128 KB: a
+    # Python-level pass over it held a crafted save 18.6 s.
+    def no_pass(*args, **kwargs):
+        raise AssertionError("a Python-level pass over the coding lines")
+
+    # Only this module's regular expressions: the reader compiles its own patterns at import.
+    monkeypatch.setattr(python_source, "re", SimpleNamespace(sub=no_pass))
+    path = tmp_path / "agent.py"
+    path.write_bytes(b"# coding: latin-1 " + b"\xe9" * 100_000 + b"\nimport playwright\n")
+    assert python_source.read_module(path) is not None
+
+
+def test_an_import_joined_across_a_crlf_under_unicode_escape_is_found(tmp_path):
+    # Python ends lines first, then decodes: the backslash before the line end joins the name.
+    (tmp_path / "agent.py").write_bytes(b"# coding: unicode_escape\r\nimport play\\\r\nwright\r\n")
+    assert browser_tools_found(tmp_path) == ["playwright"]
+
+
+def test_a_unicode_escape_file_python_cant_decode_is_skipped(tmp_path):
+    # Python refuses an unknown \N{...} name, so the file never runs.
+    (tmp_path / "agent.py").write_bytes(
+        b"# coding: unicode_escape\nimport playwright\n# \\N{NOSUCH NAME}\n"
+    )
+    assert browser_tools_found(tmp_path) == []
+
+
+def test_the_unicode_escape_total_is_shared_by_the_scans_files(tmp_path, monkeypatch):
+    from fi.alk.harness import python_source
+
+    first = b"# coding: unicode_escape\nimport \\x70atchright\n"
+    second = b"# coding: unicode_escape\nimport \\x70laywright\n"
+    assert len(first) == len(second)
+    monkeypatch.setattr(python_source, "LARGEST_ESCAPED_TOTAL", len(first))
+    (tmp_path / "a.py").write_bytes(first)
+    (tmp_path / "b.py").write_bytes(second)
+    # One file's worth: the second is read as bytes, where its escaped name isn't.
+    assert len(browser_tools_found(tmp_path)) == 1
+
+
+def test_past_the_unicode_escape_total_an_escape_before_a_name_is_a_boundary(
+    tmp_path, monkeypatch
+):
+    from fi.alk.harness import python_source
+
+    monkeypatch.setattr(python_source, "LARGEST_ESCAPED_TOTAL", 0)
+    (tmp_path / "agent.py").write_bytes(b"# coding: unicode_escape\nimport\\tplaywright\n")
+    assert browser_tools_found(tmp_path) == ["playwright"]
+
+
 def test_past_the_scans_unicode_escape_total_a_file_is_searched_as_bytes(tmp_path, monkeypatch):
     from fi.alk.harness import python_source
 
@@ -3703,6 +3755,31 @@ def test_a_codec_python_reads_slowly_or_not_at_all_is_not_used(coding):
     # 128 KB of valid labels. Python keeps a coding line's spelling, so the codec's own name is
     # the one compared.
     assert source_encoding(f"# coding: {coding}\nx = 1\n".encode()) is None
+
+
+@pytest.mark.parametrize(
+    "coding", ["punycode", "PUNYCODE", "idna", "IDNA", "undefined", "unicode_escape", "unicode-escape"]
+)
+def test_the_reader_leaves_a_slow_codecs_file_undecoded(tmp_path, coding):
+    from fi.alk.harness.python_source import read_module
+
+    # Handed back as bytes, not decoded; without a scan's total, unicode-escape too.
+    path = tmp_path / "agent.py"
+    path.write_bytes(f"# coding: {coding}\nx = 1\n".encode())
+    undecoded: list[bytes] = []
+    assert read_module(path, undecoded=undecoded) is None
+    assert undecoded == [path.read_bytes()]
+
+
+def test_the_reader_hands_back_only_a_file_in_a_codec_refused_by_name(tmp_path):
+    from fi.alk.harness.python_source import read_module
+
+    # Not UTF-8 and no coding line: Python refuses it, so its names don't count.
+    path = tmp_path / "agent.py"
+    path.write_bytes(b"import playwright\nx = '\xff'\n")
+    undecoded: list[bytes] = []
+    assert read_module(path, undecoded=undecoded) is None
+    assert undecoded == []
 
 
 def test_the_walk_reads_a_file_python_cant_decode_as_utf8(tmp_path):

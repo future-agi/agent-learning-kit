@@ -45,6 +45,8 @@ LARGEST_ESCAPED_TOTAL = 4 * 1024 * 1024
 _LONGEST_MARK_RUN = 32
 # Text codecs a coding line may name that aren't read: see _coding.
 _UNREAD_CODECS = frozenset({"idna", "punycode", "undefined", "unicode-escape"})
+# Reads every non-ASCII byte as "?", in one C pass over the bytes.
+_ASCII_ONLY = bytes(range(0x80)) + b"?" * 0x80
 _NON_ASCII_RUN = re.compile(r"[^\x00-\x7f]{2,}")
 
 
@@ -138,7 +140,8 @@ def read_module(
         and escapes.spend(raw)
     ):
         try:
-            text = raw.decode("unicode-escape")
+            # Python ends lines first, so a backslash before a CRLF joins the lines it ends.
+            text = raw.replace(b"\r\n", b"\n").replace(b"\r", b"\n").decode("unicode-escape")
         except UnicodeError:
             return None
         if needles and not any(needle.decode("ascii") in text for needle in needles):
@@ -155,11 +158,8 @@ def read_module(
         if undecoded is not None:
             undecoded.append(raw)
         return None
-    # A codec such as rot13 or base64 isn't a text encoding, so decode refuses it: the same flag
-    # decode checks, which an empty input never reaches.
-    if not getattr(info, "_is_text_encoding", True):
-        return None
     try:
+        # A codec such as rot13 or base64 isn't a text encoding, so decode refuses it.
         return raw.decode(encoding)
     except (UnicodeError, LookupError):
         return None
@@ -191,7 +191,7 @@ def _coding(raw: bytes) -> tuple[str, codecs.CodecInfo] | None:
     """
     head = b"\n".join(raw.replace(b"\r\n", b"\n").replace(b"\r", b"\n").split(b"\n", 2)[:2])
     bom = len(codecs.BOM_UTF8) if head.startswith(codecs.BOM_UTF8) else 0
-    lines = io.BytesIO(head[:bom] + re.sub(rb"[\x80-\xff]", b"?", head[bom:])).readline
+    lines = io.BytesIO(head[:bom] + head[bom:].translate(_ASCII_ONLY)).readline
     try:
         encoding, _ = tokenize.detect_encoding(lines)
         return encoding, codecs.lookup(encoding)
