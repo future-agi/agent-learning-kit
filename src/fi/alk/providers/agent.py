@@ -177,7 +177,7 @@ def build_authored_agent(
             }
         ],
         "tools": tools,
-        "model": None,
+        "model": _authored_model(contract.get("model")),
         "voice": None,
         "telephony": [],
         "supports": [],
@@ -227,6 +227,17 @@ def _authored_tool(
         "parameters": parameters,
         "endpoint": None,
     }
+
+
+def _authored_model(value: Any) -> dict[str, Any] | None:
+    """The document's model: the contract's provider and name, or None when it has no name."""
+    if not isinstance(value, Mapping):
+        return None
+    name = str(value.get("name") or "").strip()[:_NAME_MAX]
+    if not name:
+        return None
+    provider = str(value.get("provider") or "").strip()[:_NAME_MAX] or None
+    return {"provider": provider, "name": name, "temperature": None, "max_tokens": None}
 
 
 def _redact(value: Any, key: str = "") -> Any:

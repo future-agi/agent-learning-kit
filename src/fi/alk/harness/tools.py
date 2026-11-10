@@ -11,6 +11,7 @@ import asyncio
 import json
 import os
 import secrets
+import string
 import sys
 import threading
 from pathlib import Path
@@ -34,6 +35,7 @@ from .backends import qualified as qualified  # noqa: F401  (re-export; callers 
 from .backends import tool, tool_server
 
 from .contract import (
+    _ALIASES,
     CALL_DIRECTIONS,
     AgentContract,
     Runtime,
@@ -236,8 +238,12 @@ def _checked_against_source(
         try:
             problems.extend(tool_evidence_problems(contract, source_root, subfolder))
             problems.extend(_copy_prompt(contract, source_root))
+            problems.extend(_model_problems(contract, source_root))
         except PathLookupsSpent as spent:
             return _problems([*problems, str(spent)], arrived)
+    else:
+        # With no source there is no line to find the name on, so the model is unknown.
+        contract.model = None
     runtime = contract.runtime
     if subfolder and source_root is not None:
         try:
@@ -379,6 +385,121 @@ def _copy_prompt(contract: AgentContract, source_root: Path) -> list[str]:
     if parts and not problems:
         contract.system_prompt_excerpt = "\n\n".join(parts)
     return problems
+
+
+# The platform refuses the whole agent document past this, for the model's name and provider.
+_LONGEST_MODEL_FIELD = 255
+# One path as written: charged_path doesn't refuse a long path itself.
+_LONGEST_MODEL_PATH = 4096
+# What a model name is made of. A match must have none of these right before or after it, so
+# "gpt-4o" is not found inside "gpt-4o-mini".
+_MODEL_NAME_CHARS = frozenset(string.ascii_letters + string.digits + "._:/@-")
+
+
+def _resolved_in_source(root: Path, path: str) -> Path | None:
+    """``root / path`` resolved, each lookup charged to the save's budget, or None: a link
+    loop, a NUL, a path the system refuses. PathLookupsSpent is not caught here: past the
+    budget the save answers with its own message."""
+    try:
+        return charged_path(root / path)
+    except (OSError, RuntimeError, ValueError):
+        return None
+
+
+def _source_lines(path: Path, limit: int) -> list[str] | None:
+    """The lines of a file the way _copy_prompt reads them, or None: not a regular file, not
+    readable, or larger than ``limit`` bytes."""
+    try:
+        # Before the open: opening a FIFO or a device waits on it, or reads without end.
+        if not path.is_file():
+            return None
+        with path.open("rb") as handle:
+            raw = handle.read(limit + 1)
+    except (OSError, ValueError):
+        return None
+    if len(raw) > limit:
+        return None
+    # As _copy_prompt decodes, whatever coding line the file carries: one file then has one
+    # numbering in both checks, and no codec the file names gets to run on it.
+    return raw.decode("utf-8", errors="replace").splitlines()
+
+
+def _named_on(line: str, name: str) -> bool:
+    """Whether ``name`` is on ``line`` as a whole name. ``name`` is made only of
+    _MODEL_NAME_CHARS, so an occurrence starting inside one that failed has a name character
+    just before it, and the search resumes after the failed one."""
+    if not name:
+        # find("") matches at every position without moving on.
+        return False
+    at = line.find(name)
+    while at >= 0:
+        end = at + len(name)
+        if (at == 0 or line[at - 1] not in _MODEL_NAME_CHARS) and (
+            end == len(line) or line[end] not in _MODEL_NAME_CHARS
+        ):
+            return True
+        at = line.find(name, end)
+    return False
+
+
+def _model_problems(contract: AgentContract, source_root: Path) -> list[str]:
+    """Problems with contract.model, checked against the cited line. On success, strips name and
+    provider and stores path as the resolved file relative to the root, in POSIX form. Resolves
+    one path (charged to the save's budget) and reads at most one file."""
+    model = contract.model
+    if model is None:
+        return []
+    name, provider, path = model.name.strip(), model.provider.strip(), model.path.strip()
+    shown_name, shown_path = name[:100], path[:200]
+    problems: list[str] = []
+    if not name:
+        problems.append(
+            "model: name is empty; give the model's name as written in the source, or leave "
+            "model out"
+        )
+    elif not _MODEL_NAME_CHARS.issuperset(name):
+        problems.append(
+            "model: a model name is letters, digits and . _ : / @ -; write it as it appears in "
+            "the source, or leave model out"
+        )
+    if not _MODEL_NAME_CHARS.issuperset(provider):
+        problems.append(
+            "model: a provider is letters, digits and . _ : / @ -; write it as the source names "
+            "it, or leave it out"
+        )
+    if len(name) > _LONGEST_MODEL_FIELD or len(provider) > _LONGEST_MODEL_FIELD:
+        problems.append("model: name and provider are at most 255 characters")
+    if not path or model.line < 1:
+        problems.append(
+            "model: give path and line, the file and the line the model's name is written on"
+        )
+    if len(path) > _LONGEST_MODEL_PATH:
+        problems.append("model: path is too long")
+    # All of these at once, and before the disk: a citation wrong in its shape costs no lookup.
+    if problems:
+        return problems
+    root = source_root.resolve()
+    resolved = _resolved_in_source(root, path)
+    if resolved is None or not is_within(resolved, root):
+        return [f"model: {shown_path} is not a file in the source"]
+    lines = _source_lines(resolved, _LARGEST_PROMPT_FILE)
+    if lines is None:
+        return [
+            f"model: {shown_path} can't be read as a file of at most 1 MiB; check the path, and "
+            "cite the line in the file the name is written in"
+        ]
+    if model.line > len(lines):
+        return [f"model: line {model.line} is outside {shown_path}, which has {len(lines)} lines"]
+    if not _named_on(lines[model.line - 1], name):
+        return [
+            f"model: the name {shown_name} is not on line {model.line} of {shown_path} as a "
+            "whole name; write it exactly as it appears there, or leave model out if the name "
+            "is only set at run time"
+        ]
+    model.name, model.provider = name, provider
+    # The file the path leads to, so a link inside the source is stored as its target.
+    model.path = resolved.relative_to(root).as_posix()
+    return []
 
 
 def _without_nulls(value: Any) -> Any:
@@ -618,6 +739,24 @@ def contract_tools(
                     "description": "Where the agent's whole prompt is written: every part it is "
                     "assembled from, in order, as a path relative to the source root and the first "
                     "and last line of each. These lines replace system_prompt_excerpt as written.",
+                },
+                # Nothing required inside it either: a model sent without its line reaches the
+                # save, which says what is missing, instead of failing the whole call here.
+                "model": {
+                    "type": "object",
+                    "properties": {
+                        "provider": {"type": "string"},
+                        "name": {"type": "string"},
+                        "path": {"type": "string"},
+                        "line": {"type": "integer"},
+                    },
+                    "description": "The model the agent talks to the person with, read from its "
+                    "source: provider as the source names it (openai, anthropic, google...; leave "
+                    "out when it doesn't say), name exactly as written (letters, digits and "
+                    ". _ : / @ - only), and the file (relative to "
+                    "the source root) and line the name is written on. One model; a voice agent's "
+                    "speech-to-text and text-to-speech models don't count. Leave model out when "
+                    "the name is only set at run time.",
                 },
                 "hard_constraints": {
                     "type": "array",
@@ -1554,12 +1693,19 @@ def contract_tools(
                 )
             payload["chosen_evals"] = wanted
 
+        # Under any name the contract takes the quote from, so a quote under an alias is asked
+        # about too.
+        quoted = (
+            payload.get(key)
+            for key in ("system_prompt_excerpt", *_ALIASES["system_prompt_excerpt"])
+        )
+        excerpt = next((one for one in quoted if isinstance(one, str) and one.strip()), "")
         thin = [
             (
                 "prompt",
                 bool(payload.get("conversational", True))
                 and not payload.get("hard_constraints")
-                and not str(payload.get("system_prompt_excerpt") or "").strip(),
+                and not excerpt,
                 "no hard_constraints and no system_prompt_excerpt, for a conversational agent. "
                 "Its prompt usually exists and often lives away from the main agent file — "
                 "search the whole source for a long instructions string before deciding there "
@@ -1601,6 +1747,17 @@ def contract_tools(
                 "hotel_rooms, hotel_bookings, restaurant_reservations), preserving real IDs and "
                 "values. Semantic summaries such as rooms, notable_bookings or restaurant_slots "
                 "cannot seed or verify the submitted store.",
+            ),
+            (
+                # A quote may stop short of the whole prompt; lines are copied whole. Asked once,
+                # since a prompt built at run time has no lines to name, and its quote is kept.
+                "prompt-lines",
+                source_root is not None
+                and bool(excerpt)
+                and not payload.get("system_prompt_from"),
+                "system_prompt_excerpt is a quote, and system_prompt_from names no lines. If the "
+                "prompt is written in the source, name its lines in system_prompt_from so it is "
+                "copied whole.",
             ),
         ]
         # All of them together, and each only once. Nudging in sequence would cost a turn per
