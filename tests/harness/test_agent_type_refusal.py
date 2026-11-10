@@ -644,9 +644,14 @@ def _parsed_in_a_refused_codec(monkeypatch) -> list[bytes]:
         ("idna", b'import playwright\nHOST = "' + b"xn--bcher-kva." * 4_000 + b'"\n', ["playwright"]),
         ("punycode", b"import playwright\n-" + b"9" * 64_000, ["playwright"]),
         ("undefined", b"import playwright\n", ["playwright"]),
-        ("unicode-escape", b"\\x69mport playwright\n", ["playwright"]),
+        (
+            "idna",
+            b"from langchain_community.agent_toolkits import PlayWrightBrowserToolkit\n",
+            ["PlayWrightBrowserToolkit"],
+        ),
+        ("idna", b"TEAM = 'steelers'\n", []),
     ],
-    ids=["idna-plain", "idna-encoded-labels", "punycode", "undefined", "unicode-escape"],
+    ids=["idna-plain", "idna-encoded-labels", "punycode", "undefined", "idna-toolkit", "idna-word-inside-a-word"],
 )
 def test_a_file_in_a_refused_codec_still_names_its_tools(
     tmp_path, monkeypatch, codec, body, expected
@@ -664,6 +669,23 @@ def test_a_file_in_a_refused_codec_still_names_its_tools(
     assert time.monotonic() - started < 5
     # Never decoded: punycode's decode costs the square of its size, and idna's runs per label.
     assert (decoded, labels, parsed) == ([], [], [])
+
+
+def test_an_escaped_import_in_a_unicode_escape_file_is_found(tmp_path):
+    # Python decodes the escapes before it parses, so the import is real and so is the finding.
+    (tmp_path / "helper.py").write_bytes(b"# coding: unicode-escape\nimport \\x70laywright\n")
+    assert browser_tools_found(tmp_path) == ["playwright"]
+
+
+@pytest.mark.skipif(not hasattr(os, "symlink"), reason="needs folder links")
+def test_a_test_named_folder_that_is_a_link_is_not_listed_to_decide_it(tmp_path, monkeypatch):
+    _tree(tmp_path, {"shared/test_a.py": "x = 1\n", "agent.py": "import playwright\n"})
+    os.symlink(tmp_path / "shared", tmp_path / "ui-tests", target_is_directory=True)
+    asked = []
+    real = agent_type_check._only_tests
+    monkeypatch.setattr(agent_type_check, "_only_tests", lambda folder: asked.append(folder) or real(folder))
+    assert browser_tools_found(tmp_path) == ["playwright"]
+    assert not any(folder.endswith("ui-tests") for folder in asked)
 
 
 def test_a_slow_codec_named_after_a_lone_cr_is_not_read(tmp_path, monkeypatch):

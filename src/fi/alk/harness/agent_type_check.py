@@ -110,7 +110,7 @@ _TEST_FILES = ("test_*.py", "*_test.py", "conftest.py", "*.test.*", "*.spec.*")
 _SCRIPT_SUFFIXES = frozenset({".js", ".ts", ".mjs", ".cjs", ".tsx", ".jsx"})
 _CODE_SUFFIXES = _SCRIPT_SUFFIXES | {".py"}
 _LARGEST_CODE_FILE = 1024 * 1024
-_UNREAD_CODECS = frozenset({"idna", "punycode", "undefined", "unicode-escape"})
+_UNREAD_CODECS = frozenset({"idna", "punycode", "undefined"})
 # Past this a repository holds the conversation up for longer than the rest of the scan is worth.
 _LARGEST_SCAN = 128 * 1024 * 1024
 _LARGEST_RECORD = 1024 * 1024
@@ -336,11 +336,11 @@ def _packages_used(path: Path) -> set[str]:
 def _unread_codec(source: bytes) -> bool:
     """Whether the coding line names a codec the scan won't decode ``source`` in.
 
-    A codec such as rot13 isn't a text encoding, so it can't be read as source. Four text codecs
+    A codec such as rot13 isn't a text encoding, so it can't be read as source. Three text codecs
     are refused by name: punycode's decode costs the square of its size, about 2 s for 128 KB;
-    idna's runs in Python for each label; undefined decodes nothing; unicode-escape is refused
-    with them so this check and the save's agree. Python runs an idna or unicode-escape file, so
-    the readers then look for the names in its bytes instead (``_named_raw``).
+    idna's runs in Python for each label; undefined decodes nothing. Python runs an idna file, so
+    the readers then look for the names in its bytes instead (``_named_raw``). unicode-escape
+    decodes in linear time and its escapes can spell a name, so it is decoded like any other.
     """
     try:
         # A non-ASCII byte on the coding line makes detection fail while the parser still decodes
@@ -365,7 +365,12 @@ def _named_raw(source: bytes) -> tuple[set[str], set[str]]:
     For a file in a refused codec: its names are counted rather than lost, which can only bring a
     second look, never a refusal. One search over bytes already read.
     """
-    imports = {name for name in BROWSER_IMPORTS if name.encode() in source}
+    # Whole names only: "steelers" in a string is no import of steel.
+    imports = {
+        name
+        for name in BROWSER_IMPORTS
+        if re.search(rb"(?<![\w])" + re.escape(name.encode()) + rb"(?![\w])", source)
+    }
     text = source.decode("latin-1")
     markers = {
         "Playwright MCP" if "playwright" in hit.group() else "computer-use tool"
