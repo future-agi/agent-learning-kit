@@ -1,11 +1,15 @@
 from __future__ import annotations
 
 import ast
+import gc
 import inspect
 import io
+import itertools
 import json
 import os
 import tokenize
+import tracemalloc
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
@@ -342,7 +346,11 @@ def test_a_broken_langgraph_json_is_unread_not_a_crash(
 def test_the_walk_limit_and_the_clock_stop_it(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    assert (scan_walk._MAX_FILES, scan_walk._MAX_BYTES) == (40_000, 268_435_456)
+    assert (scan_walk._MAX_JOINED, scan_walk._MAX_BYTES, scan_walk._MAX_HELD) == (
+        40_000,
+        268_435_456,
+        1_610_612_736,
+    )
     _write(tmp_path, {"a.py": GRAPH, "b.py": GRAPH, "c.py": GRAPH})
     calls: list[int] = []
 
@@ -357,12 +365,12 @@ def test_the_walk_limit_and_the_clock_stop_it(
     # The walk checked before each of its two files; the join after it checks the clock too.
     assert len(calls) >= 2
 
-    monkeypatch.setattr(scan_walk, "_MAX_FILES", 2)
+    monkeypatch.setattr(scan_walk, "_MAX_JOINED", 2)
     by_count = _walk(tmp_path)
     assert by_count.stopped == "limit"
     assert _entries(by_count) == ["a.py", "b.py"]
 
-    monkeypatch.setattr(scan_walk, "_MAX_FILES", 40_000)
+    monkeypatch.setattr(scan_walk, "_MAX_JOINED", 40_000)
     monkeypatch.setattr(scan_walk, "_MAX_BYTES", len(GRAPH))
     by_bytes = _walk(tmp_path)
     assert by_bytes.stopped == "limit"
@@ -1217,9 +1225,9 @@ def test_side_folders_cannot_use_up_the_file_cap_before_the_agent(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """The customer's own code is read first; a big tests folder sorted ahead of the agent
-    no longer hides it behind the file cap."""
-    monkeypatch.setattr(scan_walk, "_MAX_FILES", 10)
-    _write(tmp_path, {f"tests/test_{index:02}.py": "x = 1\n" for index in range(25)})
+    no longer hides it behind the file cap. Each test file imports something, so it counts."""
+    monkeypatch.setattr(scan_walk, "_MAX_JOINED", 10)
+    _write(tmp_path, {f"tests/test_{index:02}.py": "import os\n" for index in range(25)})
     _write(tmp_path, {"zz_agent/agent.py": GRAPH})
 
     result = _walk(tmp_path)
@@ -1295,8 +1303,8 @@ def test_every_file_is_read_in_exactly_one_pass(tmp_path: Path, monkeypatch: pyt
 def test_a_template_beside_the_agent_is_read_before_a_big_tests_folder(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(scan_walk, "_MAX_FILES", 10)
-    _write(tmp_path, {f"tests/test_{index:02}.py": "x = 1\n" for index in range(25)})
+    monkeypatch.setattr(scan_walk, "_MAX_JOINED", 10)
+    _write(tmp_path, {f"tests/test_{index:02}.py": "import os\n" for index in range(25)})
     _write(tmp_path, {"zz_agent/agent.py": GRAPH, "zz_agent/.env.example": "OPENAI_API_KEY=\n"})
 
     result = _walk(tmp_path)
@@ -1391,3 +1399,852 @@ def test_the_step_after_the_walk_holds_a_bounded_number_of_edges(
 
     assert bounded.stopped == "limit"
     assert bounded.agents == ()
+
+
+# A UTF-16 byte-order mark followed by an odd number of bytes: the decoder can't read it. The
+# same template with its last byte pair whole can.
+ODD_UTF16_TEMPLATE = b"\xff\xfeA\x00=\x001\x00\n"
+EVEN_UTF16_TEMPLATE = ODD_UTF16_TEMPLATE + b"\x00"
+
+
+def test_a_template_the_decoder_rejects_marks_the_row_short(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    with pytest.raises(UnicodeDecodeError):
+        scan_walk._template_names(ODD_UTF16_TEMPLATE)
+    # The entry, and a file after the template that is still read: its setting is kept.
+    _write(tmp_path, {"app/bot.py": CLIENT, "app/tool.py": "import os\nos.getenv('TOOL_KEY')\n"})
+    (tmp_path / "app" / ".env.example").write_bytes(EVEN_UTF16_TEMPLATE)
+    readable = describe_entry(tmp_path, "app/bot.py", "app", deadline=FOREVER)
+    (tmp_path / "app" / ".env.example").write_bytes(ODD_UTF16_TEMPLATE)
+
+    with caplog.at_level("WARNING", logger=scan_walk.logger.name):
+        rejected = describe_entry(tmp_path, "app/bot.py", "app", deadline=FOREVER)
+
+    assert readable is not None and readable.partial is False
+    assert set(readable.env_names) == {"A", "TOOL_KEY"}
+    assert rejected is not None and rejected.partial is True
+    assert set(rejected.env_names) == {"TOOL_KEY"}
+    # Short because the decoder rejected it, not because the kit's reader failed.
+    assert "agent description:" not in caplog.text
+
+
+def test_the_walks_summary_line_counts_reader_faults_apart_from_unread_files(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    _write(tmp_path, {f"m{index}.py": "x = 1\n" for index in range(3)})
+    # An ordinary unreadable file: the tokenizer rejects it, which is no fault of the kit's.
+    _write(tmp_path, {"unterminated.py": "x = '''never closed\n"})
+    real = scan_walk._python_facts
+
+    def broken(data: bytes, shadowed: frozenset[str]) -> object:
+        if data == b"x = 1\n":
+            raise LookupError("a fault in the kit's reader")
+        return real(data, shadowed)
+
+    monkeypatch.setattr(scan_walk, "_python_facts", broken)
+    with caplog.at_level("INFO", logger=scan_walk.logger.name):
+        _walk(tmp_path)
+
+    assert "unread=4 reader_faults=3 " in caplog.text
+
+
+def test_a_fault_in_the_description_keeps_what_was_read_and_logs_the_trace(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The description runs after the model was paid for, so a fault in the kit that escapes
+    it keeps what was read, as a partial row, instead of ending the scan in a paid retry. The
+    fault raised is outside the per-file catch, so only `describe_entry`'s own catch holds it."""
+    _write(
+        tmp_path,
+        {
+            "app/bot.py": CLIENT,
+            "app/a_first.py": "import os\nos.getenv('FIRST_KEY')\n",
+            "app/z_last.py": "x = 1\n",
+        },
+    )
+    take = scan_walk._Description._take
+    calls: list[str] = []
+
+    def failing_after_the_first(self: object, directory: str, folder: str, name: str) -> None:
+        calls.append(name)
+        if len(calls) > 1:
+            raise RuntimeError("a fault in the kit")
+        take(self, directory, folder, name)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(scan_walk._Description, "_take", failing_after_the_first)
+    with caplog.at_level("WARNING", logger=scan_walk.logger.name):
+        candidate = describe_entry(tmp_path, "app/bot.py", "app", deadline=FOREVER)
+
+    assert calls[0] == "a_first.py"
+    assert candidate is not None
+    assert (candidate.entry, candidate.subfolder, candidate.partial) == ("app/bot.py", "app", True)
+    assert "FIRST_KEY" in candidate.env_names
+    assert "agent description stopped" in caplog.text
+    assert "RuntimeError: a fault in the kit" in caplog.text
+
+
+# -- what the walk and its join keep (TH-9449), and its one capped reader (TH-9450) ----------
+
+
+def _unique_parts() -> Iterator[str]:
+    first = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ_"
+    rest = first + "0123456789"
+    return ("".join(name) for name in itertools.product(first, rest, rest))
+
+
+def _crafted(parts: Iterator[str]) -> str:
+    """200 imports of 64 unique three-letter parts: the most kept for the bytes read."""
+    return "".join("import " + ".".join(next(parts) for _ in range(64)) + "\n" for _ in range(200))
+
+
+def _files(root: Path, files: dict[str, str]) -> None:
+    for relative, content in files.items():
+        path = root / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content, encoding="utf-8")
+
+
+def _shape(root: Path, shape: str) -> None:
+    """Sixteen repository shapes, small, each growing one thing the walk or its join keeps."""
+    if shape == "empty":
+        _files(root, {f"p{index % 3}/m{index:03}.py": "" for index in range(300)})
+    elif shape == "plain_imports":
+        # Nine-character names: the allocator gives each 64 bytes, more than its size asked for.
+        _files(root, {f"m{i:02}.py": "".join(f"import mod{i:02}_{n:03}\n" for n in range(200)) for i in range(60)})
+    elif shape == "dotted_imports":
+        _files(
+            root,
+            {f"m{i:02}.py": "".join(f"import pkg{i}_{n}.sub{n}.mod{n}\n" for n in range(200)) for i in range(60)},
+        )
+    elif shape == "from_import":
+        _files(
+            root,
+            {
+                f"m{i:02}.py": "from pkg.mod import (" + ", ".join(f"name_{i}_{n}" for n in range(300)) + ")\n"
+                for i in range(60)
+            },
+        )
+    elif shape == "long_names":
+        _files(
+            root,
+            {
+                f"m{i:02}.py": "".join(
+                    "import " + ".".join([f"n{i}_{n}" + "q" * 250] * 16) + "\n" for n in range(200)
+                )
+                for i in range(20)
+            },
+        )
+    elif shape == "settings":
+        _files(
+            root,
+            {
+                f"m{i:02}.py": "import os\n" + "".join(f"os.getenv('E{i}_{n}_{'X' * 120}')\n" for n in range(200))
+                for i in range(60)
+            },
+        )
+    elif shape == "wide_names":
+        _files(
+            root,
+            {
+                f"m{i:02}.py": "".join(f"import 変数変数変数変数{i}_{n}.модульмодуль{n}\n" for n in range(200))
+                for i in range(60)
+            },
+        )
+    elif shape == "crafted":
+        parts = _unique_parts()
+        _files(root, {f"m{i:02}.py": _crafted(parts) for i in range(12)})
+    elif shape == "templates":
+        _files(
+            root,
+            {f"f{i:03}/.env.example": "".join(f"S{i}_{n}_NAME=\n" for n in range(200)) for i in range(200)},
+        )
+    elif shape == "graphs":
+        _files(
+            root,
+            {
+                f"g{i:02}/langgraph.json": json.dumps(
+                    {"graphs": {f"x{n}": f"./deep/m{n}_{'y' * 40}.py:graph" for n in range(200)}}
+                )
+                for i in range(20)
+            },
+        )
+    elif shape == "comb_and_trunk":
+        _files(root, {"/".join(f"c{c}d{d}" for d in range(100)) + "/m.py": "" for c in range(40)})
+        trunk = "/".join(f"t{d}" for d in range(100))
+        for depth in range(1, 101):
+            _files(root, {"/".join(trunk.split("/")[:depth]) + "/pyproject.toml": ""})
+        _files(root, {f"{trunk}/leaf{n}/bot.py": "import os\nOpenAI()\n" for n in range(20)})
+    elif shape == "importers_and_candidates":
+        deep = "/".join(f"level{d:02}_{'z' * 20}" for d in range(30))
+        _files(root, {f"{deep}/mod{n:03}.py": "" for n in range(200)})
+        _files(
+            root,
+            {f"{deep}/imp{n:02}.py": "".join(f"from . import mod{k:03}\n" for k in range(200)) for n in range(50)},
+        )
+        # Candidates that reach the importers, and many that reach nothing: the join's shares
+        # and import lists outweigh its fixed part.
+        _files(root, {f"{deep}/c{n:02}.py": f"from . import imp{n:02}\nOpenAI()\n" for n in range(50)})
+        _files(root, {f"tiny/c{n:04}.py": "OpenAI()\n" for n in range(5_000)})
+    elif shape == "project_per_file":
+        for index in range(300):
+            _files(root, {f"proj{index:03}/pyproject.toml": "", f"proj{index:03}/m.py": "x = 1\n"})
+    elif shape == "rows_and_broom":
+        _files(root, {f"a{n:02}.py": "OpenAI()\n" for n in range(50)})
+        _files(
+            root,
+            {
+                f"lib/m{i:03}.py": "import os\n" + "".join(f"os.getenv('L{i}_{n}')\n" for n in range(100))
+                for i in range(100)
+            },
+        )
+        chain = root / "broom"
+        for depth in range(50):
+            chain = chain / f"d{depth}"
+            for sibling in range(20):
+                (chain.parent / f"s{depth}_{sibling}").mkdir(parents=True, exist_ok=True)
+        chain.mkdir(parents=True, exist_ok=True)
+    elif shape == "one_name_files":
+        _files(root, {"a.py": "OpenAI()\n"})
+        _files(root, {f"n/f{n:04}.py": f"os.getenv('N{n:05}')\n" for n in range(2_000)})
+    elif shape == "levels_over_256":
+        # Each import's level is an int of its own, and each client's line number too.
+        dots = "." * 300
+        _files(
+            root,
+            {
+                f"m{i:02}.py": "".join(f"from {dots}m{n} import x\n" for n in range(200)) + "OpenAI()\n" * 100
+                for i in range(60)
+            },
+        )
+    else:
+        raise AssertionError(shape)
+
+
+SHAPES = [
+    "empty",
+    "plain_imports",
+    "dotted_imports",
+    "from_import",
+    "long_names",
+    "settings",
+    "wide_names",
+    "crafted",
+    "templates",
+    "graphs",
+    "comb_and_trunk",
+    "importers_and_candidates",
+    "project_per_file",
+    "rows_and_broom",
+    "one_name_files",
+    "levels_over_256",
+]
+ORDINARY = SHAPES[1:7]
+
+
+def _allocated(size: int) -> int:
+    """The block a request of ``size`` gets: pymalloc's 16-byte classes up to 512, then glibc's
+    malloc (an 8-byte header, 16-byte alignment, 32 at least), as on the Linux sandbox. Kept
+    apart from the code's own `_block`, so a fault in that can't hide here."""
+    if size <= 512:
+        return max(16, (size + 15) // 16 * 16)
+    return max(32, (size + 8 + 15) // 16 * 16)
+
+
+def _rounded_live() -> int:
+    return sum(_allocated(trace.size) for trace in tracemalloc.take_snapshot().traces)
+
+
+def _largest_parse_peak(root: Path) -> int:
+    files = sorted(root.rglob("*.py"), key=lambda path: path.stat().st_size)
+    if not files:
+        return 0
+    tracemalloc.start()
+    try:
+        base = tracemalloc.get_traced_memory()[0]
+        tracemalloc.reset_peak()
+        scan_walk._python_facts(files[-1].read_bytes(), frozenset())
+        return tracemalloc.get_traced_memory()[1] - base
+    finally:
+        tracemalloc.stop()
+
+
+def _hazard_peak(root: Path) -> int:
+    """A build hazard's own look at the root, the biggest any row's can be: bounded on its own
+    (`_HAZARD_PATH_BYTES`), not charged."""
+    tracemalloc.start()
+    try:
+        base = tracemalloc.get_traced_memory()[0]
+        tracemalloc.reset_peak()
+        scan_walk.build_hazard(root, "")
+        return tracemalloc.get_traced_memory()[1] - base
+    finally:
+        tracemalloc.stop()
+
+
+def _measure(root: Path) -> dict[str, int]:
+    """Walk and join ``root`` under tracemalloc: what was charged, what is really kept."""
+    gc.collect()
+    tracemalloc.start()
+    try:
+        walk = scan_walk._Walk(root, deadline=FOREVER, clock=lambda: 0.0)
+        walk.run()
+        walk_peak = tracemalloc.get_traced_memory()[1]
+        gc.collect()
+        after_walk = tracemalloc.get_traced_memory()[0]
+        tracemalloc.reset_peak()
+        result = walk.result(upload=False)
+        join_peak = tracemalloc.get_traced_memory()[1]
+        gc.collect()
+        live = _rounded_live()
+    finally:
+        tracemalloc.stop()
+    join_charged = scan_walk._JOIN_BASE
+    join_charged += sum(scan_walk._held_for_join(path, facts) for path, facts in walk.facts.items())
+    join_charged += sum(scan_walk._join_share(target) for target in walk.graphs)
+    assert result.stopped == ""
+    return {
+        "charged": walk.reader.held,
+        "live": live,
+        "walk_peak": walk_peak,
+        "join_rise": join_peak - after_walk,
+        "join_charged": join_charged,
+    }
+
+
+@pytest.mark.parametrize("shape", SHAPES)
+def test_what_is_charged_is_never_below_what_the_walk_and_its_join_keep(
+    tmp_path: Path, shape: str
+) -> None:
+    """Checked against tracemalloc on CPython 3.12, the kit's Python, with each live block
+    rounded as the allocator rounds it (`_block`). The sizes in the estimate are 3.12's."""
+    _shape(tmp_path, shape)
+    parse_peak = _largest_parse_peak(tmp_path)
+    hazard_peak = _hazard_peak(tmp_path)
+
+    seen = _measure(tmp_path)
+
+    assert seen["live"] <= seen["charged"], seen
+    assert seen["join_rise"] <= seen["join_charged"] + hazard_peak, (seen, hazard_peak)
+    assert seen["walk_peak"] <= seen["charged"] + parse_peak + 1_048_576, seen
+    if shape in ORDINARY:
+        # High, but not so high that an ordinary repository is cut early.
+        assert seen["charged"] <= 2.5 * seen["live"], seen
+
+
+def test_the_walk_stops_at_what_it_keeps_not_at_how_many_files(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    parts = _unique_parts()
+    crafted = _crafted(parts)
+    _files(tmp_path / "crafted", {f"m{index:02}.py": _crafted(parts) for index in range(12)})
+    _files(tmp_path / "small", {f"m{index:02}.py": "" for index in range(12)})
+    one = scan_walk._held_facts("m00.py", scan_walk._python_facts(crafted.encode(), frozenset()))
+    monkeypatch.setattr(scan_walk, "_MAX_HELD", scan_walk._JOIN_BASE + 6 * one)
+
+    stopped = _walk(tmp_path / "crafted")
+    whole = _walk(tmp_path / "small")
+
+    assert stopped.stopped == "limit"
+    # The file whose charge crossed the budget is kept nowhere and isn't counted unread.
+    assert stopped.unread_files == 0
+    assert whole.stopped == ""
+
+
+def test_many_small_files_are_read_whole_and_only_joined_files_count(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A 40,000-file cap used to stop here, with the agent the last file read."""
+    for folder in range(201):
+        package = tmp_path / "small" / f"p{folder:03}"
+        package.mkdir(parents=True)
+        for index in range(200):
+            (package / f"m{index:03}.py").touch()
+    _files(tmp_path / "small", {"zz_agent/agent.py": GRAPH})
+    _files(tmp_path / "importing", {f"m{index:02}.py": "import os\n" for index in range(12)})
+
+    with caplog.at_level("INFO", logger=scan_walk.logger.name):
+        small = _walk(tmp_path / "small")
+    monkeypatch.setattr(scan_walk, "_MAX_JOINED", 10)
+    importing = _walk(tmp_path / "importing")
+
+    assert small.stopped == ""
+    assert _entries(small) == ["zz_agent/agent.py"]
+    assert "files_read=40201 " in caplog.text
+    assert importing.stopped == "limit"
+
+
+# For each thing kept: two repositories that differ only in it, and which measure shows it:
+# what is live after the join, the walk's peak (the folders `os.walk` holds until it enters
+# them), or the join's own rise (what the join builds for the files it reaches).
+KEPT = {
+    "templates": "live",
+    "graphs": "live",
+    "prompt_paths": "live",
+    "project_sets": "live",
+    "pending_folders": "walk_peak",
+    "edges": "join",
+    "join_share": "join",
+    "import_levels": "live",
+    "line_numbers": "live",
+}
+
+
+def _kept_pair(with_it: Path, without: Path, structure: str) -> None:
+    if structure == "templates":
+        _files(with_it, {f"f{i:02}/.env.example": "".join(f"N{i}_{n}=\n" for n in range(100)) for i in range(40)})
+        _files(without, {f"f{i:02}/readme.txt": "x\n" for i in range(40)})
+    elif structure == "graphs":
+        graphs = {"graphs": {f"g{n}": f"./m{n}_{'y' * 30}.py:graph" for n in range(200)}}
+        _files(with_it, {f"a{i}/langgraph.json": json.dumps(graphs) for i in range(10)})
+        _files(without, {f"a{i}/langgraph.json": "{}" for i in range(10)})
+    elif structure == "prompt_paths":
+        _files(with_it, {f"prompts/prompt_{n:04}_{'p' * 60}.txt": "" for n in range(500)})
+        _files(without, {f"others/other_{n:04}_{'p' * 60}.txt": "" for n in range(500)})
+    elif structure == "project_sets":
+        for index in range(200):
+            _files(with_it, {f"p{index:03}/pyproject.toml": "", f"p{index:03}/m.py": "", f"p{index:03}/n.py": ""})
+            _files(without, {f"p{index:03}/m.py": "", f"p{index:03}/n.py": ""})
+    elif structure == "pending_folders":
+        for root, siblings in ((with_it, 20), (without, 0)):
+            chain = root
+            for depth in range(40):
+                chain = chain / f"d{depth}"
+                for sibling in range(siblings):
+                    (chain.parent / f"s{depth}_{sibling}_{'w' * 30}").mkdir(parents=True)
+            chain.mkdir(parents=True)
+    elif structure == "edges":
+        # One candidate reaches 200 files that each import the other 199: the join keeps an
+        # import list for each. Without, the same files import nothing.
+        web = {f"m{n:03}.py": "".join(f"import m{k:03}\n" for k in range(200) if k != n) for n in range(200)}
+        _files(with_it, {"bot.py": "import m000\nOpenAI()\n", **web})
+        _files(without, {"bot.py": "OpenAI()\n", **{name: "" for name in web}})
+    elif structure == "import_levels":
+        # The same imports; only their levels pass 256, so each is an int of its own rather than
+        # a shared small one.
+        _files(with_it, {f"m{i:02}.py": "".join(f"from {'.' * 300}m{n} import x\n" for n in range(200)) for i in range(30)})
+        _files(without, {f"m{i:02}.py": "".join(f"from .m{n} import x\n" for n in range(200)) for i in range(30)})
+    elif structure == "line_numbers":
+        # One client a file, on a line past 256 or on line 1: an int of its own, or a shared one.
+        _files(with_it, {f"c{n:04}.py": "\n" * 300 + "OpenAI()\n" for n in range(2_000)})
+        _files(without, {f"c{n:04}.py": "OpenAI()\n" + "\n" * 300 for n in range(2_000)})
+    else:
+        _files(with_it, {f"c{n:04}.py": "OpenAI()\n" for n in range(5_000)})
+        _files(without, {f"c{n:04}.py": "x = 1\n" for n in range(5_000)})
+
+
+@pytest.mark.parametrize("structure", list(KEPT))
+def test_each_thing_kept_is_charged_at_least_what_it_holds(tmp_path: Path, structure: str) -> None:
+    _kept_pair(tmp_path / "with", tmp_path / "without", structure)
+
+    a, b = _measure(tmp_path / "with"), _measure(tmp_path / "without")
+
+    if KEPT[structure] == "join":
+        # Charged at the walk for every file, whether the join reaches it or not, so the
+        # repository with the thing is checked on its own.
+        assert a["join_rise"] - b["join_rise"] > 0, (a, b)
+        assert a["join_rise"] <= a["join_charged"], a
+    else:
+        measure = KEPT[structure]
+        assert a["charged"] - b["charged"] >= a[measure] - b[measure] > 0, (a, b)
+
+
+def _all_names(walk: scan_walk._Walk, subfolder: str) -> list[str]:
+    """What today's code built: every distinct name under the row's folder, sorted."""
+    return sorted({name for path, facts in walk.facts.items() if scan_walk._under(path, subfolder) for name in facts.env})
+
+
+@pytest.mark.parametrize("names", [30, 300])
+def test_a_rows_setting_names_are_its_first_fifty(tmp_path: Path, names: int) -> None:
+    _files(tmp_path, {"bot.py": "from openai import OpenAI\nOpenAI()\n"})
+    _files(
+        tmp_path,
+        {f"lib/m{i:02}.py": "import os\n" + "".join(f"os.getenv('K{(i * 37 + n) % names:04}')\n" for n in range(40)) for i in range(20)},
+    )
+    _files(tmp_path, {".env.example": "".join(f"T{n:03}=\n" for n in range(40))})
+    walk = scan_walk._Walk(tmp_path, deadline=FOREVER, clock=lambda: 0.0)
+    walk.run()
+    full = _all_names(walk, "")
+    expected = (*full, *sorted(walk.templates[""] - set(full)))[: scan_walk.ENV_NAMES_KEPT]
+
+    row = _agent(walk.result(upload=False), "bot.py")
+    described = describe_entry(tmp_path, "bot.py", "", deadline=FOREVER)
+
+    assert row.env_names == expected
+    assert described is not None and described.env_names == expected
+    assert scan_walk.ENV_NAMES_KEPT == 50
+    from fi.alk.harness import scan_document
+
+    assert scan_document.ENV_NAMES_KEPT is scan_walk.ENV_NAMES_KEPT
+
+
+def test_a_hazard_look_gives_up_past_its_listed_paths(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _files(tmp_path, {"a/agent.py": "", "b/agent.py": ""})
+    for index in range(40):
+        (tmp_path / "c" / f"folder_{index:02}_{'v' * 40}").mkdir(parents=True)
+    assert scan_walk.build_hazard(tmp_path, "") == "agent_py"
+
+    monkeypatch.setattr(scan_walk, "_HAZARD_PATH_BYTES", 500)
+
+    assert scan_walk.build_hazard(tmp_path, "") == ""
+
+
+@pytest.mark.parametrize(
+    ("weak", "stronger", "listed"),
+    [
+        ("tests/test_client.py", "tests/test_graph.py", False),
+        ("app/client.py", "tests/test_graph.py", True),
+        ("app/client.py", "app/graph.py", False),
+    ],
+    ids=["side_beside_side", "own_beside_side_only", "own_beside_own"],
+)
+def test_a_side_candidate_never_decides_for_one_outside_side_folders(
+    tmp_path: Path, weak: str, stronger: str, listed: bool
+) -> None:
+    _files(tmp_path, {"pyproject.toml": "", weak: "from openai import OpenAI\nOpenAI()\n", stronger: GRAPH})
+
+    assert (weak in _entries(_walk(tmp_path))) is listed
+
+
+def test_the_join_is_linear_in_its_candidates(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _files(tmp_path, {"pyproject.toml": "", **{f"c{n:04}.py": "OpenAI()\n" for n in range(2_000)}})
+    _files(tmp_path, {f"lib/m{n:04}.py": "" for n in range(2_000)})
+    walk = scan_walk._Walk(tmp_path, deadline=FOREVER, clock=lambda: 0.0)
+    walk.run()
+    project_of = scan_walk._Walk._project_of
+    side_checks = scan_walk._is_side_path
+    counted = {"project_of": 0, "side": 0}
+
+    def counting_project_of(self: object, path: str) -> str:
+        counted["project_of"] += 1
+        return project_of(self, path)  # type: ignore[arg-type]
+
+    def counting_side(path: str) -> bool:
+        counted["side"] += 1
+        return side_checks(path)
+
+    monkeypatch.setattr(scan_walk._Walk, "_project_of", counting_project_of)
+    monkeypatch.setattr(scan_walk, "_is_side_path", counting_side)
+    result = walk.result(upload=False)
+
+    assert len(result.agents) == 50
+    # Today's loops asked for each candidate's project once per other candidate, and walked
+    # every kept file once per row: millions here.
+    assert counted["project_of"] <= 3 * 2_000
+    assert counted["side"] <= 10 * 4_000
+
+
+def test_a_folder_and_its_ancestors_are_looked_at_once(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # 150 levels: macOS paths stop at 1,024 characters.
+    deep = "/".join(f"d{depth}" for depth in range(150))
+    _files(tmp_path, {f"{deep}/m{n:03}.py": f"import m{(n + 1) % 300:03}\n" for n in range(300)})
+    file_in = scan_walk._Projects.file_in
+    looks: list[str] = []
+
+    def counting(self: object, folder: str) -> str | None:
+        looks.append(folder)
+        return file_in(self, folder)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(scan_walk._Projects, "file_in", counting)
+    _walk(tmp_path)
+
+    # 151 folders, the root included; a look a file at a time would be 300 times as many.
+    assert len(looks) <= 2 * 151
+    assert len(set(looks)) == 151
+
+
+def test_the_capped_reader_counts_in_the_order_the_stop_points_need(tmp_path: Path) -> None:
+    for name, size in (("a", 6), ("b", 6), ("big", scan_walk._FILE_BYTES + 1)):
+        (tmp_path / name).write_bytes(b"x" * size)
+    missing = str(tmp_path / "missing")
+
+    by_files = scan_walk._CappedReader(files=2, total_bytes=10**9)
+    assert by_files.read(str(tmp_path / "a")) == b"x" * 6
+    with pytest.raises(FileNotFoundError):
+        by_files.read(missing)
+    assert by_files.files_read == 1  # a file that can't be read isn't counted
+    by_files.read(str(tmp_path / "b"))
+    with pytest.raises(scan_walk._CapReached):
+        by_files.read(missing)  # the count is checked before reading
+
+    by_bytes = scan_walk._CappedReader(files=None, total_bytes=10)
+    by_bytes.read(str(tmp_path / "a"))
+    with pytest.raises(scan_walk._CapReached):
+        by_bytes.read(str(tmp_path / "b"))  # read and counted, then past the bytes
+    assert (by_bytes.files_read, by_bytes.bytes_read) == (2, 12)
+
+    by_size = scan_walk._CappedReader(files=None, total_bytes=10**9)
+    with pytest.raises(scan_walk._Unread):
+        by_size.read(str(tmp_path / "big"))
+    assert by_size.files_read == 1
+
+    by_held = scan_walk._CappedReader(files=None, total_bytes=10**9, held=10)
+    by_held.charge(10)
+    with pytest.raises(scan_walk._CapReached):
+        by_held.charge(1)
+    scan_walk._CappedReader(files=None, total_bytes=10**9).charge(10**12)  # no budget: never
+    assert not issubclass(scan_walk._CapReached, scan_walk._FILE_ERRORS)
+
+
+def test_the_walk_and_the_description_read_through_the_one_capped_reader(tmp_path: Path) -> None:
+    walk = scan_walk._Walk(tmp_path, deadline=FOREVER, clock=lambda: 0.0)
+    description = scan_walk._Description(os.fspath(tmp_path), "bot.py", "", deadline=FOREVER, clock=lambda: 0.0)
+
+    assert isinstance(walk.reader, scan_walk._CappedReader)
+    assert isinstance(description.reader, scan_walk._CappedReader)
+    for reading in (scan_walk._Walk, scan_walk._Description):
+        assert "_read_file(" not in inspect.getsource(reading), reading.__name__
+
+
+@pytest.mark.parametrize("where", ["template", "source"])
+def test_the_descriptions_cap_stops_it_partial_at_either_read_site(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, where: str
+) -> None:
+    _files(tmp_path, {"app/bot.py": CLIENT, "app/tool.py": "x = 1\n"})
+    if where == "template":
+        # The cap is checked before each read: here before the first template is looked at.
+        _files(tmp_path, {"app/.env.example": "A=1\n"})
+        monkeypatch.setattr(scan_walk, "_DESCRIBE_FILES", 0)
+    else:
+        # No template is there, so the first read counted is bot.py; tool.py is past the cap.
+        monkeypatch.setattr(scan_walk, "_DESCRIBE_FILES", 1)
+    # Past the cap the description reads nothing more: these come after it.
+    _files(tmp_path, {f"app/prompts/prompt_{n}.md": "Be brief.\n" for n in range(7)})
+
+    with caplog.at_level("WARNING", logger=scan_walk.logger.name):
+        candidate = describe_entry(tmp_path, "app/bot.py", "app", deadline=FOREVER)
+
+    assert candidate is not None and candidate.partial is True
+    assert not candidate.prompt_files
+    assert "agent description stopped" not in caplog.text
+
+
+def test_a_rows_pass_over_many_files_watches_the_clock(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """One row's pass over the kept files checks the clock as it goes, so a huge tree of files
+    that import nothing ends as a clock stop, never past the helper's hard stop."""
+    _files(tmp_path, {"bot.py": "from openai import OpenAI\nOpenAI()\n"})
+    for folder in range(50):
+        package = tmp_path / f"p{folder:02}"
+        package.mkdir()
+        for index in range(200):
+            (package / f"m{index:03}.py").touch()
+    now = [0.0]
+    side_checks = scan_walk._is_side_path
+    seen = [0]
+
+    def counting(path: str) -> bool:
+        seen[0] += 1
+        if seen[0] == 5_000:
+            now[0] = 10_000.0  # past the result's deadline, mid-pass
+        return side_checks(path)
+
+    walk = scan_walk._Walk(tmp_path, deadline=100.0, clock=lambda: now[0])
+    walk.run()
+    assert walk.stopped == ""
+    monkeypatch.setattr(scan_walk, "_is_side_path", counting)
+
+    with pytest.raises(scan_walk._ResultOutOfTime):
+        walk.result(upload=False)
+
+
+def test_a_project_lookup_is_charged_at_least_what_it_keeps(tmp_path: Path) -> None:
+    """Each folder the lookup keeps, with its link to its nearest project, measured on the
+    lookup alone: the walk also charges these folders as ones to enter, which would hide it."""
+    folders = ["/".join(f"c{c}d{d}" for d in range(60)) for c in range(30)]
+    for folder in folders:
+        (tmp_path / folder).mkdir(parents=True)
+    (tmp_path / "pyproject.toml").touch()
+    charged = [0]
+
+    def charge(size: int) -> None:
+        charged[0] += size
+
+    projects = scan_walk._Projects(os.fspath(tmp_path), scan_walk._PROJECT_FILES, charge)
+    gc.collect()
+    tracemalloc.start()
+    try:
+        for folder in folders:
+            projects.nearest(folder)
+        gc.collect()
+        kept = _rounded_live()
+    finally:
+        tracemalloc.stop()
+
+    assert projects.nearest(folders[0]) == ""
+    assert kept <= charged[0]
+
+
+def test_the_first_names_hold_no_more_than_fifty_and_stop_early() -> None:
+    names = [f"N{n:04}" for n in range(300)]
+    taken: list[str] = []
+
+    def group(start: int) -> Iterator[str]:
+        for name in names[start:]:
+            taken.append(name)
+            yield name
+
+    first = scan_walk._first_names([group(100), group(0), group(250)])
+
+    assert first == names[:50]
+    # Each group stops at its first name past the last of 50 kept: the first fills to 50 and
+    # stops at its 51st, the second replaces them all and stops at its 51st, and the third's
+    # first name is already past.
+    assert len(taken) == 51 + 51 + 1
+
+
+def test_a_rows_names_leave_out_a_deeper_listed_folder_and_a_sibling_with_the_same_start(
+    tmp_path: Path,
+) -> None:
+    _files(
+        tmp_path,
+        {
+            "bot.py": GRAPH + "import os\nos.getenv('ROOT_KEY')\n",
+            "app/pyproject.toml": "",
+            "app/agent.py": GRAPH + "import os\nos.getenv('APP_KEY')\n",
+            # Not under app/, though its name starts the same way.
+            "app2/helper.py": "import os\nos.getenv('APP2_KEY')\n",
+            "plugins/x/pyproject.toml": "",
+            "plugins/x/agent.py": GRAPH + "import os\nos.getenv('PLUGIN_KEY')\n",
+        },
+    )
+
+    result = _walk(tmp_path)
+    by_folder = {agent.subfolder: set(agent.env_names) for agent in result.agents}
+
+    assert by_folder == {
+        "": {"ROOT_KEY", "APP2_KEY"},
+        "app": {"APP_KEY"},
+        "plugins/x": {"PLUGIN_KEY"},
+    }
+
+
+def test_the_estimate_rounds_each_object_up_to_its_block() -> None:
+    """The estimate's sizes are 3.12's, each rounded as the allocator rounds it. The whole-walk
+    comparison has margins beside the rounding, so the rounding is held here on its own."""
+    import sys
+
+    for size in range(1, 4_097):
+        assert scan_walk._block(size) >= _allocated(size), size
+    for name in ("", "a", "abcdefgh", "x" * 255, "変数", "модуль", "\U0001d400" * 3):
+        assert scan_walk._text(name) >= _allocated(sys.getsizeof(name)), name
+    for items in range(0, 210):
+        assert scan_walk._tuple(items) >= _allocated(sys.getsizeof(tuple(range(items)))), items
+
+
+@pytest.mark.parametrize("structure", ["pending_folders", "prompt_paths"])
+def test_a_charge_made_outside_one_files_read_stops_the_walk_at_limit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, structure: str
+) -> None:
+    """A folder's listing and a prompt path are charged outside any one file's read, so only the
+    walk's own catch turns their cap into `limit`: the walk keeps the row it found and never
+    raises out of `walk_repo`."""
+    _files(tmp_path, {"bot.py": CLIENT})
+    (tmp_path / "z").mkdir()
+    before = scan_walk._Walk(tmp_path, deadline=FOREVER, clock=lambda: 0.0)
+    before.run()
+    for index in range(300):
+        if structure == "pending_folders":
+            (tmp_path / "z" / f"s{index:03}_{'w' * 30}").mkdir()
+        else:
+            (tmp_path / "z" / f"prompt_{index:03}.txt").touch()
+    monkeypatch.setattr(scan_walk, "_MAX_HELD", before.reader.held + 1_024)
+
+    result = _walk(tmp_path)
+
+    assert result.stopped == "limit"
+    assert _entries(result) == ["bot.py"]
+
+
+def test_a_descriptions_byte_cap_marks_it_partial(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _files(tmp_path, {"app/bot.py": CLIENT, "app/tool.py": "x = 1\n" * 50})
+    whole = describe_entry(tmp_path, "app/bot.py", "app", deadline=FOREVER)
+    monkeypatch.setattr(scan_walk, "_DESCRIBE_BYTES", len(CLIENT) + 10)
+
+    capped = describe_entry(tmp_path, "app/bot.py", "app", deadline=FOREVER)
+
+    assert whole is not None and whole.partial is False
+    assert capped is not None and capped.partial is True
+
+
+def test_a_project_lookup_charges_each_folder_and_each_link_it_keeps(tmp_path: Path) -> None:
+    """Every folder looked at is charged once for its entry, and every link to a nearest project
+    once more; the first look at a deep folder keeps a link for each ancestor, so a file below
+    one of them is answered from the links."""
+    deep = "/".join(f"d{depth}" for depth in range(40))
+    (tmp_path / deep).mkdir(parents=True)
+    (tmp_path / "d0" / "d1" / "pyproject.toml").touch()
+    charges: list[int] = []
+    projects = scan_walk._Projects(os.fspath(tmp_path), scan_walk._PROJECT_FILES, charges.append)
+
+    assert projects.nearest(deep) == "d0/d1"
+
+    ancestors = [deep.rsplit("/", cut)[0] for cut in range(1, 40)] + [""]
+    assert set(projects._nearest) == {deep, *ancestors}
+    assert sum(charges) == sum(scan_walk._ENTRY + scan_walk._text(folder) for folder in projects._file) + (
+        scan_walk._ENTRY * len(projects._nearest)
+    )
+    looked = len(charges)
+    assert projects.nearest(ancestors[10]) == "d0/d1"
+    assert len(charges) == looked
+
+
+def test_a_hazard_look_counts_each_listed_folder_by_its_full_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _files(tmp_path, {"a/agent.py": "", "b/agent.py": ""})
+    names = [f"folder_{index:02}" for index in range(40)]
+    for name in names:
+        (tmp_path / name).mkdir()
+    # Above the names alone, below the names with the folder they sit in: the root's listing alone
+    # passes it, before either agent.py is found.
+    monkeypatch.setattr(scan_walk, "_HAZARD_PATH_BYTES", sum(len(name) + 1 for name in [*names, "a", "b"]) + 100)
+
+    assert scan_walk.build_hazard(tmp_path, "") == ""
+
+
+def test_the_file_whose_charge_crosses_the_budget_is_kept_nowhere(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _files(tmp_path, {"a.py": GRAPH, "b.py": GRAPH, "c.py": GRAPH})
+    whole = scan_walk._Walk(tmp_path, deadline=FOREVER, clock=lambda: 0.0)
+    whole.run()
+    # One byte short of the whole walk's charge: the last file's charge crosses it.
+    monkeypatch.setattr(scan_walk, "_MAX_HELD", whole.reader.held - 1)
+
+    walk = scan_walk._Walk(tmp_path, deadline=FOREVER, clock=lambda: 0.0)
+    walk.run()
+    result = _walk(tmp_path)
+
+    assert walk.stopped == "limit"
+    assert len(walk.facts) == len(walk._keys) == 2
+    assert result.stopped == "limit" and len(_entries(result)) == 2
+
+
+def test_an_import_inside_an_inner_project_resolves_at_an_outer_projects_root(tmp_path: Path) -> None:
+    """The places an import is looked for are every project at or above the file, nearest
+    first, then the repository's root: here the helper is found at the outer project's root, so
+    it joins the graph's agent rather than standing as one of its own."""
+    _files(
+        tmp_path,
+        {
+            "svc/pyproject.toml": "",
+            "svc/a/pyproject.toml": "",
+            "svc/a/graph.py": GRAPH + "from helpers.llm import ask\n",
+            "svc/helpers/llm.py": CLIENT + "def ask():\n    pass\n",
+        },
+    )
+
+    assert _entries(_walk(tmp_path)) == ["svc/a/graph.py"]
+
+
+def test_a_cap_reached_while_joining_ends_as_limit(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _files(tmp_path, {"bot.py": CLIENT})
+
+    def charging(self: object, **kwargs: object) -> object:
+        raise scan_walk._CapReached()
+
+    monkeypatch.setattr(scan_walk._Walk, "result", charging)
+
+    assert _walk(tmp_path).stopped == "limit"

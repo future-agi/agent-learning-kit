@@ -24,9 +24,10 @@ import re
 import time
 import tokenize
 import warnings
+from bisect import bisect_left
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Iterator, Literal
+from typing import Callable, Iterable, Iterator, Literal
 
 from .framework_detection import (
     _ALWAYS_SKIPPED,
@@ -56,10 +57,17 @@ _FILE_BYTES = 1_048_576
 # A hundredth of a folder check's allowance: the crafted files that use a whole one
 # take seconds, so one file now costs about a second at most.
 _FILE_WORK = 1_000_000_000
-# What the walk holds grows with the names each file imports, not its bytes: about 33 KB a
-# file for files that each import 200 names (measured 10 Nov, 1,389 MB peak at 40,000 such
-# files), which leaves room for the folder check's child in a 4,096 MB sandbox.
-_MAX_FILES = 40_000
+# What the walk and its join keep grows with the names the files hold, not with their bytes or
+# their number: a crafted 51 KB file of 200 imports of unique dotted names keeps 671 KB, so
+# 5,100 of them, inside the byte cap, kept 3.3 GiB (measured 10 Nov). So everything kept is
+# charged, where it is kept, at `_block`'s estimate of the allocator's blocks, and the walk
+# stops past this many bytes: about 1.9 GB for the scan's process with its baseline, which the
+# folder check's child, started after the walk, shares in a 4,096 MB sandbox.
+_MAX_HELD = 1_610_612_736
+# The files the join works on: Python files that import something or carry their own sign. The
+# join's time grows with them; files that do neither don't count, so a repository of many
+# small files isn't cut by their number.
+_MAX_JOINED = 40_000
 _MAX_BYTES = 268_435_456
 _NAMES_PER_FILE = 200
 _IMPORT_DEPTH = 10
@@ -71,9 +79,14 @@ _MAX_PARTS = 64
 # The prompt count is an estimate, and every file walked is listed, read or not: past this
 # many a tree of prompt files costs memory and adds nothing a person would act on.
 _MAX_PROMPT_PATHS = 20_000
-# How many folder entries one look for a build's hazard visits. The hazard is advice, so a
-# tree too big to look through gives none rather than the walk's time.
+# How many folder entries one look for a build's hazard visits, and how many bytes of subfolder
+# paths it lists (what `os.walk` holds for the folders it has yet to enter, counted without
+# refunds since its stack can't be seen). The hazard is advice, so a tree too big to look
+# through gives none rather than the walk's time or memory.
 _HAZARD_ENTRIES = 200_000
+_HAZARD_PATH_BYTES = 67_108_864
+# The most setting names a row keeps: all the answer file writes.
+ENV_NAMES_KEPT = 50
 # No file system the scan runs on has a path this long, so no file can match.
 _MODULE_PATH_MAX = 4_096
 
@@ -197,6 +210,144 @@ class _Agent:
 
 class _Unread(Exception):
     pass
+
+
+# CPython 3.12's sizes on a 64-bit build, as asked of the allocator: a str (`_text`), a tuple
+# (`_TUPLE` and a slot per item), a set's own object, one dict or set entry with its share of
+# the table, a facts object, and the join's share for a file that could be an agent (its sign,
+# its component bookkeeping, its row) beside three path strings `_project_of` and
+# `_subfolder` make. Each is then charged at the block the allocator gives it (`_block`).
+_TUPLE = 40
+_SLOT = 8
+_SET = 216
+_ENTRY = 112
+_FACTS = 512
+_JOIN_SHARE = 768
+# What the join holds for every kept file however it's joined: its place in the sorted list of
+# paths and in one search's set of files seen.
+_JOIN_PER_FILE = 64
+# What the join holds whatever was kept: its result, and up to `_MAX_AGENTS` rows with their
+# names and evidence. Charged once, when the walk starts. A build hazard's own look is
+# bounded on its own (`_HAZARD_PATH_BYTES`).
+_JOIN_BASE = 262_144
+# An int above 256 is an object of its own.
+_SMALL_INT = 256
+_INT = 48
+
+
+def _block(size: int) -> int:
+    """The block the allocator gives ``size`` bytes: pymalloc's 16-byte classes up to 512,
+    then glibc's malloc, whose header and alignment this rounds above (the sandbox is Linux)."""
+    if size <= 512:
+        return (size + 15) // 16 * 16
+    return (size + 16 + 15) // 16 * 16
+
+
+def _text(name: str) -> int:
+    """A str's block: 49 + one byte a character when ASCII, 80 + four bytes otherwise."""
+    return _block(49 + len(name) if name.isascii() else 80 + 4 * len(name))
+
+
+def _tuple(items: int) -> int:
+    return _block(_TUPLE + _SLOT * items)
+
+
+def _held_names(names: Iterable[str]) -> int:
+    """Names kept in a set or a dict, each with its entry."""
+    return sum(_ENTRY + _text(name) for name in names)
+
+
+def _joined(path: str, facts: _Facts) -> bool:
+    """Whether the file counts against `_MAX_JOINED`: it imports something or carries its own
+    sign. A graph target isn't known yet when its facts are kept, so it doesn't count."""
+    return bool(facts.imports) or _sign(path, facts, {}) is not None
+
+
+def _join_share(path: str) -> int:
+    return _JOIN_SHARE + 3 * _text(path)
+
+
+def _held_for_join(path: str, facts: _Facts) -> int:
+    """What the join will hold for one kept file: its import list, its place in the sorted
+    paths and one search's seen set, and, for a file with its own sign, its share."""
+    size = _ENTRY + _tuple(len(facts.imports)) + _JOIN_PER_FILE
+    if _sign(path, facts, {}) is not None:
+        size += _join_share(path)
+    return size
+
+
+def _held_facts(path: str, facts: _Facts) -> int:
+    """At least what keeping one Python file's facts holds, in the walk and in the join after
+    it: the facts and every name in them, the path and its two dict entries (the facts and the
+    canonical key), and what the join will hold for it. No name is taken as shared, so it is
+    high where Python shares one."""
+    size = _FACTS + _text(path) + 2 * _ENTRY + _held_for_join(path, facts)
+    size += _tuple(len(facts.imports))
+    for level, parts in facts.imports:
+        size += (
+            _block(_TUPLE + 2 * _SLOT)
+            + _tuple(len(parts))
+            + sum(_text(part) for part in parts)
+        )
+        if level > _SMALL_INT:
+            size += _INT
+    size += _tuple(len(facts.env)) + sum(_text(name) for name in facts.env)
+    for pairs in (facts.builds, facts.models, facts.clients):
+        size += _tuple(len(pairs))
+        for name, line in pairs:
+            size += (
+                _block(_TUPLE + 2 * _SLOT)
+                + _text(name)
+                + (_INT if line > _SMALL_INT else 0)
+            )
+    return size
+
+
+class _CapReached(Exception):
+    """A reading reached one of its caps and stops here. It is never one file's problem, so it
+    isn't in `_FILE_ERRORS`, and every caller catches it before those and before its own
+    `except Exception`."""
+
+
+class _CappedReader:
+    """The one capped reader behind the walk and the description. It counts reads, and the
+    bytes read, against its caps, and, with ``held``, what is kept (`charge`); what a cap means
+    is the caller's: the walk stops, and the description marks its row partial."""
+
+    def __init__(
+        self, *, files: int | None, total_bytes: int, held: int | None = None
+    ) -> None:
+        self._files = files
+        self._total_bytes = total_bytes
+        self._held = held
+        self.files_read = 0
+        self.bytes_read = 0
+        self.held = 0
+
+    def charge(self, size: int) -> None:
+        """Count ``size`` bytes about to be kept. Past the cap, `_CapReached`, and the caller
+        keeps none of it."""
+        if self._held is None:
+            return
+        self.held += size
+        if self.held > self._held:
+            raise _CapReached()
+
+    def read(self, path: str) -> bytes:
+        """The file's bytes, in the order every stop point relies on: the read count is checked
+        before reading (`_CapReached`); the system's own error for a file that can't be read
+        passes out uncounted; the read is counted; past the bytes cap, `_CapReached`, and the
+        file isn't used; and a file over the size one file is read at raises `_Unread`."""
+        if self._files is not None and self.files_read >= self._files:
+            raise _CapReached()
+        data = _read_file(path, _FILE_BYTES + 1)
+        self.files_read += 1
+        self.bytes_read += len(data)
+        if self.bytes_read > self._total_bytes:
+            raise _CapReached()
+        if len(data) > _FILE_BYTES:
+            raise _Unread()
+        return data
 
 
 class _ResultOutOfTime(Exception):
@@ -620,12 +771,17 @@ def _script_names(data: bytes) -> set[str]:
 
 
 class _Projects:
-    """Which folders hold a project file, looked up once per folder."""
+    """Which folders hold a project file, and each folder's nearest project, looked up once per
+    folder. ``charge`` counts each entry before it is kept."""
 
-    def __init__(self, top: str, names: tuple[str, ...]) -> None:
+    def __init__(
+        self, top: str, names: tuple[str, ...], charge: Callable[[int], None] | None = None
+    ) -> None:
         self._top = top
         self._names = names
+        self._charge = charge
         self._file: dict[str, str | None] = {}
+        self._nearest: dict[str, str | None] = {}
 
     def file_in(self, folder: str) -> str | None:
         if folder not in self._file:
@@ -635,16 +791,30 @@ class _Projects:
                 if os.path.isfile(path) and not os.path.islink(path):
                     found = name
                     break
+            if self._charge is not None:
+                self._charge(_ENTRY + _text(folder))
             self._file[folder] = found
         return self._file[folder]
 
     def nearest(self, folder: str) -> str | None:
-        while True:
-            if self.file_in(folder) is not None:
-                return folder
-            if not folder:
-                return None
-            folder = posixpath.dirname(folder)
+        """The nearest folder at or above ``folder`` with a project file. The first look at a
+        folder looks at every ancestor not yet looked at, so each is looked at once and later
+        looks follow the kept links."""
+        if folder in self._nearest:
+            return self._nearest[folder]
+        chain = []
+        current: str | None = folder
+        while current is not None and current not in self._nearest:
+            chain.append(current)
+            current = posixpath.dirname(current) if current else None
+        above = self._nearest[current] if current is not None else None
+        for here in reversed(chain):
+            if self.file_in(here) is not None:
+                above = here
+            if self._charge is not None:
+                self._charge(_ENTRY)
+            self._nearest[here] = above
+        return above
 
 
 def _sign(path: str, facts: _Facts, graph_files: dict[str, str]) -> Sign | None:
@@ -734,12 +904,18 @@ def _components(nodes: list[str], edges: dict[str, list[str]]) -> list[list[str]
 
 
 def _source_files(
-    top: str, start: str, *, side: bool | None = None
+    top: str,
+    start: str,
+    *,
+    side: bool | None = None,
+    charge: Callable[[int], None] | None = None,
 ) -> Iterator[tuple[str, str, str]]:
     """Every file below ``start`` the scan may read, as (directory, folder relative to
     ``top``, name), in sorted order so that a walk stopped by a limit stops at the same file.
     Installed trees and the folders a build skips are never entered. ``side`` False gives only
-    files outside test, example and other side folders; True gives only the files in them."""
+    files outside test, example and other side folders; True gives only the files in them.
+    ``charge`` counts each folder kept to enter, at its full path, which is what `os.walk`
+    holds until it enters it."""
     for directory, directories, files in os.walk(start, followlinks=False):
         directories.sort()
         files.sort()
@@ -751,6 +927,10 @@ def _source_files(
         directories[:] = _folders_to_enter(directory, directories, at_top=not relative)
         if side is False:
             directories[:] = [name for name in directories if not _is_side_part(name)]
+        if charge is not None and directories:
+            charge(
+                sum(2 * _SLOT + _text(os.path.join(directory, name)) for name in directories)
+            )
         folder = "/".join(relative)
         for name in files:
             if side is None or _read_with_side_files(_join(folder, name)) is side:
@@ -771,17 +951,21 @@ class _ShadowedNames:
     """Each project's own module names, read once per project, so an import of the
     customer's own ``agents`` package isn't read as a framework."""
 
-    def __init__(self, top: str, projects: _Projects) -> None:
+    def __init__(
+        self, top: str, projects: _Projects, charge: Callable[[int], None] | None = None
+    ) -> None:
         self._top = top
         self._projects = projects
+        self._charge = charge
         self._by_project: dict[str, frozenset[str]] = {}
 
     def for_folder(self, folder: str) -> frozenset[str]:
         project = self._projects.nearest(folder) or ""
         if project not in self._by_project:
-            self._by_project[project] = _own_modules(
-                Path(self._top, project) if project else Path(self._top), set()
-            )
+            names = _own_modules(Path(self._top, project) if project else Path(self._top), set())
+            if self._charge is not None:
+                self._charge(_ENTRY + _block(_SET) + _held_names(names))
+            self._by_project[project] = names
         return self._by_project[project]
 
 
@@ -810,27 +994,40 @@ class _Walk:
         self.faults = 0
         # When the step after the walk must give up: see _RESULT_GRACE.
         self.result_deadline = deadline + _RESULT_GRACE
-        self.files_read = 0
-        self.bytes_read = 0
+        # Everything the walk and its join keep is charged here before it is kept (`_MAX_HELD`).
+        self.reader = _CappedReader(files=None, total_bytes=_MAX_BYTES, held=_MAX_HELD)
+        self.reader.charge(_JOIN_BASE)
+        # Files the join works on (`_MAX_JOINED`).
+        self.joined = 0
         self.stopped: Literal["", "limit", "clock", "memory"] = ""
         self.source_outside_side = False
         self.script_outside_side = False
-        self.projects = _Projects(self.top, _PROJECT_FILES)
-        self.shadowed = _ShadowedNames(self.top, self.projects)
-        self._roots: dict[str, list[str]] = {}
+        self.projects = _Projects(self.top, _PROJECT_FILES, self.reader.charge)
+        self.shadowed = _ShadowedNames(self.top, self.projects, self.reader.charge)
+        # Each kept path, so a resolved import holds the walk's own string, not a copy.
+        self._keys: dict[str, str] = {}
         self._edges: dict[str, tuple[str, ...]] = {}
+        # For the rows: the kept paths in order, and each row folder's names and tools.
+        self._sorted: list[str] | None = None
+        self._owned_by: dict[str, tuple[list[str], int]] = {}
 
     def run(self) -> None:
         # The customer's own code first, then side folders, so tests and examples can't use
-        # up the file cap before the agent is reached.
-        for side in (False, True):
-            for directory, folder, name in _source_files(self.top, self.top, side=side):
-                if self.clock() > self.deadline:
-                    self.stopped = "clock"
-                    return
-                self._take(directory, folder, name)
-                if self.stopped:
-                    return
+        # up the caps before the agent is reached.
+        try:
+            for side in (False, True):
+                for directory, folder, name in _source_files(
+                    self.top, self.top, side=side, charge=self.reader.charge
+                ):
+                    if self.clock() > self.deadline:
+                        self.stopped = "clock"
+                        return
+                    self._take(directory, folder, name)
+                    if self.stopped:
+                        return
+        except _CapReached:
+            # A charge made outside one file's read: a folder's listing or a prompt path.
+            self.stopped = "limit"
 
     def _take(self, directory: str, folder: str, name: str) -> None:
         path = _join(folder, name)
@@ -844,53 +1041,67 @@ class _Walk:
             and len(self.prompt_paths) < _MAX_PROMPT_PATHS
             and not os.path.islink(full)
         ):
+            self.reader.charge(2 * _SLOT + _text(path))
             self.prompt_paths.append(path)
         if not (name.endswith(".py") or name == _LANGGRAPH or name in _TEMPLATES):
             return
         # Every read of one file sits in this one `try`: a file the tokenizer, the JSON
-        # reader or the decoder rejects is that file's problem, never the walk's.
+        # reader or the decoder rejects is that file's problem, never the walk's. What is kept
+        # is charged first, so at a cap the walk stops with none of the file kept.
         try:
-            data = self._read(full)
-            if data is None:
-                return
+            data = self.reader.read(full)
             if name.endswith(".py"):
-                self.facts[path] = _python_facts(data, self.shadowed.for_folder(folder))
+                self._keep_facts(path, _python_facts(data, self.shadowed.for_folder(folder)))
             elif name == _LANGGRAPH:
-                self._read_graphs(folder, path, data)
+                self._keep_graphs(path, self._graph_targets(folder, data))
             else:
-                self.templates.setdefault(folder, set()).update(_template_names(data))
+                self._keep_template(folder, _template_names(data))
+        except _CapReached:
+            self.stopped = "limit"
         except _FILE_ERRORS:
             self.unread += 1
         except MemoryError:
             raise
         except Exception:
             # A reader fault of a kind not foreseen is still this file's problem, never the
-            # walk's: the file is unread. The first trace is logged (secret values masked); the rest are
-            # counted, so a fault that hits every file can't flood the log.
+            # walk's: the file is unread. The first trace is logged, with only the platform's
+            # secret values masked; the rest are counted, so a fault that hits every file can't
+            # flood the log.
             if not self.faults:
                 logger.warning("agent walk: a file's reader failed", exc_info=True)
             self.faults += 1
             self.unread += 1
 
-    def _read(self, path: str) -> bytes | None:
-        if self.files_read >= _MAX_FILES:
-            self.stopped = "limit"
-            return None
-        data = _read_file(path, _FILE_BYTES + 1)
-        self.files_read += 1
-        self.bytes_read += len(data)
-        if self.bytes_read > _MAX_BYTES:
-            self.stopped = "limit"
-            return None
-        if len(data) > _FILE_BYTES:
-            raise _Unread()
-        return data
+    def _keep_facts(self, path: str, facts: _Facts) -> None:
+        joined = _joined(path, facts)
+        if joined and self.joined >= _MAX_JOINED:
+            raise _CapReached()
+        self.reader.charge(_held_facts(path, facts))
+        self.facts[path] = facts
+        self._keys[path] = path
+        self.joined += joined
 
-    def _read_graphs(self, folder: str, path: str, data: bytes) -> None:
+    def _keep_graphs(self, path: str, targets: list[str]) -> None:
+        new = [target for target in dict.fromkeys(targets) if target not in self.graphs]
+        self.reader.charge(sum(_ENTRY + _text(target) + _join_share(target) for target in new))
+        for target in new:
+            self.graphs[target] = path
+
+    def _keep_template(self, folder: str, names: set[str]) -> None:
+        size = _held_names(names)
+        if folder not in self.templates:
+            size += _ENTRY + _text(folder) + _block(_SET)
+        self.reader.charge(size)
+        self.templates.setdefault(folder, set()).update(names)
+
+    @staticmethod
+    def _graph_targets(folder: str, data: bytes) -> list[str]:
+        """The files a langgraph.json in ``folder`` declares graphs in."""
         document = json.loads(data.decode("utf-8"))
         graphs = document.get("graphs") if isinstance(document, dict) else None
         if not isinstance(graphs, dict):
-            return
+            return []
+        targets = []
         for declaration in list(graphs.values())[:_NAMES_PER_FILE]:
             if not isinstance(declaration, str) or ":" not in declaration:
                 continue
@@ -899,27 +1110,26 @@ class _Walk:
                 file_name = file_name[2:]
             target = posixpath.normpath(_join(folder, file_name))
             if target not in (".", "..") and not target.startswith(("../", "/")):
-                self.graphs.setdefault(target, path)
+                targets.append(target)
+        return targets
 
     def _import_roots(self, folder: str) -> list[str]:
-        """Where an absolute import from ``folder`` is looked for, nearest first."""
-        if folder not in self._roots:
-            roots: list[str] = []
-            current = folder
-            while True:
-                if not current or self.projects.file_in(current) is not None:
-                    roots += [current, _join(current, "src")]
-                if not current:
-                    break
-                current = posixpath.dirname(current)
-            self._roots[folder] = roots
-        return self._roots[folder]
+        """Where an absolute import from ``folder`` is looked for, nearest first: each project
+        at or above it, and its `src`, then the root's. Worked out from the kept links to the
+        nearest project, not kept itself."""
+        roots: list[str] = []
+        current = self.projects.nearest(folder)
+        while current:
+            roots += [current, _join(current, "src")]
+            current = self.projects.nearest(posixpath.dirname(current))
+        roots += ["", "src"]
+        return roots
 
     def _module_file(self, base: str, parts: tuple[str, ...]) -> str | None:
         stem = _join(base, *parts)
         for path in (f"{stem}.py" if parts else "", _join(stem, "__init__.py")):
             if path and path in self.facts:
-                return path
+                return self._keys[path]
         return None
 
     def _imported(self, path: str) -> tuple[str, ...]:
@@ -927,11 +1137,14 @@ class _Walk:
         if path not in self._edges:
             folder = posixpath.dirname(path)
             found: dict[str, None] = {}
+            roots: list[str] | None = None
             for level, parts in self.facts[path].imports:
                 target = None
                 if level == 0:
                     if parts:
-                        for root in self._import_roots(folder):
+                        if roots is None:
+                            roots = self._import_roots(folder)
+                        for root in roots:
                             target = self._module_file(root, parts)
                             if target is not None:
                                 break
@@ -1006,34 +1219,38 @@ class _Walk:
             for number, members in enumerate(components)
             if number not in taken
         ]
-        stronger = [
-            (self._project_of(path), _is_side_path(path))
-            for path, sign in signs.items()
-            if sign not in _WEAKEST
-        ]
+        stronger_any: set[str] = set()
+        stronger_own: set[str] = set()
+        for path, sign in signs.items():
+            if sign not in _WEAKEST:
+                project = self._project_of(path)
+                stronger_any.add(project)
+                if not _is_side_path(path):
+                    stronger_own.add(project)
         kept = []
         for entry in sorted(entries):
             self._in_time()
             side = _is_side_path(entry)
             if signs[entry] in _WEAKEST:
                 project = self._project_of(entry)
-                # A side candidate never decides for a file outside side folders.
-                if any(
-                    other == project and (side or not other_side)
-                    for other, other_side in stronger
-                ):
+                if project in (stronger_any if side else stronger_own):
                     continue
             kept.append((entry, side))
+        sharing: dict[str, int] = {}
+        for other, other_side in kept:
+            if not other_side:
+                key = self._project_of(other)
+                sharing[key] = sharing.get(key, 0) + 1
         agents = []
         for entry, side in kept:
             self._in_time()
-            agents.append(_Agent(entry, signs[entry], side, self._subfolder(entry, side, kept)))
+            agents.append(_Agent(entry, signs[entry], side, self._subfolder(entry, side, sharing)))
         return agents
 
     def _project_of(self, path: str) -> str:
         return self.projects.nearest(posixpath.dirname(path)) or ""
 
-    def _subfolder(self, entry: str, side: bool, agents: list[tuple[str, bool]]) -> str:
+    def _subfolder(self, entry: str, side: bool, sharing: dict[str, int]) -> str:
         folder = posixpath.dirname(entry)
         if side:
             return folder
@@ -1042,12 +1259,7 @@ class _Walk:
             return folder
         # Only agents of this same project count: one in a deeper project of its own
         # doesn't move this agent's folder.
-        sharing = sum(
-            1
-            for other, other_side in agents
-            if not other_side and self._project_of(other) == project
-        )
-        return project if sharing == 1 else folder
+        return project if sharing.get(project, 0) == 1 else folder
 
     def candidate(
         self, agent: _Agent, listed: list[_Agent], *, upload: bool
@@ -1061,18 +1273,17 @@ class _Walk:
                 for other in listed
                 if other.subfolder != subfolder and _under(other.subfolder, subfolder)
             ]
-        own = [agent.entry] if agent.entry in self.facts else []
-        for path in self.facts:
-            if (
-                path != agent.entry
-                and _under(path, subfolder)
-                and not any(_under(path, folder) for folder in deeper)
-                and not _is_side_path(_below(path, subfolder))
-            ):
-                own.append(path)
-        code = sorted({name for path in own for name in self.facts[path].env})
-        templates = self.templates.get(subfolder, set()) | self.templates.get("", set())
+        names, tools = self._owned(subfolder, deeper)
         facts = self.facts.get(agent.entry)
+        if facts is not None and not (
+            _under(agent.entry, subfolder)
+            and not any(_under(agent.entry, folder) for folder in deeper)
+            and not _is_side_path(_below(agent.entry, subfolder))
+        ):
+            # The entry is always its own row's, even where the folder rule leaves it out.
+            names = _first_names((names, facts.env))
+            tools += facts.tools
+        templates = self.templates.get(subfolder, set()) | self.templates.get("", set())
         project_file = self.projects.file_in(subfolder)
         return Candidate(
             entry=agent.entry,
@@ -1090,8 +1301,8 @@ class _Walk:
                 hazards=self.hazards,
             ),
             partial=False,
-            env_names=(*code, *sorted(templates - set(code))),
-            tools=sum(self.facts[path].tools for path in own),
+            env_names=_env_names(names, templates),
+            tools=tools,
             prompt_files=_prompt_count(self.prompt_paths, subfolder),
             evidence=_evidence(
                 agent.entry,
@@ -1102,6 +1313,36 @@ class _Walk:
                 project=(subfolder, project_file) if project_file else None,
             ),
         )
+
+    def _owned(self, subfolder: str, deeper: list[str]) -> tuple[list[str], int]:
+        """The first setting names and the tool count of the kept files a row at ``subfolder``
+        owns: under it, under none of the ``deeper`` listed folders, and not in a side folder
+        below it. Rows of one folder share one pass over its range of the sorted paths."""
+        if subfolder in self._owned_by:
+            return self._owned_by[subfolder]
+        if self._sorted is None:
+            self._sorted = sorted(self.facts)
+        paths = self._sorted
+        start, end = _range(paths, subfolder)
+        names: list[str] = []
+        tools = 0
+        at = start
+        checked = 0
+        for skip_start, skip_end in [*sorted(_range(paths, folder) for folder in deeper), (end, end)]:
+            while at < min(skip_start, end):
+                path = paths[at]
+                at += 1
+                checked += 1
+                if not checked % 4_096:
+                    self._in_time()
+                if not _is_side_path(_below(path, subfolder)):
+                    facts = self.facts[path]
+                    if facts.env:
+                        names = _first_names((names, facts.env))
+                    tools += facts.tools
+            at = max(at, skip_end)
+        self._owned_by[subfolder] = (names, tools)
+        return names, tools
 
     def result(self, *, upload: bool) -> WalkResult:
         signs: dict[str, Sign] = {}
@@ -1142,6 +1383,40 @@ class _Walk:
             if upload
             else 0,
         )
+
+
+def _range(paths: list[str], folder: str) -> tuple[int, int]:
+    """Where the sorted ``paths`` under ``folder`` are: those that start with ``folder/``,
+    which sort between it and the same folder ending in the next character, `0`."""
+    if not folder:
+        return 0, len(paths)
+    return bisect_left(paths, folder + "/"), bisect_left(paths, folder + "0")
+
+
+def _first_names(groups: Iterable[Iterable[str]]) -> list[str]:
+    """The first `ENV_NAMES_KEPT` distinct names in order, from groups each already in order.
+    One group stops at its first name past the last kept, so no more than that is held."""
+    kept: list[str] = []
+    for names in groups:
+        for name in names:
+            if len(kept) >= ENV_NAMES_KEPT and name >= kept[-1]:
+                break
+            at = bisect_left(kept, name)
+            if at < len(kept) and kept[at] == name:
+                continue
+            kept.insert(at, name)
+            if len(kept) > ENV_NAMES_KEPT:
+                kept.pop()
+    return kept
+
+
+def _env_names(code: list[str], templates: set[str]) -> tuple[str, ...]:
+    """A row's setting names: the code's first, then a template's that the code doesn't read,
+    up to `ENV_NAMES_KEPT`, the most the answer file writes. ``code`` is the code's first
+    names (`_first_names`): when it is short, it is all of them."""
+    if len(code) >= ENV_NAMES_KEPT:
+        return tuple(code[:ENV_NAMES_KEPT])
+    return (*code, *sorted(templates - set(code)))[:ENV_NAMES_KEPT]
 
 
 def _prompt_count(paths: list[str], subfolder: str) -> int:
@@ -1198,14 +1473,16 @@ def walk_repo(
         logger.warning("agent walk: joining files into agents ran out of time")
         walk.facts.clear()
         return _empty_result(walk, "clock")
-    except _ResultTooBig:
+    except (_ResultTooBig, _CapReached):
         # Too many candidates reach each other to hold: the same end as the walk's other caps.
+        # The join's lookups all meet folders the walk already charged, so none charges again;
+        # if one ever did, past a held stop, it ends here too rather than in the crash path.
         logger.warning("agent walk: joining files into agents passed its edge budget")
         walk.facts.clear()
         return _empty_result(walk, "limit")
     logger.info(
         "agent walk: files_read=%d unread=%d reader_faults=%d agents=%d left_out=%d stopped=%s",
-        walk.files_read,
+        walk.reader.files_read,
         result.unread_files,
         walk.faults,
         len(result.agents),
@@ -1257,8 +1534,9 @@ def _hazard(
     # folders included, ignoring only its own short list.
     found = 0
     entries = 0
+    listed = 0
     # os.walk reports no listing errors unless asked, so nothing here is expected to raise.
-    for index, (_, directories, files) in enumerate(os.walk(folder, followlinks=False)):
+    for index, (here, directories, files) in enumerate(os.walk(folder, followlinks=False)):
         # The folder's own listing is one read and always looked at; the clock bounds the
         # folders below it.
         if index and clock() > deadline:
@@ -1268,7 +1546,10 @@ def _hazard(
         if found > 1:
             return "agent_py"
         entries += len(directories) + len(files)
-        if entries > _HAZARD_ENTRIES:
+        # What os.walk holds for the folders it has yet to enter: each one's full path, counted in
+        # characters (a path of wide characters holds up to four bytes for each).
+        listed += sum(len(here) + 1 + len(name) for name in directories)
+        if entries > _HAZARD_ENTRIES or listed > _HAZARD_PATH_BYTES:
             return ""
     return ""
 
@@ -1295,8 +1576,7 @@ class _Description:
         self.script_env: set[str] = set()
         self.templates: set[str] = set()
         self.prompt_files = 0
-        self.files_read = 0
-        self.bytes_read = 0
+        self.reader = _CappedReader(files=_DESCRIBE_FILES, total_bytes=_DESCRIBE_BYTES)
         # A cap or the clock: the reading stops here.
         self.partial = False
         # One file that couldn't be read or parsed: the counts are short, but the reading
@@ -1375,31 +1655,21 @@ class _Description:
             self._fault("a file's reader failed")
 
     def _read(self, path: str) -> bytes | None:
-        """The file's bytes, or None for a file that can't or mustn't be read; sets
-        ``partial`` when a cap is reached."""
-        if self.files_read >= _DESCRIBE_FILES:
-            self.partial = True
-            return None
+        """The file's bytes, or None for a file that can't or mustn't be read. Both read sites
+        (the templates and the source files) come here, outside any parse `try`: a cap sets
+        ``partial``; a missing file of any kind is nothing; anything else unread is short."""
         try:
-            data = _read_file(path, _FILE_BYTES + 1)
+            return self.reader.read(path)
+        except _CapReached:
+            self.partial = True
         except FileNotFoundError:
             # A settings template that isn't there is the usual case, not a short count.
-            return None
-        except (OSError, ValueError):
-            # Unreadable, a link, or a name the system can't open: not read, so the counts
-            # are short.
+            pass
+        except (OSError, ValueError, _Unread):
+            # Unreadable, a link, a name the system can't open, or over the size a file is
+            # read at: not read, so the counts are short.
             self.short = True
-            return None
-        self.files_read += 1
-        self.bytes_read += len(data)
-        if self.bytes_read > _DESCRIBE_BYTES:
-            self.partial = True
-            return None
-        if len(data) > _FILE_BYTES:
-            # Over the size a file is read at: not read, so the counts are short.
-            self.short = True
-            return None
-        return data
+        return None
 
 
 def describe_entry(
@@ -1432,19 +1702,20 @@ def describe_entry(
         raise
     except Exception:
         # Runs after the model was paid for, so a fault in the kit keeps what was read and
-        # marks the row partial rather than ending in a paid retry. The trace is logged, with the
-        # platform's secret values masked.
+        # marks the row partial rather than ending in a paid retry. The trace is logged, with only
+        # the platform's secret values masked.
         logger.warning("agent description stopped", exc_info=True)
         reading.partial = True
     facts = reading.facts.get(entry)
-    code = {name for found in reading.facts.values() for name in found.env}
-    code |= reading.script_env
+    code = sorted(
+        {name for found in reading.facts.values() for name in found.env} | reading.script_env
+    )
     project_file = projects.file_in(subfolder)
     partial = reading.partial or reading.short
     if not partial:
-        logger.info("agent description: files_read=%d", reading.files_read)
+        logger.info("agent description: files_read=%d", reading.reader.files_read)
     else:
-        logger.info("agent description: files_read=%d partial=yes", reading.files_read)
+        logger.info("agent description: files_read=%d partial=yes", reading.reader.files_read)
     return Candidate(
         entry=entry,
         subfolder=subfolder,
@@ -1455,7 +1726,7 @@ def describe_entry(
             source, subfolder, deadline=deadline, clock=clock, hazards=hazards
         ),
         partial=partial,
-        env_names=(*sorted(code), *sorted(reading.templates - code)),
+        env_names=_env_names(code, reading.templates),
         tools=sum(found.tools for found in reading.facts.values()),
         prompt_files=reading.prompt_files,
         evidence=_evidence(
