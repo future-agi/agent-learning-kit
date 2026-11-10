@@ -13,6 +13,7 @@ import hashlib
 import json
 import math
 import sqlite3
+from collections.abc import Iterable
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Any
@@ -162,6 +163,47 @@ def _parse_structured(
     return parsed
 
 
+def json_value(value: Any) -> Any:
+    """A JSON column's SQLite value as the seed import reads it: JSON text (or a legacy Python
+    literal) parsed, or a native number or null as it is. Raises ``ValueError`` with
+    ``json_value_invalid`` for anything else, such as bare text a JSON column cannot hold."""
+    parsed = _parse_structured(
+        value,
+        expected=(dict, list, str, int, float, bool, type(None)),
+        code="json_value_invalid",
+    )
+    return _json_value(parsed)
+
+
+def unreadable_json_columns(
+    connection: sqlite3.Connection, columns: Iterable[tuple[str, str]]
+) -> list[str]:
+    """The ``table.column`` of each of ``columns`` (JSON-typed, named without regard to
+    case) whose stored values the seed import would refuse, so a writer can refuse them
+    where they are written rather than when the world is imported much later."""
+    tables = {name.lower(): name for name in _sqlite_tables(connection)}
+    problems: list[str] = []
+    for table_name, column_name in sorted(set(columns)):
+        table = tables.get(table_name.lower())
+        if table is None:
+            continue
+        present = {name.lower(): name for name in _sqlite_columns(connection, table)}
+        column = present.get(column_name.lower())
+        if column is None:
+            continue
+        found = connection.execute(
+            f"SELECT DISTINCT {_identifier(column)} FROM {_identifier(table)} "
+            f"WHERE {_identifier(column)} IS NOT NULL"
+        )
+        for (value,) in found:
+            try:
+                json_value(value)
+            except ValueError:
+                problems.append(f"{table}.{column}")
+                break
+    return problems
+
+
 def _postgres_array(text: str) -> list[str | None]:
     """A one-dimensional Postgres array literal such as ``{}`` or ``{a,"b c",NULL}``."""
     if not (text.startswith("{") and text.endswith("}")):
@@ -285,12 +327,7 @@ def _convert(column: SourceColumn, value: Any) -> Any:
     if logical is LogicalType.ARRAY:
         return array_value(value, column.element_type)
     if logical is LogicalType.JSON:
-        parsed = _parse_structured(
-            value,
-            expected=(dict, list, str, int, float, bool, type(None)),
-            code="json_value_invalid",
-        )
-        return _json_value(parsed)
+        return json_value(value)
     if logical is LogicalType.BINARY:
         if isinstance(value, bytes):
             return base64.b64encode(value).decode("ascii")

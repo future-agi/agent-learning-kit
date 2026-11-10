@@ -4352,4 +4352,26 @@ def _schema_column_types(paths: list[Path]) -> dict[tuple[str, str], str]:
                     declared[(found.group(1).lower(), name.lower())] = "text[]"
                 elif kind.startswith("JSONB"):
                     declared[(found.group(1).lower(), name.lower())] = "jsonb"
+                elif kind.startswith("JSON"):
+                    declared[(found.group(1).lower(), name.lower())] = "json"
     return declared
+
+
+def declared_json_columns(
+    source: Path | str | None, *, contract: dict[str, Any] | None = None
+) -> set[tuple[str, str]]:
+    """The ``(table, column)`` pairs the agent's own schema declares JSON or JSONB.
+
+    These are the types the validation seed imports against (``inspect_postgres`` on the same
+    schema), known here before any database exists, so a world can be checked where it is
+    written. Empty when the source declares no schema file, for example when its tables exist
+    only in ORM migrations.
+    """
+    if not source:
+        return set()
+    try:
+        declared = _schema_column_types(_source_schema_paths(Path(source), contract=contract))
+    except (OSError, ValueError, BundleAuthorError):
+        # A missing or unreadable schema is reported where the bundle is compiled.
+        return set()
+    return {key for key, kind in declared.items() if kind in ("json", "jsonb")}

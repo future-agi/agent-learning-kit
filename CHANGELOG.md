@@ -7,6 +7,10 @@ All notable release changes for Agent Learning Kit are tracked here.
 Post-rc.1 increments on the release branch. Each one adds gates on top of the
 66 proved at rc.1; the rc.1 entry below is historical and unchanged.
 
+- A world whose JSON columns hold values the seed import refuses, such as a jsonb string
+  written as bare text, is refused where it is written: `save_world` and the builder's
+  `change_world` name the table and column and the JSON text expected, instead of the
+  environment failing its seed import about 40 minutes later.
 - Multi-agent compatibility references preserve native Google ADK, LangGraph,
   and CrewAI orchestration, while Python command agents capture bounded tool
   evidence with explicit worker and task attribution.
