@@ -290,6 +290,8 @@ def _checked_against_source(
                 mismatch = quote_problem(quote, contract.system_prompt_excerpt, named)
                 if (
                     mismatch
+                    # Only lines checked against a held quote can hold their own instead (and
+                    # the second search is spent only then).
                     and alone
                     and says_something(own)
                     and quote_problem(own, contract.system_prompt_excerpt, named) is None
@@ -1755,8 +1757,7 @@ def contract_tools(
         # All of them together, and each only once. Nudging in sequence would cost a turn per
         # nudge and read as though the requirements were being invented one at a time.
         say = [said for key, when, said in thin if when and key not in asked_before]
-        asked_before.update(key for key, when, _ in thin if when)
-        nudged.update(asked_before)
+        nudged.update(key for key, when, _ in thin if when)
         if say:
             return _problems(
                 say + ["If any of these genuinely does not apply, submit again as is."]

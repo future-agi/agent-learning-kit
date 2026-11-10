@@ -3250,19 +3250,24 @@ def test_a_short_quote_not_in_its_lines_is_still_checked_against_the_held_one(tm
     assert text_of(second) == REFUSED + lines_alone("agent.py 1-4", _PARAPHRASE)
 
 
-def test_a_null_in_a_list_quote_is_dropped_before_it_is_held(tmp_path, root):
+@pytest.mark.parametrize("lines", [(6, 12), (1, 4)], ids=["the-right-lines", "the-wrong-lines"])
+def test_a_null_in_a_list_quote_is_dropped_before_it_is_held(tmp_path, root, lines):
     (root / "agent.py").write_text(_BOOKING, encoding="utf-8")
     destination = tmp_path / "out"
     submit = submitter(destination, root)
-    right = [{"path": "agent.py", "start_line": 6, "end_line": 12}]
+    named = [{"path": "agent.py", "start_line": lines[0], "end_line": lines[1]}]
 
     result = submit(
         payload(hard_constraints=["Be polite."], system_prompt_excerpt=["Be warm", None, "and brief."],
-                system_prompt_from=right)
+                system_prompt_from=named)
     )
 
-    assert not result.get("is_error"), result
-    assert saved(destination)["system_prompt_from"] == right
+    if lines == (6, 12):
+        assert not result.get("is_error"), result
+        assert saved(destination)["system_prompt_from"] == named
+    else:
+        # Refused as this call's own quote, not as one given before with "None" in it.
+        assert text_of(result).startswith(REFUSED + not_the_quote("agent.py 1-4"))
 
 
 def test_a_blank_quote_is_no_quote(tmp_path, root):
