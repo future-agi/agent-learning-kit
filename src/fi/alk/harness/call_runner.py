@@ -1357,6 +1357,37 @@ def worker_deadlines(document: Mapping[str, Any]) -> dict[str, float]:
     }
 
 
+def trial_worker_deadlines(
+    document: Mapping[str, Any], bundle_dir: Path | str | None
+) -> tuple[float | None, dict[str, float], list[dict[str, Any]]]:
+    """This trial's deadline for all workers, each named worker's own, and what the person should be told. A door sealed
+    before deadlines per worker cannot tell the workers apart, so every worker gets the shortest budget instead of
+    none, and the trial says so."""
+    deadline, deadlines = worker_deadline(document), worker_deadlines(document)
+    if not deadlines or _door_enforces_per_worker(bundle_dir):
+        return deadline, deadlines, []
+    shortest_worker = min(deadlines, key=deadlines.__getitem__)
+    shortest = deadlines[shortest_worker]
+    notice = {
+        "code": "worker_deadlines_not_per_worker",
+        "message": "This environment was sealed before deadlines per worker, so every worker was held to the shortest "
+        f"budget ({shortest_worker}'s) instead of its own. Rebuild the environment to hold each worker to its own.",
+    }
+    return min(shortest, deadline) if deadline else shortest, {}, [notice]
+
+
+def _door_enforces_per_worker(bundle_dir: Path | str | None) -> bool:
+    from .world_door import DOOR_FILE
+
+    if bundle_dir is None:
+        return False
+    try:
+        sealed = json.loads((Path(bundle_dir) / "generated" / "tool-proxy" / DOOR_FILE).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    return isinstance(sealed, dict) and sealed.get("worker_deadlines") == "per_worker"
+
+
 def _set_trial_faults(
     runtime: EnvironmentRuntime,
     faults: list[Any],
@@ -2589,6 +2620,8 @@ class CallRunnerImpl:
         no_door = actor_problems(doc, self._context.bundle_dir, why, problem) if actors is None else []
         started_at = datetime.now(timezone.utc)
         outer_timeout = run_seconds + _OUTER_WAIT_FOR_PAD_SECONDS
+        # What the person is told about how this trial's worker deadlines were held, set when the trial starts.
+        deadline_notices: list[dict[str, Any]] = []
 
         async def place() -> SimulationReport:
             if self._place_call is not None:
@@ -2608,8 +2641,7 @@ class CallRunnerImpl:
 
         async def place_with_actors() -> SimulationReport:
             faults = list(doc.get("faults") or [])
-            deadline = worker_deadline(doc)
-            deadlines = worker_deadlines(doc)
+            deadline, deadlines, deadline_notices[:] = trial_worker_deadlines(doc, self._context.bundle_dir)
             proxied = runtime.endpoints.get("tool_proxy") is not None
             if faults or deadline or deadlines or proxied:
                 # Every trial behind a tool proxy writes its own faults and deadline, none included, so nothing an
@@ -2618,7 +2650,7 @@ class CallRunnerImpl:
             try:
                 return await place_with_world_actors()
             finally:
-                if faults or deadline:
+                if faults or deadline or deadlines:
                     with contextlib.suppress(Exception):
                         _write_trial_state(runtime, [])
 
@@ -2671,6 +2703,7 @@ class CallRunnerImpl:
                 limits=actor_limits(doc, self._context.bundle_dir, "voice"),
                 actor_briefs=actors.briefs if actors is not None else None,
                 faults=list(doc.get("faults") or []),
+                notices=deadline_notices,
             )
         except (CallAborted, WorldUnavailable):
             # `_translate_report`'s own typed control-flow (non-completed status, no test case,
@@ -2733,6 +2766,7 @@ class CallRunnerImpl:
         limits: Mapping[str, Any] | None = None,
         actor_briefs: Mapping[str, str] | None = None,
         faults: Sequence[Any] = (),
+        notices: Sequence[dict[str, Any]] = (),
     ) -> CallOutcome:
         case = report.test_cases[0] if report.test_cases else None
         took_part = (
@@ -2837,10 +2871,10 @@ class CallRunnerImpl:
                         "limits": dict(limits or {}),
                         "usage": list(actor_usage),
                     }
-                notices = self._fault_notices(runtime, faults, calls)
-                if notices:
+                said = [*notices, *self._fault_notices(runtime, faults, calls)]
+                if said:
                     # A fault that did not take effect is said, never only logged: the trial ran without it.
-                    transcript_document["notices"] = notices
+                    transcript_document["notices"] = said
                 recording_offset_ms = result.metadata.get("recording_offset_ms")
                 if isinstance(recording_offset_ms, (int, float)):
                     transcript_document["recording_offset_ms"] = int(

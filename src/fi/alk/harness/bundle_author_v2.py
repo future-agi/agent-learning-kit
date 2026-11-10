@@ -88,7 +88,7 @@ from .provision import source_fingerprint
 from .provider_lifecycle import ProviderRepositoryManifest, load_provider_manifest
 from .provider_import import ProviderImportSpec
 from .world.tools import _binding
-from .world_door import method_action, world_action
+from .world_door import DOOR_CAPABILITIES, DOOR_FILE, method_action, world_action
 
 
 class BundleAuthorError(RuntimeError):
@@ -2053,6 +2053,25 @@ def _worker_permissions(contract_body: dict[str, Any] | None) -> dict[str, dict[
     }
 
 
+def _seal_tool_proxy(generated: Path, contract_body: dict[str, Any] | None) -> None:
+    """The tool proxy as this bundle ships it: the proxy and the world's door it imports, the tool each route is, each
+    declared worker's allow-list, and what this door enforces, so a runner never assumes more than it sealed."""
+    generated.mkdir(parents=True)
+    shutil.copy2(Path(__file__).with_name("tool_trace_proxy.py"), generated / "proxy.py")
+    shutil.copy2(Path(__file__).with_name("world_door.py"), generated / "world_door.py")
+    # The tool each route is, so the log keeps the agent's own tool name beside the route.
+    actions = _tool_actions(contract_body)
+    if actions:
+        (generated / "actions.json").write_text(json.dumps(actions, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    # Only with declared workers, so a bundle without them seals exactly as before.
+    permissions = _worker_permissions(contract_body)
+    if permissions:
+        (generated / "permissions.json").write_text(
+            json.dumps(permissions, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+        )
+    (generated / DOOR_FILE).write_text(json.dumps(DOOR_CAPABILITIES, sort_keys=True) + "\n", encoding="utf-8")
+
+
 def _with_worker_channels(plan: EnvironmentPlanV2, contract_body: dict[str, Any] | None) -> EnvironmentPlanV2:
     """Point each separately wired worker's tool address at its own channel on the tool proxy, so the world can tell
     the workers apart and hold each to its own tools."""
@@ -3731,29 +3750,7 @@ def author_bundle_v2(
             _compile_source_tool_handlers(contract_body, temporary)
         )
         if any(process.name == "tool-proxy" for process in plan.processes):
-            generated = temporary / "generated" / "tool-proxy"
-            generated.mkdir(parents=True)
-            shutil.copy2(
-                Path(__file__).with_name("tool_trace_proxy.py"),
-                generated / "proxy.py",
-            )
-            # The proxy is one surface of the world's door, which it imports from beside it.
-            shutil.copy2(
-                Path(__file__).with_name("world_door.py"),
-                generated / "world_door.py",
-            )
-            # The tool each route is, so the log keeps the agent's own tool name beside the route.
-            actions = _tool_actions(contract_body)
-            if actions:
-                (generated / "actions.json").write_text(
-                    json.dumps(actions, indent=2, sort_keys=True) + "\n", encoding="utf-8"
-                )
-            # Only with declared workers, so a bundle without them seals exactly as before.
-            permissions = _worker_permissions(contract_body)
-            if permissions:
-                (generated / "permissions.json").write_text(
-                    json.dumps(permissions, indent=2, sort_keys=True) + "\n", encoding="utf-8"
-                )
+            _seal_tool_proxy(temporary / "generated" / "tool-proxy", contract_body)
         if any(process.name == "mcp-toolbox" for process in plan.processes):
             toolbox = _mcp_toolbox_definition(source_root)
             if toolbox is None:

@@ -885,18 +885,15 @@ class HostedChatCallRunner:
         failure: CallAborted | None = None
         _clear_file_tool_calls(runtime)
         acting: asyncio.Task[None] | None = None
+        deadline_notices: list[dict[str, Any]] = []
         # An agent that runs its own tools reaches them through the tool proxy, which reads this trial's faults from
         # the world's database, as on a voice call.
         if proxied:
-            from .call_runner import _set_trial_faults, worker_deadline, worker_deadlines
+            from .call_runner import _set_trial_faults, trial_worker_deadlines
 
+            deadline, deadlines, deadline_notices = trial_worker_deadlines(document, self._context.bundle_dir)
             # Every trial writes its own faults, none included, so nothing an earlier trial left can apply to this one.
-            _set_trial_faults(
-                runtime,
-                list(document.get("faults") or []),
-                worker_deadline(document),
-                worker_deadlines(document),
-            )
+            _set_trial_faults(runtime, list(document.get("faults") or []), deadline, deadlines)
         try:
             if dispatcher is not None:
                 # What the actors wrote before T0 is in the world before the conversation starts.
@@ -986,11 +983,14 @@ class HostedChatCallRunner:
         if world_record is not None:
             transcript.world_actors = world_record
         faults = list(document.get("faults") or [])
+        said = list(deadline_notices)
         if faults:
             from .call_runner import fault_notices
 
             # A fault that did not take effect is said, never only logged: the trial ran without it.
-            transcript.notices = fault_notices(faults, _trial_log(door, trial_started), transcript.calls)
+            said += fault_notices(faults, _trial_log(door, trial_started), transcript.calls)
+        if said:
+            transcript.notices = said
         ended = datetime.now(timezone.utc)
         transcript_id = await self._adapter.upload_artifact(
             transcript.artifact(),

@@ -6029,3 +6029,13 @@ def test_a_templated_route_names_the_values_its_path_carries():
     assert route_values(actions, world_action("/orders/get")) == {}
     assert route_values(actions, world_action("/refunds/1043/issue/now")) == {}
     assert route_values(None, "refunds.1043.issue") == {}
+
+
+def test_a_sealed_tool_proxy_says_its_door_holds_each_worker_to_its_own_deadline(tmp_path: Path) -> None:
+    from fi.alk.harness.bundle_author_v2 import _seal_tool_proxy
+    from fi.alk.harness.call_runner import _door_enforces_per_worker
+
+    _seal_tool_proxy(tmp_path / "generated" / "tool-proxy", {"tools": [{"name": "a"}]})
+    sealed = tmp_path / "generated" / "tool-proxy"
+    assert {"proxy.py", "world_door.py", "door.json"} <= {one.name for one in sealed.iterdir()}
+    assert _door_enforces_per_worker(tmp_path)

@@ -146,6 +146,10 @@ def world_action(route: str) -> str:
     return str(route or "").split("?", 1)[0].strip("/").replace("/", ".")
 
 
+# What this door enforces, sealed beside it in a bundle: a runner reads it rather than assume a newer door than shipped.
+DOOR_FILE = "door.json"
+DOOR_CAPABILITIES = {"worker_deadlines": "per_worker"}
+
 _METHODS = frozenset({"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"})
 
 
