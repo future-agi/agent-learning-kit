@@ -1,5 +1,12 @@
 import json
 
+def _source(db):
+    today = (db.one("SELECT now FROM clock") or {"now": "2026-10-26T09:00:00Z"})["now"][:10]
+    rows = [f for f in db.query("SELECT * FROM drive_files WHERE policy_family = 'access_policy' AND status = 'approved' AND NOT is_deleted") if f["effective_date"] <= today and f["mime_type"] != "application/octet-stream"]
+    rows.sort(key=lambda f: f["effective_date"], reverse=True)
+    return {"file_id": rows[0]["file_id"], "title": rows[0]["title"], "version": rows[0]["version"]} if rows else None
+
+
 def handle(args, db):
     emp_id = args.get("employee_id")
     app_id = args.get("app_id")
@@ -74,5 +81,6 @@ def handle(args, db):
         "sod_conflict": False,
         "approval_required": role["requires_approval"],
         "approver_ids": approvers,
-        "reason": "Policy check passed. Required approvals identified."
+        "reason": "Policy check passed. Required approvals identified.",
+        "source": _source(db)
     }

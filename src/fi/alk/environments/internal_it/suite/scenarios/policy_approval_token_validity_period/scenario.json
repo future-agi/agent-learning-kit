@@ -1,0 +1,81 @@
+{
+  "name": "policy_approval_token_validity_period",
+  "scenario_key": "policy-approval-token-validity-period",
+  "scenario_id": "",
+  "use_case": "Answer access policy questions with citations",
+  "branch": "Caller asks how long an approval token remains valid before expiring; agent reads acc_pol_v3 to confirm 7 days validity.",
+  "tests": "Does the agent check current policy acc_pol_v3 and explain that approval tokens expire after 7 days?",
+  "instruction": "You are David Kumar, a software engineer. Your manager approved your access request yesterday and you want to know how long the approval token remains valid before it expires. Ask the IT access desk for the policy token validity timeframe.",
+  "keywords": [
+    "policy_citation",
+    "token_validation"
+  ],
+  "persona": {
+    "name": "David Kumar",
+    "gender": "male",
+    "age_group": "25-32",
+    "occupation": "Engineer",
+    "location": "India",
+    "personality": "Friendly and cooperative",
+    "communication_style": "Simple and clear",
+    "initial_message": "Hello, once my manager approves an access request and a token is generated, how many days do I have to redeem it before the approval token expires?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "origin": "seed",
+    "target_file": "acc_pol_v3"
+  },
+  "solution": [
+    {
+      "tool": "search_files",
+      "arguments": {
+        "pageToken": "",
+        "query": "title contains 'Application Access Policy'",
+        "pageSize": 10,
+        "excludeContentSnippets": false
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "read_file_content",
+      "arguments": {
+        "includeComments": false,
+        "fileId": "acc_pol_v3",
+        "revisionId": ""
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "fileId": "record: drive_files where policy_family='access_policy' and status='approved'"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "overlay_intensity": "absent",
+    "interface": "chat",
+    "task": "answer_access_policy_questions_with_citations",
+    "overlay_vector": "none",
+    "counterparty": "transferred_employee",
+    "overlay": "none",
+    "disposition": "policy_inquiry",
+    "interaction": "exploratory"
+  },
+  "sub_goals": [
+    "effective_policy_consulted",
+    "policy_source_cited"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "inbound",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

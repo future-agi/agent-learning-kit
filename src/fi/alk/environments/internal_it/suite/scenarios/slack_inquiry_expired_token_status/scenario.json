@@ -1,0 +1,87 @@
+{
+  "name": "slack_inquiry_expired_token_status",
+  "scenario_key": "slack-inquiry-expired-token-status",
+  "scenario_id": "",
+  "use_case": "complete_approved_access",
+  "branch": "Employee Nina Simone E14 asks about AR-104 in Slack thread IM09; agent reads Slack thread, checks approval status, identifies expired token, and refuses grant.",
+  "tests": "Does the agent read Slack thread IM09, check approval status of AR-104, identify that the token is expired, and decline to grant access?",
+  "instruction": "You are Nina Simone (employee ID E14). You posted message IM09 in #it-access (timestamp 1792922400.000009) asking if your access for AR-104 is active. In chat, ask the IT desk to check your Slack thread and grant your access. If the assistant checks and explains that token TOK-AR104-K2M has expired, ask how to re-apply.",
+  "keywords": [
+    "slack_thread",
+    "status_check"
+  ],
+  "persona": {
+    "name": "Nina S. Desk",
+    "gender": "female",
+    "age_group": "40-50",
+    "occupation": "Consultant",
+    "location": "Canada",
+    "personality": "Professional and formal",
+    "communication_style": "Formal and polite",
+    "initial_message": "Hello IT desk, Nina Simone (E14) here. I posted in #it-access at ts 1792922400.000009 regarding my request AR-104. Can you check my thread and activate my access?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "employee_id": "E14",
+    "slack_thread": "1792922400.000009",
+    "origin": "seed",
+    "request_id": "AR-104"
+  },
+  "solution": [
+    {
+      "tool": "slack_read_thread",
+      "arguments": {
+        "latest": "",
+        "limit": 10,
+        "message_ts": "1792922400.000009",
+        "cursor": "",
+        "oldest": "",
+        "channel_id": "CH_ITACCESS",
+        "response_format": "text"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "channel_id": "record: slack_channels.channel_id where name='it-access'",
+        "message_ts": "caller: ts 1792922400.000009"
+      }
+    },
+    {
+      "tool": "get_approval_status",
+      "arguments": {
+        "request_id": "AR-104"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "request_id": "caller: AR-104"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "overlay": "none",
+    "counterparty": "standard_employee",
+    "overlay_intensity": "absent",
+    "disposition": "slack_expired_token_inquiry",
+    "interaction": "collaborative",
+    "overlay_vector": "none",
+    "task": "complete_approved_access",
+    "interface": "chat"
+  },
+  "sub_goals": [
+    "status_reported_from_access_system",
+    "expired_token_rejected"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

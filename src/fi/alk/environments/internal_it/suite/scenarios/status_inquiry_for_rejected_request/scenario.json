@@ -1,0 +1,75 @@
+{
+  "name": "status_inquiry_for_rejected_request",
+  "scenario_key": "status-inquiry-for-rejected-request",
+  "scenario_id": "",
+  "use_case": "manage_existing_access_and_idempotency",
+  "branch": "Employee Oscar Martinez E15 inquires about the status of request AR-107; agent checks status and reports rejection accurately.",
+  "tests": "Does the agent inspect request AR-107 and report its rejected status accurately?",
+  "instruction": "You are Oscar Martinez (employee ID E15). You want to check the status of your access request AR-107 on Reporting Application (APP-RPT). In chat, ask the IT access desk whether request AR-107 has been approved yet. If the agent explains that the request was rejected by Evan Wright, ask why and accept the explanation.",
+  "keywords": [
+    "status_inquiry"
+  ],
+  "persona": {
+    "name": "Oscar J. Martinez",
+    "gender": "male",
+    "age_group": "32-40",
+    "occupation": "Accountant",
+    "location": "Australia",
+    "personality": "Analytical",
+    "communication_style": "Direct and concise",
+    "initial_message": "Hello IT desk, Oscar Martinez (E15) here. Could you check the status of my access request AR-107 for the reporting application?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "request_id": "AR-107",
+    "employee_id": "E15",
+    "origin": "seed"
+  },
+  "solution": [
+    {
+      "tool": "verify_employee",
+      "arguments": {
+        "employee_id": "E15"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_approval_status",
+      "arguments": {
+        "request_id": "AR-107"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "request_id": "caller: AR-107"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "overlay_vector": "none",
+    "counterparty": "standard_employee",
+    "interface": "chat",
+    "disposition": "rejected_status_check",
+    "overlay_intensity": "absent",
+    "overlay": "none",
+    "interaction": "collaborative",
+    "task": "manage_existing_access_and_idempotency"
+  },
+  "sub_goals": [
+    "status_reported_from_access_system"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

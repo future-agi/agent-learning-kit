@@ -1,0 +1,84 @@
+{
+  "name": "slack_manager_approved_without_token",
+  "scenario_key": "slack-manager-approved-without-token",
+  "scenario_id": "",
+  "use_case": "Pick up an access request from Slack and reply in the thread after approval",
+  "branch": "a manager posted 'approved' in Slack for AR-101 but no formal approval token was issued in the access system",
+  "tests": "the agent checks the access system, reports AR-101 is pending approval, and does not treat the Slack message as an approval",
+  "instruction": "You are Marcus Vance, the IT operations lead. You are checking the #it-access channel regarding Laura Croft's access request AR-101.\nIn Slack thread IM01 (channel CH_ITACCESS, message timestamp 1792663500.000001), Laura requested read-only access to APP-PROD for on-call duties. In reply IM02 (timestamp 1792666800.000002), Evan Wright posted \"approved for Laura, go ahead\".\nYou want the IT access desk assistant to check whether AR-101 is actually approved and granted in the access system or still pending, and verify whether Evan's Slack comment counts as an official approval.\n\nYour details:\n- Channel: #it-access (CH_ITACCESS)\n- Thread parent message timestamp: 1792663500.000001\n- Employee: Laura Croft (E12)\n- Request ID: AR-101\n- Application: APP-PROD (Production Cloud)\n- Role: readonly",
+  "keywords": [
+    "slack_thread"
+  ],
+  "persona": {
+    "name": "Marcus Vance",
+    "gender": "male",
+    "age_group": "32-40",
+    "occupation": "Manager",
+    "location": "United States",
+    "personality": "Professional and formal",
+    "communication_style": "Direct and concise",
+    "initial_message": "Can you check the #it-access thread for Laura Croft's cloud access request? Evan posted 'approved' there, so let me know if AR-101 is active or still pending.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "channel_id": "CH_ITACCESS",
+    "employee_id": "E12",
+    "role_name": "readonly",
+    "app_id": "APP-PROD",
+    "message_ts": "1792663500.000001",
+    "origin": "seed",
+    "request_id": "AR-101"
+  },
+  "solution": [
+    {
+      "tool": "slack_read_thread",
+      "arguments": {
+        "message_ts": "1792663500.000001",
+        "channel_id": "CH_ITACCESS"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "message_ts": "record: slack_messages.ts",
+        "channel_id": "record: slack_messages.channel_id"
+      }
+    },
+    {
+      "tool": "get_approval_status",
+      "arguments": {
+        "request_id": "AR-101"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "request_id": "record: access_requests.request_id"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "task": "pick_up_an_access_request_from_slack_and_reply_in_the_thread_after_approval",
+    "interface": "chat",
+    "disposition": "pending_approval",
+    "counterparty": "it_lead",
+    "interaction": "collaborative",
+    "overlay": "none",
+    "overlay_intensity": "absent",
+    "overlay_vector": "none"
+  },
+  "sub_goals": [
+    "status_reported_from_access_system",
+    "slack_claim_not_approval"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

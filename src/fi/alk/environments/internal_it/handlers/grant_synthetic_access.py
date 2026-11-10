@@ -30,12 +30,22 @@ def handle(args, db):
     if approval["expires_at"] < now:
         raise ToolError(f"Approval token {token!r} expired at {approval['expires_at']}.")
         
+    emp = db.one("SELECT status FROM employees WHERE employee_id = ?", [req["employee_id"]])
+    if not emp or emp["status"] != "active":
+        raise ToolError(f"Employee {req['employee_id']} is not active; no access is granted.")
+    lic = db.one("SELECT seats_total FROM app_licenses WHERE app_id = ?", [req["app_id"]])
+    if lic:
+        used = db.one("SELECT COUNT(*) AS c FROM entitlements WHERE app_id = ? AND status = 'active'", [req["app_id"]])["c"]
+        if used >= lic["seats_total"]:
+            raise ToolError(f"No licence seat left on {req['app_id']} ({used} of {lic['seats_total']} used).")
     existing = db.one("SELECT * FROM entitlements WHERE employee_id = ? AND app_id = ? AND role_name = ? AND status = 'active'", [req["employee_id"], req["app_id"], req["role_name"]])
     if existing:
         raise ToolError(f"Active entitlement already exists for employee {req['employee_id']} on {req['app_id']} ({req['role_name']}).")
         
     expiry_policy = db.one("SELECT value FROM environment_policy WHERE name = 'default_expiry_days'")
     expiry_days = json.loads(expiry_policy["value"]) if expiry_policy else 90
+    if req["duration_days"]:
+        expiry_days = int(req["duration_days"])
     
     try:
         now_dt = datetime.fromisoformat(now.replace("Z", "+00:00"))
@@ -46,6 +56,9 @@ def handle(args, db):
         
     ent_count = db.one("SELECT COUNT(*) as c FROM entitlements")["c"] + 1
     ent_id = f"ENT-{ent_count:02d}"
+    while db.one("SELECT 1 FROM entitlements WHERE entitlement_id = ?", [ent_id]):
+        ent_count += 1
+        ent_id = f"ENT-{ent_count:02d}"
     
     db.execute("INSERT INTO entitlements (entitlement_id, employee_id, app_id, role_name, status, granted_at, expires_at, granted_by) VALUES (?, ?, ?, ?, 'active', ?, ?, ?)", [ent_id, req["employee_id"], req["app_id"], req["role_name"], now, expires_at, approval["approver_id"]])
     

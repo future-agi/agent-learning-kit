@@ -1,0 +1,43 @@
+{
+  "slack_channel_digest": {
+    "server": "Slack MCP server (official, hosted)",
+    "recorded": "2026-11-04",
+    "tools": [
+      "slack_search_channels",
+      "slack_read_channel",
+      "slack_read_thread",
+      "slack_search_public_and_private",
+      "slack_send_message",
+      "slack_check_message_status"
+    ],
+    "tables": [
+      "slack_approvals",
+      "slack_channel_members",
+      "slack_channels",
+      "slack_message_ledger",
+      "slack_messages",
+      "slack_users",
+      "current_actor"
+    ]
+  },
+  "drive_policy_search": {
+    "server": "Google Drive MCP server (Developer Preview)",
+    "recorded": "2026-11-04",
+    "tools": [
+      "search_files",
+      "list_recent_files",
+      "get_file_metadata",
+      "get_file_permissions",
+      "read_file_content"
+    ],
+    "tables": [
+      "drive_audit_log",
+      "current_actor",
+      "drive_file_revisions",
+      "drive_files",
+      "drive_folders",
+      "drive_permissions",
+      "drive_users"
+    ]
+  }
+}

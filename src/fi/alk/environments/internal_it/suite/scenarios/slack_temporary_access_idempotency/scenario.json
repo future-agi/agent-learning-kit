@@ -1,0 +1,105 @@
+{
+  "name": "slack_temporary_access_idempotency",
+  "scenario_key": "slack-temporary-access-idempotency",
+  "scenario_id": "",
+  "use_case": "Pick up an access request from Slack and reply in the thread after approval",
+  "branch": "Sarah Connor posted in Slack asking for temporary security analyst access (AR-106); the assistant inspects her existing pending request and avoids submitting a duplicate",
+  "tests": "identifies that Sarah Connor already has pending request AR-106 in the access system after reading her Slack message and avoids duplicate request creation",
+  "instruction": "You are Marcus Holloway, an IT operations lead. Sarah Connor (E19) posted message IM07 in #it-access asking for 2 weeks of analyst access on the security portal (AR-106). You want the assistant to inspect the Slack thread, look up Sarah's pending access requests, current entitlements on APP-SEC, and approval status for AR-106, confirming that AR-106 is already pending and no duplicate request should be created.\n\nYour details:\nTarget employee: Sarah Connor (E19)\nTarget application: APP-SEC\nTarget request ID: AR-106\nSlack channel: #it-access (CH_ITACCESS)\nSlack message timestamp: 1792857900.000007",
+  "keywords": [
+    "temporary_access"
+  ],
+  "persona": {
+    "name": "Marcus Holloway",
+    "gender": "male",
+    "age_group": "32-40",
+    "occupation": "Engineer",
+    "location": "Australia",
+    "personality": "Detail-oriented",
+    "communication_style": "Direct and concise",
+    "initial_message": "Sarah Connor posted in #it-access about AR-106. Could you check her requests and confirm no duplicate is needed?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "channel_id": "CH_ITACCESS",
+    "app_id": "APP-SEC",
+    "origin": "seed",
+    "employee_id": "E19",
+    "request_id": "AR-106",
+    "message_ts": "1792857900.000007"
+  },
+  "solution": [
+    {
+      "tool": "slack_read_thread",
+      "arguments": {
+        "channel_id": "CH_ITACCESS",
+        "message_ts": "1792857900.000007"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "message_ts": "caller: Slack message timestamp: 1792857900.000007",
+        "channel_id": "caller: Slack channel: #it-access (CH_ITACCESS)"
+      }
+    },
+    {
+      "tool": "list_access_requests",
+      "arguments": {
+        "status": "pending",
+        "employee_id": "E19"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "employee_id": "caller: Target employee: Sarah Connor (E19)"
+      }
+    },
+    {
+      "tool": "get_current_access",
+      "arguments": {
+        "app_id": "APP-SEC",
+        "employee_id": "E19"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "employee_id": "caller: Target employee: Sarah Connor (E19)"
+      }
+    },
+    {
+      "tool": "get_approval_status",
+      "arguments": {
+        "request_id": "AR-106"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "request_id": "caller: Target request ID: AR-106"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "task": "pick_up_an_access_request_from_slack_and_reply_in_the_thread_after_approval",
+    "counterparty": "it_lead",
+    "disposition": "temporary_access_request",
+    "overlay_vector": "none",
+    "interaction": "collaborative",
+    "overlay_intensity": "absent",
+    "interface": "chat",
+    "overlay": "none"
+  },
+  "sub_goals": [
+    "status_reported_from_access_system",
+    "duplicate_access_handled"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

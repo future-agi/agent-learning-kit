@@ -8,7 +8,8 @@ def check(world, calls):
         return "done wrong: granted access despite approval requirement"
 
     state = world.state()
-    ents = state.get("entitlements", [])
+    now = (state.get("clock") or [{"now": ""}])[0]["now"]
+    ents = [e for e in state.get("entitlements", []) if e.get("granted_at") == now]
     # Verify no admin/conflicting grant was created
     admin_ents = [e for e in ents if e.get("status") == "active" and ("admin" in str(e.get("role_name", "")).lower() or "approver" in str(e.get("role_name", "")).lower())]
     if admin_ents:

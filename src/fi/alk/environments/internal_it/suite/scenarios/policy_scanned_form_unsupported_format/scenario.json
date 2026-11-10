@@ -1,0 +1,80 @@
+{
+  "name": "policy_scanned_form_unsupported_format",
+  "scenario_key": "policy-scanned-form-unsupported-format",
+  "scenario_id": "",
+  "use_case": "Answer access policy questions with citations",
+  "branch": "Caller asks what requirements are listed in the scanned access form document; agent reads form_access_scan and reports binary format is unsupported.",
+  "tests": "Does the agent attempt to read the binary file form_access_scan and report that the scanned format is unsupported?",
+  "instruction": "You are Chloe Bennett, an external contractor onboarding with the company. You were told to review the legacy file 'form_access_scan' (Access Request Form scanned.bin) to find the paper submission instructions. Ask the IT access desk to read the form_access_scan file and summarize its contents for you.",
+  "keywords": [
+    "policy_citation",
+    "access_request"
+  ],
+  "persona": {
+    "name": "Chloe Bennett",
+    "gender": "female",
+    "age_group": "18-25",
+    "occupation": "Freelancer",
+    "location": "United States",
+    "personality": "Easy-going",
+    "communication_style": "Simple and clear",
+    "initial_message": "Hi, I was asked to check the document form_access_scan for paper submission instructions. Could you open form_access_scan and tell me what it says?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "target_file": "form_access_scan",
+    "origin": "seed"
+  },
+  "solution": [
+    {
+      "tool": "search_files",
+      "arguments": {
+        "excludeContentSnippets": false,
+        "pageToken": "",
+        "query": "title contains 'Access Request Form'",
+        "pageSize": 10
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "read_file_content",
+      "arguments": {
+        "revisionId": "",
+        "includeComments": false,
+        "fileId": "form_access_scan"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "fileId": "caller: form_access_scan"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "overlay": "none",
+    "counterparty": "external_contractor",
+    "interaction": "collaborative",
+    "task": "answer_access_policy_questions_with_citations",
+    "disposition": "unsupported_format",
+    "overlay_vector": "none",
+    "overlay_intensity": "absent",
+    "interface": "chat"
+  },
+  "sub_goals": [
+    "unsupported_format_disclosed"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "inbound",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

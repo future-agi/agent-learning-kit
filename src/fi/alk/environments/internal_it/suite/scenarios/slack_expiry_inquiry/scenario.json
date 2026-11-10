@@ -1,0 +1,77 @@
+{
+  "name": "slack_expiry_inquiry",
+  "scenario_key": "slack-expiry-inquiry",
+  "scenario_id": "",
+  "use_case": "Pick up an access request from Slack and reply in the thread after approval",
+  "branch": "Ian Malcolm asked in #it-access when his reporting access expires; IT desk reads the Slack thread and looks up his entitlement expiry dates",
+  "tests": "reads Ian Malcolm's Slack thread in #it-access and looks up his entitlement expiry details",
+  "instruction": "You are Leila Thorne, an IT operations lead. Ian Malcolm (E09) asked in #it-access (message IM10) when his reporting editor access expires. You want the IT assistant to read the Slack thread and retrieve Ian's active entitlement expiry details to answer his question accurately.\n\nYour details:\nTarget employee: Ian Malcolm (E09)\nSlack channel: #it-access (CH_ITACCESS)\nMessage timestamp: 1792926000.000010",
+  "keywords": [
+    "expiry_check"
+  ],
+  "persona": {
+    "name": "Leila Thorne",
+    "gender": "female",
+    "age_group": "25-32",
+    "occupation": "Engineer",
+    "location": "United States",
+    "personality": "Analytical",
+    "communication_style": "Direct and concise",
+    "initial_message": "Ian Malcolm asked in #it-access (IM10) when his reporting access ends. Could you inspect the thread and check his entitlement expiry?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "employee_id": "E09",
+    "message_ts": "1792926000.000010",
+    "origin": "seed",
+    "channel_id": "CH_ITACCESS"
+  },
+  "solution": [
+    {
+      "tool": "slack_read_thread",
+      "arguments": {
+        "message_ts": "1792926000.000010",
+        "channel_id": "CH_ITACCESS"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_entitlement_expiry",
+      "arguments": {
+        "employee_id": "E09"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "employee_id": "caller: Target employee: Ian Malcolm (E09)"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "overlay_vector": "none",
+    "overlay": "none",
+    "interface": "chat",
+    "task": "pick_up_an_access_request_from_slack_and_reply_in_the_thread_after_approval",
+    "overlay_intensity": "absent",
+    "interaction": "collaborative",
+    "disposition": "expiry_inquiry",
+    "counterparty": "it_lead"
+  },
+  "sub_goals": [
+    "expiry_reported"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

@@ -1,0 +1,81 @@
+{
+  "name": "policy_sod_role_conflicts_matrix",
+  "scenario_key": "policy-sod-role-conflicts-matrix",
+  "scenario_id": "",
+  "use_case": "Answer access policy questions with citations",
+  "branch": "Caller inquires which roles mutually conflict under separation of duties policy across company applications; agent reads sod_matrix.",
+  "tests": "Does the agent locate and read the Separation of Duties Matrix document (sod_matrix) to cite the incompatible role pairs?",
+  "instruction": "You are Marcus Brody, an internal audit assistant. You are reviewing access governance rules and want to know which application roles are listed as incompatible under the company's Separation of Duties policy. Ask the IT access desk which roles conflict with each other.",
+  "keywords": [
+    "policy_citation",
+    "sod_conflict"
+  ],
+  "persona": {
+    "name": "Marcus Brody",
+    "gender": "male",
+    "age_group": "32-40",
+    "occupation": "Accountant",
+    "location": "United States",
+    "personality": "Detail-oriented",
+    "communication_style": "Detailed and elaborate",
+    "initial_message": "Could you look up our Separation of Duties policy matrix and tell me which specific application roles conflict with each other?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "target_file": "sod_matrix",
+    "origin": "seed"
+  },
+  "solution": [
+    {
+      "tool": "search_files",
+      "arguments": {
+        "excludeContentSnippets": false,
+        "pageSize": 10,
+        "pageToken": "",
+        "query": "title contains 'Separation of Duties'"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "read_file_content",
+      "arguments": {
+        "revisionId": "",
+        "fileId": "sod_matrix",
+        "includeComments": false
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "fileId": "record: drive_files file_id='sod_matrix'"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "overlay_vector": "none",
+    "overlay_intensity": "absent",
+    "disposition": "policy_inquiry",
+    "interface": "chat",
+    "interaction": "inquisitive",
+    "counterparty": "standard_employee",
+    "overlay": "none",
+    "task": "answer_access_policy_questions_with_citations"
+  },
+  "sub_goals": [
+    "policy_document_read_from_drive",
+    "policy_source_cited"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "inbound",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

@@ -1,0 +1,84 @@
+{
+  "name": "policy_tool_evaluation_finance_viewer",
+  "scenario_key": "policy-tool-evaluation-finance-viewer",
+  "scenario_id": "",
+  "use_case": "Answer access policy questions with citations",
+  "branch": "Caller asks about policy rules, approval routing, and SoD constraints for APP-FIN viewer role; agent invokes check_access_policy without creating a ticket.",
+  "tests": "Does the agent verify employee E424 and evaluate policy rules via check_access_policy without prematurely creating tickets or granting access?",
+  "instruction": "You are Daniel Craig (employee ID E424), a newly transferred financial analyst. You want to understand the policy requirements, approval chain, and any separation of duties rules associated with the viewer role for Financial Ledger (APP-FIN) before you submit an official request. Ask the IT access desk to check the access policy for employee E424 on APP-FIN for the viewer role.",
+  "keywords": [
+    "policy_citation",
+    "approval_routing",
+    "least_privilege"
+  ],
+  "persona": {
+    "name": "Daniel Craig",
+    "gender": "male",
+    "age_group": "40-50",
+    "occupation": "Accountant",
+    "location": "United Kingdom",
+    "personality": "Detail-oriented",
+    "communication_style": "Formal and polite",
+    "initial_message": "Hello, I am Daniel Craig (E424). Could you check the access policy and approval requirements for me on Financial Ledger (APP-FIN) for the viewer role?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "origin": "generated",
+    "employee_id": "E424",
+    "target_role": "viewer",
+    "target_app": "APP-FIN"
+  },
+  "solution": [
+    {
+      "tool": "verify_employee",
+      "arguments": {
+        "employee_id": "E424"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "employee_id": "caller: Daniel Craig (E424)"
+      }
+    },
+    {
+      "tool": "check_access_policy",
+      "arguments": {
+        "app_id": "APP-FIN",
+        "role_name": "viewer",
+        "employee_id": "E424"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "app_id": "caller: APP-FIN",
+        "role_name": "caller: viewer"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "interface": "chat",
+    "interaction": "collaborative",
+    "disposition": "policy_inquiry",
+    "counterparty": "transferred_employee",
+    "task": "answer_access_policy_questions_with_citations",
+    "overlay_vector": "none",
+    "overlay_intensity": "absent",
+    "overlay": "none"
+  },
+  "sub_goals": [
+    "effective_policy_consulted",
+    "least_privilege_role_explained"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "inbound",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

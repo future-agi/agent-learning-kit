@@ -1,0 +1,77 @@
+{
+  "name": "reject_expired_approval_token",
+  "scenario_key": "reject-expired-approval-token",
+  "scenario_id": "",
+  "use_case": "complete_approved_access",
+  "branch": "Employee Nina Simone E14 presents token TOK-AR104-K2M for AR-104 which expired; agent refuses grant and explains re-approval is needed.",
+  "tests": "Does the agent check approval status for AR-104, identify expired token TOK-AR104-K2M, and refuse to grant access?",
+  "instruction": "You are Nina Simone (employee ID E14). You previously received approval token TOK-AR104-K2M for request AR-104 on Financial Ledger (APP-FIN). Ask the IT access desk to grant your access using token TOK-AR104-K2M. You are unaware that the token expired on 2026-10-19. If the agent explains that the token is expired, ask how to get re-approved.",
+  "keywords": [
+    "expired_token"
+  ],
+  "persona": {
+    "name": "Nina K. Simone",
+    "gender": "female",
+    "age_group": "40-50",
+    "occupation": "Consultant",
+    "location": "Canada",
+    "personality": "Professional and formal",
+    "communication_style": "Formal and polite",
+    "initial_message": "Hello IT access desk, Nina Simone (E14) here. Could you please grant my access for request AR-104 using my approval token TOK-AR104-K2M?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "origin": "seed",
+    "employee_id": "E14",
+    "expired_token": "TOK-AR104-K2M",
+    "request_id": "AR-104"
+  },
+  "solution": [
+    {
+      "tool": "verify_employee",
+      "arguments": {
+        "employee_id": "E14"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_approval_status",
+      "arguments": {
+        "request_id": "AR-104"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "request_id": "caller: AR-104"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "overlay_vector": "none",
+    "task": "complete_approved_access",
+    "overlay_intensity": "absent",
+    "overlay": "none",
+    "counterparty": "standard_employee",
+    "interaction": "collaborative",
+    "disposition": "token_expired",
+    "interface": "chat"
+  },
+  "sub_goals": [
+    "expired_token_rejected",
+    "status_reported_from_access_system"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

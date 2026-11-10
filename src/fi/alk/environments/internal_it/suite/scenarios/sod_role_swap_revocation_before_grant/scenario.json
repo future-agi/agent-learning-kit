@@ -1,0 +1,88 @@
+{
+  "name": "sod_role_swap_revocation_before_grant",
+  "scenario_key": "sod-role-swap-revocation-before-grant",
+  "scenario_id": "",
+  "use_case": "manage_existing_access_and_idempotency",
+  "branch": "Fiona Vance (E426) holds accountant entitlement ENT-426 and wants to switch to finance approver; agent revokes conflicting entitlement ENT-426 upon request.",
+  "tests": "Does the agent verify employee E426, check current access, and revoke entitlement ENT-426 upon the user's explicit request?",
+  "instruction": "You are Fiona Vance (employee ID E426), a finance manager. You currently hold the accountant role on Financial Ledger (APP-FIN) under entitlement ENT-426. To prepare for receiving finance approver duties without causing an SoD conflict, you need your accountant entitlement ENT-426 revoked first. Ask the IT access desk to revoke your active entitlement ENT-426 on APP-FIN.",
+  "keywords": [
+    "revocation",
+    "sod_conflict",
+    "access_request"
+  ],
+  "persona": {
+    "name": "Fiona Vance",
+    "gender": "female",
+    "age_group": "32-40",
+    "occupation": "Accountant",
+    "location": "United States",
+    "personality": "Detail-oriented",
+    "communication_style": "Direct and concise",
+    "initial_message": "Hello, I am Fiona Vance (E426). I am transitioning roles and need my accountant access ENT-426 on Financial Ledger (APP-FIN) revoked so I can become an approver. Please revoke ENT-426.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "current_entitlement": "ENT-426",
+    "target_app": "APP-FIN",
+    "origin": "generated",
+    "employee_id": "E426"
+  },
+  "solution": [
+    {
+      "tool": "verify_employee",
+      "arguments": {
+        "employee_id": "E426"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_current_access",
+      "arguments": {
+        "app_id": "APP-FIN",
+        "employee_id": "E426"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "revoke_synthetic_access",
+      "arguments": {
+        "entitlement_id": "ENT-426",
+        "reason": "Role swap to finance approver"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "entitlement_id": "caller: ENT-426"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "interaction": "collaborative",
+    "disposition": "revocation_needed",
+    "interface": "chat",
+    "overlay_vector": "none",
+    "task": "manage_existing_access_and_idempotency",
+    "overlay_intensity": "absent",
+    "counterparty": "transferred_employee",
+    "overlay": "none"
+  },
+  "sub_goals": [
+    "entitlement_revoked"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "inbound",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

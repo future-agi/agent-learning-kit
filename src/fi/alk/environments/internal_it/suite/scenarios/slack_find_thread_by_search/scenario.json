@@ -1,0 +1,87 @@
+{
+  "name": "slack_find_thread_by_search",
+  "scenario_key": "slack-find-thread-by-search",
+  "scenario_id": "",
+  "use_case": "Pick up an access request from Slack and reply in the thread after approval",
+  "branch": "IT lead asks about Ian's question regarding access expiry without knowing where it was asked; desk searches Slack messages for 'expire', reads thread IM10, and looks up entitlement expiry.",
+  "tests": "Does the agent search Slack for Ian's expiry question, read the thread, and report his entitlement expiry?",
+  "instruction": "You are the IT Lead contacting the IT access desk. Ian Malcolm asked somewhere in Slack about when his reporting editor access expires, but you don't know which channel or thread. Ask the IT access desk to find Ian's question in Slack and check when his reporting access expires.",
+  "keywords": [
+    "expiry"
+  ],
+  "persona": {
+    "name": "Garrett Hayes",
+    "gender": "male",
+    "age_group": "40-50",
+    "occupation": "",
+    "location": "United States",
+    "personality": "Professional and formal",
+    "communication_style": "Direct and concise",
+    "initial_message": "Ian Malcolm asked somewhere on Slack about when his reporting access expires, but I'm not sure where. Can you search Slack to find his message and let me know when his access expires?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "message_ts": "1792926000.000010",
+    "channel_id": "CH_ITACCESS",
+    "origin": "seed",
+    "employee_id": "E09"
+  },
+  "solution": [
+    {
+      "tool": "slack_search_public_and_private",
+      "arguments": {
+        "keywords": [
+          "expire"
+        ]
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "slack_read_thread",
+      "arguments": {
+        "message_ts": "1792926000.000010",
+        "channel_id": "CH_ITACCESS"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_entitlement_expiry",
+      "arguments": {
+        "employee_id": "E09"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "employee_id": "record: employees Ian Malcolm E09"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "interaction": "inquisitive",
+    "overlay_vector": "none",
+    "interface": "chat",
+    "disposition": "expiry_inquiry",
+    "task": "pick_up_an_access_request_from_slack_and_reply_in_the_thread_after_approval",
+    "overlay_intensity": "absent",
+    "counterparty": "it_lead",
+    "overlay": "none"
+  },
+  "sub_goals": [
+    "expiry_reported"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

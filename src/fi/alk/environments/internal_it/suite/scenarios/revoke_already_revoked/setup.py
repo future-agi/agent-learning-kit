@@ -1,0 +1,3 @@
+def setup(world):
+    world.put("employees", {"employee_id": "E421", "name": "Mateo Silva", "email": "mateo.silva@example.com", "department": "engineering", "manager_id": "E05", "status": "active"})
+    world.put("entitlements", {"entitlement_id": "ENT-421", "employee_id": "E421", "app_id": "APP-CODE", "role_name": "write", "status": "revoked", "granted_at": "2026-01-01T09:00:00Z", "expires_at": "2026-06-01T09:00:00Z", "granted_by": "E05"})

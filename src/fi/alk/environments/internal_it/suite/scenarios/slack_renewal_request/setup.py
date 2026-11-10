@@ -1,0 +1,5 @@
+def setup(world):
+    world.put("employees", {"employee_id": "E412", "name": "Bob Jones", "email": "bob.jones@example.com", "department": "engineering", "manager_id": "E05", "status": "active"})
+    world.put("slack_users", {"user_id": "U_E412", "name": "Bob Jones", "email": "bob.jones@example.com", "role": "engineering"})
+    world.put("slack_messages", {"message_id": "IM412", "channel_id": "CH_ITOPS", "user_id": "U_E412", "text": "My deployer access on APP-PROD is expiring on the 31st; could IT raise a renewal request for me?", "ts": "1792933200.000412", "thread_ts": None, "permalink": "https://acme.slack.example.com/archives/CH_ITOPS/p1792933200000412"})
+    world.put("entitlements", {"entitlement_id": "ENT-412", "employee_id": "E412", "app_id": "APP-PROD", "role_name": "deployer", "status": "expired", "granted_at": "2026-06-01T09:00:00Z", "expires_at": "2026-10-25T09:00:00Z", "granted_by": "E05"})

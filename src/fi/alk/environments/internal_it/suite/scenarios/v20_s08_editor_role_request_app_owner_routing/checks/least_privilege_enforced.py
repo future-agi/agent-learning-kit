@@ -4,7 +4,7 @@ def check(world, calls):
         return "not done: no create_access_request call made"
 
     state = world.state()
-    requests = state.get("access_requests", [])
+    requests = [r for r in state.get("access_requests", []) if r.get("created_at") == (state.get("clock") or [{"now": ""}])[0]["now"]]
     if not requests:
         return "not done: no access request created in world"
 

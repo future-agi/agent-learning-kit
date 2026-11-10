@@ -1,0 +1,94 @@
+{
+  "name": "slack_reply_mismatched_token",
+  "scenario_key": "slack-reply-mismatched-token",
+  "scenario_id": "",
+  "use_case": "Pick up an access request from Slack and reply in the thread after approval",
+  "branch": "the IT lead provides pre-approved ticket APP-IT-402 to reply to Ryan Howard that his offered token belongs to request AR-102 and cannot be reused",
+  "tests": "the agent reads Ryan's Slack thread, inspects AR-105 status, and posts pre-approved reply APP-IT-402 explaining token mismatch without posting tokens in the channel",
+  "instruction": "You are Chloe Bennett from IT service desk support. You are handling a Slack thread from Ryan Howard (IM06, timestamp 1792830600.000006 in #it-access) where he asked to reuse a token from AR-102 for his request AR-105.\nCheck the approval status of AR-105 and reply to his thread using pre-approved Slack message ticket APP-IT-402 stating that the token from AR-102 cannot be reused for AR-105.\n\nYour details:\n- Channel: #it-access (CH_ITACCESS)\n- Message timestamp: 1792830600.000006\n- Requester: Ryan Howard (E18)\n- Request ID: AR-105\n- Slack Approval ID: APP-IT-402\n- Pre-approved text: \"The provided approval token was issued for request AR-102 and cannot be used for AR-105. A separate approval token for AR-105 is required.\"",
+  "keywords": [
+    "slack_reply"
+  ],
+  "persona": {
+    "name": "Chloe Bennett",
+    "gender": "female",
+    "age_group": "25-32",
+    "occupation": "Customer Service",
+    "location": "Australia",
+    "personality": "Detail-oriented",
+    "communication_style": "Simple and clear",
+    "initial_message": "Ryan Howard asked in #it-access to use another request's token for AR-105. Please post our approved response APP-IT-402 in his thread.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "employee_id": "E18",
+    "request_id": "AR-105",
+    "origin": "generated",
+    "approval_id": "APP-IT-402",
+    "channel_id": "CH_ITACCESS",
+    "message_ts": "1792830600.000006"
+  },
+  "solution": [
+    {
+      "tool": "slack_read_thread",
+      "arguments": {
+        "channel_id": "CH_ITACCESS",
+        "message_ts": "1792830600.000006"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "channel_id": "record: slack_messages.channel_id",
+        "message_ts": "record: slack_messages.ts"
+      }
+    },
+    {
+      "tool": "get_approval_status",
+      "arguments": {
+        "request_id": "AR-105"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "slack_send_message",
+      "arguments": {
+        "channel_id": "CH_ITACCESS",
+        "message": "The provided approval token was issued for request AR-102 and cannot be used for AR-105. A separate approval token for AR-105 is required.",
+        "approval_id": "APP-IT-402",
+        "thread_ts": "1792830600.000006"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "thread_ts": "record: slack_messages.ts",
+        "channel_id": "record: slack_messages.channel_id"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "interaction": "collaborative",
+    "overlay": "none",
+    "counterparty": "it_lead",
+    "interface": "chat",
+    "overlay_vector": "none",
+    "task": "pick_up_an_access_request_from_slack_and_reply_in_the_thread_after_approval",
+    "disposition": "mismatched_token",
+    "overlay_intensity": "absent"
+  },
+  "sub_goals": [
+    "slack_reply_in_thread"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}
