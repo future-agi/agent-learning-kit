@@ -24,7 +24,14 @@ from .credentials import imported_by_agent
 from .failure_file import FAILURE_FILE
 from .instrumentation_evidence import _SKIPPED_DIRECTORIES, _imports
 from .job import FailureDomain, HarnessFailure, HarnessStage
-from .python_source import LARGEST_PARSED_MODULE, ParseBudget, TokenBudget, parsed, read_module
+from .python_source import (
+    LARGEST_PARSED_MODULE,
+    EscapeBudget,
+    ParseBudget,
+    TokenBudget,
+    parsed,
+    read_module,
+)
 from .source_folder import agent_folder, is_within
 
 logger = logging.getLogger(__name__)
@@ -112,6 +119,9 @@ _MARKER_START = re.compile(
     r"computer[_-]?[uU]se|ComputerUse|computer_\d{8}|@playwright/mcp|mcp-server-playwright"
 )
 _TOOLKIT = "PlayWrightBrowserToolkit"
+_WHOLE_NAMES = {
+    name: re.compile(rf"(?<!\w){re.escape(name)}(?!\w)", re.ASCII) for name in BROWSER_IMPORTS
+}
 # A Python file that names none of these holds no browser import or tool marker, so it isn't parsed.
 _PYTHON_NAMES = (
     *(name.encode() for name in sorted(BROWSER_IMPORTS)),
@@ -122,6 +132,8 @@ _TEST_FILES = ("test_*.py", "*_test.py", "conftest.py", "*.test.*", "*.spec.*")
 _SCRIPT_SUFFIXES = frozenset({".js", ".ts", ".mjs", ".cjs", ".tsx", ".jsx"})
 _CODE_SUFFIXES = _SCRIPT_SUFFIXES | {".py"}
 _LARGEST_CODE_FILE = 1024 * 1024
+# What one scan searches with regular expressions in files it can't decode (see _tools_in).
+_LARGEST_RAW_SEARCH = 1024 * 1024
 # Past this a repository holds the conversation up for longer than the rest of the scan is worth.
 _LARGEST_SCAN = 128 * 1024 * 1024
 # Scripts are read by regular expressions that call back for every string or comment: 128 MB of
@@ -417,8 +429,9 @@ def _python_markers(text: str, tokens: TokenBudget, path: Path) -> set[str]:
         return set()
     try:
         found = tokens.tokens(text)
-    except (ValueError, SyntaxError, tokenize.TokenError):
-        logger.debug("agent type scan read no markers from %s", path, exc_info=True)
+    except (ValueError, SyntaxError, tokenize.TokenError) as error:
+        # The type only: the error can quote a line of the customer's file.
+        logger.debug("agent type scan read no markers from %s: %s", path, type(error).__name__)
         return set()
     # Past the work, too, the file's markers aren't read.
     return set() if found is None else _markers(_python_code(found))
@@ -438,8 +451,8 @@ def _markers_in(path: Path) -> set[str]:
             return set()
         # As Node reads it: a stray byte that isn't UTF-8 becomes a replacement character.
         text = path.read_text(encoding="utf-8", errors="replace")
-    except (OSError, ValueError):
-        logger.debug("agent type scan read no markers from %s", path, exc_info=True)
+    except (OSError, ValueError) as error:
+        logger.debug("agent type scan read no markers from %s: %s", path, type(error).__name__)
         return set()
     return _markers(_SCRIPT_COMMENT_OR_STRING.sub(_script_kept, text))
 
@@ -517,6 +530,8 @@ def _tools_in(paths: Iterable[Path], local: set[str]) -> tuple[str, ...]:
     scanned = scripts = 0
     budget = ParseBudget()
     tokens = TokenBudget()
+    escapes = EscapeBudget()
+    searched = ParseBudget(_LARGEST_RAW_SEARCH)
     for path in sorted(filter(_is_read, paths), key=_reading_order):
         size = _file_size(path)
         # Never read, so it mustn't use up the limit before the code that is.
@@ -537,7 +552,9 @@ def _tools_in(paths: Iterable[Path], local: set[str]) -> tuple[str, ...]:
             elif path.suffix != ".py":
                 found |= _markers_in(path)
             elif (
-                text := read_module(path, _largest_read(path), _PYTHON_NAMES, undecoded := [])
+                text := read_module(
+                    path, _largest_read(path), _PYTHON_NAMES, undecoded := [], escapes
+                )
             ) is not None:
                 markers = _python_markers(text, tokens, path)
                 names = _imports_in(text, path) if budget.spend(text) else set()
@@ -548,10 +565,17 @@ def _tools_in(paths: Iterable[Path], local: set[str]) -> tuple[str, ...]:
                 # packages and tool markers it names, as bytes, count. That leads to a second
                 # look, never a refusal on its own. #224 does the same.
                 raw = undecoded[0].decode("latin-1")
-                imported |= {name for name in BROWSER_IMPORTS if name in raw}
-                found |= _markers(raw)
+                named = {name for name in BROWSER_IMPORTS if name in raw}
                 if _TOOLKIT in raw:
                     found.add(_TOOLKIT)
+                # The regular expressions try each place in the text, so only while the scan's
+                # total lasts: 1,023 crafted files held the save 9 s. Past it, a name counts
+                # wherever it appears, which can only bring a second look.
+                if searched.spend(raw):
+                    # Whole names only: "steelers" in a string is no import of steel.
+                    named = {name for name in named if _WHOLE_NAMES[name].search(raw)}
+                    found |= _markers(raw)
+                imported |= named
         except Exception:
             # A skipped file may be the agent's main one, and the reading then finds nothing.
             logger.warning("agent type scan skipped %s", path, exc_info=True)

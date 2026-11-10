@@ -858,7 +858,7 @@ def test_a_module_many_entries_name_is_read_once(tmp_path, monkeypatch):
     reads = []
     real = source_tool_evidence.read_module
     monkeypatch.setattr(
-        source_tool_evidence, "read_module", lambda path: reads.append(path) or real(path)
+        source_tool_evidence, "read_module", lambda path, **kw: reads.append(path) or real(path, **kw)
     )
 
     assert len(tool_evidence_problems(_named_twice(), source)) == 2

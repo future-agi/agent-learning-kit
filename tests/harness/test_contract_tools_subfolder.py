@@ -1805,12 +1805,13 @@ def test_a_prompt_path_named_again_is_resolved_once(tmp_path, repo, monkeypatch)
         ({"system_prompt_from": [{"path": "agents/a/p\x00.txt", "start_line": 1, "end_line": 1}]}, "is not a file in the source"),
         # Not found, so the tool's evidence is unproven, not refused.
         ({"tool_entrypoints": [{"tool": "add", "mode": "import", "module": "x." * 2500 + "t", "callable": "add"}]}, None),
+        ({"tool_entrypoints": [{"tool": "add", "mode": "import", "module": "x\x00.t", "callable": "add"}]}, None),
         ({"runtime": {"language": "python", "compose_file": "x/" * 2500 + "compose.yaml"}}, "runtime_compose_file_outside_subfolder"),
         # A program no system can open can't leave the folder; bundling refuses it.
         ({"runtime": {"language": "python", "command": ["python", "x/" * 2500 + "a.py"]}}, None),
         ({"runtime": {"language": "python", "command": ["python", "a\x00.py"]}}, None),
     ],
-    ids=["prompt-long", "prompt-nul", "module-long", "compose-long", "command-long", "command-nul"],
+    ids=["prompt-long", "prompt-nul", "module-long", "module-nul", "compose-long", "command-long", "command-nul"],
 )
 def test_a_path_no_system_can_open_is_answered_not_raised(tmp_path, repo, named, refused):
     # A path past the system's limit, or holding a NUL, raised out of the save before.
@@ -1958,8 +1959,10 @@ def test_a_root_compose_file_may_read_the_roots_env_file_and_name_a_volume(repo)
           "agents/a/sub/more.yaml": "services:\n  extra:\n    image: redis\n    volumes: ./data:/data\n"}, {}),
         ({"agents/a/compose.yaml": "services:\n  agent:\n    build: .\ninclude: [sub/more.yaml]\n",
           "agents/a/sub/more.yaml": "services:\n  extra:\n    image: redis\n    volumes:\n      - type: bind\n        target: /x\n"}, {}),
+        ({"agents/a/compose.yaml": "services:\n  agent:\n    build: .\ninclude: [sub/more.yaml]\n",
+          "agents/a/sub/more.yaml": "services:\n  extra:\n    image: redis\n    env_file: 5\n"}, {}),
     ],
-    ids=["int-key", "build-int", "volumes-string", "bind-without-source"],
+    ids=["int-key", "build-int", "volumes-string", "bind-without-source", "env-file-int"],
 )
 def test_a_compose_file_docker_refuses_is_left_to_bundling_not_raised(tmp_path, repo, files, runtime):
     # The sibling check catches only what the customer's files can cause; reading a malformed

@@ -859,8 +859,11 @@ def imported_by_agent(
                 hit = looked_up[candidate]
             elif lookups_left[0] <= 0:
                 return None
-            elif plain_folders is not None and not _no_link_above(
-                candidate.parent, root, plain_folders
+            elif (
+                plain_folders is not None
+                # The depth cut first: a script's import can name about 2,000 folders.
+                and len(candidate.parts) <= deepest
+                and not _no_link_above(candidate.parent, root, plain_folders)
             ):
                 lookups_left[0] -= 1
                 hit = None

@@ -5,7 +5,7 @@ import os
 from pathlib import Path
 from typing import Iterable
 
-from .python_source import ParseBudget, parsed, read_module
+from .python_source import EscapeBudget, ParseBudget, parsed, read_module
 from .source_folder import is_within
 
 _SKIPPED_DIRECTORIES = {
@@ -62,6 +62,7 @@ def _python_imports(root: Path, reached: Iterable[Path] = ()) -> set[str]:
     imported: set[str] = set()
     local: set[str] = set()
     budget = ParseBudget()
+    escapes = EscapeBudget()
     for directory, subdirectories, files in os.walk(root):
         if Path(directory) != root and any(
             name.endswith(".dist-info") for name in subdirectories
@@ -83,16 +84,18 @@ def _python_imports(root: Path, reached: Iterable[Path] = ()) -> set[str]:
                 # Only a module at the top of the repository sits ahead of the
                 # installed package on the import path.
                 local.add(file_name[: -len(".py")])
-            _read_imports(Path(directory) / file_name, budget, imported)
+            _read_imports(Path(directory) / file_name, budget, escapes, imported)
     for path in sorted(reached):
         # The folder's own files were read above.
         if path.suffix == ".py" and not is_within(path, root):
-            _read_imports(path, budget, imported)
+            _read_imports(path, budget, escapes, imported)
     return {name for name in imported if name.split(".")[0] not in local}
 
 
-def _read_imports(path: Path, budget: ParseBudget, imported: set[str]) -> None:
-    text = read_module(path, needles=_NAMES)
+def _read_imports(
+    path: Path, budget: ParseBudget, escapes: EscapeBudget, imported: set[str]
+) -> None:
+    text = read_module(path, needles=_NAMES, escapes=escapes)
     if text is None or not budget.spend(text):
         return
     if (tree := parsed(text)) is not None:

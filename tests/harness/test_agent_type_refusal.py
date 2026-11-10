@@ -704,6 +704,66 @@ def test_a_slow_codec_named_after_a_lone_cr_is_not_read(tmp_path, monkeypatch):
     assert decoded == []
 
 
+def test_an_import_spelled_in_escapes_is_found_under_unicode_escape(tmp_path):
+    # Python decodes the file before it reads it, so this runs `import playwright`.
+    (tmp_path / "agent.py").write_bytes(b"# coding: unicode_escape\nimport \\x70laywright\n")
+    assert browser_tools_found(tmp_path) == ["playwright"]
+
+
+def test_past_the_scans_unicode_escape_total_a_file_is_searched_as_bytes(tmp_path, monkeypatch):
+    from fi.alk.harness import python_source
+
+    monkeypatch.setattr(python_source, "LARGEST_ESCAPED_TOTAL", 0)
+    (tmp_path / "escaped.py").write_bytes(b"# coding: unicode_escape\nimport \\x70laywright\n")
+    (tmp_path / "plain.py").write_bytes(b"# coding: unicode_escape\nimport selenium\n")
+    assert browser_tools_found(tmp_path) == ["selenium"]
+
+
+@pytest.mark.parametrize(
+    "head",
+    [b"# coding: latin-1 \xe9\n", b"# -*- coding: cp1252 -*- Soci\xe9t\xe9\n", b"#!/usr/bin/env python \xe9\n# coding: latin-1\n"],
+    ids=["after-the-name", "emacs-style", "on-the-first-of-two-lines"],
+)
+def test_a_non_ascii_byte_on_the_coding_line_leaves_the_file_read(tmp_path, head):
+    # detect_encoding refuses such a line, but Python reads the file in the codec it names.
+    (tmp_path / "agent.py").write_bytes(head + b"import playwright\nNAME = '\xe9'\n")
+    assert browser_tools_found(tmp_path) == ["playwright"]
+
+
+def test_a_name_in_a_refused_codec_that_is_the_agents_own_module_does_not_count(tmp_path):
+    (tmp_path / "steel.py").write_text("x = 1\n", encoding="utf-8")
+    (tmp_path / "agent.py").write_bytes(b"# coding: idna\nimport steel\n")
+    assert browser_tools_found(tmp_path) == []
+
+
+def test_a_name_in_a_refused_codec_counts_only_as_a_whole_name(tmp_path):
+    (tmp_path / "agent.py").write_bytes(b"# coding: idna\nTEAM = 'steelers'\n")
+    assert browser_tools_found(tmp_path) == []
+
+
+def test_past_the_raw_search_total_a_name_counts_wherever_it_appears(tmp_path, monkeypatch):
+    monkeypatch.setattr(agent_type_check, "_LARGEST_RAW_SEARCH", 0)
+    (tmp_path / "agent.py").write_bytes(
+        b"# coding: idna\nTEAM = 'steelers'\nTOOL = 'computer-use-preview'\n"
+    )
+    # Not searched for whole names or markers, so the cheap search's superset stands: a second
+    # look at most.
+    assert browser_tools_found(tmp_path) == ["steel"]
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        b"# hi\r\r\nTOOL = 'computer-use-preview'\r\r\n",
+        b"x = 1 + \\\r2\rTOOL = 'computer-use-preview'\r",
+    ],
+    ids=["cr-cr-lf", "backslash-before-cr"],
+)
+def test_markers_after_cr_line_ends_are_read_as_python_reads_them(tmp_path, source):
+    (tmp_path / "agent.py").write_bytes(source)
+    assert browser_tools_found(tmp_path) == ["computer-use tool"]
+
+
 def test_a_coding_word_in_a_later_cr_line_is_not_the_cookie(tmp_path):
     # With only CRs, detect_encoding saw one line and took the string's "coding:" as the cookie.
     (tmp_path / "agent.py").write_bytes(
@@ -726,7 +786,8 @@ def test_a_python_file_the_readers_refuse_is_logged_at_debug(tmp_path, caplog):
     said = [(record.levelname, record.getMessage()) for record in caplog.records]
     path = str(tmp_path.resolve() / "broken.py")
     assert ("DEBUG", f"agent type scan read no imports from {path}") in said
-    assert ("DEBUG", f"agent type scan read no markers from {path}") in said
+    # The error's type only: its text can quote a line of the customer's file.
+    assert ("DEBUG", f"agent type scan read no markers from {path}: TokenError") in said
 
 
 def test_a_python_file_saved_with_a_bom_is_read(tmp_path):
@@ -3912,3 +3973,37 @@ def test_the_save_does_not_follow_an_import_through_a_folder_link(tmp_path):
     # bundling still follows it.
     assert web not in imported_by_agent(repo, "agents/a", lookup_limit=100_000)
     assert web in imported_by_agent(repo, "agents/a")
+
+
+def test_the_save_does_not_follow_an_import_through_a_link_two_folders_up(tmp_path, monkeypatch):
+    from fi.alk.harness.credentials import imported_by_agent
+
+    repo = _tree(
+        tmp_path / "repo",
+        {
+            "agents/a/agent.py": "import shared.deep.web\nimport shared.deep.page\n",
+            "common/__init__.py": "",
+            "common/deep/__init__.py": "",
+            "common/deep/web.py": "",
+            "common/deep/page.py": "",
+        },
+    )
+    (repo / "shared").symlink_to("common")
+    web = (repo / "common" / "deep" / "web.py").resolve()
+    looked: Counter[Path] = Counter()
+    real = Path.lstat
+    monkeypatch.setattr(Path, "lstat", lambda self: looked.update([self]) or real(self))
+    # The candidate's own folder isn't a link, the one above it is.
+    assert web not in imported_by_agent(repo, "agents/a", lookup_limit=100_000)
+    folders = {path: count for path, count in looked.items() if path.is_dir()}
+    assert folders and max(folders.values()) == 1
+    monkeypatch.undo()
+    assert web in imported_by_agent(repo, "agents/a")
+
+
+def test_a_script_import_naming_thousands_of_folders_does_not_raise_at_the_save(tmp_path):
+    from fi.alk.harness.credentials import imported_by_agent
+
+    deep = "/".join(["a"] * 2_000)
+    repo = _tree(tmp_path / "repo", {"agents/a/index.js": f'import "./{deep}/x";\n'})
+    assert imported_by_agent(repo, "agents/a", lookup_limit=100_000) is not None
