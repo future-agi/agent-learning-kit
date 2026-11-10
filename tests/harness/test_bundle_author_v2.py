@@ -5761,6 +5761,33 @@ def test_a_workspace_member_requires_what_its_shared_code_reads(tmp_path):
     assert required.get("B_ONLY_API_KEY") is not True
 
 
+@pytest.mark.parametrize("layout", ["libs/common/src/common", "libs/common/common"])
+def test_a_workspace_member_requires_what_another_member_it_imports_reads(tmp_path, layout):
+    # Dileep's third review: the shared code is its own member, installed by `uv run` and imported
+    # by its package name, in a src/ or a flat layout.
+    source = _repo(
+        tmp_path,
+        {
+            "pyproject.toml": '[tool.uv.workspace]\nmembers=["agents/*", "libs/*"]\n',
+            "agents/a/pyproject.toml": "[project]\nname='agent-a'\nversion='1'\n"
+            "dependencies=['common']\n[tool.uv.sources]\ncommon={workspace=true}\n",
+            "agents/b/pyproject.toml": "[project]\nname='agent-b'\nversion='1'\n",
+            "libs/common/pyproject.toml": "[project]\nname='common'\nversion='1'\n",
+            f"{layout}/__init__.py": "",
+            f"{layout}/llm.py": 'import os\nKEY = os.environ["SHARED_API_KEY"]\n',
+            "agents/a/agent.py": "from common import llm\n" + _callback(),
+            "agents/b/agent.py": _callback("B_ONLY_API_KEY"),
+        },
+    )
+
+    _, output = _bundle(tmp_path, source, "agents/a")
+
+    manifest = json.loads((output / "credentials.json").read_text())
+    required = {item["environment_name"]: item["required"] for item in manifest["requirements"]}
+    assert required["SHARED_API_KEY"] is True
+    assert required.get("B_ONLY_API_KEY") is not True
+
+
 def test_callable_without_its_own_callback_ignores_a_siblings(tmp_path):
     source = _repo(
         tmp_path,

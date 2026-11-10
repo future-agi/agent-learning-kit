@@ -728,7 +728,7 @@ def test_a_slow_codec_named_after_a_lone_cr_is_not_read(tmp_path, monkeypatch):
     assert decoded == []
 
 
-def test_the_coding_line_is_masked_without_a_python_pass_over_it(tmp_path, monkeypatch):
+def test_the_coding_line_is_cut_without_a_python_pass_over_it(tmp_path, monkeypatch):
     from fi.alk.harness import python_source
 
     # Every file's first two lines are looked at, and one line can be the whole 128 KB: a
@@ -741,6 +741,54 @@ def test_the_coding_line_is_masked_without_a_python_pass_over_it(tmp_path, monke
     path = tmp_path / "agent.py"
     path.write_bytes(b"# coding: latin-1 " + b"\xe9" * 100_000 + b"\nimport playwright\n")
     assert python_source.read_module(path) is not None
+
+
+def test_the_coding_lines_are_found_without_rewriting_the_file():
+    from fi.alk.harness.python_source import _coding
+
+    # Reviewer A: two whole-file passes for every .py, 1 ms for 128 KB of CRs. Found by where the
+    # lines end, it's a few microseconds; 2,000 such files stay well under a second.
+    raw = b"\r" * 131072
+    started = time.perf_counter()
+    for _ in range(2_000):
+        _coding(raw)
+    assert time.perf_counter() - started < 0.5
+
+
+def test_a_file_without_a_cookie_isnt_asked_of_detect_encoding(tmp_path, monkeypatch):
+    from fi.alk.harness import python_source
+
+    # Reviewer A: one first line can be the whole 128 KB, and every .py is asked.
+    asked: list[int] = []
+    real = python_source.tokenize.detect_encoding
+    monkeypatch.setattr(
+        python_source.tokenize, "detect_encoding", lambda readline: asked.append(1) or real(readline)
+    )
+    for name, body in [("plain", b"#" + b"x" * 100_000 + b"\nimport os\n"), ("crs", b"\r" * 100_000), ("bom", b"\xef\xbb\xbfx = 1\n")]:
+        (tmp_path / f"{name}.py").write_bytes(body)
+        assert python_source.read_module(tmp_path / f"{name}.py") is not None
+    assert asked == []
+    (tmp_path / "coded.py").write_bytes(b"# coding: latin-1\nx = '\xe9'\n")
+    assert python_source.read_module(tmp_path / "coded.py") == "# coding: latin-1\nx = '\xe9'\n"
+    assert asked == [1]
+
+
+@pytest.mark.parametrize(
+    "raw, head",
+    [
+        (b"a\nb\nc", b"a\nb"),
+        (b"a\r\nb\r\nc", b"a\nb"),
+        (b"a\rb\rc", b"a\nb"),
+        (b"a\r\rb", b"a\n"),
+        (b"only", b"only"),
+        (b"a\n", b"a\n"),
+    ],
+    ids=["lf", "crlf", "cr", "blank-second", "one-line", "one-ended-line"],
+)
+def test_the_first_two_lines_end_as_python_ends_them(raw, head):
+    from fi.alk.harness.python_source import _first_lines
+
+    assert _first_lines(raw) == head
 
 
 def test_an_import_joined_across_a_crlf_under_unicode_escape_is_found(tmp_path):
@@ -776,8 +824,10 @@ def test_past_the_unicode_escape_total_an_escape_before_a_name_is_a_boundary(
     from fi.alk.harness import python_source
 
     monkeypatch.setattr(python_source, "LARGEST_ESCAPED_TOTAL", 0)
-    (tmp_path / "agent.py").write_bytes(b"# coding: unicode_escape\nimport\\tplaywright\n")
-    assert browser_tools_found(tmp_path) == ["playwright"]
+    for n, escape in enumerate([b"\\t", b"\\x20", b"\\040", b"\\11", b"\\u0020", b"\\U00000020"]):
+        (tmp_path / f"agent{n}.py").write_bytes(b"# coding: unicode_escape\nimport" + escape + b"playwright\n")
+        assert browser_tools_found(tmp_path) == ["playwright"], escape
+        (tmp_path / f"agent{n}.py").unlink()
 
 
 def test_past_the_scans_unicode_escape_total_a_file_is_searched_as_bytes(tmp_path, monkeypatch):
@@ -863,6 +913,14 @@ def test_a_python_file_the_readers_refuse_is_logged_at_debug(tmp_path, caplog):
 def test_a_python_file_saved_with_a_bom_is_read(tmp_path):
     (tmp_path / "agent.py").write_bytes(
         b"\xef\xbb\xbffrom playwright.sync_api import sync_playwright\n"
+    )
+    assert browser_tools_found(tmp_path) == ["playwright"]
+
+
+def test_a_python_file_saved_with_a_bom_and_a_coding_line_is_read(tmp_path):
+    # Round 3 reviewer B: a file with no coding line skips the check, so a BOM test needs one.
+    (tmp_path / "agent.py").write_bytes(
+        b"\xef\xbb\xbf# coding: utf-8\nfrom playwright.sync_api import sync_playwright\n"
     )
     assert browser_tools_found(tmp_path) == ["playwright"]
 
@@ -3390,6 +3448,18 @@ def test_the_scan_reads_scripts_only_up_to_their_own_total(tmp_path, monkeypatch
     assert browser_tools_found(repo) == expected
 
 
+@pytest.mark.parametrize("limit, expected", [(80, ["playwright"]), (79, [])])
+def test_the_scan_searches_python_only_up_to_its_own_total(tmp_path, monkeypatch, limit, expected):
+    # Scripts don't count towards it.
+    repo = _tree(
+        tmp_path,
+        {"a.py": "x = 1  # " + "x" * 31, "b.py": "import playwright\n" + "x" * 22, "c.js": "x" * 500},
+    )
+    monkeypatch.setattr(agent_type_check, "_LARGEST_PYTHON_SCAN", limit)
+
+    assert browser_tools_found(repo) == expected
+
+
 def test_a_long_run_of_combining_marks_is_not_parsed():
     from fi.alk.harness.python_source import parsed
 
@@ -4026,8 +4096,9 @@ def test_the_walk_stops_reading_once_its_lookups_are_spent(tmp_path, monkeypatch
         lambda content, *rest: parsed.append(content) or real(content, *rest),
     )
 
-    # a.py's first lookup spends it all; nothing b.py names could be looked up.
-    assert credentials.imported_by_agent(repo, "agents/a", lookup_limit=1) == frozenset()
+    # One lookup for each folder's pyproject.toml, from agents/a up to the root, then a.py's first
+    # lookup spends the rest; nothing b.py names could be looked up.
+    assert credentials.imported_by_agent(repo, "agents/a", lookup_limit=4) == frozenset()
     assert parsed == ["import nowhere\n"]
 
 
@@ -4054,7 +4125,550 @@ def test_a_toolkit_whose_record_is_left_unread_is_not_the_customers_module(tmp_p
     assert browser_tools_in_agent(repo, "agents/a") == ["PlayWrightBrowserToolkit"]
 
 
-def test_the_save_does_not_follow_an_import_through_a_folder_link(tmp_path):
+_DEPENDS_ON_COMMON = (
+    "[project]\nname='agent-a'\nversion='1'\ndependencies=['common>=1']\n"
+    "[tool.uv.sources]\ncommon={workspace=true}\n"
+)
+
+
+@pytest.mark.parametrize(
+    "members, found, stopped",
+    [
+        ('["agents/*", "libs/*"]', True, False),
+        ('["agents/a", "libs/common"]', True, False),
+        ('["agents/*", "libs/*"]\nexclude=["libs/common"]', False, False),
+        ('["agents/*", "**/common"]', False, True),
+        ('["agents/*", "/abs/*", "../out/*", 5]', False, False),
+        ('["libs/*"]', False, False),
+    ],
+    ids=["glob", "literal", "excluded", "double-star-not-expanded", "invalid", "agent-not-a-member"],
+)
+def test_the_walk_looks_in_the_workspace_members_the_agent_depends_on(tmp_path, members, found, stopped):
+    from fi.alk.harness.credentials import imported_by_agent
+
+    repo = _tree(
+        tmp_path / "repo",
+        {
+            "pyproject.toml": f"[tool.uv.workspace]\nmembers={members}\n",
+            "agents/a/pyproject.toml": _DEPENDS_ON_COMMON,
+            "agents/a/agent.py": "from common import llm\n",
+            "libs/common/pyproject.toml": "[project]\nname='Common'\nversion='1'\n",
+            "libs/common/src/common/__init__.py": "",
+            "libs/common/src/common/llm.py": "",
+        },
+    )
+    llm = (repo / "libs" / "common" / "src" / "common" / "llm.py").resolve()
+    said: list[bool] = []
+
+    assert (llm in imported_by_agent(repo, "agents/a", lookup_limit=100_000, stopped=said)) is found
+    assert said == [stopped]
+
+
+@pytest.mark.parametrize(
+    "agent, sources, found",
+    [
+        ("dependencies=['common']\n[tool.uv.sources]\ncommon={workspace=true}\n", "", True),
+        # The source declared at the workspace root, as uv lets every member inherit it.
+        ("dependencies=['common']\n", "[tool.uv.sources]\ncommon={workspace=true}\n", True),
+        # Named, but from the index, not the workspace: uv installs that one instead.
+        ("dependencies=['common']\n", "", False),
+        # Its source, but not asked for: not installed.
+        ("[tool.uv.sources]\ncommon={workspace=true}\n", "", False),
+        # The build syncs with --no-dev, so the dev group isn't installed; a default group is.
+        ("[dependency-groups]\ndev=['common']\n[tool.uv.sources]\ncommon={workspace=true}\n", "", False),
+        (
+            "[dependency-groups]\nlint=['common']\n[tool.uv]\ndefault-groups=['lint']\n"
+            "[tool.uv.sources]\ncommon={workspace=true}\n",
+            "",
+            True,
+        ),
+        ("[dependency-groups]\nlint=['common']\n[tool.uv.sources]\ncommon={workspace=true}\n", "", False),
+        # Which extras the build asks for isn't known at the save: all of the agent's count.
+        ("[project.optional-dependencies]\nllm=['common']\n[tool.uv.sources]\ncommon={workspace=true}\n", "", True),
+        # A list of sources, each with its own marker.
+        (
+            "dependencies=['common']\n[tool.uv.sources]\ncommon=[{workspace=true, marker=\"sys_platform == 'linux'\"},"
+            " {workspace=true, marker=\"sys_platform != 'linux'\"}]\n",
+            "",
+            True,
+        ),
+        # Names compared as uv compares them.
+        ("dependencies=['Common>=1']\n[tool.uv.sources]\nCOMMON={workspace=true}\n", "", True),
+        ("dependencies=['common @ git+https://example.invalid/c']\n[tool.uv.sources]\ncommon={git='https://example.invalid/c'}\n", "", False),
+    ],
+    ids=[
+        "own-source",
+        "root-source",
+        "index-not-workspace",
+        "source-not-required",
+        "dev-group-not-installed",
+        "default-group",
+        "other-group-not-installed",
+        "extra",
+        "list-of-sources",
+        "names-normalised",
+        "git-source",
+    ],
+)
+def test_a_member_is_looked_in_only_when_uv_installs_it(tmp_path, agent, sources, found):
+    from fi.alk.harness.credentials import imported_by_agent
+
+    repo = _tree(
+        tmp_path / "repo",
+        {
+            "pyproject.toml": '[tool.uv.workspace]\nmembers=["agents/*", "libs/*"]\n' + sources,
+            "agents/a/pyproject.toml": "[project]\nname='agent-a'\nversion='1'\n" + agent,
+            "agents/a/agent.py": "from common import llm\n",
+            "libs/common/pyproject.toml": "[project]\nname='common'\nversion='1'\n",
+            "libs/common/common/__init__.py": "",
+            "libs/common/common/llm.py": "",
+        },
+    )
+    llm = (repo / "libs" / "common" / "common" / "llm.py").resolve()
+
+    assert (llm in imported_by_agent(repo, "agents/a", lookup_limit=100_000)) is found
+
+
+@pytest.mark.parametrize("layout", ["src", "flat"])
+def test_a_package_from_a_path_source_inside_the_repository_is_followed(tmp_path, layout):
+    from fi.alk.harness.credentials import imported_by_agent
+
+    # Reviewer A: not a workspace member, but `uv sync` installs it from the path.
+    package = "libs/common/src/common" if layout == "src" else "libs/common/common"
+    repo = _tree(
+        tmp_path / "repo",
+        {
+            "agents/a/pyproject.toml": "[project]\nname='agent-a'\nversion='1'\ndependencies=['common']\n"
+            "[tool.uv.sources]\ncommon={path='../../libs/common', editable=true}\n",
+            "agents/a/agent.py": "from common import llm\n",
+            "libs/common/pyproject.toml": "[project]\nname='common'\nversion='1'\n",
+            f"{package}/__init__.py": "",
+            f"{package}/llm.py": "",
+        },
+    )
+
+    assert (repo / package / "llm.py").resolve() in imported_by_agent(repo, "agents/a", lookup_limit=100_000)
+
+
+def test_a_path_source_out_of_the_repository_isnt_followed(tmp_path):
+    from fi.alk.harness.credentials import imported_by_agent
+
+    _tree(tmp_path / "out", {"pyproject.toml": "[project]\nname='common'\n", "common/llm.py": ""})
+    repo = _tree(
+        tmp_path / "repo",
+        {
+            "agents/a/pyproject.toml": "[project]\nname='agent-a'\nversion='1'\ndependencies=['common']\n"
+            "[tool.uv.sources]\ncommon={path='../../../out'}\n",
+            "agents/a/agent.py": "from common import llm\n",
+        },
+    )
+
+    looked: list[str] = []
+    real_lstat, real_scandir = Path.lstat, credentials_module().os.scandir
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(Path, "lstat", lambda self: looked.append(str(self)) or real_lstat(self))
+        patch.setattr(
+            credentials_module().os, "scandir", lambda path: looked.append(str(path)) or real_scandir(path)
+        )
+        assert imported_by_agent(repo, "agents/a", lookup_limit=100_000) == frozenset()
+    inside = str(repo.resolve())
+    assert not [path for path in looked if not (os.path.normpath(path) + "/").startswith(inside + "/")]
+
+
+def credentials_module():
+    from fi.alk.harness import credentials
+
+    return credentials
+
+
+def test_an_agent_folder_below_its_project_looks_in_the_projects_src(tmp_path):
+    from fi.alk.harness.credentials import imported_by_agent
+
+    repo = _tree(
+        tmp_path / "repo",
+        {
+            "agents/a/pyproject.toml": "[project]\nname='agent-a'\nversion='1'\n",
+            "agents/a/app/main.py": "from a_pkg import llm\n",
+            "agents/a/src/a_pkg/__init__.py": "",
+            "agents/a/src/a_pkg/llm.py": "",
+        },
+    )
+
+    assert (repo / "agents" / "a" / "src" / "a_pkg" / "llm.py").resolve() in imported_by_agent(
+        repo, "agents/a/app", lookup_limit=100_000
+    )
+
+
+def test_a_member_is_looked_in_only_for_its_own_package_names(tmp_path, monkeypatch):
+    from fi.alk.harness import credentials
+
+    # Reviewer A: 32 members, and every name the agent imports tried each one's two places.
+    names = [f"m{n}" for n in range(32)]
+    files = {
+        "pyproject.toml": '[tool.uv.workspace]\nmembers=["agents/*", "libs/*"]\n[tool.uv.sources]\n'
+        + "".join(f"{name}={{workspace=true}}\n" for name in names),
+        "agents/a/pyproject.toml": f"[project]\nname='a'\nversion='1'\ndependencies={names!r}\n",
+        "agents/a/agent.py": "import os\nimport m7.core\n",
+    }
+    files |= {f"libs/{name}/pyproject.toml": f"[project]\nname='{name}'\nversion='1'\n" for name in names}
+    files |= {f"libs/{name}/{name}/__init__.py": "" for name in names}
+    files["libs/m7/m7/core.py"] = ""
+    repo = _tree(tmp_path / "repo", files)
+    tried: list[Path] = []
+    real = credentials._file_inside
+    monkeypatch.setattr(credentials, "_file_inside", lambda place, *rest: tried.append(place) or real(place, *rest))
+
+    found = credentials.imported_by_agent(repo, "agents/a", lookup_limit=100_000)
+    assert (repo / "libs" / "m7" / "m7" / "core.py").resolve() in found
+    # `os` is in no member, and `m7` only in its own.
+    assert not [place for place in tried if "libs" in place.parts and "m7" not in place.parts]
+
+
+def test_a_name_past_the_depth_cut_builds_no_places(tmp_path, monkeypatch):
+    from fi.alk.harness import credentials
+
+    # Reviewer A: a name of 63 parts was joined to every place, uncharged, before it was refused.
+    deep = ".".join(["a"] * 63)
+    repo = _tree(tmp_path / "repo", {"agents/a/agent.py": "".join(f"import q{n}.{deep}\n" for n in range(200))})
+    deepest = len(repo.resolve().parts) + credentials._DEEPEST_FOLLOWED
+    joined: list[int] = []
+    real = Path.joinpath
+    monkeypatch.setattr(
+        Path,
+        "joinpath",
+        lambda self, *parts: (len(parts) > 1 and joined.append(len(self.parts) + len(parts)))
+        or real(self, *parts),
+    )
+
+    credentials.imported_by_agent(repo, "agents/a", lookup_limit=100_000)
+    # A name's 64 parts joined to a place: from the root it fits the cut, so it's looked for
+    # there; from the folder it doesn't, so it isn't built.
+    assert joined and max(joined) <= deepest
+
+
+def test_more_members_than_are_read_says_the_walk_stopped(tmp_path, monkeypatch):
+    from fi.alk.harness import credentials
+
+    monkeypatch.setattr(credentials, "_WORKSPACE_MEMBERS", 3)
+    files = {"pyproject.toml": '[tool.uv.workspace]\nmembers=["agents/*", "libs/*"]\n', "agents/a/agent.py": ""}
+    files |= {f"libs/m{n}/pyproject.toml": "" for n in range(5)}
+    repo = _tree(tmp_path / "repo", files).resolve()
+
+    assert credentials._workspace_dependencies(repo, repo / "agents" / "a", [1e9], {})[2]
+
+
+def test_a_long_pattern_through_a_link_to_its_own_folder_is_bounded(tmp_path):
+    from fi.alk.harness import credentials
+
+    # Reviewer A: each base, memoised or not, counts toward the entries looked at.
+    pattern = "*/" + "/".join(["a"] * 2_000)
+    files = {"pyproject.toml": f'[tool.uv.workspace]\nmembers=["{pattern}"]\n', "agents/a/agent.py": ""}
+    repo = _tree(tmp_path / "repo", files).resolve()
+    for n in range(50):
+        (repo / f"d{n}").mkdir()
+        (repo / f"d{n}" / "a").symlink_to(".")
+    started = time.monotonic()
+
+    assert credentials._workspace_dependencies(repo, repo / "agents" / "a", [1e9], {})[2]
+    assert time.monotonic() - started < 2
+
+
+def test_the_walk_up_the_parents_stops_once_it_is_cut(tmp_path, monkeypatch):
+    from fi.alk.harness import credentials
+
+    monkeypatch.setattr(credentials, "_PYPROJECTS_READ", 10)
+    repo = _tree(
+        tmp_path / "repo",
+        {"pyproject.toml": "[tool.uv.workspace]\nmembers=['a/*']\n", "a/b/pyproject.toml": "[project]\nname='b' # padding\n"},
+    ).resolve()
+    read: list[Path] = []
+    real = credentials._Workspace.table
+    monkeypatch.setattr(credentials._Workspace, "table", lambda self, folder: read.append(folder) or real(self, folder))
+
+    assert credentials._workspace_dependencies(repo, repo / "a" / "b", [1e9], {}) == (None, [], True)
+    # b's file is past the total, so nothing above it is read.
+    assert read == [repo / "a" / "b"]
+
+
+def test_the_extras_a_requirement_asks_of_a_member_are_followed_too(tmp_path):
+    from fi.alk.harness.credentials import imported_by_agent
+
+    repo = _tree(
+        tmp_path / "repo",
+        {
+            "pyproject.toml": '[tool.uv.workspace]\nmembers=["agents/*", "libs/*"]\n'
+            "[tool.uv.sources]\ncommon={workspace=true}\nhelper={workspace=true}\nunused={workspace=true}\n",
+            "agents/a/pyproject.toml": "[project]\nname='a'\nversion='1'\ndependencies=['common[llm]']\n",
+            "agents/a/agent.py": "import helper.x\nimport unused.x\n",
+            "libs/common/pyproject.toml": "[project]\nname='common'\nversion='1'\n"
+            "[project.optional-dependencies]\nllm=['helper']\nother=['unused']\n",
+            "libs/helper/pyproject.toml": "[project]\nname='helper'\nversion='1'\n",
+            "libs/helper/helper/__init__.py": "",
+            "libs/helper/helper/x.py": "",
+            "libs/unused/pyproject.toml": "[project]\nname='unused'\nversion='1'\n",
+            "libs/unused/unused/__init__.py": "",
+            "libs/unused/unused/x.py": "",
+        },
+    )
+    found = imported_by_agent(repo, "agents/a", lookup_limit=100_000)
+
+    assert (repo / "libs" / "helper" / "helper" / "x.py").resolve() in found
+    # common's other extra isn't asked for, so its package isn't installed.
+    assert (repo / "libs" / "unused" / "unused" / "x.py").resolve() not in found
+
+
+def test_a_sibling_agents_package_isnt_this_agents_code(tmp_path):
+    # Reviewer A: agents/b is a member, but agent a doesn't depend on it, so `uv run` doesn't
+    # install it, and its `mcp` package is no import of a's.
+    from fi.alk.harness.credentials import imported_by_agent
+
+    repo = _tree(
+        tmp_path / "repo",
+        {
+            "pyproject.toml": '[tool.uv.workspace]\nmembers=["agents/*"]\n',
+            "agents/a/pyproject.toml": "[project]\nname='agent-a'\nversion='1'\ndependencies=['mcp']\n",
+            "agents/a/agent.py": "from mcp import ClientSession\n",
+            "agents/b/pyproject.toml": "[project]\nname='agent-b'\nversion='1'\n",
+            "agents/b/mcp/__init__.py": "",
+            "agents/b/mcp/tools.py": "",
+        },
+    )
+
+    assert imported_by_agent(repo, "agents/a", lookup_limit=100_000) == frozenset()
+
+
+def test_the_walk_follows_members_a_member_depends_on_and_the_workspace_roots_own_package(tmp_path):
+    from fi.alk.harness.credentials import imported_by_agent
+
+    repo = _tree(
+        tmp_path / "repo",
+        {
+            "services/pyproject.toml": "[project]\nname='platform'\nversion='1'\n"
+            "dependencies=['core']\n[tool.uv.workspace]\nmembers=['agents/*', 'libs/*']\n"
+            "[tool.uv.sources]\ncore={workspace=true}\nplatform={workspace=true}\n",
+            "services/src/platform/__init__.py": "",
+            "services/agents/a/pyproject.toml": "[project]\nname='agent-a'\nversion='1'\n"
+            "dependencies=['platform']\n",
+            "services/agents/a/agent.py": "import platform.app\nimport core.db\n",
+            "services/src/platform/app.py": "",
+            "services/libs/core/pyproject.toml": "[project]\nname='core'\nversion='1'\n",
+            "services/libs/core/core/__init__.py": "",
+            "services/libs/core/core/db.py": "",
+        },
+    )
+    found = imported_by_agent(repo, "services/agents/a", lookup_limit=100_000)
+
+    assert (repo / "services" / "src" / "platform" / "app.py").resolve() in found
+    # platform asks for core, so uv installs it with a.
+    assert (repo / "services" / "libs" / "core" / "core" / "db.py").resolve() in found
+
+
+def test_a_member_matched_by_a_glob_may_be_a_link(tmp_path):
+    from fi.alk.harness.credentials import imported_by_agent
+
+    repo = _tree(
+        tmp_path / "repo",
+        {
+            "pyproject.toml": '[tool.uv.workspace]\nmembers=["agents/*", "libs/*"]\n',
+            "agents/a/pyproject.toml": _DEPENDS_ON_COMMON,
+            "agents/a/agent.py": "from common import llm\n",
+            "vendor/common/pyproject.toml": "[project]\nname='common'\nversion='1'\n",
+            "vendor/common/common/__init__.py": "",
+            "vendor/common/common/llm.py": "",
+        },
+    )
+    (repo / "libs").mkdir()
+    (repo / "libs" / "common").symlink_to("../vendor/common")
+
+    assert (repo / "vendor" / "common" / "common" / "llm.py").resolve() in imported_by_agent(
+        repo, "agents/a", lookup_limit=100_000
+    )
+
+
+@pytest.mark.parametrize("shape", ["bom", "nested"])
+def test_an_odd_pyproject_is_read_as_uv_reads_it_or_left_unread(tmp_path, shape):
+    from fi.alk.harness.credentials import imported_by_agent
+
+    workspace = '[tool.uv.workspace]\nmembers=["agents/*", "libs/*"]\n'
+    repo = _tree(
+        tmp_path / "repo",
+        {
+            "agents/a/pyproject.toml": _DEPENDS_ON_COMMON,
+            "agents/a/agent.py": "from common import llm\n",
+            "libs/common/pyproject.toml": "[project]\nname='common'\nversion='1'\n",
+            "libs/common/common/__init__.py": "",
+            "libs/common/common/llm.py": "",
+        },
+    )
+    if shape == "bom":
+        (repo / "pyproject.toml").write_bytes(b"\xef\xbb\xbf" + workspace.encode())
+    else:
+        # Nested past the parser's recursion limit: refused, not raised.
+        (repo / "pyproject.toml").write_text("a = " + "[" * 5_000 + "]" * 5_000 + "\n")
+    found = imported_by_agent(repo, "agents/a", lookup_limit=100_000)
+
+    assert ((repo / "libs" / "common" / "common" / "llm.py").resolve() in found) is (shape == "bom")
+
+
+def test_the_pyprojects_read_up_the_folders_parents_share_one_total(tmp_path, monkeypatch):
+    from fi.alk.harness import credentials
+
+    # Reviewer A's H1: 250 folders, each with a link to one large pyproject.toml, parsed each time.
+    repo = (tmp_path / "repo").resolve()
+    repo.mkdir()
+    (repo / "big.toml").write_text("a = [" + ",".join("1" for _ in range(100_000)) + "]\n")
+    folder = repo
+    for _ in range(40):
+        folder = folder / "d"
+        folder.mkdir()
+        (folder / "pyproject.toml").symlink_to(repo / "big.toml")
+    parsed: list[int] = []
+    import tomllib
+
+    real = tomllib.loads
+    monkeypatch.setattr(tomllib, "loads", lambda text: parsed.append(len(text)) or real(text))
+
+    _, followed, cut = credentials._workspace_dependencies(repo, folder, [1e9], {})
+    assert followed == [] and cut
+    assert sum(parsed) <= credentials._PYPROJECTS_READ
+
+
+@pytest.mark.parametrize("budget", [80.0, 150.0, 200.0, 260.0])
+def test_the_member_globs_stop_when_the_lookups_are_spent(tmp_path, monkeypatch, budget):
+    from fi.alk.harness import credentials
+
+    files = {"pyproject.toml": '[tool.uv.workspace]\nmembers=["agents/*", "*/*"]\n', "agents/a/agent.py": ""}
+    files |= {f"top{n}/sub/x.py": "" for n in range(60)}
+    repo = _tree(tmp_path / "repo", files).resolve()
+    left = [budget]
+    listed_with: list[float] = []
+    real = credentials.os.scandir
+    monkeypatch.setattr(credentials.os, "scandir", lambda path: listed_with.append(left[0]) or real(path))
+
+    _, followed, cut = credentials._workspace_dependencies(repo, repo / "agents" / "a", left, {})
+    assert cut and left[0] <= 0
+    # Not one listing once the budget ran out, and nothing looked up past it.
+    assert listed_with and min(listed_with) > 0
+    assert left[0] > -3
+
+
+def test_no_pyproject_is_read_once_the_lookups_are_spent(tmp_path):
+    from fi.alk.harness.credentials import _Workspace
+
+    repo = _tree(tmp_path / "repo", {"pyproject.toml": "[project]\nname='x'\n"}).resolve()
+    left = [0.0]
+    reader = _Workspace(repo, left, {})
+
+    assert reader.table(repo) is None and reader.cut
+    assert left == [0.0]
+
+
+def test_each_folder_up_to_the_root_is_charged_for_its_pyproject(tmp_path):
+    from fi.alk.harness.credentials import _workspace_dependencies
+
+    repo = _tree(tmp_path / "repo", {"a/b/c/x.py": ""}).resolve()
+    left = [100.0]
+
+    assert _workspace_dependencies(repo, repo / "a" / "b" / "c", left, {}) == (None, [], False)
+    # c, b, a and the root.
+    assert left == [96.0]
+
+
+def test_script_names_stop_being_tried_once_the_lookups_are_spent(tmp_path):
+    from fi.alk.harness.credentials import imported_by_agent
+
+    names = "".join(f'import "../../gone/m{n}";\n' for n in range(300))
+    repo = _tree(tmp_path / "repo", {"agents/a/index.js": names})
+    (repo / "gone").symlink_to("nowhere")
+    said: list[bool] = []
+
+    imported_by_agent(repo, "agents/a", lookup_limit=200, stopped=said)
+    assert said == [True]
+
+
+def test_a_name_tries_no_more_places_once_the_lookups_are_spent(tmp_path, monkeypatch):
+    from fi.alk.harness import credentials
+
+    # Reviewer A's H2: every name went on through every member's places, uncharged.
+    names = [f"m{n}" for n in range(30)]
+    files = {
+        "pyproject.toml": '[tool.uv.workspace]\nmembers=["agents/*", "libs/*"]\n[tool.uv.sources]\n'
+        + "".join(f"{name}={{workspace=true}}\n" for name in names),
+        "agents/a/pyproject.toml": f"[project]\nname='a'\nversion='1'\ndependencies={names!r}\n",
+        "agents/a/agent.py": "".join(f"import n{n}\n" for n in range(2_000)),
+    }
+    files |= {f"libs/{name}/pyproject.toml": f"[project]\nname='{name}'\nversion='1'\n" for name in names}
+    repo = _tree(tmp_path / "repo", files)
+    built: list[int] = []
+    real = Path.with_suffix
+    monkeypatch.setattr(Path, "with_suffix", lambda self, suffix: built.append(1) or real(self, suffix))
+
+    credentials.imported_by_agent(repo, "agents/a", lookup_limit=1_000)
+    # 64 places a name: without the stop, every one of the 2,000 names builds them all.
+    assert len(built) < 2_000
+
+
+def test_a_stopped_save_walk_is_logged(tmp_path, caplog):
+    from fi.alk.harness import agent_type_check
+
+    names = "".join(f"import gone.m{n}\n" for n in range(300))
+    repo = _tree(tmp_path / "repo", {"agents/a/agent.py": names})
+    (repo / "gone").symlink_to("nowhere")
+    with caplog.at_level("WARNING", logger=agent_type_check.__name__):
+        agent_type_check._walked(repo.resolve(), "agents/a")
+
+    assert any("stopped at its limits" in record.getMessage() for record in caplog.records) is False
+    with caplog.at_level("WARNING", logger=agent_type_check.__name__):
+        import fi.alk.harness.agent_type_check as module
+
+        original = module._WALKED_LOOKUPS
+        module._WALKED_LOOKUPS = 200
+        try:
+            module._walked(repo.resolve(), "agents/a")
+        finally:
+            module._WALKED_LOOKUPS = original
+    assert any("stopped at its limits" in record.getMessage() for record in caplog.records)
+
+
+def test_a_workspace_pattern_out_of_the_root_isnt_listed(tmp_path, monkeypatch):
+    from fi.alk.harness import credentials
+
+    repo = _tree(
+        tmp_path / "repo",
+        {"pyproject.toml": '[tool.uv.workspace]\nmembers=["../*", "/*"]\n', "agents/a/agent.py": "x = 1\n"},
+    )
+    listed: list[str] = []
+    real = credentials.os.scandir
+    monkeypatch.setattr(credentials.os, "scandir", lambda path: listed.append(str(path)) or real(path))
+
+    credentials.imported_by_agent(repo, "agents/a", lookup_limit=100_000)
+    assert not [path for path in listed if not Path(path).resolve().is_relative_to(repo.resolve())]
+
+
+def test_the_walk_follows_at_most_so_many_workspace_members(tmp_path, monkeypatch):
+    from fi.alk.harness import credentials
+
+    monkeypatch.setattr(credentials, "_WORKSPACE_DEPENDENCIES", 3)
+    names = [f"m{n}" for n in range(5)]
+    files = {
+        "pyproject.toml": '[tool.uv.workspace]\nmembers=["agents/*", "libs/*"]\n[tool.uv.sources]\n'
+        + "".join(f"{name}={{workspace=true}}\n" for name in names),
+        "agents/a/pyproject.toml": f"[project]\nname='a'\nversion='1'\ndependencies={names!r}\n",
+        "agents/a/agent.py": "x = 1\n",
+    }
+    files |= {f"libs/{name}/pyproject.toml": f"[project]\nname='{name}'\nversion='1'\n" for name in names}
+    repo = _tree(tmp_path / "repo", files)
+    said: list[bool] = []
+
+    credentials.imported_by_agent(repo, "agents/a", lookup_limit=100_000, stopped=said)
+    assert said == [True]
+    _, followed, cut = credentials._workspace_dependencies(
+        repo.resolve(), (repo / "agents" / "a").resolve(), [1e9], {}
+    )
+    assert len(followed) == 3 and cut
+
+
+def test_the_save_follows_an_import_through_a_folder_link_as_bundling_does(tmp_path):
     from fi.alk.harness.credentials import imported_by_agent
 
     repo = _tree(
@@ -4064,13 +4678,24 @@ def test_the_save_does_not_follow_an_import_through_a_folder_link(tmp_path):
     (repo / "shared").symlink_to("common")
     web = (repo / "common" / "web.py").resolve()
 
-    # Resolving through a link costs lookups the save can't charge, so at the save it's a miss;
-    # bundling still follows it.
-    assert web not in imported_by_agent(repo, "agents/a", lookup_limit=100_000)
+    # The link is followed to its target inside the repository, its lookups charged (Dileep's
+    # third review: instrumentation and the browser check are derived from this reach).
+    assert web in imported_by_agent(repo, "agents/a", lookup_limit=100_000)
     assert web in imported_by_agent(repo, "agents/a")
 
 
-def test_the_save_does_not_follow_an_import_through_a_link_two_folders_up(tmp_path, monkeypatch):
+@pytest.mark.parametrize("absolute", [True, False])
+def test_the_save_does_not_follow_a_folder_link_out_of_the_repository(tmp_path, absolute):
+    from fi.alk.harness.credentials import imported_by_agent
+
+    outside = _tree(tmp_path / "outside", {"web.py": "", "__init__.py": ""})
+    repo = _tree(tmp_path / "repo", {"agents/a/agent.py": "import shared.web\n"})
+    (repo / "shared").symlink_to(outside if absolute else "../outside")
+
+    assert imported_by_agent(repo, "agents/a", lookup_limit=100_000) == frozenset()
+
+
+def test_the_save_follows_a_link_two_folders_up_looking_each_folder_up_once(tmp_path, monkeypatch):
     from fi.alk.harness.credentials import imported_by_agent
 
     repo = _tree(
@@ -4089,11 +4714,307 @@ def test_the_save_does_not_follow_an_import_through_a_link_two_folders_up(tmp_pa
     real = Path.lstat
     monkeypatch.setattr(Path, "lstat", lambda self: looked.update([self]) or real(self))
     # The candidate's own folder isn't a link, the one above it is.
-    assert web not in imported_by_agent(repo, "agents/a", lookup_limit=100_000)
+    assert web in imported_by_agent(repo, "agents/a", lookup_limit=100_000)
     folders = {path: count for path, count in looked.items() if path.is_dir()}
     assert folders and max(folders.values()) == 1
-    monkeypatch.undo()
-    assert web in imported_by_agent(repo, "agents/a")
+
+
+@pytest.mark.parametrize("target", ["loop", "missing", "file"])
+def test_the_save_takes_a_folder_link_it_cant_follow_as_a_miss(tmp_path, target):
+    from fi.alk.harness.credentials import imported_by_agent
+
+    repo = _tree(tmp_path / "repo", {"agents/a/agent.py": "import shared.web\n", "notes.txt": ""})
+    if target == "loop":
+        (repo / "other").symlink_to("shared")
+        (repo / "shared").symlink_to("other")
+    elif target == "missing":
+        (repo / "shared").symlink_to("nowhere")
+    else:
+        (repo / "shared").symlink_to("notes.txt")
+
+    assert imported_by_agent(repo, "agents/a", lookup_limit=100_000) == frozenset()
+
+
+def test_the_save_follows_a_link_out_of_the_repository_and_back_in(tmp_path):
+    from fi.alk.harness.credentials import imported_by_agent
+
+    repo = _tree(
+        tmp_path / "repo",
+        {"agents/a/agent.py": "import shared.web\n", "common/__init__.py": "", "common/web.py": ""},
+    )
+    (repo / "shared").symlink_to("../repo/common")
+
+    assert (repo / "common" / "web.py").resolve() in imported_by_agent(
+        repo, "agents/a", lookup_limit=100_000
+    )
+
+
+def test_a_name_under_a_link_that_leads_nowhere_still_spends_the_lookups(tmp_path):
+    from fi.alk.harness.credentials import imported_by_agent
+
+    names = "".join(f"import gone.m{n}\n" for n in range(300))
+    repo = _tree(tmp_path / "repo", {"agents/a/agent.py": names})
+    (repo / "gone").symlink_to("nowhere")
+    said: list[bool] = []
+
+    # The folder is looked up once, but each name tried under it is still charged a miss.
+    imported_by_agent(repo, "agents/a", lookup_limit=200, stopped=said)
+    assert said == [True]
+
+
+def test_a_candidate_past_the_depth_cut_isnt_walked_folder_by_folder(tmp_path, monkeypatch):
+    from fi.alk.harness import credentials
+
+    deep = "/".join(["a"] * 2_000)
+    repo = _tree(tmp_path / "repo", {"agents/a/index.js": f'import "./{deep}/x";\n'})
+    deepest = len(repo.resolve().parts) + credentials._DEEPEST_FOLLOWED
+    walked: list[int] = []
+    real = credentials._real_folder
+    monkeypatch.setattr(
+        credentials,
+        "_real_folder",
+        lambda folder, *rest: walked.append(len(folder.parts)) or real(folder, *rest),
+    )
+
+    credentials.imported_by_agent(repo, "agents/a", lookup_limit=100_000)
+    # Each would keep a path for each of its 2,000 folders, for every such name.
+    assert all(parts < deepest for parts in walked)
+
+
+def test_each_folder_and_each_link_is_charged_once(tmp_path):
+    from fi.alk.harness.credentials import _real_folder
+
+    repo = _tree(tmp_path / "repo", {"real/deep/x.py": ""}).resolve()
+    (repo / "link").symlink_to("real")
+    known: dict = {}
+    left = [100.0]
+
+    # One for each folder below the root.
+    assert _real_folder(repo / "real" / "deep", repo, known, left) == repo / "real" / "deep"
+    assert left == [98.0]
+    # The link: one for it, one for its target, whose folder is known already.
+    assert _real_folder(repo / "link" / "deep", repo, known, left) == repo / "real" / "deep"
+    assert left == [95.0]
+    # Known: nothing more.
+    assert _real_folder(repo / "link" / "deep", repo, known, left) == repo / "real" / "deep"
+    assert left == [95.0]
+
+
+def test_the_save_follows_a_script_import_up_a_folder_and_through_a_link(tmp_path):
+    # Reviewer B's M1: a literal ".." from the import, then a link that climbs with ".." itself.
+    from fi.alk.harness.agent_type_check import browser_tools_in_agent
+    from fi.alk.harness.credentials import imported_by_agent
+
+    repo = _tree(
+        tmp_path / "repo",
+        {
+            "agents/a/index.ts": 'import "../shared/llm";\n',
+            "libs/common/llm.ts": 'import { chromium } from "playwright";\n',
+            "libs/common/package.json": '{"dependencies": {"playwright": "1.48.0"}}',
+        },
+    )
+    (repo / "agents" / "shared").symlink_to("../libs/common")
+
+    assert (repo / "libs" / "common" / "llm.ts").resolve() in imported_by_agent(
+        repo, "agents/a", lookup_limit=100_000
+    )
+    assert browser_tools_in_agent(repo, "agents/a") == ["playwright"]
+
+
+def test_a_path_outside_the_repository_isnt_mapped_into_it(tmp_path):
+    from fi.alk.harness.credentials import imported_by_agent
+
+    # An absolute import of a file outside, named as one inside is: not that one.
+    repo = _tree(
+        tmp_path / "repo",
+        {"agents/a/index.js": 'import x from "/etc/zz_not_here.js";\n', "zz_not_here.js": ""},
+    )
+
+    assert imported_by_agent(repo, "agents/a", lookup_limit=100_000) == frozenset()
+
+
+def test_each_folder_on_the_way_to_a_candidate_is_walked_once(tmp_path, monkeypatch):
+    from fi.alk.harness import credentials
+
+    repo = _tree(
+        tmp_path / "repo",
+        {"agents/a/agent.py": "".join(f"import p.q.r.m{n}\n" for n in range(50)), "p/q/r/m0.py": ""},
+    )
+    (repo / "link").symlink_to("p")
+    stepped: list[Path] = []
+    real = credentials._step
+    monkeypatch.setattr(credentials, "_step", lambda name, *rest: stepped.append(name) or real(name, *rest))
+
+    credentials.imported_by_agent(repo, "agents/a", lookup_limit=100_000)
+    # Each folder from the root down is stepped through once, whatever the number of names in it.
+    assert len(stepped) == len(set(stepped))
+
+
+def test_a_scripts_dot_dot_after_a_link_is_taken_as_node_takes_it(tmp_path):
+    # Node joins "../shared/../x" as written before it reads the disk, so the ".." after the link
+    # leaves the link, not its target.
+    from fi.alk.harness.credentials import imported_by_agent
+
+    repo = _tree(
+        tmp_path / "repo",
+        {"agents/a/index.ts": 'import "../shared/../x";\n', "agents/x.ts": "", "libs/x.ts": "", "libs/common/y.ts": ""},
+    )
+    (repo / "agents" / "shared").symlink_to("../libs/common")
+    found = imported_by_agent(repo, "agents/a", lookup_limit=100_000)
+
+    assert (repo / "agents" / "x.ts").resolve() in found
+    assert (repo / "libs" / "x.ts").resolve() not in found
+
+
+def test_the_save_looks_up_nothing_outside_the_repository(tmp_path, monkeypatch):
+    from fi.alk.harness.credentials import imported_by_agent
+
+    repo = _tree(
+        tmp_path / "repo",
+        {
+            "agents/a/index.js": 'import hosts from "/etc/hosts";\nimport up from "../../../../x";\n'
+            'import far from "./up/etc/hosts";\nimport side from "./side/y";\n'
+        },
+    )
+    # Links whose targets climb out of the repository, the second into a folder beside it.
+    (repo / "agents" / "a" / "up").symlink_to("../../../../..")
+    (repo / "agents" / "a" / "side").symlink_to("../../../other/x")
+    looked: list[Path] = []
+    real = Path.lstat
+    monkeypatch.setattr(Path, "lstat", lambda self: looked.append(self) or real(self))
+
+    imported_by_agent(repo, "agents/a", lookup_limit=100_000)
+    # As the kernel reads each path: "a/../../.." is above the repository, however it's written.
+    inside = str(repo.resolve())
+    assert not [
+        path for path in looked if not (os.path.normpath(path) + "/").startswith(inside + "/")
+    ]
+
+
+@pytest.mark.parametrize("links, found", [(40, True), (41, False)])
+def test_a_chain_of_links_is_followed_up_to_the_kernels_limit(tmp_path, links, found):
+    from fi.alk.harness.credentials import imported_by_agent
+
+    repo = _tree(tmp_path / "repo", {"agents/a/agent.py": "import l0.web\n", "real/web.py": ""})
+    for n in range(links):
+        (repo / f"l{n}").symlink_to(f"l{n + 1}" if n < links - 1 else "real")
+
+    assert ((repo / "real" / "web.py").resolve() in imported_by_agent(
+        repo, "agents/a", lookup_limit=100_000
+    )) is found
+
+
+def test_a_links_target_is_charged_for_each_of_its_parts(tmp_path):
+    from fi.alk.harness.credentials import _real_folder
+
+    repo = (tmp_path / "repo").resolve()
+    (repo / "a" / "b").mkdir(parents=True)
+    (repo / "l").symlink_to("a/./b/../b")
+    left = [100.0]
+
+    assert _real_folder(repo / "l", repo, {}, left) == repo / "a" / "b"
+    # The link, its read, its target's 4 parts (Path drops the ".", keeps the ".."), then a and b,
+    # each looked up once.
+    assert left == [92.0]
+
+
+def test_a_link_whose_target_is_past_so_many_parts_isnt_followed(tmp_path):
+    from fi.alk.harness import credentials
+
+    repo = (tmp_path / "repo").resolve()
+    repo.mkdir()
+    (repo / "x").mkdir()
+    parts = credentials._LONGEST_TARGET
+    (repo / "ok").symlink_to("/".join(["."] + [".."] * 0 + ["x"] * 1))
+    (repo / "long").symlink_to("/".join(["x", ".."] * (parts // 2) + ["x"]))
+    (repo / "short").symlink_to("/".join(["x", ".."] * (parts // 2 - 1) + ["x"]))
+
+    assert credentials._real_folder(repo / "ok", repo, {}, [1e9]) == repo / "x"
+    assert credentials._real_folder(repo / "short", repo, {}, [1e9]) == repo / "x"
+    assert credentials._real_folder(repo / "long", repo, {}, [1e9]) is None
+
+
+def test_what_the_chain_limit_cuts_isnt_kept_for_a_shorter_chain(tmp_path):
+    from fi.alk.harness import credentials
+
+    # Reviewer B: reached at the end of a long chain, a link is cut by the limit; reached first,
+    # it's followed. The cut answer mustn't stand for it.
+    repo = (tmp_path / "repo").resolve()
+    (repo / "real").mkdir(parents=True)
+    (repo / "x").symlink_to("real")
+    for n in range(credentials._LINKS_FOLLOWED):
+        (repo / f"c{n}").symlink_to(f"c{n + 1}" if n < credentials._LINKS_FOLLOWED - 1 else "x")
+    known: dict = {}
+
+    assert credentials._real_folder(repo / "c0", repo, known, [1e9]) is None
+    assert credentials._real_folder(repo / "x", repo, known, [1e9]) == repo / "real"
+
+
+@pytest.mark.parametrize("where, read", [("inside", True), ("outside", False), ("chain", False)])
+def test_a_pyproject_that_is_a_link_is_read_only_inside_the_repository(tmp_path, where, read):
+    from fi.alk.harness.credentials import _Workspace
+
+    repo = _tree(tmp_path / "repo", {"shared/pyproject.toml": "[project]\nname='x'\n"}).resolve()
+    _tree(tmp_path / "out", {"pyproject.toml": "[project]\nname='x'\n"})
+    (repo / "a").mkdir()
+    if where == "inside":
+        (repo / "a" / "pyproject.toml").symlink_to("../shared/pyproject.toml")
+    elif where == "outside":
+        (repo / "a" / "pyproject.toml").symlink_to(tmp_path / "out" / "pyproject.toml")
+    else:
+        (repo / "shared" / "hop.toml").symlink_to("pyproject.toml")
+        (repo / "a" / "pyproject.toml").symlink_to("../shared/hop.toml")
+
+    assert (_Workspace(repo, [1e9], {}).table(repo / "a") is not None) is read
+
+
+def test_a_python_name_once_the_lookups_are_spent_says_the_walk_stopped(tmp_path):
+    from fi.alk.harness.credentials import imported_by_agent
+
+    # Plain folders, no links: the budget runs out on a.py's lookups, and b.py's names are the
+    # ones left untried.
+    repo = _tree(
+        tmp_path / "repo",
+        {"agents/a/a.py": "".join(f"import n{n}\n" for n in range(40)), "agents/a/b.py": "import os\n"},
+    )
+    said: list[bool] = []
+    imported_by_agent(repo, "agents/a", lookup_limit=60, stopped=said)
+
+    assert said == [True]
+
+
+def test_a_link_loop_costs_a_few_lookups_not_the_chain_limit(tmp_path):
+    from fi.alk.harness.credentials import _real_folder
+
+    repo = (tmp_path / "repo").resolve()
+    repo.mkdir()
+    (repo / "one").symlink_to("two")
+    (repo / "two").symlink_to("one")
+    left = [1_000.0]
+
+    assert _real_folder(repo / "one" / "x", repo, {}, left) is None
+    # Marked before it's followed, so the loop is seen at once.
+    assert left[0] > 990
+
+
+def test_the_save_follows_a_chain_of_links_once_each(tmp_path, monkeypatch):
+    from fi.alk.harness import credentials
+
+    files = {"agents/a/agent.py": "".join(f"import l0.m{n}\n" for n in range(200))}
+    files |= {f"real/m{n}.py": "" for n in range(200)}
+    repo = _tree(tmp_path / "repo", files)
+    for n in range(30):
+        (repo / f"l{n}").symlink_to(f"l{n + 1}" if n < 29 else "real")
+    read: Counter[str] = Counter()
+    real_readlink = os.readlink
+    monkeypatch.setattr(
+        credentials.os, "readlink", lambda path: read.update([str(path)]) or real_readlink(path)
+    )
+
+    found = credentials.imported_by_agent(repo, "agents/a", lookup_limit=100_000)
+    assert (repo / "real" / "m199.py").resolve() in found
+    # Each link read once in the whole walk, however many imports go through it.
+    assert read and max(read.values()) == 1
 
 
 def test_a_script_import_naming_thousands_of_folders_does_not_raise_at_the_save(tmp_path):
@@ -4102,3 +5023,722 @@ def test_a_script_import_naming_thousands_of_folders_does_not_raise_at_the_save(
     deep = "/".join(["a"] * 2_000)
     repo = _tree(tmp_path / "repo", {"agents/a/index.js": f'import "./{deep}/x";\n'})
     assert imported_by_agent(repo, "agents/a", lookup_limit=100_000) is not None
+
+
+def test_a_path_past_so_many_parts_isnt_walked(tmp_path):
+    from fi.alk.harness import credentials
+
+    # Round 3 reviewer B: a uv `path` source thousands of parts long cost its square in prefix
+    # keys, uncharged. Up to the link-target length it's walked; past it, nothing is looked up.
+    repo = (tmp_path / "repo").resolve()
+    (repo / "x").mkdir(parents=True)
+    pairs = credentials._LONGEST_TARGET // 2
+    known: dict = {}
+    left = [1e9]
+
+    assert credentials._real_folder(repo.joinpath(*["x", ".."] * pairs), repo, known, left) == repo
+    known.clear()
+    left = [1e9]
+    assert credentials._real_folder(repo.joinpath(*["x", ".."] * pairs, "x"), repo, known, left) is None
+    assert known == {} and left == [1e9]
+
+
+def test_a_path_source_past_so_many_parts_isnt_followed(tmp_path):
+    from fi.alk.harness import credentials
+
+    long_path = "../" * 2 + "y/" * 5_000
+    repo = _tree(
+        tmp_path / "repo",
+        {
+            "agents/a/pyproject.toml": "[project]\nname='agent-a'\nversion='1'\ndependencies=['common']\n"
+            f"[tool.uv.sources]\ncommon={{path='{long_path}'}}\n",
+            "agents/a/agent.py": "x = 1\n",
+        },
+    ).resolve()
+    known: dict = {}
+
+    _, followed, _ = credentials._workspace_dependencies(repo, repo / "agents" / "a", [1e9], known)
+    assert followed == [] and not [key for key in known if len(key) > len(repo.parts) + 2_000]
+
+
+def test_each_places_sources_are_read_once_however_many_names_it_asks_for(tmp_path, monkeypatch):
+    from fi.alk.harness import credentials
+
+    # Round 3 reviewer B: rebuilt for every name, 7,000 names and 7,000 sources held the save 34 s.
+    names = [f"n{n}" for n in range(50)]
+    repo = _tree(
+        tmp_path / "repo",
+        {
+            "pyproject.toml": '[tool.uv.workspace]\nmembers=["agents/*"]\n[tool.uv.sources]\n'
+            + "".join(f"s{n}={{git='https://example.invalid/s'}}\n" for n in range(50)),
+            "agents/a/pyproject.toml": f"[project]\nname='agent-a'\nversion='1'\ndependencies={names!r}\n",
+            "agents/a/agent.py": "x = 1\n",
+        },
+    ).resolve()
+    calls: list[int] = []
+    real = credentials._sources
+    monkeypatch.setattr(credentials, "_sources", lambda table: calls.append(1) or real(table))
+
+    credentials._workspace_dependencies(repo, repo / "agents" / "a", [1e9], {})
+    # The workspace root's, then the agent's: once each.
+    assert len(calls) == 2
+
+
+def test_the_python_total_cuts_shared_code_before_the_agents_own(tmp_path, monkeypatch):
+    from fi.alk.harness import agent_type_check
+
+    # Round 3 reviewer B: in path order, /libs/ is read before /services/a/, and the total cut
+    # the agent's own playwright import.
+    body = "x = 1\n" + "#" * 200 + "\n"
+    repo = _tree(
+        tmp_path / "repo",
+        {
+            "libs/__init__.py": "",
+            "libs/m0.py": body,
+            "libs/m1.py": body,
+            "services/a/imp.py": "from libs import m0\nfrom libs import m1\n",
+            "services/a/agent.py": "from playwright.sync_api import sync_playwright\n",
+        },
+    ).resolve()
+    own = sum(len(path.read_bytes()) for path in (repo / "services" / "a").iterdir())
+    monkeypatch.setattr(agent_type_check, "_LARGEST_PYTHON_SCAN", own + len(body))
+
+    assert agent_type_check.browser_tools_in_agent(repo, "services/a") == ["playwright"]
+
+
+def test_an_absolute_link_to_a_folder_in_the_repository_is_followed(tmp_path):
+    from fi.alk.harness.credentials import imported_by_agent
+
+    repo = _tree(
+        tmp_path / "repo",
+        {"agents/a/agent.py": "import shared.web\n", "common/__init__.py": "", "common/web.py": ""},
+    ).resolve()
+    (repo / "shared").symlink_to(repo / "common")
+
+    assert repo / "common" / "web.py" in imported_by_agent(repo, "agents/a", lookup_limit=100_000)
+
+
+def test_a_pyproject_link_is_charged_for_its_lookups(tmp_path):
+    from fi.alk.harness.credentials import _Workspace
+
+    repo = _tree(tmp_path / "repo", {"shared/pyproject.toml": "[project]\nname='x'\n"}).resolve()
+    (repo / "a").mkdir()
+    (repo / "a" / "pyproject.toml").symlink_to("../shared/pyproject.toml")
+    plain, linked = [100.0], [100.0]
+
+    assert _Workspace(repo, plain, {}).table(repo / "shared") is not None
+    assert _Workspace(repo, linked, {}).table(repo / "a") is not None
+    # The link's read, its target's folders (a .. and shared, one looked up), and the file's lstat.
+    assert plain == [99.0] and linked == [95.0]
+
+
+def test_a_stopped_save_walk_logs_how_many_files_it_reached(tmp_path, caplog, monkeypatch):
+    from fi.alk.harness import agent_type_check
+
+    repo = _tree(
+        tmp_path / "repo",
+        {"agents/a/agent.py": "import one\n" + "".join(f"import gone{n}\n" for n in range(300)), "one.py": ""},
+    ).resolve()
+    monkeypatch.setattr(agent_type_check, "_WALKED_LOOKUPS", 200)
+    with caplog.at_level("WARNING", logger=agent_type_check.__name__):
+        found = agent_type_check._walked(repo, "agents/a")
+
+    assert f"stopped at its limits; {len(found)} files reached" in caplog.text
+    assert len(found) >= 1
+
+
+def _ws_member_tree(tmp_path, root_extra, agent_extra, extra_files=None):
+    files = {
+        "pyproject.toml": "[project]\nname='root'\nversion='1'\n" + root_extra,
+        "agents/a/pyproject.toml": "[project]\nname='agent-a'\nversion='1'\n" + agent_extra,
+        "agents/a/agent.py": "from common import llm\n",
+        "libs/common/pyproject.toml": "[project]\nname='common'\nversion='1'\n"
+        "[project.optional-dependencies]\nllm=['llmlib']\n",
+        "libs/common/src/common/__init__.py": "",
+        "libs/common/src/common/llm.py": "import llmlib\n",
+        "libs/llmlib/pyproject.toml": "[project]\nname='llmlib'\nversion='1'\n",
+        "libs/llmlib/src/llmlib/__init__.py": "",
+    }
+    return _tree(tmp_path / "repo", files | (extra_files or {})).resolve()
+
+
+@pytest.mark.parametrize(
+    "root_extra, agent_extra, extra_files, reached",
+    [
+        # Round 3 reviewer A, M1: a path in the root's sources is the root's, as uv reads it.
+        (
+            "[tool.uv.workspace]\nmembers=['agents/*']\n[tool.uv.sources]\ncommon={path='libs/common'}\n",
+            "dependencies=['common']\n",
+            None,
+            "libs/common/src/common/llm.py",
+        ),
+        # M2: asked with an extra by a second member, after the agent took it plain.
+        (
+            "[tool.uv.workspace]\nmembers=['agents/*', 'libs/*']\n[tool.uv.sources]\n"
+            "common={workspace=true}\nllmlib={workspace=true}\nagent-b={workspace=true}\n",
+            "dependencies=['agent-b', 'common']\n",
+            {"agents/b/pyproject.toml": "[project]\nname='agent-b'\nversion='1'\ndependencies=['common[llm]']\n"},
+            "libs/llmlib/src/llmlib/__init__.py",
+        ),
+        # M2: asked with an extra in the agent's own optional dependencies.
+        (
+            "[tool.uv.workspace]\nmembers=['agents/*', 'libs/*']\n[tool.uv.sources]\n"
+            "common={workspace=true}\nllmlib={workspace=true}\n",
+            "dependencies=['common']\n[project.optional-dependencies]\nall=['common[llm]']\n",
+            None,
+            "libs/llmlib/src/llmlib/__init__.py",
+        ),
+        # L1: a default group made of another group.
+        (
+            "[tool.uv.workspace]\nmembers=['agents/*', 'libs/*']\n",
+            "[dependency-groups]\nrun=[{include-group='shared'}]\nshared=['common']\n[tool.uv]\n"
+            "default-groups=['run']\n[tool.uv.sources]\ncommon={workspace=true}\n",
+            None,
+            "libs/common/src/common/llm.py",
+        ),
+        # L4: every group, as uv reads "all".
+        (
+            "[tool.uv.workspace]\nmembers=['agents/*', 'libs/*']\n",
+            "[dependency-groups]\nrun=['common']\n[tool.uv]\ndefault-groups='all'\n"
+            "[tool.uv.sources]\ncommon={workspace=true}\n",
+            None,
+            "libs/common/src/common/llm.py",
+        ),
+        # L4: names compared as uv compares them.
+        (
+            "[tool.uv.workspace]\nmembers=['agents/*', 'libs/*']\n[tool.uv.sources]\n'Com.Mon'={workspace=true}\n",
+            "dependencies=['com_mon>=0']\n",
+            {"libs/common/pyproject.toml": "[project]\nname='Com-Mon'\nversion='1'\n"},
+            "libs/common/src/common/llm.py",
+        ),
+        # A member's own requirement takes its source from the root too.
+        (
+            "[tool.uv.workspace]\nmembers=['agents/*', 'libs/*']\n[tool.uv.sources]\n"
+            "common={workspace=true}\nllmlib={workspace=true}\n",
+            "dependencies=['common']\n",
+            {"libs/common/pyproject.toml": "[project]\nname='common'\nversion='1'\ndependencies=['llmlib']\n"},
+            "libs/llmlib/src/llmlib/__init__.py",
+        ),
+    ],
+    ids=[
+        "root-path-source",
+        "extra-asked-later",
+        "extra-in-optional",
+        "include-group",
+        "all-groups",
+        "names-normalised",
+        "member-uses-root-source",
+    ],
+)
+def test_the_member_walk_installs_what_uv_installs(tmp_path, root_extra, agent_extra, extra_files, reached):
+    from fi.alk.harness.credentials import imported_by_agent
+
+    repo = _ws_member_tree(tmp_path, root_extra, agent_extra, extra_files)
+
+    assert repo / reached in imported_by_agent(repo, "agents/a", lookup_limit=100_000)
+
+
+def test_a_members_own_source_wins_over_the_roots(tmp_path):
+    from fi.alk.harness.credentials import imported_by_agent
+
+    # Round 3 reviewer A, L4: the root says the index, the agent says the workspace; uv takes the
+    # member's.
+    repo = _ws_member_tree(
+        tmp_path,
+        "[tool.uv.workspace]\nmembers=['agents/*', 'libs/*']\n[tool.uv.sources]\ncommon={index='pypi'}\n",
+        "dependencies=['common']\n[tool.uv.sources]\ncommon={workspace=true}\n",
+    )
+
+    assert repo / "libs/common/src/common/llm.py" in imported_by_agent(repo, "agents/a", lookup_limit=100_000)
+
+
+def test_the_member_walk_reads_at_most_so_many_places(tmp_path, monkeypatch):
+    from fi.alk.harness import credentials
+
+    monkeypatch.setattr(credentials, "_WORKSPACE_READS", 1)
+    repo = _ws_member_tree(
+        tmp_path,
+        "[tool.uv.workspace]\nmembers=['agents/*', 'libs/*']\n[tool.uv.sources]\n"
+        "common={workspace=true}\nllmlib={workspace=true}\n",
+        "dependencies=['common[llm]']\n",
+    )
+
+    _, followed, cut = credentials._workspace_dependencies(repo, repo / "agents" / "a", [1e9], {})
+    assert followed == [repo / "libs" / "common"] and cut
+
+
+def test_each_requirement_list_is_read_once_a_place(tmp_path, monkeypatch):
+    from fi.alk.harness import credentials
+
+    # Round 3 reviewer A, L3: the extras asked of each name were found by rereading the list.
+    names = [f"n{n}" for n in range(40)]
+    repo = _ws_member_tree(
+        tmp_path,
+        "[tool.uv.workspace]\nmembers=['agents/*', 'libs/*']\n[tool.uv.sources]\n"
+        + "".join(f"{name}={{path='libs/common'}}\n" for name in names),
+        f"dependencies={names!r}\n",
+    )
+    calls: list[int] = []
+    real = credentials._project_name
+    monkeypatch.setattr(credentials, "_project_name", lambda value: calls.append(1) or real(value))
+
+    credentials._workspace_dependencies(repo, repo / "agents" / "a", [1e9], {})
+    assert len(calls) < 400
+
+
+def test_a_member_pattern_part_longer_than_a_folder_name_isnt_compiled(tmp_path, monkeypatch):
+    from fi.alk.harness import credentials
+
+    repo = _tree(
+        tmp_path / "repo",
+        {"pyproject.toml": f"[tool.uv.workspace]\nmembers=['{'*a' * 200}']\n", "agents/a/agent.py": "x = 1\n"},
+    ).resolve()
+    matched: list[str] = []
+    real = credentials.fnmatch.fnmatchcase
+    monkeypatch.setattr(credentials.fnmatch, "fnmatchcase", lambda name, pattern: matched.append(pattern) or real(name, pattern))
+    reader = credentials._Workspace(repo, [1e9], {})
+
+    assert reader.expand(repo, ["x" * 300]) == [] and not reader.cut
+    # A pattern that long may still match a folder: not looked at, so the walk says it was cut.
+    assert reader.expand(repo, ["*a" * 200]) == [] and matched == [] and reader.cut
+    reader.cut = False
+    assert reader.expand(repo, ["agent*"]) == [repo / "agents"] and set(matched) == {"agent*"}
+    # Round 5: every wildcard mark counts, a long literal next to a short wildcard doesn't, and a
+    # cut already said isn't taken back.
+    for pattern, cut in [("?" * 300, True), ("[" + "a" * 300 + "]", True), ("a*/" + "x" * 300, False)]:
+        reader.cut = False
+        assert reader.expand(repo, [pattern]) == [] and reader.cut is cut, pattern
+    reader.cut = False
+    reader.expand(repo, ["agents/**", "x" * 300])
+    assert reader.cut
+
+
+def test_top_names_are_folders_and_python_stems_up_to_the_limit(tmp_path):
+    from fi.alk.harness.credentials import _top_names
+
+    # Round 3 reviewer A, L4: a flat member's module, and the cut.
+    base = _tree(tmp_path / "base", {"common.py": "", "pkg/__init__.py": "", "notes.txt": "", "x-y.py": ""})
+
+    assert _top_names(base, [1e9], 100) == ({"common", "pkg"}, False)
+    names, cut = _top_names(base, [1e9], 2)
+    assert cut and len(names) <= 2
+
+
+@pytest.mark.parametrize(
+    "raw, encoding",
+    [
+        (b"#" + b"codin" * 26_000 + b"coding: latin-1\nimport x\n", "iso-8859-1"),
+        (b" " * 120_000 + b"# coding: latin-1\n", "iso-8859-1"),
+        # Not a comment line: no cookie, and the second line isn't read.
+        (b"x" + b" " * 120_000 + b"\n# coding: latin-1\n", "utf-8"),
+        (b" " * 120_000 + b"x\n# coding: latin-1\n", "utf-8"),
+        (b"x = 1  # coding: latin-1\n# coding: latin-1\n", "utf-8"),
+        (b"\n# coding: latin-1\n", "iso-8859-1"),
+        (b"# coding: !!! coding: latin-1\n", "iso-8859-1"),
+    ],
+)
+def test_a_coding_line_is_found_as_python_finds_it_without_reading_the_whole_line(raw, encoding):
+    from fi.alk.harness import python_source
+
+    # Round 3 reviewer A, H3: tokenize's cookie pattern tried each place on a 128 KB first line.
+    assert python_source._coding(raw)[0] == encoding
+    assert all(len(python_source._cookie_part(line)) < 64 for line in python_source._first_lines(raw).split(b"\n"))
+
+
+def test_a_whole_name_is_looked_for_only_where_it_starts():
+    from fi.alk.harness import agent_type_check
+
+    # Round 3 reviewer A, H4: eight lookbehinds ahead of the name were tried at every byte.
+    for name, pattern in agent_type_check._WHOLE_NAMES.items():
+        assert pattern.pattern.startswith(f"(?={re.escape(name)})")
+
+
+def test_detect_encoding_is_handed_the_cookie_not_the_whole_line(monkeypatch):
+    from fi.alk.harness import python_source
+
+    read: list[int] = []
+    real = python_source.tokenize.detect_encoding
+
+    def counted(readline):
+        def line():
+            got = readline()
+            read.append(len(got))
+            return got
+
+        return real(line)
+
+    monkeypatch.setattr(python_source.tokenize, "detect_encoding", counted)
+
+    assert python_source._coding(b"#" + b"codin" * 26_000 + b"coding: latin-1\nimport x\n")[0] == "iso-8859-1"
+    assert sum(read) < 64
+
+
+def test_a_missing_deep_folder_is_searched_for_once_for_all_its_candidates(tmp_path, monkeypatch):
+    from fi.alk.harness import credentials
+
+    # Round 4 reviewer B: each of a name's candidates searched back down a 62-part path to the
+    # missing folder, uncharged: 5,000 such script imports held the save 1.9 s.
+    repo = (tmp_path / "repo").resolve()
+    (repo / "agents" / "a").mkdir(parents=True)
+    deep = repo.joinpath("agents", "a", "gone", *["b"] * 60)
+    known: dict = {}
+    credentials._real_folder(deep, repo, known, [1e9])
+    probes: list[int] = []
+
+    class Counting(dict):
+        def __contains__(self, key):
+            probes.append(1)
+            return dict.__contains__(self, key)
+
+    counted = Counting(known)
+    for _ in range(13):
+        assert credentials._real_folder(deep, repo, counted, [1e9]) is None
+    # Found at once, each time: a probe a candidate, not one for each of the 60 folders.
+    assert len(probes) == 13
+
+
+def test_two_names_under_a_chain_past_the_limit_walk_it_once(tmp_path):
+    from fi.alk.harness import credentials
+
+    # Round 4 reviewer B, L3: the lexical key keeps a chain the limit cut, which _step drops.
+    repo = (tmp_path / "repo").resolve()
+    (repo / "real").mkdir(parents=True)
+    for n in range(credentials._LINKS_FOLLOWED + 1):
+        (repo / f"c{n}").symlink_to(f"c{n + 1}" if n < credentials._LINKS_FOLLOWED else "real")
+    known: dict = {}
+    first, second = [1e9], [1e9]
+
+    assert credentials._real_folder(repo / "c0" / "x", repo, known, first) is None
+    assert credentials._real_folder(repo / "c0" / "y", repo, known, second) is None
+    assert 1e9 - second[0] < 5 < 1e9 - first[0]
+
+
+def test_a_bom_with_a_coding_line_naming_another_codec_is_refused_as_python_refuses_it():
+    from fi.alk.harness import python_source
+
+    # The byte-order mark is kept out of the cut, so detect_encoding still sees both and refuses.
+    assert python_source._coding(b"\xef\xbb\xbf# coding: latin-1\nimport x\n") is None
+    assert python_source._coding(b"\xef\xbb\xbf# coding: utf-8\nimport x\n")[0] == "utf-8-sig"
+
+
+def test_a_head_with_more_cookie_words_than_an_honest_one_is_read_as_a_refused_codec():
+    from fi.alk.harness import python_source
+
+    # Round 4 reviewer A, H2: each failing candidate was tried in turn.
+    many = b"#" + b"coding:#" * 16_000 + b"\nimport x\n"
+    assert python_source._coding(many)[0] == "undefined"
+    assert python_source.source_encoding(many) is None
+    edge = b"#" + b"coding:#" * python_source._COOKIE_WORDS + b"\n"
+    assert python_source._coding(edge)[0] == "utf-8"
+
+
+def test_the_first_cookie_on_the_line_is_the_one_read():
+    from fi.alk.harness import python_source
+
+    # Round 4 reviewer A, L3 (M26): the search starts at the first candidate, not the last.
+    assert python_source._coding(b"# coding=latin-1 coding: !!!\n")[0] == "iso-8859-1"
+    assert python_source._coding(b"# coding: !!! coding=latin-1\n")[0] == "iso-8859-1"
+    assert python_source._coding(b"# coding=latin-1 coding: utf-8\n")[0] == "iso-8859-1"
+    assert python_source._coding(b"# coding:latin-1 coding=utf-8\n")[0] == "iso-8859-1"
+
+
+def test_a_cyclic_include_group_is_read_once(tmp_path):
+    from fi.alk.harness.credentials import imported_by_agent
+
+    # Round 4 reviewer A, L3 (M28): without the guard the save loops for ever.
+    repo = _ws_member_tree(
+        tmp_path,
+        "[tool.uv.workspace]\nmembers=['agents/*', 'libs/*']\n",
+        "[dependency-groups]\nrun=[{include-group='more'}, 'common']\nmore=[{include-group='run'}]\n"
+        "[tool.uv]\ndefault-groups=['run']\n[tool.uv.sources]\ncommon={workspace=true}\n",
+    )
+
+    import signal
+
+    def stuck(*_):
+        raise TimeoutError("the include-group walk didn't end")
+
+    previous = signal.signal(signal.SIGALRM, stuck)
+    signal.alarm(20)
+    try:
+        assert repo / "libs/common/src/common/llm.py" in imported_by_agent(repo, "agents/a", lookup_limit=100_000)
+    finally:
+        signal.alarm(0)
+        signal.signal(signal.SIGALRM, previous)
+
+
+@pytest.mark.parametrize(
+    "requirement, extra_key, found",
+    [
+        # M13: an extra's key compared as uv compares names.
+        ("common[llm-x]", "LLM_X", True),
+        # M22: brackets in a marker name no extra.
+        ("common; python_version >= '3' and platform_machine != 'x[llm]'", "llm", False),
+    ],
+    ids=["extra-name-normalised", "marker-not-read"],
+)
+def test_a_members_extra_is_found_as_uv_finds_it(tmp_path, requirement, extra_key, found):
+    from fi.alk.harness.credentials import imported_by_agent
+
+    repo = _ws_member_tree(
+        tmp_path,
+        "[tool.uv.workspace]\nmembers=['agents/*', 'libs/*']\n[tool.uv.sources]\n"
+        "common={workspace=true}\nllmlib={workspace=true}\n",
+        f"dependencies=[{requirement!r}]\n",
+        {"libs/common/pyproject.toml": f"[project]\nname='common'\nversion='1'\n"
+         f"[project.optional-dependencies]\n{extra_key}=['llmlib']\n"},
+    )
+    reached = imported_by_agent(repo, "agents/a", lookup_limit=100_000)
+
+    assert repo / "libs/common/src/common/llm.py" in reached
+    assert (repo / "libs/llmlib/src/llmlib/__init__.py" in reached) is found
+
+
+@pytest.mark.parametrize(
+    "agent_extra",
+    ["dependencies=5\n", "[tool.uv]\ndefault-groups=[{x=1}]\n[dependency-groups]\nrun=['x']\n"],
+    ids=["dependencies-not-a-list", "group-not-a-name"],
+)
+def test_a_malformed_requirement_list_is_read_as_empty(tmp_path, agent_extra):
+    from fi.alk.harness.credentials import imported_by_agent
+
+    # Round 4 reviewer A, L1: these raised TypeError out of the save; uv refuses them, loudly.
+    repo = _ws_member_tree(tmp_path, "[tool.uv.workspace]\nmembers=['agents/*', 'libs/*']\n", agent_extra)
+
+    assert imported_by_agent(repo, "agents/a", lookup_limit=100_000) is not None
+
+
+def test_a_member_reached_again_reads_only_its_new_extras(tmp_path, monkeypatch):
+    from fi.alk.harness import credentials
+
+    # Round 4 reviewer A, H1: each new extra read the member's whole list again.
+    chain = "".join(f"e{n}=['m[e{n + 1}]']\n" for n in range(60))
+    repo = _tree(
+        tmp_path / "repo",
+        {
+            "pyproject.toml": "[tool.uv.workspace]\nmembers=['agents/*', 'libs/*']\n[tool.uv.sources]\nm={workspace=true}\n",
+            "agents/a/pyproject.toml": "[project]\nname='agent-a'\nversion='1'\ndependencies=['m[e0]']\n",
+            "agents/a/agent.py": "x = 1\n",
+            "libs/m/pyproject.toml": "[project]\nname='m'\nversion='1'\ndependencies="
+            + repr([f"d{n}" for n in range(200)]) + "\n[project.optional-dependencies]\n" + chain,
+        },
+    ).resolve()
+    names: list[int] = []
+    real = credentials._project_name
+    monkeypatch.setattr(credentials, "_project_name", lambda value: names.append(1) or real(value))
+
+    credentials._workspace_dependencies(repo, repo / "agents" / "a", [1e9], {})
+    # The 200 plain ones once, not once for each of the 60 extras.
+    assert len(names) < 1_200
+
+
+def test_what_follows_a_cookie_isnt_counted_against_it():
+    from fi.alk.harness import python_source
+
+    # Pine's TH-9490 review: Python runs this file as utf-7, however many "coding" follow.
+    assert python_source._coding(b"# coding: utf-7 " + b" coding:" * 65 + b"\nimport x\n")[0] == "utf-7"
+    failing = b"coding:# " * python_source._COOKIE_WORDS
+    assert python_source._coding(b"# " + failing + b"coding: latin-1\n")[0] == "iso-8859-1"
+    assert python_source._coding(b"# " + failing + b"coding:# coding: latin-1\n")[0] == "undefined"
+
+
+def test_plain_files_ahead_of_the_agents_imports_dont_use_up_the_parse_total(tmp_path):
+    from fi.alk.harness import agent_type_check
+
+    # Pine's TH-9490 review: three plain 126 KB files that sort first spent the 256 KB total, and
+    # the walk lost common/web.py with no word.
+    pad = "x = 1\n" * 21_000
+    repo = _tree(
+        tmp_path / "repo",
+        {
+            "agents/a/a0.py": pad,
+            "agents/a/a1.py": pad,
+            "agents/a/a2.py": pad,
+            "agents/a/main.py": "from common import web\n",
+            "common/__init__.py": "",
+            "common/web.py": "",
+        },
+    ).resolve()
+
+    assert repo / "common" / "web.py" in agent_type_check._walked(repo, "agents/a")
+
+
+def test_a_file_the_parse_total_cuts_says_the_walk_stopped(tmp_path):
+    from fi.alk.harness.credentials import imported_by_agent
+    from fi.alk.harness.python_source import ParseBudget
+
+    repo = _tree(
+        tmp_path / "repo",
+        {"agents/a/a.py": "import os\n" + "x = 1\n" * 50, "agents/a/b.py": "import common.web\n"},
+    )
+    said: list[bool] = []
+    imported_by_agent(repo, "agents/a", lookup_limit=100_000, parse_budget=ParseBudget(100), stopped=said)
+    assert said == [True]
+    said.clear()
+    imported_by_agent(repo, "agents/a", lookup_limit=100_000, parse_budget=ParseBudget(10_000), stopped=said)
+    assert said == [False]
+
+
+def test_a_script_the_script_total_cuts_says_the_walk_stopped(tmp_path):
+    from fi.alk.harness.credentials import imported_by_agent
+    from fi.alk.harness.python_source import ParseBudget
+
+    repo = _tree(tmp_path / "repo", {"agents/a/a.js": "import './b';\n" + "//" * 200 + "\n", "agents/a/b.js": ""})
+    said: list[bool] = []
+    imported_by_agent(repo, "agents/a", lookup_limit=100_000, script_budget=ParseBudget(10), stopped=said)
+    assert said == [True]
+
+
+@pytest.mark.parametrize("size", [1_000, 60_000])
+def test_a_requirement_full_of_brackets_is_read_once(monkeypatch, size):
+    from fi.alk.harness import credentials
+
+    # Round 5 reviewer A, H2: findall tried every "[" in turn, the square of the length.
+    tried: list[int] = []
+    real = credentials._REQUESTED_EXTRAS
+    class Counting:
+        def match(self, value, pos=0):
+            tried.append(1)
+            return real.match(value, pos)
+    monkeypatch.setattr(credentials, "_REQUESTED_EXTRAS", Counting())
+    table = {"project": {"dependencies": ["a" + "[" * size, "common [llm, Fast_X] ; extra == 'x[y]'"]}}
+
+    asked = credentials._Requirements(table, own=True).asked(True, ())
+    assert asked == {"a": set(), "common": {"llm", "fast-x"}} and len(tried) == 2
+
+
+def test_a_second_line_python_doesnt_read_isnt_asked_about():
+    from fi.alk.harness import python_source
+
+    # Round 5 reviewer A, L1: Python reads line two for a cookie only after a blank or comment line.
+    noisy = b"# " + b"coding:# " * (python_source._COOKIE_WORDS + 1)
+    assert python_source._coding(b"x = 1\n" + noisy + b"\n")[0] == "utf-8"
+    assert python_source._coding(b"#!/usr/bin/env python\n" + noisy + b"\n")[0] == "undefined"
+    assert python_source._coding(b"# coding: latin-1\n" + noisy + b"\n")[0] == "iso-8859-1"
+
+
+def test_a_tab_after_the_cookies_colon_is_read_as_python_reads_it():
+    from fi.alk.harness import python_source
+
+    # Round 5 reviewer A, L2 (C1).
+    assert python_source._coding(b"# coding:\tlatin-1\n")[0] == "iso-8859-1"
+
+
+def test_a_members_default_groups_arent_installed_with_it(tmp_path):
+    from fi.alk.harness.credentials import imported_by_agent
+
+    # Round 5 reviewer A, L2 (N3): `uv sync --package` installs the agent's default groups only.
+    repo = _ws_member_tree(
+        tmp_path,
+        "[tool.uv.workspace]\nmembers=['agents/*', 'libs/*']\n[tool.uv.sources]\n"
+        "common={workspace=true}\nllmlib={workspace=true}\n",
+        "dependencies=['common']\n",
+        {"libs/common/pyproject.toml": "[project]\nname='common'\nversion='1'\n"
+         "[dependency-groups]\nrun=['llmlib']\n[tool.uv]\ndefault-groups=['run']\n"},
+    )
+    reached = imported_by_agent(repo, "agents/a", lookup_limit=100_000)
+
+    assert repo / "libs/common/src/common/llm.py" in reached
+    assert repo / "libs/llmlib/src/llmlib/__init__.py" not in reached
+
+
+@pytest.mark.parametrize(
+    "optional, found",
+    [
+        # N7: two keys that name one extra, as uv reads them, both count.
+        ("E-1=['llmlib']\ne_1=['x']\n", True),
+        # N8: a value that isn't a list names nothing (uv refuses it).
+        ("e_1={llmlib='1'}\n", False),
+    ],
+    ids=["keys-normalised-together", "value-not-a-list"],
+)
+def test_a_members_extras_are_indexed_as_uv_reads_them(tmp_path, optional, found):
+    from fi.alk.harness.credentials import imported_by_agent
+
+    repo = _ws_member_tree(
+        tmp_path,
+        "[tool.uv.workspace]\nmembers=['agents/*', 'libs/*']\n[tool.uv.sources]\n"
+        "common={workspace=true}\nllmlib={workspace=true}\n",
+        "dependencies=['common[e_1]']\n",
+        {"libs/common/pyproject.toml": "[project]\nname='common'\nversion='1'\n"
+         "[project.optional-dependencies]\n" + optional},
+    )
+    reached = imported_by_agent(repo, "agents/a", lookup_limit=100_000)
+
+    assert (repo / "libs/llmlib/src/llmlib/__init__.py" in reached) is found
+
+
+def test_each_cookie_word_is_looked_for_past_the_last_one_only():
+    from fi.alk.harness import python_source
+
+    # Round 6 reviewer A, L1: a word the line lacks was looked for to its end once a candidate,
+    # 64 times (3,000 such files held the save 8.1 s).
+    scanned: list[int] = []
+
+    class Counting(bytes):
+        def find(self, sub, start=0, *rest):
+            at = bytes.find(self, sub, start, *rest)
+            scanned.append((len(self) if at == -1 else at) - start)
+            return at
+
+    line = Counting(b"#" + b"coding:#" * python_source._COOKIE_WORDS + b"x" * 100_000)
+    assert python_source._cookie_part(line) == b"#"
+    assert sum(scanned) < 3 * len(line)
+
+
+def test_a_one_line_head_is_read():
+    from fi.alk.harness import python_source
+
+    # Round 6 reviewer A, L3: a file of one line with no newline.
+    assert python_source._coding(b"# coding: !!!")[0] == "utf-8"
+    assert python_source._coding(b"# coding: latin-1")[0] == "iso-8859-1"
+
+
+def test_the_last_file_the_parse_total_cuts_still_says_the_walk_stopped(tmp_path):
+    from fi.alk.harness.credentials import imported_by_agent
+    from fi.alk.harness.python_source import ParseBudget
+
+    # Round 6 reviewer B, L1: the cut is read after the file's own parse, so the walk's last
+    # file counts too.
+    repo = _tree(tmp_path / "repo", {"agents/a/a.py": "import os\n" + "x = 1\n" * 50})
+    said: list[bool] = []
+    imported_by_agent(repo, "agents/a", lookup_limit=100_000, parse_budget=ParseBudget(100), stopped=said)
+    assert said == [True]
+
+
+def test_an_import_written_without_a_space_is_still_read(tmp_path):
+    from fi.alk.harness.credentials import imported_by_agent
+
+    # Round 6 reviewer B, L1: the skip looks for the keyword, not the keyword and a space.
+    repo = _tree(
+        tmp_path / "repo",
+        {"agents/a/a.py": "from common import(web)\n", "common/__init__.py": "", "common/web.py": ""},
+    ).resolve()
+
+    assert repo / "common" / "web.py" in imported_by_agent(repo, "agents/a", lookup_limit=100_000)
+
+
+def test_a_source_with_no_table_in_it_isnt_a_source():
+    from fi.alk.harness import credentials
+
+    # Round 6 reviewer B, L2.
+    table = {"tool": {"uv": {"sources": {"a": [1, "x"], "b": {"path": "libs/b"}, "c": []}}}}
+    assert credentials._sources(table) == {"b": [{"path": "libs/b"}]}
+
+
+def test_a_path_source_to_a_folder_with_no_project_isnt_followed(tmp_path):
+    from fi.alk.harness import credentials
+
+    # Round 6 reviewer B, L2: uv refuses it; the walk follows nothing there.
+    repo = _tree(
+        tmp_path / "repo",
+        {
+            "agents/a/pyproject.toml": "[project]\nname='agent-a'\nversion='1'\ndependencies=['common']\n"
+            "[tool.uv.sources]\ncommon={path='../../libs/common'}\n",
+            "agents/a/agent.py": "x = 1\n",
+            "libs/common/common/__init__.py": "",
+        },
+    ).resolve()
+
+    _, followed, _ = credentials._workspace_dependencies(repo, repo / "agents" / "a", [1e9], {})
+    assert followed == []
