@@ -12,7 +12,6 @@ import json
 import logging
 import os
 import secrets
-import string
 import threading
 from pathlib import Path
 from typing import Any
@@ -59,12 +58,18 @@ from .runtime_selection import (
     COMPOSE_SERVICE_OUTSIDE_FOLDER,
     PathLookupsSpent,
     RuntimeSelectionError,
-    charged_path,
     path_lookup_budget,
     select_runtime,
 )
+from .model_citation import (
+    model_problems,
+    quote_problem,
+    read_source,
+    resolved_in_source,
+    source_lines,
+)
 from .python_source import utf8_size
-from .source_folder import SubfolderNotFound, agent_folder, bind_runtime, is_within
+from .source_folder import SubfolderNotFound, agent_folder, bind_runtime
 
 _LOG = logging.getLogger(__name__)
 
@@ -200,6 +205,7 @@ def _checked_contract(
     require_setup_contract: bool,
     subfolder: str | None,
     reached: list[Path] | None = None,
+    asked: set[str] | None = None,
 ) -> AgentContract | dict[str, Any]:
     """The contract to save, or the problems to send back. It reads the customer's files and
     writes nothing, so the tool runs it off the event loop. ``reached`` is the code outside the
@@ -228,7 +234,7 @@ def _checked_contract(
             problems.append(problem)
     with path_lookup_budget():
         return _checked_against_source(
-            contract, problems, arrived, source_root, subfolder, reached
+            contract, problems, arrived, source_root, subfolder, reached, asked
         )
 
 
@@ -239,15 +245,47 @@ def _checked_against_source(
     source_root: Path | None,
     subfolder: str | None,
     reached: list[Path] | None = None,
+    asked: set[str] | None = None,
 ) -> AgentContract | dict[str, Any]:
-    """The checks that read the customer's files, under the save's one path lookup budget."""
+    """The checks that read the customer's files, under the save's one path lookup budget.
+    ``asked`` is the reading's record of what it has been asked once. A model whose citation was
+    refused before is left out the second time, and lines that didn't hold the quote are left out
+    for the quote, rather than refused again: both are optional, and neither may cost the
+    reading its turns."""
     if source_root is not None:
         from .source_tool_evidence import tool_evidence_problems
 
+        quote = contract.system_prompt_excerpt
         try:
             problems.extend(tool_evidence_problems(contract, source_root, subfolder))
-            problems.extend(_copy_prompt(contract, source_root))
-            problems.extend(_model_problems(contract, source_root))
+            copy_problems = _copy_prompt(contract, source_root)
+            problems.extend(copy_problems)
+            if contract.system_prompt_from and not copy_problems:
+                named = ", ".join(
+                    f"{where.path[:200]} {where.start_line}-{where.end_line}"
+                    for where in contract.system_prompt_from
+                )
+                if mismatch := quote_problem(quote, contract.system_prompt_excerpt, named):
+                    if asked is not None and "prompt-quote" in asked:
+                        # The quote, which is what was read, rather than lines nobody checked.
+                        contract.system_prompt_excerpt = quote
+                        contract.system_prompt_from = []
+                    else:
+                        problems.append(mismatch)
+                        if asked is not None:
+                            asked.add("prompt-quote")
+                            problems.append(
+                                "system_prompt_from: if the lines are refused again, the quote "
+                                "is kept and the lines are left out"
+                            )
+            if cited := model_problems(contract, source_root):
+                if asked is not None and "model" in asked:
+                    contract.model = None
+                else:
+                    problems.extend(cited)
+                    if asked is not None:
+                        asked.add("model")
+                        problems.append("model: if the model is refused again, it is left out")
         except PathLookupsSpent as spent:
             return _problems([*problems, str(spent)], arrived)
     else:
@@ -344,22 +382,20 @@ def _copy_prompt(contract: AgentContract, source_root: Path) -> list[str]:
     read = copied = 0
     for index, where in enumerate(contract.system_prompt_from):
         if where.path not in found_at:
-            try:
-                # Through links, resolving one path can cost a lookup for each part of every
-                # target; each is charged to the save's budget.
-                resolved = charged_path(root / where.path)
-                found_at[where.path] = (
-                    resolved if is_within(resolved, root) and resolved.is_file() else None
-                )
-            except (OSError, RuntimeError, ValueError):
-                found_at[where.path] = None
+            # Through links, resolving one path can cost a lookup for each part of every
+            # target; each is charged to the save's budget.
+            found_at[where.path] = resolved_in_source(root, where.path)
         path = found_at[where.path]
+        raw = None
+        if path is not None and path not in lines_of and path not in too_large:
+            raw = read_source(path, _LARGEST_PROMPT_FILE)
+            if raw is None:
+                # Not a regular file, or one that can't be opened: the same answer as missing.
+                found_at[where.path] = path = None
         if path is None:
             problems.append(f"system_prompt_from[{index}]: {where.path} is not a file in the source")
             continue
-        if path not in lines_of and path not in too_large:
-            with path.open("rb") as handle:
-                raw = handle.read(_LARGEST_PROMPT_FILE + 1)
+        if raw is not None:
             read += len(raw)
             if read > _LARGEST_PROMPT_READ:
                 problems.append(
@@ -370,7 +406,7 @@ def _copy_prompt(contract: AgentContract, source_root: Path) -> list[str]:
             if len(raw) > _LARGEST_PROMPT_FILE:
                 too_large.add(path)
             else:
-                lines_of[path] = raw.decode("utf-8", errors="replace").splitlines()
+                lines_of[path] = source_lines(raw)
         if path in too_large:
             problems.append(
                 f"system_prompt_from[{index}]: {where.path} is larger than 1 MiB; name the "
@@ -396,121 +432,6 @@ def _copy_prompt(contract: AgentContract, source_root: Path) -> list[str]:
     if parts and not problems:
         contract.system_prompt_excerpt = "\n\n".join(parts)
     return problems
-
-
-# The platform refuses the whole agent document past this, for the model's name and provider.
-_LONGEST_MODEL_FIELD = 255
-# One path as written: charged_path doesn't refuse a long path itself.
-_LONGEST_MODEL_PATH = 4096
-# What a model name is made of. A match must have none of these right before or after it, so
-# "gpt-4o" is not found inside "gpt-4o-mini".
-_MODEL_NAME_CHARS = frozenset(string.ascii_letters + string.digits + "._:/@-")
-
-
-def _resolved_in_source(root: Path, path: str) -> Path | None:
-    """``root / path`` resolved, each lookup charged to the save's budget, or None: a link
-    loop, a NUL, a path the system refuses. PathLookupsSpent is not caught here: past the
-    budget the save answers with its own message."""
-    try:
-        return charged_path(root / path)
-    except (OSError, RuntimeError, ValueError):
-        return None
-
-
-def _source_lines(path: Path, limit: int) -> list[str] | None:
-    """The lines of a file the way _copy_prompt reads them, or None: not a regular file, not
-    readable, or larger than ``limit`` bytes."""
-    try:
-        # Before the open: opening a FIFO or a device waits on it, or reads without end.
-        if not path.is_file():
-            return None
-        with path.open("rb") as handle:
-            raw = handle.read(limit + 1)
-    except (OSError, ValueError):
-        return None
-    if len(raw) > limit:
-        return None
-    # As _copy_prompt decodes, whatever coding line the file carries: one file then has one
-    # numbering in both checks, and no codec the file names gets to run on it.
-    return raw.decode("utf-8", errors="replace").splitlines()
-
-
-def _named_on(line: str, name: str) -> bool:
-    """Whether ``name`` is on ``line`` as a whole name. ``name`` is made only of
-    _MODEL_NAME_CHARS, so an occurrence starting inside one that failed has a name character
-    just before it, and the search resumes after the failed one."""
-    if not name:
-        # find("") matches at every position without moving on.
-        return False
-    at = line.find(name)
-    while at >= 0:
-        end = at + len(name)
-        if (at == 0 or line[at - 1] not in _MODEL_NAME_CHARS) and (
-            end == len(line) or line[end] not in _MODEL_NAME_CHARS
-        ):
-            return True
-        at = line.find(name, end)
-    return False
-
-
-def _model_problems(contract: AgentContract, source_root: Path) -> list[str]:
-    """Problems with contract.model, checked against the cited line. On success, strips name and
-    provider and stores path as the resolved file relative to the root, in POSIX form. Resolves
-    one path (charged to the save's budget) and reads at most one file."""
-    model = contract.model
-    if model is None:
-        return []
-    name, provider, path = model.name.strip(), model.provider.strip(), model.path.strip()
-    shown_name, shown_path = name[:100], path[:200]
-    problems: list[str] = []
-    if not name:
-        problems.append(
-            "model: name is empty; give the model's name as written in the source, or leave "
-            "model out"
-        )
-    elif not _MODEL_NAME_CHARS.issuperset(name):
-        problems.append(
-            "model: a model name is letters, digits and . _ : / @ -; write it as it appears in "
-            "the source, or leave model out"
-        )
-    if not _MODEL_NAME_CHARS.issuperset(provider):
-        problems.append(
-            "model: a provider is letters, digits and . _ : / @ -; write it as the source names "
-            "it, or leave it out"
-        )
-    if len(name) > _LONGEST_MODEL_FIELD or len(provider) > _LONGEST_MODEL_FIELD:
-        problems.append("model: name and provider are at most 255 characters")
-    if not path or model.line < 1:
-        problems.append(
-            "model: give path and line, the file and the line the model's name is written on"
-        )
-    if len(path) > _LONGEST_MODEL_PATH:
-        problems.append("model: path is too long")
-    # All of these at once, and before the disk: a citation wrong in its shape costs no lookup.
-    if problems:
-        return problems
-    root = source_root.resolve()
-    resolved = _resolved_in_source(root, path)
-    if resolved is None or not is_within(resolved, root):
-        return [f"model: {shown_path} is not a file in the source"]
-    lines = _source_lines(resolved, _LARGEST_PROMPT_FILE)
-    if lines is None:
-        return [
-            f"model: {shown_path} can't be read as a file of at most 1 MiB; check the path, and "
-            "cite the line in the file the name is written in"
-        ]
-    if model.line > len(lines):
-        return [f"model: line {model.line} is outside {shown_path}, which has {len(lines)} lines"]
-    if not _named_on(lines[model.line - 1], name):
-        return [
-            f"model: the name {shown_name} is not on line {model.line} of {shown_path} as a "
-            "whole name; write it exactly as it appears there, or leave model out if the name "
-            "is only set at run time"
-        ]
-    model.name, model.provider = name, provider
-    # The file the path leads to, so a link inside the source is stored as its target.
-    model.path = resolved.relative_to(root).as_posix()
-    return []
 
 
 def _without_nulls(value: Any) -> Any:
@@ -1679,11 +1600,14 @@ def contract_tools(
                 "prompt",
                 bool(payload.get("conversational", True))
                 and not payload.get("hard_constraints")
-                and not excerpt,
+                and not excerpt
+                # Lines named are the prompt, found: copied whole, with no quote needed.
+                and not payload.get("system_prompt_from"),
                 "no hard_constraints and no system_prompt_excerpt, for a conversational agent. "
                 "Its prompt usually exists and often lives away from the main agent file — "
                 "search the whole source for a long instructions string before deciding there "
-                "is none.",
+                "is none. If you find it, name its lines in system_prompt_from so it is copied "
+                "whole.",
             ),
             (
                 "data",
@@ -1728,7 +1652,9 @@ def contract_tools(
                 "prompt-lines",
                 source_root is not None
                 and bool(excerpt)
-                and not payload.get("system_prompt_from"),
+                and not payload.get("system_prompt_from")
+                # Asked already, with the "prompt" nudge: the lines aren't asked for twice.
+                and "prompt" not in nudged,
                 "system_prompt_excerpt is a quote, and system_prompt_from names no lines. If the "
                 "prompt is written in the source, name its lines in system_prompt_from so it is "
                 "copied whole.",
@@ -1752,6 +1678,7 @@ def contract_tools(
             subfolder=subfolder,
             # The scan's answer is for scan_root; another root's code is found again.
             reached=reach if scan_root == source_root else None,
+            asked=nudged,
         )
         if isinstance(checked, dict):
             return checked

@@ -1772,12 +1772,14 @@ def test_a_tool_module_through_links_is_charged_to_the_saves_budget(
 
 
 def test_a_prompt_path_named_again_is_resolved_once(tmp_path, repo, monkeypatch):
-    from fi.alk.harness import tools
+    from fi.alk.harness import model_citation
 
     (repo / "agents" / "a" / "prompt.txt").write_text("Be polite.\nBe brief.\n")
     resolved: list[Path] = []
-    real = tools.charged_path
-    monkeypatch.setattr(tools, "charged_path", lambda path: resolved.append(path) or real(path))
+    real = model_citation.charged_path
+    monkeypatch.setattr(
+        model_citation, "charged_path", lambda path: resolved.append(path) or real(path)
+    )
 
     result = accept_contract(
         payload(
