@@ -189,3 +189,17 @@ def test_a_scenario_need_not_say_when_an_actor_comes_in_it_comes_in_on_its_own_a
     assert (lead.trigger.kind, lead.trigger.turn) == ("mid_journey", 3)
     assert friend.trigger.kind == "always" and lead.instruction == ""
     assert here.trigger.kind == "on_keyword"
+
+
+def test_a_speaking_actor_that_comes_in_once_a_record_exists_keeps_which_record():
+    from fi.alk.harness.actors import ScenarioActor
+    from fi.alk.harness.call_actor import CallActor, CallActorList, speaking_entries
+
+    own = {"manager": Actor(id="manager", name="Alex", role="the manager", channel="chat_message")}
+    listing = CallActorList(call_actors=[CallActor(id="manager", name="Alex", role="the manager", channel="chat_message")])
+    entry = ScenarioActor.model_validate(
+        {"id": "manager", "trigger": {"kind": "conditional", "collection": "approvals", "where": {"deal_id": 8}}}
+    )
+    (manager,) = speaking_entries([entry], listing, None, own)
+    trigger = manager.trigger.model_dump()
+    assert (trigger["kind"], trigger["collection"], trigger["where"]) == ("conditional", "approvals", {"deal_id": 8})
