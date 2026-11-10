@@ -55,3 +55,49 @@ def test_added_markers_headers_and_parameters() -> None:
         "headers": "[redacted]",
         "url": "https://example.com/x",
     }
+
+
+@pytest.mark.parametrize(
+    ("prose", "expected"),
+    [
+        (
+            "Call https://u:hunter2@api.example.com/v1 for data.",
+            "Call https://api.example.com/v1 for data.",
+        ),
+        (
+            "Use https://api.example.com/v1?api_key=sk-123#frag always",
+            "Use https://api.example.com/v1 always",
+        ),
+        ("line1\nhttps://u:p@h.example/x", "line1\nhttps://h.example/x"),
+        ("See (https://u:p@h.example/x) first", "See (https://h.example/x) first"),
+        (
+            "a https://u:p@one.example/1 and postgres://db:pw@two.example:5432/app?ssl=1",
+            "a https://one.example/1 and postgres://two.example:5432/app",
+        ),
+        # The host is lowercased, as it always was for a URL on its own.
+        ("x\thttp://{HOST}:{PORT}/hook y", "x\thttp://{host}/hook y"),
+        (
+            '{"hook": "https://u:p@h.example/x?k=1", "next": 1}',
+            '{"hook": "https://h.example/x", "next": 1}',
+        ),
+    ],
+    ids=["password", "query", "after_newline", "in_brackets", "two_urls", "template", "quoted"],
+)
+def test_a_url_inside_prose_is_redacted_and_the_prose_kept(prose: str, expected: str) -> None:
+    assert _redact(prose) == expected
+
+
+def test_a_refused_url_inside_prose_becomes_redacted_and_the_rest_stays(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    prose = "Before https://admin:hunter2＃x@db.example/ after"
+
+    assert _redact(prose) == "Before [redacted] after"
+    assert "hunter2" not in caplog.text
+
+
+@pytest.mark.parametrize(
+    "text", ["no link here", "mailto:someone@example.com", "ratio 3:1 at 10:30", ""]
+)
+def test_a_string_without_a_url_is_unchanged(text: str) -> None:
+    assert _redact(text) == text
