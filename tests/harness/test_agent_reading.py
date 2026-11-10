@@ -403,7 +403,8 @@ def test_a_browser_agent_is_refused_by_the_real_gate(tmp_path, model):
     assert _run(tmp_path, _job(subfolder=SCRAPER)) == 78
 
     assert _failure_in(output)["code"] == "agent_type_unsupported"
-    assert fake.submissions == 1
+    # One second look before any refusal: the browser answer to it stands and is refused.
+    assert fake.submissions == 2
     assert len(fake.sent) == 1
     assert not (output / "agent.json").exists()
     assert not (output / "contract.json").exists()
