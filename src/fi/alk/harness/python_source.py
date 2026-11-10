@@ -165,8 +165,9 @@ def read_module(
 
 def source_encoding(raw: bytes) -> str | None:
     """The encoding Python reads ``raw`` in: a coding line or a byte-order mark names it, and
-    it's UTF-8 without one. None for a coding line no codec reads text in, or one refused by
-    name."""
+    it's UTF-8 without one. None for a coding line no codec is found for, or one refused by name.
+    A codec that turns text into text, such as rot13, is named: bytes can't be decoded in it, so
+    the caller reads the file as UTF-8."""
     coding = _coding(raw)
     if coding is None:
         return None
@@ -205,8 +206,8 @@ _COOKIE_WORDS = 64
 def _cookie_part(line: bytes) -> bytes | None:
     """``line`` as short as says the same to detect_encoding: a comment line becomes "#" and its
     cookie, any other line "x", a blank line nothing; None past ``_COOKIE_WORDS`` failed places.
-    Its pattern, ``#.*?coding``, would try each place up to the cookie, 0.75 ms on a 128 KB line,
-    on every file (round 3 reviewer A)."""
+    detect_encoding's own pattern, ``#.*?coding``, would try each place up to the cookie on the
+    whole line, 0.75 ms on a 128 KB line, on every file (round 3 reviewer A)."""
     mark = line.find(b"#")
     if mark == -1:
         return b"x" if line.strip(b" \t\f") else b""
@@ -238,10 +239,10 @@ def _coding(raw: bytes) -> tuple[str, codecs.CodecInfo] | None:
     detect_encoding doesn't know, and after any byte-order mark each is cut to the ASCII that says
     the same to it (``_cookie_part``), since it refuses a line holding a non-ASCII byte while the
     parser still decodes the file in the codec it names (`# coding: latin-1` then a name in it).
-    A line with more failed places than an honest one reads as a refused codec's file. Four text
-    codecs are refused by name: punycode's decode costs the square of its size, 2.3 s for 128 KB; idna's
-    runs in Python for each label, 91 ms for 128 KB; undefined decodes nothing; unicode-escape is
-    decoded only under a scan's total (``read_module``).
+    A line it reads with more failed places than an honest one reads as a refused codec's file.
+    Four text codecs are refused by name: punycode's decode costs the square of its size, 2.3 s
+    for 128 KB; idna's runs in Python for each label, 91 ms for 128 KB; undefined decodes nothing;
+    unicode-escape is decoded only under a scan's total (``read_module``).
     """
     head = _first_lines(raw)
     bom = len(codecs.BOM_UTF8) if head.startswith(codecs.BOM_UTF8) else 0
@@ -251,7 +252,12 @@ def _coding(raw: bytes) -> tuple[str, codecs.CodecInfo] | None:
         return encoding, codecs.lookup(encoding)
     # Each line cut to what says the same: ASCII alone, so a non-ASCII byte elsewhere on the line
     # can't make detect_encoding refuse it.
-    parts = [_cookie_part(line) for line in head[bom:].split(b"\n")]
+    # The second line only when detect_encoding reads it: after a blank line or a comment with no
+    # cookie in it.
+    lines_read = head[bom:].split(b"\n")
+    parts = [_cookie_part(lines_read[0])]
+    if len(lines_read) > 1 and parts[0] in (b"", b"#"):
+        parts.append(_cookie_part(lines_read[1]))
     if None in parts:
         # Read as a file in a refused codec is: searched raw, never decoded.
         return "undefined", codecs.lookup("undefined")

@@ -828,7 +828,8 @@ class _Workspace:
         return matched
 
 
-_REQUESTED_EXTRAS = re.compile(r"\[([^\]]*)\]")
+# PEP 508: a requirement's one extras bracket comes straight after its name.
+_REQUESTED_EXTRAS = re.compile(r"\s*\[([^\]]*)\]")
 
 
 def _groups(groups: dict, chosen: list) -> list[object]:
@@ -868,22 +869,32 @@ class _Requirements:
                 self.by_extra.setdefault(name, []).extend(values)
         if own:
             uv = _uv_table(table)
-            groups = table.get("dependency-groups") if isinstance(table.get("dependency-groups"), dict) else {}
+            groups = table.get("dependency-groups")
+            groups = groups if isinstance(groups, dict) else {}
             default = uv.get("default-groups", ["dev"])
-            chosen = list(groups) if default == "all" else default if isinstance(default, list) else []
-            self.plain.extend(_groups(groups, [group for group in chosen if isinstance(group, str)]))
+            chosen = (
+                list(groups) if default == "all" else default if isinstance(default, list) else []
+            )
+            names = [group for group in chosen if isinstance(group, str)]
+            self.plain.extend(_groups(groups, names))
 
     def asked(self, plain: bool, extras: Iterable[str]) -> dict[str, set[str]]:
         """The distributions these requirements install, by name, each with the extras asked of
         it: the plain ones if ``plain``, and those of ``extras``."""
-        found = [*(self.plain if plain else ()), *(value for extra in extras for value in self.by_extra.get(extra, ()))]
+        found = [*(self.plain if plain else ())]
+        for extra in extras:
+            found.extend(self.by_extra.get(extra, ()))
         asked: dict[str, set[str]] = {}
         for value in found:
             if not (name := _project_name(value)):
                 continue
             wanted = asked.setdefault(name, set())
-            for listed in _REQUESTED_EXTRAS.findall(value.split(";", 1)[0]):
-                wanted |= {extra for part in listed.split(",") if (extra := _project_name(part))}
+            # Matched once, where the name ends: a search tried every "[" in turn, the square of
+            # the requirement's length (150 KB held the save 51 s; round 5 reviewer A).
+            if listed := _REQUESTED_EXTRAS.match(value, _PROJECT_NAME.match(value).end()):
+                wanted |= {
+                    extra for part in listed.group(1).split(",") if (extra := _project_name(part))
+                }
         return asked
 
 
@@ -899,7 +910,8 @@ def _sources(table: dict) -> dict[str, list[dict]]:
     found: dict[str, list[dict]] = {}
     for key, value in sources.items() if isinstance(sources, dict) else ():
         items = value if isinstance(value, list) else [value]
-        if (name := _project_name(key)) and (kept := [item for item in items if isinstance(item, dict)]):
+        kept = [item for item in items if isinstance(item, dict)]
+        if (name := _project_name(key)) and kept:
             found[name] = kept
     return found
 
@@ -985,8 +997,9 @@ def _workspace_dependencies(
             if isinstance(source.get("path"), str):
                 target = declared / source["path"]
                 found = _real_folder(target, root, known, left)
-                if found is not None and found not in tables and (read := reader.table(found)) is not None:
-                    tables[found] = read
+                if found is not None and found not in tables:
+                    if (read := reader.table(found)) is not None:
+                        tables[found] = read
                 return found if found in tables else None
         return None
 

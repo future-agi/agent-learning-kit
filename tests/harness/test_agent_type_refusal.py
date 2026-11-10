@@ -5303,6 +5303,14 @@ def test_a_member_pattern_part_longer_than_a_folder_name_isnt_compiled(tmp_path,
     assert reader.expand(repo, ["*a" * 200]) == [] and matched == [] and reader.cut
     reader.cut = False
     assert reader.expand(repo, ["agent*"]) == [repo / "agents"] and set(matched) == {"agent*"}
+    # Round 5: every wildcard mark counts, a long literal next to a short wildcard doesn't, and a
+    # cut already said isn't taken back.
+    for pattern, cut in [("?" * 300, True), ("[" + "a" * 300 + "]", True), ("a*/" + "x" * 300, False)]:
+        reader.cut = False
+        assert reader.expand(repo, [pattern]) == [] and reader.cut is cut, pattern
+    reader.cut = False
+    reader.expand(repo, ["agents/**", "x" * 300])
+    assert reader.cut
 
 
 def test_top_names_are_folders_and_python_stems_up_to_the_limit(tmp_path):
@@ -5430,6 +5438,8 @@ def test_the_first_cookie_on_the_line_is_the_one_read():
     # Round 4 reviewer A, L3 (M26): the search starts at the first candidate, not the last.
     assert python_source._coding(b"# coding=latin-1 coding: !!!\n")[0] == "iso-8859-1"
     assert python_source._coding(b"# coding: !!! coding=latin-1\n")[0] == "iso-8859-1"
+    assert python_source._coding(b"# coding=latin-1 coding: utf-8\n")[0] == "iso-8859-1"
+    assert python_source._coding(b"# coding:latin-1 coding=utf-8\n")[0] == "iso-8859-1"
 
 
 def test_a_cyclic_include_group_is_read_once(tmp_path):
@@ -5577,3 +5587,82 @@ def test_a_script_the_script_total_cuts_says_the_walk_stopped(tmp_path):
     said: list[bool] = []
     imported_by_agent(repo, "agents/a", lookup_limit=100_000, script_budget=ParseBudget(10), stopped=said)
     assert said == [True]
+
+
+@pytest.mark.parametrize("size", [1_000, 60_000])
+def test_a_requirement_full_of_brackets_is_read_once(tmp_path, monkeypatch, size):
+    from fi.alk.harness import credentials
+
+    # Round 5 reviewer A, H2: findall tried every "[" in turn, the square of the length.
+    tried: list[int] = []
+    real = credentials._REQUESTED_EXTRAS
+    class Counting:
+        def match(self, value, pos=0):
+            tried.append(1)
+            return real.match(value, pos)
+    monkeypatch.setattr(credentials, "_REQUESTED_EXTRAS", Counting())
+    table = {"project": {"dependencies": ["a" + "[" * size, "common [llm, Fast_X] ; extra == 'x[y]'"]}}
+
+    asked = credentials._Requirements(table, own=True).asked(True, ())
+    assert asked == {"a": set(), "common": {"llm", "fast-x"}} and len(tried) == 2
+
+
+def test_a_second_line_python_doesnt_read_isnt_asked_about(tmp_path):
+    from fi.alk.harness import python_source
+
+    # Round 5 reviewer A, L1: Python reads line two for a cookie only after a blank or comment line.
+    noisy = b"# " + b"coding:# " * (python_source._COOKIE_WORDS + 1)
+    assert python_source._coding(b"x = 1\n" + noisy + b"\n")[0] == "utf-8"
+    assert python_source._coding(b"#!/usr/bin/env python\n" + noisy + b"\n")[0] == "undefined"
+    assert python_source._coding(b"# coding: latin-1\n" + noisy + b"\n")[0] == "iso-8859-1"
+
+
+def test_a_tab_after_the_cookies_colon_is_read_as_python_reads_it():
+    from fi.alk.harness import python_source
+
+    # Round 5 reviewer A, L2 (C1).
+    assert python_source._coding(b"# coding:\tlatin-1\n")[0] == "iso-8859-1"
+
+
+def test_a_members_default_groups_arent_installed_with_it(tmp_path):
+    from fi.alk.harness.credentials import imported_by_agent
+
+    # Round 5 reviewer A, L2 (N3): `uv sync --package` installs the agent's default groups only.
+    repo = _ws_member_tree(
+        tmp_path,
+        "[tool.uv.workspace]\nmembers=['agents/*', 'libs/*']\n[tool.uv.sources]\n"
+        "common={workspace=true}\nllmlib={workspace=true}\n",
+        "dependencies=['common']\n",
+        {"libs/common/pyproject.toml": "[project]\nname='common'\nversion='1'\n"
+         "[dependency-groups]\nrun=['llmlib']\n[tool.uv]\ndefault-groups=['run']\n"},
+    )
+    reached = imported_by_agent(repo, "agents/a", lookup_limit=100_000)
+
+    assert repo / "libs/common/src/common/llm.py" in reached
+    assert repo / "libs/llmlib/src/llmlib/__init__.py" not in reached
+
+
+@pytest.mark.parametrize(
+    "optional, found",
+    [
+        # N7: two keys that name one extra, as uv reads them, both count.
+        ("E-1=['llmlib']\ne_1=['x']\n", True),
+        # N8: a value that isn't a list names nothing (uv refuses it).
+        ("e_1={llmlib='1'}\n", False),
+    ],
+    ids=["keys-normalised-together", "value-not-a-list"],
+)
+def test_a_members_extras_are_indexed_as_uv_reads_them(tmp_path, optional, found):
+    from fi.alk.harness.credentials import imported_by_agent
+
+    repo = _ws_member_tree(
+        tmp_path,
+        "[tool.uv.workspace]\nmembers=['agents/*', 'libs/*']\n[tool.uv.sources]\n"
+        "common={workspace=true}\nllmlib={workspace=true}\n",
+        "dependencies=['common[e_1]']\n",
+        {"libs/common/pyproject.toml": "[project]\nname='common'\nversion='1'\n"
+         "[project.optional-dependencies]\n" + optional},
+    )
+    reached = imported_by_agent(repo, "agents/a", lookup_limit=100_000)
+
+    assert (repo / "libs/llmlib/src/llmlib/__init__.py" in reached) is found
