@@ -12,6 +12,7 @@ name rather than implemented here.
 from __future__ import annotations
 
 import dataclasses
+import logging
 import os
 import tempfile
 from typing import Any, AsyncIterator
@@ -48,6 +49,8 @@ from .base import (
     WorkerSpec,
     tool_input_schema,
 )
+
+logger = logging.getLogger(__name__)
 
 # The loop is Claude Code; the model it bills is not.
 DEFAULT_MODEL = "gemini-3.7-flash"
@@ -184,8 +187,15 @@ class ClaudeSession:
         self._mirror_errors: list[str] = []
         self._tool_names: dict[str, str] = {}
         self._terminal_save_succeeded = False
+        # The CLI reports running totals within one connection, so a result's own counts are its
+        # totals less the last ones seen. None until this connection's first report.
+        self._so_far: dict[str, int] | None = None
+        # A resumed connection's totals may carry the old process's turns on (SDK 0.2.176 on).
+        self._resumed = bool(getattr(options, "resume", None))
 
     async def start(self) -> None:
+        # A new process starts its own totals, which the old baseline must not be taken from.
+        self._so_far = None
         self._client = ClaudeSDKClient(options=self._options)
         await self._client.connect()
 
@@ -277,7 +287,8 @@ class ClaudeSession:
         if isinstance(received, ResultMessage):
             # subtype alone is not the outcome. A call that failed upstream still arrives with
             # subtype "success", so the error facts ride along and Stage decides what failed.
-            counted = _tokens(getattr(received, "model_usage", None))
+            model_usage = getattr(received, "model_usage", None)
+            own = self._own(received)
             errors = [
                 *list(getattr(received, "errors", None) or []),
                 *self._mirror_errors,
@@ -286,17 +297,23 @@ class ClaudeSession:
                 StageDone(
                     outcome=received.subtype,
                     turns=received.num_turns,
-                    cost_usd=_cost(
-                        getattr(received, "model_usage", None),
-                        counted,
-                        received.total_cost_usd,
+                    # A turn that reported no usage cost nothing; None would read as unpriced.
+                    cost_usd=(
+                        0.0
+                        if own is None
+                        else _cost(
+                            [self._reported_model]
+                            if self._reported_model
+                            else [str(name) for name in (model_usage or {})],
+                            own,
+                        )
                     ),
-                    **counted,
+                    **(own or _tokens(None)),
                     session_id=received.session_id,
                     models=(
                         {self._reported_model}
                         if self._reported_model
-                        else set(getattr(received, "model_usage", None) or {})
+                        else set(model_usage or {})
                     ),
                     is_error=bool(
                         getattr(received, "is_error", False) or self._mirror_errors
@@ -326,19 +343,50 @@ class ClaudeSession:
             return returned
         return []
 
+    def _own(self, received: Any) -> dict[str, int] | None:
+        """This result's own counts, or None when it reported no usage at all."""
+        totals = _tokens(getattr(received, "model_usage", None))
+        if not any(totals.values()):
+            # Nothing to take a difference from, so the baseline stands for the next result.
+            return None
+        if self._so_far is None and self._resumed:
+            # A resumed connection's first totals may hold the earlier process's turns, and
+            # `usage` reports this query alone on every SDK. It leaves out workers' tokens.
+            usage = getattr(received, "usage", None)
+            if not usage:
+                logger.warning(
+                    "a resumed Claude session's first result reported no usage; "
+                    "its own tokens are recorded as 0"
+                )
+            own = _tokens({"usage": usage or {}})
+        elif self._so_far is None:
+            own = totals
+        elif any(totals[count] < self._so_far[count] for count in totals) or (
+            totals["tokens_in"] - totals["tokens_cached"]
+            < self._so_far["tokens_in"] - self._so_far["tokens_cached"]
+        ):
+            # The totals restarted under us, so this result is all new.
+            own = totals
+        else:
+            own = {count: totals[count] - self._so_far[count] for count in totals}
+        self._so_far = totals
+        return own
 
-def _cost(model_usage: Any, counted: dict[str, int], reported: float | None) -> float | None:
-    """What the run cost, priced here where possible, else the CLI's own figure."""
+
+def _cost(names: list[str], own: dict[str, int]) -> float | None:
+    """What this turn cost, priced here from its own tokens, or None where nothing is priced.
+
+    Never the CLI's own estimate: it prices a non-Claude model at a guess, about 7x Gemini's rate.
+    """
     from .vertex_gemini import priced
 
-    named = [str(name) for name in (model_usage or {})]
     ours = [
-        priced(name, counted["tokens_in"], counted["tokens_out"], counted["tokens_cached"])
-        for name in named
+        priced(name, own["tokens_in"], own["tokens_out"], own["tokens_cached"])
+        for name in names
     ]
     known = [one for one in ours if one is not None]
     if not known:
-        return reported
+        return None
     # One stage runs on one model: summing would price the same tokens once per reported id.
     return max(known)
 

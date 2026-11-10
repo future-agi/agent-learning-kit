@@ -48,31 +48,46 @@ from .files import file_tools
 
 DEFAULT_MODEL = "gemini-3.7-flash"
 
-# Vertex list pricing per 1M tokens: (input, output, the day this pair was last checked against
-# the platform's litellm model table). An unknown or stale model reports no cost rather than a
-# wrong one, and shows up in `unpriced_turns`.
+# Vertex list pricing per 1M tokens, as rows of (input, output, first_day, last_day) in date order.
+# Today's rates are the platform gateway's litellm model table (agentcc-gateway/internal/modeldb/
+# litellm.json, its vertex_ai/ entries, future-agi 9ec5f9fb1, 2026-11-02). The 2027 Flash rows are
+# Google's Vertex pricing page (cloud.google.com/model-garden/pricing, Global tier, read
+# 2026-11-10), which that table does not carry yet. A row ends either on a published price change
+# (the 2026 Flash rows) or on CHECK_BY, the day every latest row must be re-checked by. A model
+# with no row for today reports no cost rather than a wrong one, and shows up in `unpriced_turns`.
+CHECK_BY = "2027-03-31"
+
 # What Vertex charges for a cache read, as a share of the input rate.
 CACHE_READ_SHARE = 0.10
 
 PRICES_PER_MILLION = {
-    "gemini-3.8-flash": (0.75, 3.75, "2026-12-31"),
-    "gemini-3.7-flash": (0.75, 3.75, "2026-12-31"),
-    "gemini-3.6-flash": (0.75, 3.75, "2026-12-31"),
-    "gemini-3.5-transcribe-preview": (2.5, 12, "2026-12-31"),
-    "gemini-3.5-transcribe-live-preview": (3.5, 21, "2026-12-31"),
-    "gemini-3.5-flash-lite": (0.3, 2.5, "2026-12-31"),
-    "gemini-3.5-flash": (1.5, 9, "2026-12-31"),
-    "gemini-3.1-pro-preview-customtools": (2, 12, "2026-12-31"),
-    "gemini-3.1-pro-preview": (2, 12, "2026-12-31"),
-    "gemini-3.1-flash-lite-preview": (0.25, 1.5, "2026-12-31"),
-    "gemini-3.1-flash-lite-image": (0.25, 1.5, "2026-12-31"),
-    "gemini-3.1-flash-lite": (0.25, 1.5, "2026-12-31"),
-    "gemini-3.1-flash-image-preview": (0.5, 3, "2026-12-31"),
-    "gemini-3.1-flash-image": (0.5, 3, "2026-12-31"),
-    "gemini-3-pro-preview": (2, 12, "2026-12-31"),
-    "gemini-3-pro-image-preview": (2, 12, "2026-12-31"),
-    "gemini-3-pro-image": (2, 12, "2026-12-31"),
-    "gemini-3-flash-preview": (0.5, 3, "2026-12-31"),
+    "gemini-3.8-flash": (
+        (0.75, 3.75, "2026-11-02", "2026-12-31"),
+        (1.50, 7.50, "2027-01-01", CHECK_BY),
+    ),
+    "gemini-3.7-flash": (
+        (0.75, 3.75, "2026-11-02", "2026-12-31"),
+        (1.50, 7.50, "2027-01-01", CHECK_BY),
+    ),
+    "gemini-3.6-flash": (
+        (0.75, 3.75, "2026-11-02", "2026-12-31"),
+        (1.50, 7.50, "2027-01-01", CHECK_BY),
+    ),
+    "gemini-3.5-transcribe-preview": ((2.0, 12, "2026-11-02", CHECK_BY),),
+    "gemini-3.5-transcribe-live-preview": ((3.5, 21, "2026-11-02", CHECK_BY),),
+    "gemini-3.5-flash-lite": ((0.3, 2.5, "2026-11-02", CHECK_BY),),
+    "gemini-3.5-flash": ((1.5, 9, "2026-11-02", CHECK_BY),),
+    "gemini-3.1-pro-preview-customtools": ((2, 12, "2026-11-02", CHECK_BY),),
+    "gemini-3.1-pro-preview": ((2, 12, "2026-11-02", CHECK_BY),),
+    "gemini-3.1-flash-lite-preview": ((0.25, 1.5, "2026-11-02", CHECK_BY),),
+    "gemini-3.1-flash-lite-image": ((0.25, 1.5, "2026-11-02", CHECK_BY),),
+    "gemini-3.1-flash-lite": ((0.25, 1.5, "2026-11-02", CHECK_BY),),
+    "gemini-3.1-flash-image-preview": ((0.5, 3, "2026-11-02", CHECK_BY),),
+    "gemini-3.1-flash-image": ((0.5, 3, "2026-11-02", CHECK_BY),),
+    "gemini-3-pro-preview": ((2, 12, "2026-11-02", CHECK_BY),),
+    "gemini-3-pro-image-preview": ((2, 12, "2026-11-02", CHECK_BY),),
+    "gemini-3-pro-image": ((2, 12, "2026-11-02", CHECK_BY),),
+    "gemini-3-flash-preview": ((0.5, 3, "2026-11-02", CHECK_BY),),
 }
 
 def _json_schema(schema: Any) -> dict[str, Any]:
@@ -680,26 +695,50 @@ class VertexGeminiSession:
 logger = logging.getLogger(__name__)
 
 
+def _rows(name: str) -> tuple[tuple[Any, ...], ...] | None:
+    rows = PRICES_PER_MILLION.get(name)
+    if rows is None and "/" in name:
+        # A gateway prefixes the route, e.g. "vertex_ai/<model>"; the price belongs to the model.
+        rows = PRICES_PER_MILLION.get(name.rsplit("/", 1)[-1])
+    return rows
+
+
+def current_rates(name: str, today: date | None = None) -> tuple[float, float] | None:
+    """The (input, output) rates per 1M tokens that hold on `today`, or None if no row does.
+
+    Read the table through this rather than by position: a model's price is a schedule of rows.
+    """
+    day = (today or date.today()).isoformat()
+    # Every row is checked whatever its place, so the table's order never picks the price; the
+    # check-by test keeps a model's rows from overlapping, so at most one row holds.
+    for rate_in, rate_out, first_day, last_day in _rows(name) or ():
+        if first_day <= day <= last_day:
+            return rate_in, rate_out
+    return None
+
+
 def priced(
     model: str, tokens_in: int, tokens_out: int, tokens_cached: int = 0
 ) -> float | None:
     """What these tokens cost, or None where no price can be stood behind."""
-    prices = PRICES_PER_MILLION.get(model)
-    if prices is None and "/" in model:
-        # A gateway prefixes the route, e.g. "vertex_ai/<model>"; the price belongs to the model.
-        prices = PRICES_PER_MILLION.get(model.rsplit("/", 1)[-1])
-    if prices is None:
+    rows = _rows(model)
+    if rows is None:
         return None
-    if len(prices) > 2 and date.today().isoformat() > str(prices[2]):
+    today = date.today()
+    rates = current_rates(model, today)
+    if rates is None:
         logger.warning(
-            "no current price for %s: the table's figures expired on %s",
+            "no current price for %s on %s: the table's rows run from %s to %s",
             model,
-            prices[2],
+            today.isoformat(),
+            min(row[2] for row in rows),
+            max(row[3] for row in rows),
         )
         return None
+    rate_in, rate_out = rates
     cached = min(max(tokens_cached, 0), max(tokens_in, 0))
-    billed_in = (tokens_in - cached) * prices[0] + cached * prices[0] * CACHE_READ_SHARE
-    return (billed_in + tokens_out * prices[1]) / 1_000_000
+    billed_in = (tokens_in - cached) * rate_in + cached * rate_in * CACHE_READ_SHARE
+    return (billed_in + tokens_out * rate_out) / 1_000_000
 
 
 class VertexGeminiBackend:
