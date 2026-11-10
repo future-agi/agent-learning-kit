@@ -89,6 +89,7 @@ jobs:
           tests/harness/test_simulation_mark_bootstrap.py
           tests/harness/test_process_preflight.py
           tests/providers
+          tests/harness/test_observability.py
           tests/harness/test_scenario_source_provision_agent.py
           tests/harness/test_framework_detection.py
           tests/harness/test_hosted_entrypoint.py
