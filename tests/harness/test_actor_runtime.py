@@ -1122,3 +1122,24 @@ def test_a_scenario_s_own_start_message_is_the_task_s_turn_not_the_person_s():
     assert json.loads(transcript.artifact())["messages"][0]["role"] == "task"
     # The person's own turn is unchanged.
     assert Transcript(exchanges=[Exchange("customer", "Hi")]).canonical_messages() == [{"role": "user", "content": "Hi"}]
+
+
+def test_a_speaking_actor_can_come_in_on_a_tool_the_agent_s_tools_service_runs():
+    from types import SimpleNamespace
+
+    from fi.alk.harness.call_actor import CallActor, CallActorList
+    from fi.alk.harness.scenario import Scenario
+    from fi.alk.harness.scenario_tools import _call_actors_that_cannot_run
+
+    listing = CallActorList(call_actors=[CallActor(id="manager", name="Alex", channel="chat_message")])
+    scenario = Scenario.model_validate(
+        {"name": "x", "instruction": "Ask for 25% on deal 8.",
+         "actors": [{"id": "manager", "trigger": {"kind": "on_tool", "tool": "request_discount"}}]}
+    )
+    # The writer's local world cannot run the service's tool, but the world's tool trace sees every call of it.
+    trial = SimpleNamespace(runtime_tools={"request_discount"}, endpoint_for={})
+    tools = {"request_discount"}
+    assert _call_actors_that_cannot_run(scenario, listing, trial, False, tools, {"request_discount"}) == []
+    # A tool that truly runs only inside the agent is still refused.
+    refused = _call_actors_that_cannot_run(scenario, listing, trial, False, tools, set())
+    assert refused and "runs only inside the agent" in refused[0]
