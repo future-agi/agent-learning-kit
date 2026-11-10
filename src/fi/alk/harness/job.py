@@ -264,6 +264,34 @@ class HarnessJobMetadata(BaseModel):
     customer_code_environment: dict[str, str] = Field(default_factory=dict)
 
 
+class JobSkillFile(BaseModel):
+    model_config = ConfigDict(strict=True, extra="ignore", frozen=True)
+
+    path: str = Field(min_length=1, max_length=512)
+    content: str
+
+
+class JobSkill(BaseModel):
+    model_config = ConfigDict(strict=True, extra="ignore", frozen=True)
+
+    name: str = Field(
+        min_length=1, max_length=64, pattern=r"^[a-z0-9]+(?:-[a-z0-9]+)*$"
+    )
+    kind: str = Field(pattern=r"^(skill|context)$")
+    origin: str = Field(default="library", pattern=r"^(library|repo)$")
+    version_number: int | None = Field(default=None, ge=1)
+    files_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    files: list[JobSkillFile] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _library_carries_files(self) -> JobSkill:
+        if self.origin == "library" and (not self.files or self.version_number is None):
+            raise ValueError("a library skill carries its files and version number")
+        if self.origin == "repo" and self.files:
+            raise ValueError("a repo skill is already in the agent's code")
+        return self
+
+
 class HarnessJob(BaseModel):
     schema_version: str = HARNESS_JOB_SCHEMA_VERSION
     job_id: str

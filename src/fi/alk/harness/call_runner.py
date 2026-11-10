@@ -53,6 +53,7 @@ from fi.simulate.runtime.report import SimulationReport
 from fi.simulate.runtime.run import TestCaseStatus
 from fi.simulate.runtime.runner import SimulationRunner
 
+from .agent_skills import SKILL_TRACE_SOURCE
 from .background_noise import place_of, scenario_source
 from .bundle_v2 import EvidenceSeam
 from .hosted_scheduler import CallAborted, CallOutcome
@@ -824,7 +825,7 @@ def _collect_file_tool_calls(runtime: EnvironmentRuntime) -> tuple[Call, ...]:
             record = json.loads(line)
         except ValueError:
             continue
-        if not isinstance(record, dict):
+        if not isinstance(record, dict) or record.get("source") == SKILL_TRACE_SOURCE:
             continue
         name = record.get("name")
         if not isinstance(name, str) or not name:

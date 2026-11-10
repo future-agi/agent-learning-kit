@@ -67,6 +67,8 @@ from .bundle_v2 import (
 from .diagnostics import DiagnosticLocation, HarnessDiagnostic
 from .job import FailureDomain
 from .job import HarnessJobMetadata
+from .job import JobSkill
+from .agent_skills import job_skills
 from .job import HarnessStage
 from .livekit_source import infer_livekit_agent_name_from_source
 from .secrets import PROCESS_SECRET_FILE_ENVIRONMENT, target_provider_environment
@@ -1369,6 +1371,7 @@ def build_process_tree(
     sleep: Callable[[float], None] = time.sleep,
     secret_values: dict[str, str] | None = None,
     retain_process_log: Callable[[Path], None] | None = None,
+    skills: tuple[JobSkill, ...] = (),
 ) -> Path:
     """§2b: copy `source_root/<working_directory>` to `build_root/<name>/`, chowned to the
     process's `user` (F1), then argv-exec each `build_commands` step there under that same user —
@@ -1436,6 +1439,19 @@ def build_process_tree(
             _path.chmod(_path.stat().st_mode | 0o200)
         except OSError:
             pass
+    if skills:
+        from .agent_skills import SkillPlacementError, place_skills
+
+        try:
+            place_skills(build_dir, skills)
+        except (SkillPlacementError, OSError) as exc:
+            raise ProcessRuntimeError(
+                "build",
+                "skill_placement_failed",
+                str(exc),
+                process=process.name,
+                domain=FailureDomain.ENVIRONMENT,
+            ) from exc
 
     resolved_user = _resolve_process_user(
         process.user,
@@ -2261,6 +2277,7 @@ def spawn_source_process(
     require_declared_user: bool = False,
     chown: Callable[[Path, int, int], None] = _default_chown,
     customer_code_environment: dict[str, str] | None = None,
+    skill_trace: bool = False,
 ) -> SpawnedWorldProcess:
     """§2b: `run_command` "exec'd once per world with cwd `/work/build/<name>/`" — the build tree
     is read-only by convention at run time; `world_dir` (`{{WORLD_DIR}}`) is this process's own
@@ -2325,6 +2342,15 @@ def spawn_source_process(
                     .read_bytes()
                 )
                 mark_module.chmod(0o444)
+        if skill_trace and livekit_hook_due:
+            skill_observer = world_dir / "claude_skill_observer_bootstrap.py"
+            if not skill_observer.exists():
+                skill_observer.write_bytes(
+                    Path(__file__)
+                    .with_name("claude_skill_observer_bootstrap.py")
+                    .read_bytes()
+                )
+                skill_observer.chmod(0o444)
         if process.environment.get("ALK_CREWAI_TOOL_TRACE") == "1":
             observer = world_dir / "crewai_runtime_observer_bootstrap.py"
             if not observer.exists():
@@ -2495,6 +2521,8 @@ def spawn_source_process(
             env[name] = value
     if mark_hook_due:
         env["FI_SIMULATION_CALL_FILE"] = str(world_dir.parent / SIMULATION_CALL_FILE)
+    if skill_trace and livekit_hook_due:
+        env["ALK_SKILL_TRACE"] = "1"
     if process.local_auth:
         process.local_auth.reject_collisions(set(env) | set(secret_values))
         token = (local_auth_values or {}).get(process.local_auth.server_environment)
@@ -4109,6 +4137,7 @@ class SpawnContext:
     # The platform's per-run decision for customer code (job.json `metadata`), applied to every
     # customer process's environment as is.
     customer_code_environment: dict[str, str] = field(default_factory=dict)
+    skills: tuple[JobSkill, ...] = ()
     runner: ProcessRunner = default_process_runner
     # Shared by `build_process_trees`' `build_commands` steps and `spawn_managed_process`'s
     # postgres `initdb` bootstrap — both are "run one synchronous step, check its exit code."
@@ -4240,6 +4269,8 @@ def spawn_world(
                     require_declared_user=context.require_declared_user,
                     chown=context.chown,
                     customer_code_environment=context.customer_code_environment,
+                    skill_trace=bool(context.skills)
+                    and process.source_origin != "bundle",
                 )
             handles[name] = handle
             if isinstance(process, SourceProcess) and process.started_check is not None:
@@ -4285,6 +4316,7 @@ def build_process_trees(
             build_step_timeout_seconds=context.build_step_timeout_seconds,
             secret_values=context.secret_values,
             retain_process_log=context.retain_process_log,
+            skills=() if process.source_origin == "bundle" else context.skills,
         )
         for process in manifest.processes
         if isinstance(process, SourceProcess)
@@ -6466,6 +6498,7 @@ class ProcessRuntimeProvider:
                 customer_code_environment=_read_customer_code_environment(
                     work_directory
                 ),
+                skills=job_skills(work_directory),
                 runner=self._runner,
                 sync_run=self._sync_run,
                 prober=self._prober,
