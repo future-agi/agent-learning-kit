@@ -34,14 +34,6 @@ def _verified(db, patient_id):
         raise ToolError(f"Patient {patient_id} has not been verified in this conversation; verify the patient's full name and date of birth first.", category="permission_denied")
 
 
-def _own_appointment(db, appointment_id):
-    appt = db.one("SELECT * FROM appointments WHERE appointment_id = ?", [appointment_id])
-    if appt is None:
-        raise ToolError(f"Appointment {appointment_id!r} not found.", category="not_found")
-    _verified(db, appt["patient_id"])
-    return appt
-
-
 def _slot(db, slot_id):
     """A slot id names a provider and a start: SL-<provider>-<YYYYMMDD>-<HHMM>. It is real when it lies
     inside one of the provider's sessions; its location is that session's."""

@@ -129,15 +129,6 @@ def _staff(db, staff_id):
     return row
 
 
-def _appointment(db, appointment_id, customer_id):
-    row = db.one("SELECT * FROM appointments WHERE appointment_id = ?", [appointment_id])
-    if row is None:
-        raise ToolError(f"Appointment {appointment_id!r} not found.", category="not_found")
-    if row["customer_id"] != customer_id:
-        raise ToolError(f"Appointment {appointment_id} does not belong to customer {customer_id}.", category="permission_denied")
-    return row
-
-
 def _next_id(db, table, column, prefix, start):
     n = start
     while db.one(f"SELECT 1 AS x FROM {table} WHERE {column} = ?", [f"{prefix}{n}"]):

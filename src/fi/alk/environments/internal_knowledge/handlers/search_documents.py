@@ -18,17 +18,6 @@ def _readable(db, e):
     return {r["collection_id"] for r in db.query("SELECT collection_id FROM collection_access WHERE role = ?", [e["role"]])}
 
 
-def _doc(db, e, fid):
-    if not fid or not isinstance(fid, str):
-        raise ToolError("drive_file_id is required.", category="invalid_input")
-    d = db.one("SELECT * FROM kb_documents WHERE drive_file_id = ?", [fid])
-    if d is None:
-        raise ToolError(f"Document {fid!r} not found in the corpus.", category="not_found")
-    if d["collection_id"] not in _readable(db, e):
-        raise ToolError("This document is not available to this employee's role.", category="permission_denied")
-    return d
-
-
 def _effective(db, family, as_of):
     rows = db.query("SELECT * FROM kb_documents WHERE family = ? AND status IN ('approved', 'superseded') AND effective_date <= ? ORDER BY effective_date DESC, version DESC", [family, as_of])
     return rows[0] if rows else None

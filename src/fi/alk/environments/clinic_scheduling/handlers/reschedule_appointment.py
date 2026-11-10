@@ -107,14 +107,6 @@ def _payer_ok(db, patient_id, provider_id):
     return db.one("SELECT payer FROM provider_payers WHERE provider_id = ? AND payer = ?", [provider_id, ins["payer"]]) is not None, ins["payer"]
 
 
-def _next_id(db, table, column, prefix, start):
-    taken = {r[column] for r in db.query(f"SELECT {column} FROM {table}")}
-    n = start + len(taken)
-    while f"{prefix}{n}" in taken:
-        n += 1
-    return f"{prefix}{n}"
-
-
 def _appointment_view(a):
     return {k: a[k] for k in ("appointment_id", "patient_id", "provider_id", "location_id", "specialty", "start_time", "end_time", "reason", "status", "calendar_event_id")}
 

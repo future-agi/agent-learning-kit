@@ -129,15 +129,6 @@ def _staff(db, staff_id):
     return row
 
 
-def _appointment(db, appointment_id, customer_id):
-    row = db.one("SELECT * FROM appointments WHERE appointment_id = ?", [appointment_id])
-    if row is None:
-        raise ToolError(f"Appointment {appointment_id!r} not found.", category="not_found")
-    if row["customer_id"] != customer_id:
-        raise ToolError(f"Appointment {appointment_id} does not belong to customer {customer_id}.", category="permission_denied")
-    return row
-
-
 def _next_id(db, table, column, prefix, start):
     n = start
     while db.one(f"SELECT 1 AS x FROM {table} WHERE {column} = ?", [f"{prefix}{n}"]):
@@ -189,44 +180,6 @@ def _bookable(db, staff, service, loc, utc, off, *, ignore_event=None, customer_
 
 
 iso = _iso
-
-
-def _view(a):
-    return {k: a[k] for k in ("appointment_id", "customer_id", "service_id", "staff_id", "location_id", "start_utc", "end_utc", "local_start", "utc_offset", "time_zone", "status", "calendar_event_id", "rescheduled_from", "late_fee_cents")}
-
-
-def _write_event(db, appt_id, staff, service, customer, loc, utc, now):
-    end = utc + timedelta(minutes=service["duration_minutes"])
-    event_id = f"EV-{appt_id}"
-    db.execute(
-        "INSERT INTO calendar_events (event_id, calendar_id, summary, description, location, start_time, end_time, time_zone, status, recurring_event_id, recurrence_rule, original_start_time, version, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'confirmed', NULL, NULL, NULL, 1, ?, ?)",
-        [event_id, staff["calendar_id"], f"{service['name']} - {customer['name']}", f"appointment:{appt_id}", loc["name"], iso(utc), iso(end), loc["time_zone"], iso(now), iso(now)],
-    )
-    att = db.one("SELECT COALESCE(MAX(id), 0) + 1 AS c FROM calendar_event_attendees")["c"]
-    db.execute("INSERT INTO calendar_event_attendees (id, event_id, email, display_name, response_status, is_organizer, is_optional) VALUES (?, ?, ?, ?, 'accepted', FALSE, FALSE)", [att, event_id, customer["email"], customer["name"]])
-    return event_id
-
-
-def _insert_appointment(db, appt_id, customer, service, staff, loc, utc, off, now, request_key, source, rescheduled_from=None):
-    local, _ = _local(utc, loc["time_zone"])
-    event_id = _write_event(db, appt_id, staff, service, customer, loc, utc, now)
-    db.execute(
-        "INSERT INTO appointments (appointment_id, customer_id, service_id, staff_id, location_id, start_utc, end_utc, local_start, utc_offset, time_zone, status, calendar_event_id, request_key, rescheduled_from, source, late_fee_cents, created_at, updated_at, cancelled_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'booked', ?, ?, ?, ?, 0, ?, ?, NULL)",
-        [appt_id, customer["customer_id"], service["service_id"], staff["staff_id"], loc["location_id"], iso(utc), iso(utc + timedelta(minutes=service["duration_minutes"])), local, _fmt_off(off), loc["time_zone"], event_id, request_key, rescheduled_from, source, iso(now), iso(now)],
-    )
-    return db.one("SELECT * FROM appointments WHERE appointment_id = ?", [appt_id])
-
-
-def _contention(db, staff, service, loc, utc, now):
-    """A competing booking armed for this slot commits first (the concurrency fixture)."""
-    c = db.one("SELECT * FROM booking_contention WHERE staff_id = ? AND start_utc = ? AND status = 'armed'", [staff["staff_id"], iso(utc)])
-    if not c:
-        return None
-    rival = db.one("SELECT * FROM customers WHERE customer_id = ?", [c["competitor_customer_id"]])
-    appt_id = _next_id(db, "appointments", "appointment_id", "A", 700)
-    _insert_appointment(db, appt_id, rival, service, staff, loc, utc, _offset_min(loc["time_zone"], utc), now, f"RIVAL-{c['contention_id']}", "competitor")
-    db.execute("UPDATE booking_contention SET status = 'fired' WHERE contention_id = ?", [c["contention_id"]])
-    return appt_id
 
 
 def handle(args, db):

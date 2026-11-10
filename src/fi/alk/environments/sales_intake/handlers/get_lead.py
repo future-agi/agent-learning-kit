@@ -5,20 +5,6 @@ def handle(args, db):
     out["demos"] = db.query("SELECT demo_id, slot_id, rep_id, status FROM demos WHERE lead_id = ?", [l["lead_id"]])
     return out
 
-def _now(db):
-    row = db.one("SELECT now FROM clock")
-    return row["now"] if row else "2026-11-10T15:00:00Z"
-
-
-def _param(db, name, default):
-    import json
-    row = db.one("SELECT value FROM environment_policy WHERE name = ?", [name])
-    return json.loads(row["value"]) if row else default
-
-
-def _norm(email):
-    return (email or "").strip().lower()
-
 
 def _lead(db, lead_id):
     if not lead_id:
@@ -27,20 +13,6 @@ def _lead(db, lead_id):
     if row is None:
         raise ToolError(f"Lead {lead_id!r} not found.", category="not_found")
     return row
-
-
-def _contact(db, contact_id):
-    row = db.one("SELECT * FROM contacts WHERE contact_id = ?", [contact_id])
-    if row is None:
-        raise ToolError(f"Contact {contact_id!r} not found.", category="not_found")
-    return row
-
-
-def _expected_owner(db, country):
-    rule = db.one("SELECT * FROM territory_rules WHERE lower(country) = lower(?)", [country or ""])
-    if rule:
-        return {"kind": "rep", "id": rule["rep_id"], "rule": "territory", "rule_id": rule["rule_id"]}
-    return {"kind": "queue", "id": _param(db, "fallback_queue", "Q-SDR-FALLBACK"), "rule": "fallback", "rule_id": None}
 
 
 def _lead_view(l):

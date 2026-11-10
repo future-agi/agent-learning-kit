@@ -6,35 +6,11 @@ def handle(args, db):
         out["for_country"] = _expected_owner(db, args["country"])
     return out
 
-def _now(db):
-    row = db.one("SELECT now FROM clock")
-    return row["now"] if row else "2026-11-10T15:00:00Z"
-
 
 def _param(db, name, default):
     import json
     row = db.one("SELECT value FROM environment_policy WHERE name = ?", [name])
     return json.loads(row["value"]) if row else default
-
-
-def _norm(email):
-    return (email or "").strip().lower()
-
-
-def _lead(db, lead_id):
-    if not lead_id:
-        raise ToolError("lead_id is required.", category="invalid_input")
-    row = db.one("SELECT * FROM leads WHERE lead_id = ?", [lead_id])
-    if row is None:
-        raise ToolError(f"Lead {lead_id!r} not found.", category="not_found")
-    return row
-
-
-def _contact(db, contact_id):
-    row = db.one("SELECT * FROM contacts WHERE contact_id = ?", [contact_id])
-    if row is None:
-        raise ToolError(f"Contact {contact_id!r} not found.", category="not_found")
-    return row
 
 
 def _expected_owner(db, country):
@@ -44,5 +20,3 @@ def _expected_owner(db, country):
     return {"kind": "queue", "id": _param(db, "fallback_queue", "Q-SDR-FALLBACK"), "rule": "fallback", "rule_id": None}
 
 
-def _lead_view(l):
-    return {k: l[k] for k in ("lead_id", "contact_id", "account_id", "source", "use_case", "seats", "timeline", "country", "budget", "status", "owner_rep_id", "queue_id", "created_at", "updated_at")}

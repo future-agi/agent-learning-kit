@@ -34,14 +34,6 @@ def _verified(db, patient_id):
         raise ToolError(f"Patient {patient_id} has not been verified in this conversation; verify the patient's full name and date of birth first.", category="permission_denied")
 
 
-def _own_appointment(db, appointment_id):
-    appt = db.one("SELECT * FROM appointments WHERE appointment_id = ?", [appointment_id])
-    if appt is None:
-        raise ToolError(f"Appointment {appointment_id!r} not found.", category="not_found")
-    _verified(db, appt["patient_id"])
-    return appt
-
-
 def _slot(db, slot_id):
     """A slot id names a provider and a start: SL-<provider>-<YYYYMMDD>-<HHMM>. It is real when it lies
     inside one of the provider's sessions; its location is that session's."""
@@ -91,22 +83,6 @@ def _bookable_time(db, slot):
         raise ToolError(f"Slot {slot['slot_id']} is beyond the {_param(db, 'max_horizon_days', 30)}-day booking horizon.", category="policy_blocked")
 
 
-def _referral_ok(db, patient_id, specialty):
-    spec = db.one("SELECT * FROM specialties WHERE specialty = ?", [specialty])
-    if not spec or not spec["referral_required"]:
-        return True
-    today = _now(db)[:10]
-    return db.one("SELECT referral_id FROM referrals WHERE patient_id = ? AND specialty = ? AND status = 'active' AND (expires_on IS NULL OR expires_on >= ?)",
-                  [patient_id, specialty, today]) is not None
-
-
-def _payer_ok(db, patient_id, provider_id):
-    ins = db.one("SELECT payer FROM insurance WHERE patient_id = ?", [patient_id])
-    if ins is None:
-        return False, None
-    return db.one("SELECT payer FROM provider_payers WHERE provider_id = ? AND payer = ?", [provider_id, ins["payer"]]) is not None, ins["payer"]
-
-
 def _next_id(db, table, column, prefix, start):
     taken = {r[column] for r in db.query(f"SELECT {column} FROM {table}")}
     n = start + len(taken)
@@ -114,23 +90,6 @@ def _next_id(db, table, column, prefix, start):
         n += 1
     return f"{prefix}{n}"
 
-
-def _appointment_view(a):
-    return {k: a[k] for k in ("appointment_id", "patient_id", "provider_id", "location_id", "specialty", "start_time", "end_time", "reason", "status", "calendar_event_id")}
-
-
-def _insert_event(db, event_id, slot, appointment_id, now):
-    db.execute(
-        "INSERT INTO calendar_events (event_id, calendar_id, summary, description, location, start_time, end_time, time_zone, status, version, created_at, updated_at) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, 'Europe/London', 'confirmed', 1, ?, ?)",
-        [event_id, slot["calendar_id"], f"Clinic appointment {appointment_id}", f"appointment_id: {appointment_id}", slot["location_id"], slot["start_time"], slot["end_time"], now, now])
-
-
-def _fault(db, operation, target):
-    f = db.one("SELECT * FROM clinic_fault_injections WHERE operation = ? AND target_id = ? AND is_active = 1", [operation, target])
-    if f:
-        db.execute("UPDATE clinic_fault_injections SET is_active = 0 WHERE fault_id = ?", [f["fault_id"]])
-    return f
 
 def handle(args, db):
     _need(args, "patient_id", "slot_id", "request_key")

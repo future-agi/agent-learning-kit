@@ -33,23 +33,12 @@ def _param(db, name, default):
     return json.loads(row["value"]) if row else default
 
 
-def _norm(email):
-    return (email or "").strip().lower()
-
-
 def _lead(db, lead_id):
     if not lead_id:
         raise ToolError("lead_id is required.", category="invalid_input")
     row = db.one("SELECT * FROM leads WHERE lead_id = ?", [lead_id])
     if row is None:
         raise ToolError(f"Lead {lead_id!r} not found.", category="not_found")
-    return row
-
-
-def _contact(db, contact_id):
-    row = db.one("SELECT * FROM contacts WHERE contact_id = ?", [contact_id])
-    if row is None:
-        raise ToolError(f"Contact {contact_id!r} not found.", category="not_found")
     return row
 
 
