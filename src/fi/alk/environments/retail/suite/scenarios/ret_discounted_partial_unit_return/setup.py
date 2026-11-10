@@ -1,5 +1,0 @@
-def setup(world):
-    world.put("customers", {"customer_id": "C401", "name": "Marcus Vance", "email": "marcus.vance@example.com", "phone": "+15550401", "postal_code": "94102", "address": "100 Market St, San Francisco, CA 94102", "store_credit_cents": 0})
-    world.put("orders", {"order_id": "O401", "customer_id": "C401", "order_date": "2026-10-15T10:00:00Z", "delivery_date": "2026-10-20T10:00:00Z", "status": "delivered", "currency": "USD", "total_gross_cents": 19600, "total_discount_cents": 1000, "total_tax_cents": 0, "total_net_cents": 18600, "shipping_address": "100 Market St, San Francisco, CA 94102", "cancelled_at": None})
-    world.put("order_items", {"item_id": "IT401", "order_id": "O401", "sku": "AP05", "quantity": 2, "unit_price_cents": 9800, "line_discount_cents": 1000, "line_tax_cents": 0, "line_net_cents": 18600, "returned_quantity": 0})
-    world.put("shipments", {"shipment_id": "SHP401", "order_id": "O401", "tracking_number": "1Z999AA1000000401", "carrier": "UPS", "status": "delivered", "shipped_at": "2026-10-16T10:00:00Z", "delivered_at": "2026-10-20T10:00:00Z", "last_event": "Delivered", "last_event_at": "2026-10-20T10:00:00Z"})

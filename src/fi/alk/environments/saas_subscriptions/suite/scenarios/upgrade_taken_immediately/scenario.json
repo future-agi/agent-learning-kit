@@ -1,0 +1,104 @@
+{
+  "name": "upgrade_taken_immediately",
+  "scenario_key": "upgrade-taken-immediately",
+  "scenario_id": "",
+  "use_case": "Preview and schedule a plan or seat change",
+  "branch": "Grace Growth (T07, Basic, 5 seats) upgrades to Pro with 5 seats immediately",
+  "tests": "Previews immediate upgrade and schedules immediate plan change to Pro with confirmed request key",
+  "instruction": "You are Grace Growth, the billing administrator for GrowthLabs (Tenant ID: T07, User ID: U07_ADMIN). Your company currently has 5 seats on the Basic plan. You want to upgrade to the Pro plan with 5 seats starting immediately today, rather than waiting for renewal. When the agent previews the plan change details and asks for your confirmation, confirm the immediate upgrade with confirmation code 'confirmed' and request key 'req_upgrade_07'.\n\nYour details:\n- Tenant ID: T07 (GrowthLabs)\n- User ID: U07_ADMIN (Billing Admin)\n- Target Plan: Pro (pro)\n- Target Seats: 5\n- Effective Timing: immediate\n- Confirmation Code: confirmed\n- Request Key: req_upgrade_07",
+  "keywords": [
+    "plan_upgrade",
+    "proration",
+    "role_authorization"
+  ],
+  "persona": {
+    "name": "Grace Growth",
+    "gender": "female",
+    "age_group": "32-40",
+    "occupation": "",
+    "location": "United States",
+    "personality": "Confident",
+    "communication_style": "Direct and concise",
+    "initial_message": "Hi, I'm Grace Growth, billing admin for GrowthLabs (T07). We want to upgrade our subscription from Basic to Pro with 5 seats immediately today.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "tenant_id": "T07",
+    "current_plan": "basic",
+    "actor_id": "U07_ADMIN",
+    "target_seats": 5,
+    "target_plan_id": "pro",
+    "origin": "seed"
+  },
+  "solution": [
+    {
+      "tool": "verify_billing_admin",
+      "arguments": {
+        "tenant_id": "T07",
+        "actor_id": "U07_ADMIN"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "actor_id": "caller: U07_ADMIN",
+        "tenant_id": "caller: T07"
+      }
+    },
+    {
+      "tool": "get_subscription",
+      "arguments": {
+        "actor_id": "U07_ADMIN",
+        "tenant_id": "T07"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "preview_plan_change",
+      "arguments": {
+        "effective_timing": "immediate",
+        "target_plan_id": "pro",
+        "target_seats": 5,
+        "actor_id": "U07_ADMIN",
+        "tenant_id": "T07"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "schedule_plan_change",
+      "arguments": {
+        "target_plan_id": "pro",
+        "actor_id": "U07_ADMIN",
+        "effective_timing": "immediate",
+        "target_seats": 5,
+        "request_key": "req_upgrade_07",
+        "tenant_id": "T07",
+        "confirmation_code": "confirmed"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "tenant_id": "caller: T07",
+        "target_seats": "caller: 5",
+        "target_plan_id": "caller: pro"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {},
+  "sub_goals": [
+    "plan_change_scheduled"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

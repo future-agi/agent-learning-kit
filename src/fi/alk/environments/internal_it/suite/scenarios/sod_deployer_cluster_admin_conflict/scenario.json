@@ -12,7 +12,7 @@
     "least_privilege"
   ],
   "persona": {
-    "name": "Robert Jones",
+    "name": "Bob Jones",
     "gender": "male",
     "age_group": "32-40",
     "occupation": "Engineer",

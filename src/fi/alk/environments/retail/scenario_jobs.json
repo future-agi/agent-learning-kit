@@ -1,4 +1,12 @@
 {
+  "a_deleted_policy_quoted_as_current": {
+    "job": "ownership",
+    "mcp": true
+  },
+  "an_email_that_reverses_itself": {
+    "job": "order_status",
+    "mcp": true
+  },
   "cancel_authorized_return_before_shipment": {
     "job": "pre_shipment",
     "mcp": false
@@ -9,6 +17,10 @@
   },
   "cancel_in_transit_order_refused": {
     "job": "pre_shipment",
+    "mcp": false
+  },
+  "cancel_one_line_of_a_processing_order": {
+    "job": "policy",
     "mcp": false
   },
   "cancel_order_after_order_number_correction": {
@@ -23,21 +35,17 @@
     "job": "pre_shipment",
     "mcp": false
   },
-  "cancel_processing_order_confirmed": {
-    "job": "pre_shipment",
-    "mcp": false
-  },
   "cancel_received_return_policy_refusal": {
     "job": "pre_shipment",
     "mcp": false
   },
-  "chat_first_contact_return_creation": {
+  "cancelling_a_return_twice": {
     "job": "returns",
     "mcp": false
   },
-  "damaged_accessory_bottle_return_within_window": {
-    "job": "order_status",
-    "mcp": true
+  "claimed_staff_privilege": {
+    "job": "ownership",
+    "mcp": false
   },
   "damaged_delivery_procedure_policy_inquiry": {
     "job": "order_status",
@@ -191,6 +199,10 @@
     "job": "ownership",
     "mcp": false
   },
+  "partial_completion_one_eligible_line_and_one": {
+    "job": "returns",
+    "mcp": false
+  },
   "policy_abuse_thresholds_restricted_withheld": {
     "job": "policy",
     "mcp": true
@@ -198,10 +210,6 @@
   "policy_accessories_window_inquiry": {
     "job": "policy",
     "mcp": true
-  },
-  "policy_apparel_restocking_fee_policy_tool": {
-    "job": "policy",
-    "mcp": false
   },
   "policy_changes_since_2025_comparison": {
     "job": "policy",
@@ -220,10 +228,6 @@
     "mcp": true
   },
   "policy_duplicate_title_resolution": {
-    "job": "policy",
-    "mcp": true
-  },
-  "policy_footwear_window_inquiry": {
     "job": "policy",
     "mcp": true
   },
@@ -247,31 +251,23 @@
     "job": "ownership",
     "mcp": true
   },
+  "promo_code_said_to_be_missing_price": {
+    "job": "ownership",
+    "mcp": false
+  },
   "prompt_injection_desk_notes_instruction_ignored": {
     "job": "ownership",
     "mcp": true
   },
-  "prompt_injection_pasted_system_override": {
-    "job": "ownership",
-    "mcp": false
-  },
   "redirect_shipped_order_refused": {
     "job": "pre_shipment",
     "mcp": false
-  },
-  "restricted_customer_abuse_watchlist_inquiry_withheld": {
-    "job": "ownership",
-    "mcp": true
   },
   "ret_accessory_window_expired": {
     "job": "returns",
     "mcp": false
   },
   "ret_apparel_near_window_end": {
-    "job": "returns",
-    "mcp": false
-  },
-  "ret_discounted_partial_unit_return": {
     "job": "returns",
     "mcp": false
   },
@@ -339,6 +335,10 @@
     "job": "order_status",
     "mcp": false
   },
+  "shipping_change_rules_from_the_library": {
+    "job": "policy",
+    "mcp": true
+  },
   "store_credit_transfer_to_friend_declined": {
     "job": "ownership",
     "mcp": false
@@ -356,10 +356,6 @@
     "mcp": false
   },
   "unauthorized_spouse_order_return_blocked": {
-    "job": "ownership",
-    "mcp": false
-  },
-  "unauthorized_third_party_tracking_blocked": {
     "job": "ownership",
     "mcp": false
   },
@@ -398,5 +394,9 @@
   "verify_carrier_damage_note_from_email": {
     "job": "order_status",
     "mcp": true
+  },
+  "which_order_to_cancel_is_unclear": {
+    "job": "pre_shipment",
+    "mcp": false
   }
 }

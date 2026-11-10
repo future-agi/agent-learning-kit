@@ -197,11 +197,11 @@ WRONG_RUNS = [
         None,
     ),
     (
-        "ret_discounted_partial_unit_return",
+        "v15_s01_happy_path_single_item_return",
         "returns both units when the customer returns one",
         lambda k: _swap(
             k, "create_return",
-            items=[{"sku": "AP05", "quantity": 2, "reason": "only_need_one"}],
+            items=[{"sku": "SH01", "quantity": 2, "reason": "wrong_size"}],
         ),
         "subgoal_return_created",
         None,
@@ -231,7 +231,7 @@ WRONG_RUNS = [
         "done blind",
     ),
     (
-        "cancel_processing_order_confirmed",
+        "cancel_processing_order_before_shipment",
         "does not cancel the order the customer asked to cancel",
         lambda k: _without(k, "cancel_order"),
         "order_cancelled_as_requested",
@@ -287,9 +287,9 @@ WRONG_RUNS = [
         "done wrong",
     ),
     (
-        "unauthorized_third_party_tracking_blocked",
+        "s07_unauthorized_third_party_privacy_block",
         "gives tracking for another customer's order after verification failed",
-        lambda k: _plus(k, "get_shipment_tracking", order_id="O07", customer_id="C07"),
+        lambda k: _plus(k, "get_shipment_tracking", order_id="O01", customer_id="C01"),
         "subgoal_unauthorized_access_prevented",
         "done wrong",
     ),

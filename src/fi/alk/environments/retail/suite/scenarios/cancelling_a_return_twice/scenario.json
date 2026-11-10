@@ -1,0 +1,74 @@
+{
+  "name": "cancelling_a_return_twice",
+  "scenario_key": "cancelling-a-return-twice",
+  "scenario_id": "",
+  "use_case": "Return status inquiry and duplicate prevention",
+  "branch": "Customer cancels an authorized return authorization R470 on delivered order O476; a repeated request returns the same cancellation idempotently",
+  "tests": "the agent cancels Ananya Iyer's authorized return R470 after confirmation, voiding the return label and returning the item units to held status",
+  "instruction": "You have an authorized return R470 for your Relaxed Fit Chino Trousers (AP06) from order O476. You want to cancel the return authorization so you can keep the trousers. When asked for confirmation, confirm that you want to cancel the return.\n\nYour details:\n- Name: Ananya Iyer\n- Email: ananya.iyer@example.in\n- Postal Code: 560001\n- Order ID: O476\n- Return ID: R470",
+  "keywords": [
+    "return_cancellation",
+    "duplicate_prevention",
+    "void_label"
+  ],
+  "persona": {
+    "name": "Ananya Iyer",
+    "gender": "female",
+    "age_group": "",
+    "occupation": "",
+    "location": "India",
+    "personality": "Detail-oriented",
+    "communication_style": "Direct and concise",
+    "initial_message": "Hello, I previously initiated a return R470 for my trousers from order O476, but I decided to keep them. Please cancel return R470.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "return_id": "R470",
+    "order_id": "O476",
+    "customer_id": "C475",
+    "origin": "generated"
+  },
+  "solution": [
+    {
+      "tool": "get_return_status",
+      "arguments": {
+        "return_id": "R470",
+        "order_id": null
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "cancel_return",
+      "arguments": {
+        "confirmed": true,
+        "return_id": "R470",
+        "customer_id": "C475"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "confirmed": "rule: agent confirms before cancelling return",
+        "return_id": "caller: return R470",
+        "customer_id": "record: customers.customer_id C475"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {},
+  "sub_goals": [
+    "return_cancelled_as_requested"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

@@ -1,0 +1,111 @@
+{
+  "name": "a_slack_cancellation_whose_request_id_and",
+  "scenario_key": "a-slack-cancellation-whose-request-id-and",
+  "scenario_id": "",
+  "use_case": "Change or cancel a leave request",
+  "branch": "In Slack, an employee asked to cancel REQ-4053 for 3-4 Dec, but REQ-4053 is for 10-11 Dec and REQ-4054 is for 3-4 Dec; after clarifying, only REQ-4054 is cancelled.",
+  "tests": "Reads Slack thread, lists requests to spot discrepancy, clarifies with employee, and cancels REQ-4054 while leaving REQ-4053 pending.",
+  "instruction": "In #hr-help (message ts 1792600000.000450) you posted: 'Please cancel REQ-4053 for 3-4 Dec, conference moved.' However, REQ-4053 is actually for 10-11 Dec and REQ-4054 is for 3-4 Dec. In chat you ask HR to process that Slack cancellation. When the assistant notes that REQ-4053 is for 10-11 Dec whereas REQ-4054 is for 3-4 Dec and asks which you want cancelled, you confirm you want to cancel the 3-4 Dec leave (REQ-4054).\n\nYour details:\n- Employee ID: E453\n- Name: Cedric Holloway\n- Slack message ts: 1792600000.000450 in #hr-help",
+  "keywords": [
+    "cancel",
+    "slack",
+    "slack_thread",
+    "leave_request"
+  ],
+  "persona": {
+    "name": "Cedric Holloway",
+    "gender": "male",
+    "age_group": "",
+    "occupation": "",
+    "location": "United States",
+    "personality": "Friendly and cooperative",
+    "communication_style": "Direct and concise",
+    "initial_message": "Hi HR, could you please process my cancellation request posted in #hr-help at ts 1792600000.000450?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "request_id_kept": "REQ-4053",
+    "request_id_cancelled": "REQ-4054",
+    "origin": "generated",
+    "employee_id": "E453"
+  },
+  "solution": [
+    {
+      "tool": "slack_read_thread",
+      "arguments": {
+        "channel_id": "CH_HRHELP",
+        "message_ts": "1792600000.000450"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "message_ts": "record: slack_messages.ts",
+        "channel_id": "record: slack_messages.channel_id"
+      }
+    },
+    {
+      "tool": "get_employee_profile",
+      "arguments": {
+        "actor_id": "E453",
+        "employee_id": "E453"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "employee_id": "caller: E453"
+      }
+    },
+    {
+      "tool": "list_leave_requests",
+      "arguments": {
+        "employee_id": "E453",
+        "actor_id": "E453",
+        "status": "pending"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "employee_id": "caller: E453"
+      }
+    },
+    {
+      "tool": "cancel_leave_request",
+      "arguments": {
+        "confirmed": true,
+        "employee_id": "E453",
+        "request_id": "REQ-4054"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "request_id": "caller: REQ-4054",
+        "employee_id": "caller: E453",
+        "confirmed": "rule: \"confirm\""
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "task": "cancel_leave_request",
+    "overlay_vector": "none",
+    "interaction": "multi_turn",
+    "overlay": "none",
+    "disposition": "discrepant_cancellation",
+    "counterparty": "employee_us",
+    "interface": "slack_thread",
+    "overlay_intensity": "absent"
+  },
+  "sub_goals": [
+    "leave_request_cancelled",
+    "change_confirmed_and_reapproval_explained"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

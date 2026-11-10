@@ -1,0 +1,113 @@
+{
+  "name": "a_member_s_reply_contradicts_the_admin",
+  "scenario_key": "a-member-s-reply-contradicts-the-admin",
+  "scenario_id": "",
+  "use_case": "Pick up a billing request that arrived by email",
+  "branch": "Admin asks to process email request from thread th_s403_seat_request where a member contradicts admin's 9 seat request with 12 seats",
+  "tests": "Reads thread, adheres to billing admin's request of 9 seats ignoring member's message, and schedules plan change",
+  "instruction": "You are Carol Cloud, billing administrator for CloudScale (Tenant ID: T03, User ID: U03_ADMIN). You previously sent an email requesting 9 seats on Basic from next period in thread th_s403_seat_request. A member on your team (Charlie User) replied on that thread asking for 12 seats instead. You are now contacting the billing desk directly to confirm that your request for 9 seats is the authorized one, and you want them to preview and schedule 9 seats on Basic effective at the end of the period.\n\nYour details:\n- Tenant ID: T03\n- User ID: U03_ADMIN\n- Email Thread ID: th_s403_seat_request\n- Authorized Request: 9 seats on Basic (end of period)",
+  "keywords": [
+    "plan_downgrade",
+    "role_authorization",
+    "seat_change"
+  ],
+  "persona": {
+    "name": "Carol Cloud",
+    "gender": "female",
+    "age_group": "32-40",
+    "occupation": "",
+    "location": "United States",
+    "personality": "Confident",
+    "communication_style": "Direct and concise",
+    "initial_message": "Hi, I'm Carol Cloud from CloudScale (T03, U03_ADMIN). We sent a seat request in email thread th_s403_seat_request. Please review the thread, ignore the member's message, and schedule 9 seats on Basic for our next billing period.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "current_seats": 8,
+    "origin": "mixed",
+    "actor_id": "U03_ADMIN",
+    "target_seats": 9,
+    "thread_id": "th_s403_seat_request",
+    "tenant_id": "T03",
+    "target_plan": "basic"
+  },
+  "solution": [
+    {
+      "tool": "get_thread",
+      "arguments": {
+        "threadId": "th_s403_seat_request",
+        "messageFormat": "FULL_CONTENT"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "threadId": "the email the request came in"
+      }
+    },
+    {
+      "tool": "verify_billing_admin",
+      "arguments": {
+        "actor_id": "U03_ADMIN",
+        "tenant_id": "T03"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_subscription",
+      "arguments": {
+        "actor_id": "U03_ADMIN",
+        "tenant_id": "T03"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "preview_plan_change",
+      "arguments": {
+        "effective_timing": "end_of_period",
+        "target_plan_id": "basic",
+        "tenant_id": "T03",
+        "actor_id": "U03_ADMIN",
+        "target_seats": 9
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "schedule_plan_change",
+      "arguments": {
+        "actor_id": "U03_ADMIN",
+        "target_seats": 9,
+        "target_plan_id": "basic",
+        "tenant_id": "T03",
+        "effective_timing": "end_of_period",
+        "request_key": "req_sc_carol_403",
+        "confirmation_code": "confirmed"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "target_seats": "caller: 9",
+        "tenant_id": "caller: T03",
+        "target_plan_id": "caller: basic"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {},
+  "sub_goals": [
+    "plan_change_scheduled"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

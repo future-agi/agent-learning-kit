@@ -1,0 +1,94 @@
+{
+  "name": "cancelling_with_a_plan_change_still_pending",
+  "scenario_key": "cancelling-with-a-plan-change-still-pending",
+  "scenario_id": "",
+  "use_case": "Cancel at term end or explain renewal",
+  "branch": "Admin asks to cancel subscription at term end while a scheduled upgrade (PC408) is pending",
+  "tests": "Cancels pending plan change PC408 and schedules subscription cancellation at end of term",
+  "instruction": "You are Calvin Croft, billing administrator for Tenant T408 (User ID: U408_ADMIN). Your company currently has a Basic subscription with 6 seats, and there is a pending upgrade to Pro (PC408). You want to cancel your subscription at the end of the current term. When the agent notes the conflicting pending upgrade, confirm cancelling PC408 and proceed with scheduling the cancellation at the end of the term.\n\nYour details:\n- Tenant ID: T408\n- User ID: U408_ADMIN\n- Pending Change: PC408\n- Request: Schedule cancellation at end of term (end_of_term)",
+  "keywords": [
+    "cancel_plan_change",
+    "cancellation",
+    "role_authorization"
+  ],
+  "persona": {
+    "name": "Calvin Croft",
+    "gender": "male",
+    "age_group": "40-50",
+    "occupation": "",
+    "location": "United States",
+    "personality": "Confident",
+    "communication_style": "Direct and concise",
+    "initial_message": "Hi, I'm Calvin Croft from T408 (U408_ADMIN). We want to cancel our subscription at the end of our current term.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "actor_id": "U408_ADMIN",
+    "tenant_id": "T408",
+    "origin": "generated",
+    "existing_change_id": "PC408"
+  },
+  "solution": [
+    {
+      "tool": "verify_billing_admin",
+      "arguments": {
+        "tenant_id": "T408",
+        "actor_id": "U408_ADMIN"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_subscription",
+      "arguments": {
+        "actor_id": "U408_ADMIN",
+        "tenant_id": "T408"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "cancel_scheduled_change",
+      "arguments": {
+        "change_id": "PC408",
+        "actor_id": "U408_ADMIN",
+        "tenant_id": "T408"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "schedule_cancellation",
+      "arguments": {
+        "confirmation_code": "confirmed",
+        "effective_timing": "end_of_term",
+        "actor_id": "U408_ADMIN",
+        "request_key": "req_cancel_408",
+        "tenant_id": "T408"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "tenant_id": "caller: T408"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {},
+  "sub_goals": [
+    "scheduled_change_canceled",
+    "cancellation_scheduled_at_term_end"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

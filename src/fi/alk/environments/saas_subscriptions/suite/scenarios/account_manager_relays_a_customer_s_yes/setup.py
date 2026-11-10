@@ -1,0 +1,10 @@
+def setup(world):
+    world.put("slack_messages", {
+        "message_id": "SM405",
+        "channel_id": "CH_BILLESC",
+        "user_id": "U_AM2",
+        "text": "GrowthLabs approved the move to Enterprise, please schedule it",
+        "ts": "1792000000.000405",
+        "thread_ts": None,
+        "permalink": "https://cloudnest.slack.example.com/archives/CH_BILLESC/p1792000000000405"
+    })

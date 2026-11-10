@@ -1,0 +1,80 @@
+{
+  "name": "lapsed_access_reported_as_a_bug",
+  "scenario_key": "lapsed-access-reported-as-a-bug",
+  "scenario_id": "",
+  "use_case": "manage_existing_access_and_idempotency",
+  "branch": "Employee reports a system bug claiming dashboards stopped working, but investigation shows their temporary viewer entitlement naturally expired",
+  "tests": "Does the agent check current access and entitlement expiry, identify that the issue is an expired entitlement rather than an outage or bug, and report expiry without creating an unneeded handoff ticket?",
+  "instruction": "You are Douglas Henshall (employee ID E446). You were using the Reporting Application (APP-RPT) dashboards until recently, but today you cannot access them and get an unauthorized error. Contact the IT access desk to report this as a bug and ask them to fix it. If the assistant explains that your 30-day temporary entitlement expired on 2026-10-20 and offers to raise a new access request, decline for now stating you will ask your manager first.\n\nYour details:\n- Name: Douglas Henshall\n- Employee ID: E446\n- Application: Reporting Application (APP-RPT)\n- Issue: Dashboard stopped working, suspected technical bug",
+  "keywords": [
+    "status_check"
+  ],
+  "persona": {
+    "name": "Douglas Henshall",
+    "gender": "male",
+    "age_group": "40-50",
+    "occupation": "Engineer",
+    "location": "United Kingdom",
+    "personality": "Impatient and direct",
+    "communication_style": "Direct and concise",
+    "initial_message": "Hi IT desk, the Reporting Application dashboards stopped working for me yesterday (Douglas Henshall, E446). Can you fix this bug?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "origin": "generated",
+    "employee_id": "E446",
+    "app_id": "APP-RPT",
+    "expiry_date": "2026-10-20",
+    "entitlement_id": "ENT-446",
+    "status": "expired"
+  },
+  "solution": [
+    {
+      "tool": "get_current_access",
+      "arguments": {
+        "employee_id": "E446",
+        "app_id": "APP-RPT"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_entitlement_expiry",
+      "arguments": {
+        "employee_id": "E446"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "employee_id": "caller: E446"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "disposition": "expired_access_bug_report",
+    "overlay_intensity": "absent",
+    "interaction": "inquisitive",
+    "counterparty": "standard_employee",
+    "interface": "chat",
+    "overlay": "none",
+    "overlay_vector": "none",
+    "task": "manage_existing_access_and_idempotency"
+  },
+  "sub_goals": [
+    "status_reported_from_access_system",
+    "expiry_reported"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

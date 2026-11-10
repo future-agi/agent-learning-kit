@@ -3,12 +3,16 @@
     "job": "escalation",
     "mcp": false
   },
-  "already_holds_role": {
+  "approval_recorded_twice_after_a_dropped_chat": {
     "job": "duplicates",
     "mcp": false
   },
   "approve_and_grant_in_single_session": {
     "job": "approvals",
+    "mcp": false
+  },
+  "approver_decides_two_requests_only_one_of": {
+    "job": "escalation",
     "mcp": false
   },
   "approver_records_approval_decision": {
@@ -19,9 +23,17 @@
     "job": "approvals",
     "mcp": false
   },
+  "asked_to_edit_the_policy": {
+    "job": "policy",
+    "mcp": true
+  },
   "break_glass_bypass_rejected": {
     "job": "escalation",
     "mcp": false
+  },
+  "caller_quotes_a_retired_policy": {
+    "job": "policy",
+    "mcp": true
   },
   "cancel_from_slack_message": {
     "job": "revocation_temporary",
@@ -33,10 +45,6 @@
   },
   "cancel_then_re_request": {
     "job": "duplicates",
-    "mcp": false
-  },
-  "ceo_claim_bypass_rejected": {
-    "job": "escalation",
     "mcp": false
   },
   "consult_policy_library_for_security_role": {
@@ -79,11 +87,11 @@
     "job": "approvals",
     "mcp": false
   },
-  "idp_admin_group_escalation": {
-    "job": "escalation",
+  "inactive_employee_request_rejected": {
+    "job": "requests",
     "mcp": false
   },
-  "inactive_employee_request_rejected": {
+  "lapsed_access_reported_as_a_bug": {
     "job": "requests",
     "mcp": false
   },
@@ -93,6 +101,14 @@
   },
   "licence_exhausted_seats_security_portal": {
     "job": "sod_licences",
+    "mcp": false
+  },
+  "moving_up_from_a_role_already_held": {
+    "job": "requests",
+    "mcp": false
+  },
+  "one_chat_two_asks_partly_in_scope": {
+    "job": "escalation",
     "mcp": false
   },
   "password_reset_escalation": {
@@ -123,19 +139,11 @@
     "job": "policy",
     "mcp": true
   },
-  "policy_inactive_employee_access_rule": {
-    "job": "policy",
-    "mcp": true
-  },
   "policy_scanned_form_unsupported_format": {
     "job": "policy",
     "mcp": true
   },
   "policy_slack_approval_validity_inquiry": {
-    "job": "policy",
-    "mcp": true
-  },
-  "policy_sod_role_conflicts_matrix": {
     "job": "policy",
     "mcp": true
   },
@@ -159,19 +167,11 @@
     "job": "approvals",
     "mcp": false
   },
-  "reject_token_from_different_request": {
-    "job": "approvals",
+  "remove_everything_partly_already_gone": {
+    "job": "revocation_temporary",
     "mcp": false
   },
   "request_access_justification_prompted": {
-    "job": "requests",
-    "mcp": false
-  },
-  "request_access_via_email_lookup": {
-    "job": "requests",
-    "mcp": false
-  },
-  "request_code_repo_write_access": {
     "job": "requests",
     "mcp": false
   },
@@ -191,10 +191,6 @@
     "job": "requests",
     "mcp": false
   },
-  "request_reporting_viewer_dashboards": {
-    "job": "requests",
-    "mcp": false
-  },
   "request_temporary_access_14_days": {
     "job": "revocation_temporary",
     "mcp": false
@@ -208,10 +204,6 @@
     "mcp": false
   },
   "revoke_choose_correct_entitlement": {
-    "job": "revocation_temporary",
-    "mcp": false
-  },
-  "revoke_team_transfer": {
     "job": "revocation_temporary",
     "mcp": false
   },
@@ -240,10 +232,6 @@
     "mcp": true
   },
   "slack_inquiry_expired_token_status": {
-    "job": "approvals",
-    "mcp": true
-  },
-  "slack_inquiry_fulfill_approved_grant": {
     "job": "approvals",
     "mcp": true
   },
@@ -299,11 +287,15 @@
     "job": "requests",
     "mcp": true
   },
+  "slack_says_approved_but_the_request_was": {
+    "job": "approvals",
+    "mcp": true
+  },
   "slack_temporary_access_idempotency": {
     "job": "slack",
     "mcp": true
   },
-  "sod_accountant_finance_approver_conflict": {
+  "sod_applies_to_temporary_cover_too": {
     "job": "sod_licences",
     "mcp": false
   },
@@ -311,21 +303,17 @@
     "job": "sod_licences",
     "mcp": false
   },
-  "sod_deployer_cluster_admin_conflict": {
+  "sod_conflict_ending_in_a_swap": {
     "job": "sod_licences",
     "mcp": false
   },
-  "sod_hr_specialist_admin_conflict": {
+  "sod_deployer_cluster_admin_conflict": {
     "job": "sod_licences",
     "mcp": false
   },
   "sod_matrix_deployer_cluster_admin_inquiry": {
     "job": "sod_licences",
     "mcp": true
-  },
-  "sod_role_swap_revocation_before_grant": {
-    "job": "sod_licences",
-    "mcp": false
   },
   "status_inquiry_for_rejected_request": {
     "job": "approvals",
@@ -345,6 +333,10 @@
   },
   "truthful_status_report_for_pending_request": {
     "job": "approvals",
+    "mcp": false
+  },
+  "two_people_with_the_same_name": {
+    "job": "requests",
     "mcp": false
   },
   "unauthorized_approver_decision_refused": {
@@ -397,6 +389,14 @@
   },
   "v20_s12_social_engineering_request_routing": {
     "job": "escalation",
+    "mcp": false
+  },
+  "valid_token_for_a_leaver": {
+    "job": "sod_licences",
+    "mcp": false
+  },
+  "valid_token_wrong_role": {
+    "job": "approvals",
     "mcp": false
   }
 }

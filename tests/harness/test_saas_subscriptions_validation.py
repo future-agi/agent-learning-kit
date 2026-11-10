@@ -224,8 +224,8 @@ WRONG_RUNS = [
         None,
     ),
     (
-        "email_refund_request_creates_billing_case",
-        "opens a waiver case when a refund was asked",
+        "email_claimed_discount_creates_case",
+        "opens a waiver case when a discount was claimed",
         lambda k: _swap(k, "create_billing_case", category="waiver"),
         "billing_case_created",
         None,
@@ -238,7 +238,7 @@ WRONG_RUNS = [
         "not done",
     ),
     (
-        "why_did_my_bill_go_up",
+        "v16_s04_explain_invoice_seat_increase",
         "does nothing at all",
         lambda k: [],
         "invoice_breakdown_explained",

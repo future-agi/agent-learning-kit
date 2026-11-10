@@ -201,7 +201,7 @@ WRONG_RUNS = [
         "done wrong",
     ),
     (
-        "request_reporting_viewer_dashboards",
+        "v20_s01_submit_readonly_request",
         "requests editor when the employee only reads dashboards",
         lambda k: _swap(k, "create_access_request", role_name="editor"),
         "pending_request_created",

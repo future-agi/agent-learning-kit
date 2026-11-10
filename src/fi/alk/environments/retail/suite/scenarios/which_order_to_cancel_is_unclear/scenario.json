@@ -1,0 +1,74 @@
+{
+  "name": "which_order_to_cancel_is_unclear",
+  "scenario_key": "which-order-to-cancel-is-unclear",
+  "scenario_id": "",
+  "use_case": "Change or cancel an order before it ships",
+  "branch": "The customer has two processing orders from this morning and requests cancellation without an order number, requiring order disambiguation before cancelling",
+  "tests": "the agent finds Elena Rostova's two processing orders (O470, O471) via search_orders, clarifies which one to cancel, and cancels only O471 (the T-shirt) upon confirmation while leaving O470 processing",
+  "instruction": "You placed two orders this morning: one for Road Running Shoes and one for an Organic Cotton Crewneck T-Shirt. You want to cancel the T-shirt order. You do not remember your order number. If asked which order or item you want to cancel, state that you want to cancel the T-shirt order. Confirm cancellation when asked.\n\nYour details:\n- Name: Elena Rostova\n- Email: elena.rostova@example.com\n- Postal Code: 94102",
+  "keywords": [
+    "order_cancellation",
+    "order_disambiguation"
+  ],
+  "persona": {
+    "name": "Elena Rostova",
+    "gender": "female",
+    "age_group": "",
+    "occupation": "",
+    "location": "United States",
+    "personality": "Friendly and cooperative",
+    "communication_style": "Direct and concise",
+    "initial_message": "Hi, I placed an order this morning for a T-shirt and would like to cancel it, but I don't have the order number handy. My email is elena.rostova@example.com and postal code is 94102.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "order_id": "O471",
+    "customer_id": "C470",
+    "origin": "generated"
+  },
+  "solution": [
+    {
+      "tool": "search_orders",
+      "arguments": {
+        "status": "processing",
+        "email": "elena.rostova@example.com",
+        "postal_code": "94102"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "cancel_order",
+      "arguments": {
+        "request_key": "REQ-C470-O471-CAN",
+        "reason": "changed_mind",
+        "confirmed": true,
+        "order_id": "O471",
+        "customer_id": "C470"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "confirmed": "rule: cancel_order confirmed after customer agreed",
+        "order_id": "caller: order number O471"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {},
+  "sub_goals": [
+    "order_cancelled_as_requested"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

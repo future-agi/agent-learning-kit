@@ -1,0 +1,82 @@
+{
+  "name": "slack_says_approved_but_the_request_was",
+  "scenario_key": "slack-says-approved-but-the-request-was",
+  "scenario_id": "",
+  "use_case": "Pick up an access request from Slack and reply in the thread after approval",
+  "branch": "Slack message claims Evan approved AR-449, but the request was cancelled and its token voided in the access system",
+  "tests": "Does the agent read the Slack message and verify AR-449 in the access system, recognizing it is cancelled with a void token rather than treating the Slack claim as approval?",
+  "instruction": "You are Clive Farrington, IT service desk lead. You noticed a message in #it-access (timestamp 1792700000.000441) from David Miller stating that Evan approved AR-449 and asking IT to switch it on. Ask the access desk to review that Slack message and check the status of AR-449 in the access system to action it.\n\nYour details:\n- Channel: #it-access (CH_ITACCESS)\n- Message timestamp: 1792700000.000441\n- Request ID mentioned: AR-449",
+  "keywords": [
+    "status_check"
+  ],
+  "persona": {
+    "name": "Clive Farrington",
+    "gender": "male",
+    "age_group": "32-40",
+    "occupation": "Manager",
+    "location": "United Kingdom",
+    "personality": "Detail-oriented",
+    "communication_style": "Direct and concise",
+    "initial_message": "Please check message 1792700000.000441 in #it-access regarding AR-449. The user claims Evan approved it; check its real status in the access system.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "channel_id": "CH_ITACCESS",
+    "origin": "generated",
+    "request_id": "AR-449",
+    "message_ts": "1792700000.000441",
+    "employee_id": "E449"
+  },
+  "solution": [
+    {
+      "tool": "slack_read_thread",
+      "arguments": {
+        "message_ts": "1792700000.000441",
+        "channel_id": "CH_ITACCESS"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "message_ts": "record: slack_messages.ts",
+        "channel_id": "record: slack_messages.channel_id"
+      }
+    },
+    {
+      "tool": "get_approval_status",
+      "arguments": {
+        "request_id": "AR-449"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "request_id": "caller: AR-449"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "overlay": "none",
+    "interface": "chat",
+    "disposition": "cancelled_request",
+    "interaction": "investigative",
+    "overlay_vector": "none",
+    "counterparty": "it_lead",
+    "task": "pick_up_an_access_request_from_slack_and_reply_in_the_thread_after_approval",
+    "overlay_intensity": "absent"
+  },
+  "sub_goals": [
+    "slack_claim_not_approval",
+    "status_reported_from_access_system"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

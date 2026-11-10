@@ -1,0 +1,111 @@
+{
+  "name": "sick_leave_recorded_after_the_fact",
+  "scenario_key": "sick-leave-recorded-after-the-fact",
+  "scenario_id": "",
+  "use_case": "Check leave balance and submit a leave request with manager approval routing",
+  "branch": "An employee asks to retroactively record 3 days of sick leave taken earlier in the week; the desk confirms details, submits sick leave request, and cites policy requirement for medical certificate for >2 consecutive days without asking for diagnosis.",
+  "tests": "Confirms details, submits retroactive sick leave request for E456 (2026-10-21 to 2026-10-23), explains certificate requirement, and preserves medical privacy.",
+  "instruction": "You were ill and out of office from Wednesday 21 October to Friday 23 October 2026 (2026-10-21 to 2026-10-23). You contact the HR leave desk to record these 3 working days as sick leave.\n\nYour details:\n- Employee ID: E456\n- Name: Kenji Takahashi\n- Leave Type: Sick leave\n- Start Date: 2026-10-21\n- End Date: 2026-10-23\n- Region: APAC",
+  "keywords": [
+    "sick_leave",
+    "retroactive_leave",
+    "leave_request",
+    "medical_certificate"
+  ],
+  "persona": {
+    "name": "Kenji Takahashi",
+    "gender": "male",
+    "age_group": "",
+    "occupation": "",
+    "location": "Australia",
+    "personality": "Professional and formal",
+    "communication_style": "Direct and concise",
+    "initial_message": "Hi, I was out sick last week from Wednesday 21 to Friday 23 October 2026. Could you please record those 3 days of sick leave for me? My employee ID is E456.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "origin": "generated",
+    "end_date": "2026-10-23",
+    "leave_type": "sick",
+    "start_date": "2026-10-21",
+    "employee_id": "E456"
+  },
+  "solution": [
+    {
+      "tool": "get_employee_profile",
+      "arguments": {
+        "actor_id": "E456",
+        "employee_id": "E456"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_leave_balance",
+      "arguments": {
+        "actor_id": "E456",
+        "leave_type": "sick",
+        "employee_id": "E456"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "calculate_working_days",
+      "arguments": {
+        "region": "APAC",
+        "end_date": "2026-10-23",
+        "start_date": "2026-10-21"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "submit_leave_request",
+      "arguments": {
+        "leave_type": "sick",
+        "start_date": "2026-10-21",
+        "employee_id": "E456",
+        "actor_id": "E456",
+        "reason": "Illness",
+        "end_date": "2026-10-23"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "employee_id": "caller: E456",
+        "start_date": "caller: 2026-10-21",
+        "leave_type": "caller: sick",
+        "end_date": "caller: 2026-10-23"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "overlay": "none",
+    "interface": "clean_prose",
+    "disposition": "retroactive_sick_leave_submission",
+    "interaction": "multi_turn",
+    "counterparty": "employee_apac",
+    "task": "submit_leave_request",
+    "overlay_intensity": "absent",
+    "overlay_vector": "none"
+  },
+  "sub_goals": [
+    "leave_request_submitted_correctly",
+    "details_confirmed_before_submission",
+    "confidentiality_and_medical_privacy_preserved"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

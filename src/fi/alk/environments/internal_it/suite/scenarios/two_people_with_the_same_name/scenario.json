@@ -1,0 +1,86 @@
+{
+  "name": "two_people_with_the_same_name",
+  "scenario_key": "two-people-with-the-same-name",
+  "scenario_id": "",
+  "use_case": "submit_access_request",
+  "branch": "Caller provides ambiguous name matching two active employees, requiring disambiguation by department/ID before creating access request",
+  "tests": "Does the agent search employees, detect multiple Alex Morgans, disambiguate with the caller, and create the access request for the correct employee ID E445 in finance?",
+  "instruction": "You are Alex Morgan (employee ID E445) in the finance department. Initially, introduce yourself simply as 'Alex Morgan' and ask for the viewer role on Financial Ledger (APP-FIN). If the assistant asks to clarify your identity between multiple Alex Morgans, confirm that you are in the finance department with employee ID E445.\n\nYour details:\n- Name: Alex Morgan\n- Employee ID: E445\n- Department: Finance\n- Application: Financial Ledger (APP-FIN)\n- Role needed: viewer",
+  "keywords": [
+    "access_request",
+    "disambiguation",
+    "employee_lookup"
+  ],
+  "persona": {
+    "name": "Alex Morgan",
+    "gender": "female",
+    "age_group": "25-32",
+    "occupation": "Accountant",
+    "location": "United States",
+    "personality": "Friendly and cooperative",
+    "communication_style": "Casual and friendly",
+    "initial_message": "Hi! This is Alex Morgan. I'd like to request viewer access to the Financial Ledger (APP-FIN).",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "origin": "generated",
+    "role_name": "viewer",
+    "app_id": "APP-FIN",
+    "resolved_employee_id": "E445",
+    "ambiguous_name": "Alex Morgan",
+    "department": "finance"
+  },
+  "solution": [
+    {
+      "tool": "search_employees",
+      "arguments": {
+        "department": "",
+        "query": "Alex Morgan"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "create_access_request",
+      "arguments": {
+        "employee_id": "E445",
+        "role_name": "viewer",
+        "app_id": "APP-FIN",
+        "justification": "Financial reporting ledger view"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "app_id": "caller: Financial Ledger (APP-FIN)",
+        "employee_id": "caller: E445",
+        "role_name": "caller: viewer"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "overlay": "none",
+    "overlay_vector": "none",
+    "interface": "chat",
+    "interaction": "disambiguation",
+    "counterparty": "standard_employee",
+    "overlay_intensity": "absent",
+    "disposition": "ambiguous_identity",
+    "task": "submit_access_request"
+  },
+  "sub_goals": [
+    "pending_request_created"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

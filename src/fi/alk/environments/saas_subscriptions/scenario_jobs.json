@@ -1,13 +1,25 @@
 {
-  "add_seats_to_pro_end_of_period": {
+  "a_member_s_reply_contradicts_the_admin": {
+    "job": "email",
+    "mcp": true
+  },
+  "account_manager_relays_a_customer_s_yes": {
+    "job": "idempotency_untrusted",
+    "mcp": true
+  },
+  "approval_revoked_before_posting": {
+    "job": "slack",
+    "mcp": true
+  },
+  "asked_to_charge_the_card_now": {
+    "job": "cases",
+    "mcp": false
+  },
+  "cancel_asked_again_after_a_dropped_chat": {
     "job": "plans",
     "mcp": false
   },
   "cancel_pending_scheduled_change_success": {
-    "job": "plans",
-    "mcp": false
-  },
-  "cancel_pending_scheduled_change_t402": {
     "job": "plans",
     "mcp": false
   },
@@ -23,23 +35,31 @@
     "job": "term_end",
     "mcp": false
   },
-  "cancel_subscription_monthly_term_end": {
-    "job": "term_end",
-    "mcp": false
-  },
   "cancel_subscription_slack_escalation_request": {
     "job": "term_end",
     "mcp": true
   },
-  "cancel_subscription_unauthorized_member_refused": {
+  "cancellation_from_a_look_alike_sender": {
     "job": "roles",
+    "mcp": true
+  },
+  "cancelling_with_a_plan_change_still_pending": {
+    "job": "term_end",
     "mcp": false
   },
   "card_declined_payment_status_inquiry": {
     "job": "cases",
     "mcp": false
   },
+  "changes_their_mind_right_after_scheduling": {
+    "job": "plans",
+    "mcp": false
+  },
   "charge_not_on_invoice": {
+    "job": "invoices",
+    "mcp": false
+  },
+  "charged_twice_this_month": {
     "job": "invoices",
     "mcp": false
   },
@@ -131,10 +151,6 @@
     "job": "idempotency_untrusted",
     "mcp": true
   },
-  "email_refund_request_creates_billing_case": {
-    "job": "cases",
-    "mcp": true
-  },
   "email_renewal_question_answered_in_chat": {
     "job": "email",
     "mcp": true
@@ -144,10 +160,6 @@
     "mcp": true
   },
   "email_seat_correction_schedule_plan_change": {
-    "job": "email",
-    "mcp": true
-  },
-  "email_seat_correction_superseded_request": {
     "job": "email",
     "mcp": true
   },
@@ -163,6 +175,10 @@
     "job": "plans",
     "mcp": true
   },
+  "features_after_a_scheduled_downgrade": {
+    "job": "plans",
+    "mcp": false
+  },
   "idempotent_schedule_request_after_connection_drop": {
     "job": "idempotency_untrusted",
     "mcp": false
@@ -174,6 +190,10 @@
   "invoice_list_asked_by_email": {
     "job": "invoices",
     "mcp": true
+  },
+  "invoice_that_does_not_exist": {
+    "job": "invoices",
+    "mcp": false
   },
   "member_asks_for_invoice_lines": {
     "job": "invoices",
@@ -195,6 +215,10 @@
     "job": "invoices",
     "mcp": false
   },
+  "new_change_replaces_a_pending_one": {
+    "job": "plans",
+    "mcp": false
+  },
   "open_invoices_only": {
     "job": "invoices",
     "mcp": false
@@ -204,10 +228,6 @@
     "mcp": false
   },
   "plan_entitlements_and_features_inquiry": {
-    "job": "plans",
-    "mcp": false
-  },
-  "preview_enterprise_pricing_and_features": {
     "job": "plans",
     "mcp": false
   },
@@ -239,7 +259,7 @@
     "job": "term_end",
     "mcp": false
   },
-  "renewal_price_inquiry": {
+  "renewal_price_with_a_pending_downgrade": {
     "job": "term_end",
     "mcp": false
   },
@@ -267,10 +287,6 @@
     "job": "roles",
     "mcp": true
   },
-  "roles_slack_admin_emails_injection_resisted": {
-    "job": "idempotency_untrusted",
-    "mcp": true
-  },
   "slack_account_manager_fintrack_seats": {
     "job": "invoices",
     "mcp": true
@@ -281,14 +297,6 @@
   },
   "slack_discount_claim_no_record": {
     "job": "slack",
-    "mcp": true
-  },
-  "slack_hyperscale_renewal_inquiry": {
-    "job": "slack",
-    "mcp": true
-  },
-  "slack_injected_credit_claim_refused": {
-    "job": "idempotency_untrusted",
     "mcp": true
   },
   "slack_injected_instruction_ignored": {
@@ -327,6 +335,10 @@
     "job": "slack",
     "mcp": true
   },
+  "slack_reply_retried_after_a_dropped_chat": {
+    "job": "idempotency_untrusted",
+    "mcp": true
+  },
   "slack_reply_waiver_status_approved_post": {
     "job": "slack",
     "mcp": true
@@ -355,11 +367,7 @@
     "job": "invoices",
     "mcp": false
   },
-  "unconfirmed_schedule_request_preview_only": {
-    "job": "plans",
-    "mcp": false
-  },
-  "upgrade_starter_to_basic_end_of_period": {
+  "upgrade_taken_immediately": {
     "job": "plans",
     "mcp": false
   },
@@ -388,14 +396,6 @@
     "mcp": false
   },
   "what_is_on_this_invoice": {
-    "job": "invoices",
-    "mcp": false
-  },
-  "which_invoices_since_august": {
-    "job": "invoices",
-    "mcp": false
-  },
-  "why_did_my_bill_go_up": {
     "job": "invoices",
     "mcp": false
   }

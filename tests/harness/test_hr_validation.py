@@ -219,7 +219,7 @@ WRONG_RUNS = [
         "done blind",
     ),
     (
-        "submit_leave_request_after_chat_date_correction",
+        "chat_self_correction_dates_submission",
         "submits the dates first named, not the corrected ones",
         lambda k: _swap(k, "submit_leave_request", start_date="2026-12-14", end_date="2026-12-16"),
         "leave_request_submitted_correctly",
@@ -247,7 +247,7 @@ WRONG_RUNS = [
         None,
     ),
     (
-        "submit_leave_request_after_chat_date_correction",
+        "chat_self_correction_dates_submission",
         "does nothing at all",
         lambda k: [],
         "leave_request_submitted_correctly",
@@ -292,7 +292,7 @@ def test_the_hr_system_refuses_what_the_plan_says_must_never_happen(built: Path)
         assert request["status"] == "pending", request
     finally:
         world.close()
-    key = "manager_team_absences_medical_reasons_withheld"
+    key = "manager_inquiry_medical_diagnosis_withheld"
     world, calls, _refused, _ = _run(_scenario(key), built / WORLD, with_solution=True)
     try:
         shown = json.dumps([c.result for c in calls if c.name == "get_team_absences" and c.ok])

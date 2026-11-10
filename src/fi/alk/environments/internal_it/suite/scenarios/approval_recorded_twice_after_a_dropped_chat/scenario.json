@@ -1,0 +1,81 @@
+{
+  "name": "approval_recorded_twice_after_a_dropped_chat",
+  "scenario_key": "approval-recorded-twice-after-a-dropped-chat",
+  "scenario_id": "",
+  "use_case": "complete_approved_access",
+  "branch": "Evan Wright E05 asks to record approval for AR-452 after a dropped chat, but the request is already approved with valid token TOK-452-OK, so the agent reports the existing approval rather than recording it again.",
+  "tests": "Does the agent check approval status for AR-452, recognize it is already approved with a valid token, and report the existing approval without calling record_approval_decision again?",
+  "instruction": "You are Evan Wright (employee ID E05), an analytics manager. You were in the middle of approving access request AR-452 for Fiona Gallagher (viewer role on Reporting Application APP-RPT) when your chat connection dropped. Contact the IT access desk to approve AR-452 again and ask them to record your approval. If the assistant checks the system and informs you that your approval was already recorded and has a valid token, acknowledge the confirmation and wrap up.",
+  "keywords": [
+    "approval_recording",
+    "idempotency"
+  ],
+  "persona": {
+    "name": "Evan Wright",
+    "gender": "male",
+    "age_group": "40-50",
+    "occupation": "Manager",
+    "location": "United States",
+    "personality": "Professional and formal",
+    "communication_style": "Direct and concise",
+    "initial_message": "Hello IT access desk, I am Evan Wright (E05). My connection dropped earlier while approving AR-452. Could you record my approval for AR-452?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "approval_token": "TOK-452-OK",
+    "origin": "generated",
+    "approver_id": "E05",
+    "app_id": "APP-RPT",
+    "role_name": "viewer",
+    "request_id": "AR-452",
+    "employee_id": "E452"
+  },
+  "solution": [
+    {
+      "tool": "verify_employee",
+      "arguments": {
+        "employee_id": "E05"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_approval_status",
+      "arguments": {
+        "request_id": "AR-452"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "request_id": "caller: AR-452"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "overlay_intensity": "absent",
+    "interface": "chat",
+    "interaction": "collaborative",
+    "disposition": "approved_token",
+    "counterparty": "manager_requester",
+    "overlay_vector": "none",
+    "overlay": "none",
+    "task": "complete_approved_access"
+  },
+  "sub_goals": [
+    "status_reported_from_access_system",
+    "declined_action_explained"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}
