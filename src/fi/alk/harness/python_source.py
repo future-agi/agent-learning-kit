@@ -75,7 +75,10 @@ class TokenBudget(ParseBudget):
         """The tokens of ``text``, or None once the scan's work runs out. Charge the text with
         ``spend`` first. Raises what ``tokenize`` raises."""
         found: list[tokenize.TokenInfo] = []
-        for token in tokenize.generate_tokens(io.StringIO(text).readline):
+        # Python reads a lone CR as a line end, and the tokenizer doesn't: to it a file of only CRs
+        # is one line, so a "#" at its start would make all of it a comment.
+        lines = text.replace("\r\n", "\n").replace("\r", "\n")
+        for token in tokenize.generate_tokens(io.StringIO(lines).readline):
             self.work_left -= len(token.line)
             if self.work_left < 0:
                 return None

@@ -197,29 +197,60 @@ def _not_the_agent_dir(name: str, parent: str | None = None) -> bool:
         or (
             parent is not None
             and _TESTS_LAST.fullmatch(lowered) is not None
+            # The walk doesn't enter a linked folder, so what one holds doesn't matter.
+            and not os.path.islink(os.path.join(parent, name))
             and _only_tests(os.path.join(parent, name))
         )
     )
 
 
-def _only_tests(folder: str) -> bool:
-    """Whether the code files directly in ``folder`` are all tests, and there is one.
+def _listed(folder: str) -> tuple[list[str], list[str]]:
+    """The code files directly in ``folder``, and the folders in it the walk would enter.
 
-    Helpers below them, as page objects, go with the tests. A package's ``__init__.py`` says
-    nothing either way, and a folder of only folders may be the agent's own package.
+    A ``package.json`` is code here: it lists what the folder's scripts run. A package's
+    ``__init__.py`` says nothing either way.
+    """
+    code: list[str] = []
+    folders: list[str] = []
+    with os.scandir(folder) as entries:
+        for entry in entries:
+            if entry.is_dir(follow_symlinks=False):
+                if not _not_the_agent_dir(entry.name):
+                    folders.append(entry.name)
+            elif entry.is_file() and entry.name != "__init__.py" and (
+                entry.name == "package.json" or os.path.splitext(entry.name)[1] in _CODE_SUFFIXES
+            ):
+                code.append(entry.name)
+    return code, folders
+
+
+def _only_tests(folder: str) -> bool:
+    """Whether ``folder`` holds tests alone: its own code files are all tests, one of them more
+    than a ``conftest.py``, and no folder in it that holds code is other than named for tests.
+
+    A folder of only folders may be the agent's own package. A folder in it holds code if it has
+    a code file or a folder of its own: one level is looked at, and deeper is taken as code.
     """
     try:
-        with os.scandir(folder) as entries:
-            code = [
-                entry.name
-                for entry in entries
-                if entry.name != "__init__.py"
-                and os.path.splitext(entry.name)[1] in _CODE_SUFFIXES
-                and entry.is_file()
-            ]
+        code, folders = _listed(folder)
+        for name in folders:
+            path = os.path.join(folder, name)
+            inner, below = _listed(path)
+            if _TESTS_LAST.fullmatch(name.lower()) is not None:
+                # Tests alone, as the walk would judge it at the top, and nothing deeper.
+                if below or (inner and not _tests_alone(inner)):
+                    return False
+            elif inner or below or os.path.isfile(os.path.join(path, "__init__.py")):
+                return False
     except OSError:
         return False
-    return bool(code) and all(_not_the_agent_file(name) for name in code)
+    return _tests_alone(code)
+
+
+def _tests_alone(code: list[str]) -> bool:
+    return any(name.lower() != "conftest.py" for name in code) and all(
+        _not_the_agent_file(name) for name in code
+    )
 
 
 def _not_the_agent_file(name: str) -> bool:
@@ -328,11 +359,14 @@ def _packages_used(path: Path) -> set[str]:
     return found
 
 
-def _imports_in(text: str) -> set[str]:
+def _imports_in(text: str, path: Path) -> set[str]:
     # One file at a time: a customer's odd file can run the parser out of memory, and that mustn't
     # take the rest of the scan, or the reading it serves, down with it.
     tree = parsed(text)
-    return set() if tree is None else _imports(tree)
+    if tree is None:
+        logger.debug("agent type scan read no imports from %s", path)
+        return set()
+    return _imports(tree)
 
 
 def _largest_read(path: Path) -> int:
@@ -373,7 +407,7 @@ def _script_kept(hit: re.Match[str]) -> str:
     return kept
 
 
-def _python_markers(text: str, tokens: TokenBudget) -> set[str]:
+def _python_markers(text: str, tokens: TokenBudget, path: Path) -> set[str]:
     if not _MARKER_START.search(text):
         return set()
     if not tokens.spend(text):
@@ -384,6 +418,7 @@ def _python_markers(text: str, tokens: TokenBudget) -> set[str]:
     try:
         found = tokens.tokens(text)
     except (ValueError, SyntaxError, tokenize.TokenError):
+        logger.debug("agent type scan read no markers from %s", path, exc_info=True)
         return set()
     # Past the work, too, the file's markers aren't read.
     return set() if found is None else _markers(_python_code(found))
@@ -401,8 +436,10 @@ def _markers_in(path: Path) -> set[str]:
     try:
         if not path.is_file() or path.stat().st_size > _LARGEST_CODE_FILE:
             return set()
-        text = path.read_text(encoding="utf-8")
+        # As Node reads it: a stray byte that isn't UTF-8 becomes a replacement character.
+        text = path.read_text(encoding="utf-8", errors="replace")
     except (OSError, ValueError):
+        logger.debug("agent type scan read no markers from %s", path, exc_info=True)
         return set()
     return _markers(_SCRIPT_COMMENT_OR_STRING.sub(_script_kept, text))
 
@@ -502,15 +539,19 @@ def _tools_in(paths: Iterable[Path], local: set[str]) -> tuple[str, ...]:
             elif (
                 text := read_module(path, _largest_read(path), _PYTHON_NAMES, undecoded := [])
             ) is not None:
-                markers = _python_markers(text, tokens)
-                names = _imports_in(text) if budget.spend(text) else set()
+                markers = _python_markers(text, tokens, path)
+                names = _imports_in(text, path) if budget.spend(text) else set()
                 found |= markers
                 imported |= names
             elif undecoded:
-                # A codec refused by name, which Python still runs the file in: a browser package
-                # it names, as bytes, counts. That leads to a second look, never a refusal on its
-                # own. #224 does the same.
-                found |= {name for name in BROWSER_IMPORTS if name.encode() in undecoded[0]}
+                # A codec refused by name, which Python still runs the file in: the browser
+                # packages and tool markers it names, as bytes, count. That leads to a second
+                # look, never a refusal on its own. #224 does the same.
+                raw = undecoded[0].decode("latin-1")
+                imported |= {name for name in BROWSER_IMPORTS if name in raw}
+                found |= _markers(raw)
+                if _TOOLKIT in raw:
+                    found.add(_TOOLKIT)
         except Exception:
             # A skipped file may be the agent's main one, and the reading then finds nothing.
             logger.warning("agent type scan skipped %s", path, exc_info=True)
