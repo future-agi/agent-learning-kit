@@ -1780,3 +1780,22 @@ def test_an_actor_the_agent_s_last_call_wakes_still_acts_when_the_conversation_e
         chat.HostedChatCallRunner(_Adapter(), context).run(SimpleNamespace(scenario_key="one", scenario_id="scenario-1"), runtime)
     )
     assert [(one["actor_id"], one["outcome"]) for one in outcome.world_actions] == [("manager", "committed")]
+
+
+def test_a_chat_actor_s_timeout_and_the_fallback_taken_for_it_are_among_what_the_actors_chose() -> None:
+    from fi.alk.harness.actors import Actor, ActorList
+    from fi.alk.harness.world_door import MemoryLog
+
+    listing = ActorList(actors=[Actor(id="manager", name="Mia", permitted_actions=["approvals.change"])])
+    door = SimpleNamespace(log=MemoryLog())
+    door.log.write({"name": "approvals.change", "actor_id": "manager", "outcome": "committed", "ok": True, "at": 11.0})
+    cast = SimpleNamespace(events=[
+        {"actor": "manager", "kind": "waited", "why": "waiting"},
+        {"actor": "manager", "kind": "timeout", "fallback": "approvals.change", "outcome": "fallback_action",
+         "reason": "no answer in time: fallback_action", "status": 200, "action_outcome": "committed"},
+    ])
+    record = chat._world_actors_record(door, listing, None, cast, SimpleNamespace(rows=list), {}, since=9.0)
+    assert record["decisions"] == [
+        {"actor": "manager", "play": "timeout", "action": "approvals.change", "fallback": "approvals.change",
+         "outcome": "fallback_action", "status": 200, "action_outcome": "committed"}
+    ]
