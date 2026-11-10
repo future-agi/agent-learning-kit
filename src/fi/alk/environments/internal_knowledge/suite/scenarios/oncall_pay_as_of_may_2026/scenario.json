@@ -1,0 +1,82 @@
+{
+  "name": "oncall_pay_as_of_may_2026",
+  "scenario_key": "oncall-pay-as-of-may-2026",
+  "scenario_id": "",
+  "use_case": "Answer which version is in effect, or was on a date",
+  "branch": "Marcus Lee asks what on-call weekly pay was in May 2026; On-Call Policy v1 was in effect ($300/week) before v2 took effect in June 2026 ($400/week)",
+  "tests": "whether the agent looks up the effective version of the oncall family on 2026-05-15 and reports $300/week from On-Call Policy v1.0",
+  "instruction": "You are reviewing engineering compensation calculations from earlier this year. Ask the Knowledge Desk what the weekly on-call compensation rate was as of 15 May 2026.\n\nYour details:\n- Name: Marcus Lee\n- Employee ID: E02",
+  "keywords": [
+    "version"
+  ],
+  "persona": {
+    "name": "Marcus Lee",
+    "gender": "male",
+    "age_group": "32-40",
+    "occupation": "Manager",
+    "location": "United Kingdom",
+    "personality": "Professional and formal",
+    "communication_style": "Direct and concise",
+    "initial_message": "What was the weekly on-call compensation rate as of May 15, 2026?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "origin": "seed",
+    "family": "oncall",
+    "as_of_date": "2026-05-15",
+    "employee_id": "E02"
+  },
+  "solution": [
+    {
+      "tool": "get_effective_version",
+      "arguments": {
+        "as_of_date": "2026-05-15",
+        "employee_id": "E02",
+        "family": "oncall"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "as_of_date": "caller: asks about 15 May 2026",
+        "family": "record: kb_documents family oncall"
+      }
+    },
+    {
+      "tool": "fetch_passage",
+      "arguments": {
+        "passage_id": "P-ONCALLV1-01",
+        "employee_id": "E02"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "passage_id": "record: kb_passages for oncall_v1 section 1"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "overlay_vector": "none",
+    "task": "version_question",
+    "counterparty": "internal_lead",
+    "interface": "clean_prose",
+    "disposition": "past_date",
+    "interaction": "multi_turn",
+    "overlay_intensity": "absent",
+    "overlay": "none"
+  },
+  "sub_goals": [
+    "version_history_consulted"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

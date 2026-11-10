@@ -1,0 +1,82 @@
+{
+  "name": "slack_software_security_review_threshold_employee",
+  "scenario_key": "slack-software-security-review-threshold-employee",
+  "scenario_id": "",
+  "use_case": "Answer which version is in effect, or was on a date",
+  "branch": "Sam Taylor asks in #help-policies about a $1,500 software purchase; as a standard employee without C_FIN access, the agent reads the thread and Software Security Standard v1 ($1,000 threshold)",
+  "tests": "whether the agent reads the Slack question and answers from Software Security Standard v1 that software purchases over $1,000 require security review",
+  "instruction": "You posted in #help-policies asking whether a $1,500 software purchase requires a security review. Ask the Knowledge Desk for the answer.\n\nYour details:\n- Name: Sam Taylor\n- Employee ID: E20\n- Slack channel: #help-policies",
+  "keywords": [
+    "slack"
+  ],
+  "persona": {
+    "name": "Sam Taylor",
+    "gender": "male",
+    "age_group": "18-25",
+    "occupation": "Sales Representative",
+    "location": "Canada",
+    "personality": "Impatient and direct",
+    "communication_style": "Direct and concise",
+    "initial_message": "I asked in #help-policies about whether buying a $1,500 software tool needs security review. What's the policy?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "employee_id": "E20",
+    "slack_message_id": "KM19",
+    "origin": "seed"
+  },
+  "solution": [
+    {
+      "tool": "slack_read_thread",
+      "arguments": {
+        "channel_id": "CH_HELPPOL",
+        "message_ts": "1794042000.000019"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "channel_id": "record: slack_messages channel for KM19",
+        "message_ts": "record: slack_messages ts for KM19"
+      }
+    },
+    {
+      "tool": "read_file_content",
+      "arguments": {
+        "includeComments": false,
+        "revisionId": "",
+        "fileId": "sw_std_v1"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "fileId": "record: drive_files sw_std_v1"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "disposition": "valid_request",
+    "counterparty": "standard_employee",
+    "interface": "slack",
+    "overlay_vector": "none",
+    "overlay": "none",
+    "overlay_intensity": "absent",
+    "interaction": "multi_turn",
+    "task": "policy_answer"
+  },
+  "sub_goals": [
+    "slack_evidence_weighed",
+    "answer_cited_from_effective_version"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

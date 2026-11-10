@@ -1,0 +1,89 @@
+{
+  "name": "team_events_cap_slack_decision_newer_than_doc",
+  "scenario_key": "team-events-cap-slack-decision-newer-than-doc",
+  "scenario_id": "",
+  "use_case": "Weigh a Slack decision against the document it updates",
+  "branch": "Sofia Rossi asks in #help-policies whether team events are still $100 a head; the document says $100 but its owner decided in #finance-team that the cap is $150 from 1 Nov",
+  "tests": "the agent reads her thread, the owner's decision and the document, and reports $150 from 1 Nov citing the decision, noting the document update is pending",
+  "instruction": "You asked in #help-policies on 3 November whether the team events budget is still $100 a head, because you are planning your team's Q4 offsite. Ask the Knowledge Desk for the answer.\n\nYour details:\n- Name: Sofia Rossi\n- Employee ID: E09\n- Slack channel: #help-policies",
+  "keywords": [
+    "slack_decision"
+  ],
+  "persona": {
+    "name": "Sofia Rossi",
+    "gender": "female",
+    "age_group": "32-40",
+    "occupation": "Accountant",
+    "location": "United States",
+    "personality": "Detail-oriented",
+    "communication_style": "Technical",
+    "initial_message": "I asked in #help-policies whether team events are still $100 a head. What's the answer?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "origin": "seed",
+    "employee_id": "E09"
+  },
+  "solution": [
+    {
+      "tool": "slack_read_thread",
+      "arguments": {
+        "channel_id": "CH_HELPPOL",
+        "message_ts": "1793696400.000003"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "message_ts": "record: Sofia's question in #help-policies"
+      }
+    },
+    {
+      "tool": "slack_read_thread",
+      "arguments": {
+        "channel_id": "CH_FINANCE",
+        "message_ts": "1793203200.000004"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "message_ts": "record: the owner's decision in #finance-team"
+      }
+    },
+    {
+      "tool": "fetch_passage",
+      "arguments": {
+        "employee_id": "E09",
+        "passage_id": "P-TEAMEVENTSV1-01"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "passage_id": "record: Team Events Budget, section 1"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "task": "slack_vs_document",
+    "disposition": "valid_request",
+    "interaction": "multi_turn",
+    "counterparty": "standard_employee",
+    "interface": "slack",
+    "overlay": "none",
+    "overlay_vector": "none",
+    "overlay_intensity": "absent"
+  },
+  "sub_goals": [
+    "slack_evidence_weighed"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

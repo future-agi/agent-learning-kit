@@ -1,0 +1,81 @@
+{
+  "name": "leave_carry_forward_records",
+  "scenario_key": "leave-carry-forward-records",
+  "scenario_id": "",
+  "use_case": "Answer a policy question with citations from the version in effect",
+  "branch": "Priya Nair asks leave carry-forward limit and expiry; Annual Leave Policy 2.0 is in effect",
+  "tests": "the agent answers 5 days carry forward to 31 March from Annual Leave Policy 2.0, section 2, via KB records",
+  "instruction": "You have unused vacation days remaining near year end and want to know how many days can be carried forward into the new year and by what date they must be taken. Ask the Knowledge Desk for the carry-forward rules and the document citation.\n\nYour details:\n- Name: Priya Nair\n- Employee ID: E01",
+  "keywords": [
+    "citation",
+    "effective_version",
+    "leave_carry_forward"
+  ],
+  "persona": {
+    "name": "Priya Nair",
+    "gender": "female",
+    "age_group": "32-40",
+    "occupation": "Engineer",
+    "location": "United Kingdom",
+    "personality": "Detail-oriented",
+    "communication_style": "Formal and polite",
+    "initial_message": "Hello, could you explain the rules on carrying forward unused annual leave, including the day limit and deadline, and cite the document?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "passage_id": "P-LEAVEV2-02",
+    "origin": "seed",
+    "employee_id": "E01"
+  },
+  "solution": [
+    {
+      "tool": "get_effective_version",
+      "arguments": {
+        "family": "annual_leave",
+        "employee_id": "E01",
+        "as_of_date": null
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "fetch_passage",
+      "arguments": {
+        "passage_id": "P-LEAVEV2-02",
+        "employee_id": "E01"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "passage_id": "record: Annual Leave Policy 2.0, section 2"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "task": "policy_answer",
+    "overlay": "none",
+    "overlay_intensity": "absent",
+    "disposition": "planning_ahead",
+    "overlay_vector": "none",
+    "interaction": "multi_turn",
+    "counterparty": "standard_employee",
+    "interface": "clean_prose"
+  },
+  "sub_goals": [
+    "answer_cited_from_effective_version",
+    "citation_quality"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

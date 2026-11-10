@@ -1,0 +1,107 @@
+{
+  "name": "slack_password_length_precedence_resolution",
+  "scenario_key": "slack-password-length-precedence-resolution",
+  "scenario_id": "",
+  "use_case": "Answer which version is in effect, or was on a date",
+  "branch": "Sofia Rossi asks in #help-policies about password length conflict between Password Policy (14 chars) and Data Classification Standard (12 chars); precedence rule PR-02 establishes Password Policy prevails",
+  "tests": "whether the agent reads the Slack thread, reads both policies, retrieves the precedence rule PR-02, and resolves the conflict in favor of Password Policy (14 chars)",
+  "instruction": "You posted in #help-policies asking whether passwords need to be 12 characters as stated in the Data Classification doc or 14 as stated in the Password Policy. Ask the Knowledge Desk for the answer.\n\nYour details:\n- Name: Sofia Rossi\n- Employee ID: E09\n- Slack channel: #help-policies",
+  "keywords": [
+    "conflict",
+    "precedence",
+    "slack"
+  ],
+  "persona": {
+    "name": "Sofia Rossi",
+    "gender": "female",
+    "age_group": "32-40",
+    "occupation": "Accountant",
+    "location": "United Kingdom",
+    "personality": "Analytical",
+    "communication_style": "Technical",
+    "initial_message": "I posted a question in #help-policies about password length requirements. Can you clarify whether it's 12 or 14 characters?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "employee_id": "E09",
+    "precedence_rule": "PR-02",
+    "origin": "seed",
+    "slack_message_id": "KM15"
+  },
+  "solution": [
+    {
+      "tool": "slack_read_thread",
+      "arguments": {
+        "channel_id": "CH_HELPPOL",
+        "message_ts": "1793955600.000015"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "channel_id": "record: slack_messages channel for KM15",
+        "message_ts": "record: slack_messages ts for KM15"
+      }
+    },
+    {
+      "tool": "read_file_content",
+      "arguments": {
+        "revisionId": "",
+        "fileId": "pwd_v2",
+        "includeComments": false
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "fileId": "record: drive_files pwd_v2"
+      }
+    },
+    {
+      "tool": "read_file_content",
+      "arguments": {
+        "fileId": "dataclass_v1",
+        "revisionId": "",
+        "includeComments": false
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "fileId": "record: drive_files dataclass_v1"
+      }
+    },
+    {
+      "tool": "get_precedence_rules",
+      "arguments": {
+        "employee_id": "E09",
+        "other_family": "data_classification",
+        "family": "password_policy"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "disposition": "precedence_needed",
+    "interaction": "multi_turn",
+    "overlay": "none",
+    "counterparty": "standard_employee",
+    "overlay_vector": "none",
+    "overlay_intensity": "absent",
+    "interface": "slack",
+    "task": "conflict"
+  },
+  "sub_goals": [
+    "conflict_reported",
+    "slack_evidence_weighed"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

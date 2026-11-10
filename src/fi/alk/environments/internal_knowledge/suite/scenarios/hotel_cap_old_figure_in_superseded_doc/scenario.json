@@ -1,0 +1,80 @@
+{
+  "name": "hotel_cap_old_figure_in_superseded_doc",
+  "scenario_key": "hotel-cap-old-figure-in-superseded-doc",
+  "scenario_id": "",
+  "use_case": "Answer which version is in effect, or was on a date",
+  "branch": "Grace Kim found $200 in Travel Policy 2025; the agent consults version history and reads the current Travel Policy v3 ($220)",
+  "tests": "whether the agent checks version history to clarify that Travel Policy 2025 is superseded and answers $220 from the effective version (v3)",
+  "instruction": "You found a figure of $200 per night for hotel stays in an old file called \"Travel Policy 2025.md\". Ask the Knowledge Desk what the current hotel reimbursement cap is and whether the $200 figure still applies.\n\nYour details:\n- Name: Grace Kim\n- Employee ID: E05",
+  "keywords": [
+    "version"
+  ],
+  "persona": {
+    "name": "Grace Kim",
+    "gender": "female",
+    "age_group": "25-32",
+    "occupation": "Sales Representative",
+    "location": "United States",
+    "personality": "Friendly and cooperative",
+    "communication_style": "Casual and friendly",
+    "initial_message": "Hi! I was looking at Travel Policy 2025.md which says hotels are capped at $200/night. Is that still the current rate?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "family": "travel_policy",
+    "employee_id": "E05",
+    "origin": "seed"
+  },
+  "solution": [
+    {
+      "tool": "list_document_versions",
+      "arguments": {
+        "employee_id": "E05",
+        "family": "travel_policy",
+        "drive_file_id": ""
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "read_file_content",
+      "arguments": {
+        "revisionId": "",
+        "includeComments": false,
+        "fileId": "trv_policy_v3"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "fileId": "record: drive_files for current Travel Policy v3"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "interaction": "multi_turn",
+    "task": "version_question",
+    "disposition": "superseded_doc",
+    "interface": "clean_prose",
+    "overlay_intensity": "absent",
+    "counterparty": "standard_employee",
+    "overlay": "none",
+    "overlay_vector": "none"
+  },
+  "sub_goals": [
+    "version_history_consulted",
+    "answer_cited_from_effective_version"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

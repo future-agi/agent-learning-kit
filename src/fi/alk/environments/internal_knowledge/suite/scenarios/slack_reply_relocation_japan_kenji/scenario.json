@@ -1,0 +1,93 @@
+{
+  "name": "slack_reply_relocation_japan_kenji",
+  "scenario_key": "slack-reply-relocation-japan-kenji",
+  "scenario_id": "",
+  "use_case": "Pick up a Slack question and post the approved reply in its thread",
+  "branch": "Kenji Tanaka asked about a relocation allowance for Tokyo in #help-policies (KM07); Oliver Grant provides approval APP-KN-404 to reply in the thread stating no preset allowance applies to Japan under Relocation Policy 1.0 and offering a knowledge request",
+  "tests": "the agent reads KM07 and relocation_v1, posting that Japan has no preset allowance in Kenji's thread with APP-KN-404",
+  "instruction": "You are Oliver Grant, IT Manager. Kenji Tanaka asked in #help-policies whether there is a relocation allowance for moving to Tokyo. Ask the Knowledge Desk to post the approved reply in his thread; you provide approval APP-KN-404.\n\nYour details:\n- Name: Oliver Grant\n- Employee ID: E08\n- Approval: APP-KN-404",
+  "keywords": [
+    "slack",
+    "approval"
+  ],
+  "persona": {
+    "name": "Oliver Grant",
+    "gender": "male",
+    "age_group": "32-40",
+    "occupation": "Manager",
+    "location": "United Kingdom",
+    "personality": "Professional and formal",
+    "communication_style": "Direct and concise",
+    "initial_message": "Please answer Kenji's question in #help-policies about Tokyo relocation using approval APP-KN-404.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "origin": "generated",
+    "approval_id": "APP-KN-404"
+  },
+  "solution": [
+    {
+      "tool": "slack_read_thread",
+      "arguments": {
+        "channel_id": "CH_HELPPOL",
+        "message_ts": "1793703600.000007"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "message_ts": "record: KM07"
+      }
+    },
+    {
+      "tool": "fetch_passage",
+      "arguments": {
+        "passage_id": "P-RELOCATIONV1-01",
+        "employee_id": "E08"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "passage_id": "record: Relocation Policy 1.0, section 1"
+      }
+    },
+    {
+      "tool": "slack_send_message",
+      "arguments": {
+        "approval_id": "APP-KN-404",
+        "message": "Under Relocation Policy 1.0 section 1, allowances are fixed for the US ($10,000) and UK (8,000 GBP). Other countries like Japan are evaluated case by case without a preset allowance. We can open a knowledge request with the People team if you wish.",
+        "thread_ts": "1793703600.000007",
+        "channel_id": "CH_HELPPOL"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "thread_ts": "record: KM07 thread",
+        "channel_id": "record: #help-policies"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "overlay": "none",
+    "interface": "slack",
+    "task": "slack_reply",
+    "disposition": "missing_evidence",
+    "interaction": "multi_turn",
+    "overlay_vector": "none",
+    "counterparty": "manager",
+    "overlay_intensity": "absent"
+  },
+  "sub_goals": [
+    "slack_reply_in_thread"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

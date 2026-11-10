@@ -1,0 +1,78 @@
+{
+  "name": "trip_approval_threshold_drive",
+  "scenario_key": "trip-approval-threshold-drive",
+  "scenario_id": "",
+  "use_case": "Answer a policy question with citations from the version in effect",
+  "branch": "Daniel Brooks asks trip approval threshold; Travel Policy 3.0 is in effect",
+  "tests": "the agent answers $5,000 from Travel Policy 3.0, section 4, via Drive search",
+  "instruction": "You are planning an extensive international sales roadshow and want to know at what estimated trip cost manager approval is required before booking. Ask the Knowledge Desk for the threshold and the document citation.\n\nYour details:\n- Name: Daniel Brooks\n- Employee ID: E06",
+  "keywords": [
+    "citation",
+    "effective_version",
+    "travel_policy"
+  ],
+  "persona": {
+    "name": "Daniel Brooks",
+    "gender": "male",
+    "age_group": "40-50",
+    "occupation": "Manager",
+    "location": "United States",
+    "personality": "Confident",
+    "communication_style": "Direct and concise",
+    "initial_message": "What is the trip cost threshold above which manager pre-approval is required, and what is the policy citation?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "origin": "seed",
+    "file_id": "trv_policy_v3",
+    "employee_id": "E06"
+  },
+  "solution": [
+    {
+      "tool": "search_files",
+      "arguments": {
+        "query": "title contains 'Travel Policy'"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "read_file_content",
+      "arguments": {
+        "fileId": "trv_policy_v3"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "fileId": "record: Travel Policy 3.0 (trv_policy_v3)"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "overlay_intensity": "absent",
+    "interface": "clean_prose",
+    "interaction": "single_request",
+    "disposition": "managerial_query",
+    "counterparty": "internal_lead",
+    "task": "policy_answer",
+    "overlay": "none",
+    "overlay_vector": "none"
+  },
+  "sub_goals": [
+    "answer_cited_from_effective_version",
+    "citation_quality"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

@@ -1,0 +1,78 @@
+{
+  "name": "mfa_requirement_password_policy_drive",
+  "scenario_key": "mfa-requirement-password-policy-drive",
+  "scenario_id": "",
+  "use_case": "Answer a policy question with citations from the version in effect",
+  "branch": "Oliver Grant asks MFA requirement; Password Policy 2.0 is in effect",
+  "tests": "the agent answers multi-factor authentication (MFA) is required on all employee accounts from Password Policy 2.0, section 2, via Drive search",
+  "instruction": "You want to verify the company policy regarding mandatory multi-factor authentication (MFA) across employee accounts. Ask the Knowledge Desk for the MFA requirements and the policy citation.\n\nYour details:\n- Name: Oliver Grant\n- Employee ID: E08",
+  "keywords": [
+    "citation",
+    "effective_version",
+    "password_policy"
+  ],
+  "persona": {
+    "name": "Oliver Grant",
+    "gender": "male",
+    "age_group": "40-50",
+    "occupation": "Manager",
+    "location": "Canada",
+    "personality": "Professional and formal",
+    "communication_style": "Simple and clear",
+    "initial_message": "Hello, could you confirm the multi-factor authentication requirement for company accounts and cite the policy document?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "file_id": "pwd_v2",
+    "origin": "seed",
+    "employee_id": "E08"
+  },
+  "solution": [
+    {
+      "tool": "search_files",
+      "arguments": {
+        "query": "title contains 'Password Policy'"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "read_file_content",
+      "arguments": {
+        "fileId": "pwd_v2"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "fileId": "record: Password Policy 2.0 (pwd_v2)"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "interface": "clean_prose",
+    "overlay": "none",
+    "overlay_vector": "none",
+    "counterparty": "internal_lead",
+    "overlay_intensity": "absent",
+    "disposition": "security_audit",
+    "interaction": "multi_turn",
+    "task": "policy_answer"
+  },
+  "sub_goals": [
+    "answer_cited_from_effective_version",
+    "citation_quality"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

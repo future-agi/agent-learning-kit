@@ -1,0 +1,93 @@
+{
+  "name": "slack_hotel_cap_2027_draft_inquiry",
+  "scenario_key": "slack-hotel-cap-2027-draft-inquiry",
+  "scenario_id": "",
+  "use_case": "Answer which version is in effect, or was on a date",
+  "branch": "Lucas Martin asks in #help-policies about a draft travel policy for 2027 with $250 hotel cap; the agent checks the thread, sees the draft is not in effect, and reads Travel Policy v3",
+  "tests": "whether the agent checks the Slack question, consults metadata to verify the 2027 document is a draft, and cites the $220 cap from the approved Travel Policy v3",
+  "instruction": "You posted a question in #help-policies about whether the 2027 travel policy draft ($250/night hotel cap) is already active. Ask the Knowledge Desk for the answer.\n\nYour details:\n- Name: Lucas Martin\n- Employee ID: E14\n- Slack channel: #help-policies",
+  "keywords": [
+    "draft",
+    "slack",
+    "version"
+  ],
+  "persona": {
+    "name": "Lucas Martin",
+    "gender": "male",
+    "age_group": "25-32",
+    "occupation": "Engineer",
+    "location": "United States",
+    "personality": "Detail-oriented",
+    "communication_style": "Technical",
+    "initial_message": "I posted in #help-policies asking about the 2027 draft travel policy and the $250 hotel cap. Can you check that for me?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "origin": "seed",
+    "employee_id": "E14",
+    "slack_message_id": "KM18"
+  },
+  "solution": [
+    {
+      "tool": "slack_read_thread",
+      "arguments": {
+        "message_ts": "1793966400.000018",
+        "channel_id": "CH_HELPPOL"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "message_ts": "record: slack_messages ts for KM18",
+        "channel_id": "record: slack_messages channel for KM18"
+      }
+    },
+    {
+      "tool": "get_document_metadata",
+      "arguments": {
+        "employee_id": "E14",
+        "drive_file_id": "trv_policy_v4_draft"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "read_file_content",
+      "arguments": {
+        "includeComments": false,
+        "revisionId": "",
+        "fileId": "trv_policy_v3"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "fileId": "record: drive_files for current Travel Policy v3"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "interface": "slack",
+    "interaction": "multi_turn",
+    "task": "version_question",
+    "overlay": "none",
+    "overlay_intensity": "absent",
+    "overlay_vector": "none",
+    "counterparty": "standard_employee",
+    "disposition": "draft_inquiry"
+  },
+  "sub_goals": [
+    "version_history_consulted",
+    "slack_evidence_weighed"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

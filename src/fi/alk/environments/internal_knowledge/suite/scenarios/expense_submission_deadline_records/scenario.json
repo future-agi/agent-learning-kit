@@ -1,0 +1,81 @@
+{
+  "name": "expense_submission_deadline_records",
+  "scenario_key": "expense-submission-deadline-records",
+  "scenario_id": "",
+  "use_case": "Answer a policy question with citations from the version in effect",
+  "branch": "Maya Patel asks expense submission deadline; Expense Receipts Policy 2.0 is in effect",
+  "tests": "the agent answers 30 days from Expense Receipts Policy 2.0, section 2, via KB records",
+  "instruction": "You returned from a business trip and want to know how many days you have to submit your expense claims. Ask the Knowledge Desk for the deadline and which document specifies it.\n\nYour details:\n- Name: Maya Patel\n- Employee ID: E13",
+  "keywords": [
+    "citation",
+    "effective_version",
+    "expense_deadline"
+  ],
+  "persona": {
+    "name": "Maya Patel",
+    "gender": "female",
+    "age_group": "25-32",
+    "occupation": "Engineer",
+    "location": "United Kingdom",
+    "personality": "Analytical",
+    "communication_style": "Simple and clear",
+    "initial_message": "Hello, what is the deadline for submitting expense reports after a trip, and which policy document outlines this?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "passage_id": "P-RECEIPTSV2-02",
+    "origin": "seed",
+    "employee_id": "E13"
+  },
+  "solution": [
+    {
+      "tool": "get_effective_version",
+      "arguments": {
+        "family": "expense_receipts",
+        "as_of_date": null,
+        "employee_id": "E13"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "fetch_passage",
+      "arguments": {
+        "employee_id": "E13",
+        "passage_id": "P-RECEIPTSV2-02"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "passage_id": "record: Expense Receipts Policy 2.0, section 2"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "counterparty": "standard_employee",
+    "interface": "clean_prose",
+    "overlay_intensity": "absent",
+    "task": "policy_answer",
+    "overlay": "none",
+    "overlay_vector": "none",
+    "interaction": "multi_turn",
+    "disposition": "deadline_conscious"
+  },
+  "sub_goals": [
+    "answer_cited_from_effective_version",
+    "citation_quality"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

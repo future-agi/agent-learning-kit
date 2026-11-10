@@ -1,0 +1,78 @@
+{
+  "name": "mileage_reimbursement_rate_drive",
+  "scenario_key": "mileage-reimbursement-rate-drive",
+  "scenario_id": "",
+  "use_case": "Answer a policy question with citations from the version in effect",
+  "branch": "Ivan Petrov asks mileage rate; Mileage Reimbursement Policy 1.0 is in effect",
+  "tests": "the agent answers $0.67 per mile from Mileage Reimbursement Policy 1.0, section 1, via Drive search",
+  "instruction": "You drove your personal vehicle for company business and want to know the reimbursement rate per mile. Ask the Knowledge Desk for the mileage rate and the document citation.\n\nYour details:\n- Name: Ivan Petrov\n- Employee ID: E16",
+  "keywords": [
+    "citation",
+    "effective_version",
+    "mileage"
+  ],
+  "persona": {
+    "name": "Ivan Petrov",
+    "gender": "male",
+    "age_group": "40-50",
+    "occupation": "Technician",
+    "location": "United Kingdom",
+    "personality": "Cautious and skeptical",
+    "communication_style": "Questioning",
+    "initial_message": "What is the company reimbursement rate per mile for using a personal car, and which document sets it?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "employee_id": "E16",
+    "origin": "seed",
+    "file_id": "mileage_v1"
+  },
+  "solution": [
+    {
+      "tool": "search_files",
+      "arguments": {
+        "query": "title contains 'Mileage'"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "read_file_content",
+      "arguments": {
+        "fileId": "mileage_v1"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "fileId": "record: Mileage Reimbursement Policy 1.0 (mileage_v1)"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "task": "policy_answer",
+    "overlay_intensity": "absent",
+    "interface": "clean_prose",
+    "counterparty": "standard_employee",
+    "overlay_vector": "none",
+    "interaction": "single_request",
+    "overlay": "none",
+    "disposition": "cautious"
+  },
+  "sub_goals": [
+    "answer_cited_from_effective_version",
+    "citation_quality"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

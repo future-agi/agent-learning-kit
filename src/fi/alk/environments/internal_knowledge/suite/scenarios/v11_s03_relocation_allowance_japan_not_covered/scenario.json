@@ -1,0 +1,100 @@
+{
+  "name": "v11_s03_relocation_allowance_japan_not_covered",
+  "scenario_key": "v11-s03-relocation-allowance-japan-not-covered",
+  "scenario_id": "",
+  "use_case": "Report missing evidence and open a knowledge request with consent",
+  "branch": "Kenji Tanaka asks the relocation allowance for Japan; the Relocation Policy sets allowances only for the US and the UK, and he agrees to a knowledge request",
+  "tests": "the agent says the corpus sets no allowance for Japan, invents no amount, offers a knowledge request and opens one in People and Leave after he agrees",
+  "instruction": "You are moving from London to the Tokyo office and want to know the relocation allowance for Japan. Ask the Knowledge Desk. If they say no document covers it and offer to raise a question to the policy owner, agree.\n\nYour details:\n- Name: Kenji Tanaka\n- Employee ID: E10",
+  "keywords": [
+    "missing_evidence",
+    "knowledge_request"
+  ],
+  "persona": {
+    "name": "Kenji Tanaka",
+    "gender": "male",
+    "age_group": "60+",
+    "occupation": "Retired",
+    "location": "Australia",
+    "personality": "Reserved",
+    "communication_style": "Formal and polite",
+    "initial_message": "What's our relocation allowance for moving to Japan?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "origin": "seed",
+    "employee_id": "E10"
+  },
+  "solution": [
+    {
+      "tool": "get_user_profile",
+      "arguments": {
+        "employee_id": "E10"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "search_documents",
+      "arguments": {
+        "employee_id": "E10",
+        "query": "relocation allowance Japan"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "fetch_passage",
+      "arguments": {
+        "employee_id": "E10",
+        "passage_id": "P-RELOCATIONV1-03"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "create_knowledge_request",
+      "arguments": {
+        "employee_id": "E10",
+        "question": "What relocation allowance applies to a move from London to Tokyo, Japan?",
+        "collection_id": "C_PEOPLE",
+        "request_key": "KR-E10-JAPAN-RELOCATION",
+        "confirmed": true
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "employee_id": "caller",
+        "collection_id": "record: People and Leave owns relocation",
+        "confirmed": "caller agreed"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "task": "missing_evidence",
+    "disposition": "valid_request",
+    "interaction": "multi_turn",
+    "counterparty": "standard_employee",
+    "interface": "clean_prose",
+    "overlay": "none",
+    "overlay_vector": "none",
+    "overlay_intensity": "absent"
+  },
+  "sub_goals": [
+    "knowledge_request_created",
+    "consent_before_request"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

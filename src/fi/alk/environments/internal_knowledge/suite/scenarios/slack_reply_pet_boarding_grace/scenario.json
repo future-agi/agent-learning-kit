@@ -1,0 +1,92 @@
+{
+  "name": "slack_reply_pet_boarding_grace",
+  "scenario_key": "slack-reply-pet-boarding-grace",
+  "scenario_id": "",
+  "use_case": "Pick up a Slack question and post the approved reply in its thread",
+  "branch": "Grace Kim asked in #help-policies if dog boarding can be expensed while travelling (KM17); Chloe Dubois provides approval APP-KN-410 in a single turn to search the travel corpus and reply in her thread confirming no policy covers pet expenses",
+  "tests": "the agent reads Grace's thread (KM17), searches travel policies, and posts in Grace's thread with APP-KN-410 that pet boarding is not covered",
+  "instruction": "You are Chloe Dubois, Operations Manager. Grace Kim asked in #help-policies whether dog boarding during travel can be expensed. Ask the Knowledge Desk in a direct message to check travel policies and post the approved reply in her thread; you provide approval APP-KN-410.\n\nYour details:\n- Name: Chloe Dubois\n- Employee ID: E17\n- Approval: APP-KN-410",
+  "keywords": [
+    "slack",
+    "approval"
+  ],
+  "persona": {
+    "name": "Chloe Dubois",
+    "gender": "female",
+    "age_group": "25-32",
+    "occupation": "Manager",
+    "location": "Australia",
+    "personality": "Professional and formal",
+    "communication_style": "Questioning",
+    "initial_message": "Could someone check on KM17 in #help-policies? Grace asked about pet boarding during travel.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "approval_id": "APP-KN-410",
+    "origin": "generated"
+  },
+  "solution": [
+    {
+      "tool": "slack_read_thread",
+      "arguments": {
+        "channel_id": "CH_HELPPOL",
+        "message_ts": "1793962800.000017"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "message_ts": "record: KM17"
+      }
+    },
+    {
+      "tool": "search_documents",
+      "arguments": {
+        "query": "dog boarding pet expense",
+        "collection_id": "C_TRAVEL",
+        "employee_id": "E17"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "slack_send_message",
+      "arguments": {
+        "message": "No company policy covers dog boarding or pet care expenses during travel. We can open a knowledge request with the Travel and Expenses team if you would like.",
+        "channel_id": "CH_HELPPOL",
+        "approval_id": "APP-KN-410",
+        "thread_ts": "1793962800.000017"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "channel_id": "record: #help-policies",
+        "thread_ts": "record: KM17 thread"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "counterparty": "manager",
+    "overlay": "none",
+    "interface": "slack",
+    "disposition": "missing_evidence",
+    "task": "slack_reply",
+    "overlay_vector": "none",
+    "overlay_intensity": "absent",
+    "interaction": "single_turn"
+  },
+  "sub_goals": [
+    "slack_reply_in_thread"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

@@ -1,0 +1,78 @@
+{
+  "name": "expense_receipt_threshold_drive",
+  "scenario_key": "expense-receipt-threshold-drive",
+  "scenario_id": "",
+  "use_case": "Answer a policy question with citations from the version in effect",
+  "branch": "Sam Taylor asks receipt threshold; Expense Receipts Policy 2.0 is in effect",
+  "tests": "the agent answers $25 from Expense Receipts Policy 2.0, section 1, via Drive search",
+  "instruction": "You have some small travel expenses and want to know the dollar threshold above which itemized receipts are required. Ask the Knowledge Desk for the threshold amount and the document citation.\n\nYour details:\n- Name: Sam Taylor\n- Employee ID: E20",
+  "keywords": [
+    "citation",
+    "effective_version",
+    "receipts"
+  ],
+  "persona": {
+    "name": "Sam Taylor",
+    "gender": "male",
+    "age_group": "18-25",
+    "occupation": "Sales Representative",
+    "location": "United States",
+    "personality": "Easy-going",
+    "communication_style": "Casual and friendly",
+    "initial_message": "Hey, at what dollar amount do I need to keep receipts for expenses? Which policy doc is that in?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "employee_id": "E20",
+    "file_id": "receipts_v2",
+    "origin": "seed"
+  },
+  "solution": [
+    {
+      "tool": "search_files",
+      "arguments": {
+        "query": "title contains 'Receipts'"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "read_file_content",
+      "arguments": {
+        "fileId": "receipts_v2"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "fileId": "record: Expense Receipts Policy 2.0 (receipts_v2)"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "interface": "clean_prose",
+    "interaction": "multi_turn",
+    "task": "policy_answer",
+    "overlay_vector": "none",
+    "overlay_intensity": "absent",
+    "counterparty": "new_hire",
+    "disposition": "casual",
+    "overlay": "none"
+  },
+  "sub_goals": [
+    "answer_cited_from_effective_version",
+    "citation_quality"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

@@ -1,0 +1,78 @@
+{
+  "name": "home_office_stipend_drive",
+  "scenario_key": "home-office-stipend-drive",
+  "scenario_id": "",
+  "use_case": "Answer a policy question with citations from the version in effect",
+  "branch": "Kenji Tanaka asks home office stipend amount; Home Office Stipend Policy 1.0 is in effect",
+  "tests": "the agent answers $500 one-time from Home Office Stipend Policy 1.0, section 1, via Drive search",
+  "instruction": "You are setting up your remote workspace and want to know the one-time home office stipend amount provided to employees. Ask the Knowledge Desk for the stipend amount and the policy document citation.\n\nYour details:\n- Name: Kenji Tanaka\n- Employee ID: E10",
+  "keywords": [
+    "citation",
+    "effective_version",
+    "home_office_stipend"
+  ],
+  "persona": {
+    "name": "Kenji Tanaka",
+    "gender": "male",
+    "age_group": "25-32",
+    "occupation": "Engineer",
+    "location": "Canada",
+    "personality": "Reserved",
+    "communication_style": "Simple and clear",
+    "initial_message": "Hello, could you let me know how much the one-time home office stipend is and cite the policy document?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "employee_id": "E10",
+    "origin": "seed",
+    "file_id": "stipend_v1"
+  },
+  "solution": [
+    {
+      "tool": "search_files",
+      "arguments": {
+        "query": "title contains 'Home Office Stipend'"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "read_file_content",
+      "arguments": {
+        "fileId": "stipend_v1"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "fileId": "record: Home Office Stipend Policy 1.0 (stipend_v1)"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "overlay_intensity": "absent",
+    "counterparty": "standard_employee",
+    "disposition": "equipment_setup",
+    "overlay_vector": "none",
+    "task": "policy_answer",
+    "interface": "clean_prose",
+    "overlay": "none",
+    "interaction": "multi_turn"
+  },
+  "sub_goals": [
+    "answer_cited_from_effective_version",
+    "citation_quality"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

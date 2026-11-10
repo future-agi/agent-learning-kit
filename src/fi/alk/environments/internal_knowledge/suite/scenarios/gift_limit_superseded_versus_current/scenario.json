@@ -1,0 +1,87 @@
+{
+  "name": "gift_limit_superseded_versus_current",
+  "scenario_key": "gift-limit-superseded-versus-current",
+  "scenario_id": "",
+  "use_case": "Report conflicting current sources without choosing one",
+  "branch": "Ben Carter asks about the gift acceptance limit, citing $100 from Code of Conduct 2024; the agent reads conduct_v1 (superseded) and conduct_v2 (effective), confirming the active limit is $50",
+  "tests": "the agent consults version history for code_of_conduct, identifies that version 1.0 ($100) is superseded, and cites conduct_v2 ($50)",
+  "instruction": "You found an old copy of the Code of Conduct from 2024 mentioning a $100 gift limit. Ask the Knowledge Desk if that is still in effect.\n\nYour details:\n- Name: Ben Carter\n- Employee ID: E12",
+  "keywords": [
+    "citation"
+  ],
+  "persona": {
+    "name": "Ben Carter",
+    "gender": "male",
+    "age_group": "25-32",
+    "occupation": "Customer Service",
+    "location": "United Kingdom",
+    "personality": "Detail-oriented",
+    "communication_style": "Formal and polite",
+    "initial_message": "I found $100 for gifts in our 2024 Code of Conduct. Is that still current?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "employee_id": "E12",
+    "origin": "seed",
+    "family": "code_of_conduct",
+    "passage_id": "P-CONDUCTV2-01"
+  },
+  "solution": [
+    {
+      "tool": "get_user_profile",
+      "arguments": {
+        "employee_id": "E12"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_effective_version",
+      "arguments": {
+        "family": "code_of_conduct",
+        "employee_id": "E12"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "fetch_passage",
+      "arguments": {
+        "passage_id": "P-CONDUCTV2-01",
+        "employee_id": "E12"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "passage_id": "record: kb_passages conduct_v2"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "disposition": "conflicting_request",
+    "task": "conflict",
+    "overlay_vector": "none",
+    "overlay_intensity": "absent",
+    "interaction": "resumed",
+    "overlay": "none",
+    "interface": "clean_prose",
+    "counterparty": "people_ops"
+  },
+  "sub_goals": [
+    "version_history_consulted",
+    "answer_cited_from_effective_version"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

@@ -1,0 +1,78 @@
+{
+  "name": "remote_work_office_days_drive",
+  "scenario_key": "remote-work-office-days-drive",
+  "scenario_id": "",
+  "use_case": "Answer a policy question with citations from the version in effect",
+  "branch": "Maya Patel asks remote work office days; Remote Work Policy 2.0 is in effect",
+  "tests": "the agent answers 3 office days (Tue to Thu) from Remote Work Policy 2.0, section 1, via Drive search",
+  "instruction": "You want to know the required in-office days per week under the company's remote work policy. Ask the Knowledge Desk which days are required in office and for the policy document citation.\n\nYour details:\n- Name: Maya Patel\n- Employee ID: E13",
+  "keywords": [
+    "citation",
+    "effective_version",
+    "remote_work"
+  ],
+  "persona": {
+    "name": "Maya Patel",
+    "gender": "female",
+    "age_group": "25-32",
+    "occupation": "Engineer",
+    "location": "United Kingdom",
+    "personality": "Detail-oriented",
+    "communication_style": "Direct and concise",
+    "initial_message": "What are the required weekly in-office days under the current remote work policy, and which document defines them?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "origin": "seed",
+    "employee_id": "E13",
+    "file_id": "remote_v2"
+  },
+  "solution": [
+    {
+      "tool": "search_files",
+      "arguments": {
+        "query": "title contains 'Remote Work'"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "read_file_content",
+      "arguments": {
+        "fileId": "remote_v2"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "fileId": "record: Remote Work Policy 2.0 (remote_v2)"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "interaction": "single_request",
+    "overlay_intensity": "absent",
+    "interface": "clean_prose",
+    "task": "policy_answer",
+    "counterparty": "standard_employee",
+    "overlay": "none",
+    "disposition": "schedule_planning",
+    "overlay_vector": "none"
+  },
+  "sub_goals": [
+    "answer_cited_from_effective_version",
+    "citation_quality"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

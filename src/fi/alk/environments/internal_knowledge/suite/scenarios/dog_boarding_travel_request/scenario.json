@@ -1,0 +1,98 @@
+{
+  "name": "dog_boarding_travel_request",
+  "scenario_key": "dog-boarding-travel-request",
+  "scenario_id": "",
+  "use_case": "Report missing evidence and open a knowledge request with consent",
+  "branch": "Grace Kim posted in #help-policies about pet boarding during travel; no passage covers it and she agrees to open a knowledge request in Travel and Expenses",
+  "tests": "the agent reads Grace's Slack message, searches for pet boarding, reports no policy covers it, and opens one knowledge request in C_TRAVEL after Grace agrees",
+  "instruction": "You posted a question in #help-policies asking if boarding costs for your dog are covered when you're away on business travel. Follow up with the Knowledge Desk. If they offer to open a knowledge request with the travel team, agree.\n\nYour details:\n- Name: Grace Kim\n- Employee ID: E05\n- Channel: #help-policies",
+  "keywords": [
+    "missing_evidence",
+    "slack"
+  ],
+  "persona": {
+    "name": "Grace Kim",
+    "gender": "female",
+    "age_group": "32-40",
+    "occupation": "Sales Representative",
+    "location": "United States",
+    "personality": "Friendly and cooperative",
+    "communication_style": "Casual and friendly",
+    "initial_message": "Hey! I posted in #help-policies about dog boarding on work trips—can you help me with that?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "employee_id": "E05",
+    "message_ts": "1793962800.000017",
+    "origin": "seed"
+  },
+  "solution": [
+    {
+      "tool": "slack_read_thread",
+      "arguments": {
+        "message_ts": "1793962800.000017",
+        "channel_id": "CH_HELPPOL"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "message_ts": "record: KM17 in #help-policies",
+        "channel_id": "record: slack_channels #help-policies"
+      }
+    },
+    {
+      "tool": "search_documents",
+      "arguments": {
+        "collection_id": "C_TRAVEL",
+        "employee_id": "E05",
+        "include_superseded": false,
+        "query": "pet boarding"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "create_knowledge_request",
+      "arguments": {
+        "question": "Is pet boarding reimbursable during business travel?",
+        "request_key": "KR-E05-DOG-BOARDING",
+        "employee_id": "E05",
+        "confirmed": true,
+        "collection_id": "C_TRAVEL"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "collection_id": "record: Travel and Expenses collection",
+        "employee_id": "caller: Grace Kim (E05)",
+        "confirmed": "caller: agreed to open request"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "disposition": "valid_request",
+    "task": "missing_evidence",
+    "overlay_intensity": "absent",
+    "interface": "slack",
+    "overlay_vector": "none",
+    "counterparty": "standard_employee",
+    "overlay": "none",
+    "interaction": "multi_turn"
+  },
+  "sub_goals": [
+    "knowledge_request_created",
+    "consent_before_request"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

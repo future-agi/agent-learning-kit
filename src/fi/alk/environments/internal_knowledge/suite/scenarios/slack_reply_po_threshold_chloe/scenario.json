@@ -1,0 +1,100 @@
+{
+  "name": "slack_reply_po_threshold_chloe",
+  "scenario_key": "slack-reply-po-threshold-chloe",
+  "scenario_id": "",
+  "use_case": "Pick up a Slack question and post the approved reply in its thread",
+  "branch": "Chloe Dubois asked in #help-policies if a PO is needed for a $7,000 purchase (KM16); Ravi Shah provides approval APP-KN-409 to look up Procurement Policy 2.0 in Drive and post the approved answer in her thread",
+  "tests": "the agent reads Chloe's thread (KM16), reads proc_v2 on Drive, and posts that PO is not needed for $7,000 in Chloe's thread with APP-KN-409",
+  "instruction": "You are Ravi Shah, Procurement Specialist. Chloe Dubois asked in #help-policies if a PO is needed for a $7,000 purchase. Ask the Knowledge Desk to check the Procurement Policy files on Drive and post the approved answer in her thread; you provide approval APP-KN-409.\n\nYour details:\n- Name: Ravi Shah\n- Employee ID: E18\n- Approval: APP-KN-409",
+  "keywords": [
+    "slack",
+    "approval"
+  ],
+  "persona": {
+    "name": "Ravi Shah",
+    "gender": "male",
+    "age_group": "25-32",
+    "occupation": "Accountant",
+    "location": "United Kingdom",
+    "personality": "Professional and formal",
+    "communication_style": "Direct and concise",
+    "initial_message": "Can you check Drive for the Procurement PO threshold and answer Chloe's question in #help-policies? Approval is APP-KN-409.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "approval_id": "APP-KN-409",
+    "origin": "generated"
+  },
+  "solution": [
+    {
+      "tool": "slack_read_thread",
+      "arguments": {
+        "channel_id": "CH_HELPPOL",
+        "message_ts": "1793959200.000016"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "message_ts": "record: KM16"
+      }
+    },
+    {
+      "tool": "search_files",
+      "arguments": {
+        "query": "title contains 'Procurement'"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "read_file_content",
+      "arguments": {
+        "fileId": "proc_v2"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "fileId": "record: proc_v2"
+      }
+    },
+    {
+      "tool": "slack_send_message",
+      "arguments": {
+        "thread_ts": "1793959200.000016",
+        "approval_id": "APP-KN-409",
+        "message": "Per Procurement Policy 2.0 section 1, a Purchase Order (PO) is required only for purchases exceeding $10,000. A $7,000 purchase does not require a PO.",
+        "channel_id": "CH_HELPPOL"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "thread_ts": "record: KM16 thread",
+        "channel_id": "record: #help-policies"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "task": "slack_reply",
+    "interface": "drive",
+    "disposition": "valid_request",
+    "overlay_vector": "none",
+    "overlay_intensity": "absent",
+    "overlay": "none",
+    "counterparty": "internal_lead",
+    "interaction": "multi_turn"
+  },
+  "sub_goals": [
+    "slack_reply_in_thread"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

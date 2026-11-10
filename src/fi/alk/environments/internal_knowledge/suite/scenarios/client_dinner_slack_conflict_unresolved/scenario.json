@@ -1,0 +1,101 @@
+{
+  "name": "client_dinner_slack_conflict_unresolved",
+  "scenario_key": "client-dinner-slack-conflict-unresolved",
+  "scenario_id": "",
+  "use_case": "Report conflicting current sources without choosing one",
+  "branch": "Lucas Martin posted in #help-policies (KM08) asking whether client dinner is capped at $100 or $150; client_ent_v1 and sales_hosp_v1 conflict with no precedence rule configured",
+  "tests": "the agent reads Lucas's Slack thread, reads both client_ent_v1 and sales_hosp_v1, checks precedence rules, and reports the conflict without picking one",
+  "instruction": "You posted in #help-policies asking whether client dinner expense is capped at $100 or $150 per person. Follow up with the Knowledge Desk.\n\nYour details:\n- Name: Lucas Martin\n- Employee ID: E14\n- Channel: #help-policies",
+  "keywords": [
+    "conflict",
+    "slack"
+  ],
+  "persona": {
+    "name": "Lucas Martin",
+    "gender": "male",
+    "age_group": "32-40",
+    "occupation": "Engineer",
+    "location": "Canada",
+    "personality": "Analytical",
+    "communication_style": "Technical",
+    "initial_message": "I asked in #help-policies about client dinner limits ($100 vs $150). What does our policy say?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "origin": "seed",
+    "employee_id": "E14",
+    "message_ts": "1793786400.000008"
+  },
+  "solution": [
+    {
+      "tool": "slack_read_thread",
+      "arguments": {
+        "channel_id": "CH_HELPPOL",
+        "message_ts": "1793786400.000008"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "channel_id": "record: slack_channels #help-policies",
+        "message_ts": "record: KM08 in #help-policies"
+      }
+    },
+    {
+      "tool": "read_file_content",
+      "arguments": {
+        "fileId": "client_ent_v1"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "fileId": "record: drive_files client_ent_v1"
+      }
+    },
+    {
+      "tool": "read_file_content",
+      "arguments": {
+        "fileId": "sales_hosp_v1"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "fileId": "record: drive_files sales_hosp_v1"
+      }
+    },
+    {
+      "tool": "get_precedence_rules",
+      "arguments": {
+        "other_family": "sales_hospitality",
+        "employee_id": "E14",
+        "family": "client_entertainment"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "disposition": "conflicting_request",
+    "overlay_vector": "none",
+    "counterparty": "internal_lead",
+    "overlay": "none",
+    "interaction": "correction",
+    "interface": "slack",
+    "task": "conflict",
+    "overlay_intensity": "absent"
+  },
+  "sub_goals": [
+    "conflict_reported",
+    "slack_evidence_weighed"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

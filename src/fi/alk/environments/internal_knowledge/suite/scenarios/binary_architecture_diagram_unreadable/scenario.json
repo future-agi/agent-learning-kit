@@ -1,0 +1,85 @@
+{
+  "name": "binary_architecture_diagram_unreadable",
+  "scenario_key": "binary-architecture-diagram-unreadable",
+  "scenario_id": "",
+  "use_case": "Flag a document problem to its owner",
+  "branch": "Priya Nair asks what the architecture diagrams document (arch_diagrams) contains; read_file_content returns textFormattingNotSupported and the agent identifies owner Marcus Lee so she can follow up",
+  "tests": "the agent attempts to read arch_diagrams, explains that binary files cannot be rendered, and names Marcus Lee as the owner",
+  "instruction": "You want to know what is in the architecture diagrams file (arch_diagrams). Ask the Knowledge Desk to read it for you.\n\nYour details:\n- Name: Priya Nair\n- Employee ID: E01\n- File ID: arch_diagrams",
+  "keywords": [
+    "owner"
+  ],
+  "persona": {
+    "name": "Priya Nair",
+    "gender": "female",
+    "age_group": "25-32",
+    "occupation": "Engineer",
+    "location": "India",
+    "personality": "Professional and formal",
+    "communication_style": "Technical",
+    "initial_message": "Can you check what is inside the arch_diagrams file for me?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "drive_file_id": "arch_diagrams",
+    "employee_id": "E01",
+    "origin": "seed"
+  },
+  "solution": [
+    {
+      "tool": "get_user_profile",
+      "arguments": {
+        "employee_id": "E01"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "read_file_content",
+      "arguments": {
+        "fileId": "arch_diagrams"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_document_owner",
+      "arguments": {
+        "employee_id": "E01",
+        "drive_file_id": "arch_diagrams"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "drive_file_id": "caller: arch_diagrams"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "interaction": "single_turn",
+    "task": "issue_flagging",
+    "interface": "clean_prose",
+    "disposition": "missing_information",
+    "overlay_vector": "none",
+    "overlay_intensity": "absent",
+    "overlay": "none",
+    "counterparty": "internal_lead"
+  },
+  "sub_goals": [
+    "owner_identified",
+    "declined_action_explained"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

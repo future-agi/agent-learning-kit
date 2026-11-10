@@ -1,0 +1,100 @@
+{
+  "name": "slack_reply_oncall_pay_drive_search",
+  "scenario_key": "slack-reply-oncall-pay-drive-search",
+  "scenario_id": "",
+  "use_case": "Pick up a Slack question and post the approved reply in its thread",
+  "branch": "Priya Nair asked about on-call pay in #help-policies (KM14); Aisha Rahman provides approval APP-KN-407 to answer via Drive document search and post the approved reply in her thread",
+  "tests": "the agent reads Priya's thread (KM14), searches Drive for oncall_v2, and posts $400/wk in Priya's thread with APP-KN-407",
+  "instruction": "You are Aisha Rahman, Security Engineer. Priya Nair asked in #help-policies what on-call pay is per week. Ask the Knowledge Desk to look up the Drive files, find the current On-call Policy, and post the approved reply in her thread; you provide approval APP-KN-407.\n\nYour details:\n- Name: Aisha Rahman\n- Employee ID: E07\n- Approval: APP-KN-407",
+  "keywords": [
+    "slack",
+    "approval"
+  ],
+  "persona": {
+    "name": "Aisha Rahman",
+    "gender": "female",
+    "age_group": "32-40",
+    "occupation": "Engineer",
+    "location": "United Kingdom",
+    "personality": "Professional and formal",
+    "communication_style": "Direct and concise",
+    "initial_message": "Could you search Drive for the on-call policy and reply to Priya's thread in #help-policies (KM14)? Approval is APP-KN-407.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "origin": "generated",
+    "approval_id": "APP-KN-407"
+  },
+  "solution": [
+    {
+      "tool": "slack_read_thread",
+      "arguments": {
+        "channel_id": "CH_HELPPOL",
+        "message_ts": "1793876400.000014"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "message_ts": "record: KM14"
+      }
+    },
+    {
+      "tool": "search_files",
+      "arguments": {
+        "query": "title contains 'On-call'"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "read_file_content",
+      "arguments": {
+        "fileId": "oncall_v2"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "fileId": "record: oncall_v2"
+      }
+    },
+    {
+      "tool": "slack_send_message",
+      "arguments": {
+        "message": "Per On-call Policy 2.0 section 1, on-call engineers receive $400 per week, and $50 for each after-hours page (section 2).",
+        "approval_id": "APP-KN-407",
+        "thread_ts": "1793876400.000014",
+        "channel_id": "CH_HELPPOL"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "thread_ts": "record: KM14 thread",
+        "channel_id": "record: #help-policies"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "overlay": "none",
+    "disposition": "valid_request",
+    "task": "slack_reply",
+    "interaction": "multi_turn",
+    "overlay_vector": "none",
+    "interface": "drive",
+    "counterparty": "standard_employee",
+    "overlay_intensity": "absent"
+  },
+  "sub_goals": [
+    "slack_reply_in_thread"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

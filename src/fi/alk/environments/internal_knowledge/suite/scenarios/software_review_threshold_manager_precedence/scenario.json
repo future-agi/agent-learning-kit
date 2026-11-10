@@ -1,0 +1,91 @@
+{
+  "name": "software_review_threshold_manager_precedence",
+  "scenario_key": "software-review-threshold-manager-precedence",
+  "scenario_id": "",
+  "use_case": "Answer which version is in effect, or was on a date",
+  "branch": "Laura Chen (Finance Controller, manager) asks about software security review thresholds; since she has access to C_FIN and C_IT, both proc_v2 ($2,000) and sw_std_v1 ($1,000) are consulted and precedence rule PR-01 resolves to $1,000",
+  "tests": "whether the agent checks both conflicting passages, consults precedence rule PR-01, and cites the $1,000 threshold under PR-01",
+  "instruction": "You are reviewing software procurement policies. You noticed that the Procurement Policy mentions a $2,000 threshold for software security review, while the Software Security Standard mentions $1,000. Ask the Knowledge Desk which threshold applies.\n\nYour details:\n- Name: Laura Chen\n- Employee ID: E11",
+  "keywords": [
+    "conflict",
+    "precedence"
+  ],
+  "persona": {
+    "name": "Laura Chen",
+    "gender": "female",
+    "age_group": "32-40",
+    "occupation": "Manager",
+    "location": "Australia",
+    "personality": "Analytical",
+    "communication_style": "Technical",
+    "initial_message": "I see a discrepancy in software security review thresholds: Procurement says $2,000 while Software Security Standard says $1,000. Which threshold governs?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "origin": "seed",
+    "precedence_rule": "PR-01",
+    "employee_id": "E11"
+  },
+  "solution": [
+    {
+      "tool": "fetch_passage",
+      "arguments": {
+        "passage_id": "P-PROCV2-02",
+        "employee_id": "E11"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "passage_id": "record: kb_passages for proc_v2 section 2"
+      }
+    },
+    {
+      "tool": "fetch_passage",
+      "arguments": {
+        "passage_id": "P-SWSTDV1-01",
+        "employee_id": "E11"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "passage_id": "record: kb_passages for sw_std_v1 section 1"
+      }
+    },
+    {
+      "tool": "get_precedence_rules",
+      "arguments": {
+        "other_family": "procurement",
+        "employee_id": "E11",
+        "family": "software_approval"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "task": "conflict",
+    "overlay_intensity": "absent",
+    "overlay_vector": "none",
+    "interface": "clean_prose",
+    "counterparty": "internal_lead",
+    "disposition": "precedence_needed",
+    "interaction": "multi_turn",
+    "overlay": "none"
+  },
+  "sub_goals": [
+    "conflict_reported",
+    "citation_quality"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

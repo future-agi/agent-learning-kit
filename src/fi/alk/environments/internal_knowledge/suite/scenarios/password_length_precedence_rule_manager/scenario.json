@@ -1,0 +1,98 @@
+{
+  "name": "password_length_precedence_rule_manager",
+  "scenario_key": "password-length-precedence-rule-manager",
+  "scenario_id": "",
+  "use_case": "Report conflicting current sources without choosing one",
+  "branch": "Oliver Grant asks whether passwords must be 12 or 14 characters given differing text in pwd_v2 and dataclass_v1; the agent reads both passages and precedence rule PR-02, resolving that Password Policy (14 characters) prevails",
+  "tests": "the agent reads both password length passages, consults precedence rules between password_policy and data_classification, and reports 14 characters under PR-02",
+  "instruction": "You notice Data Classification Standard mentions 12-character passwords while Password Policy mentions 14 characters. Ask the Knowledge Desk which requirement applies.\n\nYour details:\n- Name: Oliver Grant\n- Employee ID: E08",
+  "keywords": [
+    "conflict"
+  ],
+  "persona": {
+    "name": "Oliver Grant",
+    "gender": "male",
+    "age_group": "40-50",
+    "occupation": "Manager",
+    "location": "United Kingdom",
+    "personality": "Analytical",
+    "communication_style": "Technical",
+    "initial_message": "Does password policy require 12 or 14 characters? I see conflicting numbers in our docs.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "origin": "seed",
+    "employee_id": "E08",
+    "passage_id_2": "P-DATACLASSV1-02",
+    "passage_id_1": "P-PWDV2-01"
+  },
+  "solution": [
+    {
+      "tool": "get_user_profile",
+      "arguments": {
+        "employee_id": "E08"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "fetch_passage",
+      "arguments": {
+        "passage_id": "P-PWDV2-01",
+        "employee_id": "E08"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "passage_id": "record: kb_passages pwd_v2"
+      }
+    },
+    {
+      "tool": "fetch_passage",
+      "arguments": {
+        "passage_id": "P-DATACLASSV1-02",
+        "employee_id": "E08"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "passage_id": "record: kb_passages dataclass_v1"
+      }
+    },
+    {
+      "tool": "get_precedence_rules",
+      "arguments": {
+        "employee_id": "E08",
+        "other_family": "data_classification",
+        "family": "password_policy"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "interface": "clean_prose",
+    "interaction": "correction",
+    "disposition": "conflicting_request",
+    "overlay": "none",
+    "overlay_vector": "none",
+    "task": "conflict",
+    "overlay_intensity": "absent",
+    "counterparty": "manager"
+  },
+  "sub_goals": [
+    "conflict_reported"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

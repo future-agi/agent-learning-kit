@@ -1,0 +1,86 @@
+{
+  "name": "flag_outdated_team_events_after_slack_decision",
+  "scenario_key": "flag-outdated-team-events-after-slack-decision",
+  "scenario_id": "",
+  "use_case": "Flag a document problem to its owner",
+  "branch": "Sofia Rossi sees Tomas Rivera's Slack decision in #finance-team that team events cap is $150 from 1 Nov and agrees to flag team_events_v1 as outdated",
+  "tests": "the agent reads Tomas's decision in #finance-team and raises one outdated issue on team_events_v1 after Sofia agrees",
+  "instruction": "You saw Tomas Rivera post in #finance-team that the team events budget was raised to $150 per head starting 1 November with doc updates pending. Ask the Knowledge Desk to flag the Team Events Policy document as outdated.\n\nYour details:\n- Name: Sofia Rossi\n- Employee ID: E09\n- Channel: #finance-team",
+  "keywords": [
+    "document_issue"
+  ],
+  "persona": {
+    "name": "Sofia Rossi",
+    "gender": "female",
+    "age_group": "32-40",
+    "occupation": "Accountant",
+    "location": "United States",
+    "personality": "Detail-oriented",
+    "communication_style": "Direct and concise",
+    "initial_message": "Tomas posted in #finance-team that the team events budget is now $150. Can you flag the team events policy as outdated?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "employee_id": "E09",
+    "origin": "seed",
+    "message_ts": "1793203200.000004",
+    "drive_file_id": "team_events_v1"
+  },
+  "solution": [
+    {
+      "tool": "slack_read_thread",
+      "arguments": {
+        "message_ts": "1793203200.000004",
+        "channel_id": "CH_FINANCE"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "channel_id": "record: slack_channels #finance-team",
+        "message_ts": "record: KM04 in #finance-team"
+      }
+    },
+    {
+      "tool": "flag_document_issue",
+      "arguments": {
+        "employee_id": "E09",
+        "details": "Team events budget raised to $150/head from Nov 1 per Slack decision KM04.",
+        "drive_file_id": "team_events_v1",
+        "request_key": "DI-E09-TEAM-EVENTS",
+        "issue_type": "outdated"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "issue_type": "caller: outdated document",
+        "drive_file_id": "record: drive_files team_events_v1"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "overlay": "none",
+    "overlay_vector": "none",
+    "interface": "slack",
+    "disposition": "missing_information",
+    "interaction": "single_turn",
+    "overlay_intensity": "absent",
+    "counterparty": "internal_lead",
+    "task": "issue_flagging"
+  },
+  "sub_goals": [
+    "document_issue_flagged",
+    "consent_before_request"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

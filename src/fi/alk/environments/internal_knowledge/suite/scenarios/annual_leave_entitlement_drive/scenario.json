@@ -1,0 +1,78 @@
+{
+  "name": "annual_leave_entitlement_drive",
+  "scenario_key": "annual-leave-entitlement-drive",
+  "scenario_id": "",
+  "use_case": "Answer a policy question with citations from the version in effect",
+  "branch": "Ben Carter asks annual leave entitlement; Annual Leave Policy 2.0 is in effect",
+  "tests": "the agent answers 25 days per year from Annual Leave Policy 2.0, section 1, via Drive search",
+  "instruction": "You want to know the standard annual leave entitlement for full-time employees. Ask the Knowledge Desk how many days of annual leave are provided each year and for the policy document citation.\n\nYour details:\n- Name: Ben Carter\n- Employee ID: E12",
+  "keywords": [
+    "citation",
+    "effective_version",
+    "annual_leave"
+  ],
+  "persona": {
+    "name": "Ben Carter",
+    "gender": "male",
+    "age_group": "25-32",
+    "occupation": "Customer Service",
+    "location": "United Kingdom",
+    "personality": "Easy-going",
+    "communication_style": "Casual and friendly",
+    "initial_message": "Hi! How many days of annual leave do full-time staff get each year, and what's the document reference?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "origin": "seed",
+    "file_id": "leave_v2",
+    "employee_id": "E12"
+  },
+  "solution": [
+    {
+      "tool": "search_files",
+      "arguments": {
+        "query": "title contains 'Annual Leave'"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "read_file_content",
+      "arguments": {
+        "fileId": "leave_v2"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "fileId": "record: Annual Leave Policy 2.0 (leave_v2)"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "overlay_intensity": "absent",
+    "overlay_vector": "none",
+    "overlay": "none",
+    "interface": "clean_prose",
+    "interaction": "multi_turn",
+    "disposition": "inquisitive",
+    "task": "policy_answer",
+    "counterparty": "standard_employee"
+  },
+  "sub_goals": [
+    "answer_cited_from_effective_version",
+    "citation_quality"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

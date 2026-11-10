@@ -1,0 +1,90 @@
+{
+  "name": "mileage_slack_proposal_not_a_decision",
+  "scenario_key": "mileage-slack-proposal-not-a-decision",
+  "scenario_id": "",
+  "use_case": "Report conflicting current sources without choosing one",
+  "branch": "Ivan Petrov asks if mileage reimbursement was raised to $0.70 per mile; the agent reads Ravi's proposal thread KM05 in #finance-team (declined by Laura) and mileage_v1, confirming mileage remains $0.67",
+  "tests": "the agent reads KM05 in #finance-team and mileage_v1, identifying that Ravi's message was only a proposal and citing mileage_v1 at $0.67",
+  "instruction": "You heard someone in Finance mention mileage reimbursement might be $0.70. Ask the Knowledge Desk what the actual mileage reimbursement rate is.\n\nYour details:\n- Name: Ivan Petrov\n- Employee ID: E16",
+  "keywords": [
+    "slack_decision"
+  ],
+  "persona": {
+    "name": "Ivan Petrov",
+    "gender": "male",
+    "age_group": "32-40",
+    "occupation": "Technician",
+    "location": "Australia",
+    "personality": "Cautious and skeptical",
+    "communication_style": "Direct and concise",
+    "initial_message": "Is mileage reimbursement $0.70 per mile now? I saw some chatter about it.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "origin": "seed",
+    "passage_id": "P-MILEAGEV1-01",
+    "message_ts": "1793268000.000005",
+    "employee_id": "E16"
+  },
+  "solution": [
+    {
+      "tool": "get_user_profile",
+      "arguments": {
+        "employee_id": "E16"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "slack_read_thread",
+      "arguments": {
+        "message_ts": "1793268000.000005",
+        "channel_id": "CH_FINANCE"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "channel_id": "record: slack_channels #finance-team",
+        "message_ts": "record: KM05 in #finance-team"
+      }
+    },
+    {
+      "tool": "fetch_passage",
+      "arguments": {
+        "employee_id": "E16",
+        "passage_id": "P-MILEAGEV1-01"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "passage_id": "record: kb_passages mileage_v1"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "overlay": "none",
+    "task": "conflict",
+    "counterparty": "unauthorized_employee",
+    "overlay_vector": "none",
+    "overlay_intensity": "absent",
+    "interface": "clean_prose",
+    "interaction": "resumed",
+    "disposition": "conflicting_request"
+  },
+  "sub_goals": [
+    "slack_evidence_weighed",
+    "citation_quality"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}
