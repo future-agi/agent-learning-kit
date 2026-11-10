@@ -65,7 +65,9 @@ def _canon(value: Any) -> bytes:
 
 
 def _write_whole(path: Path, body: bytes) -> None:
-    # Written whole, then moved: a reader must never find half a file.
+    # Written whole, then moved: a reader must never find half a file. The install record goes
+    # in generic-harness/ for every job, which nothing has made yet for a job that isn't generic.
+    path.parent.mkdir(parents=True, exist_ok=True)
     handle = tempfile.NamedTemporaryFile(
         "wb", dir=path.parent, prefix=".seed-", suffix=".tmp", delete=False
     )
