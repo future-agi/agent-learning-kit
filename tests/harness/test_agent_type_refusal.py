@@ -602,20 +602,21 @@ def test_a_file_that_raises_something_unexpected_costs_only_that_file(
     monkeypatch.setattr(agent_type_check, "read_module", odd)
     with caplog.at_level("WARNING", logger=agent_type_check.__name__):
         assert browser_tools_found(tmp_path) == ["playwright"]
-    [record] = caplog.records
-    assert "a_odd.py" in record.getMessage()
-    assert record.exc_info[0] is LookupError
+    skipped, cut = caplog.records
+    assert "a_odd.py" in skipped.getMessage()
+    assert skipped.exc_info[0] is LookupError
+    assert cut.getMessage() == "agent type scan cut by skipped 1"
 
 
 @pytest.mark.skipif(sys.version_info < (3, 12), reason="3.11's tokenizer reads a NUL byte")
 def test_a_file_with_a_nul_byte_is_left_unread_without_stopping_the_scan(tmp_path, caplog):
     # Through the shared reader a NUL byte is a file Python can't parse, an expected answer, not
-    # an error: it's left unread and nothing is logged. A file naming nothing isn't even read.
+    # an error: it's left unread and only the cut is logged. A file naming nothing isn't even read.
     (tmp_path / "a_blob.py").write_bytes(b" x = 1\n\x00")
     (tmp_path / "b_blob.py").write_bytes(b"import playwright\n\x00")
     with caplog.at_level("WARNING", logger=agent_type_check.__name__):
         assert browser_tools_found(tmp_path) == []
-    assert caplog.records == []
+    assert [r.getMessage() for r in caplog.records] == ["agent type scan cut by parse_failed 1"]
 
 
 def test_a_python_file_with_a_coding_line_keeps_its_marker(tmp_path):
@@ -1615,11 +1616,11 @@ def test_unknown_modality_gets_a_problem_not_a_save(tmp_path, plain_repo):
 def test_the_scan_runs_off_the_event_loop(tmp_path, monkeypatch):
     threads = []
 
-    def scan(_root):
+    def scan(_root, subfolder=None, reached=None):
         threads.append(threading.current_thread())
-        return []
+        return [], frozenset()
 
-    monkeypatch.setattr(tools, "browser_tools_found", scan)
+    monkeypatch.setattr(tools, "browser_scan", scan)
     _submitter(tmp_path / "out", tmp_path)(_reading("chat"))
     assert threads and threads[0] is not threading.main_thread()
 
@@ -1628,11 +1629,11 @@ def test_the_scan_runs_off_the_event_loop(tmp_path, monkeypatch):
 def test_a_refusal_during_the_scan_stops_this_call_too(tmp_path, monkeypatch, modality):
     output = tmp_path / "out"
 
-    def scan(_root):
+    def scan(_root, subfolder=None, reached=None):
         write_failure_file(agent_type_failure(["playwright"]), output)
-        return []
+        return [], frozenset()
 
-    monkeypatch.setattr(tools, "browser_tools_found", scan)
+    monkeypatch.setattr(tools, "browser_scan", scan)
     answer = _submitter(output, tmp_path)(_reading(modality))
     assert not (output / "contract.json").exists()
     # The stop itself, not a second look: the reading was refused while the scan ran. A browser
@@ -2410,13 +2411,13 @@ def test_conversation_with_no_tool_saves_with_no_second_look(tmp_path, plain_rep
 
 def _counted_scans(monkeypatch) -> list[Path]:
     scans: list[Path] = []
-    real_scan = tools.browser_tools_found
+    real_scan = tools.browser_scan
 
-    def counted(root):
+    def counted(root, subfolder=None, reached=None):
         scans.append(root)
-        return real_scan(root)
+        return real_scan(root, subfolder, reached)
 
-    monkeypatch.setattr(tools, "browser_tools_found", counted)
+    monkeypatch.setattr(tools, "browser_scan", counted)
     return scans
 
 
@@ -2463,12 +2464,12 @@ def test_a_call_cancelled_while_waiting_on_the_scan_leaves_it_to_the_others(
 ):
     started, release = threading.Event(), threading.Event()
 
-    def slow(_root):
+    def slow(_root, subfolder=None, reached=None):
         started.set()
         release.wait(10)
-        return []
+        return [], frozenset()
 
-    monkeypatch.setattr(tools, "browser_tools_found", slow)
+    monkeypatch.setattr(tools, "browser_scan", slow)
     tool = _submit_tool(contract_tools(tmp_path / "out", scan_root=plain_repo))
 
     async def first_message():
@@ -2484,15 +2485,15 @@ def test_a_call_cancelled_while_waiting_on_the_scan_leaves_it_to_the_others(
 
 
 def test_a_scan_that_fails_is_run_again_by_the_next_call(tmp_path, plain_repo, monkeypatch):
-    outcomes = iter([OSError("gone"), []])
+    outcomes = iter([OSError("gone"), ([], frozenset())])
 
-    def scan(_root):
+    def scan(_root, subfolder=None, reached=None):
         outcome = next(outcomes)
         if isinstance(outcome, Exception):
             raise outcome
         return outcome
 
-    monkeypatch.setattr(tools, "browser_tools_found", scan)
+    monkeypatch.setattr(tools, "browser_scan", scan)
     submit = _submitter(tmp_path / "out", plain_repo)
     with pytest.raises(OSError, match="gone"):
         submit(_reading("chat"))
@@ -2502,15 +2503,15 @@ def test_a_scan_that_fails_is_run_again_by_the_next_call(tmp_path, plain_repo, m
 def test_a_scan_that_fails_is_run_again_by_the_next_call_in_the_same_message(
     tmp_path, plain_repo, monkeypatch
 ):
-    outcomes = iter([OSError("gone"), []])
+    outcomes = iter([OSError("gone"), ([], frozenset())])
 
-    def scan(_root):
+    def scan(_root, subfolder=None, reached=None):
         outcome = next(outcomes)
         if isinstance(outcome, Exception):
             raise outcome
         return outcome
 
-    monkeypatch.setattr(tools, "browser_tools_found", scan)
+    monkeypatch.setattr(tools, "browser_scan", scan)
     tool = _submit_tool(contract_tools(tmp_path / "out", scan_root=plain_repo))
 
     async def one_message():
@@ -2527,13 +2528,13 @@ def test_a_scan_that_finished_after_its_only_caller_was_cancelled_is_not_run_aga
     started, release = threading.Event(), threading.Event()
     scans: list[Path] = []
 
-    def slow(root):
+    def slow(root, subfolder=None, reached=None):
         scans.append(root)
         started.set()
         release.wait(10)
-        return []
+        return [], frozenset()
 
-    monkeypatch.setattr(tools, "browser_tools_found", slow)
+    monkeypatch.setattr(tools, "browser_scan", slow)
     tool = _submit_tool(contract_tools(tmp_path / "out", scan_root=plain_repo))
 
     async def cancelled_then_next():
@@ -2553,14 +2554,14 @@ def test_a_scan_left_running_on_a_closed_loop_is_started_again(tmp_path, plain_r
     started, release = threading.Event(), threading.Event()
     scans: list[Path] = []
 
-    def scan(root):
+    def scan(root, subfolder=None, reached=None):
         scans.append(root)
         if len(scans) == 1:
             started.set()
             release.wait(10)
-        return []
+        return [], frozenset()
 
-    monkeypatch.setattr(tools, "browser_tools_found", scan)
+    monkeypatch.setattr(tools, "browser_scan", scan)
     tool = _submit_tool(contract_tools(tmp_path / "out", scan_root=plain_repo))
     closed = asyncio.new_event_loop()
     try:

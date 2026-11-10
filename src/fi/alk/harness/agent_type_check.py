@@ -15,6 +15,7 @@ import logging
 import os
 import re
 import tokenize
+from collections import Counter
 from collections.abc import Iterable, Iterator, Sequence
 from functools import lru_cache
 from pathlib import Path
@@ -361,14 +362,16 @@ def _agent_files(
                 yield Path(path)
 
 
-def _packages_used(path: Path) -> set[str]:
+def _packages_used(path: Path) -> set[str] | None:
+    """The browser packages ``path`` lists, or None when it can't be read: npm may still read it."""
     try:
+        # A link to nothing or a pipe isn't a manifest npm reads either.
         if not path.is_file():
             return set()
         # Windows editors often save a BOM, which json refuses.
         manifest = json.loads(path.read_text(encoding="utf-8").removeprefix("\ufeff"))
     except (OSError, ValueError, RecursionError):
-        return set()
+        return None
     if not isinstance(manifest, dict):
         return set()
     names: set[str] = set()
@@ -384,13 +387,14 @@ def _packages_used(path: Path) -> set[str]:
     return found
 
 
-def _imports_in(text: str, path: Path) -> set[str]:
+def _imports_in(text: str, path: Path) -> set[str] | None:
+    """The modules ``text`` imports, or None when it won't parse: then they're unknown, not none."""
     # One file at a time: a customer's odd file can run the parser out of memory, and that mustn't
     # take the rest of the scan, or the reading it serves, down with it.
     tree = parsed(text)
     if tree is None:
         logger.debug("agent type scan read no imports from %s", path)
-        return set()
+        return None
     return _imports(tree)
 
 
@@ -432,14 +436,15 @@ def _script_kept(hit: re.Match[str]) -> str:
     return kept
 
 
-def _python_markers(text: str, tokens: TokenBudget, path: Path) -> set[str]:
+def _python_markers(text: str, tokens: TokenBudget, path: Path) -> set[str] | None:
+    """The tool markers in ``text``'s code, or None when the scan's tokenizing ran out first."""
     if not _MARKER_START.search(text):
         return set()
     if not tokens.spend(text):
         # Past the total, comments can't be told from code, and a marker in one would refuse a
         # browser reading without its second look; so the file's markers aren't read, and the
-        # model's reading stands.
-        return set()
+        # scan says it was cut.
+        return None
     try:
         found = tokens.tokens(text)
     except (ValueError, SyntaxError, tokenize.TokenError) as error:
@@ -447,7 +452,7 @@ def _python_markers(text: str, tokens: TokenBudget, path: Path) -> set[str]:
         logger.debug("agent type scan read no markers from %s: %s", path, type(error).__name__)
         return set()
     # Past the work, too, the file's markers aren't read.
-    return set() if found is None else _markers(_python_code(found))
+    return None if found is None else _markers(_python_code(found))
 
 
 def _markers(code: str) -> set[str]:
@@ -486,7 +491,26 @@ def browser_tools_found(source_root: Path | None) -> list[str]:
     if source_root is None:
         return []
     root = Path(source_root).resolve()
-    return list(_scan(root, _signature(root)))
+    return list(_scan(root, _signature(root))[0])
+
+
+def browser_scan(
+    source_root: Path | None, subfolder: str | None = None, reached: list[Path] | None = None
+) -> tuple[list[str], frozenset[str]]:
+    """What ``browser_tools_found``, or with ``subfolder`` ``browser_tools_in_agent``, finds, and
+    the limits that cut the scan (see ``_tools_in``), from one walk: a second walk would cost the
+    conversation the scan's time again.
+
+    Raises ``SubfolderNotFound`` for a folder that can't be used.
+    """
+    if source_root is None:
+        return [], frozenset()
+    if not subfolder:
+        root = Path(source_root).resolve()
+        names, cut = _scan(root, _signature(root))
+    else:
+        names, cut = _scanned_agent(source_root, subfolder, reached)
+    return list(names), cut
 
 
 def _is_read(path: Path) -> bool:
@@ -525,7 +549,9 @@ def _signature(root: Path) -> tuple[int, int, int]:
 
 
 @lru_cache(maxsize=8)
-def _scan(root: Path, _files: tuple[int, int, int]) -> tuple[str, ...]:
+def _scan(
+    root: Path, _files: tuple[int, int, int]
+) -> tuple[tuple[str, ...], frozenset[str]]:
     """One scan per state of the files: every builder reopen in a process asks again."""
     # Each record read once: the walk keeps the top's rows for the modules there.
     left = [_LARGEST_RECORDS]
@@ -539,40 +565,56 @@ def _scan(root: Path, _files: tuple[int, int, int]) -> tuple[str, ...]:
 
 def _tools_in(
     paths: Iterable[Path], local: set[str], first: Path | None = None
-) -> tuple[str, ...]:
+) -> tuple[tuple[str, ...], frozenset[str]]:
     """The browser tools ``paths`` import or name, the files in ``first`` read before the rest:
-    the totals below cut the files read last, and the agent's own mustn't be those."""
+    the totals below cut the files read last, and the agent's own mustn't be those.
+
+    And the limits that cut the scan, by name: each left code unread or unparsed, so finding
+    nothing then doesn't say there's nothing, and the reading gets a second look. A file that
+    names no tool, or that Python can't decode, isn't one: it can't import what Python runs.
+    """
     found: set[str] = set()
     imported: set[str] = set()
+    # A count, not a flag: the log says how much each limit left unread.
+    cut: Counter[str] = Counter()
     scanned = scripts = python = 0
     budget = ParseBudget()
     tokens = TokenBudget()
     escapes = EscapeBudget()
     searched = ParseBudget(_LARGEST_RAW_SEARCH)
-    for path in sorted(
+    ordered = sorted(
         filter(_is_read, paths),
         key=lambda path: (first is not None and not is_within(path, first), *_reading_order(path)),
-    ):
+    )
+    for at, path in enumerate(ordered):
         size = _file_size(path)
         # Never read, so it mustn't use up the limit before the code that is.
         if size > _largest_read(path):
+            cut["file_size"] += 1
             continue
         scanned += size
         if scanned > _LARGEST_SCAN:
+            cut["scan_total"] += len(ordered) - at
             break
         if path.suffix in _SCRIPT_SUFFIXES:
             scripts += size
             if scripts > _LARGEST_SCRIPT_SCAN:
+                cut["script_total"] += 1
                 continue
         elif path.suffix == ".py":
             python += size
             if python > _LARGEST_PYTHON_SCAN:
+                cut["python_total"] += 1
                 continue
         # One file at a time: the tokenizer raises more than it documents (SystemError on a NUL
         # byte in 3.12), and one odd file mustn't stop every reading from being checked.
         try:
             if path.name == "package.json":
-                found |= _packages_used(path)
+                packages = _packages_used(path)
+                if packages is None:
+                    cut["package_unreadable"] += 1
+                else:
+                    found |= packages
             elif path.suffix != ".py":
                 found |= _markers_in(path)
             elif (
@@ -581,9 +623,16 @@ def _tools_in(
                 )
             ) is not None:
                 markers = _python_markers(text, tokens, path)
-                names = _imports_in(text, path) if budget.spend(text) else set()
+                if markers is None:
+                    cut["token_total"] += 1
+                    markers = set()
                 found |= markers
-                imported |= names
+                if not budget.spend(text):
+                    cut["parse_total"] += 1
+                elif (names := _imports_in(text, path)) is None:
+                    cut["parse_failed"] += 1
+                else:
+                    imported |= names
             elif undecoded:
                 # A codec refused by name, which Python still runs the file in: the browser
                 # packages and tool markers it names, as bytes, count. That leads to a second
@@ -599,11 +648,24 @@ def _tools_in(
                     # Whole names only: "steelers" in a string is no import of steel.
                     named = {name for name in named if _WHOLE_NAMES[name].search(raw)}
                     found |= _markers(raw)
+                else:
+                    # A tool marker it names then goes unseen.
+                    cut["search_total"] += 1
                 imported |= named
         except Exception:
             # A skipped file may be the agent's main one, and the reading then finds nothing.
             logger.warning("agent type scan skipped %s", path, exc_info=True)
+            cut["skipped"] += 1
             continue
+    if escapes.left < 0:
+        # A file past the total was searched as bytes, which can miss a name its codec spells.
+        cut["decode_total"] = 1
+    if cut:
+        # Names and counts only: a path can name the customer's business.
+        logger.warning(
+            "agent type scan cut by %s",
+            ", ".join(f"{name} {count}" for name, count in sorted(cut.items())),
+        )
     for name in imported:
         top = name.split(".")[0]
         if top in local:
@@ -612,7 +674,7 @@ def _tools_in(
             found.add(top)
         elif name.endswith(f".{_TOOLKIT}"):
             found.add(_TOOLKIT)
-    return tuple(sorted({name.replace("_", "-") for name in found}))
+    return tuple(sorted({name.replace("_", "-") for name in found})), frozenset(cut)
 
 
 def _files_in(folder: Path) -> list[Path]:
@@ -682,6 +744,14 @@ def browser_tools_in_agent(
 
     Raises ``SubfolderNotFound`` for a folder that can't be used.
     """
+    return list(_scanned_agent(source_root, subfolder, reached)[0])
+
+
+def _scanned_agent(
+    source_root: Path, subfolder: str, reached: list[Path] | None
+) -> tuple[tuple[str, ...], frozenset[str]]:
+    """``browser_tools_in_agent``'s scan, and the limits that cut it. The walk's own stops aren't
+    among them: they're logged by ``_walked``."""
     root = Path(source_root).resolve()
     folder = agent_folder(root, subfolder)
     above = [
@@ -750,12 +820,8 @@ def browser_tools_in_agent(
         for parent in path.parents
         if is_within(parent, root) and (parent / "package.json").is_file()
     ]
-    return list(
-        _tools_in(
-            dict.fromkeys((*_agent_files(folder), *above, *shared, *manifests)),
-            local,
-            folder,
-        )
+    return _tools_in(
+        dict.fromkeys((*_agent_files(folder), *above, *shared, *manifests)), local, folder
     )
 
 
@@ -772,18 +838,30 @@ def is_browser(text: str) -> bool:
 
 
 def decide(
-    claimed: Any, found: Sequence[str], *, looked_again: bool
+    claimed: Any,
+    found: Sequence[str],
+    *,
+    looked_again: bool,
+    cut: frozenset[str] = frozenset(),
 ) -> Literal["refuse", "second_look", "keep"]:
     """What the model read against what the code check found. A browser reading always gets one
-    more look first, and so does a reading the check disagrees with; the answer then stands."""
+    more look first, and so does a reading the check disagrees with, or one it couldn't check all
+    of (``cut``, the limits that stopped it); the answer then stands."""
     if is_browser(modality_text(claimed)):
         # Never at once: what was found can be a dev dependency or a helper script of a chat
         # agent, and a refusal can't be retried.
         return "refuse" if looked_again else "second_look"
-    return "second_look" if found and not looked_again else "keep"
+    # A cut is never a refusal: a limit reached on an honest repository says nothing of its job.
+    return "second_look" if (found or cut) and not looked_again else "keep"
 
 
 SECOND_LOOK_READ = "second_look_read"
+# Shared by both cut texts, which must say the same of the check.
+_CHECK_STOPPED = (
+    "the code check stopped before reading all of the agent's code (it holds more than the check "
+    "reads, or a file it couldn't read), so it can't say whether a browser, crawling or "
+    "computer-use tool is used"
+)
 
 
 class SecondLook:
@@ -809,7 +887,13 @@ class SecondLook:
         return bool(self._receipts)
 
     def verdict(
-        self, claimed: str, receipt: Any, found: Sequence[str], *, given_before: bool
+        self,
+        claimed: str,
+        receipt: Any,
+        found: Sequence[str],
+        *,
+        given_before: bool,
+        cut: frozenset[str] = frozenset(),
     ) -> Literal["refuse", "second_look", "keep"]:
         # A call holding a value read a look, so its answer stands. Without one, the call after a
         # look that no value came back for is taken as the answer. Once a value came back, a call
@@ -824,19 +908,28 @@ class SecondLook:
             claimed,
             found,
             looked_again=read_it or (given_before and (self._unanswered or same_answer)),
+            cut=cut,
         )
 
-    def issue(self, claimed: str, found: Sequence[str], receipt: str) -> str:
+    def issue(
+        self,
+        claimed: str,
+        found: Sequence[str],
+        receipt: str,
+        *,
+        cut: frozenset[str] = frozenset(),
+    ) -> str:
         """The look's text, with ``receipt`` as the value to send back."""
         self._receipts.add(receipt)
         self._unanswered = True
         return (
-            f"{self.prompt(claimed, found)} When you submit again, set "
+            f"{self.prompt(claimed, found, cut=cut)} When you submit again, set "
             f'{SECOND_LOOK_READ} to "{receipt}", which shows you read this.'
         )
 
     @staticmethod
-    def prompt(claimed: str, found: Sequence[str]) -> str:
+    def prompt(claimed: str, found: Sequence[str], *, cut: frozenset[str] = frozenset()) -> str:
+        # What was found already says what to decide, cut or not, so its text is the same.
         if is_browser(claimed) and found:
             return (
                 "second-look: you recorded modality browser, which stops this build as not "
@@ -846,6 +939,16 @@ class SecondLook:
                 "For a conversation, submit again as chat or voice. If its main job is that work, "
                 "submit again as browser. Decide this from the source; don't ask anyone."
             )
+        if is_browser(claimed) and cut:
+            # Nothing found in code left unread isn't nothing found.
+            return (
+                "second-look: you recorded modality browser, which stops this build as not "
+                f"supported, and {_CHECK_STOPPED}. A chat or voice agent can use one in its tests "
+                "or a helper script. Does a person come to this agent for a conversation, or to "
+                "have it carry out work on websites or a computer? For a conversation, submit "
+                "again as chat or voice. If you're sure, submit again as browser. Decide this "
+                "from the source; don't ask anyone."
+            )
         if is_browser(claimed):
             return (
                 "second-look: you recorded modality browser, which stops this build as not "
@@ -854,6 +957,15 @@ class SecondLook:
                 "out work on websites or a computer? For a conversation, submit again as chat or "
                 "voice. If you're sure, submit again as browser. Decide this from the source; "
                 "don't ask anyone."
+            )
+        if cut and not found:
+            return (
+                f"second-look: you recorded modality {claimed or 'chat'}, and {_CHECK_STOPPED}. "
+                "A chat or voice agent can use one in its tests or a helper script. If a person "
+                "comes to this agent for a conversation, submit again as is. If its main job is "
+                "carrying out work on websites or a computer, submit again as browser, which "
+                "stops this build as not supported. Decide this from the source; don't ask "
+                "anyone."
             )
         return (
             f"second-look: you recorded modality {claimed or 'chat'}, and the source uses "

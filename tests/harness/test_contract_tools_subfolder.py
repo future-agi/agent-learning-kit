@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -1043,13 +1044,20 @@ def test_a_crafted_python_file_does_not_hold_up_the_conversation(tmp_path, repo)
                 worst[0], last = max(worst[0], now - last), now
 
         beating = asyncio.create_task(beat())
-        result = await submit(_plain("crafted"))
+        # The scan doesn't read the crafted file, and says so, so the reading gets a look first.
+        look = await submit(_plain("crafted"))
+        receipt = re.search(r'second_look_read to "([^"]+)"', look["content"][0]["text"])
+        assert receipt, look
+        result = await submit({**_plain("crafted"), "second_look_read": receipt[1]})
         done.set()
         await beating
-        return result, worst[0]
+        return look, result, worst[0]
 
-    result, worst = asyncio.run(save())
+    look, result, worst = asyncio.run(save())
 
+    assert look.get("is_error")
+    assert "second-look" in look["content"][0]["text"]
+    assert "stopped before reading" in look["content"][0]["text"]
     assert not result.get("is_error"), result
     assert _saved(destination)["instrumentation"] == "traceai"
     assert worst < 0.25

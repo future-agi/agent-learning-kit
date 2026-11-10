@@ -100,6 +100,7 @@ jobs:
           tests/harness/test_reading_entry.py
           tests/harness/test_agent_reading.py
           tests/harness/test_scan_walk.py
+          tests/harness/test_browser_scan_cut.py
           tests/harness/test_scan_folders.py
           tests/harness/test_scan_document.py
           tests/harness/test_scan_ai.py

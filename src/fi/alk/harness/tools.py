@@ -25,8 +25,7 @@ from .agent_type_check import (
     SECOND_LOOK_READ,
     SecondLook,
     agent_type_failure,
-    browser_tools_found,
-    browser_tools_in_agent,
+    browser_scan,
     code_the_agent_reaches,
     failure_message,
     is_browser,
@@ -465,16 +464,16 @@ def _builds_a_sibling(source_root: Path, runtime: Runtime, subfolder: str) -> st
 
 def _tools_in_agent_folder(
     scan_root: Path | None, subfolder: str | None, reached: list[Path] | None = None
-) -> list[str]:
-    """The browser tools this agent uses, which a sibling's aren't. ``reached`` is filled with
-    the code it reaches outside its folder."""
+) -> tuple[list[str], frozenset[str]]:
+    """The browser tools this agent uses, which a sibling's aren't, and the limits that cut the
+    scan. ``reached`` is filled with the code it reaches outside its folder."""
     if not scan_root or not subfolder:
-        return browser_tools_found(scan_root)
+        return browser_scan(scan_root)
     try:
-        return browser_tools_in_agent(scan_root, subfolder, reached)
+        return browser_scan(scan_root, subfolder, reached)
     except SubfolderNotFound:
         # The folder check reports this; the model's reading shouldn't be refused for it too.
-        return []
+        return [], frozenset()
 
 
 def contract_tools(
@@ -517,11 +516,13 @@ def contract_tools(
     refused = False
     second_look = SecondLook()
     found: list[str] | None = None
+    # Set with found, from the same scan: a later call skips the scan and must still see its cut.
+    cut: frozenset[str] = frozenset()
     # Calls in one message check side by side, so the one sent last can finish first; it's the
     # model's last word, and an earlier call that finishes later mustn't write over it.
     sent = saved = 0
     # Calls in one message share one scan: each running its own takes that many times longer.
-    scan: asyncio.Future[list[str]] | None = None
+    scan: asyncio.Future[tuple[list[str], frozenset[str]]] | None = None
     # The code outside the folder the scan found the agent reaches, for the instrumentation
     # check, so the save walks the imports once.
     reach: list[Path] = []
@@ -1311,7 +1312,7 @@ def contract_tools(
         receipt = payload.pop(SECOND_LOOK_READ, None) or (
             args.get(SECOND_LOOK_READ) if isinstance(args, dict) else None
         )
-        nonlocal refused, found, sent, saved, scan
+        nonlocal refused, found, cut, sent, saved, scan
         # Taken before the scan's wait: a call already running when a look went out hasn't read it.
         looked_before = second_look.given
         sent += 1
@@ -1331,7 +1332,7 @@ def contract_tools(
                     asyncio.to_thread(_tools_in_agent_folder, scan_root, subfolder, reach)
                 )
             # Shielded: one call cancelled mustn't cancel the scan the others wait on.
-            found = await asyncio.shield(scan)
+            found, cut = await asyncio.shield(scan)
             # A call running alongside this one may have refused while this one waited.
             if refused or (destination / FAILURE_FILE).is_file():
                 return _ok(_stop_message(destination))
@@ -1343,7 +1344,9 @@ def contract_tools(
                     "job is work on websites or a computer."
                 ]
             )
-        verdict = second_look.verdict(claimed, receipt, found, given_before=looked_before)
+        verdict = second_look.verdict(
+            claimed, receipt, found, given_before=looked_before, cut=cut
+        )
         if verdict == "refuse":
             # Set first: if the write fails, the model must not get a resubmission through.
             refused = True
@@ -1355,7 +1358,7 @@ def contract_tools(
                 write_failure_file(agent_type_failure(found), destination)
             return _ok(_stop_message(destination))
         if verdict == "second_look":
-            return _problems([second_look.issue(claimed, found, _new_receipt())])
+            return _problems([second_look.issue(claimed, found, _new_receipt(), cut=cut)])
         data_store = payload.get("data_store")
         if not isinstance(data_store, dict):
             data_store = {}
