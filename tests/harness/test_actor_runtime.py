@@ -287,6 +287,26 @@ def test_an_actor_s_knowledge_reads_the_environment_s_files_and_records_but_neve
     assert "You manage the north store." in text
 
 
+def test_an_actor_never_reads_the_harness_s_own_tables_even_when_its_record_names_them(tmp_path):
+    from fi.alk.harness.actors import read_knowledge
+
+    rows = {
+        "_alk_tool_trace": [{"tool": "apply_discount", "args": "the agent's call"}],
+        "harness_seed_sentinel": [{"id": "ready"}],
+        "deals": [{"id": 7}],
+    }
+    read = read_knowledge(
+        [
+            {"kind": "records", "store": "world_db", "collection": "_alk_tool_trace"},
+            {"kind": "records", "store": "world_db", "collection": "harness_seed_sentinel"},
+            {"kind": "records", "store": "world_db", "collection": "deals"},
+        ],
+        tmp_path,
+        rows.get,
+    )
+    assert [one["read"] for one in read] == [[], [], [{"id": 7}]]
+
+
 def test_records_an_actor_may_read_are_only_named_where_the_world_cannot_be_read(tmp_path):
     from fi.alk.harness.actors import read_knowledge
 

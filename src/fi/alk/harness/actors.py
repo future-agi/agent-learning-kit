@@ -560,6 +560,11 @@ def environment_actions(
 HARNESS_TABLES = tuple(RECORD_CHANGES["never"])
 
 
+def harness_table(name: str) -> bool:
+    """Whether a collection is the harness's own (who may act, the action log, the seed marker), never a world record."""
+    return name.lower().startswith(RECORD_CHANGES["never_prefix"]) or name in HARNESS_TABLES
+
+
 def record_changes(collections: list[str]) -> list[str]:
     """The record changes an actor may be given on the world's own collections: `<collection>.put` adds a record,
     `<collection>.change` edits one (an approval, a membership, a status)."""
@@ -569,7 +574,7 @@ def record_changes(collections: list[str]) -> list[str]:
         {
             str(one)
             for one in collections
-            if one and not str(one).lower().startswith("_alk_") and str(one) not in HARNESS_TABLES
+            if one and not harness_table(str(one))
         }
     )
     return [f"{one}.{verb}" for one in own for verb in RECORD_VERBS]
@@ -626,12 +631,13 @@ def read_knowledge(
             out.append({**one, "read": read})
             continue
         rows = []
-        if records is not None:
+        collection = str(one.get("collection") or "")
+        if records is not None and not harness_table(collection):
             where = one.get("where") if isinstance(one.get("where"), dict) else {}
             try:
                 rows = [
                     row
-                    for row in records(str(one.get("collection") or ""))
+                    for row in records(collection)
                     if all(row.get(key) == value for key, value in where.items())
                 ][:KNOWLEDGE_RECORDS]
             except Exception:  # noqa: BLE001 - an unreadable store leaves the entry named, never a failed call
