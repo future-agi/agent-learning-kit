@@ -626,6 +626,57 @@ def test_a_matching_seed_is_copied_byte_for_byte(tmp_path):
     assert (output / "generic-harness" / "source-model.json").is_file()
 
 
+@pytest.mark.parametrize("generic", [False, None], ids=["false", "absent"])
+def test_a_job_that_isnt_generic_installs_and_records_the_seed(tmp_path, generic):
+    metadata = {"available_evals": EVALS}
+    if generic is not None:
+        metadata["generic_harness_v1"] = generic
+    job = _job(metadata=metadata)
+    seed = _place(tmp_path, _seed_bytes(job))
+    output = tmp_path / "authoring"
+
+    assert use_seed(seed, job, _source(tmp_path), output) == ("used", [])
+
+    assert (output / "contract.json").read_bytes() == seed.read_bytes()
+    assert (output / seed_contract.SEED_INSTALLED).is_file()
+    # Nothing else of a generic-harness build is made for it.
+    assert not (output / "generic-harness" / "source-model.json").exists()
+
+
+def test_a_reading_with_no_flag_seeds_a_build_whose_flag_is_false(tmp_path):
+    seed = _place(tmp_path, _seed_bytes(_job(metadata={"available_evals": EVALS})))
+    build = _job(metadata={"available_evals": EVALS, "generic_harness_v1": False})
+
+    assert use_seed(seed, build, _source(tmp_path), tmp_path / "authoring") == (
+        "used",
+        [],
+    )
+
+
+@pytest.mark.parametrize("generic", [False, None], ids=["false", "absent"])
+def test_a_builder_for_a_job_that_isnt_generic_uses_the_seed(
+    tmp_path, monkeypatch, generic
+):
+    runtime = _real_world(_builder(tmp_path, monkeypatch))
+    metadata = {"available_evals": EVALS}
+    if generic is not None:
+        metadata["generic_harness_v1"] = generic
+    job = _job(metadata=metadata)
+    runtime.job = job.model_dump(mode="json")
+    _place(tmp_path, _seed_bytes(job))
+    workspace = tmp_path / "authoring"
+
+    assert _open(runtime).contract is not None
+    assert _outcome(tmp_path) == {"seed": "used", "differs": []}
+    assert (workspace / seed_contract.SEED_INSTALLED).is_file()
+
+    # A restart after a contract edit and a lost outcome still says it was used.
+    (workspace / SEED_RESULT).unlink()
+    (workspace / "contract.json").write_text(json.dumps(CONTRACT), encoding="utf-8")
+    assert _open(_restarted(runtime)).contract is not None
+    assert _outcome(tmp_path) == {"seed": "used", "differs": []}
+
+
 @pytest.mark.parametrize(
     ("build", "body", "names"),
     [
