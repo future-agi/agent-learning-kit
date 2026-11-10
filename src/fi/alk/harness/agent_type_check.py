@@ -311,7 +311,9 @@ def _unread_codec(source: bytes) -> bool:
     any of them.
     """
     try:
-        encoding, _ = tokenize.detect_encoding(io.BytesIO(source).readline)
+        # A non-ASCII byte on the coding line makes detection fail while the parser still decodes
+        # the file in that codec, so it is read here as ASCII: only the codec's name matters.
+        encoding, _ = tokenize.detect_encoding(io.BytesIO(re.sub(rb"[\x80-\xff]", b"?", source)).readline)
         info = codecs.lookup(encoding)
     except (SyntaxError, UnicodeError, LookupError):
         # The reader meets the same error and refuses the file itself.
@@ -479,9 +481,9 @@ def _scan(root: Path, _files: tuple[int, int, int]) -> tuple[str, ...]:
             continue
     local = _modules_at_top(root, at_top)
     if left[0] < 0:
-        # The record the budget left unread may be the one naming a browser package unpacked at
-        # the top, so a folder of that name no longer shows the agent wrote it.
-        local -= BROWSER_IMPORTS
+        # The record the budget left unread may be the one naming a package unpacked at the top,
+        # so no folder there shows the agent wrote it: every import counts as the agent's.
+        local = set()
     for name in imported:
         top = name.split(".")[0]
         if top in local:
@@ -523,8 +525,8 @@ SECOND_LOOK_READ = "second_look_read"
 class SecondLook:
     """The second looks of one reading, across its submissions.
 
-    Where the model and the code check disagree, the model gets one more look, and its next answer
-    stands. Each look gives a value to send back: calls in one model message run before the model
+    The model gets one more look before any refusal, and wherever it and the code check disagree;
+    its next answer stands. Each look gives a value to send back: calls in one model message run before the model
     reads any answer, together or one after another, so a call holding the value is the only one
     known to have read it.
     """
