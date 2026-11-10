@@ -171,6 +171,8 @@ def _not_the_agent_dir(name: str, parent: str | None = None) -> bool:
         or (
             parent is not None
             and _TESTS_LAST.fullmatch(lowered) is not None
+            # The walk doesn't enter a linked folder, so what one holds doesn't matter.
+            and not os.path.islink(os.path.join(parent, name))
             and _only_tests(os.path.join(parent, name))
         )
     )
@@ -186,7 +188,7 @@ def _listed(folder: str) -> tuple[list[str], list[str]]:
     folders: list[str] = []
     with os.scandir(folder) as entries:
         for entry in entries:
-            if entry.is_dir():
+            if entry.is_dir(follow_symlinks=False):
                 if not _not_the_agent_dir(entry.name):
                     folders.append(entry.name)
             elif entry.is_file() and entry.name != "__init__.py" and (
@@ -206,12 +208,20 @@ def _only_tests(folder: str) -> bool:
     try:
         code, folders = _listed(folder)
         for name in folders:
-            if _TESTS_LAST.fullmatch(name.lower()) is None and any(
-                _listed(os.path.join(folder, name))
-            ):
+            path = os.path.join(folder, name)
+            inner, below = _listed(path)
+            if _TESTS_LAST.fullmatch(name.lower()) is not None:
+                # Tests alone, as the walk would judge it at the top, and nothing deeper.
+                if below or (inner and not _tests_alone(inner)):
+                    return False
+            elif inner or below or os.path.isfile(os.path.join(path, "__init__.py")):
                 return False
     except OSError:
         return False
+    return _tests_alone(code)
+
+
+def _tests_alone(code: list[str]) -> bool:
     return any(name.lower() != "conftest.py" for name in code) and all(
         _not_the_agent_file(name) for name in code
     )

@@ -366,6 +366,35 @@ def test_a_folder_ending_in_a_test_word_that_holds_an_agent_is_read(
     assert browser_tools_found(tmp_path) == expected
 
 
+@pytest.mark.parametrize(
+    "files",
+    [
+        {"qa_e2e/test_a.py": "x = 1\n", "qa_e2e/agent/__init__.py": "import playwright\n"},
+        {"qa_e2e/test_a.py": "x = 1\n", "qa_e2e/ui_tests/agent.py": "import playwright\n"},
+        {"b_e2e/test_a.py": "x = 1\n", "b_e2e/c_e2e/agent.py": "import playwright\n"},
+    ],
+    ids=["init-only-package", "nested-test-word-folder", "two-levels"],
+)
+def test_an_agent_one_level_inside_a_test_named_folder_is_read(tmp_path, files):
+    _tree(tmp_path, files)
+    assert browser_tools_found(tmp_path) == ["playwright"]
+
+
+@pytest.mark.skipif(not hasattr(os, "symlink"), reason="needs folder links")
+def test_links_inside_a_test_named_folder_are_not_followed_to_decide_it(tmp_path):
+    big = tmp_path / "big"
+    big.mkdir()
+    for n in range(5_000):
+        (big / f"f{n}.txt").write_text("", encoding="utf-8")
+    _tree(tmp_path, {"t_e2e/test_a.py": "x = 1\n", "agent.py": "import playwright\n"})
+    for n in range(500):
+        os.symlink(big, tmp_path / "t_e2e" / f"link{n}", target_is_directory=True)
+    started = time.monotonic()
+    assert browser_tools_found(tmp_path) == ["playwright"]
+    # Following each link would list the target once per link.
+    assert time.monotonic() - started < 2
+
+
 @pytest.mark.parametrize("folder", ["ui-tests", "functional_tests", "qa_e2e", "web_testing"])
 def test_a_folder_ending_in_a_test_word_that_holds_only_tests_is_skipped_whole(tmp_path, folder):
     _tree(
