@@ -439,7 +439,8 @@ def test_model_line_outside_the_file_is_refused(root):
         ),
         pytest.param('model="GPT-4o"', "gpt-4o", id="case"),
         pytest.param("gpt-4o is the model", "gpt-4o", id="not-quoted"),
-        pytest.param("llm = ChatOpenAI(model=settings.llm_model)", "settings.llm_model", id="attribute"),
+        # Dotted with a version, so not refused as a setting's name: refused as not written there.
+        pytest.param("llm = ChatOpenAI(model=cfg.gpt4o)", "cfg.gpt4o", id="attribute"),
         pytest.param('model = "gpt-4o"  # was gpt-4o-mini', "gpt-4o-mini", id="in-a-comment"),
         pytest.param("«gpt-4o»", "gpt-4o", id="non-ascii-marks"),
         pytest.param("model = gpt_4o", "gpt_4o", id="bare-in-python"),
@@ -804,7 +805,8 @@ def test_a_quote_under_an_alias_is_not_called_missing(tmp_path, root):
         pytest.param(
             "llm = ChatOpenAI(model=settings.llm_model)",
             "settings.llm_model",
-            None,
+            "model: settings.llm_model reads as the name of a setting, not a model; cite the line "
+            "its value is written on, or leave model out",
             id="attribute",
         ),
         pytest.param('model = "gpt-4o"  # was gpt-4o-mini', "gpt-4o-mini", None, id="in-a-comment"),
@@ -835,8 +837,9 @@ def test_a_name_that_is_not_the_model_is_never_sent(tmp_path, root, written, nam
 
 def not_the_quote(named: str) -> str:
     return (
-        f"system_prompt_from: the lines named ({named}) don't hold system_prompt_excerpt; name "
-        "the lines the quoted prompt is written on"
+        f"system_prompt_from: the lines named ({named}) don't hold system_prompt_excerpt; quote "
+        "the prompt word for word, with ... where you leave text out, and name the lines it is "
+        "written on"
     )
 
 
@@ -960,13 +963,21 @@ def test_accept_contract_refuses_a_wrong_citation_every_time(tmp_path, root):
     assert not (tmp_path / "out" / "contract.json").exists()
 
 
-def test_a_bare_value_in_a_configuration_file_must_be_whole(root):
+@pytest.mark.parametrize(
+    "written, name",
+    [
+        pytest.param("model: gpt-4o-mini", "gpt-4o", id="longer-on-the-right"),
+        pytest.param("model: ollama:llama3", "llama3", id="longer-on-the-left"),
+        pytest.param("model: azure-gpt-4o", "gpt-4o", id="longer-on-the-left-after-a-dash"),
+    ],
+)
+def test_a_bare_value_in_a_configuration_file_must_be_whole(root, written, name):
     # Written bare after a key, the value has no quotes to end it: the name's own edges do.
-    (root / "llm.yaml").write_text("provider: openai\nmodel: gpt-4o-mini\n", encoding="utf-8")
+    (root / "llm.yaml").write_text(f"provider: openai\n{written}\n", encoding="utf-8")
 
-    problems, _, _ = checked(root, {"name": "gpt-4o", "path": "llm.yaml", "line": 2})
+    problems, _, _ = checked(root, {"name": name, "path": "llm.yaml", "line": 2})
 
-    assert problems == [not_named("gpt-4o", 2, "llm.yaml")]
+    assert problems == [not_named(name, 2, "llm.yaml")]
 
 
 # A configuration file's bare value is found in about one pass over the line
@@ -1049,6 +1060,7 @@ def test_a_value_in_a_comment_is_not_the_model(root, file, written, name):
         pytest.param("llm.ts", 'const model = prod ? "gpt-4o" : "gpt-4o-mini"', "gpt-4o", id="ternary"),
         pytest.param("run.sh", "  --model=gpt-4o \\", "gpt-4o", id="shell-flag"),
         pytest.param("llm.py", 'client(**{"model": "gpt-4o"})', "gpt-4o", id="splatted-dict"),
+        pytest.param("llm.py", '    *rest, model="gpt-4o")', "gpt-4o", id="star-args"),
     ],
 )
 def test_more_honest_lines_are_found(root, file, written, name):
@@ -1058,6 +1070,229 @@ def test_more_honest_lines_are_found(root, file, written, name):
 
     assert problems == []
     assert contract.model is not None and contract.model.name == name
+
+
+# Model and deployment ids are not settings; settings in any spelling still are
+
+
+@pytest.mark.parametrize(
+    "written, name",
+    [
+        pytest.param('DEPLOYMENT = "GPT4"', "GPT4", id="azure-gpt4"),
+        pytest.param('DEPLOYMENT = "GPT4O"', "GPT4O", id="azure-gpt4o"),
+        pytest.param('DEPLOYMENT = "GPT35TURBO"', "GPT35TURBO", id="azure-gpt35turbo"),
+        pytest.param('MODEL = "O1"', "O1", id="capital-o1"),
+        pytest.param('MODEL = "mistral_large"', "mistral_large", id="mistral-large"),
+        pytest.param('MODEL = "command_r_plus"', "command_r_plus", id="command-r-plus"),
+        pytest.param('MODEL = "nova_pro"', "nova_pro", id="nova-pro"),
+        pytest.param('MODEL = "text_bison"', "text_bison", id="text-bison"),
+        pytest.param('DEPLOYMENT = "gpt4o-deployment"', "gpt4o-deployment", id="named-deployment"),
+        # The model is a first argument here, as for any call that isn't a lookup.
+        pytest.param('llm = genai.GenerativeModel("gemini-pro")', "gemini-pro", id="first-argument"),
+        pytest.param("llm = GenerativeModel('gemini-1.5-flash')", "gemini-1.5-flash", id="first-argument-single-quotes"),
+    ],
+)
+def test_real_model_ids_are_not_settings(root, written, name):
+    (root / "llm.py").write_text(f"# the model\n{written}\n", encoding="utf-8")
+
+    problems, contract, _ = checked(root, {"name": name, "path": "llm.py", "line": 2})
+
+    assert problems == []
+    assert contract.model is not None and contract.model.name == name
+
+
+@pytest.mark.parametrize(
+    "written, name",
+    [
+        pytest.param('MODEL = os.getenv("OPENAI_MODEL_V2")', "OPENAI_MODEL_V2", id="capitals"),
+        pytest.param('m = Field(default="gpt-4o", env="AZURE_OPENAI_DEPLOYMENT")', "AZURE_OPENAI_DEPLOYMENT", id="quoted-env-var-value"),
+        pytest.param('m = Field(env="AGENT_BRAIN")', "AGENT_BRAIN", id="capitals-without-a-setting-word"),
+        pytest.param('VAR = "llm_model"', "llm_model", id="snake-case"),
+        pytest.param('VAR = "openai_model_v2"', "openai_model_v2", id="snake-case-with-a-digit"),
+        pytest.param('VAR = "openai.chat"', "openai.chat", id="dotted-without-a-setting-word"),
+        pytest.param('VAR = "model-name"', "model-name", id="kebab-case"),
+        pytest.param('model = this.config.get<string>("openai.model");', "openai.model", id="dotted-get-generic"),
+        pytest.param('model = configService.getOrThrow("llm.model");', "llm.model", id="dotted-get-or-throw"),
+        pytest.param("$model = config('services.openai.model');", "services.openai.model", id="dotted-config"),
+        pytest.param('MODEL = env.str("llm.model")', "llm.model", id="dotted-env-str"),
+        pytest.param('model = props.getProperty("llm.model");', "llm.model", id="dotted-get-property"),
+        pytest.param('MODEL = os.environ.get ("llm.model")', "llm.model", id="dotted-space-before-the-bracket"),
+    ],
+)
+def test_settings_in_any_spelling_are_not_models(root, written, name):
+    (root / "llm.py").write_text(f"# the model\n{written}\n", encoding="utf-8")
+
+    problems, _, _ = checked(root, {"name": name, "path": "llm.py", "line": 2})
+
+    assert problems == [
+        f"model: {name} reads as the name of a setting, not a model; cite the line its value is "
+        "written on, or leave model out"
+    ]
+
+
+# Comments are found outside strings only, with or without spaces
+
+
+@pytest.mark.parametrize(
+    "file, written, name",
+    [
+        pytest.param("llm.py", '{"a": "Agent #1", "model": "gpt-4o"}', "gpt-4o", id="hash-in-a-string"),
+        pytest.param("llm.js", 'url = "http://x //y"; m = "gpt-4o"', "gpt-4o", id="slashes-in-a-string"),
+        pytest.param("llm.js", 'note = "a /* b"; m = "gpt-4o"', "gpt-4o", id="block-start-in-a-string"),
+        pytest.param("llm.py", 'm = "it\\"s #1"; model = "gpt-4o"', "gpt-4o", id="escaped-quote-in-a-string"),
+        pytest.param("run.sh", 'python run.py --model "gpt-4o"', "gpt-4o", id="a-flag-is-not-sql"),
+        pytest.param("run.sh", 'echo $#; MODEL="gpt-4o"', "gpt-4o", id="shell-count"),
+        pytest.param("index.html", '<b>Tom &#38; Jerry</b> <i model="gpt-4o">', "gpt-4o", id="html-character"),
+    ],
+)
+def test_comment_markers_inside_strings_do_not_hide_the_model(root, file, written, name):
+    (root / file).write_text(f"# settings\n{written}\n", encoding="utf-8")
+
+    problems, contract, _ = checked(root, {"name": name, "path": file, "line": 2})
+
+    assert problems == []
+    assert contract.model is not None and contract.model.name == name
+
+
+@pytest.mark.parametrize(
+    "file, written, name",
+    [
+        pytest.param("llm.js", 'x = 1;// "gpt-4o"', "gpt-4o", id="slashes-without-a-space"),
+        pytest.param("llm.py", 'x=1#"gpt-4o"', "gpt-4o", id="hash-without-a-space"),
+        pytest.param("llm.sql", "select 1 -- 'gpt-4o'", "gpt-4o", id="sql"),
+        pytest.param("llm.sql", "-- model 'gpt-4o'", "gpt-4o", id="sql-line"),
+        pytest.param("llm.ts", '    * model: "gpt-4o"', "gpt-4o", id="block-comment-middle"),
+        pytest.param("llm.ts", 'x = 1; /* "gpt-4o" */', "gpt-4o", id="block-comment-after-code"),
+        pytest.param("index.html", '<!-- "gpt-4o" -->', "gpt-4o", id="markup"),
+    ],
+)
+def test_comments_without_spaces_are_comments(root, file, written, name):
+    (root / file).write_text(f"# settings\n{written}\n", encoding="utf-8")
+
+    problems, _, _ = checked(root, {"name": name, "path": file, "line": 2})
+
+    assert problems == [not_named(name, 2, file)]
+
+
+# Prose names models, it doesn't set them
+
+
+@pytest.mark.parametrize(
+    "file, written",
+    [
+        pytest.param("README.md", "This agent uses `gpt-4o` (we tried `claude-3-opus`)", id="readme"),
+        pytest.param("README.md", "| fallback | `claude-3-opus` |", id="table-cell"),
+        pytest.param("notes.txt", "tried `claude-3-opus`", id="text"),
+        pytest.param("index.rst", "uses `claude-3-opus` here", id="rst"),
+    ],
+)
+def test_backticks_in_prose_are_not_values(root, file, written):
+    (root / file).write_text(f"# notes\n{written}\n", encoding="utf-8")
+
+    problems, _, _ = checked(root, {"name": "claude-3-opus", "path": file, "line": 2})
+
+    assert problems == [not_named("claude-3-opus", 2, file)]
+
+
+def test_a_list_item_in_prose_is_not_a_comment(root):
+    (root / "README.md").write_text('# notes\n* default model: "gpt-4o"\n', encoding="utf-8")
+
+    problems, _, _ = checked(root, {"name": "gpt-4o", "path": "README.md", "line": 2})
+
+    assert problems == []
+
+
+def test_backticks_in_code_are_values(root):
+    (root / "llm.ts").write_text("// the model\nconst model = `claude-3-opus`;\n", encoding="utf-8")
+
+    problems, _, _ = checked(root, {"name": "claude-3-opus", "path": "llm.ts", "line": 2})
+
+    assert problems == []
+
+
+@pytest.mark.parametrize(
+    "file, written",
+    [
+        pytest.param("Makefile", "MODEL ?= gpt-4o", id="makefile"),
+        pytest.param("rules.mk", "MODEL := gpt-4o", id="make-include"),
+        pytest.param(".flaskenv", "MODEL=gpt-4o", id="flaskenv"),
+        pytest.param("run.sh", 'python run.py --model "${MODEL:-gpt-4o}"', id="shell-default"),
+        pytest.param(".env", "MODEL=${MODEL:-gpt-4o}", id="env-default"),
+    ],
+)
+def test_more_configuration_forms(root, file, written):
+    (root / file).write_text(f"# settings\n{written}\n", encoding="utf-8")
+
+    problems, contract, _ = checked(root, {"name": "gpt-4o", "path": file, "line": 2})
+
+    assert problems == []
+    assert contract.model is not None and contract.model.name == "gpt-4o"
+
+
+def test_a_shell_default_is_only_found_in_configuration(root):
+    (root / "llm.py").write_text('# the model\nx = ${MODEL:-gpt-4o}\n', encoding="utf-8")
+
+    problems, _, _ = checked(root, {"name": "gpt-4o", "path": "llm.py", "line": 2})
+
+    assert problems == [not_named("gpt-4o", 2, "llm.py")]
+
+
+# The reader never waits on a pipe, and leaves a trace when it can't read
+
+
+def test_a_pipe_is_not_waited_on(tmp_path):
+    from fi.alk.harness.model_citation import read_source
+
+    if not hasattr(os, "mkfifo"):
+        pytest.skip("no named pipes here")
+    pipe = tmp_path / "pipe"
+    os.mkfifo(pipe)
+    answer: list[bytes | None] = []
+    reading = threading.Thread(target=lambda: answer.append(read_source(pipe, 10)), daemon=True)
+    reading.start()
+    reading.join(timeout=2)
+
+    assert answer == [None]
+
+
+def test_a_file_read_in_short_pieces_is_read_whole(tmp_path, monkeypatch):
+    from fi.alk.harness import model_citation
+
+    (tmp_path / "agent.py").write_bytes(b"x" * 100)
+    real_read = os.read
+    monkeypatch.setattr(model_citation.os, "read", lambda fd, n: real_read(fd, min(n, 7)))
+
+    assert model_citation.read_source(tmp_path / "agent.py", 50) == b"x" * 51
+    assert model_citation.read_source(tmp_path / "agent.py", 200) == b"x" * 100
+
+
+def test_an_unreadable_file_is_logged_without_its_content(tmp_path, caplog):
+    from fi.alk.harness.model_citation import read_source
+
+    locked = tmp_path / "locked.py"
+    locked.write_text('SECRET = "do-not-log"\n', encoding="utf-8")
+    locked.chmod(0)
+    try:
+        if os.access(locked, os.R_OK):
+            pytest.skip("this user can read a file with no permissions")
+        with caplog.at_level("INFO", logger="fi.alk.harness.model_citation"):
+            assert read_source(locked, 100) is None
+    finally:
+        locked.chmod(0o600)
+
+    assert [record.getMessage() for record in caplog.records] == [
+        f"source file not read: {locked} (PermissionError)"
+    ]
+    assert "do-not-log" not in caplog.text
+
+
+def test_a_link_put_in_place_of_the_file_is_not_followed(tmp_path):
+    from fi.alk.harness.model_citation import read_source
+
+    (tmp_path / "outside.py").write_text("SECRET\n", encoding="utf-8")
+    link("outside.py", tmp_path / "agent.py")
+
+    assert read_source(tmp_path / "agent.py", 100) is None
 
 
 def test_mismatched_quotes_are_not_a_value(root):
@@ -1116,9 +1351,11 @@ _LONG_PROMPT = "You are pair, a helpful assistant who books tables for guests. "
 @pytest.mark.parametrize(
     "quote, refused",
     [
-        # The first 80 letters match and the rest of the quote differs: a quote may trail off.
-        pytest.param(_LONG_PROMPT[:120] + " and something else entirely", False, id="same-start"),
-        # The quote differs from the lines within its first 80 letters.
+        # A quote that says where it trails off fits.
+        pytest.param(_LONG_PROMPT[:120] + " ...", False, id="trails-off-with-dots"),
+        # The start matches and the rest differs: every part of the quote must be in the lines.
+        pytest.param(_LONG_PROMPT[:120] + " and something else entirely", True, id="differs-late"),
+        # The quote differs from the lines near its start.
         pytest.param("You are pair, a helpful assistant who books rooms for guests.", True, id="differs-early"),
         # The lines hold the quote's start but are shorter than the quote.
         pytest.param(_LONG_PROMPT * 3, True, id="lines-shorter-than-the-quote"),
@@ -1168,6 +1405,177 @@ def test_lines_refused_twice_leave_the_quote(tmp_path, root):
     assert saved(destination)["system_prompt_from"] == []
 
 
+# Every piece of the quote must be in the lines named, in order
+
+_BOOKING = (
+    "import os\n"
+    "import json\n"
+    "from acme.tools import book\n"
+    "from acme.tools import cancel\n"
+    "\n"
+    "PROMPT = (\n"
+    '    "You are Acme\'s booking agent. "\n'
+    '    "Help guests book tables. "\n'
+    '    "Never share other guests\' bookings. "\n'
+    '    "Confirm every booking before saving it. "\n'
+    '    "Be warm and brief."\n'
+    ")\n"
+)
+_BOOKING_QUOTE = (
+    "You are Acme's booking agent. Help guests book tables. Never share other guests' bookings. "
+    "Confirm every booking before saving it. Be warm and brief."
+)
+
+
+@pytest.mark.parametrize(
+    "quote, lines, refused",
+    [
+        # Starting early pads the range, but its last line is still missing.
+        pytest.param(_BOOKING_QUOTE, (1, 10), True, id="starts-early-stops-short"),
+        pytest.param(_BOOKING_QUOTE, (6, 12), False, id="the-prompt"),
+        pytest.param("You are Acme's booking agent. ... Be warm and brief.", (6, 12), False, id="elided"),
+        pytest.param("You are Acme's booking agent. ... Be warm and brief.", (1, 10), True, id="elided-stops-short"),
+        pytest.param("Be warm and brief. ... You are Acme's booking agent.", (6, 12), True, id="out-of-order"),
+        pytest.param("You are Acme's booking agent. [...] Be warm and brief.", (6, 12), False, id="bracketed-dots"),
+        pytest.param("You are Acme's booking agent. … Be warm and brief.", (6, 12), False, id="ellipsis-character"),
+        pytest.param("YOU ARE ACME'S BOOKING AGENT. ... BE WARM AND BRIEF.", (6, 12), False, id="case"),
+        pytest.param("... Be warm and brief.", (6, 12), False, id="starts-with-dots"),
+        pytest.param("...", (1, 4), False, id="only-dots"),
+        # One line can't hold a piece the quote has twice.
+        pytest.param("Be warm and brief. ... Be warm and brief.", (6, 12), True, id="a-piece-twice"),
+    ],
+)
+def test_a_range_that_stops_short_is_refused(tmp_path, root, quote, lines, refused):
+    (root / "agent.py").write_text(_BOOKING, encoding="utf-8")
+    destination = tmp_path / "out"
+
+    result = accept_contract(
+        payload(
+            hard_constraints=["Be polite."],
+            system_prompt_excerpt=quote,
+            system_prompt_from=[{"path": "agent.py", "start_line": lines[0], "end_line": lines[1]}],
+        ),
+        destination,
+        source_root=root,
+    )
+
+    if refused:
+        assert text_of(result) == REFUSED + not_the_quote(f"agent.py {lines[0]}-{lines[1]}")
+    else:
+        assert not result.get("is_error"), result
+        copied = "\n".join(_BOOKING.splitlines()[lines[0] - 1 : lines[1]])
+        assert saved(destination)["system_prompt_excerpt"] == copied
+
+
+@pytest.mark.parametrize(
+    "written, quote",
+    [
+        pytest.param('PROMPT = "Tom &amp; Jerry\'s"', "Tom & Jerry's", id="entity-in-the-source"),
+        pytest.param('PROMPT = "Tom & Jerry\'s"', "Tom &amp; Jerry's", id="entity-in-the-quote"),
+        pytest.param('PROMPT = "Order a café"', "Order a café", id="decomposed-accent"),
+    ],
+)
+def test_an_honest_quote_in_another_form_fits(tmp_path, root, written, quote):
+    (root / "prompt.py").write_text(written + "\n", encoding="utf-8")
+    destination = tmp_path / "out"
+
+    result = accept_contract(
+        payload(
+            hard_constraints=["Be polite."],
+            system_prompt_excerpt=quote,
+            system_prompt_from=[{"path": "prompt.py", "start_line": 1, "end_line": 1}],
+        ),
+        destination,
+        source_root=root,
+    )
+
+    assert not result.get("is_error"), result
+    assert saved(destination)["system_prompt_excerpt"] == written
+
+
+def test_lines_sent_without_the_refused_quote_are_still_checked(tmp_path, root):
+    (root / "agent.py").write_text(_BOOKING, encoding="utf-8")
+    destination = tmp_path / "out"
+    submit = submitter(destination, root)
+    imports = [{"path": "agent.py", "start_line": 1, "end_line": 4}]
+
+    first = submit(
+        payload(
+            hard_constraints=["Be polite."],
+            system_prompt_excerpt=_BOOKING_QUOTE,
+            system_prompt_from=imports,
+        )
+    )
+    assert text_of(first).startswith(REFUSED + not_the_quote("agent.py 1-4"))
+
+    # The quote left out: the imports are still checked against it, and the quote is what's sent.
+    second = submit(payload(hard_constraints=["Be polite."], system_prompt_from=imports))
+    assert not second.get("is_error"), second
+    assert saved(destination)["system_prompt_excerpt"] == _BOOKING_QUOTE
+    assert saved(destination)["system_prompt_from"] == []
+
+
+def test_the_right_lines_after_a_refusal_are_copied(tmp_path, root):
+    (root / "agent.py").write_text(_BOOKING, encoding="utf-8")
+    destination = tmp_path / "out"
+    submit = submitter(destination, root)
+
+    first = submit(
+        payload(
+            hard_constraints=["Be polite."],
+            system_prompt_excerpt=_BOOKING_QUOTE,
+            system_prompt_from=[{"path": "agent.py", "start_line": 1, "end_line": 4}],
+        )
+    )
+    assert first.get("is_error"), first
+
+    second = submit(
+        payload(
+            hard_constraints=["Be polite."],
+            system_prompt_from=[{"path": "agent.py", "start_line": 6, "end_line": 12}],
+        )
+    )
+    assert not second.get("is_error"), second
+    assert saved(destination)["system_prompt_excerpt"] == "\n".join(_BOOKING.splitlines()[5:12])
+
+
+def test_a_new_quote_replaces_the_refused_one(tmp_path, root):
+    (root / "agent.py").write_text(_BOOKING, encoding="utf-8")
+    destination = tmp_path / "out"
+    submit = submitter(destination, root)
+
+    first = submit(
+        payload(
+            hard_constraints=["Be polite."],
+            system_prompt_excerpt="You are pair, a helpful assistant.",
+            system_prompt_from=[{"path": "agent.py", "start_line": 1, "end_line": 4}],
+        )
+    )
+    assert first.get("is_error"), first
+
+    second = submit(
+        payload(
+            hard_constraints=["Be polite."],
+            system_prompt_excerpt=_BOOKING_QUOTE,
+            system_prompt_from=[{"path": "agent.py", "start_line": 6, "end_line": 12}],
+        )
+    )
+    assert not second.get("is_error"), second
+    assert saved(destination)["system_prompt_excerpt"] == "\n".join(_BOOKING.splitlines()[5:12])
+
+
+def test_a_quote_of_many_pieces_does_not_hold_up_the_check(root):
+    from fi.alk.harness.model_citation import quote_problem
+
+    copied = "a" * MIB
+    started = time.perf_counter()
+    answer = quote_problem("a ... " * 50_000 + "b", copied, "agent.py 1-1")
+    took = time.perf_counter() - started
+
+    assert answer is not None
+    assert took < 0.5
+
+
 def test_leaving_the_quote_out_is_not_asked_about(tmp_path, root):
     # Following the advice to leave the quote out must not set off the "no prompt" question.
     (root / "prompt.py").write_text('PROMPT = "You are pair."\n', encoding="utf-8")
@@ -1206,10 +1614,18 @@ def test_a_prompt_path_through_a_link_outside_is_refused(tmp_path, root):
 @pytest.mark.parametrize(
     "written, name",
     [
-        pytest.param('MODEL = os.getenv("model-name")', "model-name", id="getenv-hyphenated"),
-        pytest.param('MODEL = cfg.get("llm.model")', "llm.model", id="get-dotted"),
-        pytest.param('MODEL = os.getenv("openai_model_v2")', "openai_model_v2", id="getenv-with-a-digit"),
-        pytest.param('MODEL = os.environ["llm-model"]', "llm-model", id="subscript"),
+        # Keys shaped like model names, so the setting-shape rule passes them and the lookup is
+        # what refuses them.
+        pytest.param('MODEL = os.getenv("fast-4")', "fast-4", id="getenv-hyphenated"),
+        pytest.param('MODEL = cfg.get("chat.v2")', "chat.v2", id="get-dotted"),
+        pytest.param('MODEL = os.getenv("gpt_4o")', "gpt_4o", id="getenv-with-a-digit"),
+        pytest.param('MODEL = os.environ["gpt-4o"]', "gpt-4o", id="subscript"),
+        pytest.param('model = this.config.get<string>("gpt-4o");', "gpt-4o", id="get-generic"),
+        pytest.param('model = configService.getOrThrow("gpt-4o");', "gpt-4o", id="get-or-throw"),
+        pytest.param('model = props.getProperty("gpt-4o");', "gpt-4o", id="get-property"),
+        pytest.param('MODEL = os.environ.get ("gpt-4o")', "gpt-4o", id="space-before-the-bracket"),
+        pytest.param('MODEL = env.str("gpt-4o")', "gpt-4o", id="env-str"),
+        pytest.param("$model = config('gpt-4o');", "gpt-4o", id="config-call"),
     ],
 )
 def test_a_lookup_key_is_not_the_model(root, written, name):

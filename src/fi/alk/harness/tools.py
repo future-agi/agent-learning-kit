@@ -206,6 +206,7 @@ def _checked_contract(
     subfolder: str | None,
     reached: list[Path] | None = None,
     asked: set[str] | None = None,
+    held: dict[str, str] | None = None,
 ) -> AgentContract | dict[str, Any]:
     """The contract to save, or the problems to send back. It reads the customer's files and
     writes nothing, so the tool runs it off the event loop. ``reached`` is the code outside the
@@ -234,7 +235,7 @@ def _checked_contract(
             problems.append(problem)
     with path_lookup_budget():
         return _checked_against_source(
-            contract, problems, arrived, source_root, subfolder, reached, asked
+            contract, problems, arrived, source_root, subfolder, reached, asked, held
         )
 
 
@@ -246,16 +247,21 @@ def _checked_against_source(
     subfolder: str | None,
     reached: list[Path] | None = None,
     asked: set[str] | None = None,
+    held: dict[str, str] | None = None,
 ) -> AgentContract | dict[str, Any]:
     """The checks that read the customer's files, under the save's one path lookup budget.
     ``asked`` is the reading's record of what it has been asked once. A model whose citation was
     refused before is left out the second time, and lines that didn't hold the quote are left out
     for the quote, rather than refused again: both are optional, and neither may cost the
-    reading its turns."""
+    reading its turns. ``held`` keeps a refused quote, so lines named later without one are
+    still checked against what was quoted."""
     if source_root is not None:
         from .source_tool_evidence import tool_evidence_problems
 
         quote = contract.system_prompt_excerpt
+        if held is not None and not quote.strip() and contract.system_prompt_from:
+            # Leaving the quote out after a refusal doesn't take the check away.
+            quote = held.get("prompt-quote", "")
         try:
             problems.extend(tool_evidence_problems(contract, source_root, subfolder))
             copy_problems = _copy_prompt(contract, source_root)
@@ -272,6 +278,8 @@ def _checked_against_source(
                         contract.system_prompt_from = []
                     else:
                         problems.append(mismatch)
+                        if held is not None:
+                            held["prompt-quote"] = quote
                         if asked is not None:
                             asked.add("prompt-quote")
                             problems.append(
@@ -556,6 +564,8 @@ def contract_tools(
     # A gate with no way through would permanently block the rare agent that genuinely lacks it,
     # and this stage cannot tell those two apart from the outside.
     nudged: set[str] = set()
+    # What was quoted for the prompt when the lines named for it were refused.
+    held: dict[str, str] = {}
     refused = False
     second_look = SecondLook()
     found: list[str] | None = None
@@ -1678,6 +1688,7 @@ def contract_tools(
             # The scan's answer is for scan_root; another root's code is found again.
             reached=reach if scan_root == source_root else None,
             asked=nudged,
+            held=held,
         )
         if isinstance(checked, dict):
             return checked
