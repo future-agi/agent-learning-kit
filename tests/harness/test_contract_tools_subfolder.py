@@ -996,7 +996,10 @@ def test_a_refusal_during_the_check_wins_though_its_failure_file_is_not_written(
         raise OSError("disk full")
 
     monkeypatch.setattr(tools, "_checked_contract", checked)
-    monkeypatch.setattr(tools, "decide", lambda claimed, *args, **kwargs: "refuse" if claimed == "browser" else "keep")
+    from fi.alk.harness import agent_type_check
+
+    # The reading's verdict, as SecondLook asks for it.
+    monkeypatch.setattr(agent_type_check, "decide", lambda claimed, *args, **kwargs: "refuse" if claimed == "browser" else "keep")
     monkeypatch.setattr(tools, "write_failure_file", unwritable)
 
     async def both():
