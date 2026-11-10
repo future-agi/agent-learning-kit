@@ -181,6 +181,7 @@ def _select_runtime(
     if runtime.source_subfolder:
         # Every service the stack runs, not only the control one: a helper that builds a sibling
         # ships the sibling's files, and its keys go unasked.
+        resolved_root = root.resolve()
         folder = (root / runtime.source_subfolder).resolve()
         # Services that share a build (a YAML alias costs nothing to repeat) are checked once.
         checked: dict[tuple[Path, str, str], bool] = {}
@@ -196,13 +197,11 @@ def _select_runtime(
                 and not (isinstance(profiles, list) and asked & {str(value) for value in profiles})
             ):
                 continue
+            base = service_bases.get(name, compose.parent)
+            environment = public_environment or {}
             if _builds_outside_folder(
-                service,
-                service_bases.get(name, compose.parent),
-                folder,
-                public_environment or {},
-                checked,
-            ):
+                service, base, folder, environment, checked
+            ) or _mounts_outside_folder(service, base, resolved_root, folder, environment):
                 raise RuntimeSelectionError(f"{COMPOSE_SERVICE_OUTSIDE_FOLDER}: {name}")
     services = {
         name: {
@@ -262,6 +261,41 @@ def _builds_outside_folder(
     if checked is not None:
         checked[key] = outside
     return outside
+
+
+def _mounts_outside_folder(
+    service: Any, base: Path, root: Path, folder: Path, public_environment: dict[str, str]
+) -> bool:
+    """True when the service binds or reads an env file from a folder of the repository that is
+    neither the agent's nor above it: a sibling's code bound into a stock image runs as surely as
+    one built from it. Paths outside the repository, such as a socket, are the host's."""
+    if not isinstance(service, dict):
+        return False
+    sources: list[Any] = []
+    envfiles = service.get("env_file") or []
+    if isinstance(envfiles, str):
+        envfiles = [envfiles]
+    for entry in envfiles if isinstance(envfiles, list) else []:
+        sources.append(entry.get("path") if isinstance(entry, dict) else entry)
+    mounts = service.get("volumes") or []
+    for mount in mounts if isinstance(mounts, list) else []:
+        if isinstance(mount, str):
+            # A named volume has no path; a bind starts with one.
+            source = mount.split(":")[0]
+            if source.startswith((".", "/")):
+                sources.append(source)
+        elif isinstance(mount, dict) and mount.get("type") == "bind":
+            sources.append(mount.get("source"))
+    for source in sources:
+        if not isinstance(source, str):
+            continue
+        value = _interpolate_structure(source, public_environment)
+        if not isinstance(value, str) or not value or value.startswith("~"):
+            continue
+        place = _resolved(base, value)
+        if is_within(place, root) and not contains_or_is_above(place, folder):
+            return True
+    return False
 
 
 def _resolved(base: Path, value: str) -> Path:

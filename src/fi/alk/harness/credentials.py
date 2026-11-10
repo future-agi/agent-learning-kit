@@ -10,6 +10,7 @@ from __future__ import annotations
 import ast
 import hashlib
 import json
+import logging
 import math
 import os
 import re
@@ -27,6 +28,8 @@ from fi.simulate.runtime.spec import SecretRef
 from .python_source import ParseBudget, parsed, source_encoding, utf8_size
 from .secrets import process_secret_environment_names
 from .source_folder import SubfolderNotFound, agent_folder, agent_scope, in_agent_scope, is_within
+
+_LOG = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from .contract import Runtime
@@ -466,7 +469,16 @@ def discover_credentials(
     scanned = 0
     truncated = False
     digest = hashlib.sha256()
-    imported = imported_by_agent(root, agent_subfolder) if agent_subfolder else frozenset()
+    walk_stopped = [False]
+    imported = (
+        imported_by_agent(root, agent_subfolder, stopped=walk_stopped)
+        if agent_subfolder
+        else frozenset()
+    )
+    if walk_stopped[0]:
+        # Keys in the files it didn't reach count as optional, so say the scan was cut short.
+        truncated = True
+        _LOG.warning("credential import walk stopped at its limits in %s", agent_subfolder)
     scope = agent_scope(root, agent_subfolder) if agent_subfolder else None
     named_compose = (root / agent_compose_file).resolve() if agent_compose_file else None
 
@@ -789,6 +801,7 @@ def imported_by_agent(
     script_budget: ParseBudget | None = None,
     import_limit: int | None = None,
     lookup_limit: int | None = None,
+    stopped: list[bool] | None = None,
 ) -> frozenset[Path]:
     """The files the agent's folder imports, followed as far as they go.
 
@@ -800,7 +813,8 @@ def imported_by_agent(
     import names in all (bundling's 20,000 when not given), and makes at most ``lookup_limit``
     lookups on disk (no limit when not given): a file found costs one for each part of its path,
     and one name can resolve a package for each of its parts. Nothing more than
-    ``_DEEPEST_FOLLOWED`` folders below the repository is followed.
+    ``_DEEPEST_FOLLOWED`` folders below the repository is followed. Given ``stopped``, its one
+    item says whether a limit stopped the walk with files or names left to follow.
     """
     root = Path(root).resolve()
     try:
@@ -871,6 +885,7 @@ def imported_by_agent(
     pending = deque(sorted(_code_in(folder)))
     own = set(pending)  # Read once already, so importing one doesn't queue it again.
     read = bytes_read = imports_tried = 0
+    cut = False
     import_limit = _MAX_WALK_IMPORTS if import_limit is None else import_limit
     while (
         pending
@@ -908,6 +923,7 @@ def imported_by_agent(
         if path.suffix == ".py":
             names = list(dict.fromkeys(_python_imports(content, parse_limit, parse_budget)))
             # One file can hold more names than the walk may try; the rest aren't tried.
+            cut |= len(names) > import_limit - imports_tried
             names = names[: import_limit - imports_tried]
             imports_tried += len(names)
             for level, name in names:
@@ -919,6 +935,7 @@ def imported_by_agent(
             continue
         else:
             names = list(dict.fromkeys(_script_imports(content)))
+            cut |= len(names) > import_limit - imports_tried
             names = names[: import_limit - imports_tried]
             imports_tried += len(names)
             for name in names:
@@ -931,6 +948,9 @@ def imported_by_agent(
                 seen.add(hit)
                 if hit not in own:
                     pending.append(hit)
+    if stopped is not None:
+        # The loop ends with files left only when a limit ended it.
+        stopped[:] = [cut or bool(pending)]
     return frozenset(seen)
 
 

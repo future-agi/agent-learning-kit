@@ -9,9 +9,9 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import secrets
-import sys
 import threading
 from pathlib import Path
 from typing import Any
@@ -25,6 +25,7 @@ from .agent_type_check import (
     agent_type_failure,
     browser_tools_found,
     browser_tools_in_agent,
+    code_the_agent_reaches,
     decide,
     failure_message,
     is_browser,
@@ -61,6 +62,8 @@ from .runtime_selection import (
 )
 from .python_source import utf8_size
 from .source_folder import SubfolderNotFound, agent_folder, bind_runtime, is_within
+
+_LOG = logging.getLogger(__name__)
 
 CONTRACT_SERVER = "contract"
 
@@ -193,9 +196,11 @@ def _checked_contract(
     source_root: Path | None,
     require_setup_contract: bool,
     subfolder: str | None,
+    reached: list[Path] | None = None,
 ) -> AgentContract | dict[str, Any]:
     """The contract to save, or the problems to send back. It reads the customer's files and
-    writes nothing, so the tool runs it off the event loop."""
+    writes nothing, so the tool runs it off the event loop. ``reached`` is the code outside the
+    folder the browser scan found the agent reaches, when it has run."""
     arrived = sorted(payload) if isinstance(payload, dict) else [type(payload).__name__]
     payload = _without_nulls(unwrapped(payload))
     try:
@@ -219,7 +224,9 @@ def _checked_contract(
         if problem := generated_chat_interface_problem(contract.runtime):
             problems.append(problem)
     with path_lookup_budget():
-        return _checked_against_source(contract, problems, arrived, source_root, subfolder)
+        return _checked_against_source(
+            contract, problems, arrived, source_root, subfolder, reached
+        )
 
 
 def _checked_against_source(
@@ -228,6 +235,7 @@ def _checked_against_source(
     arrived: list[str],
     source_root: Path | None,
     subfolder: str | None,
+    reached: list[Path] | None = None,
 ) -> AgentContract | dict[str, Any]:
     """The checks that read the customer's files, under the save's one path lookup budget."""
     if source_root is not None:
@@ -274,11 +282,13 @@ def _checked_against_source(
         return _problems(problems, arrived)
     return contract.model_copy(
         update={
+            # With a folder, what it imports from elsewhere is read too, as the other scans do.
             "instrumentation": detect_instrumentation(
-                agent_folder(source_root, subfolder)
-                if source_root and subfolder
-                else source_root
-            ),
+                agent_folder(source_root, subfolder),
+                code_the_agent_reaches(source_root, subfolder) if reached is None else reached,
+            )
+            if source_root and subfolder
+            else detect_instrumentation(source_root),
             "runtime": runtime,
         }
     )
@@ -465,19 +475,23 @@ def _builds_a_sibling(source_root: Path, runtime: Runtime, subfolder: str) -> st
     except RuntimeSelectionError as refused:
         if str(refused).startswith(f"{COMPOSE_SERVICE_OUTSIDE_FOLDER}:"):
             return str(refused)
-    except Exception as exc:  # noqa: BLE001 - bundling selects again and owns the failure
-        # Logged, so a bug here doesn't switch the check off unseen; the type only, as the
-        # message can quote a line of the customer's file.
-        print(f"sibling check skipped: {type(exc).__name__}", file=sys.stderr)
+    except (ValueError, OSError, RuntimeError) as exc:
+        # What the customer's files can make selecting raise; bundling selects again and owns
+        # that failure. Anything else is a bug and isn't caught here. The type only: the message
+        # can quote a line of the customer's file.
+        _LOG.warning("sibling check skipped: %s", type(exc).__name__)
     return None
 
 
-def _tools_in_agent_folder(scan_root: Path | None, subfolder: str | None) -> list[str]:
-    """The browser tools this agent uses, which a sibling's aren't."""
+def _tools_in_agent_folder(
+    scan_root: Path | None, subfolder: str | None, reached: list[Path] | None = None
+) -> list[str]:
+    """The browser tools this agent uses, which a sibling's aren't. ``reached`` is filled with
+    the code it reaches outside its folder."""
     if not scan_root or not subfolder:
         return browser_tools_found(scan_root)
     try:
-        return browser_tools_in_agent(scan_root, subfolder)
+        return browser_tools_in_agent(scan_root, subfolder, reached)
     except SubfolderNotFound:
         # The folder check reports this; the model's reading shouldn't be refused for it too.
         return []
@@ -533,6 +547,9 @@ def contract_tools(
     sent = saved = 0
     # Calls in one message share one scan: each running its own takes that many times longer.
     scan: asyncio.Future[list[str]] | None = None
+    # The code outside the folder the scan found the agent reaches, for the instrumentation
+    # check, so the save walks the imports once.
+    reach: list[Path] = []
 
     @tool(
         "submit_contract",
@@ -1335,7 +1352,10 @@ def contract_tools(
                 or scan.get_loop() is not asyncio.get_running_loop()
                 or (scan.done() and (scan.cancelled() or scan.exception() is not None))
             ):
-                scan = asyncio.ensure_future(asyncio.to_thread(_tools_in_agent_folder, scan_root, subfolder))
+                reach.clear()
+                scan = asyncio.ensure_future(
+                    asyncio.to_thread(_tools_in_agent_folder, scan_root, subfolder, reach)
+                )
             # Shielded: one call cancelled mustn't cancel the scan the others wait on.
             found = await asyncio.shield(scan)
             # A call running alongside this one may have refused while this one waited.
@@ -1619,6 +1639,8 @@ def contract_tools(
             source_root=source_root,
             require_setup_contract=require_setup_contract,
             subfolder=subfolder,
+            # The scan's answer is for scan_root; another root's code is found again.
+            reached=reach if scan_root == source_root else None,
         )
         if isinstance(checked, dict):
             return checked

@@ -3509,16 +3509,21 @@ def author_bundle_v2(
         source_root,
         secret_refs=job.agent.secret_refs,
         provided_environment=provided_environment,
-        # What ships: the install root, which holds the shared code the folder imports.
-        scan_paths=(
-            {_runtime_component(source_root, subfolder).relative_to(source_root).as_posix()}
-            if subfolder
-            else {
+        # What ships: each process's working directory, as with no folder (a uv workspace member
+        # ships from the workspace root, with the shared code it imports), and with a folder its
+        # install root too. agent_subfolder still says which keys are the agent's own.
+        scan_paths={
+            *(
                 str(getattr(process, "working_directory", ".") or ".")
                 for process in plan.processes
                 if isinstance(process, SourceProcess)
-            }
-        ),
+            ),
+            *(
+                (_runtime_component(source_root, subfolder).relative_to(source_root).as_posix(),)
+                if subfolder
+                else ()
+            ),
+        },
         # Match preflight: a template documents possible integrations, not every
         # credential needed by the selected generic-runtime path.
         template_secrets_required=job.metadata.get("generic_harness_v1") is not True,

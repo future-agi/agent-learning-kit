@@ -475,9 +475,41 @@ def _below_shared(path: Path, folder: Path) -> tuple[str, ...]:
     return held[common:]
 
 
-def browser_tools_in_agent(source_root: Path, subfolder: str) -> list[str]:
+def _walked(root: Path, subfolder: str) -> frozenset[Path]:
+    """What the agent's folder imports, followed with the save's limits."""
+    return imported_by_agent(
+        root,
+        subfolder,
+        parse_limit=LARGEST_PARSED_MODULE,
+        parse_budget=ParseBudget(),
+        script_budget=ParseBudget(_WALKED_SCRIPTS),
+        import_limit=_WALKED_IMPORTS,
+        lookup_limit=_WALKED_LOOKUPS,
+    )
+
+
+def code_the_agent_reaches(source_root: Path, subfolder: str) -> list[Path]:
+    """The files outside the agent's folder that its code runs, as the browser-tool scan reads
+    them: what the folder imports, and the files directly in the folders above it.
+
+    Raises ``SubfolderNotFound`` for a folder that can't be used.
+    """
+    root = Path(source_root).resolve()
+    folder = agent_folder(root, subfolder)
+    above = [
+        path for parent in folder.parents if is_within(parent, root) for path in _files_in(parent)
+    ]
+    return [*above, *sorted(_walked(root, subfolder))]
+
+
+def browser_tools_in_agent(
+    source_root: Path, subfolder: str, reached: list[Path] | None = None
+) -> list[str]:
     """What one agent of a repository uses: its folder, what it imports, and the files directly
     in the folders above it. A sibling's browser tool says nothing about this agent.
+
+    Given ``reached``, it's filled with those files outside the folder, so another scan can read
+    them without walking the imports again.
 
     Raises ``SubfolderNotFound`` for a folder that can't be used.
     """
@@ -522,15 +554,7 @@ def browser_tools_in_agent(source_root: Path, subfolder: str) -> list[str]:
     shared = [
         path
         for path in sorted(
-            imported_by_agent(
-                root,
-                subfolder,
-                parse_limit=LARGEST_PARSED_MODULE,
-                parse_budget=ParseBudget(),
-                script_budget=ParseBudget(_WALKED_SCRIPTS),
-                import_limit=_WALKED_IMPORTS,
-                lookup_limit=_WALKED_LOOKUPS,
-            )
+            _walked(root, subfolder)
         )
         if not _not_the_agent_file(path.name)
         and not unpacked(path)
@@ -544,6 +568,8 @@ def browser_tools_in_agent(source_root: Path, subfolder: str) -> list[str]:
         # and no read order keeps both the folder's and the root's whole: so it counts as found,
         # which leads to a second look at the model's reading, not a refusal.
         local -= BROWSER_IMPORTS
+    if reached is not None:
+        reached[:] = [*above, *shared]
     # A shared script's dependencies are declared in its package, at or above it.
     manifests = [
         parent / "package.json"
