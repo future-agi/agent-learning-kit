@@ -1305,27 +1305,37 @@ class HostedChatRuntime:
 
     def _decide_seed(self) -> tuple[str, list[str]] | None:
         """What the first opening does with the seed, or None when there is nothing to say."""
-        from .seed_contract import SEED_ACCEPTED, SEED_RESULT, holds_seed, print_trace, seed_beside
+        from .seed_contract import (
+            SEED_ACCEPTED,
+            SEED_INSTALLED,
+            SEED_RESULT,
+            holds_seed,
+            print_trace,
+            seed_beside,
+        )
 
         seed = seed_beside(self.workspace)
         # The platform placed no seed: nothing to decide, and nothing to say.
         if not os.path.lexists(seed):
             return None
-        # Decided by an earlier process: a restart part way into a reading must never install.
+        # Decided by an earlier process that could say so: once the file exists, nothing installs.
         if os.path.lexists(self.workspace / SEED_RESULT):
             return None
         outcome: tuple[str, list[str]]
-        if (self.workspace / "contract.json").exists() and holds_seed(self.workspace / "contract.json", seed):
-            # Installed by an earlier process that stopped before it could say so: no reading
-            # makes these bytes, since only the platform's paid reading carries the record.
+        contract = self.workspace / "contract.json"
+        if contract.exists() and ((self.workspace / SEED_INSTALLED).is_file() or holds_seed(contract, seed)):
+            # Installed by an earlier process that stopped before it could say so. The record
+            # outlasts a contract edit; before it is written no stage has opened, so the bytes
+            # are still the seed's, which no reading makes, as only the paid one is recorded.
             outcome = ("used", [])
         elif (
-            (self.workspace / "contract.json").exists()
+            contract.exists()
             or (self.workspace / FAILURE_FILE).exists()
             or self._what_exists()[1]
             or self._build_is_over()
         ):
-            # Not a fresh seeded build: the build command refused, or the workspace was restored.
+            # Not a fresh seeded build: the build command refused, the workspace was restored,
+            # or a reading of the builder's own has saved.
             return None
         elif not (self.workspace / SEED_ACCEPTED).is_file():
             # Opened before the build command accepted it, so this build reads the agent itself.

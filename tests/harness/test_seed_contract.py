@@ -253,21 +253,29 @@ def test_a_failed_record_keeps_its_traceback(tmp_path, monkeypatch, caplog):
 LATER = json.dumps({**CONTRACT, "agent": "saved-later"}).encode()
 
 
-def test_a_save_after_the_read_is_never_overwritten(tmp_path, monkeypatch):
+_READ = json.dumps(CONTRACT).encode()
+
+
+@pytest.mark.parametrize(
+    "later",
+    [LATER, _READ.replace(b'"support"', b'"Support"', 1)],
+    ids=["longer", "same_length"],
+)
+def test_a_save_after_the_read_is_never_overwritten(tmp_path, monkeypatch, later):
     job = _job()
-    reading = _reading(tmp_path, json.dumps(CONTRACT).encode())
+    reading = _reading(tmp_path, _READ)
     real = seed_contract.with_record
 
     def saved_meanwhile(job, raw):
         # The session saves again while the record is being made.
-        (reading / "contract.json").write_bytes(LATER)
+        (reading / "contract.json").write_bytes(later)
         return real(job, raw)
 
     monkeypatch.setattr(seed_contract, "with_record", saved_meanwhile)
 
     assert document(job, _source(tmp_path), reading) == 0
 
-    assert (reading / "contract.json").read_bytes() == LATER
+    assert (reading / "contract.json").read_bytes() == later
 
 
 @pytest.mark.parametrize("saved_during_the_read", [False, True], ids=["quiet", "saved"])
@@ -1231,7 +1239,9 @@ def test_the_outcome_is_written_whole_or_not_at_all(tmp_path, monkeypatch, capsy
     assert failed
     assert not (workspace / SEED_RESULT).exists()
     assert not list(workspace.rglob(".seed-*.tmp"))
-    assert "seed result not written; class: OSError" in capsys.readouterr().err
+    err = capsys.readouterr().err
+    assert "seed result not written; class: OSError" in err
+    assert "Traceback" in err
 
     # The next opening writes what was decided, and installs nothing again.
     installed = (workspace / "contract.json").read_bytes()
@@ -1267,6 +1277,128 @@ def test_a_restart_after_the_install_says_it_was_used(tmp_path, monkeypatch):
     assert _outcome(tmp_path) == {"seed": "used", "differs": []}
     assert not _marker(tmp_path).exists()
     assert runtime.order == ["after_saved", "open"]
+
+
+def test_a_restart_after_an_edit_and_a_lost_outcome_says_it_was_used(
+    tmp_path, monkeypatch
+):
+    runtime = _real_world(_builder(tmp_path, monkeypatch))
+    workspace = tmp_path / "authoring"
+    _result_write_fails(monkeypatch, times=1)
+    assert _open(runtime).contract is not None
+    assert (workspace / seed_contract.SEED_INSTALLED).is_file()
+
+    # A contract tool rewrites the contract without the record, then the process stops.
+    (workspace / "contract.json").write_text(json.dumps(CONTRACT), encoding="utf-8")
+    assert _open(_restarted(runtime)).contract is not None
+
+    assert _outcome(tmp_path) == {"seed": "used", "differs": []}
+
+
+def test_an_install_that_cannot_be_recorded_is_taken_back(
+    tmp_path, monkeypatch, capsys
+):
+    runtime = _real_world(_builder(tmp_path, monkeypatch))
+    workspace = tmp_path / "authoring"
+    real = os.replace
+
+    def replace(src, dst):
+        if Path(dst).name == seed_contract.SEED_INSTALLED.name:
+            raise OSError(28, "No space left on device")
+        return real(src, dst)
+
+    monkeypatch.setattr(seed_contract.os, "replace", replace)
+
+    assert _open(runtime).contract is None
+
+    assert _outcome(tmp_path) == {"seed": "error", "differs": []}
+    assert not (workspace / "contract.json").exists()
+    assert not (workspace / seed_contract.SEED_INSTALLED).exists()
+    assert "Traceback" in capsys.readouterr().err
+
+
+def test_a_contract_that_cannot_be_compared_is_never_claimed(tmp_path, monkeypatch):
+    runtime = _real_world(_builder(tmp_path, monkeypatch))
+    workspace = tmp_path / "authoring"
+    (workspace / "contract.json").write_bytes(_seed_path(tmp_path).read_bytes())
+
+    def breaks(path):
+        raise RuntimeError("boom-7")
+
+    monkeypatch.setattr(seed_contract, "read_seed", breaks)
+
+    assert _open(runtime).contract is not None
+
+    assert not (workspace / SEED_RESULT).exists()
+
+
+def test_every_file_is_written_beside_its_place(tmp_path, monkeypatch):
+    runtime = _real_world(_builder(tmp_path, monkeypatch, marker=False))
+    workspace = tmp_path / "authoring"
+    real = os.replace
+    moves: list[tuple[Path, Path]] = []
+
+    def replace(src, dst):
+        moves.append((Path(src), Path(dst)))
+        return real(src, dst)
+
+    monkeypatch.setattr(seed_contract.os, "replace", replace)
+
+    assert seed_contract.accept_seed(_seed_path(tmp_path), workspace) is None
+    assert _open(runtime).contract is not None
+
+    # Moved within one folder, so never across file systems, and never half written.
+    assert {dst.name for _, dst in moves} >= {
+        SEED_ACCEPTED,
+        "contract.json",
+        seed_contract.SEED_INSTALLED.name,
+        SEED_RESULT.name,
+    }
+    assert all(src.parent == dst.parent for src, dst in moves)
+
+
+def test_a_source_model_already_there_survives_a_take_back(tmp_path, monkeypatch):
+    job = _job()
+    seed = _place(tmp_path, _seed_bytes(job))
+    output = tmp_path / "authoring"
+    model = output / "generic-harness" / "source-model.json"
+    model.parent.mkdir(parents=True)
+    model.write_text('{"kept": true}', encoding="utf-8")
+    _setup_fails(tmp_path, monkeypatch, None)
+
+    assert use_seed(seed, job, _source(tmp_path), output) == ("setup_failed", [])
+
+    assert model.read_text(encoding="utf-8") == '{"kept": true}'
+    assert not (output / "contract.json").exists()
+
+
+def test_a_group_holding_a_validation_error_prints_nothing(capsys):
+    import builtins
+
+    group_type = getattr(builtins, "ExceptionGroup", None)
+    if group_type is None:
+        pytest.skip("no exception groups before 3.11")
+
+    seed_contract.print_trace(group_type("several", [_holding_values()]))
+
+    err = capsys.readouterr().err
+    assert TOKEN not in err
+    assert "Traceback" not in err
+
+
+def test_a_chain_that_loops_still_ends():
+    import threading
+
+    first, second = RuntimeError("first"), RuntimeError("second")
+    first.__context__, second.__context__ = second, first
+    answers: list[bool] = []
+    walk = threading.Thread(
+        target=lambda: answers.append(seed_contract.holds_values(first)), daemon=True
+    )
+    walk.start()
+    walk.join(timeout=5)
+
+    assert answers == [False]
 
 
 def test_a_restart_after_a_lost_outcome_says_it_was_used(tmp_path, monkeypatch):
