@@ -63,6 +63,7 @@ from .runtime_selection import (
 )
 from .model_citation import (
     model_problems,
+    quote_pieces,
     quote_problem,
     read_source,
     resolved_in_source,
@@ -217,6 +218,8 @@ def _checked_contract(
         contract = AgentContract.model_validate(payload)
     except Exception as invalid:
         return _problems([f"schema:{invalid}"[:600]], arrived)
+    # Only the save records lines it couldn't confirm.
+    contract.unconfirmed_prompt_from = []
 
     problems = validate_contract(contract)
     if (
@@ -253,15 +256,23 @@ def _checked_against_source(
     ``asked`` is the reading's record of what it has been asked once. A model whose citation was
     refused before is left out the second time, and lines that didn't hold the quote are left out
     for the quote, rather than refused again: both are optional, and neither may cost the
-    reading its turns. ``held`` keeps a refused quote, so lines named later without one are
-    still checked against what was quoted."""
+    reading its turns. ``held`` is the reading's latest quote (submit_contract keeps it), so
+    lines named later without one are still checked against what was quoted."""
     if source_root is not None:
         from .source_tool_evidence import tool_evidence_problems
 
         quote = contract.system_prompt_excerpt
-        if held is not None and not quote.strip() and contract.system_prompt_from:
-            # Leaving the quote out after a refusal doesn't take the check away.
-            quote = held.get("prompt-quote", "")
+        # Lines named with no quote of their own (or one too short to say anything), checked
+        # against the reading's latest quote, which submit_contract holds.
+        alone = False
+        if (
+            held is not None
+            and contract.system_prompt_from
+            and not quote_pieces(quote)
+            and held.get("prompt-quote")
+        ):
+            quote = held["prompt-quote"]
+            alone = True
         try:
             problems.extend(tool_evidence_problems(contract, source_root, subfolder))
             copy_problems = _copy_prompt(contract, source_root)
@@ -272,20 +283,34 @@ def _checked_against_source(
                     for where in contract.system_prompt_from
                 )
                 if mismatch := quote_problem(quote, contract.system_prompt_excerpt, named):
-                    if asked is not None and "prompt-quote" in asked:
-                        # The quote, which is what was read, rather than lines nobody checked.
+                    if asked is None:
+                        problems.append(mismatch)
+                    elif alone and "prompt-lines-alone" not in asked:
+                        # The lines may be right and the quote they were checked against wrong:
+                        # asked once to quote these lines, before either is given up.
+                        asked.add("prompt-lines-alone")
+                        shown = " ".join(quote.split())[:80]
+                        problems.append(
+                            f"system_prompt_from: the lines named ({named}) don't hold the quote "
+                            f"you gave before ({shown}); if these lines are the prompt, quote "
+                            "them word for word in system_prompt_excerpt, with ... where you "
+                            "leave text out. If they are refused again, the quote is kept and "
+                            "the lines are recorded as unconfirmed"
+                        )
+                    elif asked & {"prompt-quote", "prompt-lines-alone"}:
+                        # The quote, which is what was read, rather than lines nobody confirmed;
+                        # the lines are kept on record as unconfirmed.
+                        contract.unconfirmed_prompt_from = list(contract.system_prompt_from)
                         contract.system_prompt_excerpt = quote
                         contract.system_prompt_from = []
                     else:
                         problems.append(mismatch)
-                        if held is not None:
-                            held["prompt-quote"] = quote
-                        if asked is not None:
-                            asked.add("prompt-quote")
-                            problems.append(
-                                "system_prompt_from: if the lines are refused again, the quote "
-                                "is kept and the lines are left out"
-                            )
+                        asked.add("prompt-quote")
+                        problems.append(
+                            "system_prompt_from: lines named later are checked against this "
+                            "quote until you give another; given again with lines that don't "
+                            "hold it, the quote is kept and the lines are recorded as unconfirmed"
+                        )
             if cited := model_problems(contract, source_root):
                 if asked is not None and "model" in asked:
                     contract.model = None
@@ -661,7 +686,8 @@ def contract_tools(
                     },
                     "description": "Where the agent's whole prompt is written: every part it is "
                     "assembled from, in order, as a path relative to the source root and the first "
-                    "and last line of each. These lines replace system_prompt_excerpt as written.",
+                    "and last line of each. Once they are checked against your quote in "
+                    "system_prompt_excerpt, these lines replace it as written: keep the quote too.",
                 },
                 # Nothing required inside it either: a model sent without its line reaches the
                 # save, which says what is missing, instead of failing the whole call here.
@@ -1378,6 +1404,16 @@ def contract_tools(
     )
     async def submit_contract(args: dict[str, Any]) -> dict[str, Any]:
         payload = dict(unwrapped(args))
+        # Under any name the contract takes the quote from, so a quote under an alias counts too.
+        quoted = (
+            payload.get(key)
+            for key in ("system_prompt_excerpt", *_ALIASES["system_prompt_excerpt"])
+        )
+        excerpt = next((one for one in quoted if isinstance(one, str) and one.strip()), "")
+        # Held before anything can send this call back (a nudge, a refusal, a schema problem), so
+        # lines named later without a quote are checked against the reading's latest one.
+        if quote_pieces(excerpt):
+            held["prompt-quote"] = excerpt
         receipt = payload.pop(SECOND_LOOK_READ, None) or (
             args.get(SECOND_LOOK_READ) if isinstance(args, dict) else None
         )
@@ -1597,13 +1633,6 @@ def contract_tools(
                 )
             payload["chosen_evals"] = wanted
 
-        # Under any name the contract takes the quote from, so a quote under an alias is asked
-        # about too.
-        quoted = (
-            payload.get(key)
-            for key in ("system_prompt_excerpt", *_ALIASES["system_prompt_excerpt"])
-        )
-        excerpt = next((one for one in quoted if isinstance(one, str) and one.strip()), "")
         thin = [
             (
                 "prompt",

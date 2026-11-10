@@ -835,6 +835,22 @@ def test_a_name_that_is_not_the_model_is_never_sent(tmp_path, root, written, nam
 
 # The lines named for the prompt must hold the quote they replace
 
+def prose(path: str) -> str:
+    return (
+        f"model: {path} is text (for people, or a prompt), not code or configuration; cite the line "
+        "in the agent's code or configuration the model is set on, or leave model out"
+    )
+
+
+def lines_alone(named: str, quote: str) -> str:
+    return (
+        f"system_prompt_from: the lines named ({named}) don't hold the quote you gave before "
+        f"({' '.join(quote.split())[:80]}); if these lines are the prompt, quote them word for "
+        "word in system_prompt_excerpt, with ... where you leave text out. If they are refused "
+        "again, the quote is kept and the lines are recorded as unconfirmed"
+    )
+
+
 def not_the_quote(named: str) -> str:
     return (
         f"system_prompt_from: the lines named ({named}) don't hold system_prompt_excerpt; quote "
@@ -1109,6 +1125,13 @@ def test_real_model_ids_are_not_settings(root, written, name):
         pytest.param('m = Field(env="AGENT_BRAIN")', "AGENT_BRAIN", id="capitals-without-a-setting-word"),
         pytest.param('VAR = "llm_model"', "llm_model", id="snake-case"),
         pytest.param('VAR = "openai_model_v2"', "openai_model_v2", id="snake-case-with-a-digit"),
+        pytest.param('VAR = "api_key"', "api_key", id="a-key"),
+        pytest.param('VAR = "agent_name"', "agent_name", id="a-name"),
+        pytest.param('VAR = "use_default"', "use_default", id="a-default"),
+        pytest.param('VAR = "search_engine"', "search_engine", id="an-engine"),
+        pytest.param('VAR = "cloud_provider"', "cloud_provider", id="a-provider"),
+        pytest.param('VAR = "prod_env"', "prod_env", id="an-env"),
+        pytest.param('VAR = "deployment_id"', "deployment_id", id="an-id"),
         pytest.param('VAR = "openai.chat"', "openai.chat", id="dotted-without-a-setting-word"),
         pytest.param('VAR = "model-name"', "model-name", id="kebab-case"),
         pytest.param('model = this.config.get<string>("openai.model");', "openai.model", id="dotted-get-generic"),
@@ -1161,6 +1184,8 @@ def test_comment_markers_inside_strings_do_not_hide_the_model(root, file, writte
         pytest.param("llm.py", 'x=1#"gpt-4o"', "gpt-4o", id="hash-without-a-space"),
         pytest.param("llm.sql", "select 1 -- 'gpt-4o'", "gpt-4o", id="sql"),
         pytest.param("llm.sql", "-- model 'gpt-4o'", "gpt-4o", id="sql-line"),
+        pytest.param("llm.sql", "select 1--'gpt-4o'", "gpt-4o", id="sql-without-spaces"),
+        pytest.param("init.lua", "x = a--'gpt-4o'", "gpt-4o", id="lua"),
         pytest.param("llm.ts", '    * model: "gpt-4o"', "gpt-4o", id="block-comment-middle"),
         pytest.param("llm.ts", 'x = 1; /* "gpt-4o" */', "gpt-4o", id="block-comment-after-code"),
         pytest.param("index.html", '<!-- "gpt-4o" -->', "gpt-4o", id="markup"),
@@ -1182,24 +1207,22 @@ def test_comments_without_spaces_are_comments(root, file, written, name):
     [
         pytest.param("README.md", "This agent uses `gpt-4o` (we tried `claude-3-opus`)", id="readme"),
         pytest.param("README.md", "| fallback | `claude-3-opus` |", id="table-cell"),
+        pytest.param("README.md", 'This agent uses "gpt-4o" (we tried "claude-3-opus")', id="straight-quotes"),
+        pytest.param("README.md", '* default model: "claude-3-opus"', id="list-item"),
         pytest.param("notes.txt", "tried `claude-3-opus`", id="text"),
         pytest.param("index.rst", "uses `claude-3-opus` here", id="rst"),
+        pytest.param("guide.markdown", 'model: "claude-3-opus"', id="markdown"),
+        pytest.param("guide.adoc", 'model: "claude-3-opus"', id="asciidoc"),
+        pytest.param("page.mdx", 'model: "claude-3-opus"', id="mdx"),
+        pytest.param("README", 'model: "claude-3-opus"', id="readme-without-a-suffix"),
     ],
 )
-def test_backticks_in_prose_are_not_values(root, file, written):
+def test_prose_files_hold_no_model(root, file, written):
     (root / file).write_text(f"# notes\n{written}\n", encoding="utf-8")
 
     problems, _, _ = checked(root, {"name": "claude-3-opus", "path": file, "line": 2})
 
-    assert problems == [not_named("claude-3-opus", 2, file)]
-
-
-def test_a_list_item_in_prose_is_not_a_comment(root):
-    (root / "README.md").write_text('# notes\n* default model: "gpt-4o"\n', encoding="utf-8")
-
-    problems, _, _ = checked(root, {"name": "gpt-4o", "path": "README.md", "line": 2})
-
-    assert problems == []
+    assert problems == [prose(file)]
 
 
 def test_backticks_in_code_are_values(root):
@@ -1281,8 +1304,9 @@ def test_an_unreadable_file_is_logged_without_its_content(tmp_path, caplog):
         locked.chmod(0o600)
 
     assert [record.getMessage() for record in caplog.records] == [
-        f"source file not read: {locked} (PermissionError)"
+        "source file not read (PermissionError)"
     ]
+    assert str(locked) not in caplog.text
     assert "do-not-log" not in caplog.text
 
 
@@ -1396,13 +1420,15 @@ def test_lines_refused_twice_leave_the_quote(tmp_path, root):
     assert text_of(first) == (
         REFUSED
         + not_the_quote("prompt.py 1-2")
-        + "\n  - system_prompt_from: if the lines are refused again, the quote is kept and the "
-        "lines are left out"
+        + "\n  - system_prompt_from: lines named later are checked against this quote until you "
+        "give another; given again with lines that don't hold it, the quote is kept and the lines "
+        "are recorded as unconfirmed"
     )
     second = submit(wrong)
     assert not second.get("is_error"), second
     assert saved(destination)["system_prompt_excerpt"] == "You are pair, a helpful assistant."
     assert saved(destination)["system_prompt_from"] == []
+    assert saved(destination)["unconfirmed_prompt_from"] == wrong["system_prompt_from"]
 
 
 # Every piece of the quote must be in the lines named, in order
@@ -1439,7 +1465,7 @@ _BOOKING_QUOTE = (
         pytest.param("You are Acme's booking agent. [...] Be warm and brief.", (6, 12), False, id="bracketed-dots"),
         pytest.param("You are Acme's booking agent. … Be warm and brief.", (6, 12), False, id="ellipsis-character"),
         pytest.param("YOU ARE ACME'S BOOKING AGENT. ... BE WARM AND BRIEF.", (6, 12), False, id="case"),
-        pytest.param("... Be warm and brief.", (6, 12), False, id="starts-with-dots"),
+        pytest.param("... Confirm every booking before saving it. Be warm and brief.", (6, 12), False, id="starts-with-dots"),
         pytest.param("...", (1, 4), False, id="only-dots"),
         # One line can't hold a piece the quote has twice.
         pytest.param("Be warm and brief. ... Be warm and brief.", (6, 12), True, id="a-piece-twice"),
@@ -1470,9 +1496,9 @@ def test_a_range_that_stops_short_is_refused(tmp_path, root, quote, lines, refus
 @pytest.mark.parametrize(
     "written, quote",
     [
-        pytest.param('PROMPT = "Tom &amp; Jerry\'s"', "Tom & Jerry's", id="entity-in-the-source"),
-        pytest.param('PROMPT = "Tom & Jerry\'s"', "Tom &amp; Jerry's", id="entity-in-the-quote"),
-        pytest.param('PROMPT = "Order a café"', "Order a café", id="decomposed-accent"),
+        pytest.param('PROMPT = "Book at Tom &amp; Jerry\'s diner tonight"', "Book at Tom & Jerry's diner tonight", id="entity-in-the-source"),
+        pytest.param('PROMPT = "Book at Tom & Jerry\'s diner tonight"', "Book at Tom &amp; Jerry's diner tonight", id="entity-in-the-quote"),
+        pytest.param('PROMPT = "Order a caf\u00e9 and wait for the bill"', "Order a cafe\u0301 and wait for the bill", id="decomposed-accent"),
     ],
 )
 def test_an_honest_quote_in_another_form_fits(tmp_path, root, written, quote):
@@ -1508,11 +1534,17 @@ def test_lines_sent_without_the_refused_quote_are_still_checked(tmp_path, root):
     )
     assert text_of(first).startswith(REFUSED + not_the_quote("agent.py 1-4"))
 
-    # The quote left out: the imports are still checked against it, and the quote is what's sent.
+    # The quote left out: the imports are still checked against it, asked about once more...
     second = submit(payload(hard_constraints=["Be polite."], system_prompt_from=imports))
-    assert not second.get("is_error"), second
+    assert text_of(second) == REFUSED + lines_alone("agent.py 1-4", _BOOKING_QUOTE)
+    assert not (destination / "contract.json").exists()
+
+    # ... and then the quote is what's sent, with the lines on record as unconfirmed.
+    third = submit(payload(hard_constraints=["Be polite."], system_prompt_from=imports))
+    assert not third.get("is_error"), third
     assert saved(destination)["system_prompt_excerpt"] == _BOOKING_QUOTE
     assert saved(destination)["system_prompt_from"] == []
+    assert saved(destination)["unconfirmed_prompt_from"] == imports
 
 
 def test_the_right_lines_after_a_refusal_are_copied(tmp_path, root):
@@ -1576,6 +1608,134 @@ def test_a_quote_of_many_pieces_does_not_hold_up_the_check(root):
     assert took < 0.5
 
 
+# A prompt written with Python string prefixes holds its quote
+
+
+@pytest.mark.parametrize(
+    "written",
+    [
+        pytest.param('PROMPT = ("You are pair, " f"a helpful assistant who books tables.")', id="f-string-piece"),
+        pytest.param('PROMPT = ("You are pair, " r"a helpful assistant who books tables.")', id="raw-piece"),
+        pytest.param("PROMPT = ('You are pair, ' rb'a helpful assistant who books tables.')", id="two-letter-prefix"),
+        pytest.param('PROMPT = ("You are pair, " F"a helpful assistant who books tables.")', id="capital-prefix"),
+        pytest.param('PROMPT = f"You are pair, " "a helpful assistant who books tables."', id="prefix-on-the-first-piece"),
+        pytest.param('PROMPT = (u"You are pair, " fr"a helpful assistant who books tables.")', id="u-and-fr"),
+    ],
+)
+def test_a_prompt_with_string_prefixes_holds_the_quote(tmp_path, root, written):
+    (root / "prompt.py").write_text(written + "\n", encoding="utf-8")
+    destination = tmp_path / "out"
+
+    result = accept_contract(
+        payload(
+            hard_constraints=["Be polite."],
+            system_prompt_excerpt="You are pair, a helpful assistant who books tables.",
+            system_prompt_from=[{"path": "prompt.py", "start_line": 1, "end_line": 1}],
+        ),
+        destination,
+        source_root=root,
+    )
+
+    assert not result.get("is_error"), result
+    assert saved(destination)["system_prompt_excerpt"] == written
+
+
+@pytest.mark.parametrize(
+    "written, quote, refused",
+    [
+        # A word ending in a prefix letter keeps that letter, on both sides.
+        pytest.param('PROMPT = "He said" " hello and goodbye."', 'He said hello and goodbye.', False, id="word-before-a-quote"),
+        pytest.param('PROMPT = "Pick one of" "f the options."', "Pick one off the options.", False, id="prefix-letter-inside-a-string"),
+    ],
+)
+def test_a_word_before_a_quote_is_not_a_prefix(tmp_path, root, written, quote, refused):
+    (root / "prompt.py").write_text(written + "\n", encoding="utf-8")
+    destination = tmp_path / "out"
+
+    result = accept_contract(
+        payload(
+            hard_constraints=["Be polite."],
+            system_prompt_excerpt=quote,
+            system_prompt_from=[{"path": "prompt.py", "start_line": 1, "end_line": 1}],
+        ),
+        destination,
+        source_root=root,
+    )
+
+    if refused:
+        assert text_of(result) == REFUSED + not_the_quote("prompt.py 1-1")
+    else:
+        assert not result.get("is_error"), result
+
+
+# A value inside a docstring or a multi-line string is not the model
+
+_DOCSTRING = (
+    "def build():\n"
+    '    """Build the agent.\n'
+    "\n"
+    '    Example: model = "gpt-4o"\n'
+    '    """\n'
+    '    return Agent(model="claude-3-opus")\n'
+)
+
+
+@pytest.mark.parametrize(
+    "file, written, line, name",
+    [
+        pytest.param("llm.py", _DOCSTRING, 4, "gpt-4o", id="docstring-line"),
+        pytest.param("llm.py", "X = '''\nmodel = \"gpt-4o\"\n'''\n", 2, "gpt-4o", id="single-quote-block"),
+        pytest.param("llm.py", 'PROMPT = """You are pair.\nUse "gpt-4o" for hard cases.\n"""\n', 2, "gpt-4o", id="prompt-line"),
+        pytest.param("llm.py", 'PROMPT = """Use "gpt-4o" for hard cases."""\n', 1, "gpt-4o", id="opened-on-the-line"),
+        pytest.param("llm.toml", 'notes = """\nmodel = "gpt-4o"\n"""\n', 2, "gpt-4o", id="toml-multiline"),
+        pytest.param("llm.py", '"""Docs with \'\'\' inside.\nmodel = "gpt-4o"\n"""\n', 2, "gpt-4o", id="other-kind-does-not-close"),
+        pytest.param("llm.py", 'X = """docs \'\'\' and "gpt-4o"\n"""\n', 1, "gpt-4o", id="other-kind-on-the-line-does-not-close"),
+        pytest.param("llm.py", 'X = """gpt-4o" is the default"""\n', 1, "gpt-4o", id="a-block-that-opens-at-the-name"),
+    ],
+)
+def test_a_value_inside_a_triple_quoted_block_is_not_the_model(root, file, written, line, name):
+    (root / file).write_text(written, encoding="utf-8")
+
+    problems, _, _ = checked(root, {"name": name, "path": file, "line": line})
+
+    assert problems == [not_named(name, line, file)]
+
+
+@pytest.mark.parametrize(
+    "file, written, line, name",
+    [
+        pytest.param("llm.py", _DOCSTRING, 6, "claude-3-opus", id="closed-before"),
+        pytest.param("llm.py", 'DOC = """notes"""; MODEL = "gpt-4o"\n', 1, "gpt-4o", id="closed-on-the-line"),
+        pytest.param("llm.py", 'MODEL = """gpt-4o"""\n', 1, "gpt-4o", id="triple-quoted-value"),
+        pytest.param("llm.py", "MODEL = '''gpt-4o'''\n", 1, "gpt-4o", id="triple-single-quoted-value"),
+        pytest.param("llm.py", 'X = """a\nb"""\nMODEL = "gpt-4o"\n', 3, "gpt-4o", id="block-closed-on-an-earlier-line"),
+    ],
+)
+def test_a_value_after_a_closed_block_is_the_model(root, file, written, line, name):
+    (root / file).write_text(written, encoding="utf-8")
+
+    problems, contract, _ = checked(root, {"name": name, "path": file, "line": line})
+
+    assert problems == []
+    assert contract.model is not None and contract.model.name == name
+
+
+@pytest.mark.parametrize(
+    "written",
+    [
+        pytest.param('"""' * (MIB // 3 - 20) + '\nMODEL = "gpt-4o"\n', id="a-file-of-triple-quotes"),
+        pytest.param('"""' + '""" "gpt-4o" """' * (MIB // 20), id="a-line-of-blocks"),
+    ],
+)
+def test_a_crafted_file_of_triple_quotes_does_not_hold_up_the_check(root, written):
+    (root / "crafted.py").write_text(written, encoding="utf-8")
+    line = written.count("\n") + (0 if written.endswith("\n") else 1)
+
+    _, _, took = checked(root, {"name": "gpt-4o", "path": "crafted.py", "line": line})
+
+    assert took < 0.5
+
+
 def test_leaving_the_quote_out_is_not_asked_about(tmp_path, root):
     # Following the advice to leave the quote out must not set off the "no prompt" question.
     (root / "prompt.py").write_text('PROMPT = "You are pair."\n', encoding="utf-8")
@@ -1626,6 +1786,10 @@ def test_a_prompt_path_through_a_link_outside_is_refused(tmp_path, root):
         pytest.param('MODEL = os.environ.get ("gpt-4o")', "gpt-4o", id="space-before-the-bracket"),
         pytest.param('MODEL = env.str("gpt-4o")', "gpt-4o", id="env-str"),
         pytest.param("$model = config('gpt-4o');", "gpt-4o", id="config-call"),
+        pytest.param('model = env.getOrDefault("gpt-4o", x);', "gpt-4o", id="get-or-default"),
+        pytest.param('model = bundle.getString("gpt-4o");', "gpt-4o", id="get-string"),
+        pytest.param('model = config.getValue("gpt-4o");', "gpt-4o", id="get-value"),
+        pytest.param("$model = env('gpt-4o');", "gpt-4o", id="env-call"),
     ],
 )
 def test_a_lookup_key_is_not_the_model(root, written, name):
@@ -1643,6 +1807,8 @@ def test_a_lookup_key_is_not_the_model(root, written, name):
         pytest.param('model = genai.GenerativeModel("gemini-1.5-pro")', "gemini-1.5-pro", id="constructor"),
         pytest.param('MODEL = os.getenv("OPENAI_MODEL", "gpt-4o")', "gpt-4o", id="getenv-default"),
         pytest.param('llm = target("gpt-4o")', "gpt-4o", id="a-call-ending-in-get"),
+        pytest.param('llm = my_get("gpt-4o")', "gpt-4o", id="a-call-ending-in-_get"),
+        pytest.param('["gpt-4o", "gpt-4o-mini"]', "gpt-4o", id="a-list-at-the-line-start"),
     ],
 )
 def test_a_value_passed_to_a_call_is_the_model(root, written, name):
@@ -1688,3 +1854,822 @@ def test_a_prompt_with_escaped_characters_holds_the_quote(tmp_path, root):
 
     assert not result.get("is_error"), result
     assert saved(destination)["system_prompt_excerpt"] == written
+
+
+# Code between the string pieces of a prompt is passed over, a little at a time
+
+_LONG_OPENING = (
+    "You are Acme's booking agent. Help guests book tables, change bookings and cancel them. "
+)
+
+
+@pytest.mark.parametrize(
+    "written, quote",
+    [
+        pytest.param(
+            f'PROMPT = (\n    "{_LONG_OPENING}"\n    f"Today is {{today}}. "\n    "Be warm and brief."\n)',
+            _LONG_OPENING + "Today is {today}. Be warm and brief.",
+            id="f-string-piece-late",
+        ),
+        pytest.param(
+            f'PROMPT = (\n    "{_LONG_OPENING}"  # the rules\n    "Be warm and brief."\n)',
+            _LONG_OPENING + "Be warm and brief.",
+            id="comment-between-pieces",
+        ),
+        pytest.param(
+            f'PROMPT = (\n    "{_LONG_OPENING}"\n    r"Never share \\d+ ids. "\n    "Be warm and brief."\n)',
+            _LONG_OPENING + "Never share \\d+ ids. Be warm and brief.",
+            id="raw-piece-late",
+        ),
+        pytest.param(
+            f'PROMPT = "{_LONG_OPENING}" + NAME + " Be warm and brief."',
+            _LONG_OPENING + "Be warm and brief.",
+            id="a-variable-left-out",
+        ),
+        pytest.param(
+            f'PROMPT = "{_LONG_OPENING}<rules>Be warm and brief.</rules>"',
+            _LONG_OPENING + "Be warm and brief.",
+            id="markup-left-out",
+        ),
+        pytest.param(
+            f'PROMPT = "{_LONG_OPENING}{{{{ guest_name }}}}, be warm and brief."',
+            _LONG_OPENING + "Be warm and brief.",
+            id="a-placeholder-left-out",
+        ),
+    ],
+)
+def test_code_between_string_pieces_is_passed_over(tmp_path, root, written, quote):
+    (root / "prompt.py").write_text(written + "\n", encoding="utf-8")
+    count = len(written.splitlines())
+    destination = tmp_path / "out"
+
+    result = accept_contract(
+        payload(
+            hard_constraints=["Be polite."],
+            system_prompt_excerpt=quote,
+            system_prompt_from=[{"path": "prompt.py", "start_line": 1, "end_line": count}],
+        ),
+        destination,
+        source_root=root,
+    )
+
+    assert not result.get("is_error"), result
+    assert saved(destination)["system_prompt_excerpt"] == written
+
+
+def test_a_long_gap_between_words_is_not_passed_over(tmp_path, root):
+    written = (
+        f'PROMPT = (\n    "{_LONG_OPENING}"  # twenty-five letters of a comment here\n'
+        '    "Be warm and brief."\n)'
+    )
+    (root / "prompt.py").write_text(written + "\n", encoding="utf-8")
+
+    result = accept_contract(
+        payload(
+            hard_constraints=["Be polite."],
+            system_prompt_excerpt=_LONG_OPENING + "Be warm and brief.",
+            system_prompt_from=[{"path": "prompt.py", "start_line": 1, "end_line": 4}],
+        ),
+        tmp_path / "out",
+        source_root=root,
+    )
+
+    assert text_of(result) == REFUSED + not_the_quote("prompt.py 1-4")
+
+
+def test_a_quote_that_passed_replaces_the_held_one(tmp_path, root):
+    (root / "agent.py").write_text(_BOOKING, encoding="utf-8")
+    destination = tmp_path / "out"
+    submit = submitter(destination, root)
+    prompt = [{"path": "agent.py", "start_line": 6, "end_line": 12}]
+
+    first = submit(
+        payload(
+            hard_constraints=["Be polite."],
+            system_prompt_excerpt="You are pair, a helpful assistant.",
+            system_prompt_from=[{"path": "agent.py", "start_line": 1, "end_line": 4}],
+        )
+    )
+    assert first.get("is_error"), first
+    second = submit(
+        payload(
+            hard_constraints=["Be polite."],
+            system_prompt_excerpt=_BOOKING_QUOTE,
+            system_prompt_from=prompt,
+        )
+    )
+    assert not second.get("is_error"), second
+
+    # The lines again, without a quote: checked against the quote that passed, not the old one.
+    third = submit(payload(hard_constraints=["Be polite."], system_prompt_from=prompt))
+
+    assert not third.get("is_error"), third
+    assert saved(destination)["system_prompt_excerpt"] == "\n".join(_BOOKING.splitlines()[5:12])
+    assert saved(destination)["system_prompt_from"] == prompt
+
+
+@pytest.mark.parametrize("placeholder", ["...", "…", "[...]", "-", "—", "?"])
+def test_a_quote_without_words_does_not_skip_the_held_one(tmp_path, root, placeholder):
+    (root / "agent.py").write_text(_BOOKING, encoding="utf-8")
+    destination = tmp_path / "out"
+    submit = submitter(destination, root)
+    imports = [{"path": "agent.py", "start_line": 1, "end_line": 4}]
+
+    first = submit(
+        payload(
+            hard_constraints=["Be polite."],
+            system_prompt_excerpt=_BOOKING_QUOTE,
+            system_prompt_from=imports,
+        )
+    )
+    assert first.get("is_error"), first
+
+    again = payload(
+        hard_constraints=["Be polite."], system_prompt_excerpt=placeholder, system_prompt_from=imports
+    )
+    second = submit(again)
+    assert text_of(second) == REFUSED + lines_alone("agent.py 1-4", _BOOKING_QUOTE)
+
+    third = submit(again)
+    assert not third.get("is_error"), third
+    assert saved(destination)["system_prompt_excerpt"] == _BOOKING_QUOTE
+    assert saved(destination)["system_prompt_from"] == []
+    assert saved(destination)["unconfirmed_prompt_from"] == imports
+
+
+@pytest.mark.parametrize(
+    "written",
+    [
+        pytest.param('PROMPT = "Order a caf\\u00e9 here, then wait for the bill."', id="short-unicode-escape"),
+        pytest.param('PROMPT = "Order a caf\\xe9 here, then wait for the bill."', id="hex-escape"),
+        pytest.param('PROMPT = "Order a caf\\U000000e9 here, then wait for the bill."', id="long-unicode-escape"),
+        pytest.param('PROMPT = "Order a caf\\N{LATIN SMALL LETTER E WITH ACUTE} here, then wait for the bill."', id="named-escape"),
+        pytest.param('PROMPT = "Order a caf\\351 here, then wait for the bill."', id="octal-escape"),
+    ],
+)
+def test_more_escapes_hold_the_quote(tmp_path, root, written):
+    (root / "prompt.py").write_text(written + "\n", encoding="utf-8")
+    destination = tmp_path / "out"
+
+    result = accept_contract(
+        payload(
+            hard_constraints=["Be polite."],
+            system_prompt_excerpt="Order a café here, then wait for the bill.",
+            system_prompt_from=[{"path": "prompt.py", "start_line": 1, "end_line": 1}],
+        ),
+        destination,
+        source_root=root,
+    )
+
+    assert not result.get("is_error"), result
+
+
+def test_a_quote_that_grows_when_normalised_costs_little(root):
+    from fi.alk.harness.model_citation import quote_problem
+
+    import tracemalloc
+
+    # U+FDFA grows eighteen times under NFKC; NFC leaves it as it is.
+    copied = "\ufdfa" * (MIB // 3)
+    tracemalloc.start()
+    try:
+        started = time.perf_counter()
+        quote_problem("\ufdfa" * 1000 + " b", copied, "agent.py 1-1")
+        took = time.perf_counter() - started
+        _, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+
+    assert took < 0.5
+    assert peak < 32 * MIB
+
+
+# An apostrophe in bare text doesn't hide the comment after it
+
+
+@pytest.mark.parametrize(
+    "file, written, name",
+    [
+        pytest.param("cfg.yaml", "description: Pair's booking agent  # model: gpt-4o-mini", "gpt-4o-mini", id="yaml"),
+        pytest.param(".env", "AGENT_NAME=Bob's agent # MODEL=gpt-4o-mini", "gpt-4o-mini", id="env"),
+        pytest.param("llm.sh", "echo it\\'s # 'gpt-4o-mini'", "gpt-4o-mini", id="shell-escaped"),
+        pytest.param("lib.rs", "fn f<'a>(x: &'a str) -> &'a str { x } // \"gpt-4o-mini\"", "gpt-4o-mini", id="rust-lifetimes"),
+        pytest.param("cfg.yaml", "note: Pair's agent # it's \"gpt-4o-mini\"", "gpt-4o-mini", id="apostrophes-around-the-marker"),
+        pytest.param("llm.ini", "; model = gpt-4o-mini", "gpt-4o-mini", id="ini-comment"),
+    ],
+)
+def test_an_apostrophe_does_not_hide_a_comment(root, file, written, name):
+    (root / file).write_text(f"# settings\n{written}\n", encoding="utf-8")
+
+    problems, _, _ = checked(root, {"name": name, "path": file, "line": 2})
+
+    assert problems == [not_named(name, 2, file)]
+
+
+@pytest.mark.parametrize(
+    "file, written, name",
+    [
+        pytest.param("run.sh", "curl -s http://localhost:8000/v1/chat/completions -d '{\"model\": \"gpt-4o\"}'", "gpt-4o", id="curl"),
+        pytest.param("run.sh", "python app.py --base-url=http://localhost:4000 --model=gpt-4o", "gpt-4o", id="url-flag"),
+        pytest.param("Dockerfile", "CMD python app.py --base-url=http://ollama:11434 --model=llama3", "llama3", id="dockerfile-cmd"),
+        pytest.param("cfg.yaml", "llm: {base_url: http://localhost:11434, model: llama3}", "llama3", id="yaml-flow-map"),
+        pytest.param("run.sh", 'exec uv run -- python -m app --model "gpt-4o"', "gpt-4o", id="uv-run"),
+        pytest.param("Dockerfile", "CMD tini -- python app.py --model=gpt-4o", "gpt-4o", id="tini"),
+        pytest.param("run.sh", "for f in data/*; do MODEL=gpt-4o; done", "gpt-4o", id="glob"),
+        pytest.param("run.sh", "[ ${#MODELS[@]} -eq 0 ] && MODEL=gpt-4o", "gpt-4o", id="shell-length"),
+        pytest.param("llm.py", "n = len(x)//2; model = 'gpt-4o'", "gpt-4o", id="floor-division"),
+        pytest.param("llm.ts", ' */ const model = "gpt-4o";', "gpt-4o", id="after-a-block-comment-closes"),
+    ],
+)
+def test_urls_globs_and_dashes_are_not_comments(root, file, written, name):
+    (root / file).write_text(f"# settings\n{written}\n", encoding="utf-8")
+
+    problems, contract, _ = checked(root, {"name": name, "path": file, "line": 2})
+
+    assert problems == []
+    assert contract.model is not None and contract.model.name == name
+
+
+@pytest.mark.parametrize(
+    "written, name",
+    [
+        pytest.param('DEPLOYMENT = "gpt-4o_deployment"', "gpt-4o_deployment", id="underscore-deployment"),
+        pytest.param('DEPLOYMENT = "chat-deployment"', "chat-deployment", id="deployment-without-a-digit"),
+        pytest.param('MODEL = "azure/gpt4o_deployment"', "azure/gpt4o_deployment", id="provider-prefixed-deployment"),
+        # A setting's word with a version and no underscore: a deployment's own name.
+        pytest.param('DEPLOYMENT = "gpt4o-default"', "gpt4o-default", id="versioned-with-a-setting-word"),
+    ],
+)
+def test_deployment_ids_are_models(root, written, name):
+    (root / "llm.py").write_text(f"# the model\n{written}\n", encoding="utf-8")
+
+    problems, contract, _ = checked(root, {"name": name, "path": "llm.py", "line": 2})
+
+    assert problems == []
+    assert contract.model is not None and contract.model.name == name
+
+
+def test_a_crafted_line_of_generic_calls_does_not_hold_up_the_check(root):
+    # Each occurrence looks back for a generic's < only a few characters, not to the first get<.
+    (root / "crafted.ts").write_text('get<x>("a") ' + '>("a") ' * 100_000, encoding="utf-8")
+
+    _, _, took = checked(root, {"name": "a", "path": "crafted.ts", "line": 1})
+
+    assert took < 0.5
+
+
+def test_a_crafted_line_of_apostrophes_does_not_hold_up_the_check(root):
+    # Once one apostrophe finds no partner, none after it is paired again.
+    # Small enough that pairing each apostrophe again would show as seconds, not hang.
+    (root / "crafted.py").write_text("'" + "\\'" * 40_000 + "\n", encoding="utf-8")
+
+    problems, _, took = checked(root, {"name": "a", "path": "crafted.py", "line": 1})
+
+    assert problems == [not_named("a", 1, "crafted.py")]
+    assert took < 0.5
+
+
+# Lines sent alone after a refusal are asked about once more before either side is given up
+
+
+def test_right_lines_sent_alone_after_a_refused_paraphrase_are_kept(tmp_path, root):
+    (root / "agent.py").write_text(_BOOKING, encoding="utf-8")
+    destination = tmp_path / "out"
+    submit = submitter(destination, root)
+    prompt = [{"path": "agent.py", "start_line": 6, "end_line": 12}]
+    paraphrase = "Acme booking agent: helps guests reserve tables and never shares bookings."
+
+    first = submit(
+        payload(hard_constraints=["Be polite."], system_prompt_excerpt=paraphrase, system_prompt_from=prompt)
+    )
+    assert text_of(first).startswith(REFUSED + not_the_quote("agent.py 6-12"))
+    second = submit(payload(hard_constraints=["Be polite."], system_prompt_from=prompt))
+    assert text_of(second) == REFUSED + lines_alone("agent.py 6-12", paraphrase)
+
+    # Quoted word for word from the lines, as asked: the lines are copied, nothing unconfirmed.
+    third = submit(
+        payload(hard_constraints=["Be polite."], system_prompt_excerpt=_BOOKING_QUOTE, system_prompt_from=prompt)
+    )
+
+    assert not third.get("is_error"), third
+    contract = saved(destination)
+    assert contract["system_prompt_excerpt"] == "\n".join(_BOOKING.splitlines()[5:12])
+    assert contract["system_prompt_from"] == prompt
+    assert "unconfirmed_prompt_from" not in contract
+
+
+def test_unconfirmed_lines_reach_the_document(tmp_path, root):
+    from fi.alk.providers.agent import build_authored_agent
+
+    (root / "agent.py").write_text(_BOOKING, encoding="utf-8")
+    destination = tmp_path / "out"
+    submit = submitter(destination, root)
+    imports = [{"path": "agent.py", "start_line": 1, "end_line": 4}]
+    quoted = payload(hard_constraints=["Be polite."], system_prompt_excerpt=_BOOKING_QUOTE, system_prompt_from=imports)
+
+    assert submit(quoted).get("is_error")
+    assert submit(payload(hard_constraints=["Be polite."], system_prompt_from=imports)).get("is_error")
+    assert not submit(payload(hard_constraints=["Be polite."], system_prompt_from=imports)).get("is_error")
+
+    contract = AgentContract.model_validate(saved(destination)).model_dump(mode="json")
+    document = build_authored_agent(contract)
+    assert document["behaviour"][0]["instructions"] == _BOOKING_QUOTE
+    assert document["extension"]["contract"]["unconfirmed_prompt_from"] == imports
+
+
+def test_only_the_save_records_unconfirmed_lines(tmp_path, root):
+    destination = tmp_path / "out"
+    claimed = [{"path": "agent.py", "start_line": 1, "end_line": 1}]
+
+    result = accept_contract(
+        payload(hard_constraints=["Be polite."], unconfirmed_prompt_from=claimed),
+        destination,
+        source_root=root,
+    )
+
+    assert not result.get("is_error"), result
+    assert "unconfirmed_prompt_from" not in saved(destination)
+
+
+def test_a_quote_whose_start_matches_everywhere_does_not_hold_up_the_check(root):
+    from fi.alk.harness.model_citation import quote_problem
+
+    # Every start matches a thousand words before failing: the attempts are counted and stop.
+    started = time.perf_counter()
+    answer = quote_problem("a " * 1000 + "b", "a" * MIB, "agent.py 1-1")
+    took = time.perf_counter() - started
+
+    assert answer is not None
+    assert took < 0.5
+
+
+def test_a_first_word_found_early_is_tried_again(tmp_path, root):
+    # "you" first appears in the comment, too far from "are"; the prompt's own "You are" follows.
+    written = "# you should keep this comment long enough to break the match\n" + _BOOKING
+    (root / "agent.py").write_text(written, encoding="utf-8")
+    destination = tmp_path / "out"
+
+    result = accept_contract(
+        payload(
+            hard_constraints=["Be polite."],
+            system_prompt_excerpt=_BOOKING_QUOTE,
+            system_prompt_from=[{"path": "agent.py", "start_line": 1, "end_line": 13}],
+        ),
+        destination,
+        source_root=root,
+    )
+
+    assert not result.get("is_error"), result
+    assert saved(destination)["system_prompt_excerpt"] == "\n".join(written.splitlines())
+
+
+def test_wrong_lines_alone_after_a_passed_quote_are_asked_about_then_left_out(tmp_path, root):
+    (root / "agent.py").write_text(_BOOKING, encoding="utf-8")
+    destination = tmp_path / "out"
+    submit = submitter(destination, root)
+    imports = [{"path": "agent.py", "start_line": 1, "end_line": 4}]
+
+    first = submit(
+        payload(
+            hard_constraints=["Be polite."],
+            system_prompt_excerpt=_BOOKING_QUOTE,
+            system_prompt_from=[{"path": "agent.py", "start_line": 6, "end_line": 12}],
+        )
+    )
+    assert not first.get("is_error"), first
+    second = submit(payload(hard_constraints=["Be polite."], system_prompt_from=imports))
+    assert text_of(second) == REFUSED + lines_alone("agent.py 1-4", _BOOKING_QUOTE)
+
+    third = submit(payload(hard_constraints=["Be polite."], system_prompt_from=imports))
+
+    assert not third.get("is_error"), third
+    assert saved(destination)["system_prompt_excerpt"] == _BOOKING_QUOTE
+    assert saved(destination)["unconfirmed_prompt_from"] == imports
+
+
+# A quote is held from the moment it is sent, whatever sends the call back
+
+
+@pytest.mark.parametrize(
+    "first",
+    [
+        pytest.param({}, id="asked-for-lines"),
+        pytest.param({"modality": "telepathy"}, id="refused-before-the-checks"),
+    ],
+)
+def test_a_quote_sent_without_lines_is_held(tmp_path, root, first):
+    (root / "agent.py").write_text(_BOOKING, encoding="utf-8")
+    destination = tmp_path / "out"
+    submit = submitter(destination, root)
+    imports = [{"path": "agent.py", "start_line": 1, "end_line": 4}]
+
+    sent_back = submit(
+        payload(hard_constraints=["Be polite."], system_prompt_excerpt=_BOOKING_QUOTE, **first)
+    )
+    assert sent_back.get("is_error"), sent_back
+
+    second = submit(payload(hard_constraints=["Be polite."], system_prompt_from=imports))
+    assert text_of(second) == REFUSED + lines_alone("agent.py 1-4", _BOOKING_QUOTE)
+    third = submit(payload(hard_constraints=["Be polite."], system_prompt_from=imports))
+
+    assert not third.get("is_error"), third
+    assert saved(destination)["system_prompt_excerpt"] == _BOOKING_QUOTE
+    assert saved(destination)["unconfirmed_prompt_from"] == imports
+
+
+def test_the_quote_shown_with_lines_sent_alone_is_on_one_line(tmp_path, root):
+    (root / "agent.py").write_text(_BOOKING, encoding="utf-8")
+    submit = submitter(tmp_path / "out", root)
+    imports = [{"path": "agent.py", "start_line": 1, "end_line": 4}]
+    quote = "You are Acme's booking agent.\n\nHelp guests book tables."
+
+    submit(payload(hard_constraints=["Be polite."], system_prompt_excerpt=quote, system_prompt_from=imports))
+    second = submit(payload(hard_constraints=["Be polite."], system_prompt_from=imports))
+
+    assert "(You are Acme's booking agent. Help guests book tables.)" in text_of(second)
+
+
+@pytest.mark.parametrize("placeholder", ["n/a", "N/A", "TBD", "none", "see lines", "as above"])
+def test_a_quote_of_a_few_letters_says_nothing(tmp_path, root, placeholder):
+    (root / "agent.py").write_text(_BOOKING, encoding="utf-8")
+    destination = tmp_path / "out"
+    submit = submitter(destination, root)
+    imports = [{"path": "agent.py", "start_line": 1, "end_line": 4}]
+
+    assert submit(
+        payload(hard_constraints=["Be polite."], system_prompt_excerpt=_BOOKING_QUOTE, system_prompt_from=imports)
+    ).get("is_error")
+    again = payload(hard_constraints=["Be polite."], system_prompt_excerpt=placeholder, system_prompt_from=imports)
+
+    assert text_of(submit(again)) == REFUSED + lines_alone("agent.py 1-4", _BOOKING_QUOTE)
+    assert not submit(again).get("is_error")
+    assert saved(destination)["system_prompt_excerpt"] == _BOOKING_QUOTE
+    assert saved(destination)["unconfirmed_prompt_from"] == imports
+
+
+# The gap between two words of a quote is 24 letters, no more
+
+
+@pytest.mark.parametrize("letters, refused", [(24, False), (25, True)])
+def test_the_gap_between_words_is_24_letters(letters, refused):
+    from fi.alk.harness.model_citation import quote_problem
+
+    copied = "Confirm every booking " + "x" * letters + " before saving it."
+
+    answer = quote_problem("Confirm every booking before saving it.", copied, "agent.py 1-1")
+
+    assert (answer is not None) is refused
+
+
+# Each search is charged what it reads
+
+
+def test_an_elided_quote_of_a_long_prompt_holds(tmp_path, root):
+    from fi.alk.harness.model_citation import quote_problem
+
+    filler = "A guest asks a question and a host answers it at a table. " * 3_000
+    copied = f'PROMPT = """You are Acme\'s booking agent. {filler}A short answer is best."""'
+
+    answer = quote_problem(
+        "You are Acme's booking agent. ... A short answer is best.", copied, "agent.py 1-1"
+    )
+
+    assert answer is None
+
+
+def test_a_crafted_long_word_costs_little(root):
+    from fi.alk.harness.model_citation import quote_problem
+
+    started = time.perf_counter()
+    answer = quote_problem("a " + "a" * MIB + "b", "a" * MIB, "agent.py 1-1")
+    took = time.perf_counter() - started
+
+    assert answer is not None
+    assert took < 0.25
+
+
+# Scripts written without spaces: each character is a word
+
+
+@pytest.mark.parametrize(
+    "written, quote",
+    [
+        pytest.param('PROMPT = ("你是一个乐于助人的订餐" f"助手，今天是{today}。")', "你是一个乐于助人的订餐助手，今天是{today}。", id="chinese-prefix-mid-clause"),
+        pytest.param('PROMPT = ("你是一个乐于助人的订餐"  # 角色\n    "助手，请礼貌地回答。")', "你是一个乐于助人的订餐助手，请礼貌地回答。", id="chinese-comment-mid-clause"),
+        pytest.param('PROMPT = ("あなたは親切な予約" f"アシスタントです。{name}")', "あなたは親切な予約アシスタントです。", id="japanese-prefix-mid-clause"),
+    ],
+)
+def test_an_unspaced_prompt_holds_its_quote(tmp_path, root, written, quote):
+    (root / "prompt.py").write_text(written + "\n", encoding="utf-8")
+    count = len(written.splitlines())
+    destination = tmp_path / "out"
+
+    result = accept_contract(
+        payload(
+            hard_constraints=["Be polite."],
+            system_prompt_excerpt=quote,
+            system_prompt_from=[{"path": "prompt.py", "start_line": 1, "end_line": count}],
+        ),
+        destination,
+        source_root=root,
+    )
+
+    assert not result.get("is_error"), result
+
+
+def test_an_escape_that_names_no_character_is_kept_as_written(tmp_path, root):
+    from fi.alk.harness.model_citation import quote_problem
+
+    quote = "Order a table \\UFFFFFFFF and \\N{NOT A REAL NAME} for two."
+
+    assert quote_problem(quote, 'PROMPT = "' + quote + '"', "prompt.py 1-1") is None
+
+
+# The reader: what counts is limit + 1, and every descriptor is closed
+
+
+def test_a_read_that_lands_on_the_limit_reads_one_more(tmp_path, monkeypatch):
+    from fi.alk.harness import model_citation
+
+    (tmp_path / "agent.py").write_bytes(b"x" * 100)
+    real_read = os.read
+    monkeypatch.setattr(model_citation.os, "read", lambda fd, n: real_read(fd, min(n, 7)))
+
+    assert model_citation.read_source(tmp_path / "agent.py", 49) == b"x" * 50
+
+
+def test_the_reader_closes_what_it_opens(tmp_path, monkeypatch):
+    from fi.alk.harness import model_citation
+
+    (tmp_path / "agent.py").write_bytes(b"x" * 10)
+    (tmp_path / "folder").mkdir()
+    opened: list[int] = []
+    closed: list[int] = []
+    real_open, real_close = os.open, os.close
+    monkeypatch.setattr(model_citation.os, "open", lambda *a: opened.append(real_open(*a)) or opened[-1])
+    monkeypatch.setattr(model_citation.os, "close", lambda fd: closed.append(fd) or real_close(fd))
+
+    model_citation.read_source(tmp_path / "agent.py", 100)
+    model_citation.read_source(tmp_path / "folder", 100)
+
+    assert sorted(opened) == sorted(closed) and len(opened) == 2
+
+
+# Triple quotes count only in languages that have them, and never inside a string or comment
+
+
+@pytest.mark.parametrize(
+    "file, written, line, name",
+    [
+        pytest.param("llm.py", "parts = r.split('\"\"\"')\nMODEL = \"gpt-4o\"\n", 2, "gpt-4o", id="in-a-one-line-string"),
+        pytest.param("llm.py", "# docstrings use \"\"\"\nMODEL = \"gpt-4o\"\n", 2, "gpt-4o", id="in-a-comment"),
+        pytest.param("llm.py", "SEP = \"'''\"; MODEL = \"gpt-4o\"\n", 1, "gpt-4o", id="in-a-string-on-the-line"),
+        pytest.param("llm.ts", "const prompt = 'Use \"\"\" for blocks';\nconst model = \"gpt-4o\";\n", 2, "gpt-4o", id="typescript"),
+        pytest.param("main.go", "var sep = `\"\"\"`\nvar model = \"gpt-4o\"\n", 2, "gpt-4o", id="go"),
+        pytest.param("cfg.yaml", "a: '''quoted'''\nmodel: gpt-4o\n", 2, "gpt-4o", id="yaml"),
+        pytest.param("llm.py", 'X = """a\nb"""; MODEL = "gpt-4o"\n', 2, "gpt-4o", id="a-block-closing-before-the-value"),
+        pytest.param("llm.py", "msg = f'Agent #{n}'; MODEL = \"gpt-4o\"\n", 1, "gpt-4o", id="prefixed-string-with-a-hash"),
+        pytest.param("llm.py", "x = a[1]//2; m = \"gpt-4o\"\n", 1, "gpt-4o", id="floor-division-after-a-subscript"),
+        pytest.param("llm.py", "n = a//2; model = 'gpt-4o'\n", 1, "gpt-4o", id="floor-division-after-a-name"),
+    ],
+)
+def test_stray_triple_quotes_do_not_hide_the_model(root, file, written, line, name):
+    (root / file).write_text(written, encoding="utf-8")
+
+    problems, contract, _ = checked(root, {"name": name, "path": file, "line": line})
+
+    assert problems == []
+    assert contract.model is not None and contract.model.name == name
+
+
+@pytest.mark.parametrize(
+    "file, written, line, name",
+    [
+        pytest.param("llm.py", '"""Uses "gpt-4o".\n"""\n', 1, "gpt-4o", id="a-docstring-opening-on-the-line"),
+        pytest.param("llm.py", "X = '''It's a''' # it's \"gpt-4o\"\n", 1, "gpt-4o", id="a-comment-after-a-block"),
+        pytest.param("llm.py", 'X = """a\nb"""  # was "gpt-4o"\n', 2, "gpt-4o", id="a-comment-after-a-block-closes"),
+        pytest.param("lib.hs", "x' = 1 -- \"gpt-4o\"\n", 1, "gpt-4o", id="haskell-prime"),
+        pytest.param("llm.ts", '\t*\tmodel: "gpt-4o"\n', 1, "gpt-4o", id="a-tabbed-block-comment-line"),
+        pytest.param("llm.cfg", "; model = gpt-4o\n", 1, "gpt-4o", id="cfg-comment"),
+        pytest.param("llm.conf", "; model = gpt-4o\n", 1, "gpt-4o", id="conf-comment"),
+    ],
+)
+def test_more_comments_and_docstrings_are_not_the_model(root, file, written, line, name):
+    (root / file).write_text(written, encoding="utf-8")
+
+    problems, _, _ = checked(root, {"name": name, "path": file, "line": line})
+
+    assert problems == [not_named(name, line, file)]
+
+
+def test_a_crafted_file_of_one_byte_lines_and_triple_quotes_costs_little(root):
+    # Lines with no triple quote, and lines inside a block without its closing quote, are passed
+    # over without a scan.
+    (root / "crafted.py").write_text(
+        '"""\n' + "x\n" * (MIB // 4) + '"""\n' + "y\n" * (MIB // 4) + 'MODEL = "gpt-4o"\n',
+        encoding="utf-8",
+    )
+    line = 2 * (MIB // 4) + 3
+
+    _, _, took = checked(root, {"name": "gpt-4o", "path": "crafted.py", "line": line})
+
+    assert took < 0.25
+
+
+@pytest.mark.parametrize(
+    "file",
+    ["notes.org", "rules.mdc", "CHANGELOG", "CHANGELOG.md", "LICENSE", "CONTRIBUTING.rst"],
+)
+def test_more_prose_files_hold_no_model(root, file):
+    (root / file).write_text('# notes\nmodel: "claude-3-opus"\n', encoding="utf-8")
+
+    problems, _, _ = checked(root, {"name": "claude-3-opus", "path": file, "line": 2})
+
+    assert problems == [prose(file)]
+
+
+def test_a_file_named_after_readme_is_code(root):
+    (root / "readme_writer.py").write_text('# writes READMEs\nMODEL = "gpt-4o"\n', encoding="utf-8")
+
+    problems, _, _ = checked(root, {"name": "gpt-4o", "path": "readme_writer.py", "line": 2})
+
+    assert problems == []
+
+
+@pytest.mark.parametrize(
+    "quote, lines, refused",
+    [
+        pytest.param("You are pair.", (1, 4), True, id="short-and-not-in-the-lines"),
+        pytest.param("Be warm and brief.", (6, 12), False, id="short-and-in-the-lines"),
+        pytest.param("TBD", (1, 4), True, id="a-placeholder-with-nothing-held"),
+    ],
+)
+def test_a_short_quote_is_looked_for_whole(tmp_path, root, quote, lines, refused):
+    (root / "agent.py").write_text(_BOOKING, encoding="utf-8")
+
+    result = accept_contract(
+        payload(
+            hard_constraints=["Be polite."],
+            system_prompt_excerpt=quote,
+            system_prompt_from=[{"path": "agent.py", "start_line": lines[0], "end_line": lines[1]}],
+        ),
+        tmp_path / "out",
+        source_root=root,
+    )
+
+    if refused:
+        assert text_of(result) == REFUSED + not_the_quote(f"agent.py {lines[0]}-{lines[1]}")
+    else:
+        assert not result.get("is_error"), result
+
+
+def test_full_width_digits_hold_their_quote(tmp_path, root):
+    (root / "prompt.py").write_text('PROMPT = "Seat at most ８ guests per table tonight."\n', encoding="utf-8")
+
+    result = accept_contract(
+        payload(
+            hard_constraints=["Be polite."],
+            system_prompt_excerpt="Seat at most 8 guests per table tonight.",
+            system_prompt_from=[{"path": "prompt.py", "start_line": 1, "end_line": 1}],
+        ),
+        tmp_path / "out",
+        source_root=root,
+    )
+
+    assert not result.get("is_error"), result
+
+
+@pytest.mark.parametrize(
+    "file, written, name",
+    [
+        pytest.param("agent.ts", 'class A { #model = "gpt-4o"; }', "gpt-4o", id="js-private-field"),
+        pytest.param("agent.c", '#define MODEL "gpt-4o"', "gpt-4o", id="c-define"),
+        pytest.param("main.rs", '#[default = "gpt-4o"] model: String,', "gpt-4o", id="rust-attribute"),
+        pytest.param("cfg.yaml", "llm: {url: http://x/#top, model: gpt-4o}", "gpt-4o", id="yaml-url-fragment"),
+        pytest.param("cfg.yaml", "llm: {a: 1,#b, model: gpt-4o}", "gpt-4o", id="yaml-hash-without-a-space"),
+        pytest.param("agent.ts", '/* the default */ const model = "gpt-4o";', "gpt-4o", id="a-closed-block-comment-before"),
+        pytest.param("index.html", '<!-- the default --> <i model="gpt-4o">', "gpt-4o", id="a-closed-markup-comment-before"),
+        pytest.param("llm.py", 'm = str("gpt-4o")', "gpt-4o", id="str-as-a-function"),
+        pytest.param("GNUmakefile", "MODEL ?= gpt-4o", "gpt-4o", id="gnu-makefile"),
+        pytest.param("chat.prompt", "model: googleai/gemini-1.5-pro", "googleai/gemini-1.5-pro", id="dotprompt-frontmatter"),
+    ],
+)
+def test_more_honest_forms_by_language(root, file, written, name):
+    (root / file).write_text(f"\n{written}\n", encoding="utf-8")
+
+    problems, contract, _ = checked(root, {"name": name, "path": file, "line": 2})
+
+    assert problems == []
+    assert contract.model is not None and contract.model.name == name
+
+
+@pytest.mark.parametrize(
+    "file, written, name",
+    [
+        pytest.param("agent.ts", 'x = 1; /* "gpt-4o" */ y = 2;', "gpt-4o", id="inside-a-closed-block-comment"),
+        pytest.param("agent.py", "x = 1  # it's \"gpt-4o\"", "gpt-4o", id="python-hash"),
+        pytest.param("cfg.yaml", 'model: gpt-4o-mini # was "gpt-4o"', "gpt-4o", id="yaml-spaced-hash"),
+        pytest.param("agent.ts", 'const m = config?.["gpt-4o"];', "gpt-4o", id="optional-chained-lookup"),
+        pytest.param("agent.py", 'm = env.str("gpt-4o")', "gpt-4o", id="str-as-a-method"),
+    ],
+)
+def test_more_comments_and_lookups_by_language(root, file, written, name):
+    (root / file).write_text(f"\n{written}\n", encoding="utf-8")
+
+    problems, _, _ = checked(root, {"name": name, "path": file, "line": 2})
+
+    assert problems == [not_named(name, 2, file)]
+
+
+@pytest.mark.parametrize("file", ["prompt.j2", "prompt.jinja", "prompt.jinja2", "prompt.hbs", "prompt.mustache"])
+def test_a_prompt_template_holds_no_model(root, file):
+    (root / file).write_text('You are an assistant.\nYou run on "gpt-4o".\n', encoding="utf-8")
+
+    problems, _, _ = checked(root, {"name": "gpt-4o", "path": file, "line": 2})
+
+    assert problems == [prose(file)]
+
+
+def test_a_short_quote_with_nothing_held_is_looked_for_whole(tmp_path, root):
+    (root / "agent.py").write_text(_BOOKING, encoding="utf-8")
+    submit = submitter(tmp_path / "out", root)
+
+    result = submit(
+        payload(
+            hard_constraints=["Be polite."],
+            system_prompt_excerpt="You are pair.",
+            system_prompt_from=[{"path": "agent.py", "start_line": 1, "end_line": 4}],
+        )
+    )
+
+    assert text_of(result).startswith(REFUSED + not_the_quote("agent.py 1-4"))
+
+
+def test_a_long_first_word_is_charged_on_every_try(root):
+    from fi.alk.harness.model_citation import quote_problem
+
+    started = time.perf_counter()
+    # Without the charge, each of 200,000 tries would compare 200,000 letters.
+    answer = quote_problem("a" * 200_000 + " b", "a" * 400_000, "agent.py 1-1")
+    took = time.perf_counter() - started
+
+    assert answer is not None
+    assert took < 0.25
+
+
+def test_a_short_unspaced_quote_is_still_searched_with_gaps(tmp_path, root):
+    # Six characters, each counted as three letters: long enough to be searched with gaps.
+    (root / "prompt.py").write_text('PROMPT = ("你是订餐" f"助手")\n', encoding="utf-8")
+
+    result = accept_contract(
+        payload(
+            hard_constraints=["Be polite."],
+            system_prompt_excerpt="你是订餐助手",
+            system_prompt_from=[{"path": "prompt.py", "start_line": 1, "end_line": 1}],
+        ),
+        tmp_path / "out",
+        source_root=root,
+    )
+
+    assert not result.get("is_error"), result
+
+
+@pytest.mark.parametrize(
+    "file, written, line, name",
+    [
+        pytest.param("cfg.yaml", 'note: x """ y\nmodel: gpt-4o\n', 2, "gpt-4o", id="yaml-bare-triple"),
+        pytest.param("main.go", 'var s = x + """\nvar model = "gpt-4o"\n', 2, "gpt-4o", id="go-bare-triple"),
+    ],
+)
+def test_triple_quotes_are_tracked_only_where_they_are_strings(root, file, written, line, name):
+    (root / file).write_text(written, encoding="utf-8")
+
+    problems, _, _ = checked(root, {"name": name, "path": file, "line": line})
+
+    assert problems == []
+
+
+def test_a_value_before_a_block_closes_is_text(root):
+    (root / "llm.py").write_text('X = """a\nuse "gpt-4o" here"""\n', encoding="utf-8")
+
+    problems, _, _ = checked(root, {"name": "gpt-4o", "path": "llm.py", "line": 2})
+
+    assert problems == [not_named("gpt-4o", 2, "llm.py")]
+
+
+def test_lines_without_a_triple_quote_are_not_scanned(root, monkeypatch):
+    from fi.alk.harness import model_citation
+
+    written = '"""\n' + "x\n" * 499 + '"""\n' + "y\n" * 499 + 'MODEL = "gpt-4o"\n'
+    (root / "llm.py").write_text(written, encoding="utf-8")
+    scanned: list[str] = []
+    real_scan = model_citation._line_scan
+    monkeypatch.setattr(
+        model_citation, "_line_scan", lambda line, *a, **k: scanned.append(line) or real_scan(line, *a, **k)
+    )
+
+    problems, _, _ = checked(root, {"name": "gpt-4o", "path": "llm.py", "line": 1001})
+
+    assert problems == []
+    # The block's opening and closing lines, and the cited line: nothing between.
+    assert scanned == ['"""', '"""', 'MODEL = "gpt-4o"']

@@ -1188,9 +1188,15 @@ def test_a_prompt_file_without_end_is_read_only_to_its_limit(tmp_path, repo, mon
             endless.add(descriptor)
         return descriptor
 
+    given: list[int] = []
+
     def read(descriptor, size):
         # Like a link to /proc/self/pagemap: its size says 0 and it reads without end.
-        return b"#" * size if descriptor in endless else real_read(descriptor, size)
+        if descriptor not in endless:
+            return real_read(descriptor, size)
+        given.append(size)
+        assert sum(given) <= 8 * 1024 * 1024, "read to the end"
+        return b"#" * size
 
     def close(descriptor):
         endless.discard(descriptor)

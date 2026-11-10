@@ -115,7 +115,7 @@ Find, in roughly this order:
    and every later stage decides what the agent should do from it. If the prompt is built or
    fetched at run time and has no lines to name, quote it in `system_prompt_excerpt`; the save
    asks once whether lines can be named. A quote is word for word, with ... where you leave text
-   out; when you give both, the lines named must hold it.
+   out. The lines you name are checked against your latest quote, given with them or before.
 
 7. **The modality.** How this agent is run: a voice session, a text conversation, or work it
    carries out on websites or a computer. This decides how it is later run, so getting it wrong

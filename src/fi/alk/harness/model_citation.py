@@ -38,46 +38,201 @@ MODEL_NAME_CHARS = frozenset(string.ascii_letters + string.digits + "._:/@-")
 CONFIG_SUFFIXES = frozenset(
     {
         ".yaml", ".yml", ".toml", ".json", ".ini", ".cfg", ".conf", ".env", ".properties",
-        ".sh", ".bash", ".zsh", ".dockerfile", ".mk",
+        ".sh", ".bash", ".zsh", ".dockerfile", ".mk", ".prompt",
     }
 )
 _CONFIG_NAMES = frozenset({"makefile", "gnumakefile", ".flaskenv"})
-_YAML_SUFFIXES = frozenset({".yaml", ".yml"})
-# Files written for people: a backticked word there names something, it doesn't set it.
-PROSE_SUFFIXES = frozenset({".md", ".markdown", ".rst", ".txt", ".adoc"})
-# Words a setting is named with, never a model: `cfg.get("model")`, OPENAI_MODEL, llm.model.
-_SETTING_WORDS = frozenset(
-    {"model", "llm", "name", "default", "engine", "deployment", "provider", "key", "env", "id"}
+# Languages where # isn't a comment: C and C++ (#define), JavaScript and TypeScript (#field),
+# Java, Go, Rust (#[attr]), Swift (#if), Kotlin, C#, Scala, Dart, Objective-C.
+_NO_HASH_COMMENT_SUFFIXES = frozenset(
+    {
+        ".c", ".h", ".cc", ".cpp", ".cxx", ".hpp", ".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx",
+        ".java", ".go", ".rs", ".swift", ".kt", ".kts", ".cs", ".scala", ".dart", ".m", ".mm",
+    }
 )
-_CODE_QUOTES = frozenset("\"'`")
-_PROSE_QUOTES = frozenset("\"'")
+_YAML_SUFFIXES = frozenset({".yaml", ".yml"})
+# INI files: a line starting with ; is a comment.
+_INI_SUFFIXES = frozenset({".ini", ".cfg", ".conf"})
+# Files where -- starts a comment: SQL, Lua, Haskell.
+_DASH_COMMENT_SUFFIXES = frozenset({".sql", ".lua", ".hs"})
+# Files written for people: they say which model is used; they don't set it.
+# And prompt templates (.j2, .hbs): their text is the agent's prompt, which may name a model
+# without setting it.
+PROSE_SUFFIXES = frozenset(
+    {
+        ".md", ".markdown", ".mdx", ".mdc", ".rst", ".txt", ".adoc", ".org", ".j2", ".jinja",
+        ".jinja2", ".hbs", ".mustache",
+    }
+)
+# Files written for people, by name: README, CHANGELOG, LICENSE, CONTRIBUTING, with or without a
+# suffix (not readme_writer.py).
+_PROSE_STEMS = frozenset({"readme", "changelog", "license", "contributing"})
+# Words a setting is named with, never a model: `cfg.get("model")`, OPENAI_MODEL, llm.model.
+# Not "deployment": an Azure deployment's own name often has it (gpt-4o_deployment).
+_SETTING_WORDS = frozenset({"model", "llm", "name", "default", "engine", "provider", "key", "env", "id"})
+_QUOTES = frozenset("\"'`")
 _SETTING_NAME_CHARS = frozenset(string.ascii_uppercase + string.digits + "_")
 _SETTING_PARTS = re.compile(r"[_\-.:/@]")
-# A \uXXXX or \xXX escape in a string, as json.dump writes any non-ASCII character.
-_CHAR_ESCAPE = re.compile(r"\\(?:u([0-9a-fA-F]{4})|x([0-9a-fA-F]{2}))")
-# Where a quote leaves text out: ... or …, also inside brackets, which only letters are compared.
+# An escape in a string: \uXXXX and \xXX (as json.dump writes any non-ASCII character),
+# \UXXXXXXXX, \N{NAME} and octal.
+_CHAR_ESCAPE = re.compile(
+    r"\\(?:u([0-9a-fA-F]{4})|x([0-9a-fA-F]{2})|U([0-9a-fA-F]{8})|N\{([A-Za-z0-9 \-]{1,88})\}"
+    r"|([0-7]{1,3}))"
+)
+_NOT_A_LETTER = re.compile(r"[\W_]+")
+# Full-width letters and digits (３, Ａ) as their ASCII forms: what NFKC would do for them,
+# without NFKC's growth elsewhere.
+_FULL_WIDTH = {code: code - 0xFEE0 for code in range(0xFF01, 0xFF5F)}
+# Scripts written without spaces between words (Thai, Lao, Burmese, Khmer, Japanese kana,
+# Chinese and Japanese ideographs): each character is a word, so the gap below applies between
+# characters there too.
+_UNSPACED = "\u0e00-\u0eff\u1000-\u109f\u1780-\u17ff\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff"
+_UNSPACED_CHAR = re.compile(f"[{_UNSPACED}]")
+_WORD = re.compile(f"[{_UNSPACED}]|[^\\W_{_UNSPACED}]+")
+# A quote of fewer letters than this says nothing to check lines against ("n/a", "TBD", "see
+# lines"): a few short words are found in almost any lines. A character of an unspaced script
+# counts as three.
+_SHORTEST_QUOTE = 16
+# Languages with triple-quoted strings ("""...""" or '''...'''): Python, TOML, Kotlin, Scala,
+# Swift, Groovy and Gradle, Java and C# text blocks, Julia, Dart, Elixir.
+_TRIPLE_SUFFIXES = frozenset(
+    {
+        ".py", ".pyi", ".pyw", ".toml", ".kt", ".kts", ".scala", ".sc", ".swift", ".groovy",
+        ".gradle", ".java", ".cs", ".jl", ".dart", ".ex", ".exs",
+    }
+)
+# Where a quote leaves text out: ... or …, also inside brackets, since only letters are compared.
 _ELISION = re.compile(r"\.{3,}|…")
+# How many letters of code may sit between two words of a quote in the lines: a string prefix
+# (f"), a short comment, `+ NAME +`, a markup tag or a placeholder the quote leaves out.
+_WORD_GAP = 24
 
 
-def _comment_finder(quotes: frozenset[str]) -> re.Pattern[str]:
-    """One pass over a line: a quoted string is matched whole (to the line's end if it isn't
-    closed), so a marker inside it is passed over; the first marker outside a string starts the
-    comment. The string alternatives can't overlap, so the search never backtracks."""
-    strings = [rf"{re.escape(q)}(?:[^{re.escape(q)}\\]|\\.)*{re.escape(q)}?" for q in sorted(quotes)]
-    markers = [
-        # Not $# (a shell count) or &# (an HTML character).
-        r"(?<![$&])#",
-        r"//",
-        r"/\*",
-        r"<!--",
-        # SQL and Lua: -- on its own, not a --flag.
-        r"(?<![^ \t])--(?![^ \t])",
-    ]
-    return re.compile("|".join([*strings, *markers]))
+# How # starts a comment: anywhere (Python, shell, Ruby, TOML...), only at a line's start or
+# after a space (YAML, where `url: http://x/#top` and `{a: 1,#b}` are values), or not at all.
+_HASH_ANYWHERE, _HASH_SPACED, _HASH_NONE = "anywhere", "spaced", "none"
 
 
-_CODE_COMMENTS = _comment_finder(_CODE_QUOTES)
-_PROSE_COMMENTS = _comment_finder(_PROSE_QUOTES)
+def _comment_tokens(*, dashes: bool, triple: bool, hash_comments: str) -> re.Pattern[str]:
+    """What the line scan stops at: a triple quote (in languages that have them), a
+    double-quoted or backticked string, matched whole (to the line's end if it isn't closed); an
+    apostrophe, which the scan pairs itself; or a comment marker. # not in $# (a shell count),
+    &# (an HTML character) or ${# (a shell length); // not in a URL (http://), floor division
+    (x//2) or after a name; /* not in a glob (data/*)."""
+    alternatives = ['"""', "'''"] if triple else []
+    alternatives += [r'"(?:[^"\\]|\\.)*"?', r"`(?:[^`\\]|\\.)*`?", "'"]
+    if hash_comments == _HASH_ANYWHERE:
+        alternatives.append(r"(?<!\$\{)(?<![$&])#")
+    elif hash_comments == _HASH_SPACED:
+        alternatives.append(r"(?<![^ \t])#")
+    alternatives += [r"(?<![:)\]\w])//", r"(?<![\w.*/])/\*", "<!--"]
+    if dashes:
+        # In SQL, Lua and Haskell, -- starts a comment wherever it is.
+        alternatives.append("--")
+    return re.compile("|".join(alternatives))
+
+
+_TOKENS = {
+    (dashes, triple, hash_comments): _comment_tokens(
+        dashes=dashes, triple=triple, hash_comments=hash_comments
+    )
+    for dashes in (False, True)
+    for triple in (False, True)
+    for hash_comments in (_HASH_ANYWHERE, _HASH_SPACED, _HASH_NONE)
+}
+# The rest of a string an apostrophe opens, to the apostrophe that closes it.
+_REST_OF_SINGLE = re.compile(r"(?:[^'\\]|\\.)*'")
+# Python's string prefixes: an apostrophe right after one of these opens a string.
+_STRING_PREFIXES = frozenset({"r", "b", "f", "u", "rb", "br", "fr", "rf"})
+
+
+def _opens_a_string(line: str, at: int) -> bool:
+    """Whether the apostrophe at ``at`` can open a string: not inside a word (Pair's, it's, x'
+    in Haskell) and not after a backslash (it\\'s), unless the word is a string prefix (r'...',
+    rb'...'). Looks at three characters at most."""
+    start = at
+    while start > 0 and at - start < 3 and line[start - 1].isalnum():
+        start -= 1
+    if start == at:
+        return at == 0 or line[at - 1] != "\\"
+    whole = start == 0 or not (line[start - 1].isalnum() or line[start - 1] == "_")
+    return whole and line[start:at].lower() in _STRING_PREFIXES
+
+
+def _line_scan(
+    line: str,
+    block: str | None,
+    *,
+    dashes: bool = False,
+    ini: bool = False,
+    triple: bool = False,
+    hash_comments: str = _HASH_ANYWHERE,
+) -> tuple[int, list[tuple[int, int]], str | None]:
+    """One pass over a line: where its comment starts (or its length), the stretches of it that
+    are text (inside a triple-quoted string, or a block comment closed on the line), and the
+    triple quote still open at its end. ``block`` is the one open where the line starts. A line
+    is a comment when it is the `* ` middle of a block comment or,
+    in INI, starts with ;. Strings are passed over whole, so a marker or a triple quote inside one
+    doesn't count; an apostrophe opens a string only when another closes it on the line."""
+    inside: list[tuple[int, int]] = []
+    at = 0
+    if block is not None:
+        close = line.find(block)
+        if close < 0:
+            return len(line), [(0, len(line))], block
+        inside.append((0, close))
+        at = close + 3
+    else:
+        stripped = line.lstrip()
+        if stripped.startswith(("* ", "*\t")) or (ini and stripped.startswith(";")):
+            return 0, inside, None
+    tokens = _TOKENS[dashes, triple, hash_comments]
+    while (found := tokens.search(line, at)) is not None:
+        token, start = found.group(), found.start()
+        at = found.end()
+        if token in ('"""', "'''"):
+            close = line.find(token, at)
+            if close < 0:
+                inside.append((at, len(line)))
+                return len(line), inside, token
+            inside.append((at, close))
+            at = close + 3
+        elif token == "'":
+            if _opens_a_string(line, start):
+                # Unclosed, it is an apostrophe: every later one is then after a backslash, so
+                # none of them opens a string either, and the line is read about once.
+                closed = _REST_OF_SINGLE.match(line, at)
+                if closed is not None:
+                    at = closed.end()
+        elif token in ("/*", "<!--"):
+            # A block comment closed on the line is passed over: `/* x */ model = "gpt-4o"`.
+            close = line.find("*/" if token == "/*" else "-->", at)
+            if close < 0:
+                return start, inside, None
+            # From the marker itself, so the stretch can never be a quoted value.
+            inside.append((start, close))
+            at = close + (2 if token == "/*" else 3)
+        elif token[0] not in "\"`":
+            return start, inside, None
+    return len(line), inside, None
+
+
+def block_open_before(
+    lines: list[str], *, dashes: bool = False, ini: bool = False, hash_comments: str = _HASH_ANYWHERE
+) -> str | None:
+    """The triple quote open where the line after ``lines`` starts, the lines read with the same
+    scan as the cited one. A line with no triple quote, outside a block, is passed over without
+    a scan; inside one, only the closing quote is looked for."""
+    block: str | None = None
+    for line in lines:
+        if block is None and '"""' not in line and "'''" not in line:
+            continue
+        if block is not None and block not in line:
+            continue
+        _, _, block = _line_scan(
+            line, block, dashes=dashes, ini=ini, triple=True, hash_comments=hash_comments
+        )
+    return block
 
 
 def resolved_in_source(root: Path, path: str) -> Path | None:
@@ -94,7 +249,7 @@ def resolved_in_source(root: Path, path: str) -> Path | None:
 _OPEN_FLAGS = (
     os.O_RDONLY
     # A pipe or a device put at the path after it was resolved is opened without waiting on it,
-    # then refused below; a link put there since isn't followed out of the source.
+    # then refused below; a link put in the path's last part since isn't followed.
     | getattr(os, "O_NONBLOCK", 0)
     | getattr(os, "O_NOFOLLOW", 0)
     | getattr(os, "O_CLOEXEC", 0)
@@ -104,15 +259,15 @@ _OPEN_FLAGS = (
 def read_source(path: Path, limit: int) -> bytes | None:
     """At most ``limit + 1`` bytes of the file, or None: not a regular file, or not readable.
     ``path`` is already resolved. The caller judges the size. A file that can't be read is
-    logged by its path and the error's kind, never its content."""
+    logged by the error's kind alone: its path and content are the customer's."""
     try:
         descriptor = os.open(path, _OPEN_FLAGS)
     except (OSError, ValueError) as failed:
-        _LOG.info("source file not read: %s (%s)", path, type(failed).__name__)
+        _LOG.info("source file not read (%s)", type(failed).__name__)
         return None
     try:
         if not stat.S_ISREG(os.fstat(descriptor).st_mode):
-            _LOG.info("source file not read: %s (not a regular file)", path)
+            _LOG.info("source file not read (not a regular file)")
             return None
         chunks: list[bytes] = []
         held = 0
@@ -125,7 +280,7 @@ def read_source(path: Path, limit: int) -> bytes | None:
             held += len(chunk)
         return b"".join(chunks)
     except OSError as failed:
-        _LOG.info("source file not read: %s (%s)", path, type(failed).__name__)
+        _LOG.info("source file not read (%s)", type(failed).__name__)
         return None
     finally:
         os.close(descriptor)
@@ -135,19 +290,6 @@ def source_lines(raw: bytes) -> list[str]:
     """The file's lines, whatever coding line it carries: no codec the file names gets to run
     on it, and one file has one numbering wherever it is read."""
     return raw.decode("utf-8", errors="replace").splitlines()
-
-
-def _comment_start(line: str, *, prose: bool) -> int:
-    """Where a comment starts on the line, or its length: a line that is a comment (also the
-    `* ` middle of a block comment, outside prose), or the first #, //, /*, <!-- or lone --
-    outside a quoted string."""
-    stripped = line.lstrip()
-    if not prose and (stripped == "*" or stripped.startswith(("* ", "*\t", "*/"))):
-        return 0
-    for found in (_PROSE_COMMENTS if prose else _CODE_COMMENTS).finditer(line):
-        if found.group()[0] not in _CODE_QUOTES:
-            return found.start()
-    return len(line)
 
 
 def _bare_after_key(line: str, at: int, *, yaml: bool) -> bool:
@@ -176,6 +318,8 @@ def _is_a_key(line: str, at: int, end: int) -> bool:
 
 
 # Calls that look a setting up by its name: get, os.getenv, getOrThrow, getProperty, env.str.
+# str only as a method (env.str): str("gpt-4o") is a value.
+_METHOD_ONLY_CALLS = frozenset({"str"})
 _LOOKUP_CALLS = (
     "getenv", "get", "getOrThrow", "getOrDefault", "getProperty", "getString", "getValue", "str",
     "env", "config",
@@ -196,7 +340,7 @@ def _is_a_lookup(line: str, at: int) -> bool:
         return False
     if line[before] == "[":
         # A subscript follows a name or a closing bracket; a list literal doesn't.
-        return line[before - 1].isalnum() or line[before - 1] in "_)]"
+        return line[before - 1].isalnum() or line[before - 1] in "_)]."
     if line[before] != "(":
         return False
     end = before - 1
@@ -211,32 +355,53 @@ def _is_a_lookup(line: str, at: int) -> bool:
     for call in _LOOKUP_CALLS:
         start = end + 1 - len(call)
         if start >= 0 and line[start : end + 1] == call:
+            if call in _METHOD_ONLY_CALLS:
+                return start > 0 and line[start - 1] == "."
             return start == 0 or not _NAME_END.match(line[start - 1])
     return False
 
 
 def named_on(
-    line: str, name: str, *, config: bool, yaml: bool = False, prose: bool = False
+    line: str,
+    name: str,
+    *,
+    config: bool,
+    yaml: bool = False,
+    dashes: bool = False,
+    ini: bool = False,
+    triple: bool = False,
+    hash_comments: str = _HASH_ANYWHERE,
+    block: str | None = None,
 ) -> bool:
-    """Whether ``name`` is the value written on ``line``: whole, outside a comment, and between
-    matching quotes (not a key, not a lookup; in prose, not backticks), or in a configuration
-    file written bare after ``:`` or ``=`` or as a shell default, ``${MODEL:-gpt-4o}``.
-    ``name`` is made only of MODEL_NAME_CHARS, so an occurrence starting inside one that failed
-    has a name character just before it, and the search resumes after the failed one. Each step
-    looks at a few characters beside the occurrence, so a line costs about one pass."""
+    """Whether ``name`` is the value written on ``line``: whole, outside a comment and outside
+    a triple-quoted string (``block`` is the triple quote open where the line starts), and
+    between matching quotes (not a key, not a lookup), or in a configuration file written bare
+    after ``:`` or ``=`` or as a shell default, ``${MODEL:-gpt-4o}``. ``name`` is made only of
+    MODEL_NAME_CHARS, so an occurrence starting inside one that failed has a name character just
+    before it, and the search resumes after the failed one. The line is scanned once, its
+    triple-quoted stretches walked alongside the occurrences, and each step looks at a few
+    characters beside one, so a line costs about one pass."""
     if not name:
         # find("") matches at every position without moving on.
         return False
-    quotes = _PROSE_QUOTES if prose else _CODE_QUOTES
-    comment = _comment_start(line, prose=prose)
+    comment, inside, _ = _line_scan(
+        line, block, dashes=dashes, ini=ini, triple=triple, hash_comments=hash_comments
+    )
+    stretches = iter(inside)
+    stretch = next(stretches, None)
     at = line.find(name, 0, comment)
     while at >= 0:
         end = at + len(name)
+        while stretch is not None and stretch[1] <= at:
+            stretch = next(stretches, None)
         before = line[at - 1] if at else ""
         after = line[end] if end < len(line) else ""
-        if after not in MODEL_NAME_CHARS:
+        # Inside a triple-quoted string or a block comment the line is text, unless the string is
+        # the value: MODEL = """gpt-4o""".
+        inside_text = stretch is not None and stretch[0] <= at and stretch != (at, end)
+        if not inside_text and after not in MODEL_NAME_CHARS:
             if before not in MODEL_NAME_CHARS:
-                if before and before in quotes and after == before:
+                if before and before in _QUOTES and after == before:
                     if not _is_a_key(line, at, end) and not _is_a_lookup(line, at):
                         return True
                 elif config and _bare_after_key(line, at, yaml=yaml):
@@ -259,7 +424,7 @@ def is_config_file(path: Path) -> bool:
 
 
 def is_prose_file(path: Path) -> bool:
-    return path.suffix.lower() in PROSE_SUFFIXES
+    return path.suffix.lower() in PROSE_SUFFIXES or path.stem.lower() in _PROSE_STEMS
 
 
 def _reads_as_a_setting(name: str) -> bool:
@@ -325,6 +490,14 @@ def model_problems(contract: AgentContract, source_root: Path) -> list[str]:
     resolved = resolved_in_source(root, path)
     if resolved is None:
         return [f"model: {shown_path} is not a file in the source"]
+    if is_prose_file(resolved):
+        # A README, a text file or a prompt template says which model is used; the code or its
+        # configuration sets it.
+        return [
+            f"model: {shown_path} is text (for people, or a prompt), not code or configuration; "
+            "cite the line in the agent's code or configuration the model is set on, or leave "
+            "model out"
+        ]
     raw = read_source(resolved, LARGEST_MODEL_FILE)
     if raw is None or len(raw) > LARGEST_MODEL_FILE:
         return [
@@ -334,12 +507,32 @@ def model_problems(contract: AgentContract, source_root: Path) -> list[str]:
     lines = source_lines(raw)
     if model.line > len(lines):
         return [f"model: line {model.line} is outside {shown_path}, which has {len(lines)} lines"]
+    suffix = resolved.suffix.lower()
+    dashes, ini = suffix in _DASH_COMMENT_SUFFIXES, suffix in _INI_SUFFIXES
+    triple = suffix in _TRIPLE_SUFFIXES
+    hash_comments = (
+        _HASH_NONE
+        if suffix in _NO_HASH_COMMENT_SUFFIXES
+        else _HASH_SPACED
+        if suffix in _YAML_SUFFIXES
+        else _HASH_ANYWHERE
+    )
     if not named_on(
         lines[model.line - 1],
         name,
         config=is_config_file(resolved),
-        yaml=resolved.suffix.lower() in _YAML_SUFFIXES,
-        prose=is_prose_file(resolved),
+        yaml=suffix in _YAML_SUFFIXES,
+        dashes=dashes,
+        ini=ini,
+        triple=triple,
+        hash_comments=hash_comments,
+        block=(
+            block_open_before(
+                lines[: model.line - 1], dashes=dashes, ini=ini, hash_comments=hash_comments
+            )
+            if triple
+            else None
+        ),
     ):
         return [
             f"model: the name {shown_name} is not the value written on line {model.line} of "
@@ -352,36 +545,90 @@ def model_problems(contract: AgentContract, source_root: Path) -> list[str]:
     return []
 
 
+def _escape(found: re.Match[str]) -> str:
+    code = found.group(1) or found.group(2) or found.group(3)
+    try:
+        if code:
+            return chr(int(code, 16))
+        if found.group(4):
+            return unicodedata.lookup(found.group(4))
+        return chr(int(found.group(5), 8))
+    except (KeyError, ValueError, OverflowError):
+        return found.group()
+
+
+def _comparable(text: str) -> str:
+    """``text`` as a quote and the lines it was quoted from both read it: escapes decoded, HTML
+    entities decoded, one Unicode form (NFC, which never grows the text much), case set aside."""
+    unescaped = _CHAR_ESCAPE.sub(_escape, text)
+    return unicodedata.normalize("NFC", html.unescape(unescaped)).translate(_FULL_WIDTH).casefold()
+
+
 def _letters(text: str) -> str:
-    """The letters and digits of ``text``, case set aside: what a quote and the lines it was
-    quoted from share whatever the quoting, the escapes, the HTML entities, the Unicode form or
-    the pieces a long string is written in."""
-    unescaped = _CHAR_ESCAPE.sub(
-        lambda escape: chr(int(escape.group(1) or escape.group(2), 16)), text
+    """The letters and digits of ``text`` once comparable: what a quote and its lines share
+    whatever the quoting or the pieces a long string is written in."""
+    return _NOT_A_LETTER.sub("", _comparable(text))
+
+
+def quote_pieces(quote: str) -> list[list[str]]:
+    """The quote's words, in the pieces it leaves text out between (..., …). Empty when the
+    quote has fewer than _SHORTEST_QUOTE letters: then it says nothing to check lines against."""
+    pieces = [_WORD.findall(_comparable(piece)) for piece in _ELISION.split(quote)]
+    pieces = [words for words in pieces if words]
+    letters = sum(
+        3 if _UNSPACED_CHAR.fullmatch(word) else len(word) for words in pieces for word in words
     )
-    unescaped = unescaped.replace("\\n", " ").replace("\\t", " ").replace("\\r", " ")
-    unescaped = unicodedata.normalize("NFKC", html.unescape(unescaped)).casefold()
-    return "".join(filter(str.isalnum, unescaped))
+    return pieces if letters >= _SHORTEST_QUOTE else []
+
+
+def _holds(found: str, pieces: list[list[str]]) -> bool:
+    """Whether every piece's words are in ``found`` in order, each within _WORD_GAP letters of
+    the one before, and each piece after the one before. A piece whose first word matches in the
+    wrong place is tried again further on. Each search is charged what it reads, against a budget
+    of a few times the text, so a crafted file or quote costs a few passes at most."""
+    budget = 4 * (len(found) + sum(len(word) for words in pieces for word in words)) + 10_000
+    at = 0
+    for words in pieces:
+        while True:
+            start = found.find(words[0], at)
+            if start < 0:
+                return False
+            budget -= start - at + len(words[0])
+            end = start + len(words[0])
+            for word in words[1:]:
+                hit = found.find(word, end, end + _WORD_GAP + len(word))
+                if hit < 0:
+                    # A false start usually ends here, at its second word: charged that word.
+                    budget -= len(word)
+                    break
+                budget -= _WORD_GAP + len(word)
+                end = hit + len(word)
+            else:
+                at = end
+                break
+            if budget < 0:
+                return False
+            at = start + 1
+    return True
 
 
 def quote_problem(quote: str, copied: str, named: str) -> str | None:
     """A problem when the lines named for the prompt don't hold the quote given for it: they
-    replace the quote, so a wrong range would send unrelated code as the agent's instructions,
-    and a short one would send less than was quoted. The quote is split where it leaves text
-    out (..., [...]) and every piece must be in the lines, in order. Each search starts where
-    the last one ended and only the last can fail, so the lines are read about twice."""
-    pieces = [piece for piece in map(_letters, _ELISION.split(quote)) if piece]
-    if not pieces:
+    replace the quote, so lines that miss any of it (a range that stops short, or the wrong
+    lines) would send other text as the agent's instructions. A quote of fewer than
+    _SHORTEST_QUOTE letters is looked for whole, with no gaps. Lines that hold more than the quote
+    are not caught."""
+    pieces = quote_pieces(quote)
+    if pieces:
+        held = _holds(_letters(copied), pieces)
+    else:
+        # A quote too short to search for with gaps must be in the lines letter for letter.
+        letters = _letters(quote)
+        held = not letters or letters in _letters(copied)
+    if held:
         return None
-    found = _letters(copied)
-    at = 0
-    for piece in pieces:
-        at = found.find(piece, at)
-        if at < 0:
-            return (
-                f"system_prompt_from: the lines named ({named}) don't hold "
-                "system_prompt_excerpt; quote the prompt word for word, with ... where you "
-                "leave text out, and name the lines it is written on"
-            )
-        at += len(piece)
-    return None
+    return (
+        f"system_prompt_from: the lines named ({named}) don't hold system_prompt_excerpt; quote "
+        "the prompt word for word, with ... where you leave text out, and name the lines it is "
+        "written on"
+    )

@@ -1142,6 +1142,9 @@ class AgentContract(BaseModel):
     system_prompt_excerpt: str = ""
     # When given, the excerpt is replaced by these lines copied from the source as written.
     system_prompt_from: list[PromptSource] = Field(default_factory=list)
+    # Set by the save, never by the reading: lines named for the prompt that twice didn't hold
+    # the quote given for it, so the quote went out instead. Empty for nearly every contract.
+    unconfirmed_prompt_from: list[PromptSource] = Field(default_factory=list)
     # None is unknown. Kept only when its name was found on the line cited in the source.
     model: ModelSource | None = None
     hard_constraints: list[str] = Field(default_factory=list)
@@ -1185,6 +1188,9 @@ class AgentContract(BaseModel):
         data = handler(self)
         if data.get("model") is None:
             data.pop("model", None)
+        # The same for the record of unconfirmed prompt lines, kept only when there are some.
+        if not data.get("unconfirmed_prompt_from"):
+            data.pop("unconfirmed_prompt_from", None)
         return data
 
     def tool_names(self) -> set[str]:
