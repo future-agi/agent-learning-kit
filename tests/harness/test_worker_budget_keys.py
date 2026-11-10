@@ -19,3 +19,13 @@ def test_a_budget_for_a_worker_the_contract_does_not_declare_is_refused_with_the
     assert _budgets_for_unknown_workers(_scenario({"refund": 2}), tmp_path) == ""
     # One number for all workers names none.
     assert _budgets_for_unknown_workers(_scenario(30), tmp_path) == ""
+
+
+def test_a_budget_per_worker_is_refused_when_the_contract_cannot_be_read(tmp_path):
+    # No contract.json: the declared workers are unknown, so a per-worker budget cannot be checked and is not accepted.
+    said = _budgets_for_unknown_workers(_scenario({"refund": 2}), tmp_path)
+    assert "contract" in said and "worker_budget_seconds" in said
+    (tmp_path / "contract.json").write_text("{not json")
+    assert "worker_budget_seconds" in _budgets_for_unknown_workers(_scenario({"refund": 2}), tmp_path)
+    # One number for all workers needs no contract.
+    assert _budgets_for_unknown_workers(_scenario(30), tmp_path) == ""

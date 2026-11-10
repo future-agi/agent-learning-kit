@@ -1369,7 +1369,11 @@ def _budgets_for_unknown_workers(scenario: Scenario, world_root: Path) -> str:
     try:
         contract = json.loads((Path(world_root) / "contract.json").read_text(encoding="utf-8"))
     except (OSError, ValueError):
-        return ""
+        # Unchecked is not accepted: without the contract nobody can say these workers exist.
+        return (
+            "worker_budget_seconds: the agent's contract could not be read, so a budget per worker cannot be checked "
+            "against its declared workers; give one number for all workers, or fix the contract first"
+        )
     declared = {str(one.get("id")) for one in contract.get("workers") or [] if isinstance(one, dict)}
     unknown = sorted(str(worker) for worker in budgets if str(worker) not in declared)
     if not unknown:
