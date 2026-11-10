@@ -22,6 +22,8 @@ from .http_stream import (
     SSEDecoder,
     SSEProtocolError,
     SSEReducer,
+    _MISSING,
+    _select,
 )
 
 from fi._diagnostics import safe_endpoint, sanitize_diagnostic
@@ -707,6 +709,15 @@ class HTTPAgentWrapper(AgentWrapper):
                 self._auth_values.update(item.value for item in cookies.values())
         decoder = SSEDecoder()
         reducer = SSEReducer(self.sse)
+        completion_path_seen = False
+
+        def accept_frame(frame):
+            nonlocal completion_path_seen
+            envelope = {"event": frame.event, "data": frame.data, "id": frame.event_id}
+            if _select(envelope, self.sse.completion.path) is not _MISSING:
+                completion_path_seen = True
+            return reducer.accept(frame, bytes_received=decoder.bytes_received)
+
         try:
             async with httpx.AsyncClient(
                 cookies=self._cookies,
@@ -774,17 +785,13 @@ class HTTPAgentWrapper(AgentWrapper):
                         )
                     async for chunk in response.aiter_raw():
                         for frame in decoder.feed(chunk):
-                            complete = reducer.accept(
-                                frame, bytes_received=decoder.bytes_received
-                            )
+                            complete = accept_frame(frame)
                             if complete:
                                 self._record_stream_trace(complete, state="complete")
                                 self._response_text = ""
                                 return status, list(complete.payloads), complete
                     for frame in decoder.finish():
-                        complete = reducer.accept(
-                            frame, bytes_received=decoder.bytes_received
-                        )
+                        complete = accept_frame(frame)
                         if complete:
                             self._record_stream_trace(complete, state="complete")
                             self._response_text = ""
@@ -831,6 +838,7 @@ class HTTPAgentWrapper(AgentWrapper):
             self._stream_trace = {
                 "stream_state": "incomplete",
                 "stream_reason": exc.code,
+                "stream_completion_path_seen": completion_path_seen,
                 "stream_bytes_received": exc.bytes_received or decoder.bytes_received,
                 "stream_events_received": exc.events_received or reducer.events_received,
                 "stream_last_event_id": exc.last_event_id or reducer.last_event_id,

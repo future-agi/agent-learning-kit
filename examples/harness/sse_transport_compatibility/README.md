@@ -20,7 +20,7 @@ python examples/harness/sse_transport_compatibility/verify_reference.py \
 Start the unmodified upstream dojo from the materialized `examples` directory:
 
 ```bash
-export GOOGLE_APPLICATION_CREDENTIALS="/path/to/Vertex_AI_Creds.json"
+export GOOGLE_APPLICATION_CREDENTIALS="/path/to/google-application-credentials.json"
 export VERTEXAI_PROJECT="your-vertex-project-id"
 export VERTEXAI_LOCATION=global
 export MODEL=vertex_ai/gemini-3.7-flash
@@ -96,7 +96,7 @@ Run the matrix from the ALK checkout:
 ```bash
 export E2B_API_KEY=...
 export VERTEXAI_PROJECT="your-vertex-project-id"
-export GOOGLE_APPLICATION_CREDENTIALS="/path/to/Vertex_AI_Creds.json"
+export GOOGLE_APPLICATION_CREDENTIALS="/path/to/google-application-credentials.json"
 uv run --with e2b==2.37.1 \
   python examples/harness/sse_transport_compatibility/e2b_qualify.py \
   --output /tmp/alk-sse-e2b.json

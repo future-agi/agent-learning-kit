@@ -11,7 +11,7 @@ must prove which source file each case imported.
 
 ```bash
 export E2B_API_KEY=...
-export GOOGLE_APPLICATION_CREDENTIALS=/path/to/Vertex_AI_Creds.json
+export GOOGLE_APPLICATION_CREDENTIALS=/path/to/google-application-credentials.json
 export VERTEXAI_PROJECT=...
 uv run --with e2b==2.37.1 \
   python examples/harness/sse_transport_compatibility/e2b_qualify.py \

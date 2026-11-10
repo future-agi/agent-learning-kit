@@ -322,6 +322,15 @@ def sse_server():
                 self.wfile.flush()
                 state["release"].wait(3)
                 return
+            if case == "ping_only":
+                for _ in range(50):
+                    try:
+                        self.wfile.write(b": ping\n\n")
+                        self.wfile.flush()
+                    except (BrokenPipeError, ConnectionResetError):
+                        break
+                    time.sleep(0.02)
+                return
             if case == "slow_active":
                 for value in "hello":
                     self.wfile.write(
@@ -501,6 +510,8 @@ def test_live_stream_requires_success_terminal(case, reason):
         assert trace["success"] is False
         assert trace["failure_stage"] == "stream"
         assert trace["stream_reason"] == reason
+        if reason == "sse_incomplete":
+            assert trace["stream_completion_path_seen"] is True
         assert response.content == ""
         assert not response.tool_calls
 
@@ -550,6 +561,23 @@ def test_live_stream_has_an_absolute_deadline():
         assert trace["timeout_error"] is True
         assert trace["stream_events_received"] == 1
         assert trace["response_excerpt"] == "partial"
+
+
+def test_live_stream_absolute_deadline_stops_ping_only_keepalives():
+    with sse_server() as (endpoint, _state):
+        started = time.monotonic()
+        response = asyncio.run(
+            _wrapper(
+                endpoint, timeout=0.1, total_timeout=0.2, secret_values={}
+            ).call(_input("ping_only"))
+        )
+        elapsed = time.monotonic() - started
+
+    trace = response.metadata["external_agent"]
+    assert elapsed < 0.8
+    assert trace["success"] is False
+    assert trace["stream_reason"] == "sse_deadline"
+    assert trace["timeout_error"] is True
 
 
 def test_regular_stream_timeout_is_idle_not_absolute():

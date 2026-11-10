@@ -383,8 +383,8 @@ def qualify(
         raise RuntimeError("sandbox_report_missing")
     report = validate_report(raw_report, expected_hash)
     report["sandbox"] = {
-        "id": sandbox_id,
-        "template": template,
+        "id": "redacted",
+        "template": "redacted",
         "cleanup_succeeded": cleanup_succeeded,
     }
     report["passed"] = bool(report["passed"] and cleanup_succeeded)

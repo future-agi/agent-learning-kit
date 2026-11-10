@@ -792,8 +792,20 @@ def test_ingress_classifies_timeout_type_not_message(tmp_path, monkeypatch, kind
             "chat_ingress_configuration_invalid",
         ),
         (
-            {"failure_stage": "stream", "stream_reason": "sse_incomplete"},
+            {
+                "failure_stage": "stream",
+                "stream_reason": "sse_incomplete",
+                "stream_completion_path_seen": False,
+            },
             "chat_ingress_configuration_invalid",
+        ),
+        (
+            {
+                "failure_stage": "stream",
+                "stream_reason": "sse_incomplete",
+                "stream_completion_path_seen": True,
+            },
+            "chat_ingress_failed",
         ),
     ],
 )

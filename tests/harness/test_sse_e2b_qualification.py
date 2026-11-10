@@ -217,8 +217,8 @@ def test_controller_writes_report_only_after_sandbox_cleanup(tmp_path, monkeypat
     report = json.loads(output.read_text(encoding="utf-8"))
     assert "secret" not in output.read_text(encoding="utf-8")
     assert report["sandbox"] == {
-        "id": "sandbox-1",
-        "template": "base",
+        "id": "redacted",
+        "template": "redacted",
         "cleanup_succeeded": True,
     }
     assert sandbox.killed is True
