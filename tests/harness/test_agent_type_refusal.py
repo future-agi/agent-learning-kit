@@ -5520,3 +5520,60 @@ def test_a_member_reached_again_reads_only_its_new_extras(tmp_path, monkeypatch)
     credentials._workspace_dependencies(repo, repo / "agents" / "a", [1e9], {})
     # The 200 plain ones once, not once for each of the 60 extras.
     assert len(names) < 1_200
+
+
+def test_what_follows_a_cookie_isnt_counted_against_it():
+    from fi.alk.harness import python_source
+
+    # Pine's TH-9490 review: Python runs this file as utf-7, however many "coding" follow.
+    assert python_source._coding(b"# coding: utf-7 " + b" coding" * 65 + b"\nimport x\n")[0] == "utf-7"
+    failing = b"coding:# " * python_source._COOKIE_WORDS
+    assert python_source._coding(b"# " + failing + b"coding: latin-1\n")[0] == "iso-8859-1"
+    assert python_source._coding(b"# " + failing + b"coding:# coding: latin-1\n")[0] == "undefined"
+
+
+def test_plain_files_ahead_of_the_agents_imports_dont_use_up_the_parse_total(tmp_path):
+    from fi.alk.harness import agent_type_check
+
+    # Pine's TH-9490 review: three plain 126 KB files that sort first spent the 256 KB total, and
+    # the walk lost common/web.py with no word.
+    pad = "x = 1\n" * 21_000
+    repo = _tree(
+        tmp_path / "repo",
+        {
+            "agents/a/a0.py": pad,
+            "agents/a/a1.py": pad,
+            "agents/a/a2.py": pad,
+            "agents/a/main.py": "from common import web\n",
+            "common/__init__.py": "",
+            "common/web.py": "",
+        },
+    ).resolve()
+
+    assert repo / "common" / "web.py" in agent_type_check._walked(repo, "agents/a")
+
+
+def test_a_file_the_parse_total_cuts_says_the_walk_stopped(tmp_path):
+    from fi.alk.harness.credentials import imported_by_agent
+    from fi.alk.harness.python_source import ParseBudget
+
+    repo = _tree(
+        tmp_path / "repo",
+        {"agents/a/a.py": "import os\n" + "x = 1\n" * 50, "agents/a/b.py": "import common.web\n"},
+    )
+    said: list[bool] = []
+    imported_by_agent(repo, "agents/a", lookup_limit=100_000, parse_budget=ParseBudget(100), stopped=said)
+    assert said == [True]
+    said.clear()
+    imported_by_agent(repo, "agents/a", lookup_limit=100_000, parse_budget=ParseBudget(10_000), stopped=said)
+    assert said == [False]
+
+
+def test_a_script_the_script_total_cuts_says_the_walk_stopped(tmp_path):
+    from fi.alk.harness.credentials import imported_by_agent
+    from fi.alk.harness.python_source import ParseBudget
+
+    repo = _tree(tmp_path / "repo", {"agents/a/a.js": "import './b';\n" + "//" * 200 + "\n", "agents/a/b.js": ""})
+    said: list[bool] = []
+    imported_by_agent(repo, "agents/a", lookup_limit=100_000, script_budget=ParseBudget(10), stopped=said)
+    assert said == [True]

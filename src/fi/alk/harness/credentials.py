@@ -1457,7 +1457,12 @@ def imported_by_agent(
         content = text.replace("\r\n", "\n").replace("\r", "\n")
         hits: list[Path] = []
         if path.suffix == ".py":
+            # A file with no import in it can't lead anywhere, so it doesn't use up the parse total
+            # before the files that do (Pine's TH-9490 review); a file the total cuts says so.
+            if "import" not in content:
+                continue
             names = list(dict.fromkeys(_python_imports(content, parse_limit, parse_budget)))
+            cut |= parse_budget is not None and parse_budget.left < 0
             # One file can hold more names than the walk may try; the rest aren't tried.
             cut |= len(names) > import_limit - imports_tried
             names = names[: import_limit - imports_tried]
@@ -1468,6 +1473,7 @@ def imported_by_agent(
                 except (IndexError, ValueError, OSError):
                     continue  # An import that can't be a path in this repository.
         elif script_budget is not None and not script_budget.spend(content):
+            cut = True
             continue
         else:
             names = list(dict.fromkeys(_script_imports(content)))

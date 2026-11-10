@@ -196,29 +196,38 @@ def _first_lines(raw: bytes) -> bytes:
 # steps that never backtrack: a run of spaces before a missing name cost the square of its length.
 _COOKIE_SPACE = re.compile(rb"[ \t]*")
 _COOKIE_NAME = re.compile(rb"[-\w.]+", re.ASCII)
-# The places a cookie may start on the first two lines, at most: each that fails is tried in turn,
-# and 3,000 files of 16,000 held the save 2.4 s (round 4 reviewer A). An honest file has one.
+# The places on a line that look like a cookie's start but aren't one, at most, before the cookie:
+# each is tried in turn, and 3,000 files of 16,000 held the save 2.4 s (round 4 reviewer A). An
+# honest file has none. What follows a cookie isn't counted: Python reads the file in its codec.
 _COOKIE_WORDS = 64
 
 
-def _cookie_part(line: bytes) -> bytes:
+def _cookie_part(line: bytes) -> bytes | None:
     """``line`` as short as says the same to detect_encoding: a comment line becomes "#" and its
-    cookie, any other line "x", a blank line nothing. Its pattern, ``#.*?coding``, would try each
-    place up to the cookie, 0.75 ms on a 128 KB line, on every file (round 3 reviewer A)."""
+    cookie, any other line "x", a blank line nothing; None past ``_COOKIE_WORDS`` failed places.
+    Its pattern, ``#.*?coding``, would try each place up to the cookie, 0.75 ms on a 128 KB line,
+    on every file (round 3 reviewer A)."""
     mark = line.find(b"#")
     if mark == -1:
         return b"x" if line.strip(b" \t\f") else b""
     if line[:mark].strip(b" \t\f"):
         return b"x"
-    # Each place the cookie's word is, first to last, found by bytes.find; the first with a name
-    # after it is the cookie. _coding refuses a head with more than _COOKIE_WORDS of them.
-    at = mark
-    while starts := [i for i in (line.find(b"coding:", at), line.find(b"coding=", at)) if i != -1]:
-        start = min(starts)
+    # Each place the cookie's word is, first to last, found by bytes.find, each kind looked for
+    # again only past the one just tried (a kind the line lacks was read to its end each time: 21 s
+    # for 3,000 files); the first with a name after it is the cookie.
+    colon, equal, failed = line.find(b"coding:", mark), line.find(b"coding=", mark), 0
+    while colon != -1 or equal != -1:
+        start = colon if equal == -1 or colon != -1 and colon < equal else equal
         name = _COOKIE_NAME.match(line, _COOKIE_SPACE.match(line, start + 7).end())
         if name:
             return b"#" + line[start : start + 7] + name.group()
-        at = start + 1
+        failed += 1
+        if failed > _COOKIE_WORDS:
+            return None
+        if start == colon:
+            colon = line.find(b"coding:", start + 1)
+        else:
+            equal = line.find(b"coding=", start + 1)
     return b"#"
 
 
@@ -228,8 +237,9 @@ def _coding(raw: bytes) -> tuple[str, codecs.CodecInfo] | None:
     Asked about the first two lines as Python reads them: a lone CR ends a line, which
     detect_encoding doesn't know, and after any byte-order mark each is cut to the ASCII that says
     the same to it (``_cookie_part``), since it refuses a line holding a non-ASCII byte while the
-    parser still decodes the file in the codec it names (`# coding: latin-1` then a name in it). Four text codecs are
-    refused by name: punycode's decode costs the square of its size, 2.3 s for 128 KB; idna's
+    parser still decodes the file in the codec it names (`# coding: latin-1` then a name in it).
+    A line with more failed places than an honest one reads as a refused codec's file. Four text
+    codecs are refused by name: punycode's decode costs the square of its size, 2.3 s for 128 KB; idna's
     runs in Python for each label, 91 ms for 128 KB; undefined decodes nothing; unicode-escape is
     decoded only under a scan's total (``read_module``).
     """
@@ -239,12 +249,13 @@ def _coding(raw: bytes) -> tuple[str, codecs.CodecInfo] | None:
         # No cookie: detect_encoding would only run its pattern over the lines to say so.
         encoding = "utf-8-sig" if bom else "utf-8"
         return encoding, codecs.lookup(encoding)
-    if head.count(b"coding") > _COOKIE_WORDS:
-        # Read as a file in a refused codec is: searched raw, never decoded.
-        return "undefined", codecs.lookup("undefined")
     # Each line cut to what says the same: ASCII alone, so a non-ASCII byte elsewhere on the line
     # can't make detect_encoding refuse it.
-    cut = b"\n".join(map(_cookie_part, head[bom:].split(b"\n")))
+    parts = [_cookie_part(line) for line in head[bom:].split(b"\n")]
+    if None in parts:
+        # Read as a file in a refused codec is: searched raw, never decoded.
+        return "undefined", codecs.lookup("undefined")
+    cut = b"\n".join(parts)
     lines = io.BytesIO(head[:bom] + cut).readline
     try:
         encoding, _ = tokenize.detect_encoding(lines)
