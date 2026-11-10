@@ -311,6 +311,11 @@ def sse_server():
                 self.wfile.flush()
                 self.close_connection = True
                 return
+            if case == "eof_without_completion_path":
+                self.wfile.write(_event({"delta": "partial"}))
+                self.wfile.flush()
+                self.close_connection = True
+                return
             if case == "idle":
                 state["cancel_started"].set()
                 state["release"].wait(3)
@@ -497,13 +502,14 @@ def test_live_stream_returns_on_completion_before_server_eof():
 
 
 @pytest.mark.parametrize(
-    ("case", "reason"),
+    ("case", "reason", "completion_path_seen"),
     [
-        ("error", "sse_application"),
-        ("eof", "sse_incomplete"),
+        ("error", "sse_application", True),
+        ("eof", "sse_incomplete", True),
+        ("eof_without_completion_path", "sse_incomplete", False),
     ],
 )
-def test_live_stream_requires_success_terminal(case, reason):
+def test_live_stream_requires_success_terminal(case, reason, completion_path_seen):
     with sse_server() as (endpoint, _state):
         response = asyncio.run(_wrapper(endpoint).call(_input(case)))
         trace = response.metadata["external_agent"]
@@ -511,7 +517,7 @@ def test_live_stream_requires_success_terminal(case, reason):
         assert trace["failure_stage"] == "stream"
         assert trace["stream_reason"] == reason
         if reason == "sse_incomplete":
-            assert trace["stream_completion_path_seen"] is True
+            assert trace["stream_completion_path_seen"] is completion_path_seen
         assert response.content == ""
         assert not response.tool_calls
 
