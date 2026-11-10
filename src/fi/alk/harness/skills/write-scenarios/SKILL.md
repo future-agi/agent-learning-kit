@@ -647,8 +647,11 @@ called. Assert on what the world looks like afterwards and on what the caller wa
 
 Only when the environment lists actors. Someone the request names as acting during the run (deciding, objecting,
 negotiating, granting access) is an actor in that scenario, with their actions or a live part, never a line in the
-caller's instruction or a record already in place, and never the caller. A kept scenario's reply reads its cast back
-beside the actors it leaves out: compare it with the request before the next one.
+caller's instruction or a record already in place, and never the caller. When an actor decides something the person
+wants (a price, a discount, an approval), the person's instruction says what they ask for and never the outcome; how
+far the actor will go sits in that actor's limits (may agree to, keeps to themselves), so the negotiation happens in
+the run. A kept scenario's reply reads its cast back beside the actors it leaves out: compare it with the request
+before the next one.
 
 Write the scenario first as if no one else were there: the
 person's situation, request, details, sub-goals and answer key complete on their own. The person's

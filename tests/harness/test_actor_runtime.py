@@ -181,6 +181,31 @@ def test_an_actor_writes_in_the_chat_when_its_trigger_fires_and_the_agent_reads_
     ]
 
 
+def test_an_actor_whose_model_fails_says_nothing_and_the_conversation_goes_on(monkeypatch):
+    from fi.alk.harness.actor_model import ActorModelFailed
+
+    cast = _cast({"kind": "always"}, monkeypatch)
+
+    async def failing(actor, brief):
+        raise ActorModelFailed("manager's model gemini-3.8-flash did not answer: api_error: 403")
+
+    monkeypatch.setattr(cast, "_write", failing)
+    agent = _Agent(["Hello, what can I do?", "Moved to Friday."])
+    person = _Person(["Hi, I want to move my order.", conv.DONE])
+    transcript = _run(monkeypatch, cast, agent, person)
+    assert [one for one in transcript.canonical_messages() if one["role"] == "actor"] == []
+    assert not any("403" in one for one in agent.heard)
+    assert cast.summary() == [
+        {
+            "actor": "manager",
+            "name": "Mia",
+            "triggered": True,
+            "delivered": 0,
+            "dropped": ["its model did not answer"],
+        }
+    ]
+
+
 def test_an_actor_the_agent_answers_goes_back_and_forth_with_it_until_its_live_turns_run_out(monkeypatch):
     # One person's turn: the actor writes, the agent answers, the actor answers that, up to its own live turns.
     lines = ["20% is too high.", "Why not 14%?", "16% then, final.", "Fine, approved.", "One more thing."]
@@ -285,6 +310,26 @@ def test_an_actor_s_knowledge_reads_the_environment_s_files_and_records_but_neve
     assert '"value": 900' in text and '"value": 50' not in text
     assert "the answer key" not in text and "not the environment's" not in text
     assert "You manage the north store." in text
+
+
+def test_an_actor_never_reads_the_harness_s_own_tables_even_when_its_record_names_them(tmp_path):
+    from fi.alk.harness.actors import read_knowledge
+
+    rows = {
+        "_alk_tool_trace": [{"tool": "apply_discount", "args": "the agent's call"}],
+        "harness_seed_sentinel": [{"id": "ready"}],
+        "deals": [{"id": 7}],
+    }
+    read = read_knowledge(
+        [
+            {"kind": "records", "store": "world_db", "collection": "_alk_tool_trace"},
+            {"kind": "records", "store": "world_db", "collection": "harness_seed_sentinel"},
+            {"kind": "records", "store": "world_db", "collection": "deals"},
+        ],
+        tmp_path,
+        rows.get,
+    )
+    assert [one["read"] for one in read] == [[], [], [{"id": 7}]]
 
 
 def test_records_an_actor_may_read_are_only_named_where_the_world_cannot_be_read(tmp_path):
@@ -456,6 +501,22 @@ def test_an_event_started_run_invokes_the_agent_once_with_no_caller(monkeypatch)
     assert agent.heard == ["Meeting ended: launch sync"]
     assert [one["role"] for one in transcript.canonical_messages()] == ["actor", "assistant"]
     assert transcript.ended == conv.FINISHED
+
+
+def test_an_actor_s_start_message_is_theirs_by_name_and_counted_as_their_line(monkeypatch):
+    from fi.alk.harness.actors import StartsWith
+
+    agent = _Agent(["Applied and posted."])
+    monkeypatch.setattr(conv, "Stage", lambda *a, **k: pytest.fail("no caller is simulated"))
+    cast = conv.ChatActors([{**_MANAGER, "trigger": {"kind": "always"}}], seed="run", model=None)
+    scenario = SimpleNamespace(
+        instruction="", max_turns=4, starts_with=StartsWith(actor="manager", text="Apply the agreed 20% to deal 8.")
+    )
+    transcript = asyncio.run(conv.converse(agent, scenario, SimpleNamespace(), actors=cast))
+    assert transcript.canonical_messages()[0] == {
+        "role": "actor", "actor": "manager", "name": "Mia", "content": "Apply the agreed 20% to deal 8."
+    }
+    assert cast.summary() == [{"actor": "manager", "name": "Mia", "triggered": True, "delivered": 1, "dropped": []}]
 
 
 def test_a_task_driven_run_needs_no_actor_and_the_scenario_sends_the_task(monkeypatch):
@@ -970,3 +1031,71 @@ def test_a_task_driven_run_s_task_reaches_the_platform_as_the_person_s_message()
     from fi.alk.harness.platform import SPEAKERS
 
     assert SPEAKERS["task"] == "user"
+
+
+def test_a_start_message_from_no_one_is_read_back_with_the_actors_who_could_send_it(tmp_path):
+    from fi.alk.harness.scenario import Scenario
+    from fi.alk.harness.scenario_tools import cast_read_back
+
+    save_actors(tmp_path, ActorList(actors=[Actor(id="manager", name="Alex Vance", permitted_actions=["chat.post_message"])]))
+    unsent = Scenario.model_validate({"name": "x", "instruction": "A deal was approved.", "starts_with": {"text": "Apply it."}})
+    said = cast_read_back(unsent, tmp_path)
+    assert "Started by: the scenario's own task" in said
+    assert "The start message comes from no one" in said and "Alex Vance (manager)" in said
+    sent = Scenario.model_validate(
+        {"name": "x", "instruction": "A deal was approved.", "starts_with": {"actor": "manager", "text": "Apply it."}}
+    )
+    assert "comes from no one" not in cast_read_back(sent, tmp_path)
+
+
+def test_an_actor_whose_role_names_one_caller_is_read_back_as_written_for_one_scenario(tmp_path):
+    from fi.alk.harness.scenario import Scenario
+    from fi.alk.harness.scenario_tools import cast_read_back
+
+    save_actors(
+        tmp_path,
+        ActorList(actors=[Actor(id="spouse", name="Sam Whitfield", role="Spouse of caller Dana Whitfield", channel="audio_mix")]),
+    )
+    other_caller = Scenario.model_validate(
+        {"name": "x", "instruction": "Ask about the claim.", "persona": {"name": "Chloe Park"}, "actors": [{"id": "spouse"}]}
+    )
+    said = cast_read_back(other_caller, tmp_path, {"dana whitfield", "chloe park"})
+    assert "Sam Whitfield's role names Dana Whitfield, a caller in this suite" in said
+    assert "never by one scenario's names" in said
+    # The same caller's own scenario is caught too: the actor is shared by every scenario.
+    assert "names Dana Whitfield" in cast_read_back(
+        Scenario.model_validate({**other_caller.model_dump(), "persona": {"name": "Dana Whitfield"}}), tmp_path
+    )
+    # A role that names people by their part, or a single shared first name, is fine.
+    save_actors(tmp_path, ActorList(actors=[Actor(id="spouse", name="Sam Whitfield", role="The caller's spouse, Dana's husband", channel="audio_mix")]))
+    assert "role names" not in cast_read_back(other_caller, tmp_path, {"dana whitfield", "chloe park"})
+
+
+def test_a_caller_instruction_that_states_what_an_actor_decides_is_read_back_as_settled(tmp_path):
+    from fi.alk.harness.actors import Constraints
+    from fi.alk.harness.scenario import Scenario
+    from fi.alk.harness.scenario_tools import cast_read_back
+
+    save_actors(
+        tmp_path,
+        ActorList(
+            actors=[
+                Actor(
+                    id="manager",
+                    name="Alex Vance",
+                    play="live",
+                    permitted_actions=["approvals.change"],
+                    constraints=Constraints(may_agree=["Up to 18% on deals over $50,000"]),
+                )
+            ]
+        ),
+    )
+    settled = Scenario.model_validate(
+        {"name": "x", "instruction": "The manager agreed 18% on deal 9; apply it.", "actors": [{"id": "manager"}]}
+    )
+    said = cast_read_back(settled, tmp_path)
+    assert "The caller's instruction already states 18%, which Alex Vance decides" in said
+    asked = Scenario.model_validate(
+        {"name": "x", "instruction": "Ask for 25% on deal 9.", "actors": [{"id": "manager"}]}
+    )
+    assert "already states" not in cast_read_back(asked, tmp_path)

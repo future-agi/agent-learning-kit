@@ -1555,6 +1555,10 @@ def _call_actors_missing(scenario: Scenario, outcome: CallOutcome) -> str:
         report = reports.get(actor_id) or {}
         if not report.get("delivered") and report.get("drawn", True):
             why = "not_delivered" if report.get("triggered") else "not_triggered"
+            # Why it said nothing, when the call recorded it (its model did not answer, no room): the reader's next step.
+            dropped = [str(one) for one in report.get("dropped") or [] if one]
+            if why == "not_delivered" and dropped:
+                why = f"{why}: {dropped[0]}"
             missing.append(f"{report.get('name') or actor_id} ({why})")
     # An actor acting through the world that could not act at all (no door, not listed) is the scenario's problem too.
     for report in outcome.call_actors:

@@ -4734,7 +4734,9 @@ def _friend(**seen) -> dict:
 @pytest.mark.parametrize(
     "seen, why",
     [
-        (_friend(dropped=["not ready in time"]), "Rowan (not_delivered)"),
+        (_friend(dropped=["not ready in time"]), "Rowan (not_delivered: not ready in time)"),
+        (_friend(dropped=["its model did not answer"]), "Rowan (not_delivered: its model did not answer)"),
+        (_friend(), "Rowan (not_delivered)"),
         (_friend(triggered=False), "Rowan (not_triggered)"),
         (None, "friend (not_triggered)"),
     ],
