@@ -2317,7 +2317,9 @@ class CallRunnerImpl:
             result = case.result
             combined = result.audio_combined_path
             recording = combined if combined and Path(combined).is_file() else None
-            if result.transcript:
+            notices = self._fault_notices(runtime, faults, calls)
+            # A call that ended with no words still says what did not take effect, never only logging it.
+            if result.transcript or notices:
                 transcript_document = {
                     "schema_version": "futureagi.call-transcript.v1",
                     "transcript": result.transcript,
@@ -2341,7 +2343,6 @@ class CallRunnerImpl:
                         "limits": dict(limits or {}),
                         "usage": list(actor_usage),
                     }
-                notices = self._fault_notices(runtime, faults, calls)
                 if notices:
                     # A fault that did not take effect is said, never only logged: the trial ran without it.
                     transcript_document["notices"] = notices
