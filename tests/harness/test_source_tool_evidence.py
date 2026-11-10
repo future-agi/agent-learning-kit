@@ -827,6 +827,15 @@ def test_tool_check_with_a_bad_folder_reads_the_root(tmp_path):
     assert not tool_evidence_problems(_entry_contract(), tmp_path, "agents/missing")
 
 
+def test_tool_check_decodes_a_unicode_escape_module_as_python_does(tmp_path):
+    # \x23 is "#": Python reads both lines as comments, so no lookup is defined.
+    (tmp_path / "agent.py").write_bytes(
+        b"# coding: unicode_escape\n\\x23 def lookup():\n\\x23     return 1\n"
+    )
+
+    assert tool_evidence_problems(_entry_contract(), tmp_path)
+
+
 _COMMENTED_METHOD = (
     "class Assistant:\n    def __init__(self): pass\n"
     "    # async def lookup_weather(self, location): pass\n"
@@ -858,7 +867,7 @@ def test_a_module_many_entries_name_is_read_once(tmp_path, monkeypatch):
     reads = []
     real = source_tool_evidence.read_module
     monkeypatch.setattr(
-        source_tool_evidence, "read_module", lambda path: reads.append(path) or real(path)
+        source_tool_evidence, "read_module", lambda path, **kw: reads.append(path) or real(path, **kw)
     )
 
     assert len(tool_evidence_problems(_named_twice(), source)) == 2

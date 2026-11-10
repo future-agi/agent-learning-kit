@@ -556,6 +556,14 @@ def certify_template(
             label="uv-toolchain",
         )
         checks.append("uv-toolchain")
+        _sandbox_command(
+            sandbox,
+            "/opt/alk-venv/bin/python -c "
+            "'import importlib.util as u, fi.alk.harness.chat_worker as w, os; "
+            "raise SystemExit(not os.path.exists(u.cache_from_source(w.__file__)))'",
+            label="bytecode",
+        )
+        checks.append("bytecode")
 
         expected_catalog = catalog_path.read_bytes()
         actual_catalog = sandbox.files.read(

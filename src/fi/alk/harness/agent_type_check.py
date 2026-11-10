@@ -24,7 +24,14 @@ from .credentials import imported_by_agent
 from .failure_file import FAILURE_FILE
 from .instrumentation_evidence import _SKIPPED_DIRECTORIES, _imports
 from .job import FailureDomain, HarnessFailure, HarnessStage
-from .python_source import LARGEST_PARSED_MODULE, ParseBudget, TokenBudget, parsed, read_module
+from .python_source import (
+    LARGEST_PARSED_MODULE,
+    EscapeBudget,
+    ParseBudget,
+    TokenBudget,
+    parsed,
+    read_module,
+)
 from .source_folder import agent_folder, is_within
 
 logger = logging.getLogger(__name__)
@@ -112,6 +119,14 @@ _MARKER_START = re.compile(
     r"computer[_-]?[uU]se|ComputerUse|computer_\d{8}|@playwright/mcp|mcp-server-playwright"
 )
 _TOOLKIT = "PlayWrightBrowserToolkit"
+# A whole name: no letter, digit or "_" before or after it. In a unicode-escape file read as bytes,
+# an escape such as \t or \x20 just before it counts as a boundary too.
+_WHOLE_NAMES = {
+    name: re.compile(
+        rf"(?:(?<!\w)|(?<=\\[abfnrtv])|(?<=\\x[0-9A-Fa-f]{{2}})){re.escape(name)}(?!\w)", re.ASCII
+    )
+    for name in BROWSER_IMPORTS
+}
 # A Python file that names none of these holds no browser import or tool marker, so it isn't parsed.
 _PYTHON_NAMES = (
     *(name.encode() for name in sorted(BROWSER_IMPORTS)),
@@ -122,6 +137,8 @@ _TEST_FILES = ("test_*.py", "*_test.py", "conftest.py", "*.test.*", "*.spec.*")
 _SCRIPT_SUFFIXES = frozenset({".js", ".ts", ".mjs", ".cjs", ".tsx", ".jsx"})
 _CODE_SUFFIXES = _SCRIPT_SUFFIXES | {".py"}
 _LARGEST_CODE_FILE = 1024 * 1024
+# What one scan searches with regular expressions in files it can't decode (see _tools_in).
+_LARGEST_RAW_SEARCH = 1024 * 1024
 # Past this a repository holds the conversation up for longer than the rest of the scan is worth.
 _LARGEST_SCAN = 128 * 1024 * 1024
 # Scripts are read by regular expressions that call back for every string or comment: 128 MB of
@@ -197,29 +214,60 @@ def _not_the_agent_dir(name: str, parent: str | None = None) -> bool:
         or (
             parent is not None
             and _TESTS_LAST.fullmatch(lowered) is not None
+            # The walk doesn't enter a linked folder, so what one holds doesn't matter.
+            and not os.path.islink(os.path.join(parent, name))
             and _only_tests(os.path.join(parent, name))
         )
     )
 
 
-def _only_tests(folder: str) -> bool:
-    """Whether the code files directly in ``folder`` are all tests, and there is one.
+def _listed(folder: str) -> tuple[list[str], list[str]]:
+    """The code files directly in ``folder``, and the folders in it the walk would enter.
 
-    Helpers below them, as page objects, go with the tests. A package's ``__init__.py`` says
-    nothing either way, and a folder of only folders may be the agent's own package.
+    A ``package.json`` is code here: it lists what the folder's scripts run. A package's
+    ``__init__.py`` says nothing either way.
+    """
+    code: list[str] = []
+    folders: list[str] = []
+    with os.scandir(folder) as entries:
+        for entry in entries:
+            if entry.is_dir(follow_symlinks=False):
+                if not _not_the_agent_dir(entry.name):
+                    folders.append(entry.name)
+            elif entry.is_file() and entry.name != "__init__.py" and (
+                entry.name == "package.json" or os.path.splitext(entry.name)[1] in _CODE_SUFFIXES
+            ):
+                code.append(entry.name)
+    return code, folders
+
+
+def _only_tests(folder: str) -> bool:
+    """Whether ``folder`` holds tests alone: its own code files are all tests, one of them more
+    than a ``conftest.py``, and no folder in it that holds code is other than named for tests.
+
+    A folder of only folders may be the agent's own package. A folder in it holds code if it has
+    a code file or a folder of its own: one level is looked at, and deeper is taken as code.
     """
     try:
-        with os.scandir(folder) as entries:
-            code = [
-                entry.name
-                for entry in entries
-                if entry.name != "__init__.py"
-                and os.path.splitext(entry.name)[1] in _CODE_SUFFIXES
-                and entry.is_file()
-            ]
+        code, folders = _listed(folder)
+        for name in folders:
+            path = os.path.join(folder, name)
+            inner, below = _listed(path)
+            if _TESTS_LAST.fullmatch(name.lower()) is not None:
+                # Tests alone, as the walk would judge it at the top, and nothing deeper.
+                if below or (inner and not _tests_alone(inner)):
+                    return False
+            elif inner or below or os.path.isfile(os.path.join(path, "__init__.py")):
+                return False
     except OSError:
         return False
-    return bool(code) and all(_not_the_agent_file(name) for name in code)
+    return _tests_alone(code)
+
+
+def _tests_alone(code: list[str]) -> bool:
+    return any(name.lower() != "conftest.py" for name in code) and all(
+        _not_the_agent_file(name) for name in code
+    )
 
 
 def _not_the_agent_file(name: str) -> bool:
@@ -328,11 +376,14 @@ def _packages_used(path: Path) -> set[str]:
     return found
 
 
-def _imports_in(text: str) -> set[str]:
+def _imports_in(text: str, path: Path) -> set[str]:
     # One file at a time: a customer's odd file can run the parser out of memory, and that mustn't
     # take the rest of the scan, or the reading it serves, down with it.
     tree = parsed(text)
-    return set() if tree is None else _imports(tree)
+    if tree is None:
+        logger.debug("agent type scan read no imports from %s", path)
+        return set()
+    return _imports(tree)
 
 
 def _largest_read(path: Path) -> int:
@@ -373,7 +424,7 @@ def _script_kept(hit: re.Match[str]) -> str:
     return kept
 
 
-def _python_markers(text: str, tokens: TokenBudget) -> set[str]:
+def _python_markers(text: str, tokens: TokenBudget, path: Path) -> set[str]:
     if not _MARKER_START.search(text):
         return set()
     if not tokens.spend(text):
@@ -383,7 +434,9 @@ def _python_markers(text: str, tokens: TokenBudget) -> set[str]:
         return set()
     try:
         found = tokens.tokens(text)
-    except (ValueError, SyntaxError, tokenize.TokenError):
+    except (ValueError, SyntaxError, tokenize.TokenError) as error:
+        # The type only: the error can quote a line of the customer's file.
+        logger.debug("agent type scan read no markers from %s: %s", path, type(error).__name__)
         return set()
     # Past the work, too, the file's markers aren't read.
     return set() if found is None else _markers(_python_code(found))
@@ -401,8 +454,10 @@ def _markers_in(path: Path) -> set[str]:
     try:
         if not path.is_file() or path.stat().st_size > _LARGEST_CODE_FILE:
             return set()
-        text = path.read_text(encoding="utf-8")
-    except (OSError, ValueError):
+        # As Node reads it: a stray byte that isn't UTF-8 becomes a replacement character.
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except (OSError, ValueError) as error:
+        logger.debug("agent type scan read no markers from %s: %s", path, type(error).__name__)
         return set()
     return _markers(_SCRIPT_COMMENT_OR_STRING.sub(_script_kept, text))
 
@@ -480,6 +535,8 @@ def _tools_in(paths: Iterable[Path], local: set[str]) -> tuple[str, ...]:
     scanned = scripts = 0
     budget = ParseBudget()
     tokens = TokenBudget()
+    escapes = EscapeBudget()
+    searched = ParseBudget(_LARGEST_RAW_SEARCH)
     for path in sorted(filter(_is_read, paths), key=_reading_order):
         size = _file_size(path)
         # Never read, so it mustn't use up the limit before the code that is.
@@ -499,11 +556,31 @@ def _tools_in(paths: Iterable[Path], local: set[str]) -> tuple[str, ...]:
                 found |= _packages_used(path)
             elif path.suffix != ".py":
                 found |= _markers_in(path)
-            elif (text := read_module(path, _largest_read(path), _PYTHON_NAMES)) is not None:
-                markers = _python_markers(text, tokens)
-                names = _imports_in(text) if budget.spend(text) else set()
+            elif (
+                text := read_module(
+                    path, _largest_read(path), _PYTHON_NAMES, undecoded := [], escapes
+                )
+            ) is not None:
+                markers = _python_markers(text, tokens, path)
+                names = _imports_in(text, path) if budget.spend(text) else set()
                 found |= markers
                 imported |= names
+            elif undecoded:
+                # A codec refused by name, which Python still runs the file in: the browser
+                # packages and tool markers it names, as bytes, count. That leads to a second
+                # look, never a refusal on its own. #224 does the same.
+                raw = undecoded[0].decode("latin-1")
+                named = {name for name in BROWSER_IMPORTS if name in raw}
+                if _TOOLKIT in raw:
+                    found.add(_TOOLKIT)
+                # The regular expressions try each place in the text, so only while the scan's
+                # total lasts: 1,023 crafted files held the save 9 s. Past it, a name counts
+                # wherever it appears, which can only bring a second look.
+                if searched.spend(raw):
+                    # Whole names only: "steelers" in a string is no import of steel.
+                    named = {name for name in named if _WHOLE_NAMES[name].search(raw)}
+                    found |= _markers(raw)
+                imported |= named
         except Exception:
             # A skipped file may be the agent's main one, and the reading then finds nothing.
             logger.warning("agent type scan skipped %s", path, exc_info=True)
@@ -624,10 +701,11 @@ def browser_tools_in_agent(
     ]
     local = _modules_at_top(folder, rows_of[folder]) | _modules_at_top(root, rows_of[root])
     if left[0] < 0:
-        # Records left unread can't say a browser package there is installed, not the customer's,
-        # and no read order keeps both the folder's and the root's whole: so it counts as found,
-        # which leads to a second look at the model's reading, not a refusal.
-        local -= BROWSER_IMPORTS
+        # Records left unread can't say a package there is installed, not the customer's, and no
+        # read order keeps both the folder's and the root's whole: so every import counts, as in
+        # the scan with no folder. A browser one is found, which leads to a second look at the
+        # model's reading, not a refusal.
+        local = set()
     if reached is not None:
         reached[:] = [*above, *shared]
     # A shared script's dependencies are declared in its package, at or above it.

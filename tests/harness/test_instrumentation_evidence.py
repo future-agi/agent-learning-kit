@@ -501,3 +501,9 @@ def test_a_fullwidth_name_is_a_known_limit(tmp_path: Path) -> None:
     source = _repository(tmp_path, {"agent.py": "import ｔraceai_openai\n"})
 
     assert detect_instrumentation(source) != "traceai"
+
+
+def test_an_import_spelled_in_escapes_is_found_under_unicode_escape(tmp_path: Path) -> None:
+    # Python decodes the file before it reads it, so this runs `import traceai_openai`.
+    (tmp_path / "agent.py").write_bytes(b"# coding: unicode_escape\nimport \\x74raceai_openai\n")
+    assert detect_instrumentation(tmp_path) == "traceai"

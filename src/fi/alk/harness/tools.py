@@ -36,6 +36,7 @@ from .backends import qualified as qualified  # noqa: F401  (re-export; callers 
 from .backends import tool, tool_server
 
 from .contract import (
+    _ALIASES,
     CALL_DIRECTIONS,
     AgentContract,
     Runtime,
@@ -57,12 +58,18 @@ from .runtime_selection import (
     COMPOSE_SERVICE_OUTSIDE_FOLDER,
     PathLookupsSpent,
     RuntimeSelectionError,
-    charged_path,
     path_lookup_budget,
     select_runtime,
 )
+from .model_citation import (
+    model_problems,
+    quote_problem,
+    read_source,
+    resolved_in_source,
+    source_lines,
+)
 from .python_source import utf8_size
-from .source_folder import SubfolderNotFound, agent_folder, bind_runtime, is_within
+from .source_folder import SubfolderNotFound, agent_folder, bind_runtime
 
 _LOG = logging.getLogger(__name__)
 
@@ -198,6 +205,7 @@ def _checked_contract(
     require_setup_contract: bool,
     subfolder: str | None,
     reached: list[Path] | None = None,
+    asked: set[str] | None = None,
 ) -> AgentContract | dict[str, Any]:
     """The contract to save, or the problems to send back. It reads the customer's files and
     writes nothing, so the tool runs it off the event loop. ``reached`` is the code outside the
@@ -226,7 +234,7 @@ def _checked_contract(
             problems.append(problem)
     with path_lookup_budget():
         return _checked_against_source(
-            contract, problems, arrived, source_root, subfolder, reached
+            contract, problems, arrived, source_root, subfolder, reached, asked
         )
 
 
@@ -237,16 +245,52 @@ def _checked_against_source(
     source_root: Path | None,
     subfolder: str | None,
     reached: list[Path] | None = None,
+    asked: set[str] | None = None,
 ) -> AgentContract | dict[str, Any]:
-    """The checks that read the customer's files, under the save's one path lookup budget."""
+    """The checks that read the customer's files, under the save's one path lookup budget.
+    ``asked`` is the reading's record of what it has been asked once. A model whose citation was
+    refused before is left out the second time, and lines that didn't hold the quote are left out
+    for the quote, rather than refused again: both are optional, and neither may cost the
+    reading its turns."""
     if source_root is not None:
         from .source_tool_evidence import tool_evidence_problems
 
+        quote = contract.system_prompt_excerpt
         try:
             problems.extend(tool_evidence_problems(contract, source_root, subfolder))
-            problems.extend(_copy_prompt(contract, source_root))
+            copy_problems = _copy_prompt(contract, source_root)
+            problems.extend(copy_problems)
+            if contract.system_prompt_from and not copy_problems:
+                named = ", ".join(
+                    f"{where.path[:200]} {where.start_line}-{where.end_line}"
+                    for where in contract.system_prompt_from
+                )
+                if mismatch := quote_problem(quote, contract.system_prompt_excerpt, named):
+                    if asked is not None and "prompt-quote" in asked:
+                        # The quote, which is what was read, rather than lines nobody checked.
+                        contract.system_prompt_excerpt = quote
+                        contract.system_prompt_from = []
+                    else:
+                        problems.append(mismatch)
+                        if asked is not None:
+                            asked.add("prompt-quote")
+                            problems.append(
+                                "system_prompt_from: if the lines are refused again, the quote "
+                                "is kept and the lines are left out"
+                            )
+            if cited := model_problems(contract, source_root):
+                if asked is not None and "model" in asked:
+                    contract.model = None
+                else:
+                    problems.extend(cited)
+                    if asked is not None:
+                        asked.add("model")
+                        problems.append("model: if the model is refused again, it is left out")
         except PathLookupsSpent as spent:
             return _problems([*problems, str(spent)], arrived)
+    else:
+        # With no source there is no line to find the name on, so the model is unknown.
+        contract.model = None
     runtime = contract.runtime
     if subfolder and source_root is not None:
         try:
@@ -338,22 +382,20 @@ def _copy_prompt(contract: AgentContract, source_root: Path) -> list[str]:
     read = copied = 0
     for index, where in enumerate(contract.system_prompt_from):
         if where.path not in found_at:
-            try:
-                # Through links, resolving one path can cost a lookup for each part of every
-                # target; each is charged to the save's budget.
-                resolved = charged_path(root / where.path)
-                found_at[where.path] = (
-                    resolved if is_within(resolved, root) and resolved.is_file() else None
-                )
-            except (OSError, RuntimeError, ValueError):
-                found_at[where.path] = None
+            # Through links, resolving one path can cost a lookup for each part of every
+            # target; each is charged to the save's budget.
+            found_at[where.path] = resolved_in_source(root, where.path)
         path = found_at[where.path]
+        raw = None
+        if path is not None and path not in lines_of and path not in too_large:
+            raw = read_source(path, _LARGEST_PROMPT_FILE)
+            if raw is None:
+                # Not a regular file, or one that can't be opened: the same answer as missing.
+                found_at[where.path] = path = None
         if path is None:
             problems.append(f"system_prompt_from[{index}]: {where.path} is not a file in the source")
             continue
-        if path not in lines_of and path not in too_large:
-            with path.open("rb") as handle:
-                raw = handle.read(_LARGEST_PROMPT_FILE + 1)
+        if raw is not None:
             read += len(raw)
             if read > _LARGEST_PROMPT_READ:
                 problems.append(
@@ -364,7 +406,7 @@ def _copy_prompt(contract: AgentContract, source_root: Path) -> list[str]:
             if len(raw) > _LARGEST_PROMPT_FILE:
                 too_large.add(path)
             else:
-                lines_of[path] = raw.decode("utf-8", errors="replace").splitlines()
+                lines_of[path] = source_lines(raw)
         if path in too_large:
             problems.append(
                 f"system_prompt_from[{index}]: {where.path} is larger than 1 MiB; name the "
@@ -610,6 +652,24 @@ def contract_tools(
                     "description": "Where the agent's whole prompt is written: every part it is "
                     "assembled from, in order, as a path relative to the source root and the first "
                     "and last line of each. These lines replace system_prompt_excerpt as written.",
+                },
+                # Nothing required inside it either: a model sent without its line reaches the
+                # save, which says what is missing, instead of failing the whole call here.
+                "model": {
+                    "type": "object",
+                    "properties": {
+                        "provider": {"type": "string"},
+                        "name": {"type": "string"},
+                        "path": {"type": "string"},
+                        "line": {"type": "integer"},
+                    },
+                    "description": "The model the agent talks to the person with, read from its "
+                    "source: provider as the source names it (openai, anthropic, google...; leave "
+                    "out when it doesn't say), name exactly as written (letters, digits and "
+                    ". _ : / @ - only), and the file (relative to "
+                    "the source root) and line the name is written on. One model; a voice agent's "
+                    "speech-to-text and text-to-speech models don't count. Leave model out when "
+                    "the name is only set at run time.",
                 },
                 "hard_constraints": {
                     "type": "array",
@@ -1327,7 +1387,6 @@ def contract_tools(
                 or scan.get_loop() is not asyncio.get_running_loop()
                 or (scan.done() and (scan.cancelled() or scan.exception() is not None))
             ):
-                reach.clear()
                 scan = asyncio.ensure_future(
                     asyncio.to_thread(_tools_in_agent_folder, scan_root, subfolder, reach)
                 )
@@ -1528,16 +1587,26 @@ def contract_tools(
                 )
             payload["chosen_evals"] = wanted
 
+        # Under any name the contract takes the quote from, so a quote under an alias is asked
+        # about too.
+        quoted = (
+            payload.get(key)
+            for key in ("system_prompt_excerpt", *_ALIASES["system_prompt_excerpt"])
+        )
+        excerpt = next((one for one in quoted if isinstance(one, str) and one.strip()), "")
         thin = [
             (
                 "prompt",
                 bool(payload.get("conversational", True))
                 and not payload.get("hard_constraints")
-                and not str(payload.get("system_prompt_excerpt") or "").strip(),
+                and not excerpt
+                # Lines named are the prompt, found: copied whole, with no quote needed.
+                and not payload.get("system_prompt_from"),
                 "no hard_constraints and no system_prompt_excerpt, for a conversational agent. "
                 "Its prompt usually exists and often lives away from the main agent file — "
                 "search the whole source for a long instructions string before deciding there "
-                "is none.",
+                "is none. If you find it, name its lines in system_prompt_from so it is copied "
+                "whole.",
             ),
             (
                 "data",
@@ -1576,6 +1645,19 @@ def contract_tools(
                 "values. Semantic summaries such as rooms, notable_bookings or restaurant_slots "
                 "cannot seed or verify the submitted store.",
             ),
+            (
+                # A quote may stop short of the whole prompt; lines are copied whole. Asked once,
+                # since a prompt built at run time has no lines to name, and its quote is kept.
+                "prompt-lines",
+                source_root is not None
+                and bool(excerpt)
+                and not payload.get("system_prompt_from")
+                # Asked already, with the "prompt" nudge: the lines aren't asked for twice.
+                and "prompt" not in nudged,
+                "system_prompt_excerpt is a quote, and system_prompt_from names no lines. If the "
+                "prompt is written in the source, name its lines in system_prompt_from so it is "
+                "copied whole.",
+            ),
         ]
         # All of them together, and each only once. Nudging in sequence would cost a turn per
         # nudge and read as though the requirements were being invented one at a time.
@@ -1595,6 +1677,7 @@ def contract_tools(
             subfolder=subfolder,
             # The scan's answer is for scan_root; another root's code is found again.
             reached=reach if scan_root == source_root else None,
+            asked=nudged,
         )
         if isinstance(checked, dict):
             return checked

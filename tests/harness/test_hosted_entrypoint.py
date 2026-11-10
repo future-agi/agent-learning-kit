@@ -364,6 +364,28 @@ class FakeTransport:
             self.receipts[key] = json_body
             return ob.TransportResponse(200 if existed else 201, {}, {})
         if url.endswith("/manifest/") and method == "POST" and json_body is not None:
+            # The platform's `ingest_manifest` checks: every entry names an acknowledged
+            # artifact, and a complete manifest carries build, result and log.
+            unknown = [
+                entry["artifact_id"]
+                for entry in json_body["entries"]
+                if entry["artifact_id"].removeprefix("sha256:") not in self.artifacts
+            ]
+            missing = {"build", "result", "log"} - {
+                entry["kind"] for entry in json_body["entries"]
+            }
+            if unknown or (json_body["complete"] and missing):
+                return ob.TransportResponse(
+                    422,
+                    {
+                        "error": "artifact_unknown"
+                        if unknown
+                        else "manifest_required_artifact_missing",
+                        "message": f"manifest refused: {unknown or sorted(missing)}",
+                        "retryable": False,
+                    },
+                    {},
+                )
             self.manifests.append(json_body)
             return ob.TransportResponse(200, {}, {})
         if "/artifacts/" in url and method == "PUT":
@@ -4927,6 +4949,161 @@ def test_process_logs_from_close_are_uploaded_before_final_manifest():
         )
 
     asyncio.run(scenario())
+
+
+class _ProcessLogProvisioner(FakeProvisioner):
+    """Writes `count` process logs during close, as the process runtime does."""
+
+    def __init__(self, *, count: int) -> None:
+        super().__init__(instances=1)
+        self._count = count
+
+    async def close(self, *, work_directory):
+        await super().close(work_directory=work_directory)
+        logs = work_directory / "diagnostics" / "process-logs"
+        logs.mkdir(parents=True, exist_ok=True)
+        for index in range(self._count):
+            (logs / f"worlds-w0-agent-{index:02d}.log").write_text(f"tail {index}")
+
+
+def _process_log_harness(
+    *, count: int, intercept: Callable[..., ob.TransportResponse | None]
+) -> Harness:
+    """One scored scenario; `intercept(method, url, headers=, data=)` may answer a call in
+    place of the fake platform."""
+    harness = _build_harness(
+        scenarios=[FakeScenario("s1", "platform-s1", [FakeSubGoal("holds", True)])],
+        instances=1,
+    )
+    harness.deps.build_provider = lambda _capabilities, _transport: (
+        _ProcessLogProvisioner(count=count)
+    )
+    platform = harness.transport.request
+
+    def request(method, url, *, headers, json_body=None, data=None, timeout=30.0):
+        answer = intercept(method, url, headers=headers, data=data)
+        if answer is not None:
+            return answer
+        return platform(
+            method,
+            url,
+            headers=headers,
+            json_body=json_body,
+            data=data,
+            timeout=timeout,
+        )
+
+    harness.transport.request = request  # type: ignore[method-assign]
+    return harness
+
+
+def _is_process_log(method: str, data: Any) -> bool:
+    return method == "PUT" and isinstance(data, bytes) and data.startswith(b"worlds-")
+
+
+def test_a_slow_channel_after_terminal_still_delivers_the_manifest_within_the_window() -> (
+    None
+):
+    # Process-log uploads after the terminal are best-effort. On a slow channel they used to
+    # spend the whole flush window, and the manifest push then failed with
+    # `deadline_exceeded` before its first attempt.
+    def slow_process_logs(method, url, *, headers, data):
+        if _is_process_log(method, data):
+            time.sleep(0.2)
+        return None
+
+    harness = _process_log_harness(count=30, intercept=slow_process_logs)
+    harness.deps.flush_window_seconds = 4.0
+
+    code = _run(harness)
+
+    assert code == he.EXIT_OK
+    assert len(harness.transport.terminal_events()) == 1
+    assert len(harness.transport.manifests) == 1
+    assert harness.transport.manifests[0]["complete"] is True
+    uploaded = [
+        body
+        for body in harness.transport.artifacts.values()
+        if body.startswith(b"worlds-")
+    ]
+    assert 0 < len(uploaded) < 30  # the process logs were cut short, not the manifest
+
+
+def test_an_artifact_the_platform_refused_is_left_out_of_the_manifest() -> None:
+    # A manifest entry is recorded before its upload result is known. A refused upload used to
+    # stay named on the wire, and the platform then refused the whole manifest as
+    # `artifact_unknown`.
+    def refuse_process_logs(method, url, *, headers, data):
+        if _is_process_log(method, data):
+            return ob.TransportResponse(
+                413,
+                {
+                    "error": "artifact_budget_exceeded",
+                    "message": "artifact exceeds the remaining job upload budget",
+                    "retryable": False,
+                },
+                {},
+            )
+        return None
+
+    harness = _process_log_harness(count=1, intercept=refuse_process_logs)
+
+    code = _run(harness)
+
+    assert code == he.EXIT_OK
+    assert len(harness.transport.manifests) == 1
+    refused = "sha256:" + hashlib.sha256(b"worlds-w0-agent-00.log\ntail 0").hexdigest()
+    wire_ids = {
+        entry["artifact_id"] for entry in harness.transport.manifests[0]["entries"]
+    }
+    assert refused not in wire_ids
+    # The offline mirror still names it: the platform's replay ingests mirrored artifacts first.
+    mirror = harness.work / he.EVENTS_SPOOL_DIR_NAME / "manifest.json"
+    mirror_ids = {
+        entry["artifact_id"]
+        for entry in json.loads(mirror.read_text(encoding="utf-8"))["entries"]
+    }
+    assert mirror_ids == wire_ids | {refused}
+
+
+def test_a_required_artifact_whose_upload_failed_is_reuploaded_before_the_manifest() -> (
+    None
+):
+    # The `result` artifact's only upload attempt fails. A complete manifest is refused without
+    # an acknowledged `result`, so it gets one more upload from the offline mirror first.
+    failed: list[str] = []
+
+    def fail_first_result_upload(method, url, *, headers, data):
+        if (
+            method == "PUT"
+            and headers.get("X-Artifact-Kind") == "result"
+            and not failed
+        ):
+            failed.append(url)
+            return ob.TransportResponse(
+                503,
+                {"error": "unavailable", "message": "try later", "retryable": True},
+                {},
+            )
+        return None
+
+    harness = _process_log_harness(count=0, intercept=fail_first_result_upload)
+    harness.deps.retry_policy = lambda: ob.RetryPolicy(max_attempts=1)
+
+    code = _run(harness)
+
+    assert code == he.EXIT_OK
+    assert len(failed) == 1
+    assert len(harness.transport.manifests) == 1
+    result_entries = [
+        entry
+        for entry in harness.transport.manifests[0]["entries"]
+        if entry["kind"] == "result"
+    ]
+    assert len(result_entries) == 1
+    assert result_entries[0]["artifact_id"].removeprefix("sha256:") in (
+        harness.transport.artifacts
+    )
 
 
 def test_hosted_job_passes_sealed_bundle_to_world_factory() -> None:
