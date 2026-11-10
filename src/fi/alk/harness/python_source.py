@@ -178,6 +178,22 @@ def source_encoding(raw: bytes) -> str | None:
     return encoding
 
 
+def _first_lines(raw: bytes) -> bytes:
+    """The first two lines of ``raw``, each ended as Python ends a line (LF, CRLF or a lone CR),
+    joined by LF: found where they end, so the rest of the file is never rewritten."""
+    lines: list[bytes] = []
+    start = 0
+    for _ in range(2):
+        ends = [at for at in (raw.find(b"\n", start), raw.find(b"\r", start)) if at != -1]
+        if not ends:
+            lines.append(raw[start:])
+            break
+        end = min(ends)
+        lines.append(raw[start:end])
+        start = end + (2 if raw[end : end + 2] == b"\r\n" else 1)
+    return b"\n".join(lines)
+
+
 def _coding(raw: bytes) -> tuple[str, codecs.CodecInfo] | None:
     """The codec Python reads ``raw`` in, as detect_encoding names it and its codec info.
 
@@ -189,8 +205,12 @@ def _coding(raw: bytes) -> tuple[str, codecs.CodecInfo] | None:
     runs in Python for each label, 91 ms for 128 KB; undefined decodes nothing; unicode-escape is
     decoded only under a scan's total (``read_module``).
     """
-    head = b"\n".join(raw.replace(b"\r\n", b"\n").replace(b"\r", b"\n").split(b"\n", 2)[:2])
+    head = _first_lines(raw)
     bom = len(codecs.BOM_UTF8) if head.startswith(codecs.BOM_UTF8) else 0
+    if b"coding:" not in head and b"coding=" not in head:
+        # No cookie: detect_encoding would only run its pattern over the lines to say so.
+        encoding = "utf-8-sig" if bom else "utf-8"
+        return encoding, codecs.lookup(encoding)
     lines = io.BytesIO(head[:bom] + head[bom:].translate(_ASCII_ONLY)).readline
     try:
         encoding, _ = tokenize.detect_encoding(lines)

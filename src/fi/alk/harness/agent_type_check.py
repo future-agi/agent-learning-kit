@@ -120,10 +120,12 @@ _MARKER_START = re.compile(
 )
 _TOOLKIT = "PlayWrightBrowserToolkit"
 # A whole name: no letter, digit or "_" before or after it. In a unicode-escape file read as bytes,
-# an escape such as \t or \x20 just before it counts as a boundary too.
+# an escape such as \t, \x20, \040 or \u0020 just before it counts as a boundary too.
 _WHOLE_NAMES = {
     name: re.compile(
-        rf"(?:(?<!\w)|(?<=\\[abfnrtv])|(?<=\\x[0-9A-Fa-f]{{2}})){re.escape(name)}(?!\w)", re.ASCII
+        rf"(?:(?<!\w)|(?<=\\[abfnrtv])|(?<=\\x[0-9A-Fa-f]{{2}})|(?<=\\[0-7])|(?<=\\[0-7]{{2}})"
+        rf"|(?<=\\[0-7]{{3}})|(?<=\\u[0-9A-Fa-f]{{4}})|(?<=\\U[0-9A-Fa-f]{{8}})){re.escape(name)}(?!\w)",
+        re.ASCII,
     )
     for name in BROWSER_IMPORTS
 }
@@ -144,6 +146,10 @@ _LARGEST_SCAN = 128 * 1024 * 1024
 # Scripts are read by regular expressions that call back for every string or comment: 128 MB of
 # crafted ones held the save 13 s. An agent's own scripts are far smaller.
 _LARGEST_SCRIPT_SCAN = 16 * 1024 * 1024
+# And the Python searched for the names it may hold: each file is searched once for each of
+# about 35 names, and 128 MB of crafted ones held the save 1.7 s. An agent's own Python is far
+# smaller.
+_LARGEST_PYTHON_SCAN = 32 * 1024 * 1024
 _LARGEST_RECORD = 1024 * 1024
 # The scripts the walk reads to follow imports, while the conversation waits; bundling reads 32 MB.
 _WALKED_SCRIPTS = 2 * 1024 * 1024
@@ -532,7 +538,7 @@ def _scan(root: Path, _files: tuple[int, int, int]) -> tuple[str, ...]:
 def _tools_in(paths: Iterable[Path], local: set[str]) -> tuple[str, ...]:
     found: set[str] = set()
     imported: set[str] = set()
-    scanned = scripts = 0
+    scanned = scripts = python = 0
     budget = ParseBudget()
     tokens = TokenBudget()
     escapes = EscapeBudget()
@@ -548,6 +554,10 @@ def _tools_in(paths: Iterable[Path], local: set[str]) -> tuple[str, ...]:
         if path.suffix in _SCRIPT_SUFFIXES:
             scripts += size
             if scripts > _LARGEST_SCRIPT_SCAN:
+                continue
+        elif path.suffix == ".py":
+            python += size
+            if python > _LARGEST_PYTHON_SCAN:
                 continue
         # One file at a time: the tokenizer raises more than it documents (SystemError on a NUL
         # byte in 3.12), and one odd file mustn't stop every reading from being checked.

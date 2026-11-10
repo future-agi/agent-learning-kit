@@ -715,7 +715,9 @@ class _Workspace:
     """What one walk reads of a uv workspace: every lookup charged to ``left``, the
     pyproject.toml files read under one total, and its folders found through ``known``."""
 
-    def __init__(self, root: Path, left: list[float], known: dict[Path, Path | None]) -> None:
+    def __init__(
+        self, root: Path, left: list[float], known: dict[tuple[str, ...], Path | None]
+    ) -> None:
         self.root, self.left, self.known = root, left, known
         self.read = 0
         self.cut = False
@@ -723,7 +725,7 @@ class _Workspace:
     def spent(self) -> bool:
         if self.left[0] <= 0:
             self.cut = True
-        return self.cut and self.left[0] <= 0
+        return self.left[0] <= 0
 
     def table(self, folder: Path) -> dict | None:
         """``folder``'s pyproject.toml, parsed, or None."""
@@ -732,7 +734,21 @@ class _Workspace:
         self.left[0] -= 1
         document = folder / "pyproject.toml"
         try:
-            if not document.is_file():
+            mode = document.lstat().st_mode
+            if stat.S_ISLNK(mode):
+                # One link, to a file inside the root, found by the charged walk: the kernel would
+                # follow it anywhere, uncharged.
+                self.left[0] -= 1
+                target = folder / os.readlink(document)
+                if len(target.parts) > len(self.root.parts) + _LONGEST_TARGET:
+                    return None
+                place = _real_folder(target.parent, self.root, self.known, self.left)
+                if place is None:
+                    return None
+                document = place / target.name
+                self.left[0] -= 1
+                mode = document.lstat().st_mode
+            if not stat.S_ISREG(mode):
                 return None
             with document.open("rb") as handle:
                 raw = handle.read(_LARGEST_PYPROJECT + 1)
@@ -770,6 +786,9 @@ class _Workspace:
                     if self.left[0] <= 0 or entries >= _WORKSPACE_ENTRIES:
                         self.cut = True
                         break
+                    # Each base looked at counts, a memoised one too: a link back to its own
+                    # folder makes a long pattern visit the same bases again and again.
+                    entries += 1
                     if not any(mark in part for mark in "*?["):
                         if (found := _real_folder(base / part, self.root, self.known, self.left)):
                             below.append(found)
@@ -798,50 +817,77 @@ class _Workspace:
         return matched
 
 
-def _requirements(table: dict) -> set[str]:
-    """The names of every distribution ``table``'s project asks for: its dependencies, its
-    extras and its dependency groups, which ``uv run`` installs by default."""
+_REQUESTED_EXTRAS = re.compile(r"\[([^\]]*)\]")
+
+
+def _requirements(table: dict, extras: set[str] | None) -> set[str]:
+    """The names of the distributions installed with ``table``'s project by the build's
+    ``uv sync --no-dev --package``: its dependencies, its extras (all of them for the agent's own
+    project, given ``extras=None``, since which ones the build asks for isn't known here; for a
+    dependency, those its requirement names), and its default groups other than ``dev``."""
     project = table.get("project") if isinstance(table.get("project"), dict) else {}
     found: list[object] = list(project.get("dependencies") or [])
-    extras = project.get("optional-dependencies")
-    for values in extras.values() if isinstance(extras, dict) else ():
-        found.extend(values if isinstance(values, list) else [])
-    groups = table.get("dependency-groups")
-    for values in groups.values() if isinstance(groups, dict) else ():
-        found.extend(values if isinstance(values, list) else [])
+    optional = project.get("optional-dependencies")
+    for key, values in optional.items() if isinstance(optional, dict) else ():
+        if extras is None or _project_name(key) in extras:
+            found.extend(values if isinstance(values, list) else [])
+    if extras is None:
+        uv = _uv_table(table)
+        groups = table.get("dependency-groups") if isinstance(table.get("dependency-groups"), dict) else {}
+        default = uv.get("default-groups", ["dev"])
+        chosen = list(groups) if default == "all" else default if isinstance(default, list) else []
+        for group in chosen:
+            if group != "dev" and isinstance(groups.get(group), list):
+                found.extend(groups[group])
     return {name for value in found if (name := _project_name(value))}
 
 
-def _workspace_sources(table: dict) -> set[str]:
+def _requested_extras(table: dict, name: str) -> set[str]:
+    """The extras ``table``'s project asks of the dependency ``name``."""
+    project = table.get("project") if isinstance(table.get("project"), dict) else {}
+    asked: set[str] = set()
+    for value in project.get("dependencies") or []:
+        if isinstance(value, str) and _project_name(value) == name:
+            for found in _REQUESTED_EXTRAS.findall(value.split(";", 1)[0]):
+                asked |= {extra for part in found.split(",") if (extra := _project_name(part))}
+    return asked
+
+
+def _uv_table(table: dict) -> dict:
     tool = table.get("tool") if isinstance(table.get("tool"), dict) else {}
-    uv = tool.get("uv") if isinstance(tool.get("uv"), dict) else {}
-    sources = uv.get("sources") if isinstance(uv.get("sources"), dict) else {}
-    return {
-        name
-        for key, source in sources.items()
-        if isinstance(source, dict) and source.get("workspace") is True
-        and (name := _project_name(key))
-    }
+    return tool.get("uv") if isinstance(tool.get("uv"), dict) else {}
+
+
+def _sources(table: dict) -> dict[str, list[dict]]:
+    """``table``'s ``[tool.uv.sources]``, by normalised name, each a list of its source tables
+    (uv also takes a list of them, each with its own marker)."""
+    sources = _uv_table(table).get("sources")
+    found: dict[str, list[dict]] = {}
+    for key, value in sources.items() if isinstance(sources, dict) else ():
+        items = value if isinstance(value, list) else [value]
+        if (name := _project_name(key)) and (kept := [item for item in items if isinstance(item, dict)]):
+            found[name] = kept
+    return found
 
 
 def _workspace_of(table: dict) -> dict | None:
-    tool = table.get("tool") if isinstance(table.get("tool"), dict) else {}
-    uv = tool.get("uv") if isinstance(tool.get("uv"), dict) else {}
-    return uv.get("workspace") if isinstance(uv.get("workspace"), dict) else None
+    workspace = _uv_table(table).get("workspace")
+    return workspace if isinstance(workspace, dict) else None
 
 
 def _workspace_dependencies(
-    root: Path, folder: Path, left: list[float], known: dict[Path, Path | None]
-) -> tuple[list[Path], bool]:
-    """The folders of the uv workspace members the agent's project depends on, and whether some
-    weren't looked for.
+    root: Path, folder: Path, left: list[float], known: dict[tuple[str, ...], Path | None]
+) -> tuple[Path | None, list[Path], bool]:
+    """The agent's project folder, the folders of the local packages installed with it, and
+    whether some weren't looked for.
 
-    ``uv run`` installs a member the project names as a requirement whose source is the
-    workspace (``{workspace = true}``, in the project or the workspace root), and what that
-    member asks for in turn; an agent imports it by its package name. Another member, a sibling
-    agent among them, isn't installed, so it isn't looked in. The project is the nearest
-    pyproject.toml at or above ``folder``, the workspace the nearest one above it that names it a
-    member. A ``**`` pattern isn't expanded, and past the limits the rest isn't read: both say so.
+    The project is the nearest pyproject.toml at or above ``folder``. The build installs it with
+    what it asks for (``_requirements``); a requirement whose source is the uv workspace
+    (``{workspace = true}``, in the project or the workspace root, the nearest pyproject.toml
+    above the project that names it a member) is that member's folder, one whose source is a
+    ``path`` inside the repository is that folder, and what each of those asks for is followed
+    in turn. Another member, a sibling agent among them, isn't installed, so it isn't looked in.
+    A ``**`` member pattern isn't expanded, and past the limits the rest isn't read: both say so.
     """
     reader = _Workspace(root, left, known)
     project: tuple[Path, dict] | None = None
@@ -856,44 +902,84 @@ def _workspace_dependencies(
         if _workspace_of(table) is not None:
             workspace = (place, table)
             break
-    if project is None or workspace is None:
-        return [], reader.cut
-    home, top = workspace
-    shape = _workspace_of(top) or {}
-    excluded = set(reader.expand(home, shape.get("exclude", [])))
-    members = [
-        member for member in dict.fromkeys(reader.expand(home, shape.get("members", [])))
-        if member not in excluded
-    ]
-    if len(members) > _WORKSPACE_MEMBERS:
-        members, reader.cut = members[:_WORKSPACE_MEMBERS], True
-    # The project must be the workspace's root or one of its members: uv runs any other alone.
-    if project[0] != home and project[0] not in members:
-        return [], reader.cut
-    tables = {home: top, project[0]: project[1]}
+    if project is None:
+        return None, [], reader.cut
+    tables: dict[Path, dict] = {project[0]: project[1]}
     by_name: dict[str, Path] = {}
-    for member in (home, *members):
-        if member not in tables and (table := reader.table(member)) is not None:
-            tables[member] = table
-        name = _project_name((tables.get(member, {}).get("project") or {}).get("name"))
-        if name:
-            by_name.setdefault(name, member)
-    shared = _workspace_sources(top)
+    shared: dict[str, list[dict]] = {}
+    if workspace is not None:
+        home, top = workspace
+        shape = _workspace_of(top) or {}
+        excluded = set(reader.expand(home, shape.get("exclude", [])))
+        members = [
+            member for member in dict.fromkeys(reader.expand(home, shape.get("members", [])))
+            if member not in excluded
+        ]
+        if len(members) > _WORKSPACE_MEMBERS:
+            members, reader.cut = members[:_WORKSPACE_MEMBERS], True
+        # The project must be the workspace's root or one of its members: uv runs any other alone.
+        if project[0] == home or project[0] in members:
+            tables[home] = top
+            shared = _sources(top)
+            for member in (home, *members):
+                if member not in tables and (table := reader.table(member)) is not None:
+                    tables[member] = table
+                name = _project_name((tables.get(member, {}).get("project") or {}).get("name"))
+                if name:
+                    by_name.setdefault(name, member)
+
+    def installed(place: Path, table: dict, name: str) -> Path | None:
+        """The folder of the local package ``name``, as ``place``'s project gets it, or None."""
+        sources = _sources(table)
+        if place == project[0] or place in by_name.values():
+            # The workspace root's sources apply to every member, under the member's own.
+            sources = {**shared, **sources}
+        for source in sources.get(name, []):
+            if source.get("workspace") is True:
+                return by_name.get(name)
+            if isinstance(source.get("path"), str):
+                target = place / source["path"]
+                found = _real_folder(target, root, known, left)
+                if found is not None and found not in tables and (read := reader.table(found)) is not None:
+                    tables[found] = read
+                return found if found in tables else None
+        return None
+
     followed: list[Path] = []
-    queue = [project[0]]
-    while queue:
-        place = queue.pop(0)
+    queue: list[tuple[Path, set[str] | None]] = [(project[0], None)]
+    while queue and left[0] > 0:
+        place, extras = queue.pop(0)
         table = tables.get(place, {})
-        for name in sorted(_requirements(table) & (shared | _workspace_sources(table))):
-            member = by_name.get(name)
+        for name in sorted(_requirements(table, extras)):
+            member = installed(place, table, name)
             if member is None or member in followed or member == project[0]:
                 continue
             if len(followed) == _WORKSPACE_DEPENDENCIES:
                 reader.cut = True
                 break
             followed.append(member)
-            queue.append(member)
-    return followed, reader.cut
+            queue.append((member, _requested_extras(table, name)))
+    return project[0], followed, reader.cut
+
+
+def _top_names(base: Path, left: list[float], limit: int) -> tuple[set[str], bool]:
+    """The names an import can start with in ``base``: its folders and its ``.py`` files' stems,
+    each entry charged to ``left``; past ``limit`` entries, whether it was cut."""
+    names: set[str] = set()
+    try:
+        with os.scandir(base) as listing:
+            for count, entry in enumerate(listing):
+                left[0] -= 1
+                if count >= limit or left[0] <= 0:
+                    return names, True
+                stem, suffix = os.path.splitext(entry.name)
+                if suffix == ".py" and stem.isidentifier():
+                    names.add(stem)
+                elif not suffix and entry.name.isidentifier():
+                    names.add(entry.name)
+    except OSError:
+        pass
+    return names, False
 
 
 # Links one chain may lead through, as the kernel allows about as many in one path.
@@ -901,53 +987,89 @@ _LINKS_FOLLOWED = 40
 
 
 def _real_folder(
-    folder: Path,
-    root: Path,
-    known: dict[Path, Path | None],
-    left: list[float],
-    depth: int = 0,
+    folder: Path, root: Path, known: dict[tuple[str, ...], Path | None], left: list[float]
 ) -> Path | None:
     """``folder`` with each link in it followed, if it's a folder inside ``root``; else None.
 
-    Each name below ``root`` is looked up once a walk, charged one lookup to ``left``, and a
-    link one more for its target, whose parts are looked up the same way: the kernel follows the
-    links of a path uncharged, and a chain of them held the save 11.6 s. A ``..`` is taken from
-    the folder reached so far, which has no link in it, so it costs nothing; above ``root``
-    nothing is looked up, and a path that stays out gives None. So do a missing folder, a loop
-    and a chain of links past ``_LINKS_FOLLOWED``.
+    Each name below ``root`` is looked up once a walk, charged one lookup to ``left``; a link is
+    charged one more, and one for each part of its target, which is walked a part at a time from
+    the real folder it's in (``_followed``): the kernel follows the links of a path uncharged,
+    and a chain of them held the save 11.6 s. A ``..`` is taken from the folder reached so far,
+    which has no link in it, so it costs nothing; above ``root`` nothing is looked up, and a path
+    that stays out gives None. So do a missing folder, a loop and a chain of links past
+    ``_LINKS_FOLLOWED``; what that limit cut isn't kept, since the same link reached by a shorter
+    chain may be followed.
     """
-    if not is_within(folder, root):
+    # Each name here is reached first, so what the chain limit cuts below it is cut for any way to
+    # it, and can be kept; a link's target is walked by _step, which keeps only what it didn't cut.
+    capped = [False]
+    parts, top = folder.parts, len(root.parts)
+    if parts[:top] != root.parts:
         return None
-    # The nearest folder already known, then each one below it in turn.
-    pending: list[Path] = []
-    place = folder
-    while place != root and place not in known and place != place.parent:
-        pending.append(place)
-        place = place.parent
-    real = root if place == root else known[place]
-    for literal in reversed(pending):
+    # From the deepest folder already known (most candidates share their folder with the last),
+    # each one below it looked up in turn, stopping at the first that isn't there: a crafted name
+    # of dozens of parts costs the folders up to that one.
+    known_end = len(parts)
+    while known_end > top and parts[:known_end] not in known:
+        known_end -= 1
+    real: Path | None = root if known_end == top else known[parts[:known_end]]
+    for end in range(known_end + 1, len(parts) + 1):
         if real is None:
-            known[literal] = None
-            continue
-        if literal.name == "..":
-            real = real.parent
-        elif not is_within(real, root):
-            # Above the root, as written: the way back in is by the same names.
-            real = real / literal.name
+            return None
+        key = parts[:end]
+        if key in known:
+            real = known[key]
         else:
-            # Marked first, so a link back to it reads as a loop.
-            known[literal] = None
-            real = _followed(real / literal.name, root, known, left, depth)
-        known[literal] = real
+            name = parts[end - 1]
+            if name == "..":
+                real = real.parent
+            elif not is_within(real, root):
+                # Above the root, as written: the way back in is by the same names.
+                real = real / name
+            else:
+                real = _step(real / name, root, known, left, 0, capped)
+            known[key] = real
     return real if real is not None and is_within(real, root) else None
 
 
+def _step(
+    name: Path,
+    root: Path,
+    known: dict[tuple[str, ...], Path | None],
+    left: list[float],
+    depth: int,
+    capped: list[bool],
+) -> Path | None:
+    """``name``, in a folder inside ``root`` with no link in it, as a folder, kept by its real
+    path for the walk unless the chain limit cut it."""
+    key = name.parts
+    if key in known:
+        return known[key]
+    # Marked first, so a link back to it reads as a loop.
+    known[key] = None
+    found = _followed(name, root, known, left, depth, capped)
+    if capped[0]:
+        del known[key]
+    else:
+        known[key] = found
+    return found
+
+
+# The longest link target followed, in parts: an honest one is a few parts, and each part of a
+# crafted one is a step to look up.
+_LONGEST_TARGET = 2 * _DEEPEST_FOLLOWED
+
+
 def _followed(
-    place: Path, root: Path, known: dict[Path, Path | None], left: list[float], depth: int
+    place: Path,
+    root: Path,
+    known: dict[tuple[str, ...], Path | None],
+    left: list[float],
+    depth: int,
+    capped: list[bool],
 ) -> Path | None:
     """``place``, a name in a folder with no link in it, as a folder: itself, or its link's
-    target followed, if that's a folder inside ``root``. A link's answer depends only on its own
-    chain, ``depth`` links long so far, so it can be kept for the walk."""
+    target followed a part at a time, if that's a folder inside ``root``."""
     left[0] -= 1
     try:
         mode = place.lstat().st_mode
@@ -955,16 +1077,34 @@ def _followed(
         return None
     if stat.S_ISDIR(mode):
         return place
-    if not stat.S_ISLNK(mode) or depth >= _LINKS_FOLLOWED:
+    if not stat.S_ISLNK(mode):
+        return None
+    if depth >= _LINKS_FOLLOWED:
+        capped[0] = True
         return None
     left[0] -= 1
     try:
         target = Path(os.readlink(place))
     except (OSError, ValueError):
         return None
-    # An absolute target is taken as written: one that leaves the root, through a name that is
-    # a link above it or not, isn't followed.
-    return _real_folder(place.parent / target, root, known, left, depth + 1)
+    if len(target.parts) > _LONGEST_TARGET:
+        return None
+    # Each part is a step on the way, charged as a lookup is.
+    left[0] -= len(target.parts)
+    real = Path(target.anchor) if target.is_absolute() else place.parent
+    for part in target.parts[1:] if target.is_absolute() else target.parts:
+        if part == "..":
+            real = real.parent
+        elif not is_within(real, root):
+            # Above the root: nothing is looked up there.
+            real = real / part
+        else:
+            found = _step(real / part, root, known, left, depth + 1, capped)
+            if found is None:
+                return None
+            real = found
+    # Out of the root, it's refused where it's used (_real_folder).
+    return real
 
 
 def _code_in(folder: Path) -> Iterator[Path]:
@@ -1110,19 +1250,25 @@ def imported_by_agent(
     # The uv workspace members the agent's project depends on are installed with it, so an import
     # names one by its package (Dileep's third review): each one's folder and its src/ are looked
     # in too.
-    members, members_cut = _workspace_dependencies(root, folder, lookups_left, {})
-    python_bases = (
-        folder,
-        folder / "src",
-        root,
-        root / "src",
-        *(base for member in members for base in (member / "src", member)),
-    )
+    project, members, members_cut = _workspace_dependencies(root, folder, lookups_left, {})
+    # The agent's own project, when the folder is below it, is installed too, src/ layout or not.
+    own = () if project in (None, folder) else (project, project / "src")
+    python_bases = (folder, folder / "src", root, root / "src", *own)
+    # Each member is looked in only for a name that starts as one of its packages or modules:
+    # every place is a few lookups for every name, and a name from the standard library or an
+    # index is in none of them.
+    member_bases: dict[str, list[Path]] = {}
+    for member in members:
+        for base in (member / "src", member):
+            names, cut_short = _top_names(base, lookups_left, _WORKSPACE_ENTRIES)
+            members_cut |= cut_short
+            for top in names:
+                member_bases.setdefault(top, []).append(base)
     # At the save, a candidate's folders are looked up one by one, each once a walk, and a folder
     # link is followed to its target inside the repository, charged: the kernel and resolve()
     # follow every link in a path uncharged, and a chain of them took 2,300 imports 11.6 s. So the
     # save reaches what bundling, which resolves as the kernel does, reaches.
-    real_folders: dict[Path, Path | None] | None = None if lookup_limit is None else {}
+    real_folders: dict[tuple[str, ...], Path | None] | None = None if lookup_limit is None else {}
     spent = [False]
 
     def found_at(candidates: Iterable[Path]) -> Path | None:
@@ -1159,11 +1305,19 @@ def imported_by_agent(
         # A path past the system's limit can't be opened, so it isn't built.
         if len(module) > _DEEPEST_FOLLOWED or len(name) > _LONGEST_NAME:
             return []
-        for start in (path.parents[level - 1],) if level else python_bases:
+        starts = (
+            (path.parents[level - 1],)
+            if level
+            else (*python_bases, *member_bases.get(module[0], ()))
+        )
+        for start in starts:
             if lookups_left[0] <= 0:
-                # Spent: each place left would be refused uncharged, and there can be dozens.
+                # Spent: each place left would be refused uncharged.
                 spent[0] = True
                 return []
+            if len(start.parts) + len(module) > deepest:
+                # Past the depth cut wherever it's looked for: not built at all.
+                continue
             target = start.joinpath(*module)
             if hit := found_at((target.with_suffix(".py"), target / "__init__.py")):
                 # Importing a module runs every package above it first.
