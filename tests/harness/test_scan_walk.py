@@ -1880,8 +1880,10 @@ def test_a_rows_setting_names_are_its_first_fifty(tmp_path: Path, names: int) ->
 
 def test_a_hazard_look_gives_up_past_its_listed_paths(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _files(tmp_path, {"a/agent.py": "", "b/agent.py": ""})
+    # Beside a and b, so the root's own listing passes the bound before either agent.py is
+    # seen, whatever order the file system lists folders in (os.walk doesn't sort them).
     for index in range(40):
-        (tmp_path / "c" / f"folder_{index:02}_{'v' * 40}").mkdir(parents=True)
+        (tmp_path / f"folder_{index:02}_{'v' * 40}").mkdir()
     assert scan_walk.build_hazard(tmp_path, "") == "agent_py"
 
     monkeypatch.setattr(scan_walk, "_HAZARD_PATH_BYTES", 500)
