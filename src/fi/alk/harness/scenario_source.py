@@ -32,7 +32,7 @@ from pydantic import ValidationError
 from .. import __version__ as _sdk_version
 from ..providers.agent import build_authored_agent
 from . import outbound as ob
-from .catalogue import CATALOGUE, NO_OVERLAY, SubGoal, is_refusal
+from .catalogue import CATALOGUE, NO_OVERLAY, SubGoal
 from .contract import AgentContract
 from .job import FailureDomain, SourceKind
 
@@ -440,16 +440,16 @@ def _load_catalogue_claims(bundle_dir: Path) -> dict[str, dict[str, str]]:
 def _needs_a_tool_action(goal: _CompiledSubGoal, *, overlay: str, claimed: str) -> bool:
     """Whether this sub-goal can hold only after the agent acted through a tool.
 
-    A refusal holds when the forbidden thing did not happen, so a correct agent can make no call.
-    A judged claim for the scenario's overlay (an escalation, an out-of-scope request) is decided
-    from what was said. Every other sub-goal is taken to depend on the solution's tool steps.
-    `claimed` is the catalogue's `overlay` field, which the overlay gate also accepts.
+    A judged claim for the scenario's overlay (a refusal, an escalation, an out-of-scope
+    request) is decided from what was said, so a correct agent can make no call. Every other
+    sub-goal, coded ones included, is taken to depend on the solution's tool steps, so an empty
+    capture stays `evidence_missing`. The claim is matched strictly (`SubGoal.claims`): by the
+    catalogue's `overlay` field (`claimed`) or the overlay's whole name, never by a word in the
+    name alone, which would also drop the guard for a task such as `time_block_reserved`.
     """
-    if is_refusal(goal.name):
-        return False
     if not goal.judged or overlay.strip().lower() in NO_OVERLAY:
         return True
-    return not SubGoal(name=goal.name, overlay=claimed).settles(overlay)
+    return not SubGoal(name=goal.name, overlay=claimed).claims(overlay)
 
 
 def _load_one(
@@ -567,9 +567,13 @@ def _load_one(
     # sub-goal also needs a tool action to hold.
     coverage = body.get("coverage")
     overlay = str(coverage.get("overlay") or "") if isinstance(coverage, dict) else ""
-    requires_tool_evidence = bool(set(solution_tools) & (declared_tools or set())) and any(
+    requires_tool_evidence = bool(
+        set(solution_tools) & (declared_tools or set())
+    ) and any(
         _needs_a_tool_action(
-            goal, overlay=overlay, claimed=(claims or {}).get(goal.name, {}).get("overlay", "")
+            goal,
+            overlay=overlay,
+            claimed=(claims or {}).get(goal.name, {}).get("overlay", ""),
         )
         for goal in sub_goals
     )
