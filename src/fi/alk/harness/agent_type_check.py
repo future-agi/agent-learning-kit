@@ -615,8 +615,11 @@ def _below_shared(path: Path, folder: Path) -> tuple[str, ...]:
 
 
 def _walked(root: Path, subfolder: str) -> frozenset[Path]:
-    """What the agent's folder imports, followed with the save's limits."""
-    return imported_by_agent(
+    """What the agent's folder imports, followed with the save's limits. A walk a limit stopped
+    is logged: what it didn't reach, the save's checks don't see, and bundling's walk, with no
+    limit, may."""
+    stopped: list[bool] = []
+    found = imported_by_agent(
         root,
         subfolder,
         parse_limit=LARGEST_PARSED_MODULE,
@@ -624,13 +627,22 @@ def _walked(root: Path, subfolder: str) -> frozenset[Path]:
         script_budget=ParseBudget(_WALKED_SCRIPTS),
         import_limit=_WALKED_IMPORTS,
         lookup_limit=_WALKED_LOOKUPS,
+        stopped=stopped,
     )
+    if stopped and stopped[0]:
+        logger.warning(
+            "the save's import walk for %s stopped at its limits; %d files reached",
+            subfolder,
+            len(found),
+        )
+    return found
 
 
 def code_the_agent_reaches(source_root: Path, subfolder: str) -> list[Path]:
-    """The files outside the agent's folder that its code runs, exactly as the browser-tool scan
-    counts them: what the folder imports and the files directly above it, less test helpers and
-    other people's unpacked packages. It runs that scan; the save reuses the scan it already ran.
+    """The files outside the agent's folder that its code runs: the files directly above it,
+    less test helpers, and everything its imports lead to, as the credential scan reads them
+    (test-named and unpacked packages included, which the browser-tool scan leaves out). It runs
+    that scan; the save reuses the scan it already ran.
 
     Raises ``SubfolderNotFound`` for a folder that can't be used.
     """

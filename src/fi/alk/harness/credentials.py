@@ -691,91 +691,212 @@ def _file_inside(
     return resolved if len(resolved.parts) <= deepest and is_within(resolved, root) else None
 
 
-# A uv workspace's members, at most: each is two more places every Python import is looked for.
-_WORKSPACE_MEMBERS = 128
-# The largest pyproject.toml read for its workspace.
+# A uv workspace's members read for their names, at most.
+_WORKSPACE_MEMBERS = 256
+# The members the agent depends on, at most: each is two more places every Python import is
+# looked for.
+_WORKSPACE_DEPENDENCIES = 32
+# The largest pyproject.toml read, and what one walk reads of them in all: a crafted one parses
+# in about 0.4 s a MB.
 _LARGEST_PYPROJECT = 256 * 1024
+_PYPROJECTS_READ = 1024 * 1024
+# The folder entries a member pattern's globs look at, at most.
+_WORKSPACE_ENTRIES = 20_000
+_PROJECT_NAME = re.compile(r"\s*([A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?)")
 
 
-def _workspace_members(
-    root: Path, folder: Path, left: list[float]
-) -> tuple[list[Path], bool]:
-    """The members of the nearest uv workspace at or above ``folder`` inside ``root``, and
-    whether some weren't looked for.
+def _project_name(value: object) -> str | None:
+    """A distribution's name as uv compares it, from a name or a requirement string."""
+    found = _PROJECT_NAME.match(value) if isinstance(value, str) else None
+    return re.sub(r"[-_.]+", "-", found.group(1)).lower() if found else None
 
-    ``uv run`` installs them, so an agent imports one by its package name. Each folder entry
-    looked at is charged to ``left``. A ``**`` pattern isn't expanded, and past
-    ``_WORKSPACE_MEMBERS`` members the rest aren't added: both say so.
-    """
-    for workspace in (folder, *folder.parents):
-        if not is_within(workspace, root):
-            return [], False
-        document = workspace / "pyproject.toml"
-        # Not charged: one look per folder up to the root, which the depth cut bounds.
+
+class _Workspace:
+    """What one walk reads of a uv workspace: every lookup charged to ``left``, the
+    pyproject.toml files read under one total, and its folders found through ``known``."""
+
+    def __init__(self, root: Path, left: list[float], known: dict[Path, Path | None]) -> None:
+        self.root, self.left, self.known = root, left, known
+        self.read = 0
+        self.cut = False
+
+    def spent(self) -> bool:
+        if self.left[0] <= 0:
+            self.cut = True
+        return self.cut and self.left[0] <= 0
+
+    def table(self, folder: Path) -> dict | None:
+        """``folder``'s pyproject.toml, parsed, or None."""
+        if self.spent():
+            return None
+        self.left[0] -= 1
+        document = folder / "pyproject.toml"
         try:
-            if not document.is_file() or document.stat().st_size > _LARGEST_PYPROJECT:
-                continue
+            if not document.is_file():
+                return None
+            with document.open("rb") as handle:
+                raw = handle.read(_LARGEST_PYPROJECT + 1)
+        except (OSError, ValueError):
+            return None
+        if len(raw) > _LARGEST_PYPROJECT or self.read + len(raw) > _PYPROJECTS_READ:
+            self.cut = True
+            return None
+        self.read += len(raw)
+        try:
             import tomllib
 
-            table = tomllib.loads(document.read_text(encoding="utf-8"))
-        except (OSError, ValueError, ImportError):
-            continue
-        uv = table.get("tool", {}).get("uv", {}) if isinstance(table.get("tool"), dict) else {}
-        found = uv.get("workspace") if isinstance(uv, dict) else None
-        if isinstance(found, dict):
-            break
-    else:
-        return [], False
-    cut = False
+            table = tomllib.loads(raw.decode("utf-8-sig"))
+        except (ValueError, UnicodeError, RecursionError, ImportError):
+            return None
+        return table if isinstance(table, dict) else None
 
-    def expand(patterns: object) -> list[Path]:
-        nonlocal cut
+    def expand(self, workspace: Path, patterns: object) -> list[Path]:
+        """The folders ``patterns`` match, as uv globs them, one level at a time."""
         matched: list[Path] = []
+        entries = 0
         for pattern in patterns if isinstance(patterns, list) else []:
+            # An absolute pattern or one with "..", out of the root, is found nowhere by
+            # _real_folder, which looks nothing up there.
             parts = PurePosixPath(pattern).parts if isinstance(pattern, str) else ()
-            if not parts or PurePosixPath(pattern).is_absolute() or ".." in parts:
+            if not parts:
                 continue
             if "**" in parts:
-                cut = True
+                self.cut = True
                 continue
             level = [workspace]
             for part in parts:
                 below: list[Path] = []
                 for base in level:
+                    if self.left[0] <= 0 or entries >= _WORKSPACE_ENTRIES:
+                        self.cut = True
+                        break
                     if not any(mark in part for mark in "*?["):
-                        left[0] -= 1
-                        if (base / part).is_dir():
-                            below.append(base / part)
+                        if (found := _real_folder(base / part, self.root, self.known, self.left)):
+                            below.append(found)
                         continue
                     try:
-                        with os.scandir(base) as entries:
-                            for entry in entries:
-                                left[0] -= 1
-                                if left[0] <= 0:
-                                    cut = True
+                        with os.scandir(base) as listing:
+                            names = []
+                            for entry in listing:
+                                entries += 1
+                                self.left[0] -= 1
+                                if self.left[0] <= 0 or entries >= _WORKSPACE_ENTRIES:
+                                    self.cut = True
                                     break
-                                if fnmatch.fnmatchcase(entry.name, part) and entry.is_dir(
-                                    follow_symlinks=False
-                                ):
-                                    below.append(base / entry.name)
+                                if fnmatch.fnmatchcase(entry.name, part):
+                                    names.append(entry.name)
                     except OSError:
                         continue
-                level = sorted(below)
+                    # A member may be a link, as uv follows it.
+                    for name in sorted(names):
+                        if self.spent():
+                            break
+                        if (found := _real_folder(base / name, self.root, self.known, self.left)):
+                            below.append(found)
+                level = sorted(set(below))
             matched.extend(level)
         return matched
 
-    excluded = set(expand(found.get("exclude", [])))
-    members = sorted(
-        member
-        for member in dict.fromkeys(expand(found.get("members", [])))
-        if member not in excluded and member != workspace
-    )
+
+def _requirements(table: dict) -> set[str]:
+    """The names of every distribution ``table``'s project asks for: its dependencies, its
+    extras and its dependency groups, which ``uv run`` installs by default."""
+    project = table.get("project") if isinstance(table.get("project"), dict) else {}
+    found: list[object] = list(project.get("dependencies") or [])
+    extras = project.get("optional-dependencies")
+    for values in extras.values() if isinstance(extras, dict) else ():
+        found.extend(values if isinstance(values, list) else [])
+    groups = table.get("dependency-groups")
+    for values in groups.values() if isinstance(groups, dict) else ():
+        found.extend(values if isinstance(values, list) else [])
+    return {name for value in found if (name := _project_name(value))}
+
+
+def _workspace_sources(table: dict) -> set[str]:
+    tool = table.get("tool") if isinstance(table.get("tool"), dict) else {}
+    uv = tool.get("uv") if isinstance(tool.get("uv"), dict) else {}
+    sources = uv.get("sources") if isinstance(uv.get("sources"), dict) else {}
+    return {
+        name
+        for key, source in sources.items()
+        if isinstance(source, dict) and source.get("workspace") is True
+        and (name := _project_name(key))
+    }
+
+
+def _workspace_of(table: dict) -> dict | None:
+    tool = table.get("tool") if isinstance(table.get("tool"), dict) else {}
+    uv = tool.get("uv") if isinstance(tool.get("uv"), dict) else {}
+    return uv.get("workspace") if isinstance(uv.get("workspace"), dict) else None
+
+
+def _workspace_dependencies(
+    root: Path, folder: Path, left: list[float], known: dict[Path, Path | None]
+) -> tuple[list[Path], bool]:
+    """The folders of the uv workspace members the agent's project depends on, and whether some
+    weren't looked for.
+
+    ``uv run`` installs a member the project names as a requirement whose source is the
+    workspace (``{workspace = true}``, in the project or the workspace root), and what that
+    member asks for in turn; an agent imports it by its package name. Another member, a sibling
+    agent among them, isn't installed, so it isn't looked in. The project is the nearest
+    pyproject.toml at or above ``folder``, the workspace the nearest one above it that names it a
+    member. A ``**`` pattern isn't expanded, and past the limits the rest isn't read: both say so.
+    """
+    reader = _Workspace(root, left, known)
+    project: tuple[Path, dict] | None = None
+    workspace: tuple[Path, dict] | None = None
+    for place in (folder, *folder.parents):
+        if not is_within(place, root) or reader.cut:
+            break
+        if (table := reader.table(place)) is None:
+            continue
+        if project is None:
+            project = (place, table)
+        if _workspace_of(table) is not None:
+            workspace = (place, table)
+            break
+    if project is None or workspace is None:
+        return [], reader.cut
+    home, top = workspace
+    shape = _workspace_of(top) or {}
+    excluded = set(reader.expand(home, shape.get("exclude", [])))
+    members = [
+        member for member in dict.fromkeys(reader.expand(home, shape.get("members", [])))
+        if member not in excluded
+    ]
     if len(members) > _WORKSPACE_MEMBERS:
-        members, cut = members[:_WORKSPACE_MEMBERS], True
-    return members, cut
+        members, reader.cut = members[:_WORKSPACE_MEMBERS], True
+    # The project must be the workspace's root or one of its members: uv runs any other alone.
+    if project[0] != home and project[0] not in members:
+        return [], reader.cut
+    tables = {home: top, project[0]: project[1]}
+    by_name: dict[str, Path] = {}
+    for member in (home, *members):
+        if member not in tables and (table := reader.table(member)) is not None:
+            tables[member] = table
+        name = _project_name((tables.get(member, {}).get("project") or {}).get("name"))
+        if name:
+            by_name.setdefault(name, member)
+    shared = _workspace_sources(top)
+    followed: list[Path] = []
+    queue = [project[0]]
+    while queue:
+        place = queue.pop(0)
+        table = tables.get(place, {})
+        for name in sorted(_requirements(table) & (shared | _workspace_sources(table))):
+            member = by_name.get(name)
+            if member is None or member in followed or member == project[0]:
+                continue
+            if len(followed) == _WORKSPACE_DEPENDENCIES:
+                reader.cut = True
+                break
+            followed.append(member)
+            queue.append(member)
+    return followed, reader.cut
 
 
-# Links one folder lookup may follow, as the kernel allows about as many in one path.
+# Links one chain may lead through, as the kernel allows about as many in one path.
 _LINKS_FOLLOWED = 40
 
 
@@ -784,22 +905,23 @@ def _real_folder(
     root: Path,
     known: dict[Path, Path | None],
     left: list[float],
-    hops: list[int] | None = None,
+    depth: int = 0,
 ) -> Path | None:
     """``folder`` with each link in it followed, if it's a folder inside ``root``; else None.
 
-    Each folder below ``root`` is looked up once a walk, charged one lookup to ``left``, and a
+    Each name below ``root`` is looked up once a walk, charged one lookup to ``left``, and a
     link one more for its target, whose parts are looked up the same way: the kernel follows the
-    links of a path uncharged, and a chain of them held the save 11.6 s. A link that leaves
-    ``root``, a missing folder, a loop and a chain past ``_LINKS_FOLLOWED`` give None.
+    links of a path uncharged, and a chain of them held the save 11.6 s. A ``..`` is taken from
+    the folder reached so far, which has no link in it, so it costs nothing; above ``root``
+    nothing is looked up, and a path that stays out gives None. So do a missing folder, a loop
+    and a chain of links past ``_LINKS_FOLLOWED``.
     """
-    hops = [0] if hops is None else hops
     if not is_within(folder, root):
         return None
     # The nearest folder already known, then each one below it in turn.
     pending: list[Path] = []
     place = folder
-    while place != root and place not in known:
+    while place != root and place not in known and place != place.parent:
         pending.append(place)
         place = place.parent
     real = root if place == root else known[place]
@@ -807,18 +929,25 @@ def _real_folder(
         if real is None:
             known[literal] = None
             continue
-        # Marked first, so a link back to it reads as a loop.
-        known[literal] = None
-        real = _followed(real / literal.name, root, known, left, hops)
+        if literal.name == "..":
+            real = real.parent
+        elif not is_within(real, root):
+            # Above the root, as written: the way back in is by the same names.
+            real = real / literal.name
+        else:
+            # Marked first, so a link back to it reads as a loop.
+            known[literal] = None
+            real = _followed(real / literal.name, root, known, left, depth)
         known[literal] = real
-    return real
+    return real if real is not None and is_within(real, root) else None
 
 
 def _followed(
-    place: Path, root: Path, known: dict[Path, Path | None], left: list[float], hops: list[int]
+    place: Path, root: Path, known: dict[Path, Path | None], left: list[float], depth: int
 ) -> Path | None:
     """``place``, a name in a folder with no link in it, as a folder: itself, or its link's
-    target followed, if that's a folder inside ``root``."""
+    target followed, if that's a folder inside ``root``. A link's answer depends only on its own
+    chain, ``depth`` links long so far, so it can be kept for the walk."""
     left[0] -= 1
     try:
         mode = place.lstat().st_mode
@@ -826,31 +955,16 @@ def _followed(
         return None
     if stat.S_ISDIR(mode):
         return place
-    if not stat.S_ISLNK(mode) or hops[0] >= _LINKS_FOLLOWED:
+    if not stat.S_ISLNK(mode) or depth >= _LINKS_FOLLOWED:
         return None
-    hops[0] += 1
     left[0] -= 1
     try:
         target = Path(os.readlink(place))
     except (OSError, ValueError):
         return None
-    real = root if target.is_absolute() else place.parent
-    if target.is_absolute():
-        if not is_within(target, root):
-            return None
-        target = target.relative_to(root)
-    for part in target.parts:
-        if part in ("", "."):
-            continue
-        if part == "..":
-            # The folder reached so far has no link in it, so its parent is the real one. Out of
-            # the root and back in is followed, as the kernel follows it; staying out isn't.
-            real = real.parent
-            continue
-        real = _real_folder(real / part, root, known, left, hops)
-        if real is None:
-            return None
-    return real
+    # An absolute target is taken as written: one that leaves the root, through a name that is
+    # a link above it or not, isn't followed.
+    return _real_folder(place.parent / target, root, known, left, depth + 1)
 
 
 def _code_in(folder: Path) -> Iterator[Path]:
@@ -993,9 +1107,10 @@ def imported_by_agent(
     # A name is tried once, but a crafted chain of packages makes it resolve dozens of paths, each
     # dozens of parts deep: 1,000 names took the save 12 s. What is looked up again costs nothing.
     lookups_left = [math.inf if lookup_limit is None else float(lookup_limit)]
-    # A uv workspace's members are installed with the agent, so an import names one by its package
-    # (Dileep's third review): each member's folder and its src/ are looked in too.
-    members, members_cut = _workspace_members(root, folder, lookups_left)
+    # The uv workspace members the agent's project depends on are installed with it, so an import
+    # names one by its package (Dileep's third review): each one's folder and its src/ are looked
+    # in too.
+    members, members_cut = _workspace_dependencies(root, folder, lookups_left, {})
     python_bases = (
         folder,
         folder / "src",
@@ -1045,6 +1160,10 @@ def imported_by_agent(
         if len(module) > _DEEPEST_FOLLOWED or len(name) > _LONGEST_NAME:
             return []
         for start in (path.parents[level - 1],) if level else python_bases:
+            if lookups_left[0] <= 0:
+                # Spent: each place left would be refused uncharged, and there can be dozens.
+                spent[0] = True
+                return []
             target = start.joinpath(*module)
             if hit := found_at((target.with_suffix(".py"), target / "__init__.py")):
                 # Importing a module runs every package above it first.
@@ -1061,7 +1180,9 @@ def imported_by_agent(
         if len(name) > _LONGEST_NAME:
             return None
         for start in (path.parent,) if name.startswith(".") else (folder, root):
-            target = start / name
+            # Joined as written, as Node joins it before it reads the disk: a ".." after a folder
+            # link leaves the link, not its target.
+            target = Path(os.path.normpath(start / name))
             written = [target.with_suffix(suffix) for suffix in (".ts", ".tsx")]
             if hit := found_at(
                 (

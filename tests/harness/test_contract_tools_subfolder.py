@@ -1923,7 +1923,12 @@ def test_the_folders_instrumentation_counts_a_test_named_package_it_imports(tmp_
 
 
 def test_the_folders_instrumentation_counts_another_workspace_members_code(tmp_path, repo):
-    (repo / "pyproject.toml").write_text('[tool.uv.workspace]\nmembers=["agents/*", "libs/*"]\n')
+    (repo / "pyproject.toml").write_text(
+        '[tool.uv.workspace]\nmembers=["agents/*", "libs/*"]\n[tool.uv.sources]\ncommon={workspace=true}\n'
+    )
+    (repo / "agents" / "a" / "pyproject.toml").write_text(
+        "[project]\nname='agent-a'\nversion='1'\ndependencies=['common']\n"
+    )
     (repo / "agents" / "a" / "agent.py").write_text("from common import tracing\n")
     shared = repo / "libs" / "common" / "src" / "common"
     shared.mkdir(parents=True)
