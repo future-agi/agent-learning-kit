@@ -473,6 +473,22 @@ def test_an_event_started_run_invokes_the_agent_once_with_no_caller(monkeypatch)
     assert transcript.ended == conv.FINISHED
 
 
+def test_an_actor_s_start_message_is_theirs_by_name_and_counted_as_their_line(monkeypatch):
+    from fi.alk.harness.actors import StartsWith
+
+    agent = _Agent(["Applied and posted."])
+    monkeypatch.setattr(conv, "Stage", lambda *a, **k: pytest.fail("no caller is simulated"))
+    cast = conv.ChatActors([{**_MANAGER, "trigger": {"kind": "always"}}], seed="run", model=None)
+    scenario = SimpleNamespace(
+        instruction="", max_turns=4, starts_with=StartsWith(actor="manager", text="Apply the agreed 20% to deal 8.")
+    )
+    transcript = asyncio.run(conv.converse(agent, scenario, SimpleNamespace(), actors=cast))
+    assert transcript.canonical_messages()[0] == {
+        "role": "actor", "actor": "manager", "name": "Mia", "content": "Apply the agreed 20% to deal 8."
+    }
+    assert cast.summary() == [{"actor": "manager", "name": "Mia", "triggered": True, "delivered": 1, "dropped": []}]
+
+
 def test_a_task_driven_run_needs_no_actor_and_the_scenario_sends_the_task(monkeypatch):
     from fi.alk.harness.actors import StartsWith
 

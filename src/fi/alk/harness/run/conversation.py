@@ -507,7 +507,10 @@ class ChatActors:
 
 
 async def _started_by_event(
-    target: Target, starts_with: Any, on_exchange: Callable[[Exchange], Any] | None
+    target: Target,
+    starts_with: Any,
+    on_exchange: Callable[[Exchange], Any] | None,
+    actors: ChatActors | None = None,
 ) -> Transcript:
     """One invocation of the agent by the scenario's task or an actor's message, and whatever it answers; no one
     else speaks. What it did is in the world, which is what the run is graded on."""
@@ -521,7 +524,12 @@ async def _started_by_event(
     await target.open()
     try:
         sender = starts_with.actor
-        actor = {"id": sender, "name": sender} if sender is not None else None
+        listed = next((one for one in (actors.actors if actors else []) if str(one["id"]) == sender), None)
+        actor = {"id": sender, "name": (listed or {}).get("name") or sender} if sender is not None else None
+        if listed is not None:
+            # The message that starts the run is the sender's own line, as the call records it.
+            actors.triggered.add(sender)
+            actors.written[sender].append(starts_with.text)
         record(Exchange("actor" if sender is not None else "task", starts_with.text, time.time(), actor))
         try:
             reply = await target.say(starts_with.text)
@@ -552,7 +560,7 @@ async def converse(
     scenario (`starts_with`) has no person: the agent is invoked once by the scenario's task or that actor's message."""
     starts_with = getattr(scenario, "starts_with", None)
     if starts_with is not None:
-        return await _started_by_event(target, starts_with, on_exchange)
+        return await _started_by_event(target, starts_with, on_exchange, actors)
     transcript = Transcript()
     from ..simulator import load_simulator_prompt
 
