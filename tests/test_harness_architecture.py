@@ -25,6 +25,7 @@ from fi.alk.harness.environment_plan import (
 from fi.alk.harness.executor import (
     GitHubSourceAcquirer,
     HarnessExecutor,
+    SourceAcquisitionError,
     _failure_from_events,
 )
 from fi.alk.harness.job import (
@@ -80,6 +81,7 @@ def test_executor_understands_a_materialized_archive_as_a_repository(
         job_id="job-upload",
         run_id="run-upload",
         execution="hosted",
+        runtime={"isolation": "dedicated_vm"},
         source={"kind": "archive", "archive_artifact_id": "source-id"},
         agent={"connector": "auto"},
         metadata={"source_kind": "archive"},
@@ -112,8 +114,10 @@ def test_executor_freezes_the_resolved_github_commit_before_building(
         job_id="job-github",
         run_id="run-github",
         execution="hosted",
+        runtime={"isolation": "dedicated_vm"},
         source={
             "kind": "github",
+            "commit_sha": "a" * 40,
             "visibility": "public",
             "repository": "customer/agent",
             "ref": "main",
@@ -991,8 +995,10 @@ def test_job_carries_references_but_rejects_resolved_secrets() -> None:
         job_id="job",
         run_id="run",
         execution="hosted",
+        runtime={"isolation": "dedicated_vm"},
         source={
             "kind": "github",
+            "commit_sha": "a" * 40,
             "installation_id": "installation",
             "repository": "customer/agent",
             "ref": "main",
@@ -1001,9 +1007,9 @@ def test_job_carries_references_but_rejects_resolved_secrets() -> None:
             "connector": "livekit",
             "secret_refs": {
                 "api_key": {
-                    "manager": "futureagi",
+                    "manager": "platform-vault",
                     "key": "secret_livekit_key",
-                    "purpose": "connect to agent",
+                    "purpose": "target_provider",
                 }
             },
         },
@@ -1016,8 +1022,10 @@ def test_job_carries_references_but_rejects_resolved_secrets() -> None:
             job_id="job",
             run_id="run",
             execution="hosted",
+            runtime={"isolation": "dedicated_vm"},
             source={
                 "kind": "github",
+                "commit_sha": "a" * 40,
                 "installation_id": "installation",
                 "repository": "customer/agent",
             },
@@ -1030,6 +1038,7 @@ def test_public_github_job_needs_no_installation_but_is_commit_pinnable() -> Non
         job_id="job",
         run_id="run",
         execution="hosted",
+        runtime={"isolation": "dedicated_vm"},
         source={
             "kind": "github",
             "visibility": "public",
@@ -1049,8 +1058,10 @@ def test_public_github_branch_url_is_normalized_into_repository_and_ref() -> Non
         job_id="job",
         run_id="run",
         execution="hosted",
+        runtime={"isolation": "dedicated_vm"},
         source={
             "kind": "github",
+            "commit_sha": "a" * 40,
             "visibility": "public",
             "repository": "https://github.com/future-agi/future-agi/tree/feat/harness",
         },
@@ -1091,8 +1102,10 @@ def test_hosted_job_rejects_unsafe_security_policy(security: dict) -> None:
             job_id="job",
             run_id="run",
             execution="hosted",
+            runtime={"isolation": "dedicated_vm"},
             source={
                 "kind": "github",
+                "commit_sha": "a" * 40,
                 "visibility": "public",
                 "repository": "customer/public-agent",
             },
@@ -1217,6 +1230,8 @@ def test_hosted_github_checkout_keeps_token_out_of_process_arguments(
     observed = {}
 
     def run(command, **kwargs):
+        if command[1] == "rev-parse":
+            return SimpleNamespace(returncode=0, stdout="a" * 40 + "\n", stderr="")
         observed["command"] = command
         observed["environment"] = kwargs["env"]
         Path(command[-1]).mkdir()
@@ -1227,8 +1242,10 @@ def test_hosted_github_checkout_keeps_token_out_of_process_arguments(
         job_id="job",
         run_id="run",
         execution="hosted",
+        runtime={"isolation": "dedicated_vm"},
         source={
             "kind": "github",
+            "commit_sha": "a" * 40,
             "installation_id": "installation",
             "repository": "customer/private-agent",
             "ref": "main",
@@ -1254,6 +1271,8 @@ def test_public_github_checkout_does_not_request_or_inject_token(
         raise AssertionError("public checkout must not request an installation token")
 
     def run(command, **kwargs):
+        if command[1] == "rev-parse":
+            return SimpleNamespace(returncode=0, stdout="a" * 40 + "\n", stderr="")
         observed["environment"] = kwargs["env"]
         Path(command[-1]).mkdir()
         return SimpleNamespace(returncode=0, stdout="", stderr="")
@@ -1263,8 +1282,10 @@ def test_public_github_checkout_does_not_request_or_inject_token(
         job_id="job",
         run_id="run",
         execution="hosted",
+        runtime={"isolation": "dedicated_vm"},
         source={
             "kind": "github",
+            "commit_sha": "a" * 40,
             "visibility": "public",
             "repository": "customer/public-agent",
         },
@@ -1283,6 +1304,8 @@ def test_public_github_branch_url_clones_the_branch(
     observed = {}
 
     def run(command, **kwargs):
+        if command[1] == "rev-parse":
+            return SimpleNamespace(returncode=0, stdout="a" * 40 + "\n", stderr="")
         observed["command"] = command
         Path(command[-1]).mkdir()
         return SimpleNamespace(returncode=0, stdout="", stderr="")
@@ -1292,8 +1315,10 @@ def test_public_github_branch_url_clones_the_branch(
         job_id="job",
         run_id="run",
         execution="hosted",
+        runtime={"isolation": "dedicated_vm"},
         source={
             "kind": "github",
+            "commit_sha": "a" * 40,
             "visibility": "public",
             "repository": "https://github.com/acme/agent/tree/feat/harness",
         },
@@ -1312,6 +1337,218 @@ def test_public_github_branch_url_clones_the_branch(
         "https://github.com/acme/agent.git",
         str(tmp_path / "repository"),
     ]
+
+
+def _recording_git(head_output: str):
+    calls = []
+
+    # Every call is recorded before it is answered, so rev-parse's arguments, folder and
+    # environment are checked as strictly as the clone's.
+    def run(command, **kwargs):
+        calls.append((command, kwargs["cwd"], kwargs["env"]))
+        if command[1] == "rev-parse":
+            return SimpleNamespace(returncode=0, stdout=head_output + "\n", stderr="")
+        Path(command[-1]).mkdir()
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    return run, calls
+
+
+def test_executor_freezes_the_checked_out_commit_for_a_local_github_job(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # A value no job pins, so the build can only see it if the checkout's revision was frozen.
+    commit = "c" * 40
+    observed: dict[str, str | None] = {}
+    calls = []
+
+    async def fake_auto(args) -> int:
+        observed["commit"] = args.job.source.commit_sha
+        return 0
+
+    def fake_run(command, **kwargs):
+        calls.append((command, kwargs["cwd"]))
+        return SimpleNamespace(returncode=0, stdout=commit + "\n", stderr="")
+
+    monkeypatch.setattr("fi.alk.harness.cli._auto", fake_auto)
+    monkeypatch.setattr("fi.alk.harness.executor.subprocess.run", fake_run)
+    source = tmp_path / "repository"
+    source.mkdir()
+    # Hosted GitHub jobs must arrive pinned, so only a local job reaches the freeze.
+    job = HarnessJob(
+        job_id="job-local-github",
+        run_id="run-local-github",
+        execution="local",
+        source={
+            "kind": "github",
+            "visibility": "public",
+            "repository": "customer/agent",
+            "ref": "main",
+        },
+        agent={"connector": "auto"},
+    )
+
+    status = asyncio.run(
+        HarnessExecutor().run(job, source=source, output=tmp_path / "artifacts")
+    )
+
+    assert status.stage.value == "completed"
+    assert observed["commit"] == commit
+    # The recorded provenance must be the checkout's revision, not that of a folder around it.
+    assert calls == [(["git", "rev-parse", "HEAD"], source)]
+
+
+# The frozen job is not validated again, so a failed rev-parse must be refused even when it
+# printed a commit, and output that isn't a commit even when git exits cleanly.
+@pytest.mark.parametrize(
+    ("returncode", "stdout"),
+    [(1, "c" * 40 + "\n"), (0, "not-a-commit\n")],
+    ids=["rev-parse-fails", "output-is-not-a-commit"],
+)
+def test_executor_fails_a_local_github_job_whose_commit_cannot_be_resolved(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, returncode: int, stdout: str
+) -> None:
+    async def fake_auto(args) -> int:
+        raise AssertionError("an unresolved commit must not reach the build")
+
+    def fake_run(*_args, **_kwargs):
+        return SimpleNamespace(returncode=returncode, stdout=stdout, stderr="")
+
+    monkeypatch.setattr("fi.alk.harness.cli._auto", fake_auto)
+    monkeypatch.setattr("fi.alk.harness.executor.subprocess.run", fake_run)
+    source = tmp_path / "repository"
+    source.mkdir()
+    job = HarnessJob(
+        job_id="job-local-github",
+        run_id="run-local-github",
+        execution="local",
+        source={
+            "kind": "github",
+            "visibility": "public",
+            "repository": "customer/agent",
+            "ref": "main",
+        },
+        agent={"connector": "auto"},
+    )
+
+    status = asyncio.run(
+        HarnessExecutor().run(job, source=source, output=tmp_path / "artifacts")
+    )
+
+    assert status.stage.value == "failed"
+    assert status.failure.code == "github_commit_resolution_failed"
+    assert status.failure.domain is FailureDomain.INFRASTRUCTURE
+    assert status.failure.stage is HarnessStage.ACQUIRING_SOURCE
+
+
+def test_hosted_github_checkout_keeps_token_out_of_git_arguments_and_the_pin_check(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    token = "installation-secret-token"
+    run, calls = _recording_git("a" * 40)
+    monkeypatch.setattr("fi.alk.harness.executor.subprocess.run", run)
+    job = HarnessJob(
+        job_id="job",
+        run_id="run",
+        execution="hosted",
+        runtime={"isolation": "dedicated_vm"},
+        source={
+            "kind": "github",
+            "installation_id": "installation",
+            "repository": "customer/private-agent",
+            "ref": "main",
+            "commit_sha": "a" * 40,
+        },
+        agent={"connector": "http"},
+    )
+
+    checkout = asyncio.run(
+        GitHubSourceAcquirer(lambda _installation: token).acquire(job, tmp_path)
+    )
+
+    assert checkout == tmp_path / "repository"
+    assert [command for command, _cwd, _env in calls] == [
+        [
+            "git",
+            "clone",
+            "--depth",
+            "1",
+            "--branch",
+            "main",
+            "https://github.com/customer/private-agent.git",
+            str(tmp_path / "repository"),
+        ],
+        ["git", "rev-parse", "HEAD"],
+    ]
+    assert all(token not in " ".join(command) for command, _cwd, _env in calls)
+    assert calls[0][2]["GIT_CONFIG_VALUE_0"].endswith(token)
+    # Verifying the pin needs no credential, so the token must not ride along into it.
+    _command, verify_cwd, verify_env = calls[1]
+    assert verify_cwd == tmp_path / "repository"
+    assert all(token not in value for value in verify_env.values())
+
+
+def test_hosted_github_checkout_refuses_a_checkout_that_is_not_the_pinned_commit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    token = "installation-secret-token"
+    # Differs from the pin only in its last character, so comparing a short prefix can't pass.
+    run, _calls = _recording_git("a" * 39 + "b")
+    monkeypatch.setattr("fi.alk.harness.executor.subprocess.run", run)
+    job = HarnessJob(
+        job_id="job",
+        run_id="run",
+        execution="hosted",
+        runtime={"isolation": "dedicated_vm"},
+        source={
+            "kind": "github",
+            "installation_id": "installation",
+            "repository": "customer/private-agent",
+            "ref": "main",
+            "commit_sha": "a" * 40,
+        },
+        agent={"connector": "http"},
+    )
+
+    with pytest.raises(SourceAcquisitionError, match="github_commit_mismatch"):
+        asyncio.run(
+            GitHubSourceAcquirer(lambda _installation: token).acquire(job, tmp_path)
+        )
+
+
+# None leaves the runtime out, which selects the shared-runner default; hosted customer code
+# must never get that or any other isolation weaker than its own VM.
+@pytest.mark.parametrize(
+    "isolation",
+    [
+        None,
+        *(
+            isolation.value
+            for isolation in RuntimeIsolation
+            if isolation is not RuntimeIsolation.DEDICATED_VM
+        ),
+    ],
+)
+def test_hosted_job_refuses_any_isolation_but_a_dedicated_vm(
+    isolation: str | None,
+) -> None:
+    # Pinned, so the commit rule passes and the isolation rule is the one that refuses.
+    common = {
+        "job_id": "job",
+        "run_id": "run",
+        "execution": "hosted",
+        "source": {
+            "kind": "github",
+            "visibility": "public",
+            "repository": "customer/public-agent",
+            "commit_sha": "a" * 40,
+        },
+        "agent": {"connector": "auto"},
+    }
+    runtime = {} if isolation is None else {"runtime": {"isolation": isolation}}
+
+    with pytest.raises(ValueError, match="hosted_isolation_must_be_dedicated_vm"):
+        HarnessJob(**common, **runtime)
 
 
 def test_source_fingerprint_hashes_symlink_metadata_without_reading_target(
