@@ -528,3 +528,14 @@ def test_a_templated_route_s_real_call_is_logged_under_the_agent_s_tool_name(wor
     _post(url, "/w/c-refund/records/7/approve", {})
     [row] = rows()
     assert row["agent_tool"] == "approve_record"
+
+
+def test_a_templated_route_s_path_values_are_logged_with_the_call_s_arguments(worker_proxy, tmp_path):
+    url, rows = worker_proxy
+    (tmp_path / "shipped" / "actions.json").write_text(
+        json.dumps({"records.{deal}.approve": "approve_record"}), encoding="utf-8"
+    )
+    _post(url, "/w/c-refund/records/7/approve", {"note": "ok"})
+    _post(url, "/w/c-refund/records/8/approve", {"deal": "body wins"})
+    first, second = rows()
+    assert (first["arguments"], second["arguments"]) == ({"deal": "7", "note": "ok"}, {"deal": "body wins"})

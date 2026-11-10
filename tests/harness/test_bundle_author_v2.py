@@ -5992,3 +5992,13 @@ def test_a_templated_route_s_real_call_is_logged_under_its_tool_s_own_name():
     assert action_tool(actions, world_action("/refunds/issue")) == ""
     assert action_tool({}, "orders.get") == ""
     assert action_tool(None, "orders.get") == ""
+
+
+def test_a_templated_route_names_the_values_its_path_carries():
+    from fi.alk.harness.world_door import route_values, world_action
+
+    actions = {"refunds.{order_id}.issue": "issue_refund", "orders.get": "get_order"}
+    assert route_values(actions, world_action("/refunds/1043/issue?x=1")) == {"order_id": "1043"}
+    assert route_values(actions, world_action("/orders/get")) == {}
+    assert route_values(actions, world_action("/refunds/1043/issue/now")) == {}
+    assert route_values(None, "refunds.1043.issue") == {}

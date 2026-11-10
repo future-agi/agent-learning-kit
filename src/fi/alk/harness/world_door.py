@@ -177,6 +177,21 @@ def action_tool(actions: object, action: str) -> str:
     return tool if isinstance(tool, str) else ""
 
 
+def route_values(actions: object, action: str) -> dict[str, str]:
+    """The values a world action's path carries for the templated route it matches (`refunds.{order_id}.issue` and
+    `refunds.1043.issue` give `{"order_id": "1043"}`), so a check reads them as it reads the body. Empty otherwise."""
+    if not isinstance(actions, dict) or action in actions:
+        return {}
+    for route in actions:
+        if "{" in str(route) and _matches(str(route), action):
+            return {
+                want[1:-1]: have
+                for want, have in zip(str(route).split("."), action.split("."))
+                if want.startswith("{") and want.endswith("}")
+            }
+    return {}
+
+
 def record_action(action: str) -> tuple[str, str] | None:
     """The collection and verb of a record change (`approvals.change`), or None for any other action."""
     collection, _, verb = action.rpartition(".")
