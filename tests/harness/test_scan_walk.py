@@ -1370,3 +1370,24 @@ def test_the_step_after_the_walk_watches_the_clock(tmp_path: Path, monkeypatch: 
     assert timed.stopped == "clock"
     assert timed.agents == ()
     assert len(calls) < len(files) + 50
+
+
+def test_the_step_after_the_walk_holds_a_bounded_number_of_edges(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Dileep's shape, small: every candidate imports one package that re-exports modules, so
+    each candidate reaches every other and the pairs grow with the square of the candidates."""
+    files = {"pkg/__init__.py": "".join(f"from .m{index} import x\n" for index in range(20))}
+    files.update({f"pkg/m{index}.py": "x = 1\n" for index in range(20)})
+    files.update({f"c{index}.py": CLIENT + "import pkg\nfrom pkg import x\n" for index in range(30)})
+    files.update({f"pkg/m{index}.py": CLIENT for index in range(20, 40)})
+    files["pkg/__init__.py"] += "".join(f"from .m{index} import x\n" for index in range(20, 40))
+    _write(tmp_path, files)
+
+    assert _walk(tmp_path).stopped == ""
+
+    monkeypatch.setattr(scan_walk, "_MAX_EDGES", 10)
+    bounded = _walk(tmp_path)
+
+    assert bounded.stopped == "limit"
+    assert bounded.agents == ()

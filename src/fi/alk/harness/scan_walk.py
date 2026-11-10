@@ -203,6 +203,14 @@ class _ResultOutOfTime(Exception):
     """The step after the walk (joining files into agents) passed its deadline."""
 
 
+class _ResultTooBig(Exception):
+    """The step after the walk found more candidate-to-candidate imports than it holds."""
+
+
+# Candidates that reach each other hold one entry each per pair, which grows with the square of
+# the candidates. About 17.5 bytes an entry (Dileep's measurement, 10 Nov), so this is ~90 MB.
+_MAX_EDGES = 5_000_000
+
 # The step after the walk may run this long past the walk's own deadline. It stays well inside
 # the helper's margin before the hard stop (600 s), so a slow join ends in the scan's own file.
 _RESULT_GRACE = 120.0
@@ -973,14 +981,15 @@ class _Walk:
 
     def agents(self, signs: dict[str, Sign]) -> list[_Agent]:
         nodes = sorted(signs)
-        edges = {
-            node: [
-                target
-                for target in self._reached(node, signs)
-                if self._absorbs(node, target, signs)
+        edges: dict[str, list[str]] = {}
+        held = 0
+        for node in nodes:
+            edges[node] = [
+                target for target in self._reached(node, signs) if self._absorbs(node, target, signs)
             ]
-            for node in nodes
-        }
+            held += len(edges[node])
+            if held > _MAX_EDGES:
+                raise _ResultTooBig()
         component_of: dict[str, int] = {}
         components = _components(nodes, edges)
         for number, members in enumerate(components):
@@ -1189,6 +1198,11 @@ def walk_repo(
         logger.warning("agent walk: joining files into agents ran out of time")
         walk.facts.clear()
         return _empty_result(walk, "clock")
+    except _ResultTooBig:
+        # Too many candidates reach each other to hold: the same end as the walk's other caps.
+        logger.warning("agent walk: joining files into agents passed its edge budget")
+        walk.facts.clear()
+        return _empty_result(walk, "limit")
     logger.info(
         "agent walk: files_read=%d unread=%d reader_faults=%d agents=%d left_out=%d stopped=%s",
         walk.files_read,
