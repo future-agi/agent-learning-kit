@@ -80,6 +80,8 @@ def test_an_actor_acts_through_the_proxy_under_its_own_id_and_this_trial_s_token
             {
                 "X-ALK-Actor": "reviewer",
                 "Idempotency-Key": "trial-1:reviewer:0",
+                # No identity of its own in that service: it still acts as itself, never as the agent.
+                "X-ALK-Actor-Identity": "reviewer",
             },
             {"item": "d1"},
         )
@@ -337,6 +339,7 @@ def test_a_live_actor_decides_its_action_when_the_agent_reaches_it_and_the_world
                 "X-ALK-Actor": "manager",
                 "Idempotency-Key": "trial-1:manager:l1",
                 "X-ALK-Parent-Event": "a1",
+                "X-ALK-Actor-Identity": "manager",
             },
             {"deal": 7},
         )

@@ -1069,3 +1069,26 @@ def test_a_caller_instruction_that_states_what_an_actor_decides_is_read_back_as_
         {"name": "x", "instruction": "Ask for 25% on deal 9.", "actors": [{"id": "manager"}]}
     )
     assert "already states" not in cast_read_back(asked, tmp_path)
+
+
+def test_an_actor_with_no_identity_in_a_service_still_acts_there_as_itself():
+    from fi.alk.harness.run.conversation import ChatActors
+
+    acted = []
+
+    async def act(actor, action, arguments, *, key, parent, identity="", form="tool"):
+        acted.append((action, identity))
+        return {"status": 200, "outcome": "committed"}
+
+    cast = ChatActors(
+        [{"id": "manager", "name": "Alex", "permitted_actions": ["chat.post_message"], "trigger": {"kind": "always"}}],
+        seed="t", model=None, act=act, about={},
+    )
+
+    async def write(actor, brief):
+        return json.dumps({"action": "chat.post_message", "arguments": {"channel": "#sales", "text": "Approved."}})
+
+    cast._write = write
+    asyncio.run(cast.due_lines(agent_turns=1, last_text="", tools_called=[], conversation=[]))
+    # With no identity the world would fill in its own default, and that default is the agent.
+    assert acted == [("chat.post_message", "manager")]
