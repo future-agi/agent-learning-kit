@@ -38,6 +38,8 @@ COST_FILE = "cost.json"
 
 EXIT_DONE = 0
 EXIT_RETRYABLE = 1
+# How long a mode's own end at the hard limit may take before the timeout is written anyway.
+_SETTLE_SECONDS = 60.0
 
 # Neither file is deleted by the hosted authoring entrypoint, so a read here takes nothing away
 # from the code that loads them.
@@ -64,6 +66,9 @@ class ReadingMode:
     # ``time_limit_seconds`` as its default; the helper's own limit adds the margin to it.
     limit_env: str | None = None
     limit_margin_seconds: float = 0.0
+    # Called at the hard limit, before any timeout is written: an exit code means the mode has
+    # already ended what it saved (its own files written), and no timeout is written over it.
+    at_limit: Callable[[HarnessJob, Path, Path], int | None] | None = None
 
 
 def limit_seconds(env: str, default: float) -> float:
@@ -238,8 +243,12 @@ class _HardLimit:
     """Ends the process at the limit. Before the work returns, a timeout is written first; after
     it, the work's files stand and the process ends with the work's own code."""
 
-    def __init__(self, mode: ReadingMode, output: Path, limit: float) -> None:
+    def __init__(
+        self, mode: ReadingMode, job: HarnessJob, source: Path, output: Path, limit: float
+    ) -> None:
         self._mode = mode
+        self._job = job
+        self._source = source
         self._output = output
         self._limit = limit
         self._returned: int | None = None
@@ -264,20 +273,43 @@ class _HardLimit:
         # Nothing logs on the way out: a blocked stderr must not hold off the exit.
         logging.disable(logging.CRITICAL)
         try:
-            write_reading_failure(
-                reading_failure(
-                    FailureDomain.INFRASTRUCTURE,
-                    mode.timed_out_code,
-                    f"The {mode.name} reading ran past its {limit:g} s limit "
-                    "and was stopped.",
-                    retryable=mode.timed_out_retryable,
-                ),
-                output,
-            )
+            settled = self._settled()
+            if settled is not None:
+                # The mode ended what it had saved; a timeout would throw away a paid result.
+                exit_code = settled
+            else:
+                write_reading_failure(
+                    reading_failure(
+                        FailureDomain.INFRASTRUCTURE,
+                        mode.timed_out_code,
+                        f"The {mode.name} reading ran past its {limit:g} s limit "
+                        "and was stopped.",
+                        retryable=mode.timed_out_retryable,
+                    ),
+                    output,
+                )
             write_reading_cost(output, complete=False)
         finally:
             # Work running in a thread can't be cancelled, and a normal exit would wait for it.
             os._exit(exit_code)
+
+    def _settled(self) -> int | None:
+        at_limit = self._mode.at_limit
+        if at_limit is None:
+            return None
+        settled: list[int | None] = []
+
+        def settle() -> None:
+            try:
+                settled.append(at_limit(self._job, self._source, self._output))
+            except Exception:
+                pass
+
+        # Its own thread, with a bound, so the mode's last step can't keep the process alive.
+        worker = threading.Thread(target=settle, daemon=True)
+        worker.start()
+        worker.join(_SETTLE_SECONDS)
+        return settled[0] if settled else None
 
 
 async def _work_then_stop_the_clock(
@@ -360,12 +392,13 @@ def run_reading_mode(mode: ReadingMode, *, job_path: Path, source: Path, output:
 
     # Read now, not when the mode was made, so it is the same limit the work reads as it starts.
     seconds = _hard_limit(mode)
-    limit = None if seconds is None else _HardLimit(mode, output, seconds)
-    crash: Exception | None = None
+    limit = None if seconds is None else _HardLimit(mode, job, source, output, seconds)
+    crash: BaseException | None = None
     try:
         logger.info("reading started at %s", datetime.now(timezone.utc).isoformat())
         code = asyncio.run(_work_then_stop_the_clock(mode, job, source, output, limit))
-    except Exception as exc:
+    except (Exception, asyncio.CancelledError) as exc:
+        # A cancel leaking out of the work is a crash too; an interrupt or exit is let through.
         logger.error("the %s reading crashed", mode.name, exc_info=True)
         crash = exc
     finally:

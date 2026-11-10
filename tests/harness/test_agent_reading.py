@@ -8,11 +8,13 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import dataclasses
 import json
 import logging
 import os
 import shutil
 import threading
+import types
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -25,6 +27,7 @@ from fi.alk.harness import (
     authoring_entrypoint,
     reading_entry,
     reading_result,
+    scenario_source,
     session,
     spend,
 )
@@ -56,8 +59,22 @@ IN_SUPPORT = {
 _LIMIT_ENV = "ALK_READING_MAX_DURATION_SECONDS"
 
 
+class _LoudExit:
+    """``os`` for the helper under test: its hard limit ending this test process is a failure,
+    never the silent exit 0 its backstop gives a finished reading."""
+
+    def __getattr__(self, name):
+        return getattr(os, name)
+
+    @staticmethod
+    def _exit(_code):
+        os.write(2, b"a reading's hard limit ended the test process\n")
+        os._exit(97)
+
+
 @pytest.fixture(autouse=True)
 def _fresh_state(monkeypatch, tmp_path):
+    monkeypatch.setattr(reading_entry, "os", _LoudExit())
     monkeypatch.delenv(spend.JOURNAL_ALIAS, raising=False)
     monkeypatch.setenv("ALK_HARNESS_MODEL", "gemini-2.5-flash")
     # The machine's own secrets files must not decide what a test sees masked.
@@ -89,6 +106,9 @@ class _Live:
             raise FileNotFoundError("the Claude CLI was not found")
 
     async def stop(self) -> None:
+        if self.backend.close_hangs:
+            # A session stuck shutting down; only the loop's own teardown ends it.
+            await asyncio.Event().wait()
         output = self.backend.output
         self.backend.stopped.append(
             {
@@ -128,6 +148,7 @@ class _Backend:
         self.interrupt_says = "the interrupt control request timed out"
         self.start_raises = False
         self.saves_on_start: dict | None = None
+        self.close_hangs = False
         self.submissions = 0
 
     def create(self, spec) -> _Live:
@@ -479,6 +500,131 @@ def test_only_github_or_an_upload_is_read(tmp_path, model, kind):
         assert fake.created == []
 
 
+@pytest.mark.parametrize(
+    "agent",
+    [
+        {"connector": "vapi", "mode": "provider_import", "config": {"assistant_id": "asst-1"}},
+        {"connector": "vapi", "mode": "connect_only", "config": {"assistant_id": "asst-1"}},
+    ],
+    ids=["provider_import", "connect_only"],
+)
+def test_a_provider_defined_agent_is_not_read_without_a_build(tmp_path, model, agent):
+    _repo(tmp_path)
+    fake = model()
+    output = tmp_path / "reading"
+
+    assert _run(tmp_path, {**_job(), "agent": agent}) == 78
+
+    failure = _failure_in(output)
+    assert (failure["code"], failure["domain"], failure["retryable"]) == (
+        READING_JOB_INVALID,
+        "platform_sync",
+        False,
+    )
+    assert "repository only" in failure["message"]
+    assert fake.created == []
+
+
+def test_a_cancel_before_the_save_is_a_crash_with_its_file(tmp_path, model):
+    _repo(tmp_path)
+
+    async def cancelled(live):
+        raise asyncio.CancelledError()
+        yield _done()
+
+    model(cancelled)
+    output = tmp_path / "reading"
+
+    assert _run(tmp_path) == 1
+
+    failure = _failure_in(output)
+    assert (failure["code"], failure["retryable"]) == ("agent_reading_crashed", True)
+    assert failure["message"].startswith("CancelledError")
+    _assert_cost(output, 0.0, False)
+
+
+def test_a_cancel_after_the_save_keeps_the_saved_contract(tmp_path, model):
+    _repo(tmp_path)
+
+    async def saves_then_cancelled(live):
+        _save(live.backend.output, CHAT)
+        raise asyncio.CancelledError()
+        yield _done()
+
+    model(saves_then_cancelled)
+    output = tmp_path / "reading"
+
+    assert _run(tmp_path) == 0
+
+    assert _names(output) == {"contract.json", "agent.json", "cost.json"}
+    _assert_cost(output, 0.0, False)
+
+
+def test_a_session_whose_close_hangs_still_ends_with_its_saved_contract(
+    tmp_path, model, monkeypatch, caplog
+):
+    _repo(tmp_path)
+    _short_limit(monkeypatch)
+
+    async def saves_then_goes_quiet(live):
+        _save(live.backend.output, CHAT)
+        await asyncio.Event().wait()
+        yield _done()
+
+    fake = model(saves_then_goes_quiet)
+    fake.close_hangs = True
+    output = tmp_path / "reading"
+    job_path = tmp_path / "job.json"
+    job_path.write_text(json.dumps(_job()), encoding="utf-8")
+    # A short hard limit, so a reading stuck on the close ends this test (exit 97), not CI's clock.
+    mode = dataclasses.replace(
+        agent_reading._read_agent(interrupt_wait=0.3), limit_margin_seconds=5.0
+    )
+
+    with caplog.at_level("WARNING", logger=agent_reading.__name__):
+        assert run_reading_mode(mode, job_path=job_path, source=tmp_path / "source", output=output) == 0
+
+    assert _names(output) == {"contract.json", "agent.json", "cost.json"}
+    # Decided while the close still hung: it never got as far as recording itself.
+    assert fake.stopped == []
+    assert any("did not close" in record.getMessage() for record in caplog.records)
+
+
+def test_at_the_hard_limit_a_saved_contract_ends_as_the_reading_ends_it(tmp_path):
+    source = _repo(tmp_path)
+    job = HarnessJob.model_validate(_job())
+    output = tmp_path / "reading"
+    output.mkdir()
+
+    assert agent_reading._at_the_limit(job, source, output) is None
+    _save(output, CHAT)
+    assert agent_reading._at_the_limit(job, source, output) == 0
+    assert (output / "agent.json").exists()
+    assert agent_reading._at_the_limit(job, source, output) == 0
+    assert agent_reading.READ_AGENT.at_limit is agent_reading._at_the_limit
+
+
+def test_a_failed_document_is_logged_with_its_masked_trace(tmp_path, model, monkeypatch, caplog):
+    secret = "sk-document-0123456789"
+    secrets = tmp_path / "secrets.json"
+    secrets.write_text(json.dumps({"KEY": secret}), encoding="utf-8")
+    monkeypatch.setattr(reading_entry, "_SECRET_FILES", (secrets,))
+
+    def breaks(*_args, **_kwargs):
+        raise RuntimeError(f"the document builder broke on {secret}")
+
+    monkeypatch.setattr(scenario_source, "build_authored_agent", breaks)
+    _repo(tmp_path)
+    model(_writes(CHAT))
+
+    with caplog.at_level("WARNING", logger=reading_result.__name__):
+        assert _run(tmp_path) == 78
+
+    [logged] = [record for record in caplog.records if record.name == reading_result.__name__]
+    assert "RuntimeError: the document builder broke on ***" in logged.exc_text
+    assert secret not in caplog.text
+
+
 def test_a_folder_mismatch_is_an_invalid_document(tmp_path, model):
     _repo(tmp_path)
     # Saved with no folder recorded, for a job that names one.
@@ -489,7 +635,8 @@ def test_a_folder_mismatch_is_an_invalid_document(tmp_path, model):
 
     failure = _failure_in(output)
     assert (failure["code"], failure["retryable"]) == ("agent_document_invalid", False)
-    assert failure["details"]["code"] == "subfolder_mismatch"
+    # The build's own code for it, from the build's own document code.
+    assert failure["details"]["code"] == "agent_invalid"
     assert (output / "contract.json").exists()
     assert not (output / "agent.json").exists()
     _assert_cost(output, 0.11, True)
@@ -533,7 +680,7 @@ def test_an_oversized_document_is_refused(tmp_path, model, monkeypatch, inner, p
     document = inner()
     if not passes and document["items"]:
         assert _body_size(document) <= MIB
-    monkeypatch.setattr(reading_result, "build_authored_agent", lambda *a, **k: document)
+    monkeypatch.setattr(scenario_source, "build_authored_agent", lambda *a, **k: document)
     model(_writes(CHAT, cost_usd=0.05))
     output = tmp_path / "reading"
 
@@ -1531,11 +1678,14 @@ def test_the_claude_backend_accepts_the_reading_spec(tmp_path, model, monkeypatc
 
 def test_the_soft_limit_counts_from_the_readings_start(tmp_path, model, monkeypatch):
     _repo(tmp_path)
-    _short_limit(monkeypatch, soft=3.0)
+    _short_limit(monkeypatch, soft=30.0)
     real = agent_reading.open_stage
+    now = [1000.0]
+    # The reading's own clock, so the time spent opening the stage is told, not slept.
+    monkeypatch.setattr(agent_reading, "time", types.SimpleNamespace(monotonic=lambda: now[0]))
 
     def slow(*args, **kwargs):
-        time.sleep(2.0)
+        now[0] += 29.9
         return real(*args, **kwargs)
 
     monkeypatch.setattr(agent_reading, "open_stage", slow)
@@ -1544,8 +1694,9 @@ def test_the_soft_limit_counts_from_the_readings_start(tmp_path, model, monkeypa
 
     assert _run(tmp_path, wait=0.2) == 78
 
+    # 0.1 s were left of the 30, not 30 again from the stage's opening.
     [interrupted] = fake.interrupts
-    assert 2.8 <= interrupted - started < 4.0
+    assert interrupted - started < 10.0
 
 
 # -- R37 to R41: the switch, the folders, the limit and the last write --------------------------

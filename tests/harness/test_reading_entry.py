@@ -41,8 +41,22 @@ FIND_AGENTS_VALUES = {
 }
 
 
+class _LoudExit:
+    """``os`` for the helper under test: its hard limit ending this test process is a failure,
+    never the silent exit 0 its backstop gives a finished reading."""
+
+    def __getattr__(self, name):
+        return getattr(os, name)
+
+    @staticmethod
+    def _exit(_code):
+        os.write(2, b"a reading's hard limit ended the test process\n")
+        os._exit(97)
+
+
 @pytest.fixture(autouse=True)
 def _fresh_state(monkeypatch, tmp_path):
+    monkeypatch.setattr(reading_entry, "os", _LoudExit())
     monkeypatch.delenv(spend.JOURNAL_ALIAS, raising=False)
     # The machine's own secrets files must not decide what a test sees masked.
     monkeypatch.setattr(reading_entry, "_SECRET_FILES", (tmp_path / "no-secrets.json",))
@@ -165,6 +179,9 @@ async def work(job, source, output):
         reading_entry.write_reading_cost(output, complete=True)
         if config["work"] == "completes_then_raises":
             raise RuntimeError("the work broke after its last write")
+    if config["work"] == "saves_then_blocks":
+        # Saved, then stuck where a session's close can hang: past the limit, never returning.
+        (output / "contract.json").write_text(json.dumps(config["contract"]))
     if config["work"] == "spoils_the_output_then_blocks":
         # Every write at the limit now fails, and each failure would log.
         shutil.rmtree(output)
@@ -178,7 +195,12 @@ async def work(job, source, output):
     return 0
 
 
-mode = ReadingMode(check_job=lambda job: None, work=work, **config["mode"])
+extra = {}
+if config.get("at_limit") == "read_agent":
+    from fi.alk.harness import agent_reading
+
+    extra["at_limit"] = agent_reading._at_the_limit
+mode = ReadingMode(check_job=lambda job: None, work=work, **config["mode"], **extra)
 (root / "started").write_text(repr(time.time()))
 code = run_reading_mode(
     mode, job_path=root / "job.json", source=root / "source", output=root / "reading"
@@ -190,7 +212,7 @@ sys.exit(code)
 _BLOCK_SECONDS = 20.0
 
 
-def _run_in_a_child(root: Path, mode_values: dict, work: str, *, linger: float = 0.0):
+def _run_in_a_child(root: Path, mode_values: dict, work: str, *, linger: float = 0.0, **more):
     """Returns the finished child and the seconds from the helper's start to the child's end."""
     root.mkdir(parents=True, exist_ok=True)
     (root / "job.json").write_text(json.dumps(_job()), encoding="utf-8")
@@ -201,6 +223,7 @@ def _run_in_a_child(root: Path, mode_values: dict, work: str, *, linger: float =
         "work": work,
         "block_seconds": _BLOCK_SECONDS,
         "linger_seconds": linger,
+        **more,
     }
     env = {
         **os.environ,
@@ -486,6 +509,28 @@ def test_a_thread_left_after_the_work_ends_the_process_quietly_at_the_limit(tmp_
 
 def _empty_spend() -> dict:
     return {"schema": "futureagi.harness-spend.v1", "total_usd": 0.0, "unpriced_turns": 0, "stages": []}
+
+
+def test_a_contract_saved_before_the_hard_limit_still_ends_with_its_document(tmp_path):
+    (tmp_path / "source").mkdir(parents=True)
+    contract = {
+        "agent": "support",
+        "modality": "chat",
+        "real_use_cases": ["order"],
+        "tools": [{"name": "add", "args": ["item_id"]}],
+    }
+    mode_values = {**READ_AGENT_VALUES, "time_limit_seconds": 1.0}
+
+    finished, elapsed = _run_in_a_child(
+        tmp_path, mode_values, "saves_then_blocks", contract=contract, at_limit="read_agent"
+    )
+
+    output = tmp_path / "reading"
+    assert finished.returncode == 0, finished.stderr
+    assert 1.0 <= elapsed <= 1.0 + 5
+    assert not (output / "failure.json").exists()
+    assert json.loads((output / "agent.json").read_text())["agent"]
+    assert _cost_in(output)["complete"] is False
 
 
 def test_a_timeout_after_a_complete_cost_marks_it_incomplete(tmp_path):

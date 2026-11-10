@@ -22,8 +22,9 @@ from .agent_type_check import EXIT_REFUSED
 from .backends import StageDone
 from .cli import guidance_text
 from .failure_file import FAILURE_FILE
-from .job import FailureDomain, HarnessFailure, HarnessJob, SourceKind
+from .job import FailureDomain, HarnessFailure, HarnessJob, ProviderExecutionMode, SourceKind
 from .reading_entry import (
+    EXIT_DONE,
     EXIT_RETRYABLE,
     READING_JOB_INVALID,
     MaskSecrets,
@@ -34,6 +35,7 @@ from .reading_entry import (
     write_reading_failure,
 )
 from .reading_result import (
+    AGENT_FILE,
     CONTRACT_FILE,
     classify,
     document,
@@ -70,6 +72,15 @@ def _soft_limit() -> float:
 
 
 def _check_job(job: HarnessJob) -> HarnessFailure | None:
+    if job.agent.mode in (ProviderExecutionMode.PROVIDER_IMPORT, ProviderExecutionMode.CONNECT_ONLY):
+        # The build reads these agents from the provider's definition, which a reading never loads.
+        return reading_failure(
+            FailureDomain.PLATFORM_SYNC,
+            READING_JOB_INVALID,
+            "A reading without a build reads an agent from its repository only. A "
+            f"{job.agent.mode.value} job's agent is defined by its provider, so it needs a build.",
+            retryable=False,
+        )
     if job.source.kind in (SourceKind.GITHUB, SourceKind.ARCHIVE):
         return None
     return reading_failure(
@@ -176,14 +187,14 @@ async def _stop(
         # A stop that can't be delivered is still a timeout, not a crash.
         logger.warning("the stop at the time limit was not delivered", exc_info=True)
     await asyncio.wait({task}, timeout=wait)
-    # Closed before the files are read, so no late tool call can save after the decision.
+    # Closed before the files are read, so no late tool call can save after the decision. The
+    # close is bounded too: a session that hangs closing must not keep the reading from deciding.
     task.cancel()
-    try:
-        await task
-    except asyncio.CancelledError:
-        pass
-    except Exception:
-        logger.warning("the stopped reading ended with an error", exc_info=True)
+    await asyncio.wait({task}, timeout=wait)
+    if not task.done():
+        logger.warning("the stopped reading's session did not close within %g s", wait)
+    elif not task.cancelled() and task.exception() is not None:
+        logger.warning("the stopped reading ended with an error", exc_info=task.exception())
 
 
 def _timed_out(output: Path, soft_limit: float) -> int:
@@ -297,8 +308,9 @@ async def _read(job: HarnessJob, source: Path, output: Path, *, interrupt_wait: 
             code, complete = await _reading(
                 job, Path(source), output, started, _soft_limit(), interrupt_wait
             )
-        except Exception as exc:
+        except (Exception, asyncio.CancelledError) as exc:
             # A contract the gate saved is paid for; a crash would have the platform pay again.
+            # A cancel leaking out of the session is the same: the saved contract still stands.
             if saved_file(output) != CONTRACT_FILE:
                 raise
             logger.warning(
@@ -309,6 +321,15 @@ async def _read(job: HarnessJob, source: Path, output: Path, *, interrupt_wait: 
         # The work owns the final cost file, on every way out.
         write_reading_cost(output, complete=complete)
     return code
+
+
+def _at_the_limit(job: HarnessJob, source: Path, output: Path) -> int | None:
+    """At the helper's hard limit: a saved contract still ends as the reading ends one."""
+    if saved_file(output) != CONTRACT_FILE:
+        return None
+    if (output / AGENT_FILE).is_file():
+        return EXIT_DONE
+    return document(job, Path(source), output)
 
 
 def _read_agent(*, interrupt_wait: float = _INTERRUPT_WAIT_SECONDS) -> ReadingMode:
@@ -324,6 +345,7 @@ def _read_agent(*, interrupt_wait: float = _INTERRUPT_WAIT_SECONDS) -> ReadingMo
         crashed_code=AGENT_READING_CRASHED,
         limit_env=_LIMIT_ENV,
         limit_margin_seconds=_HARD_LIMIT_MARGIN_SECONDS,
+        at_limit=_at_the_limit,
     )
 
 

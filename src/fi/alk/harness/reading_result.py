@@ -14,20 +14,25 @@ import tempfile
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from .. import __version__
-from ..providers.agent import AgentBuildError, build_authored_agent
 from .agent_type_check import EXIT_REFUSED
 from .backends import StageDone
-from .contract import AgentContract
 from .failure_file import FAILURE_FILE
 from .framework_detection import detect_framework, named_framework_folder
 from .job import FailureDomain, HarnessJob
-from .reading_entry import EXIT_DONE, EXIT_RETRYABLE, reading_failure, write_reading_failure
+from .reading_entry import (
+    EXIT_DONE,
+    EXIT_RETRYABLE,
+    MaskSecrets,
+    reading_failure,
+    write_reading_failure,
+)
+from .scenario_source import authored_agent_document
 
 if TYPE_CHECKING:
     from .agent_reading import _ReadingStage
 
 logger = logging.getLogger(__name__)
+logger.addFilter(MaskSecrets())
 
 AGENT_FILE = "agent.json"
 CONTRACT_FILE = "contract.json"
@@ -189,25 +194,15 @@ def document(job: HarnessJob, source: Path, output: Path) -> int:
         contract_bytes = (output / CONTRACT_FILE).stat().st_size
         if contract_bytes > _CONTRACT_LIMIT_BYTES:
             raise _TooLarge({"contract_bytes": contract_bytes})
-        contract = AgentContract.model_validate(
-            json.loads((output / CONTRACT_FILE).read_text(encoding="utf-8"))
-        ).model_dump(mode="json")
-        # The echo proves which folder was read, so it comes from the contract.
-        built_from = str((contract.get("runtime") or {}).get("source_subfolder") or "")
-        if built_from != (job.source.subfolder or ""):
-            raise AgentBuildError("subfolder_mismatch")
         framework = detect_framework(
             _framework_folder(job, source, output), repo_root=source, package_dir=None
         )
-        inner = build_authored_agent(
-            contract, subfolder=built_from or None, framework=framework
+        # The build's own document, made by the build's own code.
+        made = authored_agent_document(
+            output / CONTRACT_FILE, subfolder=job.source.subfolder, framework=framework
         )
-        body = json.dumps(
-            {"sdk_version": __version__, "agent": inner},
-            ensure_ascii=False,
-            separators=(",", ":"),
-        ).encode("utf-8")
-        stored = json.dumps(inner, ensure_ascii=False).encode("utf-8")
+        body = json.dumps(made, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        stored = json.dumps(made["agent"], ensure_ascii=False).encode("utf-8")
         if len(body) > _DOCUMENT_LIMIT_BYTES or len(stored) > _DOCUMENT_LIMIT_BYTES:
             raise _TooLarge(
                 {
@@ -233,7 +228,7 @@ def document(job: HarnessJob, source: Path, output: Path) -> int:
     except Exception as exc:
         code = str(getattr(exc, "code", "") or "")
         logger.warning(
-            "agent document not built: class=%s code=%s", type(exc).__name__, code
+            "agent document not built: class=%s code=%s", type(exc).__name__, code, exc_info=True
         )
         write_reading_failure(
             reading_failure(
