@@ -199,6 +199,40 @@ class _Unread(Exception):
     pass
 
 
+class _CapReached(Exception):
+    """A reading reached one of its caps and stops here. It is never one file's problem, so it
+    isn't in `_FILE_ERRORS`, and every caller catches it before those and before its own
+    `except Exception`."""
+
+
+class _CappedReader:
+    """The one capped reader behind the walk and the description. It counts reads, and the
+    bytes read, against its caps; what a cap means is the caller's: the walk stops, and the
+    description marks its row partial."""
+
+    def __init__(self, *, files: int | None, total_bytes: int) -> None:
+        self._files = files
+        self._total_bytes = total_bytes
+        self.files_read = 0
+        self.bytes_read = 0
+
+    def read(self, path: str) -> bytes:
+        """The file's bytes, in the order every stop point relies on: the read count is checked
+        before reading (`_CapReached`); the system's own error for a file that can't be read
+        passes out uncounted; the read is counted; past the bytes cap, `_CapReached`, and the
+        file isn't used; and a file over the size one file is read at raises `_Unread`."""
+        if self._files is not None and self.files_read >= self._files:
+            raise _CapReached()
+        data = _read_file(path, _FILE_BYTES + 1)
+        self.files_read += 1
+        self.bytes_read += len(data)
+        if self.bytes_read > self._total_bytes:
+            raise _CapReached()
+        if len(data) > _FILE_BYTES:
+            raise _Unread()
+        return data
+
+
 class _ResultOutOfTime(Exception):
     """The step after the walk (joining files into agents) passed its deadline."""
 
@@ -810,8 +844,7 @@ class _Walk:
         self.faults = 0
         # When the step after the walk must give up: see _RESULT_GRACE.
         self.result_deadline = deadline + _RESULT_GRACE
-        self.files_read = 0
-        self.bytes_read = 0
+        self.reader = _CappedReader(files=_MAX_FILES, total_bytes=_MAX_BYTES)
         self.stopped: Literal["", "limit", "clock", "memory"] = ""
         self.source_outside_side = False
         self.script_outside_side = False
@@ -850,15 +883,15 @@ class _Walk:
         # Every read of one file sits in this one `try`: a file the tokenizer, the JSON
         # reader or the decoder rejects is that file's problem, never the walk's.
         try:
-            data = self._read(full)
-            if data is None:
-                return
+            data = self.reader.read(full)
             if name.endswith(".py"):
                 self.facts[path] = _python_facts(data, self.shadowed.for_folder(folder))
             elif name == _LANGGRAPH:
                 self._read_graphs(folder, path, data)
             else:
                 self.templates.setdefault(folder, set()).update(_template_names(data))
+        except _CapReached:
+            self.stopped = "limit"
         except _FILE_ERRORS:
             self.unread += 1
         except MemoryError:
@@ -871,20 +904,6 @@ class _Walk:
                 logger.warning("agent walk: a file's reader failed", exc_info=True)
             self.faults += 1
             self.unread += 1
-
-    def _read(self, path: str) -> bytes | None:
-        if self.files_read >= _MAX_FILES:
-            self.stopped = "limit"
-            return None
-        data = _read_file(path, _FILE_BYTES + 1)
-        self.files_read += 1
-        self.bytes_read += len(data)
-        if self.bytes_read > _MAX_BYTES:
-            self.stopped = "limit"
-            return None
-        if len(data) > _FILE_BYTES:
-            raise _Unread()
-        return data
 
     def _read_graphs(self, folder: str, path: str, data: bytes) -> None:
         document = json.loads(data.decode("utf-8"))
@@ -1205,7 +1224,7 @@ def walk_repo(
         return _empty_result(walk, "limit")
     logger.info(
         "agent walk: files_read=%d unread=%d reader_faults=%d agents=%d left_out=%d stopped=%s",
-        walk.files_read,
+        walk.reader.files_read,
         result.unread_files,
         walk.faults,
         len(result.agents),
@@ -1295,8 +1314,7 @@ class _Description:
         self.script_env: set[str] = set()
         self.templates: set[str] = set()
         self.prompt_files = 0
-        self.files_read = 0
-        self.bytes_read = 0
+        self.reader = _CappedReader(files=_DESCRIBE_FILES, total_bytes=_DESCRIBE_BYTES)
         # A cap or the clock: the reading stops here.
         self.partial = False
         # One file that couldn't be read or parsed: the counts are short, but the reading
@@ -1375,31 +1393,21 @@ class _Description:
             self._fault("a file's reader failed")
 
     def _read(self, path: str) -> bytes | None:
-        """The file's bytes, or None for a file that can't or mustn't be read; sets
-        ``partial`` when a cap is reached."""
-        if self.files_read >= _DESCRIBE_FILES:
-            self.partial = True
-            return None
+        """The file's bytes, or None for a file that can't or mustn't be read. Both read sites
+        (the templates and the source files) come here, outside any parse `try`: a cap sets
+        ``partial``; a missing file of any kind is nothing; anything else unread is short."""
         try:
-            data = _read_file(path, _FILE_BYTES + 1)
+            return self.reader.read(path)
+        except _CapReached:
+            self.partial = True
         except FileNotFoundError:
             # A settings template that isn't there is the usual case, not a short count.
-            return None
-        except (OSError, ValueError):
-            # Unreadable, a link, or a name the system can't open: not read, so the counts
-            # are short.
+            pass
+        except (OSError, ValueError, _Unread):
+            # Unreadable, a link, a name the system can't open, or over the size a file is
+            # read at: not read, so the counts are short.
             self.short = True
-            return None
-        self.files_read += 1
-        self.bytes_read += len(data)
-        if self.bytes_read > _DESCRIBE_BYTES:
-            self.partial = True
-            return None
-        if len(data) > _FILE_BYTES:
-            # Over the size a file is read at: not read, so the counts are short.
-            self.short = True
-            return None
-        return data
+        return None
 
 
 def describe_entry(
@@ -1442,9 +1450,9 @@ def describe_entry(
     project_file = projects.file_in(subfolder)
     partial = reading.partial or reading.short
     if not partial:
-        logger.info("agent description: files_read=%d", reading.files_read)
+        logger.info("agent description: files_read=%d", reading.reader.files_read)
     else:
-        logger.info("agent description: files_read=%d partial=yes", reading.files_read)
+        logger.info("agent description: files_read=%d partial=yes", reading.reader.files_read)
     return Candidate(
         entry=entry,
         subfolder=subfolder,
