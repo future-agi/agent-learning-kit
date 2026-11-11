@@ -287,11 +287,21 @@ def _not_the_agent_file(name: str) -> bool:
     return any(fnmatch.fnmatchcase(lowered, pattern) for pattern in _TEST_FILES)
 
 
-def _unpacked_at_top(root: Path, left: list[int] | None = None) -> set[str]:
+def _unpacked_at_top(
+    root: Path,
+    left: list[int] | None = None,
+    read: dict[tuple[tuple[str, int], ...], frozenset[str]] | None = None,
+) -> set[str] | frozenset[str]:
     """The files ``pip install -t .`` put beside the agent's code, by each distribution's record.
 
     Exact paths: one distribution shipping ``tools/x.py`` says nothing about the customer's own
     ``tools/``. ``left`` is the record bytes still to read, shared across one walk's folders.
+    ``read`` holds, for one walk, the rows of each folder read whole, keyed by its records' names
+    and sizes: a folder holding exactly those records again, as in one Lambda folder after
+    another, shares them, unread, for an eighth of each record's size, at least 4 KiB each.
+    Shared, so never changed. Every ``_agent_files`` walk shares, the agent folder's own walk in
+    ``browser_tools_in_agent`` too; only its ``rows_of``, the records at and above the agent,
+    doesn't.
     """
     names: set[str] = set()
     try:
@@ -300,7 +310,15 @@ def _unpacked_at_top(root: Path, left: list[int] | None = None) -> set[str]:
         return names
     if left is None:
         left = [_LARGEST_RECORDS]
+    sized: list[tuple[str, Path, int]] = []
+    whole = True
     for entry in records:
+        # Each record costs at least a block, read or shared, so a folder of more than are left
+        # can't be read whole, and its key could never be stored or matched. A spent budget stops
+        # here, before any record is looked at.
+        if len(sized) * _SMALLEST_RECORD > left[0]:
+            whole = False
+            break
         try:
             record = entry / "RECORD"
             # pip writes neither as a link, and following them reads one record once per link.
@@ -309,14 +327,30 @@ def _unpacked_at_top(root: Path, left: list[int] | None = None) -> set[str]:
             # A link to a device or a named pipe reports no size, and reading it never ends.
             if not record.is_file() or record.stat().st_size > _LARGEST_RECORD:
                 continue
-            left[0] -= max(record.stat().st_size, _SMALLEST_RECORD)
+            sized.append((entry.name, record, record.stat().st_size))
+        except OSError:
+            continue
+    key = tuple((name, size) for name, _, size in sized)
+    shared = read.get(key) if read is not None and whole and key else None
+    if shared is not None:
+        left[0] -= sum(max(size // 8, _SMALLEST_RECORD) for _, _, size in sized)
+        return shared if left[0] >= 0 else names
+    for _, record, size in sized:
+        try:
+            left[0] -= max(size, _SMALLEST_RECORD)
             if left[0] < 0:
+                whole = False
                 break
             names.update(
                 row[0] for row in csv.reader(io.StringIO(record.read_text(encoding="utf-8"))) if row
             )
         except (OSError, ValueError, csv.Error):
+            # Rows left out: another folder with this key must read its own.
+            whole = False
             continue
+    if read is not None and whole and key:
+        read[key] = frozenset(names)
+        return read[key]
     return names
 
 
@@ -330,10 +364,11 @@ def _agent_files(
     # records hold them, as pip wrote them, so what is kept is the rows the budget lets in and that
     # folder's path once: how deep the folder sits doesn't multiply what each row costs.
     # ``at_top`` gets the rows of the records at the top, for a caller that would read them again.
-    unpacked: dict[str, set[str]] = {}
+    unpacked: dict[str, set[str] | frozenset[str]] = {}
     # The folders above this one whose records gave rows, nearest last. The walk goes top down, so
     # leaving a folder is seeing a directory that isn't under it.
     holding: list[str] = []
+    read: dict[tuple[tuple[str, int], ...], frozenset[str]] = {}
     if left is None:
         left = [_LARGEST_RECORDS]
     top = os.fspath(root)
@@ -341,7 +376,7 @@ def _agent_files(
         while holding and not directory.startswith(holding[-1] + os.sep):
             del unpacked[holding.pop()]
         if any(name.endswith(".dist-info") for name in subdirectories):
-            rows = _unpacked_at_top(Path(directory), left)
+            rows = _unpacked_at_top(Path(directory), left, read)
             if rows:
                 unpacked[directory] = rows
                 holding.append(directory)
@@ -405,7 +440,7 @@ def _largest_read(path: Path) -> int:
     return _LARGEST_CODE_FILE
 
 
-def _modules_at_top(root: Path, unpacked: set[str] | None = None) -> set[str]:
+def _modules_at_top(root: Path, unpacked: set[str] | frozenset[str] | None = None) -> set[str]:
     """What sits ahead of an installed package on the import path, so isn't that package.
 
     ``unpacked`` is the folder's record rows, when the caller has read them already.
@@ -446,7 +481,7 @@ def _python_markers(text: str, tokens: TokenBudget, path: Path) -> set[str]:
         return set()
     try:
         found = tokens.tokens(text)
-    except (ValueError, SyntaxError, tokenize.TokenError) as error:
+    except (ValueError, SyntaxError, SystemError, tokenize.TokenError) as error:
         # The type only: the error can quote a line of the customer's file.
         logger.debug("agent type scan read no markers from %s: %s", path, type(error).__name__)
         return set()
@@ -508,8 +543,10 @@ def _signature(root: Path) -> tuple[int, int, int]:
 
     Every reopen asks, so records are looked at, not read: a record that starts or stops naming a
     file changes its own size or time. Files a record names count too, which only rescans more.
+    The times of every file read are summed, so one file dated ahead can't pin the key; the change
+    time is in the sum because a copy that puts a modified time back still moves it.
     """
-    latest = count = size = 0
+    times = count = size = 0
     for directory, subdirectories, files in os.walk(root):
         subdirectories[:] = [
             name for name in subdirectories if not _not_the_agent_dir(name, directory)
@@ -522,10 +559,10 @@ def _signature(root: Path) -> tuple[int, int, int]:
                 info = path.stat()
             except OSError:
                 continue
-            latest = max(latest, info.st_mtime_ns)
+            times += info.st_mtime_ns + info.st_ctime_ns
             count += 1
             size += info.st_size
-    return latest, count, size
+    return times, count, size
 
 
 @lru_cache(maxsize=8)
@@ -553,6 +590,7 @@ def _tools_in(
     tokens = TokenBudget()
     escapes = EscapeBudget()
     searched = ParseBudget(_LARGEST_RAW_SEARCH)
+    skipped = 0
     for path in sorted(
         filter(_is_read, paths),
         key=lambda path: (first is not None and not is_within(path, first), *_reading_order(path)),
@@ -572,8 +610,8 @@ def _tools_in(
             python += size
             if python > _LARGEST_PYTHON_SCAN:
                 continue
-        # One file at a time: the tokenizer raises more than it documents (SystemError on a NUL
-        # byte in 3.12), and one odd file mustn't stop every reading from being checked.
+        # The tokenizer's known faults are caught in `_python_markers`; this catch is for the ones
+        # nobody foresaw.
         try:
             if path.name == "package.json":
                 found |= _packages_used(path)
@@ -604,10 +642,17 @@ def _tools_in(
                     named = {name for name in named if _WHOLE_NAMES[name].search(raw)}
                     found |= _markers(raw)
                 imported |= named
-        except Exception:
-            # A skipped file may be the agent's main one, and the reading then finds nothing.
-            logger.warning("agent type scan skipped %s", path, exc_info=True)
+        except Exception as error:
+            # A skipped file may be the agent's main one, and the reading then finds nothing. The
+            # type only at WARNING, once a scan: a trace can quote a line of the customer's code,
+            # and a path can name their business.
+            skipped += 1
+            if skipped == 1:
+                logger.warning("agent type scan skipped a file: %s", type(error).__name__)
+            logger.debug("agent type scan skipped %s", path, exc_info=True)
             continue
+    if skipped > 1:
+        logger.warning("agent type scan skipped %d files", skipped)
     for name in imported:
         top = name.split(".")[0]
         if top in local:
