@@ -1182,25 +1182,38 @@ def test_a_strings_length_is_charged_though_it_builds_nothing(repo, copies, refu
 
 
 def test_a_prompt_file_without_end_is_read_only_to_its_limit(tmp_path, repo, monkeypatch):
-    import io
+    import os
 
-    class Endless(io.RawIOBase):
-        def readable(self):
-            return True
-
-        def read(self, size=-1):
-            assert size >= 0, "read to the end"
-            return b"#" * size
+    from fi.alk.harness import model_citation
 
     (repo / "agents" / "a" / "prompt.txt").write_text("")
-    opened = Path.open
-    monkeypatch.setattr(
-        Path,
-        "open",
-        lambda path, *args, **kwargs: Endless()
-        if path.name == "prompt.txt"
-        else opened(path, *args, **kwargs),
-    )
+    # The prompt is read through model_citation.read_source, by descriptor.
+    endless: set[int] = set()
+    real_open, real_read, real_close = os.open, os.read, os.close
+
+    def open_(path, flags, *args, **kwargs):
+        descriptor = real_open(path, flags, *args, **kwargs)
+        if Path(path).name == "prompt.txt":
+            endless.add(descriptor)
+        return descriptor
+
+    given: list[int] = []
+
+    def read(descriptor, size):
+        # Like a link to /proc/self/pagemap: its size says 0 and it reads without end.
+        if descriptor not in endless:
+            return real_read(descriptor, size)
+        given.append(size)
+        assert sum(given) <= 8 * 1024 * 1024, "read to the end"
+        return b"#" * size
+
+    def close(descriptor):
+        endless.discard(descriptor)
+        real_close(descriptor)
+
+    monkeypatch.setattr(model_citation.os, "open", open_)
+    monkeypatch.setattr(model_citation.os, "read", read)
+    monkeypatch.setattr(model_citation.os, "close", close)
 
     result = accept_contract(
         payload(
@@ -1452,10 +1465,17 @@ def test_a_prompt_file_named_again_is_not_read_again(tmp_path, repo):
 def test_a_prompt_file_past_the_limit_is_read_once(tmp_path, repo, monkeypatch):
     large = repo / "agents" / "a" / "p.txt"
     large.write_text("Be brief.\n" + "#" * (1024 * 1024))
+    import os
+
+    from fi.alk.harness import model_citation
+
     opened: list[Path] = []
-    real = Path.open
+    real = os.open
+    # The prompt is opened through model_citation.read_source, by descriptor.
     monkeypatch.setattr(
-        Path, "open", lambda path, *args, **kwargs: opened.append(path) or real(path, *args, **kwargs)
+        model_citation.os,
+        "open",
+        lambda path, *args, **kwargs: opened.append(Path(path)) or real(path, *args, **kwargs),
     )
 
     result = accept_contract(
@@ -1785,12 +1805,14 @@ def test_a_tool_module_through_links_is_charged_to_the_saves_budget(
 
 
 def test_a_prompt_path_named_again_is_resolved_once(tmp_path, repo, monkeypatch):
-    from fi.alk.harness import tools
+    from fi.alk.harness import model_citation
 
     (repo / "agents" / "a" / "prompt.txt").write_text("Be polite.\nBe brief.\n")
     resolved: list[Path] = []
-    real = tools.charged_path
-    monkeypatch.setattr(tools, "charged_path", lambda path: resolved.append(path) or real(path))
+    real = model_citation.charged_path
+    monkeypatch.setattr(
+        model_citation, "charged_path", lambda path: resolved.append(path) or real(path)
+    )
 
     result = accept_contract(
         payload(

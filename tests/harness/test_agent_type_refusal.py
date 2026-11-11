@@ -452,6 +452,17 @@ def test_a_test_named_folder_with_more_than_tests_is_read(tmp_path, files):
     assert browser_tools_found(tmp_path) == ["playwright"]
 
 
+@pytest.mark.parametrize(
+    "inner", ["agent/core/run.py", "ui_tests/core/run.py"], ids=["folder", "test-word-folder"]
+)
+def test_a_folder_holding_only_a_folder_inside_a_test_named_folder_is_read(tmp_path, inner):
+    _tree(
+        tmp_path,
+        {"qa_e2e/test_flow.py": "def test_x():\n    pass\n", f"qa_e2e/{inner}": "import playwright\n"},
+    )
+    assert browser_tools_found(tmp_path) == ["playwright"]
+
+
 def test_tools_found_skips_an_upper_case_test_file(tmp_path):
     (tmp_path / "Test_A.py").write_text("import playwright\n", encoding="utf-8")
     assert browser_tools_found(tmp_path) == []
@@ -603,9 +614,38 @@ def test_a_file_that_raises_something_unexpected_costs_only_that_file(
     with caplog.at_level("WARNING", logger=agent_type_check.__name__):
         assert browser_tools_found(tmp_path) == ["playwright"]
     skipped, cut = caplog.records
-    assert "a_odd.py" in skipped.getMessage()
-    assert skipped.exc_info[0] is LookupError
+    assert skipped.getMessage() == "agent type scan skipped a file: LookupError"
+    assert skipped.exc_info is None
     assert cut.getMessage() == "agent type scan cut by skipped 1"
+
+
+def test_a_skip_logs_its_type_once_and_its_path_and_trace_at_debug_only(
+    tmp_path, monkeypatch, caplog
+):
+    _tree(tmp_path, {"a_odd.py": "x = 1\n", "b_odd.py": "x = 1\n", "agent.py": "import playwright\n"})
+    real = agent_type_check.read_module
+
+    def odd(path, *args, **kwargs):
+        if "odd" in path.name:
+            raise LookupError("SOURCE-LINE")
+        return real(path, *args, **kwargs)
+
+    monkeypatch.setattr(agent_type_check, "read_module", odd)
+    with caplog.at_level("DEBUG", logger=agent_type_check.__name__):
+        assert browser_tools_found(tmp_path) == ["playwright"]
+    loud = [record for record in caplog.records if record.levelno >= 20]
+    assert [record.getMessage() for record in loud] == [
+        "agent type scan skipped a file: LookupError",
+        "agent type scan cut by skipped 2",
+    ]
+    assert not any(
+        "SOURCE-LINE" in record.getMessage() or "odd" in record.getMessage() or record.exc_info
+        for record in loud
+    )
+    quiet = [record for record in caplog.records if record.levelno < 20 and record.exc_info]
+    assert [record.exc_info[0] for record in quiet] == [LookupError, LookupError]
+    assert "a_odd.py" in quiet[0].getMessage()
+    assert "b_odd.py" in quiet[1].getMessage()
 
 
 @pytest.mark.skipif(sys.version_info < (3, 12), reason="3.11's tokenizer reads a NUL byte")
@@ -617,6 +657,20 @@ def test_a_file_with_a_nul_byte_is_left_unread_without_stopping_the_scan(tmp_pat
     with caplog.at_level("WARNING", logger=agent_type_check.__name__):
         assert browser_tools_found(tmp_path) == []
     assert [r.getMessage() for r in caplog.records] == ["agent type scan cut by parse_failed 1"]
+
+
+@pytest.mark.skipif(sys.version_info < (3, 12), reason="3.11's tokenizer reads a NUL byte")
+def test_a_nul_byte_the_tokenizer_breaks_on_reaches_no_warning(tmp_path, caplog):
+    for n in range(30):
+        (tmp_path / f"a{n:02}.py").write_bytes(b'# computer_use\n x = 1\nKEY = "SOURCE-LINE"\x00\n')
+    (tmp_path / "agent.py").write_text("import playwright\n", encoding="utf-8")
+    with caplog.at_level("DEBUG", logger=agent_type_check.__name__):
+        assert browser_tools_found(tmp_path) == ["playwright"]
+    # The tokenizer's fault reaches no WARNING of its own. The files name a tool and can't be
+    # parsed, so they cut the scan (TH-9512), and that line holds names and counts only.
+    loud = [record.getMessage() for record in caplog.records if record.levelno >= 20]
+    assert loud == ["agent type scan cut by parse_failed 30"]
+    assert "SOURCE-LINE" not in caplog.text
 
 
 def test_a_python_file_with_a_coding_line_keeps_its_marker(tmp_path):
@@ -872,6 +926,20 @@ def test_past_the_raw_search_total_a_name_counts_wherever_it_appears(tmp_path, m
     # Not searched for whole names or markers, so the cheap search's superset stands: a second
     # look at most.
     assert browser_tools_found(tmp_path) == ["steel"]
+
+
+@pytest.mark.parametrize(
+    "line, expected",
+    [
+        (b"import playwright", ["playwright"]),
+        (b'NAME = "computer_20241022"', ["computer-use tool"]),
+        (b"from langchain_community import PlayWrightBrowserToolkit", ["PlayWrightBrowserToolkit"]),
+    ],
+    ids=["import", "marker", "toolkit"],
+)
+def test_a_refused_codec_file_is_searched_whole(tmp_path, line, expected):
+    (tmp_path / "a.py").write_bytes(b"# coding: idna\n" + b"#" * 70_000 + b"\n" + line + b"\n")
+    assert browser_tools_found(tmp_path) == expected
 
 
 @pytest.mark.parametrize(
@@ -1210,6 +1278,230 @@ def test_every_folder_shares_one_record_budget(tmp_path, monkeypatch):
     assert [path.name for path in files].count("vendored.py") == 1
 
 
+_RECORD = "".join(f"pkg/m{n:04}.py,sha256=a,1\n" for n in range(400))
+
+
+def _same_three(root: Path) -> None:
+    for folder in ("fn0", "fn1", "fn2"):
+        _tree(
+            root,
+            {
+                f"{folder}/pkg-1.0.dist-info/RECORD": _RECORD,
+                f"{folder}/pkg/m0000.py": 'NAME = "computer_20241022"\n',
+                f"{folder}/handler.py": "import os\n",
+            },
+        )
+
+
+def test_a_folder_holding_the_same_records_again_costs_an_eighth(tmp_path, monkeypatch):
+    _same_three(tmp_path)
+    monkeypatch.setattr(
+        agent_type_check,
+        "_LARGEST_RECORDS",
+        len(_RECORD.encode()) + 2 * agent_type_check._SMALLEST_RECORD,
+    )
+    assert browser_tools_found(tmp_path) == []
+
+
+def test_a_folder_holding_the_same_records_again_does_not_read_them(tmp_path, monkeypatch):
+    _same_three(tmp_path)
+    read = _records_read(monkeypatch)
+    assert browser_tools_found(tmp_path) == []
+    assert sum(read.values()) == 1
+
+
+def test_folders_holding_the_same_records_share_one_set_of_rows(tmp_path, monkeypatch):
+    _same_three(tmp_path)
+    got: list[set[str] | frozenset[str]] = []
+    real = agent_type_check._unpacked_at_top
+    monkeypatch.setattr(
+        agent_type_check, "_unpacked_at_top", lambda *a, **k: got.append(real(*a, **k)) or got[-1]
+    )
+    browser_tools_found(tmp_path)
+    assert len(got) == 3
+    assert got[1] is got[0]
+    assert got[2] is got[0]
+    assert isinstance(got[0], frozenset)
+
+
+def test_the_same_records_nested_deep_cost_the_memory_of_one(tmp_path):
+    import tracemalloc
+
+    record = "".join(f"r{n:06}\n" for n in range(32_768))
+
+    def nested(root: Path, depth: int) -> Path:
+        folder = root
+        for _ in range(depth):
+            folder = folder / "d"
+            _tree(folder, {"pkg-1.0.dist-info/RECORD": record})
+        return root
+
+    def peak(root: Path) -> int:
+        agent_type_check._scan.cache_clear()
+        tracemalloc.start()
+        try:
+            browser_tools_found(root)
+            return tracemalloc.get_traced_memory()[1]
+        finally:
+            tracemalloc.stop()
+
+    one = peak(nested(tmp_path / "one", 1))
+    many = peak(nested(tmp_path / "many", 40))
+    assert many < 2 * one, (one, many)
+
+
+def test_a_record_of_another_name_and_the_same_size_is_read_on_its_own(tmp_path):
+    _tree(
+        tmp_path,
+        {
+            "a/pkg-1.0.dist-info/RECORD": "pkg/x.py,,\n",
+            "a/pkg/x.py": "x = 1\n",
+            "b/qkg-1.0.dist-info/RECORD": "qkg/y.py,,\n",
+            "b/pkg/x.py": 'NAME = "computer_20241022"\n',
+            "b/qkg/y.py": "x = 1\n",
+        },
+    )
+    assert browser_tools_found(tmp_path) == ["computer-use tool"]
+
+
+def test_a_record_of_the_same_name_and_another_size_is_read_on_its_own(tmp_path):
+    _tree(
+        tmp_path,
+        {
+            "a/pkg-1.0.dist-info/RECORD": "pkg/x.py,,\n",
+            "a/pkg/x.py": "x = 1\n",
+            "b/pkg-1.0.dist-info/RECORD": "pkg/yy.py,,\n",
+            "b/pkg/x.py": 'NAME = "computer_20241022"\n',
+            "b/pkg/yy.py": "x = 1\n",
+        },
+    )
+    assert browser_tools_found(tmp_path) == ["computer-use tool"]
+
+
+@pytest.mark.parametrize(
+    "extra, expected",
+    [("b", []), ("a", ["computer-use tool"])],
+    ids=["later-folder-has-one-more", "later-folder-has-one-fewer"],
+)
+def test_a_folder_holding_one_package_more_or_fewer_is_read_on_its_own(tmp_path, extra, expected):
+    # Only b holds qkg/y.py: skipped where b's own records name it, read where they don't.
+    _tree(
+        tmp_path,
+        {
+            "a/pkg-1.0.dist-info/RECORD": "pkg/x.py,,\n",
+            "b/pkg-1.0.dist-info/RECORD": "pkg/x.py,,\n",
+            f"{extra}/qkg-1.0.dist-info/RECORD": "qkg/y.py,,\n",
+            "b/qkg/y.py": 'NAME = "computer_20241022"\n',
+        },
+    )
+    assert browser_tools_found(tmp_path) == expected
+
+
+def test_a_folder_whose_record_could_not_be_read_is_not_shared(tmp_path):
+    good = "pkg/x.py,,\n"
+    _tree(
+        tmp_path,
+        {
+            "a/ok-1.0.dist-info/RECORD": "ok/z.py,,\n",
+            "b/ok-1.0.dist-info/RECORD": "ok/z.py,,\n",
+            "b/pkg-1.0.dist-info/RECORD": good,
+            "b/pkg/x.py": 'NAME = "computer_20241022"\n',
+        },
+    )
+    (tmp_path / "a/pkg-1.0.dist-info").mkdir()
+    (tmp_path / "a/pkg-1.0.dist-info/RECORD").write_bytes(b"\xff" * len(good))
+    assert browser_tools_found(tmp_path) == []
+
+
+def _records_looked_at(monkeypatch) -> list[Path]:
+    seen: list[Path] = []
+    real = Path.is_symlink
+
+    def looked(self):
+        if self.name == "RECORD":
+            seen.append(self)
+        return real(self)
+
+    monkeypatch.setattr(Path, "is_symlink", looked)
+    return seen
+
+
+def test_once_the_record_budget_is_spent_no_record_is_looked_at(tmp_path, monkeypatch):
+    _tree(
+        tmp_path,
+        {
+            "a/x-1.dist-info/RECORD": "",
+            "b/y-1.dist-info/RECORD": "",
+            **{f"c/z{n:02}-1.dist-info/RECORD": "" for n in range(20)},
+        },
+    )
+    monkeypatch.setattr(agent_type_check, "_LARGEST_RECORDS", agent_type_check._SMALLEST_RECORD)
+    seen = _records_looked_at(monkeypatch)
+    browser_tools_found(tmp_path)
+    assert seen
+    assert not [path for path in seen if path.parent.parent.name == "c"]
+
+
+def test_a_folder_of_more_records_than_are_left_is_looked_at_only_so_far(tmp_path, monkeypatch):
+    _tree(tmp_path, {f"z{n:02}-1.dist-info/RECORD": "" for n in range(20)})
+    monkeypatch.setattr(
+        agent_type_check, "_LARGEST_RECORDS", 2 * agent_type_check._SMALLEST_RECORD
+    )
+    seen = _records_looked_at(monkeypatch)
+    browser_tools_found(tmp_path)
+    assert len(seen) == 3
+
+
+def test_a_folder_the_budget_cuts_short_is_not_shared(tmp_path, monkeypatch):
+    # c holds a's two records and one more; the budget runs out inside c, so c reads what it can
+    # of its own and shares nothing.
+    _tree(
+        tmp_path,
+        {
+            "a/pkg-1.0.dist-info/RECORD": "pkg/x.py,,\n",
+            "a/qkg-1.0.dist-info/RECORD": "qkg/y.py,,\n",
+            "c/pkg-1.0.dist-info/RECORD": "pkg/x.py,,\n",
+            "c/qkg-1.0.dist-info/RECORD": "qkg/y.py,,\n",
+            "c/zkg-1.0.dist-info/RECORD": "zkg/z.py,,\n",
+            "c/pkg/x.py": 'NAME = "computer_20241022"\n',
+        },
+    )
+    monkeypatch.setattr(
+        agent_type_check, "_LARGEST_RECORDS", 3 * agent_type_check._SMALLEST_RECORD
+    )
+    assert browser_tools_found(tmp_path) == []
+
+
+def test_a_nested_folders_records_dont_take_the_tops_own_modules(tmp_path):
+    _tree(
+        tmp_path,
+        {
+            "steel.py": "x = 1\n",
+            "agent.py": "import steel\n",
+            "lambda/x-1.0.dist-info/RECORD": "steel.py,,\n",
+            "lambda/steel.py": "x = 1\n",
+        },
+    )
+    assert browser_tools_found(tmp_path) == []
+
+
+def _sixteen_mib_of_records(folder: Path) -> None:
+    row = "p/" + "x" * 1000 + ".py,,\n"
+    body = (row * (1024 * 1024 // len(row) + 1))[: 1024 * 1024 - 1] + "\n"
+    assert len(body) == agent_type_check._LARGEST_RECORD
+    for n in range(16):
+        _tree(folder, {f"r{n:02}-1.0.dist-info/RECORD": body})
+
+
+def test_records_past_sixteen_mib_are_not_read(tmp_path):
+    _sixteen_mib_of_records(tmp_path / "a")
+    _tree(
+        tmp_path,
+        {"b/pkg-1.0.dist-info/RECORD": "pkg/x.py,,\n", "b/pkg/x.py": 'NAME = "computer_20241022"\n'},
+    )
+    assert browser_tools_found(tmp_path) == ["computer-use tool"]
+
+
 def test_a_deep_folders_records_cost_what_their_rows_do(tmp_path, monkeypatch):
     import tracemalloc
 
@@ -1415,7 +1707,8 @@ def test_an_edit_outside_python_is_scanned_again(tmp_path, name, before, after):
 
 
 def test_one_file_fewer_is_scanned_again(tmp_path):
-    # The same total size and latest time, so only the count says it changed.
+    # The same total size and modified times: the count and the deleted file's change time say it
+    # changed.
     _tree(tmp_path, {"a.py": "import openai\n", "b.py": "import scrapy\n"})
     for name in ("a.py", "b.py"):
         os.utime(tmp_path / name, ns=(1, 1))
@@ -1431,6 +1724,69 @@ def test_removing_a_nested_helper_is_scanned_again(tmp_path):
     assert browser_tools_found(tmp_path) == ["playwright"]
     (tmp_path / "src/helper.py").unlink()
     assert browser_tools_found(tmp_path) == []
+
+
+def _rewrite_until_ctime_moves(
+    path: Path, text: str, before: os.stat_result, keep_mtime: bool
+) -> os.stat_result:
+    # Two writes in one clock tick can share a change time, as on Linux, or a filesystem with
+    # 1 s times: write again until it moves, for at most 2 s.
+    deadline = time.monotonic() + 2
+    while True:
+        path.write_text(text, encoding="utf-8")
+        if keep_mtime:
+            os.utime(path, ns=(before.st_atime_ns, before.st_mtime_ns))
+        after = path.stat()
+        if after.st_ctime_ns != before.st_ctime_ns or time.monotonic() > deadline:
+            break
+        time.sleep(0.005)
+    assert (
+        after.st_ctime_ns != before.st_ctime_ns
+    ), "the clock didn't move in 2 s: the test machine, not the scan"
+    return after
+
+
+def test_a_record_rewritten_with_its_size_and_time_put_back_is_scanned_again(tmp_path):
+    _tree(
+        tmp_path,
+        {"x-1.dist-info/RECORD": "vendored.py,,\n", "vendored.py": 'NAME = "computer_20241022"\n'},
+    )
+    record = tmp_path / "x-1.dist-info/RECORD"
+    assert browser_tools_found(tmp_path) == []
+    before = record.stat()
+    after = _rewrite_until_ctime_moves(record, "otherxdd.py,,\n", before, keep_mtime=True)
+    assert (after.st_size, after.st_mtime_ns) == (before.st_size, before.st_mtime_ns)
+    assert browser_tools_found(tmp_path) == ["computer-use tool"]
+
+
+def test_an_edit_beside_a_file_dated_ahead_is_scanned_again(tmp_path):
+    _tree(tmp_path, {"agent.py": "#mport playwright\n", "util.py": "x = 1\n"})
+    os.utime(tmp_path / "util.py", ns=(2**62, 2**62))
+    assert browser_tools_found(tmp_path) == []
+    agent = tmp_path / "agent.py"
+    _rewrite_until_ctime_moves(agent, "import playwright\n", agent.stat(), keep_mtime=False)
+    assert browser_tools_found(tmp_path) == ["playwright"]
+
+
+def test_the_scan_key_is_each_files_times_summed_with_the_count_and_size(tmp_path):
+    _tree(
+        tmp_path,
+        {
+            "a.py": "x = 1\n",
+            "src/b.ts": "let b = 2;\n",
+            "x-1.dist-info/RECORD": "a.py,,\n",
+            "test_c.py": "x = 3\n",
+            "notes.txt": "n\n",
+        },
+    )
+    os.utime(tmp_path / "a.py", ns=(2**62, 2**62))
+    # The test file and the .txt aren't read, so they aren't in the key.
+    stats = [(tmp_path / name).stat() for name in ("a.py", "src/b.ts", "x-1.dist-info/RECORD")]
+    assert agent_type_check._signature(tmp_path) == (
+        sum(info.st_mtime_ns + info.st_ctime_ns for info in stats),
+        3,
+        sum(info.st_size for info in stats),
+    )
 
 
 def test_a_customers_other_package_names_never_appear(tmp_path):
@@ -3464,6 +3820,30 @@ def test_the_scan_searches_python_only_up_to_its_own_total(tmp_path, monkeypatch
     assert browser_tools_found(repo) == expected
 
 
+def test_a_refused_codec_file_past_the_python_total_is_not_read(tmp_path, monkeypatch):
+    body = b"# coding: idna\n" + b"import os  # omputer\n" * 50
+    for n in range(5):
+        (tmp_path / f"m{n}.py").write_bytes(body)
+    monkeypatch.setattr(agent_type_check, "_LARGEST_PYTHON_SCAN", 2 * len(body))
+    read: list[str] = []
+    real = agent_type_check.read_module
+    monkeypatch.setattr(
+        agent_type_check,
+        "read_module",
+        lambda path, *a, **k: read.append(path.name) or real(path, *a, **k),
+    )
+    browser_tools_found(tmp_path)
+    assert read == ["m0.py", "m1.py"]
+
+
+def test_python_past_thirty_two_mib_is_not_read(tmp_path):
+    body = b"#" * (agent_type_check.LARGEST_PARSED_MODULE - 1) + b"\n"
+    for n in range(32 * 1024 * 1024 // len(body)):
+        (tmp_path / f"a{n:03}.py").write_bytes(body)
+    (tmp_path / "zz_agent.py").write_text("import playwright\n", encoding="utf-8")
+    assert browser_tools_found(tmp_path) == []
+
+
 def test_a_long_run_of_combining_marks_is_not_parsed():
     from fi.alk.harness.python_source import parsed
 
@@ -3726,20 +4106,33 @@ def test_the_folders_at_and_above_the_agent_share_one_record_budget(
     assert browser_tools_in_agent(repo, "agents/a") == expected
 
 
+def test_records_at_and_above_an_agent_past_sixteen_mib_are_not_read(tmp_path):
+    _sixteen_mib_of_records(tmp_path / "agent")
+    _tree(
+        tmp_path,
+        {
+            "agent/run.py": "import steel\n",
+            "agent/steel.py": "x = 1\n",
+            "z-1.0.dist-info/RECORD": "z.py,,\n",
+        },
+    )
+    assert browser_tools_in_agent(tmp_path, "agent") == ["steel"]
+
+
 def test_each_folder_above_the_agent_has_its_records_read_once(tmp_path, monkeypatch):
     repo = _vendored_above(tmp_path, 1)
-    read: list[Path] = []
+    looked: list[Path] = []
     real = agent_type_check._unpacked_at_top
     monkeypatch.setattr(
         agent_type_check,
         "_unpacked_at_top",
-        lambda root, left=None: read.append(Path(root)) or real(root, left),
+        lambda root, left=None, read=None: looked.append(Path(root)) or real(root, left, read),
     )
 
     assert browser_tools_in_agent(repo, "agents/a") == []
-    assert read.count(repo.resolve()) == 1
+    assert looked.count(repo.resolve()) == 1
     # The agent's folder: once here, and once in its own walk's look at its packages.
-    assert read.count((repo / "agents" / "a").resolve()) == 2
+    assert looked.count((repo / "agents" / "a").resolve()) == 2
 
 
 @pytest.mark.parametrize(

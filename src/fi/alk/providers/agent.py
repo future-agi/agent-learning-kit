@@ -180,7 +180,7 @@ def build_authored_agent(
             }
         ],
         "tools": tools,
-        "model": None,
+        "model": _authored_model(contract.get("model")),
         "voice": None,
         "telephony": [],
         "supports": [],
@@ -232,7 +232,27 @@ def _authored_tool(
     }
 
 
+def _authored_model(value: Any) -> dict[str, Any] | None:
+    """The document's model: the contract's provider and name, or None when it has no name."""
+    if not isinstance(value, Mapping):
+        return None
+    name = str(value.get("name") or "").strip()[:_NAME_MAX]
+    if not name:
+        return None
+    provider = str(value.get("provider") or "").strip()[:_NAME_MAX] or None
+    return {"provider": provider, "name": name, "temperature": None, "max_tokens": None}
+
+
 def _redact(value: Any, key: str = "") -> Any:
+    refused: list[str] = []
+    redacted = _redact_in(value, key, refused)
+    if refused:
+        # Once per document, not per string: a crafted contract can hold half a million of them.
+        logger.warning("a URL was redacted whole: class=%s", refused[0])
+    return redacted
+
+
+def _redact_in(value: Any, key: str, refused: list[str]) -> Any:
     lowered = key.lower()
     if any(marker in lowered for marker in _REDACTION_MARKERS):
         return _REDACTED
@@ -242,18 +262,19 @@ def _redact(value: Any, key: str = "") -> Any:
         return _REDACTED
     if isinstance(value, Mapping):
         return {
-            str(item_key): _redact(item, str(item_key))
+            str(item_key): _redact_in(item, str(item_key), refused)
             for item_key, item in value.items()
         }
     if isinstance(value, list):
-        return [_redact(item, key) for item in value]
+        return [_redact_in(item, key, refused) for item in value]
     if isinstance(value, str) and "://" in value:
         try:
             parsed = urlsplit(value)
-        except ValueError as refused:
+        except ValueError as error:
             # A netloc urlsplit refuses may still hold credentials, so none of it is kept, and
             # only the error's class is logged: its text repeats the netloc.
-            logger.warning("a URL was redacted whole: class=%s", type(refused).__name__)
+            if not refused:
+                refused.append(type(error).__name__)
             return _REDACTED
         if parsed.scheme and parsed.netloc:
             hostname = parsed.hostname or ""
