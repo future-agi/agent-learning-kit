@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import errno
+import gc
 import json
 import os
 import re
@@ -619,7 +620,7 @@ def test_a_file_that_raises_something_unexpected_costs_only_that_file(
     assert cut.getMessage() == "agent type scan cut by skipped 1"
 
 
-def test_a_skip_logs_its_type_once_and_its_path_and_trace_at_debug_only(
+def test_a_skip_logs_its_type_once_and_its_path_at_debug_only_with_no_trace(
     tmp_path, monkeypatch, caplog
 ):
     _tree(tmp_path, {"a_odd.py": "x = 1\n", "b_odd.py": "x = 1\n", "agent.py": "import playwright\n"})
@@ -642,10 +643,17 @@ def test_a_skip_logs_its_type_once_and_its_path_and_trace_at_debug_only(
         "SOURCE-LINE" in record.getMessage() or "odd" in record.getMessage() or record.exc_info
         for record in loud
     )
-    quiet = [record for record in caplog.records if record.levelno < 20 and record.exc_info]
-    assert [record.exc_info[0] for record in quiet] == [LookupError, LookupError]
-    assert "a_odd.py" in quiet[0].getMessage()
-    assert "b_odd.py" in quiet[1].getMessage()
+    # No record at any level carries a trace or the error's own text, which can quote the source.
+    assert not any(record.exc_info or "SOURCE-LINE" in record.getMessage() for record in caplog.records)
+    assert "SOURCE-LINE" not in caplog.text
+    quiet = [
+        record.getMessage()
+        for record in caplog.records
+        if record.levelno < 20 and record.getMessage().startswith("agent type scan skipped ")
+    ]
+    assert len(quiet) == 2
+    assert "a_odd.py" in quiet[0] and quiet[0].endswith(": LookupError")
+    assert "b_odd.py" in quiet[1] and quiet[1].endswith(": LookupError")
 
 
 @pytest.mark.skipif(sys.version_info < (3, 12), reason="3.11's tokenizer reads a NUL byte")
@@ -667,7 +675,7 @@ def test_a_nul_byte_the_tokenizer_breaks_on_reaches_no_warning(tmp_path, caplog)
     with caplog.at_level("DEBUG", logger=agent_type_check.__name__):
         assert browser_tools_found(tmp_path) == ["playwright"]
     # The tokenizer's fault reaches no WARNING of its own. The files name a tool and can't be
-    # parsed, so they cut the scan (TH-9512), and that line holds names and counts only.
+    # parsed, so they cut the scan, and that line holds names and counts only.
     loud = [record.getMessage() for record in caplog.records if record.levelno >= 20]
     assert loud == ["agent type scan cut by parse_failed 30"]
     assert "SOURCE-LINE" not in caplog.text
@@ -3688,7 +3696,14 @@ def test_a_crafted_script_does_not_hold_up_the_conversation(tmp_path):
         await beating
         return result, worst[0], waited
 
-    result, worst, waited = asyncio.run(save())
+    # The heap the tests before this one built is frozen, so a full collection of it can't land
+    # inside the save. The save's own collections still count.
+    gc.collect()
+    gc.freeze()
+    try:
+        result, worst, waited = asyncio.run(save())
+    finally:
+        gc.unfreeze()
 
     assert not result.get("is_error"), result
     assert worst < 0.25

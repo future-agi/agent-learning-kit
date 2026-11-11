@@ -9,7 +9,10 @@ from __future__ import annotations
 import asyncio
 from datetime import datetime, timezone
 import hashlib
+import hmac
+import ipaddress
 import json
+import logging
 import os
 from pathlib import Path
 from pathlib import PurePosixPath
@@ -498,6 +501,14 @@ class LocalSandbox:
                     status_code=400,
                     detail=f"sandbox_secret_reference_refused: {alias}",
                 )
+            if hosted and reference.manager == "platform-vault":
+                # The resolver answers only the vault keys this sandbox mints for the job, so an
+                # incoming one could only fail later, after the job took a slot. Refuse it now,
+                # with the code the resolver would give.
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"sandbox_vault_reference_unknown: {alias}",
+                )
         claimed_files, secret_file_names = self._claim_secret_files(
             identifier, request.secret_refs
         )
@@ -522,8 +533,9 @@ class LocalSandbox:
                 purpose="target_provider",
             )
             values[internal_key] = value.get_secret_value()
-        # Only an upload the claim bound to this alias is minted; any other file ref is dropped
-        # rather than trusted for its prefix.
+        # Only an upload the claim bound to this alias is minted. The claim's digest check already
+        # binds every mounted upload key to its alias, so this is a second guard behind it, not
+        # the only one: nothing should rely on it alone.
         for alias, reference in request.secret_refs.items():
             if (
                 reference.manager == "mounted"
@@ -662,7 +674,9 @@ class LocalSandbox:
         resolved: dict[str, str] = {}
         for alias, reference in references.items():
             # Any other ref would resolve from this server's environment, which holds the
-            # runner's own credentials. Only an upload claimed under its own alias passes.
+            # runner's own credentials. Only an upload claimed under its own alias passes. The
+            # last two conditions repeat what the claim's digest check guarantees: a second
+            # guard behind it, not the only one.
             if (
                 reference.manager != "mounted"
                 or not reference.key.startswith(_SANDBOX_FILE_PREFIX)
@@ -1968,16 +1982,101 @@ _TERMINAL_STAGES = {
 }
 
 
-def _authorize(authorization: str | None = Header(default=None)) -> None:
-    expected = os.getenv("ALK_SANDBOX_TOKEN")
-    if expected and authorization != f"Bearer {expected}":
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid token"
+logger = logging.getLogger(__name__)
+
+_TOKEN_ENV = "ALK_SANDBOX_TOKEN"
+_ALLOW_ENV = "ALK_SANDBOX_ALLOW_UNAUTHENTICATED"
+
+
+def _sandbox_token() -> str | None:
+    # Returned unstripped so the server compares exactly the bytes the platform sends.
+    token = os.getenv(_TOKEN_ENV)
+    if not token or not token.strip():
+        return None
+    try:
+        # A value that isn't valid UTF-8 can never match a header; treating it as unset
+        # keeps every request a clean refusal instead of a 500.
+        token.encode()
+    except UnicodeEncodeError:
+        return None
+    return token
+
+
+def _unauthenticated_allowed() -> bool:
+    # Only an exact "1": "0", "false" or an empty value must never open the server.
+    return os.getenv(_ALLOW_ENV) == "1"
+
+
+def _is_loopback(host: str) -> bool:
+    # A name such as "localhost" can resolve anywhere, so only an IP literal counts.
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
+def _startup_refusal(host: str, token: str | None, allow: bool) -> str | None:
+    # A padded token would never match what the platform sends, so refuse it loudly
+    # rather than start a server that rejects every job. These messages end up in
+    # container logs, so they name variables, never values.
+    if token:
+        try:
+            token.encode()
+        except UnicodeEncodeError:
+            return f"{_TOKEN_ENV} is not valid UTF-8. Set it to a plain text value."
+    if token and token != token.strip():
+        return (
+            f"{_TOKEN_ENV} is blank or has leading or trailing whitespace. Set it "
+            "without any, and the same value as ALK_HARNESS_SANDBOX_TOKEN for the "
+            "platform."
         )
+    if token:
+        return None
+    if not allow:
+        return (
+            f"{_TOKEN_ENV} is not set. Set {_TOKEN_ENV} on the sandbox, and the "
+            "same value as ALK_HARNESS_SANDBOX_TOKEN for the platform. For a "
+            f"development server on your own laptop only, set {_ALLOW_ENV}=1 with "
+            "a loopback ALK_SANDBOX_HOST."
+        )
+    if not _is_loopback(host):
+        return (
+            f"{_ALLOW_ENV}=1 works only on a loopback address, and ALK_SANDBOX_HOST "
+            f"is {host!r}. Use 127.0.0.1 or ::1 (not localhost), or set {_TOKEN_ENV}."
+        )
+    return None
+
+
+def _authorize(authorization: str | None = Header(default=None)) -> None:
+    token = _sandbox_token()
+    if token is not None:
+        # Bytes, so a missing or non-ASCII header is a 401 rather than a TypeError.
+        if not hmac.compare_digest(
+            (authorization or "").encode(), f"Bearer {token}".encode()
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid token"
+            )
+        return
+    if _unauthenticated_allowed():
+        return
+    # The operator, not the caller, has to fix this, so it is not a 401.
+    raise HTTPException(
+        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        detail="sandbox_token_not_configured",
+    )
 
 
 def create_app(root: Path | None = None) -> FastAPI:
-    app = FastAPI(title="ALK local sandbox", version="1")
+    # No schema or docs pages: they skip the token check, and a closed server shows nothing to
+    # a caller without one.
+    app = FastAPI(
+        title="ALK local sandbox",
+        version="1",
+        docs_url=None,
+        redoc_url=None,
+        openapi_url=None,
+    )
     sandbox = LocalSandbox(
         root or Path(os.getenv("ALK_SANDBOX_ROOT", "./artifacts/sandbox")),
         max_concurrency=int(os.getenv("ALK_SANDBOX_MAX_CONCURRENCY", "2")),
@@ -2093,11 +2192,24 @@ app = create_app()
 
 
 def main() -> None:
+    # One value for both the check and the bind, so the check sees the real host.
+    host = os.getenv("ALK_SANDBOX_HOST", "127.0.0.1")
+    refusal = _startup_refusal(host, os.getenv(_TOKEN_ENV), _unauthenticated_allowed())
+    if refusal is not None:
+        print(refusal, file=sys.stderr)
+        sys.exit(2)
+    if _sandbox_token() is None:
+        logger.warning(
+            "unauthenticated sandbox: for a developer's own laptop only; any container "
+            "on this machine, including the agent under test, can submit jobs and read "
+            "this server's values"
+        )
+
     import uvicorn
 
     uvicorn.run(
         "fi.alk.harness.sandbox_server:app",
-        host=os.getenv("ALK_SANDBOX_HOST", "127.0.0.1"),
+        host=host,
         port=int(os.getenv("ALK_SANDBOX_PORT", "8788")),
     )
 

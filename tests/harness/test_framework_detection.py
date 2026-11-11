@@ -1756,12 +1756,19 @@ def _watch_the_stack(monkeypatch: pytest.MonkeyPatch) -> list[int]:
     def watching(*args: Any, **kwargs: Any) -> Any:
         walk = real_walk(*args, **kwargs)
         for item in walk:
-            stack = walk.gi_frame.f_locals.get("stack", []) if walk.gi_frame else []
+            # A missing `stack` fails loudly rather than reading nothing.
+            stack = walk.gi_frame.f_locals["stack"]
             held.append(sum(_allocated(sys.getsizeof(path)) + 8 for path in stack if isinstance(path, str)))
             yield item
 
     monkeypatch.setattr(fd.os, "walk", watching)
     return held
+
+
+# os.walk keeps its folders still to visit in a `stack` local only from 3.12; before, it recurses.
+_STACK_WALK = pytest.mark.skipif(
+    sys.version_info < (3, 12), reason="os.walk has a `stack` list to watch only from Python 3.12"
+)
 
 
 _STACK_CASES = {
@@ -1777,6 +1784,7 @@ _STACK_CASES = {
 }
 
 
+@_STACK_WALK
 @pytest.mark.parametrize("case", list(_STACK_CASES))
 def test_the_walks_own_list_never_passes_the_folder_bound(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, case: str
@@ -1800,6 +1808,7 @@ def test_the_walks_own_list_never_passes_the_folder_bound(
     assert max(held) <= bound, (max(held), bound)
 
 
+@_STACK_WALK
 def test_the_walks_own_list_grows_past_the_test_bound_without_it(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

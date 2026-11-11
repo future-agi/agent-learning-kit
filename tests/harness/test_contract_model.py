@@ -845,7 +845,7 @@ def prose(path: str) -> str:
 
 def lines_alone(named: str, quote: str, *, short: bool = False) -> str:
     outcome = (
-        "the lines are copied as the prompt and recorded as unconfirmed, since that quote is too "
+        "the lines are recorded as unconfirmed and no prompt is saved, since that quote is too "
         "short to stand for it"
         if short
         else "the quote is kept and the lines are recorded as unconfirmed"
@@ -1428,8 +1428,8 @@ def test_lines_refused_twice_leave_the_quote(tmp_path, root):
         REFUSED
         + not_the_quote("prompt.py 1-2")
         + "\n  - system_prompt_from: lines named later are checked against this quote until you "
-        "give another; a later mismatch records the lines as unconfirmed and keeps the quote, or the "
-        "lines if the quote has fewer than 16 letters"
+        "give another; a later mismatch records the lines as unconfirmed and keeps the quote, "
+        "or saves no prompt if the quote has fewer than 16 letters"
     )
     second = submit(wrong)
     assert not second.get("is_error"), second
@@ -1841,6 +1841,313 @@ def test_a_value_in_a_block_comment_is_not_the_model(root, file, written, name):
     problems, _, _ = checked(root, {"name": name, "path": file, "line": 2})
 
     assert problems == [not_named(name, 2, file)]
+
+
+@pytest.mark.parametrize(
+    "file, written, line",
+    [
+        pytest.param("a.js", '/*\nmodel: "gpt-4o"\n*/\n', 2, id="a-block-over-lines"),
+        pytest.param(
+            "a.js",
+            'const a = 1; /* was\nnotes\nconst model = "gpt-4o";\n*/\n',
+            3,
+            id="opened-after-code",
+        ),
+        pytest.param(
+            "a.js", '/* was\nconst model = "gpt-4o"; */\n', 2, id="before-the-closer"
+        ),
+        pytest.param(
+            "a.ts",
+            '/** Settings.\n  @default "gpt-4o"\n */\n',
+            2,
+            id="a-doc-comment-without-stars",
+        ),
+        pytest.param(
+            "page.html",
+            '<!--\nmodel: "gpt-4o"\n-->\n',
+            2,
+            id="a-markup-block-over-lines",
+        ),
+        pytest.param(
+            "page.xml",
+            '<!-- was\n<model>"gpt-4o"</model> -->\n',
+            2,
+            id="a-markup-block-before-its-closer",
+        ),
+        pytest.param(
+            "page.vue",
+            '<template>\n<!--\n<x model="gpt-4o"/>\n-->\n</template>\n',
+            3,
+            id="a-markup-block-in-a-component",
+        ),
+        pytest.param(
+            "a.js",
+            '/* was\nconst model = "gpt-4o";\nmore\n*/\n',
+            2,
+            id="a-closer-after-the-cited-line",
+        ),
+        pytest.param(
+            "a.js",
+            '/* a */\nx\n/* real\nconst model = "gpt-4o";\n*/\n',
+            4,
+            id="a-comment-after-an-earlier-closed-one",
+        ),
+        # <!-- runs on over lines in every file but code and configuration: XML under any
+        # suffix, and templates that mix markup with code.
+        pytest.param(
+            "App.config",
+            '<!--\n<add key="model" value="gpt-4o"/>\n-->\n',
+            2,
+            id="a-markup-block-in-dotnet-config",
+        ),
+        pytest.param(
+            "a.csproj",
+            '<!-- was\n<Model>"gpt-4o"</Model>\n-->\n',
+            2,
+            id="a-markup-block-in-a-project-file",
+        ),
+        pytest.param(
+            "page.php",
+            '<!--\n<?php $model = "gpt-4o"; ?>\n-->\n',
+            2,
+            id="a-markup-block-in-php",
+        ),
+        pytest.param(
+            "env.xml",
+            '<!--\n<model>"gpt-4o"</model>\n-->\n',
+            2,
+            id="a-markup-block-in-markup-named-like-configuration",
+        ),
+    ],
+)
+def test_a_value_inside_a_block_comment_over_lines_is_not_the_model(
+    root, file, written, line
+):
+    (root / file).write_text(written, encoding="utf-8")
+
+    problems, _, _ = checked(root, {"name": "gpt-4o", "path": file, "line": line})
+
+    assert problems == [not_named("gpt-4o", line, file)]
+
+
+@pytest.mark.parametrize(
+    "file, written, line",
+    [
+        pytest.param(
+            "a.js",
+            '/*\nold\n*/\nconst model = "gpt-4o";\n',
+            4,
+            id="after-the-closing-line",
+        ),
+        pytest.param(
+            "a.js",
+            '/*\nold */ const model = "gpt-4o";\n',
+            2,
+            id="after-the-closer-on-its-line",
+        ),
+        pytest.param(
+            "a.js",
+            '/* old */\nconst model = "gpt-4o";\n',
+            2,
+            id="closed-on-an-earlier-line",
+        ),
+        pytest.param(
+            "a.js",
+            '/* old */ const model = "gpt-4o";\n',
+            1,
+            id="closed-on-the-same-line",
+        ),
+        pytest.param(
+            "page.html",
+            '<!--\nold\n-->\n<script>const model = "gpt-4o";</script>\n',
+            4,
+            id="after-a-markup-block",
+        ),
+        pytest.param(
+            "a.js",
+            'const open = "/*";\nconst model = "gpt-4o";\n',
+            2,
+            id="an-opener-in-a-string",
+        ),
+        pytest.param(
+            "a.js",
+            "const open = '<!--';\nconst model = \"gpt-4o\";\n",
+            2,
+            id="a-markup-opener-in-a-string",
+        ),
+        pytest.param(
+            "a.js",
+            'const s = `/*\n`;\nconst model = "gpt-4o";\n',
+            3,
+            id="an-opener-in-a-template",
+        ),
+        pytest.param(
+            "a.js",
+            '// see /* and <!--\nconst model = "gpt-4o";\n',
+            2,
+            id="openers-in-a-line-comment",
+        ),
+        pytest.param(
+            "a.ts", 'const files = data/*\nconst model = "gpt-4o";\n', 2, id="a-glob"
+        ),
+        pytest.param(
+            "Dockerfile",
+            "COPY data/* /app/\nENV MODEL=gpt-4o\n",
+            2,
+            id="a-glob-in-configuration",
+        ),
+        pytest.param(
+            "llm.py", '# see /* below\nMODEL = "gpt-4o"\n', 2, id="python-hash-comment"
+        ),
+        pytest.param(
+            "llm.py",
+            'X = a /*b\nMODEL = "gpt-4o"\n',
+            2,
+            id="python-has-no-block-comments",
+        ),
+        pytest.param(
+            "llm.py",
+            '# <!-- a note\nMODEL = "gpt-4o"\n',
+            2,
+            id="python-hash-comment-markup",
+        ),
+        pytest.param(
+            "llm.yaml",
+            "# <!-- a note\nmodel: gpt-4o\n",
+            2,
+            id="yaml-hash-comment-markup",
+        ),
+        pytest.param(
+            "q.sql",
+            "-- see /* below\nSET model = 'gpt-4o';\n",
+            2,
+            id="sql-dash-comment",
+        ),
+        pytest.param(
+            "llm.ini", "; <!-- a note\nmodel = gpt-4o\n", 2, id="ini-semicolon-comment"
+        ),
+        pytest.param(
+            "a.kt",
+            '"""\n/*\n"""\nval model = "gpt-4o"\n',
+            4,
+            id="an-opener-inside-a-triple-quote",
+        ),
+        pytest.param(
+            "a.kt",
+            '/*\n"""\n*/\nval model = "gpt-4o"\n',
+            4,
+            id="a-triple-quote-inside-a-comment",
+        ),
+        # An opener whose closer is on no later line is text, not a comment over the rest of
+        # the file. And <!-- runs on over lines only outside code and configuration.
+        pytest.param(
+            "a.js",
+            'const isComment = /<!--/.test(s);\nconst model = "gpt-4o";\n',
+            2,
+            id="a-markup-opener-in-a-regex",
+        ),
+        pytest.param(
+            "a.js",
+            'const re = /\\/*/g;\nconst model = "gpt-4o";\n',
+            2,
+            id="a-block-opener-in-a-regex",
+        ),
+        pytest.param(
+            "c.yaml", "banner: <!-- top\nmodel: gpt-4o\n", 2, id="a-markup-opener-in-yaml"
+        ),
+        pytest.param(".env", "BANNER=<!--\nMODEL=gpt-4o\n", 2, id="a-markup-opener-in-env"),
+        pytest.param(
+            "a.sh",
+            'cat <<EOF\n<!-- header\nEOF\nMODEL="gpt-4o"\n',
+            4,
+            id="a-markup-opener-in-a-heredoc",
+        ),
+        pytest.param(
+            "a.ts",
+            'const t = `\n/* todo\n`;\nconst model = "gpt-4o";\n',
+            4,
+            id="a-block-opener-in-a-template",
+        ),
+        pytest.param(
+            "a.js",
+            'const a = /<!--/;\nconst model = "gpt-4o";\nconst b = /-->/;\n',
+            2,
+            id="a-markup-opener-outside-markup-with-a-closer-later",
+        ),
+        pytest.param(
+            "c.yaml",
+            "banner: <!-- top\nmodel: gpt-4o\nfooter: -->\n",
+            2,
+            id="a-markup-opener-in-configuration-with-a-closer-later",
+        ),
+        pytest.param(
+            ".env",
+            "BANNER=<!--\nMODEL=gpt-4o\nFOOTER=-->\n",
+            2,
+            id="a-markup-opener-in-configuration-by-name-with-a-closer-later",
+        ),
+    ],
+)
+def test_a_value_outside_a_block_comment_is_the_model(root, file, written, line):
+    (root / file).write_text(written, encoding="utf-8")
+
+    problems, contract, _ = checked(
+        root, {"name": "gpt-4o", "path": file, "line": line}
+    )
+
+    assert problems == []
+    assert contract.model is not None and contract.model.name == "gpt-4o"
+
+
+@pytest.mark.parametrize(
+    "written",
+    [
+        pytest.param(
+            "/*\n" * (MIB // 3 - 20) + 'const model = "gpt-4o";\n',
+            id="a-file-of-openers",
+        ),
+        pytest.param(
+            "*/ /*\n" * (MIB // 6 - 20) + 'const model = "gpt-4o";\n',
+            id="a-file-of-closers-and-openers",
+        ),
+        pytest.param(
+            "/* */ " * (MIB // 6 - 20) + '"gpt-4o"\n', id="a-line-of-closed-blocks"
+        ),
+        pytest.param(
+            "<!--\n" * (MIB // 5 - 20) + 'const model = "gpt-4o";\n',
+            id="a-file-of-markup-openers",
+        ),
+    ],
+)
+def test_a_crafted_file_of_block_comments_does_not_hold_up_the_check(root, written):
+    (root / "crafted.js").write_text(written, encoding="utf-8")
+    line = written.count("\n")
+
+    _, _, took = checked(root, {"name": "gpt-4o", "path": "crafted.js", "line": line})
+
+    assert took < 0.5
+
+
+def test_lines_inside_a_block_comment_without_its_closer_are_not_scanned(
+    root, monkeypatch
+):
+    from fi.alk.harness import model_citation
+
+    written = "/*\n" + "x\n" * 499 + "*/\n" + "y\n" * 499 + 'const model = "gpt-4o";\n'
+    (root / "a.js").write_text(written, encoding="utf-8")
+    scanned: list[str] = []
+    real_scan = model_citation._line_scan
+    monkeypatch.setattr(
+        model_citation,
+        "_line_scan",
+        lambda line, *a, **k: scanned.append(line) or real_scan(line, *a, **k),
+    )
+
+    problems, _, _ = checked(root, {"name": "gpt-4o", "path": "a.js", "line": 1001})
+
+    assert problems == []
+    # The block's opening and closing lines, and the cited line: nothing between.
+    assert scanned == ["/*", "*/", 'const model = "gpt-4o";']
 
 
 def test_a_prompt_with_escaped_characters_holds_the_quote(tmp_path, root):
@@ -2704,14 +3011,17 @@ def test_a_short_quote_is_held_and_its_lines_asked_about(tmp_path, root):
     assert text_of(second) == REFUSED + lines_alone("agent.py 1-4", "Be warm and brief.", short=True)
     third = submit(payload(hard_constraints=["Be polite."], system_prompt_from=imports))
 
-    # A quote this short can't stand for the prompt: the lines go out, on record as unconfirmed,
-    # and the reply says so.
+    # A quote this short can't stand for the prompt, and lines that twice didn't hold it would be
+    # shown as it: no prompt is saved, the lines are on record as unconfirmed, and the reply says
+    # so.
     assert not third.get("is_error"), third
     assert text_of(third).endswith(
         "\nsystem_prompt_from: the lines named (agent.py 1-4) are recorded as unconfirmed, since "
-        "they don't hold the quote; the lines are the prompt."
+        "they don't hold the quote; no prompt is saved, since the quote is too short to stand "
+        "for it."
     )
-    assert saved(destination)["system_prompt_from"] == imports
+    assert saved(destination)["system_prompt_excerpt"] == ""
+    assert saved(destination)["system_prompt_from"] == []
     assert saved(destination)["unconfirmed_prompt_from"] == imports
 
 
@@ -2753,7 +3063,7 @@ def test_a_list_quote_that_passes_replaces_the_held_one(tmp_path, root):
     assert "unconfirmed_prompt_from" not in saved(destination)
 
 
-def test_a_placeholder_with_the_right_lines_keeps_the_lines(tmp_path, root):
+def test_a_placeholder_with_the_right_lines_saves_no_prompt(tmp_path, root):
     (root / "agent.py").write_text(_BOOKING, encoding="utf-8")
     destination = tmp_path / "out"
     submit = submitter(destination, root)
@@ -2763,8 +3073,10 @@ def test_a_placeholder_with_the_right_lines_keeps_the_lines(tmp_path, root):
     assert submit(again).get("is_error")
     second = submit(again)
 
+    # Lines that don't hold even a placeholder are unconfirmed, however right they are.
     assert not second.get("is_error"), second
-    assert saved(destination)["system_prompt_excerpt"] == "\n".join(_BOOKING.splitlines()[5:12])
+    assert saved(destination)["system_prompt_excerpt"] == ""
+    assert saved(destination)["system_prompt_from"] == []
     assert saved(destination)["unconfirmed_prompt_from"] == prompt
 
 
@@ -3314,8 +3626,9 @@ def test_short_lines_set_aside_in_a_call_refused_for_something_else_are_said(tmp
 
     assert "model: the name gpt-4o is not the value written on line 1" in text_of(second)
     assert (
-        "system_prompt_from: the lines named (agent.py 1-4) are copied unconfirmed, since they "
-        "don't hold the short quote"
+        "system_prompt_from: the lines named (agent.py 1-4) are recorded as unconfirmed and no "
+        "prompt is saved, since they don't hold the quote and it is too short to stand for the "
+        "prompt"
     ) in text_of(second)
 
 
