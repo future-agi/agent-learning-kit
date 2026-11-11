@@ -557,12 +557,12 @@ def test_a_large_honest_repository_gets_a_look(tmp_path, monkeypatch):
 
 
 def test_the_walks_stop_is_no_cut(tmp_path, caplog):
-    # Over the walk's 256 KB parse total in modules that import, none of them naming a tool.
+    # Over the walk's 512 KB parse total in modules that import, none of them naming a tool.
     module = "import os\n" + "x = 1\n" * (100 * 1024 // 6)
     repo = _tree(
         tmp_path / "source",
         {
-            **{f"agents/a/m_{at}.py": module for at in range(3)},
+            **{f"agents/a/m_{at}.py": module for at in range(6)},
             "agents/a/z_main.py": "import common.util\n",
             "common/__init__.py": "",
             "common/util.py": "x = 1\n",
