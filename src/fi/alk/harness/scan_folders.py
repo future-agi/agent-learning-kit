@@ -67,7 +67,8 @@ def _answer(source: Path, subfolder: str) -> dict[str, Any]:
         return {"name": "unknown", "version": None}
     except Exception:
         # A fault in the check itself. The child stays up for the next folder, and sends the
-        # trace so the parent logs it masked and marks the row unfinished.
+        # trace so the parent logs it, with only the platform's secret values masked, and marks
+        # the row unfinished.
         return {_FAILED: traceback.format_exc()}
 
 
