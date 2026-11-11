@@ -861,6 +861,11 @@ def test_the_longest_stop_leaves_room_for_the_document_inside_the_margin():
     )
     assert bounds == (10.0, 60.0, 20.0)
     assert sum(bounds) == 90.0
+    # And the reading the platform runs waits after the interrupt for exactly that bound.
+    assert agent_reading.READ_AGENT.work.func is agent_reading._read
+    assert agent_reading.READ_AGENT.work.keywords == {
+        "interrupt_wait": agent_reading._INTERRUPT_WAIT_SECONDS
+    }
     # Then the saved contract's document, whose framework scan can take over a minute on a
     # crafted repository: at least 150 s of the margin stays for it.
     assert sum(bounds) + 150.0 < agent_reading._HARD_LIMIT_MARGIN_SECONDS
