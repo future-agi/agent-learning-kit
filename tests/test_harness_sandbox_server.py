@@ -1140,9 +1140,89 @@ def test_local_submit_refuses_a_second_alias_for_an_upload(tmp_path, manager):
 
 
 @pytest.mark.parametrize("source_kind", ["archive", "github"])
+def test_hosted_submit_refuses_an_incoming_vault_ref_before_any_claim(
+    hosted_sandbox, source_kind
+):
+    sandbox = hosted_sandbox
+    sandbox._execute = _idle_execute
+
+    async def submit():
+        upload = await _upload_credential(sandbox, "GOOD")
+        source = (
+            {"source_id": await _upload_archive(sandbox)}
+            if source_kind == "archive"
+            else {"github_repository": "acme/agent", "github_commit_sha": "a" * 40}
+        )
+        with pytest.raises(HTTPException) as refused:
+            sandbox.submit(
+                LocalSandboxRequest(
+                    **source,
+                    secret_refs={
+                        "GOOD": _ref("mounted", upload),
+                        "PLATFORM": _ref(
+                            "platform-vault", "harness-organization-secret"
+                        ),
+                    },
+                )
+            )
+        return refused.value
+
+    refused = asyncio.run(submit())
+
+    assert refused.status_code == 400
+    assert refused.detail == "sandbox_vault_reference_unknown: PLATFORM"
+    _assert_nothing_left(sandbox)
+    # Refused before the claim, so the upload is still there to submit again.
+    assert any(sandbox.secret_files_root.joinpath("pending").iterdir())
+
+
+def test_a_local_vault_ref_is_accepted_at_submit_and_refused_at_resolve(tmp_path):
+    # Only hosted jobs refuse it at the door; a local job keeps its old path, failing when its
+    # refs are resolved.
+    sandbox = LocalSandbox(tmp_path / "state")
+    platform = _ref("platform-vault", "harness-organization-secret")
+
+    job = asyncio.run(
+        _parked_submit(
+            sandbox,
+            provider_only=True,
+            connector="retell",
+            connector_mode="connect_only",
+            connector_config={"agent_id": "agent_example"},
+            secret_refs={"PLATFORM": platform},
+        )
+    )
+
+    assert job.execution.value == "local"
+    assert job.agent.secret_refs["PLATFORM"] == platform
+    with pytest.raises(
+        SecretResolutionError, match="sandbox_vault_reference_unknown: PLATFORM"
+    ):
+        sandbox._resolve_job_secrets(job)
+
+
+def test_hosted_submit_lets_a_platform_config_ref_through(hosted_sandbox):
+    # Only incoming vault refs are refused at the door; other managers keep their own path.
+    sandbox = hosted_sandbox
+    config_ref = SecretRef(
+        manager="platform-config", key="simulator-key", purpose="simulator_provider"
+    )
+
+    async def submit():
+        return await _parked_submit(
+            sandbox,
+            source_id=await _upload_archive(sandbox),
+            secret_refs={"SIMULATOR": config_ref},
+        )
+
+    job = asyncio.run(submit())
+
+    assert job.agent.secret_refs["SIMULATOR"] == config_ref
+
+
+@pytest.mark.parametrize("source_kind", ["archive", "github"])
 def test_hosted_submit_names_its_own_values_platform_vault(hosted_sandbox, source_kind):
     sandbox = hosted_sandbox
-    platform_ref = _ref("platform-vault", "harness-organization-secret")
 
     async def submit():
         upload = await _upload_credential(sandbox, "GOOD", b"credential-never-persist")
@@ -1155,7 +1235,7 @@ def test_hosted_submit_names_its_own_values_platform_vault(hosted_sandbox, sourc
             sandbox,
             **source,
             environment_values={"OPENAI_API_KEY": "value-never-persist"},
-            secret_refs={"GOOD": _ref("mounted", upload), "PLATFORM": platform_ref},
+            secret_refs={"GOOD": _ref("mounted", upload)},
         )
         return job, upload
 
@@ -1168,7 +1248,6 @@ def test_hosted_submit_names_its_own_values_platform_vault(hosted_sandbox, sourc
 
     assert job.execution.value == "hosted"
     assert job.agent.secret_refs == {
-        "PLATFORM": platform_ref,
         "OPENAI_API_KEY": _ref("platform-vault", _job_key(job.job_id, 0)),
         "GOOD": _ref("platform-vault", upload),
     }
