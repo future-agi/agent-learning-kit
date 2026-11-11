@@ -7,6 +7,7 @@ import io
 import itertools
 import json
 import os
+import random
 import tokenize
 import tracemalloc
 from collections.abc import Iterator
@@ -298,11 +299,11 @@ def test_env_files_with_values_are_never_opened(
     _write(
         tmp_path,
         {
-            ".env": "REAL_SECRET=sk-fake-123\n",
+            ".env": "GROQ_API_KEY=sk-fake-123\n",
             ".env.local": "LOCAL_SECRET=sk-fake-456\n",
             "app/.env": "APP_SECRET=sk-fake-789\n",
-            ".env.example": "# a note\nEXAMPLE_NAME=sk-fake-000\n"
-            "export EXPORTED_NAME=1\n BAD-NAME=2\n",
+            ".env.example": "# a note\nOPENAI_API_KEY=sk-fake-000\n"
+            "export ANTHROPIC_API_KEY=1\n BAD-NAME=2\n",
             "bot.py": CLIENT,
         },
     )
@@ -321,7 +322,8 @@ def test_env_files_with_values_are_never_opened(
     assert ".env" not in opened
     assert ".env.local" not in opened
     [agent] = result.agents
-    assert agent.env_names == ("EXAMPLE_NAME", "EXPORTED_NAME")
+    # `GROQ_API_KEY` is an SDK name only `.env` holds: its absence shows `.env` stays unread.
+    assert agent.env_names == ("ANTHROPIC_API_KEY", "OPENAI_API_KEY")
     assert "sk-fake" not in repr(result)
 
 
@@ -644,7 +646,7 @@ def test_an_upload_keeps_one_agent_at_the_root_counted_for_the_root(
             "svc/graph.py": GRAPH + "import os\nos.getenv('SVC_KEY')\n",
             "main.py": "import os\nos.getenv('ROOT_KEY')\n@tool\ndef search(): ...\n",
             "prompts/system.txt": "hello\n",
-            ".env.example": "TEMPLATE_KEY=x\n",
+            ".env.example": "OPENAI_API_KEY=x\n",
             "tests/test_x.py": "import os\nos.getenv('TEST_KEY')\n",
             "other/bot.py": CLIENT,
         },
@@ -655,14 +657,14 @@ def test_an_upload_keeps_one_agent_at_the_root_counted_for_the_root(
 
     [agent] = uploaded.agents
     assert (agent.entry, agent.subfolder) == ("svc/graph.py", "")
-    assert agent.env_names == ("ROOT_KEY", "SVC_KEY", "TEMPLATE_KEY")
+    assert agent.env_names == ("ROOT_KEY", "SVC_KEY", "OPENAI_API_KEY")
     assert agent.tools == 1
     assert agent.prompt_files == 1
     assert agent.build_may_stop == build_hazard(source, "")
     assert uploaded.upload_others == 1
     in_folder = _agent(listed, "svc/graph.py")
     assert in_folder.subfolder == "svc"
-    assert in_folder.env_names == ("SVC_KEY", "TEMPLATE_KEY")
+    assert in_folder.env_names == ("SVC_KEY", "OPENAI_API_KEY")
     assert (in_folder.tools, in_folder.prompt_files) == (0, 0)
 
     side_only = tmp_path / "side"
@@ -691,6 +693,7 @@ def test_env_names_are_checked_and_ordered(tmp_path: Path) -> None:
         "Y" * 128,
         "A_CODE",
         "naïve",
+        "OPENAI_API_KEY",
     ]
     code = "import os\n" + CLIENT + "".join(f"os.getenv('{n}')\n" for n in names)
     _write(
@@ -698,22 +701,28 @@ def test_env_names_are_checked_and_ordered(tmp_path: Path) -> None:
         {
             "svc/pyproject.toml": "",
             "svc/bot.py": code,
-            "svc/.env.example": "B_TEMPLATE=1\nexport A_TEMPLATE=2\nA_CODE=3\n",
-            ".env.sample": "ROOT_TEMPLATE=1\n",
-            "elsewhere/.env.template": "ELSEWHERE=1\n",
+            "svc/.env.example": "GROQ_API_KEY=1\nexport ANTHROPIC_API_KEY=2\nOPENAI_API_KEY=3\n"
+            "A_CODE=4\nB_TEMPLATE=5\n",
+            "svc/.env.template": "CO_API_KEY=1\n",
+            ".env.sample": "MISTRAL_API_KEY=1\n",
+            "elsewhere/.env.template": "HF_TOKEN=1\n",
         },
     )
 
     [agent] = _walk(tmp_path).agents
 
+    # The code's names first, each once, then the SDK names of the agent's folder's templates
+    # and the root's, sorted; another folder's template adds nothing.
     assert agent.subfolder == "svc"
     assert agent.env_names == (
         "A_CODE",
+        "OPENAI_API_KEY",
         "Y" * 128,
         "Z_CODE",
-        "A_TEMPLATE",
-        "B_TEMPLATE",
-        "ROOT_TEMPLATE",
+        "ANTHROPIC_API_KEY",
+        "CO_API_KEY",
+        "GROQ_API_KEY",
+        "MISTRAL_API_KEY",
     )
 
 
@@ -730,7 +739,8 @@ def test_describe_entry_reads_process_env(tmp_path: Path) -> None:
             "web/src/util.mjs": "export const u = process.env.UTIL_KEY;\n",
             "web/tests/agent.test.ts": "process.env.TEST_ONLY;\n",
             "web/node_modules/pkg/index.js": "process.env.DEPENDENCY_KEY;\n",
-            "web/.env.example": "TEMPLATE_KEY=1\n",
+            "web/.env.example": "GROQ_API_KEY=1\n",
+            ".env.sample": "MISTRAL_API_KEY=1\n",
             "api/server.js": "process.env.ELSEWHERE;\n",
         },
     )
@@ -749,7 +759,8 @@ def test_describe_entry_reads_process_env(tmp_path: Path) -> None:
         "OTHER_KEY",
         "THIRD_KEY",
         "UTIL_KEY",
-        "TEMPLATE_KEY",
+        "GROQ_API_KEY",
+        "MISTRAL_API_KEY",
     )
 
 
@@ -816,6 +827,58 @@ def test_describe_entry_stops_at_its_deadline_with_partial(
     assert (capped.partial, capped.env_names) == (True, ("FIRST",))
 
 
+# The 46 SDK setting names, typed here rather than taken from `_SDK_SETTINGS`, so a change to
+# either fails `test_the_sdk_names`: the only names a template adds to a row.
+SDK_NAMES = frozenset(
+    {
+        "OPENAI_API_KEY",
+        "OPENAI_BASE_URL",
+        "OPENAI_ORG_ID",
+        "OPENAI_PROJECT_ID",
+        "OPENAI_API_VERSION",
+        "AZURE_OPENAI_API_KEY",
+        "AZURE_OPENAI_ENDPOINT",
+        "AZURE_OPENAI_AD_TOKEN",
+        "GOOGLE_API_KEY",
+        "GEMINI_API_KEY",
+        "GOOGLE_GENAI_USE_VERTEXAI",
+        "GOOGLE_CLOUD_PROJECT",
+        "GOOGLE_CLOUD_LOCATION",
+        "LIVEKIT_URL",
+        "LIVEKIT_API_KEY",
+        "LIVEKIT_API_SECRET",
+        "DEEPGRAM_API_KEY",
+        "CARTESIA_API_KEY",
+        "ELEVEN_API_KEY",
+        "FI_API_KEY",
+        "FI_SECRET_KEY",
+        "FI_BASE_URL",
+        "FI_PROJECT_NAME",
+        "OTEL_SERVICE_NAME",
+        "HF_TOKEN",
+        "HUGGING_FACE_HUB_TOKEN",
+        "ANTHROPIC_API_KEY",
+        "ANTHROPIC_AUTH_TOKEN",
+        "ANTHROPIC_BASE_URL",
+        "MISTRAL_API_KEY",
+        "CO_API_KEY",
+        "GROQ_API_KEY",
+        "ELEVENLABS_API_KEY",
+        "LANGSMITH_API_KEY",
+        "LANGSMITH_TRACING",
+        "LANGSMITH_PROJECT",
+        "LANGSMITH_ENDPOINT",
+        "LANGCHAIN_API_KEY",
+        "LANGCHAIN_TRACING_V2",
+        "LANGCHAIN_PROJECT",
+        "LANGCHAIN_ENDPOINT",
+        "AWS_ACCESS_KEY_ID",
+        "AWS_SECRET_ACCESS_KEY",
+        "AWS_SESSION_TOKEN",
+        "AWS_REGION",
+        "AWS_DEFAULT_REGION",
+    }
+)
 # Every value line below carries "FAKE", so any name holding it is a piece of a value.
 FAKE_KEY_LINE = "FAKEk3yAAAAAbbbbbbbbCCCCCCCCdddddddd0123456789EEEEEEEEffffffffGG"
 AROUND = ("A_BEFORE", "Z_AFTER")
@@ -1000,17 +1063,19 @@ def test_a_template_in_utf16_or_latin1_gives_its_names_and_no_value(
 ) -> None:
     # Not UTF-8 either way: a byte-order mark of UTF-16, or a Latin-1 `ü`.
     text = (
-        f"A_BEFORE=1\nCITY=Zürich\nSIGNING_KEY={FAKE_KEY_LINE}\n{FAKE_KEY_LINE}\nFAKEt4il=\n"
-        "Z_AFTER=2\n"
+        f"OPENAI_API_KEY=1\nCITY=Zürich\nSIGNING_KEY={FAKE_KEY_LINE}\n{FAKE_KEY_LINE}\n"
+        "FAKEt4il=\nGROQ_API_KEY=2\n"
     )
-    expected = ("A_BEFORE", "CITY", "SIGNING_KEY", "Z_AFTER")
+    expected = ("CITY", "GROQ_API_KEY", "OPENAI_API_KEY", "SIGNING_KEY")
     data = encoded(text)  # type: ignore[operator]
     (tmp_path / ".env.example").write_bytes(data)
     (tmp_path / "bot.py").write_text(CLIENT, encoding="utf-8")
 
     problems = _name_problems(scan_walk._template_names(data), expected)
     walked = _walk(tmp_path)
-    walked_problems = _name_problems(walked.agents[0].env_names, expected)
+    # The walk keeps only the template's SDK names.
+    kept = ("GROQ_API_KEY", "OPENAI_API_KEY")
+    walked_problems = _name_problems(walked.agents[0].env_names, kept)
 
     assert problems == ([], [])
     assert walked.unread_files == 0
@@ -1052,22 +1117,39 @@ def test_a_multi_line_value_in_a_template_is_never_a_name(tmp_path: Path) -> Non
         "WRAPPED_BLOB",
         "lowercasename",
     )
+    direct = scan_walk._template_names(template.encode("utf-8"))
+    assert _name_problems(direct, expected) == ([], [])
+    # The names around each value become SDK names, so the routes, which keep only those, still
+    # show whether the reader found the lines before and after the value.
+    swap = {
+        "A_BEFORE": "OPENAI_API_KEY",
+        "Z_AFTER": "GROQ_API_KEY",
+        "BEFORE_NAME": "ANTHROPIC_API_KEY",
+        "AFTER_NAME": "MISTRAL_API_KEY",
+    }
+
+    def swapped(text: str) -> str:
+        for old, new in swap.items():
+            text = text.replace(old, new)
+        return text
+
     # Each shape in a repository of its own, so one shape's value can't hide another's.
     repos = {"mixed": (template, expected), **TEMPLATE_SHAPES}
     for shape, (text, _) in repos.items():
         (tmp_path / shape).mkdir()
-        (tmp_path / shape / ".env.example").write_bytes(text.encode("utf-8"))
+        (tmp_path / shape / ".env.example").write_bytes(swapped(text).encode("utf-8"))
         (tmp_path / shape / "bot.py").write_text(CLIENT, encoding="utf-8")
 
     for shape, (_, names) in repos.items():
+        kept = tuple(sorted(name for name in map(swapped, names) if name in SDK_NAMES))
         [agent] = _walk(tmp_path / shape).agents
         described = describe_entry(tmp_path / shape, "bot.py", "", deadline=FOREVER)
 
         assert described is not None
         for found in (agent.env_names, described.env_names):
-            problems = _name_problems(found, names)
+            problems = _name_problems(found, kept)
             assert (shape, problems) == (shape, ([], []))
-            assert found == tuple(sorted(names))
+            assert found == kept
             assert not any("FAKE" in name.upper() or "MIIE" in name for name in found), shape
 
 
@@ -1450,8 +1532,8 @@ def test_the_step_after_the_walk_holds_a_bounded_number_of_edges(
 
 # A UTF-16 byte-order mark followed by an odd number of bytes: the decoder can't read it. The
 # same template with its last byte pair whole can.
-ODD_UTF16_TEMPLATE = b"\xff\xfeA\x00=\x001\x00\n"
-EVEN_UTF16_TEMPLATE = ODD_UTF16_TEMPLATE + b"\x00"
+EVEN_UTF16_TEMPLATE = b"\xff\xfe" + "OPENAI_API_KEY=1\n".encode("utf-16-le")
+ODD_UTF16_TEMPLATE = EVEN_UTF16_TEMPLATE[:-1]
 
 
 def test_a_template_the_decoder_rejects_marks_the_row_short(
@@ -1469,7 +1551,7 @@ def test_a_template_the_decoder_rejects_marks_the_row_short(
         rejected = describe_entry(tmp_path, "app/bot.py", "app", deadline=FOREVER)
 
     assert readable is not None and readable.partial is False
-    assert set(readable.env_names) == {"A", "TOOL_KEY"}
+    assert set(readable.env_names) == {"OPENAI_API_KEY", "TOOL_KEY"}
     assert rejected is not None and rejected.partial is True
     assert set(rejected.env_names) == {"TOOL_KEY"}
     # Short because the decoder rejected it, not because the kit's reader failed.
@@ -1901,24 +1983,34 @@ def _all_names(walk: scan_walk._Walk, subfolder: str) -> list[str]:
     return sorted({name for path, facts in walk.facts.items() if scan_walk._under(path, subfolder) for name in facts.env})
 
 
-@pytest.mark.parametrize("names", [30, 300])
+@pytest.mark.parametrize("names", [0, 30, 49, 300])
 def test_a_rows_setting_names_are_its_first_fifty(tmp_path: Path, names: int) -> None:
     _files(tmp_path, {"bot.py": "from openai import OpenAI\nOpenAI()\n"})
-    _files(
-        tmp_path,
-        {f"lib/m{i:02}.py": "import os\n" + "".join(f"os.getenv('K{(i * 37 + n) % names:04}')\n" for n in range(40)) for i in range(20)},
-    )
-    _files(tmp_path, {".env.example": "".join(f"T{n:03}=\n" for n in range(40))})
+    for i in range(20 if names else 0):
+        reads = "".join(f"os.getenv('K{(i * 37 + n) % names:04}')\n" for n in range(40))
+        _files(tmp_path, {f"lib/m{i:02}.py": "import os\n" + reads})
+    # Every SDK name, and 100 other names a template adds nothing for.
+    template = sorted(SDK_NAMES) + [f"T{n:03}" for n in range(100)]
+    _files(tmp_path, {".env.example": "".join(f"{name}=\n" for name in template)})
     walk = scan_walk._Walk(tmp_path, deadline=FOREVER, clock=lambda: 0.0)
     walk.run()
     full = _all_names(walk, "")
-    expected = (*full, *sorted(walk.templates[""] - set(full)))[: scan_walk.ENV_NAMES_KEPT]
+    sdk = sorted(SDK_NAMES - set(full))
+    expected = (*full, *sdk)[: scan_walk.ENV_NAMES_KEPT]
 
     row = _agent(walk.result(upload=False), "bot.py")
     described = describe_entry(tmp_path, "bot.py", "", deadline=FOREVER)
 
+    assert len(full) == names
     assert row.env_names == expected
     assert described is not None and described.env_names == expected
+    if names == 0:
+        # With no code names, a template fills at most the 46 SDK names, sorted.
+        assert row.env_names == tuple(sorted(SDK_NAMES))
+    if names == 49:
+        # One SDK name fills the 50th place.
+        assert len(row.env_names) == scan_walk.ENV_NAMES_KEPT
+        assert row.env_names[-1] == sdk[0]
     assert scan_walk.ENV_NAMES_KEPT == 50
     from fi.alk.harness import scan_document
 
@@ -2297,3 +2389,225 @@ def test_a_cap_reached_while_joining_ends_as_limit(tmp_path: Path, monkeypatch: 
     monkeypatch.setattr(scan_walk._Walk, "result", charging)
 
     assert _walk(tmp_path).stopped == "limit"
+
+
+def _three_routes(
+    source: Path, entry: str, subfolder: str
+) -> dict[str, tuple[str, ...]]:
+    """A row's setting names on the walk, the description and an upload."""
+    described = describe_entry(source, entry, subfolder, deadline=FOREVER)
+    assert described is not None
+    return {
+        "walk": _agent(_walk(source), entry).env_names,
+        "description": described.env_names,
+        "upload": _agent(_walk(source, upload=True), entry).env_names,
+    }
+
+
+def test_a_template_adds_only_sdk_names(tmp_path: Path) -> None:
+    _write(
+        tmp_path,
+        {
+            "bot.py": CLIENT
+            + "import os\nos.getenv('OPENAI_API_KEY')\nos.getenv('CODE_ONLY')\n",
+            ".env.example": "OPENAI_API_KEY=\nANTHROPIC_API_KEY=\nexport GROQ_API_KEY=1\n"
+            "TEMPLATE_ONLY=sk-fake-000\n",
+        },
+    )
+
+    found = _three_routes(tmp_path, "bot.py", "")
+
+    # The code's names first, `OPENAI_API_KEY` among them once; then the template's SDK names.
+    expected = ("CODE_ONLY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "GROQ_API_KEY")
+    assert found == {"walk": expected, "description": expected, "upload": expected}
+
+
+# Shapes in which a template's value spans lines or hides a line break. `{value}` is where the
+# value's made-up lines go, each shaped like a setting, so a reader that takes one for a setting
+# gives a name.
+VALUE_SHAPES = {
+    "open_quote": 'KEY="first\n{value}\n',
+    "key_block": "PEM=-----BEGIN PRIVATE KEY-----\n{value}\n-----END PRIVATE KEY-----\n",
+    "wrapped_key": f"KEY={FAKE_KEY_LINE}\n{{value}}\n",
+    "heredoc": "KEY=<<EOF\n{value}\nEOF\n",
+    "name_value_inside_a_value": 'KEY="a\n{value}\n"\n',
+    **{
+        f"{label}_at_a_line_end": f"KEY=fake{character}\n{{value}}\n"
+        for label, character in [
+            ("nul", "\x00"),
+            ("cr", "\r"),
+            ("bom", "\ufeff"),
+            ("vt", "\x0b"),
+            ("ff", "\x0c"),
+            ("line_separator", "\u2028"),
+        ]
+    },
+}
+# Latin-1 can't hold a BOM or U+2028 written as text: those shapes use the other three.
+VALUE_ENCODINGS = {
+    "utf8": lambda text: text.encode("utf-8"),
+    "utf8_bom": lambda text: b"\xef\xbb\xbf" + text.encode("utf-8"),
+    "utf16_bom": lambda text: b"\xff\xfe" + text.encode("utf-16-le"),
+    "latin1": lambda text: text.encode("latin-1"),
+}
+NOT_LATIN1 = frozenset({"bom_at_a_line_end", "line_separator_at_a_line_end"})
+CODE_READING = CLIENT + "import os\nos.getenv('CODE_KEY')\n"
+NONE_ON_ANY_ROUTE: dict[str, list[int]] = {"walk": [], "description": [], "upload": []}
+
+
+def _value_template(shape: str, value: str = "LEAK_ONE=fake\nLEAK_TWO=") -> str:
+    # `CITY` holds a `ü`, so Latin-1 bytes aren't UTF-8; SDK names before and after the value.
+    body = VALUE_SHAPES[shape].replace("{value}", value)
+    return f"OPENAI_API_KEY=\nCITY=Zürich\n{body}GROQ_API_KEY=\n"
+
+
+def _never_a_value(found: dict[str, tuple[str, ...]]) -> dict[str, list[int]]:
+    """Per route, the lengths of the names neither the code nor the SDK list gives. Lengths
+    only, so a failure never prints a piece of a value."""
+    return {
+        route: sorted(
+            len(name) for name in names if name != "CODE_KEY" and name not in SDK_NAMES
+        )
+        for route, names in found.items()
+    }
+
+
+@pytest.mark.parametrize(
+    ("shape", "encoding"),
+    [
+        (shape, encoding)
+        for shape in VALUE_SHAPES
+        for encoding in VALUE_ENCODINGS
+        if encoding != "latin1" or shape not in NOT_LATIN1
+    ],
+)
+def test_a_template_value_never_becomes_a_name(
+    tmp_path: Path, shape: str, encoding: str
+) -> None:
+    data = VALUE_ENCODINGS[encoding](_value_template(shape))
+    _write(tmp_path, {"bot.py": CODE_READING})
+    (tmp_path / ".env.example").write_bytes(data)
+
+    found = _three_routes(tmp_path, "bot.py", "")
+
+    assert _never_a_value(found) == NONE_ON_ANY_ROUTE
+    assert found["walk"][0] == "CODE_KEY"
+    # The template was read: the SDK name on the line before the value reaches every route.
+    assert all("OPENAI_API_KEY" in names for names in found.values())
+
+
+def test_a_template_value_never_becomes_a_name_in_random_values(tmp_path: Path) -> None:
+    # The cases above stay live: the reader alone takes some value line for a setting.
+    leaked = [
+        shape
+        for shape in VALUE_SHAPES
+        if any(
+            name.startswith("LEAK_")
+            for name in scan_walk._template_names(
+                _value_template(shape).encode("utf-8")
+            )
+        )
+    ]
+    assert leaked
+    rng = random.Random(9048)
+    letters = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_"
+    for index in range(200):
+        shape = rng.choice(sorted(VALUE_SHAPES))
+        encodings = sorted(VALUE_ENCODINGS)
+        encoding = rng.choice(
+            [e for e in encodings if e != "latin1" or shape not in NOT_LATIN1]
+        )
+        # A made-up value wrapped over lines, each line shaped like a setting.
+        value = "\n".join(
+            "".join(rng.choice(letters) for _ in range(rng.randint(1, 40)))
+            + rng.choice(["=", "==", "=fake", ""])
+            for _ in range(rng.randint(1, 6))
+        )
+        source = tmp_path / str(index)
+        _write(source, {"bot.py": CODE_READING})
+        (source / ".env.example").write_bytes(
+            VALUE_ENCODINGS[encoding](_value_template(shape, value))
+        )
+
+        found = _three_routes(source, "bot.py", "")
+
+        assert _never_a_value(found) == NONE_ON_ANY_ROUTE, index
+
+
+def test_a_value_line_that_spells_an_sdk_name_adds_it(tmp_path: Path) -> None:
+    template = "KEY=<<EOF\nHF_TOKEN=x\nNOT_SDK=y\nEOF\n"
+    _write(tmp_path, {"bot.py": CLIENT, ".env.example": template})
+
+    found = _three_routes(tmp_path, "bot.py", "")
+
+    # The reader takes both body lines for settings; only the SDK name reaches the row.
+    assert {"HF_TOKEN", "NOT_SDK"} <= scan_walk._template_names(
+        template.encode("utf-8")
+    )
+    assert found == {
+        "walk": ("HF_TOKEN",),
+        "description": ("HF_TOKEN",),
+        "upload": ("HF_TOKEN",),
+    }
+
+
+def test_a_template_name_matches_exactly(tmp_path: Path) -> None:
+    alone = tmp_path / "alone"
+    _write(
+        alone, {"bot.py": CLIENT, ".env.example": "openai_api_key=\nOpenAI_Api_Key=\n"}
+    )
+    beside = tmp_path / "beside"
+    _write(
+        beside,
+        {
+            "bot.py": CLIENT + "import os\nos.getenv('OPENAI_API_KEY')\n",
+            ".env.example": "openai_api_key=\n",
+        },
+    )
+
+    routes = ("walk", "description", "upload")
+    assert _three_routes(alone, "bot.py", "") == dict.fromkeys(routes, ())
+    assert _three_routes(beside, "bot.py", "") == dict.fromkeys(
+        routes, ("OPENAI_API_KEY",)
+    )
+
+
+def test_a_shared_module_does_not_vouch_for_a_template_name(tmp_path: Path) -> None:
+    agent = CLIENT + "from common.config import settings\n"
+    _write(
+        tmp_path,
+        {
+            "agents/support/pyproject.toml": "",
+            "agents/support/agent.py": agent,
+            "agents/sales/pyproject.toml": "",
+            "agents/sales/agent.py": agent,
+            "common/__init__.py": "",
+            "common/config.py": "import os\nsettings = (\n    os.getenv('DATABASE_URL'),\n"
+            "    os.environ.get('SLACK_BOT_TOKEN'),\n    os.environ['ZENDESK_API_TOKEN'],\n)\n",
+            ".env.example": "DATABASE_URL=\nSLACK_BOT_TOKEN=\nZENDESK_API_TOKEN=\n"
+            "OPENAI_API_KEY=\n",
+        },
+    )
+
+    walked = _walk(tmp_path)
+    uploaded = _walk(tmp_path, upload=True)
+
+    # Only the row's own files vouch for a template name; an upload's own files are the root's.
+    for entry in ("agents/sales/agent.py", "agents/support/agent.py"):
+        row = _agent(walked, entry)
+        described = describe_entry(tmp_path, entry, row.subfolder, deadline=FOREVER)
+        assert row.subfolder == entry.rsplit("/", 1)[0]
+        assert described is not None
+        assert (row.env_names, described.env_names) == (("OPENAI_API_KEY",),) * 2
+    [upload] = uploaded.agents
+    assert upload.env_names == (
+        "DATABASE_URL",
+        "SLACK_BOT_TOKEN",
+        "ZENDESK_API_TOKEN",
+        "OPENAI_API_KEY",
+    )
+
+
+def test_the_sdk_names() -> None:
+    assert len(SDK_NAMES) == 46
+    assert scan_walk._SDK_SETTINGS == SDK_NAMES
