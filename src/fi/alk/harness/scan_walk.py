@@ -212,20 +212,20 @@ class _Unread(Exception):
     pass
 
 
-# CPython 3.12's sizes on a 64-bit build, as asked of the allocator: a str (`_text`), a tuple
+# CPython's sizes on a 64-bit build, as asked of the allocator, measured on 3.12, the Python the
+# hosted image builds the kit's venv with (`_SIZES_MEASURED_ON`): a str (`_text`, which uses
+# 3.11's 49-byte header, so on 3.12 and 3.13, at 41, it is 8 bytes high), a tuple
 # (`_TUPLE` and a slot per item), a set's own object, one dict or set entry with its share of
 # the table, a facts object, and the join's share for a file that could be an agent (its sign,
 # its component bookkeeping, its row) beside three path strings `_project_of` and
 # `_subfolder` make. Each is then charged at the block the allocator gives it (`_block`).
+_SIZES_MEASURED_ON = (3, 12)
 _TUPLE = 40
 _SLOT = 8
 _SET = 216
 _ENTRY = 112
 _FACTS = 512
 _JOIN_SHARE = 768
-# What the join holds for every kept file however it's joined: its place in the sorted list of
-# paths and in one search's set of files seen.
-_JOIN_PER_FILE = 64
 # What the join holds whatever was kept: its result, and up to `_MAX_AGENTS` rows with their
 # names and evidence. Charged once, when the walk starts. A build hazard's own look is
 # bounded on its own (`_HAZARD_PATH_BYTES`).
@@ -268,9 +268,11 @@ def _join_share(path: str) -> int:
 
 
 def _held_for_join(path: str, facts: _Facts) -> int:
-    """What the join will hold for one kept file: its import list, its place in the sorted
-    paths and one search's seen set, and, for a file with its own sign, its share."""
-    size = _ENTRY + _tuple(len(facts.imports)) + _JOIN_PER_FILE
+    """What the join will hold for one kept file: its import list, with an entry's charge that
+    also covers its place in the sorted paths and one search's seen set (measured on a fan-out
+    of 20,000 files; `test_each_thing_kept_is_charged_at_least_what_it_holds`), and, for a file
+    with its own sign, its share."""
+    size = _ENTRY + _tuple(len(facts.imports))
     if _sign(path, facts, {}) is not None:
         size += _join_share(path)
     return size
@@ -915,7 +917,8 @@ def _source_files(
     Installed trees and the folders a build skips are never entered. ``side`` False gives only
     files outside test, example and other side folders; True gives only the files in them.
     ``charge`` counts each folder kept to enter, at its full path, which is what `os.walk`
-    holds until it enters it."""
+    holds until it enters it. With ``side`` True, the second pass, only folders the first pass
+    never entered are counted: side folders, and folders below one."""
     for directory, directories, files in os.walk(start, followlinks=False):
         directories.sort()
         files.sort()
@@ -928,9 +931,10 @@ def _source_files(
         if side is False:
             directories[:] = [name for name in directories if not _is_side_part(name)]
         if charge is not None and directories:
-            charge(
-                sum(2 * _SLOT + _text(os.path.join(directory, name)) for name in directories)
-            )
+            new = directories
+            if side is True and not any(_is_side_part(part) for part in relative):
+                new = [name for name in directories if _is_side_part(name)]
+            charge(sum(2 * _SLOT + _text(os.path.join(directory, name)) for name in new))
         folder = "/".join(relative)
         for name in files:
             if side is None or _read_with_side_files(_join(folder, name)) is side:
@@ -1473,11 +1477,16 @@ def walk_repo(
         logger.warning("agent walk: joining files into agents ran out of time")
         walk.facts.clear()
         return _empty_result(walk, "clock")
-    except (_ResultTooBig, _CapReached):
+    except _ResultTooBig:
         # Too many candidates reach each other to hold: the same end as the walk's other caps.
-        # The join's lookups all meet folders the walk already charged, so none charges again;
-        # if one ever did, past a held stop, it ends here too rather than in the crash path.
         logger.warning("agent walk: joining files into agents passed its edge budget")
+        walk.facts.clear()
+        return _empty_result(walk, "limit")
+    except _CapReached:
+        # The join's lookups all meet folders the walk already charged, so none charges again;
+        # if one ever did, past a held stop, it ends here rather than in the crash path. The
+        # rows found so far are dropped with the facts, unlike a stop during the walk.
+        logger.warning("agent walk: joining files into agents passed its memory budget")
         walk.facts.clear()
         return _empty_result(walk, "limit")
     logger.info(

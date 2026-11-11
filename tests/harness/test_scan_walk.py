@@ -2297,3 +2297,72 @@ def test_a_cap_reached_while_joining_ends_as_limit(tmp_path: Path, monkeypatch: 
     monkeypatch.setattr(scan_walk._Walk, "result", charging)
 
     assert _walk(tmp_path).stopped == "limit"
+
+
+def test_each_folder_is_charged_once_across_the_two_passes(tmp_path: Path) -> None:
+    """The side pass walks the customer's own folders again; only the folders the first pass
+    never entered (side folders, and folders below one) are charged there (Dileep, #273 P3)."""
+    for index in range(40):
+        (tmp_path / f"app{index:02}" / "inner").mkdir(parents=True)
+        (tmp_path / "tests" / f"t{index:02}" / "deep").mkdir(parents=True)
+        (tmp_path / f"app{index:02}" / "examples" / "e").mkdir(parents=True)
+    charged: dict[str, int] = {"own": 0, "side": 0, "once": 0}
+
+    def into(key: str):
+        def charge(size: int) -> None:
+            charged[key] += size
+
+        return charge
+
+    top = str(tmp_path)
+    for _ in scan_walk._source_files(top, top, side=False, charge=into("own")):
+        pass
+    for _ in scan_walk._source_files(top, top, side=True, charge=into("side")):
+        pass
+    for _ in scan_walk._source_files(top, top, charge=into("once")):
+        pass
+
+    assert charged["own"] > 0 and charged["side"] > 0
+    assert charged["own"] + charged["side"] == charged["once"], charged
+
+
+def test_the_estimates_sizes_were_measured_on_the_hosted_kits_python() -> None:
+    """The sizes are CPython 3.12's. On 3.14 a tuple's header is larger, so the estimate would be
+    low there (Dileep, #273 P3). This fails when the hosted image's kit venv moves to another
+    Python, so the sizes are measured again before the bound is trusted."""
+    dockerfile = (Path(__file__).resolve().parents[2] / "Dockerfile.hosted").read_text()
+    major, minor = scan_walk._SIZES_MEASURED_ON
+    assert f"python{major}.{minor} -m venv /opt/alk-venv" in dockerfile
+
+
+def test_a_memory_budget_stop_while_joining_says_so(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A held-budget stop during the join ends at `limit`, with its own cause in the log, not the
+    edge budget's (Dileep, #273 P3)."""
+    _files(tmp_path, {"bot.py": CLIENT})
+
+    def reached(self, *, upload: bool):
+        raise scan_walk._CapReached()
+
+    monkeypatch.setattr(scan_walk._Walk, "result", reached)
+    with caplog.at_level("WARNING", logger=scan_walk.logger.name):
+        result = scan_walk.walk_repo(tmp_path, deadline=FOREVER, clock=lambda: 0.0)
+
+    assert result.stopped == "limit"
+    assert "passed its memory budget" in caplog.text
+    assert "edge budget" not in caplog.text
+
+
+def test_a_fan_out_join_is_charged_without_its_base(tmp_path: Path) -> None:
+    """One entry, 200 hubs, 20,000 leaves: the join walks every leaf. What it really holds is
+    covered by the per-file charge alone, without `_JOIN_BASE` (Dileep, #273 P3)."""
+    hubs = {f"h{h:03}.py": "".join(f"import l{h:03}_{n:03}\n" for n in range(100)) for h in range(200)}
+    leaves = {f"l{h:03}_{n:03}.py": "x = 1\n" for h in range(200) for n in range(100)}
+    entry = "".join(f"import h{h:03}\n" for h in range(200)) + CLIENT
+    _files(tmp_path, {"bot.py": entry, **hubs, **leaves})
+
+    seen = _measure(tmp_path)
+
+    assert seen["join_rise"] > 1_000_000, seen
+    assert seen["join_rise"] <= seen["join_charged"] - scan_walk._JOIN_BASE, seen
