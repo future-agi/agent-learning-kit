@@ -761,13 +761,14 @@ def _tools_in(
                     cut["search_total"] += 1
                 imported |= named
         except Exception as error:
-            # A skipped file may be the agent's main one, and the reading then finds nothing. The
-            # type only at WARNING, once a scan: a trace can quote a line of the customer's code,
-            # and a path can name their business. The count is in the cut line below.
+            # A skipped file may be the agent's main one, and the reading then finds nothing. No
+            # trace at any level, since a trace can quote a line of the customer's code; the type
+            # only at WARNING, once a scan, since a path can name their business. The count is in
+            # the cut line below.
             cut["skipped"] += 1
             if cut["skipped"] == 1:
                 logger.warning("agent type scan skipped a file: %s", type(error).__name__)
-            logger.debug("agent type scan skipped %s", path, exc_info=True)
+            logger.debug("agent type scan skipped %s: %s", path, type(error).__name__)
             continue
     if escapes.left < 0:
         # A file past the total was searched as bytes, which can miss a name its codec spells.

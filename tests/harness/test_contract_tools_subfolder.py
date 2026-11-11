@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import gc
 import json
 import sys
 from pathlib import Path
@@ -611,7 +612,14 @@ def test_the_check_runs_off_the_loop_and_a_refusal_meanwhile_wins(tmp_path, repo
         await beating
         return result, worst[0]
 
-    result, worst = asyncio.run(save(slow))
+    # The heap the tests before this one built is frozen, so a full collection of it can't land
+    # inside the save. The save's own collections still count.
+    gc.collect()
+    gc.freeze()
+    try:
+        result, worst = asyncio.run(save(slow))
+    finally:
+        gc.unfreeze()
     assert (destination / "contract.json").exists(), result
     assert worst < 0.25
 
@@ -1050,7 +1058,14 @@ def test_a_crafted_python_file_does_not_hold_up_the_conversation(tmp_path, repo)
         await beating
         return result, worst[0]
 
-    result, worst = asyncio.run(save())
+    # The heap the tests before this one built is frozen, so a full collection of it can't land
+    # inside the save (one took 0.3 s inside a parse on CI). The save's own collections still count.
+    gc.collect()
+    gc.freeze()
+    try:
+        result, worst = asyncio.run(save())
+    finally:
+        gc.unfreeze()
 
     assert not result.get("is_error"), result
     assert _saved(destination)["instrumentation"] == "traceai"

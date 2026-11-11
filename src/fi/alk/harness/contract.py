@@ -1506,7 +1506,7 @@ def _walks_as_sequence(origin: Any) -> bool:
 
 def _walks_as_mapping(origin: Any) -> bool:
     """Whether _holders walks a field of this origin as a mapping: any subclass of those above,
-    such as an OrderedDict (change review r3, B-L1)."""
+    such as an OrderedDict."""
     return isinstance(origin, type) and issubclass(origin, _MAPPINGS)
 
 
