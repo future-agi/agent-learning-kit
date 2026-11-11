@@ -1912,6 +1912,12 @@ def test_a_value_in_a_block_comment_is_not_the_model(root, file, written, name):
             2,
             id="a-markup-block-in-php",
         ),
+        pytest.param(
+            "env.xml",
+            '<!--\n<model>"gpt-4o"</model>\n-->\n',
+            2,
+            id="a-markup-block-in-markup-named-like-configuration",
+        ),
     ],
 )
 def test_a_value_inside_a_block_comment_over_lines_is_not_the_model(
@@ -2032,8 +2038,8 @@ def test_a_value_inside_a_block_comment_over_lines_is_not_the_model(
             4,
             id="a-triple-quote-inside-a-comment",
         ),
-        # An opener whose closer is on no later line is text: a comment that never closes
-        # doesn't compile. And <!-- runs on over lines only in markup.
+        # An opener whose closer is on no later line is text, not a comment over the rest of
+        # the file. And <!-- runs on over lines only outside code and configuration.
         pytest.param(
             "a.js",
             'const isComment = /<!--/.test(s);\nconst model = "gpt-4o";\n',
@@ -2067,6 +2073,18 @@ def test_a_value_inside_a_block_comment_over_lines_is_not_the_model(
             'const a = /<!--/;\nconst model = "gpt-4o";\nconst b = /-->/;\n',
             2,
             id="a-markup-opener-outside-markup-with-a-closer-later",
+        ),
+        pytest.param(
+            "c.yaml",
+            "banner: <!-- top\nmodel: gpt-4o\nfooter: -->\n",
+            2,
+            id="a-markup-opener-in-configuration-with-a-closer-later",
+        ),
+        pytest.param(
+            ".env",
+            "BANNER=<!--\nMODEL=gpt-4o\nFOOTER=-->\n",
+            2,
+            id="a-markup-opener-in-configuration-by-name-with-a-closer-later",
         ),
     ],
 )

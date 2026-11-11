@@ -124,10 +124,7 @@ _TRIPLE_SUFFIXES = frozenset(
 # file (HTML, XML and its many suffixes: .config, .csproj, .xaml; PHP, JSP, Vue, Svelte, and any
 # suffix not known here) it runs on to its -->.
 _NO_MARKUP_COMMENT_SUFFIXES = (
-    _NO_HASH_COMMENT_SUFFIXES
-    | _NO_BLOCK_COMMENT_SUFFIXES
-    | _TRIPLE_SUFFIXES
-    | _DASH_COMMENT_SUFFIXES
+    _NO_HASH_COMMENT_SUFFIXES | _NO_BLOCK_COMMENT_SUFFIXES | _DASH_COMMENT_SUFFIXES
 )
 # Where a quote leaves text out: ... or …, also inside brackets, since only letters are compared.
 _ELISION = re.compile(r"\.{3,}|…")
@@ -675,7 +672,13 @@ def model_problems(contract: AgentContract, source_root: Path) -> list[str]:
             ini=ini,
             hash_comments=hash_comments,
             block_comments=block_comments,
-            markup=not (config or suffix in _NO_MARKUP_COMMENT_SUFFIXES),
+            # Configuration by its suffix or its whole name: env.xml and Dockerfile.xml are
+            # markup.
+            markup=not (
+                suffix in CONFIG_SUFFIXES
+                or _names_configuration(name_lower)
+                or suffix in _NO_MARKUP_COMMENT_SUFFIXES
+            ),
         ),
     ):
         return [
