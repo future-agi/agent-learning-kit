@@ -53,8 +53,19 @@ def _unauthenticated_development_server(monkeypatch):
 # harmless child, whatever the test does. A test that didn't ask for workers (fake_worker) and
 # makes one anyway fails at teardown. The guard can't raise at the start, because TestClient and
 # _execute's own except swallow it.
-_GUARDED = ("fi.alk.harness.sandbox_worker", "fi.alk.harness.cli")
-_GUARDED_PROGRAMS = ("docker", "claude")
+# Any argv text naming the package is guarded, and so is a guarded program in any word of it
+# (`env docker ...`, `timeout 60 claude ...`, `sh -c "docker ..."`): the names are the real
+# console scripts of pyproject `[project.scripts]` plus docker and claude.
+_GUARDED = ("fi.alk",)
+_GUARDED_PROGRAMS = (
+    "docker",
+    "docker-compose",
+    "claude",
+    "alk",
+    "agent-learn",
+    "alk-harness-worker",
+    "alk-harness-sandbox",
+)
 _HARMLESS = [sys.executable, "-c", "pass"]
 
 
@@ -83,9 +94,10 @@ class _WorkerGuard:
             text = os.fsdecode(args)
         else:
             text = " ".join(os.fsdecode(part) for part in args)
-        words = text.split()
-        first = os.path.basename(words[0]) if words else ""
-        if any(name in text for name in _GUARDED) or first in _GUARDED_PROGRAMS:
+        words = [os.path.basename(word.strip("\"'`;&|()")) for word in text.split()]
+        if any(name in text for name in _GUARDED) or any(
+            word in _GUARDED_PROGRAMS for word in words
+        ):
             return text
         return None
 
@@ -2476,37 +2488,100 @@ def test_cancel_owns_nothing_but_the_state(tmp_path, monkeypatch, fake_worker, s
         assert _stage(app.state.sandbox, job_id).value == "canceled"
 
 
-def test_a_cancelled_rerun_starts_no_further_stage(tmp_path, monkeypatch, fake_worker, stops):
+async def _start_rerun(sandbox, source):
+    """A finished job's rerun, started the way the server does: returns the job."""
+    sandbox._execute = _idle_execute
+    response = sandbox.submit(LocalSandboxRequest(source_path=str(source)))
+    await sandbox._tasks.pop(response.job.job_id)
+    del sandbox._execute
+    job = response.job
+    (sandbox.artifacts_root / job.run_id / "environment-bundle").mkdir(parents=True)
+    state_path = sandbox.jobs_root / job.job_id / "state.json"
+    state = json.loads(state_path.read_text())
+    state.update(stage="queued")
+    state_path.write_text(json.dumps(state))
+    sandbox._tasks[job.job_id] = asyncio.create_task(sandbox._execute_rerun(job, []))
+    return job
+
+
+# The stage the cancel lands in: how many launches it takes, and the launch that sleeps.
+_RERUN_STAGES = {"environment up": (1, 1), "simulate": (2, 2), "environment down": (3, 3)}
+
+
+@pytest.mark.parametrize("stage", list(_RERUN_STAGES))
+def test_a_cancelled_rerun_starts_no_further_stage(
+    tmp_path, monkeypatch, fake_worker, stops, stage
+):
     source = _local_source(tmp_path, monkeypatch)
     sandbox = LocalSandbox(tmp_path / "state")
+    launches, sleeper = _RERUN_STAGES[stage]
+    died = []
 
-    def after_the_first(_child):
-        # environment up exits at once; simulation then sleeps until the cancel.
-        if len(fake_worker.launches) == 1:
+    def sleeps_in_its_stage(_child):
+        # The stages before the cancelled one exit at once; the next launch is the sleeper.
+        if len(fake_worker.launches) == sleeper - 1:
             fake_worker.sleeping()
 
-    fake_worker.on_start(after_the_first)
+    if sleeper == 1:
+        fake_worker.sleeping()
+    fake_worker.on_start(sleeps_in_its_stage)
 
     async def scenario():
-        sandbox._execute = _idle_execute
-        response = sandbox.submit(LocalSandboxRequest(source_path=str(source)))
-        await sandbox._tasks.pop(response.job.job_id)
-        del sandbox._execute
-        job = response.job
-        (sandbox.artifacts_root / job.run_id / "environment-bundle").mkdir(parents=True)
-        state_path = sandbox.jobs_root / job.job_id / "state.json"
-        state = json.loads(state_path.read_text())
-        state.update(stage="queued")
-        state_path.write_text(json.dumps(state))
-        sandbox._tasks[job.job_id] = asyncio.create_task(sandbox._execute_rerun(job, []))
-        await _until(lambda: _running(fake_worker, 2))
+        job = await _start_rerun(sandbox, source)
+        await _until(lambda: _running(fake_worker, launches))
         await sandbox.cancel(job.job_id)
+        # Before the guard's teardown, which would kill a leaked child and hide it.
+        died.append(fake_worker.children[-1].poll() is not None)
         return job.job_id
 
     job_id = asyncio.run(scenario())
 
-    assert len(fake_worker.launches) == 2
-    assert not any("environment down" in launch.argv for launch in fake_worker.launches)
+    assert died == [True], "the running stage was left alive after the cancel"
+    assert len(fake_worker.launches) == launches
+    assert len(stops) == 1
+    assert _stage(sandbox, job_id).value == "canceled"
+
+
+def test_a_loop_closing_during_a_rerun_start_does_not_hang(tmp_path, monkeypatch, fake_worker, stops):
+    import threading
+
+    source = _local_source(tmp_path, monkeypatch)
+    sandbox = LocalSandbox(tmp_path / "state")
+    fake_worker.sleeping().on_start(lambda _child: asyncio.get_running_loop().stop())
+
+    async def rerun():
+        job = await _start_rerun(sandbox, source)
+        await sandbox._tasks[job.job_id]
+
+    runner = asyncio.Runner()
+    with pytest.raises(RuntimeError, match="Event loop stopped"):
+        runner.run(rerun())
+    closing = threading.Thread(target=runner.close, daemon=True)
+    closing.start()
+    closing.join(20)
+
+    assert not closing.is_alive(), "closing the loop hung"
+    assert fake_worker.children[0].poll() is not None
+    assert len(stops) == 1
+
+
+def test_cancel_stops_the_environment_of_a_job_with_no_running_task(
+    tmp_path, monkeypatch, stops
+):
+    source = _local_source(tmp_path, monkeypatch)
+    sandbox = LocalSandbox(tmp_path / "state")
+
+    async def scenario():
+        sandbox._execute = _idle_execute
+        response = sandbox.submit(LocalSandboxRequest(source_path=str(source)))
+        task = sandbox._tasks[response.job.job_id]
+        await task
+        assert task.done()
+        await sandbox.cancel(response.job.job_id)
+        return response.job.job_id
+
+    job_id = asyncio.run(scenario())
+
     assert len(stops) == 1
     assert _stage(sandbox, job_id).value == "canceled"
 
@@ -2558,6 +2633,44 @@ def test_stopping_a_group_it_may_not_signal_returns(monkeypatch, caplog):
     assert [record.getMessage() for record in caplog.records] == [
         f"sandbox worker {child.pid} not reaped 0.1s after SIGKILL"
     ]
+
+
+def test_stopping_a_reaped_worker_signals_no_group(monkeypatch):
+    # A reaped leader's pid may belong to someone else by now.
+    child = subprocess.Popen([sys.executable, "-c", "pass"], start_new_session=True)
+    child.wait()
+    calls = []
+    monkeypatch.setattr(os, "killpg", lambda pgid, sig: calls.append((pgid, sig)))
+
+    sandbox_server._stop_worker(child)
+
+    assert calls == []
+
+
+def test_a_group_seen_gone_is_not_killed_afterwards(monkeypatch):
+    calls = []
+    real_killpg = os.killpg
+
+    def record(pgid, sig):
+        calls.append(sig)
+        real_killpg(pgid, sig)
+
+    child = subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(30)"], start_new_session=True
+    )
+    monkeypatch.setattr(sandbox_server, "_STOP_GRACE_SECONDS", 2.0)
+    monkeypatch.setattr(os, "killpg", record)
+    try:
+        sandbox_server._stop_worker(child)
+    finally:
+        if child.poll() is None:
+            real_killpg(child.pid, signal.SIGKILL)
+        child.wait()
+
+    # SIGTERM, then probes until one raised ProcessLookupError; nothing is sent after it.
+    assert calls[0] == signal.SIGTERM
+    assert calls[-1] == 0
+    assert signal.SIGKILL not in calls
 
 
 def test_a_cancel_before_the_start_still_cleans_up(tmp_path, monkeypatch, stops):
@@ -2637,10 +2750,13 @@ def test_the_guard_swaps_every_worker_start():
     guard.popen([sys.executable, "-m", "fi.alk.harness.sandbox_worker", "job.json"])
     guard.popen("python -m fi.alk.harness.cli simulate", shell=True)
     guard.popen(["docker", "compose", "up"])
+    guard.popen([sys.executable, "-m", "fi.alk.harness", "simulate"])
+    guard.popen("/usr/bin/env docker compose up", shell=True)
+    guard.popen(["timeout", "60", "claude", "-p"])
     guard.popen(["git", "status"])
 
-    assert seen == [_HARMLESS, _HARMLESS, _HARMLESS, ["git", "status"]]
-    assert len(guard.unexpected()) == 3
+    assert seen == [_HARMLESS] * 6 + [["git", "status"]]
+    assert len(guard.unexpected()) == 6
 
 
 def test_a_test_that_starts_a_worker_unasked_fails(pytester):
