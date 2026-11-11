@@ -926,11 +926,13 @@ def _source_files(
         directories.sort()
         files.sort()
         relative = directory[len(top) :].split(os.sep)[1:]
-        if charge is not None and (
-            side is not True or any(_is_side_part(part) for part in relative)
-        ):
-            # Charged once, in the pass that first reaches the folder, before any is filtered out.
-            charge(sum(_SLOT + _text(name) for name in (*directories, *files)))
+        first_pass = side is not True or any(_is_side_part(part) for part in relative)
+        if charge is not None and first_pass:
+            # Summed list by list: one tuple of every name would itself hold a slot a name.
+            charge(
+                sum(_SLOT + _text(name) for name in directories)
+                + sum(_SLOT + _text(name) for name in files)
+            )
         if relative and any(name.endswith(".dist-info") for name in directories):
             # An installed tree, not the customer's code.
             directories[:] = []
@@ -940,7 +942,7 @@ def _source_files(
             directories[:] = [name for name in directories if not _is_side_part(name)]
         if charge is not None and directories:
             new = directories
-            if side is True and not any(_is_side_part(part) for part in relative):
+            if not first_pass:
                 new = [name for name in directories if _is_side_part(name)]
             charge(sum(2 * _SLOT + _text(os.path.join(directory, name)) for name in new))
         folder = "/".join(relative)

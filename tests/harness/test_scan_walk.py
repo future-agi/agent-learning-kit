@@ -1393,7 +1393,7 @@ def test_a_reader_fault_on_every_described_file_logs_one_trace(
 
 
 def test_the_step_after_the_walk_watches_the_clock(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Dileep's shape, small: many files that build a client, each importing a web of modules.
+    """The reviewed shape, small: many files that build a client, each importing a web of modules.
     Joining them into agents must stop at its deadline and end as a clock stop, never run on
     to the helper's hard stop."""
     files = {
@@ -1430,7 +1430,7 @@ def test_the_step_after_the_walk_watches_the_clock(tmp_path: Path, monkeypatch: 
 def test_the_step_after_the_walk_holds_a_bounded_number_of_edges(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Dileep's shape, small: every candidate imports one package that re-exports modules, so
+    """The reviewed shape, small: every candidate imports one package that re-exports modules, so
     each candidate reaches every other and the pairs grow with the square of the candidates."""
     files = {"pkg/__init__.py": "".join(f"from .m{index} import x\n" for index in range(20))}
     files.update({f"pkg/m{index}.py": "x = 1\n" for index in range(20)})
@@ -2397,11 +2397,22 @@ def test_a_fan_out_join_is_charged_without_its_base(tmp_path: Path, shape: str) 
     assert seen["join_rise"] <= seen["join_charged"] - scan_walk._JOIN_BASE, seen
 
 
-def test_a_wide_folder_is_charged_its_listing(tmp_path: Path) -> None:
-    """One folder of many empty folders: what `os.walk` holds for the folder it is in, its names,
-    is charged once when the walk reaches it, so the charge is never below the walk's peak."""
-    for index in range(30_000):
-        (tmp_path / f"f{index:05}").mkdir()
+@pytest.mark.parametrize("entries", ["folders", "files", "links"])
+def test_a_wide_folder_is_charged_its_listing(tmp_path: Path, entries: str) -> None:
+    """One folder of many entries: what `os.walk` holds for the folder it is in, its names, is
+    charged once when the walk reaches it, before any name is filtered out (links to a folder are
+    listed as folders and then left out), so the charge is never below the walk's peak."""
+    target = tmp_path / "target"
+    target.mkdir()
+    wide = tmp_path / "wide"
+    wide.mkdir()
+    for index in range(80_000 if entries == "files" else 30_000):
+        if entries == "folders":
+            (wide / f"f{index:05}").mkdir()
+        elif entries == "files":
+            (wide / f"f{index:05}.txt").touch()
+        else:
+            (wide / f"f{index:05}").symlink_to(target)
 
     seen = _measure(tmp_path)
 
