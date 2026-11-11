@@ -1934,8 +1934,8 @@ def test_the_folders_instrumentation_counts_the_shared_code_it_imports(tmp_path,
 
 @pytest.mark.parametrize("package", ["testing_utils", "tests_shared", "e2e"])
 def test_the_folders_instrumentation_counts_a_test_named_package_it_imports(tmp_path, repo, package):
-    # The walk follows it and the credential scan reads it, so instrumentation does too (Dileep's
-    # third review): the root build says traceai.
+    # The walk follows it and the credential scan reads it, so instrumentation does too: the root
+    # build says traceai.
     (repo / "agents" / "a" / "agent.py").write_text(f"from {package} import tracing\n")
     (repo / package).mkdir()
     (repo / package / "__init__.py").write_text("")
@@ -1979,7 +1979,7 @@ def test_the_folders_instrumentation_counts_another_workspace_members_code(tmp_p
 
 def test_the_save_follows_a_committed_folder_link_to_the_shared_code(tmp_path, repo):
     # common -> libs/common: bundling follows it, so the save does too, and instrumentation and the
-    # browser check read what's behind it (Dileep's third review).
+    # browser check read what's behind it.
     (repo / "agents" / "a" / "agent.py").write_text("from common import tracing, browse\n")
     shared = repo / "libs" / "common"
     shared.mkdir(parents=True)

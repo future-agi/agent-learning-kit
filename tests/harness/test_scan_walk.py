@@ -1393,7 +1393,7 @@ def test_a_reader_fault_on_every_described_file_logs_one_trace(
 
 
 def test_the_step_after_the_walk_watches_the_clock(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Dileep's shape, small: many files that build a client, each importing a web of modules.
+    """A crafted shape, small: many files that build a client, each importing a web of modules.
     Joining them into agents must stop at its deadline and end as a clock stop, never run on
     to the helper's hard stop."""
     files = {
@@ -1430,7 +1430,7 @@ def test_the_step_after_the_walk_watches_the_clock(tmp_path: Path, monkeypatch: 
 def test_the_step_after_the_walk_holds_a_bounded_number_of_edges(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Dileep's shape, small: every candidate imports one package that re-exports modules, so
+    """A crafted shape, small: every candidate imports one package that re-exports modules, so
     each candidate reaches every other and the pairs grow with the square of the candidates."""
     files = {"pkg/__init__.py": "".join(f"from .m{index} import x\n" for index in range(20))}
     files.update({f"pkg/m{index}.py": "x = 1\n" for index in range(20)})

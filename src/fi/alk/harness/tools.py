@@ -10,9 +10,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import os
 import secrets
-import threading
 from pathlib import Path
 from typing import Any
 
@@ -50,6 +48,8 @@ from .contract import (
     generated_chat_interface_problem,
     runtime_public_environment,
     validate_contract,
+    write_contract,
+    CONTRACT_FILE,
 )
 from .failure_file import FAILURE_FILE, write_failure_file
 from .instrumentation_evidence import detect_instrumentation
@@ -418,19 +418,10 @@ def _checked_against_source(
 
 
 def _save_contract(contract: AgentContract, destination: Path) -> dict[str, Any]:
-    destination.mkdir(parents=True, exist_ok=True)
-    path = destination / "contract.json"
-    # Written beside it and moved into place: a write that fails partway leaves the contract an
-    # earlier call was told was saved as it was.
-    partial = destination / f".contract.json.{os.getpid()}.{threading.get_ident()}"
-    try:
-        partial.write_text(
-            json.dumps(contract.model_dump(), indent=2, ensure_ascii=False),
-            encoding="utf-8",
-        )
-        os.replace(partial, path)
-    finally:
-        partial.unlink(missing_ok=True)
+    # write_contract writes beside the file and moves it into place: a write that fails partway
+    # leaves the contract an earlier call was told was saved as it was.
+    write_contract(contract, destination)
+    path = destination / CONTRACT_FILE
     said = (
         f"Accepted and saved to {path}.\n"
         f"{len(contract.tools)} tools: {', '.join(sorted(contract.tool_names()))}\n"
