@@ -226,6 +226,10 @@ _SET = 216
 _ENTRY = 112
 _FACTS = 512
 _JOIN_SHARE = 768
+# What the join holds for every kept file however it's joined: its place in the sorted list of
+# paths and in one search's set of files seen. Held by
+# `test_a_fan_out_join_is_charged_without_its_base`, which fails with this at 0.
+_JOIN_PER_FILE = 64
 # What the join holds whatever was kept: its result, and up to `_MAX_AGENTS` rows with their
 # names and evidence. Charged once, when the walk starts. A build hazard's own look is
 # bounded on its own (`_HAZARD_PATH_BYTES`).
@@ -268,11 +272,9 @@ def _join_share(path: str) -> int:
 
 
 def _held_for_join(path: str, facts: _Facts) -> int:
-    """What the join will hold for one kept file: its import list, with an entry's charge that
-    also covers its place in the sorted paths and one search's seen set (measured on a fan-out
-    of 20,000 files; `test_each_thing_kept_is_charged_at_least_what_it_holds`), and, for a file
-    with its own sign, its share."""
-    size = _ENTRY + _tuple(len(facts.imports))
+    """What the join will hold for one kept file: its import list, its place in the sorted
+    paths and one search's seen set, and, for a file with its own sign, its share."""
+    size = _ENTRY + _tuple(len(facts.imports)) + _JOIN_PER_FILE
     if _sign(path, facts, {}) is not None:
         size += _join_share(path)
     return size

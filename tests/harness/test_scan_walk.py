@@ -2355,12 +2355,14 @@ def test_a_memory_budget_stop_while_joining_says_so(
 
 
 def test_a_fan_out_join_is_charged_without_its_base(tmp_path: Path) -> None:
-    """One entry, 200 hubs, 20,000 leaves: the join walks every leaf. What it really holds is
-    covered by the per-file charge alone, without `_JOIN_BASE` (Dileep, #273 P3)."""
+    """One entry, 200 hubs, 20,000 leaves that each import one shared module: the join walks
+    every leaf. What it really holds is covered by the per-file charge alone, without
+    `_JOIN_BASE`, and only with `_JOIN_PER_FILE` (Dileep, #273 P3). Leaves that import nothing
+    share CPython's empty tuple, which would hide the per-file cost."""
     hubs = {f"h{h:03}.py": "".join(f"import l{h:03}_{n:03}\n" for n in range(100)) for h in range(200)}
-    leaves = {f"l{h:03}_{n:03}.py": "x = 1\n" for h in range(200) for n in range(100)}
+    leaves = {f"l{h:03}_{n:03}.py": "import common\n" for h in range(200) for n in range(100)}
     entry = "".join(f"import h{h:03}\n" for h in range(200)) + CLIENT
-    _files(tmp_path, {"bot.py": entry, **hubs, **leaves})
+    _files(tmp_path, {"bot.py": entry, "common.py": "x = 1\n", **hubs, **leaves})
 
     seen = _measure(tmp_path)
 
