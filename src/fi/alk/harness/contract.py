@@ -1426,6 +1426,9 @@ KEPT_AS_WRITTEN = (
     "AgentContract.agent_languages",
     "AgentContract.conversational",
     "AgentContract.system_prompt_from",
+    "AgentContract.unconfirmed_prompt_from",
+    # The model name the code cites, with its file and line: read as written, like the prompt lines.
+    "AgentContract.model",
     "AgentContract.tools",
     "AgentContract.data_schema",
     "AgentContract.base_environment",
@@ -1463,6 +1466,7 @@ KEPT_AS_WRITTEN = (
     "Dependency.version",
     "Dependency.reached",
     "PromptSource",
+    "ModelSource",
     "Reached",
     "DataStore",
     "Runtime",
