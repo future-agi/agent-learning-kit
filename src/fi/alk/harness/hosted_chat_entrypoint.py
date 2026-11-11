@@ -7,6 +7,8 @@ import traceback
 import json
 import os
 import signal
+import sys
+import threading
 import time
 import uuid
 from collections.abc import Awaitable
@@ -57,6 +59,8 @@ _AUTHORING_BASIS = ".futureagi-authoring-basis.json"
 _PUBLISHED = ".futureagi-published.json"
 _LEDGER = ".futureagi-ledger.json"
 _LEDGER_NOTES = 40
+# One install at a time: an opening cancelled mid-install leaves its thread running.
+_SEED_LOCK = threading.Lock()
 # Tools whose effect the person confirms before it happens.
 _NEEDS_CONFIRMATION = frozenset(
     {
@@ -283,6 +287,10 @@ class BuilderConversation:
 
 
 class HostedChatRuntime:
+    # Whether this process's first opening has decided on the seed, and what it decided.
+    _seed_taken = False
+    _seed_outcome: tuple[str, list[str]] | None = None
+
     def __init__(
         self,
         *,
@@ -360,9 +368,24 @@ class HostedChatRuntime:
         from .understand import load as load_contract
 
         policy_job = guest_booking_policy_job(self.job)
+        # A reading the platform handed this build is used before anything opens.
+        await asyncio.to_thread(self._take_seed)
         contract = load_contract(self.workspace)
         self._opened_with = self._what_exists()
         if not self._opened_with[1]:
+            if contract is not None:
+                try:
+                    # What follows a saved contract is done before the world stage opens.
+                    await asyncio.to_thread(self._after_saved)
+                except Exception as exc:  # noqa: BLE001 - the world stage opens without it; it is tried again after a turn, at finish_build and at the next opening
+                    from .seed_contract import print_trace
+
+                    print(
+                        f"source model not written before the world stage; class: {type(exc).__name__}",
+                        file=sys.stderr,
+                        flush=True,
+                    )
+                    print_trace(exc)
             stage = self._open_for_building(contract)
         else:
             try:
@@ -1288,6 +1311,87 @@ class HostedChatRuntime:
             after_contract(self.workspace, self.source, job)
         if has_world and (world_changed or not (self.workspace / "environment-bundle" / "manifest.json").is_file()):
             after_world(self.source if self.source.is_dir() else None, self.workspace, load_contract(self.workspace))
+
+    def _take_seed(self) -> None:
+        """Use the reading the platform handed this build, at the first opening only, and leave
+        what was decided for the platform."""
+        from .seed_contract import SEED_RESULT, write_result
+
+        with _SEED_LOCK:
+            if self._seed_taken:
+                # Decided at this process's first opening; a record that couldn't be written is
+                # tried again, but nothing is decided twice.
+                if self._seed_outcome is not None and not os.path.lexists(self.workspace / SEED_RESULT):
+                    write_result(self.workspace, *self._seed_outcome)
+                return
+            self._seed_taken = True
+            self._seed_outcome = self._decide_seed()
+            if self._seed_outcome is not None:
+                write_result(self.workspace, *self._seed_outcome)
+
+    def _decide_seed(self) -> tuple[str, list[str]] | None:
+        """What the first opening does with the seed, or None when there is nothing to say."""
+        from .seed_contract import (
+            SEED_ACCEPTED,
+            SEED_INSTALLED,
+            SEED_RESULT,
+            holds_seed,
+            print_trace,
+            seed_beside,
+        )
+
+        seed = seed_beside(self.workspace)
+        # The platform placed no seed: nothing to decide, and nothing to say.
+        if not os.path.lexists(seed):
+            return None
+        # Decided by an earlier process that could say so: once the file exists, nothing installs.
+        if os.path.lexists(self.workspace / SEED_RESULT):
+            return None
+        outcome: tuple[str, list[str]]
+        contract = self.workspace / "contract.json"
+        if contract.exists() and ((self.workspace / SEED_INSTALLED).is_file() or holds_seed(contract, seed)):
+            # Installed by an earlier process that stopped before it could say so. The record
+            # outlasts a contract edit; before it is written no stage has opened, so the bytes
+            # are still the seed's, which no reading makes, as only the paid one is recorded.
+            outcome = ("used", [])
+        elif (
+            contract.exists()
+            or (self.workspace / FAILURE_FILE).exists()
+            or self._what_exists()[1]
+            or self._build_is_over()
+        ):
+            # Not a fresh seeded build: the build command refused, the workspace was restored,
+            # or a reading of the builder's own has saved.
+            return None
+        elif not (self.workspace / SEED_ACCEPTED).is_file():
+            # Opened before the build command accepted it, so this build reads the agent itself.
+            return "not_accepted", []
+        else:
+            outcome = self._use_seed(seed)
+        try:
+            # Consumed whatever the outcome, so nothing but this opening ever acts on it.
+            (self.workspace / SEED_ACCEPTED).unlink(missing_ok=True)
+        except OSError as exc:
+            print_trace(exc)
+        return outcome
+
+    def _use_seed(self, seed: Path) -> tuple[str, list[str]]:
+        from pydantic import ValidationError
+
+        from .job import HarnessJob
+        from .seed_contract import print_trace, use_seed
+
+        try:
+            job = HarnessJob.model_validate(self.job)
+        except ValidationError:
+            # Only the class: its text repeats values from the job.
+            print("seed contract: error; class: ValidationError", file=sys.stderr, flush=True)
+            return "error", []
+        except Exception as exc:  # noqa: BLE001 - a job the builder can't read reads the agent itself
+            print(f"seed contract: error; class: {type(exc).__name__}", file=sys.stderr, flush=True)
+            print_trace(exc)
+            return "error", []
+        return use_seed(seed, job, self.source, self.workspace)
 
     async def _handle(self, command: dict[str, Any]) -> None:
         if str(command["kind"]) != "nudge":
