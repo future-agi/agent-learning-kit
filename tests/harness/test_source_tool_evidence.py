@@ -836,6 +836,39 @@ def test_tool_check_decodes_a_unicode_escape_module_as_python_does(tmp_path):
     assert tool_evidence_problems(_entry_contract(), tmp_path)
 
 
+def test_tool_check_decodes_a_utf_7_module_as_python_does(tmp_path):
+    # +AAo- is a line end and +AEA- an "@": Python reads a decorated lookup after the comment,
+    # where the bytes hold one comment line with the definition in it.
+    (tmp_path / "agent.py").write_bytes(
+        b"# coding: utf-7\nfrom agents import tool\n"
+        b"# def lookup(): an example+AAo-+AEA-tool+AAo-def lookup(): return 1\n"
+    )
+
+    assert tool_evidence_problems(_entry_contract(), tmp_path) == []
+
+
+def test_tool_check_reads_the_text_an_import_reads(tmp_path):
+    # The runtime imports a tool's module. An import joins the definition to the coding line's
+    # comment, where `python file.py` would read it as code.
+    (tmp_path / "agent.py").write_bytes(b"# coding: unicode-escape \\\ndef lookup(): return 1\n")
+
+    problems = tool_evidence_problems(_entry_contract(), tmp_path)
+    assert [p.split(" — ")[0] for p in problems] == [
+        "tool[lookup]:commented-only-entrypoint:agent.lookup"
+    ]
+
+
+def test_tool_check_finds_a_def_a_utf_7_comment_hides(tmp_path):
+    # +ACM- is a "#": Python reads the definition as a comment. Read as UTF-8 the line doesn't
+    # parse, and a file not read gives no problem either.
+    (tmp_path / "agent.py").write_bytes(b"# coding: utf-7\n+ACM- def lookup(): return 1\n")
+
+    problems = tool_evidence_problems(_entry_contract(), tmp_path)
+    assert [p.split(" — ")[0] for p in problems] == [
+        "tool[lookup]:commented-only-entrypoint:agent.lookup"
+    ]
+
+
 _COMMENTED_METHOD = (
     "class Assistant:\n    def __init__(self): pass\n"
     "    # async def lookup_weather(self, location): pass\n"

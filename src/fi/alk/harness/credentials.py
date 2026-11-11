@@ -1490,7 +1490,7 @@ def imported_by_agent(
     # One total for the whole walk: bundling has no lookup limit and no parse total, so this is
     # all that bounds what decoding first costs there, a unicode-escape file's second reading
     # included (at most this much more parsing per walk).
-    escapes = EscapeBudget()
+    escapes = EscapeBudget(reader="import walk")
     seen: set[Path] = set()
     pending = deque(sorted(_code_in(folder, root, unread)))
     own = set(pending)  # Read once already, so importing one doesn't queue it again.
@@ -1522,8 +1522,9 @@ def imported_by_agent(
         bytes_read += len(raw)
         # A .py in a codec that can spell a name in other bytes is read as Python reads it while
         # the walk's total lasts: decoded after its line ends, so hz's `~` before a CRLF joins.
+        also: list[str] = []
         taken, decoded, encoding = (
-            decoded_first(raw, escapes) if path.suffix == ".py" else (False, None, None)
+            decoded_first(raw, escapes, also) if path.suffix == ".py" else (False, None, None)
         )
         read_before = None
         if taken:
@@ -1554,11 +1555,14 @@ def imported_by_agent(
             content = text.replace("\r\n", "\n").replace("\r", "\n")
         hits: list[Path] = []
         if path.suffix == ".py":
+            # A crafted coding line: what `python file.py` reads, where an import reads the first.
+            others = [other.replace("\r\n", "\n").replace("\r", "\n") for other in also]
             # A file with no import in it can't lead anywhere, so it doesn't use up the parse total
             # before the files that do; a file the total cuts says so.
-            if "import" not in content:
+            if "import" not in content and not any("import" in other for other in others):
                 continue
             readings = [content] if read_before is None else [content, read_before]
+            readings += others
             # Each reading is charged as it's parsed: a file parsed twice and charged once let a
             # crafted pair cost the walk twice its total.
             results = [_python_imports(reading, parse_limit, parse_budget) for reading in readings]

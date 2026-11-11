@@ -12,11 +12,14 @@ import ast
 import codecs
 import functools
 import io
+import logging
 import re
 import tokenize
 import unicodedata
 from collections.abc import Iterable
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 # The worst crafted file this size parses in about 0.3 s on 3.12; an honest one in about 0.03 s.
 LARGEST_PARSED_MODULE = 128 * 1024
@@ -137,6 +140,9 @@ _RAW_SAFE_CODECS = frozenset(
 )
 # Refused by name in _coding: never decoded, whatever the total.
 _NEVER_DECODED_FIRST = frozenset({"idna", "punycode", "undefined"})
+# The longest first lines, up to the coding line's end, decoded to ask whether they read as
+# themselves: an honest coding line is far shorter, and a longer one is read both ways, charged.
+_LONGEST_HEAD_CHECKED = 4096
 # Python reads a lone CR as a line end before it decodes, so hz's `~` and a line end join.
 _CR_TO_LF = bytes.maketrans(b"\r", b"\n")
 _NON_ASCII_RUN = re.compile(r"[^\x00-\x7f]{2,}")
@@ -160,15 +166,32 @@ class ParseBudget:
 
 class EscapeBudget:
     """What is left for one scan to decode before searching, in bytes: every file read that way (a
-    text codec not proven safe to search as bytes, unicode-escape among them) is charged here."""
+    text codec not proven safe to search as bytes, unicode-escape among them) is charged here, for
+    each decode. ``reader`` names the scan in the WARNING its total running out gives."""
 
-    def __init__(self, total: int | None = None) -> None:
-        self.left = LARGEST_ESCAPED_TOTAL if total is None else total
+    def __init__(self, total: int | None = None, reader: str = "scan") -> None:
+        self.total = LARGEST_ESCAPED_TOTAL if total is None else total
+        self.left = self.total
+        self.reader = reader
+        self.decoded = 0
 
     def spend(self, raw: bytes) -> bool:
-        """Charge ``raw``, and say whether the scan may still decode it."""
+        """Charge ``raw``, and say whether the scan may still decode it. The first time the total
+        runs out, a WARNING says so, in counts alone: a file past it isn't decoded as Python
+        does, so a name its codec spells in other bytes can be missed."""
         self.left -= len(raw)
-        return self.left >= 0
+        if self.left >= 0:
+            self.decoded += 1
+            return True
+        if self.left + len(raw) >= 0:
+            logger.warning(
+                "%s: decoding Python as Python does stopped at its total of %d bytes, after %d "
+                "decodes; a name the rest spell in their codec can be missed",
+                self.reader,
+                self.total,
+                self.decoded,
+            )
+        return False
 
 
 class TokenBudget(ParseBudget):
@@ -204,6 +227,7 @@ def read_module(
     needles: Iterable[bytes] = (),
     undecoded: list[bytes] | None = None,
     escapes: EscapeBudget | None = None,
+    also: list[str] | None = None,
 ) -> str | None:
     """The file as text, or None: not a regular file, larger than ``limit`` bytes, not readable
     in the encoding its coding line or byte-order mark names (UTF-8 without one), or, given
@@ -211,10 +235,13 @@ def read_module(
 
     Given ``escapes``, a file in a codec not proven safe to search as bytes (unicode-escape,
     utf-7, hz and others) is decoded as Python does while the scan's total lasts, and a needle
-    counts in what it decodes to, or in its bytes when that isn't ASCII. Given ``undecoded``, a file that names a needle
-    but isn't read because its coding line names a codec refused by name (or unicode-escape past
-    the total) is put there as bytes: Python still runs it (plain ASCII under idna as it would
-    without the line), so a scan looking for names can still find them.
+    counts in what it decodes to, or in its bytes when that isn't ASCII. Given ``undecoded``, a
+    file that names a needle but isn't read because its coding line names a codec refused by name
+    (or unicode-escape past the total) is put there as bytes: Python still runs it (plain ASCII
+    under idna as it would without the line), so a scan looking for names can still find them.
+    Given ``also``, a file Python reads two ways (``_decoded_readings``) has its second text put
+    there, for the caller to read on its own: joined to the first, one text's syntax error would
+    sink the other.
     """
     try:
         # A link can name a device or a pipe, which reads without end.
@@ -227,18 +254,22 @@ def read_module(
     if len(raw) > limit:
         return None
     coding = _coding(raw)
-    taken, text = _decoded_first(raw, coding, escapes)
+    taken, text, other = _decoded_readings(raw, coding, escapes)
     if taken:
         if text is None:
             return None
+        readings = [text] if other is None else [text, other]
         # The bytes too, as for any other file: the parser folds a fullwidth name the text spells
         # (`ｐlaywright`) to the needle, and a needle in the bytes is what lets such a file in. On
         # ASCII text nothing folds, so whatever a scan can find is in the text itself.
         if needles and not any(
-            needle.decode("ascii") in text or not text.isascii() and needle in raw
+            needle.decode("ascii") in reading or not reading.isascii() and needle in raw
+            for reading in readings
             for needle in needles
         ):
             return None
+        if other is not None and also is not None:
+            also.append(other)
         return text
     # A literal match: a name spelled in other characters that Python folds to the same one,
     # such as a fullwidth `ｐlaywright`, isn't found.
@@ -273,14 +304,16 @@ def source_encoding(raw: bytes) -> str | None:
 
 
 def decoded_first(
-    raw: bytes, escapes: EscapeBudget | None
+    raw: bytes, escapes: EscapeBudget | None, also: list[str] | None = None
 ) -> tuple[bool, str | None, str | None]:
     """``raw`` read as ``read_module`` reads a file before searching it, for a reader that
     searches no needles: whether it was decoded first, its text (None when Python refuses it),
     and the encoding ``source_encoding`` gives, to read a file that wasn't. The coding line is
-    read once for both."""
+    read once for both. ``also`` is as ``read_module``'s."""
     coding = _coding(raw)
-    taken, text = _decoded_first(raw, coding, escapes)
+    taken, text, other = _decoded_readings(raw, coding, escapes)
+    if other is not None and also is not None:
+        also.append(other)
     encoding = None if coding is None or coding[1].name in _UNREAD_CODECS else coding[0]
     return taken, text, encoding
 
@@ -289,14 +322,29 @@ def _decoded_first(
     raw: bytes, coding: tuple[str, codecs.CodecInfo] | None, escapes: EscapeBudget | None
 ) -> tuple[bool, str | None]:
     """Whether ``raw``, in the codec ``coding`` names, is decoded before it's searched, and its
-    text as Python reads it: None when Python refuses it.
+    text as Python reads it: None when Python refuses it. The first of ``_decoded_readings``."""
+    taken, text, _ = _decoded_readings(raw, coding, escapes)
+    return taken, text
+
+
+def _decoded_readings(
+    raw: bytes, coding: tuple[str, codecs.CodecInfo] | None, escapes: EscapeBudget | None
+) -> tuple[bool, str | None, str | None]:
+    """Whether ``raw``, in the codec ``coding`` names, is decoded before it's searched, its text
+    as Python reads it (None when Python refuses it), and a second text, or None.
 
     A codec not proven safe to search as bytes can spell a name in other bytes, so its file is
     decoded while ``escapes`` lasts. Past it, or with no total, it isn't taken, and the caller
     reads it as any other file.
+
+    An import decodes the whole file, and `python file.py` the lines after the coding line, the
+    ones up to it read as they are. The two agree when those lines decode to themselves. When
+    they don't (`# coding: utf-7 +`, hz's `~{`, an iso2022 escape, a backslash at the end), the
+    script's reading is the text when the whole file doesn't decode, and the second text when
+    both do and differ. Each decode is charged.
     """
     if coding is None or escapes is None:
-        return False, None
+        return False, None, None
     encoding, info = coding
     if (
         info.name in _RAW_SAFE_CODECS
@@ -304,9 +352,41 @@ def _decoded_first(
         # Not a text encoding, such as rot13 or base64: bytes.decode refuses it before reading.
         or not getattr(info, "_is_text_encoding", True)
     ):
-        return False, None
+        return False, None, None
     if not escapes.spend(raw):
-        return False, None
+        return False, None, None
+    if not _reads_its_cookie(encoding):
+        return True, _read_as_a_script(raw, encoding), None
+    whole = _read_whole(raw, encoding)
+    # An import also ends lines before it decodes, and a script after, so any CR can split the
+    # two (a backslash or iso2022_jp_2's single shift before one joins the next line in one only).
+    if b"\r" not in raw and _head_reads_as_itself(raw, encoding):
+        return True, whole, None
+    if not escapes.spend(raw):
+        # Past the total, a file the whole decode refuses is read as any file past it is.
+        return (True, whole, None) if whole is not None else (False, None, None)
+    script = _read_as_a_script(raw, encoding)
+    if whole is None:
+        return True, script, None
+    return True, whole, None if script == whole else script
+
+
+def _head_reads_as_itself(raw: bytes, encoding: str) -> bool:
+    """Whether the lines of ``raw`` up to and including its coding line decode to themselves in
+    ``encoding``, leaving its decoder as a fresh one would be: then an import and a script read
+    the file alike."""
+    head = raw[: _cookie_line_end(raw)]
+    if len(head) > _LONGEST_HEAD_CHECKED:
+        # Not decoded uncharged: read both ways, as a crafted line is, and charged for it.
+        return False
+    try:
+        return head.decode(encoding) == head.decode("latin-1")
+    except (UnicodeError, LookupError):
+        return False
+
+
+def _read_whole(raw: bytes, encoding: str) -> str | None:
+    """``raw`` as an import reads it, decoded whole, or None when Python refuses it."""
     if b"\r" in raw:
         # Python ends lines before it decodes, so a backslash or hz's `~` before a CRLF joins
         # the lines it ends.
@@ -318,10 +398,71 @@ def _decoded_first(
         text = raw.decode(encoding)
     except (UnicodeError, LookupError):
         # LookupError only from a codec registered at run time: Python's text codecs don't.
-        return True, None
+        return None
     # Python reads nothing past a NUL its decode makes at a line's start, and refuses the file
     # for one elsewhere: so a name after it is never run.
-    return True, text.partition("\0")[0]
+    return text.partition("\0")[0]
+
+
+@functools.lru_cache(maxsize=64)
+def _reads_its_cookie(encoding: str) -> bool:
+    """Whether ``encoding`` decodes an ASCII coding line to that line. Every codec compile() and
+    import accept does. cp037 and the other EBCDIC codecs don't, nor UTF-16 and UTF-32, whose
+    characters are wider than a byte, and only `python file.py` runs a file in one of those
+    (``_read_as_a_script``)."""
+    cookie = f"# -*- coding: {encoding} -*-\n"
+    try:
+        return cookie.encode("ascii").decode(encoding) == cookie
+    except (UnicodeError, LookupError):
+        return False
+
+
+def _read_as_a_script(raw: bytes, encoding: str) -> str | None:
+    """``raw`` as `python file.py` reads it, or None when Python refuses it: what an import reads
+    too unless the coding line, or the codec, doesn't decode the lines up to it to themselves.
+
+    Python reads the lines up to and including the cookie's as they are. It then opens the file
+    again in the codec one byte before that line's end, and throws away the first line it reads
+    there. In an EBCDIC codec that byte is no line end unless it's a CR, so after an LF the next
+    line goes with it; in UTF-16 or UTF-32 it starts a character with the bytes after it. The
+    rest is decoded, and its CRs end lines. A blank line stands for a line of the file thrown
+    away, so each line keeps its number in the file.
+    """
+    end = _cookie_line_end(raw)
+    head = raw[:end].replace(b"\r\n", b"\n").translate(_CR_TO_LF)
+    try:
+        rest = raw[end - 1 :].decode(encoding)
+    except (UnicodeError, LookupError):
+        return None
+    ends = [at for at in (rest.find("\n"), rest.find("\r")) if at != -1]
+    thrown = len(rest)
+    if ends:
+        thrown = min(ends) + (2 if rest[min(ends) : min(ends) + 2] == "\r\n" else 1)
+    body = rest[thrown:].replace("\r\n", "\n").replace("\r", "\n")
+    text = head.decode("utf-8", "replace") + ("\n" if thrown > 1 else "") + body
+    if not text.endswith("\n"):
+        text += "\n"
+    # As for any decoded file: nothing past a NUL is read.
+    return text.partition("\0")[0]
+
+
+def _cookie_line_end(raw: bytes) -> int:
+    """Where the line holding the coding line's cookie ends in ``raw``, past its line end: the
+    first line's, or the second's when the first names no cookie."""
+    end = _line_end(raw, 0)
+    part = _cookie_part(raw[:end].rstrip(b"\r\n"))
+    if part is not None and part.startswith(b"#coding"):
+        return end
+    return _line_end(raw, end)
+
+
+def _line_end(raw: bytes, start: int) -> int:
+    """Where the line at ``start`` ends, past its LF, CRLF or lone CR, as Python ends a line."""
+    ends = [at for at in (raw.find(b"\n", start), raw.find(b"\r", start)) if at != -1]
+    if not ends:
+        return len(raw)
+    end = min(ends)
+    return end + (2 if raw[end : end + 2] == b"\r\n" else 1)
 
 
 def _first_lines(raw: bytes) -> bytes:
@@ -407,7 +548,12 @@ def _coding(raw: bytes) -> tuple[str, codecs.CodecInfo] | None:
     if None in parts:
         # Read as a file in a refused codec is: searched raw, never decoded.
         return "undefined", codecs.lookup("undefined")
-    cut = b"\n".join(parts)
+    # From 3.14 detect_encoding decodes the lines it's handed in their codec, as Python decodes
+    # the real ones, line ends included: each cut line keeps its real length mod 4, so a UTF-16
+    # or UTF-32 line decodes in the cut as it does whole.
+    # A blank line padded with spaces is still blank.
+    parts = [part + b" " * ((len(line) - len(part)) % 4) for part, line in zip(parts, lines_read)]
+    cut = b"\n".join(parts) + b"\n"
     lines = io.BytesIO(head[:bom] + cut).readline
     try:
         encoding, _ = tokenize.detect_encoding(lines)

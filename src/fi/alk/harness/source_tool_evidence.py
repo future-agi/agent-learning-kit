@@ -49,7 +49,7 @@ def tool_evidence_problems(
     commented: dict[Path, list[str] | None] = {}
     budget = ParseBudget()
     tokens = TokenBudget()
-    escapes = EscapeBudget()
+    escapes = EscapeBudget(reader="tool check")
     for entry in contract.tool_entrypoints:
         if entry.mode not in {"import", "construct"} or not entry.module:
             continue
