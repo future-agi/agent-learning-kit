@@ -1368,7 +1368,7 @@ def test_an_install_that_cannot_be_recorded_is_taken_back(
     assert "Traceback" in capsys.readouterr().err
 
 
-def test_a_contract_that_cannot_be_compared_is_never_claimed(tmp_path, monkeypatch):
+def test_a_contract_that_cannot_be_compared_is_never_claimed(tmp_path, monkeypatch, capsys):
     runtime = _real_world(_builder(tmp_path, monkeypatch))
     workspace = tmp_path / "authoring"
     (workspace / "contract.json").write_bytes(_seed_path(tmp_path).read_bytes())
@@ -1381,6 +1381,8 @@ def test_a_contract_that_cannot_be_compared_is_never_claimed(tmp_path, monkeypat
     assert _open(runtime).contract is not None
 
     assert not (workspace / SEED_RESULT).exists()
+    # Why the restart didn't claim the seed reaches the log.
+    assert "RuntimeError: boom-7" in capsys.readouterr().err
 
 
 def test_every_file_is_written_beside_its_place(tmp_path, monkeypatch):
@@ -1503,7 +1505,7 @@ def test_a_mark_that_cannot_be_removed_still_leaves_the_outcome(
     assert "PermissionError" in err
 
 
-def test_a_contract_that_cannot_be_taken_back_is_used(tmp_path, monkeypatch):
+def test_a_contract_that_cannot_be_taken_back_is_used(tmp_path, monkeypatch, capsys):
     runtime = _real_world(_builder(tmp_path, monkeypatch))
     _setup_fails(tmp_path, monkeypatch, runtime)
     _unlink_fails_for(monkeypatch, "contract.json")
@@ -1513,6 +1515,8 @@ def test_a_contract_that_cannot_be_taken_back_is_used(tmp_path, monkeypatch):
     assert _outcome(tmp_path) == {"seed": "used", "differs": []}
     installed = (tmp_path / "authoring" / "contract.json").read_bytes()
     assert installed == _seed_path(tmp_path).read_bytes()
+    # The failed take-back, which is what makes the outcome `used`, reaches the log.
+    assert "PermissionError: [Errno 13] Permission denied" in capsys.readouterr().err
 
 
 # -- the round trip ----------------------------------------------------------------------------
