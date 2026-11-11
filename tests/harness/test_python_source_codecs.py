@@ -539,12 +539,11 @@ def test_the_walk_keeps_the_decoded_reading_beside_an_escaped_cr(tmp_path):
     assert repo / "common" / "web.py" in imported_by_agent(repo, "agents/a")
 
 
-def test_a_file_read_two_ways_is_charged_once(tmp_path):
+def test_a_file_read_two_ways_is_charged_for_each_reading(tmp_path):
     pad = b"# " + b"x" * 76 + b"\n"
-    repo = _shared(
-        tmp_path, _ESCAPED + b'SEP = "\\r"\nimport common.web\n' + pad * 1200
-    )
-    _write(repo / "agents" / "a", b"import common.tools\n" + pad * 1200, "b.py")
+    agent = _ESCAPED + b'SEP = "\\r"\nimport common.web\n' + pad * 600
+    repo = _shared(tmp_path, agent)
+    _write(repo / "agents" / "a", b"import common.tools\n" + pad * 600, "b.py")
     _write(repo / "common", b"", "tools.py")
     stopped: list[bool] = []
     budget = python_source.ParseBudget()
@@ -555,13 +554,16 @@ def test_a_file_read_two_ways_is_charged_once(tmp_path):
         parse_budget=budget,
         stopped=stopped,
     )
-    assert repo / "common" / "tools.py" in found and stopped == [False]
-    # Charged once, as the larger reading (the UTF-8 one, where `\\r` is two characters).
-    parsed = [repo / "agents" / "a" / n for n in ("agent.py", "b.py")]
-    parsed.append(repo / "common" / "web.py")
-    assert budget.left == python_source.LARGEST_PARSED_TOTAL - sum(
-        p.stat().st_size for p in parsed
+    # Each reading is charged as it's parsed: the decoded one, where `\\r` is one character, and
+    # the UTF-8 one, where it's two.
+    assert repo / "common" / "tools.py" in found
+    others = [repo / "agents" / "a" / "b.py", repo / "common" / "web.py"]
+    assert budget.left == python_source.LARGEST_PARSED_TOTAL - (
+        2 * len(agent) - 1 + sum(p.stat().st_size for p in others)
     )
+    # The decoded reading, the one Python runs, is refused: its CR splits the string. The walk
+    # can't be sure it followed what Python runs, so it says it stopped.
+    assert stopped == [True]
 
 
 def test_the_union_is_for_unicode_escape_only(tmp_path):
