@@ -18,6 +18,7 @@ from pydantic import ValidationError
 
 from .agent_type_check import EXIT_REFUSED
 from .backends import StageDone
+from .contract import CONTRACT_FILE
 from .failure_file import FAILURE_FILE
 from .framework_detection import detect_framework, named_framework_folder
 from .job import FailureDomain, HarnessJob
@@ -37,7 +38,6 @@ logger = logging.getLogger(__name__)
 logger.addFilter(MaskSecrets())
 
 AGENT_FILE = "agent.json"
-CONTRACT_FILE = "contract.json"
 
 AGENT_READING_MODEL_ERROR = "agent_reading_model_error"
 AGENT_READING_INCOMPLETE = "agent_reading_incomplete"

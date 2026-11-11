@@ -35,6 +35,7 @@ from pydantic import BaseModel, Field, SecretStr, model_validator
 
 from fi.simulate.runtime.spec import SecretRef
 
+from ..providers.agent import _redact
 from .credentials import (
     CredentialManifest,
     CredentialRequirement,
@@ -1853,14 +1854,19 @@ def _stage_outputs(run_root: Path) -> list[dict[str, Any]]:
             for tool in contract.get("tools", [])
             if isinstance(tool, dict) and tool.get("name")
         ]
+        # One call: a contract written before write_contract cleaned its prose is cleaned here.
+        one_liner, *rules = _redact(
+            [
+                str(contract.get("one_liner") or ""),
+                *(str(item) for item in contract.get("hard_constraints", [])),
+            ]
+        )
         data = {
-            "one_liner": str(contract.get("one_liner") or ""),
+            "one_liner": one_liner,
             "modality": str(contract.get("modality") or "unknown"),
             "runtime": contract.get("runtime") or {},
             "tools": tools,
-            "hard_constraints": [
-                str(item) for item in contract.get("hard_constraints", [])
-            ],
+            "hard_constraints": rules,
         }
         outputs.append(
             {

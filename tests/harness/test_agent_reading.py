@@ -10,6 +10,7 @@ import argparse
 import asyncio
 import builtins
 import dataclasses
+import itertools
 import json
 import logging
 import os
@@ -34,12 +35,21 @@ from fi.alk.harness import (
     scenario_source,
     session,
     spend,
+    tools,
 )
 from fi.alk.harness.backends import StageDone
+from fi.alk.harness.backends.base import qualified
 from fi.alk.harness.config import chosen_model
 from fi.alk.harness.contract import AgentContract
+from fi.alk.harness.failure_file import write_failure_file
 from fi.alk.harness.framework_detection import detect_framework
-from fi.alk.harness.job import HarnessJob, SourceKind
+from fi.alk.harness.job import (
+    FailureDomain,
+    HarnessFailure,
+    HarnessJob,
+    HarnessStage,
+    SourceKind,
+)
 from fi.alk.harness.reading_entry import READING_JOB_INVALID, run_reading_mode
 from fi.alk.harness.tools import CONTRACT_SERVER, _checked_contract
 from fi.alk.harness.understand import SUBMIT_REMINDER, reading_settings
@@ -532,6 +542,97 @@ def test_a_provider_defined_agent_is_not_read_without_a_build(tmp_path, model, a
     )
     assert "repository only" in failure["message"]
     assert fake.created == []
+
+
+# Every connector and mode a job can carry; padded and mixed case as the loader normalises them.
+_P_CONNECTORS = [
+    "auto",
+    "http",
+    "websocket",
+    "livekit",
+    "phone",
+    "vapi",
+    "retell",
+    "retell_chat",
+    " LiveKit ",
+    "VAPI",
+    " VAPI ",
+    "Retell_Chat",
+]
+_P_MODES = [None, "connect_only", "environment_backed", "provider_import"]
+# What the build loads a profile for: from the provider, or from the prompt pasted into the job.
+_P_REFUSED = {
+    ("vapi", "connect_only"),
+    ("retell", "connect_only"),
+    ("retell_chat", "connect_only"),
+    ("phone", "connect_only"),
+    ("livekit", "connect_only"),
+    ("vapi", "provider_import"),
+    ("retell", "provider_import"),
+    ("retell_chat", "provider_import"),
+}
+
+
+def _p_agent(connector: str, mode: str | None) -> dict:
+    config = {
+        "assistant_id": "asst-1",
+        "agent_id": "agent-1",
+        "agent_name": "lk",
+        "target_system_prompt": "Be kind.",
+    }
+    if connector == "phone":
+        config["phone_number"] = "+14155550123"
+    if mode == "environment_backed":
+        config = {k: v for k, v in config.items() if k not in ("assistant_id", "agent_id")}
+    return {"connector": connector, "config": config, **({"mode": mode} if mode else {})}
+
+
+def _p_admitted():
+    """Every (connector, mode) pair a job validates with."""
+    for connector, mode in itertools.product(_P_CONNECTORS, _P_MODES):
+        try:
+            HarnessJob.model_validate({**_job(), "agent": _p_agent(connector, mode)})
+        except ValueError:
+            continue
+        yield connector, mode
+
+
+@pytest.mark.parametrize("connector,mode", list(_p_admitted()))
+def test_the_reading_refuses_exactly_what_the_build_loads_a_profile_for(
+    tmp_path, monkeypatch, connector, mode
+):
+    """Checks the build still uses the shared rule. Both sides call it, so a break inside the rule
+    moves them together: the refused-pairs table below is the real guard on the rule itself."""
+    monkeypatch.setattr(
+        authoring_entrypoint, "inspect_provider_target", lambda provider, **_: {"provider": provider}
+    )
+    job = HarnessJob.model_validate({**_job(), "agent": _p_agent(connector, mode)})
+    secrets = tmp_path / "secrets.json"
+    secrets.write_text(json.dumps({"VAPI_API_KEY": "x", "RETELL_API_KEY": "y"}), encoding="utf-8")
+
+    assert (agent_reading._check_job(job) is not None) is (
+        authoring_entrypoint._load_provider_import_profile(job, secrets) is not None
+    )
+
+
+@pytest.mark.parametrize("connector,mode", list(_p_admitted()))
+def test_the_refused_jobs_are_the_provider_and_pasted_prompt_ones(connector, mode):
+    assert _P_REFUSED <= {(c.strip().lower(), m) for c, m in _p_admitted()}
+    job = HarnessJob.model_validate({**_job(), "agent": _p_agent(connector, mode)})
+
+    assert (agent_reading._check_job(job) is not None) is (
+        (connector.strip().lower(), mode) in _P_REFUSED
+    )
+
+
+def test_a_connect_only_job_without_a_provider_is_read(tmp_path, model):
+    _repo(tmp_path)
+    fake = model(_writes(CHAT))
+
+    assert _run(tmp_path, {**_job(), "agent": {"connector": "auto", "mode": "connect_only"}}) == 0
+
+    assert (tmp_path / "reading" / "agent.json").exists()
+    assert len(fake.created) == 1
 
 
 def test_a_cancel_before_the_save_is_a_crash_with_its_file(tmp_path, model):
@@ -1539,12 +1640,27 @@ def test_a_contract_saved_at_the_soft_limit_is_kept(tmp_path, model, monkeypatch
 
 
 def test_nothing_is_saved_after_the_soft_limit_decides(tmp_path, model, monkeypatch):
+    """A cancel probe: the turn is cancelled and its session closed before the files are read.
+
+    The fake turn waits for the reading's decision itself, not for a time, so it fails only if
+    the reading reads its files before the AI's turn is cancelled and its session is closed. On
+    correct code the fake never reaches the gate; the ``stopped`` record is the assertion that
+    bites.
+    """
     _repo(tmp_path)
     _short_limit(monkeypatch, soft=0.3)
+    decided = asyncio.Event()
+    real_timed_out = agent_reading._timed_out
+
+    def timed_out(output, soft_limit):
+        decided.set()
+        return real_timed_out(output, soft_limit)
+
+    monkeypatch.setattr(agent_reading, "_timed_out", timed_out)
 
     async def saves_too_late(live):
-        # Ignores the interrupt, and would save only after the wait has run out.
-        await asyncio.sleep(1.5)
+        # Ignores the interrupt, and would save only once the reading has decided.
+        await decided.wait()
         await _gate(live, CHAT)
         yield _done()
 
@@ -1557,6 +1673,320 @@ def test_nothing_is_saved_after_the_soft_limit_decides(tmp_path, model, monkeypa
     assert fake.stopped == [{"failure": False, "agent": False}]
     assert not (output / "contract.json").exists()
     assert _failure_in(output)["code"] == "agent_reading_timed_out"
+    # Documents the probe: the turn never reached the gate. Not the assertion that bites.
+    assert fake.submissions == 0
+
+
+# -- a tool call still running when the reading decides ------------------------------------------
+
+CHAT2 = {**CHAT, "agent": "billing", "real_use_cases": ["refund"]}
+
+
+def _replace_the_contract(output: Path) -> None:
+    _save(output, CHAT2)
+
+
+def _refuse_the_agent(output: Path) -> None:
+    (output / "contract.json").unlink(missing_ok=True)
+    write_failure_file(
+        HarnessFailure(
+            domain=FailureDomain.AGENT,
+            stage=HarnessStage.UNDERSTANDING_AGENT,
+            code="agent_type_unsupported",
+            message="late refusal",
+            retryable=False,
+        ),
+        output,
+    )
+
+
+@pytest.mark.parametrize("path", ["finished", "soft_limit", "close_hangs"])
+@pytest.mark.parametrize(
+    "late_write", [_replace_the_contract, _refuse_the_agent], ids=["replace", "refuse"]
+)
+def test_a_late_save_after_the_decision_is_cancelled(
+    tmp_path, model, monkeypatch, late_write, path
+):
+    """A tool call the session's close did not stop, run as the SDKs run one: a task of its own.
+
+    Its last wait ends while the reading writes agent.json; what it does then is ``late_write``,
+    a save's own last, synchronous step. The reading cancels it before its next turn.
+    """
+    _repo(tmp_path)
+    soft = path != "finished"
+    if soft:
+        _short_limit(monkeypatch, soft=0.3)
+    output = tmp_path / "reading"
+    release = asyncio.Event()
+    record: dict = {}
+    real_document = agent_reading.document
+
+    def document(*args, **kwargs):
+        code = real_document(*args, **kwargs)
+        release.set()
+        return code
+
+    monkeypatch.setattr(agent_reading, "document", document)
+    # classify() calls the document through its own module.
+    monkeypatch.setattr(reading_result, "document", document)
+
+    async def late():
+        try:
+            await release.wait()
+        except asyncio.CancelledError:
+            record["cancelled"] = True
+            raise
+        late_write(output)
+        record["wrote"] = True
+
+    async def turn(live):
+        _save(live.backend.output, CHAT)
+        record["task"] = asyncio.get_running_loop().create_task(late())
+        if soft:
+            await asyncio.Event().wait()
+        yield _done()
+
+    fake = model(turn)
+    fake.close_hangs = path == "close_hangs"
+
+    assert _run(tmp_path, wait=0.3) == 0
+
+    assert record.get("cancelled") is True
+    assert "wrote" not in record
+    assert json.loads((output / "contract.json").read_text(encoding="utf-8"))["agent"] == "support"
+    assert (output / "agent.json").exists()
+    assert not (output / "failure.json").exists()
+
+
+def test_a_late_save_after_a_cancel_that_escapes_the_turn_is_cancelled(
+    tmp_path, model, monkeypatch
+):
+    """The ending where a cancel escapes the turn after the contract was saved (`_read`'s except
+    branch). The guard in `finally` covers it too."""
+    _repo(tmp_path)
+    output = tmp_path / "reading"
+    release = asyncio.Event()
+    record: dict = {}
+    real_document = agent_reading.document
+
+    def document(*args, **kwargs):
+        code = real_document(*args, **kwargs)
+        release.set()
+        return code
+
+    monkeypatch.setattr(agent_reading, "document", document)
+
+    async def late():
+        try:
+            await release.wait()
+        except asyncio.CancelledError:
+            record["cancelled"] = True
+            raise
+        _save(output, CHAT2)
+        record["wrote"] = True
+
+    async def turn(live):
+        _save(live.backend.output, CHAT)
+        record["task"] = asyncio.get_running_loop().create_task(late())
+        raise asyncio.CancelledError()
+        yield _done()
+
+    model(turn)
+    assert _run(tmp_path) == 0
+    assert record.get("cancelled") is True
+    assert "wrote" not in record
+    assert json.loads((output / "contract.json").read_text(encoding="utf-8"))["agent"] == "support"
+
+
+def test_a_late_save_woken_in_the_deciding_turn_is_cancelled(tmp_path, model):
+    """No hook in the document: the late call's wake-up is queued in the same loop turn as the
+    reading's own, behind it, by a done callback on the conversation's task."""
+    _repo(tmp_path)
+    output = tmp_path / "reading"
+    record: dict = {}
+
+    async def late(gate):
+        try:
+            await gate
+        except asyncio.CancelledError:
+            record["cancelled"] = True
+            raise
+        _save(output, CHAT2)
+        record["wrote"] = True
+
+    async def turn(live):
+        _save(live.backend.output, CHAT)
+        loop = asyncio.get_running_loop()
+        gate = loop.create_future()
+        asyncio.current_task().add_done_callback(lambda _t: gate.done() or gate.set_result(None))
+        record["task"] = loop.create_task(late(gate))
+        yield _done()
+
+    model(turn)
+
+    assert _run(tmp_path, wait=0.3) == 0
+
+    assert "wrote" not in record
+    assert json.loads((output / "contract.json").read_text(encoding="utf-8"))["agent"] == "support"
+
+
+def _reading_spec(tmp_path: Path, job: dict):
+    """The reading's own stage spec, opened as `_reading` opens it, and its output folder."""
+    source = _repo(tmp_path)
+    output = tmp_path / "reading"
+    output.mkdir()
+    harness_job = HarnessJob.model_validate(job)
+    opened = agent_reading.open_stage(
+        agent_reading.resolve_source(
+            "repo", name="agent", root=source, subfolder=harness_job.source.subfolder
+        ),
+        out=output,
+        **reading_settings(harness_job),
+    )[0]
+    return opened.spec, output
+
+
+def _submit_contract(spec):
+    return next(t for t in spec.servers[CONTRACT_SERVER].tools if t.name == "submit_contract")
+
+
+# Saved on its first call: no tools to nudge for, and one hard constraint.
+SCAN_PAYLOAD = {k: v for k, v in CHAT.items() if k != "tools"} | {
+    "hard_constraints": ["Never share another customer's order."]
+}
+
+
+@pytest.mark.parametrize("cancelled", [True, False], ids=["cancelled", "uncancelled"])
+@pytest.mark.parametrize("where", ["scan", "checks", "scan-browser"])
+def test_a_cancelled_contract_save_writes_nothing(tmp_path, monkeypatch, where, cancelled):
+    """The real save, cancelled at each of its waits, writes nothing.
+
+    The refusal path has nothing more to cancel: a refusal needs a second look, which is given
+    only after the scan, and the refusing call reaches its write with no wait after the scan.
+    So the scan is its only wait (``scan-browser``).
+    """
+    subfolder = SCRAPER if where == "scan-browser" else SUPPORT
+    spec, output = _reading_spec(tmp_path, _job(subfolder=subfolder))
+    tool = _submit_contract(spec)
+    entered, release = threading.Event(), threading.Event()
+    held = "_checked_contract" if where == "checks" else "_tools_in_agent_folder"
+    real = getattr(tools, held)
+
+    def holding(*args, **kwargs):
+        entered.set()
+        assert release.wait(10)
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(tools, held, holding)
+    payload = {
+        "scan": SCAN_PAYLOAD,
+        "checks": CHAT,
+        "scan-browser": {**SCAN_PAYLOAD, "modality": "browser"},
+    }[where]
+
+    async def run():
+        if where == "checks":
+            # As the gate sends it: the first, thin call is answered; the second reaches the checks.
+            first = await tool.handler(dict(CHAT))
+            assert not entered.is_set(), first
+        task = asyncio.ensure_future(tool.handler(dict(payload)))
+        assert await asyncio.to_thread(entered.wait, 10)
+        if cancelled:
+            task.cancel()
+        # Before the next wait: a save that swallowed the cancel would hold the loop on it.
+        release.set()
+        (answer,) = await asyncio.gather(task, return_exceptions=True)
+        for _ in range(5):
+            await asyncio.sleep(0)
+        return task, answer
+
+    task, answer = asyncio.run(run())
+
+    if cancelled:
+        assert task.cancelled()
+        assert not (output / "contract.json").exists()
+        assert not (output / "failure.json").exists()
+    elif where == "scan-browser":
+        assert "second-look" in json.dumps(answer)
+        assert not (output / "contract.json").exists()
+        assert not (output / "failure.json").exists()
+    else:
+        assert (output / "contract.json").exists(), answer
+
+
+def test_the_readings_gemini_tools_run_on_its_loop(tmp_path, monkeypatch):
+    """The model calls the real submit_contract; it runs on the reading's own thread and loop.
+
+    So the reading's last cancel reaches it. ADK's tool_thread_pool_config would move it to a
+    thread's own loop, but only in live mode in the locked 2.7.1, which a reading never uses.
+    """
+    from google.adk.models.google_llm import Gemini
+    from google.adk.models.llm_response import LlmResponse
+    from google.adk.runners import Runner
+    from google.genai import types
+
+    from fi.alk.harness.backends.vertex_gemini import VertexGeminiSession
+
+    calls = []
+
+    async def generate(self, llm_request, stream=False):
+        calls.append(llm_request)
+        if len(calls) == 1:
+            assert llm_request.contents[-1].parts[0].text == "Hello"
+            call = types.FunctionCall(
+                name=qualified(CONTRACT_SERVER, "submit_contract"), args=dict(SCAN_PAYLOAD)
+            )
+            yield LlmResponse(
+                content=types.Content(role="model", parts=[types.Part(function_call=call)])
+            )
+        else:
+            yield LlmResponse(content=types.Content(role="model", parts=[types.Part(text="ok")]))
+
+    monkeypatch.setattr(Gemini, "generate_content_async", generate)
+    monkeypatch.setenv("GOOGLE_CLOUD_PROJECT", "test-project")
+    monkeypatch.setenv("GOOGLE_CLOUD_LOCATION", "global")
+    monkeypatch.setenv("GOOGLE_GENAI_USE_VERTEXAI", "TRUE")
+    run_configs = []
+    real_run_async = Runner.run_async
+
+    # A plain def: the session wraps what it returns in aclosing().
+    def run_async(self, *args, **kwargs):
+        run_configs.append(kwargs.get("run_config"))
+        return real_run_async(self, *args, **kwargs)
+
+    monkeypatch.setattr(Runner, "run_async", run_async)
+    where = []
+    real_unwrapped = tools.unwrapped
+
+    # The save's first step; later calls come from its checks, on a worker thread.
+    def unwrapped(payload):
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = None
+        where.append((threading.get_ident(), loop))
+        return real_unwrapped(payload)
+
+    monkeypatch.setattr(tools, "unwrapped", unwrapped)
+    spec, _ = _reading_spec(tmp_path, _job())
+
+    async def run():
+        live = VertexGeminiSession(spec, model="gemini-2.5-flash")
+        await live.start()
+        try:
+            await live.send("Hello")
+            [event async for event in live.replies()]
+        finally:
+            await live.stop()
+        return threading.get_ident(), asyncio.get_running_loop()
+
+    ident, loop = asyncio.run(run())
+
+    assert where, "submit_contract was never called"
+    assert where[0] == (ident, loop)
+    # A second tripwire, for a later ADK that reads it outside live mode.
+    assert run_configs and run_configs[0] is not None
+    assert run_configs[0].tool_thread_pool_config is None
 
 
 def test_a_saved_contract_wins_over_an_error_flag(tmp_path, model):
@@ -2163,3 +2593,48 @@ def test_a_failed_document_write_is_not_retried(tmp_path, model, monkeypatch):
     # No document, and no half-written one left beside it.
     assert _names(output) == {"contract.json", "cost.json", "failure.json"}
     _assert_cost(output, 0.1, True)
+
+
+# -- TH-9491: the canary (plan v5.1 §W7) ---------------------------------------------------------
+
+
+def test_a_password_in_the_prompt_reaches_no_file_the_reading_writes(tmp_path, model):
+    """The prompt is copied from the source as written, so the URL with credentials is real
+    input. Every file under the test folder is then searched; only the source holds it."""
+    url = "https://bot:hunter2@hooks.example/v1?key=sk-1#frag"
+    source = _repo(tmp_path)
+    (source / SUPPORT / "prompt.txt").write_text(
+        f"You take orders.\nPost each one to {url} after.\n", encoding="utf-8"
+    )
+    model(
+        _submits(
+            {
+                **CHAT,
+                "one_liner": f"Takes orders and posts them to {url}",
+                "system_prompt_from": [
+                    {"path": f"{SUPPORT}/prompt.txt", "start_line": 1, "end_line": 2}
+                ],
+                "hard_constraints": [f"Always post to {url}"],
+                "notes": f"The hook is {url}",
+            },
+            cost_usd=0.1,
+        )
+    )
+    output = tmp_path / "reading"
+
+    assert _run(tmp_path, _job(subfolder=SUPPORT)) == 0
+
+    assert {"contract.json", "agent.json"} <= _names(output)
+    contract = json.loads((output / "contract.json").read_text(encoding="utf-8"))
+    assert contract["system_prompt_excerpt"] == (
+        "You take orders.\nPost each one to https://hooks.example/v1 after."
+    )
+    holding = sorted(
+        str(path.relative_to(tmp_path))
+        for path in tmp_path.rglob("*")
+        if path.is_file()
+        and any(
+            secret in path.read_bytes() for secret in (b"hunter2", b"sk-1")
+        )
+    )
+    assert holding == [f"source/{SUPPORT}/prompt.txt"]
