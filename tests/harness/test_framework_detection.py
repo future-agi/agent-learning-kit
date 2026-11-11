@@ -1756,7 +1756,7 @@ def _watch_the_stack(monkeypatch: pytest.MonkeyPatch) -> list[int]:
     def watching(*args: Any, **kwargs: Any) -> Any:
         walk = real_walk(*args, **kwargs)
         for item in walk:
-            # A missing `stack` fails loudly rather than reading nothing (Dileep, #275 P3).
+            # A missing `stack` fails loudly rather than reading nothing.
             stack = walk.gi_frame.f_locals["stack"]
             held.append(sum(_allocated(sys.getsizeof(path)) + 8 for path in stack if isinstance(path, str)))
             yield item

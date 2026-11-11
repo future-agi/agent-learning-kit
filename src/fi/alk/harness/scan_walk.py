@@ -919,12 +919,18 @@ def _source_files(
     Installed trees and the folders a build skips are never entered. ``side`` False gives only
     files outside test, example and other side folders; True gives only the files in them.
     ``charge`` counts each folder kept to enter, at its full path, which is what `os.walk`
-    holds until it enters it. With ``side`` True, the second pass, only folders the first pass
-    never entered are counted: side folders, and folders below one."""
+    holds until it enters it, and each folder's own listing, its subfolder and file names, which
+    `os.walk` holds while the walk is in that folder. With ``side`` True, the second pass, only
+    folders the first pass never entered are counted: side folders, and folders below one."""
     for directory, directories, files in os.walk(start, followlinks=False):
         directories.sort()
         files.sort()
         relative = directory[len(top) :].split(os.sep)[1:]
+        if charge is not None and (
+            side is not True or any(_is_side_part(part) for part in relative)
+        ):
+            # Charged once, in the pass that first reaches the folder, before any is filtered out.
+            charge(sum(_SLOT + _text(name) for name in (*directories, *files)))
         if relative and any(name.endswith(".dist-info") for name in directories):
             # An installed tree, not the customer's code.
             directories[:] = []

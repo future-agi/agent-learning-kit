@@ -2301,7 +2301,7 @@ def test_a_cap_reached_while_joining_ends_as_limit(tmp_path: Path, monkeypatch: 
 
 def test_each_folder_is_charged_once_across_the_two_passes(tmp_path: Path) -> None:
     """The side pass walks the customer's own folders again; only the folders the first pass
-    never entered (side folders, and folders below one) are charged there (Dileep, #273 P3)."""
+    never entered (side folders, and folders below one) are charged there."""
     for index in range(40):
         (tmp_path / f"app{index:02}" / "inner").mkdir(parents=True)
         (tmp_path / "tests" / f"t{index:02}" / "deep").mkdir(parents=True)
@@ -2330,7 +2330,7 @@ def test_each_folder_is_charged_once_across_the_two_passes(tmp_path: Path) -> No
 
 def test_the_estimates_sizes_were_measured_on_the_hosted_kits_python() -> None:
     """The sizes are CPython 3.12's. On 3.14 a tuple's header is larger, so the estimate would be
-    low there (Dileep, #273 P3). This fails when the hosted image's kit venv moves to another
+    low there. This fails when the hosted image's kit venv moves to another
     Python, so the sizes are measured again before the bound is trusted."""
     dockerfile = (Path(__file__).resolve().parents[2] / "Dockerfile.hosted").read_text()
     major, minor = scan_walk._SIZES_MEASURED_ON
@@ -2348,7 +2348,7 @@ def test_a_memory_budget_stop_while_joining_says_so(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
     """A held-budget stop during the join ends at `limit`, with its own cause in the log, not the
-    edge budget's (Dileep, #273 P3)."""
+    edge budget's."""
     _files(tmp_path, {"bot.py": CLIENT})
 
     def reached(self, *, upload: bool):
@@ -2379,7 +2379,7 @@ def test_a_fan_out_join_is_charged_without_its_base(tmp_path: Path, shape: str) 
     entries are dearer still: the first fills that table, then the second's own search grows its
     seen set while the table stays full (about 59.5 bytes a file). What the join really holds is
     covered by the per-file charge alone, without `_JOIN_BASE`, and only with `_JOIN_PER_FILE`
-    at 64: at 56 the two-entry shape fails (Dileep, #273 P3). Leaves that import nothing share
+    at 64: at 56 the two-entry shape fails. Leaves that import nothing share
     CPython's empty tuple, which would hide the per-file cost."""
     per_hub = 199 if shape == "one_entry" else 198
     hubs = {
@@ -2395,3 +2395,14 @@ def test_a_fan_out_join_is_charged_without_its_base(tmp_path: Path, shape: str) 
 
     assert seen["join_rise"] > 1_000_000, seen
     assert seen["join_rise"] <= seen["join_charged"] - scan_walk._JOIN_BASE, seen
+
+
+def test_a_wide_folder_is_charged_its_listing(tmp_path: Path) -> None:
+    """One folder of many empty folders: what `os.walk` holds for the folder it is in, its names,
+    is charged once when the walk reaches it, so the charge is never below the walk's peak."""
+    for index in range(30_000):
+        (tmp_path / f"f{index:05}").mkdir()
+
+    seen = _measure(tmp_path)
+
+    assert seen["walk_peak"] <= seen["charged"], seen

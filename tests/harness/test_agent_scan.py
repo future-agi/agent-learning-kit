@@ -1538,7 +1538,7 @@ def test_the_clock_is_first_read_after_the_sources_own_folder(tmp_path) -> None:
 
 def test_the_clock_is_read_inside_a_huge_folder(tmp_path) -> None:
     """One folder of 5,000 empty folders, past the deadline: the look stops partway through that
-    folder's listing, not after reading all of it (Dileep, #277 P3)."""
+    folder's listing, not after reading all of it."""
     source = tmp_path / "src"
     folders = _empty_folders(source, [f"f{index:05}" for index in range(5_000)])
     whole = _cost(str(source)) + sum(_cost(folder) for folder in folders)
@@ -1552,7 +1552,7 @@ def test_the_clock_is_read_inside_a_huge_folder(tmp_path) -> None:
 
 def test_the_clock_is_read_inside_a_huge_folder_of_links(tmp_path, monkeypatch) -> None:
     """Links are entries too: 5,000 dangling links past the deadline stop at the clock without
-    each being looked at (Dileep named links)."""
+    each being looked at."""
     source = tmp_path / "src"
     source.mkdir()
     for index in range(5_000):
@@ -1573,7 +1573,7 @@ def test_the_clock_is_read_inside_a_huge_folder_of_links(tmp_path, monkeypatch) 
 
 
 def test_the_clock_is_read_inside_a_huge_folder_past_the_bound(tmp_path, monkeypatch) -> None:
-    """Past the bound the read goes on for a regular file; the clock still stops it (Dileep's case)."""
+    """Past the bound the read goes on for a regular file; the clock still stops it."""
     source = tmp_path / "src"
     folders = _empty_folders(source, [f"f{index:05}" for index in range(5_000)])
     monkeypatch.setattr(agent_scan, "_LOOK_HELD", 50 * _cost(folders[0]))
