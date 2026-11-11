@@ -3,11 +3,15 @@ import hmac
 from io import BytesIO
 import json
 import os
+import uuid
 
-from fastapi import UploadFile
+from fastapi import HTTPException, UploadFile
 from fastapi.testclient import TestClient
+from pydantic import Field, ValidationError
 import pytest
 
+from fi.alk.harness import sandbox_server
+from fi.alk.harness.job import HarnessJob
 from fi.alk.harness.sandbox_server import (
     LocalSandbox,
     LocalSandboxRequest,
@@ -21,7 +25,8 @@ from fi.alk.harness.sandbox_server import (
     create_app,
     main,
 )
-from fi.alk.harness.secrets import resolve_worker_secrets
+from fi.alk.harness.secrets import SecretResolutionError, resolve_worker_secrets
+from fi.simulate.runtime.spec import RuntimeIsolation, RuntimeRequirements, SecretRef
 
 _TOKEN = "ALK_SANDBOX_TOKEN"
 _FLAG = "ALK_SANDBOX_ALLOW_UNAUTHENTICATED"
@@ -1200,3 +1205,599 @@ def test_health_needs_no_token_or_flag(tmp_path, monkeypatch):
     client = TestClient(create_app(tmp_path / "state"))
 
     assert client.get("/health").status_code == 200
+class _DedicatedVmJob(HarnessJob):
+    # Hosted jobs require the dedicated_vm runtime, which submit does not set yet. A
+    # subclass rather than a factory, because get() rebuilds jobs with model_validate.
+    runtime: RuntimeRequirements = Field(
+        default_factory=lambda: RuntimeRequirements(
+            isolation=RuntimeIsolation.DEDICATED_VM
+        )
+    )
+
+
+class _AwaitingDedicatedIsolation(Exception):
+    """The route failed only on the runtime isolation hosted jobs still lack."""
+
+
+async def _idle_execute(*_args):
+    return None
+
+
+@pytest.fixture
+def hosted_sandbox(tmp_path, monkeypatch):
+    monkeypatch.setattr(sandbox_server, "HarnessJob", _DedicatedVmJob)
+    return LocalSandbox(
+        tmp_path / "state",
+        upload_root=tmp_path / "uploads",
+        secret_file_root=tmp_path / "secret-files",
+    )
+
+
+@pytest.fixture
+def launched_workers(monkeypatch):
+    launched = []
+
+    class Worker:
+        async def wait(self):
+            return 0
+
+    async def fake_worker(*args, **kwargs):
+        launched.append(kwargs["env"])
+        return Worker()
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_worker)
+    return launched
+
+
+def _ref(manager, key):
+    return SecretRef(manager=manager, key=key, purpose="target_provider")
+
+
+def _job_key(job_id, index):
+    return f"ALK_JOB_{job_id.replace('-', '').upper()}_{index}"
+
+
+def _with_refs(job, refs):
+    return job.model_copy(
+        update={"agent": job.agent.model_copy(update={"secret_refs": refs})}
+    )
+
+
+async def _upload_archive(sandbox):
+    uploaded = await sandbox.upload_source(
+        [UploadFile(filename="agent.py", file=BytesIO(b"print('ready')\n"))],
+        ["agent.py"],
+        "customer-agent",
+    )
+    return uploaded.source_id
+
+
+async def _upload_credential(sandbox, name, body=b"credential-body"):
+    uploaded = await sandbox.upload_secret_file(
+        UploadFile(filename="credential", file=BytesIO(body)), name
+    )
+    return uploaded.secret_ref.key
+
+
+async def _parked_submit(sandbox, **fields):
+    # Parking _execute keeps the job's directory, state and in-memory values live, so a
+    # test can run the real _execute or resolver on a job it crafts afterwards.
+    sandbox._execute = _idle_execute
+    try:
+        response = sandbox.submit(LocalSandboxRequest(**fields))
+        await sandbox._tasks.pop(response.job.job_id)
+    finally:
+        del sandbox._execute
+    return response.job
+
+
+async def _terminal_job(sandbox, **fields):
+    job = await _parked_submit(sandbox, **fields)
+    run_root = sandbox.artifacts_root / job.run_id
+    (run_root / "environment-bundle").mkdir(parents=True)
+    for path in (
+        run_root / "contract.json",
+        run_root / "scenarios.json",
+        run_root / "environment-bundle" / "manifest.json",
+        run_root / "platform.json",
+    ):
+        path.write_text("{}", encoding="utf-8")
+    state_path = sandbox.jobs_root / job.job_id / "state.json"
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    state["stage"] = "completed"
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+    sandbox._execute_rerun = _idle_execute
+    return job
+
+
+def _assert_nothing_left(sandbox):
+    assert list(sandbox.jobs_root.iterdir()) == []
+    assert list((sandbox.secret_files_root / "jobs").iterdir()) == []
+
+
+def _assert_failed_before_launch(sandbox, job_id, launched, message):
+    state = json.loads((sandbox.jobs_root / job_id / "state.json").read_text())
+    assert state["stage"] == "failed"
+    assert state["failure"]["code"] == "SecretResolutionError"
+    assert state["failure"]["message"] == message
+    assert launched == []
+
+
+@pytest.mark.parametrize(
+    ("manager", "key_kind"),
+    [
+        ("platform-vault", "job"),
+        ("mounted", "job"),
+        ("platform-vault", "upload"),
+        ("environment", "upload"),
+        ("Mounted", "upload"),
+        ("other", "upload"),
+    ],
+)
+def test_hosted_submit_refuses_incoming_sandbox_prefixed_refs(
+    hosted_sandbox, manager, key_kind
+):
+    sandbox = hosted_sandbox
+    sandbox._execute = _idle_execute
+
+    async def submit():
+        source_id = await _upload_archive(sandbox)
+        upload = await _upload_credential(sandbox, "GOOD")
+        key = upload if key_kind == "upload" else _job_key(str(uuid.uuid4()), 0)
+        with pytest.raises(HTTPException) as refused:
+            sandbox.submit(
+                LocalSandboxRequest(
+                    source_id=source_id, secret_refs={"X": _ref(manager, key)}
+                )
+            )
+        return refused.value
+
+    refused = asyncio.run(submit())
+
+    assert refused.status_code == 400
+    assert refused.detail == "sandbox_secret_reference_refused: X"
+    _assert_nothing_left(sandbox)
+
+
+@pytest.mark.parametrize(
+    "manager",
+    [
+        "environment",
+        "futureagi",
+        "platform-vault",
+        "platform-config",
+        "Mounted",
+        "other",
+    ],
+)
+def test_local_submit_refuses_a_second_alias_for_an_upload(tmp_path, manager):
+    sandbox = LocalSandbox(
+        tmp_path / "state",
+        upload_root=tmp_path / "uploads",
+        secret_file_root=tmp_path / "secret-files",
+    )
+    sandbox._execute = _idle_execute
+
+    async def submit():
+        upload = await _upload_credential(sandbox, "GOOD")
+        with pytest.raises(HTTPException) as refused:
+            sandbox.submit(
+                LocalSandboxRequest(
+                    provider_only=True,
+                    connector="livekit",
+                    connector_mode="connect_only",
+                    connector_config={
+                        "agent_name": "returns-agent",
+                        "target_system_prompt": "You handle returns.",
+                    },
+                    secret_refs={
+                        "GOOD": _ref("mounted", upload),
+                        "PYTHONPATH": _ref(manager, upload),
+                    },
+                )
+            )
+        return refused.value
+
+    refused = asyncio.run(submit())
+
+    assert refused.status_code == 400
+    assert refused.detail == "sandbox_secret_reference_refused: PYTHONPATH"
+    _assert_nothing_left(sandbox)
+
+
+@pytest.mark.parametrize("source_kind", ["archive", "github"])
+def test_hosted_submit_names_its_own_values_platform_vault(hosted_sandbox, source_kind):
+    sandbox = hosted_sandbox
+    platform_ref = _ref("platform-vault", "harness-organization-secret")
+
+    async def submit():
+        upload = await _upload_credential(sandbox, "GOOD", b"credential-never-persist")
+        source = (
+            {"source_id": await _upload_archive(sandbox)}
+            if source_kind == "archive"
+            else {"github_repository": "acme/agent", "github_commit_sha": "a" * 40}
+        )
+        job = await _parked_submit(
+            sandbox,
+            **source,
+            environment_values={"OPENAI_API_KEY": "value-never-persist"},
+            secret_refs={"GOOD": _ref("mounted", upload), "PLATFORM": platform_ref},
+        )
+        return job, upload
+
+    job, upload = asyncio.run(submit())
+    claimed_path = str(sandbox.secret_files_root / "jobs" / job.job_id / "GOOD")
+    directory = sandbox.jobs_root / job.job_id
+    persisted = (directory / "job.json").read_text() + (
+        directory / "state.json"
+    ).read_text()
+
+    assert job.execution.value == "hosted"
+    assert job.agent.secret_refs == {
+        "PLATFORM": platform_ref,
+        "OPENAI_API_KEY": _ref("platform-vault", _job_key(job.job_id, 0)),
+        "GOOD": _ref("platform-vault", upload),
+    }
+    assert job.metadata["environment_value_names"] == ["GOOD", "OPENAI_API_KEY"]
+    assert sandbox._ephemeral_secrets[job.job_id] == {
+        _job_key(job.job_id, 0): "value-never-persist",
+        upload: claimed_path,
+    }
+    assert "value-never-persist" not in persisted
+    assert "credential-never-persist" not in persisted
+    assert claimed_path not in persisted
+
+
+def test_hosted_submit_still_refuses_a_mounted_server_key(hosted_sandbox):
+    sandbox = hosted_sandbox
+    sandbox._execute = _idle_execute
+
+    async def submit():
+        source_id = await _upload_archive(sandbox)
+        upload = await _upload_credential(sandbox, "GOOD")
+        with pytest.raises(
+            ValidationError, match="hosted_secret_manager_unsupported: AGENTCC_API_KEY"
+        ):
+            sandbox.submit(
+                LocalSandboxRequest(
+                    source_id=source_id,
+                    environment_values={"OPENAI_API_KEY": "value"},
+                    secret_refs={
+                        "GOOD": _ref("mounted", upload),
+                        "AGENTCC_API_KEY": _ref("mounted", "AGENTCC_API_KEY"),
+                    },
+                )
+            )
+
+    asyncio.run(submit())
+
+    _assert_nothing_left(sandbox)
+
+
+def test_hosted_submit_refuses_a_vault_alias_for_another_aliases_upload(
+    hosted_sandbox,
+):
+    sandbox = hosted_sandbox
+    sandbox._execute = _idle_execute
+
+    async def submit():
+        source_id = await _upload_archive(sandbox)
+        upload = await _upload_credential(sandbox, "GOOD")
+        with pytest.raises(HTTPException) as refused:
+            sandbox.submit(
+                LocalSandboxRequest(
+                    source_id=source_id,
+                    secret_refs={
+                        "GOOD": _ref("mounted", upload),
+                        "PYTHONPATH": _ref("platform-vault", upload),
+                    },
+                )
+            )
+        return upload, refused.value
+
+    upload, refused = asyncio.run(submit())
+    pending = str(uuid.UUID(hex=upload.removeprefix("ALK_SECRET_FILE_")[:32].lower()))
+
+    assert refused.status_code == 400
+    assert refused.detail == "sandbox_secret_reference_refused: PYTHONPATH"
+    _assert_nothing_left(sandbox)
+    # The refusal precedes the claim, so the upload was never consumed.
+    assert (sandbox.secret_files_root / "pending" / pending).is_file()
+
+
+def test_hosted_execute_resolves_its_own_values(hosted_sandbox, launched_workers):
+    sandbox = hosted_sandbox
+
+    async def submit():
+        source_id = await _upload_archive(sandbox)
+        upload = await _upload_credential(sandbox, "GOOD")
+        response = sandbox.submit(
+            LocalSandboxRequest(
+                source_id=source_id,
+                environment_values={"OPENAI_API_KEY": "own-value"},
+                secret_refs={"GOOD": _ref("mounted", upload)},
+            )
+        )
+        await sandbox._tasks[response.job.job_id]
+        return response.job
+
+    job = asyncio.run(submit())
+    state = json.loads((sandbox.jobs_root / job.job_id / "state.json").read_text())
+
+    assert state["stage"] == "completed", state.get("detail")
+    assert len(launched_workers) == 1
+    assert launched_workers[0]["ALK_RUNTIME_VALUE_OPENAI_API_KEY"] == "own-value"
+    assert launched_workers[0]["ALK_RUNTIME_VALUE_GOOD"] == str(
+        sandbox.secret_files_root / "jobs" / job.job_id / "GOOD"
+    )
+
+
+def test_hosted_execute_never_reads_a_vault_key_from_the_environment(
+    hosted_sandbox, launched_workers, monkeypatch
+):
+    sandbox = hosted_sandbox
+
+    async def execute():
+        source_id = await _upload_archive(sandbox)
+        job = await _parked_submit(sandbox, source_id=source_id)
+        # This job's own key shape, set only in the environment.
+        key = _job_key(job.job_id, 9)
+        monkeypatch.setenv(key, "server-environment-value")
+        await sandbox._execute(
+            _with_refs(job, {"X": _ref("platform-vault", key)}),
+            sandbox.uploads_root / source_id,
+        )
+        return job
+
+    job = asyncio.run(execute())
+
+    _assert_failed_before_launch(
+        sandbox, job.job_id, launched_workers, "secret_reference_unavailable: X"
+    )
+
+
+@pytest.mark.parametrize(
+    ("key_kind", "message"),
+    [
+        ("upload", "secret_reference_unavailable: X"),
+        ("job", "sandbox_vault_reference_unknown: X"),
+    ],
+)
+def test_hosted_execute_never_reads_another_jobs_values(
+    hosted_sandbox, launched_workers, key_kind, message
+):
+    sandbox = hosted_sandbox
+
+    async def execute():
+        source_id = await _upload_archive(sandbox)
+        upload = await _upload_credential(sandbox, "GOOD")
+        # The other job stays parked, so its values and claimed file are live throughout.
+        other = await _parked_submit(
+            sandbox,
+            source_id=source_id,
+            environment_values={"OPENAI_API_KEY": "other-job-value"},
+            secret_refs={"GOOD": _ref("mounted", upload)},
+        )
+        job = await _parked_submit(sandbox, source_id=source_id)
+        key = upload if key_kind == "upload" else _job_key(other.job_id, 0)
+        await sandbox._execute(
+            _with_refs(job, {"X": _ref("platform-vault", key)}),
+            sandbox.uploads_root / source_id,
+        )
+        return job, other
+
+    job, other = asyncio.run(execute())
+
+    _assert_failed_before_launch(sandbox, job.job_id, launched_workers, message)
+    assert other.job_id in sandbox._ephemeral_secrets
+
+
+@pytest.mark.parametrize("key_kind", ["server_token", "foreign_job", "platform"])
+def test_resolver_refuses_vault_keys_it_did_not_mint_for_this_job(
+    hosted_sandbox, monkeypatch, key_kind
+):
+    sandbox = hosted_sandbox
+    monkeypatch.setenv("ALK_SANDBOX_TOKEN", "server-token-value")
+
+    async def submit():
+        return await _parked_submit(
+            sandbox,
+            source_id=await _upload_archive(sandbox),
+            environment_values={"OPENAI_API_KEY": "own-value"},
+        )
+
+    job = asyncio.run(submit())
+    foreign = _job_key(str(uuid.uuid4()), 0)
+    # Seeded into this job's own map, so only the job-id check can refuse it.
+    sandbox._ephemeral_secrets[job.job_id][foreign] = "foreign-value"
+    key = {
+        "server_token": "ALK_SANDBOX_TOKEN",
+        "foreign_job": foreign,
+        "platform": "harness-organization-secret",
+    }[key_kind]
+
+    with pytest.raises(SecretResolutionError) as refused:
+        sandbox._resolve_job_secrets(
+            _with_refs(job, {"X": _ref("platform-vault", key)})
+        )
+
+    assert str(refused.value) == "sandbox_vault_reference_unknown: X"
+
+
+def test_resolver_returns_own_values_and_treats_empty_as_missing(hosted_sandbox):
+    sandbox = hosted_sandbox
+
+    async def submit():
+        return await _parked_submit(
+            sandbox,
+            source_id=await _upload_archive(sandbox),
+            environment_values={"OPENAI_API_KEY": "own-value"},
+        )
+
+    job = asyncio.run(submit())
+
+    assert sandbox._resolve_job_secrets(job) == {"OPENAI_API_KEY": "own-value"}
+    sandbox._ephemeral_secrets[job.job_id][_job_key(job.job_id, 0)] = ""
+    with pytest.raises(SecretResolutionError) as refused:
+        sandbox._resolve_job_secrets(job)
+    assert str(refused.value) == "secret_reference_unavailable: OPENAI_API_KEY"
+
+
+def test_resolver_keeps_local_mounted_and_environment_refs(tmp_path, monkeypatch):
+    source = tmp_path / "sources" / "agent"
+    source.mkdir(parents=True)
+    monkeypatch.setenv("ALK_SANDBOX_SOURCE_ROOTS", str(tmp_path / "sources"))
+    monkeypatch.setenv("SANDBOX_TEST_SHELL_VALUE", "shell-value")
+    sandbox = LocalSandbox(
+        tmp_path / "state",
+        upload_root=tmp_path / "uploads",
+        secret_file_root=tmp_path / "secret-files",
+    )
+
+    async def submit():
+        return await _parked_submit(
+            sandbox,
+            source_path=str(source),
+            environment_values={"OPENAI_API_KEY": "local-value"},
+            secret_refs={"SHELL": _ref("environment", "SANDBOX_TEST_SHELL_VALUE")},
+        )
+
+    job = asyncio.run(submit())
+    expected = resolve_worker_secrets(
+        job.agent.secret_refs,
+        environment={**os.environ, **sandbox._ephemeral_secrets[job.job_id]},
+    )
+
+    assert job.execution.value == "local"
+    assert job.agent.secret_refs["OPENAI_API_KEY"].manager == "mounted"
+    assert sandbox._resolve_job_secrets(job) == expected
+    assert expected == {"OPENAI_API_KEY": "local-value", "SHELL": "shell-value"}
+
+
+def test_hosted_rerun_resolves_a_claimed_file_from_its_claim(hosted_sandbox):
+    sandbox = hosted_sandbox
+
+    async def rerun():
+        job = await _terminal_job(sandbox, source_id=await _upload_archive(sandbox))
+        upload = await _upload_credential(sandbox, "GOOD")
+        sandbox.rerun(
+            job.job_id,
+            SandboxRerunRequest(
+                secret_refs={"GOOD": _ref("mounted", upload)},
+                environment_values={"OPENAI_API_KEY": "fresh-value"},
+            ),
+        )
+        await sandbox._tasks.pop(job.job_id)
+        return job
+
+    job = asyncio.run(rerun())
+
+    assert sandbox._ephemeral_secrets[job.job_id] == {
+        "OPENAI_API_KEY": "fresh-value",
+        "GOOD": str(sandbox.secret_files_root / "jobs" / job.job_id / "GOOD"),
+    }
+
+
+@pytest.mark.parametrize(
+    ("manager", "key_kind"),
+    [
+        ("mounted", "server"),
+        ("environment", "server"),
+        ("futureagi", "server"),
+        ("platform-vault", "job"),
+        ("environment", "upload"),
+    ],
+)
+def test_hosted_rerun_refuses_refs_other_than_its_claimed_files(
+    hosted_sandbox, monkeypatch, manager, key_kind
+):
+    sandbox = hosted_sandbox
+    monkeypatch.setenv("AGENTCC_API_KEY", "server-credential-value")
+
+    async def rerun():
+        job = await _terminal_job(sandbox, source_id=await _upload_archive(sandbox))
+        upload = await _upload_credential(sandbox, "GOOD")
+        key = {
+            "server": "AGENTCC_API_KEY",
+            "job": _job_key(job.job_id, 0),
+            "upload": upload,
+        }[key_kind]
+        state_before = (sandbox.jobs_root / job.job_id / "state.json").read_text()
+        with pytest.raises(HTTPException) as refused:
+            sandbox.rerun(
+                job.job_id,
+                SandboxRerunRequest(
+                    secret_refs={
+                        "GOOD": _ref("mounted", upload),
+                        "X": _ref(manager, key),
+                    }
+                ),
+            )
+        return job, state_before, refused.value
+
+    job, state_before, refused = asyncio.run(rerun())
+
+    assert refused.status_code == 400
+    assert refused.detail == "sandbox_rerun_secret_refused: X"
+    assert job.job_id not in sandbox._ephemeral_secrets
+    assert job.job_id not in sandbox._tasks
+    assert not (sandbox.secret_files_root / "jobs" / job.job_id).exists()
+    assert (sandbox.jobs_root / job.job_id / "state.json").read_text() == state_before
+
+
+def test_local_rerun_still_resolves_a_mounted_server_side_ref(tmp_path, monkeypatch):
+    source = tmp_path / "sources" / "agent"
+    source.mkdir(parents=True)
+    monkeypatch.setenv("ALK_SANDBOX_SOURCE_ROOTS", str(tmp_path / "sources"))
+    monkeypatch.setenv("SANDBOX_TEST_SHELL_VALUE", "shell-value")
+    sandbox = LocalSandbox(
+        tmp_path / "state",
+        upload_root=tmp_path / "uploads",
+        secret_file_root=tmp_path / "secret-files",
+    )
+
+    async def rerun():
+        job = await _terminal_job(sandbox, source_path=str(source))
+        sandbox.rerun(
+            job.job_id,
+            SandboxRerunRequest(
+                secret_refs={"X": _ref("mounted", "SANDBOX_TEST_SHELL_VALUE")}
+            ),
+        )
+        await sandbox._tasks.pop(job.job_id)
+        return job
+
+    job = asyncio.run(rerun())
+
+    assert sandbox._ephemeral_secrets[job.job_id] == {"X": "shell-value"}
+
+
+@pytest.mark.xfail(
+    strict=True,
+    raises=_AwaitingDedicatedIsolation,
+    reason="submit does not yet give hosted jobs the dedicated_vm runtime",
+)
+def test_hosted_github_route_accepts_a_submitted_value(tmp_path, monkeypatch):
+    monkeypatch.delenv("ALK_SANDBOX_TOKEN", raising=False)
+    monkeypatch.setattr(LocalSandbox, "_execute", _idle_execute)
+    client = TestClient(create_app(tmp_path / "state"))
+
+    try:
+        response = client.post(
+            "/v1/jobs",
+            json={
+                "github_repository": "acme/agent",
+                "github_commit_sha": "a" * 40,
+                "environment_values": {"OPENAI_API_KEY": "route-value"},
+            },
+        )
+    except ValidationError as exc:
+        if "hosted_isolation_must_be_dedicated_vm" in str(exc):
+            raise _AwaitingDedicatedIsolation from exc
+        raise
+
+    assert response.status_code == 200
+    job = response.json()["job"]
+    assert job["execution"] == "hosted"
+    assert job["agent"]["secret_refs"]["OPENAI_API_KEY"]["manager"] == "platform-vault"
+    assert "route-value" not in response.text
