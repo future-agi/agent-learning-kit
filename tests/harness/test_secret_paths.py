@@ -55,6 +55,17 @@ TABLE: tuple[tuple[str, str], ...] = (
     ("**/*credential*.yaml", "credentials.yaml"),
     ("**/*credential*.yml", "config/credentials.yml"),
     ("**/*credential*.toml", "app-credentials.toml"),
+    ("**/*secret*.ini", "config/secrets.ini"),
+    ("**/*secret*.cfg", "secrets.cfg"),
+    ("**/*secret*.conf", "etc/app-secrets.conf"),
+    ("**/*secret*.properties", "secrets.properties"),
+    ("**/*secret*.xml", "secrets.xml"),
+    ("**/*credential*.ini", "credentials.ini"),
+    ("**/*credential*.cfg", "conf/credentials.cfg"),
+    ("**/*credential*.conf", "credentials.conf"),
+    ("**/*credential*.properties", "src/main/resources/credentials.properties"),
+    ("**/*credential*.xml", "jenkins/credentials.xml"),
+    ("**/*firebase-adminsdk*.json", "app/myproj-firebase-adminsdk-ab12c-0123456789.json"),
     ("**/*.pem", "certs/server.pem"),
     ("**/*.key", "certs/server.key"),
     ("**/*.p12", "certs/a.p12"),
@@ -114,6 +125,7 @@ NEAR_MISSES = (
     "infra/terraform.tfstate.d/default.backup", "agent.py",
     "src/env.mjs", "next-env.d.ts", "vite-env.d.ts", "env.example", "dotenv.py",
     "secret_manager.py", "credentials_helper.go", "secrets.yaml.example", "visa.json", "sa.json",
+    "secrets.py", "secrets.sh", "firebase.json", "id_ed25519.pub", "secrets.ini.example",
 )  # fmt: skip
 
 
@@ -122,7 +134,8 @@ NEAR_MISSES = (
 # scan starts or stops hiding fails the end-to-end test.
 SCAN_ONLY = (
     "id_rsa.pub", "secrets/app.json", "credentials/README.json", "secret_manager.py",
-    "credentials_helper.go", "secrets.yaml.example",
+    "credentials_helper.go", "secrets.yaml.example", "secrets.py", "secrets.sh", "id_ed25519.pub",
+    "secrets.ini.example",
 )  # fmt: skip
 
 

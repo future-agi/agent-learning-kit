@@ -542,6 +542,28 @@ def _names_a_model(line: str) -> bool:
     return bool(words & _MODEL_WORDS) or ("ENGINE" in words and bool(words & _ENGINE_PROVIDERS))
 
 
+_ENV_DEFAULT = re.compile(r"\$\{[A-Za-z_][A-Za-z0-9_]*:?-([^{}$]*)\}")
+
+
+def _env_value(line: str) -> str | None:
+    """The value a `.env` line gives its setting: quoted, or up to the first space, `;` or `,`.
+    None when the line sets nothing."""
+    found = _ENV_SETTING.match(line)
+    if found is None:
+        return None
+    rest = line[found.end():].lstrip()
+    if rest[:1] in ("'", '"'):
+        end = rest.find(rest[0], 1)
+        if end < 0:
+            return None
+        value = rest[1:end]
+    else:
+        value = re.split(r"[\s;,]", rest, maxsplit=1)[0]
+    # Compose's default, ${MODEL:-gpt-4o}: the default is what the setting holds when unset.
+    default = _ENV_DEFAULT.fullmatch(value)
+    return default.group(1) if default else value
+
+
 def model_problems(contract: AgentContract, source_root: Path) -> list[str]:
     """Problems with contract.model, checked against the cited line. On success, strips name and
     provider and stores path as the resolved file relative to the root, in POSIX form. Resolves
@@ -618,10 +640,15 @@ def model_problems(contract: AgentContract, source_root: Path) -> list[str]:
         if env_file:
             return [f"model: line {model.line} is outside {shown_path}"]
         return [f"model: line {model.line} is outside {shown_path}, which has {len(lines)} lines"]
-    if env_file and not _names_a_model(lines[model.line - 1]):
+    # In a .env file the name must be the value of the one setting that names the model, so a
+    # guess is never checked against another setting on the same line.
+    if env_file and (
+        not _names_a_model(lines[model.line - 1]) or _env_value(lines[model.line - 1]) != name
+    ):
         return [
             f"model: in a .env file, cite the line whose setting names the model (such as "
-            f"OPENAI_MODEL); {shown_path} line {model.line} sets another setting"
+            f"OPENAI_MODEL), with the name as its value; {shown_path} line {model.line} sets "
+            "another setting or another value"
         ]
     suffix = kind_suffix(resolved)
     dashes, ini = suffix in _DASH_COMMENT_SUFFIXES, suffix in _INI_SUFFIXES

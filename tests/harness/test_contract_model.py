@@ -83,7 +83,8 @@ def not_named(name: str, line: int, path: str) -> str:
 def not_a_model_line(path: str, line: int) -> str:
     return (
         f"model: in a .env file, cite the line whose setting names the model (such as "
-        f"OPENAI_MODEL); {path} line {line} sets another setting"
+        f"OPENAI_MODEL), with the name as its value; {path} line {line} sets another setting "
+        "or another value"
     )
 
 
@@ -3147,8 +3148,9 @@ def test_a_pipe_is_logged_as_not_a_regular_file(tmp_path, caplog):
         pytest.param("run.zsh", "echo a#b; MODEL=gpt-4o", "gpt-4o", id="zsh-hash-in-a-word"),
         pytest.param("rules.mk", "\techo a#b; MODEL=gpt-4o", "gpt-4o", id="mk-hash-in-a-word"),
         pytest.param("app.dockerfile", "ENV A=a#b MODEL=gpt-4o", "gpt-4o", id="dockerfile-suffix-hash-in-a-word"),
-        # prod.env is a .env file, so its line must set a model (since TH-9042's second round).
-        pytest.param("prod.env", "MODEL_NOTE=a#b MODEL=gpt-4o", "gpt-4o", id="env-suffix-hash-in-a-word"),
+        # prod.env is a .env file, so the name must be its line's own model setting's value (since
+        # TH-9042's second round).
+        pytest.param("prod.env", "MODEL=gpt-4o # see a#b", "gpt-4o", id="env-suffix-hash-in-a-word"),
         pytest.param("agent.mts", 'class A { #model = "gpt-4o"; }', "gpt-4o", id="mts-private-field"),
         pytest.param("agent.cts", 'this.#model = "gpt-4o";', "gpt-4o", id="cts-private-field"),
         pytest.param("agent.sc", 'val t: A#B = x; val model = "gpt-4o"', "gpt-4o", id="scala-script-type-projection"),
@@ -3178,7 +3180,6 @@ def test_more_honest_lines_after_the_settled_round(root, file, written, name):
         pytest.param("agent.json", '"model": "gpt-4o", // "gpt-4-turbo" is slower', "gpt-4-turbo", id="json-comment-after-a-value"),
         pytest.param("agent.json", '* "model": "gpt-4",', "gpt-4", id="json-block-comment-middle-line"),
         pytest.param("dockerfile_gen.py", 'MODEL = DEFAULT#"gpt-4"', "gpt-4", id="python-named-like-a-dockerfile"),
-        pytest.param(".env_loader.py", 'MODEL = DEFAULT#"gpt-4"', "gpt-4", id="python-named-like-an-env-file"),
         pytest.param("cfg.yaml", "note: the cart's total # model: 'gpt-4'", "gpt-4", id="a-word-ending-like-a-prefix"),
         pytest.param("cfg.yaml", "note: it_t's ok # model: 'gpt-4'", "gpt-4", id="an-underscore-before-a-prefix"),
         pytest.param("env.rb", "MODEL = gpt-4o", "gpt-4o", id="env-rb-is-code"),
@@ -3570,6 +3571,10 @@ def test_a_source_under_a_listed_folder_still_cites_its_model(tmp_path, monkeypa
         pytest.param("LLM=gpt-4o", "gpt-4o", id="llm"),
         pytest.param("DEFAULT_LLM=gpt-4o", "gpt-4o", id="default-llm"),
         pytest.param("export LLM_MODEL=gpt-4o", "gpt-4o", id="exported"),
+        pytest.param('OPENAI_MODEL="gpt-4o"', "gpt-4o", id="double-quoted"),
+        pytest.param("export OPENAI_MODEL='gpt-4o'  # pinned", "gpt-4o", id="single-quoted-exported"),
+        pytest.param("OPENAI_MODEL=gpt-4o # the default", "gpt-4o", id="comment-after"),
+        pytest.param('OPENAI_MODEL="${OPENAI_MODEL:-gpt-4o}"', "gpt-4o", id="quoted-compose-default"),
     ],
 )
 def test_a_env_setting_named_for_a_model_by_any_of_its_words_is_accepted(root, written, name):
@@ -3611,6 +3616,16 @@ def test_every_kind_of_env_file_takes_the_same_rule(root, file):
         ),
         pytest.param(".env", "DB_ENGINE=postgresql", "postgresql", id="database-engine"),
         pytest.param("prod.env", "URL=http://x/#a MODEL=gpt-4o", "gpt-4o", id="env-suffix-url-first"),
+        pytest.param(".env", "OPENAI_MODEL=gpt-4o OPENAI_API_KEY=sk-fakeguess1", "sk-fakeguess1", id="second-setting"),
+        pytest.param(".env", "OPENAI_MODEL=gpt-4o;OPENAI_API_KEY=sk-fakeguess1", "sk-fakeguess1", id="second-setting-semicolon"),
+        pytest.param(".env", 'OPENAI_MODEL="gpt-4o" DB_PASSWORD="fakeguess1"', "fakeguess1", id="second-setting-quoted"),
+        pytest.param(".envrc", "export LLM_MODEL=gpt-4o; export DB_PASSWORD=fakeguess1", "fakeguess1", id="envrc-second-export"),
+        pytest.param("prod.env", "MODEL_NOTE=a#b OPENAI_API_KEY=sk-fakeguess1", "sk-fakeguess1", id="hash-then-key"),
+        pytest.param(".env", 'LLM_CONFIG={"model":"gpt-4o","api_key":"sk-fakeguess1"}', "sk-fakeguess1", id="json-value"),
+        pytest.param(".env.yaml", "model: {name: gpt-4o, api_key: sk-fakeguess1}", "sk-fakeguess1", id="flow-mapping"),
+        pytest.param(".env", "MODEL_NOTE=a#b MODEL=gpt-4o", "gpt-4o", id="model-as-a-second-setting"),
+        # Named like a .env file, so it takes the .env rule (since TH-9042's second round).
+        pytest.param(".env_loader.py", 'MODEL = DEFAULT#"gpt-4"', "gpt-4", id="python-named-like-an-env-file"),
         pytest.param(".env.yaml", "DB_PASSWORD: MODELfake123", "MODELfake123", id="colon-setting"),
         pytest.param(".env", "MODELfake123", "MODELfake123", id="no-setting"),
     ],
