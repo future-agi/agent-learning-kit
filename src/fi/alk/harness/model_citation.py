@@ -517,12 +517,21 @@ def _reads_as_a_setting(name: str) -> bool:
     return "." in name and not has_digit
 
 
-def _env_key(line: str) -> str:
-    """The setting a `.env` line sets: what comes before its first `=`, without `export`."""
-    key = line.split("=", 1)[0].strip()
-    if key.startswith("export ") or key.startswith("export\t"):
-        key = key[len("export") :].strip()
-    return key
+_ENV_SETTING = re.compile(r"\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_.-]*)\s*[=:]")
+# A setting that names a model, by its words, and one that holds a secret even so.
+_MODEL_WORDS = frozenset({"MODEL", "DEPLOYMENT", "ENGINE", "LLM"})
+_SECRET_WORDS = frozenset({"KEY", "TOKEN", "SECRET", "PASSWORD", "PASS", "PWD", "AUTH", "CREDENTIAL", "CREDENTIALS"})
+
+
+def _names_a_model(line: str) -> bool:
+    """Whether a `.env` line sets a model: a setting whose words include MODEL, DEPLOYMENT, ENGINE
+    or LLM (OPENAI_MODEL, AZURE_OPENAI_DEPLOYMENT, LLM) and none that marks a secret (MODEL_API_KEY).
+    A line that sets nothing (no `=` or `:` after a name) doesn't."""
+    found = _ENV_SETTING.match(line)
+    if found is None:
+        return False
+    words = set(re.split(r"[_.-]+", found.group(1).upper()))
+    return bool(words & _MODEL_WORDS) and not words & _SECRET_WORDS
 
 
 def model_problems(contract: AgentContract, source_root: Path) -> list[str]:
@@ -601,7 +610,7 @@ def model_problems(contract: AgentContract, source_root: Path) -> list[str]:
         if env_file:
             return [f"model: line {model.line} is outside {shown_path}"]
         return [f"model: line {model.line} is outside {shown_path}, which has {len(lines)} lines"]
-    if env_file and "MODEL" not in _env_key(lines[model.line - 1]).upper():
+    if env_file and not _names_a_model(lines[model.line - 1]):
         return [
             f"model: in a .env file, cite the line whose setting names the model (such as "
             f"OPENAI_MODEL); {shown_path} line {model.line} sets another setting"

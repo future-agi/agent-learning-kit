@@ -2117,11 +2117,13 @@ def _copy(tmp_path: Path, root: Path, path: str, start: int = 1, end: int = 1) -
     )
 
 
-def test_a_prompt_named_in_a_credential_file_is_refused_and_never_copied(tmp_path, repo):
-    (repo / ".pgpass").write_text("db:5432:app:admin:fake-pass-123\n")
+@pytest.mark.parametrize("name", [".pgpass", ".env"])
+def test_a_prompt_named_in_a_credential_file_is_refused_and_never_copied(tmp_path, repo, name):
+    # A .env file too: only a model citation may name one, never the prompt copy.
+    (repo / name).write_text("db:5432:app:admin:fake-pass-123\n")
 
     for start, end in ((1, 1), (1, 40)):
-        result = _copy(tmp_path, repo, ".pgpass", start, end)
+        result = _copy(tmp_path, repo, name, start, end)
         text = result["content"][0]["text"]
         assert result.get("is_error") and _KEPT_OUT in text, result
         assert "fake-pass-123" not in text and "which has" not in text

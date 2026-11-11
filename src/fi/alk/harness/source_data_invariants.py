@@ -18,6 +18,7 @@ from pathlib import Path, PurePosixPath
 from urllib.parse import urlsplit
 
 from .backends import SessionSpec, tool, tool_server
+from .backends.files import secret_text
 from .config import chosen_model
 from .contract import AgentContract, is_data_free_conversation
 from .session import Stage
@@ -43,6 +44,8 @@ def source_files(root: Path, folder: str = "") -> dict[str, Path]:
             for part in path.relative_to(root).parts
         )
         and path.resolve().is_relative_to(root)
+        # A link named like code can lead to a credential file; judged where it resolves (TH-9042).
+        and not secret_text(path.resolve().relative_to(root).as_posix())
         and (
             scope is None
             or in_agent_scope(PurePosixPath(path.relative_to(root).as_posix()), scope)

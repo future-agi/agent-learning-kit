@@ -45,8 +45,8 @@ jobs:
           'livekit-plugins-openai==1.8.3'
           'livekit-plugins-silero==1.8.3'
       - name: Pin the Claude Agent SDK to the lock's version
-        # The image installs from uv.lock, so the tests run the Claude Code CLI that ships
-        # (test_secret_paths.py drives it; TH-9042).
+        # The image installs the SDK at uv.lock's version, so the tests run the Claude Code CLI
+        # that ships (test_secret_paths.py drives it; TH-9042). Only the SDK is pinned here.
         run: >-
           python -m pip install "claude-agent-sdk==$(python -c "import tomllib;
           print(next(p['version'] for p in tomllib.load(open('uv.lock', 'rb'))['package']

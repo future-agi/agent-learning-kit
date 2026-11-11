@@ -252,7 +252,8 @@ class _FakeMessages:
         return f"http://127.0.0.1:{self.server.server_address[1]}"
 
     def results(self) -> dict[str, tuple[str, str]]:
-        """Each tool call's result text, and the role of the session that sent it back."""
+        """Each tool call's result text, and the role of the session that sent it back. An error
+        result's text starts with "ERROR:", so a case can't pass on a call that failed."""
         found: dict[str, tuple[str, str]] = {}
         for request in self.requests:
             for message in request["body"].get("messages") or []:
@@ -260,7 +261,10 @@ class _FakeMessages:
                     continue
                 for block in message["content"]:
                     if block.get("type") == "tool_result":
-                        found[block["tool_use_id"]] = (json.dumps(block.get("content")), request["role"])
+                        text = json.dumps(block.get("content"))
+                        if block.get("is_error"):
+                            text = "ERROR:" + text
+                        found[block["tool_use_id"]] = (text, request["role"])
         return found
 
 
@@ -364,10 +368,14 @@ def test_claude_code_and_the_kit_hide_the_same_files(
         text, _ = results[call["id"]]
         seen = set(_MARK.findall(text))
         assert not {m for m in seen if m.startswith("MARK-P")}, (call, seen, _versions())
+        if root in ("glob", "-"):
+            assert not text.startswith("ERROR:"), (call, text[:300], _versions())
         if root == "glob":
             listed = {line.strip().strip('"') for line in text.replace("\\n", "\n").splitlines()}
             for path in positives:
                 assert not any(item.endswith(f"/{path}") or item == path for item in listed), (path, _versions())
+            for path in (".kube/configmap.yaml", ".docker/Dockerfile", "agent.py"):
+                assert any(item.endswith(path) for item in listed), (path, text[:300], _versions())
             continue
         if root == "-":
             assert not seen, (call, seen)
@@ -387,5 +395,9 @@ def test_claude_code_and_the_kit_hide_the_same_files(
         _run(ClaudeBackend()._options(spec))
     text, role = fake.results()["toolu_worker"]
     assert role == "worker", fake.served
-    assert any(r["role"] == "worker" and "Task" not in r["tools"] for r in fake.requests)
+    worker_tools = [set(r["tools"]) for r in fake.requests if r["role"] == "worker"]
+    parent_tools = [set(r["tools"]) for r in fake.requests if r["role"] == "parent"]
+    assert worker_tools and parent_tools, fake.served
+    # The worker's own session: the three file tools it was given, and none of the parent's others.
+    assert all({"Read", "Glob", "Grep"} <= tools and len(tools) < len(parent_tools[0]) for tools in worker_tools)
     assert set(_MARK.findall(text)) == _expected(near, ""), _versions()

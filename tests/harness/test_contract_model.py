@@ -3552,3 +3552,48 @@ def test_a_source_under_a_listed_folder_still_cites_its_model(tmp_path, monkeypa
     absolute, _, _ = checked(source, {"name": "gpt-4o", "path": str(source / "agent.py"), "line": 1})
 
     assert relative == absolute == []
+
+
+@pytest.mark.parametrize(
+    "written, name",
+    [
+        pytest.param("AZURE_OPENAI_DEPLOYMENT=gpt4o-prod", "gpt4o-prod", id="azure-deployment"),
+        pytest.param("AZURE_OPENAI_DEPLOYMENT_NAME=gpt4o-prod", "gpt4o-prod", id="azure-deployment-name"),
+        pytest.param("OPENAI_ENGINE=gpt-4o", "gpt-4o", id="engine"),
+        pytest.param("LLM=gpt-4o", "gpt-4o", id="llm"),
+        pytest.param("DEFAULT_LLM=gpt-4o", "gpt-4o", id="default-llm"),
+        pytest.param("export LLM_MODEL=gpt-4o", "gpt-4o", id="exported"),
+    ],
+)
+def test_a_env_setting_named_for_a_model_by_any_of_its_words_is_accepted(root, written, name):
+    (root / ".env").write_text(f"{written}\n", encoding="utf-8")
+
+    problems, _, _ = checked(root, {"name": name, "path": ".env", "line": 1})
+
+    assert problems == []
+
+
+@pytest.mark.parametrize(
+    "file, written, name",
+    [
+        pytest.param(".env", "MODEL_API_KEY=sk-fake-guess", "sk-fake-guess", id="model-key"),
+        pytest.param(".env", "LLM_TOKEN=fake-guess", "fake-guess", id="llm-token"),
+        pytest.param(".env", "OPENAI_MODEL_PASSWORD=fake-guess", "fake-guess", id="model-password"),
+        pytest.param(".env.yaml", "DB_PASSWORD: MODELfake123", "MODELfake123", id="colon-setting"),
+        pytest.param(".env", "MODELfake123", "MODELfake123", id="no-setting"),
+    ],
+)
+def test_a_env_line_that_holds_a_secret_or_sets_nothing_is_refused(root, file, written, name):
+    (root / file).write_text(f"{written}\n", encoding="utf-8")
+
+    problems, _, _ = checked(root, {"name": name, "path": file, "line": 1})
+
+    assert problems == [not_a_model_line(file, 1)]
+
+
+def test_a_backup_copy_of_a_credential_file_is_refused(root):
+    (root / ".pgpass.bak").write_text("db:5432:app:admin:changeme\n", encoding="utf-8")
+
+    problems, _, _ = checked(root, {"name": "changeme", "path": ".pgpass.bak", "line": 1})
+
+    assert problems == [kept_out(".pgpass.bak")]
