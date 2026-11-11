@@ -25,14 +25,18 @@ import tempfile
 from .agent_type_check import EXIT_REFUSED, failure_message
 from .cli import _auto
 from .failure_file import FAILURE_FILE
-from .job import HarnessJob, ProviderExecutionMode, SourceKind
+from .job import (
+    PROVIDER_MANAGED_CONNECTORS as PROVIDER_MANAGED_CONNECTORS,
+    HarnessJob,
+    ProviderExecutionMode,
+    SourceKind,
+    provider_profile_source,
+)
 from .hosted_compose_bootstrap import initialize_hosted_compose
 from .provider_import import inspect_provider_target
 from .scenarios import load as load_written
 from .source_folder import refuse_unusable_folder, saved_runtime
 from .understand import PROVIDER_IMPORT_PROFILE_PATH_ENV
-
-PROVIDER_MANAGED_CONNECTORS = frozenset({"vapi", "retell", "retell_chat"})
 
 
 def _persist_authored_scenario_count(
@@ -468,10 +472,8 @@ def _load_provider_import_profile(
     secrets_path: Path | None,
     profile_cache_path: Path | None = None,
 ) -> dict[str, object] | None:
-    if (
-        job.agent.mode is ProviderExecutionMode.CONNECT_ONLY
-        and job.agent.connector.strip().lower() == "phone"
-    ):
+    source = provider_profile_source(job.agent)
+    if source == "phone":
         # A dial-in number has no provider API to inspect. The supplied prompt is the only
         # behavioral source of truth; never pretend we discovered tools or implementation code.
         return {
@@ -481,10 +483,7 @@ def _load_provider_import_profile(
             "system_prompt": str(job.agent.config["target_system_prompt"]),
             "tools": [],
         }
-    if (
-        job.agent.mode is ProviderExecutionMode.CONNECT_ONLY
-        and job.agent.connector.strip().lower() == "livekit"
-    ):
+    if source == "livekit":
         if secrets_path is not None:
             secrets_path.unlink(missing_ok=True)
         return {
@@ -494,14 +493,7 @@ def _load_provider_import_profile(
             "system_prompt": str(job.agent.config["target_system_prompt"]),
             "tools": [],
         }
-    inspect_connect_only_provider = (
-        job.agent.mode is ProviderExecutionMode.CONNECT_ONLY
-        and job.agent.connector.strip().lower() in PROVIDER_MANAGED_CONNECTORS
-    )
-    if (
-        job.agent.mode is not ProviderExecutionMode.PROVIDER_IMPORT
-        and not inspect_connect_only_provider
-    ):
+    if source is None:
         return None
     if profile_cache_path is not None and profile_cache_path.is_file():
         cached = json.loads(profile_cache_path.read_text(encoding="utf-8"))
@@ -690,7 +682,18 @@ def main(argv: list[str] | None = None, *, validate_runtime: bool = False) -> in
         action="store_true",
         help="Find the agents in the source and leave their list in --output; build nothing",
     )
+    parser.add_argument(
+        "--seed-contract",
+        type=Path,
+        help="A reading's raw contract.json at /work/seed/contract.json; the build reuses it when it matches the job",
+    )
     args = parser.parse_args(argv)
+    if args.seed_contract is not None and (
+        args.certify_only or args.read_agent_only or args.find_agents
+    ):
+        parser.error(
+            "--seed-contract cannot be combined with --certify-only, --read-agent-only or --find-agents"
+        )
     if args.certify_only:
         if args.bundle_output is None:
             parser.error("--certify-only requires --bundle-output")
@@ -729,6 +732,22 @@ def main(argv: list[str] | None = None, *, validate_runtime: bool = False) -> in
         args.source.resolve(), job.source.subfolder, args.output.resolve()
     ):
         return EXIT_REFUSED
+    from .seed_contract import SEED_ACCEPTED
+
+    # Cleared before the seed checks: a mark an earlier command left must not pass for this one's yes.
+    (args.output / SEED_ACCEPTED).unlink(missing_ok=True)
+    if args.seed_contract is not None:
+        if args.await_harness:
+            from .seed_contract import accept_seed
+
+            refused = accept_seed(args.seed_contract, args.output)
+            if refused is not None:
+                return refused
+        else:
+            print(
+                "seed contract: not used; only a build the conversation's harness runs takes one",
+                file=sys.stderr,
+            )
     broker_socket = initialize_hosted_compose(job, args.source.resolve())
     if broker_socket is not None:
         os.environ["ALK_COMPOSE_BROKER_SOCKET"] = str(broker_socket)

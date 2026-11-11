@@ -139,9 +139,13 @@ def test_a_url_urlsplit_refuses_is_registered_redacted_and_logged_by_class_only(
 
     assert payload["agent"]["agent"]["behaviour"][0]["instructions"] == "[redacted]"
     assert "hunter2" not in json.dumps(payload["agent"])
-    [logged] = [record for record in caplog.records if record.name == "fi.alk.providers.agent"]
-    assert logged.getMessage() == "a URL was redacted whole: class=ValueError"
-    assert logged.exc_info is None
+    assert payload["agent_prompt"] == "[redacted]"
+    # Once for the document and once for the prompt.
+    logged = [record for record in caplog.records if record.name == "fi.alk.providers.agent"]
+    assert [record.getMessage() for record in logged] == [
+        "a URL was redacted whole: class=ValueError"
+    ] * 2
+    assert all(record.exc_info is None for record in logged)
     assert "hunter2" not in caplog.text
 
 
@@ -389,3 +393,62 @@ def test_detection_gets_all_three_folders(
     assert calls == [
         (tmp_path / "a", {"repo_root": tmp_path / "b", "package_dir": tmp_path / "c"})
     ]
+
+
+def test_a_password_in_a_prompt_url_reaches_neither_the_prompt_nor_the_document(
+    tmp_path: Path,
+) -> None:
+    prompt = "You book visits. Post to https://bot:hunter2@hooks.example/v1?key=sk-1 after each."
+    _write_bundle(tmp_path, _contract(prompt))
+
+    payload = _provision(tmp_path, SourceKind.GITHUB)
+
+    sent = json.dumps(payload)
+    assert "hunter2" not in sent
+    assert "sk-1" not in sent
+    assert payload["agent_prompt"] == "You book visits. Post to https://hooks.example/v1 after each."
+    assert payload["agent"]["agent"]["behaviour"][0]["instructions"] == payload["agent_prompt"]
+
+
+def test_a_password_in_a_prompt_url_is_redacted_for_a_source_with_no_document(
+    tmp_path: Path,
+) -> None:
+    _write_bundle(tmp_path, _contract("Use https://bot:hunter2@hooks.example/v1 to log."))
+
+    payload = _provision(tmp_path, SourceKind.REMOTE)
+
+    assert "agent" not in payload
+    assert payload["agent_prompt"] == "Use https://hooks.example/v1 to log."
+
+
+def test_only_the_urls_in_a_prompt_change_on_their_way_to_the_platform(tmp_path: Path) -> None:
+    """B1: whitespace and the tokens without a scheme start are byte-identical."""
+    prompt = (
+        "You book visits.\n\n\tRules:  never share https://u:pw@h.example/x?key=sk-1#f\n"
+        "Then  call postgres://db:hunter2@db.example:5432/app?ssl=1,　and stop."
+    )
+    _write_bundle(tmp_path, _contract(prompt))
+
+    payload = _provision(tmp_path, SourceKind.GITHUB)
+
+    assert payload["agent_prompt"] == (
+        "You book visits.\n\n\tRules:  never share https://h.example/x\n"
+        "Then  call postgres://db.example:5432/app　and stop."
+    )
+
+
+def test_the_document_and_the_reading_hold_the_same_cleaned_prompt(tmp_path: Path) -> None:
+    """B2: the provision document, the reading's agent.json and agent_prompt agree."""
+    prompt = "Post to https://bot:hunter2@hooks.example/v1?key=sk-1 after each."
+    _write_bundle(tmp_path, _contract(prompt))
+
+    payload = _provision(tmp_path, SourceKind.GITHUB)
+    reading = ss.authored_agent_document(
+        (tmp_path / "contract.json").read_text(encoding="utf-8"), subfolder=None, framework=None
+    )
+
+    cleaned = "Post to https://hooks.example/v1 after each."
+    assert payload["agent_prompt"] == cleaned
+    assert payload["agent"]["agent"]["behaviour"][0]["instructions"] == cleaned
+    assert reading["agent"]["behaviour"][0]["instructions"] == cleaned
+    assert "hunter2" not in json.dumps(reading) and "sk-1" not in json.dumps(reading)

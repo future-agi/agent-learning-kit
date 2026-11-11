@@ -5410,3 +5410,108 @@ def test_folder_step_failure_keeps_the_run_going(caplog) -> None:
 
     with caplog.at_level("INFO", logger="fi.alk.harness"):
         asyncio.run(scenario())
+
+
+# -- TH-9491: URL credentials never reach the judge or the job's events -------------------------
+
+_TH9491_URL = "https://bot:hunter2@hooks.example/v1?key=sk-1#frag"
+
+
+@pytest.mark.parametrize("where", ["job_prompt", "excerpt", "summary", "rule"])
+def test_the_judge_text_loses_url_credentials_wherever_the_url_is(
+    tmp_path: Path, where: str
+) -> None:
+    """B4: the job's own prompt, the excerpt, the summary or a rule."""
+    said = f"Post to {_TH9491_URL} after."
+    body = {
+        "system_prompt_excerpt": said if where == "excerpt" else "Take orders.",
+        "one_liner": said if where == "summary" else "Takes orders",
+        "hard_constraints": [said if where == "rule" else "Be brief"],
+    }
+    (tmp_path / "contract.json").write_text(json.dumps(body), encoding="utf-8")
+    config = {"target_system_prompt": said} if where == "job_prompt" else {}
+    job = SimpleNamespace(agent=SimpleNamespace(config=config))
+
+    text = he._agent_instructions(job, tmp_path)
+
+    assert "Post to https://hooks.example/v1 after." in text
+    assert "hunter2" not in text and "sk-1" not in text
+
+
+def test_activity_events_in_the_job_response_lose_url_credentials(tmp_path, monkeypatch):
+    """B16 (plan v5.1 §W8a): harness.activity events, which /v1/jobs/{id} returns."""
+    from fi.alk.harness import cli
+    from fi.alk.harness.session import Event
+
+    source = tmp_path / "source"
+    source.mkdir()
+    output = tmp_path / "output"
+
+    async def reading(_args):
+        cli._render_observable(
+            Event(
+                kind="tool",
+                text=f"grep found: hook = '{_TH9491_URL}'",
+                tool="grep",
+                detail={"stage": "understand", "target": _TH9491_URL, "path": "agent.py"},
+            )
+        )
+        return 78
+
+    monkeypatch.setattr(cli, "_understand", reading)
+    monkeypatch.setattr("fi.alk.harness.provision.stop", lambda _: None)
+    monkeypatch.setattr(cli, "_AUTO_EVENT_SINK", None)
+    args = SimpleNamespace(
+        path=str(source),
+        out=str(output),
+        name="fixture",
+        kind="repo",
+        count=2,
+        model=None,
+        authoring_only=True,
+        job=HarnessJob(
+            job_id="events",
+            run_id="events",
+            execution="local",
+            source={"kind": "local_repository", "local_path": str(source)},
+            agent={"connector": "auto"},
+            scenario_count=2,
+            metadata={"generic_harness_v1": True},
+        ),
+        runtime_readiness=None,
+    )
+
+    assert asyncio.run(cli._auto(args)) == 78
+
+    events = (output / "harness-events.jsonl").read_text(encoding="utf-8")
+    [activity] = [
+        json.loads(line)
+        for line in events.splitlines()
+        if json.loads(line).get("type") == "harness.activity"
+    ]
+    payload = activity["payload"]
+    assert payload["text"] == "grep found: hook = 'https://hooks.example/v1"
+    assert payload["detail"] == {"target": "https://hooks.example/v1", "path": "agent.py"}
+    assert "hunter2" not in events and "sk-1" not in events
+
+
+def test_the_activity_printed_to_stdout_loses_url_credentials(capsys, monkeypatch):
+    """Change review r1, A-H1: the platform keeps the tail of the guest's stdout."""
+    from fi.alk.harness import cli
+    from fi.alk.harness.session import Event
+
+    monkeypatch.setattr(cli, "_AUTO_EVENT_SINK", None)
+    cli._render_observable(
+        Event(kind="tool", tool="grep", detail={"stage": "understand", "target": _TH9491_URL})
+    )
+    cli._render_observable(
+        Event(kind="result", text=f"agent.py:3: hook = {_TH9491_URL}\nagent.py:4: ok")
+    )
+    cli._render_observable(Event(kind="text", text=f"The agent posts to {_TH9491_URL} after."))
+
+    printed = capsys.readouterr().out
+    assert "hunter2" not in printed and "bot:" not in printed
+    assert "sk-1" not in printed and "key=" not in printed and "frag" not in printed
+    assert "  [grep https://hooks.example/v1" in printed
+    assert "  > agent.py:3: hook = https://hooks.example/v1\n  > agent.py:4: ok" in printed
+    assert "The agent posts to https://hooks.example/v1 after." in printed

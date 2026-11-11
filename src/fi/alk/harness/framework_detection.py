@@ -37,6 +37,13 @@ _MAX_ALIASES = 10_000
 # A backslash-continued dotted name has no length limit of its own, and no real
 # name comes near this.
 _MAX_DOTTED_PARTS = 64
+# What os.walk holds for the folders it has yet to visit grows with a tree that holds no Python,
+# which none of the limits above sees. Each folder kept to walk into is counted, never refunded, at
+# what its full path costs as a str: past this total the walk stops (TH-9511).
+_MAX_FOLDER_BYTES = 67_108_864
+# The folder being checked counts as at least this many characters, so that while its own path is
+# ASCII and no longer, every caller counts the same tree the same, wherever it sits on disk.
+_TOP_FLOOR = 184
 
 _FILE_SKIPPED = "file_skipped"
 _FILE_UNREADABLE = "file_unreadable"
@@ -705,6 +712,17 @@ def _is_side_file(name: str) -> bool:
     )
 
 
+def _folder_bytes(top: str, below: str) -> int:
+    """At least what one folder costs in ``os.walk``'s list of folders to visit: the whole path,
+    ``top``, a separator and ``below``, at the width of its widest character (one byte if all of it is
+    ASCII, else counted at four), plus 120: the str's fixed part (at most 60 bytes on 3.12), the
+    allocator's rounding (at most 23 under glibc), the list's slot (8, and about 1 of its spare room),
+    and pymalloc's own share of each block (pool headers and alignment, up to about 15), with about
+    13 to spare."""
+    width = 1 if top.isascii() and below.isascii() else 4
+    return width * (max(len(top), _TOP_FLOOR) + 1 + len(below)) + 120
+
+
 def _directories_to_enter(
     directory: str, names: list[str], *, at_top: bool, blockers: set[str]
 ) -> list[str]:
@@ -862,6 +880,7 @@ def folder_findings(
         blockers.add(_FILE_SKIPPED)
 
     top = os.fspath(folder)
+    listed = 0
     try:
         for directory, directories, files in os.walk(
             top, followlinks=False, onerror=on_walk_error
@@ -877,6 +896,14 @@ def folder_findings(
             directories[:] = _directories_to_enter(
                 directory, directories, at_top=not relative, blockers=blockers
             )
+            here = "/".join(relative)
+            listed += sum(
+                _folder_bytes(top, f"{here}/{name}" if here else name) for name in directories
+            )
+            if listed > _MAX_FOLDER_BYTES:
+                # Before this folder's files, so os.walk takes none of its folders on.
+                walk.over_limit = True
+                break
             for name in files:
                 walk.take(directory, relative, name)
                 if walk.over_limit:

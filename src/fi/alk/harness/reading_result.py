@@ -18,6 +18,7 @@ from pydantic import ValidationError
 
 from .agent_type_check import EXIT_REFUSED
 from .backends import StageDone
+from .contract import CONTRACT_FILE
 from .failure_file import FAILURE_FILE
 from .framework_detection import detect_framework, named_framework_folder
 from .job import FailureDomain, HarnessJob
@@ -37,7 +38,6 @@ logger = logging.getLogger(__name__)
 logger.addFilter(MaskSecrets())
 
 AGENT_FILE = "agent.json"
-CONTRACT_FILE = "contract.json"
 
 AGENT_READING_MODEL_ERROR = "agent_reading_model_error"
 AGENT_READING_INCOMPLETE = "agent_reading_incomplete"
@@ -205,6 +205,18 @@ def document(job: HarnessJob, source: Path, output: Path) -> int:
             contract_bytes = max(os.fstat(handle.fileno()).st_size, len(raw))
         if contract_bytes > _CONTRACT_LIMIT_BYTES:
             raise _TooLarge({"contract_bytes": contract_bytes})
+        try:
+            from .seed_contract import replace_if_unchanged, with_record
+
+            # What the reading was made from, so a build can tell whether it may reuse it. Made
+            # from these bytes and written only over them, so a later save is never lost.
+            recorded = with_record(job, raw)
+            if recorded is not None:
+                replace_if_unchanged(output / CONTRACT_FILE, raw, recorded)
+        except Exception:
+            # A paid reading never fails for its record. The mask covers the trace, and
+            # nothing here runs pydantic.
+            logger.warning("reading record not written", exc_info=True)
         contract_text = raw.decode("utf-8")
         framework = detect_framework(
             _framework_folder(job, source, output, contract_text),
