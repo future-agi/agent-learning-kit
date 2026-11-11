@@ -666,8 +666,14 @@ def world_actor_tools(
         listing = load_actors(destination)
         current = listing.by_id().get(str(args.get("id") or ""))
         given = {name: value for name, value in args.items() if name not in ("provenance", "share_actions")}
-        shared = {str(one) for one in args.get("share_actions") or []}
-        if given.get("surface") in CHANNELS:
+        confirmed = args.get("share_actions")
+        # One action or a list of them; anything else confirms nothing.
+        shared = (
+            {str(one) for one in confirmed if isinstance(one, str)}
+            if isinstance(confirmed, list)
+            else {confirmed} if isinstance(confirmed, str) else set()
+        )
+        if isinstance(given.get("surface"), str) and given["surface"] in CHANNELS:
             # A way of speaking sent as the place it acts: said back, never saved as a surface no world has.
             return _err(
                 f"Not added: {given['surface']!r} is how an actor speaks in the conversation; send it as `channel`. "

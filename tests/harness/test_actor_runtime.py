@@ -686,6 +686,15 @@ def test_the_builder_gives_an_actor_only_a_model_a_run_can_play_it_on(tmp_path):
     assert not edited.get("is_error") and load_actors(tmp_path).by_id()["old"].role == "the caller's manager"
 
 
+@pytest.mark.parametrize("field, value", [("surface", ["chat"]), ("surface", {"a": 1}), ("share_actions", 1), ("share_actions", True)])
+def test_the_builder_answers_an_actor_of_the_wrong_shape_and_never_raises(tmp_path, field, value):
+    from fi.alk.harness.world.tools import world_actor_tools
+
+    add, _drop = world_actor_tools(tmp_path, SimpleNamespace(modality="voice", model_dump=lambda: {"tools": []}))
+    out = asyncio.run(add.handler({"id": "lead", "name": "Sam", field: value}))
+    assert isinstance(out, dict) and out["content"][0]["text"]
+
+
 def test_a_person_folded_into_the_caller_is_refused_and_a_kept_scenario_reads_its_cast_back(tmp_path):
     from fi.alk.harness.actors import load_actors
     from fi.alk.harness.scenario import Scenario
