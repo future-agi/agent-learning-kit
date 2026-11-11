@@ -75,6 +75,20 @@ def not_named(name: str, line: int, path: str) -> str:
     )
 
 
+def not_a_model_line(path: str, line: int) -> str:
+    return (
+        f"model: in a .env file, cite the line whose setting names the model (such as "
+        f"OPENAI_MODEL); {path} line {line} sets another setting"
+    )
+
+
+def kept_out(path: str) -> str:
+    return (
+        f"model: {path} is kept out of this session because it holds credentials; cite the line "
+        "in the agent's code or configuration the model is set on, or leave model out"
+    )
+
+
 def payload(**fields):
     return {
         "agent": "pair",
@@ -2070,7 +2084,8 @@ def test_an_apostrophe_does_not_hide_a_comment(root, file, written, name):
 
     problems, _, _ = checked(root, {"name": name, "path": file, "line": 2})
 
-    assert problems == [not_named(name, 2, file)]
+    # In a .env file a line whose setting isn't a model's is refused before it is read (TH-9042).
+    assert problems == [not_a_model_line(file, 2) if file == ".env" else not_named(name, 2, file)]
 
 
 @pytest.mark.parametrize(
@@ -3122,7 +3137,6 @@ def test_a_pipe_is_logged_as_not_a_regular_file(tmp_path, caplog):
         pytest.param("init.lua", 'local n = a // 2; model = "gpt-4o"', "gpt-4o", id="lua-floor-division"),
         pytest.param("Makefile", "\techo a#b; MODEL=gpt-4o", "gpt-4o", id="makefile-hash-in-a-word"),
         pytest.param(".flaskenv", "URL=http://x/#a MODEL=gpt-4o", "gpt-4o", id="flaskenv-hash-in-a-word"),
-        pytest.param(".env.local", "URL=http://x/#a MODEL=gpt-4o", "gpt-4o", id="env-name-hash-in-a-word"),
         pytest.param("Dockerfile.dev", "ENV A=a#b MODEL=gpt-4o", "gpt-4o", id="dockerfile-name-hash-in-a-word"),
         pytest.param("run.bash", "echo a#b; MODEL=gpt-4o", "gpt-4o", id="bash-hash-in-a-word"),
         pytest.param("run.zsh", "echo a#b; MODEL=gpt-4o", "gpt-4o", id="zsh-hash-in-a-word"),
@@ -3463,3 +3477,78 @@ def test_words_that_say_nothing_do_not_replace_the_held_quote(tmp_path, root, no
     )
 
     assert text_of(result) == REFUSED + lines_alone("agent.py 1-4", _BOOKING_QUOTE)
+
+
+# TH-9042: a model citation never reads a file on the secret list, apart from a .env file's
+# line whose setting names a model; and it never tells such a file's length or whether it exists.
+
+
+@pytest.mark.parametrize(
+    "file, written",
+    [
+        pytest.param(".pgpass", "db:5432:app:admin:changeme", id="pgpass"),
+        pytest.param("infra/prod.tfvars", 'db_password = "changeme"', id="tfvars"),
+        pytest.param("kubeconfig.yaml", "token: changeme", id="kubeconfig"),
+        pytest.param("gcp-key.json", '{"private_key": "changeme"}', id="key-json"),
+    ],
+)
+def test_a_model_citation_never_reads_a_listed_file(root, file, written):
+    target = root / file
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(f"{written}\n", encoding="utf-8")
+
+    present, contract, _ = checked(root, {"name": "changeme", "path": file, "line": 1})
+    past_the_end, _, _ = checked(root, {"name": "changeme", "path": file, "line": 9})
+    target.unlink()
+    missing, _, _ = checked(root, {"name": "changeme", "path": file, "line": 1})
+
+    assert present == past_the_end == missing == [kept_out(file)]
+    assert contract.model is not None and contract.model.name == "changeme"
+
+
+def test_a_model_citation_through_a_link_to_a_listed_file_is_refused(root):
+    (root / ".pgpass").write_text("db:5432:app:admin:changeme\n", encoding="utf-8")
+    (root / "settings.txt").symlink_to(".pgpass")
+    (root / "gone.yaml").symlink_to("kubeconfig.yaml")
+
+    linked, _, _ = checked(root, {"name": "changeme", "path": "settings.txt", "line": 1})
+    dangling, _, _ = checked(root, {"name": "changeme", "path": "gone.yaml", "line": 1})
+
+    assert linked == [kept_out("settings.txt")]
+    assert dangling == [kept_out("gone.yaml")]
+
+
+def test_a_env_file_cites_a_model_only_on_a_line_that_sets_one(root):
+    (root / ".env").write_text(
+        "DB_PASSWORD=changeme\nOPENAI_MODEL=gpt-4o\nexport LLM_MODEL=gpt-4o-mini\n", encoding="utf-8"
+    )
+
+    password, _, _ = checked(root, {"name": "changeme", "path": ".env", "line": 1})
+    model, contract, _ = checked(root, {"name": "gpt-4o", "path": ".env", "line": 2})
+    exported, _, _ = checked(root, {"name": "gpt-4o-mini", "path": ".env", "line": 3})
+    past_the_end, _, _ = checked(root, {"name": "gpt-4o", "path": ".env", "line": 40})
+
+    assert password == [not_a_model_line(".env", 1)]
+    assert model == [] and contract.model is not None and contract.model.path == ".env"
+    assert exported == []
+    assert past_the_end == ["model: line 40 is outside .env"]
+
+
+def test_a_env_line_whose_setting_is_not_a_model_is_refused_even_with_a_model_on_it(root):
+    (root / ".env.local").write_text("\nURL=http://x/#a MODEL=gpt-4o\n", encoding="utf-8")
+
+    problems, _, _ = checked(root, {"name": "gpt-4o", "path": ".env.local", "line": 2})
+
+    assert problems == [not_a_model_line(".env.local", 2)]
+
+
+def test_a_source_under_a_listed_folder_still_cites_its_model(tmp_path, monkeypatch):
+    source = tmp_path / ".claude" / "worktrees" / "repo"
+    source.mkdir(parents=True)
+    (source / "agent.py").write_text('MODEL = "gpt-4o"\n', encoding="utf-8")
+    monkeypatch.chdir(tmp_path / ".claude")
+
+    relative, _, _ = checked(source, {"name": "gpt-4o", "path": "agent.py", "line": 1})
+    absolute, _, _ = checked(source, {"name": "gpt-4o", "path": str(source / "agent.py"), "line": 1})
+
+    assert relative == absolute == []

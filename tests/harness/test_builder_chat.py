@@ -955,6 +955,11 @@ def test_file_tools_on_any_backend_never_return_credentials(tmp_path):
     (work / "scenarios" / "a.json").write_text("SENTINEL-free")
     (work / ".env").write_text("SENTINEL=1")
     (work / "service_account.json").write_text('{"SENTINEL": 1}')
+    # The names TH-9042 added, each holding the same marker.
+    added = (".pgpass", ".kube/config", ".docker/config.json", "infra/terraform.tfstate", "gcp-key.json", "id_ed25519")
+    for name in added:
+        (work / name).parent.mkdir(parents=True, exist_ok=True)
+        (work / name).write_text("SENTINEL=2")
     tools = {spec.name: _spec_tool(spec.name, spec) for spec in file_tools(str(work / "scenarios"))}
 
     def run(name, **args):
@@ -968,6 +973,38 @@ def test_file_tools_on_any_backend_never_return_credentials(tmp_path):
     assert ".env" not in run("Glob", pattern="*", path="..")
     assert "a.json" in run("Glob", pattern="*.json")
     assert "kept out of this session" in run("Grep", pattern="x", path="/")
+    assert "SENTINEL=2" not in run("Grep", pattern="SENTINEL", path="..")
+    for name in added:
+        assert "SENTINEL=2" not in run("Read", file_path=f"../{name}"), name
+        assert name.rsplit("/", 1)[-1] not in run("Glob", pattern="**/*", path=".."), name
+
+
+def test_the_gate_judges_a_call_where_the_session_resolves_it(tmp_path):
+    """Through the hook itself, with the payload's cwd: a relative path resolves in the session's
+    folder, not the harness's (TH-9042)."""
+    from fi.alk.harness.config import gate_hooks
+
+    session = tmp_path / "session"
+    (session / "k").mkdir(parents=True)
+    (session / ".pgpass").write_text("x")
+    (session / "notes.txt").symlink_to(".pgpass")
+    refuse = gate_hooks(["Read", "Glob", "Grep"])["PreToolUse"][0].hooks[0]
+
+    def denied(tool, arguments, cwd=str(session)):
+        payload = {"tool_name": tool, "tool_input": arguments, "cwd": cwd}
+        answer = asyncio.run(refuse(payload, None, None))
+        return answer.get("hookSpecificOutput", {}).get("permissionDecision") == "deny"
+
+    assert denied("Grep", {"pattern": "x", "path": "notes.txt"})
+    assert denied("Read", {"file_path": "notes.txt"})
+    assert denied("Grep", {"pattern": "x", "path": "."}, cwd="/run")
+    assert denied("Glob", {"pattern": "**/.kube/config"})
+    assert denied("Glob", {"pattern": "**/*.tfstate"})
+    for name in (".pgpass", ".kube/config", ".docker/config.json", "x.tfstate", "gcp-key.json", "id_ecdsa_sk"):
+        assert denied("Read", {"file_path": str(session / name)}), name
+    assert not denied("Read", {"file_path": str(session / ".kube" / "configmap.yaml")})
+    assert not denied("Grep", {"pattern": "x", "path": "k"})
+    assert not denied("Grep", {"pattern": "x", "path": "notes.txt"}, cwd=str(tmp_path))
 
 
 class RebuildClient(BuilderClient):
