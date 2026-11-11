@@ -4818,4 +4818,5 @@ def test_an_actor_who_speaks_but_only_acted_in_the_world_reached_the_agent() -> 
     )
     assert hs._call_actors_missing(scenario, posted) == ""
     refused = replace(posted, world_actions=({"actor_id": "jordan", "outcome": "refused", "name": "post_message"},))
-    assert hs._call_actors_missing(scenario, refused) == "Jordan (not_delivered)"
+    # Its refused attempt is the reason it said nothing, so the reader looks at the world data, not the agent.
+    assert hs._call_actors_missing(scenario, refused) == "Jordan (not_delivered: the world refused its post_message)"

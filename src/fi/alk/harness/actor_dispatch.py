@@ -384,7 +384,9 @@ class ActorDispatcher:
             return None
         for row in log:
             key = str(row.get("action_id") or "")
-            if key and key not in self.answered[actor.id] and self._sees(actor, row):
+            # Its own action refused is news to it too: a person told no tries again, or stops.
+            refused_own = row.get("actor_id") == actor.id and row.get("outcome") == "refused"
+            if key and key not in self.answered[actor.id] and (self._sees(actor, row) or refused_own):
                 self.answered[actor.id].add(key)
                 return key
         if actor.id in self.woken:
@@ -406,6 +408,9 @@ class ActorDispatcher:
                     "action": r.get("name"),
                     "arguments": r.get("arguments"),
                     "outcome": r.get("outcome"),
+                    # What the world told it when its own action was refused, so it can correct it.
+                    **({"world_said": str(r["error"])[:300]} if r.get("actor_id") == actor.id
+                       and r.get("outcome") != "committed" and r.get("error") else {}),
                 },
                 default=str,
             )

@@ -685,6 +685,11 @@ def world_actor_tools(
             actor = Actor.model_validate({**base, **merged})
         except ValueError as exc:
             return _err(f"Not added: {exc}")
+        from ..actors import ACTOR_MODELS
+
+        if actor.model and actor.model != (current.model if current is not None else None) and actor.model not in ACTOR_MODELS:
+            # A run plays the actor on this model, so an unknown one would fail each of its turns.
+            return _err(f"Not added: model is one of {', '.join(ACTOR_MODELS)}, or left out for the environment's model.")
         if actor.channel:
             problems = entry_problems(
                 CallActor(

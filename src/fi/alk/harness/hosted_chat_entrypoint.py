@@ -625,7 +625,7 @@ class HostedChatRuntime:
                         spec.name,
                         {
                             "question": f"Confirm this change: {spec.name} "
-                            + json.dumps(args, sort_keys=True, default=str, indent=1),
+                            + json.dumps(args, sort_keys=True, default=str, indent=1, ensure_ascii=False),
                             "options": [_CONFIRM, "No"] if alone else [_CONFIRM, _CONFIRM_ALL, "No"],
                         },
                         None,

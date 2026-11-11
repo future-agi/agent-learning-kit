@@ -562,6 +562,37 @@ def test_a_live_actor_never_answers_its_own_action():
     assert [row["actor_id"] for row in log] == ["agent", "manager"]
 
 
+def test_a_live_actor_told_no_hears_why_and_tries_once_more_in_the_place_the_world_names():
+    situations = []
+
+    async def decide(situation):
+        situations.append(situation)
+        channel = "#sales" if "is not in sales" in situation else "sales"
+        return '{"action": "slack.post_message", "arguments": {"channel": "%s", "text": "approved"}, "why": "x"}' % channel
+
+    log = []
+    actors = {"lead": Actor(id="lead", name="Lee", play="live", permitted_actions=["slack.post_message"])}
+
+    def send(url, headers, arguments):
+        ok = arguments.get("channel") == "#sales"
+        log.append({"name": "post_message", "actor_id": headers["X-ALK-Actor"], "action_id": f"r{len(log)}",
+                    "arguments": arguments, "outcome": "committed" if ok else "refused",
+                    **({} if ok else {"error": '{"detail": "lead is not in sales"}'})})
+        return 200 if ok else 403
+
+    dispatcher = ActorDispatcher(
+        actors, [ScenarioActor(id="lead")], trial_id="trial-1", proxy_url="http://proxy/", token="t0ken",
+        read_log=lambda: list(log), seed="trial-1", timeout=60.0, clock=_Clock(), send=send, decide=decide,
+    )
+    log.append({"name": "post_message", "actor_id": "agent", "action_id": "a1", "outcome": "committed",
+                "arguments": {"channel": "#sales", "text": "Was deal 7 approved?"}})
+    asyncio.run(_ticks(dispatcher, count=6))
+    assert [row["outcome"] for row in log if row["actor_id"] == "lead"] == ["refused", "committed"]
+    assert "lead is not in sales" in situations[1]
+    # Committed, it is not woken by its own action again.
+    assert len(situations) == 2
+
+
 def test_a_scenario_s_own_trigger_decides_when_the_world_starts_waiting_on_an_actor():
     dispatcher, clock, sent = _approver("silent")
     assert dispatcher.triggers["manager"].kind == "contacted"

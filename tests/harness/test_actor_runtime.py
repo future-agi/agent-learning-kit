@@ -362,6 +362,19 @@ def test_a_trial_s_state_changes_keep_attempted_refused_and_committed_apart_per_
     assert changes[0]["committed_actions"] == ["deals.request_approval", "deals.apply_discount"]
 
 
+def test_a_commit_whose_answer_was_lost_is_named_apart_so_a_retry_reads_as_a_second_commit():
+    from fi.alk.harness.call_runner import trial_state_changes
+
+    log = [
+        {"name": "apply_discount", "outcome": "committed", "error": "response_lost"},
+        {"name": "apply_discount", "outcome": "committed"},
+    ]
+    agent = trial_state_changes(log, {})[0]
+    assert agent["committed_actions"] == ["apply_discount", "apply_discount"]
+    assert agent["answer_lost_actions"] == ["apply_discount"]
+    assert "answer_lost_actions" not in trial_state_changes(log[1:], {})[0]
+
+
 def test_an_actor_s_action_is_shown_by_its_full_name_where_its_permissions_name_one():
     from fi.alk.harness.call_runner import actor_rows, trial_state_changes
 
@@ -653,6 +666,22 @@ def test_an_identity_is_keyed_by_a_service_of_the_world_never_by_a_record_field(
     from fi.alk.harness.actors import Actor, ActorList, save_actors
 
     save_actors(tmp_path, ActorList(actors=[Actor(id="old", name="Kim", identities={"member": "kim"})]))
+    edited = asyncio.run(add.handler({"id": "old", "role": "the caller's manager"}))
+    assert not edited.get("is_error") and load_actors(tmp_path).by_id()["old"].role == "the caller's manager"
+
+
+def test_the_builder_gives_an_actor_only_a_model_a_run_can_play_it_on(tmp_path):
+    from fi.alk.harness.actors import ACTOR_MODELS, Actor, ActorList, load_actors, save_actors
+    from fi.alk.harness.world.tools import world_actor_tools
+
+    add, _drop = world_actor_tools(tmp_path, SimpleNamespace(modality="chat", model_dump=lambda: {"tools": []}))
+    out = asyncio.run(add.handler({"id": "lead", "name": "Sam", "model": "gpt-unknown"}))
+    assert out.get("is_error") and ACTOR_MODELS[0] in out["content"][0]["text"]
+    assert load_actors(tmp_path).actors == []
+    ok = asyncio.run(add.handler({"id": "lead", "name": "Sam", "model": ACTOR_MODELS[1]}))
+    assert not ok.get("is_error") and load_actors(tmp_path).by_id()["lead"].model == ACTOR_MODELS[1]
+    # An actor saved earlier with another model keeps its other edits open.
+    save_actors(tmp_path, ActorList(actors=[Actor(id="old", name="Kim", model="retired-model")]))
     edited = asyncio.run(add.handler({"id": "old", "role": "the caller's manager"}))
     assert not edited.get("is_error") and load_actors(tmp_path).by_id()["old"].role == "the caller's manager"
 

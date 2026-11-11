@@ -1033,7 +1033,8 @@ def trial_state_changes(
     """What each participant attempted in this trial and what the world made of it: one entry for the agent and one
     per actor that acted, with attempted, committed, refused, faulted and duplicate counts and the actions it
     committed, in order. Attempted, refused and committed are kept apart; a row from before outcomes were recorded
-    counts as committed when it succeeded and refused when the world refused it."""
+    counts as committed when it succeeded and refused when the world refused it. `answer_lost_actions` lists the
+    committed actions whose answer a `timeout_after_commit` fault replaced with a timeout."""
     entries: dict[str, dict[str, Any]] = {}
     chosen = _ChosenActions(decisions)
     for row in log:
@@ -1059,9 +1060,11 @@ def trial_state_changes(
         if outcome in _OUTCOMES:
             entry[outcome] += 1
         if outcome == "committed":
-            entry["committed_actions"].append(
-                str(row.get("name") or "") if who == AGENT else chosen.name(who, str(row.get("name") or ""), actor)
-            )
+            shown = str(row.get("name") or "") if who == AGENT else chosen.name(who, str(row.get("name") or ""), actor)
+            entry["committed_actions"].append(shown)
+            if row.get("error") == "response_lost":
+                # Committed, yet the one who acted was told it timed out: a retry after it commits twice.
+                entry.setdefault("answer_lost_actions", []).append(shown)
     # The agent always has a line: "no change" is a result, since doing nothing can be correct.
     agent = entries.pop(AGENT, None) or {
         "who": AGENT, "name": "the agent", "attempted": 0, **{outcome: 0 for outcome in _OUTCOMES},

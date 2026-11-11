@@ -376,12 +376,25 @@ def decision_brief(
     parts.append(
         "Your actions in the world:\n"
         + ("\n".join(f"- {name}: {about}".rstrip(": ") for name, about in allowed.items()) or "- none")
+        # The world matches names exactly, so a channel written without its # is one it does not have.
+        + (
+            "\nWrite every name and id in an action exactly as your brief, the conversation or the world writes it, "
+            "symbols and case included."
+            if allowed
+            else ""
+        )
     )
     parts.append("What you can see happened in the world, oldest first:\n" + ("\n".join(seen or []) or "nothing yet"))
     if any('"by": "you"' in one for one in seen or []):
         parts.append(
             'Rows marked "by": "you" are your own earlier actions. A committed action is done: do not send it again, '
             "and do not reverse a decision you already made unless the conversation gives you a new reason."
+        )
+    if any('"world_said"' in one for one in seen or []):
+        parts.append(
+            'A row with "world_said" was refused, and that is what the world told you. Change what made it fail (a name '
+            "or value written differently from how the world writes it, such as a channel's full name) and send it "
+            "again, or leave it."
         )
     if not speaks:
         parts.append("You do not speak on this conversation; leave `line` null.")

@@ -1704,6 +1704,80 @@ def test_a_chat_actor_decides_knowing_its_own_earlier_actions_in_the_trial():
     assert "do not reverse a decision you already made" in briefs[0]
 
 
+def test_a_chat_actor_told_no_by_the_world_hears_what_it_said():
+    rows = [{"actor_id": "manager", "name": "post_message", "outcome": "refused",
+             "arguments": {"channel": "sales"}, "error": '{"detail": "manager is not in sales"}'},
+            {"actor_id": "manager", "name": "put", "outcome": "committed", "arguments": {}, "error": "ignored"}]
+    sent, briefs = [], []
+    cast = _manager_chat(lambda key: rows if key == "manager" else [], sent, briefs)
+    asyncio.run(cast.due_lines(agent_turns=1, last_text="Is it approved?", tools_called=[], conversation=[]))
+    assert "manager is not in sales" in briefs[0]
+    assert briefs[0].count('"world_said": ') == 1
+
+
+def test_a_chat_actor_told_no_corrects_its_action_once_straight_away_and_never_loops():
+    from fi.alk.harness.run import conversation as conv
+
+    def cast_for(accepts):
+        rows, briefs = [], []
+
+        async def act(actor_id, action, arguments, **kwargs):
+            ok = arguments.get("channel") in accepts
+            rows.append({"actor_id": actor_id, "name": action, "arguments": arguments,
+                         "outcome": "committed" if ok else "refused",
+                         **({} if ok else {"error": f'{{"detail": "lead is not in {arguments.get("channel")}"}}'})})
+            return {"status": 200 if ok else 403, "outcome": "committed" if ok else "refused"}
+
+        cast = conv.ChatActors(
+            [{"id": "lead", "name": "Lee", "trigger": {"kind": "always"}, "permitted_actions": ["chat.post_message"]}],
+            seed="t", model=None, act=act, history=lambda key: [row for row in rows if row["actor_id"] == key],
+        )
+
+        async def write(actor, brief):
+            briefs.append(brief)
+            channel = "#sales" if "lead is not in sales" in brief else "sales"
+            return '{"action": "chat.post_message", "arguments": {"channel": "%s", "text": "approved"}, "why": "x"}' % channel
+
+        cast._write = write
+        asyncio.run(cast.due_lines(agent_turns=1, last_text="Was it approved?", tools_called=[], conversation=[]))
+        return rows, briefs
+
+    rows, briefs = cast_for({"#sales"})
+    assert [(row["arguments"]["channel"], row["outcome"]) for row in rows] == [("sales", "refused"), ("#sales", "committed")]
+    # Refused again, it is not asked a third time in the same turn.
+    rows, briefs = cast_for(set())
+    assert [row["outcome"] for row in rows] == ["refused", "refused"] and len(briefs) == 2
+    assert "is what the world told you" in briefs[1] and "is what the world told you" not in briefs[0]
+    assert "exactly as your brief, the conversation or the world writes it" in briefs[0]
+
+
+def test_a_chat_actor_told_no_that_answers_with_words_instead_still_says_them():
+    from fi.alk.harness.run import conversation as conv
+
+    rows = []
+
+    async def act(actor_id, action, arguments, **kwargs):
+        rows.append({"actor_id": actor_id, "name": action, "arguments": arguments, "outcome": "refused",
+                     "error": "not allowed"})
+        return {"status": 403, "outcome": "refused"}
+
+    cast = conv.ChatActors(
+        [{"id": "lead", "name": "Lee", "trigger": {"kind": "always"}, "permitted_actions": ["chat.post_message"]}],
+        seed="t", model=None, act=act, history=lambda key: list(rows),
+    )
+    replies = iter([
+        '{"action": "chat.post_message", "arguments": {"channel": "sales"}, "why": "x"}',
+        '{"line": "I could not post it, but it was approved.", "action": null, "why": "tell them"}',
+    ])
+
+    async def write(actor, brief):
+        return next(replies)
+
+    cast._write = write
+    out = asyncio.run(cast.due_lines(agent_turns=1, last_text="Approved?", tools_called=[], conversation=[]))
+    assert [line for _, line in out] == ["I could not post it, but it was approved."] and len(rows) == 1
+
+
 def test_a_chat_actor_never_sends_an_action_it_already_committed_again():
     rows: list = []
     sent, briefs = [], []
