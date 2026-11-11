@@ -1069,3 +1069,156 @@ def test_a_walk_that_cant_parse_a_file_marks_the_manifest_truncated(tmp_path):
 
     manifest = discover_credentials(root, agent_subfolder="agents/a")
     assert manifest.truncated
+
+
+# --- LiveKit plugin api_key= handling (TH-9519) ---------------------------------------
+
+_LK_ENV = ["LIVEKIT_URL", "LIVEKIT_API_KEY", "LIVEKIT_API_SECRET"]
+
+
+def _plugin_agent(tmp_path: Path, plugin: str, call: str, *, pre: str = "") -> None:
+    _write(
+        tmp_path,
+        "agent.py",
+        f"import os\nfrom livekit.plugins import {plugin}\n{pre}\nx = {plugin}.{call}\n",
+    )
+
+
+def _lk(tmp_path: Path, *supplied: str):
+    manifest = discover_credentials(
+        tmp_path, provided_environment=[*_LK_ENV, *supplied]
+    )
+    return manifest, _requirements(manifest)
+
+
+def _missing(tmp_path: Path, *supplied: str) -> set[str]:
+    manifest, found = _lk(tmp_path, *supplied)
+    assert manifest.ready is bool(
+        not any(r.status is RequirementStatus.MISSING for r in found.values())
+    )
+    return {
+        name for name, r in found.items() if r.status is RequirementStatus.MISSING
+    }
+
+
+@pytest.mark.parametrize("call", ["TTS()", "STT()"])
+def test_elevenlabs_plugin_asks_for_the_name_the_plugin_reads(tmp_path, call):
+    _plugin_agent(tmp_path, "elevenlabs", call)
+    _, found = _lk(tmp_path)
+    assert "ELEVENLABS_API_KEY" not in found
+    assert found["ELEVEN_API_KEY"].provider == "elevenlabs"
+    assert found["ELEVEN_API_KEY"].status is RequirementStatus.MISSING
+    manifest, _ = _lk(tmp_path, "ELEVEN_API_KEY")
+    assert manifest.ready
+
+
+def test_elevenlabs_environment_index_is_read_as_that_name_only(tmp_path):
+    _plugin_agent(
+        tmp_path, "elevenlabs", 'TTS(api_key=os.environ["ELEVENLABS_API_KEY"])'
+    )
+    assert _missing(tmp_path) == {"ELEVENLABS_API_KEY"}
+    _, found = _lk(tmp_path)
+    assert "ELEVEN_API_KEY" not in found
+    assert _lk(tmp_path, "ELEVENLABS_API_KEY")[0].ready
+
+
+@pytest.mark.parametrize(
+    "plugin,call,read_name,own_name",
+    [
+        ("elevenlabs", 'TTS(api_key=os.getenv("ELEVENLABS_API_KEY"))', "ELEVENLABS_API_KEY", "ELEVEN_API_KEY"),
+        ("elevenlabs", 'TTS(api_key=os.environ.get("ELEVENLABS_API_KEY", ""))', "ELEVENLABS_API_KEY", "ELEVEN_API_KEY"),
+        ("deepgram", 'STT(api_key=os.getenv("MY_DEEPGRAM"))', "MY_DEEPGRAM", "DEEPGRAM_API_KEY"),
+        ("deepgram", 'STT(api_key=os.environ.get("DG_KEY", ""))', "DG_KEY", "DEEPGRAM_API_KEY"),
+        ("deepgram", 'STT(api_key=os.getenv("DG_KEY", None))', "DG_KEY", "DEEPGRAM_API_KEY"),
+        ("deepgram", 'STT(api_key=os.getenv("DG_KEY", default=""))', "DG_KEY", "DEEPGRAM_API_KEY"),
+        ("elevenlabs", 'TTS(api_key=os.getenv("ELEVENLABS_API_KEY", "your-api-key"))', "ELEVENLABS_API_KEY", "ELEVEN_API_KEY"),
+    ],
+)
+def test_a_nullable_read_passed_as_api_key_is_required_by_its_own_name(
+    tmp_path, plugin, call, read_name, own_name
+):
+    _plugin_agent(tmp_path, plugin, call)
+    assert _missing(tmp_path) == {read_name}
+    _, found = _lk(tmp_path)
+    assert own_name not in found
+    assert found[read_name].required is True
+    assert _lk(tmp_path, read_name)[0].ready
+
+
+@pytest.mark.parametrize(
+    "plugin,call",
+    [
+        ("deepgram", 'STT(api_key=os.getenv("X_KEY", "fallback-value"))'),
+        ("deepgram", 'STT(api_key=os.getenv("DG_KEY", default="fallback-value"))'),
+        ("deepgram", 'STT(api_key="literal")'),
+        ("elevenlabs", 'TTS(api_key="literal")'),
+    ],
+)
+def test_a_literal_or_defaulted_api_key_adds_no_requirement(tmp_path, plugin, call):
+    _plugin_agent(tmp_path, plugin, call)
+    manifest, found = _lk(tmp_path)
+    assert manifest.ready
+    assert not any(
+        n in found for n in ("DEEPGRAM_API_KEY", "ELEVEN_API_KEY", "ELEVENLABS_API_KEY")
+    )
+    assert not any(
+        o.startswith("sdk:") for r in found.values() for o in r.detected_from
+    )
+
+
+@pytest.mark.parametrize(
+    "call,pre",
+    [
+        ("STT(api_key=KEY)", 'KEY = os.getenv("DEEPGRAM_API_KEY")'),
+        ("STT(api_key=settings.deepgram_api_key)", ""),
+        ("STT(api_key=os.getenv('DEEPGRAM_API_KEY') or '')", ""),
+        ("STT(**opts)", ""),
+        ("STT(api_key='')", ""),
+        ('STT(api_key=os.environ["dg_key"])', ""),
+    ],
+)
+def test_an_unreadable_api_key_keeps_the_plugins_own_requirement(tmp_path, call, pre):
+    _plugin_agent(tmp_path, "deepgram", call, pre=pre)
+    assert "DEEPGRAM_API_KEY" in _missing(tmp_path)
+    assert _lk(tmp_path, "DEEPGRAM_API_KEY")[0].ready
+
+
+def test_a_bare_getenv_imported_from_os_keeps_the_plugins_own_requirement(tmp_path):
+    _write(
+        tmp_path,
+        "agent.py",
+        "from os import getenv\nfrom livekit.plugins import deepgram\n"
+        'x = deepgram.STT(api_key=getenv("DEEPGRAM_API_KEY"))\n',
+    )
+    assert "DEEPGRAM_API_KEY" in _missing(tmp_path)
+
+
+def test_elevenlabs_options_dict_is_not_ready_without_the_plugins_name(tmp_path):
+    _plugin_agent(tmp_path, "elevenlabs", "TTS(**opts)")
+    assert {"ELEVEN_API_KEY", "ELEVENLABS_API_KEY"} <= _missing(tmp_path)
+
+
+@pytest.mark.parametrize(
+    "call,pre",
+    [
+        ("TTS(api_key=KEY)", 'KEY = os.getenv("ELEVENLABS_API_KEY")'),
+        ("TTS(api_key=settings.elevenlabs_api_key)", ""),
+    ],
+)
+def test_an_unreadable_elevenlabs_api_key_asks_for_both_names(tmp_path, call, pre):
+    _plugin_agent(tmp_path, "elevenlabs", call, pre=pre)
+    assert "ELEVENLABS_API_KEY" in _missing(tmp_path, "ELEVEN_API_KEY")
+    assert not _lk(tmp_path, "ELEVEN_API_KEY")[0].ready
+    assert _lk(tmp_path, "ELEVEN_API_KEY", "ELEVENLABS_API_KEY")[0].ready
+
+
+def test_code_reading_the_eleven_names_is_labelled_elevenlabs(tmp_path):
+    _write(
+        tmp_path,
+        "agent.py",
+        'import os\na = os.environ["ELEVEN_API_KEY"]\nb = os.environ["ELEVENLABS_API_KEY"]\n',
+    )
+    _, found = _lk(tmp_path)
+    for name in ("ELEVEN_API_KEY", "ELEVENLABS_API_KEY"):
+        assert found[name].provider == "elevenlabs"
+        assert found[name].required is True

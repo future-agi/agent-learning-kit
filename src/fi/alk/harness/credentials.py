@@ -264,7 +264,7 @@ _PROVIDERS: tuple[tuple[tuple[str, ...], str, str], ...] = (
     (("LIVEKIT_", "ACCEPTANCE_LIVEKIT_"), "livekit", "connect to the voice room"),
     (("DEEPGRAM_",), "deepgram", "speech-to-text"),
     (("CARTESIA_",), "cartesia", "text-to-speech"),
-    (("ELEVENLABS_",), "elevenlabs", "text-to-speech"),
+    (("ELEVENLABS_", "ELEVEN_"), "elevenlabs", "text-to-speech"),
     (("OPENAI_",), "openai", "language or realtime model"),
     (("ANTHROPIC_",), "anthropic", "language model"),
     (("GOOGLE_", "VERTEX_", "CLOUD_ML_"), "google_cloud", "model or cloud runtime"),
@@ -298,9 +298,63 @@ _CONNECTOR_REQUIREMENTS: dict[str, tuple[str, ...]] = {
 _LIVEKIT_PROVIDER_CREDENTIALS = {
     "deepgram": ("DEEPGRAM_API_KEY",),
     "cartesia": ("CARTESIA_API_KEY",),
-    "elevenlabs": ("ELEVENLABS_API_KEY",),
+    "elevenlabs": ("ELEVEN_API_KEY",),
     "openai": ("OPENAI_API_KEY",),
 }
+
+
+# When a constructor's ``api_key=`` can't be read, ElevenLabs' own code may read either name.
+_LIVEKIT_UNREADABLE_KEY_EXTRA = {"elevenlabs": ("ELEVENLABS_API_KEY",)}
+_CODE_ENV_NAME = re.compile(r"[A-Z][A-Z0-9_]{2,}")
+
+
+def _plugin_key_names(node: ast.Call, provider: str) -> tuple[str, ...]:
+    """Names a LiveKit plugin constructor needs, judged by the ``api_key=`` it passes.
+
+    Only errs towards asking: anything that can't be read keeps the plugin's own row.
+    """
+    own = _LIVEKIT_PROVIDER_CREDENTIALS[provider]
+    fallback = own + _LIVEKIT_UNREADABLE_KEY_EXTRA.get(provider, ())
+    keys = [keyword for keyword in node.keywords if keyword.arg == "api_key"]
+    if not keys:
+        return fallback if any(k.arg is None for k in node.keywords) else own
+    value = keys[0].value
+    if isinstance(value, ast.Constant) and isinstance(value.value, str):
+        return () if value.value.strip() else fallback
+    if (
+        isinstance(value, ast.Subscript)
+        and _dotted_name(value.value) == "os.environ"
+        and isinstance(value.slice, ast.Constant)
+        and isinstance(value.slice.value, str)
+        and _CODE_ENV_NAME.fullmatch(value.slice.value)
+    ):
+        return ()
+    if (
+        isinstance(value, ast.Call)
+        and _dotted_name(value.func) in {"os.getenv", "os.environ.get"}
+        and value.args
+        and not any(isinstance(arg, ast.Starred) for arg in value.args)
+        and not any(k.arg is None for k in value.keywords)
+        and len(value.args) <= 2
+        and isinstance(value.args[0], ast.Constant)
+        and isinstance(value.args[0].value, str)
+        and _CODE_ENV_NAME.fullmatch(value.args[0].value)
+    ):
+        name = value.args[0].value
+        default = value.args[1] if len(value.args) > 1 else None
+        for keyword in value.keywords:
+            if keyword.arg == "default" and default is None:
+                default = keyword.value
+        if default is None or (
+            isinstance(default, ast.Constant) and default.value is None
+        ):
+            return (name,)
+        if isinstance(default, ast.Constant) and isinstance(default.value, str):
+            text = default.value.strip()
+            if not text or _PLACEHOLDER_VALUE.fullmatch(text):
+                return (name,)
+            return ()
+    return fallback
 
 
 def _dotted_name(node: ast.AST) -> str:
@@ -393,7 +447,7 @@ def _python_sdk_requirements(content: str) -> list[tuple[str, str]]:
             "TTS",
             "RealtimeModel",
         }:
-            for name in _LIVEKIT_PROVIDER_CREDENTIALS[provider]:
+            for name in _plugin_key_names(node, provider):
                 found.add((name, f"sdk:livekit.plugins.{provider}"))
         if provider == "google" and constructor in {"LLM", "STT", "TTS"}:
             vertex = next(
@@ -625,7 +679,11 @@ def discover_credentials(
     for name, finding in sorted(findings.items()):
         kind = _kind(name)
         required = bool(finding["required"])
-        if kind is RequirementKind.CONFIGURATION and finding["declared_default"]:
+        if (
+            kind is RequirementKind.CONFIGURATION
+            and finding["declared_default"]
+            and not any(str(o).startswith("sdk:") for o in finding["detected_from"])
+        ):
             required = False
         if kind is RequirementKind.HARNESS_INFRASTRUCTURE:
             status = RequirementStatus.HARNESS_PROVIDED
