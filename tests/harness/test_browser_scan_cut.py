@@ -407,6 +407,24 @@ def test_a_large_data_module_is_no_cut(tmp_path):
             {},
             id="named-3-mib-in",
         ),
+        # Exactly the per-file bound: the needle ends at its last byte.
+        pytest.param(
+            {
+                "big.py": "#" * (agent_type_check._LARGEST_UNREAD_SEARCHED - 19)
+                + "\nimport playwright\n"
+            },
+            {},
+            id="named-at-the-bound",
+        ),
+        # The toolkit's import holds no lowercase `playwright`.
+        pytest.param(
+            {
+                "big.py": "x = 1\n" * 30_000
+                + "from langchain_community.agent_toolkits import PlayWrightBrowserToolkit\n"
+            },
+            {},
+            id="toolkit",
+        ),
         # Python refuses the coding line until the codec is registered at run time.
         pytest.param(
             {"big.py": b"# coding: nonesuch\n" + _DATA_MODULE.encode()},
@@ -463,6 +481,25 @@ def test_an_unread_file_that_may_name_a_tool_cuts(tmp_path, monkeypatch, files, 
         monkeypatch.setattr(module, name, value)
     repo = _tree(tmp_path / "source", {"main.py": "import openai\n", **files})
     assert browser_scan(repo) == ([], frozenset({"file_size"}))
+
+
+def test_past_the_search_total_a_file_isnt_opened(tmp_path, monkeypatch):
+    repo = _tree(
+        tmp_path / "source",
+        {"main.py": "import openai\n", "big.py": _DATA_MODULE, "big_too.py": _DATA_MODULE},
+    )
+    monkeypatch.setattr(agent_type_check, "_UNREAD_SEARCH_TOTAL", len(_DATA_MODULE) - 1)
+    opened: list[str] = []
+    real = Path.open
+
+    def spy(self, *args, **kwargs):
+        opened.append(self.name)
+        return real(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", spy)
+    assert browser_scan(repo) == ([], frozenset({"file_size"}))
+    # Neither fits what's left of the total, so neither is read to be searched.
+    assert "big.py" not in opened and "big_too.py" not in opened
 
 
 @pytest.mark.parametrize(
