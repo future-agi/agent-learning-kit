@@ -1251,6 +1251,13 @@ ALLOWED: dict[tuple[str, str, str], tuple[int, str]] = {
         1, "compares the saved file's name; document writes agent.json"),
     ("fi.alk.harness.reading_result", "document", "_write_whole"): (
         1, "reads contract.json; writes agent.json through build_authored_agent's _redact"),
+    # Copies: each writes contract.json from bytes an earlier save already wrote.
+    ("fi.alk.harness.reading_result", "document", "replace_if_unchanged"): (
+        1, "rewrites the saved contract's own bytes with the reading's record (a technical key) "
+        "spliced in; the free text is the saved, cleaned text"),
+    ("fi.alk.harness.seed_contract", "use_seed", "_write_whole"): (
+        2, "installs the platform's seed, a reading's saved contract, as written; a reading from "
+        "before the cleaner stays as written (a named limit), and every send cleans again"),
     ("fi.alk.harness.authoring_entrypoint", "_prepare_source_data_invariants",
      "prune_invariant_scopes"): (1, _READS + " (the invariants file)"),
     ("fi.alk.harness.authoring_runtime_validation", "validate_and_repair",
