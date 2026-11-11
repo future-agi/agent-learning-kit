@@ -2611,3 +2611,123 @@ def test_a_shared_module_does_not_vouch_for_a_template_name(tmp_path: Path) -> N
 def test_the_sdk_names() -> None:
     assert len(SDK_NAMES) == 46
     assert scan_walk._SDK_SETTINGS == SDK_NAMES
+
+
+def test_each_folder_is_charged_once_across_the_two_passes(tmp_path: Path) -> None:
+    """The side pass walks the customer's own folders again; only the folders the first pass
+    never entered (side folders, and folders below one) are charged there."""
+    for index in range(40):
+        (tmp_path / f"app{index:02}" / "inner").mkdir(parents=True)
+        (tmp_path / "tests" / f"t{index:02}" / "deep").mkdir(parents=True)
+        (tmp_path / f"app{index:02}" / "examples" / "e").mkdir(parents=True)
+        (tmp_path / f"app{index:02}" / ".hidden" / "x").mkdir(parents=True)
+    (tmp_path / ".github" / "workflows").mkdir(parents=True)
+    charged: dict[str, int] = {"own": 0, "side": 0, "once": 0}
+
+    def into(key: str):
+        def charge(size: int) -> None:
+            charged[key] += size
+
+        return charge
+
+    top = str(tmp_path)
+    for _ in scan_walk._source_files(top, top, side=False, charge=into("own")):
+        pass
+    for _ in scan_walk._source_files(top, top, side=True, charge=into("side")):
+        pass
+    for _ in scan_walk._source_files(top, top, charge=into("once")):
+        pass
+
+    assert charged["own"] > 0 and charged["side"] > 0
+    assert charged["own"] + charged["side"] == charged["once"], charged
+
+
+def test_the_estimates_sizes_were_measured_on_the_hosted_kits_python() -> None:
+    """The sizes are CPython 3.12's. On 3.14 a tuple's header is larger, so the estimate would be
+    low there. This fails when the hosted image's kit venv moves to another
+    Python, so the sizes are measured again before the bound is trusted."""
+    dockerfile = (Path(__file__).resolve().parents[2] / "Dockerfile.hosted").read_text()
+    major, minor = scan_walk._SIZES_MEASURED_ON
+    made = [
+        line
+        for line in dockerfile.splitlines()
+        if "/opt/alk-venv" in line and ("-m venv" in line or "uv venv" in line or "virtualenv" in line)
+    ]
+    assert len(made) == 1, made
+    assert f"python{major}.{minor} -m venv /opt/alk-venv" in made[0], made
+    assert made[0].count("-m venv") == 1, made
+
+
+def test_a_memory_budget_stop_while_joining_says_so(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A held-budget stop during the join ends at `limit`, with its own cause in the log, not the
+    edge budget's."""
+    _files(tmp_path, {"bot.py": CLIENT})
+
+    def reached(self, *, upload: bool):
+        raise scan_walk._CapReached()
+
+    monkeypatch.setattr(scan_walk._Walk, "result", reached)
+    kept: list[int] = []
+    real_empty = scan_walk._empty_result
+
+    def empty(walk, stopped):
+        kept.append(len(walk.facts))
+        return real_empty(walk, stopped)
+
+    monkeypatch.setattr(scan_walk, "_empty_result", empty)
+    with caplog.at_level("WARNING", logger=scan_walk.logger.name):
+        result = scan_walk.walk_repo(tmp_path, deadline=FOREVER, clock=lambda: 0.0)
+
+    assert result.stopped == "limit"
+    assert "passed its memory budget" in caplog.text
+    assert "edge budget" not in caplog.text
+    assert kept == [0]  # the facts are let go before the empty result is built
+
+
+@pytest.mark.parametrize("shape", ["one_entry", "two_entries"])
+def test_a_fan_out_join_is_charged_without_its_base(tmp_path: Path, shape: str) -> None:
+    """110 hubs of leaves that each import one shared module, about 22,000 files: the join walks
+    every leaf. One entry puts the import table just past its growth at 21,846 entries. Two
+    entries are dearer still: the first fills that table, then the second's own search grows its
+    seen set while the table stays full (about 59.5 bytes a file). What the join really holds is
+    covered by the per-file charge alone, without `_JOIN_BASE`, and only with `_JOIN_PER_FILE`
+    at 64: at 56 the two-entry shape fails. Leaves that import nothing share
+    CPython's empty tuple, which would hide the per-file cost."""
+    per_hub = 199 if shape == "one_entry" else 198
+    hubs = {
+        f"h{h:03}.py": "".join(f"import l{h:03}_{n:03}\n" for n in range(per_hub)) for h in range(110)
+    }
+    leaves = {f"l{h:03}_{n:03}.py": "import common\n" for h in range(110) for n in range(per_hub)}
+    entries = {"a.py": "".join(f"import h{h:03}\n" for h in range(110)) + CLIENT}
+    if shape == "two_entries":
+        entries["b.py"] = "".join(f"import h{h:03}\n" for h in range(100)) + CLIENT
+    _files(tmp_path, {**entries, "common.py": "x = 1\n", **hubs, **leaves})
+
+    seen = _measure(tmp_path)
+
+    assert seen["join_rise"] > 1_000_000, seen
+    assert seen["join_rise"] <= seen["join_charged"] - scan_walk._JOIN_BASE, seen
+
+
+@pytest.mark.parametrize("entries", ["folders", "files", "links"])
+def test_a_wide_folder_is_charged_its_listing(tmp_path: Path, entries: str) -> None:
+    """One folder of many entries: what `os.walk` holds for the folder it is in, its names, is
+    charged once when the walk reaches it, before any name is filtered out (links to a folder are
+    listed as folders and then left out), so the charge is never below the walk's peak."""
+    target = tmp_path / "target"
+    target.mkdir()
+    wide = tmp_path / "wide"
+    wide.mkdir()
+    for index in range(80_000 if entries == "files" else 30_000):
+        if entries == "folders":
+            (wide / f"f{index:05}").mkdir()
+        elif entries == "files":
+            (wide / f"f{index:05}.txt").touch()
+        else:
+            (wide / f"f{index:05}").symlink_to(target)
+
+    seen = _measure(tmp_path)
+
+    assert seen["walk_peak"] <= seen["charged"], seen
