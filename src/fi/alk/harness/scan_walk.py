@@ -1551,9 +1551,9 @@ def _hazard(
         # folders below it.
         if index and clock() > deadline:
             return ""
-        # Sorted, so that a look stopped by a cap stops at the same folder on every file system.
+        # Folders sorted, so that a look stopped by a cap stops at the same folder on every file
+        # system. Files need no order: only their count and `agent.py`'s are used.
         directories.sort()
-        files.sort()
         directories[:] = [name for name in directories if name not in _BUILD_IGNORED]
         found += files.count("agent.py")
         if found > 1:
