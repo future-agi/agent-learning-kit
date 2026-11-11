@@ -672,8 +672,8 @@ def model_problems(contract: AgentContract, source_root: Path) -> list[str]:
             ini=ini,
             hash_comments=hash_comments,
             block_comments=block_comments,
-            # Configuration by its suffix or its whole name: env.xml and Dockerfile.xml are
-            # markup.
+            # Configuration by its suffix or its whole name: env.xml is markup. A name that
+            # is configuration by itself stays so whatever its suffix (Dockerfile.xml, .env.xml).
             markup=not (
                 suffix in CONFIG_SUFFIXES
                 or _names_configuration(name_lower)
