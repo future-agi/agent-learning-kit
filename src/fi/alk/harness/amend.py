@@ -19,12 +19,18 @@ the same kind of guess it exists to prevent.
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
-from .contract import AgentContract, known_modalities, validate_contract
+from ..providers.agent import _redact
+from .contract import (
+    CONTRACT_FILE,
+    AgentContract,
+    known_modalities,
+    validate_contract,
+    write_contract,
+)
 
-CONTRACT = "contract.json"
+CONTRACT = CONTRACT_FILE
 
 
 def widen(
@@ -78,12 +84,7 @@ def widen(
         contract.amendments.pop()
         return False, "the amended contract would not be valid: " + "; ".join(problems)
 
-    destination = Path(destination)
-    destination.mkdir(parents=True, exist_ok=True)
-    (destination / CONTRACT).write_text(
-        json.dumps(contract.model_dump(), indent=2, ensure_ascii=False),
-        encoding="utf-8",
-    )
+    _persist(contract, destination)
     return True, (
         f"{tool_name}.{argument} now accepts {', '.join(fresh)}. "
         f"{len(contract.amendments)} amendment(s) recorded on the contract."
@@ -104,8 +105,12 @@ def add_rule(
         return False, "no rule given"
     if not why.strip():
         return False, "say why: an unexplained rule is indistinguishable from a guess"
-    if any(rule.lower() == existing.lower() for existing in contract.hard_constraints):
-        return False, f"the agent already has that rule: {rule}"
+    # Both sides are compared as they are saved: a contract held from an older save can still
+    # hold its rules raw. One call, so a refused URL is logged once. The reply names the rule as
+    # saved too, since the chat sends it on to the platform.
+    cleaned, *existing = _redact([rule, *contract.hard_constraints])
+    if cleaned.lower() in (one.lower() for one in existing):
+        return False, f"the agent already has that rule: {cleaned}"
 
     contract.hard_constraints.append(rule)
     contract.amendments.append(f"rule added — {rule}: {why.strip()}")
@@ -115,12 +120,7 @@ def add_rule(
         contract.amendments.pop()
         return False, "the amended contract would not be valid: " + "; ".join(problems)
 
-    destination = Path(destination)
-    destination.mkdir(parents=True, exist_ok=True)
-    (destination / CONTRACT).write_text(
-        json.dumps(contract.model_dump(), indent=2, ensure_ascii=False),
-        encoding="utf-8",
-    )
+    _persist(contract, destination)
     return True, (
         f"added. The agent now has {len(contract.hard_constraints)} rules, and this one is "
         "graded from here on."
@@ -166,12 +166,7 @@ def set_modality(
         contract.amendments.pop()
         return False, "the amended contract would not be valid: " + "; ".join(problems)
 
-    destination = Path(destination)
-    destination.mkdir(parents=True, exist_ok=True)
-    (destination / CONTRACT).write_text(
-        json.dumps(contract.model_dump(), indent=2, ensure_ascii=False),
-        encoding="utf-8",
-    )
+    _persist(contract, destination)
     reached = {
         "voice": "a call placed to the agent where it is hosted, its own tools answered over a "
         "webhook",
@@ -191,25 +186,23 @@ def drop_rule(
     """
     if not why.strip():
         return False, "say why: removing a rule changes what is being graded"
+    # Both sides are compared as they are saved: a contract held from an older save can still
+    # hold its rules raw. One call, so a refused URL is logged once.
+    wanted, *saved_rules = _redact([rule.strip(), *contract.hard_constraints])
+    wanted = wanted.lower()
+    held = list(zip(contract.hard_constraints, (one.lower() for one in saved_rules)))
     match = next(
-        (
-            existing
-            for existing in contract.hard_constraints
-            if existing.lower() == rule.strip().lower()
-        ),
+        (existing for existing, as_saved in held if as_saved == wanted),
         None,
     ) or next(
-        (
-            existing
-            for existing in contract.hard_constraints
-            if rule.strip().lower() in existing.lower()
-        ),
+        (existing for existing, as_saved in held if wanted in as_saved),
         None,
     )
     if match is None:
+        # The rules as saved, since the chat sends this reply on to the platform.
         return False, (
             "no rule like that. It has:\n  - "
-            + "\n  - ".join(contract.hard_constraints)
+            + "\n  - ".join(saved_rules)
         )
     contract.hard_constraints.remove(match)
     contract.amendments.append(f"rule removed — {match}: {why.strip()}")
@@ -322,12 +315,9 @@ def drop_tool_references(contract: AgentContract) -> list[str]:
 
 
 def _persist(contract: AgentContract, destination: Path) -> None:
-    destination = Path(destination)
-    destination.mkdir(parents=True, exist_ok=True)
-    (destination / CONTRACT).write_text(
-        json.dumps(contract.model_dump(), indent=2, ensure_ascii=False),
-        encoding="utf-8",
-    )
+    """Save the contract the stage is holding. Its free text is cleaned in place as it is saved,
+    so the stage goes on working from what was saved."""
+    write_contract(contract, Path(destination))
 
 
 def not_offered(contract: AgentContract, candidates: dict[str, set[str]]) -> list[str]:

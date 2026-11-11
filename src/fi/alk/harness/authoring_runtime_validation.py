@@ -1427,6 +1427,27 @@ def _invariants_the_ir_still_breaks(world, authoring: Path) -> list[str]:
         return []
 
 
+def _promote_data_store(contract, authoring: Path, candidate_dir: Path) -> int:
+    """Copy only ``data_store`` from a candidate reading onto the saved contract, and save it.
+
+    Returns 0 when it was promoted, 1 when the candidate has none to give.
+    """
+    from .contract import AgentContract, write_contract
+
+    candidate_path = candidate_dir / "contract.json"
+    if not candidate_path.is_file():
+        return 1
+    candidate = AgentContract.model_validate_json(
+        candidate_path.read_text(encoding="utf-8")
+    )
+    if candidate.data_store is None or not candidate.data_store.kind.strip():
+        return 1
+    payload = contract.model_dump()
+    payload["data_store"] = candidate.data_store.model_dump()
+    write_contract(AgentContract.model_validate(payload), authoring)
+    return 0
+
+
 async def validate_and_repair(
     job,
     source: Path,
@@ -1509,24 +1530,11 @@ async def validate_and_repair(
                                 ],
                             )
                         )
-                        candidate_path = Path(candidate_dir) / "contract.json"
-                        if status != 0 or not candidate_path.is_file():
+                        if status != 0:
                             return 1
-                        candidate = AgentContract.model_validate_json(
-                            candidate_path.read_text(encoding="utf-8")
+                        return _promote_data_store(
+                            contract, authoring, Path(candidate_dir)
                         )
-                        if (
-                            candidate.data_store is None
-                            or not candidate.data_store.kind.strip()
-                        ):
-                            return 1
-                        payload = contract.model_dump()
-                        payload["data_store"] = candidate.data_store.model_dump()
-                        repaired = AgentContract.model_validate(payload)
-                        contract_path.write_text(
-                            repaired.model_dump_json(indent=2) + "\n", encoding="utf-8"
-                        )
-                    return 0
                 if generic and _needs_runtime_plan_repair(_active_repair_diagnostics):
                     from .contract import AgentContract
                     from .runtime_repair import request_runtime_plan_patch
