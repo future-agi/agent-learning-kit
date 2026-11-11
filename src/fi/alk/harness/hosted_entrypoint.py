@@ -35,6 +35,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Protocol, Sequence
 
+from ..providers.agent import _redact
 from . import observability
 from . import outbound as ob
 from .backends import GOOGLE_ADK_APPROVAL_ENV
@@ -782,7 +783,8 @@ def _agent_instructions(job: Any, bundle_dir: Path) -> str:
             parts.append(f"Summary: {summary}")
         if rules:
             parts.append("Rules:\n- " + "\n- ".join(rules))
-    return "\n\n".join(parts)
+    # The whole text, once: the job's own prompt, the summary and the rules may each hold a URL.
+    return _redact("\n\n".join(parts))
 
 
 def _bundle_contract_value(bundle_dir: Path, key: str) -> str | None:

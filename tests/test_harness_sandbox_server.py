@@ -8,7 +8,6 @@ from fastapi import HTTPException, UploadFile
 from fastapi.testclient import TestClient
 from pydantic import Field, ValidationError
 import pytest
-from pydantic import Field
 
 from fi.alk.harness import sandbox_server
 from fi.alk.harness.job import HarnessJob
@@ -1132,6 +1131,36 @@ def test_subfolder_scopes_credentials(tmp_path, cloning, monkeypatch, hosted_git
     required = {item["environment_name"]: item["required"] for item in manifest["requirements"]}
     assert required["A_ONLY_API_KEY"] is True
     assert required["B_ONLY_API_KEY"] is False
+
+
+def test_live_contract_output_loses_url_credentials_from_a_raw_contract(tmp_path):
+    """B3d (TH-9491, plan v5.1 §W9): a contract.json written directly, not by write_contract,
+    as a job from before the fix left it, is cleaned on its way to the live run view."""
+    from fi.alk.harness.sandbox_server import _stage_outputs
+
+    url = "https://bot:hunter2@hooks.example/v1?key=sk-1#frag"
+    (tmp_path / "contract.json").write_text(
+        json.dumps(
+            {
+                "one_liner": f"Books rides through {url}",
+                "modality": "voice",
+                "tools": [{"name": "book_ride"}],
+                "hard_constraints": [f"Always post to {url}", "Confirm before booking"],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    [contract] = [item for item in _stage_outputs(tmp_path) if item["kind"] == "contract"]
+
+    assert contract["data"]["one_liner"] == "Books rides through https://hooks.example/v1"
+    assert contract["data"]["hard_constraints"] == [
+        "Always post to https://hooks.example/v1",
+        "Confirm before booking",
+    ]
+    assert "hunter2" not in json.dumps(contract) and "sk-1" not in json.dumps(contract)
+
+
 class _DedicatedVmJob(HarnessJob):
     # Hosted jobs require the dedicated_vm runtime, which submit does not set yet. A
     # subclass rather than a factory, because get() rebuilds jobs with model_validate.

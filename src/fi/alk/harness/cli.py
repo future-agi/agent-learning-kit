@@ -19,6 +19,7 @@ from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
 
+from ..providers.agent import _redact
 from . import spend
 from . import observability
 from .build import open_stage as build_stage
@@ -62,7 +63,9 @@ def _source_root(destination: Path, explicit: str = "") -> str:
 
 
 def _render(event: Event) -> None:
-    line = event.line()
+    # The platform keeps the tail of this output, so a URL's password, query and fragment are
+    # dropped first, in one call per event, as emit_model_event drops them from the job's events.
+    line = _redact(event.line())
     if event.kind == TEXT:
         print(line, end="", flush=True)
     else:
@@ -109,7 +112,11 @@ async def _drain_authoring_commands(stage) -> None:
                     emitted.append(event.text)
 
             await stage.say(content, on_event=receive)
-            text = "".join(emitted).strip() or "I’m still working on the active authoring stage."
+            # Sent to the platform's chat as the hosted builder's replies are, so cleaned the same way.
+            text = (
+                _redact("".join(emitted).strip())
+                or "I’m still working on the active authoring stage."
+            )
             await client.emit(
                 "assistant_message",
                 message_id=str(uuid.uuid4()),
@@ -1015,12 +1022,15 @@ async def _auto(args: argparse.Namespace) -> int:
             for key in ("target", "label", "call_id", "is_error", "path", "outcome", "cost_usd")
             if key in detail
         }
+        # The job response carries these, so a URL's password or query is dropped first, in
+        # one call, before the text is cut.
+        text, safe_detail = _redact([event.text or None, safe_detail])
         emit(
             "harness.activity",
             str(detail.get("stage") or "authoring"),
             event_kind=event.kind,
             tool=event.tool or None,
-            text=event.text[:2000] if event.text else None,
+            text=text[:2000] if text else None,
             detail=safe_detail,
         )
 

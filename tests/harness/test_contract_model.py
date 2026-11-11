@@ -2687,7 +2687,7 @@ def test_lines_without_a_triple_quote_are_not_scanned(root, monkeypatch):
     assert scanned == ['"""', '"""', 'MODEL = "gpt-4o"']
 
 
-# Round 3: a short or list quote is held like any other
+# A short or list quote is held like any other
 
 
 def test_a_short_quote_is_held_and_its_lines_asked_about(tmp_path, root):
@@ -2845,7 +2845,7 @@ def test_lines_set_aside_in_a_call_refused_for_something_else_are_said(tmp_path,
     ) in text_of(second)
 
 
-# Round 3: pins for the line scan
+# Pins for the line scan
 
 
 @pytest.mark.parametrize("quote", ['x = "' + '\\"' * 40_000, "x = `" + "\\`" * 40_000])
@@ -2941,7 +2941,7 @@ def test_more_wrong_values_after_round_3_probes(root, file, written, name):
     assert problems == [not_named(name, 2, file)]
 
 
-# The settled round: pins for rules the plants found unpinned
+# Pins for rules the plants found unpinned
 
 
 @pytest.mark.parametrize(
@@ -3000,7 +3000,7 @@ def test_a_quote_alone_after_lines_alone_were_refused_is_not_asked_for_lines(tmp
     assert saved(destination)["system_prompt_excerpt"] == _BOOKING_QUOTE
 
 
-# The settled round: lines numbered as the reading numbers them, and the reviewers' pins
+# Lines numbered as the reading numbers them
 
 
 @pytest.mark.parametrize(
@@ -3190,7 +3190,7 @@ def test_a_type_projection_does_not_hide_a_triple_quote(root):
     assert problems == [not_named("gpt-4o", 2, "agent.scala")]
 
 
-# The settled round: the flows
+# The flows
 
 
 _SHORT_PROMPT = 'import os\n\nINSTRUCTIONS = "Be warm and brief."\n'
@@ -3353,7 +3353,7 @@ def test_a_saved_call_that_kept_the_quote_says_so(tmp_path, root):
     )
 
 
-# The settled round 2: a short quote on its own lines, and its limits
+# A short quote on its own lines, and its limits
 
 
 @pytest.mark.parametrize(

@@ -9,9 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 import re
-import tempfile
 from pathlib import Path
 from typing import Literal
 from urllib.parse import urljoin, urlsplit
@@ -27,6 +25,7 @@ from .contract import (
     Runtime,
     RuntimeConfigFile,
     generated_chat_interface_problem,
+    write_contract,
 )
 from .diagnostics import HarnessDiagnostic
 from .session import DONE, RESULT, TOOL, Event, Stage
@@ -1548,20 +1547,8 @@ def apply_runtime_plan_patch(
         available_secret_aliases=available_secret_aliases,
         allow_ingress_repair=allow_ingress_repair,
     )
-    contract_path.parent.mkdir(parents=True, exist_ok=True)
-    descriptor, temporary_name = tempfile.mkstemp(
-        prefix=".contract-runtime-repair-", suffix=".json", dir=contract_path.parent
-    )
-    temporary = Path(temporary_name)
-    try:
-        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
-            stream.write(repaired.model_dump_json(indent=2) + "\n")
-            stream.flush()
-            os.fsync(stream.fileno())
-        os.replace(temporary, contract_path)
-    finally:
-        temporary.unlink(missing_ok=True)
-    return repaired
+    # write_contract writes beside the file, syncs it and moves it into place.
+    return write_contract(repaired, contract_path.parent)
 
 
 async def request_runtime_plan_patch(

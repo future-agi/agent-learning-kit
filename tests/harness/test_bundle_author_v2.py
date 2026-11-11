@@ -5763,7 +5763,7 @@ def test_a_workspace_member_requires_what_its_shared_code_reads(tmp_path):
 
 @pytest.mark.parametrize("layout", ["libs/common/src/common", "libs/common/common"])
 def test_a_workspace_member_requires_what_another_member_it_imports_reads(tmp_path, layout):
-    # Dileep's third review: the shared code is its own member, installed by `uv run` and imported
+    # The shared code is its own member, installed by `uv run` and imported
     # by its package name, in a src/ or a flat layout.
     source = _repo(
         tmp_path,
