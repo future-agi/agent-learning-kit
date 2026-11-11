@@ -59,7 +59,7 @@ from .job import (
 )
 from .packaging import PackagingManifest, inspect_packaging
 from .provision import ProvisionError, source_fingerprint, stop
-from .secrets import resolve_worker_secrets, worker_environment
+from .secrets import SecretResolutionError, resolve_worker_secrets, worker_environment
 from .source_folder import SubfolderNotFound, agent_folder, subfolder_not_found
 
 
