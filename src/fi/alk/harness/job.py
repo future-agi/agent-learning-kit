@@ -297,6 +297,19 @@ class HarnessJobMetadata(BaseModel):
     customer_code_environment: dict[str, str] = Field(default_factory=dict)
 
 
+def routed_through_gateway(target_model: object) -> bool:
+    """True for a model name the model gateway must route, such as `vertex_ai/gemini-3.7-flash`.
+
+    The first segment is compared case-sensitively because the Agents SDK does the same: only
+    the exact prefix `openai` is stripped and sent on as a bare OpenAI name.
+    """
+    return (
+        isinstance(target_model, str)
+        and "/" in target_model
+        and target_model.partition("/")[0] != "openai"
+    )
+
+
 class HarnessJob(BaseModel):
     schema_version: str = HARNESS_JOB_SCHEMA_VERSION
     job_id: str
@@ -376,6 +389,14 @@ class HarnessJob(BaseModel):
                 "values. Simulator credentials are not target credentials. A requested "
                 "provider/model must be configured through the agent's supported settings, "
                 "then verified with a real chat. Do not substitute a different provider."
+            )
+        if routed_through_gateway(target_model):
+            instructions.append(
+                "If the agent uses the OpenAI Agents SDK and takes its model as a name, give it "
+                f"the requested model written as openai/{target_model}: the SDK refuses or "
+                "reroutes a name whose first segment is not openai, and it removes openai/ and "
+                "sends the rest unchanged to its configured endpoint. Never change the model "
+                "itself."
             )
         if self.require_tool_workflow:
             instructions.append(

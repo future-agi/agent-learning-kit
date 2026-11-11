@@ -6523,3 +6523,66 @@ def test_bundle_main_matching_folder_passes(tmp_path, monkeypatch):
 
     assert code == 0 and len(seen) == 1
     assert not (authoring / "failure.json").exists()
+
+
+_GATEWAY_MARK = "ALK_OPENAI_AGENTS_CHAT_COMPLETIONS"
+
+
+def _gateway_job(target_model: str | None) -> HarnessJob:
+    job = _job(connector="auto")
+    if target_model is not None:
+        job.agent.config["target_model"] = target_model
+    return job
+
+
+def _gateway_control_environment(tmp_path: Path, lane: str, target_model: str | None):
+    if lane == "compose":
+        source = tmp_path / "compose-agent"
+        source.mkdir()
+        (source / "agent.py").write_text("print('agent')\n", encoding="utf-8")
+        (source / "requirements.txt").write_text("\n", encoding="utf-8")
+        (source / "compose.yml").write_text(
+            "services:\n  postgres:\n    image: postgres:16\n  agent:\n    build: .\n"
+            "    depends_on:\n      postgres: {condition: service_healthy}\n",
+            encoding="utf-8",
+        )
+        plan = resolve_environment_plan(
+            source,
+            _gateway_job(target_model),
+            contract_modality="chat",
+            contract_interface_kind="http",
+            contract_runtime={},
+        )
+    else:
+        text, runtime, kind = _LANES[lane]
+        source = _repo(
+            tmp_path,
+            {"pyproject.toml": _PROJECT, "agent.py": text},
+        )
+        plan = resolve_environment_plan(
+            source,
+            _gateway_job(target_model),
+            contract_modality="chat",
+            contract_interface_kind=kind,
+            contract_runtime=dict(runtime),
+        )
+    return next(p for p in plan.processes if p.name == plan.control_service).environment
+
+
+@pytest.mark.parametrize("lane", ["callback", "declared", "compose"])
+def test_routed_target_model_marks_the_agent_process_for_chat_completions(
+    tmp_path: Path, lane: str
+) -> None:
+    environment = _gateway_control_environment(
+        tmp_path, lane, "vertex_ai/gemini-3.7-flash"
+    )
+    assert environment[_GATEWAY_MARK] == "1"
+
+
+@pytest.mark.parametrize("lane", ["callback", "declared", "compose"])
+@pytest.mark.parametrize("target_model", ["gpt-4o", "openai/gpt-4o", None])
+def test_unrouted_target_model_leaves_the_agent_process_unmarked(
+    tmp_path: Path, lane: str, target_model: str | None
+) -> None:
+    environment = _gateway_control_environment(tmp_path, lane, target_model)
+    assert _GATEWAY_MARK not in environment
