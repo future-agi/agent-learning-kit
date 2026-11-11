@@ -212,11 +212,14 @@ class _Unread(Exception):
     pass
 
 
-# CPython 3.12's sizes on a 64-bit build, as asked of the allocator: a str (`_text`), a tuple
+# CPython's sizes on a 64-bit build, as asked of the allocator, measured on 3.12, the Python the
+# hosted image builds the kit's venv with (`_SIZES_MEASURED_ON`): a str (`_text`, which uses
+# 3.11's 49-byte header, so on 3.12 and 3.13, at 41, it is 8 bytes high), a tuple
 # (`_TUPLE` and a slot per item), a set's own object, one dict or set entry with its share of
 # the table, a facts object, and the join's share for a file that could be an agent (its sign,
 # its component bookkeeping, its row) beside three path strings `_project_of` and
 # `_subfolder` make. Each is then charged at the block the allocator gives it (`_block`).
+_SIZES_MEASURED_ON = (3, 12)
 _TUPLE = 40
 _SLOT = 8
 _SET = 216
@@ -224,7 +227,8 @@ _ENTRY = 112
 _FACTS = 512
 _JOIN_SHARE = 768
 # What the join holds for every kept file however it's joined: its place in the sorted list of
-# paths and in one search's set of files seen.
+# paths and in one search's set of files seen. Held by
+# `test_a_fan_out_join_is_charged_without_its_base`, which fails with this at 0.
 _JOIN_PER_FILE = 64
 # What the join holds whatever was kept: its result, and up to `_MAX_AGENTS` rows with their
 # names and evidence. Charged once, when the walk starts. A build hazard's own look is
@@ -915,11 +919,20 @@ def _source_files(
     Installed trees and the folders a build skips are never entered. ``side`` False gives only
     files outside test, example and other side folders; True gives only the files in them.
     ``charge`` counts each folder kept to enter, at its full path, which is what `os.walk`
-    holds until it enters it."""
+    holds until it enters it, and each folder's own listing, its subfolder and file names, which
+    `os.walk` holds while the walk is in that folder. With ``side`` True, the second pass, only
+    folders the first pass never entered are counted: side folders, and folders below one."""
     for directory, directories, files in os.walk(start, followlinks=False):
         directories.sort()
         files.sort()
         relative = directory[len(top) :].split(os.sep)[1:]
+        first_pass = side is not True or any(_is_side_part(part) for part in relative)
+        if charge is not None and first_pass:
+            # Summed list by list: one tuple of every name would itself hold a slot a name.
+            charge(
+                sum(_SLOT + _text(name) for name in directories)
+                + sum(_SLOT + _text(name) for name in files)
+            )
         if relative and any(name.endswith(".dist-info") for name in directories):
             # An installed tree, not the customer's code.
             directories[:] = []
@@ -928,9 +941,10 @@ def _source_files(
         if side is False:
             directories[:] = [name for name in directories if not _is_side_part(name)]
         if charge is not None and directories:
-            charge(
-                sum(2 * _SLOT + _text(os.path.join(directory, name)) for name in directories)
-            )
+            new = directories
+            if not first_pass:
+                new = [name for name in directories if _is_side_part(name)]
+            charge(sum(2 * _SLOT + _text(os.path.join(directory, name)) for name in new))
         folder = "/".join(relative)
         for name in files:
             if side is None or _read_with_side_files(_join(folder, name)) is side:
@@ -1473,11 +1487,16 @@ def walk_repo(
         logger.warning("agent walk: joining files into agents ran out of time")
         walk.facts.clear()
         return _empty_result(walk, "clock")
-    except (_ResultTooBig, _CapReached):
+    except _ResultTooBig:
         # Too many candidates reach each other to hold: the same end as the walk's other caps.
-        # The join's lookups all meet folders the walk already charged, so none charges again;
-        # if one ever did, past a held stop, it ends here too rather than in the crash path.
         logger.warning("agent walk: joining files into agents passed its edge budget")
+        walk.facts.clear()
+        return _empty_result(walk, "limit")
+    except _CapReached:
+        # The join's lookups all meet folders the walk already charged, so none charges again;
+        # if one ever did, past a held stop, it ends here rather than in the crash path. The
+        # rows found so far are dropped with the facts, unlike a stop during the walk.
+        logger.warning("agent walk: joining files into agents passed its memory budget")
         walk.facts.clear()
         return _empty_result(walk, "limit")
     logger.info(
@@ -1542,9 +1561,9 @@ def _hazard(
         # folders below it.
         if index and clock() > deadline:
             return ""
-        # Sorted, so that a look stopped by a cap stops at the same folder on every file system.
+        # Folders sorted, so that a look stopped by a cap stops at the same folder on every file
+        # system. Files need no order: only their count and `agent.py`'s are used.
         directories.sort()
-        files.sort()
         directories[:] = [name for name in directories if name not in _BUILD_IGNORED]
         found += files.count("agent.py")
         if found > 1:
