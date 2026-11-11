@@ -618,7 +618,7 @@ def test_a_file_that_raises_something_unexpected_costs_only_that_file(
     assert record.exc_info is None
 
 
-def test_a_skip_logs_its_type_once_and_its_path_and_trace_at_debug_only(
+def test_a_skip_logs_its_type_once_and_its_path_at_debug_only_with_no_trace(
     tmp_path, monkeypatch, caplog
 ):
     _tree(tmp_path, {"a_odd.py": "x = 1\n", "b_odd.py": "x = 1\n", "agent.py": "import playwright\n"})
@@ -641,10 +641,17 @@ def test_a_skip_logs_its_type_once_and_its_path_and_trace_at_debug_only(
         "SOURCE-LINE" in record.getMessage() or "odd" in record.getMessage() or record.exc_info
         for record in loud
     )
-    quiet = [record for record in caplog.records if record.levelno < 20 and record.exc_info]
-    assert [record.exc_info[0] for record in quiet] == [LookupError, LookupError]
-    assert "a_odd.py" in quiet[0].getMessage()
-    assert "b_odd.py" in quiet[1].getMessage()
+    # No record at any level carries a trace or the error's own text, which can quote the source.
+    assert not any(record.exc_info or "SOURCE-LINE" in record.getMessage() for record in caplog.records)
+    assert "SOURCE-LINE" not in caplog.text
+    quiet = [
+        record.getMessage()
+        for record in caplog.records
+        if record.levelno < 20 and record.getMessage().startswith("agent type scan skipped ")
+    ]
+    assert len(quiet) == 2
+    assert "a_odd.py" in quiet[0] and quiet[0].endswith(": LookupError")
+    assert "b_odd.py" in quiet[1] and quiet[1].endswith(": LookupError")
 
 
 @pytest.mark.skipif(sys.version_info < (3, 12), reason="3.11's tokenizer reads a NUL byte")
