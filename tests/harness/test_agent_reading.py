@@ -1865,6 +1865,8 @@ def test_a_cancelled_contract_save_writes_nothing(tmp_path, monkeypatch, where, 
     only after the scan, and the refusing call reaches its write with no wait after the scan.
     So the scan is its only wait (``scan-browser``).
     """
+    # It patches checks the save would otherwise run in a child, so they run in this process.
+    monkeypatch.setenv("ALK_SAVE_CHECKS", "thread")
     subfolder = SCRAPER if where == "scan-browser" else SUPPORT
     spec, output = _reading_spec(tmp_path, _job(subfolder=subfolder))
     tool = _submit_contract(spec)
@@ -1920,6 +1922,8 @@ def test_the_readings_gemini_tools_run_on_its_loop(tmp_path, monkeypatch):
     So the reading's last cancel reaches it. ADK's tool_thread_pool_config would move it to a
     thread's own loop, but only in live mode in the locked 2.7.1, which a reading never uses.
     """
+    # It patches checks the save would otherwise run in a child, so they run in this process.
+    monkeypatch.setenv("ALK_SAVE_CHECKS", "thread")
     from google.adk.models.google_llm import Gemini
     from google.adk.models.llm_response import LlmResponse
     from google.adk.runners import Runner

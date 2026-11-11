@@ -123,8 +123,12 @@ def _reading(modality: str | None = "chat", **fields):
     return payload
 
 
-def _submitter(destination: Path, scan_root: Path, subfolder: str | None = None):
-    server = contract_tools(destination, scan_root=scan_root, subfolder=subfolder)
+def _submitter(
+    destination: Path, scan_root: Path, subfolder: str | None = None, save_checks=None
+):
+    server = contract_tools(
+        destination, scan_root=scan_root, subfolder=subfolder, save_checks=save_checks
+    )
     tool = next(one for one in server.tools if one.name == "submit_contract")
     return lambda payload: asyncio.run(tool.handler(payload))
 
@@ -552,9 +556,31 @@ def test_a_large_honest_repository_gets_a_look(tmp_path, monkeypatch):
     monkeypatch.setattr(agent_type_check, "_LARGEST_SCAN", 64 * 1024)
     agent_type_check._scan.cache_clear()
     assert browser_scan(repo) == ([], frozenset({"scan_total"}))
-    answer = _submitter(tmp_path / "out", repo)(_reading("chat"))
+    answer = _submitter(tmp_path / "out", repo, save_checks="thread")(_reading("chat"))
     assert _text(answer) == _look(_CUT_CHAT.format(claimed="chat"))
 
+
+
+def test_a_large_honest_repository_gets_a_look_from_the_childs_scan(tmp_path):
+    import inspect
+
+    # The child's scan stops at its limits; a stand-in says so, since a patch here can't reach it.
+    repo = _tree(
+        tmp_path / "source",
+        {
+            "service/main.py": "from playwright.sync_api import sync_playwright\n",
+            "save-stand-in.json": json.dumps({"scan": "cut"}),
+        },
+    )
+    server = contract_tools(
+        tmp_path / "out", scan_root=repo, save_checks="child", save_stand_in="_save_stand_ins"
+    )
+    handler = next(one for one in server.tools if one.name == "submit_contract").handler
+
+    answer = asyncio.run(handler(_reading("chat")))
+
+    assert _text(answer) == _look(_CUT_CHAT.format(claimed="chat"))
+    assert inspect.getclosurevars(handler).nonlocals["checker"].ran_in_child == 0
 
 def test_the_walks_stop_is_no_cut(tmp_path, caplog):
     # Over the walk's 512 KB parse total in modules that import, none of them naming a tool.
