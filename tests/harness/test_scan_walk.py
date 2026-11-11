@@ -2306,6 +2306,8 @@ def test_each_folder_is_charged_once_across_the_two_passes(tmp_path: Path) -> No
         (tmp_path / f"app{index:02}" / "inner").mkdir(parents=True)
         (tmp_path / "tests" / f"t{index:02}" / "deep").mkdir(parents=True)
         (tmp_path / f"app{index:02}" / "examples" / "e").mkdir(parents=True)
+        (tmp_path / f"app{index:02}" / ".hidden" / "x").mkdir(parents=True)
+    (tmp_path / ".github" / "workflows").mkdir(parents=True)
     charged: dict[str, int] = {"own": 0, "side": 0, "once": 0}
 
     def into(key: str):
@@ -2332,7 +2334,10 @@ def test_the_estimates_sizes_were_measured_on_the_hosted_kits_python() -> None:
     Python, so the sizes are measured again before the bound is trusted."""
     dockerfile = (Path(__file__).resolve().parents[2] / "Dockerfile.hosted").read_text()
     major, minor = scan_walk._SIZES_MEASURED_ON
-    assert f"python{major}.{minor} -m venv /opt/alk-venv" in dockerfile
+    made = [line for line in dockerfile.splitlines() if "-m venv" in line and "/opt/alk-venv" in line]
+    assert len(made) == 1, made
+    assert f"python{major}.{minor} -m venv /opt/alk-venv" in made[0], made
+    assert made[0].count("-m venv") == 1, made
 
 
 def test_a_memory_budget_stop_while_joining_says_so(
