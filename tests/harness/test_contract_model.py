@@ -2145,7 +2145,7 @@ def test_a_crafted_file_of_block_comments_does_not_hold_up_the_check(root, writt
 
     _, _, took = checked(root, {"name": "gpt-4o", "path": "crafted.js", "line": line})
 
-    assert took < 0.5
+    assert took < QUICK_SECONDS
 
 
 def test_lines_inside_a_block_comment_without_its_closer_are_not_scanned(
