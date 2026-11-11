@@ -25,14 +25,18 @@ import tempfile
 from .agent_type_check import EXIT_REFUSED, failure_message
 from .cli import _auto
 from .failure_file import FAILURE_FILE
-from .job import HarnessJob, ProviderExecutionMode, SourceKind
+from .job import (
+    PROVIDER_MANAGED_CONNECTORS as PROVIDER_MANAGED_CONNECTORS,
+    HarnessJob,
+    ProviderExecutionMode,
+    SourceKind,
+    provider_profile_source,
+)
 from .hosted_compose_bootstrap import initialize_hosted_compose
 from .provider_import import inspect_provider_target
 from .scenarios import load as load_written
 from .source_folder import refuse_unusable_folder, saved_runtime
 from .understand import PROVIDER_IMPORT_PROFILE_PATH_ENV
-
-PROVIDER_MANAGED_CONNECTORS = frozenset({"vapi", "retell", "retell_chat"})
 
 
 def _persist_authored_scenario_count(
@@ -468,10 +472,8 @@ def _load_provider_import_profile(
     secrets_path: Path | None,
     profile_cache_path: Path | None = None,
 ) -> dict[str, object] | None:
-    if (
-        job.agent.mode is ProviderExecutionMode.CONNECT_ONLY
-        and job.agent.connector.strip().lower() == "phone"
-    ):
+    source = provider_profile_source(job.agent)
+    if source == "phone":
         # A dial-in number has no provider API to inspect. The supplied prompt is the only
         # behavioral source of truth; never pretend we discovered tools or implementation code.
         return {
@@ -481,10 +483,7 @@ def _load_provider_import_profile(
             "system_prompt": str(job.agent.config["target_system_prompt"]),
             "tools": [],
         }
-    if (
-        job.agent.mode is ProviderExecutionMode.CONNECT_ONLY
-        and job.agent.connector.strip().lower() == "livekit"
-    ):
+    if source == "livekit":
         if secrets_path is not None:
             secrets_path.unlink(missing_ok=True)
         return {
@@ -494,14 +493,7 @@ def _load_provider_import_profile(
             "system_prompt": str(job.agent.config["target_system_prompt"]),
             "tools": [],
         }
-    inspect_connect_only_provider = (
-        job.agent.mode is ProviderExecutionMode.CONNECT_ONLY
-        and job.agent.connector.strip().lower() in PROVIDER_MANAGED_CONNECTORS
-    )
-    if (
-        job.agent.mode is not ProviderExecutionMode.PROVIDER_IMPORT
-        and not inspect_connect_only_provider
-    ):
+    if source is None:
         return None
     if profile_cache_path is not None and profile_cache_path.is_file():
         cached = json.loads(profile_cache_path.read_text(encoding="utf-8"))
