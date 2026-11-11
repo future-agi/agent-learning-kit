@@ -36,6 +36,7 @@ from .backends import qualified as qualified  # noqa: F401  (re-export; callers 
 from .backends import tool, tool_server
 
 from .contract import (
+    prompt_quote,
     CALL_DIRECTIONS,
     AgentContract,
     Runtime,
@@ -57,12 +58,20 @@ from .runtime_selection import (
     COMPOSE_SERVICE_OUTSIDE_FOLDER,
     PathLookupsSpent,
     RuntimeSelectionError,
-    charged_path,
     path_lookup_budget,
     select_runtime,
 )
+from .model_citation import (
+    model_problems,
+    quote_pieces,
+    quote_problem,
+    says_something,
+    read_source,
+    resolved_in_source,
+    source_lines,
+)
 from .python_source import utf8_size
-from .source_folder import SubfolderNotFound, agent_folder, bind_runtime, is_within
+from .source_folder import SubfolderNotFound, agent_folder, bind_runtime
 
 _LOG = logging.getLogger(__name__)
 
@@ -198,6 +207,8 @@ def _checked_contract(
     require_setup_contract: bool,
     subfolder: str | None,
     reached: list[Path] | None = None,
+    asked: set[str] | None = None,
+    held: dict[str, str] | None = None,
 ) -> AgentContract | dict[str, Any]:
     """The contract to save, or the problems to send back. It reads the customer's files and
     writes nothing, so the tool runs it off the event loop. ``reached`` is the code outside the
@@ -208,6 +219,8 @@ def _checked_contract(
         contract = AgentContract.model_validate(payload)
     except Exception as invalid:
         return _problems([f"schema:{invalid}"[:600]], arrived)
+    # Only the save records lines it couldn't confirm.
+    contract.unconfirmed_prompt_from = []
 
     problems = validate_contract(contract)
     if (
@@ -226,7 +239,7 @@ def _checked_contract(
             problems.append(problem)
     with path_lookup_budget():
         return _checked_against_source(
-            contract, problems, arrived, source_root, subfolder, reached
+            contract, problems, arrived, source_root, subfolder, reached, asked, held
         )
 
 
@@ -237,16 +250,126 @@ def _checked_against_source(
     source_root: Path | None,
     subfolder: str | None,
     reached: list[Path] | None = None,
+    asked: set[str] | None = None,
+    held: dict[str, str] | None = None,
 ) -> AgentContract | dict[str, Any]:
-    """The checks that read the customer's files, under the save's one path lookup budget."""
+    """The checks that read the customer's files, under the save's one path lookup budget.
+    ``asked`` is the reading's record of what it has been asked once. A model whose citation was
+    refused before is left out the second time, and lines that didn't hold the quote are left out
+    for the quote, rather than refused again: both are optional, and neither may cost the
+    reading its turns. ``held`` is the reading's latest quote (submit_contract keeps it), so
+    lines named later without one are still checked against what was quoted."""
     if source_root is not None:
         from .source_tool_evidence import tool_evidence_problems
 
+        quote = own = contract.system_prompt_excerpt
+        # Lines named with no quote of their own (or one too short to say anything), checked
+        # against the reading's latest quote, which submit_contract holds.
+        alone = False
+        if (
+            held is not None
+            and contract.system_prompt_from
+            and not quote_pieces(quote)
+            and held.get("prompt-quote")
+            # A short quote held for this very call is this call's own, not one given before.
+            and held["prompt-quote"] != quote
+        ):
+            quote = held["prompt-quote"]
+            alone = True
+        # Said when the fallback below sets the lines aside in a call refused for something else.
+        set_aside: list[str] = []
         try:
             problems.extend(tool_evidence_problems(contract, source_root, subfolder))
-            problems.extend(_copy_prompt(contract, source_root))
+            copy_problems = _copy_prompt(contract, source_root)
+            problems.extend(copy_problems)
+            if contract.system_prompt_from and not copy_problems:
+                named = ", ".join(
+                    f"{where.path[:200]} {where.start_line}-{where.end_line}"
+                    for where in contract.system_prompt_from
+                )
+                mismatch = quote_problem(quote, contract.system_prompt_excerpt, named)
+                confirmed = None if mismatch else quote
+                if (
+                    mismatch
+                    # Only lines checked against a held quote can hold their own instead (and
+                    # the second search is spent only then).
+                    and alone
+                    and says_something(own)
+                    # Words, not a name: PROMPT or SYSTEM_PROMPT is on almost any prompt's lines.
+                    and len(own.split()) > 1
+                    # A quote some lines already held stands: a short one doesn't replace it.
+                    and held.get("prompt-quote-confirmed") != quote
+                    and quote_problem(own, contract.system_prompt_excerpt, named) is None
+                ):
+                    # The call's own short quote is in its lines letter for letter: that is this
+                    # call's evidence, and the quote it passed with is the reading's latest now.
+                    mismatch = None
+                    held["prompt-quote"] = confirmed = own
+                if held is not None and confirmed and says_something(confirmed):
+                    held["prompt-quote-confirmed"] = confirmed
+                if mismatch:
+                    if asked is None:
+                        problems.append(mismatch)
+                    elif alone and "prompt-lines-alone" not in asked:
+                        # The lines may be right and the quote they were checked against wrong:
+                        # asked once to quote these lines, before either is given up.
+                        asked.add("prompt-lines-alone")
+                        shown = " ".join(quote.split())[:80]
+                        outcome = (
+                            "the quote is kept and the lines are recorded as unconfirmed"
+                            if quote_pieces(quote)
+                            else "the lines are copied as the prompt and recorded as unconfirmed, "
+                            "since that quote is too short to stand for it"
+                        )
+                        problems.append(
+                            f"system_prompt_from: the lines named ({named}) don't hold the quote "
+                            f"you gave before ({shown}); if these lines are the prompt, quote "
+                            "them word for word in system_prompt_excerpt, with ... where you "
+                            f"leave text out. If they are refused again against it, {outcome}"
+                        )
+                    elif asked & {"prompt-quote", "prompt-lines-alone"}:
+                        # Either way the lines are kept on record as unconfirmed.
+                        contract.unconfirmed_prompt_from = list(contract.system_prompt_from)
+                        if quote_pieces(quote):
+                            # The quote, which is what was read, rather than lines nobody
+                            # confirmed.
+                            contract.system_prompt_excerpt = quote
+                            contract.system_prompt_from = []
+                            set_aside.append(
+                                f"system_prompt_from: the lines named ({named}) are left out and "
+                                "the quote is kept, since they don't hold it"
+                            )
+                        else:
+                            # A quote of a few words says too little to stand for the prompt:
+                            # the lines are copied.
+                            set_aside.append(
+                                f"system_prompt_from: the lines named ({named}) are copied "
+                                "unconfirmed, since they don't hold the short quote"
+                            )
+                    else:
+                        problems.append(mismatch)
+                        asked.add("prompt-quote")
+                        problems.append(
+                            "system_prompt_from: lines named later are checked against this "
+                            "quote until you give another; a later mismatch records the lines as "
+                            "unconfirmed and keeps the quote, or the lines if the quote has fewer "
+                            "than 16 letters"
+                        )
+            if cited := model_problems(contract, source_root):
+                if asked is not None and "model" in asked:
+                    contract.model = None
+                else:
+                    problems.extend(cited)
+                    if asked is not None:
+                        asked.add("model")
+                        problems.append("model: if the model is refused again, it is left out")
         except PathLookupsSpent as spent:
             return _problems([*problems, str(spent)], arrived)
+        if problems:
+            problems.extend(set_aside)
+    else:
+        # With no source there is no line to find the name on, so the model is unknown.
+        contract.model = None
     runtime = contract.runtime
     if subfolder and source_root is not None:
         try:
@@ -309,13 +432,24 @@ def _save_contract(contract: AgentContract, destination: Path) -> dict[str, Any]
         os.replace(partial, path)
     finally:
         partial.unlink(missing_ok=True)
-    return _ok(
+    said = (
         f"Accepted and saved to {path}.\n"
         f"{len(contract.tools)} tools: {', '.join(sorted(contract.tool_names()))}\n"
         f"{len(contract.hard_constraints)} rules, "
         f"{len(contract.real_use_cases)} use cases, "
         f"{len(contract.open_questions)} open questions."
     )
+    if contract.unconfirmed_prompt_from:
+        named = ", ".join(
+            f"{where.path[:200]} {where.start_line}-{where.end_line}"
+            for where in contract.unconfirmed_prompt_from
+        )
+        kept = "the lines are the prompt" if contract.system_prompt_from else "the quote is the prompt"
+        said += (
+            f"\nsystem_prompt_from: the lines named ({named}) are recorded as unconfirmed, since "
+            f"they don't hold the quote; {kept}."
+        )
+    return _ok(said)
 
 
 # One prompt file, and what the excerpt copies from all of them: the same file named a hundred
@@ -338,22 +472,20 @@ def _copy_prompt(contract: AgentContract, source_root: Path) -> list[str]:
     read = copied = 0
     for index, where in enumerate(contract.system_prompt_from):
         if where.path not in found_at:
-            try:
-                # Through links, resolving one path can cost a lookup for each part of every
-                # target; each is charged to the save's budget.
-                resolved = charged_path(root / where.path)
-                found_at[where.path] = (
-                    resolved if is_within(resolved, root) and resolved.is_file() else None
-                )
-            except (OSError, RuntimeError, ValueError):
-                found_at[where.path] = None
+            # Through links, resolving one path can cost a lookup for each part of every
+            # target; each is charged to the save's budget.
+            found_at[where.path] = resolved_in_source(root, where.path)
         path = found_at[where.path]
+        raw = None
+        if path is not None and path not in lines_of and path not in too_large:
+            raw = read_source(path, _LARGEST_PROMPT_FILE)
+            if raw is None:
+                # Not a regular file, or one that can't be opened: the same answer as missing.
+                found_at[where.path] = path = None
         if path is None:
             problems.append(f"system_prompt_from[{index}]: {where.path} is not a file in the source")
             continue
-        if path not in lines_of and path not in too_large:
-            with path.open("rb") as handle:
-                raw = handle.read(_LARGEST_PROMPT_FILE + 1)
+        if raw is not None:
             read += len(raw)
             if read > _LARGEST_PROMPT_READ:
                 problems.append(
@@ -364,7 +496,7 @@ def _copy_prompt(contract: AgentContract, source_root: Path) -> list[str]:
             if len(raw) > _LARGEST_PROMPT_FILE:
                 too_large.add(path)
             else:
-                lines_of[path] = raw.decode("utf-8", errors="replace").splitlines()
+                lines_of[path] = source_lines(raw)
         if path in too_large:
             problems.append(
                 f"system_prompt_from[{index}]: {where.path} is larger than 1 MiB; name the "
@@ -514,6 +646,8 @@ def contract_tools(
     # A gate with no way through would permanently block the rare agent that genuinely lacks it,
     # and this stage cannot tell those two apart from the outside.
     nudged: set[str] = set()
+    # What was quoted for the prompt when the lines named for it were refused.
+    held: dict[str, str] = {}
     refused = False
     second_look = SecondLook()
     found: list[str] | None = None
@@ -609,7 +743,26 @@ def contract_tools(
                     },
                     "description": "Where the agent's whole prompt is written: every part it is "
                     "assembled from, in order, as a path relative to the source root and the first "
-                    "and last line of each. These lines replace system_prompt_excerpt as written.",
+                    "and last line of each. Once they are checked against your quote in "
+                    "system_prompt_excerpt, these lines replace it as written: keep the quote too.",
+                },
+                # Nothing required inside it either: a model sent without its line reaches the
+                # save, which says what is missing, instead of failing the whole call here.
+                "model": {
+                    "type": "object",
+                    "properties": {
+                        "provider": {"type": "string"},
+                        "name": {"type": "string"},
+                        "path": {"type": "string"},
+                        "line": {"type": "integer"},
+                    },
+                    "description": "The model the agent talks to the person with, read from its "
+                    "source: provider as the source names it (openai, anthropic, google...; leave "
+                    "out when it doesn't say), name exactly as written (letters, digits and "
+                    ". _ : / @ - only), and the file (relative to "
+                    "the source root) and line the name is written on. One model; a voice agent's "
+                    "speech-to-text and text-to-speech models don't count. Leave model out when "
+                    "the name is only set at run time.",
                 },
                 "hard_constraints": {
                     "type": "array",
@@ -1308,6 +1461,20 @@ def contract_tools(
     )
     async def submit_contract(args: dict[str, Any]) -> dict[str, Any]:
         payload = dict(unwrapped(args))
+        # The quote as the contract will read it: under any alias, a list joined.
+        excerpt = prompt_quote(_without_nulls(payload))
+        if not excerpt.strip():
+            excerpt = ""
+        # Held before anything can send this call back (a nudge, a refusal, a schema problem), so
+        # lines named later without a quote are checked against the reading's latest one. A short
+        # quote is held only while nothing longer is: it says less.
+        if quote_pieces(excerpt) or (
+            says_something(excerpt) and not quote_pieces(held.get("prompt-quote", ""))
+        ):
+            held["prompt-quote"] = excerpt
+        # What this call was already asked, as it stood when the call was sent: a call sent in the
+        # same message as one that is refused hasn't seen that refusal yet.
+        asked_before = set(nudged)
         receipt = payload.pop(SECOND_LOOK_READ, None) or (
             args.get(SECOND_LOOK_READ) if isinstance(args, dict) else None
         )
@@ -1532,11 +1699,14 @@ def contract_tools(
                 "prompt",
                 bool(payload.get("conversational", True))
                 and not payload.get("hard_constraints")
-                and not str(payload.get("system_prompt_excerpt") or "").strip(),
+                and not excerpt
+                # Lines named are the prompt, found: copied whole, with no quote needed.
+                and not payload.get("system_prompt_from"),
                 "no hard_constraints and no system_prompt_excerpt, for a conversational agent. "
                 "Its prompt usually exists and often lives away from the main agent file — "
                 "search the whole source for a long instructions string before deciding there "
-                "is none.",
+                "is none. If you find it, name its lines in system_prompt_from so it is copied "
+                "whole.",
             ),
             (
                 "data",
@@ -1575,10 +1745,24 @@ def contract_tools(
                 "values. Semantic summaries such as rooms, notable_bookings or restaurant_slots "
                 "cannot seed or verify the submitted store.",
             ),
+            (
+                # A quote may stop short of the whole prompt; lines are copied whole. Asked once,
+                # since a prompt built at run time has no lines to name, and its quote is kept.
+                "prompt-lines",
+                source_root is not None
+                and bool(excerpt)
+                and not payload.get("system_prompt_from")
+                # Asked already, with the "prompt" nudge or a refusal of named lines: the lines
+                # aren't asked for twice.
+                and not asked_before & {"prompt", "prompt-quote", "prompt-lines-alone"},
+                "system_prompt_excerpt is a quote, and system_prompt_from names no lines. If the "
+                "prompt is written in the source, name its lines in system_prompt_from so it is "
+                "copied whole.",
+            ),
         ]
         # All of them together, and each only once. Nudging in sequence would cost a turn per
         # nudge and read as though the requirements were being invented one at a time.
-        say = [said for key, when, said in thin if when and key not in nudged]
+        say = [said for key, when, said in thin if when and key not in asked_before]
         nudged.update(key for key, when, _ in thin if when)
         if say:
             return _problems(
@@ -1594,7 +1778,11 @@ def contract_tools(
             subfolder=subfolder,
             # The scan's answer is for scan_root; another root's code is found again.
             reached=reach if scan_root == source_root else None,
+            asked=asked_before,
+            held=held,
         )
+        # Whatever this call asked is asked for the calls sent after it.
+        nudged.update(asked_before)
         if isinstance(checked, dict):
             return checked
         if refused or (destination / FAILURE_FILE).is_file():
