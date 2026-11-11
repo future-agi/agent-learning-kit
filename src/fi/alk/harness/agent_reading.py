@@ -22,7 +22,7 @@ from .agent_type_check import EXIT_REFUSED
 from .backends import StageDone
 from .cli import guidance_text
 from .failure_file import FAILURE_FILE
-from .job import FailureDomain, HarnessFailure, HarnessJob, ProviderExecutionMode, SourceKind
+from .job import FailureDomain, HarnessFailure, HarnessJob, SourceKind, provider_profile_source
 from .reading_entry import (
     EXIT_RETRYABLE,
     READING_JOB_INVALID,
@@ -75,13 +75,14 @@ def _soft_limit() -> float:
 
 
 def _check_job(job: HarnessJob) -> HarnessFailure | None:
-    if job.agent.mode in (ProviderExecutionMode.PROVIDER_IMPORT, ProviderExecutionMode.CONNECT_ONLY):
-        # The build reads these agents from the provider's definition, which a reading never loads.
+    if provider_profile_source(job.agent) is not None:
+        # The build adds a profile to what it reads for these agents, which a reading never loads.
         return reading_failure(
             FailureDomain.PLATFORM_SYNC,
             READING_JOB_INVALID,
-            "A reading without a build reads an agent from its repository only. A "
-            f"{job.agent.mode.value} job's agent is defined by its provider, so it needs a build.",
+            "A reading without a build reads an agent from its repository only. This job's agent "
+            "is also described outside its repository (by its provider, or by a prompt in the "
+            "job), so it needs a build.",
             retryable=False,
         )
     if job.source.kind in (SourceKind.GITHUB, SourceKind.ARCHIVE):
@@ -201,7 +202,8 @@ async def _stop(
     await asyncio.wait({task}, timeout=wait)
     # Closed before the files are read, so a late tool call is unlikely to save after the
     # decision. The close is bounded, though: a session that hangs closing must not keep the
-    # reading from deciding, and one that outlives the bound could still act afterwards.
+    # reading from deciding; a session that outlives the bound is cancelled, with every other
+    # task, before the reading returns (`_stop_the_rest`).
     task.cancel()
     closing = min(wait, _CLOSE_SECONDS)
     await asyncio.wait({task}, timeout=closing)
@@ -209,6 +211,23 @@ async def _stop(
         logger.warning("the stopped reading's session did not close within %g s", closing)
     elif not task.cancelled() and task.exception() is not None:
         logger.warning("the stopped reading ended with an error", exc_info=task.exception())
+
+
+def _stop_the_rest() -> None:
+    # Every task on this loop but this one is cancelled, ahead of the next loop turn, so no
+    # late tool call can change the files the reading decided on. asyncio.run's shutdown
+    # reaches the same tasks a moment later and cancels any still pending a second time, so a
+    # cleanup that catches the first cancel and then awaits may be cut short. It relies on `_read` running as asyncio.run's main task.
+    # The precondition: every tool call runs as a task on this loop and honours a cancel.
+    # The reading's Gemini tools are pinned to run on its loop (ADK's tool_thread_pool_config
+    # applies only to live mode in 2.7.1, which the reading doesn't use); its Claude tools run
+    # in the SDK's MCP server task on the same loop. The contract save is pinned to write
+    # nothing when cancelled at any of its waits. A tool that runs on another thread's loop,
+    # or swallows its cancel, is not covered by the guard. Shown against the locked versions.
+    this = asyncio.current_task()
+    for other in asyncio.all_tasks():
+        if other is not this:
+            other.cancel()
 
 
 def _timed_out(output: Path, soft_limit: float) -> int:
@@ -338,6 +357,7 @@ async def _read(job: HarnessJob, source: Path, output: Path, *, interrupt_wait: 
             )
             code, complete = document(job, Path(source), output), False
     finally:
+        _stop_the_rest()
         # The work owns the final cost file, on every way out.
         write_reading_cost(output, complete=complete)
     return code
