@@ -21,7 +21,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from .scan_walk import fits_path_rule
+from .scan_walk import ENV_NAMES_KEPT, fits_path_rule
 
 if TYPE_CHECKING:
     from .job import HarnessJob
@@ -33,7 +33,6 @@ AGENTS_FILE = "agents.json"
 SCHEMA_VERSION = "futureagi.agent-scan.v1"
 MAX_AGENTS = 50
 MAX_BYTES = 1_048_576
-ENV_NAMES_KEPT = 50
 NAME_MAX = 255
 EVIDENCE_MAX = 200
 EVIDENCE_KEPT = 5

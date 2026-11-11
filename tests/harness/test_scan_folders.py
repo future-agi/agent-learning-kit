@@ -241,6 +241,27 @@ def test_a_fault_in_the_check_comes_back_as_a_trace(tmp_path, monkeypatch) -> No
     assert scan_folders._answer(tmp_path, "no/such/folder") == {"name": "unknown", "version": None}
 
 
+def test_running_out_of_memory_in_the_check_comes_back_as_a_trace(tmp_path, monkeypatch) -> None:
+    """A MemoryError inside one folder's check is that folder's problem: it comes back with its
+    trace, as any other fault does, and the child's loop goes on to the next folder. This
+    differs on purpose from the walk, which re-raises a MemoryError: the walk runs in the scan's
+    own process, while this runs in the child, where ending it would only lose every later
+    folder's word. `_serve` leaves its loop only on EOFError or OSError, so an answer here is
+    the loop going on."""
+    import fi.alk.harness.framework_detection as fd
+
+    def out_of_memory(*args, **kwargs):
+        raise MemoryError()
+
+    monkeypatch.setattr(fd, "folder_findings", out_of_memory)
+    (tmp_path / "agent.py").write_text(CREW, encoding="utf-8")
+
+    answer = scan_folders._answer(tmp_path, "")
+
+    assert set(answer) == {scan_folders._FAILED}
+    assert "MemoryError" in answer[scan_folders._FAILED]
+
+
 def test_a_failed_answer_marks_the_row_unfinished_and_logs_the_trace(tmp_path, caplog) -> None:
     """The parent's half: a child answer carrying a trace becomes an unfinished ``unknown``,
     kept for the folder, with the trace in the log."""

@@ -112,7 +112,14 @@ Find, in roughly this order:
    often kept away from the main agent file, so search the whole source for a long instructions
    string before concluding there are none. Name where the whole prompt is written in
    `system_prompt_from`, every part it is assembled from: it is copied into the contract as written,
-   and every later stage decides what the agent should do from it.
+   and every later stage decides what the agent should do from it. If the prompt is built or
+   fetched at run time and has no lines to name, quote it in `system_prompt_excerpt`; the save
+   asks once whether lines can be named. A quote is word for word from the prompt, a sentence or
+   more, with ... where you leave text out. The lines you name are checked against your latest
+   such quote, given with them or before. Lines that don't hold it are refused, and asked about
+   once more if they come without a quote; after that, the quote is kept and the lines are
+   recorded as unconfirmed (with a quote of fewer than 16 letters, the lines are kept, also
+   recorded as unconfirmed).
 
 7. **The modality.** How this agent is run: a voice session, a text conversation, or work it
    carries out on websites or a computer. This decides how it is later run, so getting it wrong
@@ -183,7 +190,8 @@ Find, in roughly this order:
    This is not who speaks first: an outbound agent usually still greets. It decides how the
    simulated person is briefed, and briefing someone who did not dial as though they had an errand
    to raise tests nothing about how the agent opens a call it placed. Two builds of the same agent
-   can differ only in this, so quote the line you read it from in `system_prompt_excerpt`.
+   can differ only in this, so quote the line you read it from in `notes`, unless it is already in
+   the prompt you name or quote.
 
 9. **What it depends on.** Everything the agent reaches for that has to exist before it can
    work: a datastore, a service it calls over HTTP, a file it reads, a queue. Record each one,
@@ -298,6 +306,19 @@ Find, in roughly this order:
     scenarios and they are written later, from these sentences. Each one is something the
     agent's own text says it does; a capability stretched from a passing word or a tool name
     becomes a whole slice of scenarios testing what the agent was never built to do.
+
+16. **The model.** Record `model` only from the agent's own source: the one model the agent talks
+    to the person with. A voice agent's speech-to-text and text-to-speech models don't count. Its
+    provider is the company or service as the source names it (openai, anthropic, google, azure),
+    left out when the source doesn't say. Its name is written exactly and wholly as it appears on
+    the line you cite (openai/gpt-4o, if that is what is written); its path is relative to the
+    source root, as for the prompt's lines; its line is the 1-based line the name is written on. A name
+    or provider is made only of letters, digits and . _ : / @ -, so a name with a space in it
+    can't be recorded; leave `model` out then.
+
+    Leave `model` out when the name is only set at run time: an environment variable with no
+    default in the code, or a value fetched from elsewhere. Where the code gives an environment
+    variable a default, record the default.
 
 ## A repository may not hold one agent
 

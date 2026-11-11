@@ -9,6 +9,8 @@ import logging
 import math
 import os
 import shutil
+import stat
+import sys
 import time
 from pathlib import Path
 
@@ -335,7 +337,9 @@ def test_the_walk_limit_before_any_agent_is_an_error(tmp_path, monkeypatch, ai) 
 
 
 def test_the_clock_ends_in_a_file(tmp_path, monkeypatch, ai) -> None:
-    source = _write(tmp_path / "source", {"a/graph.py": GRAPH})
+    # A file at the root: the source look finds it in its first folder, before any clock check, so
+    # it is the walk's own clock that stops this scan.
+    source = _write(tmp_path / "source", {"README.md": "# notes\n", "a/graph.py": GRAPH})
     monkeypatch.setattr(agent_scan, "CLOCK", -1.0)
 
     assert _scan(_job(), source, tmp_path / "out") == 0
@@ -1220,3 +1224,327 @@ def test_the_model_steps_limit_is_read_when_it_is_asked(tmp_path, monkeypatch, a
     assert _scan(_job(), source, tmp_path / "out") == 0
 
     assert [call["seconds"] for call in ai.calls] == [100.0]
+
+
+# The source look's bound (TH-9525). Every bound is worked out here from the paths each test builds,
+# at the contract's cost (four bytes a character unless the path is ASCII, plus 120), never fixed,
+# and never by calling the code under test.
+
+
+def _cost(path: Path | str) -> int:
+    text = os.fspath(path)
+    return (1 if text.isascii() else 4) * len(text) + 120
+
+
+def _allocated(size: int) -> int:
+    """The block a request of ``size`` gets on the Linux sandbox: pymalloc's 16-byte classes up to
+    512, then glibc's malloc (an 8-byte header, 16-byte alignment). Kept apart from the code's own
+    cost (as in test_scan_walk.py)."""
+    if size <= 512:
+        return max(16, (size + 15) // 16 * 16)
+    return max(32, (size + 8 + 15) // 16 * 16)
+
+
+def _empty_folders(top: Path, names: list[str]) -> list[Path]:
+    made = []
+    for name in names:
+        (top / name).mkdir(parents=True)
+        made.append(top / name)
+    return made
+
+
+def _broom(top: Path, depth: int, siblings: int) -> list[Path]:
+    """A chain ``depth`` folders deep with ``siblings`` empty folders beside each chain folder, and no
+    file anywhere. Every folder it made, in no particular order."""
+    made, folder = [], top
+    for level in range(depth):
+        made += _empty_folders(folder, [f"s{level:02}_{index:03}" for index in range(siblings)])
+        folder = folder / f"a{level:02}"
+        folder.mkdir(parents=True)
+        made.append(folder)
+    return made
+
+
+def _padded(base: Path, length: int) -> Path:
+    left = length - len(os.fspath(base)) - 1
+    if left < 1:
+        pytest.skip("this machine's tmp_path is too long to pad")
+    parts = []
+    while left > 201:
+        parts.append("p" * 200)
+        left -= 201
+    parts.append("p" * left)
+    top = base.joinpath(*parts)
+    assert len(os.fspath(top)) == length
+    top.mkdir(parents=True)
+    return top
+
+
+class _Listing:
+    """Stands in for one ``os.scandir`` call: the real entries, in an order the test picks, and a
+    look at the caller's list of folders still to visit at each entry."""
+
+    def __init__(self, real, path, *, order, watch) -> None:
+        with real(path) as entries:
+            self._entries = order(list(entries)) if order else list(entries)
+        self._watch = watch
+        self._at = 0
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc) -> None:
+        return None
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        if self._watch is not None:
+            # By name, so a rename of the loop's own list fails here rather than checking nothing.
+            caller = sys._getframe(1).f_locals
+            self._watch(caller["stack"], caller["held"])
+        if self._at >= len(self._entries):
+            raise StopIteration
+        self._at += 1
+        return self._entries[self._at - 1]
+
+
+def _wrap_scandir(monkeypatch, *, order=None, watch=None, calls=None) -> None:
+    real = os.scandir
+
+    def listing(path):
+        if calls is not None:
+            calls.append(os.fspath(path))
+        return _Listing(real, path, order=order, watch=watch)
+
+    monkeypatch.setattr(agent_scan.os, "scandir", listing)
+
+
+def _held(stack: list[str]) -> int:
+    return sum(_allocated(sys.getsizeof(path)) + 8 for path in stack)
+
+
+def test_a_file_beside_many_folders_is_found(tmp_path, monkeypatch) -> None:
+    folders = _empty_folders(tmp_path / "src", [f"folder_{index:04}" for index in range(2_000)])
+    _write(tmp_path / "src", {"README.md": "# notes\n"})
+    bound = sum(_cost(folder) for folder in folders) // 4
+    monkeypatch.setattr(agent_scan, "_LOOK_HELD", bound)
+    # The folders come first in the listing, so the bound is passed before the file is seen.
+    _wrap_scandir(monkeypatch, order=lambda entries: sorted(entries, key=lambda e: not e.is_dir()))
+
+    word, _, held = agent_scan._look(tmp_path / "src", deadline=math.inf, clock=time.monotonic)
+
+    assert word == "file"
+    assert held > bound
+
+
+@pytest.mark.parametrize("shape", ["nested", "flat"])
+def test_a_tree_of_empty_folders_past_the_bound_is_the_limit(tmp_path, monkeypatch, ai, shape) -> None:
+    source = tmp_path / "src"
+    if shape == "nested":
+        folders = _broom(source, 30, 40)
+    else:
+        folders = _empty_folders(source, [f"folder_{index:04}" for index in range(5_000)])
+    bound = sum(_cost(folder) for folder in folders) // 4
+    monkeypatch.setattr(agent_scan, "_LOOK_HELD", bound)
+
+    assert _scan(_job(), source, tmp_path / "out") == 0
+
+    document = _agents(tmp_path / "out")
+    assert (document["status"], document["agents"], document["truncated"]) == ("error", [], False)
+    assert document["error"]["code"] == "scan_limit_reached"
+    assert ai.calls == []
+
+
+def test_a_flat_folder_is_held_to_the_bound_partway_through(tmp_path, monkeypatch) -> None:
+    source = tmp_path / "src"
+    folders = _empty_folders(source, [f"folder_{index:04}" for index in range(5_000)])
+    bound = sum(_cost(folder) for folder in folders) // 4
+    monkeypatch.setattr(agent_scan, "_LOOK_HELD", bound)
+    most: list[int] = [0]
+    _wrap_scandir(monkeypatch, watch=lambda stack, held: most.__setitem__(0, max(most[0], len(stack))))
+
+    word, _, _ = agent_scan._look(source, deadline=math.inf, clock=time.monotonic)
+
+    assert word == "limit"
+    assert most[0] > 0
+    # The list stops growing at the bound, a quarter of the folders, not at the folder's end.
+    one = max(_cost(folder) for folder in folders)
+    assert most[0] <= bound // min(_cost(folder) for folder in folders) + 1
+    assert most[0] * one < sum(_cost(folder) for folder in folders)
+
+
+def test_a_deep_chain_with_its_file_at_the_bottom_is_found(tmp_path, monkeypatch) -> None:
+    folder = tmp_path / "src"
+    for _ in range(60):
+        folder = folder / "d"
+    _write(folder, {"notes.txt": "x\n"})
+    # A list that takes each folder off as it moves in holds one folder at a time; a running total of
+    # every folder taken on passes three times the deepest one's cost long before the bottom.
+    monkeypatch.setattr(agent_scan, "_LOOK_HELD", 3 * _cost(folder))
+
+    word, _, _ = agent_scan._look(tmp_path / "src", deadline=math.inf, clock=time.monotonic)
+
+    assert word == "file"
+
+
+def test_a_link_to_a_folder_with_a_file_is_not_followed(tmp_path) -> None:
+    outside = _write(tmp_path / "outside", {"bot.py": GRAPH})
+    source = tmp_path / "src"
+    source.mkdir()
+    (source / "linked").symlink_to(outside, target_is_directory=True)
+
+    assert _scan(_job(), source, tmp_path / "out") == 1
+    assert _read(tmp_path / "out", "failure.json")["code"] == "scan_source_missing"
+
+
+def test_the_look_watches_the_clock(tmp_path, monkeypatch, ai) -> None:
+    source = tmp_path / "src"
+    _empty_folders(source, [f"folder_{index:03}" for index in range(200)])
+    monkeypatch.setenv(agent_scan.CLOCK_ENV, "0.000001")
+
+    assert _scan(_job(), source, tmp_path / "out") == 0
+
+    document = _agents(tmp_path / "out")
+    assert (document["status"], document["agents"]) == ("error", [])
+    assert document["error"]["code"] == "scan_timed_out"
+    assert ai.calls == []
+
+
+def test_an_empty_source_is_missing_however_little_time_is_left(tmp_path, monkeypatch) -> None:
+    """The clock is read only after the source's own folder, so a source with nothing in it is missing,
+    not out of time."""
+    (tmp_path / "src").mkdir()
+    monkeypatch.setenv(agent_scan.CLOCK_ENV, "0.000001")
+
+    assert _scan(_job(), tmp_path / "src", tmp_path / "out") == 1
+    assert _read(tmp_path / "out", "failure.json")["code"] == "scan_source_missing"
+
+
+def test_an_unreadable_folder_is_passed_over(tmp_path) -> None:
+    if os.geteuid() == 0:
+        pytest.skip("root reads a mode-000 folder")
+    source = tmp_path / "src"
+    locked = source / "a_locked"
+    locked.mkdir(parents=True)
+    _write(source, {"z_folder/notes.txt": "x\n"})
+    locked.chmod(0)
+    try:
+        word, _, _ = agent_scan._look(source, deadline=math.inf, clock=time.monotonic)
+    finally:
+        locked.chmod(stat.S_IRWXU)
+
+    assert word == "file"
+
+
+_TOPS = {"ascii": None, "long": 400, "wide": -1}
+
+
+@pytest.mark.parametrize("top", list(_TOPS))
+def test_the_looks_list_never_passes_its_bound(tmp_path, monkeypatch, top) -> None:
+    if _TOPS[top] is None:
+        source = tmp_path / "src"
+    elif _TOPS[top] < 0:
+        source = tmp_path / "\U0001d400src"
+    else:
+        source = _padded(tmp_path / "src", _TOPS[top])
+    folders = _broom(source, 20, 40)
+    # A third of the broom at one byte a character, so it is reached however the width is counted.
+    bound = sum(len(os.fspath(folder)) + 120 for folder in folders) // 3
+    monkeypatch.setattr(agent_scan, "_LOOK_HELD", bound)
+    most = [0]
+    _wrap_scandir(monkeypatch, watch=lambda stack, held: most.__setitem__(0, max(most[0], _held(stack))))
+
+    word, _, _ = agent_scan._look(source, deadline=math.inf, clock=time.monotonic)
+
+    assert word == "limit"
+    assert most[0] > 0
+    assert most[0] <= bound + max(_cost(folder) for folder in folders), (most[0], bound)
+
+
+def test_the_look_takes_folders_in_name_order(tmp_path, monkeypatch) -> None:
+    """Depth first, in name order: only the folders a folder adds are sorted, so a sibling whose name
+    sorts before "/" (such as "a-x" or "a.b") still waits until "a"'s own subtree is done."""
+    source = tmp_path / "src"
+    names = ("m", "c", "a.b", "x", "a", "q", "a-x", "b")
+    for name in names:
+        for child in ("z", "k", "e"):
+            (source / name / child).mkdir(parents=True)
+    calls: list[str] = []
+    _wrap_scandir(monkeypatch, order=lambda entries: list(reversed(entries)), calls=calls)
+
+    word, _, _ = agent_scan._look(source, deadline=math.inf, clock=time.monotonic)
+
+    assert word == "none"
+    below = [os.path.relpath(path, source) for path in calls]
+    expected = ["."]
+    for name in sorted(names):
+        expected += [name] + [os.path.join(name, child) for child in sorted(("z", "k", "e"))]
+    assert below == expected
+
+
+def test_the_looks_bound_has_its_real_value() -> None:
+    assert agent_scan._LOOK_HELD == 67_108_864
+
+
+def test_the_looks_count_is_exactly_what_its_list_holds(tmp_path, monkeypatch) -> None:
+    """At every entry read, the look's count equals the cost of every folder on its list: a deep
+    branching tree taken first, so folders come on and go off, then a wide folder."""
+    source = tmp_path / "src"
+    level = [source / "a"]
+    for _ in range(6):
+        level = [folder / name for folder in level for name in ("l", "r")]
+    for folder in level:
+        folder.mkdir(parents=True)
+    _empty_folders(source / "w", [f"folder_{index:03}" for index in range(300)])
+    checked = [0]
+
+    def exact(stack, held):
+        assert held == sum(_cost(path) for path in stack), (held, len(stack))
+        checked[0] += 1
+
+    _wrap_scandir(monkeypatch, watch=exact)
+
+    word, _, held = agent_scan._look(source, deadline=math.inf, clock=time.monotonic)
+
+    assert word == "none"
+    assert held == 0
+    assert checked[0] > 400
+
+
+def test_an_entry_that_cannot_be_looked_at_is_passed_over(tmp_path, monkeypatch) -> None:
+    source = _write(tmp_path / "src", {"gone.txt": "x\n", "real.txt": "x\n"})
+
+    def gone_first(entries):
+        # Listed, then removed before the look can lstat it, ahead of a real file.
+        (source / "gone.txt").unlink()
+        return sorted(entries, key=lambda entry: entry.name != "gone.txt")
+
+    _wrap_scandir(monkeypatch, order=gone_first)
+
+    word, _, _ = agent_scan._look(source, deadline=math.inf, clock=time.monotonic)
+
+    assert word == "file"
+
+
+def test_the_clock_is_first_read_after_the_sources_own_folder(tmp_path) -> None:
+    (tmp_path / "src" / "only").mkdir(parents=True)
+
+    word, folders, _ = agent_scan._look(tmp_path / "src", deadline=0.0, clock=lambda: 1.0)
+
+    assert (word, folders) == ("clock", 1)
+
+
+def test_the_look_says_why_it_stopped_in_one_line_of_counts(tmp_path, monkeypatch, caplog) -> None:
+    source = tmp_path / "src"
+    folders = _empty_folders(source, [f"folder_{index:03}" for index in range(200)])
+    monkeypatch.setattr(agent_scan, "_LOOK_HELD", sum(_cost(folder) for folder in folders) // 4)
+
+    with caplog.at_level(logging.INFO, logger=agent_scan.logger.name):
+        assert _scan(_job(), source, tmp_path / "out") == 0
+
+    lines = [record for record in caplog.records if "the source look stopped" in record.getMessage()]
+    assert len(lines) == 1 and lines[0].levelno == logging.INFO
+    assert "stopped=limit" in lines[0].getMessage()
+    assert os.fspath(source) not in lines[0].getMessage()
