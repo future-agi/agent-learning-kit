@@ -601,6 +601,8 @@ def _p_admitted():
 def test_the_reading_refuses_exactly_what_the_build_loads_a_profile_for(
     tmp_path, monkeypatch, connector, mode
 ):
+    """Checks the build still uses the shared rule. Both sides call it, so a break inside the rule
+    moves them together: the refused-pairs table below is the real guard on the rule itself."""
     monkeypatch.setattr(
         authoring_entrypoint, "inspect_provider_target", lambda provider, **_: {"provider": provider}
     )
@@ -1756,9 +1758,11 @@ def test_a_late_save_after_the_decision_is_cancelled(
     assert not (output / "failure.json").exists()
 
 
-def test_a_late_save_after_a_cancel_that_escapes_the_turn_is_cancelled(tmp_path, model):
-    """Change review r1, A-M1: the ending where a cancel escapes the turn after the contract was
-    saved (`_read`'s except branch). The guard in `finally` covers it too."""
+def test_a_late_save_after_a_cancel_that_escapes_the_turn_is_cancelled(
+    tmp_path, model, monkeypatch
+):
+    """The ending where a cancel escapes the turn after the contract was saved (`_read`'s except
+    branch). The guard in `finally` covers it too."""
     _repo(tmp_path)
     output = tmp_path / "reading"
     release = asyncio.Event()
@@ -1770,28 +1774,25 @@ def test_a_late_save_after_a_cancel_that_escapes_the_turn_is_cancelled(tmp_path,
         release.set()
         return code
 
-    agent_reading.document = document
-    try:
+    monkeypatch.setattr(agent_reading, "document", document)
 
-        async def late():
-            try:
-                await release.wait()
-            except asyncio.CancelledError:
-                record["cancelled"] = True
-                raise
-            _save(output, CHAT2)
-            record["wrote"] = True
+    async def late():
+        try:
+            await release.wait()
+        except asyncio.CancelledError:
+            record["cancelled"] = True
+            raise
+        _save(output, CHAT2)
+        record["wrote"] = True
 
-        async def turn(live):
-            _save(live.backend.output, CHAT)
-            record["task"] = asyncio.get_running_loop().create_task(late())
-            raise asyncio.CancelledError()
-            yield _done()
+    async def turn(live):
+        _save(live.backend.output, CHAT)
+        record["task"] = asyncio.get_running_loop().create_task(late())
+        raise asyncio.CancelledError()
+        yield _done()
 
-        model(turn)
-        assert _run(tmp_path) == 0
-    finally:
-        agent_reading.document = real_document
+    model(turn)
+    assert _run(tmp_path) == 0
     assert record.get("cancelled") is True
     assert "wrote" not in record
     assert json.loads((output / "contract.json").read_text(encoding="utf-8"))["agent"] == "support"
