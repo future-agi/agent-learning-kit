@@ -34,12 +34,7 @@ M = "gemini-3.7-flash"
 def _a_priced_day(monkeypatch):
     """Prices are a dated schedule; these tests are about counting, so the day is fixed."""
 
-    class _Today(date):
-        @classmethod
-        def today(cls):
-            return date(2026, 12, 1)
-
-    monkeypatch.setattr(vertex_gemini, "date", _Today)
+    monkeypatch.setattr(vertex_gemini, "_today", lambda: date(2026, 12, 1))
     # A journal the machine names must not receive these tests' turns.
     monkeypatch.delenv(spend.JOURNAL_ALIAS, raising=False)
     spend._stages.clear()
@@ -137,6 +132,28 @@ def test_a_turn_with_input_and_no_output_is_still_a_report():
     assert (done.tokens_in, done.tokens_out) == (1_000, 0)
     assert done.cost_usd == pytest.approx(priced(M, 1_000, 0))
     assert done.cost_usd > 0
+
+
+def test_a_difference_below_the_querys_own_usage_takes_the_totals_whole():
+    """Totals that restarted and came back above the baseline, or a CLI that reports each query on
+    its own, would otherwise record less than the query's own usage (Dileep, #274)."""
+    session = _session()
+    _done(
+        session,
+        _result(
+            {M: _usage(100_000, 1_000)},
+            usage={"input_tokens": 100_000, "output_tokens": 1_000},
+        ),
+    )
+    second = _done(
+        session,
+        _result(
+            {M: _usage(120_000, 1_200)},
+            usage={"input_tokens": 120_000, "output_tokens": 1_200},
+        ),
+    )
+
+    assert (second.tokens_in, second.tokens_out) == (120_000, 1_200)
 
 
 def test_a_lower_count_takes_all_three_counts_whole():

@@ -24,7 +24,7 @@ import re
 import uuid
 from collections.abc import AsyncIterator
 from contextlib import aclosing
-from datetime import date
+from datetime import date, datetime, timezone
 from typing import Any
 
 from fi import agentcc
@@ -53,8 +53,9 @@ DEFAULT_MODEL = "gemini-3.7-flash"
 # litellm.json, its vertex_ai/ entries, future-agi 9ec5f9fb1, 2026-11-02). The 2027 Flash rows are
 # Google's Vertex pricing page (cloud.google.com/model-garden/pricing, Global tier, read
 # 2026-11-10), which that table does not carry yet. A row ends either on a published price change
-# (the 2026 Flash rows) or on CHECK_BY, the day every latest row must be re-checked by. A model
-# with no row for today reports no cost rather than a wrong one, and shows up in `unpriced_turns`.
+# (the 2026 Flash rows) or on CHECK_BY, the day every latest row must be re-checked by. Days are
+# UTC days, as the platform's dated rows are. A model with no row for today reports no cost rather
+# than a wrong one, and shows up in `unpriced_turns`.
 CHECK_BY = "2027-03-31"
 
 # What Vertex charges for a cache read, as a share of the input rate.
@@ -703,12 +704,18 @@ def _rows(name: str) -> tuple[tuple[Any, ...], ...] | None:
     return rows
 
 
+def _today() -> date:
+    """The price day, in UTC: the platform's dated price rows switch at midnight UTC, so the kit's
+    rows do too, wherever the process runs."""
+    return datetime.now(timezone.utc).date()
+
+
 def current_rates(name: str, today: date | None = None) -> tuple[float, float] | None:
     """The (input, output) rates per 1M tokens that hold on `today`, or None if no row does.
 
     Read the table through this rather than by position: a model's price is a schedule of rows.
     """
-    day = (today or date.today()).isoformat()
+    day = (today or _today()).isoformat()
     # Every row is checked whatever its place, so the table's order never picks the price; the
     # check-by test keeps a model's rows from overlapping, so at most one row holds.
     for rate_in, rate_out, first_day, last_day in _rows(name) or ():
@@ -724,7 +731,7 @@ def priced(
     rows = _rows(model)
     if rows is None:
         return None
-    today = date.today()
+    today = _today()
     rates = current_rates(model, today)
     if rates is None:
         logger.warning(

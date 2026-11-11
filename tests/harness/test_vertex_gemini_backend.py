@@ -283,13 +283,8 @@ def test_a_cache_read_is_not_charged_at_the_full_input_rate(monkeypatch) -> None
     from fi.alk.harness.backends import vertex_gemini
     from fi.alk.harness.backends.vertex_gemini import CACHE_READ_SHARE, priced
 
-    class _Today(date):
-        @classmethod
-        def today(cls):
-            # The 0.75 rate holds through 2026-12-31: a price is a schedule of dated rows.
-            return date(2026, 12, 1)
-
-    monkeypatch.setattr(vertex_gemini, "date", _Today)
+    # The 0.75 rate holds through 2026-12-31: a price is a schedule of dated rows.
+    monkeypatch.setattr(vertex_gemini, "_today", lambda: date(2026, 12, 1))
     full = priced("gemini-3.7-flash", 1_000_000, 0, 0)
     all_cached = priced("gemini-3.7-flash", 1_000_000, 0, 1_000_000)
     assert full == 0.75

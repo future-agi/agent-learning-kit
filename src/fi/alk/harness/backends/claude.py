@@ -369,6 +369,12 @@ class ClaudeSession:
             own = totals
         else:
             own = {count: totals[count] - self._so_far[count] for count in totals}
+            # A difference below the query's own usage means the totals weren't running on:
+            # restarted and already back above the baseline, or a CLI that reports each query on
+            # its own. usage is this query's main-thread tokens, so the turn is never less.
+            per_query = _tokens({"usage": getattr(received, "usage", None) or {}})
+            if any(own[count] < per_query[count] for count in own):
+                own = totals
         self._so_far = totals
         return own
 

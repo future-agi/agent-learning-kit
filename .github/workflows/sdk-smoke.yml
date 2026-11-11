@@ -74,3 +74,10 @@ jobs:
           tests/test_release_workflow.py
           tests/test_release_pr_step.py
           tests/episode
+      - name: Rerun the Claude cost tests on the locked SDK
+        # The hosted image installs from uv.lock, while the step above gets pip's newest SDK. The
+        # two handle a resumed session differently (TH-9057), so the cost tests run on both.
+        run: |
+          version=$(python -c "import tomllib; lock = tomllib.load(open('uv.lock', 'rb')); print(next(p['version'] for p in lock['package'] if p['name'] == 'claude-agent-sdk'))")
+          python -m pip install "claude-agent-sdk==$version"
+          python -m pytest -q tests/harness/test_claude_cost.py

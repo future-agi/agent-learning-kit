@@ -108,16 +108,30 @@ def test_a_session_reports_its_tokens_too(tmp_path):
 
 def _on(monkeypatch, day):
     """Price as if today were `day`; the table is a schedule, so a price depends on the date."""
-    from datetime import date
+    from fi.alk.harness.backends import vertex_gemini
+
+    monkeypatch.setattr(vertex_gemini, "_today", lambda: day)
+
+
+def test_the_price_day_is_the_utc_day(monkeypatch):
+    """The platform's dated rows switch at midnight UTC, so the kit's do too (Dileep, #274)."""
+    from datetime import datetime, timezone
 
     from fi.alk.harness.backends import vertex_gemini
 
-    class _Today(date):
-        @classmethod
-        def today(cls):
-            return day
+    def at(moment):
+        class _Clock(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                assert tz is timezone.utc
+                return moment
 
-    monkeypatch.setattr(vertex_gemini, "date", _Today)
+        monkeypatch.setattr(vertex_gemini, "datetime", _Clock)
+
+    at(datetime(2026, 12, 31, 23, 30, tzinfo=timezone.utc))
+    assert vertex_gemini.current_rates("gemini-3.7-flash") == (0.75, 3.75)
+    at(datetime(2027, 1, 1, 0, 30, tzinfo=timezone.utc))
+    assert vertex_gemini.current_rates("gemini-3.7-flash") == (1.50, 7.50)
 
 
 @pytest.mark.parametrize("model", ["gemini-3.6-flash", "gemini-3.7-flash", "gemini-3.8-flash"])
@@ -315,6 +329,26 @@ def test_every_harness_stage_feeds_the_one_ledger():
         "spend must be recorded in exactly one place; a second call site double-counts or drifts, "
         f"found: {recorded}"
     )
+
+
+def test_todays_prices_match_the_gateway_table_as_committed():
+    """Runs in CI, unlike the live comparison below: the gateway's rows at 9ec5f9fb1, committed as
+    a fixture, so a mistyped price fails here (Dileep, #274)."""
+    import json
+    from datetime import date
+    from pathlib import Path
+
+    from fi.alk.harness.backends.vertex_gemini import PRICES_PER_MILLION, current_rates
+
+    fixture = Path(__file__).parent / "fixtures" / "litellm_vertex_prices.json"
+    rows = json.loads(fixture.read_text(encoding="utf-8"))["rows"]
+    assert sorted(rows) == sorted(f"vertex_ai/{name}" for name in PRICES_PER_MILLION)
+    for name in PRICES_PER_MILLION:
+        row = rows[f"vertex_ai/{name}"]
+        assert current_rates(name, date(2026, 12, 1)) == (
+            round(row["input_cost_per_token"] * 1_000_000, 6),
+            round(row["output_cost_per_token"] * 1_000_000, 6),
+        ), name
 
 
 def test_the_price_table_agrees_with_the_platform_model_table():
