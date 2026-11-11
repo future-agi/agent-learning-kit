@@ -85,8 +85,10 @@ _BAD_SUBMIT = 'Give {"agents": [{"folder": ..., "entry": ...}]} with at most 50 
 _TOO_SLOW = "That call took too long and was stopped. Narrow the path."
 _FAILED = "That call failed. Try a different path or argument."
 
-# Names the kit's secret filter doesn't cover. A source file named like `secret_manager.py` is
-# hidden too; that's the price of never showing a settings file under an unusual name.
+# The scan applies the shared list (`files.SECRET_GLOBS`) and hides these names as well. Some of
+# them are on the shared list too; the rest hide more than a build may: any name with "secret" or
+# "credential" in it, such as `secret_manager.py`, and an SSH key's `.pub`. The scan only looks
+# for agents, so that's the price of never showing a settings file under an unusual name.
 _SECRET_NAMES = (
     "*.env",
     "*.env.*",

@@ -49,6 +49,8 @@ def _resolved(raw: str, cwd: Path) -> Path:
 # the SDK splits its rules on commas and spaces.
 SECRET_GLOBS: tuple[str, ...] = (
     "**/.env*",
+    "**/*.env",
+    "**/*.env.*",
     "**/.claude",
     "**/.ssh",
     "**/.aws",
@@ -63,6 +65,12 @@ SECRET_GLOBS: tuple[str, ...] = (
     "**/*service-account*.json",
     "**/*service_account*.json",
     "**/*serviceaccount*.json",
+    "**/*secret*.yaml",
+    "**/*secret*.yml",
+    "**/*secret*.toml",
+    "**/*credential*.yaml",
+    "**/*credential*.yml",
+    "**/*credential*.toml",
     "**/*.pem",
     "**/*.key",
     "**/*.p12",
@@ -98,6 +106,7 @@ SECRET_GLOBS: tuple[str, ...] = (
     "**/*.tfvars.json",
     "**/*-key.json",
     "**/*_key.json",
+    "**/*-sa.json",
 )
 # Exact names whose `.bak` copy is a credential too. `.kube/config.*` already covers its own.
 _WITH_BACKUP: tuple[str, ...] = (
@@ -122,7 +131,8 @@ _WITH_BACKUP: tuple[str, ...] = (
     "**/id_ed25519_sk",
 )
 ALL_SECRET_GLOBS: tuple[str, ...] = SECRET_GLOBS + tuple(f"{glob}.bak" for glob in _WITH_BACKUP)
-_ENV_GLOB = "**/.env*"
+# The settings files a model citation may name, under its own rule (`model_citation`).
+_ENV_GLOBS = ("**/.env*", "**/*.env", "**/*.env.*")
 # The platform's own roots, which are paths, not names.
 _ROOTS = r"^/proc(/|$)|^/run/futureagi(/|$)|^/run/secrets(/|$)"
 
@@ -138,8 +148,8 @@ def _compiled(globs: tuple[str, ...]) -> re.Pattern[str]:
 
 
 _SECRET_PATHS = _compiled(ALL_SECRET_GLOBS)
-# The same, less `.env` files: what a model citation may not name (`model_citation`).
-_SECRET_BUT_ENV = _compiled(tuple(glob for glob in ALL_SECRET_GLOBS if glob != _ENV_GLOB))
+# The same, less those settings files: what a model citation may not name.
+_SECRET_BUT_ENV = _compiled(tuple(glob for glob in ALL_SECRET_GLOBS if glob not in _ENV_GLOBS))
 
 
 def secret_text(text: str, *, env_allowed: bool = False) -> bool:

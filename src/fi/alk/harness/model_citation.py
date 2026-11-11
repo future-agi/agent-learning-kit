@@ -518,20 +518,28 @@ def _reads_as_a_setting(name: str) -> bool:
 
 
 _ENV_SETTING = re.compile(r"\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_.-]*)\s*[=:]")
-# A setting that names a model, by its words, and one that holds a secret even so.
-_MODEL_WORDS = frozenset({"MODEL", "DEPLOYMENT", "ENGINE", "LLM"})
-_SECRET_WORDS = frozenset({"KEY", "TOKEN", "SECRET", "PASSWORD", "PASS", "PWD", "AUTH", "CREDENTIAL", "CREDENTIALS"})
+# A setting that names a model, by its words. ENGINE alone also names databases (DB_ENGINE), so it
+# counts only beside a provider's word (OPENAI_ENGINE, AZURE_OPENAI_ENGINE).
+_MODEL_WORDS = frozenset({"MODEL", "DEPLOYMENT", "LLM"})
+_ENGINE_PROVIDERS = frozenset({"OPENAI", "AZURE"})
+# What marks a setting that holds a secret, anywhere in its name, joined words included
+# (LLM_APIKEY). A URL can carry a password, and a model's name is never one.
+_SECRET_PARTS = ("KEY", "TOKEN", "SECRET", "PASS", "PWD", "AUTH", "CREDENTIAL", "URL", "URI", "DSN")
 
 
 def _names_a_model(line: str) -> bool:
-    """Whether a `.env` line sets a model: a setting whose words include MODEL, DEPLOYMENT, ENGINE
-    or LLM (OPENAI_MODEL, AZURE_OPENAI_DEPLOYMENT, LLM) and none that marks a secret (MODEL_API_KEY).
+    """Whether a `.env` line sets a model: a setting with the word MODEL, DEPLOYMENT or LLM, or
+    ENGINE beside OPENAI or AZURE (OPENAI_MODEL, AZURE_OPENAI_DEPLOYMENT, LLM, OPENAI_ENGINE), and
+    nothing anywhere in its name that marks a secret (MODEL_API_KEY, LLM_APIKEY, DB_ENGINE_URL).
     A line that sets nothing (no `=` or `:` after a name) doesn't."""
     found = _ENV_SETTING.match(line)
     if found is None:
         return False
-    words = set(re.split(r"[_.-]+", found.group(1).upper()))
-    return bool(words & _MODEL_WORDS) and not words & _SECRET_WORDS
+    setting = found.group(1).upper()
+    if any(part in setting for part in _SECRET_PARTS):
+        return False
+    words = set(re.split(r"[_.-]+", setting))
+    return bool(words & _MODEL_WORDS) or ("ENGINE" in words and bool(words & _ENGINE_PROVIDERS))
 
 
 def model_problems(contract: AgentContract, source_root: Path) -> list[str]:

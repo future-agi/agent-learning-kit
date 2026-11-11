@@ -32,7 +32,9 @@ from fi.alk.harness.backends.files import (
 # Written out by hand, never built from the module's list: removing a glob there must fail here.
 # Each sample is matched by its own glob and no other.
 TABLE: tuple[tuple[str, str], ...] = (
-    ("**/.env*", ".env.local"),
+    ("**/.env*", ".envrc"),
+    ("**/*.env", "deploy/prod.env"),
+    ("**/*.env.*", "deploy/prod.env.example"),
     ("**/.claude", ".claude/settings.json"),
     ("**/.ssh", ".ssh/config"),
     ("**/.aws", ".aws/credentials"),
@@ -47,6 +49,12 @@ TABLE: tuple[tuple[str, str], ...] = (
     ("**/*service-account*.json", "gcp-service-account.json"),
     ("**/*service_account*.json", "service_account.json"),
     ("**/*serviceaccount*.json", "serviceaccount.json"),
+    ("**/*secret*.yaml", "config/secrets.yaml"),
+    ("**/*secret*.yml", "k8s/db-secret.yml"),
+    ("**/*secret*.toml", ".streamlit/secrets.toml"),
+    ("**/*credential*.yaml", "credentials.yaml"),
+    ("**/*credential*.yml", "config/credentials.yml"),
+    ("**/*credential*.toml", "app-credentials.toml"),
     ("**/*.pem", "certs/server.pem"),
     ("**/*.key", "certs/server.key"),
     ("**/*.p12", "certs/a.p12"),
@@ -84,6 +92,7 @@ TABLE: tuple[tuple[str, str], ...] = (
     ("**/*.tfvars.json", "infra/prod.tfvars.json"),
     ("**/*-key.json", "gcp-key.json"),
     ("**/*_key.json", "api_key.json"),
+    ("**/*-sa.json", "deploy/gcp-sa.json"),
 )
 # Exact names whose .bak copy is listed too.
 BACKED_UP = (
@@ -103,6 +112,17 @@ NEAR_MISSES = (
     "infra/terraform.tfvars.example", "debug.keystore.md", "key.json", "gcp-key.json.example",
     ".azure/pipelines.yml", "secrets/app.json", "tokens/list.json", "credentials/README.json",
     "infra/terraform.tfstate.d/default.backup", "agent.py",
+    "src/env.mjs", "next-env.d.ts", "vite-env.d.ts", "env.example", "dotenv.py",
+    "secret_manager.py", "credentials_helper.go", "secrets.yaml.example", "visa.json", "sa.json",
+)  # fmt: skip
+
+
+# What the scan hides beyond the shared list, written out by hand: the scan hides every name with
+# "secret" or "credential" in it, and every SSH key's .pub, where a build must read those. A name the
+# scan starts or stops hiding fails the end-to-end test.
+SCAN_ONLY = (
+    "id_rsa.pub", "secrets/app.json", "credentials/README.json", "secret_manager.py",
+    "credentials_helper.go", "secrets.yaml.example",
 )  # fmt: skip
 
 
@@ -384,7 +404,7 @@ def test_claude_code_and_the_kit_hide_the_same_files(
     kit_seen = set(_MARK.findall(json.dumps(asyncio.run(kit["Grep"]({"pattern": "password"})))))
     scan_seen = set(_MARK.findall(json.dumps(asyncio.run(scan["grep"]({"text": "password"})))))
     assert kit_seen == _expected(near, ""), kit_seen ^ _expected(near, "")
-    scan_own = {mark for path, mark in near.items() if any(scan_ai._secret_name(part) for part in path.split("/"))}
+    scan_own = {near[path] for path in SCAN_ONLY}
     assert scan_seen == _expected(near, "") - scan_own, scan_seen ^ (_expected(near, "") - scan_own)
 
     # The same search inside a worker the session starts with Task keeps to the same rules.
