@@ -1,7 +1,9 @@
 import asyncio
+import hmac
 from io import BytesIO
 import json
 import os
+import re
 import uuid
 
 from fastapi import HTTPException, UploadFile
@@ -19,11 +21,25 @@ from fi.alk.harness.sandbox_server import (
     _CONTROLLER_TOKEN,
     _presentation_value,
     _process_identity,
+    _startup_refusal,
     _worker_failure_retryable,
     create_app,
+    main,
 )
 from fi.alk.harness.secrets import SecretResolutionError, resolve_worker_secrets
 from fi.simulate.runtime.spec import RuntimeIsolation, RuntimeRequirements, SecretRef
+
+_TOKEN = "ALK_SANDBOX_TOKEN"
+_FLAG = "ALK_SANDBOX_ALLOW_UNAUTHENTICATED"
+_SENTINEL = "tok-sentinel-7f3e9b"
+
+
+@pytest.fixture(autouse=True)
+def _unauthenticated_development_server(monkeypatch):
+    # The server fails closed without a token; most tests here exercise job logic on
+    # a tokenless app, and a token exported in the shell must not change them.
+    monkeypatch.setenv(_FLAG, "1")
+    monkeypatch.delenv(_TOKEN, raising=False)
 
 
 def test_presentation_redaction_handles_prose_with_email_before_url():
@@ -937,6 +953,286 @@ def test_acquisition_defers_inventory_and_unselected_packaging_to_authoring(
         )["status"]
         == "missing"
     )
+
+
+@pytest.mark.parametrize("flag", [None, "0", "false", "", "true", "yes", " 1", "1 "])
+def test_tokenless_server_refuses_jobs_unless_the_flag_is_exactly_one(
+    tmp_path, monkeypatch, caplog, flag
+):
+    caplog.set_level("DEBUG")
+    if flag is None:
+        monkeypatch.delenv(_FLAG)
+    else:
+        monkeypatch.setenv(_FLAG, flag)
+    client = TestClient(create_app(tmp_path / "state"))
+
+    response = client.get("/v1/jobs", headers={"Authorization": f"Bearer {_SENTINEL}"})
+
+    assert response.status_code == 503
+    assert response.json() == {"detail": "sandbox_token_not_configured"}
+    assert _SENTINEL not in response.text
+    assert _SENTINEL not in caplog.text
+
+
+@pytest.mark.parametrize("token", ["", "   ", "tok\udcff"])
+def test_blank_or_unusable_token_refuses_jobs_without_the_flag(
+    tmp_path, monkeypatch, token
+):
+    monkeypatch.delenv(_FLAG)
+    monkeypatch.setenv(_TOKEN, token)
+    client = TestClient(create_app(tmp_path / "state"), raise_server_exceptions=False)
+
+    response = client.get("/v1/jobs", headers={"Authorization": "Bearer "})
+
+    assert response.status_code == 503
+    assert response.json() == {"detail": "sandbox_token_not_configured"}
+
+
+def test_padded_token_is_compared_exactly_at_request_time(tmp_path, monkeypatch):
+    monkeypatch.setenv(_TOKEN, f" {_SENTINEL}")
+    client = TestClient(create_app(tmp_path / "state"))
+
+    response = client.get("/v1/jobs", headers={"Authorization": f"Bearer {_SENTINEL}"})
+
+    assert response.status_code == 401
+
+
+def test_every_route_but_health_refuses_without_a_token(tmp_path, monkeypatch):
+    # Walks the app itself, so a route added without the guard fails here.
+    monkeypatch.delenv(_FLAG)
+    app = create_app(tmp_path / "state")
+    client = TestClient(app, raise_server_exceptions=False)
+    checked = 0
+    for route in app.routes:
+        if route.path == "/health":
+            continue
+        path = re.sub(r"\{[^}]+\}", "x", route.path)
+        for method in sorted(route.methods - {"HEAD"}):
+            response = client.request(method, path)
+            assert response.status_code == 503, (method, route.path)
+            checked += 1
+
+    assert checked >= 9
+
+
+@pytest.mark.parametrize("path", ["/docs", "/redoc", "/openapi.json"])
+def test_no_schema_or_docs_pages(tmp_path, monkeypatch, path):
+    monkeypatch.setenv(_TOKEN, _SENTINEL)
+    client = TestClient(create_app(tmp_path / "state"))
+
+    assert client.get(path).status_code == 404
+
+
+def test_tokenless_server_serves_jobs_under_the_flag(tmp_path):
+    client = TestClient(create_app(tmp_path / "state"))
+
+    assert client.get("/v1/jobs").status_code == 200
+
+
+@pytest.mark.parametrize("flag", ["1", None])
+@pytest.mark.parametrize(
+    ("authorization", "expected"),
+    [
+        (f"Bearer {_SENTINEL}", 200),
+        ("Bearer wrong", 401),
+        (None, 401),
+        ("Bearer té".encode(), 401),
+        (f"Bearer {_SENTINEL}x", 401),
+        (f"Bearer {_SENTINEL[:-1]}", 401),
+        (_SENTINEL, 401),
+    ],
+)
+def test_set_token_is_required_even_under_the_flag(
+    tmp_path, monkeypatch, caplog, flag, authorization, expected
+):
+    caplog.set_level("DEBUG")
+    monkeypatch.setenv(_TOKEN, _SENTINEL)
+    if flag is None:
+        monkeypatch.delenv(_FLAG)
+    else:
+        monkeypatch.setenv(_FLAG, flag)
+    client = TestClient(create_app(tmp_path / "state"), raise_server_exceptions=False)
+    headers = {} if authorization is None else {"Authorization": authorization}
+
+    response = client.get("/v1/jobs", headers=headers)
+
+    assert response.status_code == expected
+    if expected == 401:
+        assert response.json() == {"detail": "invalid token"}
+    assert _SENTINEL not in response.text
+    assert _SENTINEL not in caplog.text
+
+
+def test_token_is_compared_in_constant_time_on_bytes(tmp_path, monkeypatch):
+    monkeypatch.setenv(_TOKEN, _SENTINEL)
+    real = hmac.compare_digest
+    calls = []
+
+    def spy(left, right):
+        calls.append((type(left), type(right)))
+        return real(left, right)
+
+    monkeypatch.setattr(hmac, "compare_digest", spy)
+    client = TestClient(create_app(tmp_path / "state"))
+
+    response = client.get("/v1/jobs", headers={"Authorization": f"Bearer {_SENTINEL}"})
+
+    assert response.status_code == 200
+    assert calls == [(bytes, bytes)]
+
+
+@pytest.mark.parametrize(
+    "host",
+    [
+        "",
+        "0.0.0.0",
+        "::",
+        "localhost",
+        "192.168.1.10",
+        "127.0.0.1.example.com",
+        "127.0.0.1:8788",
+    ],
+)
+def test_flag_refuses_to_start_on_a_non_loopback_host(host):
+    reason = _startup_refusal(host, None, True)
+
+    assert reason is not None
+    assert _FLAG in reason
+    assert "127.0.0.1" in reason and "::1" in reason
+
+
+@pytest.mark.parametrize("host", ["127.0.0.1", "127.0.0.2", "::1"])
+def test_flag_starts_on_a_loopback_host(host):
+    assert _startup_refusal(host, None, True) is None
+    assert _startup_refusal(host, "", True) is None
+
+
+@pytest.mark.parametrize("token", [None, "", "   "])
+@pytest.mark.parametrize("host", ["127.0.0.1", "0.0.0.0"])
+def test_missing_token_refuses_to_start_without_the_flag(host, token):
+    reason = _startup_refusal(host, token, False)
+
+    assert reason is not None
+    assert _TOKEN in reason
+
+
+def test_missing_token_refusal_names_both_sides_and_the_flag():
+    reason = _startup_refusal("0.0.0.0", None, False)
+
+    assert reason is not None
+    assert _TOKEN in reason
+    assert "ALK_HARNESS_SANDBOX_TOKEN" in reason
+    assert _FLAG in reason
+
+
+@pytest.mark.parametrize("allow", [False, True])
+@pytest.mark.parametrize("host", ["0.0.0.0", "127.0.0.1", "10.0.0.5", ""])
+def test_set_token_starts_on_any_host(host, allow):
+    assert _startup_refusal(host, _SENTINEL, allow) is None
+
+
+@pytest.mark.parametrize(("host", "allow"), [("0.0.0.0", False), ("127.0.0.1", True)])
+@pytest.mark.parametrize("token", [f" {_SENTINEL} ", f"{_SENTINEL}\n", "   "])
+def test_padded_or_blank_token_refuses_to_start_without_naming_it(host, allow, token):
+    reason = _startup_refusal(host, token, allow)
+
+    assert reason is not None
+    assert _TOKEN in reason
+    assert _SENTINEL not in reason
+
+
+@pytest.fixture
+def stubbed_uvicorn(monkeypatch):
+    monkeypatch.delenv(_FLAG, raising=False)
+    monkeypatch.delenv(_TOKEN, raising=False)
+    monkeypatch.delenv("ALK_SANDBOX_HOST", raising=False)
+    calls = []
+    monkeypatch.setattr("uvicorn.run", lambda *args, **kwargs: calls.append(kwargs))
+    return calls
+
+
+@pytest.mark.parametrize("token", [None, "", "   ", f" {_SENTINEL} "])
+def test_main_refuses_to_start_without_a_usable_token(
+    monkeypatch, capsys, caplog, stubbed_uvicorn, token
+):
+    caplog.set_level("DEBUG")
+    if token is not None:
+        monkeypatch.setenv(_TOKEN, token)
+
+    with pytest.raises(SystemExit) as exited:
+        main()
+
+    assert exited.value.code == 2
+    assert stubbed_uvicorn == []
+    err = capsys.readouterr().err
+    assert _TOKEN in err
+    assert _SENTINEL not in err
+    assert _SENTINEL not in caplog.text
+
+
+def test_main_refuses_a_blank_token_even_under_the_flag_on_loopback(
+    monkeypatch, stubbed_uvicorn
+):
+    monkeypatch.setenv(_FLAG, "1")
+    monkeypatch.setenv("ALK_SANDBOX_HOST", "127.0.0.1")
+    monkeypatch.setenv(_TOKEN, "   ")
+
+    with pytest.raises(SystemExit) as exited:
+        main()
+
+    assert exited.value.code == 2
+    assert stubbed_uvicorn == []
+
+
+def test_unusable_token_refuses_to_start():
+    assert _startup_refusal("127.0.0.1", "tok\udcff", True) is not None
+
+
+@pytest.mark.parametrize("host", ["10.0.0.5", "0.0.0.0", ""])
+def test_main_checks_the_host_it_binds(monkeypatch, stubbed_uvicorn, host):
+    monkeypatch.setenv(_FLAG, "1")
+    monkeypatch.setenv("ALK_SANDBOX_HOST", host)
+
+    with pytest.raises(SystemExit) as exited:
+        main()
+
+    assert exited.value.code == 2
+    assert stubbed_uvicorn == []
+
+
+def test_main_starts_with_a_token_on_the_configured_host(
+    monkeypatch, caplog, stubbed_uvicorn
+):
+    caplog.set_level("DEBUG")
+    monkeypatch.setenv(_TOKEN, _SENTINEL)
+    monkeypatch.setenv("ALK_SANDBOX_HOST", "0.0.0.0")
+
+    main()
+
+    assert [call["host"] for call in stubbed_uvicorn] == ["0.0.0.0"]
+    assert "unauthenticated sandbox" not in caplog.text
+    assert _SENTINEL not in caplog.text
+
+
+def test_main_warns_when_starting_unauthenticated_on_loopback(
+    monkeypatch, caplog, stubbed_uvicorn
+):
+    caplog.set_level("WARNING")
+    monkeypatch.setenv(_FLAG, "1")
+
+    main()
+
+    assert [call["host"] for call in stubbed_uvicorn] == ["127.0.0.1"]
+    assert "unauthenticated sandbox" in caplog.text
+    assert "developer's own laptop only" in caplog.text
+    assert "including the agent under test" in caplog.text
+
+
+def test_health_needs_no_token_or_flag(tmp_path, monkeypatch):
+    monkeypatch.delenv(_FLAG)
+    client = TestClient(create_app(tmp_path / "state"))
+
+    assert client.get("/health").status_code == 200
 
 
 class _DedicatedVmJob(HarnessJob):
