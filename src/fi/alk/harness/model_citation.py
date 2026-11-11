@@ -64,9 +64,6 @@ _NO_BLOCK_COMMENT_SUFFIXES = frozenset(
     {".py", ".pyi", ".pyw", ".rb", ".pl", ".r", ".jl", ".ex", ".exs", ".nim", ".lua"}
 )
 _YAML_SUFFIXES = frozenset({".yaml", ".yml"})
-# Markup: only there is <!-- a comment that runs on over lines. Elsewhere it is text (a regex,
-# a YAML value, a heredoc), and a comment only to its line's end.
-_MARKUP_SUFFIXES = frozenset({".html", ".htm", ".xhtml", ".xml", ".svg", ".vue", ".svelte"})
 # INI files: a line starting with ; is a comment.
 _INI_SUFFIXES = frozenset({".ini", ".cfg", ".conf"})
 # Files where -- starts a comment: SQL, Lua, Haskell.
@@ -121,6 +118,16 @@ _TRIPLE_SUFFIXES = frozenset(
         ".py", ".pyi", ".pyw", ".toml", ".kt", ".kts", ".scala", ".sc", ".swift", ".groovy",
         ".gradle", ".java", ".cs", ".jl", ".dart", ".ex", ".exs",
     }
+)
+# Code languages where <!-- is never a comment over lines, only text (a regex, a string, a
+# template): there, as in configuration, it is a comment only to its line's end. In every other
+# file (HTML, XML and its many suffixes: .config, .csproj, .xaml; PHP, JSP, Vue, Svelte, and any
+# suffix not known here) it runs on to its -->.
+_NO_MARKUP_COMMENT_SUFFIXES = (
+    _NO_HASH_COMMENT_SUFFIXES
+    | _NO_BLOCK_COMMENT_SUFFIXES
+    | _TRIPLE_SUFFIXES
+    | _DASH_COMMENT_SUFFIXES
 )
 # Where a quote leaves text out: ... or …, also inside brackets, since only letters are compared.
 _ELISION = re.compile(r"\.{3,}|…")
@@ -196,10 +203,10 @@ def _line_scan(
     """One pass over a line: where its comment starts (or its length), the stretches of it that
     are text (inside a triple-quoted string, or a block comment closed on the line), and the
     block still open at its end (a triple quote, or the */ or --> a comment ends at; --> only in
-    ``markup``, where <!-- runs on over lines). ``block`` is the one open where the line starts. A line is a comment when it is the `* ` middle of a
-    block comment or, in INI, starts with ;. Strings are passed over whole, so a marker or a
-    triple quote inside one doesn't count; an apostrophe opens a string only when another closes
-    it on the line."""
+    ``markup``, where <!-- runs on over lines). ``block`` is the one open where the line starts.
+    A line is a comment when it is the `* ` middle of a block comment or, in INI, starts with ;.
+    Strings are passed over whole, so a marker or a triple quote inside one doesn't count; an
+    apostrophe opens a string only when another closes it on the line."""
     inside: list[tuple[int, int]] = []
     at = 0
     if block is not None:
@@ -271,10 +278,10 @@ def block_open_before(
 ) -> str | None:
     """The block open where ``lines[before]`` starts (a triple quote, or the */ or --> of a
     block comment), the lines before it read with the same scan as the cited one. A comment is
-    carried to later lines only when its closer is on a later line of the file: one that never
-    closes doesn't compile, so its opener is text (a regex, a template). A line that could open
-    none, outside a block, is passed over without a scan; inside one, only its closer is looked
-    for."""
+    carried to later lines only when its closer is on a later line of the file: an opener that
+    never closes is text (a regex, a template), not a comment over the rest of the file. A line
+    that could open none, outside a block, is passed over without a scan; inside one, only its
+    closer is looked for."""
     openers = ['"""', "'''"] if triple else []
     if block_comments:
         openers.append("/*")
@@ -659,7 +666,7 @@ def model_problems(contract: AgentContract, source_root: Path) -> list[str]:
         hash_comments=hash_comments,
         block_comments=block_comments,
         # A block open from an earlier line: a triple quote, /* where block comments are, <!--
-        # in markup.
+        # outside code and configuration.
         block=block_open_before(
             lines,
             model.line - 1,
@@ -668,7 +675,7 @@ def model_problems(contract: AgentContract, source_root: Path) -> list[str]:
             ini=ini,
             hash_comments=hash_comments,
             block_comments=block_comments,
-            markup=suffix in _MARKUP_SUFFIXES,
+            markup=not (config or suffix in _NO_MARKUP_COMMENT_SUFFIXES),
         ),
     ):
         return [

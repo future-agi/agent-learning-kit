@@ -1886,6 +1886,32 @@ def test_a_value_in_a_block_comment_is_not_the_model(root, file, written, name):
             2,
             id="a-closer-after-the-cited-line",
         ),
+        pytest.param(
+            "a.js",
+            '/* a */\nx\n/* real\nconst model = "gpt-4o";\n*/\n',
+            4,
+            id="a-comment-after-an-earlier-closed-one",
+        ),
+        # <!-- runs on over lines in every file but code and configuration: XML under any
+        # suffix, and templates that mix markup with code.
+        pytest.param(
+            "App.config",
+            '<!--\n<add key="model" value="gpt-4o"/>\n-->\n',
+            2,
+            id="a-markup-block-in-dotnet-config",
+        ),
+        pytest.param(
+            "a.csproj",
+            '<!-- was\n<Model>"gpt-4o"</Model>\n-->\n',
+            2,
+            id="a-markup-block-in-a-project-file",
+        ),
+        pytest.param(
+            "page.php",
+            '<!--\n<?php $model = "gpt-4o"; ?>\n-->\n',
+            2,
+            id="a-markup-block-in-php",
+        ),
     ],
 )
 def test_a_value_inside_a_block_comment_over_lines_is_not_the_model(
