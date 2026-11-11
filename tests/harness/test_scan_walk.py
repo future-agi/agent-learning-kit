@@ -1142,6 +1142,43 @@ def test_build_hazard_is_bounded_and_asked_once_per_folder(
     assert len(entries) <= 3
 
 
+@pytest.mark.parametrize("case", ["found", "stopped"])
+def test_a_hazard_look_stopped_by_its_cap_gives_one_answer_in_any_listing_order(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, case: str
+) -> None:
+    """The look goes in name order whatever order the file system lists folders in, so where its
+    cap stops it is the same everywhere. Both orders are forced, a level below the top."""
+    if case == "found":
+        # Name order reaches both agent.py files before the big folder.
+        _files(tmp_path, {"x/a/agent.py": "", "x/b/agent.py": ""})
+        _files(tmp_path, {f"x/z/f{index:02}": "" for index in range(50)})
+    else:
+        # Name order meets the big folder first and stops there, before either agent.py.
+        _files(tmp_path, {f"x/a/f{index:02}": "" for index in range(50)})
+        _files(tmp_path, {"x/b/agent.py": "", "x/c/agent.py": ""})
+    monkeypatch.setattr(scan_walk, "_HAZARD_ENTRIES", 20)
+    real_walk = os.walk
+    answers, seen = [], []
+
+    for descending in (False, True):
+        listed: list[str] = []
+
+        def ordered(*args: object, descending: bool = descending, listed: list[str] = listed, **kwargs: object):
+            for here, directories, files in real_walk(*args, **kwargs):  # type: ignore[arg-type]
+                directories.sort(reverse=descending)
+                listed.extend(files)
+                yield here, directories, files
+
+        monkeypatch.setattr(scan_walk.os, "walk", ordered)
+        answers.append(scan_walk.build_hazard(tmp_path, ""))
+        seen.append(listed.count("agent.py"))
+
+    expected = "agent_py" if case == "found" else ""
+    assert answers == [expected, expected]
+    if case == "stopped":
+        # The "" is the cap's, not a look that missed them: neither agent.py was ever listed.
+        assert seen == [0, 0]
+
 def test_the_prompt_files_listed_are_capped(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1881,7 +1918,7 @@ def test_a_rows_setting_names_are_its_first_fifty(tmp_path: Path, names: int) ->
 def test_a_hazard_look_gives_up_past_its_listed_paths(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _files(tmp_path, {"a/agent.py": "", "b/agent.py": ""})
     # Beside a and b, so the root's own listing passes the bound before either agent.py is
-    # seen, whatever order the file system lists folders in (os.walk doesn't sort them).
+    # seen, whatever order the file system lists folders in.
     for index in range(40):
         (tmp_path / f"folder_{index:02}_{'v' * 40}").mkdir()
     assert scan_walk.build_hazard(tmp_path, "") == "agent_py"

@@ -1503,8 +1503,9 @@ def build_hazard(
     """Why a build of the folder may stop on its own fallback, or ``""``.
 
     ``hazards`` holds one scan's answers by folder, so a folder many agents share is looked
-    through once. The look stops, with ``""``, at the deadline or after ``_HAZARD_ENTRIES``
-    entries: it walks folders the scan skips, which the walk's own clock never saw.
+    through once. The look takes folders depth first in name order. It stops, with ``""``, at the
+    deadline, after ``_HAZARD_ENTRIES`` entries, or past ``_HAZARD_PATH_BYTES`` of listed folder
+    paths: it walks folders the scan skips, which the walk's own clock never saw.
     """
     if hazards is not None and subfolder in hazards:
         return hazards[subfolder]
@@ -1541,6 +1542,9 @@ def _hazard(
         # folders below it.
         if index and clock() > deadline:
             return ""
+        # Sorted, so that a look stopped by a cap stops at the same folder on every file system.
+        directories.sort()
+        files.sort()
         directories[:] = [name for name in directories if name not in _BUILD_IGNORED]
         found += files.count("agent.py")
         if found > 1:
