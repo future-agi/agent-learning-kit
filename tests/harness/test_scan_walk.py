@@ -2334,7 +2334,11 @@ def test_the_estimates_sizes_were_measured_on_the_hosted_kits_python() -> None:
     Python, so the sizes are measured again before the bound is trusted."""
     dockerfile = (Path(__file__).resolve().parents[2] / "Dockerfile.hosted").read_text()
     major, minor = scan_walk._SIZES_MEASURED_ON
-    made = [line for line in dockerfile.splitlines() if "-m venv" in line and "/opt/alk-venv" in line]
+    made = [
+        line
+        for line in dockerfile.splitlines()
+        if "/opt/alk-venv" in line and ("-m venv" in line or "uv venv" in line or "virtualenv" in line)
+    ]
     assert len(made) == 1, made
     assert f"python{major}.{minor} -m venv /opt/alk-venv" in made[0], made
     assert made[0].count("-m venv") == 1, made
@@ -2351,23 +2355,41 @@ def test_a_memory_budget_stop_while_joining_says_so(
         raise scan_walk._CapReached()
 
     monkeypatch.setattr(scan_walk._Walk, "result", reached)
+    kept: list[int] = []
+    real_empty = scan_walk._empty_result
+
+    def empty(walk, stopped):
+        kept.append(len(walk.facts))
+        return real_empty(walk, stopped)
+
+    monkeypatch.setattr(scan_walk, "_empty_result", empty)
     with caplog.at_level("WARNING", logger=scan_walk.logger.name):
         result = scan_walk.walk_repo(tmp_path, deadline=FOREVER, clock=lambda: 0.0)
 
     assert result.stopped == "limit"
     assert "passed its memory budget" in caplog.text
     assert "edge budget" not in caplog.text
+    assert kept == [0]  # the facts are let go before the empty result is built
 
 
-def test_a_fan_out_join_is_charged_without_its_base(tmp_path: Path) -> None:
-    """One entry, 110 hubs, 21,890 leaves that each import one shared module: the join walks
-    every leaf, and its import table has just grown (past 21,846 entries), its dearest point. What it really holds is covered by the per-file charge alone, without
-    `_JOIN_BASE`, and only with `_JOIN_PER_FILE` (Dileep, #273 P3). Leaves that import nothing
-    share CPython's empty tuple, which would hide the per-file cost."""
-    hubs = {f"h{h:03}.py": "".join(f"import l{h:03}_{n:03}\n" for n in range(199)) for h in range(110)}
-    leaves = {f"l{h:03}_{n:03}.py": "import common\n" for h in range(110) for n in range(199)}
-    entry = "".join(f"import h{h:03}\n" for h in range(110)) + CLIENT
-    _files(tmp_path, {"bot.py": entry, "common.py": "x = 1\n", **hubs, **leaves})
+@pytest.mark.parametrize("shape", ["one_entry", "two_entries"])
+def test_a_fan_out_join_is_charged_without_its_base(tmp_path: Path, shape: str) -> None:
+    """110 hubs of leaves that each import one shared module, about 22,000 files: the join walks
+    every leaf. One entry puts the import table just past its growth at 21,846 entries. Two
+    entries are dearer still: the first fills that table, then the second's own search grows its
+    seen set while the table stays full (about 59.5 bytes a file). What the join really holds is
+    covered by the per-file charge alone, without `_JOIN_BASE`, and only with `_JOIN_PER_FILE`
+    at 64: at 56 the two-entry shape fails (Dileep, #273 P3). Leaves that import nothing share
+    CPython's empty tuple, which would hide the per-file cost."""
+    per_hub = 199 if shape == "one_entry" else 198
+    hubs = {
+        f"h{h:03}.py": "".join(f"import l{h:03}_{n:03}\n" for n in range(per_hub)) for h in range(110)
+    }
+    leaves = {f"l{h:03}_{n:03}.py": "import common\n" for h in range(110) for n in range(per_hub)}
+    entries = {"a.py": "".join(f"import h{h:03}\n" for h in range(110)) + CLIENT}
+    if shape == "two_entries":
+        entries["b.py"] = "".join(f"import h{h:03}\n" for h in range(100)) + CLIENT
+    _files(tmp_path, {**entries, "common.py": "x = 1\n", **hubs, **leaves})
 
     seen = _measure(tmp_path)
 
