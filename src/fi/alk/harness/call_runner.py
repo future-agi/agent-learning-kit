@@ -2325,10 +2325,16 @@ class CallRunnerImpl:
                     "transcript": result.transcript,
                     "messages": result.messages,
                 }
-                if call_actors:
+                # Every actor that took part, the ones acting only through the world too, so the call is found by each.
+                summary = list(
+                    _with_world_actors(
+                        tuple(took_part.get("call_actors") or ()), actor_decisions, self._context.bundle_dir
+                    )
+                )
+                if call_actors or summary:
                     transcript_document["call_actors"] = {
                         "resolved": call_actors,
-                        "summary": took_part.get("call_actors") or [],
+                        "summary": summary,
                         "events": took_part.get("call_actor_events") or [],
                     }
                 if acted or actor_decisions:

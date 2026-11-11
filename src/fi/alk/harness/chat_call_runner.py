@@ -983,11 +983,17 @@ class HostedChatCallRunner:
         if traced_calls and not transcript.calls:
             transcript.calls.extend(traced_calls)
 
-        if cast is not None:
-            transcript.call_actors = {"resolved": chat_actors, "summary": cast.summary(), "events": cast.events}
         world_record = _world_actors_record(door, listing, dispatcher, cast, meter, limits, since=trial_started)
         if world_record is not None:
             transcript.world_actors = world_record
+        # Every actor that took part, the ones acting only through the world too, so the call is found by each.
+        summary = list(_chat_actor_summary(cast, world_record, listing))
+        if summary:
+            transcript.call_actors = {
+                "resolved": chat_actors,
+                "summary": summary,
+                "events": cast.events if cast is not None else [],
+            }
         faults = list(document.get("faults") or [])
         if faults:
             from .call_runner import fault_notices

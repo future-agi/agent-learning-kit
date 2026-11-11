@@ -2447,6 +2447,42 @@ def test_a_world_actor_s_actions_are_sealed_with_the_transcript_never_as_the_age
     ] == [("records.approve", "reviewer")]
 
 
+def test_a_call_where_only_a_world_actor_took_part_lists_it_in_the_call_s_actor_record(
+    tmp_path, monkeypatch
+) -> None:
+    _job_obj, context = _context(
+        tmp_path=tmp_path, evidence_seam=EvidenceSeam.TOOL_TRACE
+    )
+    _write_scenario_doc(context.bundle_dir, scenario_key="k1")
+    _with_actors(context.bundle_dir)
+    columns = ["name", "arguments", "result", "ok", "error", "at", "action_id", "actor_id", "outcome"]
+    rows = [("approve", {}, None, True, "", 2.0, "a2", "reviewer", "committed")]
+    monkeypatch.setitem(sys.modules, "psycopg", _FakePsycopg(rows, columns))
+    adapter = FakeAdapter()
+    runner = cr.CallRunnerImpl(adapter, context, place_call=None)
+
+    outcome = asyncio.run(
+        runner._translate_report(
+            _report(transcript="user: hello", messages=[{"role": "user", "content": "hello"}]),
+            runtime=_runtime(endpoints={"database": _postgres_endpoint()}),
+            scenario_key="k1",
+            started_at=datetime.now(timezone.utc),
+            actor_decisions=[
+                {"actor": "reviewer", "play": "mocked", "action": "records.approve", "outcome": "committed"}
+            ],
+        )
+    )
+
+    row = {"actor": "reviewer", "name": "Robin", "triggered": True, "delivered": 1, "dropped": [],
+           "acts_in_world": True}
+    assert row in outcome.call_actors
+    [transcript] = [
+        json.loads(data) for kind, _key, data in adapter.uploads if kind is cr.ArtifactKind.TRANSCRIPT
+    ]
+    # The run's actor filter reads this record, so a call where only the world actor took part is found by it.
+    assert transcript["call_actors"]["summary"] == [row]
+
+
 def test_a_trial_s_faults_go_to_the_world_database_and_are_cleared_after_the_call(tmp_path, monkeypatch) -> None:
     _job_obj, context = _context(tmp_path=tmp_path, evidence_seam=EvidenceSeam.TOOL_TRACE)
     _write_scenario_doc(context.bundle_dir, scenario_key="k1")

@@ -1445,7 +1445,8 @@ def test_a_chat_trial_plays_its_actors_through_the_same_door_as_the_agent(tmp_pa
             return AgentResponse(content="The account is active.")
 
     monkeypatch.setattr(chat, "HTTPAgentWrapper", Wrapper)
-    runner = chat.HostedChatCallRunner(_Adapter(), context)
+    adapter = _Adapter()
+    runner = chat.HostedChatCallRunner(adapter, context)
     runtime = EnvironmentRuntime(
         runtime_id="runtime-1", world_index=0, bundle_digest="sha256:" + "a" * 64, state=RuntimeState.READY,
         endpoints={"target_http": RuntimeEndpoint(capability="target_http", protocol="http",
@@ -1453,6 +1454,10 @@ def test_a_chat_trial_plays_its_actors_through_the_same_door_as_the_agent(tmp_pa
     )
     outcome = asyncio.run(runner.run(SimpleNamespace(scenario_key="one", scenario_id="scenario-1"), runtime))
 
+    # The call's own record lists the actor too, so the run's actor filter finds a call where only it took part.
+    [sealed] = [json.loads(data) for data in adapter.uploads if b'"world_actors"' in data]
+    assert {"actor": "manager", "name": "Mia", "triggered": True, "delivered": 1, "dropped": [],
+            "acts_in_world": True} in sealed["call_actors"]["summary"]
     # The agent's own calls are what grading reads; the actor's action is never among them.
     assert [(call.name, call.arguments) for call in outcome.calls] == [("lookup_account", {"account_id": "ACC-2048"})]
     assert [(one["actor_id"], one["outcome"]) for one in outcome.world_actions] == [("manager", "committed")]
