@@ -820,6 +820,16 @@ def test_a_json_value_is_cleaned_as_a_structure_and_stays_json(value):
         assert tree[1] == {"role": "x"}
 
 
+def test_a_json_string_inside_json_is_cleaned_as_a_structure_too():
+    inner = json.dumps({"url": "https://h/a?key=v", "next": "keep me"})
+    value = json.dumps({"role": "tool", "content": inner})
+
+    out = _export_one(_readable(**{"input.value": value})).attributes["input.value"]
+
+    tree = json.loads(out)
+    assert json.loads(tree["content"]) == {"url": "https://h/a", "next": "keep me"}
+
+
 def test_a_json_value_cut_by_traceai_is_cleaned_as_text():
     value = ('{"note": "' + "x" * 4900 + " https://deploy:8374")[:4997] + "..."
     out = _export_one(_readable(**{"tool.input": value})).attributes["tool.input"]

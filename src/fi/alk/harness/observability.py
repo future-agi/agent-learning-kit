@@ -304,6 +304,10 @@ def _take_json(node: Any, flat: list[str], key: str) -> Any:
     if isinstance(node, str):
         if _named_secret(key):
             return ("as is", "[redacted]")
+        # A string inside JSON can itself be JSON (a tool's input dumped into a message).
+        tree = _as_json(node)
+        if tree is not None:
+            return ("json text", _take_json(tree, flat, key))
         flat.append(node)
         return ("text", len(flat) - 1)
     return ("as is", node)
@@ -328,6 +332,8 @@ def _give_json(where: Any, cleaned: list[Any]) -> Any:
         return [_give_json(item, cleaned) for item in body]
     if kind == "text":
         return cleaned[body]
+    if kind == "json text":
+        return json.dumps(_give_json(body, cleaned), ensure_ascii=False)
     return body
 
 
