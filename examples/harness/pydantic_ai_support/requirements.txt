@@ -1,0 +1,2 @@
+pydantic-ai-slim[openai]==2.61.0
+agent-simulate==0.1.3
