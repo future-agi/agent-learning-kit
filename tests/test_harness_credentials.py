@@ -1175,12 +1175,27 @@ def test_a_literal_or_defaulted_api_key_adds_no_requirement(tmp_path, plugin, ca
         ("STT(**opts)", ""),
         ("STT(api_key='')", ""),
         ('STT(api_key=os.environ["dg_key"])', ""),
+        ('STT(api_key=os.getenv("dg_key"))', ""),
+        ('STT(api_key="  ")', ""),
     ],
 )
 def test_an_unreadable_api_key_keeps_the_plugins_own_requirement(tmp_path, call, pre):
     _plugin_agent(tmp_path, "deepgram", call, pre=pre)
     assert "DEEPGRAM_API_KEY" in _missing(tmp_path)
     assert _lk(tmp_path, "DEEPGRAM_API_KEY")[0].ready
+
+
+@pytest.mark.parametrize(
+    "plugin, call",
+    [
+        ("openai", 'LLM(api_key=os.getenv("ALK_CLAUDE_GATEWAY_API_KEY"))'),
+        ("deepgram", 'STT(api_key=os.getenv("HOST"))'),
+    ],
+)
+def test_a_reserved_name_passed_as_the_key_does_not_break_the_check(tmp_path, plugin, call):
+    _plugin_agent(tmp_path, plugin, call)
+    _, found = _lk(tmp_path)
+    assert "ALK_CLAUDE_GATEWAY_API_KEY" not in found and "HOST" not in found
 
 
 def test_a_bare_getenv_imported_from_os_keeps_the_plugins_own_requirement(tmp_path):

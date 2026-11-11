@@ -656,6 +656,9 @@ def discover_credentials(
         if path.suffix.lower() == ".py":
             for name, origin in _python_sdk_requirements(content):
                 record(name, required=True)
+                if name not in findings:
+                    # A reserved name the code passes as its key: record() leaves it out.
+                    continue
                 detected = findings[name]["detected_from"]
                 assert isinstance(detected, set)
                 detected.add(origin)
