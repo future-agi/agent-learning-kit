@@ -20,6 +20,7 @@ import string
 import unicodedata
 from pathlib import Path
 
+from .backends.files import secret_text
 from .contract import AgentContract
 from .runtime_selection import charged_path
 from .source_folder import is_within
@@ -516,6 +517,14 @@ def _reads_as_a_setting(name: str) -> bool:
     return "." in name and not has_digit
 
 
+def _env_key(line: str) -> str:
+    """The setting a `.env` line sets: what comes before its first `=`, without `export`."""
+    key = line.split("=", 1)[0].strip()
+    if key.startswith("export ") or key.startswith("export\t"):
+        key = key[len("export") :].strip()
+    return key
+
+
 def model_problems(contract: AgentContract, source_root: Path) -> list[str]:
     """Problems with contract.model, checked against the cited line. On success, strips name and
     provider and stores path as the resolved file relative to the root, in POSIX form. Resolves
@@ -562,6 +571,17 @@ def model_problems(contract: AgentContract, source_root: Path) -> list[str]:
     resolved = resolved_in_source(root, path)
     if resolved is None:
         return [f"model: {shown_path} is not a file in the source"]
+    # Judged where it resolves, inside the source, before anything is opened, so a file that
+    # exists and one that doesn't get the same answer. A `.env` file is the one listed place a
+    # model may be cited from (it is where OPENAI_MODEL and the like are set), but only on a
+    # line whose setting names a model, and never with its length told.
+    relative = resolved.relative_to(root).as_posix()
+    if secret_text(relative, env_allowed=True):
+        return [
+            f"model: {shown_path} is kept out of this session because it holds credentials; cite "
+            "the line in the agent's code or configuration the model is set on, or leave model out"
+        ]
+    env_file = secret_text(relative)
     if is_prose_file(resolved):
         # A README, a text file or a prompt template says which model is used; the code or its
         # configuration sets it.
@@ -578,7 +598,14 @@ def model_problems(contract: AgentContract, source_root: Path) -> list[str]:
         ]
     lines = source_lines(raw)
     if model.line > len(lines):
+        if env_file:
+            return [f"model: line {model.line} is outside {shown_path}"]
         return [f"model: line {model.line} is outside {shown_path}, which has {len(lines)} lines"]
+    if env_file and "MODEL" not in _env_key(lines[model.line - 1]).upper():
+        return [
+            f"model: in a .env file, cite the line whose setting names the model (such as "
+            f"OPENAI_MODEL); {shown_path} line {model.line} sets another setting"
+        ]
     suffix = kind_suffix(resolved)
     dashes, ini = suffix in _DASH_COMMENT_SUFFIXES, suffix in _INI_SUFFIXES
     triple = suffix in _TRIPLE_SUFFIXES

@@ -293,8 +293,10 @@ _PROVED_NAMES = re.compile(
 )
 
 
-def secret_refusal(tool: str, arguments: dict[str, Any]) -> str:
-    """Why this call would expose a secret or skip a proof, or empty when it would not."""
+def secret_refusal(tool: str, arguments: dict[str, Any], cwd: str | None = None) -> str:
+    """Why this call would expose a secret or skip a proof, or empty when it would not. ``cwd`` is
+    the session's own folder, from the hook's payload: a relative path resolves there, as the
+    tool itself resolves it, not in the harness's folder."""
     if tool in ("Write", "Edit") and _PROVED_FILES.search(str(arguments.get("file_path") or "")):
         return (
             "That file is part of the proved environment and only changes through the tool that "
@@ -318,9 +320,10 @@ def secret_refusal(tool: str, arguments: dict[str, Any]) -> str:
         if arguments.get(key)
     ]
     pattern = str(arguments.get("pattern") or "") if tool == "Glob" else ""
-    if any(secret_path(one) for one in [*paths, pattern] if one):
+    base = Path(cwd) if cwd else None
+    if any(secret_path(one, base) for one in [*paths, pattern] if one):
         return SECRET_REFUSAL
-    if tool in ("Grep", "Glob") and any(above_secrets(one) for one in paths):
+    if tool in ("Grep", "Glob") and any(above_secrets(one, base) for one in paths):
         return SECRET_REFUSAL
     return ""
 
@@ -360,7 +363,7 @@ def gate_hooks(granted: Iterable[str]) -> dict[str, Any]:
         name = str(payload.get("tool_name") or "")
         if name in permitted:
             arguments = payload.get("tool_input") or {}
-            refusal = secret_refusal(name, arguments)
+            refusal = secret_refusal(name, arguments, payload.get("cwd"))
             if refusal:
                 return {
                     "hookSpecificOutput": {
