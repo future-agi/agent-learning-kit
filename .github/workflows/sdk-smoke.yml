@@ -49,6 +49,9 @@ jobs:
         # pre-existing failures unrelated to the voice engine (CLI golden-path,
         # init presets, plus test_config_and_facades hangs) — track those
         # separately so this gate stays green and meaningful.
+        # Deselected below, failing on dev too: the two sandbox-server tests are TH-8978. (The
+        # run is one folded line, so the ticket is named here rather than beside each
+        # --deselect.)
         run: >-
           python -m pytest -q
           tests/runtime/test_livekit_engine.py
@@ -60,6 +63,9 @@ jobs:
           tests/test_call_originator_factory.py
           tests/test_retell_evidence.py
           tests/harness/test_process_runtime.py
+          tests/test_harness_sandbox_server.py
+          --deselect tests/test_harness_sandbox_server.py::test_private_github_submission_becomes_hosted_job
+          --deselect tests/test_harness_sandbox_server.py::test_public_github_branch_url_populates_job_ref
           tests/harness/test_simulation_mark_bootstrap.py
           tests/harness/test_process_preflight.py
           tests/providers
