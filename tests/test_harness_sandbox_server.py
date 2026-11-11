@@ -8,7 +8,6 @@ from fastapi import HTTPException, UploadFile
 from fastapi.testclient import TestClient
 from pydantic import Field, ValidationError
 import pytest
-from pydantic import Field
 
 from fi.alk.harness import sandbox_server
 from fi.alk.harness.job import HarnessJob
