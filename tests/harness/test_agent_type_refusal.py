@@ -5146,7 +5146,7 @@ def test_a_stopped_save_walk_logs_how_many_files_it_reached(tmp_path, caplog, mo
     with caplog.at_level("WARNING", logger=agent_type_check.__name__):
         found = agent_type_check._walked(repo, "agents/a")
 
-    assert f"stopped at its limits; {len(found)} files reached" in caplog.text
+    assert f"stopped at its limits or left code unread; {len(found)} files reached" in caplog.text
     assert len(found) >= 1
 
 
@@ -5812,10 +5812,12 @@ _ESCAPED_LINE = b"# coding: unicode-escape\n"
 @pytest.mark.parametrize(
     "helper, stopped_too, reached",
     [
-        # Decoded, the CR ends the comment and Python runs the import; read as UTF-8 the comment
-        # runs on and the file parses, with only os.
+        # Decoded, the CR ends the comment and Python 3.12 runs the import (3.11 doesn't: a false
+        # cut there, in the safe direction); read as UTF-8 the comment runs on and the file parses,
+        # with only os.
         (_ESCAPED_LINE + b"import os  # c\\r; import common.web\n", True, False),
-        # Decoded, it's two imports; read as UTF-8, a stray backslash: only the decoded parses.
+        # Decoded, the walk reads two imports (Python refuses the bare CR, so following it only
+        # over-reaches); read as UTF-8, a stray backslash: only the decoded reading parses.
         (_ESCAPED_LINE + b"import os\\rimport common.web\n", False, True),
         # Both readings parse.
         (_ESCAPED_LINE + b"import common.web  # see \\r\n", False, True),
@@ -5946,7 +5948,8 @@ def test_a_name_whose_file_resolves_past_the_depth_cut_says_bundlings_walk_stopp
     (far / "mod.py").write_text("")
     (repo / "agents" / "a").mkdir(parents=True)
     (repo / "agents" / "a" / "main.py").write_text("import lib.mod\n")
-    (repo / "agents" / "a" / "lib").symlink_to(far)
+    # At the root, outside the agent's folder, so only the resolved depth can cut.
+    (repo / "lib").symlink_to(far)
     stopped: list[bool] = []
 
     imported_by_agent(repo, "agents/a", stopped=stopped)
@@ -5959,8 +5962,9 @@ def test_a_link_target_past_so_many_parts_says_the_walk_stopped(tmp_path):
     repo = _tree(tmp_path / "repo", {"common/__init__.py": "", "common/web.py": "", "x/keep": ""}).resolve()
     (repo / "agents" / "a").mkdir(parents=True)
     (repo / "agents" / "a" / "main.py").write_text("import shared.web\n")
-    target = "/".join(["..", "..", *(["x", ".."] * (credentials._LONGEST_TARGET // 2)), "common"])
-    (repo / "agents" / "a" / "shared").symlink_to(target)
+    # At the root, outside the agent's folder, so only the link's own refusal can cut.
+    target = "/".join([*(["x", ".."] * (credentials._LONGEST_TARGET // 2)), "common"])
+    (repo / "shared").symlink_to(target)
 
     found, stopped = _save_walk(repo)
     assert stopped and repo / "common" / "web.py" not in found
@@ -6080,3 +6084,95 @@ def test_a_second_reading_the_parse_total_refuses_says_the_walk_stopped(tmp_path
         repo, "agents/a", parse_limit=LARGEST_PARSED_MODULE, parse_budget=ParseBudget(first), stopped=stopped
     )
     assert taken and repo / "common" / "web.py" in found and stopped == [True]
+
+
+def test_a_folder_link_in_the_agents_folder_says_the_walk_stopped(tmp_path):
+    from fi.alk.harness.credentials import imported_by_agent
+
+    # The walk doesn't enter a folder link; one that leads inside the repository may hold code
+    # the agent runs.
+    repo = _tree(
+        tmp_path / "repo",
+        {"shared/handlers/run.py": "import common.web\n", "common/__init__.py": "", "common/web.py": "", "agents/a/main.py": "x = 1\n"},
+    ).resolve()
+    (repo / "agents" / "a" / "handlers").symlink_to("../../shared/handlers")
+    stopped: list[bool] = []
+
+    _, at_save = _save_walk(repo)
+    imported_by_agent(repo, "agents/a", stopped=stopped)
+    assert at_save and stopped == [True]
+
+
+def test_a_folder_link_out_of_the_repository_doesnt_say_the_walk_stopped(tmp_path):
+    outside = _tree(tmp_path / "data", {"rows.csv": "a,b\n"}).resolve()
+    repo = _tree(tmp_path / "repo", {"agents/a/main.py": "x = 1\n"}).resolve()
+    (repo / "agents" / "a" / "data").symlink_to(outside)
+
+    _, stopped = _save_walk(repo)
+    assert not stopped
+
+
+def test_a_long_link_target_before_the_last_folder_says_the_walk_stopped(tmp_path):
+    from fi.alk.harness import credentials
+
+    # The refused link is the first of the candidate's folders: the walk stops there and says so.
+    repo = _tree(tmp_path / "repo", {"common/sub/__init__.py": "", "common/sub/web.py": "", "x/keep": ""}).resolve()
+    (repo / "agents" / "a").mkdir(parents=True)
+    (repo / "agents" / "a" / "main.py").write_text("import shared.sub.web\n")
+    target = "/".join([*(["x", ".."] * (credentials._LONGEST_TARGET // 2)), "common"])
+    (repo / "shared").symlink_to(target)
+
+    found, stopped = _save_walk(repo)
+    assert stopped and repo / "common" / "sub" / "web.py" not in found
+
+
+@pytest.mark.parametrize("case", ["decoded", "utf8"])
+def test_a_reading_is_sized_with_its_line_ends_folded(tmp_path, case):
+    from fi.alk.harness.credentials import imported_by_agent
+    from fi.alk.harness.python_source import LARGEST_PARSED_MODULE, ParseBudget
+
+    # Each file is over the per-file parse limit as written and under it once its line ends are
+    # folded, as Python folds them: sized as written, the reading would be refused.
+    root = tmp_path.resolve()
+    (root / "a").mkdir()
+    (root / "a" / "m.py").write_text("x = 1\n")
+    if case == "decoded":
+        # The decoded reading: each escaped CRLF is two characters, one once folded.
+        body = _ESCAPED_LINE + b"import m\\r\\n" * 13_200
+    else:
+        # The UTF-8 reading, with real CRLFs: only it imports m.
+        pad = b"#" + b"p" * 40 + b"\r\n"
+        body = _ESCAPED_LINE.replace(b"\n", b"\r\n") + b"s = '\\r'; import m\r\n" + pad * 3_100
+    assert len(body) > LARGEST_PARSED_MODULE
+    (root / "a" / "main.py").write_bytes(body)
+    stopped: list[bool] = []
+
+    found = imported_by_agent(
+        root, "a", parse_limit=LARGEST_PARSED_MODULE, parse_budget=ParseBudget(512 * 1024), stopped=stopped
+    )
+    assert root / "a" / "m.py" in found
+    if case == "decoded":
+        assert stopped == [False]
+
+
+def test_a_script_with_more_names_than_the_walk_tries_says_it_stopped(tmp_path):
+    from fi.alk.harness.credentials import imported_by_agent
+
+    # None of them is there: the third is left untried with nothing else left to follow.
+    repo = _tree(tmp_path / "repo", {"agents/a/index.js": 'import "./b";\nimport "./c";\nimport "./d";\n'})
+    stopped: list[bool] = []
+
+    imported_by_agent(repo, "agents/a", import_limit=2, stopped=stopped)
+    assert stopped == [True]
+
+
+def test_a_decode_total_spent_exactly_doesnt_say_the_walk_stopped(tmp_path, monkeypatch):
+    from fi.alk.harness import python_source
+
+    helper = _ESCAPED_LINE + b"\\x69mport common.web\n"
+    repo = _behind(tmp_path, helper)
+    # The walk's decode total has room for this file and no byte more.
+    monkeypatch.setattr(python_source, "LARGEST_ESCAPED_TOTAL", len(helper))
+
+    found, stopped = _save_walk(repo)
+    assert not stopped and repo / "common" / "web.py" in found

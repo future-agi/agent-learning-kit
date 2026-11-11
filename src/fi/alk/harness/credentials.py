@@ -1216,15 +1216,25 @@ def _followed(
     return real
 
 
-def _code_in(folder: Path) -> Iterator[Path]:
+def _code_in(
+    folder: Path, root: Path | None = None, unread: list[bool] | None = None
+) -> Iterator[Path]:
     """The Python and script files in ``folder``, outside the folders no one's code is in.
 
     Those folders aren't entered, and each file costs its name: building a parent for each part,
     as 3.12 does to make a path relative, cost a crafted folder of 31,000 nested packages 2.8 s.
+    A folder link isn't entered either; given ``root`` and ``unread``, one that leads inside
+    ``root`` sets ``unread``, since code the agent runs may be there.
     """
     suffixes = {".py", *_SCRIPT_SUFFIXES}
     for directory, subdirectories, files in os.walk(folder):
         subdirectories[:] = [name for name in subdirectories if name not in _IGNORED_PARTS]
+        if unread is not None and root is not None and not unread[0]:
+            for name in subdirectories:
+                place = os.path.join(directory, name)
+                if os.path.islink(place) and is_within(Path(os.path.realpath(place)), root):
+                    unread[0] = True
+                    break
         for name in files:
             if name not in _IGNORED_PARTS and os.path.splitext(name)[1] in suffixes:
                 yield Path(directory, name)
@@ -1482,7 +1492,7 @@ def imported_by_agent(
     # included (at most this much more parsing per walk).
     escapes = EscapeBudget()
     seen: set[Path] = set()
-    pending = deque(sorted(_code_in(folder)))
+    pending = deque(sorted(_code_in(folder, root, unread)))
     own = set(pending)  # Read once already, so importing one doesn't queue it again.
     read = bytes_read = imports_tried = 0
     import_limit = _MAX_WALK_IMPORTS if import_limit is None else import_limit

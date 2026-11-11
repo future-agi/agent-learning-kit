@@ -654,7 +654,8 @@ def _walked(root: Path, subfolder: str) -> frozenset[Path]:
     )
     if stopped and stopped[0]:
         logger.warning(
-            "the save's import walk for %s stopped at its limits; %d files reached",
+            "the save's import walk for %s stopped at its limits or left code unread; "
+            "%d files reached",
             subfolder,
             len(found),
         )
