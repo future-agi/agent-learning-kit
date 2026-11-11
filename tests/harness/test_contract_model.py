@@ -27,7 +27,7 @@ MIB = 1024 * 1024
 # How long a check this file holds to "quick" may take: it takes well under a tenth of a second
 # alone, and the bound leaves room for a shared CI runner under load. A check under tracemalloc,
 # which slows Python down several times over, gets its own.
-QUICK_SECONDS = 2.0
+QUICK_SECONDS = 1.0
 QUICK_SECONDS_TRACED = 5.0
 FIXTURES = Path(__file__).resolve().parents[1] / "providers" / "fixtures" / "authored"
 
@@ -3607,6 +3607,16 @@ def test_every_kind_of_env_file_takes_the_same_rule(root, file):
         pytest.param(".env", "MODEL_ACCESSKEY=fake-guess", "fake-guess", id="joined-accesskey"),
         pytest.param(".env", "OPENAI_MODEL_APIKEY=sk-fake-guess", "sk-fake-guess", id="model-joined-apikey"),
         pytest.param(".env", "LLM_PASSWD=fake-guess", "fake-guess", id="joined-passwd"),
+        pytest.param(".env", "LLM_KEY=fake-guess", "fake-guess", id="part-key"),
+        pytest.param(".env", "MODEL_TOKEN=fake-guess", "fake-guess", id="part-token"),
+        pytest.param(".env", "MODEL_SECRET=fake-guess", "fake-guess", id="part-secret"),
+        pytest.param(".env", "LLM_PASS=fake-guess", "fake-guess", id="part-pass"),
+        pytest.param(".env", "LLM_PWD=fake-guess", "fake-guess", id="part-pwd"),
+        pytest.param(".env", "LLM_AUTH=fake-guess", "fake-guess", id="part-auth"),
+        pytest.param(".env", "MODEL_CREDENTIAL=fake-guess", "fake-guess", id="part-credential"),
+        pytest.param(".env", "LLM_URL=fake-guess", "fake-guess", id="part-url"),
+        pytest.param(".env", "MODEL_URI=fake-guess", "fake-guess", id="part-uri"),
+        pytest.param(".env", "LLM_DSN=fake-guess", "fake-guess", id="part-dsn"),
         pytest.param(".env", "MODEL_URL=https://admin:fake@llm.local/v1", "https://admin:fake@llm.local/v1", id="model-url"),
         pytest.param(
             ".env",

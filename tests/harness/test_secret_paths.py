@@ -66,6 +66,23 @@ TABLE: tuple[tuple[str, str], ...] = (
     ("**/*credential*.properties", "src/main/resources/credentials.properties"),
     ("**/*credential*.xml", "jenkins/credentials.xml"),
     ("**/*firebase-adminsdk*.json", "app/myproj-firebase-adminsdk-ab12c-0123456789.json"),
+    ("**/*credential*.csv", "aws/my_credentials.csv"),
+    ("**/*accesskeys*.csv", "rootkey-accessKeys.csv"),
+    ("**/*secret*.txt", "api-secret.txt"),
+    ("**/*credential*.txt", "gcp-credential.txt"),
+    ("**/secrets/*.txt", "deploy/secrets/db_password.txt"),
+    ("**/.secrets", ".secrets"),
+    ("**/.dev.vars", "worker/.dev.vars"),
+    ("**/local.settings.json", "functions/local.settings.json"),
+    ("**/key.properties", "android/key.properties"),
+    ("**/keystore.properties", "android/keystore.properties"),
+    ("**/AuthKey_*.p8", "AuthKey_ABC123.p8"),
+    ("**/*.ppk", "deploy/server.ppk"),
+    ("**/.config/gh/hosts.yml", ".config/gh/hosts.yml"),
+    ("**/.databrickscfg", ".databrickscfg"),
+    ("**/.terraformrc", ".terraformrc"),
+    ("**/.cargo/credentials", ".cargo/credentials"),
+    ("**/.gem/credentials", ".gem/credentials"),
     ("**/*.pem", "certs/server.pem"),
     ("**/*.key", "certs/server.key"),
     ("**/*.p12", "certs/a.p12"),
@@ -126,16 +143,17 @@ NEAR_MISSES = (
     "src/env.mjs", "next-env.d.ts", "vite-env.d.ts", "env.example", "dotenv.py",
     "secret_manager.py", "credentials_helper.go", "secrets.yaml.example", "visa.json", "sa.json",
     "secrets.py", "secrets.sh", "firebase.json", "id_ed25519.pub", "secrets.ini.example",
+    "secrets/manager.go", "credentials/README.txt", ".cargo/config.toml", "gh/hosts.yml", "AuthKey.md",
 )  # fmt: skip
 
 
-# What the scan hides beyond the shared list, written out by hand: the scan hides every name with
-# "secret" or "credential" in it, and every SSH key's .pub, where a build must read those. A name the
-# scan starts or stops hiding fails the end-to-end test.
+# What the scan hides beyond the shared list, written out by hand: every name with "secret" or
+# "credential" in it, such as source files and source folders a build reads, and every SSH key's
+# .pub. A name the scan starts or stops hiding fails the end-to-end test.
 SCAN_ONLY = (
     "id_rsa.pub", "secrets/app.json", "credentials/README.json", "secret_manager.py",
     "credentials_helper.go", "secrets.yaml.example", "secrets.py", "secrets.sh", "id_ed25519.pub",
-    "secrets.ini.example",
+    "secrets.ini.example", "secrets/manager.go", "credentials/README.txt",
 )  # fmt: skip
 
 
