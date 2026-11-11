@@ -204,6 +204,27 @@ class ProviderExecutionMode(str, Enum):
     PROVIDER_IMPORT = "provider_import"
 
 
+PROVIDER_MANAGED_CONNECTORS = frozenset({"vapi", "retell", "retell_chat"})
+
+
+def provider_profile_source(agent: AgentConnection) -> str | None:
+    """Where the build loads this agent's profile from, if it loads one.
+
+    A profile from the provider's API or from the job's own config: ``"phone"`` or
+    ``"livekit"`` for a connect-only job on those connectors, ``"provider"`` for an import or a
+    connect-only job on a provider-managed connector, and ``None`` when there is none.
+    """
+    connector = agent.connector.strip().lower()
+    if agent.mode is ProviderExecutionMode.CONNECT_ONLY and connector in {"phone", "livekit"}:
+        return connector
+    if agent.mode is ProviderExecutionMode.PROVIDER_IMPORT or (
+        agent.mode is ProviderExecutionMode.CONNECT_ONLY
+        and connector in PROVIDER_MANAGED_CONNECTORS
+    ):
+        return "provider"
+    return None
+
+
 class ArtifactLevel(str, Enum):
     METADATA_ONLY = "metadata-only"
     TRACES = "traces"

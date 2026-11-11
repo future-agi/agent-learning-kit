@@ -30,7 +30,7 @@ from typing import TYPE_CHECKING, Any, Callable, Sequence
 from pydantic import ValidationError
 
 from .. import __version__ as _sdk_version
-from ..providers.agent import AgentBuildError, build_authored_agent
+from ..providers.agent import AgentBuildError, _redact, build_authored_agent
 from . import outbound as ob
 from .catalogue import CATALOGUE, SubGoal
 from .contract import AgentContract
@@ -847,7 +847,8 @@ def _chosen_evals_and_prompt(bundle_dir: Path) -> tuple[list[str], str, str]:
     modality = str(body.get("modality") or "").strip().lower()
     return (
         names,
-        str(body.get("system_prompt_excerpt") or "").strip(),
+        # Cleaned again at send, for a contract not saved by write_contract (an older bundle).
+        _redact(str(body.get("system_prompt_excerpt") or "").strip()),
         modality if modality in ("voice", "text") else "",
     )
 

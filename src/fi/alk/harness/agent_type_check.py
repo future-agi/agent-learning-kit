@@ -128,7 +128,7 @@ _TOOLKIT = "PlayWrightBrowserToolkit"
 _WHOLE_NAMES = {
     name: re.compile(
         # The name looked for first, so only the places it starts at are tried: eight lookbehinds
-        # at every byte held the save 2.8 s (round 3 reviewer A).
+        # at every byte held the save 2.8 s.
         rf"(?={re.escape(name)})(?:(?<!\w)|(?<=\\[abfnrtv])|(?<=\\x[0-9A-Fa-f]{{2}})|(?<=\\[0-7])|(?<=\\[0-7]{{2}})"
         rf"|(?<=\\[0-7]{{3}})|(?<=\\u[0-9A-Fa-f]{{4}})|(?<=\\U[0-9A-Fa-f]{{8}})){re.escape(name)}(?!\w)",
         re.ASCII,
@@ -922,7 +922,7 @@ def _scanned_agent(
         local = set()
     if reached is not None:
         # Everything the walk followed, as the credential scan reads it: a test-named package the
-        # agent imports still runs (Dileep's third review). The files above stay filtered: a root
+        # agent imports still runs. The files above stay filtered: a root
         # conftest.py isn't the agent's code.
         reached[:] = [*above, *walked]
     # A shared script's dependencies are declared in its package, at or above it.
