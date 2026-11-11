@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 from pathlib import Path
 
 import pytest
@@ -76,8 +77,12 @@ _READ_MESSAGE = (
     "This agent's main job was read as driving a browser, operating a computer or crawling "
     "sites. Only voice and chat agents are supported for now."
 )
-# Over the size a .py is read at, so never read.
-_OVERSIZED = "#" * (LARGEST_PARSED_MODULE + 1)
+# Over the size a .py is read at, so never read; it names a tool, so leaving it unread cuts.
+_OVERSIZED = "# playwright\n".ljust(LARGEST_PARSED_MODULE + 1, "#")
+# A data module of prompt strings over that size, about 265 KB, naming no tool.
+_DATA_MODULE = (
+    "PROMPTS = [\n" + '    "Tell me about the weather today.",\n' * 6_800 + "]\n"
+)
 
 
 @pytest.fixture(autouse=True)
@@ -226,7 +231,7 @@ _LIMITS = [
     ),
     pytest.param(
         "package_unreadable",
-        {"package.json": b'\xff{"dependencies": {"playwright": "1"}}'},
+        {"package.json": "[" * 100_000},
         {},
         id="package_unreadable",
     ),
@@ -374,6 +379,216 @@ def test_a_package_json_that_isnt_a_file_is_no_cut(tmp_path):
     repo = _tree(tmp_path / "source", {"agent.py": "import openai\n"})
     (repo / "package.json").symlink_to(repo / "nowhere.json")
     assert browser_scan(repo) == ([], frozenset())
+
+
+def test_a_large_data_module_is_no_cut(tmp_path):
+    # A big data module beside code that imports no tool.
+    assert len(_DATA_MODULE.encode()) > 260 * 1024
+    repo = _tree(
+        tmp_path / "a", {"main.py": "import openai\n", "prompts_data.py": _DATA_MODULE}
+    )
+    assert browser_scan(repo) == ([], frozenset())
+    output = tmp_path / "out"
+    answer = _submitter(output, repo)(_reading("chat"))
+    assert not answer.get("is_error"), answer
+    assert load(output).modality == "chat"
+
+
+@pytest.mark.parametrize(
+    "files, totals",
+    [
+        pytest.param(
+            {"big.py": "#" * (LARGEST_PARSED_MODULE + 1) + "\nimport playwright\n"},
+            {},
+            id="named-past-the-read-limit",
+        ),
+        pytest.param(
+            {"big.py": "#" * (3 * 1024 * 1024) + "\nimport playwright\n"},
+            {},
+            id="named-3-mib-in",
+        ),
+        # Python refuses the coding line until the codec is registered at run time.
+        pytest.param(
+            {"big.py": b"# coding: nonesuch\n" + _DATA_MODULE.encode()},
+            {},
+            id="refused-coding",
+        ),
+        pytest.param(
+            {"big.py": "x = 1\n" * 30_000 + "TOOL = 'computer_use_preview'\n"},
+            {},
+            id="marker",
+        ),
+        # Python reads it as `import playwright`; its bytes name nothing.
+        pytest.param(
+            {
+                "big.py": b"# coding: utf-7\nimport +AHA-laywright\n"
+                + _DATA_MODULE.encode()
+            },
+            {},
+            id="utf-7",
+        ),
+        pytest.param(
+            {
+                "big.py": b"# coding: unicode_escape\nimport \\x70laywright\n"
+                + _DATA_MODULE.encode()
+            },
+            {},
+            id="unicode-escape",
+        ),
+        pytest.param(
+            {"big.py": _DATA_MODULE},
+            {(agent_type_check, "_LARGEST_UNREAD_SEARCHED"): LARGEST_PARSED_MODULE + 1},
+            id="past-the-file-bound",
+        ),
+        pytest.param(
+            {"big.py": _DATA_MODULE},
+            {(agent_type_check, "_UNREAD_SEARCH_TOTAL"): len(_DATA_MODULE) - 1},
+            id="past-the-scan-total",
+        ),
+        pytest.param(
+            {"bundle.js": "const tool = 'computer-use-preview';\n"},
+            {(agent_type_check, "_LARGEST_CODE_FILE"): 20},
+            id="script-marker",
+        ),
+        # The packages a manifest lists aren't among the names searched for.
+        pytest.param(
+            {"package.json": json.dumps({"dependencies": {"puppeteer": "1"}})},
+            {(agent_type_check, "_LARGEST_CODE_FILE"): 20},
+            id="package-json",
+        ),
+    ],
+)
+def test_an_unread_file_that_may_name_a_tool_cuts(tmp_path, monkeypatch, files, totals):
+    for (module, name), value in totals.items():
+        monkeypatch.setattr(module, name, value)
+    repo = _tree(tmp_path / "source", {"main.py": "import openai\n", **files})
+    assert browser_scan(repo) == ([], frozenset({"file_size"}))
+
+
+@pytest.mark.parametrize(
+    "files, totals",
+    [
+        # "computer" in prose starts no tool marker.
+        pytest.param(
+            {"big.py": _DATA_MODULE.replace("weather today", "computer", 1)},
+            {},
+            id="prose-computer",
+        ),
+        pytest.param(
+            {"big.py": b"# coding: latin-1\n" + _DATA_MODULE.encode()},
+            {},
+            id="raw-safe-coding",
+        ),
+        pytest.param(
+            {"bundle.js": "const answer = 42; // past twenty bytes\n"},
+            {(agent_type_check, "_LARGEST_CODE_FILE"): 20},
+            id="script",
+        ),
+        # The second file's search spends what's left exactly.
+        pytest.param(
+            {"big.py": _DATA_MODULE, "big_too.py": _DATA_MODULE},
+            {(agent_type_check, "_UNREAD_SEARCH_TOTAL"): 2 * len(_DATA_MODULE)},
+            id="at-the-scan-total",
+        ),
+    ],
+)
+def test_an_unread_file_that_names_no_tool_is_no_cut(
+    tmp_path, monkeypatch, files, totals
+):
+    for (module, name), value in totals.items():
+        monkeypatch.setattr(module, name, value)
+    repo = _tree(tmp_path / "source", {"main.py": "import openai\n", **files})
+    assert browser_scan(repo) == ([], frozenset())
+
+
+def _unreadable(monkeypatch, repo: Path) -> None:
+    real = Path.open
+
+    def refused(self, *args, **kwargs):
+        if self.name == "big.py":
+            raise PermissionError("refused")
+        return real(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", refused)
+
+
+def _sized(size: int):
+    real = agent_type_check._file_size
+    return lambda path: size if path.name == "big.py" else real(path)
+
+
+def _not_a_file(monkeypatch, repo: Path) -> None:
+    # Read, it would give nothing, and nothing names no tool.
+    (repo / "big.py").unlink()
+    (repo / "big.py").symlink_to(os.devnull)
+    monkeypatch.setattr(
+        agent_type_check, "_file_size", _sized(LARGEST_PARSED_MODULE + 1)
+    )
+
+
+def _grown(monkeypatch, repo: Path) -> None:
+    # Its size taken under the bound, it's past it when read.
+    (repo / "big.py").write_text("x = 1\n" * (5 * 1024 * 1024 // 6), encoding="utf-8")
+    monkeypatch.setattr(
+        agent_type_check, "_file_size", _sized(LARGEST_PARSED_MODULE + 1)
+    )
+
+
+@pytest.mark.parametrize("make", [_unreadable, _not_a_file, _grown])
+def test_an_unread_file_that_cant_be_cleared_cuts(tmp_path, monkeypatch, make):
+    repo = _tree(
+        tmp_path / "source", {"main.py": "import openai\n", "big.py": _DATA_MODULE}
+    )
+    make(monkeypatch, repo)
+    assert browser_scan(repo) == ([], frozenset({"file_size"}))
+
+
+def test_the_unread_search_is_charged_to_its_own_total(tmp_path, monkeypatch):
+    # Read first by name: charged to the scan's totals, it would leave the agent's file unread.
+    repo = _tree(
+        tmp_path / "source",
+        {"a_data.py": _DATA_MODULE, "z_agent.py": "import playwright\n"},
+    )
+    monkeypatch.setattr(agent_type_check, "_LARGEST_SCAN", 100)
+    monkeypatch.setattr(agent_type_check, "_LARGEST_PYTHON_SCAN", 100)
+    assert browser_scan(repo) == (["playwright"], frozenset())
+    # The search's total is shared by the scan's files, in the order they're read.
+    agent_type_check._scan.cache_clear()
+    _tree(repo, {"b_data.py": _DATA_MODULE})
+    monkeypatch.setattr(agent_type_check, "_UNREAD_SEARCH_TOTAL", len(_DATA_MODULE))
+    assert browser_scan(repo) == (["playwright"], frozenset({"file_size"}))
+
+
+@pytest.mark.parametrize(
+    "manifest, names",
+    [
+        # A trailing comma: npm refuses it too.
+        pytest.param(
+            b'{"name": "x", "dependencies": {"react": "1"},}', [], id="trailing-comma"
+        ),
+        # Node reads a byte that isn't UTF-8 as a replacement character.
+        pytest.param(
+            b'{"description": "\xff", "dependencies": {"playwright": "1"}}',
+            ["playwright"],
+            id="not-utf-8-in-a-string",
+        ),
+        # Read that way, a stray byte before the object is no JSON either.
+        pytest.param(
+            b'\xff{"dependencies": {"playwright": "1"}}', [], id="not-utf-8-before-it"
+        ),
+        # JSON.parse reads an integer of any length; json refuses one past 4,300 digits.
+        pytest.param(
+            b'{"dependencies": {"puppeteer": "22"}, "n": ' + b"1" * 5000 + b"}",
+            ["puppeteer"],
+            id="a-5000-digit-integer",
+        ),
+    ],
+)
+def test_a_package_json_npm_reads_or_refuses_is_no_cut(tmp_path, manifest, names):
+    repo = _tree(
+        tmp_path / "b", {"main.py": "import openai\n", "package.json": manifest}
+    )
+    assert browser_scan(repo) == (names, frozenset())
 
 
 @pytest.mark.parametrize(

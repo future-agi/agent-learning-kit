@@ -26,10 +26,12 @@ from .failure_file import FAILURE_FILE
 from .instrumentation_evidence import _SKIPPED_DIRECTORIES, _imports
 from .job import FailureDomain, HarnessFailure, HarnessStage
 from .python_source import (
+    _RAW_SAFE_CODECS,
     LARGEST_PARSED_MODULE,
     EscapeBudget,
     ParseBudget,
     TokenBudget,
+    _coding,
     parsed,
     read_module,
 )
@@ -119,6 +121,7 @@ BROWSER_MODALITIES = frozenset({"browser", "computer_use", "cua"})
 _MARKER_START = re.compile(
     r"computer[_-]?[uU]se|ComputerUse|computer_\d{8}|@playwright/mcp|mcp-server-playwright"
 )
+_MARKER_START_BYTES = re.compile(_MARKER_START.pattern.encode())
 _TOOLKIT = "PlayWrightBrowserToolkit"
 # A whole name: no letter, digit or "_" before or after it. In a unicode-escape file read as bytes,
 # an escape such as \t, \x20, \040 or \u0020 just before it counts as a boundary too.
@@ -144,6 +147,16 @@ _CODE_SUFFIXES = _SCRIPT_SUFFIXES | {".py"}
 _LARGEST_CODE_FILE = 1024 * 1024
 # What one scan searches with regular expressions in files it can't decode (see _tools_in).
 _LARGEST_RAW_SEARCH = 1024 * 1024
+# A file too big to read is searched as bytes for the names that would make it matter (see
+# _may_name_a_tool), up to this size: a generated or data module of a few MB is cleared. Larger
+# ones aren't read at all.
+_LARGEST_UNREAD_SEARCHED = 4 * 1024 * 1024
+# And what one scan searches of them in all. Every name is looked for in each file: about 18 ms a
+# MiB on 3.12.3, crafted near misses included, so this much is about 0.15 s. A coding line naming a
+# codec costs more: the lookup normalises the name in Python, so two crafted 4 MiB names took
+# 0.31 s, and encodings._cache keeps each name it misses, 8 M characters for those two, for as long
+# as the process runs. read_module looks up the names of files it reads the same way.
+_UNREAD_SEARCH_TOTAL = 8 * 1024 * 1024
 # Past this a repository holds the conversation up for longer than the rest of the scan is worth.
 _LARGEST_SCAN = 128 * 1024 * 1024
 # Scripts are read by regular expressions that call back for every string or comment: 128 MB of
@@ -402,15 +415,24 @@ def _agent_files(
 
 
 def _packages_used(path: Path) -> set[str] | None:
-    """The browser packages ``path`` lists, or None when it can't be read: npm may still read it."""
+    """The browser packages ``path`` lists, or None when it can't be read: npm may still read it.
+
+    Read as Node reads it, a byte that isn't UTF-8 becoming a replacement character. Text that
+    isn't JSON lists nothing: npm refuses it too.
+    """
     try:
         # A link to nothing or a pipe isn't a manifest npm reads either.
         if not path.is_file():
             return set()
         # Windows editors often save a BOM, which json refuses.
-        manifest = json.loads(path.read_text(encoding="utf-8").removeprefix("\ufeff"))
-    except (OSError, ValueError, RecursionError):
+        text = path.read_text(encoding="utf-8", errors="replace").removeprefix("\ufeff")
+        # JSON.parse reads an integer of any length, which json refuses past 4,300 digits; the
+        # scan uses no numbers, so they're kept as text.
+        manifest = json.loads(text, parse_int=str)
+    except (OSError, RecursionError):
         return None
+    except ValueError:
+        return set()
     if not isinstance(manifest, dict):
         return set()
     names: set[str] = set()
@@ -521,6 +543,46 @@ def _file_size(path: Path) -> int:
         return 0
 
 
+def _may_name_a_tool(path: Path, size: int, left: list[int]) -> bool:
+    """Whether a file too big to read, of ``size`` bytes, may name a tool, so leaving it unread
+    cuts the scan.
+
+    Its bytes are searched for the names a Python file must hold to be read at all
+    (``_PYTHON_NAMES``, as ``read_module`` searches them), "omputer" aside: that is a word in
+    prose, so it counts only where a ``_MARKER_START`` match starts. Every such match holds
+    "omputer" or "playwright", so this covers a script's tool markers too. It's never decoded or
+    parsed. A Python file whose coding line names a codec not proven safe to search as bytes can
+    spell a name its bytes don't show, so it may; so may one whose coding line Python refuses,
+    since the codec can be registered at run time before the file is imported. A file that can't
+    be cleared may: one over ``_LARGEST_UNREAD_SEARCHED``, over what is ``left`` of the scan's
+    ``_UNREAD_SEARCH_TOTAL``, one that can't be read, or a path that isn't a regular file. So may
+    a ``package.json``: the packages it lists aren't among these names.
+    """
+    if path.name == "package.json":
+        return True
+    if size > _LARGEST_UNREAD_SEARCHED or size > left[0]:
+        return True
+    try:
+        # A link can name a device or a pipe, which reads without end.
+        if not path.is_file():
+            return True
+        with path.open("rb") as handle:
+            raw = handle.read(_LARGEST_UNREAD_SEARCHED + 1)
+    except (OSError, ValueError):
+        return True
+    left[0] -= len(raw)
+    # It may have grown since its size was taken.
+    if len(raw) > _LARGEST_UNREAD_SEARCHED or left[0] < 0:
+        return True
+    if path.suffix == ".py":
+        coding = _coding(raw)
+        if coding is None or coding[1].name not in _RAW_SAFE_CODECS:
+            return True
+    if any(name in raw for name in _PYTHON_NAMES if name != b"omputer"):
+        return True
+    return b"omputer" in raw and _MARKER_START_BYTES.search(raw) is not None
+
+
 def browser_tools_found(source_root: Path | None) -> list[str]:
     """The browser, crawling and computer-use tools the agent's own code uses, by display name.
 
@@ -612,7 +674,9 @@ def _tools_in(
 
     And the limits that cut the scan, by name: each left code unread or unparsed, so finding
     nothing then doesn't say there's nothing, and the reading gets a second look. A file that
-    names no tool, or that Python can't decode, isn't one: it can't import what Python runs.
+    names no tool, or that Python can't decode, isn't one: it can't import what Python runs. A
+    file too big to read is searched as bytes to say whether it names one (``_may_name_a_tool``),
+    so a large data module that doesn't isn't one either.
     """
     found: set[str] = set()
     imported: set[str] = set()
@@ -623,15 +687,18 @@ def _tools_in(
     tokens = TokenBudget()
     escapes = EscapeBudget()
     searched = ParseBudget(_LARGEST_RAW_SEARCH)
+    unread = [_UNREAD_SEARCH_TOTAL]
     ordered = sorted(
         filter(_is_read, paths),
         key=lambda path: (first is not None and not is_within(path, first), *_reading_order(path)),
     )
     for at, path in enumerate(ordered):
         size = _file_size(path)
-        # Never read, so it mustn't use up the limit before the code that is.
+        # Never read as code, so it mustn't use up the limits before the code that is: what its
+        # search reads has its own total.
         if size > _largest_read(path):
-            cut["file_size"] += 1
+            if _may_name_a_tool(path, size, unread):
+                cut["file_size"] += 1
             continue
         scanned += size
         if scanned > _LARGEST_SCAN:

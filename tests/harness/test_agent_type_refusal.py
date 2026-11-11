@@ -667,7 +667,7 @@ def test_a_nul_byte_the_tokenizer_breaks_on_reaches_no_warning(tmp_path, caplog)
     with caplog.at_level("DEBUG", logger=agent_type_check.__name__):
         assert browser_tools_found(tmp_path) == ["playwright"]
     # The tokenizer's fault reaches no WARNING of its own. The files name a tool and can't be
-    # parsed, so they cut the scan (TH-9512), and that line holds names and counts only.
+    # parsed, so they cut the scan, and that line holds names and counts only.
     loud = [record.getMessage() for record in caplog.records if record.levelno >= 20]
     assert loud == ["agent type scan cut by parse_failed 30"]
     assert "SOURCE-LINE" not in caplog.text
