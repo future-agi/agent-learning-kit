@@ -36,7 +36,7 @@ jobs:
       - name: Install test dependencies
         # Exercise the minimum LiveKit version supported by pyproject.toml.
         run: >-
-          python -m pip install '.[livekit]' pytest pytest-asyncio
+          python -m pip install '.[livekit]' pytest pytest-asyncio 'hypothesis>=6.140'
           'livekit-agents==1.8.3'
           'livekit-plugins-cartesia==1.8.3'
           'livekit-plugins-deepgram==1.8.3'

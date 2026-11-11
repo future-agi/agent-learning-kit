@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import logging
+import re
 from collections.abc import Mapping, Sequence
 from typing import Any, Literal
-from urllib.parse import urlsplit, urlunsplit
+from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
@@ -267,25 +268,102 @@ def _redact_in(value: Any, key: str, refused: list[str]) -> Any:
         }
     if isinstance(value, list):
         return [_redact_in(item, key, refused) for item in value]
-    if isinstance(value, str) and "://" in value:
-        try:
-            parsed = urlsplit(value)
-        except ValueError as error:
-            # A netloc urlsplit refuses may still hold credentials, so none of it is kept, and
-            # only the error's class is logged: its text repeats the netloc.
-            if not refused:
-                refused.append(type(error).__name__)
-            return _REDACTED
-        if parsed.scheme and parsed.netloc:
-            hostname = parsed.hostname or ""
-            try:
-                port = f":{parsed.port}" if parsed.port else ""
-            except ValueError:
-                # A template such as http://{HOST}:{PORT} has no numeric port;
-                # keep the host rather than failing the whole document.
-                port = ""
-            return urlunsplit((parsed.scheme, hostname + port, parsed.path, "", ""))
+    if isinstance(value, str):
+        return _redact_text(value, refused)
     return value
+
+
+# Every :// starts a URL. Each match is one run of scheme characters before a ://, and the
+# lookbehind means a start inside such a run is never tried, which keeps the scan linear.
+_START = re.compile(r"(?<![A-Za-z0-9+.\-])[A-Za-z0-9+.\-]*://")
+_LETTER = re.compile(r"[A-Za-z]")
+# A value that is one URL begins with a letter scheme and ://, checked before anything is removed.
+_LEADING_SCHEME = re.compile(r"[A-Za-z][A-Za-z0-9+.\-]*://")
+# urlsplit itself removes these inside a URL.
+_URL_BREAKS = str.maketrans("", "", "\t\r\n")
+_SPACE = re.compile(r"(\s+)")
+_QUERY_OR_FRAGMENT = re.compile(r"[?#]")
+
+
+def _redact_text(value: str, refused: list[str]) -> str:
+    """Drop every URL's userinfo, query and fragment, and keep the rest of the text as written.
+
+    A URL runs from its scheme to the next whitespace. Within one whitespace-free token, a later
+    :// that starts before the current URL's own ? or # begins a new URL; once a URL has a ? or
+    #, the rest of the token is its query or fragment.
+    """
+    if "://" not in value:
+        return value
+    if _LEADING_SCHEME.match(value):
+        joined = value.translate(_URL_BREAKS)
+        if not _SPACE.search(joined):
+            # A field that is one URL, perhaps broken by a tab or a line break: one token.
+            return _redact_token(joined, refused)
+    return "".join(
+        part if not part or part.isspace() else _redact_token(part, refused)
+        for part in _SPACE.split(value)
+    )
+
+
+def _redact_token(token: str, refused: list[str]) -> str:
+    starts: list[tuple[int, bool]] = []
+    for match in _START.finditer(token):
+        # The scheme is the run from its first letter; the text before that letter stays.
+        letter = _LETTER.search(token, match.start(), match.end() - 3)
+        starts.append((letter.start() if letter else match.end() - 3, letter is None))
+    if not starts:
+        return token
+    out = [token[: starts[0][0]]]
+    # The first ? or # from the first start, searched for once. If it comes before the next
+    # start, the query owns the rest of the token and the loop ends; if not, it is also the
+    # first ? or # from every later start up to it. Searching from each start instead would
+    # make the scan quadratic.
+    query_at = -1
+    for index, (start, schemeless) in enumerate(starts):
+        if query_at < start:
+            found = _QUERY_OR_FRAGMENT.search(token, start)
+            query_at = found.start() if found else len(token)
+        following = starts[index + 1][0] if index + 1 < len(starts) else len(token)
+        end = len(token) if query_at < following else following
+        piece = token[start:end]
+        if schemeless:
+            # "${SCHEME}://user:pw@host": parsed with a stand-in scheme, written back without it.
+            cleaned = _redact_url("x" + piece, refused)
+            out.append(cleaned[1:] if cleaned.startswith("x://") else cleaned)
+        else:
+            out.append(_redact_url(piece, refused))
+        if end == len(token):
+            break
+    return "".join(out)
+
+
+def _redact_url(url: str, refused: list[str]) -> str:
+    try:
+        parsed = urlsplit(url)
+    except ValueError as error:
+        # A netloc urlsplit refuses may still hold credentials, so none of it is kept, and
+        # only the error's class is logged: its text repeats the netloc.
+        if not refused:
+            refused.append(type(error).__name__)
+        return _REDACTED
+    if not parsed.scheme:
+        return url
+    # Built by hand in both branches: urlunsplit drops the // for a scheme urllib does not
+    # know, so sqlite:///./app.db would come back as sqlite:/./app.db.
+    if not parsed.netloc:
+        # file:///x?token=... has no host, but its query and fragment still go.
+        return f"{parsed.scheme}://{parsed.path}"
+    hostname = parsed.hostname or ""
+    if ":" in hostname:
+        # IPv6 keeps its brackets, so cleaning it a second time changes nothing.
+        hostname = f"[{hostname}]"
+    try:
+        port = f":{parsed.port}" if parsed.port else ""
+    except ValueError:
+        # A template such as http://{HOST}:{PORT} has no numeric port;
+        # keep the host rather than failing the whole document.
+        port = ""
+    return f"{parsed.scheme}://{hostname}{port}{parsed.path}"
 
 
 def _sorted_directions(listed: Sequence[str]) -> bool:
