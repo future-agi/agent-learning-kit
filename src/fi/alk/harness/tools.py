@@ -318,7 +318,7 @@ def _checked_against_source(
                         outcome = (
                             "the quote is kept and the lines are recorded as unconfirmed"
                             if quote_pieces(quote)
-                            else "the lines are copied as the prompt and recorded as unconfirmed, "
+                            else "the lines are recorded as unconfirmed and no prompt is saved, "
                             "since that quote is too short to stand for it"
                         )
                         problems.append(
@@ -340,11 +340,14 @@ def _checked_against_source(
                                 "the quote is kept, since they don't hold it"
                             )
                         else:
-                            # A quote of a few words says too little to stand for the prompt:
-                            # the lines are copied.
+                            # A quote of a few words says too little to stand for the prompt, and
+                            # lines nobody confirmed would be shown as it.
+                            contract.system_prompt_excerpt = ""
+                            contract.system_prompt_from = []
                             set_aside.append(
-                                f"system_prompt_from: the lines named ({named}) are copied "
-                                "unconfirmed, since they don't hold the short quote"
+                                f"system_prompt_from: the lines named ({named}) are recorded as "
+                                "unconfirmed and no prompt is saved, since they don't hold the "
+                                "quote and it is too short to stand for the prompt"
                             )
                     else:
                         problems.append(mismatch)
@@ -352,8 +355,8 @@ def _checked_against_source(
                         problems.append(
                             "system_prompt_from: lines named later are checked against this "
                             "quote until you give another; a later mismatch records the lines as "
-                            "unconfirmed and keeps the quote, or the lines if the quote has fewer "
-                            "than 16 letters"
+                            "unconfirmed and keeps the quote, or saves no prompt if the quote has "
+                            "fewer than 16 letters"
                         )
             if cited := model_problems(contract, source_root):
                 if asked is not None and "model" in asked:
@@ -435,7 +438,11 @@ def _save_contract(contract: AgentContract, destination: Path) -> dict[str, Any]
             f"{where.path[:200]} {where.start_line}-{where.end_line}"
             for where in contract.unconfirmed_prompt_from
         )
-        kept = "the lines are the prompt" if contract.system_prompt_from else "the quote is the prompt"
+        kept = (
+            "the quote is the prompt"
+            if contract.system_prompt_excerpt
+            else "no prompt is saved, since the quote is too short to stand for it"
+        )
         said += (
             f"\nsystem_prompt_from: the lines named ({named}) are recorded as unconfirmed, since "
             f"they don't hold the quote; {kept}."
