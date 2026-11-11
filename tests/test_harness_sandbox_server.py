@@ -2653,6 +2653,11 @@ def test_a_group_seen_gone_is_not_killed_afterwards(monkeypatch):
 
     def record(pgid, sig):
         calls.append(sig)
+        if sig == 0:
+            # The group is seen gone. Real timing can't promise this answer: on macOS a probe
+            # that lands as the leader dies sees a zombie instead (PermissionError), and the
+            # SIGKILL that follows is then right.
+            raise ProcessLookupError
         real_killpg(pgid, sig)
 
     child = subprocess.Popen(
@@ -2667,10 +2672,8 @@ def test_a_group_seen_gone_is_not_killed_afterwards(monkeypatch):
             real_killpg(child.pid, signal.SIGKILL)
         child.wait()
 
-    # SIGTERM, then probes until one raised ProcessLookupError; nothing is sent after it.
-    assert calls[0] == signal.SIGTERM
-    assert calls[-1] == 0
-    assert signal.SIGKILL not in calls
+    # SIGTERM, then the probe that saw the group gone; nothing is sent after it.
+    assert calls == [signal.SIGTERM, 0]
 
 
 def test_a_cancel_before_the_start_still_cleans_up(tmp_path, monkeypatch, stops):
