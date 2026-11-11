@@ -490,6 +490,14 @@ class LocalSandbox:
                     status_code=400,
                     detail=f"sandbox_secret_reference_refused: {alias}",
                 )
+            if hosted and reference.manager == "platform-vault":
+                # The resolver answers only the vault keys this sandbox mints for the job, so an
+                # incoming one could only fail later, after the job took a slot. Refuse it now,
+                # with the code the resolver would give.
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"sandbox_vault_reference_unknown: {alias}",
+                )
         claimed_files, secret_file_names = self._claim_secret_files(
             identifier, request.secret_refs
         )
@@ -514,8 +522,9 @@ class LocalSandbox:
                 purpose="target_provider",
             )
             values[internal_key] = value.get_secret_value()
-        # Only an upload the claim bound to this alias is minted; any other file ref is dropped
-        # rather than trusted for its prefix.
+        # Only an upload the claim bound to this alias is minted. The claim's digest check already
+        # binds every mounted upload key to its alias, so this is a second guard behind it, not
+        # the only one: nothing should rely on it alone.
         for alias, reference in request.secret_refs.items():
             if (
                 reference.manager == "mounted"
@@ -653,7 +662,9 @@ class LocalSandbox:
         resolved: dict[str, str] = {}
         for alias, reference in references.items():
             # Any other ref would resolve from this server's environment, which holds the
-            # runner's own credentials. Only an upload claimed under its own alias passes.
+            # runner's own credentials. Only an upload claimed under its own alias passes. The
+            # last two conditions repeat what the claim's digest check guarantees: a second
+            # guard behind it, not the only one.
             if (
                 reference.manager != "mounted"
                 or not reference.key.startswith(_SANDBOX_FILE_PREFIX)
