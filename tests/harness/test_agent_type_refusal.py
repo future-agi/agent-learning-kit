@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import errno
+import gc
 import json
 import os
 import re
@@ -3691,7 +3692,14 @@ def test_a_crafted_script_does_not_hold_up_the_conversation(tmp_path):
         await beating
         return result, worst[0], waited
 
-    result, worst, waited = asyncio.run(save())
+    # The heap the tests before this one built is frozen, so a full collection of it can't land
+    # inside the save. The save's own collections still count.
+    gc.collect()
+    gc.freeze()
+    try:
+        result, worst, waited = asyncio.run(save())
+    finally:
+        gc.unfreeze()
 
     assert not result.get("is_error"), result
     assert worst < 0.25
