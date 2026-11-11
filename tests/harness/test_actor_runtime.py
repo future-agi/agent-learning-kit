@@ -626,6 +626,37 @@ def test_an_actor_needs_its_identity_where_its_action_s_tool_names_who_acts(tmp_
     assert not ok.get("is_error") and load_actors(tmp_path).by_id()["lead"].identities == {"chat": "lead"}
 
 
+def test_an_identity_is_keyed_by_a_service_of_the_world_never_by_a_record_field(tmp_path):
+    from fi.alk.harness.actors import load_actors
+    from fi.alk.harness.world.tools import world_actor_tools
+
+    world = {
+        "tools": [{"name": "post_message", "args": ["channel", "text"]}, {"name": "get_deal", "args": ["deal_id"]}],
+        "tool_entrypoints": [
+            {"tool": "post_message", "endpoint": "chat/post_message"},
+            {"tool": "get_deal", "endpoint": "crm/get_deal"},
+        ],
+    }
+    add, _drop = world_actor_tools(tmp_path, SimpleNamespace(modality="chat", model_dump=lambda: world))
+    # Keyed by the record field the handle sits in, the world could never find who the actor is in a service.
+    out = asyncio.run(
+        add.handler({"id": "lead", "name": "Sam", "permitted_actions": ["chat.post_message"], "identities": {"author": "lead"}})
+    )
+    text = out["content"][0]["text"]
+    assert out.get("is_error") and "'author'" in text and "chat, crm" in text
+    assert load_actors(tmp_path).actors == []
+    ok = asyncio.run(
+        add.handler({"id": "lead", "name": "Sam", "permitted_actions": ["chat.post_message"], "identities": {"chat": "lead", "crm": "u7"}})
+    )
+    assert not ok.get("is_error") and load_actors(tmp_path).by_id()["lead"].identities == {"chat": "lead", "crm": "u7"}
+    # An actor saved earlier under a field key can still be changed in its other fields.
+    from fi.alk.harness.actors import Actor, ActorList, save_actors
+
+    save_actors(tmp_path, ActorList(actors=[Actor(id="old", name="Kim", identities={"member": "kim"})]))
+    edited = asyncio.run(add.handler({"id": "old", "role": "the caller's manager"}))
+    assert not edited.get("is_error") and load_actors(tmp_path).by_id()["old"].role == "the caller's manager"
+
+
 def test_a_person_folded_into_the_caller_is_refused_and_a_kept_scenario_reads_its_cast_back(tmp_path):
     from fi.alk.harness.actors import load_actors
     from fi.alk.harness.scenario import Scenario

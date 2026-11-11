@@ -716,6 +716,15 @@ def world_actor_tools(
                 f"with who they are in each one's records (the member, user or handle the world seeds for them), "
                 f"for example {{{', '.join(repr(one) + ': ...' for one in unnamed)}}}."
             )
+        services = sorted({one.split(".", 1)[0] for one in world_actions()})
+        # Only the keys sent now: an actor saved before this check keeps its other edits open.
+        stray = sorted(set(given.get("identities") or {}) - set(services)) if services else []
+        if stray:
+            # An identity is looked up by the service an action goes to; under any other key no action finds it.
+            return _err(
+                f"Not added: identities are keyed by the service the person is known in, one of {', '.join(services)}; "
+                f"{', '.join(repr(one) for one in stray)} {'is not one' if len(stray) == 1 else 'are not'}. Send {{'<service>': '<who they are there>'}}."
+            )
         from ..actors import permission_conflicts
 
         unconfirmed = [(action, holder) for action, holder in permission_conflicts(listing, actor) if action not in shared]
