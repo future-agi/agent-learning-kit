@@ -194,7 +194,14 @@ def main(argv: list[str] | None = None) -> int:
         os.environ["ALK_FOREGROUND_COORDINATOR"] = "1"
     job_id, run_id, telemetry = _authoring_job_context(forwarded)
     if job_id:
-        observability.begin(job_id, run_id, telemetry)
+        # Every value the job declared, as the outbound channels replace them: spans carry tool
+        # output, and a tool can print a key.
+        observability.begin(
+            job_id,
+            run_id,
+            telemetry,
+            secret_values=(*all_values.values(), *gateway_values.values()),
+        )
         observability.stage("authoring")
     try:
         from .authoring_runtime_validation import RuntimeValidationError

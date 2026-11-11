@@ -9,6 +9,7 @@ FI_HARNESS_PROJECT; absent credentials mean untraced, and every failure here is 
 from __future__ import annotations
 
 import contextlib
+import json
 import logging
 import os
 from typing import Any, Iterator, Mapping
@@ -33,7 +34,12 @@ def enabled() -> bool:
     return bool(os.getenv("FI_API_KEY") and os.getenv("FI_SECRET_KEY"))
 
 
-def begin(job_id: str, run_id: str, context: Mapping[str, Any] | None = None) -> None:
+def begin(
+    job_id: str,
+    run_id: str,
+    context: Mapping[str, Any] | None = None,
+    secret_values: tuple[str, ...] = (),
+) -> None:
     """Open the job's session, once, as early as the job id is known."""
     global _provider, _tracer, _context
     if not enabled() or _provider is not None:
@@ -60,7 +66,7 @@ def begin(job_id: str, run_id: str, context: Mapping[str, Any] | None = None) ->
             set_global_tracer_provider=False,
             verbose=False,
         )
-        cleaner = _CleaningExporter(_exporter())
+        cleaner = _CleaningExporter(_exporter(), secret_values)
         _swap(_provider, BatchSpanProcessor(span_exporter=cleaner))
         _instrument(_provider)
         # After the instrumentors, which are handed the provider and may add a processor of their
@@ -163,8 +169,19 @@ class _CleaningExporter(SpanExporter):
     carry the error's text.
     """
 
-    def __init__(self, inner: Any) -> None:
+    def __init__(self, inner: Any, secret_values: tuple[str, ...] = ()) -> None:
         self._inner = inner
+        # The job's own secret values, replaced whole as the other outbound channels replace them
+        # (outbound.redact_outbound_text): a key a tool printed has no shape to recognise.
+        self._secrets = tuple(
+            sorted(
+                {value for value in secret_values if len(value) >= _SHORTEST_SECRET},
+                key=len,
+                reverse=True,
+            )
+        )
+        # One cleaned copy per resource, made the first time it is seen.
+        self._resources: dict[int, tuple[Any, Any]] = {}
 
     def export(self, spans: Any) -> Any:
         from opentelemetry.sdk.trace.export import SpanExportResult
@@ -173,16 +190,17 @@ class _CleaningExporter(SpanExporter):
         try:
             spans = list(spans)
             flat: list[str] = []
-            plans = [_gather(span, flat) for span in spans]
+            plans = [_gather(span, flat, self._secrets) for span in spans]
             from fi.alk.providers import agent
 
-            # One call for the whole batch, with no key: the cleaner logs at most once per call,
-            # and a key such as gen_ai.usage.input_tokens would mask a count.
+            # One call for the whole batch, so the cleaner logs at most once per batch. Each
+            # attribute's key has already been applied in _take: a value whose key names a
+            # secret never reaches this list.
             cleaned = agent._redact(flat)
             copies = []
             for span, plan in zip(spans, plans):
                 try:
-                    copies.append(_rebuild(span, plan, cleaned))
+                    copies.append(_rebuild(span, plan, cleaned, self._resource(span.resource)))
                 except Exception as dropped:
                     error = error or dropped
             if not copies:
@@ -197,6 +215,26 @@ class _CleaningExporter(SpanExporter):
                 with contextlib.suppress(Exception):
                     logger.warning("trace spans dropped: %s", type(error).__name__)
 
+    def _resource(self, resource: Any) -> Any:
+        known = self._resources.get(id(resource))
+        if known is not None and known[0] is resource:
+            return known[1]
+        from opentelemetry.sdk.resources import Resource
+
+        from fi.alk.providers import agent
+
+        flat: list[str] = []
+        plan = {
+            key: _take(value, flat, key, self._secrets)
+            for key, value in (resource.attributes or {}).items()
+        }
+        cleaned = agent._redact(flat)
+        copy = Resource(
+            {key: _give(where, cleaned) for key, where in plan.items()}, resource.schema_url
+        )
+        self._resources[id(resource)] = (resource, copy)
+        return copy
+
     def shutdown(self) -> None:
         self._inner.shutdown()
 
@@ -204,14 +242,71 @@ class _CleaningExporter(SpanExporter):
         return self._inner.force_flush(timeout_millis)
 
 
-def _take(value: Any, flat: list[str]) -> Any:
-    """Put each string of an attribute value in flat; return where to find it again."""
+# outbound.redact_outbound_text's floor: a shorter declared value would mask ordinary words.
+_SHORTEST_SECRET = 8
+
+
+def _named_secret(key: str) -> bool:
+    """The cleaner's own key rule (providers/agent.py _redact_in), applied to one string."""
+    from fi.alk.providers.agent import _REDACTION_MARKERS
+
+    lowered = key.lower()
+    return lowered == "headers" or any(marker in lowered for marker in _REDACTION_MARKERS)
+
+
+def _take(value: Any, flat: list[str], key: str, secrets: tuple[str, ...]) -> Any:
+    """Put each string of an attribute value in flat; return where to find it again.
+
+    Only strings are cleaned: a number or a bool under a key such as gen_ai.usage.input_tokens
+    passes as it is.
+    """
     if isinstance(value, str):
-        flat.append(_cut(value))
-        return ("text", len(flat) - 1)
+        return _take_text(value, flat, key, secrets)
     if isinstance(value, (tuple, list)):
-        return ("sequence", [_take(item, flat) for item in value])
+        return ("sequence", [_take(item, flat, key, secrets) for item in value])
     return ("as is", value)
+
+
+def _take_text(value: str, flat: list[str], key: str, secrets: tuple[str, ...]) -> Any:
+    for secret in secrets:
+        value = value.replace(secret, "***")
+    if _named_secret(key):
+        return ("as is", "[redacted]")
+    cut = _cut(value)
+    if cut == value:
+        # traceai records tool input, messages and metadata as JSON. Cleaned as prose, a URL with
+        # a query takes the rest of its whitespace-free run, the JSON's closing quote and comma
+        # with it; cleaned as a structure, each string is cleaned on its own and the JSON stays
+        # JSON. A value cut short isn't JSON any more, so it is cleaned as text.
+        tree = _as_json(value)
+        if tree is not None:
+            return ("json", _take_json(tree, flat, key))
+    flat.append(cut)
+    return ("text", len(flat) - 1)
+
+
+def _as_json(value: str) -> Any:
+    opening = value.lstrip()[:1]
+    if opening not in ("{", "["):
+        return None
+    try:
+        tree = json.loads(value)
+    except ValueError:
+        return None
+    return tree if isinstance(tree, (dict, list)) else None
+
+
+def _take_json(node: Any, flat: list[str], key: str) -> Any:
+    if isinstance(node, dict):
+        return ("dict", [(name, _take_json(item, flat, str(name))) for name, item in node.items()])
+    if isinstance(node, list):
+        return ("list", [_take_json(item, flat, key) for item in node])
+    if isinstance(node, str):
+        if _named_secret(key):
+            return ("as is", "[redacted]")
+        flat.append(node)
+        return ("text", len(flat) - 1)
+    return ("as is", node)
 
 
 def _give(where: Any, cleaned: list[Any]) -> Any:
@@ -220,26 +315,44 @@ def _give(where: Any, cleaned: list[Any]) -> Any:
         return cleaned[body]
     if kind == "sequence":
         return tuple(_give(item, cleaned) for item in body)
+    if kind == "json":
+        return json.dumps(_give_json(body, cleaned), ensure_ascii=False)
     return body
 
 
-def _gather(span: Any, flat: list[str]) -> Any:
+def _give_json(where: Any, cleaned: list[Any]) -> Any:
+    kind, body = where
+    if kind == "dict":
+        return {name: _give_json(item, cleaned) for name, item in body}
+    if kind == "list":
+        return [_give_json(item, cleaned) for item in body]
+    if kind == "text":
+        return cleaned[body]
+    return body
+
+
+def _gather(span: Any, flat: list[str], secrets: tuple[str, ...]) -> Any:
     def mapping(attributes: Any) -> Any:
-        return {key: _take(value, flat) for key, value in (attributes or {}).items()}
+        return {
+            key: _take(value, flat, key, secrets) for key, value in (attributes or {}).items()
+        }
 
     description = span.status.description
     return (
-        _take(span.name, flat),
+        _take(span.name, flat, "", secrets),
         mapping(span.attributes),
-        [(_take(event.name, flat), mapping(event.attributes)) for event in span.events],
+        [
+            (_take(event.name, flat, "", secrets), mapping(event.attributes))
+            for event in span.events
+        ],
         [mapping(link.attributes) for link in span.links],
-        _take(description, flat)
+        _take(description, flat, "", secrets)
         if isinstance(description, str)
         else ("as is", description),
     )
 
 
-def _rebuild(span: Any, plan: Any, cleaned: list[Any]) -> Any:
+def _rebuild(span: Any, plan: Any, cleaned: list[Any], resource: Any) -> Any:
     from opentelemetry.attributes import BoundedAttributes
     from opentelemetry.sdk import trace as sdk_trace
     from opentelemetry.sdk.util import BoundedList
@@ -278,7 +391,7 @@ def _rebuild(span: Any, plan: Any, cleaned: list[Any]) -> Any:
         name=_give(name, cleaned),
         context=span.context,
         parent=span.parent,
-        resource=span.resource,
+        resource=resource,
         attributes=bounded(attributes, span.dropped_attributes),
         events=new_events,
         links=new_links,

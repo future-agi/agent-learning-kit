@@ -7,6 +7,7 @@ so every string a span carries is cleaned of credentials first (TH-9504).
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 
 import pytest
@@ -104,8 +105,8 @@ class _Run:
         self.provider = None
         self._restore_export = restore_export
 
-    def begin(self):
-        observability.begin("job", "run")
+    def begin(self, secret_values=()):
+        observability.begin("job", "run", secret_values=secret_values)
         self.provider = observability._provider
         return self
 
@@ -428,7 +429,8 @@ def test_t8_dropped_counts_are_carried_over():
     assert copy.kind == original.kind
     assert (copy.start_time, copy.end_time) == (original.start_time, original.end_time)
     assert copy.instrumentation_scope == original.instrumentation_scope
-    assert copy.resource is original.resource
+    # A cleaned copy of the resource; with no secret in it, the same attributes.
+    assert copy.resource.attributes == original.resource.attributes
 
 
 EARLIER = "see https://a.example/p?q=1 then "
@@ -780,3 +782,115 @@ def test_a_batch_whose_every_span_is_dropped_sends_nothing(_real_begin, monkeypa
 
     assert result is SpanExportResult.FAILURE
     assert bodies == []
+
+
+# -- review (Dileep, #280): JSON values, declared secrets, the key rule, the resource ----------
+
+
+def _export_one(span, secret_values=()):
+    sink = InMemorySpanExporter()
+    observability._CleaningExporter(sink, secret_values).export([span])
+    return sink.get_finished_spans()[0]
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        # traceai's own json.dumps of a WebFetch input, and the same compact.
+        '{"url": "https://u:pw@docs.example.com/guide?section=auth#setup", '
+        '"prompt": "Summarise the auth section"}',
+        '{"url":"https://u:pw@h/a?b=1","next":"keep me"}',
+        '[{"role": "user", "content": "fetch https://h/x?key=v please"}, {"role": "x"}]',
+    ],
+)
+def test_a_json_value_is_cleaned_as_a_structure_and_stays_json(value):
+    copy = _export_one(_readable(**{"input.value": value}))
+
+    out = copy.attributes["input.value"]
+    tree = json.loads(out)
+    assert "pw@" not in out and "key=v" not in out and "b=1" not in out
+    if isinstance(tree, dict) and "prompt" in tree:
+        assert tree == {
+            "url": "https://docs.example.com/guide",
+            "prompt": "Summarise the auth section",
+        }
+    if isinstance(tree, dict) and "next" in tree:
+        assert tree["next"] == "keep me"
+    if isinstance(tree, list):
+        assert tree[1] == {"role": "x"}
+
+
+def test_a_json_value_cut_by_traceai_is_cleaned_as_text():
+    value = ('{"note": "' + "x" * 4900 + " https://deploy:8374")[:4997] + "..."
+    out = _export_one(_readable(**{"tool.input": value})).attributes["tool.input"]
+    assert "8374" not in out
+
+
+def test_a_declared_secret_never_reaches_the_inner_exporter():
+    secret = "sk-JOBSECRET-1234567890"
+    span = _readable(
+        **{
+            "output.value": "OPENAI_API_KEY=" + secret,
+            "tool.input": '{"k": "' + secret + '"}',
+        }
+    )
+
+    copy = _export_one(span, (secret, "short"))
+
+    assert secret not in copy.attributes["output.value"]
+    assert copy.attributes["output.value"] == "OPENAI_API_KEY=***"
+    assert secret not in copy.attributes["tool.input"]
+
+
+def test_a_declared_secret_in_an_exception_is_replaced(_real_begin):
+    secret = "sk-JOBSECRET-1234567890"
+    run = _real_begin.begin(secret_values=(secret,))
+    assert observability._tracer is not None
+    with run.tracer.start_as_current_span("tool") as span:
+        try:
+            raise RuntimeError("login failed key=" + secret)
+        except RuntimeError as error:
+            span.record_exception(error)
+
+    (exception,) = run.one().events
+    assert secret not in exception.attributes["exception.message"]
+    assert secret not in exception.attributes["exception.stacktrace"]
+
+
+def test_a_string_whose_key_names_a_secret_is_masked_and_a_count_is_kept():
+    span = _readable(
+        **{
+            "http.request.header.authorization": ("Bearer sk-abc-123456",),
+            "api_key": "plain-text-value",
+            "gen_ai.usage.input_tokens": 12,
+            "input.value": '{"usage": {"input_tokens": 12}, "token": "abc123def"}',
+        }
+    )
+
+    attributes = _export_one(span).attributes
+
+    assert attributes["http.request.header.authorization"] == ("[redacted]",)
+    assert attributes["api_key"] == "[redacted]"
+    assert attributes["gen_ai.usage.input_tokens"] == 12
+    assert json.loads(attributes["input.value"]) == {
+        "usage": {"input_tokens": 12},
+        "token": "[redacted]",
+    }
+
+
+def test_the_resource_is_cleaned_once_and_reused():
+    from opentelemetry.sdk.resources import Resource
+
+    memory = InMemorySpanExporter()
+    provider = TracerProvider(resource=Resource({"note": "postgres://u:pw@db/x?k=v"}))
+    provider.add_span_processor(SimpleSpanProcessor(memory))
+    for name in ("one", "two"):
+        with provider.get_tracer("test").start_as_current_span(name):
+            pass
+    sink = InMemorySpanExporter()
+
+    observability._CleaningExporter(sink).export(memory.get_finished_spans())
+
+    first, second = sink.get_finished_spans()
+    assert first.resource.attributes["note"] == "postgres://db/x"
+    assert first.resource is second.resource
