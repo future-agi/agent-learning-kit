@@ -1536,6 +1536,54 @@ def test_the_clock_is_first_read_after_the_sources_own_folder(tmp_path) -> None:
     assert (word, folders) == ("clock", 1)
 
 
+def test_the_clock_is_read_inside_a_huge_folder(tmp_path) -> None:
+    """One folder of 5,000 empty folders, past the deadline: the look stops partway through that
+    folder's listing, not after reading all of it."""
+    source = tmp_path / "src"
+    folders = _empty_folders(source, [f"f{index:05}" for index in range(5_000)])
+    whole = _cost(str(source)) + sum(_cost(folder) for folder in folders)
+
+    word, read, held = agent_scan._look(source, deadline=0.0, clock=lambda: 1.0)
+
+    assert (word, read) == ("clock", 1)
+    # Read at the 4,096th entry, after 4,095 folders were taken on: where and how often.
+    assert held == (agent_scan._LOOK_CLOCK_EVERY - 1) * _cost(folders[0]) < whole
+
+
+def test_the_clock_is_read_inside_a_huge_folder_of_links(tmp_path, monkeypatch) -> None:
+    """Links are entries too: 5,000 dangling links past the deadline stop at the clock without
+    each being looked at."""
+    source = tmp_path / "src"
+    source.mkdir()
+    for index in range(5_000):
+        os.symlink("nowhere", source / f"l{index:05}")
+    calls = [0]
+    real = os.lstat
+
+    def counted(path, *args, **kwargs):
+        calls[0] += 1
+        return real(path, *args, **kwargs)
+
+    monkeypatch.setattr(agent_scan.os, "lstat", counted)
+
+    word, read, _ = agent_scan._look(source, deadline=0.0, clock=lambda: 1.0)
+
+    assert (word, read) == ("clock", 1)
+    assert calls[0] < agent_scan._LOOK_CLOCK_EVERY
+
+
+def test_the_clock_is_read_inside_a_huge_folder_past_the_bound(tmp_path, monkeypatch) -> None:
+    """Past the bound the read goes on for a regular file; the clock still stops it."""
+    source = tmp_path / "src"
+    folders = _empty_folders(source, [f"f{index:05}" for index in range(5_000)])
+    monkeypatch.setattr(agent_scan, "_LOOK_HELD", 50 * _cost(folders[0]))
+
+    word, read, held = agent_scan._look(source, deadline=0.0, clock=lambda: 1.0)
+
+    assert (word, read) == ("clock", 1)
+    assert held > agent_scan._LOOK_HELD
+
+
 def test_the_look_says_why_it_stopped_in_one_line_of_counts(tmp_path, monkeypatch, caplog) -> None:
     source = tmp_path / "src"
     folders = _empty_folders(source, [f"folder_{index:03}" for index in range(200)])
