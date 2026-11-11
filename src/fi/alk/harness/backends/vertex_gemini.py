@@ -54,8 +54,10 @@ DEFAULT_MODEL = "gemini-3.7-flash"
 # Google's Vertex pricing page (cloud.google.com/model-garden/pricing, Global tier, read
 # 2026-11-10), which that table does not carry yet. A row ends either on a published price change
 # (the 2026 Flash rows) or on CHECK_BY, the day every latest row must be re-checked by. Days are
-# UTC days, as the platform's dated rows are. A model with no row for today reports no cost rather
-# than a wrong one, and shows up in `unpriced_turns`.
+# UTC days, as the platform's dated rows are. Past CHECK_BY a model keeps its latest row's price,
+# with a warning, so a running release keeps counting cost; a weekly scheduled
+# workflow goes red a month before, so the table is re-checked without blocking PRs. A model with
+# no row at all reports no cost rather than a wrong one, and shows up in `unpriced_turns`.
 CHECK_BY = "2027-03-31"
 
 # What Vertex charges for a cache read, as a share of the input rate.
@@ -704,6 +706,10 @@ def _rows(name: str) -> tuple[tuple[Any, ...], ...] | None:
     return rows
 
 
+# (model, day) pairs already warned about, so a stale price warns once a day, not once a turn.
+_STALE_WARNED: set[tuple[str, date]] = set()
+
+
 def _today() -> date:
     """The price day, in UTC: the platform's dated price rows switch at midnight UTC, so the kit's
     rows do too, wherever the process runs."""
@@ -734,14 +740,28 @@ def priced(
     today = _today()
     rates = current_rates(model, today)
     if rates is None:
-        logger.warning(
-            "no current price for %s on %s: the table's rows run from %s to %s",
-            model,
-            today.isoformat(),
-            min(row[2] for row in rows),
-            max(row[3] for row in rows),
-        )
-        return None
+        latest = max(rows, key=lambda row: row[3])
+        if today.isoformat() <= latest[3]:
+            # Before the model's first row: there is no price to stand behind.
+            logger.warning(
+                "no current price for %s on %s: the table's rows run from %s to %s",
+                model,
+                today.isoformat(),
+                min(row[2] for row in rows),
+                latest[3],
+            )
+            return None
+        # Past the re-check date the latest price is still the best one known. It is off by
+        # whatever changed since, either way; None would stop every turn's cost.
+        if (model, today) not in _STALE_WARNED:
+            _STALE_WARNED.add((model, today))
+            logger.warning(
+                "price for %s is past its re-check date %s: billing at that row's rate; re-check "
+                "the table against the gateway's litellm.json and Google's Vertex pricing page",
+                model,
+                latest[3],
+            )
+        rates = latest[0], latest[1]
     rate_in, rate_out = rates
     cached = min(max(tokens_cached, 0), max(tokens_in, 0))
     billed_in = (tokens_in - cached) * rate_in + cached * rate_in * CACHE_READ_SHARE

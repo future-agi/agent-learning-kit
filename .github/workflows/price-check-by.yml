@@ -1,0 +1,59 @@
+name: Price check-by
+
+# The Gemini price table carries a re-check date (CHECK_BY in vertex_gemini.py). This goes red
+# from a month before it, on its own schedule, so the reminder never blocks a PR. GitHub runs
+# schedules on the default branch only, so this checks main's table. A red scheduled run opens or
+# updates one issue, so the notice reaches the team and not only whoever last edited the cron.
+permissions:
+  contents: read
+
+on:
+  schedule:
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+jobs:
+  check-by:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install package
+        run: python -m pip install . pytest
+      - name: Check the price table's re-check date
+        env:
+          ALK_PRICE_CHECK_BY: "1"
+        # A skip exits 0, so the job checks that the test ran and passed.
+        run: |
+          set -o pipefail
+          python -m pytest -q -rs "tests/harness/test_spend.py::test_the_price_table_is_re_checked_before_its_check_by_date" | tee pytest.out
+          grep -q "1 passed" pytest.out
+
+  # Separate from the check, so the token that can write issues never reaches a job that installs
+  # packages.
+  notify:
+    needs: check-by
+    if: failure() && github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      issues: write
+    steps:
+      - name: Open or update the re-check issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          title="Gemini price table: re-check before CHECK_BY"
+          body="The weekly price-check-by run failed: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}. Compare every row in vertex_gemini.py with the gateway's litellm.json and Google's Vertex pricing page, then move CHECK_BY on."
+          number=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "\"$title\" in:title" --json number --jq '.[0].number // empty')
+          if [ -n "$number" ]; then
+            gh issue comment "$number" --repo "$GITHUB_REPOSITORY" --body "$body"
+          else
+            gh issue create --repo "$GITHUB_REPOSITORY" --title "$title" --body "$body"
+          fi

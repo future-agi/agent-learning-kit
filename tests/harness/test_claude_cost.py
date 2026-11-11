@@ -637,7 +637,8 @@ def test_a_claude_reading_adds_per_turn_figures_as_they_come(tmp_path, monkeypat
 
 
 def test_ci_runs_these_tests():
-    """The check-by date is enforced by CI going red, which only happens if CI runs it."""
+    """Every PR runs these tests, so the price table's shape and the cost rules are checked on each.
+    The check-by date itself goes red from the weekly price-check-by workflow, not here."""
     workflow = (
         Path(__file__).resolve().parents[2] / ".github" / "workflows" / "sdk-smoke.yml"
     )
