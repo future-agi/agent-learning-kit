@@ -61,10 +61,12 @@ from .job import (
 )
 from .packaging import PackagingManifest, inspect_packaging
 from .provision import ProvisionError, source_fingerprint, stop
-from .secrets import resolve_worker_secrets, worker_environment
+from .secrets import SecretResolutionError, resolve_worker_secrets, worker_environment
 
 
 _CONTROLLER_TOKEN = uuid.uuid4().hex
+_SANDBOX_JOB_PREFIX = "ALK_JOB_"
+_SANDBOX_FILE_PREFIX = "ALK_SECRET_FILE_"
 
 
 class LocalSandboxRequest(BaseModel):
@@ -472,6 +474,60 @@ class LocalSandbox:
                 )
                 _write_json(path, state)
 
+    def _job_secret_refs(
+        self, identifier: str, request: LocalSandboxRequest, *, hosted: bool
+    ) -> tuple[dict[str, SecretRef], dict[str, str], set[str]]:
+        """Refs, values (keyed by internal key), and secret-file names for one new job."""
+        # Job keys are public through GET /v1/jobs, so a sandbox prefix proves nothing about
+        # who minted a key. Refusing every incoming ref that uses one, except an upload the
+        # claim binds to its own alias, is what lets the resolver trust a prefixed vault key.
+        for alias, reference in request.secret_refs.items():
+            if reference.key.startswith(_SANDBOX_JOB_PREFIX) or (
+                reference.key.startswith(_SANDBOX_FILE_PREFIX)
+                and reference.manager != "mounted"
+            ):
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"sandbox_secret_reference_refused: {alias}",
+                )
+        claimed_files, secret_file_names = self._claim_secret_files(
+            identifier, request.secret_refs
+        )
+        # Hosted jobs admit only vault refs. The sandbox stands in for the hosting side's
+        # vault, and resolves these keys from this job's in-memory values only.
+        manager = "platform-vault" if hosted else "mounted"
+        refs = {
+            alias: reference
+            for alias, reference in request.secret_refs.items()
+            if not reference.key.startswith((_SANDBOX_JOB_PREFIX, _SANDBOX_FILE_PREFIX))
+        }
+        values: dict[str, str] = {}
+        job_prefix = f"{_SANDBOX_JOB_PREFIX}{identifier.replace('-', '').upper()}_"
+        for index, (name, value) in enumerate(request.environment_values.items()):
+            internal_key = f"{job_prefix}{index}"
+            refs[name] = SecretRef(
+                manager=manager,
+                key=internal_key,
+                # Values entered for a run configure the submitted target runtime. Bundle V2
+                # admits secrets by purpose, so a descriptive free-form purpose causes the
+                # certified process provider to drop an otherwise valid value.
+                purpose="target_provider",
+            )
+            values[internal_key] = value.get_secret_value()
+        # Only an upload the claim bound to this alias is minted; any other file ref is dropped
+        # rather than trusted for its prefix.
+        for alias, reference in request.secret_refs.items():
+            if (
+                reference.manager == "mounted"
+                and reference.key.startswith(_SANDBOX_FILE_PREFIX)
+                and alias in secret_file_names
+            ):
+                refs[alias] = SecretRef(
+                    manager=manager, key=reference.key, purpose="target_provider"
+                )
+        values.update(claimed_files)
+        return refs, values, secret_file_names
+
     def submit(self, request: LocalSandboxRequest) -> SandboxJobResponse:
         source = (
             _allowed_source(request.source_path)
@@ -490,24 +546,12 @@ class LocalSandbox:
             else None
         )
         github_repository = github_location.repository if github_location else None
-        mounted_refs: dict[str, SecretRef] = {}
-        mounted_values: dict[str, str] = {}
-        for index, (name, value) in enumerate(request.environment_values.items()):
-            internal_key = f"ALK_JOB_{identifier.replace('-', '').upper()}_{index}"
-            mounted_refs[name] = SecretRef(
-                manager="mounted",
-                key=internal_key,
-                # Values entered for a run configure the submitted target runtime. Bundle V2
-                # admits secrets by purpose, so a descriptive free-form purpose causes the
-                # certified process provider to drop an otherwise valid value.
-                purpose="target_provider",
-            )
-            mounted_values[internal_key] = value.get_secret_value()
-        claimed_files, secret_file_names = self._claim_secret_files(
-            identifier, request.secret_refs
-        )
-        mounted_values.update(claimed_files)
+        hosted = bool(request.source_id or request.github_repository)
         try:
+            # Inside the try so a refusal or raise after the claim still deletes the claim.
+            job_refs, mounted_values, secret_file_names = self._job_secret_refs(
+                identifier, request, hosted=hosted
+            )
             source_spec = (
                 RepositorySource(kind=SourceKind.PROVIDER)
                 if request.provider_only
@@ -533,17 +577,13 @@ class LocalSandbox:
             job = HarnessJob(
                 job_id=identifier,
                 run_id=run_id,
-                execution=(
-                    ExecutionMode.HOSTED
-                    if request.source_id or request.github_repository
-                    else ExecutionMode.LOCAL
-                ),
+                execution=ExecutionMode.HOSTED if hosted else ExecutionMode.LOCAL,
                 source=source_spec,
                 agent=AgentConnection(
                     connector=request.connector,
                     mode=request.connector_mode,
                     config=request.connector_config,
-                    secret_refs={**request.secret_refs, **mounted_refs},
+                    secret_refs=job_refs,
                 ),
                 scenario_count=request.scenario_count,
                 seed=request.seed,
@@ -565,7 +605,7 @@ class LocalSandbox:
                     # Both dotenv values and credential-file paths are runtime configuration. Only
                     # their names are persisted; values and provider-local paths remain ephemeral.
                     "environment_value_names": sorted(
-                        {*mounted_refs, *secret_file_names}
+                        {*request.environment_values, *secret_file_names}
                     ),
                     "secret_file_names": sorted(secret_file_names),
                 },
@@ -603,6 +643,30 @@ class LocalSandbox:
         self._tasks[identifier] = asyncio.create_task(self._execute(job, source))
         return self.get(identifier)
 
+    @staticmethod
+    def _hosted_rerun_secrets(
+        references: dict[str, SecretRef],
+        claimed_files: dict[str, str],
+        secret_file_names: set[str],
+    ) -> dict[str, str]:
+        """Resolve a hosted rerun's refs from the files it just claimed, and nothing else."""
+        resolved: dict[str, str] = {}
+        for alias, reference in references.items():
+            # Any other ref would resolve from this server's environment, which holds the
+            # runner's own credentials. Only an upload claimed under its own alias passes.
+            if (
+                reference.manager != "mounted"
+                or not reference.key.startswith(_SANDBOX_FILE_PREFIX)
+                or reference.key not in claimed_files
+                or alias not in secret_file_names
+            ):
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"sandbox_rerun_secret_refused: {alias}",
+                )
+            resolved[str(alias)] = claimed_files[reference.key]
+        return resolved
+
     def rerun(self, job_id: str, request: SandboxRerunRequest) -> SandboxJobResponse:
         response = self.get(job_id)
         if not response.status.stage.terminal:
@@ -634,10 +698,15 @@ class LocalSandbox:
             job_id, request.secret_refs
         )
         try:
-            resolved = resolve_worker_secrets(
-                request.secret_refs,
-                environment={**os.environ, **claimed_files},
-            )
+            if response.job.execution is ExecutionMode.HOSTED:
+                resolved = self._hosted_rerun_secrets(
+                    request.secret_refs, claimed_files, secret_file_names
+                )
+            else:
+                resolved = resolve_worker_secrets(
+                    request.secret_refs,
+                    environment={**os.environ, **claimed_files},
+                )
         except Exception:
             self._delete_job_secret_files(job_id)
             raise
@@ -924,6 +993,37 @@ class LocalSandbox:
             ],
         )
 
+    def _resolve_job_secrets(self, job: HarnessJob) -> dict[str, str]:
+        """Resolve a job's refs; vault refs only from this job's own map."""
+        # Read here rather than passed in, so no caller can hand the resolver a wider store.
+        values = self._ephemeral_secrets.get(job.job_id, {})
+        own_job_prefix = f"{_SANDBOX_JOB_PREFIX}{job.job_id.replace('-', '').upper()}_"
+        resolved: dict[str, str] = {}
+        others: dict[str, SecretRef] = {}
+        for alias, reference in job.agent.secret_refs.items():
+            if reference.manager != "platform-vault":
+                others[alias] = reference
+                continue
+            # A vault ref never reads the process environment, which holds this server's own
+            # credentials, and never another job's values.
+            if reference.key.startswith(_SANDBOX_JOB_PREFIX):
+                if not reference.key.startswith(own_job_prefix):
+                    raise SecretResolutionError(
+                        f"sandbox_vault_reference_unknown: {alias}"
+                    )
+            elif not reference.key.startswith(_SANDBOX_FILE_PREFIX):
+                raise SecretResolutionError(f"sandbox_vault_reference_unknown: {alias}")
+            value = values.get(reference.key)
+            # Empty counts as missing, as it does for the other managers.
+            if not value:
+                raise SecretResolutionError(f"secret_reference_unavailable: {alias}")
+            resolved[str(alias)] = value
+        if others:
+            resolved.update(
+                resolve_worker_secrets(others, environment={**os.environ, **values})
+            )
+        return resolved
+
     async def _execute(self, job: HarnessJob, source: Path | None) -> None:
         directory = self.jobs_root / job.job_id
         state_path = directory / "state.json"
@@ -997,13 +1097,7 @@ class LocalSandbox:
                     directory / "configuration-admission.json",
                     admission.model_dump(mode="json"),
                 )
-                resolved_secrets = resolve_worker_secrets(
-                    job.agent.secret_refs,
-                    environment={
-                        **os.environ,
-                        **self._ephemeral_secrets.get(job.job_id, {}),
-                    },
-                )
+                resolved_secrets = self._resolve_job_secrets(job)
                 submitted_source_digest = source_fingerprint(source)
                 result: dict[str, Any] = {}
                 return_code = 1
@@ -1930,7 +2024,15 @@ def _authorize(authorization: str | None = Header(default=None)) -> None:
 
 
 def create_app(root: Path | None = None) -> FastAPI:
-    app = FastAPI(title="ALK local sandbox", version="1")
+    # No schema or docs pages: they skip the token check, and a closed server shows nothing to
+    # a caller without one.
+    app = FastAPI(
+        title="ALK local sandbox",
+        version="1",
+        docs_url=None,
+        redoc_url=None,
+        openapi_url=None,
+    )
     sandbox = LocalSandbox(
         root or Path(os.getenv("ALK_SANDBOX_ROOT", "./artifacts/sandbox")),
         max_concurrency=int(os.getenv("ALK_SANDBOX_MAX_CONCURRENCY", "2")),
@@ -2054,8 +2156,9 @@ def main() -> None:
         sys.exit(2)
     if _sandbox_token() is None:
         logger.warning(
-            "unauthenticated sandbox: for a developer's own laptop only; "
-            "containers on this machine can reach it"
+            "unauthenticated sandbox: for a developer's own laptop only; any container "
+            "on this machine, including the agent under test, can submit jobs and read "
+            "this server's values"
         )
 
     import uvicorn
