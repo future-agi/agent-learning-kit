@@ -118,8 +118,8 @@ Find, in roughly this order:
    more, with ... where you leave text out. The lines you name are checked against your latest
    such quote, given with them or before. Lines that don't hold it are refused, and asked about
    once more if they come without a quote; after that, the quote is kept and the lines are
-   recorded as unconfirmed (with a quote of fewer than 16 letters, the lines are kept, also
-   recorded as unconfirmed).
+   recorded as unconfirmed (with a quote of fewer than 16 letters, no prompt is saved; the
+   lines are recorded as unconfirmed).
 
 7. **The modality.** How this agent is run: a voice session, a text conversation, or work it
    carries out on websites or a computer. This decides how it is later run, so getting it wrong
