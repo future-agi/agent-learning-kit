@@ -35,6 +35,7 @@ AGENT_TRACK_TIMEOUT_SECONDS = 30.0
 RECV_FRAME_TIMEOUT_SECONDS = 30.0
 REQUEST_TIMEOUT_SECONDS = 15.0
 CLOSING_STATES = {"ended", "replaced"}
+_TIMEOUT_ERRORS = (asyncio.TimeoutError, TimeoutError)
 
 
 class RetellWebCallError(RuntimeError):
@@ -63,6 +64,9 @@ class _CallerAudioTrack(MediaStreamTrack):
         if self.readyState != "live":
             raise MediaStreamError
         if self._started_at is None:
+            # Audio queued while the connection was coming up would otherwise
+            # become a permanent delay on everything the caller says.
+            self._pending.clear()
             self._started_at = time.monotonic()
         delay = self._started_at + self._pts / RETELL_SAMPLE_RATE - time.monotonic()
         if delay > 0:
@@ -117,6 +121,7 @@ class RetellWebCallConnector(ProviderConnector):
         self._track_future: asyncio.Future[MediaStreamTrack] | None = None
         self._agent_disconnected = asyncio.Event()
         self._agent_ready = asyncio.Event()
+        self._pc_connected = asyncio.Event()
         self._call_id: str | None = None
         self._access_token: str | None = None
         self._session_url: str | None = None
@@ -167,30 +172,60 @@ class RetellWebCallConnector(ProviderConnector):
             await self._open_session()
             if self._track_future is None:
                 raise RetellWebCallError("retell_webcall_track_future_missing")
-            await asyncio.wait_for(
-                asyncio.shield(self._track_future),
-                timeout=AGENT_TRACK_TIMEOUT_SECONDS,
-            )
+            loop = asyncio.get_running_loop()
+            deadline = loop.time() + AGENT_TRACK_TIMEOUT_SECONDS
+            try:
+                await asyncio.wait_for(
+                    asyncio.shield(self._track_future),
+                    timeout=AGENT_TRACK_TIMEOUT_SECONDS,
+                )
+            except _TIMEOUT_ERRORS as exc:
+                raise RetellWebCallError("retell_webcall_agent_track_timeout") from exc
+            await self._wait_until_connected(max(0.0, deadline - loop.time()))
             logger.info("retell_webcall_connected", extra={"call_id": self._call_id})
-        except asyncio.TimeoutError as exc:
-            await self.disconnect()
-            raise RetellWebCallError("retell_webcall_agent_track_timeout") from exc
         except Exception:
             await self.disconnect()
             raise
 
+    async def _wait_until_connected(self, timeout: float) -> None:
+        pc = self._pc
+        if pc is None:
+            raise RetellWebCallError("retell_webcall_connect_failed")
+        if pc.connectionState == "connected":
+            return
+        connected = asyncio.ensure_future(self._pc_connected.wait())
+        dead = asyncio.ensure_future(self._agent_disconnected.wait())
+        try:
+            done, _ = await asyncio.wait(
+                {connected, dead},
+                timeout=timeout,
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+        finally:
+            for task in (connected, dead):
+                task.cancel()
+            await asyncio.gather(connected, dead, return_exceptions=True)
+        if connected in done and pc.connectionState == "connected":
+            return
+        if not done:
+            raise RetellWebCallError("retell_webcall_connect_timeout")
+        raise RetellWebCallError("retell_webcall_connect_failed")
+
     async def _create_call(self) -> None:
         assert self._http is not None
-        async with self._http.post(
-            self._config.api_url,
-            headers={"Authorization": f"Bearer {self._config.api_key}"},
-            json={"agent_id": self._config.assistant_id},
-        ) as response:
-            if response.status != 201:
-                raise RetellWebCallError(
-                    "retell_webcall_create_failed", response.status
-                )
-            payload = await response.json()
+        try:
+            async with self._http.post(
+                self._config.api_url,
+                headers={"Authorization": f"Bearer {self._config.api_key}"},
+                json={"agent_id": self._config.assistant_id},
+            ) as response:
+                if response.status != 201:
+                    raise RetellWebCallError(
+                        "retell_webcall_create_failed", response.status
+                    )
+                payload = await response.json()
+        except _TIMEOUT_ERRORS as exc:
+            raise RetellWebCallError("retell_webcall_create_timeout") from exc
         if not isinstance(payload, dict):
             raise RetellWebCallError("retell_webcall_response_invalid")
         for field in ("call_id", "access_token"):
@@ -227,21 +262,26 @@ class RetellWebCallConnector(ProviderConnector):
 
         @pc.on("connectionstatechange")
         def _on_state() -> None:
+            if pc.connectionState == "connected":
+                self._pc_connected.set()
             if pc.connectionState in {"failed", "closed"}:
                 self._agent_disconnected.set()
 
         await pc.setLocalDescription(await pc.createOffer())
         sessions_url = _sessions_url(self._config.api_url, self._call_id)
-        async with self._http.post(
-            sessions_url,
-            headers=self._session_headers(),
-            json={"identity": "client", "sdp": pc.localDescription.sdp},
-        ) as response:
-            if response.status not in (200, 201):
-                raise RetellWebCallError(
-                    "retell_webcall_session_failed", response.status
-                )
-            answer = await response.json()
+        try:
+            async with self._http.post(
+                sessions_url,
+                headers=self._session_headers(),
+                json={"identity": "client", "sdp": pc.localDescription.sdp},
+            ) as response:
+                if response.status not in (200, 201):
+                    raise RetellWebCallError(
+                        "retell_webcall_session_failed", response.status
+                    )
+                answer = await response.json()
+        except _TIMEOUT_ERRORS as exc:
+            raise RetellWebCallError("retell_webcall_session_timeout") from exc
         session_id = answer.get("session_id") if isinstance(answer, dict) else None
         sdp = answer.get("sdp") if isinstance(answer, dict) else None
         if not isinstance(session_id, str) or not isinstance(sdp, str):
@@ -300,7 +340,9 @@ class RetellWebCallConnector(ProviderConnector):
                     return_when=asyncio.FIRST_COMPLETED,
                 )
                 if frame_task not in done:
-                    break
+                    if ended in done:
+                        break
+                    raise RetellWebCallError("retell_webcall_agent_audio_timeout")
                 try:
                     frame = frame_task.result()
                 except MediaStreamError:

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 
 class ProviderConnector(ABC):
@@ -39,7 +39,7 @@ class ProviderConnector(ABC):
 
 @dataclass(frozen=True)
 class ConnectorConfig:
-    api_key: str
+    api_key: str = field(repr=False)
     assistant_id: str
     api_url: str
     livekit_url: str = ""

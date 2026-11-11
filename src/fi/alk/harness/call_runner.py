@@ -44,6 +44,7 @@ from pathlib import Path
 from typing import Any, Awaitable, Callable, Mapping, Protocol
 
 from fi import agentcc, simulate
+from fi.simulate.agent.definition import retell_web_call_url as _retell_web_call_url
 from fi.simulate.runtime import (
     SimulationSpec,
     new_run_id,
@@ -103,15 +104,6 @@ OPENAI_API_KEY_ALIAS = "OPENAI_API_KEY"
 VAPI_API_KEY_ALIAS = "VAPI_API_KEY"
 VAPI_PUBLIC_API_KEY_ALIAS = "VAPI_PUBLIC_API_KEY"
 RETELL_API_KEY_ALIAS = "RETELL_API_KEY"
-RETELL_WEB_CALL_URL = "https://api.retellai.com/v3/create-web-call"
-RETELL_LEGACY_WEB_CALL_PATH = "/v2/create-web-call"
-
-
-def _retell_web_call_url(configured: object) -> str:
-    url = str(configured or "").strip()
-    if not url or url.rstrip("/").endswith(RETELL_LEGACY_WEB_CALL_PATH):
-        return RETELL_WEB_CALL_URL
-    return url
 SIP_OUTBOUND_TRUNK_ID_ALIAS = "SIP_OUTBOUND_TRUNK_ID"
 SIP_OUTBOUND_FROM_NUMBER_ALIAS = "SIP_OUTBOUND_FROM_NUMBER"
 SIMULATOR_LLM_PROVIDER_ALIAS = "SIMULATOR_LLM_PROVIDER"

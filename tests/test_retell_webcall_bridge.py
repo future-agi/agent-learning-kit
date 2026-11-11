@@ -2,13 +2,16 @@ from __future__ import annotations
 
 import asyncio
 import json
+import subprocess
+import sys
 from types import SimpleNamespace
 
 import av
 import pytest
+from aiortc.mediastreams import MediaStreamError
 
 from fi.alk.harness.call_runner import _retell_web_call_url
-from fi.simulate.agent.definition import RetellTargetConfig
+from fi.simulate.agent.definition import RetellTargetConfig, retell_web_call_url
 from fi.simulate.simulation.bridge import livekit as bridge_livekit
 from fi.simulate.simulation.bridge import retell
 from fi.simulate.simulation.bridge.connector import ConnectorConfig
@@ -49,11 +52,22 @@ class _Response:
         return self._body
 
 
+class _TimedOut:
+    """A request that stalls until aiohttp's own timeout fires."""
+
+    async def __aenter__(self):
+        raise retell.aiohttp.ServerTimeoutError("timed out")
+
+    async def __aexit__(self, *_args):
+        return None
+
+
 class _Http:
     def __init__(self, responses):
         self.responses = list(responses)
         self.requests = []
         self.closed = False
+        self.session_kwargs = None
 
     def post(self, url, *, headers, json):
         self.requests.append(("POST", url, headers, json))
@@ -92,8 +106,10 @@ class _Track:
 
 
 class _PeerConnection(_Emitter):
-    def __init__(self, remote_track=None):
+    def __init__(self, remote_track=None, auto_connect=True):
         super().__init__()
+        self.calls = []
+        self.auto_connect = auto_connect
         self.tracks = []
         self.channel = _Emitter()
         self.channel_label = None
@@ -107,18 +123,29 @@ class _PeerConnection(_Emitter):
         self.tracks.append(track)
 
     def createDataChannel(self, label):
+        self.calls.append("createDataChannel")
         self.channel_label = label
         return self.channel
 
     async def createOffer(self):
+        self.calls.append("createOffer")
         return SimpleNamespace(sdp="v=0\r\noffer", type="offer")
 
     async def setLocalDescription(self, description):
+        self.calls.append("setLocalDescription")
         self.localDescription = description
+
+    def set_state(self, state):
+        self.connectionState = state
+        handler = self.handlers.get("connectionstatechange")
+        if handler is not None:
+            handler()
 
     async def setRemoteDescription(self, description):
         self.remote = description
         self.handlers["track"](self.remote_track)
+        if self.auto_connect:
+            self.set_state("connected")
 
     async def close(self):
         self.closed = True
@@ -132,7 +159,11 @@ def _connector():
 
 
 def _install(monkeypatch, http, pc):
-    monkeypatch.setattr(retell.aiohttp, "ClientSession", lambda **_kwargs: http)
+    def make_session(**kwargs):
+        http.session_kwargs = kwargs
+        return http
+
+    monkeypatch.setattr(retell.aiohttp, "ClientSession", make_session)
     monkeypatch.setattr(retell, "RTCPeerConnection", lambda configuration: pc)
 
 
@@ -352,18 +383,44 @@ def test_failed_peer_connection_ends_the_audio_stream(monkeypatch) -> None:
     asyncio.run(run())
 
 
-def test_silent_agent_track_ends_the_stream_after_the_frame_timeout(
-    monkeypatch,
-) -> None:
+def test_silent_agent_track_raises_a_coded_audio_timeout(monkeypatch) -> None:
     _, _, connector = _ready(monkeypatch)
     monkeypatch.setattr(retell, "RECV_FRAME_TIMEOUT_SECONDS", 0.05)
 
     async def run():
         await connector.connect()
-        await asyncio.wait_for(_drain(connector), timeout=1)
-        await connector.disconnect()
+        try:
+            await asyncio.wait_for(_drain(connector), timeout=1)
+        finally:
+            await connector.disconnect()
 
-    asyncio.run(run())
+    with pytest.raises(RetellWebCallError) as exc:
+        asyncio.run(run())
+
+    assert exc.value.code == "retell_webcall_agent_audio_timeout"
+    details = _safe_provider_error_details(exc.value, operation="provider_audio")
+    assert details["provider_code"] == "retell_webcall_agent_audio_timeout"
+
+
+def test_bridge_fails_the_call_when_the_provider_audio_stream_errors() -> None:
+    class _FailingConnector:
+        async def recv_audio(self):
+            raise RetellWebCallError("retell_webcall_agent_audio_timeout")
+            yield b"", 0  # pragma: no cover
+
+    bridge = object.__new__(bridge_livekit.LiveKitAudioBridge)
+
+    async def _no_playout() -> None:
+        return None
+
+    bridge._audio_source = SimpleNamespace(wait_for_playout=_no_playout)
+    bridge._connector = _FailingConnector()
+    bridge._last_audio_at = bridge._last_provider_audio_at = 0.0
+
+    with pytest.raises(RetellWebCallError) as exc:
+        asyncio.run(bridge._provider_to_room())
+
+    assert exc.value.code == "retell_webcall_agent_audio_timeout"
 
 
 def test_caller_audio_is_sent_in_20ms_frames_then_silence() -> None:
@@ -371,6 +428,7 @@ def test_caller_audio_is_sent_in_20ms_frames_then_silence() -> None:
 
     async def run():
         track = retell._CallerAudioTrack()
+        await track.recv()
         track.push(sample * (FRAME_SAMPLES + 10))
         frames = [await track.recv() for _ in range(3)]
         track.stop()
@@ -380,7 +438,11 @@ def test_caller_audio_is_sent_in_20ms_frames_then_silence() -> None:
 
     for frame in (first, second, third):
         assert (frame.samples, frame.sample_rate) == (FRAME_SAMPLES, 48000)
-    assert [first.pts, second.pts, third.pts] == [0, FRAME_SAMPLES, 2 * FRAME_SAMPLES]
+    assert [first.pts, second.pts, third.pts] == [
+        FRAME_SAMPLES,
+        2 * FRAME_SAMPLES,
+        3 * FRAME_SAMPLES,
+    ]
     assert bytes(first.planes[0])[: FRAME_SAMPLES * 2] == sample * FRAME_SAMPLES
     second_pcm = bytes(second.planes[0])[: FRAME_SAMPLES * 2]
     assert second_pcm[:20] == sample * 10
@@ -392,6 +454,60 @@ def test_caller_audio_buffer_is_bounded() -> None:
     track = retell._CallerAudioTrack()
     track.push(b"\x01\x00" * retell.MAX_PENDING_BYTES)
     assert len(track._pending) == retell.MAX_PENDING_BYTES
+
+
+def test_caller_audio_overflow_drops_the_oldest_bytes() -> None:
+    track = retell._CallerAudioTrack()
+    track.push(b"\x01" * retell.MAX_PENDING_BYTES)
+    track.push(b"\x02" * 1000)
+
+    assert len(track._pending) == retell.MAX_PENDING_BYTES
+    assert bytes(track._pending[-1000:]) == b"\x02" * 1000
+    assert track._pending[0] == 1
+    assert track._pending.count(1) == retell.MAX_PENDING_BYTES - 1000
+
+
+def test_audio_queued_before_the_first_recv_is_dropped() -> None:
+    sample = (9).to_bytes(2, "little", signed=True)
+
+    async def run():
+        track = retell._CallerAudioTrack()
+        track.push(sample * FRAME_SAMPLES * 5)
+        first = await track.recv()
+        pending_after_first = len(track._pending)
+        track.push(sample * FRAME_SAMPLES)
+        second = await track.recv()
+        return first, pending_after_first, second
+
+    first, pending_after_first, second = asyncio.run(run())
+
+    assert set(bytes(first.planes[0])[: FRAME_SAMPLES * 2]) == {0}
+    assert pending_after_first == 0
+    assert bytes(second.planes[0])[: FRAME_SAMPLES * 2] == sample * FRAME_SAMPLES
+
+
+def test_caller_frames_are_paced_in_real_time(monkeypatch) -> None:
+    sleeps = []
+    real_sleep = asyncio.sleep
+
+    async def recording_sleep(delay, *args, **kwargs):
+        sleeps.append(delay)
+        await real_sleep(0)
+
+    monkeypatch.setattr(asyncio, "sleep", recording_sleep)
+
+    async def run():
+        track = retell._CallerAudioTrack()
+        await track.recv()
+        await track.recv()
+        track.stop()
+
+    asyncio.run(run())
+
+    assert len(sleeps) == 1
+    # Any wait up to one frame proves the sender paces; the exact amount depends
+    # on how long the runner took between the two reads.
+    assert 0 < sleeps[0] <= FRAME_SAMPLES / retell.RETELL_SAMPLE_RATE
 
 
 def test_send_audio_resamples_to_48k(monkeypatch) -> None:
@@ -504,10 +620,253 @@ def test_from_env_defaults_to_v3(monkeypatch) -> None:
             "https://retell.proxy.example/v3/create-web-call",
             "https://retell.proxy.example/v3/create-web-call",
         ),
+        (
+            "https://proxy.example/v2/create-web-call",
+            "https://proxy.example/v3/create-web-call",
+        ),
+        (
+            "http://localhost:8080/retell/v2/create-web-call/",
+            "http://localhost:8080/retell/v3/create-web-call",
+        ),
     ],
 )
-def test_harness_upgrades_the_retired_v2_url(configured, expected) -> None:
+def test_retired_v2_url_is_upgraded_and_keeps_its_host(configured, expected) -> None:
+    assert retell_web_call_url(configured) == expected
     assert _retell_web_call_url(configured) == expected
+
+
+def test_target_config_upgrades_a_v2_api_url() -> None:
+    target = RetellTargetConfig(
+        agent_id="agent_1", api_url="https://proxy.example/v2/create-web-call"
+    )
+    assert str(target.api_url) == "https://proxy.example/v3/create-web-call"
+
+
+def test_from_env_with_a_v2_url_posts_to_v3(monkeypatch) -> None:
+    monkeypatch.setenv("RETELL_API_KEY", "key")
+    monkeypatch.setenv("RETELL_AGENT_ID", "agent_1")
+    monkeypatch.setenv("RETELL_API_URL", "https://proxy.example/v2/create-web-call")
+    http = _Http([_Response(201, CALL), _Response(201, ANSWER)])
+    _install(monkeypatch, http, _PeerConnection())
+    connector = RetellWebCallConnector.from_env()
+
+    async def run():
+        await connector.connect()
+        await connector.disconnect()
+
+    asyncio.run(run())
+
+    assert http.requests[0][1] == "https://proxy.example/v3/create-web-call"
+    assert http.requests[1][1] == (
+        "https://proxy.example/webrtc-proxy/call_retell_123/v1/webrtc/sessions"
+    )
+
+
+def test_stalled_create_post_reports_a_create_timeout(monkeypatch) -> None:
+    http = _Http([_TimedOut()])
+    _install(monkeypatch, http, _PeerConnection())
+
+    with pytest.raises(RetellWebCallError) as exc:
+        asyncio.run(_connector().connect())
+
+    assert exc.value.code == "retell_webcall_create_timeout"
+    assert http.closed
+
+
+def test_stalled_session_post_reports_a_session_timeout(monkeypatch) -> None:
+    http = _Http([_Response(201, CALL), _TimedOut()])
+    pc = _PeerConnection()
+    _install(monkeypatch, http, pc)
+
+    with pytest.raises(RetellWebCallError) as exc:
+        asyncio.run(_connector().connect())
+
+    assert exc.value.code == "retell_webcall_session_timeout"
+    assert pc.closed and http.closed
+
+
+def test_connect_waits_for_the_peer_connection_to_come_up(monkeypatch) -> None:
+    _, pc, connector = _ready(monkeypatch)
+    pc.auto_connect = False
+
+    async def run():
+        task = asyncio.create_task(connector.connect())
+        await asyncio.sleep(0.05)
+        assert not task.done()
+        pc.set_state("connected")
+        await asyncio.wait_for(task, timeout=1)
+        assert connector.is_connected
+        await connector.disconnect()
+
+    asyncio.run(run())
+
+
+def test_peer_connection_failing_during_connect_raises_a_coded_error(
+    monkeypatch,
+) -> None:
+    http, pc, connector = _ready(monkeypatch)
+    pc.auto_connect = False
+
+    async def run():
+        task = asyncio.create_task(connector.connect())
+        await asyncio.sleep(0.05)
+        pc.set_state("failed")
+        await asyncio.wait_for(task, timeout=1)
+
+    with pytest.raises(RetellWebCallError) as exc:
+        asyncio.run(run())
+
+    assert exc.value.code == "retell_webcall_connect_failed"
+    assert pc.closed and http.closed
+
+
+def test_peer_connection_closing_during_connect_raises_a_coded_error(
+    monkeypatch,
+) -> None:
+    _, pc, connector = _ready(monkeypatch)
+    pc.auto_connect = False
+
+    async def run():
+        task = asyncio.create_task(connector.connect())
+        await asyncio.sleep(0.05)
+        pc.set_state("closed")
+        await asyncio.wait_for(task, timeout=1)
+
+    with pytest.raises(RetellWebCallError) as exc:
+        asyncio.run(run())
+
+    assert exc.value.code == "retell_webcall_connect_failed"
+
+
+def test_peer_connection_that_never_connects_times_out(monkeypatch) -> None:
+    http, pc, connector = _ready(monkeypatch)
+    pc.auto_connect = False
+    monkeypatch.setattr(retell, "AGENT_TRACK_TIMEOUT_SECONDS", 0.05)
+
+    with pytest.raises(RetellWebCallError) as exc:
+        asyncio.run(connector.connect())
+
+    assert exc.value.code == "retell_webcall_connect_timeout"
+    assert pc.closed and http.closed
+
+
+def test_control_channel_is_created_before_the_offer(monkeypatch) -> None:
+    _, pc, connector = _ready(monkeypatch)
+
+    async def run():
+        await connector.connect()
+        await connector.disconnect()
+
+    asyncio.run(run())
+
+    assert pc.calls.index("createDataChannel") < pc.calls.index("createOffer")
+    assert pc.calls.index("createDataChannel") < pc.calls.index("setLocalDescription")
+
+
+def test_http_session_has_a_request_timeout(monkeypatch) -> None:
+    http, _, connector = _ready(monkeypatch)
+
+    async def run():
+        await connector.connect()
+        await connector.disconnect()
+
+    asyncio.run(run())
+
+    timeout = http.session_kwargs["timeout"]
+    assert isinstance(timeout, retell.aiohttp.ClientTimeout)
+    assert timeout.total == retell.REQUEST_TIMEOUT_SECONDS
+
+
+def test_closed_peer_connection_ends_the_audio_stream(monkeypatch) -> None:
+    _, pc, connector = _ready(monkeypatch)
+
+    async def run():
+        await connector.connect()
+        receiver = asyncio.create_task(_drain(connector))
+        await asyncio.sleep(0)
+        pc.set_state("closed")
+        await asyncio.wait_for(receiver, timeout=1)
+        assert connector.is_connected is False
+        await connector.disconnect()
+
+    asyncio.run(run())
+
+
+def test_media_stream_error_ends_the_audio_stream_cleanly(monkeypatch) -> None:
+    class _EndedTrack(_Track):
+        async def recv(self):
+            raise MediaStreamError
+
+    _, _, connector = _ready(monkeypatch, remote_track=_EndedTrack())
+
+    async def run():
+        await connector.connect()
+        await asyncio.wait_for(_drain(connector), timeout=1)
+        assert connector.is_connected is False
+        await connector.disconnect()
+
+    asyncio.run(run())
+
+
+def test_errors_and_error_details_carry_no_credentials(monkeypatch) -> None:
+    api_key = "sk-secret-api-key-4471"
+    token = "tok-secret-access-9083"
+    call = {**CALL, "access_token": token}
+    scenarios = [
+        [_Response(422, {"message": "agent missing"})],
+        [_Response(201, call), _Response(401, {"message": "expired"})],
+        [_Response(201, call), _TimedOut()],
+    ]
+    for responses in scenarios:
+        _install(monkeypatch, _Http(responses), _PeerConnection())
+        connector = RetellWebCallConnector(
+            ConnectorConfig(api_key=api_key, assistant_id="agent_1", api_url=API_URL)
+        )
+
+        with pytest.raises(RetellWebCallError) as exc:
+            asyncio.run(connector.connect())
+
+        details = _safe_provider_error_details(exc.value, operation="web_bridge_start")
+        for text in (str(exc.value), repr(exc.value), json.dumps(details)):
+            assert api_key not in text and token not in text
+
+
+def test_connector_config_repr_hides_the_api_key() -> None:
+    config = ConnectorConfig(
+        api_key="sk-secret-api-key-4471", assistant_id="agent_1", api_url=API_URL
+    )
+    assert "sk-secret-api-key-4471" not in repr(config)
+    assert "agent_1" in repr(config)
+
+
+def test_importing_the_bridge_package_does_not_load_aiortc() -> None:
+    code = (
+        "import sys, importlib.abc\n"
+        "class Block(importlib.abc.MetaPathFinder):\n"
+        "    def find_spec(self, name, path=None, target=None):\n"
+        "        if name == 'aiortc' or name.startswith('aiortc.'):\n"
+        "            raise ImportError('blocked ' + name)\n"
+        "sys.meta_path.insert(0, Block())\n"
+        "import fi.simulate.simulation.bridge\n"
+        "assert 'aiortc' not in sys.modules\n"
+        "assert 'fi.simulate.simulation.bridge.retell' not in sys.modules\n"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", code],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    assert result.returncode == 0, result.stderr
+
+
+def test_bridge_package_loads_the_retell_connector_on_first_use() -> None:
+    import fi.simulate.simulation.bridge as bridge_package
+
+    assert bridge_package.RetellWebCallConnector is RetellWebCallConnector
+    with pytest.raises(AttributeError):
+        bridge_package.__getattr__("NoSuchConnector")
 
 
 def test_cancelling_bridge_run_reaps_all_media_tasks():

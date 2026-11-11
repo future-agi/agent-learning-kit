@@ -3955,10 +3955,19 @@ async def _wait_for_conversation_end(
             else:
                 monitor_failures[name] = exc
         for name, exc in monitor_failures.items():
+            extra: dict[str, object] = {
+                "monitor": name,
+                "target_identity": target_identity,
+            }
+            if name == "provider_disconnected" and isinstance(exc, Exception):
+                # Only the sanitized code and status, never the message.
+                extra.update(
+                    _safe_provider_error_details(exc, operation="provider_audio")
+                )
             logger.warning(
                 "conversation end monitor failed",
                 exc_info=redacted_exc_info(exc),
-                extra={"monitor": name, "target_identity": target_identity},
+                extra=extra,
             )
         # A bridge task error is still a real provider-side disconnect.
         if "provider_disconnected" in monitor_failures:
