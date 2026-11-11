@@ -213,6 +213,21 @@ class PromptSource(BaseModel):
     end_line: int
 
 
+class ModelSource(BaseModel):
+    """The model the agent talks to the person with, and the line its name is written on."""
+
+    provider: str = ""
+    name: str = ""
+    path: str = ""
+    line: int = 0
+
+    @model_validator(mode="before")
+    @classmethod
+    def _bare_name(cls, value: Any) -> Any:
+        # A bare string is the name alone; the save then asks for path and line.
+        return {"name": value} if isinstance(value, str) else value
+
+
 class DataStore(BaseModel):
     """What the agent's tools read and write, and how to be there instead of it.
 
@@ -1074,6 +1089,20 @@ def _reached(one: Dependency) -> str:
     return "; ".join(said)
 
 
+def prompt_quote(payload: Any) -> str:
+    """The quote of the prompt as AgentContract reads it from a payload: under its own name or
+    the first alias that has one, a list joined by lines. The save holds it before validating."""
+    if not isinstance(payload, dict):
+        return ""
+    for key in ("system_prompt_excerpt", *_ALIASES["system_prompt_excerpt"]):
+        value = payload.get(key)
+        if value:
+            if isinstance(value, list):
+                return "\n".join(str(item) for item in value)
+            return value if isinstance(value, str) else str(value)
+    return ""
+
+
 class AgentContract(BaseModel):
     """What the agent verifiably is. Nothing downstream may contradict this."""
 
@@ -1132,6 +1161,12 @@ class AgentContract(BaseModel):
     system_prompt_excerpt: str = ""
     # When given, the excerpt is replaced by these lines copied from the source as written.
     system_prompt_from: list[PromptSource] = Field(default_factory=list)
+    # Set by the save, never by the reading: lines named for the prompt that twice didn't hold
+    # the quote given for it. The quote went out instead, or, when the quote was too short to
+    # stand for the prompt, the lines did, unconfirmed. Empty for nearly every contract.
+    unconfirmed_prompt_from: list[PromptSource] = Field(default_factory=list)
+    # None is unknown. Kept only when its name was found on the line cited in the source.
+    model: ModelSource | None = None
     hard_constraints: list[str] = Field(default_factory=list)
     tools: list[ToolSpec] = Field(default_factory=list)
     data_schema: dict[str, Any] = Field(default_factory=dict)
@@ -1165,6 +1200,18 @@ class AgentContract(BaseModel):
     # than blended in, and whoever reads it later can tell the two apart.
     amendments: list[str] = Field(default_factory=list)
     instrumentation: str = "none"
+
+    @model_serializer(mode="wrap")
+    def _omit_absent_model(self, handler: Any) -> dict[str, Any]:
+        # A contract with no model writes the same bytes as before the field existed, so its
+        # setup fingerprint is unchanged.
+        data = handler(self)
+        if data.get("model") is None:
+            data.pop("model", None)
+        # The same for the record of unconfirmed prompt lines, kept only when there are some.
+        if not data.get("unconfirmed_prompt_from"):
+            data.pop("unconfirmed_prompt_from", None)
+        return data
 
     def tool_names(self) -> set[str]:
         return {tool.name for tool in self.tools}

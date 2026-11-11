@@ -690,7 +690,18 @@ def main(argv: list[str] | None = None, *, validate_runtime: bool = False) -> in
         action="store_true",
         help="Find the agents in the source and leave their list in --output; build nothing",
     )
+    parser.add_argument(
+        "--seed-contract",
+        type=Path,
+        help="A reading's raw contract.json at /work/seed/contract.json; the build reuses it when it matches the job",
+    )
     args = parser.parse_args(argv)
+    if args.seed_contract is not None and (
+        args.certify_only or args.read_agent_only or args.find_agents
+    ):
+        parser.error(
+            "--seed-contract cannot be combined with --certify-only, --read-agent-only or --find-agents"
+        )
     if args.certify_only:
         if args.bundle_output is None:
             parser.error("--certify-only requires --bundle-output")
@@ -729,6 +740,22 @@ def main(argv: list[str] | None = None, *, validate_runtime: bool = False) -> in
         args.source.resolve(), job.source.subfolder, args.output.resolve()
     ):
         return EXIT_REFUSED
+    from .seed_contract import SEED_ACCEPTED
+
+    # Cleared before the seed checks: a mark an earlier command left must not pass for this one's yes.
+    (args.output / SEED_ACCEPTED).unlink(missing_ok=True)
+    if args.seed_contract is not None:
+        if args.await_harness:
+            from .seed_contract import accept_seed
+
+            refused = accept_seed(args.seed_contract, args.output)
+            if refused is not None:
+                return refused
+        else:
+            print(
+                "seed contract: not used; only a build the conversation's harness runs takes one",
+                file=sys.stderr,
+            )
     broker_socket = initialize_hosted_compose(job, args.source.resolve())
     if broker_socket is not None:
         os.environ["ALK_COMPOSE_BROKER_SOCKET"] = str(broker_socket)

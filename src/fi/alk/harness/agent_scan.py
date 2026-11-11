@@ -139,21 +139,65 @@ def _check_job(job: HarnessJob) -> HarnessFailure | None:
     return None
 
 
-def _holds_a_file(source: Path) -> bool:
-    """Whether ``source`` is a folder with at least one regular file, stopping at the first."""
+# The most the source look's list of folders still to visit may hold, by its count (TH-9525).
+_LOOK_HELD = 67_108_864
+
+
+def _path_cost(path: str) -> int:
+    """At least what one folder costs on the look's list: its full path as a str, at four bytes a
+    character unless it is all ASCII, plus 120 for the str's fixed part (at most 60 bytes on 3.12),
+    the allocator's rounding and the list's slot."""
+    return (1 if path.isascii() else 4) * len(path) + 120
+
+
+def _look(
+    source: Path, *, deadline: float, clock: Callable[[], float]
+) -> tuple[str, int, int]:
+    """Whether ``source`` holds a regular file, stopping at the folder where one is found:
+    ``"file"``, ``"none"`` (none in the whole tree), ``"limit"`` (the folders still to visit passed
+    `_LOOK_HELD` first) or ``"clock"`` (the deadline passed first), with the folders read and what
+    the list held. Each folder is read once, entry by entry: its subfolders are taken on until the
+    bound, and the read goes on past the bound for a regular file, which wins wherever it is in the
+    folder. A folder or entry that can't be read is passed over, as os.walk does."""
     try:
         if not source.is_dir():
-            return False
+            return "none", 0, 0
     except OSError:
-        return False
-    for directory, _, files in os.walk(source, followlinks=False):
-        for name in files:
-            try:
-                if stat.S_ISREG(os.lstat(os.path.join(directory, name)).st_mode):
-                    return True
-            except OSError:
-                continue
-    return False
+        return "none", 0, 0
+    top = os.fspath(source)
+    stack = [top]
+    held = _path_cost(top)
+    folders = 0
+    while stack:
+        # Never before the source's own folder: an empty source is "missing" whatever the time.
+        if folders and clock() > deadline:
+            return "clock", folders, held
+        folder = stack.pop()
+        held -= _path_cost(folder)
+        folders += 1
+        start = len(stack)
+        over = False
+        try:
+            with os.scandir(folder) as entries:
+                for entry in entries:
+                    try:
+                        if entry.is_dir(follow_symlinks=False):
+                            if not over:
+                                stack.append(entry.path)
+                                held += _path_cost(entry.path)
+                                over = held > _LOOK_HELD
+                        elif stat.S_ISREG(os.lstat(entry.path).st_mode):
+                            return "file", folders, held
+                    except OSError:
+                        continue
+        except OSError:
+            # A folder that can't be listed, or stops partway: what it gave is kept.
+            pass
+        if over:
+            return "limit", folders, held
+        # The first in name order is popped next, so the look goes depth first in name order.
+        stack[start:] = sorted(stack[start:], reverse=True)
+    return "none", folders, held
 
 
 def _hints(walk: WalkResult) -> str:
@@ -437,7 +481,18 @@ async def _scan(job: HarnessJob, source: Path, output: Path, scan: _Scan) -> int
     clock = time.monotonic
     # Taken first, so the source check counts against the clock too.
     deadline = clock() + limit_seconds(CLOCK_ENV, CLOCK)
-    if not _holds_a_file(source):
+    looked, folders, held = _look(source, deadline=deadline, clock=clock)
+    if looked in ("limit", "clock"):
+        # No regular file was found before the look's own bound or the clock: the same end as a
+        # walk stopped with nothing found, and no model is asked.
+        logger.info(
+            "agent scan: the source look stopped, stopped=%s folders=%d held=%d",
+            looked,
+            folders,
+            held,
+        )
+        return _result(job, output, scan, replace(_NO_WALK, stopped=looked), None)
+    if looked == "none":
         return _fail(
             output,
             FailureDomain.PLATFORM_SYNC,

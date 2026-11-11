@@ -96,6 +96,7 @@ jobs:
           tests/harness/test_hosted_entrypoint_provision_retry.py
           tests/harness/test_instrumentation_evidence.py
           tests/harness/test_agent_type_refusal.py
+          tests/harness/test_python_source_codecs.py
           tests/harness/test_executor_completed_counts.py
           tests/harness/test_reading_entry.py
           tests/harness/test_agent_reading.py
@@ -105,6 +106,7 @@ jobs:
           tests/harness/test_scan_ai.py
           tests/harness/test_agent_scan.py
           tests/harness/test_authoring_entrypoint_find_agents.py
+          tests/harness/test_seed_contract.py
           tests/test_bump_deployment_values.py
           tests/test_release_workflow.py
           tests/test_release_pr_step.py
