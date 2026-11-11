@@ -1874,6 +1874,18 @@ def test_a_value_in_a_block_comment_is_not_the_model(root, file, written, name):
             2,
             id="a-markup-block-before-its-closer",
         ),
+        pytest.param(
+            "page.vue",
+            '<template>\n<!--\n<x model="gpt-4o"/>\n-->\n</template>\n',
+            3,
+            id="a-markup-block-in-a-component",
+        ),
+        pytest.param(
+            "a.js",
+            '/* was\nconst model = "gpt-4o";\nmore\n*/\n',
+            2,
+            id="a-closer-after-the-cited-line",
+        ),
     ],
 )
 def test_a_value_inside_a_block_comment_over_lines_is_not_the_model(
@@ -1993,6 +2005,42 @@ def test_a_value_inside_a_block_comment_over_lines_is_not_the_model(
             '/*\n"""\n*/\nval model = "gpt-4o"\n',
             4,
             id="a-triple-quote-inside-a-comment",
+        ),
+        # An opener whose closer is on no later line is text: a comment that never closes
+        # doesn't compile. And <!-- runs on over lines only in markup.
+        pytest.param(
+            "a.js",
+            'const isComment = /<!--/.test(s);\nconst model = "gpt-4o";\n',
+            2,
+            id="a-markup-opener-in-a-regex",
+        ),
+        pytest.param(
+            "a.js",
+            'const re = /\\/*/g;\nconst model = "gpt-4o";\n',
+            2,
+            id="a-block-opener-in-a-regex",
+        ),
+        pytest.param(
+            "c.yaml", "banner: <!-- top\nmodel: gpt-4o\n", 2, id="a-markup-opener-in-yaml"
+        ),
+        pytest.param(".env", "BANNER=<!--\nMODEL=gpt-4o\n", 2, id="a-markup-opener-in-env"),
+        pytest.param(
+            "a.sh",
+            'cat <<EOF\n<!-- header\nEOF\nMODEL="gpt-4o"\n',
+            4,
+            id="a-markup-opener-in-a-heredoc",
+        ),
+        pytest.param(
+            "a.ts",
+            'const t = `\n/* todo\n`;\nconst model = "gpt-4o";\n',
+            4,
+            id="a-block-opener-in-a-template",
+        ),
+        pytest.param(
+            "a.js",
+            'const a = /<!--/;\nconst model = "gpt-4o";\nconst b = /-->/;\n',
+            2,
+            id="a-markup-opener-outside-markup-with-a-closer-later",
         ),
     ],
 )

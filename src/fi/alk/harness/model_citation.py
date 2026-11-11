@@ -64,6 +64,9 @@ _NO_BLOCK_COMMENT_SUFFIXES = frozenset(
     {".py", ".pyi", ".pyw", ".rb", ".pl", ".r", ".jl", ".ex", ".exs", ".nim", ".lua"}
 )
 _YAML_SUFFIXES = frozenset({".yaml", ".yml"})
+# Markup: only there is <!-- a comment that runs on over lines. Elsewhere it is text (a regex,
+# a YAML value, a heredoc), and a comment only to its line's end.
+_MARKUP_SUFFIXES = frozenset({".html", ".htm", ".xhtml", ".xml", ".svg", ".vue", ".svelte"})
 # INI files: a line starting with ; is a comment.
 _INI_SUFFIXES = frozenset({".ini", ".cfg", ".conf"})
 # Files where -- starts a comment: SQL, Lua, Haskell.
@@ -188,11 +191,12 @@ def _line_scan(
     triple: bool = False,
     hash_comments: str = _HASH_ANYWHERE,
     block_comments: bool = True,
+    markup: bool = False,
 ) -> tuple[int, list[tuple[int, int]], str | None]:
     """One pass over a line: where its comment starts (or its length), the stretches of it that
     are text (inside a triple-quoted string, or a block comment closed on the line), and the
-    block still open at its end (a triple quote, or the */ or --> a comment ends at). ``block`` is
-    the one open where the line starts. A line is a comment when it is the `* ` middle of a
+    block still open at its end (a triple quote, or the */ or --> a comment ends at; --> only in
+    ``markup``, where <!-- runs on over lines). ``block`` is the one open where the line starts. A line is a comment when it is the `* ` middle of a
     block comment or, in INI, starts with ;. Strings are passed over whole, so a marker or a
     triple quote inside one doesn't count; an apostrophe opens a string only when another closes
     it on the line."""
@@ -241,6 +245,9 @@ def _line_scan(
             closer = "*/" if token == "/*" else "-->"
             close = line.find(closer, at)
             if close < 0:
+                if token == "<!--" and not markup:
+                    # Outside markup, <!-- is a comment only to the line's end.
+                    return start, inside, None
                 # The comment runs on to the line that closes it.
                 return start, inside, closer
             # From the marker itself, so the stretch can never be a quoted value.
@@ -253,21 +260,31 @@ def _line_scan(
 
 def block_open_before(
     lines: list[str],
+    before: int,
     *,
     triple: bool = False,
     dashes: bool = False,
     ini: bool = False,
     hash_comments: str = _HASH_ANYWHERE,
     block_comments: bool = True,
+    markup: bool = False,
 ) -> str | None:
-    """The block open where the line after ``lines`` starts (a triple quote, or the */ or -->
-    of a block comment), the lines read with the same scan as the cited one. A line that could
-    open none, outside a block, is passed over without a scan; inside one, only its closer is
-    looked for."""
+    """The block open where ``lines[before]`` starts (a triple quote, or the */ or --> of a
+    block comment), the lines before it read with the same scan as the cited one. A comment is
+    carried to later lines only when its closer is on a later line of the file: one that never
+    closes doesn't compile, so its opener is text (a regex, a template). A line that could open
+    none, outside a block, is passed over without a scan; inside one, only its closer is looked
+    for."""
     openers = ['"""', "'''"] if triple else []
-    openers += ["/*", "<!--"] if block_comments else ["<!--"]
+    if block_comments:
+        openers.append("/*")
+    if markup:
+        openers.append("<!--")
+    # The last line each comment closer is on, looked for once, from the file's end.
+    last_closer: dict[str, int] = {}
     block: str | None = None
-    for line in lines:
+    for at in range(before):
+        line = lines[at]
         if block is None and not any(opener in line for opener in openers):
             continue
         if block is not None and block not in line:
@@ -280,7 +297,15 @@ def block_open_before(
             triple=triple,
             hash_comments=hash_comments,
             block_comments=block_comments,
+            markup=markup,
         )
+        if block in _COMMENT_CLOSERS:
+            if block not in last_closer:
+                last_closer[block] = next(
+                    (i for i in range(len(lines) - 1, -1, -1) if block in lines[i]), -1
+                )
+            if last_closer[block] <= at:
+                block = None
     return block
 
 
@@ -633,14 +658,17 @@ def model_problems(contract: AgentContract, source_root: Path) -> list[str]:
         triple=triple,
         hash_comments=hash_comments,
         block_comments=block_comments,
-        # Every file can hold a block open from an earlier line: <!-- is a marker in all of them.
+        # A block open from an earlier line: a triple quote, /* where block comments are, <!--
+        # in markup.
         block=block_open_before(
-            lines[: model.line - 1],
+            lines,
+            model.line - 1,
             triple=triple,
             dashes=dashes,
             ini=ini,
             hash_comments=hash_comments,
             block_comments=block_comments,
+            markup=suffix in _MARKUP_SUFFIXES,
         ),
     ):
         return [
