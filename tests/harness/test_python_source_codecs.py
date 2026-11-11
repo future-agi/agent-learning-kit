@@ -408,6 +408,18 @@ def test_an_ascii_compatible_codec_reads_as_before():
     assert budget.left == python_source.LARGEST_ESCAPED_TOTAL - len(raw)
 
 
+def test_a_file_whose_second_reading_is_past_the_total_keeps_the_imports_reading():
+    # A CR asks for the script's reading too, and the total lasts for the first decode only: the
+    # import's reading comes back alone, decoded, the escape on the coding line included.
+    raw = b"# coding: unicode-escape  # \\x41\r\nimport playwright\r\n"
+    budget = EscapeBudget(len(raw) + 1)
+    assert _decoded_readings(raw, _coding(raw), budget) == (
+        True,
+        raw.replace(b"\r\n", b"\n").decode("unicode-escape"),
+        None,
+    )
+
+
 def test_a_coding_line_that_reads_as_another_gives_both_readings():
     # An import reads the coding line's escape, and the decoded CR in the string; a script
     # keeps the escape as written, and ends the string's line at the CR.
@@ -1201,7 +1213,7 @@ def test_the_walk_parses_each_files_own_readings(tmp_path, monkeypatch):
     _write(repo / "agents" / "a", b"# coding: unicode-escape \\0\nimport common.web\n", "a.py")
     _write(repo / "agents" / "a", b"import os\n", "b.py")
     assert repo / "common" / "web.py" in imported_by_agent(repo, "agents/a")
-    # a.py is read twice, the decoded text cut at its NUL and the file as UTF-8; b.py once.
+    # a.py is read twice, the decoded text cut at its NUL and the text a script reads; b.py once.
     assert sum("unicode-escape" in reading for reading in parsed) == 2
     assert sum("import os" in reading for reading in parsed) == 1
 

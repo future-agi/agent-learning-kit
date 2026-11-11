@@ -338,8 +338,9 @@ def _decoded_readings(
     reads it as any other file.
 
     An import decodes the whole file, and `python file.py` the lines after the coding line, the
-    ones up to it read as they are. The two agree when those lines decode to themselves. When
-    they don't (`# coding: utf-7 +`, hz's `~{`, an iso2022 escape, a backslash at the end), the
+    ones up to it read as they are. The two agree when those lines decode to themselves and the
+    file holds no CR: an import ends lines before it decodes, a script after. When they don't
+    (`# coding: utf-7 +`, hz's `~{`, an iso2022 escape, a backslash at the end, a CR), the
     script's reading is the text when the whole file doesn't decode, and the second text when
     both do and differ. Each decode is charged.
     """
@@ -373,8 +374,8 @@ def _decoded_readings(
 
 def _head_reads_as_itself(raw: bytes, encoding: str) -> bool:
     """Whether the lines of ``raw`` up to and including its coding line decode to themselves in
-    ``encoding``, leaving its decoder as a fresh one would be: then an import and a script read
-    the file alike."""
+    ``encoding``, leaving its decoder as a fresh one would be: then, in a file with no CR, an
+    import and a script read it alike."""
     head = raw[: _cookie_line_end(raw)]
     if len(head) > _LONGEST_HEAD_CHECKED:
         # Not decoded uncharged: read both ways, as a crafted line is, and charged for it.
