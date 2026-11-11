@@ -90,15 +90,9 @@ def resolve_worker_secrets(
     return resolved
 
 
-def worker_environment(
-    resolved: Mapping[str, str],
-    *,
-    runtime_configuration: Mapping[str, str] | None = None,
-    host_environment: Mapping[str, str] | None = None,
-) -> dict[str, str]:
-    """Create a least-privilege child environment instead of inheriting every host secret."""
-    host = host_environment if host_environment is not None else os.environ
-    allowed = {
+# What a worker inherits from the host environment, and nothing else.
+WORKER_ENVIRONMENT_NAMES: frozenset[str] = frozenset(
+    {
         "DOCKER_HOST",
         "HOME",
         "LANG",
@@ -153,6 +147,18 @@ def worker_environment(
         "FI_API_KEY",
         "FI_SECRET_KEY",
     }
+)
+
+
+def worker_environment(
+    resolved: Mapping[str, str],
+    *,
+    runtime_configuration: Mapping[str, str] | None = None,
+    host_environment: Mapping[str, str] | None = None,
+) -> dict[str, str]:
+    """Create a least-privilege child environment instead of inheriting every host secret."""
+    host = host_environment if host_environment is not None else os.environ
+    allowed = WORKER_ENVIRONMENT_NAMES
     child = {name: value for name, value in host.items() if name in allowed}
     reserved = {
         "ALK_HARNESS",
