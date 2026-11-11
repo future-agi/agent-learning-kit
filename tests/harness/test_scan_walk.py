@@ -1142,42 +1142,52 @@ def test_build_hazard_is_bounded_and_asked_once_per_folder(
     assert len(entries) <= 3
 
 
+def _ordered_walk(real_walk, *, descending: bool, listed: list[str]):
+    """``os.walk`` with each folder's subfolders handed over in one forced order, recording every
+    file name it lists."""
+
+    def walk(*args, **kwargs):
+        for here, directories, files in real_walk(*args, **kwargs):
+            directories.sort(reverse=descending)
+            listed.extend(files)
+            yield here, directories, files
+
+    return walk
+
+
+@pytest.mark.parametrize("below", ["", "x/"], ids=["top", "nested"])
 @pytest.mark.parametrize("case", ["found", "stopped"])
 def test_a_hazard_look_stopped_by_its_cap_gives_one_answer_in_any_listing_order(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, case: str
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, case: str, below: str
 ) -> None:
     """The look goes in name order whatever order the file system lists folders in, so where its
-    cap stops it is the same everywhere. Both orders are forced, a level below the top."""
+    cap stops it is the same everywhere. Both orders are forced, at the folder the look starts
+    from and a level below it."""
     if case == "found":
         # Name order reaches both agent.py files before the big folder.
-        _files(tmp_path, {"x/a/agent.py": "", "x/b/agent.py": ""})
-        _files(tmp_path, {f"x/z/f{index:02}": "" for index in range(50)})
+        _files(tmp_path, {f"{below}a/agent.py": "", f"{below}b/agent.py": ""})
+        _files(tmp_path, {f"{below}z/f{index:02}": "" for index in range(50)})
     else:
         # Name order meets the big folder first and stops there, before either agent.py.
-        _files(tmp_path, {f"x/a/f{index:02}": "" for index in range(50)})
-        _files(tmp_path, {"x/b/agent.py": "", "x/c/agent.py": ""})
+        _files(tmp_path, {f"{below}a/f{index:02}": "" for index in range(50)})
+        _files(tmp_path, {f"{below}b/agent.py": "", f"{below}c/agent.py": ""})
     monkeypatch.setattr(scan_walk, "_HAZARD_ENTRIES", 20)
     real_walk = os.walk
     answers, seen = [], []
 
     for descending in (False, True):
         listed: list[str] = []
-
-        def ordered(*args: object, descending: bool = descending, listed: list[str] = listed, **kwargs: object):
-            for here, directories, files in real_walk(*args, **kwargs):  # type: ignore[arg-type]
-                directories.sort(reverse=descending)
-                listed.extend(files)
-                yield here, directories, files
-
-        monkeypatch.setattr(scan_walk.os, "walk", ordered)
+        monkeypatch.setattr(scan_walk.os, "walk", _ordered_walk(real_walk, descending=descending, listed=listed))
         answers.append(scan_walk.build_hazard(tmp_path, ""))
         seen.append(listed.count("agent.py"))
 
-    expected = "agent_py" if case == "found" else ""
-    assert answers == [expected, expected]
-    if case == "stopped":
+    if case == "found":
+        assert answers == ["agent_py", "agent_py"]
+    else:
+        assert answers == ["", ""]
         # The "" is the cap's, not a look that missed them: neither agent.py was ever listed.
         assert seen == [0, 0]
+
 
 def test_the_prompt_files_listed_are_capped(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
