@@ -758,7 +758,7 @@ def test_generated_worker_translates_loopback_livekit_without_persisting_it(
     monkeypatch.setattr(
         provisioning,
         "_config",
-        lambda _environment: {"services": {"agent-runtime": {"environment": {}}}},
+        lambda _environment, process_overrides=None: {"services": {"agent-runtime": {"environment": {}}}},
     )
 
     def run(_environment, *arguments, **kwargs):
@@ -799,7 +799,7 @@ def test_runtime_does_not_revalidate_container_target_for_mounted_google_credent
     monkeypatch.setattr(
         provisioning,
         "_config",
-        lambda _environment: {
+        lambda _environment, process_overrides=None: {
             "services": {
                 "agent-runtime": {
                     "environment": {
@@ -900,7 +900,7 @@ def test_managed_runtime_uses_generated_private_endpoint_over_submitted_default(
     monkeypatch.setattr(
         provisioning,
         "_config",
-        lambda _environment: {
+        lambda _environment, process_overrides=None: {
             "services": {
                 "agent-runtime": {
                     "environment": {"TOOLS_API_URL": "http://harness:8787"}
@@ -929,6 +929,78 @@ def test_managed_runtime_uses_generated_private_endpoint_over_submitted_default(
     assert seen["injected"]["TOOLS_API_URL"] == "http://tools-api:8080"
     arguments = seen["arguments"]
     assert "TOOLS_API_URL=http://tools-api:8080" in arguments
+
+
+def _network_mode_depends_on_injected_harness_mode(tmp_path: Path, monkeypatch):
+    environment = provisioning.ProvisionedEnvironment(
+        source=str(tmp_path),
+        compose_file=str(tmp_path / "compose.json"),
+        project="runtime-validation",
+        runtime_services=["agent-runtime"],
+        running=True,
+    )
+    environment.save(tmp_path)
+    monkeypatch.setenv("HARNESS_RUNTIME_STABLE_SECONDS", "0")
+    calls: list[tuple[str, ...]] = []
+
+    def run(_environment, *arguments, **kwargs):
+        calls.append(arguments)
+        if "config" in arguments:
+            # Stands in for ``network_mode: "${HARNESS_MODE:+container:x}"``.
+            overrides = kwargs.get("process_overrides") or {}
+            service: dict[str, object] = {"environment": {}}
+            if overrides.get("HARNESS_MODE"):
+                service["network_mode"] = "container:x"
+            return json.dumps({"name": "runtime-validation", "services": {"agent-runtime": service}})
+        return ""
+
+    monkeypatch.setattr(provisioning, "_run", run)
+    monkeypatch.setattr(
+        provisioning,
+        "_docker",
+        lambda *arguments, **_kwargs: (
+            "running" if arguments and arguments[0] == "inspect" else ""
+        ),
+    )
+    return calls
+
+
+def test_start_runtime_refuses_a_file_that_only_reaches_out_with_injected_values(
+    tmp_path: Path, monkeypatch
+) -> None:
+    calls = _network_mode_depends_on_injected_harness_mode(tmp_path, monkeypatch)
+
+    # Rendered without the injected variables, the file is clean ...
+    environment = provisioning.ProvisionedEnvironment.load(tmp_path)
+    clean = provisioning._config(environment)
+    provisioning._validate_compose_security(clean)
+    assert "network_mode" not in clean["services"]["agent-runtime"]
+
+    # ... and start_runtime renders it again with them, finds container:x, and never runs it.
+    calls.clear()
+    with pytest.raises(provisioning.ProvisionError, match="network_mode outside the project"):
+        provisioning.start_runtime(tmp_path)
+    assert not any("run" in arguments for arguments in calls)
+
+
+def test_start_runtime_runs_when_the_file_is_clean_with_injected_values(
+    tmp_path: Path, monkeypatch
+) -> None:
+    calls = _network_mode_depends_on_injected_harness_mode(tmp_path, monkeypatch)
+    # Same file, but rendered clean even with the injected values.
+    original = provisioning._run
+
+    def run(environment, *arguments, **kwargs):
+        if "config" in arguments:
+            return json.dumps(
+                {"name": "runtime-validation", "services": {"agent-runtime": {"environment": {}}}}
+            )
+        return original(environment, *arguments, **kwargs)
+    monkeypatch.setattr(provisioning, "_run", run)
+
+    provisioning.start_runtime(tmp_path)
+
+    assert any("run" in arguments for arguments in calls)
 
 
 def test_compose_process_overrides_uploaded_runtime_endpoint(tmp_path: Path, monkeypatch) -> None:

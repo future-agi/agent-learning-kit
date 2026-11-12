@@ -646,25 +646,57 @@ def test_host_escape_compose_features_are_rejected(service):
         _validate_compose_security({"services": {"agent": service}})
 
 
+def _svc(**fields):
+    return {"services": {"agent": fields, "db": {}}}
+
+
+def _net(spec, name="job"):
+    return {"name": name, "services": {"agent": {}}, "networks": {"back": spec}}
+
+
 @pytest.mark.parametrize(
     ("config", "expected"),
     [
-        ({"services": {"agent": {"network_mode": "container:other"}}}, "agent: network_mode=container:other"),
-        ({"services": {"agent": {"network_mode": "platform_default"}}}, "agent: network_mode=platform_default"),
-        ({"services": {"agent": {"network_mode": "bridge"}}}, "agent: network_mode=bridge"),
-        ({"services": {"agent": {"network_mode": "host"}}}, "agent: network_mode=host"),
-        ({"services": {"agent": {"network_mode": "service:missing"}}}, "agent: network_mode=service:missing"),
+        # network_mode
+        (_svc(network_mode="container:other"), "agent: network_mode outside the project"),
+        (_svc(network_mode="container:db"), "agent: network_mode outside the project"),
+        (_svc(network_mode="platform_default"), "agent: network_mode outside the project"),
+        (_svc(network_mode="bridge"), "agent: network_mode outside the project"),
+        (_svc(network_mode="host"), "agent: network_mode=host"),
+        (_svc(network_mode="service:missing"), "agent: network_mode outside the project"),
+        (_svc(network_mode="NONE"), "agent: network_mode outside the project"),
+        (_svc(network_mode="NoNe"), "agent: network_mode outside the project"),
+        # pid and ipc
+        (_svc(pid="host"), "agent: pid=host"),
+        (_svc(pid="container:db"), "agent: pid outside the project"),
+        (_svc(pid="service:missing"), "agent: pid outside the project"),
+        (_svc(pid="private"), "agent: pid outside the project"),
+        (_svc(ipc="host"), "agent: ipc=host"),
+        (_svc(ipc="container:db"), "agent: ipc outside the project"),
+        (_svc(ipc="service:missing"), "agent: ipc outside the project"),
+        # volumes_from
+        (_svc(volumes_from=["container:db"]), "agent: volumes_from outside the project"),
+        (_svc(volumes_from=["container:db:ro"]), "agent: volumes_from outside the project"),
+        (_svc(volumes_from=["missing"]), "agent: volumes_from outside the project"),
+        (_svc(volumes_from=["db", "missing:ro"]), "agent: volumes_from outside the project"),
+        # build
+        (_svc(build={"context": ".", "network": "host"}), "agent: build.network"),
+        (_svc(build={"context": ".", "network": "platform_default"}), "agent: build.network"),
+        (_svc(build={"context": ".", "privileged": True}), "agent: build.privileged"),
+        (_svc(build={"context": ".", "entitlements": ["network.host"]}), "agent: build.entitlements"),
+        # top-level networks
+        (_net({"name": "shared", "external": True}), "network back: external"),
+        (_net({"name": "otherproject_back"}), "network back: named outside the project"),
+        (_net({"name": "job_default"}), "network back: named outside the project"),
+        (_net({"name": "job_back", "driver": "macvlan"}), "network back: driver"),
+        (_net({"name": "job_back", "driver": "host"}), "network back: driver"),
         (
-            {"name": "job", "services": {"agent": {}}, "networks": {"shared": {"name": "shared", "external": True}}},
-            "network shared: external",
-        ),
-        (
-            {"name": "job", "services": {"agent": {}}, "networks": {"default": {"name": "otherproject_default"}}},
-            "network default: name outside the project",
+            _net({"name": "job_back", "driver_opts": {"parent": "eth0"}}),
+            "network back: driver_opts",
         ),
     ],
 )
-def test_compose_network_joins_outside_the_project_are_rejected(config, expected):
+def test_compose_reach_outside_the_project_is_rejected(config, expected):
     with pytest.raises(ProvisionError, match="forbidden host access") as error:
         _validate_compose_security(config)
     assert expected in str(error.value)
@@ -673,17 +705,70 @@ def test_compose_network_joins_outside_the_project_are_rejected(config, expected
 @pytest.mark.parametrize(
     "config",
     [
-        {"services": {"agent": {"network_mode": "service:db"}, "db": {}}},
-        {"services": {"agent": {"network_mode": "none"}}},
-        {"services": {"agent": {}}},
-        {"services": {"agent": {"network_mode": ""}}},
-        {"name": "job", "services": {"agent": {}}, "networks": {"default": {"name": "job_default"}}},
+        # network_mode
+        _svc(network_mode="service:db"),
+        _svc(network_mode="none"),
+        _svc(network_mode=""),
+        _svc(),
+        # pid and ipc
+        _svc(pid="service:db"),
+        _svc(pid=""),
+        _svc(ipc="service:db"),
+        _svc(ipc="none"),
+        _svc(ipc="private"),
+        _svc(ipc="shareable"),
+        _svc(ipc=""),
+        # volumes_from
+        _svc(volumes_from=["db"]),
+        _svc(volumes_from=["db:ro"]),
+        _svc(volumes_from=["db:rw"]),
+        # build
+        _svc(build={"context": "."}),
+        _svc(build={"context": ".", "network": "default"}),
+        _svc(build={"context": ".", "network": "none"}),
+        _svc(build={"context": ".", "privileged": False, "entitlements": []}),
+        # top-level networks
+        _net({"name": "job_back"}),
+        _net({"name": "job_back", "driver": "bridge", "driver_opts": {}}),
+        _net({"driver": "bridge", "internal": True}),
         {"name": "job", "services": {"agent": {}}, "networks": {"default": None}},
         {"name": "job", "services": {"agent": {}}},
     ],
 )
-def test_compose_network_settings_inside_the_project_are_accepted(config):
+def test_compose_settings_inside_the_project_are_accepted(config):
     _validate_compose_security(config)
+
+
+@pytest.mark.parametrize(
+    "config",
+    [
+        _svc(network_mode="CANARY-7f3a"),
+        _svc(pid="CANARY-7f3a"),
+        _svc(ipc="CANARY-7f3a"),
+        _svc(volumes_from=["CANARY-7f3a"]),
+        _svc(build={"network": "CANARY-7f3a"}),
+        _net({"name": "CANARY-7f3a"}),
+        _net({"name": "job_back", "driver": "CANARY-7f3a"}),
+        _net({"name": "job_back", "driver_opts": {"parent": "CANARY-7f3a"}}),
+    ],
+)
+def test_compose_refusal_text_never_contains_a_value(config):
+    with pytest.raises(ProvisionError) as error:
+        _validate_compose_security(config)
+    assert "CANARY" not in str(error.value)
+    assert "7f3a" not in str(error.value)
+
+
+def test_network_refusal_ends_with_the_hint_and_other_refusals_do_not():
+    with pytest.raises(ProvisionError) as network:
+        _validate_compose_security(_svc(network_mode="container:db"))
+    assert str(network.value).endswith(
+        "; declare networks in this file without external or name, and use network_mode "
+        "only as none or service:<a service in this file>"
+    )
+    with pytest.raises(ProvisionError) as other:
+        _validate_compose_security(_svc(privileged=True))
+    assert "declare networks" not in str(other.value)
 
 
 def test_clickhouse_is_generated_when_contract_declares_it_without_compose(tmp_path):

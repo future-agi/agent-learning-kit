@@ -397,9 +397,13 @@ def _command_failure_output(output: str, *, limit: int = 16_000) -> str:
     return f"{head}\n... {omitted} characters omitted ...\n{tail}"
 
 
-def _config(environment: ProvisionedEnvironment) -> dict[str, Any]:
+def _config(
+    environment: ProvisionedEnvironment,
+    process_overrides: dict[str, str] | None = None,
+) -> dict[str, Any]:
     # Include opt-in profiles while inspecting. They are not started as infrastructure, but the
-    # harness must still discover which service is the submitted agent runtime.
+    # harness must still discover which service is the submitted agent runtime. Pass the same
+    # ``process_overrides`` a later ``compose run`` will use to render the file as it will run.
     rendered = _run(
         environment,
         "--profile",
@@ -408,6 +412,7 @@ def _config(environment: ProvisionedEnvironment) -> dict[str, Any]:
         "--format",
         "json",
         timeout=60,
+        process_overrides=process_overrides,
     )
     try:
         value = json.loads(rendered)
@@ -507,20 +512,67 @@ def _runtime_services(config: dict[str, Any], contract: Any | None = None) -> li
     return candidates
 
 
+_NETWORK_HINT = (
+    "; declare networks in this file without external or name, and use network_mode only "
+    "as none or service:<a service in this file>"
+)
+
+
 def _validate_compose_security(config: dict[str, Any]) -> None:
-    """Reject host-escape primitives before any submitted container is created."""
+    """Reject host-escape primitives before any submitted container is created.
+
+    Messages carry a category and the file's own service/network keys, never a rendered value:
+    the config is interpolated with the environment and uploaded runtime values.
+    """
     violations: list[str] = []
-    for name, service in config["services"].items():
+    network_rule_failed = False
+    services = config["services"]
+    for name, service in services.items():
         if service.get("privileged"):
             violations.append(f"{name}: privileged")
-        for key in ("pid", "ipc"):
-            if str(service.get(key) or "").lower() == "host":
-                violations.append(f"{name}: {key}=host")
-        mode = str(service.get("network_mode") or "").strip()
-        if mode and mode.lower() != "none":
-            sibling = mode[len("service:") :] if mode.startswith("service:") else None
-            if sibling is None or sibling not in config["services"]:
-                violations.append(f"{name}: network_mode={mode}")
+        mode = str(service.get("network_mode") or "")
+        # Docker reads any other string, in any case, as the name of a network to join.
+        if mode and mode != "none":
+            if not (mode.startswith("service:") and mode[len("service:") :] in services):
+                violations.append(
+                    f"{name}: network_mode=host"
+                    if mode.lower() == "host"
+                    else f"{name}: network_mode outside the project"
+                )
+                network_rule_failed = True
+        for key, extra in (("pid", ()), ("ipc", ("none", "private", "shareable"))):
+            value = str(service.get(key) or "")
+            if not value or value in extra:
+                continue
+            if value.startswith("service:") and value[len("service:") :] in services:
+                continue
+            violations.append(
+                f"{name}: {key}=host"
+                if value.lower() == "host"
+                else f"{name}: {key} outside the project"
+            )
+        for entry in service.get("volumes_from") or []:
+            source = str(entry)
+            if source.startswith("container:"):
+                violations.append(f"{name}: volumes_from outside the project")
+                continue
+            for suffix in (":ro", ":rw"):
+                if source.endswith(suffix):
+                    source = source[: -len(suffix)]
+                    break
+            if source.startswith("service:"):
+                source = source[len("service:") :]
+            if source not in services:
+                violations.append(f"{name}: volumes_from outside the project")
+        build = service.get("build")
+        if isinstance(build, dict):
+            if str(build.get("network") or "") not in {"", "default", "none"}:
+                violations.append(f"{name}: build.network")
+                network_rule_failed = True
+            if build.get("privileged"):
+                violations.append(f"{name}: build.privileged")
+            if build.get("entitlements"):
+                violations.append(f"{name}: build.entitlements")
         if service.get("devices"):
             violations.append(f"{name}: host devices")
         for volume in service.get("volumes") or []:
@@ -540,12 +592,22 @@ def _validate_compose_security(config: dict[str, Any]) -> None:
             continue
         if spec.get("external"):
             violations.append(f"network {key}: external")
+            network_rule_failed = True
         declared = spec.get("name")
         if declared and declared != f"{project}_{key}":
-            violations.append(f"network {key}: name outside the project")
+            violations.append(f"network {key}: named outside the project")
+            network_rule_failed = True
+        if str(spec.get("driver") or "") not in {"", "bridge"}:
+            violations.append(f"network {key}: driver")
+            network_rule_failed = True
+        if spec.get("driver_opts"):
+            violations.append(f"network {key}: driver_opts")
+            network_rule_failed = True
     if violations:
         raise ProvisionError(
-            "submitted Compose requests forbidden host access: " + ", ".join(violations)
+            "submitted Compose requests forbidden host access: "
+            + ", ".join(violations)
+            + (_NETWORK_HINT if network_rule_failed else "")
         )
 
 
@@ -2559,6 +2621,10 @@ def start_runtime(
         value = f"{name}={injected[name]}" if name in explicit_non_secret else name
         arguments.extend(("--env", value))
     arguments.append(service)
+    # ``injected`` is applied only here, so the file validated at provision time was rendered
+    # without it. A value such as ``${HARNESS_MODE:+container:x}`` could pass that check and
+    # change meaning now; validate the file as ``compose run`` will render it.
+    _validate_compose_security(_config(environment, process_overrides=injected))
     _run(environment, *arguments, timeout=900, process_overrides=injected)
     deadline = time.monotonic() + 60
     # LiveKit workers commonly stay alive while warming VAD/STT/TTS processes and only register
