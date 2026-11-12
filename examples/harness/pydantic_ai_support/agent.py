@@ -64,11 +64,17 @@ async def agent_callback(agent_input):
             history.append(ModelRequest(parts=[UserPromptPart(content=message["content"])]))
         elif message["role"] == "assistant":
             history.append(ModelResponse(parts=[TextPart(content=message["content"])]))
+    api_key = os.getenv("OPENAI_API_KEY")
+    base_url = os.getenv("OPENAI_BASE_URL")
+    # With no base URL the client falls back to api.openai.com and would send the key there.
+    if api_key and not base_url:
+        raise RuntimeError(
+            "OPENAI_API_KEY is set but OPENAI_BASE_URL is empty: set OPENAI_BASE_URL to the "
+            "endpoint the key belongs to."
+        )
     # Each request runs in its own event loop, and the provider does not close a client it
     # was handed, so the client lives and dies with the call.
-    async with AsyncOpenAI(
-        base_url=os.getenv("OPENAI_BASE_URL"), api_key=os.getenv("OPENAI_API_KEY")
-    ) as client:
+    async with AsyncOpenAI(base_url=base_url, api_key=api_key) as client:
         # A model object, because a name string is resolved by prefix: `openai:` would use
         # the Responses API, which the model gateway serves only for OpenAI-format routes,
         # and a bare vertex_ai/... name is rejected.

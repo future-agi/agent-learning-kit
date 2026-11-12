@@ -9,27 +9,35 @@ from __future__ import annotations
 
 import ast
 import asyncio
+import importlib.util
+import inspect
 import json
 import os
 import shutil
-import subprocess
 import sys
 import textwrap
 from pathlib import Path
 
 import pytest
-from test_bundle_author_v2 import _authoring, _github_job, _write_callable_contract
+from reference_agents import (
+    DETECTION_CASES,
+    REPO,
+    TOOLS,
+    TRACE_HOOK,
+    assert_detected,
+    assert_pins,
+    build_control_service,
+    fresh_import,
+    run_tracer,
+    write_callable_contract,
+    write_stand_ins,
+)
 
-from fi.alk.harness.bundle_author_v2 import author_bundle_v2
-from fi.alk.harness.framework_detection import detect_framework, folder_findings
 from fi.simulate import AgentInput
 
-REPO = Path(__file__).resolve().parents[2]
 SUBFOLDER = "examples/harness/pydantic_ai_support"
 EXAMPLE = REPO / SUBFOLDER
-BOOTSTRAP = REPO / "src/fi/alk/harness/livekit_tool_trace_bootstrap.py"
-
-TOOLS = ("look_up_order", "start_return", "return_policy")
+ENVIRONMENT = ("OPENAI_API_KEY", "OPENAI_BASE_URL", "OPENAI_MODEL")
 
 # `Tool.call` follows Pydantic AI 2.61.0 (_function_schema.py:81-89, _utils.py:182-199): a
 # coroutine function is awaited, a plain function is run by `anyio.to_thread.run_sync`
@@ -156,131 +164,73 @@ STAND_IN_FILES = {
 }
 
 
-def _copy_example(destination: Path) -> Path:
-    shutil.copytree(EXAMPLE, destination, ignore=shutil.ignore_patterns("__pycache__"))
-    return destination
-
-
-def _write_stand_in(root: Path) -> Path:
-    for relative, source in STAND_IN_FILES.items():
-        path = root / relative
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(source, encoding="utf-8")
-    return root
-
-
 @pytest.fixture
 def example_module(tmp_path, monkeypatch):
     """A fresh import of the example's `agent.py` on the stand-in library, with no key set."""
-    for name in ("OPENAI_API_KEY", "OPENAI_BASE_URL", "OPENAI_MODEL"):
-        monkeypatch.delenv(name, raising=False)
-    stand_in = _write_stand_in(tmp_path / "stand-in")
-    run = tmp_path / "run"
-    run.mkdir()
-    shutil.copy2(EXAMPLE / "agent.py", run / "agent.py")
-    saved = dict(sys.modules)
-    for name in list(sys.modules):
-        if name.split(".")[0] in {"pydantic_ai", "openai", "agent"}:
-            del sys.modules[name]
-    monkeypatch.syspath_prepend(str(run))
-    monkeypatch.syspath_prepend(str(stand_in))
-
-    def load():
-        import agent
-
-        return agent
-
-    yield load
-    for name in list(sys.modules):
-        if name not in saved:
-            del sys.modules[name]
-    sys.modules.update(saved)
+    with fresh_import(
+        tmp_path,
+        monkeypatch,
+        EXAMPLE,
+        stand_in=STAND_IN_FILES,
+        clear_env=ENVIRONMENT,
+        purge=("pydantic_ai", "openai"),
+    ) as load:
+        yield load
 
 
 # T1: detection ------------------------------------------------------------------------------
 
 
-def test_example_is_found_as_the_run_folder(tmp_path: Path) -> None:
-    run = _copy_example(tmp_path / "run")
-
-    assert detect_framework(run) == {"name": "pydantic_ai", "version": None}
-    assert folder_findings(run).blockers == frozenset()
-
-
-def test_example_is_found_as_a_subfolder_of_a_bigger_tree(tmp_path: Path) -> None:
-    repo = tmp_path / "repo"
-    _copy_example(repo / SUBFOLDER)
-    # A package of the same name deep in the tree must not make the library import look
-    # like the customer's own module.
-    nested = repo / "src/pkg/pydantic_ai"
-    nested.mkdir(parents=True)
-    (nested / "__init__.py").write_text("", encoding="utf-8")
-    (nested / "score.py").write_text("def score():\n    return 1\n", encoding="utf-8")
-    (repo / "main.py").write_text("print('hello')\n", encoding="utf-8")
-
-    found = folder_findings(repo / SUBFOLDER, repo_root=repo)
-
-    assert detect_framework(repo / SUBFOLDER, repo_root=repo) == {
-        "name": "pydantic_ai",
-        "version": None,
-    }
-    assert found.blockers == frozenset()
-
-
-def test_example_in_place_is_not_shadowed_by_the_repository(tmp_path: Path) -> None:
-    # Nothing named `pydantic_ai` may sit on the example's path or inside it, or it would
-    # shadow the library and block detection.
-    assert "pydantic_ai" not in EXAMPLE.relative_to(REPO).parts
-    assert not [
-        path
-        for path in EXAMPLE.rglob("*")
-        if path.name in {"pydantic_ai", "pydantic_ai.py"} and "__pycache__" not in path.parts
-    ]
-    assert detect_framework(EXAMPLE, repo_root=REPO) == {
-        "name": "pydantic_ai",
-        "version": None,
-    }
+@pytest.mark.parametrize("where", DETECTION_CASES)
+def test_example_is_detected_as_pydantic_ai(tmp_path: Path, where: str) -> None:
+    # `pydantic_ai` is the library's top-level package, so a package or module of that name
+    # near the example would pass for the customer's own.
+    assert_detected(
+        EXAMPLE, "pydantic_ai", "pydantic_ai", where=where, tmp_path=tmp_path, subfolder=SUBFOLDER
+    )
 
 
 # T2: the build ------------------------------------------------------------------------------
 
 
-def test_build_runs_the_callback_bridge_and_binds_the_tool_tracer(tmp_path: Path) -> None:
-    source = tmp_path / "source"
-    _copy_example(source / SUBFOLDER)
-    (source / "README.md").write_text("many examples\n", encoding="utf-8")
-    authoring = _authoring(tmp_path)
-    _write_callable_contract(authoring)
-    contract_path = authoring / "contract.json"
-    contract = json.loads(contract_path.read_text(encoding="utf-8"))
-    contract["tool_entrypoints"] = [
-        {"tool": name, "mode": "import", "module": "agent", "callable": name}
-        for name in TOOLS
-    ]
-    contract_path.write_text(json.dumps(contract), encoding="utf-8")
+def _example_module_for_bindings(tmp_path: Path):
+    # The example's own `agent.py`, loaded by path on a stand-in library, so the names the
+    # build binds are checked against the code that runs.
+    stand_in = write_stand_ins(tmp_path / "bindings-stand-in", STAND_IN_FILES)
+    sys.path.insert(0, str(stand_in))
+    saved = dict(sys.modules)
+    try:
+        spec = importlib.util.spec_from_file_location("example_agent", EXAMPLE / "agent.py")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+    finally:
+        sys.path.remove(str(stand_in))
+        for name in list(sys.modules):
+            if name not in saved:
+                del sys.modules[name]
 
-    bundle = author_bundle_v2(
-        source=source,
-        job=_github_job(
-            SUBFOLDER,
-            with_secrets=True,
-            secret_aliases=("OPENAI_API_KEY", "OPENAI_BASE_URL"),
-        ),
-        authoring=authoring,
-        output=tmp_path / "bundle",
+
+def test_build_runs_the_callback_bridge_and_binds_the_tool_tracer(tmp_path: Path) -> None:
+    agent = build_control_service(
+        tmp_path, write_callable_contract, "agent", subfolder=SUBFOLDER, example=EXAMPLE
     )
 
-    agent = next(p for p in bundle.processes if p.name == bundle.runtime.control_service)
     assert "ThreadingHTTPServer" in json.dumps(agent.run_command)
     assert agent.environment["ALK_CALLBACK_ENTRYPOINT"] == "agent:agent_callback"
     assert agent.environment["PORT"] == "{{PORT_agent}}"
     assert "requirements.txt" in json.dumps(agent.build_commands)
     assert agent.environment["HARNESS_TOOL_TRACE"] == "{{WORLD_DIR}}/agent-tool-calls.jsonl"
     bindings = json.loads(agent.environment["ALK_TOOL_TRACE_BINDINGS"])
-    assert sorted(bindings, key=lambda item: item["name"]) == sorted(
-        ({"name": name, "module": "agent", "callable": name} for name in TOOLS),
-        key=lambda item: item["name"],
-    )
+    module = _example_module_for_bindings(tmp_path)
+    assert len(bindings) == len(TOOLS)
+    for binding in bindings:
+        assert binding["module"] == "agent"
+        function = getattr(module, binding["callable"], None)
+        assert inspect.isfunction(function), binding
+        assert not inspect.iscoroutinefunction(function), binding
+        assert function.__name__ == binding["name"]
+    assert sorted(binding["name"] for binding in bindings) == sorted(TOOLS)
 
 
 # T3: the tracer and a library-shaped call ---------------------------------------------------
@@ -327,19 +277,18 @@ def test_tools_called_the_way_the_library_calls_them_are_traced(tmp_path: Path) 
     (run / "agent_extra.py").write_text(
         "def look_up_order(order_id):\n    return 'not declared'\n", encoding="utf-8"
     )
-    shutil.copy2(BOOTSTRAP, run / "sitecustomize.py")
-    stand_in = _write_stand_in(tmp_path / "stand-in")
+    hook = tmp_path / "hook"
+    hook.mkdir()
+    shutil.copy2(TRACE_HOOK, hook / "sitecustomize.py")
+    stand_in = write_stand_ins(tmp_path / "stand-in", STAND_IN_FILES)
     trace = tmp_path / "calls.jsonl"
     bindings = [{"name": name, "module": "agent", "callable": name} for name in TOOLS]
 
-    completed = subprocess.run(
+    completed = run_tracer(
         [sys.executable, "-c", DRIVER],
-        check=True,
-        capture_output=True,
-        text=True,
-        cwd=run,
-        env={
-            **os.environ,
+        hook,
+        run,
+        {
             "PYTHONPATH": os.pathsep.join([str(stand_in), str(run)]),
             "HARNESS_TOOL_TRACE": str(trace),
             "ALK_TOOL_TRACE_BINDINGS": json.dumps(bindings),
@@ -427,6 +376,7 @@ def test_callback_sends_each_turn_once_and_replies_with_content_only(
 
 
 def test_first_turn_has_an_empty_history(example_module, monkeypatch) -> None:
+    monkeypatch.setenv("OPENAI_BASE_URL", "http://gateway.test/v1")
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
     agent = example_module()
     import pydantic_ai
@@ -439,6 +389,7 @@ def test_first_turn_has_an_empty_history(example_module, monkeypatch) -> None:
 
 
 def test_each_call_builds_and_closes_its_own_client(example_module, monkeypatch) -> None:
+    monkeypatch.setenv("OPENAI_BASE_URL", "http://gateway.test/v1")
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
     agent = example_module()
     import openai
@@ -454,6 +405,25 @@ def test_each_call_builds_and_closes_its_own_client(example_module, monkeypatch)
     assert [run.client_open for run in runs] == [True, True]
     assert [len(run.message_history) for run in runs] == [0, 2]
     assert len(pydantic_ai.STATE["agents"]) == 1
+
+
+@pytest.mark.parametrize("base_url", [None, ""])
+def test_a_key_with_no_base_url_is_refused_before_a_client_is_built(
+    example_module, monkeypatch, base_url
+) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "secret-canary-key")
+    if base_url is not None:
+        monkeypatch.setenv("OPENAI_BASE_URL", base_url)
+    agent = example_module()
+    import openai
+    import pydantic_ai
+
+    with pytest.raises(RuntimeError, match="OPENAI_BASE_URL") as refused:
+        asyncio.run(agent.agent_callback(_agent_input(CONVERSATION)))
+
+    assert "secret-canary-key" not in str(refused.value)
+    assert openai.CLIENTS == []
+    assert pydantic_ai.STATE["runs"] == []
 
 
 def test_import_sets_up_the_agent_without_a_key_or_a_client(example_module) -> None:
@@ -483,6 +453,7 @@ def test_persona_is_given_as_instructions_not_a_system_prompt(example_module) ->
 
 
 def test_library_failure_is_not_hidden(example_module, monkeypatch) -> None:
+    monkeypatch.setenv("OPENAI_BASE_URL", "http://gateway.test/v1")
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
     agent = example_module()
     import openai
@@ -509,6 +480,4 @@ def test_example_has_one_async_callback_and_plain_tools() -> None:
 
 
 def test_requirements_and_python_version_are_pinned() -> None:
-    lines = (EXAMPLE / "requirements.txt").read_text(encoding="utf-8").splitlines()
-    assert lines == ["pydantic-ai-slim[openai]==2.61.0", "agent-simulate==0.1.3"]
-    assert (EXAMPLE / ".python-version").read_text(encoding="utf-8").strip() == "3.12"
+    assert_pins(EXAMPLE, ["pydantic-ai-slim[openai]==2.61.0", "agent-simulate==0.1.3"])
