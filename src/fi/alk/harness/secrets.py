@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import os
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, MutableMapping
 
 from fi.simulate.runtime.spec import SecretRef
 
@@ -15,6 +15,9 @@ class SecretResolutionError(RuntimeError):
 
 
 _RUNTIME_CONFIGURATION_PREFIX = "ALK_RUNTIME_VALUE_"
+# The names manifest. Its presence, even empty, marks a sandbox controller process: one that holds
+# the runner's credentials, so a repository's names never reach its environment directly.
+RUNTIME_CONFIGURATION_NAMES_ENV = "ALK_RUNTIME_CONFIGURATION_NAMES"
 
 
 WORKER_ENVIRONMENT_NAMES: frozenset[str] = frozenset(
@@ -270,9 +273,16 @@ def runtime_configuration_value(
     # The local CLI historically receives agent configuration directly from its shell. Hosted
     # workers always define the names manifest (even when empty), so they never fall back to a
     # runner credential with the same name.
-    if "ALK_RUNTIME_CONFIGURATION_NAMES" not in source:
+    if RUNTIME_CONFIGURATION_NAMES_ENV not in source:
         return source.get(name, "")
     return ""
+
+
+def mark_controller_process(environ: MutableMapping[str, str] | None = None) -> None:
+    """Mark this process as a controller, keeping a manifest that's already there, so a
+    repository's .env reaches it only through the allowlist (`cli._load_connection_env`)."""
+    target = os.environ if environ is None else environ
+    target.setdefault(RUNTIME_CONFIGURATION_NAMES_ENV, "")
 
 
 def resolve_worker_secrets(
@@ -352,6 +362,8 @@ def worker_environment(
 __all__ = [
     "CONTROLLER_CONNECTION_NAMES",
     "RUNNER_RESERVED_ENVIRONMENT",
+    "RUNTIME_CONFIGURATION_NAMES_ENV",
+    "mark_controller_process",
     "SecretResolutionError",
     "WORKER_ENVIRONMENT_NAMES",
     "client_name_reserved",

@@ -17,6 +17,7 @@ from . import observability
 from .authoring_entrypoint import main as authoring_main
 from .backends import GOOGLE_ADK_APPROVAL_ENV
 from .poc_guest_booking import PIN_ENV, TARGET_PHONE_ENV
+from .secrets import mark_controller_process
 
 _SECRETS_PATH = Path("/run/futureagi/secrets.json")
 _ADC_PATH = Path("/work/.authoring-credentials/google.json")
@@ -178,6 +179,9 @@ def main(argv: list[str] | None = None) -> int:
     )
     _configure_generation_environment(values)
     _configure_observability_environment(all_values)
+    # This process holds the platform's generation credentials, and authoring loads the customer's
+    # .env into it: only through the same allowlist as the sandbox controller.
+    mark_controller_process()
     target_values = {
         name: all_values[name]
         for name in _TARGET_CREDENTIAL_NAMES
