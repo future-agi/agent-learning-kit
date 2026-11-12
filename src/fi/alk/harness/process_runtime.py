@@ -2318,16 +2318,18 @@ def spawn_source_process(
                         _SIMULATION_MARK_SITECUSTOMIZE, encoding="utf-8"
                     )
                 sitecustomize_hook.chmod(0o444)
-        if mark_hook_due:
-            # The customer's interpreter has no `fi.alk`, so the module sits beside the hook.
-            mark_module = world_dir / "simulation_mark_bootstrap.py"
-            if not mark_module.exists():
-                mark_module.write_bytes(
-                    Path(__file__)
-                    .with_name("simulation_mark_bootstrap.py")
-                    .read_bytes()
-                )
-                mark_module.chmod(0o444)
+        if mark_hook_due or process.environment.get("ALK_OBSERVE_FRAMEWORKS") == "1":
+            # The customer's interpreter has no `fi.alk`, so the modules sit beside the hook.
+            for module_name in (
+                "simulation_mark_bootstrap.py",
+                "simulation_worker_events.py",
+            ):
+                mark_module = world_dir / module_name
+                if not mark_module.exists():
+                    mark_module.write_bytes(
+                        Path(__file__).with_name(module_name).read_bytes()
+                    )
+                    mark_module.chmod(0o444)
         if process.environment.get("ALK_CREWAI_TOOL_TRACE") == "1":
             observer = world_dir / "crewai_runtime_observer_bootstrap.py"
             if not observer.exists():
@@ -4141,6 +4143,9 @@ class SpawnContext:
     # A dedicated Daytona sandbox can still share one LiveKit project with other jobs. Carry the
     # stable job identity into placeholder rendering so each worker gets a unique dispatch name.
     job_id: str = "local"
+    # What ``{{JOB_ID}}`` renders to: the job plus its attempt (see `_dispatch_identity`). Empty
+    # means the job id alone.
+    dispatch_id: str = ""
     # The platform's per-run decision for customer code (job.json `metadata`), applied to every
     # customer process's environment as is.
     customer_code_environment: dict[str, str] = field(default_factory=dict)
@@ -4264,7 +4269,7 @@ def spawn_world(
                         context.work_directory, world_index, name
                     ),
                     world_index=world_index,
-                    job_id=context.job_id,
+                    job_id=context.dispatch_id or context.job_id,
                     port_plan=context.port_plan,
                     configuration_addresses=configuration_addresses,
                     secret_values=context.secret_values,
@@ -5746,23 +5751,31 @@ def run_conformance_gate(
 
 
 def _read_job_id(work_directory: Path) -> str:
-    """Return the stable job identifier used by explicitly declared ``{{JOB_ID}}`` templates.
+    """Return the job identifier used by explicitly declared ``{{JOB_ID}}`` templates.
 
-    Hosted execution guarantees ``/work/job.json``. Local tests and direct SDK process-runtime
-    use may omit it, so they receive a deterministic local-lane value rather than failing for a
-    field needed only to isolate shared external dispatch namespaces.
+    Hosted execution guarantees ``/work/job.json`` with the platform job id. Local tests and
+    direct SDK process-runtime use may omit it. They get a value unique to this call, never a
+    shared constant, because ``{{JOB_ID}}`` isolates external dispatch namespaces (a LiveKit
+    agent name) that other sandboxes on the same project also register in.
     """
     path = work_directory / "job.json"
-    if not path.is_file():
-        return "local"
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
-        return "local"
-    if not isinstance(raw, dict):
-        return "local"
-    value = str(raw.get("job_id") or "").strip()
-    return value or "local"
+        raw = None
+    value = str(raw.get("job_id") or "").strip() if isinstance(raw, dict) else ""
+    return value or f"local-{secrets.token_hex(4)}"
+
+
+def _dispatch_identity(job_id: str, attempt_id: str | None) -> str:
+    """The identity that ``{{JOB_ID}}`` renders to: the job plus its attempt.
+
+    A retry or rerun is a new attempt of the same job, and the superseded attempt's sandbox may
+    still be registered with LiveKit, so two attempts must not share a dispatch name. Local runs
+    have no attempt and use the job identity alone.
+    """
+    attempt = str(attempt_id or "").strip()
+    return f"{job_id}-{attempt[:12]}" if attempt else job_id
 
 
 def _read_customer_code_environment(work_directory: Path) -> dict[str, str]:
@@ -6491,13 +6504,15 @@ class ProcessRuntimeProvider:
                 name: value.password for name, value in credentials.items()
             }
             self._diagnostic_work_directory = work_directory
+            job_id = _read_job_id(work_directory)
             context = SpawnContext(
                 work_directory=work_directory,
                 port_plan=port_plan,
                 credentials=credentials,
                 secret_values=self._secret_values,
                 secret_purposes=self._secret_purposes,
-                job_id=_read_job_id(work_directory),
+                job_id=job_id,
+                dispatch_id=_dispatch_identity(job_id, self._provider_attempt_id),
                 customer_code_environment=_read_customer_code_environment(
                     work_directory
                 ),
@@ -7092,7 +7107,9 @@ class ProcessRuntimeProvider:
 
         def _fill(value: str) -> str:
             return (
-                value.replace("{{JOB_ID}}", self._context.job_id)
+                value.replace(
+                    "{{JOB_ID}}", self._context.dispatch_id or self._context.job_id
+                )
                 .replace("{{WORLD_INDEX}}", str(world_index))
                 .replace("{{WORLD_DIR}}", str(world_dir))
             )

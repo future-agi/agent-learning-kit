@@ -816,6 +816,7 @@ async def validate_once(
         (work / "job.json").write_text(
             json.dumps(
                 {
+                    "job_id": getattr(job, "job_id", ""),
                     "runtime": {
                         "cpu_units": getattr(runtime, "cpu_units", 1),
                         "memory_mb": getattr(runtime, "memory_mb", 512),
