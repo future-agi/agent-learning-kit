@@ -1481,8 +1481,10 @@ def _actor_dispatcher(
     reported: Callable[[], list[dict[str, Any]]] | None = None,
     why_not: list[tuple[str, str]] | None = None,
 ) -> ActorDispatcher | None:
-    """The scenario's actors for this trial, acting through a world door built here in the runner's own process: the
-    agent's process holds nothing that lets it act as an actor, and the tool proxy refuses any request that names one.
+    """The scenario's actors for this trial, acting through a world door built here in the runner's own process; the
+    tool proxy refuses any agent request that names an actor. Known limit: in a sandbox where the agent runs as the
+    same OS user as this runner, the agent can reach what this runner holds (the voice actions file included), so
+    actor identity is not isolated from the agent there.
     None when the scenario has none. An actor that cannot act here is the scenario's problem, recorded by the caller
     from `actor_problems`."""
     if not (doc.get("actors") or doc.get("history") or doc.get("pre_run")):
@@ -1517,8 +1519,8 @@ def _bundle_contract(bundle_dir: Path) -> dict[str, Any]:
 
 def _private_actions_file(path: Path) -> Path:
     """An empty file for this call's speaking actors' actions, readable and writable by this run's user alone, in a
-    directory only it can enter: what is written there is sent under an actor's id with the trial's token, so the
-    agent under test (another user in the same sandbox) must never be able to write to it."""
+    directory only it can enter: what is written there is sent under an actor's id. That keeps out an agent running as
+    another OS user; an agent running as this same user (the hosted sandbox today) can still write to it."""
     path.parent.mkdir(parents=True, exist_ok=True)
     os.chmod(path.parent, 0o700)
     path.unlink(missing_ok=True)

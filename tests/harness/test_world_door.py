@@ -172,6 +172,53 @@ def test_a_fault_is_never_guessed_onto_every_call_when_the_log_cannot_count_the_
     assert len(executor.ran) == 3
 
 
+def test_a_one_shot_fault_is_not_taken_again_when_the_faulted_call_s_row_was_not_kept():
+    class _LosesFirstRow(MemoryLog):
+        lost = False
+
+        def write(self, row):
+            if not self.lost:
+                self.lost = True
+                raise RuntimeError("log down")
+            return super().write(row)
+
+    executor = _Executor()
+    door = _door(
+        executor,
+        faults=[
+            {"action": "crm.update", "mode": "timeout_before_commit", "on_call": 1, "delay_seconds": 0}
+        ],
+        log=_LosesFirstRow(),
+    )
+    first = door.enter(ToolCall(action="crm.update", name="update"))
+    second = door.enter(ToolCall(action="crm.update", name="update"))
+    assert first.fault is not None
+    assert second.fault is None and len(executor.ran) == 1
+
+
+def test_a_door_that_outlives_a_trial_numbers_the_next_trial_s_calls_from_one():
+    trial = {"id": "a"}
+
+    class _LosesRows(MemoryLog):
+        def write(self, row):
+            raise RuntimeError("log down")
+
+    executor = _Executor()
+    door = WorldDoor(
+        executor,
+        _LosesRows(),
+        DictRoster({}),
+        faults=lambda: [
+            {"action": "crm.update", "mode": "timeout_before_commit", "on_call": 1, "delay_seconds": 0}
+        ],
+        trial=lambda: trial["id"],
+    )
+    assert door.enter(ToolCall(action="crm.update", name="update")).fault is not None
+    assert door.enter(ToolCall(action="crm.update", name="update")).fault is None
+    trial["id"] = "b"
+    assert door.enter(ToolCall(action="crm.update", name="update")).fault is not None
+
+
 def test_the_door_never_raises_into_its_caller_when_the_world_or_the_log_fails():
     class _Broken(MemoryLog):
         def write(self, row):

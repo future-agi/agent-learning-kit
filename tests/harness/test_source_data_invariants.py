@@ -118,7 +118,15 @@ def test_non_relational_state_does_not_require_sql_invariants(tmp_path, monkeypa
             }
         )
     )
-    world = SimpleNamespace(state=lambda: {"harness_seed_sentinel": []})
+    world = SimpleNamespace(
+        state=lambda: {
+            "harness_seed_sentinel": [],
+            "_alk_tool_trace": [],
+            "_alk_actors": [],
+            "_alk_action_keys": [{"actor_id": "manager"}],
+            "_alk_trial_faults": [{"id": 1}],
+        }
+    )
 
     assert asyncio.run(subject.author_invariants(source, out, world)) == []
     review = json.loads((out / subject.ARTIFACT).read_text())

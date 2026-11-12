@@ -64,6 +64,8 @@ __all__ = ["Handler", "door", "permitted"]
 # One connection, opened on the first agent call and kept: reading the trial's faults never opens a connection per call.
 _FAULTS_CONNECTION = None
 _FAULTS_LOCK = threading.Lock()
+# The version of the faults row last read: the runner rewrites it at every trial's start, so a new version is a new trial.
+_FAULTS_TRIAL = None
 
 
 def _trial_row(column: str, *, strict: bool = False) -> tuple | None:
@@ -92,7 +94,9 @@ def _trial_faults() -> list[dict]:
     Known limit: an agent whose own tools service holds the world's database URL can read and write that table too.
     Read over one kept connection; a world whose runner set no faults has no row, and an unreadable table is no
     faults."""
-    row = _trial_row("faults")
+    global _FAULTS_TRIAL
+    row = _trial_row("faults, xmin::text")
+    _FAULTS_TRIAL = row[1] if row and len(row) > 1 else None
     faults = row[0] if row else []
     return [one for one in faults if isinstance(one, dict)] if isinstance(faults, list) else []
 
@@ -161,6 +165,7 @@ def door() -> WorldDoor:
         PostgresRoster(DATABASE_URL),
         faults=_trial_faults,
         workers=_worker_limits,
+        trial=lambda: _FAULTS_TRIAL,
     )
 
 

@@ -266,6 +266,7 @@ class WorldDoor:
         write_seconds: float = LOG_WRITE_SECONDS,
         faults_by_tool: bool = False,
         workers: Callable[[], Mapping[str, Any]] = dict,
+        trial: Callable[[], Any] | None = None,
     ) -> None:
         self.executor = executor
         self.log = log
@@ -284,6 +285,12 @@ class WorldDoor:
         # "unknown" when the world may have applied it but did not say. Kept here as well as in the log, so a log that
         # cannot be written or read never lets a retry run the action again.
         self._keyed: dict[str, tuple[str, Any, Any]] = {}
+        # How many calls of each faulted action this door has numbered, so a call whose row the log failed to keep
+        # still counts and a one-shot fault is never taken again by the next call.
+        self._numbered: dict[str, int] = {}
+        # Which trial the numbers belong to, for a door that outlives a trial (the tool proxy); None for one door a trial.
+        self.trial = trial
+        self._numbered_trial: Any = None
 
     def enter(self, call: ToolCall) -> Outcome:
         """The outcome of one call. Never raises: whatever goes wrong comes back as an outcome."""
@@ -364,7 +371,8 @@ class WorldDoor:
             named = self._named_faults(call)
             if named:
                 # Which call of this action this is, and its row, are decided under one lock: two calls at once
-                # never both take a one-shot fault set on the same call number.
+                # never both take a one-shot fault set on the same call number. The lock is held across the world
+                # call, so calls of one faulted action run one at a time (each at most the executor's timeout).
                 with self._key_lock(f"\x01calls\x00{call.name}"):
                     fault = self._fault(call, named)
                     if fault is not None:
@@ -494,6 +502,13 @@ class WorldDoor:
             made = self.log.agent_calls(call.name)
         except Exception:  # noqa: BLE001 - which call this is is unknown: a guess would fault every call as the first
             return None
+        if self.trial is not None:
+            current = self.trial()
+            if current != self._numbered_trial:
+                self._numbered.clear()
+                self._numbered_trial = current
+        made = max(made, self._numbered.get(call.name, 0))
+        self._numbered[call.name] = made + 1
         return next(
             (one for one in named if _int(one.get("on_call"), 1) == made + 1), None
         )
@@ -803,6 +818,7 @@ class PostgresLog:
         self.dsn = dsn
         self.connect_seconds = connect_seconds
         self._extended: bool | None = None
+        self._keys_made = False
 
     def _connect(self, **options: Any) -> Any:
         import psycopg
@@ -859,9 +875,20 @@ class PostgresLog:
             ).fetchone()
         return (row[0], row[1]) if row else None
 
+    def _keys_table(self, connection: Any) -> None:
+        """The keys table, made once per log; two first claims at once can race on creating it, and the loser finds it
+        made."""
+        if self._keys_made:
+            return
+        try:
+            connection.execute(_KEYS_DDL)
+        except Exception:  # noqa: BLE001 - another claim created it at the same moment; a real failure raises below
+            connection.execute(_KEYS_DDL)
+        self._keys_made = True
+
     def claim(self, key: str, actor: str) -> str | None:
         with self._connect() as connection:
-            connection.execute(_KEYS_DDL)
+            self._keys_table(connection)
             row = connection.execute(
                 "INSERT INTO _alk_action_keys (actor_id, idempotency_key, state) VALUES (%s, %s, 'pending') "
                 "ON CONFLICT DO NOTHING RETURNING state",
