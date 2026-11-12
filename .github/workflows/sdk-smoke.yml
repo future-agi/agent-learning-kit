@@ -95,6 +95,7 @@ jobs:
           tests/harness/test_hosted_entrypoint_provision_retry.py
           tests/harness/test_instrumentation_evidence.py
           tests/harness/test_agent_type_refusal.py
+          tests/harness/test_google_adk_reference.py
           tests/harness/test_python_source_codecs.py
           tests/harness/test_executor_completed_counts.py
           tests/harness/test_reading_entry.py
