@@ -349,7 +349,22 @@ class GeneratedWorld(EnvironmentAdapter):
                 raise
             keep = call.ok or self._kept
             if held:
-                self.store.release(keep=keep)
+                try:
+                    self.store.release(keep=keep)
+                except Exception as failed:
+                    # The commit itself failed (a constraint checked at commit, a lost store):
+                    # nothing the call wrote stands, so it is recorded as failed, not as the
+                    # success the handler returned.
+                    if self.calls and self.calls[-1] is call:
+                        self.calls.pop()
+                    call = self._record(
+                        Call(
+                            name=call.name,
+                            arguments=call.arguments,
+                            ok=False,
+                            error=f"{type(failed).__name__}: {failed}",
+                        )
+                    )
             elif not keep and mark is not None:
                 self.revert(mark)
             return call

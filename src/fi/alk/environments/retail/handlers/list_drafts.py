@@ -1,6 +1,14 @@
 _STORE = "@northgate-outfitters.example"
 
 
+def _addresses(*fields):
+    """The complete mailbox addresses in address fields ("a@x, Name <b@y>"), lower-cased. Only a
+    whole address is one: a display name, or a longer address that contains it, is not."""
+    from email.utils import getaddresses
+
+    return {address.strip().lower() for _, address in getaddresses([f for f in fields if f]) if "@" in address}
+
+
 def _caller_email(db):
     """The email of the customer signed in to this conversation, set by the session."""
     row = db.one("SELECT c.email FROM session_caller s JOIN customers c ON c.customer_id = s.customer_id WHERE s.id = 'default'")
@@ -9,13 +17,7 @@ def _caller_email(db):
 
 def _people(*fields):
     """The non-store addresses in comma-separated address fields."""
-    found = set()
-    for field in fields:
-        for address in (field or "").split(","):
-            address = address.strip().lower()
-            if address and not address.endswith(_STORE):
-                found.add(address)
-    return found
+    return {address for address in _addresses(*fields) if not address.endswith(_STORE)}
 
 
 def _yours(db, thread_id):

@@ -1,3 +1,11 @@
+def _addresses(*fields):
+    """The complete mailbox addresses in address fields ("a@x, Name <b@y>"), lower-cased. Only a
+    whole address is one: a display name, or a longer address that contains it, is not."""
+    from email.utils import getaddresses
+
+    return {address.strip().lower() for _, address in getaddresses([f for f in fields if f]) if "@" in address}
+
+
 def handle(args, db):
     def addresses(name):
         value = args.get(name)
@@ -46,7 +54,7 @@ def handle(args, db):
             raise ToolError("No one is signed in to this conversation, so there is no one to draft for.", category="permission_denied")
         own = db.one("SELECT tenant_id FROM users WHERE actor_id = ?", [caller])
         filed = own["tenant_id"] if own else next(
-            (u["tenant_id"] for a in to for u in db.query("SELECT tenant_id FROM users WHERE lower(email) = ?", [a.lower()])), None
+            (u["tenant_id"] for a in sorted(_addresses(*to)) for u in db.query("SELECT tenant_id FROM users WHERE lower(email) = ?", [a])), None
         )
         count = db.one("SELECT COUNT(*) AS c FROM gmail_threads")["c"]
         thread_id = f"T-{count + 1:02d}"
@@ -109,7 +117,7 @@ def _may_read_thread(db, thread_id):
         email = user["email"].lower()
         rows = db.query("SELECT sender, recipient, cc FROM gmail_messages WHERE thread_id = ?", [thread_id])
         rows += db.query("SELECT '' AS sender, recipient, cc FROM gmail_drafts WHERE thread_id = ?", [thread_id])
-        return any(email in f"{m['sender']},{m['recipient']},{m['cc'] or ''}".lower() for m in rows)
+        return any(email in _addresses(m["sender"], m["recipient"], m["cc"]) for m in rows)
     staff = db.one("SELECT role FROM slack_users WHERE user_id = ?", [caller])
     if staff is None:
         return False

@@ -65,11 +65,17 @@ class SqliteStore(Records):
         self._held = True
 
     def release(self, keep: bool) -> None:
+        """Commit or roll back the held call. A commit that fails is rolled back before the error
+        goes up, so nothing it wrote stays pending for the next call to commit."""
         self._held = False
-        if keep:
-            self.connection.commit()
-        else:
+        if not keep:
             self.connection.rollback()
+            return
+        try:
+            self.connection.commit()
+        except Exception:
+            self.connection.rollback()
+            raise
 
     def apply(self, script: str) -> None:
         """Several statements at once, which is how a schema or a seed arrives."""

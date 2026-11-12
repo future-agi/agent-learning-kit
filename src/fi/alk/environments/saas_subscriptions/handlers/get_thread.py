@@ -1,3 +1,11 @@
+def _addresses(*fields):
+    """The complete mailbox addresses in address fields ("a@x, Name <b@y>"), lower-cased. Only a
+    whole address is one: a display name, or a longer address that contains it, is not."""
+    from email.utils import getaddresses
+
+    return {address.strip().lower() for _, address in getaddresses([f for f in fields if f]) if "@" in address}
+
+
 def handle(args, db):
     thread_id = (args.get("threadId") or "").strip() if isinstance(args.get("threadId"), str) else ""
     if not thread_id:
@@ -60,7 +68,7 @@ def _may_read_thread(db, thread_id):
         email = user["email"].lower()
         rows = db.query("SELECT sender, recipient, cc FROM gmail_messages WHERE thread_id = ?", [thread_id])
         rows += db.query("SELECT '' AS sender, recipient, cc FROM gmail_drafts WHERE thread_id = ?", [thread_id])
-        return any(email in f"{m['sender']},{m['recipient']},{m['cc'] or ''}".lower() for m in rows)
+        return any(email in _addresses(m["sender"], m["recipient"], m["cc"]) for m in rows)
     staff = db.one("SELECT role FROM slack_users WHERE user_id = ?", [caller])
     if staff is None:
         return False

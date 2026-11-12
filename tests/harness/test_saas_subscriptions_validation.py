@@ -616,3 +616,33 @@ def test_wrong_runs_cover_every_kind_the_plan_names() -> None:
     for kind in ("immediately", "twice", "first named", "without reading", "claimed discount", "does nothing",
                  "signed in", "role"):
         assert kind in kinds, kind
+
+
+@pytest.mark.parametrize(
+    ("sender", "recipient", "opens"),
+    [
+        ("notbob@acme.com", "billing@cloudnest.example", False),
+        ("bob@acme.com.lookalike.example", "billing@cloudnest.example", False),
+        ('"bob@acme.com" <mallory@lookalike.example>', "billing@cloudnest.example", False),
+        ("billing@cloudnest.example", "Bob Member <notbob@acme.com>", False),
+        ("Bob Member <BOB@ACME.COM>", "billing@cloudnest.example", True),
+        ("billing@cloudnest.example", "finance@acme.com, Bob Member <bob@acme.com>", True),
+    ],
+)
+def test_a_member_s_mail_is_matched_by_whole_address(built: Path, sender: str, recipient: str, opens: bool) -> None:
+    """A member sees only threads they wrote or were sent, by complete address: their address
+    inside another address or a display name grants nothing (Rishav's notbob@acme.com probe)."""
+    world = _signed_in(built, "U01_MEMBER")
+    try:
+        thread = "th_b02_seat_correction"
+        for message in [m for m in world.state()["gmail_messages"] if m["thread_id"] == thread]:
+            world.change("gmail_messages", message["id"], {"sender": sender, "recipient": recipient, "cc": ""}, by="id")
+        routes = [
+            world.call("get_thread", {"threadId": thread}).ok,
+            world.call("get_message", {"messageId": [m for m in world.state()["gmail_messages"] if m["thread_id"] == thread][0]["id"]}).ok,
+            world.call("label_thread", {"threadId": thread, "labelIds": ["billing"]}).ok,
+            any(t.get("id") == thread for t in (world.call("search_threads", {"query": "seats"}).result or {}).get("threads") or []),
+        ]
+        assert routes == [opens] * 4, routes
+    finally:
+        world.close()

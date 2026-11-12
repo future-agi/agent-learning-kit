@@ -132,6 +132,37 @@ def test_only_a_simulated_fault_keeps_what_it_wrote(isolation: str, monkeypatch)
     assert len(world.state()["appointments"]) == 1 and len(world.state()["events"]) == 1
 
 
+def test_a_commit_that_fails_records_a_failed_call_and_keeps_nothing() -> None:
+    """A constraint SQLite checks only at commit: the handler returns normally, the commit
+    refuses, and the call must be recorded as failed, keep nothing, and leave the world usable."""
+    from fi.alk.harness.world import GeneratedWorld
+
+    class Ledger(GeneratedWorld):
+        name = "ledger"
+        tools = [{"name": "add_line"}]
+        handlers = {
+            "add_line": (
+                "def handle(args, db):\n"
+                "    db.execute('INSERT INTO lines (line_id, invoice_id) VALUES (?, ?)', [args['line_id'], args['invoice_id']])\n"
+                "    return {'line_id': args['line_id']}\n"
+            )
+        }
+
+    world = Ledger(":memory:")
+    world.connection.executescript(
+        "CREATE TABLE invoices (invoice_id TEXT PRIMARY KEY);"
+        "CREATE TABLE lines (line_id TEXT PRIMARY KEY, invoice_id TEXT REFERENCES invoices(invoice_id) DEFERRABLE INITIALLY DEFERRED);"
+        "INSERT INTO invoices VALUES ('INV1');"
+    )
+    world.connection.commit()
+    refused = world.call("add_line", {"line_id": "L1", "invoice_id": "NOPE"})
+    assert not refused.ok and "FOREIGN KEY" in refused.error.upper()
+    assert world.calls[-1] is refused and not any(c.ok for c in world.calls)
+    assert world.state()["lines"] == []
+    fine = world.call("add_line", {"line_id": "L2", "invoice_id": "INV1"})
+    assert fine.ok and [row["line_id"] for row in world.state()["lines"]] == ["L2"]
+
+
 # -- PostgreSQL: the path world_mcp and the release tool server take ---------------------------
 
 PG = os.environ.get("ALK_TEST_POSTGRES_URL", "")
