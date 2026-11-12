@@ -9819,6 +9819,7 @@ def test_small_mark_hook_says_so_when_the_mark_module_is_broken(
     world = captured["world_dir"]
     assert sorted(path.name for path in world.iterdir()) == [
         "simulation_mark_bootstrap.py",
+        "simulation_measure.py",
         "simulation_worker_events.py",
         "sitecustomize.py",
     ]

@@ -45,11 +45,8 @@ SDK_INSTRUMENTORS = {
 }
 # Our own scope, for the span that says a call went unmeasured.
 SCOPE = "alk_simulation_measure"
-# The scopes whose spans leave the process. A framework's own model spans (LangChain's, say) stay
-# in, so a call made through a framework and its SDK is counted once.
-_EXPORTED_SCOPES = frozenset(
-    [name for name, _attribute in SDK_INSTRUMENTORS.values()] + [SCOPE]
-)
+# The SDK instrumentors' scopes: a model API request inside one of their spans is the SDK's own.
+_SDK_SCOPES = frozenset(name for name, _attribute in SDK_INSTRUMENTORS.values())
 # Model SDKs this cannot measure whose calls reach no HTTP client the wire check sees.
 _UNSEEN_SDKS = ("google.generativeai", "vertexai", "google.cloud.aiplatform")
 # Model API hosts: a request to one outside an SDK span is a model call nothing here measured.
@@ -116,7 +113,10 @@ def _say(line: str) -> None:
 
 
 def _provider():
-    """Our provider, made once: it exports the SDK instrumentors' spans and ours only."""
+    """Our provider, made once. Only the SDK instrumentors and the unmeasured-call span use it,
+    so only their spans leave: a framework's own model span (LangChain's, say) goes to the
+    provider the process or the mark hook serves, and a call made through a framework and its
+    SDK is billed once."""
     with _lock:
         provider = _state["provider"]
         if provider is not None:
@@ -126,7 +126,7 @@ def _provider():
         )
         from opentelemetry.sdk.resources import Resource
         from opentelemetry.sdk.trace import SpanProcessor, TracerProvider
-        from opentelemetry.sdk.trace.export import BatchSpanProcessor, SpanExporter
+        from opentelemetry.sdk.trace.export import BatchSpanProcessor
 
         class _Stamp(SpanProcessor):
             """Stamps a span started after an unmeasured call was seen."""
@@ -134,31 +134,6 @@ def _provider():
             def on_start(self, span, parent_context=None):
                 if _state["partial"]:
                     span.set_attribute(STATE_KEY, PARTIAL)
-
-        class _Measured(SpanExporter):
-            """Passes on the SDK instrumentors' spans and ours; every other span stays in."""
-
-            def __init__(self, inner):
-                self._inner = inner
-
-            def export(self, spans):
-                kept = [
-                    span
-                    for span in spans
-                    if getattr(span.instrumentation_scope, "name", None)
-                    in _EXPORTED_SCOPES
-                ]
-                if not kept:
-                    from opentelemetry.sdk.trace.export import SpanExportResult
-
-                    return SpanExportResult.SUCCESS
-                return self._inner.export(kept)
-
-            def shutdown(self):
-                self._inner.shutdown()
-
-            def force_flush(self, timeout_millis=30000):
-                return self._inner.force_flush(timeout_millis)
 
         exporter = OTLPSpanExporter(
             endpoint=os.environ[_ENDPOINT],
@@ -171,9 +146,7 @@ def _provider():
         provider = TracerProvider(resource=Resource.create())
         provider.add_span_processor(_Stamp())
         provider.add_span_processor(
-            BatchSpanProcessor(
-                _Measured(exporter), schedule_delay_millis=_BATCH_DELAY_MS
-            )
+            BatchSpanProcessor(exporter, schedule_delay_millis=_BATCH_DELAY_MS)
         )
         _state["provider"] = provider
         return provider
@@ -298,10 +271,7 @@ def _inside_sdk_span() -> bool:
         span = trace.get_current_span()
         scope = getattr(span, "instrumentation_scope", None)
         return bool(
-            span.is_recording()
-            and scope is not None
-            and scope.name in _EXPORTED_SCOPES
-            and scope.name != SCOPE
+            span.is_recording() and scope is not None and scope.name in _SDK_SCOPES
         )
     except Exception:
         return False

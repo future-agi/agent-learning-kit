@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import gzip
 import importlib
+import json
 import os
 import signal
 import subprocess
@@ -52,18 +53,9 @@ HOOK_MODULES = (
 )
 
 OPENAI_CALL = f"""
-import httpx, openai
+import os, openai
 
-def answer(request):
-    return httpx.Response(200, json={{
-        "id": "chatcmpl-1", "object": "chat.completion", "created": 1,
-        "model": "gpt-4o-mini-2024-07-18",
-        "choices": [{{"index": 0, "finish_reason": "stop",
-                     "message": {{"role": "assistant", "content": "{REPLY}"}}}}],
-        "usage": {{"prompt_tokens": 11, "completion_tokens": 7, "total_tokens": 18}},
-    }})
-
-client = openai.OpenAI(api_key="sk-test", http_client=httpx.Client(transport=httpx.MockTransport(answer)))
+client = openai.OpenAI(api_key="sk-test", base_url=os.environ["MODEL_URL"] + "/v1")
 
 def ask():
     out = client.chat.completions.create(
@@ -74,18 +66,9 @@ def ask():
 """
 
 ANTHROPIC_CALL = f"""
-import httpx, anthropic
+import os, anthropic
 
-def answer(request):
-    return httpx.Response(200, json={{
-        "id": "msg_1", "type": "message", "role": "assistant",
-        "model": "claude-3-5-haiku-20241022",
-        "content": [{{"type": "text", "text": "{REPLY}"}}],
-        "stop_reason": "end_turn", "stop_sequence": None,
-        "usage": {{"input_tokens": 11, "output_tokens": 7}},
-    }})
-
-client = anthropic.Anthropic(api_key="sk-test", http_client=httpx.Client(transport=httpx.MockTransport(answer)))
+client = anthropic.Anthropic(api_key="sk-test", base_url=os.environ["MODEL_URL"])
 
 def ask():
     out = client.messages.create(
@@ -105,6 +88,62 @@ httpx.Client(transport=httpx.MockTransport(raw_answer)).post(
     "https://api.anthropic.com/v1/messages", json={"messages": []}
 )
 """
+
+
+# What the stand-in model API answers, by the path the SDK posts to.
+_ANSWERS = {
+    "/v1/chat/completions": {
+        "id": "chatcmpl-1",
+        "object": "chat.completion",
+        "created": 1,
+        "model": "gpt-4o-mini-2024-07-18",
+        "choices": [
+            {
+                "index": 0,
+                "finish_reason": "stop",
+                "message": {"role": "assistant", "content": REPLY},
+            }
+        ],
+        "usage": {"prompt_tokens": 11, "completion_tokens": 7, "total_tokens": 18},
+    },
+    "/v1/messages": {
+        "id": "msg_1",
+        "type": "message",
+        "role": "assistant",
+        "model": "claude-3-5-haiku-20241022",
+        "content": [{"type": "text", "text": REPLY}],
+        "stop_reason": "end_turn",
+        "stop_sequence": None,
+        "usage": {"input_tokens": 11, "output_tokens": 7},
+    },
+}
+
+
+class _ModelHandler(BaseHTTPRequestHandler):
+    def do_POST(self):  # noqa: N802 - the http.server hook
+        self.rfile.read(int(self.headers.get("Content-Length", 0)))
+        answer = _ANSWERS.get(self.path.split("?", 1)[0])
+        body = json.dumps(answer or {}).encode()
+        self.send_response(200 if answer else 404)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, *_args):
+        pass
+
+
+_MODEL_SERVER: list = []
+
+
+def _model_url() -> str:
+    """A stand-in model API on this machine, so an SDK's own transport is what it uses."""
+    if not _MODEL_SERVER:
+        server = ThreadingHTTPServer(("127.0.0.1", 0), _ModelHandler)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        _MODEL_SERVER.append(server)
+    return f"http://127.0.0.1:{_MODEL_SERVER[0].server_port}"
 
 
 class Collector:
@@ -217,6 +256,7 @@ def _environment(
         FI_SIMULATION_CALL_FILE=str(call_file),
         FI_SIMULATION_INGEST_API_KEY=INGEST[0],
         FI_SIMULATION_INGEST_SECRET_KEY=INGEST[1],
+        MODEL_URL=_model_url(),
     )
     if measure:
         env.update(
@@ -259,6 +299,7 @@ def _needs(*modules: str) -> None:
         ("openai", OPENAI_CALL, "gpt-4o-mini"),
         ("anthropic", ANTHROPIC_CALL, "claude-3-5-haiku"),
     ],
+    ids=["openai", "anthropic"],
 )
 def test_an_untraced_agents_model_call_is_measured_without_its_text(
     tmp_path: Path, collector: Collector, sdk: str, call: str, model: str
@@ -313,7 +354,7 @@ def test_a_call_through_a_framework_and_its_sdk_is_counted_once(
         OPENAI_CALL
         + """
 from langchain_openai import ChatOpenAI
-chat = ChatOpenAI(model="gpt-4o-mini", api_key="sk-test", http_client=client._client)
+chat = ChatOpenAI(model="gpt-4o-mini", api_key="sk-test", base_url=os.environ["MODEL_URL"] + "/v1")
 print(chat.invoke([("system", "%s"), ("user", "%s")]).content)
 """
         % (SYSTEM, PROMPT)
@@ -414,8 +455,8 @@ def test_a_langfuse_agent_keeps_its_own_traces(
     try:
         script = (
             OPENAI_CALL.replace(
-                "import httpx, openai",
-                "import httpx\nfrom langfuse.openai import openai",
+                "import os, openai",
+                "import os\nfrom langfuse.openai import openai",
             )
             + "ask()\nfrom langfuse import get_client\nget_client().flush()\n"
         )
