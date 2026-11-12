@@ -1352,7 +1352,7 @@ def test_an_aborted_readiness_call_counts_its_tool_calls_not_its_hand_offs(
 
 
 def test_the_readiness_call_reads_calls_from_the_bundle_s_own_evidence_seam(tmp_path, monkeypatch):
-    from fi.alk.harness import chat_call_runner
+    from fi.alk.harness import chat_call_runner, chat_readiness
     from fi.alk.harness.bundle_v2 import EvidenceSeam
     from fi.alk.harness.world.runtime import Call
 
@@ -1368,6 +1368,8 @@ def test_the_readiness_call_reads_calls_from_the_bundle_s_own_evidence_seam(tmp_
             return SimpleNamespace(calls=(Call(name="issue_refund", arguments={}),), turns=1)
 
     monkeypatch.setattr(chat_call_runner, "HostedChatCallRunner", Runner)
+    # Tool routing is recorded elsewhere when present; this test is only about the seam.
+    monkeypatch.setattr(chat_readiness, "record_tool_routing", lambda *a, **k: None, raising=False)
     asyncio.run(workflow_probe(tmp_path, "http://x", evidence_seam=EvidenceSeam.TOOL_TRACE))
     assert seen["seam"] is EvidenceSeam.TOOL_TRACE
     assert workflow_receipt(tmp_path)[1]["status"] == "passed"
