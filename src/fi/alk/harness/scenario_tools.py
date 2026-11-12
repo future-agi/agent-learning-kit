@@ -1365,20 +1365,43 @@ def _records_the_agent_cannot_see(scenario: Scenario, world_root: Path) -> list[
 def _budgets_for_unknown_workers(scenario: Scenario, world_root: Path) -> str:
     """A budget per worker names only the contract's workers: a misspelt id would leave that worker with no deadline."""
     budgets = scenario.worker_budget_seconds
-    if not isinstance(budgets, dict):
+    if not budgets or isinstance(budgets, bool):
         return ""
     try:
         contract = json.loads((Path(world_root) / "contract.json").read_text(encoding="utf-8"))
     except (OSError, ValueError):
+        if not isinstance(budgets, dict):
+            # One number for all workers names none; whether any is separate is said at the trial.
+            return ""
         # Unchecked is not accepted: without the contract nobody can say these workers exist.
         return (
             "worker_budget_seconds: the agent's contract could not be read, so a budget per worker cannot be checked "
             "against its declared workers; give one number for all workers, or fix the contract first"
         )
+    if not isinstance(budgets, dict):
+        # One number for all workers is held only for separate workers; with none, it could never be held.
+        if any(isinstance(one, dict) and one.get("binding") == "separate" for one in contract.get("workers") or []):
+            return ""
+        return (
+            "worker_budget_seconds: the agent has no separate worker, so the world cannot tell any worker's calls "
+            "apart and the deadline cannot be held; record the workers as separate first, or drop the budget"
+        )
     declared = {str(one.get("id")) for one in contract.get("workers") or [] if isinstance(one, dict)}
     unknown = sorted(str(worker) for worker in budgets if str(worker) not in declared)
     if not unknown:
-        return ""
+        # A shared worker's calls reach the world without its name, so a deadline of its own could never be held.
+        separate = {
+            str(one.get("id"))
+            for one in contract.get("workers") or []
+            if isinstance(one, dict) and one.get("binding") == "separate"
+        }
+        shared = sorted(str(worker) for worker in budgets if str(worker) not in separate)
+        if not shared:
+            return ""
+        return (
+            f"worker_budget_seconds: {', '.join(shared)} {'is' if len(shared) == 1 else 'are'} wired as shared, so the "
+            "world cannot tell its calls apart and a deadline of its own cannot be held; budget only separate workers"
+        )
     return (
         f"worker_budget_seconds: {', '.join(unknown)} {'is' if len(unknown) == 1 else 'are'} not one of the contract's "
         f"workers ({', '.join(sorted(declared)) or 'none declared'}); name a declared worker or give one number for all"

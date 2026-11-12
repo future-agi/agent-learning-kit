@@ -1543,6 +1543,13 @@ def validate_contract(contract: AgentContract) -> list[str]:
                 f"worker[{index}]:allowed-tools-it-does-not-hold:{','.join(beyond)}: a worker may be allowed "
                 "only tools it holds."
             )
+        if worker.binding == "shared" and worker.allowed_tools:
+            # A shared worker's calls reach the world without its name, so nothing can hold it to fewer tools.
+            problems.append(
+                f"worker[{index}]:allowed-tools-on-a-shared-worker: the world cannot tell a shared worker's calls "
+                "apart, so its allowed tools cannot be held; record it as separate with its address variable, or "
+                "drop allowed_tools."
+            )
         if worker.binding == "separate" and worker.id.strip():
             # A separate worker reaches the world through its own channel, named from its id and its address variable.
             if not _CHANNEL_WORKER_ID.fullmatch(worker.id):

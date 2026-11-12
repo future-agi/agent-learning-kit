@@ -2987,6 +2987,28 @@ def test_worker_budgets_on_a_door_sealed_before_worker_limits_are_said_not_enfor
     assert cr.trial_worker_deadlines({"worker_budget_seconds": 30}, None) == (1030.0, {}, [])
 
 
+def test_limits_on_a_shared_worker_are_said_not_enforced_on_a_new_door(monkeypatch, tmp_path):
+    monkeypatch.setattr(cr.time, "time", lambda: 1000.0)
+    door = tmp_path / "generated" / "tool-proxy"
+    door.mkdir(parents=True)
+    (door / "door.json").write_text('{"worker_deadlines": "per_worker"}')
+    contract = tmp_path / "contract.json"
+    separate = {"id": "lookup", "binding": "separate", "address_env": "LOOKUP_URL"}
+    shared = {"id": "refund", "binding": "shared", "tools": ["get_order"]}
+    contract.write_text(json.dumps({"workers": [separate, shared]}))
+    # A deadline naming a shared worker: the world cannot tell its calls apart, so it is held, not graded.
+    [notice] = cr.trial_worker_deadlines({"worker_budget_seconds": {"refund": 2}}, tmp_path)[2]
+    assert notice["code"] == "worker_limits_not_enforced"
+    # A deadline naming only the separate worker is held by the door: nothing said.
+    assert cr.trial_worker_deadlines({"worker_budget_seconds": {"lookup": 2}}, tmp_path)[2] == []
+    # One deadline for all with no separate worker cannot be held either.
+    contract.write_text(json.dumps({"workers": [shared]}))
+    assert cr.trial_worker_deadlines({"worker_budget_seconds": 30}, tmp_path)[2]
+    # Permitted tools on a shared worker cannot be held.
+    contract.write_text(json.dumps({"workers": [{**shared, "allowed_tools": ["get_order"]}]}))
+    assert cr.trial_worker_deadlines({}, tmp_path)[2]
+
+
 def test_a_permission_only_scenario_on_a_door_sealed_before_worker_limits_is_said_not_enforced(tmp_path):
     # No budget, but the agent declares a worker held to its own tools: an old door holds none of it.
     (tmp_path / "contract.json").write_text(

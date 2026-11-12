@@ -1379,14 +1379,44 @@ def trial_worker_deadlines(
     permitted actions are held there: a scenario that relies on either says so, and is held rather than graded."""
     deadline, deadlines = worker_deadline(document), worker_deadlines(document)
     relies = bool(deadline or deadlines) or declares_worker_limits(bundle_dir)
-    if not relies or _door_holds_worker_limits(bundle_dir):
+    if not relies:
         return deadline, deadlines, []
+    if _door_holds_worker_limits(bundle_dir):
+        unheld = _limits_on_shared_workers(document, bundle_dir)
+        if not unheld:
+            return deadline, deadlines, []
+        return deadline, deadlines, [{
+            "code": "worker_limits_not_enforced",
+            "message": f"{unheld} cannot be held for a worker wired as shared, because the world cannot tell its "
+            "calls apart, so this trial's checks were not graded. Record the worker as separate and rebuild the "
+            "environment.",
+        }]
     notice = {
         "code": "worker_limits_not_enforced",
         "message": "This environment was sealed before worker limits, so no worker's deadline or permitted actions "
         "were enforced in this trial, and its checks were not graded. Rebuild the environment to enforce them.",
     }
     return deadline, deadlines, [notice]
+
+
+def _limits_on_shared_workers(document: Mapping[str, Any], bundle_dir: Path | str | None) -> str:
+    """Which limit, if any, this trial puts on a worker the world cannot tell apart: a deadline naming a shared
+    worker, one deadline for all when no worker is separate, or permitted tools on a shared worker."""
+    if bundle_dir is None:
+        return ""
+    workers = [one for one in _bundle_contract(Path(bundle_dir)).get("workers") or [] if isinstance(one, dict)]
+    if not workers:
+        # A contract that declares no workers: the budget's worker names were checked at authoring.
+        return ""
+    separate = {str(one.get("id")) for one in workers if one.get("binding") == "separate"}
+    budgets = document.get("worker_budget_seconds")
+    if isinstance(budgets, Mapping) and any(str(one) not in separate for one in budgets):
+        return "A worker deadline"
+    if worker_deadline(document) is not None and not separate:
+        return "A worker deadline"
+    if any(one.get("binding") != "separate" and one.get("allowed_tools") for one in workers):
+        return "A worker's permitted tools"
+    return ""
 
 
 def declares_worker_limits(bundle_dir: Path | str | None) -> bool:

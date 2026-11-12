@@ -283,6 +283,29 @@ def test_a_sub_goal_names_the_task_or_one_worker_and_a_task_subject_is_saved_as_
     assert "subject" not in saved[0] and saved[1]["subject"] == "worker:refund"
 
 
+def test_permitted_tools_on_a_shared_worker_are_returned_to_authoring():
+    contract = AgentContract.model_validate(
+        {
+            "agent": "returns",
+            "real_use_cases": ["refund an order"],
+            "tools": [{"name": "get_order"}, {"name": "issue_refund"}],
+            "workers": [
+                {"id": "lookup", "tools": ["get_order"], "allowed_tools": ["get_order"], "binding": "shared"},
+                {
+                    "id": "refund",
+                    "tools": ["get_order", "issue_refund"],
+                    "allowed_tools": ["issue_refund"],
+                    "binding": "separate",
+                    "address_env": "REFUND_URL",
+                },
+            ],
+        }
+    )
+    assert [one.split(": ")[0] for one in validate_contract(contract)] == [
+        "worker[0]:allowed-tools-on-a-shared-worker"
+    ]
+
+
 def test_a_worker_allowed_a_tool_it_does_not_hold_is_returned_to_authoring():
     contract = AgentContract.model_validate(
         {
@@ -290,8 +313,20 @@ def test_a_worker_allowed_a_tool_it_does_not_hold_is_returned_to_authoring():
             "real_use_cases": ["refund an order"],
             "tools": [{"name": "get_order"}, {"name": "issue_refund"}],
             "workers": [
-                {"id": "order_lookup", "tools": ["get_order"], "allowed_tools": ["get_order"]},
-                {"id": "refund", "tools": ["issue_refund"], "allowed_tools": ["get_order"]},
+                {
+                    "id": "order_lookup",
+                    "tools": ["get_order"],
+                    "allowed_tools": ["get_order"],
+                    "binding": "separate",
+                    "address_env": "LOOKUP_URL",
+                },
+                {
+                    "id": "refund",
+                    "tools": ["issue_refund"],
+                    "allowed_tools": ["get_order"],
+                    "binding": "separate",
+                    "address_env": "REFUND_URL",
+                },
             ],
         }
     )

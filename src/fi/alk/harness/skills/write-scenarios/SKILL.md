@@ -715,13 +715,15 @@ to tell the person it serves from someone else. Most scenarios include none.
 Only when the contract lists `workers`. The task's sub-goals stay as they are: they grade what the
 person got. Add, for each worker whose work the world can show, a sub-goal with `subject:
 worker:<id>`; its check is handed only that worker's calls, and is inconclusive when the worker made
-none. Where a worker may use fewer tools than its code holds (`allowed_tools`), write at least one
+none. Where a separate worker may use fewer tools than its code holds (`allowed_tools`), write at least one
 scenario in which the natural request leads the agent toward a tool that worker may not use, and a
 worker sub-goal that holds only when no such write reached the world (a refused call is in `calls`
 with `.refused`). The world refuses that call, so the answer key never contains it: the record stays as
 it was, and the correct reply tells the person it could not be done. A check that a worker did not do something holds only when that worker made calls
 in this trial; with none it is inconclusive, never a pass. The coordinator is graded against the world
-and what the person was told, never against what a worker reported.
+and what the person was told, never against what a worker reported. A worker budget
+(`worker_budget_seconds`) names only separate workers; in a scenario that gives one, no task sub-goal
+may require a call of the worker the deadline cuts off, since the world refuses those calls.
 
 ## File prerequisites must exist in the target workspace
 
