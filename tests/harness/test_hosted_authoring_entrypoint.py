@@ -1,9 +1,60 @@
 from __future__ import annotations
 
+import contextlib
 import json
+import os
+import sys
+import types
 from pathlib import Path
+from typing import Any
+from unittest import mock
 
 from fi.alk.harness import hosted_authoring_entrypoint as entrypoint
+
+_NAMES_AUTHORING_DOES_NOT_USE = (
+    "FI_API_KEY",
+    "FI_BASE_URL",
+    "FI_HARNESS_PROJECT",
+    "FI_SECRET_KEY",
+)
+
+
+def _values_for_unused_names(prefix: str) -> dict[str, str]:
+    return {name: f"{prefix}-{name.lower()}" for name in _NAMES_AUTHORING_DOES_NOT_USE}
+
+
+@contextlib.contextmanager
+def _process_environment_without(*names: str):
+    """The process environment with `names` removed, restored afterwards: `main` writes the
+    values it passes through into it."""
+    with mock.patch.dict(os.environ):
+        for name in names:
+            os.environ.pop(name, None)
+        yield
+
+
+def _record_tracing_registrations(monkeypatch) -> list[dict[str, Any]]:
+    """Stand in for the tracing package and record every attempt to start tracing.
+
+    The stand-in offers everything the tracing module imports, so an attempt reaches `register`
+    rather than stopping at an import error, and `register` refuses so nothing is exported.
+    """
+    registered: list[dict[str, Any]] = []
+
+    def register(**kwargs: Any) -> Any:
+        registered.append(kwargs)
+        raise RuntimeError("tracing is not available in this test")
+
+    package = types.ModuleType("fi_instrumentation")
+    package.register = register
+    for name in ("FITracer", "using_metadata", "using_session", "using_tags", "using_user"):
+        setattr(package, name, lambda *args, **kwargs: None)
+    kinds = types.ModuleType("fi_instrumentation.fi_types")
+    kinds.ProjectType = types.SimpleNamespace(OBSERVE="observe")
+    package.fi_types = kinds
+    monkeypatch.setitem(sys.modules, "fi_instrumentation", package)
+    monkeypatch.setitem(sys.modules, "fi_instrumentation.fi_types", kinds)
+    return registered
 
 
 def test_platform_simulator_values_ignore_customer_target_credentials() -> None:
@@ -83,6 +134,120 @@ def test_authoring_hears_the_platform_noise_catalogue(tmp_path, monkeypatch) -> 
 
     assert entrypoint.main([]) == 0
     assert entrypoint.os.environ["ALK_BACKGROUND_NOISE_CATALOG"] == catalogue
+    assert gateway.is_file()
+
+
+def test_fallback_authoring_environment_has_only_the_values_authoring_uses(
+    tmp_path, monkeypatch
+) -> None:
+    """Neither values document adds the names authoring does not use to the process environment,
+    and the ones it does use still arrive."""
+    secrets = tmp_path / "secrets.json"
+    gateway = tmp_path / "simulator-secrets.json"
+    secrets.write_text(json.dumps(_values_for_unused_names("job")), encoding="utf-8")
+    gateway.write_text(
+        json.dumps(
+            {
+                "AGENTCC_API_KEY": "gateway-key-placeholder",
+                "AGENTCC_BASE_URL": "https://gateway.example.test",
+                "HARNESS_OBSERVABILITY": "off",
+                **_values_for_unused_names("simulator"),
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(entrypoint, "_SECRETS_PATH", secrets)
+    monkeypatch.setattr(entrypoint, "_SIMULATOR_SECRETS_PATH", gateway)
+    monkeypatch.setattr(entrypoint, "_ADC_PATH", tmp_path / "adc.json")
+    seen_by_authoring: list[list[str]] = []
+
+    def authoring_main(argv, *, validate_runtime):
+        seen_by_authoring.append(
+            sorted(name for name in _NAMES_AUTHORING_DOES_NOT_USE if name in os.environ)
+        )
+        return 0
+
+    monkeypatch.setattr(entrypoint, "authoring_main", authoring_main)
+
+    with _process_environment_without(
+        *_NAMES_AUTHORING_DOES_NOT_USE,
+        "AGENTCC_API_KEY",
+        "AGENTCC_BASE_URL",
+        "HARNESS_OBSERVABILITY",
+    ):
+        assert entrypoint.main([]) == 0
+        left_in_environment = sorted(
+            name for name in _NAMES_AUTHORING_DOES_NOT_USE if name in os.environ
+        )
+        gateway_url = os.environ.get("AGENTCC_BASE_URL")
+        tracing_switch = os.environ.get("HARNESS_OBSERVABILITY")
+
+    assert seen_by_authoring == [[]]
+    assert left_in_environment == []
+    assert gateway_url == "https://gateway.example.test"
+    assert tracing_switch == "off"
+    assert gateway.is_file()
+
+
+def test_fallback_authoring_stays_untraced_when_the_values_document_names_values_it_does_not_use(
+    tmp_path, monkeypatch
+) -> None:
+    registered = _record_tracing_registrations(monkeypatch)
+    secrets = tmp_path / "secrets.json"
+    gateway = tmp_path / "simulator-secrets.json"
+    job = tmp_path / "job.json"
+    secrets.write_text("{}", encoding="utf-8")
+    # No tracing switch at all: leaving these names out has to be enough on its own.
+    gateway.write_text(
+        json.dumps(
+            {
+                "AGENTCC_API_KEY": "gateway-key-placeholder",
+                "AGENTCC_BASE_URL": "https://gateway.example.test",
+                **_values_for_unused_names("simulator"),
+            }
+        ),
+        encoding="utf-8",
+    )
+    # A job document gives authoring a job id, which is what opens a traced session.
+    job.write_text(json.dumps({"job_id": "job-1", "run_id": "run-1"}), encoding="utf-8")
+    monkeypatch.setattr(entrypoint, "_SECRETS_PATH", secrets)
+    monkeypatch.setattr(entrypoint, "_SIMULATOR_SECRETS_PATH", gateway)
+    monkeypatch.setattr(entrypoint, "_ADC_PATH", tmp_path / "adc.json")
+    monkeypatch.setattr(
+        entrypoint, "authoring_main", lambda argv, *, validate_runtime: 0
+    )
+    entrypoint.observability.end()
+
+    with _process_environment_without(
+        *_NAMES_AUTHORING_DOES_NOT_USE,
+        "AGENTCC_API_KEY",
+        "AGENTCC_BASE_URL",
+        "HARNESS_OBSERVABILITY",
+    ):
+        assert entrypoint.main([str(job)]) == 0
+        tracing_enabled = entrypoint.observability.enabled()
+
+    assert registered == []
+    assert tracing_enabled is False
+
+
+def test_fallback_authoring_still_passes_the_tracing_switch(tmp_path, monkeypatch) -> None:
+    secrets = tmp_path / "secrets.json"
+    gateway = tmp_path / "simulator-secrets.json"
+    secrets.write_text("{}", encoding="utf-8")
+    gateway.write_text(json.dumps({"HARNESS_OBSERVABILITY": "off"}), encoding="utf-8")
+    monkeypatch.setattr(entrypoint, "_SECRETS_PATH", secrets)
+    monkeypatch.setattr(entrypoint, "_SIMULATOR_SECRETS_PATH", gateway)
+    monkeypatch.setattr(entrypoint, "_ADC_PATH", tmp_path / "adc.json")
+    monkeypatch.setattr(
+        entrypoint, "authoring_main", lambda argv, *, validate_runtime: 0
+    )
+
+    with _process_environment_without("HARNESS_OBSERVABILITY"):
+        assert entrypoint.main([]) == 0
+        tracing_switch = os.environ.get("HARNESS_OBSERVABILITY")
+
+    assert tracing_switch == "off"
     assert gateway.is_file()
 
 
