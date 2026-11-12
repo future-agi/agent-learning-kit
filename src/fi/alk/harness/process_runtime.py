@@ -2622,6 +2622,7 @@ def _open_for_declared_users(work_directory: Path, worlds: int) -> None:
         work_directory / "build",
         work_directory / "worlds",
         work_directory / "managed",
+        work_directory / "provider",  # above each world's lifecycle directory
         *(work_directory / "worlds" / f"w{index}" for index in range(worlds)),
     ):
         path.mkdir(parents=True, exist_ok=True)

@@ -229,7 +229,9 @@ def test_a_declared_user_can_pass_through_to_its_own_trees_but_not_list_them(tmp
     finally:
         os.umask(previous)
 
-    for relative in ("", "build", "worlds", "managed", "worlds/w0", "worlds/w1"):
+    for relative in (
+        "", "build", "worlds", "managed", "provider", "worlds/w0", "worlds/w1"
+    ):
         mode = (tmp_path / "work" / relative).stat().st_mode & 0o777
         assert mode == 0o711, relative
 
