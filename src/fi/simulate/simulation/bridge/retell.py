@@ -82,22 +82,33 @@ class _CallerAudioTrack(MediaStreamTrack):
         return frame
 
 
+def _is_tls_relay(url: str) -> bool:
+    return url.startswith("turns:")
+
+
 def _ice_servers(servers: Any) -> list[RTCIceServer]:
     result = []
     for server in servers if isinstance(servers, list) else []:
         if not isinstance(server, dict):
             continue
         urls = server.get("urls") or server.get("url")
-        if not urls:
+        if isinstance(urls, str):
+            urls = [urls]
+        if not isinstance(urls, list) or not urls:
             continue
         result.append(
             RTCIceServer(
-                urls=urls,
+                urls=sorted(
+                    (str(url) for url in urls),
+                    key=lambda url: not _is_tls_relay(url),
+                ),
                 username=server.get("username"),
                 credential=server.get("credential"),
             )
         )
-    return result
+    return sorted(
+        result, key=lambda server: not any(_is_tls_relay(u) for u in server.urls)
+    )
 
 
 def _mono_pcm(frame: av.AudioFrame, resampler: av.AudioResampler) -> bytes:

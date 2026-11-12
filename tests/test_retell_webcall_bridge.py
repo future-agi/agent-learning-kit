@@ -9,6 +9,7 @@ from types import SimpleNamespace
 import av
 import pytest
 from aiortc.mediastreams import MediaStreamError
+from aiortc.rtcicetransport import connection_kwargs
 
 from fi.alk.harness.call_runner import _retell_web_call_url
 from fi.simulate.agent.definition import RetellTargetConfig, retell_web_call_url
@@ -243,6 +244,53 @@ def test_ice_servers_from_the_call_reach_the_peer_connection(monkeypatch) -> Non
     (server,) = seen["servers"]
     assert server.urls == ["turn:turn.retell.example:3478"]
     assert (server.username, server.credential) == ("u", "c")
+
+
+def test_tls_relay_is_offered_before_udp_relay_and_stun() -> None:
+    servers = retell._ice_servers(
+        [
+            {
+                "urls": "turn:turn.retell.example:3478?transport=udp",
+                "username": "u",
+                "credential": "c",
+            },
+            {
+                "urls": "turns:turn.retell.example:443",
+                "username": "u",
+                "credential": "c",
+            },
+            {"urls": "stun:stun.example:19302"},
+        ]
+    )
+
+    assert [server.urls for server in servers] == [
+        ["turns:turn.retell.example:443"],
+        ["turn:turn.retell.example:3478?transport=udp"],
+        ["stun:stun.example:19302"],
+    ]
+    assert connection_kwargs(servers)["turn_server"] == ("turn.retell.example", 443)
+    assert connection_kwargs(servers)["turn_ssl"] is True
+
+
+def test_tls_relay_leads_within_one_server_entry() -> None:
+    (server,) = retell._ice_servers(
+        [
+            {
+                "urls": [
+                    "turn:turn.retell.example:3478?transport=udp",
+                    "turns:turn.retell.example:443",
+                ],
+                "username": "u",
+                "credential": "c",
+            }
+        ]
+    )
+
+    assert server.urls[0] == "turns:turn.retell.example:443"
+
+
+def test_ice_server_without_urls_is_dropped() -> None:
+    assert retell._ice_servers([{"username": "u"}, {"urls": []}, "stun:x"]) == []
 
 
 def test_refused_create_reports_its_http_status(monkeypatch) -> None:
