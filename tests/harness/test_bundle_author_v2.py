@@ -4265,6 +4265,42 @@ def test_every_adk_server_flag_that_takes_no_value_is_known(server: str) -> None
     assert flags <= _ADK_SERVER_FLAGS
 
 
+@pytest.mark.parametrize("server", ["web", "api_server"])
+def test_every_adk_server_option_that_takes_a_value_is_known(server: str) -> None:
+    import click
+    from google.adk.cli.cli_tools_click import main
+
+    from fi.alk.harness.bundle_author_v2 import _ADK_SERVER_VALUE_OPTIONS
+
+    options = {
+        name
+        for param in main.commands[server].params
+        if isinstance(param, click.Option) and not param.is_flag
+        for name in (*param.opts, *param.secondary_opts)
+    }
+    assert options <= _ADK_SERVER_VALUE_OPTIONS
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        ["adk", "web", "--future_flag", "agents"],
+        ["adk", "api_server", "--future_option", "value", "agents"],
+    ],
+)
+def test_an_unknown_adk_option_before_the_agents_directory_resolves_no_app(
+    tmp_path: Path, command: list[str]
+) -> None:
+    from fi.alk.harness.bundle_author_v2 import _adk_app_name
+
+    (tmp_path / "agents" / "real_app").mkdir(parents=True)
+    (tmp_path / "agents" / "real_app" / "agent.py").write_text("root_agent = 1\n", encoding="utf-8")
+    (tmp_path / "top_app").mkdir()
+    (tmp_path / "top_app" / "agent.py").write_text("root_agent = 1\n", encoding="utf-8")
+
+    assert _adk_app_name(tmp_path, ".", command) is None
+
+
 @pytest.mark.parametrize(
     "command",
     [

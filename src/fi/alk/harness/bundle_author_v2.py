@@ -1870,8 +1870,42 @@ _ADK_SERVER_FLAGS = frozenset(
 )
 
 
-def _adk_agents_dir_argument(arguments: list[str]) -> str | None:
-    """The positional ``AGENTS_DIR`` among ``adk web`` / ``adk api_server`` arguments, if any."""
+# Options of ``adk web`` / ``adk api_server`` that take a value (ADK 1.31 to 2.14), each also
+# under the other spelling of its separator.
+_ADK_SERVER_VALUE_OPTIONS = frozenset(
+    spelling
+    for option in (
+        "--allow_origins",
+        "--artifact_service_uri",
+        "--artifact_storage_uri",
+        "--default_llm_model",
+        "--disable_features",
+        "--enable_features",
+        "--eval_storage_uri",
+        "--extra_plugins",
+        "--gemini_enterprise_app_name",
+        "--host",
+        "--log_level",
+        "--logo-image-url",
+        "--logo-text",
+        "--memory_service_uri",
+        "--port",
+        "--session_db_url",
+        "--session_service_uri",
+        "--trigger_sources",
+        "--url_prefix",
+    )
+    for spelling in (option, "--" + option[2:].replace("-", "_"), "--" + option[2:].replace("_", "-"))
+)
+
+# An option this parser does not know: whether it takes a value, and so which token is the
+# agents directory, cannot be told.
+_UNKNOWN_ADK_OPTION = object()
+
+
+def _adk_agents_dir_argument(arguments: list[str]) -> str | object | None:
+    """The positional ``AGENTS_DIR`` among ``adk web`` / ``adk api_server`` arguments, if any;
+    ``_UNKNOWN_ADK_OPTION`` when an option before it is not one ADK is known to take."""
 
     index = 0
     while index < len(arguments):
@@ -1879,8 +1913,13 @@ def _adk_agents_dir_argument(arguments: list[str]) -> str | None:
         if token == "--":
             return arguments[index + 1] if index + 1 < len(arguments) else None
         if token.startswith("-"):
-            takes_value = "=" not in token and token not in _ADK_SERVER_FLAGS
-            index += 2 if takes_value else 1
+            name = token.split("=", 1)[0]
+            if name in _ADK_SERVER_FLAGS or (name in _ADK_SERVER_VALUE_OPTIONS and "=" in token):
+                index += 1
+            elif name in _ADK_SERVER_VALUE_OPTIONS:
+                index += 2
+            else:
+                return _UNKNOWN_ADK_OPTION
             continue
         return token
     return None
@@ -1934,7 +1973,10 @@ def _adk_app_name(
     if not workdir.is_relative_to(root.resolve()) or not workdir.is_dir():
         return None
     agents_arg = _adk_agents_dir_argument(_adk_server_arguments(command or []) or [])
-    if agents_arg is not None:
+    # An unknown option may have swallowed the agents directory: no app rather than a guess.
+    if agents_arg is _UNKNOWN_ADK_OPTION:
+        return None
+    if isinstance(agents_arg, str):
         agents_dir = (workdir / agents_arg).resolve()
         # A named directory ADK cannot serve from this checkout is no app to guess from.
         if not agents_dir.is_relative_to(root.resolve()) or not agents_dir.is_dir():
