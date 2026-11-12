@@ -127,6 +127,10 @@ _CLIENT_PREFIXES = (
     "BUILDX_",
     "GIT_",
     "CLAUDE_CODE_",
+    # Git asks SSH_ASKPASS for a credential even with GIT_TERMINAL_PROMPT=0, and XDG_CONFIG_HOME
+    # moves its global config, credential.helper included: either runs a job's own code.
+    "SSH_",
+    "XDG_",
 )
 _CLIENT_EXACT = frozenset(
     {
