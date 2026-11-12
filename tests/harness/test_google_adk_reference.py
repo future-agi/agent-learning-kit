@@ -8,112 +8,72 @@ reaches a network.
 from __future__ import annotations
 
 import ast
-import importlib
+import inspect
 import json
-import os
 import shutil
-import subprocess
 import sys
 import textwrap
 from pathlib import Path
 
 import pytest
-from test_bundle_author_v2 import _authoring, _github_job, _write_chat_contract
+from reference_agents import (
+    DETECTION_CASES,
+    REPO,
+    TOOLS,
+    TRACE_HOOK,
+    assert_detected,
+    assert_pins,
+    build_control_service,
+    copy_example,
+    fresh_import,
+    run_tracer,
+    write_chat_contract,
+)
 
-from fi.alk.harness.bundle_author_v2 import author_bundle_v2
-from fi.alk.harness.framework_detection import detect_framework, folder_findings
-
-REPO = Path(__file__).resolve().parents[2]
 SUBFOLDER = "examples/harness/google_adk_support"
 EXAMPLE = REPO / SUBFOLDER
-BOOTSTRAP = REPO / "src/fi/alk/harness/livekit_tool_trace_bootstrap.py"
 
 APP = "support_agent"
 MODULE = f"{APP}.agent"
-TOOLS = ("look_up_order", "start_return", "return_policy")
 LOOK_UP_ORDER, START_RETURN, RETURN_POLICY = TOOLS
 ENVIRONMENT = ("OPENAI_API_KEY", "OPENAI_BASE_URL", "OPENAI_MODEL")
-DETECTED = {"name": "google_adk", "version": None}
-
-
-def _copy_example(destination: Path) -> Path:
-    shutil.copytree(
-        EXAMPLE, destination, ignore=shutil.ignore_patterns("__pycache__", ".adk")
-    )
-    return destination
 
 
 # T1: detection ------------------------------------------------------------------------------
 
 
-def test_example_is_found_as_the_run_folder(tmp_path: Path) -> None:
-    run = _copy_example(tmp_path / "run")
-
-    assert detect_framework(run) == DETECTED
-    assert folder_findings(run).blockers == frozenset()
-
-
-def test_example_is_found_as_a_subfolder_of_a_bigger_tree(tmp_path: Path) -> None:
-    repo = tmp_path / "repo"
-    _copy_example(repo / SUBFOLDER)
-    # A package named like the library's top-level one, deep in the tree, must not make the
-    # library import look like the customer's own module.
-    nested = repo / "src/pkg/google"
-    nested.mkdir(parents=True)
-    (nested / "__init__.py").write_text("", encoding="utf-8")
-    (nested / "score.py").write_text("def score():\n    return 1\n", encoding="utf-8")
-    (repo / "main.py").write_text("print('hello')\n", encoding="utf-8")
-
-    found = folder_findings(repo / SUBFOLDER, repo_root=repo)
-
-    assert detect_framework(repo / SUBFOLDER, repo_root=repo) == DETECTED
-    assert found.blockers == frozenset()
-
-
-def test_example_in_place_is_not_shadowed_by_the_repository() -> None:
-    # Nothing named `google` may sit on the example's path or inside it, or it would shadow
-    # the library and block detection.
-    assert "google" not in EXAMPLE.relative_to(REPO).parts
-    assert not [
-        path
-        for path in EXAMPLE.rglob("*")
-        if path.name in {"google", "google.py"} and "__pycache__" not in path.parts
-    ]
-    assert detect_framework(EXAMPLE, repo_root=REPO) == DETECTED
-    assert folder_findings(EXAMPLE, repo_root=REPO).blockers == frozenset()
+@pytest.mark.parametrize("where", DETECTION_CASES)
+def test_example_is_detected_as_an_adk_app(tmp_path: Path, where: str) -> None:
+    # `google` is the library's top-level package, so a module of that name near the example
+    # would pass for the customer's own.
+    assert_detected(
+        EXAMPLE,
+        "google_adk",
+        "google",
+        where=where,
+        tmp_path=tmp_path,
+        subfolder=SUBFOLDER,
+        ignore=(".adk",),
+    )
 
 
 # T2: the build ------------------------------------------------------------------------------
 
 
-def test_build_runs_adks_own_server_and_binds_the_tool_tracer(tmp_path: Path) -> None:
-    source = tmp_path / "source"
-    _copy_example(source / SUBFOLDER)
-    (source / "README.md").write_text("many examples\n", encoding="utf-8")
-    authoring = _authoring(tmp_path)
-    _write_chat_contract(
-        authoring, command=["adk", "web", "--port", "8080", "."], workdir=SUBFOLDER
-    )
-    contract_path = authoring / "contract.json"
-    contract = json.loads(contract_path.read_text(encoding="utf-8"))
-    contract["tool_entrypoints"] = [
-        {"tool": name, "mode": "import", "module": MODULE, "callable": name}
-        for name in TOOLS
-    ]
-    contract_path.write_text(json.dumps(contract), encoding="utf-8")
-
-    bundle = author_bundle_v2(
-        source=source,
-        job=_github_job(
-            SUBFOLDER,
-            with_secrets=True,
-            secret_aliases=("OPENAI_API_KEY", "OPENAI_BASE_URL"),
+def test_build_runs_adks_own_server_and_binds_the_tool_tracer(
+    tmp_path: Path, load_example
+) -> None:
+    agent = build_control_service(
+        tmp_path,
+        lambda authoring: write_chat_contract(
+            authoring, command=["adk", "web", "--port", "8080", "."], workdir=SUBFOLDER
         ),
-        authoring=authoring,
-        output=tmp_path / "bundle",
+        MODULE,
+        subfolder=SUBFOLDER,
+        example=EXAMPLE,
+        ignore=(".adk",),
     )
 
-    agent = next(p for p in bundle.processes if p.name == bundle.runtime.control_service)
     # ADK's server is started as it is, not nested in the kit's callback bridge.
     assert "ThreadingHTTPServer" not in json.dumps(agent.run_command)
     assert "ALK_SUBPROCESS_COMMAND" not in agent.environment
@@ -138,10 +98,18 @@ def test_build_runs_adks_own_server_and_binds_the_tool_tracer(tmp_path: Path) ->
 
     assert agent.environment["HARNESS_TOOL_TRACE"] == "{{WORLD_DIR}}/agent-tool-calls.jsonl"
     bindings = json.loads(agent.environment["ALK_TOOL_TRACE_BINDINGS"])
-    assert sorted(bindings, key=lambda item: item["name"]) == sorted(
-        ({"name": name, "module": MODULE, "callable": name} for name in TOOLS),
-        key=lambda item: item["name"],
+    # Each binding is checked against the example's real module, so renaming a tool there
+    # breaks this test instead of leaving the build and its input in agreement.
+    example = load_example()
+    assert sorted(item["name"] for item in bindings) == sorted(
+        tool.__name__ for tool in example.root_agent.tools
     )
+    for item in bindings:
+        assert item["module"] == MODULE
+        function = getattr(example, item["callable"], None)
+        assert inspect.isfunction(function), item
+        assert not inspect.iscoroutinefunction(function), item
+        assert function.__name__ == item["name"]
 
 
 # T3: ADK's own tool path and the tracer -----------------------------------------------------
@@ -218,35 +186,31 @@ DRIVER = textwrap.dedent(
 
 
 def test_tools_run_by_adk_are_traced_once_each(tmp_path: Path) -> None:
-    run = _copy_example(tmp_path / "run")
+    run = copy_example(EXAMPLE, tmp_path / "run", (".adk",))
     hook = tmp_path / "hook"
     hook.mkdir()
-    shutil.copy2(BOOTSTRAP, hook / "sitecustomize.py")
+    shutil.copy2(TRACE_HOOK, hook / "sitecustomize.py")
     trace = tmp_path / "calls.jsonl"
     bindings = [{"name": name, "module": MODULE, "callable": name} for name in TOOLS]
-    environment = {
-        **{key: value for key, value in os.environ.items() if key not in ENVIRONMENT},
-        "PYTHONPATH": os.pathsep.join([str(hook), str(run)]),
-        "PYTHONDONTWRITEBYTECODE": "1",
-        "HARNESS_TOOL_TRACE": str(trace),
-        "ALK_TOOL_TRACE_BINDINGS": json.dumps(bindings),
-    }
 
-    completed = subprocess.run(
+    completed = run_tracer(
         [
             sys.executable,
             "-c",
             DRIVER,
             json.dumps({"folder": str(run), "script": SCRIPT, "turns": TURNS}),
         ],
-        capture_output=True,
-        text=True,
-        cwd=run,
-        env=environment,
-        timeout=180,
+        hook,
+        run,
+        {
+            **dict.fromkeys(ENVIRONMENT),
+            "PYTHONPATH": str(run),
+            "PYTHONDONTWRITEBYTECODE": "1",
+            "HARNESS_TOOL_TRACE": str(trace),
+            "ALK_TOOL_TRACE_BINDINGS": json.dumps(bindings),
+        },
     )
 
-    assert completed.returncode == 0, completed.stderr[-3000:]
     result = json.loads(completed.stdout.splitlines()[-1])
     assert result["replies"] == [SCRIPT[1][1], SCRIPT[4][1]]
     assert len(result["tools_seen"]) == len(SCRIPT)
@@ -281,28 +245,19 @@ def test_tools_run_by_adk_are_traced_once_each(tmp_path: Path) -> None:
 @pytest.fixture
 def load_example(tmp_path, monkeypatch):
     """A fresh import of the example's `support_agent.agent` with only the given environment."""
-    copies = []
-
-    def drop_example_modules() -> None:
-        for name in list(sys.modules):
-            if name.split(".")[0] == APP:
-                del sys.modules[name]
-
-    def load(**environment: str):
-        for name in ENVIRONMENT:
-            monkeypatch.delenv(name, raising=False)
-        for name, value in environment.items():
-            monkeypatch.setenv(name, value)
-        # The model is built when the module is imported, so a cached import would show the
-        # environment of the one before.
-        drop_example_modules()
-        run = _copy_example(tmp_path / f"run-{len(copies)}")
-        copies.append(run)
-        monkeypatch.syspath_prepend(str(run))
-        return importlib.import_module(MODULE)
-
-    yield load
-    drop_example_modules()
+    # The model is built when the module is imported, so each load needs its own copy and a
+    # clean environment.
+    with fresh_import(
+        tmp_path,
+        monkeypatch,
+        EXAMPLE,
+        module=MODULE,
+        clear_env=ENVIRONMENT,
+        copy_package=True,
+        reset_each_load=True,
+        ignore=(".adk",),
+    ) as load:
+        yield load
 
 
 def test_model_goes_to_the_gateway_with_its_url_and_key(load_example) -> None:
@@ -355,12 +310,10 @@ def test_a_second_import_sees_its_own_environment(load_example) -> None:
 
 
 def test_requirements_and_python_version_are_pinned() -> None:
-    lines = (EXAMPLE / "requirements.txt").read_text(encoding="utf-8").splitlines()
     # `litellm` is what the `openai/` model name needs, and its first call imports `mcp`, which
     # neither pin brings in; this agent runs on ADK's server, so the kit's simulate package is
     # not part of it.
-    assert lines == ["google-adk==2.13.0", "litellm==1.106.2", "mcp==2.3.0"]
-    assert (EXAMPLE / ".python-version").read_text(encoding="utf-8").strip() == "3.12"
+    assert_pins(EXAMPLE, ["google-adk==2.13.0", "litellm==1.106.2", "mcp==2.3.0"])
 
 
 def test_example_is_an_adk_app_package_with_plain_tools() -> None:
@@ -383,7 +336,6 @@ def test_example_is_an_adk_app_package_with_plain_tools() -> None:
         == ["root_agent"]
         for node in module.body
     )
-    assert 'MODEL = os.getenv("OPENAI_MODEL", "vertex_ai/gemini-3.7-flash")' in source
     # A coroutine tool is traced at every await as well as at its return, and ADK would run it
     # on the event loop differently.
     assert not [n.name for n in module.body if isinstance(n, ast.AsyncFunctionDef)]
