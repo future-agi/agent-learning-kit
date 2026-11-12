@@ -1394,11 +1394,21 @@ async def validate_once(
             executor.shutdown(wait=False, cancel_futures=True)
             await provider.close(work_directory=work)
             if validation_error is not None:
-                from .process_diagnostics import retained_process_evidence
+                from .process_diagnostics import (
+                    retained_process_evidence,
+                    source_secret_masks,
+                )
 
                 try:
+                    # The listed files in the agent's source, walked once for this run's
+                    # evidence (and only when it fails), masked out of every log the repair
+                    # model reads. If the walk itself fails, no log goes to the model.
+                    try:
+                        source_masks = await asyncio.to_thread(source_secret_masks, source)
+                    except Exception:
+                        raise OSError("source secret masks unavailable") from None
                     validation_error.process_evidence = retained_process_evidence(
-                        process_logs, logs_before, redaction_values
+                        process_logs, logs_before, redaction_values, masks=source_masks
                     )
                     control_service = (
                         getattr(manifest.runtime, "control_service", None)
@@ -1407,7 +1417,7 @@ async def validate_once(
                     if control_service:
                         validation_error.target_process_evidence = retained_process_evidence(
                             process_logs, logs_before, redaction_values,
-                            process_name=control_service,
+                            process_name=control_service, masks=source_masks,
                         )
                 except OSError:
                     pass
@@ -1598,6 +1608,22 @@ async def validate_and_repair(
                     job=job,
                 )
             )
+
+    # Every text the repair step gets can echo process output (logs and diagnostics alike), so
+    # all of it is masked against the contents of the source's listed files on the way in. If the
+    # masks can't be built, the repair gets the standing instructions without the evidence.
+    from .process_diagnostics import mask_source_secrets, source_secret_masks
+
+    _unmasked_repair = repair
+
+    async def repair(phase, guidance, *more, **options):
+        try:
+            masks = await asyncio.to_thread(source_secret_masks, source)
+        except Exception:
+            guidance = "The diagnostic evidence was withheld.\n\n" + base_guidance
+        else:
+            guidance = mask_source_secrets(guidance, masks)
+        return await _unmasked_repair(phase, guidance, *more, **options)
 
     _active_repair_diagnostics = ()
     if generic:

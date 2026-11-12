@@ -294,6 +294,18 @@ def _validate_native(tmp_path, command, **fields):
         pytest.param(["python", "-cexec(open('.e'+'nv').read())"], id="python-joined-c"),
         pytest.param(["python", "-c", "print(1)"], id="python-c"),
         pytest.param(["python3.12", "-W", "error", "-cprint(1)"], id="python-joined-c-after-W"),
+        pytest.param(["python", "-Bc", "print(1)"], id="python-Bc"),
+        pytest.param(["python", "-uc", "print(1)"], id="python-uc"),
+        pytest.param(["python3", "-Ic", "print(1)"], id="python-Ic"),
+        pytest.param(["python3.12", "-IBc", "print(1)"], id="python-IBc"),
+        pytest.param(["python", "-Bcexec(open('.e'+'nv').read())"], id="python-Bc-joined"),
+        pytest.param(
+            ["python", "--check-hash-based-pycs", "default", "-cprint(1)"], id="python-option-value-then-c"
+        ),
+        pytest.param(["node", "-r", "./s.js", "-p", "1"], id="node-require-then-p"),
+        pytest.param(["node", "--require", "./s.js", "--eval=1"], id="node-require-then-eval"),
+        pytest.param(["node", "--import", "./s.mjs", "-e1"], id="node-import-then-e"),
+        pytest.param(["python", "-W", "error", "-Bc", "print(1)"], id="python-Bc-after-W"),
         pytest.param(["uv", "run", "python", "-cprint(1)"], id="uv-python-joined-c"),
         pytest.param(["node", "--print", "require('fs').readFileSync('.e'+'nv','utf8')"], id="node-print"),
         pytest.param(["node", "--print=1"], id="node-print-joined"),
@@ -319,6 +331,12 @@ def test_runtime_patch_refuses_inline_code_joined_to_its_flag(tmp_path, command)
         ["python", "-m", "uvicorn", "app:app", "--port", "8080"],
         ["python", "app.py", "-p", "8080"],
         ["python", "app.py", "-cfoo"],
+        ["python", "-B", "app.py"],
+        ["python", "-u", "app.py"],
+        ["python", "-Bu", "app.py"],
+        ["python", "--check-hash-based-pycs", "default", "app.py"],
+        ["python", "-Wignore", "app.py"],
+        ["python", "-m", "uvicorn", "-Bc"],
     ],
 )
 def test_runtime_patch_still_passes_a_command_with_flags_after_the_script(tmp_path, command) -> None:
@@ -357,9 +375,13 @@ def test_runtime_patch_passes_an_ordinary_folder_changing_flag(tmp_path) -> None
 def test_runtime_patch_may_name_a_config_file_the_kit_generates(tmp_path) -> None:
     # `.env` is a key of config_files: the kit writes it from the runtime's own values, so naming
     # it is not naming the customer's file. Without that key it is still refused.
+    # Keys are relative to the source root, so this holds with no workdir (see
+    # test_a_config_file_key_at_the_root_is_still_exempt_for_the_kits_own_file); under a workdir
+    # `.env` is the workdir's own file and is refused either way.
     command = ["python", "-m", "uvicorn", "main:app", "--env-file", ".env"]
     generated = {"config_files": {".env": RuntimeConfigFile(values={"REGION": "global"})}}
-    assert _validate_native(tmp_path, command, **generated).runtime.command == command
+    with pytest.raises(ValueError, match="runtime_repair_runtime_names_kept_out_file"):
+        _validate_native(tmp_path, command, **generated)
     with pytest.raises(ValueError, match="runtime_repair_runtime_names_kept_out_file"):
         _validate_native(tmp_path, command)
 
@@ -1408,6 +1430,123 @@ def test_model_patch_newly_naming_a_listed_file_is_still_refused(tmp_path, chang
         validate_runtime_plan_patch(
             tmp_path, contract, patch, allowed_diagnostic_codes={"generated_runtime_plan_invalid"}
         )
+
+
+def _env_file_command_contract() -> AgentContract:
+    return AgentContract(
+        agent="fixture",
+        runtime=Runtime(
+            language="python",
+            workdir="service",
+            command=["python", "-m", "server", "--env-file", ".env"],
+            interface=RuntimeInterface(kind="http", port=8080, path="/chat"),
+        ),
+    )
+
+
+def _env_file_command_patch(tmp_path, command) -> tuple[AgentContract, RuntimePlanPatch]:
+    (tmp_path / "service").mkdir(exist_ok=True)
+    (tmp_path / "service" / "app.py").write_text("print('agent')\n", encoding="utf-8")
+    contract = _env_file_command_contract()
+    patch = RuntimePlanPatch(
+        base_contract_hash=_contract_hash(contract),
+        runtime=contract.runtime.model_copy(update={"command": command}),
+        evidence_paths=("service/app.py",),
+        diagnostic_codes=("generated_runtime_plan_invalid",),
+        summary="Change the command.",
+    )
+    return contract, patch
+
+
+def test_command_token_listed_in_the_base_command_is_not_exempt_in_a_new_position(tmp_path) -> None:
+    # `.env` is in the base command only as the value of --env-file; handing it to python as the
+    # script is a new (previous token, token) pair and is refused.
+    contract, patch = _env_file_command_patch(tmp_path, ["python", ".env"])
+
+    with pytest.raises(ValueError, match="runtime_repair_runtime_names_kept_out_file"):
+        validate_runtime_plan_patch(
+            tmp_path, contract, patch, allowed_diagnostic_codes={"generated_runtime_plan_invalid"}
+        )
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        ["python", "-m", "server", "--env-file", ".env"],
+        ["python", "-m", "server", "--port", "9090", "--env-file", ".env"],
+    ],
+)
+def test_command_pair_carried_over_from_the_base_command_passes(tmp_path, command) -> None:
+    contract, patch = _env_file_command_patch(tmp_path, command)
+
+    repaired = validate_runtime_plan_patch(
+        tmp_path, contract, patch, allowed_diagnostic_codes={"generated_runtime_plan_invalid"}
+    )
+
+    assert repaired.runtime.command == command
+
+
+def _config_file_contract(**fields) -> AgentContract:
+    return AgentContract(
+        agent="fixture",
+        runtime=Runtime(
+            language="python",
+            config_files={".env": RuntimeConfigFile(values={"REGION": "global"})},
+            interface=RuntimeInterface(kind="http", port=8080, path="/chat"),
+            **fields,
+        ),
+    )
+
+
+def _config_file_patch(tmp_path, command, **fields):
+    (tmp_path / "app.py").write_text("print('agent')\n", encoding="utf-8")
+    for folder in ("backend", "service"):
+        (tmp_path / folder).mkdir(exist_ok=True)
+        (tmp_path / folder / "app.py").write_text("print('agent')\n", encoding="utf-8")
+        (tmp_path / folder / ".env").write_text("K=fake\n", encoding="utf-8")
+    contract = AgentContract(agent="fixture", runtime=Runtime(language="python"))
+    patch = RuntimePlanPatch(
+        base_contract_hash=_contract_hash(contract),
+        runtime=_config_file_contract(command=command, **fields).runtime,
+        evidence_paths=("backend/app.py",),
+        diagnostic_codes=("generated_runtime_plan_invalid",),
+        summary="Run the service.",
+    )
+    return contract, patch
+
+
+def _check(tmp_path, command, **fields):
+    contract, patch = _config_file_patch(tmp_path, command, **fields)
+    return validate_runtime_plan_patch(
+        tmp_path, contract, patch, allowed_diagnostic_codes={"generated_runtime_plan_invalid"}
+    )
+
+
+def test_a_config_file_key_is_not_exempt_after_a_folder_flag_moves_the_command(tmp_path) -> None:
+    # The kit writes the root .env; `uv --directory backend run python .env` runs backend/.env.
+    with pytest.raises(ValueError, match="runtime_repair_runtime_names_kept_out_file"):
+        _check(tmp_path, ["uv", "--directory", "backend", "run", "python", ".env"])
+
+
+def test_a_config_file_key_is_not_joined_to_the_workdir(tmp_path) -> None:
+    # Keys are root-relative: with a workdir, `.env` is service/.env, which is the customer's.
+    with pytest.raises(ValueError, match="runtime_repair_runtime_names_kept_out_file"):
+        _check(tmp_path, ["python", "-m", "server", "--env-file", ".env"], workdir="service")
+
+
+def test_a_config_file_key_at_the_root_is_still_exempt_for_the_kits_own_file(tmp_path) -> None:
+    command = ["python", "-m", "server", "--env-file", ".env"]
+    assert _check(tmp_path, command).runtime.command == command
+    joined = ["python", "-m", "server", "--env-file=.env"]
+    assert _check(tmp_path, joined).runtime.command == joined
+
+
+def test_a_flag_joined_to_a_config_file_key_judges_only_the_value(tmp_path) -> None:
+    # `node --env-file=.env`: the whole token matches *.env as a path; only the value is judged.
+    command = ["node", "--env-file=.env", "app.py"]
+    assert _check(tmp_path, command).runtime.command == command
+    with pytest.raises(ValueError, match="runtime_repair_runtime_names_kept_out_file"):
+        _check(tmp_path, ["node", "--env-file=other.env", "app.py"])
 
 
 def test_kit_extras_repair_survives_a_listed_name_the_contract_already_carries(tmp_path) -> None:

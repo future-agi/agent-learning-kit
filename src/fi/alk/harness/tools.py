@@ -410,12 +410,24 @@ def _checked_against_source(
         # The first save is the only place a listed name can be stopped from entering the
         # contract: a later repair judges only the names it adds. Only this model-facing route
         # asks (the kit's own write_contract does not pass through here). The name isn't echoed.
-        from .runtime_repair import _runtime_names_listed_file
+        from .runtime_repair import (
+            _SHELL_LAUNCHERS,
+            _runs_inline_code,
+            _runtime_names_listed_file,
+        )
 
         if _runtime_names_listed_file(source_root.resolve(), runtime):
             problems.append(
                 "runtime: a command or path in the runtime names a file that is kept out of "
                 "this task; name only the program and the source files it runs"
+            )
+        elif _runs_inline_code(runtime.command) and not (
+            # A shell is its own policy (saved at the root, refused by repair and in a folder).
+            runtime.command and Path(runtime.command[0]).name.casefold() in _SHELL_LAUNCHERS
+        ):
+            problems.append(
+                "runtime: the command hands an interpreter its program as an argument "
+                "(-c, -e, -p, --eval, --print); name the source file it runs instead"
             )
     if problems:
         return _problems(problems, arrived)

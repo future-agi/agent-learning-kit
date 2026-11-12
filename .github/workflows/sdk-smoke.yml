@@ -107,6 +107,7 @@ jobs:
           tests/harness/test_bundle_author_v2.py
           tests/harness/test_simulation_mark_bootstrap.py
           tests/harness/test_process_preflight.py
+          tests/harness/test_process_diagnostics.py
           tests/providers
           tests/harness/test_scenario_source_provision_agent.py
           tests/harness/test_framework_detection.py

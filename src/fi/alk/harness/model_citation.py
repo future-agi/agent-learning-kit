@@ -631,9 +631,13 @@ def _env_value(line: str) -> str | None:
 # `latest`, after a last name with no `:` (that makes it a login: user:pw@host). Any other @ in a
 # value is a login (user@host, user:password@host).
 # This is a whole-value guess only, never letter by letter. A login that has the same shape
-# (scott/fakepw@1521, user@123, fakepw@123456) can't be told from a model name by shape, so values
-# like those are accepted too: they can only be confirmed whole, never letter by letter.
-_VERSIONED_NAME = re.compile(r"(?:[\w.-]+/)*[^@:/]+@(?:\d{3,8}|latest)")
+# (user@123, fakepw@123456) can't be told from a model name by shape, so values like those are
+# accepted too: they can only be confirmed whole, never letter by letter. A `/` path is allowed
+# only when it starts like a model path (vertex_ai/, publishers/, projects/, models/), so
+# scott/fakepw@1521 is a login.
+_VERSIONED_NAME = re.compile(
+    r"(?:(?:vertex_ai|publishers|projects|models)/(?:[\w.-]+/)*)?[^@:/]+@(?:\d{3,8}|latest)"
+)
 
 
 def _env_value_is_a_locator(value: str) -> bool:

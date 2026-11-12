@@ -215,3 +215,156 @@ def test_target_evidence_excludes_build_sidecar_and_old_target_logs(tmp_path):
     assert "BUILD" not in evidence
     assert "SIDECAR" not in evidence
     assert "OLD TARGET" not in evidence
+
+
+# --- listed files in the source are masked out of the logs the repair model reads ---------------
+
+import os  # noqa: E402
+
+import pytest  # noqa: E402
+
+from fi.alk.harness.process_diagnostics import (  # noqa: E402
+    MIN_MASKED_LENGTH,
+    retained_process_evidence,
+    source_secret_masks,
+)
+
+_PEM_LINES = [
+    "-----BEGIN PRIVATE KEY-----",
+    "CANARYKEYLINEONEabcdefghijklmnop0123",
+    "CANARYKEYLINETWOqrstuvwxyz9876543210",
+    "-----END PRIVATE KEY-----",
+]
+
+
+def _evidence(tmp_path, source, log_text):
+    logs = tmp_path / "process-logs"
+    logs.mkdir(exist_ok=True)
+    (logs / "worlds-w0-agent-" f"{'a' * 32}.log").write_text(log_text)
+    return retained_process_evidence(
+        logs, set(), {"job_key": "unrelated-job-value"}, masks=source_secret_masks(source)
+    )
+
+
+def _source(tmp_path, files):
+    source = tmp_path / "source"
+    source.mkdir(exist_ok=True)
+    for name, text in files.items():
+        path = source / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text)
+    return source
+
+
+@pytest.mark.parametrize(
+    "line, leaked",
+    [
+        ('API_TOKEN="canary-token-quoted-0001"', "canary-token-quoted-0001"),
+        ("API_TOKEN='canary-token-single-0002'", "canary-token-single-0002"),
+        ("export API_TOKEN=canary-token-export-0003", "canary-token-export-0003"),
+        ("export API_TOKEN='canary-token-both-0004'", "canary-token-both-0004"),
+        ("API_TOKEN=canary-token-comment-0005 # prod key", "canary-token-comment-0005"),
+        ('API_TOKEN="canary-token-qcomment-0006"  # prod', "canary-token-qcomment-0006"),
+        ("API_TOKEN=canary-token-spaces-0007   ", "canary-token-spaces-0007"),
+        ("api_token: canary-token-colon-0008", "canary-token-colon-0008"),
+    ],
+)
+def test_env_style_values_are_masked_from_process_logs(tmp_path, line, leaked):
+    source = _source(tmp_path, {".env": f"PORT=8080\n{line}\n"})
+    text = _evidence(tmp_path, source, f"starting with key {leaked} ok\nlistening on 8080\n")
+    assert leaked not in text
+    assert "<redacted>" in text
+    assert "listening on 8080" in text
+
+
+def test_the_raw_value_as_written_is_masked_too(tmp_path):
+    source = _source(tmp_path, {".env": 'API_TOKEN="canary-raw-token-0009" # note\n'})
+    text = _evidence(tmp_path, source, 'got "canary-raw-token-0009" # note\n')
+    assert "canary-raw-token-0009" not in text
+
+
+def test_a_pem_printed_whole_is_masked(tmp_path):
+    pem = "\n".join(_PEM_LINES) + "\n"
+    source = _source(tmp_path, {"deploy/service.pem": pem})
+    text = _evidence(tmp_path, source, "key dump:\n" + pem + "done\n")
+    assert "CANARYKEYLINE" not in text
+    assert "done" in text
+
+
+def test_a_pem_printed_line_by_line_is_masked(tmp_path):
+    source = _source(tmp_path, {"deploy/service.pem": "\n".join(_PEM_LINES) + "\n"})
+    log = "line1: " + _PEM_LINES[1] + "\nline2 " + _PEM_LINES[2] + "\n"
+    text = _evidence(tmp_path, source, log)
+    assert "CANARYKEYLINE" not in text
+
+
+def test_a_json_key_file_is_masked_whole_and_by_line(tmp_path):
+    body = '{\n  "private_key": "canary-json-private-key-0010",\n  "client": "canary-json-client-0011"\n}\n'
+    source = _source(tmp_path, {"svc-key.json": body})
+    text = _evidence(
+        tmp_path, source, 'x "private_key": "canary-json-private-key-0010", y canary-json-client-0011'
+    )
+    assert "canary-json-private-key-0010" not in text
+    assert "canary-json-client-0011" not in text
+
+
+def test_a_value_under_the_minimum_is_left_alone(tmp_path):
+    assert MIN_MASKED_LENGTH == 10
+    source = _source(
+        tmp_path,
+        {".env": "ENABLED=1\nDEBUG=true\nPORT=8080\nHOST=localhost\nDB=127.0.0.1\nSECRET=canary-long-value-0012\n"},
+    )
+    log = "enabled 1 debug true port 8080 host localhost db 127.0.0.1 canary-long-value-0012\n"
+    text = _evidence(tmp_path, source, log)
+    assert "enabled 1 debug true port 8080 host localhost db 127.0.0.1" in text
+    assert "canary-long-value-0012" not in text
+    assert "1" not in source_secret_masks(source) and "localhost" not in source_secret_masks(source)
+
+
+def test_a_listed_file_reached_through_a_link_is_judged_where_it_resolves(tmp_path):
+    outside = tmp_path / "outside.env"
+    outside.write_text("API_TOKEN=canary-outside-token-0013\n")
+    source = _source(
+        tmp_path,
+        {
+            "real/.env": "API_TOKEN=canary-linked-token-0014\n",
+            "notes.txt": "plain notes that are not on the list at all\n",
+        },
+    )
+    # A harmless name that resolves to a listed file inside the root is read as that file.
+    os.symlink(source / "real" / ".env", source / "settings.txt")
+    # A listed name that resolves to an unlisted file is not read, nor is one that leaves the root.
+    os.symlink(source / "notes.txt", source / "decoy.pem")
+    os.symlink(outside, source / "leaving.env")
+    os.symlink(tmp_path, source / "up")
+    masks = source_secret_masks(source)
+    assert "canary-linked-token-0014" in masks
+    assert not any("canary-outside-token-0013" in mask for mask in masks)
+    assert not any("plain notes" in mask for mask in masks)
+
+
+def test_a_file_not_on_the_list_is_left_alone(tmp_path):
+    source = _source(
+        tmp_path,
+        {
+            "app.py": "TOKEN = 'canary-source-code-value-0015'\n",
+            "config.yaml": "token: canary-yaml-value-0016\n",
+        },
+    )
+    text = _evidence(tmp_path, source, "canary-source-code-value-0015 canary-yaml-value-0016\n")
+    assert "canary-source-code-value-0015" in text and "canary-yaml-value-0016" in text
+
+
+def test_an_ordinary_log_reads_normally(tmp_path):
+    source = _source(tmp_path, {".env": "PORT=8080\nAPI_TOKEN=canary-ordinary-token-0017\n"})
+    log = "INFO server booting\nWARNING db slow\nTraceback: ImportError: no module named foo\n"
+    text = _evidence(tmp_path, source, log)
+    assert log.strip() in text
+    assert "<redacted>" not in text
+
+
+def test_the_walk_is_bounded(tmp_path, monkeypatch):
+    source = _source(tmp_path, {"big/.env": "KEY=" + "canary-big-" * 10000 + "\n", ".env": "K=canary-small-value-0018\n"})
+    masks = source_secret_masks(source)
+    assert "canary-small-value-0018" in masks
+    assert not any("canary-big-" in mask for mask in masks)

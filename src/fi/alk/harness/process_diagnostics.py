@@ -1,13 +1,122 @@
 from __future__ import annotations
 
+import json
 import os
 import re
 import stat
 import uuid
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from pathlib import Path
 
 from fi._diagnostics import sanitize_diagnostic
+
+from .backends.files import _SKIP_DIRS, secret_text
+
+# A string shorter than this is never masked. The files on the secret list also hold plain
+# settings (PORT=8080, DEBUG=true, HOST=localhost, region names, 127.0.0.1), and masking those
+# would shred every log that mentions them without hiding anything. Generated tokens, API keys
+# and passwords are longer than 10; "localhost", "127.0.0.1", "postgres" and "us-east-1" are not.
+# The cost is that a 9-character-or-shorter password in a listed file is not masked in a log.
+MIN_MASKED_LENGTH = 10
+_MAX_MASKED_FILE_BYTES = 64 * 1024  # a credential file is small; a state file is not
+_MAX_MASKED_TOTAL_BYTES = 1024 * 1024  # all listed files together
+_MAX_WALKED_ENTRIES = 50_000  # directory entries visited, so a huge tree cannot stall a run
+_ENV_LINE = re.compile(r"^\s*(?:export\s+)?[A-Za-z_][A-Za-z0-9_.-]*\s*[=:]\s*(.*?)\s*$")
+_PLACEHOLDER = "<redacted>"
+
+
+def _line_values(line: str) -> set[str]:
+    """The values a NAME=value, export NAME=value or NAME: value line holds: as written, with
+    quotes stripped, and without a trailing comment."""
+    match = _ENV_LINE.match(line)
+    if not match:
+        return set()
+    raw = match.group(1)
+    values = {raw}
+    if raw[:1] in {'"', "'"}:
+        quote = raw[0]
+        end = raw.find(quote, 1)
+        values.add(raw[1:end] if end > 0 else raw[1:])
+    else:
+        values.add(re.sub(r"\s+#.*$", "", raw).strip())
+    return {value.strip() for value in values}
+
+
+def _json_strings(value) -> set[str]:
+    if isinstance(value, str):
+        return {value, *(line.strip() for line in value.splitlines())}
+    items = value.values() if isinstance(value, dict) else value if isinstance(value, list) else ()
+    return set().union(*(_json_strings(item) for item in items)) if items else set()
+
+
+def _masks_of(text: str) -> set[str]:
+    masks = {text, text.strip()}
+    try:
+        # A JSON key file: each string in it, since one is printed without its field name.
+        masks |= _json_strings(json.loads(text))
+    except (ValueError, RecursionError):
+        pass
+    for line in text.splitlines():
+        masks.add(line.strip())
+        masks |= _line_values(line)
+    return masks
+
+
+def source_secret_masks(root: Path) -> frozenset[str]:
+    """The contents of the files on the secret list in the source, as strings to mask in a log.
+
+    Bounded (file size, total size, entries visited), follows no link out of the root, and judges
+    each path by where it resolves, relative to the root. Strings under MIN_MASKED_LENGTH are
+    dropped."""
+    root = root.resolve()
+    masks: set[str] = set()
+    total = 0
+    visited = 0
+    stack = [root]
+    while stack:
+        folder = stack.pop()
+        try:
+            with os.scandir(folder) as entries:
+                listing = sorted(entries, key=lambda entry: entry.name)
+        except OSError:
+            continue
+        for entry in listing:
+            visited += 1
+            if visited > _MAX_WALKED_ENTRIES:
+                return frozenset(mask for mask in masks if len(mask) >= MIN_MASKED_LENGTH)
+            try:
+                if entry.is_dir(follow_symlinks=False):
+                    if entry.name not in _SKIP_DIRS:
+                        stack.append(Path(entry.path))
+                    continue
+                resolved = Path(os.path.realpath(entry.path))
+                if not resolved.is_relative_to(root):
+                    continue
+                if not secret_text(resolved.relative_to(root).as_posix()):
+                    continue
+                fd = os.open(resolved, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+            except (OSError, ValueError):
+                continue
+            with os.fdopen(fd, "rb") as stream:
+                info = os.fstat(stream.fileno())
+                if (
+                    not stat.S_ISREG(info.st_mode)
+                    or info.st_size > _MAX_MASKED_FILE_BYTES
+                    or total + info.st_size > _MAX_MASKED_TOTAL_BYTES
+                ):
+                    continue
+                total += info.st_size
+                text = stream.read(_MAX_MASKED_FILE_BYTES + 1).decode("utf-8", errors="replace")
+            masks |= _masks_of(text)
+    return frozenset(mask for mask in masks if len(mask) >= MIN_MASKED_LENGTH)
+
+
+def mask_source_secrets(text: str, masks: Iterable[str]) -> str:
+    """Replace each mask string with the sanitizer's placeholder, longest first, so a whole key
+    is masked before its lines."""
+    for mask in sorted(masks, key=len, reverse=True):
+        text = text.replace(mask, _PLACEHOLDER)
+    return text
 
 
 def retain_process_log(
@@ -100,7 +209,12 @@ async def upload_process_logs(root: Path, adapter, **kwargs) -> None:
 
 
 def retained_process_evidence(
-    directory: Path, before: set[Path], secrets, *, process_name: str | None = None
+    directory: Path,
+    before: set[Path],
+    secrets,
+    *,
+    process_name: str | None = None,
+    masks: Iterable[str] = (),
 ) -> str:
     """Read only bounded, sanitized logs retained by the current validation attempt."""
     if not directory.is_dir() or directory.is_symlink():
@@ -126,12 +240,17 @@ def retained_process_evidence(
                 info = os.fstat(stream.fileno())
                 if not stat.S_ISREG(info.st_mode) or info.st_size > 32768:
                     continue
-                text = sanitize_diagnostic(
-                    stream.read(32768).decode("utf-8", errors="replace"),
-                    secrets,
-                    limit=32768,
+                text = mask_source_secrets(
+                    sanitize_diagnostic(
+                        stream.read(32768).decode("utf-8", errors="replace"),
+                        secrets,
+                        limit=32768,
+                    ),
+                    masks,
                 )
-            piece = (sanitize_diagnostic(name, secrets) + "\n" + text)[:remaining]
+            piece = (
+                mask_source_secrets(sanitize_diagnostic(name, secrets), masks) + "\n" + text
+            )[:remaining]
             pieces.append(piece)
             remaining -= len(piece)
             if not remaining:

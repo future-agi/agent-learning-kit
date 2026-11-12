@@ -1010,6 +1010,10 @@ def _tool_mapping_selectors_changed(before, after) -> bool:
 _FOLDER_FLAGS = ("--directory", "--cwd", "--chdir", "--project", "--prefix", "--dir")
 
 
+_PYTHON_VALUE_OPTIONS = frozenset({"--check-hash-based-pycs"})
+_SCRIPT_VALUE_OPTIONS = frozenset({"-r", "--require", "--import"})
+
+
 def _runs_inline_code(command: list[str]) -> bool:
     """Whether the command hands an interpreter its program as an argument. The exact flags are
     refused wherever they stand; the forms joined to their value (-cexec(...), --print=...,
@@ -1023,16 +1027,35 @@ def _runs_inline_code(command: list[str]) -> bool:
         script = name in {"node", "nodejs", "bun", "deno"}
         if not (python or script):
             continue
+        # Every token up to the script or module is an option of the interpreter itself; the
+        # value of one that takes a value is not mistaken for the script.
+        takes_value = _PYTHON_VALUE_OPTIONS if python else _SCRIPT_VALUE_OPTIONS
         options = iter(command[index + 1:])
         for option in options:
             if not option.startswith("-") or option == "-m":
                 break
-            if python and option.startswith("-c"):
+            if python and _python_cluster_runs_code(option):
                 return True
             if script and option.startswith(("--eval", "--print", "-e", "-p")):
                 return True
-            if python and option in {"-W", "-X"}:
+            if option in takes_value or (
+                python and option.startswith("-") and not option.startswith("--") and option[-1] in "WX"
+            ):
                 next(options, None)
+    return False
+
+
+def _python_cluster_runs_code(option: str) -> bool:
+    """Whether a single-dash cluster of python's own flag letters carries ``c`` (-c, -Bc, -uc,
+    -IBc, -cexec(...)). Letters are read left to right as python reads them: -W and -X take the
+    rest of the cluster as their value and -m names a module, so nothing after them is a flag."""
+    if not option.startswith("-") or option.startswith("--"):
+        return False
+    for letter in option[1:]:
+        if letter == "c":
+            return True
+        if letter in "WXm" or not letter.isalpha():
+            return False
     return False
 
 
@@ -1057,6 +1080,16 @@ def _runtime_names_listed_file(
 
     def new_only(values: list[str], kept: list[str] | None) -> list[str]:
         return [value for value in values if kept is None or value not in kept]
+
+    def new_command_tokens(values: list[str], kept: list[str] | None) -> list[str]:
+        """A command token is carried over only as the same (previous token, token) pair: a bare
+        `.env` is not exempt because the base command has `--env-file .env`. The first token
+        pairs with None."""
+        def pairs(tokens: list[str]) -> list[tuple[str | None, str]]:
+            return [(tokens[i - 1] if i else None, token) for i, token in enumerate(tokens)]
+
+        carried = set(pairs(kept)) if kept is not None else set()
+        return [token for pair, token in zip(pairs(values), values) if pair not in carried]
 
     def old(field: str) -> list[str] | None:
         if existing is None:
@@ -1095,17 +1128,23 @@ def _runtime_names_listed_file(
             folder = token[2:]
         if folder:
             bases.append((workdir / folder).resolve())
-    # Files the kit writes itself from the runtime's config_files are the model's own values,
-    # not the customer's file of that name.
-    generated = {
-        (base / key).resolve() for key in runtime.config_files for base in (root, workdir)
-    }
-    for token in split(new_only(list(runtime.command), old("command"))):
-        for operand in {token, token.partition("=")[2]} if token.startswith("-") else {token}:
-            if not operand or any((base / operand).resolve() in generated for base in (root, workdir)):
-                continue
-            if any(listed(operand, base) for base in (*bases, root)):
-                return True
+    # Files the kit writes itself from the runtime's config_files are the model's own values, not
+    # the customer's file of that name. The keys are relative to the source root, not to the
+    # workdir, and an operand is exempt only if it resolves to one under every folder the command
+    # may be running in (the workdir and any folder a flag moves to): `uv --directory backend run
+    # python .env` runs backend/.env, not the key.
+    generated = {(root / key).resolve() for key in runtime.config_files}
+    for token in split(new_command_tokens(list(runtime.command), old("command"))):
+        # `-x=value` names its value; the flag in front is not a path.
+        operands = {token.partition("=")[2]} if token.startswith("-") and "=" in token else {token}
+        for operand in operands:
+            try:
+                if not operand or all((base / operand).resolve() in generated for base in bases):
+                    continue
+                if any(listed(operand, base) for base in (*bases, root)):
+                    return True
+            except (ValueError, OSError):
+                continue  # a name no system can open (a NUL, past the length limit) names no file
     return False
 
 

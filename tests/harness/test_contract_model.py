@@ -3992,8 +3992,10 @@ def test_every_kind_of_env_file_takes_the_same_rule(root, file):
         pytest.param(".env", "LLM_ENDPOINT=gpt-4o@llm.internal", "gpt-4o@llm.internal", id="user-at-host"),
         pytest.param(".env", "MODEL_ID=gpt-4o@evil.example", "gpt-4o@evil.example", id="model-then-host"),
         # A version is 3 to 8 digits or lowercase `latest`, after a name with no / or :.
-        # (user@123, fakepw@123456 and scott/fakepw@1521 look like model names and are not told
+        # (user@123 and fakepw@123456 look like model names and are not told
         # apart by shape.)
+        pytest.param(".env", "MODEL_SERVER=scott/fakepw@1521", "scott/fakepw@1521", id="login-with-slash-and-port"),
+        pytest.param(".env", "MODEL_SERVER=a/b/fakepw@123456", "a/b/fakepw@123456", id="login-with-deeper-path"),
         pytest.param(".env", "MODEL_SERVER=root@0", "root@0", id="login-one-digit-host"),
         pytest.param(".env", "MODEL_SERVER=admin@2130706433", "admin@2130706433", id="login-decimal-ip-host"),
         pytest.param(".env", "MODEL_SERVER=user@LATEST", "user@LATEST", id="login-uppercase-latest"),
@@ -4073,3 +4075,17 @@ def test_a_first_save_with_an_ordinary_runtime_command_is_saved(tmp_path, root):
 
     assert not result.get("is_error"), result
     assert saved(destination)["runtime"]["command"] == ["python", "agent.py"]
+
+
+def test_a_first_save_whose_command_runs_inline_code_is_refused(tmp_path, root):
+    destination = tmp_path / "out"
+
+    result = accept_contract(
+        payload(runtime={"language": "python", "command": ["python", "-Bc", "print(1)"]}),
+        destination,
+        source_root=root,
+    )
+
+    assert result.get("is_error"), result
+    assert "program as an argument" in text_of(result)
+    assert not (destination / "contract.json").exists()

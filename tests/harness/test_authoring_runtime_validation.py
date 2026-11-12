@@ -147,6 +147,39 @@ def test_validation_repairs_then_revalidates_and_records_scope(tmp_path):
     assert proof["reference_tools_proven"] is False
 
 
+def test_the_whole_repair_guidance_is_masked_against_the_sources_listed_files(tmp_path):
+    # A diagnostic's own text can echo process output, not just the process logs.
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / ".env").write_text("DB_PASSWORD=canary-source-password-7781\nPORT=8080\n")
+    authoring = tmp_path / "authoring"
+    authoring.mkdir()
+    calls = []
+
+    async def validate(*args):
+        calls.append("validate")
+        if len(calls) == 1:
+            error = RuntimeValidationError(
+                "environment", "login failed for canary-source-password-7781 on 8080"
+            )
+            error.process_evidence = "agent.log\nusing canary-source-password-7781\n"
+            raise error
+        return 10
+
+    seen = []
+
+    async def repair(phase, guidance):
+        seen.append(guidance)
+        return 0
+
+    asyncio.run(
+        validate_and_repair(None, source, authoring, validate=validate, repair=repair)
+    )
+    assert seen and "canary-source-password-7781" not in seen[0]
+    assert "<redacted>" in seen[0]
+    assert "8080" in seen[0]
+
+
 def test_validation_stops_after_two_repairs_without_false_certificate(tmp_path):
     repairs = []
 
@@ -2744,6 +2777,59 @@ def test_startup_failure_preserves_redacted_process_logs_for_repair(
             assert "aiohttp not installed" in evidence
             assert "private-startup-token" not in evidence
             assert "stale failure" not in evidence
+
+
+def test_startup_failure_masks_the_sources_listed_files_in_both_process_logs(
+    tmp_path, monkeypatch
+):
+    from fi.alk.harness import bundle_author_v2, process_preflight, process_runtime
+
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / ".env").write_text("DB_PASSWORD=canary-source-password-7781\nPORT=8080\n")
+    authoring = tmp_path / "authoring"
+    authoring.mkdir()
+    secrets = tmp_path / "secrets.json"
+    secrets.write_text('{"KEY":"private-startup-token"}')
+    logs = authoring / "generic-harness" / "process-logs"
+    logs.mkdir(parents=True)
+    started = []
+
+    class Provider:
+        def __init__(self, **kwargs):
+            pass
+
+        async def provision(self, *args, **kwargs):
+            started.append(True)
+            raise process_runtime.ProcessRuntimeError(
+                "depends_on", "depends_on_timeout", "readiness probe timed out"
+            )
+
+        async def close(self, **kwargs):
+            (logs / ("worlds-w0-agent-" + "a" * 32 + ".log")).write_text(
+                "connecting with canary-source-password-7781 on port 8080\n"
+            )
+
+    def compile_bundle(**kwargs):
+        return SimpleNamespace(
+            runtime=BundleRuntimeV2(
+                kind=RuntimeKindV2.PROCESS,
+                evidence_seam=EvidenceSeam.HTTP_TOOL,
+                control_service="agent",
+            )
+        )
+
+    monkeypatch.setattr(process_runtime, "ProcessRuntimeProvider", Provider)
+    monkeypatch.setattr(bundle_author_v2, "author_bundle_v2", compile_bundle)
+    monkeypatch.setattr(process_preflight, "preflight_bundle", lambda *a, **k: None)
+    job = SimpleNamespace(agent=SimpleNamespace(secret_refs={}))
+    with pytest.raises(RuntimeValidationError) as caught:
+        asyncio.run(
+            validate_once(job, source, authoring, secrets_path=secrets, local_runtime=True)
+        )
+    for evidence in (caught.value.process_evidence, caught.value.target_process_evidence):
+        assert "connecting with <redacted> on port 8080" in evidence
+        assert "canary-source-password-7781" not in evidence
 
 
 @pytest.mark.parametrize("readiness_only", [False, True])
