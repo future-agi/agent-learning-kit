@@ -19,6 +19,7 @@ from typing import Any
 
 # Main thread only: with livekit installed this import registers plugins.
 from fi.simulate import AgentInput
+from fi.simulate.agent.content import text_of
 
 
 def _load_callback() -> Any:
@@ -41,7 +42,7 @@ def _json_body(value: Any) -> dict[str, Any]:
     elif isinstance(value, dict):
         body = value
     else:
-        body = {"content": str(value)}
+        body = {"content": text_of(value)}
     if not isinstance(body, dict):
         raise TypeError("callback response must serialize to a JSON object")
     body.setdefault("content", "")

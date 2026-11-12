@@ -5,6 +5,7 @@ import time
 from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional
 
 from fi.simulate._logging import redacted_exc_info
+from fi.simulate.agent.content import text_of
 from fi.simulate.agent.generic import wrap_agent
 from fi.simulate.agent.wrapper import AgentInput, AgentResponse, AgentWrapper, SimulationArtifact, SimulationEvent
 from fi.simulate.environment import (
@@ -222,7 +223,12 @@ class ChatEnvironment:
             _agent_t0 = time.perf_counter()
             raw_response = await wrapper.call(agent_input)
             _agent_latency_ms = int((time.perf_counter() - _agent_t0) * 1000)
-            response = raw_response if isinstance(raw_response, AgentResponse) else AgentResponse(content=str(raw_response))
+            if isinstance(raw_response, AgentResponse):
+                response = raw_response
+                if not isinstance(response.content, str):
+                    response = response.model_copy(update={"content": text_of(response.content)})
+            else:
+                response = AgentResponse(content=text_of(raw_response))
             # Per-turn agent latency (wall-clock around the target call) so the
             # platform's avg_latency_ms populates for every target type.
             assistant_message = {"role": "assistant", "content": response.content, "latency_ms": _agent_latency_ms}

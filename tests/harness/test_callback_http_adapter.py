@@ -20,11 +20,17 @@ def _free_port() -> int:
         return probe.getsockname()[1]
 
 
-@pytest.fixture
-def adapter(tmp_path):
+def _serve(tmp_path, entrypoint):
     (tmp_path / "chat_agent.py").write_text(
         "def reply(agent_input):\n"
-        "    return {'content': 'thread ' + agent_input.thread_id}\n",
+        "    return {'content': 'thread ' + agent_input.thread_id}\n"
+        "\n"
+        "def thinking_reply(agent_input):\n"
+        "    return [\n"
+        "        {'type': 'thinking', 'thinking': 'hmm', 'signature': 'sig-abc'},\n"
+        "        {'type': 'text', 'text': 'The status '},\n"
+        "        {'type': 'text', 'text': 'is complete.'},\n"
+        "    ]\n",
         encoding="utf-8",
     )
     # Bundles embed the adapter's source and run it from the bundle, not from the package.
@@ -35,9 +41,11 @@ def adapter(tmp_path):
         [sys.executable, str(script)],
         env={
             **os.environ,
-            "ALK_CALLBACK_ENTRYPOINT": "chat_agent:reply",
+            "ALK_CALLBACK_ENTRYPOINT": entrypoint,
             "PORT": str(port),
-            "PYTHONPATH": str(tmp_path),
+            "PYTHONPATH": os.pathsep.join(
+                [str(tmp_path), os.environ.get("PYTHONPATH", "")]
+            ),
         },
         stderr=subprocess.PIPE,
     )
@@ -56,6 +64,16 @@ def adapter(tmp_path):
     process.wait(timeout=10)
 
 
+@pytest.fixture
+def adapter(tmp_path):
+    yield from _serve(tmp_path, "chat_agent:reply")
+
+
+@pytest.fixture
+def thinking_adapter(tmp_path):
+    yield from _serve(tmp_path, "chat_agent:thinking_reply")
+
+
 def test_a_callback_answers_from_the_request_thread(adapter):
     """The request thread is not the main thread; nothing imported there may require it."""
     body = json.dumps(
@@ -71,3 +89,22 @@ def test_a_callback_answers_from_the_request_thread(adapter):
     with urllib.request.urlopen(request, timeout=30) as response:
         assert response.status == 200
         assert json.loads(response.read())["content"] == "thread t1"
+
+
+def test_a_block_list_reply_keeps_only_its_text(thinking_adapter):
+    body = json.dumps(
+        {
+            "thread_id": "t1",
+            "messages": [{"role": "user", "content": "hello"}],
+            "new_message": {"role": "user", "content": "hello"},
+        }
+    ).encode()
+    request = urllib.request.Request(
+        f"{thinking_adapter}/invoke",
+        data=body,
+        headers={"Content-Type": "application/json"},
+    )
+    with urllib.request.urlopen(request, timeout=30) as response:
+        content = json.loads(response.read())["content"]
+    assert content == "The status is complete."
+    assert "signature" not in content and "thinking" not in content
