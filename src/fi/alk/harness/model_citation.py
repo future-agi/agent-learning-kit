@@ -626,7 +626,7 @@ def _env_value(line: str) -> str | None:
 
 # A Vertex model name carries its version after an @ (claude-3-5-sonnet@20240620); any other @ in
 # a value is a login (user@host, user:password@host).
-_VERSIONED_NAME = re.compile(r"[^@:]+@(?:\d{8}|latest)", re.IGNORECASE)
+_VERSIONED_NAME = re.compile(r"[^@:]+@(?:\d+|latest)", re.IGNORECASE)
 
 
 def _env_value_is_a_locator(value: str) -> bool:

@@ -3921,6 +3921,8 @@ def test_a_env_setting_named_for_a_model_by_any_of_its_words_is_accepted(root, w
     [
         pytest.param("VERTEX_MODEL=claude-3-5-sonnet@20240620", "claude-3-5-sonnet@20240620", id="vertex-version"),
         pytest.param("VERTEX_MODEL=claude-3-5-sonnet-v2@latest", "claude-3-5-sonnet-v2@latest", id="vertex-latest"),
+        pytest.param("VERTEX_MODEL=mistral-large@2407", "mistral-large@2407", id="vertex-short-version"),
+        pytest.param("VERTEX_MODEL=text-bison@001", "text-bison@001", id="vertex-three-digit-version"),
         pytest.param("BEDROCK_MODEL=anthropic.claude-3-5-sonnet-20240620-v1:0", "anthropic.claude-3-5-sonnet-20240620-v1:0", id="bedrock-colon"),
     ],
 )

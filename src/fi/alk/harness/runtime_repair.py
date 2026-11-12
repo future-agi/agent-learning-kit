@@ -18,7 +18,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from .backends import SessionSpec, tool, tool_server
 from .backends.base import ToolSpec
-from .backends.files import file_tools
+from .backends.files import file_tools, secret_text
 from .contract import (
     AgentContract,
     Dependency,
@@ -1043,6 +1043,10 @@ def validate_runtime_plan_patch(
             evidence.relative_to(root)
         except ValueError as exc:
             raise ValueError("runtime_repair_evidence_escapes_repository") from exc
+        if secret_text(evidence.relative_to(root).as_posix()):
+            # Judged where it resolves, before it is opened or checked for: a listed file, a link
+            # to one and one that is missing get this same answer, so no guess is ever checked.
+            raise ValueError(f"runtime_repair_evidence_holds_credentials: {relative}")
         if not evidence.exists():
             raise ValueError(f"runtime_repair_evidence_missing: {relative}")
         if evidence.is_file():
