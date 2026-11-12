@@ -63,6 +63,7 @@ jobs:
           tests/test_retell_transport_validation.py
           tests/test_call_originator_factory.py
           tests/test_retell_evidence.py
+          tests/test_retell_webcall_bridge.py
           tests/harness/test_process_runtime.py
           tests/harness/test_source_folder.py
           tests/test_harness_sandbox_server.py

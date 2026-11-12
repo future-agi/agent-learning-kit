@@ -44,6 +44,7 @@ from pathlib import Path
 from typing import Any, Awaitable, Callable, Mapping, Protocol
 
 from fi import agentcc, simulate
+from fi.simulate.agent.definition import retell_web_call_url as _retell_web_call_url
 from fi.simulate.runtime import (
     SimulationSpec,
     new_run_id,
@@ -598,14 +599,7 @@ def _build_spec(
             target={
                 "provider": "retell",
                 "agent_id": provider_target_id,
-                "api_url": str(
-                    simulator_config.get("retell_api_url")
-                    or "https://api.retellai.com/v2/create-web-call"
-                ),
-                "livekit_url": str(
-                    simulator_config.get("retell_livekit_url")
-                    or "wss://retell-ai-4ihahnq7.livekit.cloud"
-                ),
+                "api_url": _retell_web_call_url(simulator_config.get("retell_api_url")),
                 "api_key_env": RETELL_API_KEY_ALIAS,
             },
             transport={"kind": "retell_webcall"},
