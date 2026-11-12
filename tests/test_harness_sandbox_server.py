@@ -1506,6 +1506,11 @@ def _ref(manager, key):
     return SecretRef(manager=manager, key=key, purpose="target_provider")
 
 
+def _controller_ref(manager, key):
+    # A connection ref for the controller itself, not the customer agent's own credential.
+    return SecretRef(manager=manager, key=key, purpose="livekit_url")
+
+
 def _job_key(job_id, index):
     return f"ALK_JOB_{job_id.replace('-', '').upper()}_{index}"
 
@@ -2233,6 +2238,7 @@ def test_reserved_config_key_is_a_422_over_http(tmp_path):
         "http_proxy",
         "no_proxy",
         "ALK_SANDBOX_TOKEN",
+        "ANTHROPIC_API_KEY",
     ],
 )
 def test_a_reserved_alias_for_a_controller_variable_is_refused(request_type, alias):
@@ -2240,8 +2246,37 @@ def test_a_reserved_alias_for_a_controller_variable_is_refused(request_type, ali
         with pytest.raises(ValidationError, match=f"secret_alias_reserved: {alias}"):
             request_type(
                 source_path="/tmp/agent",
-                secret_refs={alias: _ref(manager, "SOME_NEUTRAL_KEY")},
+                secret_refs={alias: _controller_ref(manager, "SOME_NEUTRAL_KEY")},
             )
+
+
+@pytest.mark.parametrize("request_type", [LocalSandboxRequest, SandboxPreflightRequest])
+@pytest.mark.parametrize(
+    "alias", ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL", "GOOGLE_API_KEY"]
+)
+def test_the_agents_own_provider_credential_is_accepted(request_type, alias):
+    request_type(source_path="/tmp/agent", secret_refs={alias: _ref("environment", "MY_KEY")})
+
+
+@pytest.mark.parametrize("request_type", [LocalSandboxRequest, SandboxPreflightRequest])
+@pytest.mark.parametrize("alias", ["PYTHONPATH", "HARNESS_PLATFORM_API_KEY", "ALK_SANDBOX_TOKEN"])
+def test_the_agents_own_credential_takes_the_environment_value_rule(request_type, alias):
+    with pytest.raises(ValidationError, match=f"secret_alias_reserved: {alias}"):
+        request_type(source_path="/tmp/agent", secret_refs={alias: _ref("environment", "MY_KEY")})
+
+
+def test_the_agents_own_claude_key_reaches_the_agent_and_not_the_controller(
+    local_sandbox, launched_workers, monkeypatch
+):
+    monkeypatch.setenv("MY_ANTHROPIC", "customer-claude-key")
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+
+    _run_local_job(local_sandbox, refs={"ANTHROPIC_API_KEY": _ref("environment", "MY_ANTHROPIC")})
+
+    child = _only_worker_env(launched_workers)
+    assert child["ALK_RUNTIME_VALUE_ANTHROPIC_API_KEY"] == "customer-claude-key"
+    assert "ANTHROPIC_API_KEY" in child["ALK_RUNTIME_CONFIGURATION_NAMES"].split(",")
+    assert "ANTHROPIC_API_KEY" not in child
 
 
 @pytest.mark.parametrize("alias", ["A=B", " PYTHONPATH", "X\x00", "1BAD", ""])
@@ -2386,7 +2421,7 @@ def test_development_mode_reads_an_ordinary_server_variable(
 ):
     monkeypatch.setenv("LK_URL", "wss://dev.invalid")
 
-    _run_local_job(local_sandbox, refs={"X": _ref("environment", "LK_URL")})
+    _run_local_job(local_sandbox, refs={"X": _controller_ref("environment", "LK_URL")})
 
     assert _only_worker_env(launched_workers)["X"] == "wss://dev.invalid"
 
@@ -2519,5 +2554,5 @@ def test_no_proxy_setting_from_a_job_reaches_the_controllers_environment(
     with pytest.raises(ValidationError, match="secret_alias_reserved: no_proxy"):
         LocalSandboxRequest(
             source_path="/tmp/agent",
-            secret_refs={"no_proxy": _ref("environment", "SOME_NEUTRAL_KEY")},
+            secret_refs={"no_proxy": _controller_ref("environment", "SOME_NEUTRAL_KEY")},
         )
