@@ -1165,6 +1165,11 @@ class LocalSandbox:
                     runtime_names = {
                         str(name)
                         for name in job.metadata.get("environment_value_names", [])
+                    } | {
+                        # The customer agent's own credentials: the agent's, never the controller's.
+                        str(alias)
+                        for alias, reference in job.agent.secret_refs.items()
+                        if _target_alias(reference)
                     }
                     config_controller, config_runtime = _configuration_environment(
                         job.agent.config
@@ -1584,8 +1589,19 @@ def _validate_controller_names(
             _SANDBOX_FILE_PREFIX
         ):
             continue
+        if _target_alias(reference):
+            # The customer agent's own credential (ANTHROPIC_API_KEY, GOOGLE_API_KEY): it reaches
+            # only the agent's runtime namespace, so it takes the rule environment values take.
+            if alias in _RUNNER_RESERVED_ENVIRONMENT or alias.startswith("ALK_"):
+                raise ValueError(f"secret_alias_reserved: {alias}")
+            continue
         if controller_name_reserved(alias):
             raise ValueError(f"secret_alias_reserved: {alias}")
+
+
+def _target_alias(reference: SecretRef) -> bool:
+    """A ref the platform sends for the customer's agent, never for the controller."""
+    return reference.purpose == "target_provider"
 
 
 def _validate_environment_values(
