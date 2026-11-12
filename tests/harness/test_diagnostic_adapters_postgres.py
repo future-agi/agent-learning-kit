@@ -64,6 +64,24 @@ def test_array_failure_is_identified_from_datatype_not_message() -> None:
     assert diagnostic.owner is RepairOwner.AUTHORING
 
 
+def test_a_value_the_column_type_cannot_parse_goes_to_authoring_repair() -> None:
+    diagnostic = diagnose_postgres_error(
+        DatabaseError(
+            "22P02",
+            Diag(
+                message_primary='invalid input syntax for type uuid: "rider-1"',
+                table_name="riders",
+                column_name="id",
+                datatype_name="uuid",
+            ),
+        ),
+        stage=HarnessStage.VALIDATING_ENVIRONMENT,
+    )
+
+    assert diagnostic.code == "value_shape_mismatch"
+    assert diagnostic.owner is RepairOwner.AUTHORING
+
+
 def test_constraint_codes_have_stable_ownership() -> None:
     cases = {
         "23503": "foreign_key_missing",

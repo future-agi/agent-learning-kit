@@ -13,7 +13,9 @@ _SQLSTATE_CODES = {
     "23503": "foreign_key_missing",
     "23505": "unique_key_duplicate",
     "23514": "constraint_value_invalid",
-    "22P02": "schema_type_mismatch",
+    # The column's type cannot parse the authored text (a uuid, inet or enum value, say):
+    # the value has to be authored again, recompiling the same value cannot fix it.
+    "22P02": "value_shape_mismatch",
     "42804": "schema_type_mismatch",
     "42P01": "generated_setup_invalid",
     "42703": "generated_setup_invalid",
