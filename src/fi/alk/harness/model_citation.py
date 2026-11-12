@@ -596,7 +596,7 @@ def _names_a_model(line: str) -> bool:
     return bool(words & _MODEL_WORDS) or ("ENGINE" in words and bool(words & _ENGINE_PROVIDERS))
 
 
-_ENV_DEFAULT = re.compile(r"\$\{[A-Za-z_][A-Za-z0-9_]*:?-([^{}$]*)\}")
+_ENV_DEFAULT = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*):?-([^{}$]*)\}")
 
 
 def _env_value(line: str) -> str | None:
@@ -613,9 +613,12 @@ def _env_value(line: str) -> str | None:
         value = rest[1:end]
     else:
         value = re.split(r"[\s;,]", rest, maxsplit=1)[0]
-    # Compose's default, ${MODEL:-gpt-4o}: the default is what the setting holds when unset.
+    # Compose's default, ${MODEL:-gpt-4o}: the default is what the setting holds when unset. Only
+    # when the braced variable is the setting itself: ${DB_PASSWORD:-guess} is another setting's.
     default = _ENV_DEFAULT.fullmatch(value)
-    return default.group(1) if default else value
+    if default and default.group(1) == found.group(1):
+        return default.group(2)
+    return value
 
 
 def model_problems(contract: AgentContract, source_root: Path) -> list[str]:

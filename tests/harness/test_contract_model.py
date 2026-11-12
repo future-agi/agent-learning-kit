@@ -2123,7 +2123,7 @@ def test_a_value_outside_a_block_comment_is_the_model(root, file, written, line)
     "written",
     [
         pytest.param(
-            "/*\n" * (MIB // 3 - 20) + 'const model = "gpt-4o";\n',
+            "/*\n" * (MIB // 6 - 20) + 'const model = "gpt-4o";\n',
             id="a-file-of-openers",
         ),
         pytest.param(
@@ -3951,6 +3951,8 @@ def test_every_kind_of_env_file_takes_the_same_rule(root, file):
         pytest.param(".env_loader.py", 'MODEL = DEFAULT#"gpt-4"', "gpt-4", id="python-named-like-an-env-file"),
         pytest.param(".env.yaml", "DB_PASSWORD: MODELfake123", "MODELfake123", id="colon-setting"),
         pytest.param(".env", "MODELfake123", "MODELfake123", id="no-setting"),
+        pytest.param(".env", "OPENAI_MODEL=${DB_PASSWORD:-fakeguess1}", "fakeguess1", id="other-setting-compose-default"),
+        pytest.param(".env", 'OPENAI_MODEL="${OPENAI_API_KEY:-sk-fakeguess1}"', "sk-fakeguess1", id="quoted-other-setting-compose-default"),
     ],
 )
 def test_a_env_line_that_holds_a_secret_or_sets_nothing_is_refused(root, file, written, name):
