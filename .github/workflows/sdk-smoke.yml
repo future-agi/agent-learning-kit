@@ -70,6 +70,7 @@ jobs:
           --deselect tests/test_harness_sandbox_server.py::test_public_github_branch_url_populates_job_ref
           tests/test_harness_architecture.py
           tests/test_harness_credentials.py
+          tests/test_harness_secrets.py
           tests/test_harness.py
           --deselect tests/test_harness.py::test_hosted_claude_session_uses_durable_resume_and_restricted_tools
           --deselect tests/test_harness.py::test_a_skill_only_names_tools_its_stage_actually_has
