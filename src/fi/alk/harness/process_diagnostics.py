@@ -20,8 +20,10 @@ _MEANINGFUL = re.compile(
 # Opaque ids, so two copies of one record with different ids match: hex runs that carry a digit
 # (uuids, hashes), and letter-and-digit runs of twelve or more (job, request and sandbox ids;
 # shorter names such as a module name stay as they are, so two different errors stay apart).
+# Each alternative starts only where a run starts, so a long run is scanned once, not once per
+# position: the log is written by the tested agent and must not make this slow.
 _OPAQUE_ID = re.compile(
-    r"\b(?=[0-9a-fA-F-]*\d)[0-9a-fA-F][0-9a-fA-F-]{7,}\b"
+    r"(?<![0-9A-Za-z-])(?=[0-9a-fA-F-]*\d)[0-9a-fA-F][0-9a-fA-F-]{7,}\b"
     r"|(?<![A-Za-z0-9])(?=[A-Za-z0-9]*\d)(?=[A-Za-z0-9]*[A-Za-z])[A-Za-z0-9]{12,}(?![A-Za-z0-9])"
 )
 
@@ -86,8 +88,9 @@ def _collapse_repeated_lines(text: str) -> str:
     A healthy process repeats some lines all through its log (stream notices, polling, retries);
     left in, they push the one line that explains a failure out of the retained tail. A record is
     a line with its indented continuation, and a traceback stays whole, so two different errors
-    never share or lose frames. Records that differ only in digits (times, ids, counters) count
-    as the same record, but a status, exit or HTTP code keeps two errors apart. The kept copy is the
+    never share or lose frames. Records that differ only in digits (times, counters) or opaque ids
+    (uuids, hashes, long letter-and-digit ids) count as the same record, but a status, exit or
+    HTTP code keeps two errors apart. The kept copy is the
     last one, so its time is the latest, not the first.
     """
 

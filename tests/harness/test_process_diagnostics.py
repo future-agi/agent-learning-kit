@@ -275,6 +275,24 @@ def test_short_names_with_digits_still_tell_two_errors_apart():
     assert first in collapsed and second in collapsed
 
 
+def test_a_long_dash_run_written_by_the_agent_collapses_in_linear_time():
+    import time
+
+    from fi.alk.harness.process_diagnostics import _collapse_repeated_lines
+
+    started = time.monotonic()
+    _collapse_repeated_lines("a-" * 32000 + "\n")
+    assert time.monotonic() - started < 1.0
+
+
+def test_an_underscore_prefixed_hex_id_collapses_like_any_other_id():
+    from fi.alk.harness.process_diagnostics import _collapse_repeated_lines
+
+    lines = "".join(f"INFO poll req_{n:010x} state=pending\n" for n in (0x3941907E58, 0x1A2B3C4D5E))
+    collapsed = _collapse_repeated_lines(lines + "ERROR root cause\n")
+    assert "[earlier copies of the next line omitted: 1]" in collapsed
+
+
 def test_a_nul_byte_in_the_log_does_not_break_collapsing(tmp_path):
     from fi.alk.harness.process_diagnostics import retain_process_log
 
