@@ -7,7 +7,9 @@ the next turn instead of surfacing once the session is already over.
 
 from __future__ import annotations
 
+import asyncio
 import json
+import secrets
 from pathlib import Path
 from typing import Any
 
@@ -16,6 +18,15 @@ from fi.simulate.agent.wrappers.http_events import (
     CompletedToolRows,
 )
 
+from .agent_type_check import (
+    SECOND_LOOK_READ,
+    SecondLook,
+    agent_type_failure,
+    browser_tools_found,
+    failure_message,
+    is_browser,
+    modality_text,
+)
 from .backends import qualified as qualified  # noqa: F401  (re-export; callers import it here)
 from .backends import tool, tool_server
 
@@ -34,6 +45,7 @@ from .contract import (
     generated_chat_interface_problem,
     validate_contract,
 )
+from .failure_file import FAILURE_FILE, write_failure_file
 from .instrumentation_evidence import detect_instrumentation
 
 CONTRACT_SERVER = "contract"
@@ -237,11 +249,21 @@ def _without_nulls(value: Any) -> Any:
 MOST_CHOSEN_EVALS = 6
 
 
+def _new_receipt() -> str:
+    return secrets.token_hex(4)
+
+
+def _stop_message(destination: Path) -> str:
+    said = failure_message(destination) or "This build can't go on."
+    return f"{said} Don't submit again or do more work; tell the person."
+
+
 def contract_tools(
     destination: Path,
     available_evals: list[dict[str, Any]] | None = None,
     *,
     source_root: Path | None = None,
+    scan_root: Path | None = None,
     require_setup_contract: bool = False,
 ) -> Any:
     """A server exposing ``submit_contract``, writing to ``destination`` on acceptance.
@@ -272,6 +294,11 @@ def contract_tools(
     # A gate with no way through would permanently block the rare agent that genuinely lacks it,
     # and this stage cannot tell those two apart from the outside.
     nudged: set[str] = set()
+    refused = False
+    second_look = SecondLook()
+    found: list[str] | None = None
+    # Calls in one message share one scan: each running its own takes that many times longer.
+    scan: asyncio.Future[list[str]] | None = None
 
     @tool(
         "submit_contract",
@@ -293,6 +320,11 @@ def contract_tools(
         # call and a sequence of rejected guesses.
         schema(
             {
+                SECOND_LOOK_READ: {
+                    "type": "string",
+                    "description": "Only when a second look asked for it: the value it gave. "
+                    "It is not part of the contract.",
+                },
                 "agent": {
                     "type": "string",
                     "description": "Short lower-case identifier, no spaces. Only a label for "
@@ -305,9 +337,10 @@ def contract_tools(
                 "modality": {
                     "type": "string",
                     "enum": list(known_modalities()),
-                    "description": "How a person reaches it, read from its runtime. A voice "
-                    "session (LiveKit, telephony, TTS/STT) is voice; a text interface is chat; "
-                    "a browser-driving agent is browser. This decides how it is later run.",
+                    "description": "How this agent is run, read from its runtime. A voice "
+                    "session (LiveKit, telephony, TTS/STT) is voice; a text conversation is chat; "
+                    "an agent a person uses to carry out work on websites or a computer is "
+                    "browser. This decides how it is later run.",
                 },
                 "call_direction": {
                     "type": "string",
@@ -431,6 +464,21 @@ def contract_tools(
                         # That every tool has none is the real defect, and validate_contract
                         # is where it is caught, with an explanation.
                     },
+                },
+                "workers": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "id": {"type": "string"},
+                            "name": {"type": "string"},
+                            "tools": {"type": "array", "items": {"type": "string"}},
+                        },
+                        "required": ["id"],
+                    },
+                    "description": "Agents this one hands work to, if any: an id no other worker has, the name the app "
+                    "gives the agent (its spans carry it), and the names of the tools above that it "
+                    "holds. Leave out for an agent that hands no work on.",
                 },
                 "data_schema": {
                     "type": "object",
@@ -1063,7 +1111,51 @@ def contract_tools(
         ),
     )
     async def submit_contract(args: dict[str, Any]) -> dict[str, Any]:
-        payload = unwrapped(args)
+        payload = dict(unwrapped(args))
+        receipt = payload.pop(SECOND_LOOK_READ, None) or (
+            args.get(SECOND_LOOK_READ) if isinstance(args, dict) else None
+        )
+        nonlocal refused, found, scan
+        # Taken before the scan's wait: a call already running when a look went out hasn't read it.
+        looked_before = second_look.given
+        if refused or (destination / FAILURE_FILE).is_file():
+            return _ok(_stop_message(destination))
+        if found is None:
+            # Run again only a scan that can't give its answer here: one that raised or was
+            # cancelled, or one on another loop, which this one can't wait on. One that finished
+            # after every call waiting on it was cancelled still holds its answer.
+            if (
+                scan is None
+                or scan.get_loop() is not asyncio.get_running_loop()
+                or (scan.done() and (scan.cancelled() or scan.exception() is not None))
+            ):
+                scan = asyncio.ensure_future(asyncio.to_thread(browser_tools_found, scan_root))
+            # Shielded: one call cancelled mustn't cancel the scan the others wait on.
+            found = await asyncio.shield(scan)
+            # A call running alongside this one may have refused while this one waited.
+            if refused or (destination / FAILURE_FILE).is_file():
+                return _ok(_stop_message(destination))
+        claimed = modality_text(payload.get("modality"))
+        if claimed and not is_browser(claimed) and claimed not in known_modalities():
+            return _problems(
+                [
+                    f"{claimed!r} is not a modality. Use voice or chat, or browser if its main "
+                    "job is work on websites or a computer."
+                ]
+            )
+        verdict = second_look.verdict(claimed, receipt, found, given_before=looked_before)
+        if verdict == "refuse":
+            # Set first: if the write fails, the model must not get a resubmission through.
+            refused = True
+            # First: an earlier reading in this folder would otherwise build the agent just
+            # refused, even if the write below fails.
+            try:
+                (destination / "contract.json").unlink(missing_ok=True)
+            finally:
+                write_failure_file(agent_type_failure(found), destination)
+            return _ok(_stop_message(destination))
+        if verdict == "second_look":
+            return _problems([second_look.issue(claimed, found, _new_receipt())])
         data_store = payload.get("data_store")
         if not isinstance(data_store, dict):
             data_store = {}

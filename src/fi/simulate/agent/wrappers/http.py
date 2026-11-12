@@ -967,7 +967,7 @@ class HTTPAgentWrapper(AgentWrapper):
 
     def _agent_response_from_payload(self, payload: Any) -> AgentResponse:
         if self.protocol == "json_template":
-            selected = _select_response_value(payload, self.response_path)
+            selected = _select_response_value(payload, self.response_path, text=True)
             if isinstance(selected, Mapping):
                 raise ValueError(
                     "response_path must select chat content, not a JSON object"
@@ -1109,6 +1109,23 @@ def _render_template(value: Any, context: Mapping[str, Any]) -> Any:
     return _PLACEHOLDER.sub(replacement, value)
 
 
+class _StreamedEvents(list):
+    """The events of a streamed reply (server-sent events or JSON lines), in the order sent."""
+
+
+def _streamed_text(pieces: list[str]) -> str:
+    """Deltas join; a stream whose pieces each strictly extend the last, or end on the whole text, keeps its last."""
+    if pieces[-1] == "".join(pieces[:-1]):
+        return pieces[-1]
+    cumulative = pieces[:-1] if len(pieces) > 2 and pieces[-1] == pieces[-2] else pieces
+    if all(
+        len(later) > len(earlier) and later.startswith(earlier)
+        for earlier, later in zip(cumulative, cumulative[1:])
+    ):
+        return pieces[-1]
+    return "".join(pieces)
+
+
 def _decode_json_or_sse(text: str) -> Any:
     try:
         return json.loads(text)
@@ -1125,9 +1142,16 @@ def _decode_json_or_sse(text: str) -> Any:
             except json.JSONDecodeError:
                 events.append(data)
         if events:
-            return events
+            return _StreamedEvents(events)
+        # Newline-delimited JSON, one object per line, as some agent servers stream.
+        lines = [line for line in text.splitlines() if line.strip()]
+        if lines:
+            try:
+                return _StreamedEvents(json.loads(line) for line in lines)
+            except json.JSONDecodeError:
+                pass
         raise ValueError(
-            "HTTP target returned neither JSON nor JSON server-sent events"
+            "HTTP target returned neither JSON, JSON server-sent events nor JSON lines"
         )
 
 
@@ -1156,7 +1180,8 @@ def _tool_result_error(result: Any, path: str) -> bool:
     raise ValueError("tool result error must be null, boolean or string")
 
 
-def _select_response_value(payload: Any, path: str) -> Any:
+def _select_response_value(payload: Any, path: str, *, text: bool = False) -> Any:
+    """The value at ``path``; with ``text``, a streamed reply's pieces are its reply text, not its latest event."""
     if not path:
         return payload
     segments = [raw for raw in path.removeprefix("$").strip(".").split(".") if raw]
@@ -1177,7 +1202,19 @@ def _select_response_value(payload: Any, path: str) -> Any:
                 # response schema describes one event.  A path such as ``content.parts.0.text``
                 # is therefore still meaningful: select the latest event matching that shape.
                 # This is envelope-driven rather than framework-specific and leaves explicit
-                # numeric paths (including negative indexes) unchanged.
+                # numeric paths (including negative indexes) unchanged. A streamed reply's
+                # text is spread over its events instead.
+                if text and isinstance(current, _StreamedEvents):
+                    pieces = []
+                    for item in current:
+                        try:
+                            piece = select(item, offset)
+                        except ValueError:
+                            continue
+                        if piece is not None:
+                            pieces.append(piece)
+                    if pieces and all(isinstance(piece, str) for piece in pieces):
+                        return _streamed_text(pieces)
                 last_error: ValueError | None = None
                 for item in reversed(current):
                     try:

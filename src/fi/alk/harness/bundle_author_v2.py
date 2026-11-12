@@ -68,6 +68,8 @@ from .bundle_v2 import (
 from .contract import DataStore, Runtime, ToolEntry, runtime_public_environment
 from .generated_runtime import (
     GeneratedRuntimeError,
+    framework_instrumentation_command,
+    uv_run_project,
     _python_language_version,
     select_python_extras,
     python_workspace_root,
@@ -3089,19 +3091,30 @@ def resolve_environment_plan(
         for process in normalized_processes
     ]
 
+    # A voice agent's tool calls are traced by its LiveKit worker, never twice.
     if (
         not isinstance(selected, ComposeSelection)
         and runtime_model.command
-        and contract_interface_kind == "command"
+        and str(contract_modality or "").strip().lower() != "voice"
     ):
         trace_environment = _source_tool_trace_environment(
-            root, runtime_model, tool_entrypoints or []
+            root,
+            runtime_model,
+            (tool_entrypoints or []) if contract_interface_kind == "command" else [],
         )
         if trace_environment:
             processes = [
-                process.model_copy(update={
-                    "environment": {**process.environment, **trace_environment},
-                })
+                process.model_copy(
+                    update={
+                        "environment": {**process.environment, **trace_environment},
+                        "build_commands": [
+                            *process.build_commands,
+                            framework_instrumentation_command(
+                                uv_run_project(process.run_command)
+                            ),
+                        ],
+                    }
+                )
                 if isinstance(process, SourceProcess) and process.name == control_name
                 else process
                 for process in processes
@@ -3128,12 +3141,14 @@ def _source_tool_trace_environment(
             declared.append({
                 "name": entry.tool, "module": entry.module, "callable": entry.callable,
             })
-    if not declared:
-        return {}
+    # Every Python agent's framework spans are read for its tool calls and the agent that made
+    # each, so any multi-agent source is observed without changes to it.
     environment = {
         "HARNESS_TOOL_TRACE": "{{WORLD_DIR}}/agent-tool-calls.jsonl",
-        "ALK_TOOL_TRACE_BINDINGS": json.dumps(declared, sort_keys=True),
+        "ALK_OBSERVE_FRAMEWORKS": "1",
     }
+    if declared:
+        environment["ALK_TOOL_TRACE_BINDINGS"] = json.dumps(declared, sort_keys=True)
     component = _runtime_component(source, runtime.workdir)
     project = _pyproject_document(component / "pyproject.toml").get("project", {})
     requirements = list(project.get("dependencies", []))
@@ -3159,6 +3174,15 @@ _SOURCE_TOOL_TRACE_VERSION = 1
 
 
 def _uses_source_tool_trace(processes: Sequence[Any]) -> bool:
+    """Whether ALK traces the source's tools or its framework spans; LiveKit's own trace alone does not count."""
+    return any(
+        {"ALK_TOOL_TRACE_BINDINGS", "ALK_OBSERVE_FRAMEWORKS"}
+        & set(getattr(process, "environment", None) or {})
+        for process in processes
+    )
+
+
+def _binds_source_tools(processes: Sequence[Any]) -> bool:
     return any(
         "ALK_TOOL_TRACE_BINDINGS" in (getattr(process, "environment", None) or {})
         for process in processes
@@ -3419,12 +3443,9 @@ def _with_source_tool_trace(
             if key not in {"HARNESS_TOOL_TRACE", "ALK_TOOL_TRACE_BINDINGS"}
         }
         if bindings:
-            environment.update(
-                {
-                    "HARNESS_TOOL_TRACE": "{{WORLD_DIR}}/agent-tool-calls.jsonl",
-                    "ALK_TOOL_TRACE_BINDINGS": json.dumps(bindings),
-                }
-            )
+            environment["ALK_TOOL_TRACE_BINDINGS"] = json.dumps(bindings)
+        if bindings or "ALK_OBSERVE_FRAMEWORKS" in environment:
+            environment["HARNESS_TOOL_TRACE"] = "{{WORLD_DIR}}/agent-tool-calls.jsonl"
         updated.append(process.model_copy(update={"environment": environment}))
     return tuple(updated)
 
@@ -3596,7 +3617,7 @@ def author_bundle_v2(
         if contract_modality == "chat"
         else []
     )
-    if trace_bindings and not _uses_source_tool_trace(plan.processes):
+    if trace_bindings and not _binds_source_tools(plan.processes):
         plan = replace(
             plan,
             processes=_with_source_tool_trace(
@@ -4146,7 +4167,7 @@ def _carry_contract(
     traced_command = (
         isinstance(interface, dict)
         and str(interface.get("kind") or "").strip().lower() == "command"
-        and _uses_source_tool_trace(processes)
+        and _binds_source_tools(processes)
     )
     if (
         str(body.get("modality") or "").strip().lower() == "chat"

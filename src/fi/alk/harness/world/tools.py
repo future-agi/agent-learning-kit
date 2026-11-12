@@ -1474,7 +1474,7 @@ def world_tools(
 
     @tool(
         "set_modality",
-        "Correct how a person actually reaches this agent: voice, chat or browser. Modality "
+        "Correct how a person actually reaches this agent: voice or chat. Modality "
         "picks the world, the simulated person and the transport, so a wrong one does not weaken "
         "a run, it runs a different test. Use it when the operator says where the agent is "
         "deployed and the contract disagrees: an agent's code reads the same answering a chat "

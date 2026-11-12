@@ -176,6 +176,182 @@ def test_file_tool_trace_is_collected_from_runtime_metadata(tmp_path: Path) -> N
     assert calls[1].error == "declined"
 
 
+def test_the_sealed_trace_row_keeps_the_runtime_worker_task_and_event_ids(
+    tmp_path: Path,
+) -> None:
+    from fi.alk.harness.world.runtime import trace_row
+
+    trace = _trace_lines(
+        tmp_path / "agent-tool-calls.jsonl",
+        {
+            "name": "lookup",
+            "arguments": {},
+            "output": "found",
+            "is_error": False,
+            "source": "crewai",
+            "agent_key": "researcher",
+            "task_name": "Find weather",
+            "event_id": "e2",
+            "parent_event_id": "e1",
+        },
+        {"name": "lookup", "arguments": {}, "output": "found", "is_error": False},
+    )
+    observed, plain = (
+        trace_row(call)
+        for call in cr._collect_file_tool_calls(
+            _runtime(metadata={"tool_trace_path": str(trace)})
+        )
+    )
+
+    assert (observed["worker_id"], observed["task_label"]) == (
+        "researcher",
+        "Find weather",
+    )
+    assert observed["runtime_ids"] == {"event_id": "e2", "parent_event_id": "e1"}
+    assert not {
+        "worker_id",
+        "worker_label",
+        "task_id",
+        "task_label",
+        "runtime_ids",
+    } & set(plain)
+
+
+_SPAN_LINES = (
+    {
+        "name": "ask_writer",
+        "arguments": {},
+        "output": None,
+        "is_error": False,
+        "source": "otel",
+        "agent_key": "Coordinator",
+        "delegated_to": "Writer",
+        "at": 1.0,
+        "ended_at": 3.0,
+    },
+    {
+        "name": "draft_note",
+        "arguments": {},
+        "output": None,
+        "is_error": False,
+        "source": "otel",
+        "agent_key": "Writer",
+        "at": 2.0,
+    },
+)
+
+
+def _observed() -> list[Call]:
+    # Stamped once their results were read, later than they started and in the other order.
+    return [
+        Call(
+            name="ask_writer",
+            arguments={"topic": "tides"},
+            result="done",
+            ok=True,
+            at=9.2,
+        ),
+        Call(
+            name="draft_note",
+            arguments={"topic": "tides"},
+            result="drafted",
+            ok=True,
+            at=9.1,
+        ),
+    ]
+
+
+def test_span_lines_name_the_agent_of_calls_another_source_observed_and_add_none(
+    tmp_path: Path,
+) -> None:
+    trace = _trace_lines(
+        tmp_path / "agent-tool-calls.jsonl",
+        *_SPAN_LINES,
+        {"name": "draft_note", "arguments": {}, "output": "written", "is_error": False},
+    )
+    calls = cr._with_span_calls(
+        _observed(), _runtime(metadata={"tool_trace_path": str(trace)})
+    )
+    assert [
+        (c.name, c.arguments, c.worker_id, c.delegated_to, c.at, c.ended_at)
+        for c in calls
+    ] == [
+        ("ask_writer", {"topic": "tides"}, "Coordinator", "Writer", 1.0, 3.0),
+        ("draft_note", {"topic": "tides"}, "Writer", "", 2.0, 0.0),
+    ]
+
+
+def test_a_runtime_s_hand_off_keeps_when_the_worker_returned_and_is_never_graded(
+    tmp_path: Path,
+) -> None:
+    # CrewAI's observer writes each agent a flow runs as a hand-off, with its own start and end.
+    from fi.alk.harness.world.runtime import graded_calls, trace_row
+
+    trace = _trace_lines(
+        tmp_path / "agent-tool-calls.jsonl",
+        {
+            "name": "Draft checker",
+            "arguments": {},
+            "output": "valid",
+            "is_error": False,
+            "source": "crewai",
+            "agent_key": "DraftFlow",
+            "delegated_to": "Draft checker",
+            "at": 4.0,
+            "ended_at": 6.5,
+            "kind": "handoff",
+        },
+    )
+    calls = cr._collect_file_tool_calls(
+        _runtime(metadata={"tool_trace_path": str(trace)})
+    )
+    (row,) = (trace_row(call) for call in calls)
+    assert (
+        row["worker_id"],
+        row["delegated_to"],
+        row["at"],
+        row["ended_at"],
+        row["kind"],
+    ) == ("DraftFlow", "Draft checker", 4.0, 6.5, "delegated")
+    assert graded_calls(calls) == []
+
+
+def test_a_span_that_recorded_no_arguments_reads_as_none_not_as_raw_text(
+    tmp_path: Path,
+) -> None:
+    trace = _trace_lines(
+        tmp_path / "agent-tool-calls.jsonl",
+        {**_SPAN_LINES[1], "arguments": "", "output": ""},
+        {"name": "note", "arguments": "not json", "output": "", "is_error": False},
+    )
+    calls = cr._collect_file_tool_calls(
+        _runtime(metadata={"tool_trace_path": str(trace)})
+    )
+    assert [(c.name, c.arguments) for c in calls] == [
+        ("note", {"raw": "not json"}),
+        ("draft_note", {}),
+    ]
+
+
+@pytest.mark.parametrize(
+    "seam", [EvidenceSeam.TOOL_TRACE, EvidenceSeam.HTTP_TOOL, None]
+)
+def test_a_process_agent_s_seam_calls_keep_their_evidence_and_take_the_agent_from_its_spans(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, seam: EvidenceSeam | None
+) -> None:
+    trace = _trace_lines(tmp_path / "agent-tool-calls.jsonl", *_SPAN_LINES)
+    for reader in ("_collect_tool_trace_calls", "_collect_http_tool_calls"):
+        monkeypatch.setattr(cr, reader, lambda runtime: tuple(_observed()))
+    _job_obj, context = _context(tmp_path=tmp_path, evidence_seam=seam)
+    runner = cr.CallRunnerImpl(FakeAdapter(), context, place_call=None)
+    calls = runner._collect_calls(_runtime(metadata={"tool_trace_path": str(trace)}))
+    # With no seam, the spans are the only evidence.
+    assert [(c.name, c.result, c.worker_id) for c in calls] == [
+        ("ask_writer", "done" if seam else None, "Coordinator"),
+        ("draft_note", "drafted" if seam else None, "Writer"),
+    ]
+
+
 def test_a_result_traced_as_the_text_of_a_dict_reaches_checks_as_the_dict(tmp_path: Path) -> None:
     trace = tmp_path / "agent-tool-calls.jsonl"
     trace.write_text(
@@ -2445,6 +2621,50 @@ def test_a_world_actor_s_actions_are_sealed_with_the_transcript_never_as_the_age
     assert [
         (one["name"], one["actor_id"]) for one in transcript["world_actors"]["actions"]
     ] == [("records.approve", "reviewer")]
+
+
+def test_a_hand_off_record_among_the_agent_s_calls_takes_no_action_id_and_moves_none(
+    tmp_path, monkeypatch
+) -> None:
+    _job_obj, context = _context(
+        tmp_path=tmp_path, evidence_seam=EvidenceSeam.TOOL_TRACE
+    )
+    _write_scenario_doc(context.bundle_dir, scenario_key="k1")
+    _with_actors(context.bundle_dir)
+    columns = ["name", "arguments", "result", "ok", "error", "at", "action_id", "actor_id", "outcome"]
+    rows = [
+        ("request_approval", {}, None, True, "", 1.0, "a1", "agent", "committed"),
+        ("approve", {}, None, True, "", 2.0, "a2", "reviewer", "committed"),
+    ]
+    monkeypatch.setitem(sys.modules, "psycopg", _FakePsycopg(rows, columns))
+
+    async def place_call(spec):
+        return _report(
+            transcript="user: hello", messages=[{"role": "user", "content": "hello"}]
+        )
+
+    adapter = FakeAdapter()
+    runner = cr.CallRunnerImpl(adapter, context, place_call=place_call)
+    # The worker's run comes first in the record; it is not one of the world's actions.
+    calls = (
+        Call(name="Approvals worker", arguments={}, delegated_to="Approvals worker", handoff=True),
+        Call(name="request_approval", arguments={}, ok=True, at=1.0),
+    )
+    monkeypatch.setattr(runner, "_collect_calls", lambda _runtime: calls)
+    _run(
+        runner,
+        _FakeScenario("k1"),
+        _runtime(
+            endpoints={"database": _postgres_endpoint()},
+            metadata={"livekit_agent_name": "agent-w0"},
+        ),
+    )
+    sealed = {kind: data for kind, _key, data in adapter.uploads}
+    trace = [json.loads(line) for line in sealed[cr.ArtifactKind.TOOL_TRACE].decode().splitlines()]
+    assert [(one["name"], one.get("action_id")) for one in trace] == [
+        ("Approvals worker", None),
+        ("request_approval", "a1"),
+    ]
 
 
 def test_a_call_where_only_a_world_actor_took_part_lists_it_in_the_call_s_actor_record(
