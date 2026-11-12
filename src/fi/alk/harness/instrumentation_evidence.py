@@ -62,7 +62,7 @@ def _python_imports(root: Path, reached: Iterable[Path] = ()) -> set[str]:
     imported: set[str] = set()
     local: set[str] = set()
     budget = ParseBudget()
-    escapes = EscapeBudget()
+    escapes = EscapeBudget(reader="instrumentation scan")
     for directory, subdirectories, files in os.walk(root):
         if Path(directory) != root and any(
             name.endswith(".dist-info") for name in subdirectories
@@ -95,11 +95,13 @@ def _python_imports(root: Path, reached: Iterable[Path] = ()) -> set[str]:
 def _read_imports(
     path: Path, budget: ParseBudget, escapes: EscapeBudget, imported: set[str]
 ) -> None:
-    text = read_module(path, needles=_NAMES, escapes=escapes)
-    if text is None or not budget.spend(text):
+    text = read_module(path, needles=_NAMES, escapes=escapes, also=(also := []))
+    if text is None:
         return
-    if (tree := parsed(text)) is not None:
-        imported.update(_imports(tree))
+    # An import and `python file.py` can read a crafted file two ways: each reading on its own.
+    for reading in (text, *also):
+        if budget.spend(reading) and (tree := parsed(reading)) is not None:
+            imported.update(_imports(tree))
 
 
 def _imports(tree: ast.AST) -> set[str]:
