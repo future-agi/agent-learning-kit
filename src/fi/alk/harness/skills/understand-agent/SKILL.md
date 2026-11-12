@@ -239,7 +239,9 @@ Find, in roughly this order:
    record the conversational ingress the submitted runtime already exposes: HTTP, WebSocket or
    callable; its exact port and path; whether it is OpenAI Chat Completions-compatible; and any
    existing health path. Do not invent an endpoint. Without a real ingress the runtime may be
-   startable but the simulator cannot honestly claim to have exercised it.
+   startable but the simulator cannot honestly claim to have exercised it. When the ingress is
+   HTTP, the runtime command must start the long-running web or API server the source documents
+   for it, never a terminal REPL that reads a console, such as `adk run`.
 
    If an HTTP ingress uses neither the ALK nor OpenAI envelope, do not stop and do not label it as
    one of those protocols. Read the route models, OpenAPI setup, client examples and tests, then use

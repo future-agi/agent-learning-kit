@@ -4126,6 +4126,258 @@ def test_adk_web_command_without_interface_uses_source_http_api(tmp_path: Path) 
     )
 
 
+@pytest.mark.parametrize(
+    ("server", "app_name"),
+    [
+        (["adk", "web"], "root_app"),
+        (["adk", "api_server"], "root_app"),
+        (["adk", "api_server", "root_app"], "root_app"),
+        (["adk", "api_server", "agents"], "nested_app"),
+        (["adk", "api_server", "--port", "8080", "agents"], "nested_app"),
+        (
+            ["adk", "api_server", "agents", "--host", "0.0.0.0", "--reload"],
+            "nested_app",
+        ),
+        (["adk", "api_server", "--port=8080", "agents/nested_app"], "nested_app"),
+    ],
+)
+def test_adk_http_servers_resolve_the_app_their_agents_directory_serves(
+    tmp_path: Path, server: list[str], app_name: str
+) -> None:
+    source = tmp_path / "source"
+    for app in (source / "root_app", source / "agents" / "nested_app"):
+        app.mkdir(parents=True)
+        (app / "__init__.py").write_text("", encoding="utf-8")
+        (app / "agent.py").write_text("root_agent = object()\n", encoding="utf-8")
+    (source / "pyproject.toml").write_text(
+        "[project]\nname='adk-app'\nversion='1'\n", encoding="utf-8"
+    )
+    authoring = _authoring(tmp_path)
+    _write_chat_contract(authoring, command=["uv", "run", *server])
+    with sqlite3.connect(authoring / "world.sqlite") as database:
+        database.execute("CREATE TABLE fixture (id TEXT PRIMARY KEY)")
+
+    output = tmp_path / "bundle"
+    manifest = author_bundle_v2(
+        source=source,
+        job=_job(connector="auto", metadata={"generic_harness_v1": True}),
+        authoring=authoring,
+        output=output,
+    )
+
+    assert manifest.metadata["adk_web_app"] == app_name
+    interface = json.loads((output / "contract.json").read_text())["runtime"][
+        "interface"
+    ]
+    assert interface["path"] == "/run_sse"
+    assert interface["request_template"]["app_name"] == app_name
+    assert interface["setup_requests"][0]["path"] == (
+        f"/apps/{app_name}/users/{{{{thread_id}}}}/sessions"
+    )
+
+
+@pytest.mark.parametrize(
+    ("command", "app_name"),
+    [
+        ([".venv/bin/adk", "api_server", "agents"], "nested_app"),
+        (["/usr/local/bin/adk", "web", "agents"], "nested_app"),
+        (["python", "-m", "google.adk.cli", "api_server", "agents"], "nested_app"),
+        (["python3", "-m", "google.adk.cli", "web", "agents"], "nested_app"),
+        (["adk", "api_server", "yaml_app"], "yaml_app"),
+        (["adk", "api_server", "yaml_agents"], "only_yaml"),
+    ],
+)
+def test_adk_servers_are_recognised_however_adk_is_invoked_and_however_the_app_is_defined(
+    tmp_path: Path, command: list[str], app_name: str
+) -> None:
+    from fi.alk.harness.bundle_author_v2 import _adk_app_name, _adk_server_arguments
+
+    nested = tmp_path / "agents" / "nested_app"
+    nested.mkdir(parents=True)
+    (nested / "__init__.py").write_text("", encoding="utf-8")
+    (nested / "agent.py").write_text("root_agent = object()\n", encoding="utf-8")
+    # ADK also accepts an app defined by root_agent.yaml, as one app or as a sub-app.
+    (tmp_path / "yaml_app").mkdir()
+    (tmp_path / "yaml_app" / "root_agent.yaml").write_text(
+        "name: x\n", encoding="utf-8"
+    )
+    (tmp_path / "yaml_agents" / "only_yaml").mkdir(parents=True)
+    (tmp_path / "yaml_agents" / "only_yaml" / "root_agent.yaml").write_text(
+        "name: y\n", encoding="utf-8"
+    )
+
+    assert _adk_server_arguments(command) is not None
+    assert _adk_app_name(tmp_path, ".", command) == app_name
+
+
+def test_an_adk_app_without_an_init_file_is_still_the_app_served(tmp_path: Path) -> None:
+    from fi.alk.harness.bundle_author_v2 import _adk_app_name
+
+    # ADK loads agents_dir/app/agent.py whether or not app/__init__.py exists.
+    app = tmp_path / "agents" / "plain_app"
+    app.mkdir(parents=True)
+    (app / "agent.py").write_text("root_agent = object()\n", encoding="utf-8")
+    (tmp_path / "agents" / "notes").mkdir()
+
+    assert _adk_app_name(tmp_path, ".", ["adk", "web", "agents"]) == "plain_app"
+
+    second = tmp_path / "agents" / "other_app"
+    second.mkdir()
+    (second / "agent.py").write_text("root_agent = object()\n", encoding="utf-8")
+    assert _adk_app_name(tmp_path, ".", ["adk", "web", "agents"]) is None
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        ["adk", "web", "agents", "--logo_image_url", "assets"],
+        ["adk", "web", "--logo_image_url", "assets", "agents"],
+        ["adk", "api_server", "--reload", "agents", "--port", "8000"],
+        ["adk", "api_server", "--host=0.0.0.0", "agents", "--a2a"],
+    ],
+)
+def test_the_adk_agents_directory_is_the_positional_argument_not_an_option_value(
+    tmp_path: Path, command: list[str]
+) -> None:
+    from fi.alk.harness.bundle_author_v2 import _adk_app_name
+
+    for app in (tmp_path / "agents" / "real_app", tmp_path / "assets" / "logo_app"):
+        app.mkdir(parents=True)
+        (app / "__init__.py").write_text("", encoding="utf-8")
+        (app / "agent.py").write_text("root_agent = object()\n", encoding="utf-8")
+
+    assert _adk_app_name(tmp_path, ".", command) == "real_app"
+
+
+@pytest.mark.parametrize("server", ["web", "api_server"])
+def test_every_adk_server_flag_that_takes_no_value_is_known(server: str) -> None:
+    import click
+    from google.adk.cli.cli_tools_click import main
+
+    from fi.alk.harness.bundle_author_v2 import _ADK_SERVER_FLAGS
+
+    flags = {
+        name
+        for param in main.commands[server].params
+        if isinstance(param, click.Option) and param.is_flag
+        for name in (*param.opts, *param.secondary_opts)
+    }
+    assert flags <= _ADK_SERVER_FLAGS
+
+
+@pytest.mark.parametrize("server", ["web", "api_server"])
+def test_every_adk_server_option_that_takes_a_value_is_known(server: str) -> None:
+    import click
+    from google.adk.cli.cli_tools_click import main
+
+    from fi.alk.harness.bundle_author_v2 import _ADK_SERVER_VALUE_OPTIONS
+
+    options = {
+        name
+        for param in main.commands[server].params
+        if isinstance(param, click.Option) and not param.is_flag
+        for name in (*param.opts, *param.secondary_opts)
+    }
+    assert options <= _ADK_SERVER_VALUE_OPTIONS
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        ["adk", "web", "--future_flag", "agents"],
+        ["adk", "api_server", "--future_option", "value", "agents"],
+    ],
+)
+def test_an_unknown_adk_option_before_the_agents_directory_resolves_no_app(
+    tmp_path: Path, command: list[str]
+) -> None:
+    from fi.alk.harness.bundle_author_v2 import _adk_app_name
+
+    (tmp_path / "agents" / "real_app").mkdir(parents=True)
+    (tmp_path / "agents" / "real_app" / "agent.py").write_text("root_agent = 1\n", encoding="utf-8")
+    (tmp_path / "top_app").mkdir()
+    (tmp_path / "top_app" / "agent.py").write_text("root_agent = 1\n", encoding="utf-8")
+
+    assert _adk_app_name(tmp_path, ".", command) is None
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        ["adk", "web", "--use_local_storage", "agents"],
+        ["adk", "api_server", "--express_mode", "agents"],
+        ["adk", "web", "--logo-image-url", "assets", "agents"],
+    ],
+)
+def test_adk_flags_without_a_value_do_not_swallow_the_agents_directory(
+    tmp_path: Path, command: list[str]
+) -> None:
+    from fi.alk.harness.bundle_author_v2 import _adk_app_name
+
+    for app in (tmp_path / "agents" / "real_app", tmp_path / "assets" / "logo_app"):
+        app.mkdir(parents=True)
+        (app / "agent.py").write_text("root_agent = object()\n", encoding="utf-8")
+    (tmp_path / "top_app").mkdir()
+    (tmp_path / "top_app" / "agent.py").write_text("root_agent = 1\n", encoding="utf-8")
+
+    assert _adk_app_name(tmp_path, ".", command) == "real_app"
+
+
+@pytest.mark.parametrize("agents_dir", ["missing", "../outside", "notes.txt"])
+def test_an_agents_directory_adk_cannot_serve_resolves_no_app(
+    tmp_path: Path, agents_dir: str
+) -> None:
+    from fi.alk.harness.bundle_author_v2 import _adk_app_name
+
+    source = tmp_path / "source"
+    (source / "only_app").mkdir(parents=True)
+    (source / "only_app" / "agent.py").write_text("root_agent = 1\n", encoding="utf-8")
+    (source / "notes.txt").write_text("", encoding="utf-8")
+    (tmp_path / "outside" / "other").mkdir(parents=True)
+    (tmp_path / "outside" / "other" / "agent.py").write_text("x = 1\n", encoding="utf-8")
+
+    assert _adk_app_name(source, ".", ["adk", "web", agents_dir]) is None
+
+
+@pytest.mark.parametrize("command", [["adk", "web"], ["adk", "api_server", "."]])
+def test_an_app_at_the_checkout_root_resolves_no_name(
+    tmp_path: Path, command: list[str]
+) -> None:
+    from fi.alk.harness.bundle_author_v2 import _adk_app_name
+
+    # At run time the checkout sits under a per-process directory, so ADK would serve the
+    # root app under that directory's name, not the checkout's.
+    (tmp_path / "agent.py").write_text("root_agent = object()\n", encoding="utf-8")
+
+    assert _adk_app_name(tmp_path, ".", command) is None
+
+
+def test_only_apps_adk_can_load_are_candidates(tmp_path: Path) -> None:
+    from fi.alk.harness.bundle_author_v2 import _adk_app_name
+
+    agents = tmp_path / "agents"
+    for name in ("my-app", ".hidden"):
+        (agents / name).mkdir(parents=True)
+        (agents / name / "agent.py").write_text("root_agent = 1\n", encoding="utf-8")
+    package = agents / "package_app"
+    package.mkdir()
+    (package / "__init__.py").write_text("root_agent = object()\n", encoding="utf-8")
+    helpers = agents / "helpers"
+    helpers.mkdir()
+    (helpers / "__init__.py").write_text("", encoding="utf-8")
+
+    assert _adk_app_name(tmp_path, ".", ["adk", "web", "agents"]) == "package_app"
+    assert _adk_app_name(tmp_path, ".", ["adk", "web", "agents/my-app"]) is None
+
+
+def test_a_command_that_only_mentions_adk_is_not_its_server() -> None:
+    from fi.alk.harness.bundle_author_v2 import _adk_server_arguments
+
+    assert _adk_server_arguments(["python", "-m", "google.adk.cli", "deploy"]) is None
+    assert _adk_server_arguments(["python", "main.py", "adk", "notes"]) is None
+    assert _adk_server_arguments(["myadk", "web"]) is None
+
+
 def test_adk_source_toolbox_is_hosted_against_world_database(tmp_path: Path) -> None:
     source = tmp_path / "source"
     app = source / "bug_agent"

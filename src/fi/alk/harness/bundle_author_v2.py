@@ -1832,14 +1832,103 @@ def _runtime_component(root: Path, configured_workdir: str) -> Path:
     return component
 
 
-def _is_adk_web_command(command: list[str]) -> bool:
-    """Return whether argv starts Google ADK's source-owned HTTP development server."""
+def _adk_server_arguments(command: list[str]) -> list[str] | None:
+    """The arguments after ``adk web`` or ``adk api_server``, or None for any other argv.
+
+    Both start ADK's source-owned HTTP server with the same API; ``web`` adds the dev UI.
+    """
 
     normalized = [str(item).strip() for item in command]
-    return any(
-        normalized[index : index + 2] == ["adk", "web"]
-        for index in range(max(0, len(normalized) - 1))
+    for index in range(len(normalized) - 1):
+        token = normalized[index]
+        # `adk` on PATH or by path (`.venv/bin/adk`), or the module (`python -m google.adk.cli`).
+        if Path(token).name == "adk" or (
+            token == "google.adk.cli" and index > 0 and normalized[index - 1] == "-m"
+        ):
+            if normalized[index + 1] in {"web", "api_server"}:
+                return normalized[index + 2 :]
+    return None
+
+
+# ADK's server options that take no value; every other option consumes the next token.
+_ADK_SERVER_FLAGS = frozenset(
+    {
+        "-v",
+        "--verbose",
+        "--trace_to_cloud",
+        "--otel_to_cloud",
+        "--reload",
+        "--no-reload",
+        "--a2a",
+        "--reload_agents",
+        "--use_local_storage",
+        "--no_use_local_storage",
+        "--auto_create_session",
+        "--express_mode",
+        "--with_ui",
+    }
+)
+
+
+# Options of ``adk web`` / ``adk api_server`` that take a value (ADK 1.31 to 2.14), each also
+# under the other spelling of its separator.
+_ADK_SERVER_VALUE_OPTIONS = frozenset(
+    spelling
+    for option in (
+        "--allow_origins",
+        "--artifact_service_uri",
+        "--artifact_storage_uri",
+        "--default_llm_model",
+        "--disable_features",
+        "--enable_features",
+        "--eval_storage_uri",
+        "--extra_plugins",
+        "--gemini_enterprise_app_name",
+        "--host",
+        "--log_level",
+        "--logo-image-url",
+        "--logo-text",
+        "--memory_service_uri",
+        "--port",
+        "--session_db_url",
+        "--session_service_uri",
+        "--trigger_sources",
+        "--url_prefix",
     )
+    for spelling in (option, "--" + option[2:].replace("-", "_"), "--" + option[2:].replace("_", "-"))
+)
+
+# An option this parser does not know: whether it takes a value, and so which token is the
+# agents directory, cannot be told.
+_UNKNOWN_ADK_OPTION = object()
+
+
+def _adk_agents_dir_argument(arguments: list[str]) -> str | object | None:
+    """The positional ``AGENTS_DIR`` among ``adk web`` / ``adk api_server`` arguments, if any;
+    ``_UNKNOWN_ADK_OPTION`` when an option before it is not one ADK is known to take."""
+
+    index = 0
+    while index < len(arguments):
+        token = arguments[index]
+        if token == "--":
+            return arguments[index + 1] if index + 1 < len(arguments) else None
+        if token.startswith("-"):
+            name = token.split("=", 1)[0]
+            if name in _ADK_SERVER_FLAGS or (name in _ADK_SERVER_VALUE_OPTIONS and "=" in token):
+                index += 1
+            elif name in _ADK_SERVER_VALUE_OPTIONS:
+                index += 2
+            else:
+                return _UNKNOWN_ADK_OPTION
+            continue
+        return token
+    return None
+
+
+def _is_adk_web_command(command: list[str]) -> bool:
+    """Return whether argv starts Google ADK's source-owned HTTP server."""
+
+    return _adk_server_arguments(command) is not None
 
 
 def _command_port(command: list[str], *, default: int) -> int:
@@ -1861,12 +1950,18 @@ def _command_port(command: list[str], *, default: int) -> int:
     return default
 
 
-def _adk_app_name(root: Path, configured_workdir: str) -> str | None:
-    """Discover the unique ADK app package exposed by ``adk web``.
+def _adk_app_name(
+    root: Path, configured_workdir: str, command: list[str] | None = None
+) -> str | None:
+    """Discover the unique ADK app package exposed by ``adk web`` or ``adk api_server``.
 
-    ADK discovers applications as immediate Python packages below its working directory. Keep
-    this source-derived and deterministic: when a checkout contains more than one possible app,
-    authoring must describe the desired HTTP boundary instead of the compiler guessing.
+    ADK serves the agents directory named by the command's positional argument (default: its
+    working directory). That directory is one app when it holds ``agent.py`` or
+    ``root_agent.yaml`` itself; otherwise ADK discovers applications as its immediate
+    subdirectories with an ``agent.py`` (``__init__.py`` is optional), a ``root_agent.yaml``, or
+    an ``__init__.py`` that defines ``root_agent``. An app name must be a Python identifier.
+    Keep this source-derived and deterministic: when a checkout contains more than one possible
+    app, authoring must describe the desired HTTP boundary instead of the compiler guessing.
     """
 
     configured = configured_workdir.strip()
@@ -1877,15 +1972,51 @@ def _adk_app_name(root: Path, configured_workdir: str) -> str | None:
     )
     if not workdir.is_relative_to(root.resolve()) or not workdir.is_dir():
         return None
+    agents_arg = _adk_agents_dir_argument(_adk_server_arguments(command or []) or [])
+    # An unknown option may have swallowed the agents directory: no app rather than a guess.
+    if agents_arg is _UNKNOWN_ADK_OPTION:
+        return None
+    if isinstance(agents_arg, str):
+        agents_dir = (workdir / agents_arg).resolve()
+        # A named directory ADK cannot serve from this checkout is no app to guess from.
+        if not agents_dir.is_relative_to(root.resolve()) or not agents_dir.is_dir():
+            return None
+        workdir = agents_dir
+    # ADK treats a directory as one app when it holds agent.py or root_agent.yaml.
+    if _is_adk_app_directory(workdir, package=False):
+        # The checkout root is copied under a per-process directory at run time, so its
+        # name there is not this one.
+        if workdir == root.resolve() or not _ADK_APP_NAME.fullmatch(workdir.name):
+            return None
+        return workdir.name
     candidates = sorted(
         path.name
         for path in workdir.iterdir()
         if path.is_dir()
         and path.name not in _IGNORED_ARTIFACT_PARTS
-        and (path / "__init__.py").is_file()
-        and (path / "agent.py").is_file()
+        and _ADK_APP_NAME.fullmatch(path.name)
+        and _is_adk_app_directory(path, package=True)
     )
     return candidates[0] if len(candidates) == 1 else None
+
+
+# ADK loads only apps whose name is a Python identifier made of these characters.
+_ADK_APP_NAME = re.compile(r"[A-Za-z0-9_]+")
+
+
+def _is_adk_app_directory(path: Path, *, package: bool) -> bool:
+    """Whether ADK loads an app from ``path``: ``agent.py``, ``root_agent.yaml`` or, for a
+    sub-app, a package whose ``__init__.py`` defines ``root_agent``."""
+
+    if (path / "agent.py").is_file() or (path / "root_agent.yaml").is_file():
+        return True
+    init = path / "__init__.py"
+    if not package or not init.is_file():
+        return False
+    try:
+        return "root_agent" in init.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return False
 
 
 def _adk_web_interface(root: Path, runtime: dict[str, Any]) -> dict[str, Any] | None:
@@ -1894,7 +2025,7 @@ def _adk_web_interface(root: Path, runtime: dict[str, Any]) -> dict[str, Any] | 
     command = [str(item) for item in (runtime.get("command") or [])]
     if not _is_adk_web_command(command):
         return None
-    app_name = _adk_app_name(root, str(runtime.get("workdir") or ""))
+    app_name = _adk_app_name(root, str(runtime.get("workdir") or ""), command)
     if app_name is None:
         return None
     return _adk_interface_for(command, app_name)
@@ -3518,7 +3649,8 @@ def author_bundle_v2(
             runtime = dict(runtime)
             adk_interface = _adk_web_interface(source_root, runtime)
             if adk_interface is not None:
-                # ``adk web`` is a persistent source-owned HTTP server, not a one-shot command.
+                # ``adk web`` / ``adk api_server`` is a persistent source-owned HTTP server, not
+                # a one-shot command.
                 # Launch it directly and describe its existing API rather than nesting it inside
                 # the subprocess bridge (which would make both processes bind the same port).
                 runtime["interface"] = adk_interface
@@ -3528,7 +3660,8 @@ def author_bundle_v2(
                     "generated_runtime_entrypoint_ambiguous: runtime.command requires an "
                     "explicit chat interface. Inspect the source and declare its native "
                     "chat transport, or kind=command only if the command accepts a chat "
-                    "request and exits with the response."
+                    "request and exits with the response. A terminal REPL cannot serve a "
+                    "hosted chat; use the framework's web or API server command instead."
                 )
             contract_body = {**contract_body, "runtime": runtime}
         if (
@@ -4024,9 +4157,10 @@ def _adk_web_app(source: Path, contract: dict[str, Any]) -> dict[str, str]:
     """The ADK app a build resolves for an ``adk web`` runtime, as manifest metadata."""
     runtime = contract.get("runtime")
     runtime = runtime if isinstance(runtime, dict) else {}
-    if not _is_adk_web_command([str(item) for item in (runtime.get("command") or [])]):
+    command = [str(item) for item in (runtime.get("command") or [])]
+    if not _is_adk_web_command(command):
         return {}
-    app_name = _adk_app_name(source, str(runtime.get("workdir") or ""))
+    app_name = _adk_app_name(source, str(runtime.get("workdir") or ""), command)
     return {"adk_web_app": app_name or ""}
 
 
