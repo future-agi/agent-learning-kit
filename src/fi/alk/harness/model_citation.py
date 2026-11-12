@@ -614,9 +614,12 @@ def _env_value(line: str) -> str | None:
     else:
         value = re.split(r"[\s;,]", rest, maxsplit=1)[0]
     # Compose's default, ${MODEL:-gpt-4o}: the default is what the setting holds when unset. Only
-    # when the braced variable is the setting itself: ${DB_PASSWORD:-guess} is another setting's.
+    # when the braced variable is the setting itself or another model setting
+    # (${DEFAULT_MODEL:-gpt-4o}): ${DB_PASSWORD:-guess} is a secret's.
     default = _ENV_DEFAULT.fullmatch(value)
-    if default and default.group(1) == found.group(1):
+    if default and (
+        default.group(1) == found.group(1) or _names_a_model(f"{default.group(1)}=")
+    ):
         return default.group(2)
     return value
 

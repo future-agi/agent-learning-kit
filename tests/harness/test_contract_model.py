@@ -3888,6 +3888,9 @@ def test_a_source_under_a_listed_folder_still_cites_its_model(tmp_path, monkeypa
         pytest.param("export OPENAI_MODEL='gpt-4o'  # pinned", "gpt-4o", id="single-quoted-exported"),
         pytest.param("OPENAI_MODEL=gpt-4o # the default", "gpt-4o", id="comment-after"),
         pytest.param('OPENAI_MODEL="${OPENAI_MODEL:-gpt-4o}"', "gpt-4o", id="quoted-compose-default"),
+        pytest.param(
+            "CHAT_MODEL=${DEFAULT_MODEL:-gpt-4o-mini}", "gpt-4o-mini", id="another-model-setting-default"
+        ),
     ],
 )
 def test_a_env_setting_named_for_a_model_by_any_of_its_words_is_accepted(root, written, name):
