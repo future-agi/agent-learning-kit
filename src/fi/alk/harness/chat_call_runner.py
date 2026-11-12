@@ -848,6 +848,8 @@ class HostedChatCallRunner:
         # act through it: read that table whenever the trial is proxied or has limited workers, cast or not.
         proxied = runtime.endpoints.get("tool_proxy") is not None
         limited_workers = (Path(self._context.bundle_dir) / "generated" / "tool-proxy" / "permissions.json").is_file()
+        # The scenario's faults are a rule of its graded trials; a readiness probe checks the tools' binding without them.
+        faults = [] if self._context.readiness_probe else list(document.get("faults") or [])
         door = chat_door(
             target_world,
             world_db.address
@@ -857,7 +859,7 @@ class HostedChatCallRunner:
                 one.id: {"permitted_actions": list(one.permitted_actions), "on_behalf_of": one.on_behalf_of}
                 for one in listing.actors
             },
-            list(document.get("faults") or []),
+            faults,
             tools_url=service.address if service is not None else None,
             service_actions=service_actions(self._contract),
         )
@@ -922,7 +924,7 @@ class HostedChatCallRunner:
                 # The workers' deadline is a rule of the scenario's graded trials; the probe checks the tools' binding.
                 deadline, deadlines = None, {}
             # Every trial writes its own faults, none included, so nothing an earlier trial left can apply to this one.
-            _set_trial_faults(runtime, list(document.get("faults") or []), deadline, deadlines)
+            _set_trial_faults(runtime, faults, deadline, deadlines)
         else:
             deadline_notices = _unproxied_worker_notices(document, self._context.bundle_dir)
         try:
@@ -1019,7 +1021,6 @@ class HostedChatCallRunner:
                 "summary": summary,
                 "events": cast.events if cast is not None else [],
             }
-        faults = list(document.get("faults") or [])
         said = list(deadline_notices)
         if faults:
             from .call_runner import fault_notices

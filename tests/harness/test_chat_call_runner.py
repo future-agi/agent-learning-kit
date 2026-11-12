@@ -1624,6 +1624,52 @@ def test_a_readiness_probe_sets_no_worker_deadline_while_a_graded_trial_does(tmp
     assert all(len(row) < 2 or (row[1] is None and not row[2]) for row in written)
 
 
+def test_a_readiness_probe_applies_none_of_the_scenario_s_faults(tmp_path: Path, monkeypatch: Any) -> None:
+    """The probe checks how the tools reach the world; a scenario's fault would fail it and block Validate and Save."""
+    import dataclasses
+
+    from fi.alk.harness import call_runner
+
+    context = dataclasses.replace(_context(tmp_path), readiness_probe=True)
+    path = context.bundle_dir / "scenarios" / "one" / "scenario.json"
+    document = json.loads(path.read_text(encoding="utf-8"))
+    document["faults"] = [{"action": "crm.apply_discount", "mode": "timeout_after_commit", "on_call": 1}]
+    path.write_text(json.dumps(document), encoding="utf-8")
+    written: list[list] = []
+    doors: list[list] = []
+    real_door = chat.chat_door
+
+    def _door(world, mirror_dsn, permissions, faults, **kwargs):
+        doors.append(list(faults))
+        return real_door(world, None, permissions, faults, **kwargs)
+
+    monkeypatch.setattr(call_runner, "_write_trial_state", lambda _runtime, faults, *_rest: written.append(list(faults)))
+    monkeypatch.setattr(chat, "_tool_world", lambda *_args: _ToolWorld())
+    monkeypatch.setattr(chat, "_drive_conversation", _single_exchange)
+    monkeypatch.setattr(chat, "chat_door", _door)
+
+    class Wrapper:
+        def __init__(self, **_kwargs: Any) -> None:
+            return
+
+        async def call(self, _request: Any) -> AgentResponse:
+            return AgentResponse(content="Done.")
+
+    monkeypatch.setattr(chat, "HTTPAgentWrapper", Wrapper)
+    endpoints = {
+        "target_http": RuntimeEndpoint(capability="target_http", protocol="http", address="http://localhost:18080"),
+        "tool_proxy": RuntimeEndpoint(capability="tool_proxy", protocol="http", address="http://localhost:18081"),
+    }
+    runtime = EnvironmentRuntime(
+        runtime_id="runtime-1", world_index=0, bundle_digest="sha256:" + "a" * 64, state=RuntimeState.READY,
+        endpoints=endpoints,
+    )
+    asyncio.run(chat.HostedChatCallRunner(_Adapter(), context).run(SimpleNamespace(scenario_key="one", scenario_id="scenario-1"), runtime))
+    # Neither the in-process door nor the tool proxy gets the fault.
+    assert doors == [[]]
+    assert written == [[], []]
+
+
 def test_a_proxied_chat_trial_without_actors_still_reads_the_world_s_table(tmp_path: Path, monkeypatch: Any) -> None:
     """The proxy logs the agent's own calls and the faults it applies in the world's table; a trial with no actors must
     read it too, or its fault notices and world changes see nothing."""
