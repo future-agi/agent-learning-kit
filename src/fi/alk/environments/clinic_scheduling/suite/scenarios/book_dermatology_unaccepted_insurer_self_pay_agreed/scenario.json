@@ -5,7 +5,7 @@
   "use_case": "Book a new appointment",
   "branch": "P161 (insured with Aviva) asks for dermatology with Dr. Sofia Morales, who does not accept Aviva; the desk explains and P161 agrees to self-pay; booked with self_pay True for Thursday 29 October 13:00.",
   "tests": "the agent checks Dr. Morales's accepted payers, explains that Aviva is not accepted, secures agreement for self-pay, and books Thursday 29 October at 13:00",
-  "instruction": "You want to book a dermatology appointment with Dr. Sofia Morales. You are insured with Aviva. When informed that Dr. Morales does not accept Aviva insurance, agree to proceed as a self-pay patient. When offered times, choose Thursday 29 October at 13:00 at Riverbank Central and confirm the booking.\n\nYour details:\n- Full name: Arjun Shah\n- Date of birth: 1977-12-12\n- Email: arjun.shah@example.com\n- Phone: +447700900116\n- Insurance: Aviva (member AV-400127)",
+  "instruction": "You want to book a dermatology appointment with Dr. Sofia Morales. You are insured with Aviva. When informed that Dr. Morales does not accept Aviva insurance, agree to proceed as a self-pay patient. When offered times, choose Thursday 29 October at 13:00 at Riverbank Central and confirm the booking.\n\nYour details:\n- Full name: Arjun Shah\n- Date of birth: 1977-12-12\n- Email: arjun.shah@example.com\n- Phone: +447700900161\n- Insurance: Aviva (member AV-400127)",
   "keywords": [
     "book_appointment",
     "dermatology",

@@ -5,7 +5,7 @@
   "use_case": "Book a demo on the owner's calendar after the prospect picks",
   "branch": "Owner rep calendar is completely booked with conflicting events",
   "tests": "the desk checks open demo slots for owner A05 and informs the prospect that no slots are currently open without booking or inventing availability",
-  "instruction": "You are Devendra Nambiar from Ganges Fintech (lead L20, India). Tell the sales desk you would like to see open demo slots for this week and book one.\n\nYour details:\n- Name: Devendra Nambiar\n- Company: Ganges Fintech\n- Email: devendra.nambiar@gangesfin.example\n- Lead ID: L20\n- Country: India\n- Assigned Rep: Aakav Sharma (A05)",
+  "instruction": "You are Devendra Nambiar from Ganges Fintech (lead L20, India). Tell the sales desk you would like to see open demo slots for this week and book one.\n\nYour details:\n- Name: Devendra Nambiar\n- Company: Ganges Fintech\n- Email: devendra.nambiar@gangesfin.example\n- Lead ID: L20\n- Country: India\n- Assigned Rep: Arjun Mehta (A05)",
   "keywords": [
     "demo_slots",
     "calendar_conflicts",

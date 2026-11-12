@@ -18,7 +18,7 @@
     "gender": "female",
     "age_group": "25-32",
     "occupation": "Manager",
-    "location": "Canada",
+    "location": "United States",
     "personality": "Friendly and cooperative",
     "communication_style": "Direct and concise",
     "initial_message": "Hi, I'm Avril Bouchard from Quillon Travel (avril.bouchard@quillon.example). I'd like to see if our team qualifies for BrightDesk.",
@@ -34,7 +34,7 @@
   "fixture": {
     "contacts": [
       {
-        "account_id": "ACC425",
+        "account_id": "ACC11",
         "email": "avril.bouchard@quillon.example",
         "name": "Avril Bouchard",
         "contact_id": "C425"
@@ -51,7 +51,7 @@
     "accounts": [
       {
         "name": "Quillon Travel",
-        "account_id": "ACC425"
+        "account_id": "ACC11"
       }
     ]
   },

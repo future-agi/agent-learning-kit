@@ -27,3 +27,5 @@ def setup(world):
         "date": "2026-10-25T12:00:00Z",
         "snippet": "Hello, please record on my file that I require step-free access for my appointments. Victor Lindqvist"
     })
+    # The front desk (Jordan Ellis) is working the bookings mailbox in this conversation.
+    world.change("session_caller", "default", {"customer_id": None, "desk_id": "DS01"}, by="id")

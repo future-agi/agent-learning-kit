@@ -1,12 +1,13 @@
 def check(world, calls, reference=None):
     state = world.state()
     now = (state.get("clock") or [{"now": ""}])[0]["now"]
-    want = {}
+    want, facts = {}, {}
     for step in reference or ():
-        if step.get("tool") == 'upsert_lead':
-            for k in ('email',):
-                if step.get("arguments", {}).get(k) is not None:
-                    want[k] = step["arguments"][k]
+        if step.get("tool") == "upsert_lead":
+            a = step.get("arguments", {})
+            if a.get("email") is not None:
+                want["email"] = a["email"]
+            facts.update({k: a[k] for k in ("use_case", "seats", "timeline", "budget") if a.get(k) is not None})
     if not any(c.name == "upsert_lead" and c.ok for c in calls):
         return "not done: upsert_lead was not called successfully"
     email = (want.get("email") or "").strip().lower()
@@ -21,8 +22,12 @@ def check(world, calls, reference=None):
         return f"done wrong: lead {new_leads[0]['lead_id']} was created instead of updating the open lead"
     if contacts:
         open_leads = [l for l in state.get("leads", []) if l["contact_id"] == contacts[0]["contact_id"] and l["status"] not in ("disqualified", "closed")]
-        if not any(l["updated_at"] == now for l in open_leads):
+        updated = [l for l in open_leads if l["updated_at"] == now]
+        if not updated:
             return "not done: the existing open lead was not updated"
+        for k, v in facts.items():
+            if str(updated[0].get(k)) != str(v):
+                return f"done wrong: lead {updated[0]['lead_id']} records {k} = {updated[0].get(k)!r}, the person stated {v!r}"
     missing = _evidence_missing(world, calls, reference)
     if missing:
         return f"done blind: the decision rests on {', '.join(missing)}, which was never read"
@@ -99,7 +104,6 @@ def _texts_shown(calls):
         if c.ok and c.name in ("slack_read_thread", "slack_read_channel", "slack_search_public_and_private"):
             walk(c.result)
     return shown
-
 
 if __name__ == "__main__":
     # Run this check by hand against what a run left behind. The first argument is anything

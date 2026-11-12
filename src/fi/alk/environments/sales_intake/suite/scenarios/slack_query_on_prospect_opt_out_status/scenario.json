@@ -11,7 +11,7 @@
     "consent"
   ],
   "persona": {
-    "name": "Oliver R. Hughes",
+    "name": "Oliver Hughes",
     "gender": "male",
     "age_group": "32-40",
     "occupation": "",
@@ -54,7 +54,9 @@
         "contact_id": "C05"
       },
       "environment_arguments": {},
-      "fixed": {}
+      "fixed": {
+        "contact_id": "record: Imogen Pryce, C05, Harbourline's contact on L05"
+      }
     },
     {
       "tool": "get_lead",
@@ -62,9 +64,7 @@
         "lead_id": "L05"
       },
       "environment_arguments": {},
-      "fixed": {
-        "lead_id": "record: Harbourline lead L05"
-      }
+      "fixed": {}
     }
   ],
   "alternatives": [],
@@ -79,7 +79,7 @@
     "overlay_intensity": "absent"
   },
   "sub_goals": [
-    "lead_status_reported"
+    "consent_status_reported"
   ],
   "max_turns": 10,
   "background_noise": false,

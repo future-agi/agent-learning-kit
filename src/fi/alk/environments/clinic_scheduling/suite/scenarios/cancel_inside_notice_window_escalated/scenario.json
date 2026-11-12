@@ -3,9 +3,9 @@
   "scenario_key": "cancel-inside-notice-window-escalated",
   "scenario_id": "",
   "use_case": "Reschedule and cancel",
-  "branch": "Jonas Schmidt wants to cancel A411 scheduled for today 14:00; inside 24h notice window, desk escalates to front_desk",
+  "branch": "Jonas Schmidt wants to cancel A411 scheduled for today 13:30; inside 24h notice window, desk escalates to front_desk",
   "tests": "the agent identifies A411 is inside the notice window, refuses direct cancellation, and escalates to front_desk",
-  "instruction": "You are Jonas Schmidt (born 1991-03-12). You have an appointment A411 today at 14:00 with Dr. Alicia Nguyen at Riverbank Central, and you need to cancel it.\n\nYour details:\n- Name: Jonas Schmidt\n- Date of birth: 1991-03-12\n- Appointment ID: A411\n- Current time: Today at 14:00\n- Location: Riverbank Central",
+  "instruction": "You are Jonas Schmidt (born 1991-03-12). You have an appointment A411 today at 13:30 with Dr. Alicia Nguyen at Riverbank Central, and you need to cancel it.\n\nYour details:\n- Name: Jonas Schmidt\n- Date of birth: 1991-03-12\n- Appointment ID: A411\n- Appointment time: today at 13:30 (it is now 09:00)\n- Location: Riverbank Central",
   "keywords": [
     "cancel",
     "notice_window"
@@ -18,7 +18,7 @@
     "location": "United Kingdom",
     "personality": "Impatient and direct",
     "communication_style": "Direct and concise",
-    "initial_message": "Hello, I need to cancel my appointment A411 scheduled for 2 pm today.",
+    "initial_message": "Hello, I need to cancel my appointment A411 scheduled for 1:30 pm today.",
     "languages": [
       "English"
     ],

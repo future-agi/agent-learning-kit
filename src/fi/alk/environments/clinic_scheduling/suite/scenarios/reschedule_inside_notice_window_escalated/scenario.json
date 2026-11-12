@@ -5,7 +5,7 @@
   "use_case": "Reschedule and cancel",
   "branch": "Hannah Schmidt wants to move A11 scheduled for today 14:00; inside 24h notice window, desk escalates to front_desk",
   "tests": "the agent identifies A11 is inside the change notice window, refuses direct reschedule, and escalates to front_desk",
-  "instruction": "You are Hannah Schmidt (born 1993-08-15). You have an appointment A11 today at 14:00 with Dr. Alicia Nguyen at Riverbank Central, but something came up and you need to move it to a later date.\n\nYour details:\n- Name: Hannah Schmidt\n- Date of birth: 1993-08-15\n- Appointment ID: A11\n- Current time: Today at 14:00\n- Location: Riverbank Central",
+  "instruction": "You are Hannah Schmidt (born 1993-08-15). You have an appointment A11 today at 14:00 with Dr. Alicia Nguyen at Riverbank Central, but something came up and you need to move it to a later date.\n\nYour details:\n- Name: Hannah Schmidt\n- Date of birth: 1993-08-15\n- Appointment ID: A11\n- Appointment time: today at 14:00 (it is now 09:00)\n- Location: Riverbank Central",
   "keywords": [
     "reschedule",
     "notice_window"

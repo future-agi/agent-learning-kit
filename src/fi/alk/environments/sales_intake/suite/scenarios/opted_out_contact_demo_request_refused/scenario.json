@@ -11,11 +11,11 @@
     "opt_out"
   ],
   "persona": {
-    "name": "Grace N. Okafor",
+    "name": "Grace Okafor",
     "gender": "female",
     "age_group": "32-40",
     "occupation": "",
-    "location": "United Kingdom",
+    "location": "United States",
     "personality": "Cautious and skeptical",
     "communication_style": "Questioning",
     "initial_message": "Hello, I'm Grace Okafor with Ridgeway Utilities. Can I schedule a demo of BrightDesk for our team?",
@@ -62,7 +62,7 @@
     "task": "consent"
   },
   "sub_goals": [
-    "privacy_protected",
+    "consent_status_reported",
     "declined_action_explained"
   ],
   "max_turns": 10,

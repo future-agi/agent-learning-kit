@@ -5,7 +5,7 @@
   "use_case": "Flag a document problem to its owner",
   "branch": "Sofia Rossi sees Tomas Rivera's Slack decision in #finance-team that team events cap is $150 from 1 Nov and agrees to flag team_events_v1 as outdated",
   "tests": "the agent reads Tomas's decision in #finance-team and raises one outdated issue on team_events_v1 after Sofia agrees",
-  "instruction": "You saw Tomas Rivera post in #finance-team that the team events budget was raised to $150 per head starting 1 November with doc updates pending. Ask the Knowledge Desk to flag the Team Events Policy document as outdated.\n\nYour details:\n- Name: Sofia Rossi\n- Employee ID: E09\n- Channel: #finance-team",
+  "instruction": "You saw Tomas Rivera post in #finance-team that the team events budget was raised to $150 per head starting 1 November with doc updates pending. Ask the Knowledge Desk to flag the Team Events Budget document as outdated.\n\nYour details:\n- Name: Sofia Rossi\n- Employee ID: E09\n- Channel: #finance-team",
   "keywords": [
     "document_issue"
   ],

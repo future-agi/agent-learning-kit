@@ -187,4 +187,22 @@ def handle(args, db):
                 if _bookable(db, st, service, loc, utc, off) is None:
                     slots.append({"staff_id": st["staff_id"], "staff_name": st["name"], "start_local": t.strftime("%Y-%m-%dT%H:%M"), "start_utc": iso(utc), "utc_offset": _fmt_off(off), "duration_minutes": service["duration_minutes"], "online_booking": bool(cal and cal["access_role"] in ("writer", "owner"))})
                 t += timedelta(minutes=step)
-    return {"date": f"{day:%Y-%m-%d}", "location_id": loc["location_id"], "time_zone": tz, "service_id": service["service_id"], "slots": slots}
+    out = {"date": f"{day:%Y-%m-%d}", "location_id": loc["location_id"], "time_zone": tz, "service_id": service["service_id"], "slots": slots}
+    if not slots:
+        # An empty day says why when the reason is the studio's, not the calendars': the agent can
+        # then explain a closure, the notice or the horizon instead of guessing.
+        now = _now(db)
+        horizon = now + timedelta(days=int(_param(db, "booking_horizon_days", 30)))
+        notice = now + timedelta(hours=int(_param(db, "booking_min_notice_hours", 2)))
+        if not opens:
+            out["unavailable_reason"] = f"{loc['name']} is closed on {day:%A}s"
+        elif db.one("SELECT reason FROM blackout_dates WHERE location_id = ? AND date = ?", [loc["location_id"], f"{day:%Y-%m-%d}"]):
+            out["unavailable_reason"] = f"{loc['name']} is closed on {day:%Y-%m-%d}: " + db.one("SELECT reason FROM blackout_dates WHERE location_id = ? AND date = ?", [loc["location_id"], f"{day:%Y-%m-%d}"])["reason"]
+        else:
+            first, _ = _to_utc(f"{day:%Y-%m-%d}T{opens}", tz)
+            last, _ = _to_utc(f"{day:%Y-%m-%d}T{closes}", tz)
+            if first > horizon:
+                out["unavailable_reason"] = f"outside the booking horizon: bookings open at most {int(_param(db, 'booking_horizon_days', 30))} days ahead, up to {iso(horizon)}"
+            elif last < notice:
+                out["unavailable_reason"] = f"too soon: bookings need {int(_param(db, 'booking_min_notice_hours', 2))} hours' notice"
+    return out

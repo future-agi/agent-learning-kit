@@ -3,21 +3,21 @@
   "scenario_key": "quillon-seats-refused-unknown-in-chat",
   "scenario_id": "",
   "use_case": "Ask for missing facts instead of inventing them",
-  "branch": "Sofia Bianchi (lead L11) chats to qualify but does not know their seat count yet; the desk evaluates L11 with the facts on file, leaving it in needs_information",
-  "tests": "the agent asks for seat count and leaves lead L11 in needs_information when Sofia does not know the number",
-  "instruction": "You are Sofia Bianchi from Quillon Travel (lead L11). You want to qualify for next steps. When the desk asks how many agents or seats you need, say you don't know the seat count yet and are still evaluating team size.\n\nYour details:\n- Name: Sofia Bianchi\n- Email: sofia.bianchi@quillon.example\n- Company: Quillon Travel\n- Lead ID: L11",
+  "branch": "Ava Morales (lead L11) chats to qualify but does not know their seat count yet; the desk evaluates L11 with the facts on file, leaving it in needs_information",
+  "tests": "the agent asks Ava Morales for the seat count and leaves lead L11 in needs_information when she does not know it",
+  "instruction": "You are Ava Morales from Quillon Travel (lead L11). You want to qualify for next steps. When the desk asks how many agents or seats you need, say you don't know the seat count yet and are still evaluating team size.\n\nYour details:\n- Name: Ava Morales\n- Email: ava.morales@quillon.example\n- Company: Quillon Travel\n- Lead ID: L11",
   "keywords": [
     "qualification"
   ],
   "persona": {
-    "name": "Sofia Bianchi",
+    "name": "Ava Morales",
     "gender": "female",
     "age_group": "32-40",
     "occupation": "Manager",
     "location": "United States",
     "personality": "Reserved",
     "communication_style": "Questioning",
-    "initial_message": "Hello, Sofia Bianchi from Quillon Travel here. Can we qualify our lead for next steps?",
+    "initial_message": "Hello, Ava Morales from Quillon Travel here. Can we qualify our lead for next steps?",
     "languages": [
       "English"
     ],

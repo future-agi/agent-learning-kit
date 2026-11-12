@@ -76,7 +76,8 @@
       },
       "environment_arguments": {},
       "fixed": {
-        "appointment_id": "record: appointments.appointment_id A08"
+        "appointment_id": "record: appointments.appointment_id A08",
+        "new_slot_id": "record: the slot the caller confirmed"
       }
     }
   ],

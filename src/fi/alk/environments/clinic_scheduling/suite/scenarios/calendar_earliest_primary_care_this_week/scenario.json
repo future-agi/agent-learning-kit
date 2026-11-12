@@ -47,7 +47,11 @@
         "specialty": "primary_care"
       },
       "environment_arguments": {},
-      "fixed": {}
+      "fixed": {
+        "specialty": "record: the specialty and the week the caller asks about",
+        "date_from": "record: the specialty and the week the caller asks about",
+        "date_to": "record: the specialty and the week the caller asks about"
+      }
     }
   ],
   "alternatives": [

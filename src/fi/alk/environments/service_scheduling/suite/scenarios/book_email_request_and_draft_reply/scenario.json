@@ -19,7 +19,7 @@
     "location": "Canada",
     "personality": "Detail-oriented",
     "communication_style": "Direct and concise",
-    "initial_message": "Hi, I sent an email with subject 'Booking request' requesting a haircut with Marcus Hale on Wednesday 28 October at 10 am at Midtown. Can you book it and prepare a confirmation email draft for me? My email is jack.turner@example.com and phone is +1 212 555 0110.",
+    "initial_message": "Hi, please handle Jack Turner's email request in thread th_s11_booking_request_jack: book his haircut with Marcus Hale at Midtown on Thursday 29 October at 11 am, and draft a reply on his thread confirming it.",
     "languages": [
       "English"
     ],

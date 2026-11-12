@@ -78,7 +78,8 @@
       },
       "environment_arguments": {},
       "fixed": {
-        "email": "caller: brooke.winslow@kestrellogistics.example"
+        "email": "caller: brooke.winslow@kestrellogistics.example",
+        "seats": "caller: 70 seats"
       }
     }
   ],

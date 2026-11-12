@@ -1,3 +1,19 @@
+def _withheld(db, thread_id):
+    """The patient a mailbox thread is about whom this conversation may not see yet, or None. The
+    appointments mailbox holds patients' health details: a thread linked to a patient is shown only
+    once that patient is verified by the person talking, who must be them or hold recorded
+    guardian or proxy authority for them."""
+    row = db.one("SELECT caller_id FROM session_caller WHERE id = 'default'")
+    caller = row["caller_id"] if row else None
+    for link in db.query("SELECT patient_id FROM gmail_thread_patients WHERE thread_id = ?", (thread_id,)):
+        pid = link["patient_id"]
+        entitled = caller is not None and (caller == pid or db.one(
+            "SELECT patient_id FROM caller_access WHERE caller_id = ? AND patient_id = ?", (caller, pid)) is not None)
+        if not entitled or not db.one("SELECT patient_id FROM verified_patients WHERE patient_id = ?", (pid,)):
+            return pid
+    return None
+
+
 def handle(args, db):
     from datetime import datetime, timedelta
 
@@ -57,6 +73,8 @@ def handle(args, db):
     for t in threads:
         t_labels = [row["label_id"] for row in db.query("SELECT label_id FROM gmail_thread_labels WHERE thread_id = ?", (t["id"],))]
         if "SPAM" in t_labels or ("TRASH" in t_labels and not include_trash):
+            continue
+        if _withheld(db, t["id"]):
             continue
         if any(lid not in t_labels for lid in label_ids):
             continue

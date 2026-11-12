@@ -16,3 +16,6 @@ def setup(world):
         "status": "qualified", "owner_rep_id": None, "queue_id": None, "source": "web_form",
         "request_key": None, "created_at": "2026-11-09T10:00:00Z", "updated_at": "2026-11-09T10:00:00Z"
     })
+    # Who is in this conversation: the session sets it, not anything the desk is told.
+    world.put("slack_users", {"user_id": "U_S417", "name": "Declan Murphy", "email": "declan.murphy@brightdesk.example", "role": "sales_ops"})
+    world.change("session_caller", "default", {"person_id": "U_S417"}, by="id")

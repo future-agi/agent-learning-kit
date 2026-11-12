@@ -56,3 +56,5 @@ def setup(world):
     })
     # Its own slot: DS17 belongs to the seed demo D01.
     world.put("demo_slots", {"slot_id": "DS419", "rep_id": "A06", "start_time": "2026-11-12T23:00:00Z", "end_time": "2026-11-12T23:30:00Z", "status": "booked"})
+    # Who is in this conversation: the session sets it, not anything the desk is told.
+    world.change("session_caller", "default", {"person_id": "C419"}, by="id")

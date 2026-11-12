@@ -54,7 +54,8 @@
       },
       "environment_arguments": {},
       "fixed": {
-        "lead_id": "record: Kestrel's lead L07"
+        "lead_id": "record: Kestrel's lead L07",
+        "facts": "email: 0-3 months"
       }
     }
   ],

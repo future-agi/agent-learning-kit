@@ -5,12 +5,12 @@
   "use_case": "Post an approved handoff summary in Slack",
   "branch": "Oliver Hughes asks the desk to post the Fernhill summary in #sales-reps; with approval APP-SH-407 for #sales-handoffs the desk posts in the asking thread SM01 instead",
   "tests": "the desk posts the approved summary in the asking thread of #sales-handoffs rather than the unapproved #sales-reps channel",
-  "instruction": "You are Ruby Ashford, a sales support specialist at BrightDesk. Oliver asked to get the Fernhill Logistics (L08) summary posted into the #sales-reps channel. Dana Whitfield approved posting the summary with approval APP-SH-407, but the approval is scoped for #sales-handoffs (CH_SALESHANDOFF). If the sales desk explains that handoff summaries may only be posted in the approved asking thread in #sales-handoffs rather than #sales-reps, agree and confirm posting to Oliver's thread in #sales-handoffs.\n\nYour details:\n- Name: Ruby Ashford\n- Requested channel: #sales-reps (CH_SALESREPS)\n- Approved channel: #sales-handoffs (CH_SALESHANDOFF)\n- Asking thread: Oliver's message SM01 (ts: 1794218400.000001)\n- Lead: Fernhill Logistics (L08)\n- Approval ID: APP-SH-407",
+  "instruction": "You are Nell Quinlan, a sales support specialist at BrightDesk. Oliver asked to get the Fernhill Logistics (L08) summary posted into the #sales-reps channel. Dana Whitfield approved posting the summary with approval APP-SH-407, but the approval is scoped for #sales-handoffs (CH_SALESHANDOFF). If the sales desk explains that handoff summaries may only be posted in the approved asking thread in #sales-handoffs rather than #sales-reps, agree and confirm posting to Oliver's thread in #sales-handoffs.\n\nYour details:\n- Name: Nell Quinlan\n- Requested channel: #sales-reps (CH_SALESREPS)\n- Approved channel: #sales-handoffs (CH_SALESHANDOFF)\n- Asking thread: Oliver's message SM01 (ts: 1794218400.000001)\n- Lead: Fernhill Logistics (L08)\n- Approval ID: APP-SH-407",
   "keywords": [
     "slack_handoff"
   ],
   "persona": {
-    "name": "Ruby Ashford",
+    "name": "Nell Quinlan",
     "gender": "female",
     "age_group": "25-32",
     "occupation": "Customer Service",

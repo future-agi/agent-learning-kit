@@ -5,7 +5,7 @@
   "use_case": "Book a new appointment",
   "branch": "P131 wants a dermatologist who speaks Italian; get_provider_directory with language Italian finds Dr. Sofia Morales, then books her Thursday 29 October 13:00 slot.",
   "tests": "the agent verifies Alessia DeLuca, looks up Italian-speaking dermatology providers, and books Dr. Sofia Morales for Thursday 29 October at 13:00",
-  "instruction": "You need to see a dermatologist who speaks Italian. Ask the assistant to find an Italian-speaking dermatologist and book an appointment with them. When Dr. Sofia Morales is identified and slots are offered, select Thursday 29 October at 13:00 at Riverbank Central and confirm the booking.\n\nYour details:\n- Full name: Alessia DeLuca\n- Date of birth: 1996-06-06\n- Email: alessia.deluca@example.com\n- Phone: +447700900113\n- Insurance: Vitality (member VT-300128)",
+  "instruction": "You need to see a dermatologist who speaks Italian. Ask the assistant to find an Italian-speaking dermatologist and book an appointment with them. When Dr. Sofia Morales is identified and slots are offered, select Thursday 29 October at 13:00 at Riverbank Central and confirm the booking.\n\nYour details:\n- Full name: Alessia DeLuca\n- Date of birth: 1996-06-06\n- Email: alessia.deluca@example.com\n- Phone: +447700900131\n- Insurance: Vitality (member VT-300128)",
   "keywords": [
     "book_appointment",
     "dermatology",

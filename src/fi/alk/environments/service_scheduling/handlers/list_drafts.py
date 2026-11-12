@@ -1,4 +1,23 @@
+def _caller(db):
+    """Who is in this conversation, as the session knows it (session_caller), never as the
+    conversation tells it: a customer, a front-desk member, or nobody identified."""
+    row = db.one("SELECT customer_id, desk_id FROM session_caller WHERE id = 'default'")
+    return (row["customer_id"], row["desk_id"]) if row else (None, None)
+
+
+def _desk(db):
+    """Whether the caller is an active front-desk member, who may act for any customer."""
+    _, desk_id = _caller(db)
+    return bool(desk_id and db.one("SELECT 1 AS x FROM desk_staff WHERE desk_id = ? AND role = 'front_desk' AND active = 1", [desk_id]))
+
+
+def _desk_only(db, what):
+    """Drafts and labels are the front desk's own work on the mailbox."""
+    if not _desk(db):
+        raise ToolError(f"Permission denied: only the front desk can {what}", category="permission_denied")
+
 def handle(args, db):
+    _desk_only(db, "read the mailbox's drafts")
     page_size = args.get("pageSize")
     if page_size is None:
         page_size = 20

@@ -8,3 +8,5 @@ def setup(world):
         "time_zone": "America/Toronto",
         "created_at": "2026-10-26T09:00:00Z"
     })
+    # The person in this conversation, as the session knows them.
+    world.change("session_caller", "default", {"customer_id": "CU414", "desk_id": None}, by="id")

@@ -5,19 +5,19 @@
   "use_case": "Book a demo on the owner's calendar after the prospect picks",
   "branch": "Theo Sandoval of Cedar & Finch Retail (lead L06, rep A01) asks for 12 November 4 pm Eastern which clashes with Jordan's pipeline review (DS19); the desk offers valid open slots and books DS03 when Theo picks it",
   "tests": "the agent ignores the clashing slot DS19, offers open slots, and books DS03 upon Theo's confirmation",
-  "instruction": "You are Theodore (Theo) Sandoval at Cedar & Finch Retail in the United States. You initially ask for a demo on November 12 at 4:00 PM Eastern. If told that time is unavailable, choose Thursday 12 November at 11:00 AM Eastern (DS03) and confirm the booking.\n\nYour details:\n- Name: Theodore Sandoval\n- Email: theo.sandoval@cedarfinch.example\n- Company: Cedar & Finch Retail",
+  "instruction": "You are Theo Sandoval at Cedar & Finch Retail in the United States. You initially ask for a demo on November 12 at 4:00 PM Eastern. If told that time is unavailable, choose Thursday 12 November at 11:00 AM Eastern (DS03) and confirm the booking.\n\nYour details:\n- Name: Theo Sandoval\n- Email: theo.sandoval@cedarfinch.example\n- Company: Cedar & Finch Retail",
   "keywords": [
     "calendar"
   ],
   "persona": {
-    "name": "Theodore Sandoval",
+    "name": "Theo Sandoval",
     "gender": "male",
     "age_group": "25-32",
     "occupation": "",
     "location": "United States",
     "personality": "Easy-going",
     "communication_style": "Direct and concise",
-    "initial_message": "Hi, Theodore Sandoval here from Cedar & Finch Retail. Can we book a BrightDesk demo with Jordan Ellis on November 12th at 4:00 PM Eastern?",
+    "initial_message": "Hi, Theo Sandoval here from Cedar & Finch Retail. Can we book a BrightDesk demo with Jordan Ellis on November 12th at 4:00 PM Eastern?",
     "languages": [
       "English"
     ],

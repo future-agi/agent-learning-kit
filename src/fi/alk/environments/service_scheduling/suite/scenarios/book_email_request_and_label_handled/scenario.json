@@ -87,11 +87,16 @@
     {
       "tool": "label_thread",
       "arguments": {
-        "labelIds": "handled",
+        "labelIds": [
+          "handled"
+        ],
         "threadId": "th_s01_spanish_consultation"
       },
       "environment_arguments": {},
-      "fixed": {}
+      "fixed": {
+        "threadId": "Ana Morales's thread",
+        "labelIds": "the label the desk asked for"
+      }
     }
   ],
   "alternatives": [],
@@ -106,7 +111,8 @@
     "counterparty": "staff_member"
   },
   "sub_goals": [
-    "appointment_booked_as_confirmed"
+    "appointment_booked_as_confirmed",
+    "thread_labelled"
   ],
   "max_turns": 10,
   "background_noise": false,

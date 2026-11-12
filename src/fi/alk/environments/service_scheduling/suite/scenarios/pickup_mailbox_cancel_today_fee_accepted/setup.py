@@ -12,7 +12,7 @@ def setup(world):
         "appointment_id": "A428",
         "customer_id": "CU428",
         "service_id": "SV1",
-        "staff_id": "ST01",
+        "staff_id": "ST02",
         "location_id": "L1",
         "start_utc": "2026-10-26T19:00:00Z",
         "end_utc": "2026-10-26T19:45:00Z",
@@ -31,7 +31,7 @@ def setup(world):
     })
     world.put("calendar_events", {
         "event_id": "EV-A428",
-        "calendar_id": "CAL-ST01",
+        "calendar_id": "CAL-ST02",
         "summary": "Initial Consultation - Derrick Cole",
         "description": "appointment:A428",
         "location": "Midtown Studio",
@@ -58,7 +58,7 @@ def setup(world):
     world.put("gmail_threads", {
         "id": "th_s404",
         "subject": "Cancel today's consultation",
-        "snippet": "Something came up; please cancel my consultation with Olivia today...",
+        "snippet": "Something came up; please cancel my consultation with Lucia today...",
         "history_id": "shist_404",
         "is_restricted": 0,
         "updated_at": "2026-10-26T08:30:00Z"
@@ -70,14 +70,13 @@ def setup(world):
         "recipient": "bookings@northlight-studios.example",
         "cc": "",
         "subject": "Cancel today's consultation",
-        "body": "Something came up; please cancel my consultation with Olivia today, 26 October at 3 pm. Derrick Cole",
+        "body": "Something came up; please cancel my consultation with Lucia today, 26 October at 3 pm. Derrick Cole",
         "date": "2026-10-26T08:30:00Z",
-        "snippet": "Something came up; please cancel my consultation with Olivia today..."
+        "snippet": "Something came up; please cancel my consultation with Lucia today..."
     })
     world.put("gmail_thread_labels", {
         "thread_id": "th_s404",
         "label_id": "INBOX"
     })
-    # The seed booking A004 held this time on the same calendar; it was cancelled before this scenario starts.
-    world.change("appointments", "A004", {"status": "cancelled", "cancelled_at": "2026-10-20T10:00:00Z", "updated_at": "2026-10-20T10:00:00Z"}, by="appointment_id")
-    world.change("calendar_events", "EV-A004", {"status": "cancelled", "updated_at": "2026-10-20T10:00:00Z"}, by="event_id")
+    # The person in this conversation, as the session knows them.
+    world.change("session_caller", "default", {"customer_id": "CU428", "desk_id": None}, by="id")

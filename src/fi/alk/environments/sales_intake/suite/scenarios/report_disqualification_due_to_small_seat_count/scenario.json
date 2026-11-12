@@ -5,7 +5,7 @@
   "use_case": "Qualify an inbound enquiry against the rubric",
   "branch": "Ciara Walsh (L13, 5 seats, status disqualified) chats asking if BrightDesk can provide a demo for her 5-person team; desk checks L13 and ICP rules and explains qualification threshold >= 20 seats",
   "tests": "the agent looks up L13, consults ICP rules, and explains that 5 seats does not meet the 20-seat threshold without changing the lead",
-  "instruction": "You are Ciara Walsh, Lead Engineer at Liffey Analytics in the UK. You want to see if BrightDesk can provide a product demo for your team of 5 support engineers. If told that your team size does not meet the minimum qualification threshold of 20 seats, ask what other options or resources are available for smaller teams.\n\nYour details:\n- Name: Ciara Walsh\n- Email: ciara.walsh@liffey.example\n- Company: Liffey Analytics\n- Country: United Kingdom\n- Team size: 5 seats",
+  "instruction": "You are Ciara Walsh, VP Customer Experience at Liffey Analytics in Ireland. You want to see if BrightDesk can provide a product demo for your team of 5 support agents. If told that your team size does not meet the minimum qualification threshold of 20 seats, ask what other options or resources are available for smaller teams.\n\nYour details:\n- Name: Ciara Walsh\n- Email: ciara.walsh@liffey.example\n- Company: Liffey Analytics\n- Country: Ireland\n- Team size: 5 seats",
   "keywords": [
     "qualify_lead"
   ],
@@ -14,7 +14,7 @@
     "gender": "female",
     "age_group": "25-32",
     "occupation": "Engineer",
-    "location": "United Kingdom",
+    "location": "Ireland",
     "personality": "Friendly and cooperative",
     "communication_style": "Direct and concise",
     "initial_message": "Hi! I submitted a request for Liffey Analytics. We have a 5-person support team. Can we schedule a demo?",

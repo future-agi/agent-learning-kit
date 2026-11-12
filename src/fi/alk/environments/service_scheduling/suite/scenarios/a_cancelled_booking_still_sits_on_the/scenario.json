@@ -53,7 +53,8 @@
       },
       "environment_arguments": {},
       "fixed": {
-        "calendarId": "the calendarId the outcome rests on"
+        "calendarId": "the calendarId the outcome rests on",
+        "startTime": "the day the customer asked about"
       }
     }
   ],

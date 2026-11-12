@@ -5,7 +5,7 @@
   "use_case": "New and returning customers and their preferences",
   "branch": "Nora Quinn, a first-time customer, books a haircut with Marcus Hale on Friday 6 November at 9 am at Midtown; she is created once and booked",
   "tests": "the agent creates the new customer once and books the confirmed haircut for her",
-  "instruction": "This is your first visit to Northlight. You want a haircut at the Midtown studio on Friday 6 November at 9 am, any stylist (Marcus is fine). Give your details when asked and confirm when read back.\n\nYour details:\n- Name: Nora Quinn\n- Email: nora.quinn@example.com\n- Phone: +1 212 555 0199",
+  "instruction": "This is your first visit to Northlight. You want a haircut at the Midtown studio on Friday 6 November at 9 am, with any stylist. Give your details when asked and confirm when read back.\n\nYour details:\n- Name: Nora Quinn\n- Email: nora.quinn@example.com\n- Phone: +1 212 555 0199",
   "keywords": [],
   "persona": {
     "name": "Nora Quinn",
@@ -68,7 +68,6 @@
       "fixed": {
         "customer_id": "caller",
         "service_id": "the service confirmed",
-        "staff_id": "the staff member confirmed",
         "location_id": "the studio",
         "start_time": "the local time confirmed",
         "confirmed": "the customer agreed"

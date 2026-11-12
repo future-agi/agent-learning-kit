@@ -5,7 +5,7 @@
   "use_case": "Recognise known contacts and accounts",
   "branch": "Finlytics resubmit by email: read th_s06_finlytics_resubmit (fix), upsert_lead with Meera's email as written (fix), add a note to L09",
   "tests": "the agent reads Meera Iyer's resubmission email on thread th_s06_finlytics_resubmit, updates lead L09, and records a lead note without duplicating records",
-  "instruction": "You are Arjun Mehta, AE for India (A05). Meera Iyer at Finlytics sent a follow-up email on thread th_s06_finlytics_resubmit. Ask the sales desk to read thread th_s06_finlytics_resubmit, update the lead with upsert_lead using her email, and add a note to lead L09.\n\nYour details:\n- Name: Arjun Mehta\n- Role: Account Executive (India, A05)\n- Thread ID: th_s06_finlytics_resubmit\n- Contact: Meera Iyer\n- Email: Meera.Iyer@Finlytics.Example\n- Lead ID: L09",
+  "instruction": "You are Arjun Mehta, AE for India (A05). Meera Iyer at Finlytics sent a follow-up email on thread th_s06_finlytics_resubmit. Ask the sales desk to read thread th_s06_finlytics_resubmit, update the lead with upsert_lead using her email and the facts she wrote, and add a note to lead L09.\n\nYour details:\n- Name: Arjun Mehta\n- Role: Account Executive (India, A05)\n- Thread ID: th_s06_finlytics_resubmit\n- Contact: Meera Iyer\n- Email: Meera.Iyer@Finlytics.Example\n- Lead ID: L09",
   "keywords": [
     "duplicate"
   ],
@@ -47,11 +47,15 @@
       "tool": "upsert_lead",
       "arguments": {
         "email": "Meera.Iyer@Finlytics.Example",
-        "request_key": "REQ-L09-RESUBMIT"
+        "request_key": "REQ-L09-RESUBMIT",
+        "seats": 22,
+        "timeline": "3-6 months"
       },
       "environment_arguments": {},
       "fixed": {
-        "email": "caller: Meera.Iyer@Finlytics.Example"
+        "email": "caller: Meera.Iyer@Finlytics.Example",
+        "seats": "email: 22 support agents",
+        "timeline": "email: live within 3-6 months"
       }
     },
     {

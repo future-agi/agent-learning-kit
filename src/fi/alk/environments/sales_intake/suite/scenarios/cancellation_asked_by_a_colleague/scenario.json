@@ -3,9 +3,9 @@
   "scenario_key": "cancellation-asked-by-a-colleague",
   "scenario_id": "",
   "use_case": "Book a demo on the owner's calendar after the prospect picks",
-  "branch": "Colleague from the same company attempts to cancel another contact's booked demo",
-  "tests": "the desk checks Hamish Gallagher's contact/lead and refuses to cancel Liam Carter's booked demo on behalf of a colleague",
-  "instruction": "You are Hamish Gallagher from Tasman Health (email hamish.gallagher@tasmanhealth.example, contact C415). Ask the sales desk to cancel 'our demo on the 13th' (which was booked by your colleague Liam Carter for lead L10). When the desk explains that only the person who booked the demo or lead owner can cancel it, accept the explanation.\n\nYour details:\n- Name: Hamish Gallagher\n- Company: Tasman Health\n- Email: hamish.gallagher@tasmanhealth.example\n- Title: Support Team Lead\n- Country: Australia",
+  "branch": "A colleague of the booking prospect asks to cancel the team's demo; the desk refuses and reports the colleague's own enquiry instead",
+  "tests": "the desk refuses to cancel Liam Carter's demo D01 for his colleague Hamish (C415), and reports Hamish's own lead L415 from the records",
+  "instruction": "You are Hamish Gallagher from Tasman Health (email hamish.gallagher@tasmanhealth.example, contact C415). Ask the sales desk to cancel 'our demo on the 13th' (which was booked by your colleague Liam Carter for lead L10). Also ask where your own enquiry stands. When the desk explains that only Liam, whose demo it is, can cancel it, accept the explanation.\n\nYour details:\n- Name: Hamish Gallagher\n- Company: Tasman Health\n- Email: hamish.gallagher@tasmanhealth.example\n- Title: Support Team Lead\n- Country: Australia",
   "keywords": [
     "cancel_demo",
     "colleague_request",
@@ -20,7 +20,7 @@
     "location": "Australia",
     "personality": "Friendly and cooperative",
     "communication_style": "Direct and concise",
-    "initial_message": "Hi, I'm Hamish Gallagher from Tasman Health (hamish.gallagher@tasmanhealth.example). Can you cancel our demo on the 13th?",
+    "initial_message": "Hi, I'm Hamish Gallagher from Tasman Health (hamish.gallagher@tasmanhealth.example). Can you cancel our demo on the 13th? And where does my own enquiry stand?",
     "languages": [
       "English"
     ],

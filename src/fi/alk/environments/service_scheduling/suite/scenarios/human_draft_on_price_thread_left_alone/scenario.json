@@ -35,13 +35,13 @@
         "threadId": "th_s09_prices"
       },
       "environment_arguments": {},
-      "fixed": {}
+      "fixed": {
+        "threadId": "Hana Sato's price thread"
+      }
     },
     {
       "tool": "list_drafts",
-      "arguments": {
-        "query": "to:hana.sato@example.com"
-      },
+      "arguments": {},
       "environment_arguments": {},
       "fixed": {}
     }

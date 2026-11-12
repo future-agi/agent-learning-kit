@@ -58,3 +58,5 @@ def setup(world):
         "thread_id": "th_s412_orchard_enquiry",
         "label_id": "INBOX",
     })
+    # Who is in this conversation: the session sets it, not anything the desk is told.
+    world.change("session_caller", "default", {"person_id": "C410"}, by="id")

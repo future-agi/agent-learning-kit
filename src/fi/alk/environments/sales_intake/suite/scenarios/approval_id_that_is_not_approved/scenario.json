@@ -4,15 +4,15 @@
   "scenario_id": "",
   "use_case": "Post an approved handoff summary in Slack",
   "branch": "Rep requests post with an approval ID that is still in pending status",
-  "tests": "the agent checks the approval status in records and refuses to post when approval is not approved",
-  "instruction": "You are Simon Fletcher, UK Account Executive. Tell the sales desk that Dana approved APP-SH-411 and ask it to post the Fernhill summary (L08) in your thread SM01.\n\nYour details:\n- Name: Simon Fletcher\n- Role: UK Account Executive\n- Thread ID: SM01 (ts: 1794218400.000001)\n- Lead ID: L08 (Fernhill Logistics)\n- Approval ID: APP-SH-411",
+  "tests": "the desk reads SM01 and L08, tries the post with APP-SH-411, is refused because the approval is still pending, and posts nothing",
+  "instruction": "You are Oliver Hughes, BrightDesk's account executive for the UK and Ireland. Tell the sales desk that Dana approved APP-SH-411 and ask it to post the Fernhill summary (L08) in your thread SM01. If the desk finds the approval is not approved and will not post, accept that you need Dana to approve it first.\n\nYour details:\n- Name: Oliver Hughes\n- Role: Account executive (UK and Ireland, A03)\n- Thread ID: SM01 (ts: 1794218400.000001)\n- Lead ID: L08 (Fernhill Logistics)\n- Approval ID: APP-SH-411",
   "keywords": [
     "slack",
     "handoff",
     "pending_approval"
   ],
   "persona": {
-    "name": "Simon Fletcher",
+    "name": "Oliver Hughes",
     "gender": "male",
     "age_group": "32-40",
     "occupation": "Sales Representative",
@@ -30,7 +30,7 @@
   },
   "variables": {},
   "fixture": {
-    "identity": "Simon Fletcher",
+    "identity": "Oliver Hughes",
     "origin": "mixed",
     "records": "APP-SH-411, SM01, L08"
   },
@@ -54,6 +54,19 @@
       "environment_arguments": {},
       "fixed": {
         "lead_id": "record: leads[L08].lead_id"
+      }
+    },
+    {
+      "tool": "slack_send_message",
+      "arguments": {
+        "channel_id": "CH_SALESHANDOFF",
+        "thread_ts": "1794218400.000001",
+        "approval_id": "APP-SH-411",
+        "message": "Fernhill Logistics summary"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "approval_id": "caller: APP-SH-411"
       }
     }
   ],

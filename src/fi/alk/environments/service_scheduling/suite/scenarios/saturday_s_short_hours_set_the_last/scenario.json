@@ -63,7 +63,8 @@
       },
       "environment_arguments": {},
       "fixed": {
-        "staff_id": "record: staff[ST04].staff_id"
+        "staff_id": "record: staff[ST04].staff_id",
+        "date": "the day the customer asked about"
       }
     }
   ],

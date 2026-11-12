@@ -24,7 +24,11 @@ def handle(args, db):
             raise ToolError(f"Unsupported draft search operator {part!r}; drafts support to:, cc:, bcc: and subject:", category="invalid_input")
 
     drafts = []
+    # Drafts are the desk's work in progress; a prospect sees only those addressed to them.
+    kind, who = _caller(db)
     for d in db.query("SELECT * FROM gmail_drafts ORDER BY updated_at DESC"):
+        if kind != "staff" and not (kind == "contact" and who["email_normalized"] in [x.strip().lower() for x in d["recipient"].split(",")]):
+            continue
         text = f"{d['subject']} {d['body']} {d['recipient']}".lower()
         if terms and not all(term in text for term in terms):
             continue
@@ -51,3 +55,27 @@ def handle(args, db):
     if offset + page_size < len(drafts):
         result["nextPageToken"] = str(offset + page_size)
     return result
+
+
+def _caller(db):
+    """Who is in this conversation, as the session set it: ("contact", row) for a prospect speaking
+    for themselves, ("staff", row) for a BrightDesk employee (their Slack user), or (None, None).
+    An ID or an email the desk is told never changes it."""
+    row = db.one("SELECT person_id FROM session_caller WHERE id = 'default'")
+    person = row["person_id"] if row else None
+    if person:
+        contact = db.one("SELECT * FROM contacts WHERE contact_id = ?", [person])
+        if contact:
+            return "contact", contact
+        staff = db.one("SELECT * FROM slack_users WHERE user_id = ?", [person])
+        if staff:
+            return "staff", staff
+    return None, None
+
+
+def _named(kind, who):
+    if kind == "contact":
+        return f"{who['name']} ({who['contact_id']})"
+    if kind == "staff":
+        return f"{who['name']} ({who['user_id']})"
+    return "nobody signed in"

@@ -39,21 +39,29 @@
   },
   "solution": [
     {
+      "tool": "verify_patient",
+      "arguments": {
+        "full_name": "Mei Tanaka",
+        "dob": "1971-02-27"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
       "tool": "get_thread",
       "arguments": {
         "messageFormat": "FULL_CONTENT",
         "threadId": "th_c11_prep_p12"
       },
       "environment_arguments": {},
-      "fixed": {}
+      "fixed": {
+        "threadId": "record: the caller's email thread"
+      }
     },
     {
       "tool": "list_drafts",
       "arguments": {
-        "view": null,
-        "pageToken": null,
-        "pageSize": 10,
-        "query": "th_c11_prep_p12"
+        "pageSize": 10
       },
       "environment_arguments": {},
       "fixed": {}

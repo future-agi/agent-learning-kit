@@ -88,3 +88,5 @@ def setup(world):
             "created_at": "2026-10-20T12:00:00Z",
             "updated_at": "2026-10-20T12:00:00Z"
         })
+    # The person in this conversation, as the session knows them.
+    world.change("session_caller", "default", {"customer_id": "CU405", "desk_id": None}, by="id")

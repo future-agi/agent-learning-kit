@@ -52,7 +52,7 @@
       },
       "environment_arguments": {},
       "fixed": {
-        "passage_id": "record: Software Standards 1.0, section 1"
+        "passage_id": "record: Software Approval Standard 1.0, section 1"
       }
     },
     {
@@ -69,7 +69,7 @@
       "tool": "slack_send_message",
       "arguments": {
         "approval_id": "APP-KN-412",
-        "message": "Under precedence rule PR-01, Software Standards 1.0 section 1 prevails over Procurement Policy: software purchases over $1,000 require an IT security review, so a $1,500 software purchase requires review.",
+        "message": "Under precedence rule PR-01, Software Approval Standard 1.0 section 1 prevails over the Procurement Policy: software purchases over $1,000 require an IT security review, so a $1,500 software purchase requires review.",
         "channel_id": "CH_HELPPOL",
         "thread_ts": "1794042000.000019"
       },

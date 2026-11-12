@@ -3,18 +3,18 @@
   "scenario_key": "lead-status-and-owner-reported-for-northwind",
   "scenario_id": "",
   "use_case": "Qualify an inbound enquiry against the rubric",
-  "branch": "An AE asks about the status and owner of Northwind Support Co's lead (L01), which is currently status 'new' with no assigned owner",
+  "branch": "An SDR asks about the status and owner of Northwind Support Co's lead (L01), which is currently status 'new' with no assigned owner",
   "tests": "the agent looks up lead L01 in the records, reports its current status and unassigned owner accurately, and changes nothing",
-  "instruction": "You are Rohan Kapoor, an Account Executive at BrightDesk in India. You want to know what is happening with the Northwind Support Co lead (L01) and whether it has been assigned to an AE yet.\n\nYour details:\n- Name: Rohan Kapoor\n- Role: Account Executive\n- Lead ID: L01\n- Company: Northwind Support Co",
+  "instruction": "You are Nadia Brennan, a Sales Development Representative at BrightDesk. You want to know what is happening with the Northwind Support Co lead (L01) and whether it has been assigned to an AE yet.\n\nYour details:\n- Name: Nadia Brennan\n- Role: Sales Development Representative\n- Lead ID: L01\n- Company: Northwind Support Co",
   "keywords": [
     "lead"
   ],
   "persona": {
-    "name": "Rohan Kapoor",
+    "name": "Nadia Brennan",
     "gender": "male",
     "age_group": "25-32",
     "occupation": "Sales Representative",
-    "location": "India",
+    "location": "United States",
     "personality": "Detail-oriented",
     "communication_style": "Direct and concise",
     "initial_message": "Can you check the status of lead L01 for Northwind Support Co and tell me who is assigned as the owner?",

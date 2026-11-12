@@ -1,10 +1,30 @@
 def check(world, calls, reference=None):
-    if not any(c.name in ("find_available_slots", "list_events", "get_event", "suggest_time") and c.ok for c in calls):
-        return "not done: no calendar or slot query was made"
-    state = world.state()
+    """The availability the answer rests on reached the agent: each provider calendar the reference
+    reads was returned (or the slots computed from it), and each slot query it fixes (a provider or
+    specialty, a location, a date range) returned the open slots for at least that range."""
+    queries, calendars = [], False
+    for step in reference or ():
+        a = step.get("arguments", {})
+        if step.get("tool") == "find_available_slots" and (a.get("provider_id") or a.get("specialty")):
+            queries.append(a)
+        if (step.get("tool") == "list_events" and a.get("calendarId")) or (step.get("tool") == "get_event" and a.get("eventId")):
+            calendars = True
+    if not queries and not calendars:
+        return "not done: the reference fixes no calendar or slot query"
     missing = _evidence_missing(world, calls, reference)
     if missing:
         return f"done blind: the decision rests on {', '.join(missing)}, which was never read"
+    for q in queries:
+        answered = any(
+            c.name == "find_available_slots" and c.ok and isinstance(c.result, dict) and isinstance(c.result.get("slots"), list)
+            and all(c.arguments.get(k) == q[k] for k in ("provider_id", "specialty", "location_id") if q.get(k))
+            and (not q.get("date_from") or str(c.arguments.get("date_from") or "9999") <= q["date_from"])
+            and (not q.get("date_to") or str(c.arguments.get("date_to") or "") >= q["date_to"])
+            for c in calls
+        )
+        if not answered:
+            what = ", ".join(f"{k}={v}" for k, v in q.items() if k in ("provider_id", "specialty", "location_id", "date_from", "date_to"))
+            return f"done blind: the open slots for {what} were never returned"
     return None
 
 def _evidence_missing(world, calls, reference):

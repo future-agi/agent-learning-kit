@@ -5,7 +5,7 @@
   "use_case": "Flag a document problem to its owner",
   "branch": "Sam Taylor (E20, employee) asks who owns Vendor Onboarding; vendor_v1 is in Finance outside his role; desk checks access, checks Finance team directory, routes him to Laura Chen/Finance without quoting document",
   "tests": "the desk checks access for vendor_v1, finds it restricted to Finance/managers, checks team directory for Finance, and routes Sam to Finance without quoting the restricted document",
-  "instruction": "You want to onboard a new vendor and ask who owns the Vendor Onboarding document (vendor_v1). If the desk explains that vendor onboarding is in the Finance & Procurement collection outside your role's access, but directs you to Laura Chen / the Finance team, accept this.\n\nYour details:\n- Name: Sam Taylor\n- Employee ID: E20",
+  "instruction": "You want to onboard a new vendor and ask who owns the Vendor Onboarding document (vendor_v1). If the desk explains that vendor onboarding is in the Finance & Procurement collection outside your role's access, but directs you to the Finance team or its collection owner Laura Chen, accept this.\n\nYour details:\n- Name: Sam Taylor\n- Employee ID: E20",
   "keywords": [
     "access_check",
     "issue_flagging",

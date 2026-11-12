@@ -18,7 +18,7 @@
     "location": "Canada",
     "personality": "Friendly and cooperative",
     "communication_style": "Direct and concise",
-    "initial_message": "Hi, I sent an email earlier with the subject 'Booking request' about getting a haircut. Can you check my email emma.schultz@example.com and book the haircut for me?",
+    "initial_message": "Hi, I sent an email earlier with the subject 'Booking request' about an Initial Consultation with Olivia. Can you check my email emma.schultz@example.com and book it for me?",
     "languages": [
       "English"
     ],

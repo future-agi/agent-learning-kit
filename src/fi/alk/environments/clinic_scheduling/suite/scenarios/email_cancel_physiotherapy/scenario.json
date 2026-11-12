@@ -36,6 +36,15 @@
   },
   "solution": [
     {
+      "tool": "verify_patient",
+      "arguments": {
+        "full_name": "Laura Becker",
+        "dob": "1988-09-09"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
       "tool": "get_thread",
       "arguments": {
         "threadId": "th_c05_cancel_p15"
@@ -44,15 +53,6 @@
       "fixed": {
         "threadId": "the patient's thread"
       }
-    },
-    {
-      "tool": "verify_patient",
-      "arguments": {
-        "full_name": "Laura Becker",
-        "dob": "1988-09-09"
-      },
-      "environment_arguments": {},
-      "fixed": {}
     },
     {
       "tool": "cancel_appointment",

@@ -3,7 +3,7 @@ def setup(world):
         "patient_id": "P131",
         "full_name": "Alessia DeLuca",
         "dob": "1996-06-06",
-        "phone": "+447700900113",
+        "phone": "+447700900131",
         "email": "alessia.deluca@example.com",
         "guardian_name": None,
         "is_new_patient": 0
@@ -15,3 +15,4 @@ def setup(world):
         "group_number": "",
         "updated_at": "2026-01-05T09:00:00Z"
     })
+    world.change("session_caller", "default", {"caller_id": "P131"}, by="id")

@@ -38,17 +38,6 @@
   },
   "solution": [
     {
-      "tool": "get_thread",
-      "arguments": {
-        "messageFormat": "FULL_CONTENT",
-        "threadId": "th_c05_cancel_p15"
-      },
-      "environment_arguments": {},
-      "fixed": {
-        "threadId": "record: gmail_threads.id"
-      }
-    },
-    {
       "tool": "verify_patient",
       "arguments": {
         "dob": "1988-09-09",
@@ -58,6 +47,17 @@
       "fixed": {
         "full_name": "caller: Laura Becker",
         "dob": "caller: 1988-09-09"
+      }
+    },
+    {
+      "tool": "get_thread",
+      "arguments": {
+        "messageFormat": "FULL_CONTENT",
+        "threadId": "th_c05_cancel_p15"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "threadId": "record: gmail_threads.id"
       }
     },
     {

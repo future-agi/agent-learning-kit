@@ -39,14 +39,6 @@
   },
   "solution": [
     {
-      "tool": "get_thread",
-      "arguments": {
-        "threadId": "th_c02_referral_p09"
-      },
-      "environment_arguments": {},
-      "fixed": {}
-    },
-    {
       "tool": "verify_patient",
       "arguments": {
         "dob": "1984-12-01",
@@ -57,6 +49,14 @@
         "dob": "caller: 1984-12-01",
         "full_name": "caller: Lucas Ferreira"
       }
+    },
+    {
+      "tool": "get_thread",
+      "arguments": {
+        "threadId": "th_c02_referral_p09"
+      },
+      "environment_arguments": {},
+      "fixed": {}
     },
     {
       "tool": "get_referral_status",

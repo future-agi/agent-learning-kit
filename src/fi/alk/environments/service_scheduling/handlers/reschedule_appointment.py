@@ -135,6 +135,7 @@ def _appointment(db, appointment_id, customer_id):
         raise ToolError(f"Appointment {appointment_id!r} not found.", category="not_found")
     if row["customer_id"] != customer_id:
         raise ToolError(f"Appointment {appointment_id} does not belong to customer {customer_id}.", category="permission_denied")
+    _entitled(db, customer_id)
     return row
 
 
@@ -246,17 +247,57 @@ def _together(db, touched, writes):
         raise
 
 
-def handle(args, db):
+def _writable(db, staff_id, what):
+    """Refuse a change on a calendar that is read-only here: it is managed elsewhere, so it goes
+    through the front desk (create_handoff), like a booking with that staff member."""
+    staff = db.one("SELECT name, calendar_id FROM staff WHERE staff_id = ?", [staff_id])
+    cal = db.one("SELECT access_role FROM calendar_calendars WHERE calendar_id = ?", [staff["calendar_id"]]) if staff else None
+    if not cal or cal["access_role"] not in ("writer", "owner"):
+        raise ToolError(f"{staff['name'] if staff else staff_id}'s calendar is read-only here: {what} goes through the front desk (create_handoff).", category="policy_blocked")
+
+
+def _caller(db):
+    """Who is in this conversation, as the session knows it (session_caller), never as the
+    conversation tells it: a customer, a front-desk member, or nobody identified."""
+    row = db.one("SELECT customer_id, desk_id FROM session_caller WHERE id = 'default'")
+    return (row["customer_id"], row["desk_id"]) if row else (None, None)
+
+
+def _desk(db):
+    """Whether the caller is an active front-desk member, who may act for any customer."""
+    _, desk_id = _caller(db)
+    return bool(desk_id and db.one("SELECT 1 AS x FROM desk_staff WHERE desk_id = ? AND role = 'front_desk' AND active = 1", [desk_id]))
+
+
+def _entitled(db, customer_id):
+    """Refuse unless the caller is this customer or the front desk: a customer ID the agent passes
+    names a record, it does not prove who is asking."""
+    if _desk(db):
+        return
+    caller, _ = _caller(db)
+    if not caller or caller != customer_id:
+        raise ToolError(f"Permission denied: the person in this conversation ({caller or 'not identified'}) cannot see or change {customer_id}'s records.", category="permission_denied")
+
+
+def _handle(args, db):
     key = args.get("request_key")
     if not key:
         raise ToolError("request_key is required.", category="invalid_input")
     done = db.one("SELECT * FROM appointments WHERE request_key = ?", [key])
     if done:
-        orig = db.one("SELECT * FROM appointments WHERE appointment_id = ?", [done["rescheduled_from"]])
-        return {"rescheduled": True, "status": "rescheduled", "original": _view(orig) if orig else None, "replacement": _view(done), "idempotent": True}
+        # A replay is this customer moving this appointment to the same time again; any other use of
+        # the key is a different request, refused without showing what the key was used for.
+        first = db.one("SELECT * FROM appointments WHERE appointment_id = ?", [args.get("appointment_id")])
+        _appointment(db, args.get("appointment_id"), args.get("customer_id"))
+        utc, _ = _to_utc(args.get("new_start_time"), first["time_zone"], args.get("utc_offset"))
+        same = done["rescheduled_from"] == first["appointment_id"] and done["start_utc"] == iso(utc) and (not args.get("new_staff_id") or args["new_staff_id"] == done["staff_id"])
+        if not same:
+            raise ToolError(f"request_key {key!r} was already used for a different request; use a new key for this move.", category="conflict")
+        return {"rescheduled": True, "status": "rescheduled", "original": _view(first), "replacement": _view(done), "idempotent": True}
     orig = _appointment(db, args.get("appointment_id"), args.get("customer_id"))
     if orig["status"] != "booked":
         raise ToolError(f"Appointment {orig['appointment_id']} is {orig['status']}; only a booked appointment can be moved.", category="conflict")
+    _writable(db, orig["staff_id"], "moving this appointment")
     if args.get("confirmed") is not True:
         raise ToolError("Read back the new time and time zone, and reschedule only after the customer confirms.", category="policy_blocked")
     cust, service, loc = _customer(db, orig["customer_id"]), _service(db, orig["service_id"]), _location(db, orig["location_id"])
@@ -266,11 +307,12 @@ def handle(args, db):
         raise ToolError(f"{staff['name']}'s calendar is read-only here.", category="policy_blocked")
     utc, off = _to_utc(args.get("new_start_time"), loc["time_zone"], args.get("utc_offset"))
     now = _now(db)
-    if _contention(db, staff, service, loc, utc, now):
-        return {"rescheduled": False, "status": "replacement_conflict", "message": "The new slot was taken before the replacement could be committed; the original appointment is still booked.", "original": _view(orig), "replacement": None}
     why = _bookable(db, staff, service, loc, utc, off, ignore_event=orig["calendar_event_id"])
     if why:
         raise ToolError(f"Cannot move to that time: {why}. The original appointment is unchanged.", category="conflict")
+    # The competing booking races only for a slot the move could have taken.
+    if _contention(db, staff, service, loc, utc, now):
+        return {"rescheduled": False, "status": "replacement_conflict", "message": "The new slot was taken before the replacement could be committed; the original appointment is still booked.", "original": _view(orig), "replacement": None}
     appt_id = _next_id(db, "appointments", "appointment_id", "A", 600)
 
     def move():
@@ -284,3 +326,43 @@ def handle(args, db):
                          ("calendar_events", "event_id", orig["calendar_event_id"])], move)
     orig = db.one("SELECT * FROM appointments WHERE appointment_id = ?", [orig["appointment_id"]])
     return {"rescheduled": True, "status": "rescheduled", "original": _view(orig), "replacement": _view(new), "idempotent": False}
+
+
+_WRITES = ("appointments", "booking_contention", "calendar_event_attendees", "calendar_events")
+
+def _all_or_nothing(db, run):
+    """Run the call so that a failed call changes nothing. A handler gets no transaction of its own,
+    so every table this tool writes is held first and put back if the call raises, whether a write
+    failed partway or the call refused after writing. Only a fault the world simulates on purpose
+    (an error marked keep_writes: a rival booking, a commit whose reply was lost, a fault used up)
+    keeps what it wrote."""
+    held = {table: db.query(f"SELECT * FROM {table}") for table in _WRITES}
+    try:
+        return run()
+    except Exception as failed:
+        if not getattr(failed, "keep_writes", False):
+            for table, rows in held.items():
+                if _same(db.query(f"SELECT * FROM {table}"), rows):
+                    continue
+                db.execute(f"DELETE FROM {table}")
+                for row in rows:
+                    cols = list(row)
+                    db.execute(
+                        f"INSERT INTO {table} ({', '.join(chr(34) + c + chr(34) for c in cols)}) VALUES ({', '.join('?' * len(cols))})",
+                        [row[c] for c in cols],
+                    )
+        raise
+
+def _same(rows, held):
+    """Whether a table still holds exactly the rows it held, in any order: only a table the call
+    changed is rewritten."""
+    import json
+
+    def key(row):
+        return json.dumps(row, sort_keys=True, default=str)
+
+    return sorted(map(key, rows)) == sorted(map(key, held))
+
+
+def handle(args, db):
+    return _all_or_nothing(db, lambda: _handle(args, db))

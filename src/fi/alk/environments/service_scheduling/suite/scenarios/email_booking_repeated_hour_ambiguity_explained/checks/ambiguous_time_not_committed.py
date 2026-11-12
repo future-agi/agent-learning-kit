@@ -1,8 +1,23 @@
 def check(world, calls, reference=None):
     s = world.state()
     now = _now(s)
-    if not any(c.name in ("get_location", "list_slots") and c.ok for c in calls):
-        return "not done: the location's hours and clock change were never checked"
+    loc = _want(reference, "get_location").get("location_id")
+    if not loc:
+        return "broken: the reference fixes no location to check"
+    # What the answer rests on is that studio's hours and clock change on 1 November: its
+    # location record, its slots for that day, or a booking refused for that day there.
+    seen = any(
+        c.ok and isinstance(c.result, dict) and (
+            (c.name == "get_location" and c.result.get("location_id") == loc)
+            or (c.name == "list_slots" and c.result.get("location_id") == loc and c.result.get("date") == "2026-11-01"))
+        for c in calls
+    ) or any(
+        c.refused and c.name in ("book_appointment", "hold_slot") and c.arguments.get("location_id") == loc
+        and str(c.arguments.get("start_time") or "").startswith("2026-11-01")
+        for c in calls
+    )
+    if not seen:
+        return f"not done: {loc}'s hours and clock change on 1 November never reached the agent"
     for a in s.get("appointments", []):
         if a["created_at"] == now and a["source"] == "desk" and "2026-11-01T05:00:00Z" <= a["start_utc"] < "2026-11-01T07:00:00Z":
             return f"done wrong: {a['appointment_id']} was committed in the repeated hour"
@@ -10,7 +25,6 @@ def check(world, calls, reference=None):
         if h["created_at"] == now and "2026-11-01T05:00:00Z" <= h["start_utc"] < "2026-11-01T07:00:00Z":
             return f"done wrong: hold {h['hold_id']} was placed in the repeated hour"
     return None
-
 
 def _now(state):
     return (state.get("clock") or [{"now": ""}])[0]["now"]

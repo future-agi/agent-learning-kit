@@ -5,7 +5,7 @@
   "use_case": "Book a demo on the owner's calendar after the prospect picks",
   "branch": "Prospect's requested slot has become unavailable due to a calendar conflict",
   "tests": "the desk notices requested slot DS06 is blocked, offers remaining open slots on Priya Raman's calendar, and books DS07 on prospect choice",
-  "instruction": "You are Genevieve Bouchard from St. Laurent Telecom (lead L420, owner Priya Raman A02). You previously requested Thursday Nov 12 at 3:00 PM Toronto time (slot DS06) via email thread th_s410_mapleridge_pick. When the sales desk explains that slot DS06 is no longer available and offers alternatives, choose Friday Nov 13 at 10:00 AM Toronto time (slot DS07) and confirm the booking.\n\nYour details:\n- Name: Genevieve Bouchard\n- Company: St. Laurent Telecom\n- Email: genevieve.bouchard@stlaurent.example\n- Lead ID: L420\n- Assigned Rep: Priya Raman (A02)",
+  "instruction": "You are Genevieve Bouchard from St. Laurent Telecom (lead L420, owner Priya Raman A02). You previously requested Thursday Nov 12 at 3:00 PM Toronto time (slot DS06) via email thread th_s410_stlaurent_pick. When the sales desk explains that slot DS06 is no longer available and offers alternatives, choose Friday Nov 13 at 10:00 AM Toronto time (slot DS07) and confirm the booking.\n\nYour details:\n- Name: Genevieve Bouchard\n- Company: St. Laurent Telecom\n- Email: genevieve.bouchard@stlaurent.example\n- Lead ID: L420\n- Assigned Rep: Priya Raman (A02)",
   "keywords": [
     "slot_conflict",
     "reschedule",
@@ -20,7 +20,7 @@
     "location": "Canada",
     "personality": "Friendly and cooperative",
     "communication_style": "Direct and concise",
-    "initial_message": "Hi, following up on thread th_s410_mapleridge_pick, I wanted to confirm my demo booking for St. Laurent Telecom.",
+    "initial_message": "Hi, following up on thread th_s410_stlaurent_pick, I wanted to confirm my demo booking for St. Laurent Telecom.",
     "languages": [
       "English"
     ],
@@ -50,7 +50,7 @@
       {
         "subject": "Re: St. Laurent Demo times",
         "sender": "genevieve.bouchard@stlaurent.example",
-        "id": "th_s410_mapleridge_pick"
+        "id": "th_s410_stlaurent_pick"
       }
     ],
     "calendar_events": [
@@ -73,7 +73,7 @@
     {
       "tool": "get_thread",
       "arguments": {
-        "threadId": "th_s410_mapleridge_pick"
+        "threadId": "th_s410_stlaurent_pick"
       },
       "environment_arguments": {},
       "fixed": {

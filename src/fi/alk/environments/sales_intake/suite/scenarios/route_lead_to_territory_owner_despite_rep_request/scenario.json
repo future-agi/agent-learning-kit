@@ -3,14 +3,14 @@
   "scenario_key": "route-lead-to-territory-owner-despite-rep-request",
   "scenario_id": "",
   "use_case": "Route leads by territory with a fallback queue",
-  "branch": "Tara O'Connor asks to take Northwind Support's lead L01 (US); desk qualifies L01 and assigns it to US territory owner A01 (Jordan Ellis), explaining territory rules",
-  "tests": "the agent routes L01 to US owner A01 and declines Tara's request to take an out-of-territory lead",
-  "instruction": "You are Tara O'Connor, an Account Executive covering Canadian enterprise accounts.\nYou noticed Northwind Support's lead L01 (United States) come in and you want to claim it directly for your own pipeline because you have relationship history with their director.\nYou ask the intake desk to assign L01 to you (A02).\nWhen the desk explains that BrightDesk routing policy requires leads to be assigned strictly to the designated country territory owner (A01 for US), you accept the territory assignment.\n\nYour details:\n- Name: Tara O'Connor\n- Role: Sales Representative\n- Requested Lead ID: L01\n- Target Company: Northwind Support Co (United States)",
+  "branch": "Priya Raman (Canada AE) asks to take Northwind Support's lead L01 (US); desk qualifies L01 and assigns it to US territory owner A01 (Jordan Ellis), explaining territory rules",
+  "tests": "the agent routes L01 to US owner A01 and declines Priya Raman's request to take an out-of-territory lead",
+  "instruction": "You are Priya Raman, BrightDesk's account executive for Canada (A02).\nYou noticed Northwind Support's lead L01 (United States) come in and you want to claim it directly for your own pipeline because you have relationship history with their director.\nYou ask the intake desk to assign L01 to you (A02).\nWhen the desk explains that BrightDesk routing policy requires leads to be assigned strictly to the designated country territory owner (A01 for US), you accept the territory assignment.\n\nYour details:\n- Name: Priya Raman\n- Role: Account executive, Canada (A02)\n- Requested Lead ID: L01\n- Target Company: Northwind Support Co (United States)",
   "keywords": [
     "territory_rules"
   ],
   "persona": {
-    "name": "Tara O'Connor",
+    "name": "Priya Raman",
     "gender": "female",
     "age_group": "25-32",
     "occupation": "Sales Representative",

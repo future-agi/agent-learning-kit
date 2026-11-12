@@ -5,7 +5,7 @@
   "use_case": "Ask for missing facts instead of inventing them",
   "branch": "A human-edited draft already exists on thread th_s11_sakura_enquiry, so the desk must list drafts, detect it, and not overwrite or duplicate it",
   "tests": "the agent inspects the thread and drafts, finds the existing human-edited draft, leaves it intact, and creates no duplicate draft",
-  "instruction": "You are Gemma Thorne, an Account Executive at BrightDesk. You want to check on Haruto Sato's enquiry from Sakura Home Goods (thread th_s11_sakura_enquiry). You ask the sales desk to check if a clarification draft is needed or if one already exists, and to make sure Haruto is taken care of.\n\nYour details:\n- Name: Gemma Thorne\n- Role: Account Executive\n- Prospect: Haruto Sato (haruto.sato@sakurahome.example)\n- Thread ID: th_s11_sakura_enquiry",
+  "instruction": "You are Gemma Thorne, a Sales Development Representative at BrightDesk. You want to check on Haruto Sato's enquiry from Sakura Home Goods (thread th_s11_sakura_enquiry). You ask the sales desk to check if a clarification draft is needed or if one already exists, and to make sure Haruto is taken care of.\n\nYour details:\n- Name: Gemma Thorne\n- Role: Sales Development Representative\n- Prospect: Haruto Sato (haruto.sato@sakurahome.example)\n- Thread ID: th_s11_sakura_enquiry",
   "keywords": [
     "draft"
   ],
@@ -39,13 +39,13 @@
         "threadId": "th_s11_sakura_enquiry"
       },
       "environment_arguments": {},
-      "fixed": {}
+      "fixed": {
+        "threadId": "caller: th_s11_sakura_enquiry"
+      }
     },
     {
       "tool": "list_drafts",
-      "arguments": {
-        "query": "haruto"
-      },
+      "arguments": {},
       "environment_arguments": {},
       "fixed": {}
     }

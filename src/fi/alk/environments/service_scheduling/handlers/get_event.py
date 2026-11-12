@@ -1,3 +1,29 @@
+def _caller(db):
+    """Who is in this conversation, as the session knows it (session_caller), never as the
+    conversation tells it: a customer, a front-desk member, or nobody identified."""
+    row = db.one("SELECT customer_id, desk_id FROM session_caller WHERE id = 'default'")
+    return (row["customer_id"], row["desk_id"]) if row else (None, None)
+
+
+def _desk(db):
+    """Whether the caller is an active front-desk member, who may act for any customer."""
+    _, desk_id = _caller(db)
+    return bool(desk_id and db.one("SELECT 1 AS x FROM desk_staff WHERE desk_id = ? AND role = 'front_desk' AND active = 1", [desk_id]))
+
+
+def _shown(db, r, att_rows):
+    """An event as this caller may see it. Another customer's booking on a staff calendar shows as
+    busy time, not as who is booked: the front desk sees everything, a customer their own."""
+    d = r["description"] or ""
+    if not d.startswith("appointment:") or _desk(db):
+        return r, att_rows
+    a = db.one("SELECT customer_id FROM appointments WHERE appointment_id = ?", [d.split(":", 1)[1]])
+    if a and a["customer_id"] == _caller(db)[0]:
+        return r, att_rows
+    r = dict(r)
+    r.update({"summary": "Booked", "description": None})
+    return r, []
+
 def handle(args, db):
     evt_id = args.get("eventId")
     if not evt_id or not isinstance(evt_id, str):
@@ -14,6 +40,7 @@ def handle(args, db):
     if not r:
         raise ToolError(f"Event {evt_id!r} not found on calendar {cal_id!r}.", category="not_found")
 
+    r, rows = _shown(db, r, db.query("SELECT email, display_name, response_status, is_organizer, is_optional FROM calendar_event_attendees WHERE event_id = ?", (evt_id,)))
     attendees = [
         {
             "email": a["email"],
@@ -22,7 +49,7 @@ def handle(args, db):
             "organizer": bool(a["is_organizer"]),
             "optionalAttendee": bool(a["is_optional"]),
         }
-        for a in db.query("SELECT email, display_name, response_status, is_organizer, is_optional FROM calendar_event_attendees WHERE event_id = ?", (evt_id,))
+        for a in rows
     ]
     return {
         "id": r["event_id"],

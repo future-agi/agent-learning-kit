@@ -1,4 +1,5 @@
 def setup(world):
+    world.change("session_caller", "default", {"employee_id": "E13"}, by="id")
     world.put("knowledge_requests", {
         "request_id": "KR-401",
         "requester_id": "E13",

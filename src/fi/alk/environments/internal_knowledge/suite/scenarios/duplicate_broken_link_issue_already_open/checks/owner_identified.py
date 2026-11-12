@@ -3,19 +3,35 @@ def check(world, calls, reference=None):
     for step in reference or ():
         if step.get("tool") == "get_document_owner":
             fid = step.get("arguments", {}).get("drive_file_id") or fid
-    # The owner tool, the team directory, or any metadata read that returns the document's owner (plan §3.3).
-    looks = [
-        c for c in calls
-        if c.ok and (
-            c.name in ("get_document_owner", "get_team_directory")
-            or (c.name in ("check_document_access", "get_document_metadata") and "owner_id" in str(c.result))
-            or (c.name == "get_file_metadata" and "owner" in str(c.result).lower())
-        )
-    ]
-    if not looks:
+    state = world.state()
+    owner_of = {d["drive_file_id"]: d["owner_id"] for d in state.get("kb_documents", [])}
+    email_of = {e["employee_id"]: e["email"] for e in state.get("employees", [])}
+    issues = {i["issue_id"]: i for i in state.get("document_issues", [])}
+
+    def owner_returned(c, target):
+        """Whether this call returned `target`'s owner: the owner tool, the document's metadata,
+        its Drive metadata, or an issue raised on it (which names the owner it was routed to)."""
+        r = c.result if isinstance(c.result, dict) else {}
+        owner = owner_of.get(target)
+        if owner is None:
+            return False
+        if c.name in ("get_document_owner", "get_document_metadata") and c.arguments.get("drive_file_id") == target:
+            return r.get("owner_id") == owner
+        if c.name == "flag_document_issue" and c.arguments.get("drive_file_id") == target:
+            issue = issues.get(r.get("issue_id"))
+            return r.get("owner_id") == owner and issue is not None and issue["owner_id"] == owner
+        if c.name == "get_file_metadata" and c.arguments.get("fileId") == target:
+            return bool(r.get("owner")) and r.get("owner") == email_of.get(owner)
+        return False
+
+    ok = [c for c in calls if c.ok]
+    if fid:
+        # The team directory names team leads and collection owners, not who owns this document.
+        if not any(owner_returned(c, fid) for c in ok):
+            return f"not done: the owner of {fid} was never returned"
+        return None
+    if not any(c.name == "get_team_directory" or any(owner_returned(c, t) for t in owner_of) for c in ok):
         return "not done: no owner was looked up"
-    if fid and not any(c.name == "get_team_directory" or fid in (c.arguments.get("drive_file_id"), c.arguments.get("fileId")) for c in looks):
-        return f"done wrong: the owner of {fid} was never looked up"
     return None
 
 

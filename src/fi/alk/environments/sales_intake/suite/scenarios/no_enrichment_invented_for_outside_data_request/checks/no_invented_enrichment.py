@@ -1,6 +1,22 @@
 def check(world, calls, reference=None):
-    if not any(c.ok for c in calls):
-        return "not done: nothing was looked up before answering"
+    target = None
+    for step in reference or ():
+        a = step.get("arguments", {})
+        if step.get("tool") == "get_account" and a.get("account_id"):
+            target = ("account", a["account_id"])
+        elif step.get("tool") == "get_lead" and a.get("lead_id") and not target:
+            target = ("lead", a["lead_id"])
+        elif step.get("tool") == "get_icp_rules" and not target:
+            target = ("rubric", None)
+    # The answer is "the records do not hold it": that rests on the record having been read.
+    if target and target[0] == "account" and not any(r.get("account_id") == target[1] and "employee_count" in r for r in _returned(calls, "get_account")):
+        return f"not done: account {target[1]} was never read, so what it holds is unknown"
+    if target and target[0] == "lead" and not any(r.get("lead_id") == target[1] and "seats" in r for r in _returned(calls, "get_lead")):
+        return f"not done: lead {target[1]} was never read, so what it holds is unknown"
+    if target and target[0] == "rubric" and not any(c.name == "get_icp_rules" and c.ok and c.result for c in calls):
+        return "not done: the rubric was never read"
+    if not target:
+        return "not done: the scenario fixes no record to read"
     for c in calls:
         if c.ok and c.name in ("upsert_lead", "qualify_lead", "add_lead_note", "create_handoff", "assign_owner"):
             return f"done wrong: {c.name} recorded facts while only stated facts may be recorded"
@@ -8,6 +24,25 @@ def check(world, calls, reference=None):
     if missing:
         return f"done blind: the decision rests on {', '.join(missing)}, which was never read"
     return None
+
+
+def _returned(calls, *tools):
+    """Every record (dict) that a successful call of `tools` returned, at any depth."""
+    found = []
+
+    def walk(value):
+        if isinstance(value, dict):
+            found.append(value)
+            for one in value.values():
+                walk(one)
+        elif isinstance(value, list):
+            for one in value:
+                walk(one)
+
+    for c in calls:
+        if c.ok and c.name in tools:
+            walk(c.result)
+    return found
 
 def _evidence_missing(world, calls, reference):
     """The email thread or Slack thread the reference fixes and whether its content reached this run:
@@ -80,7 +115,6 @@ def _texts_shown(calls):
         if c.ok and c.name in ("slack_read_thread", "slack_read_channel", "slack_search_public_and_private"):
             walk(c.result)
     return shown
-
 
 if __name__ == "__main__":
     # Run this check by hand against what a run left behind. The first argument is anything

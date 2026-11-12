@@ -26,3 +26,4 @@ def setup(world):
         "created_at": "2026-10-01T10:00:00Z",
         "updated_at": "2026-10-01T10:00:00Z",
     })
+    world.change("session_caller", "default", {"caller_id": "P411"}, by="id")

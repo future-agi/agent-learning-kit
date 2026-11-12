@@ -3,7 +3,7 @@
   "scenario_key": "repeated-booking-request-same-request-key",
   "scenario_id": "",
   "use_case": "Concurrency, clock changes and failures",
-  "branch": "The chat dropped after booking; customer asks again; using the same request_key returns the existing booking idempotently without double-booking.",
+  "branch": "The chat dropped right after the booking committed (A450, request key REQ-MARCUS-REPEAT); the customer asks whether it went through. The desk finds the booking in his appointments and books nothing again (a retry with the same request_key would only return A450).",
   "tests": "the agent handles a repeated booking request with the same request key idempotently returning the single committed appointment",
   "instruction": "You want to book Massage Therapy with Olivia Bennett at Midtown Studio on Monday 2 November at 10:00 am (2026-11-02T10:00). You previously attempted to book with request key REQ-MARCUS-REPEAT right before your chat disconnected. You are reconnecting to confirm the booking for that exact slot.\n\nYour details:\n- Name: Marcus Zhao\n- Email: marcus.zhao@example.com\n- Phone: +61 2 9555 0405\n- Customer ID: CU405\n- Location: L1\n- Staff: ST01\n- Service: SV2\n- Start Time: 2026-11-02T10:00\n- UTC Offset: -05:00",
   "keywords": [
@@ -49,26 +49,13 @@
       "fixed": {}
     },
     {
-      "tool": "book_appointment",
+      "tool": "list_customer_appointments",
       "arguments": {
-        "confirmed": true,
-        "service_id": "SV2",
-        "hold_id": "",
-        "utc_offset": "-05:00",
-        "request_key": "REQ-MARCUS-REPEAT",
-        "staff_id": "ST01",
-        "start_time": "2026-11-02T10:00",
-        "customer_id": "CU405",
-        "location_id": "L1"
+        "customer_id": "CU405"
       },
       "environment_arguments": {},
       "fixed": {
-        "staff_id": "caller: ST01",
-        "location_id": "caller: L1",
-        "customer_id": "caller: CU405",
-        "utc_offset": "caller: -05:00",
-        "service_id": "caller: SV2",
-        "start_time": "caller: 2026-11-02T10:00"
+        "customer_id": "the caller"
       }
     }
   ],
@@ -84,7 +71,7 @@
     "interface": "clean_prose"
   },
   "sub_goals": [
-    "appointment_booked_as_confirmed"
+    "appointment_status_reported"
   ],
   "max_turns": 10,
   "background_noise": false,

@@ -5,7 +5,7 @@
   "use_case": "Ask for missing facts instead of inventing them",
   "branch": "Grant Walker asks the desk to draft a question to Marcus Bell (L02) about their timeline; Marcus's email is not in the mailbox, so the setup adds thread th_s401_bluepeak with message smsg_401 from marcus.bell@bluepeak.example asking for pricing for 25 seats; read it, get_lead L02, create_draft to Marcus replying to smsg_401",
   "tests": "the agent reads Marcus Bell's email thread and drafts a clarification reply asking for their go-live timeline, without sending it",
-  "instruction": "You are Grant Walker, Account Executive at BrightDesk. Marcus Bell at Bluepeak Software (lead L02) sent an email asking for pricing for 25 seats. Ask the sales desk to draft a question to Marcus asking about their target go-live timeline so you can review it before sending.",
+  "instruction": "You are Grant Walker, Sales Development Representative at BrightDesk. Marcus Bell at Bluepeak Software (lead L02) sent an email asking for pricing for 25 seats. Ask the sales desk to draft a question to Marcus asking about their target go-live timeline so you can review it before sending.",
   "keywords": [
     "draft",
     "qualification"

@@ -3,23 +3,23 @@
   "scenario_key": "known-company-contact-without-lead-quillon",
   "scenario_id": "",
   "use_case": "Recognise known contacts and accounts",
-  "branch": "Sofia Bianchi (C31, Quillon) is a contact without a lead and asks for a demo; the desk finds her existing contact by email and the Quillon account. Read-only: search_contacts by her email, search_accounts for Quillon.",
-  "tests": "the agent searches for Sofia Bianchi's email and Quillon Travel, detecting that the company exists and Sofia is a known contact without an open lead",
-  "instruction": "You are Nina Patel from Quillon Travel. You are checking on behalf of your colleague Sofia Bianchi (sofia.bianchi@quillon.example). Chat with the sales desk to see if Sofia's contact or the Quillon Travel company account already exists and if there is an active lead or demo.\n\nYour details:\n- Name: Nina Patel\n- Colleague: Sofia Bianchi\n- Company: Quillon Travel\n- Email: sofia.bianchi@quillon.example",
+  "branch": "Sofia Bianchi asks whether she and Quillon Travel are on file and whether she has a demo; she is a known contact with no open lead",
+  "tests": "the agent finds Sofia Bianchi's own contact C31 and Quillon Travel, and reports no open lead or demo without creating anything",
+  "instruction": "You are Sofia Bianchi, procurement manager at Quillon Travel (sofia.bianchi@quillon.example). Ask the sales desk whether you and Quillon Travel are already in BrightDesk's records, and whether you have an open enquiry or a demo scheduled. When told you are on file with no open lead or demo, thank the desk.\n\nYour details:\n- Name: Sofia Bianchi\n- Company: Quillon Travel\n- Email: sofia.bianchi@quillon.example",
   "keywords": [
     "duplicate",
     "contact",
     "account"
   ],
   "persona": {
-    "name": "Nina Patel",
+    "name": "Sofia Bianchi",
     "gender": "female",
     "age_group": "25-32",
     "occupation": "Customer Service",
-    "location": "Australia",
+    "location": "United States",
     "personality": "Friendly and cooperative",
     "communication_style": "Simple and clear",
-    "initial_message": "Hi, I'm Nina Patel from Quillon Travel checking on our contact Sofia Bianchi (sofia.bianchi@quillon.example). Can you see if our account or contact already exists and if there is a demo scheduled?",
+    "initial_message": "Hi, I'm Sofia Bianchi from Quillon Travel (sofia.bianchi@quillon.example). Are we already in your records, and do I have a demo scheduled?",
     "languages": [
       "English"
     ],
@@ -41,7 +41,9 @@
         "email": "sofia.bianchi@quillon.example"
       },
       "environment_arguments": {},
-      "fixed": {}
+      "fixed": {
+        "email": "caller: sofia.bianchi@quillon.example"
+      }
     },
     {
       "tool": "search_accounts",

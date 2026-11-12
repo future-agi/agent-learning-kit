@@ -1,13 +1,50 @@
 def check(world, calls, reference=None):
-    looks = [c for c in calls if c.name in ("search_contacts", "get_contact", "search_accounts") and c.ok]
-    if not looks:
-        return "not done: the contact was never searched"
-    if any(c.name == "upsert_lead" and c.ok and (c.result or {}).get("created") for c in calls):
+    state = world.state()
+    now = (state.get("clock") or [{"now": ""}])[0]["now"]
+    target = None
+    by_email = {c["email_normalized"]: c["contact_id"] for c in state.get("contacts", [])}
+    for step in reference or ():
+        a = step.get("arguments", {})
+        if step.get("tool") == "search_contacts" and a.get("email"):
+            target = by_email.get(a["email"].strip().lower(), target)
+        elif step.get("tool") == "get_contact" and a.get("contact_id"):
+            target = a["contact_id"]
+    if not target:
+        # Without a fixed one, the person to find is the one in the conversation.
+        session = (state.get("session_caller") or [{}])[0].get("person_id")
+        target = session if any(c["contact_id"] == session for c in state.get("contacts", [])) else None
+    found = {r.get("contact_id") for r in _returned(calls, "search_contacts", "get_contact") if r.get("email")}
+    if target and target not in found:
+        return f"not done: the existing contact {target} was never found"
+    if not target and not found:
+        return "not done: no existing contact was found"
+    if any(c["created_at"] == now for c in state.get("contacts", [])):
+        return "done wrong: a new contact was created for a known person"
+    if any(l["created_at"] == now for l in state.get("leads", [])):
         return "done wrong: a new lead was created for a known person"
     missing = _evidence_missing(world, calls, reference)
     if missing:
         return f"done blind: the decision rests on {', '.join(missing)}, which was never read"
     return None
+
+
+def _returned(calls, *tools):
+    """Every record (dict) that a successful call of `tools` returned, at any depth."""
+    found = []
+
+    def walk(value):
+        if isinstance(value, dict):
+            found.append(value)
+            for one in value.values():
+                walk(one)
+        elif isinstance(value, list):
+            for one in value:
+                walk(one)
+
+    for c in calls:
+        if c.ok and c.name in tools:
+            walk(c.result)
+    return found
 
 def _evidence_missing(world, calls, reference):
     """The email thread or Slack thread the reference fixes and whether its content reached this run:
@@ -80,7 +117,6 @@ def _texts_shown(calls):
         if c.ok and c.name in ("slack_read_thread", "slack_read_channel", "slack_search_public_and_private"):
             walk(c.result)
     return shown
-
 
 if __name__ == "__main__":
     # Run this check by hand against what a run left behind. The first argument is anything

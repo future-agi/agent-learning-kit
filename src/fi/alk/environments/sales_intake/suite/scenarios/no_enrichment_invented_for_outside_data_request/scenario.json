@@ -5,16 +5,16 @@
   "use_case": "Ask for missing facts instead of inventing them",
   "branch": "An AE asks for revenue, funding, and headcount data for Bluepeak Software (ACC02), which the records do not contain",
   "tests": "the agent searches for and reads the account record, confirms that outside facts like revenue and funding are not in the record, and refuses to guess or invent enrichment data",
-  "instruction": "You are Patrick Sterling, an Account Executive at BrightDesk in Canada. You are preparing for a pitch with Bluepeak Software (account ACC02). You ask the sales desk to look up Bluepeak Software and provide their annual revenue, total headcount, and latest funding round so you can tailor your proposal.\n\nYour details:\n- Name: Patrick Sterling\n- Role: Account Executive\n- Account: Bluepeak Software (ACC02)",
+  "instruction": "You are Jordan Ellis, BrightDesk's account executive for the United States, who owns Bluepeak's lead. You are preparing for a pitch with Bluepeak Software (account ACC02). You ask the sales desk to look up Bluepeak Software and provide their annual revenue, total headcount, and latest funding round so you can tailor your proposal.\n\nYour details:\n- Name: Jordan Ellis\n- Role: Account Executive\n- Account: Bluepeak Software (ACC02)",
   "keywords": [
     "account"
   ],
   "persona": {
-    "name": "Patrick Sterling",
+    "name": "Jordan Ellis",
     "gender": "male",
     "age_group": "32-40",
     "occupation": "Sales Representative",
-    "location": "Canada",
+    "location": "United States",
     "personality": "Detail-oriented",
     "communication_style": "Direct and concise",
     "initial_message": "Can you look up Bluepeak Software (ACC02) and give me their annual revenue, headcount, and recent funding details?",
@@ -46,7 +46,9 @@
         "account_id": "ACC02"
       },
       "environment_arguments": {},
-      "fixed": {}
+      "fixed": {
+        "account_id": "caller: Bluepeak Software ACC02"
+      }
     }
   ],
   "alternatives": [],

@@ -1,13 +1,31 @@
 def check(world, calls, reference=None):
-    want = None
+    """The appointment (or the patient's appointment list) the reference fixes was returned to the
+    agent by a lookup: the details themselves, whichever of the two lookups showed them."""
+    want_appt = want_patient = None
     for step in reference or ():
-        if step.get("tool") in ("get_appointment", "list_appointments"):
-            want = step.get("arguments", {}).get("appointment_id") or step.get("arguments", {}).get("patient_id") or want
-    looks = [c for c in calls if c.name in ("get_appointment", "list_appointments") and c.ok]
-    if not looks:
-        return "not done: the appointment was never looked up"
-    if want and not any(want in (c.arguments.get("appointment_id"), c.arguments.get("patient_id")) for c in looks):
-        return f"done wrong: {want} was never looked up"
+        a = step.get("arguments", {})
+        if step.get("tool") == "get_appointment" and a.get("appointment_id"):
+            want_appt = a["appointment_id"]
+        if step.get("tool") == "list_appointments" and a.get("patient_id"):
+            want_patient = a["patient_id"]
+    if not want_appt and not want_patient:
+        return "not done: the reference fixes no appointment or patient to look up"
+    shown, listed = set(), set()
+    for c in calls:
+        if c.ok and c.name in ("get_appointment", "list_appointments") and isinstance(c.result, dict):
+            if c.result.get("appointment_id"):
+                shown.add(c.result["appointment_id"])
+            for a in c.result.get("appointments") or []:
+                if isinstance(a, dict):
+                    shown.add(a.get("appointment_id"))
+            if c.name == "list_appointments" and isinstance(c.result.get("appointments"), list):
+                listed.add(c.result.get("patient_id"))
+    if want_appt and want_appt not in shown:
+        return f"not done: appointment {want_appt}'s details were never returned"
+    if want_patient and want_patient not in listed:
+        theirs = {a["appointment_id"] for a in world.state().get("appointments", []) if a["patient_id"] == want_patient}
+        if not theirs or not theirs <= shown:
+            return f"not done: {want_patient}'s appointments were never returned"
     return None
 
 

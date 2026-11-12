@@ -15,3 +15,6 @@ def setup(world):
         "group_number": "",
         "updated_at": "2026-01-05T09:00:00Z"
     })
+    world.put("callers", {"caller_id": "C401", "full_name": "Claire Davies", "organisation": None})
+    world.put("caller_access", {"caller_id": "C401", "patient_id": "P405", "relationship": "mother and guardian"})
+    world.change("session_caller", "default", {"caller_id": "C401"}, by="id")

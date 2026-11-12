@@ -22,3 +22,5 @@ def setup(world):
         "thread_id": "th_s406_optout",
         "label_id": "INBOX"
     })
+    # Who is in this conversation: the session sets it, not anything the desk is told.
+    world.change("session_caller", "default", {"person_id": "C25"}, by="id")

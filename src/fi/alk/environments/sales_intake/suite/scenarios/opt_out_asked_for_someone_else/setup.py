@@ -11,3 +11,5 @@ def setup(world):
         "created_at": "2026-09-01T10:00:00Z",
         "updated_at": "2026-09-01T10:00:00Z",
     })
+    # Who is in this conversation: the session sets it, not anything the desk is told.
+    world.change("session_caller", "default", {"person_id": "C422"}, by="id")

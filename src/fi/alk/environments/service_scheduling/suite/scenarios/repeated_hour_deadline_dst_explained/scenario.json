@@ -5,7 +5,7 @@
   "use_case": "Concurrency, clock changes and failures",
   "branch": "Repeated hour asked as a deadline: customer asks for anything before 1:30 am on 1 November in New York; explained and nothing booked.",
   "tests": "the agent explains the repeated hour ambiguity and studio operating hours when a deadline falls in the DST transition hour",
-  "instruction": "You are travelling to New York and looking for an appointment at Midtown Studio on Sunday 1 November, specifically asking for anything before 1:30 am because you arrive on a red-eye flight. If the agent explains that 1:30 am occurs twice due to the daylight saving clock change and that Midtown studio opens at 9:00 am on Sundays, acknowledge and do not book anything.\n\nYour details:\n- Name: Daniel Vance\n- Email: daniel.vance@example.com\n- Phone: +1 416 555 0402\n- Location: Midtown Studio (New York)\n- Service: Massage Therapy",
+  "instruction": "You are travelling to New York and looking for an appointment at Midtown Studio on Sunday 1 November, specifically asking for anything before 1:30 am because you arrive on a red-eye flight. If the agent explains that 1:30 am occurs twice due to the daylight saving clock change and that the Midtown studio is closed on Sundays, acknowledge and do not book anything.\n\nYour details:\n- Name: Daniel Vance\n- Email: daniel.vance@example.com\n- Phone: +1 416 555 0402\n- Location: Midtown Studio (New York)\n- Service: Massage Therapy",
   "keywords": [
     "dst_ambiguity",
     "repeated_hour",
@@ -45,7 +45,9 @@
         "location_id": "L1"
       },
       "environment_arguments": {},
-      "fixed": {}
+      "fixed": {
+        "location_id": "the studio the customer asked about"
+      }
     },
     {
       "tool": "list_slots",

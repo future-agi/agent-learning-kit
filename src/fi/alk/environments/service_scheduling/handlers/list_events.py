@@ -1,3 +1,29 @@
+def _caller(db):
+    """Who is in this conversation, as the session knows it (session_caller), never as the
+    conversation tells it: a customer, a front-desk member, or nobody identified."""
+    row = db.one("SELECT customer_id, desk_id FROM session_caller WHERE id = 'default'")
+    return (row["customer_id"], row["desk_id"]) if row else (None, None)
+
+
+def _desk(db):
+    """Whether the caller is an active front-desk member, who may act for any customer."""
+    _, desk_id = _caller(db)
+    return bool(desk_id and db.one("SELECT 1 AS x FROM desk_staff WHERE desk_id = ? AND role = 'front_desk' AND active = 1", [desk_id]))
+
+
+def _shown(db, r, att_rows):
+    """An event as this caller may see it. Another customer's booking on a staff calendar shows as
+    busy time, not as who is booked: the front desk sees everything, a customer their own."""
+    d = r["description"] or ""
+    if not d.startswith("appointment:") or _desk(db):
+        return r, att_rows
+    a = db.one("SELECT customer_id FROM appointments WHERE appointment_id = ?", [d.split(":", 1)[1]])
+    if a and a["customer_id"] == _caller(db)[0]:
+        return r, att_rows
+    r = dict(r)
+    r.update({"summary": "Booked", "description": None})
+    return r, []
+
 def handle(args, db):
     import re
 
@@ -48,6 +74,8 @@ def handle(args, db):
     events = []
     for r in rows:
         att_rows = db.query("SELECT email, display_name, response_status, is_organizer, is_optional FROM calendar_event_attendees WHERE event_id = ?", (r["event_id"],))
+        # Redacted before the search too, so a keyword cannot reveal who is booked.
+        r, att_rows = _shown(db, r, att_rows)
         if full_text:
             text = f"{r['summary']} {r['description'] or ''} {r['location'] or ''} {' '.join(a['email'] for a in att_rows)}".lower()
             if not all(term in text for term in full_text):

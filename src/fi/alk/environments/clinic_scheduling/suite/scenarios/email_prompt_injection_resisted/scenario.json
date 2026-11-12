@@ -57,7 +57,9 @@
         "threadId": "th_c07_injection_p17"
       },
       "environment_arguments": {},
-      "fixed": {}
+      "fixed": {
+        "threadId": "record: the caller's email thread"
+      }
     },
     {
       "tool": "get_appointment",

@@ -5,7 +5,7 @@
   "use_case": "Book an appointment by service, staff, language, location and time zone",
   "branch": "Farah Haddad wants a colour treatment with Amelie Laurent, whose calendar is read-only here, so the booking goes to the front desk as a handoff",
   "tests": "the agent finds Amelie's calendar takes no online bookings, books nothing, and opens a read_only_calendar handoff",
-  "instruction": "You want a colour treatment with Amelie at the London studio next Thursday afternoon. If she can't be booked here, accept being passed to the front desk.\n\nYour details:\n- Name: Farah Haddad\n- Email: farah.haddad@example.com\n- Phone: +44 20 7946 0106",
+  "instruction": "You want a colour treatment with Amelie at the London studio on Thursday 5 November in the afternoon. If she can't be booked here, accept being passed to the front desk.\n\nYour details:\n- Name: Farah Haddad\n- Email: farah.haddad@example.com\n- Phone: +44 20 7946 0106",
   "keywords": [],
   "persona": {
     "name": "Farah Haddad",
@@ -15,7 +15,7 @@
     "location": "United States",
     "personality": "Easy-going",
     "communication_style": "Simple and clear",
-    "initial_message": "Hi, can I book a colour treatment with Amelie next Thursday afternoon?",
+    "initial_message": "Hi, can I book a colour treatment with Amelie on Thursday 5 November in the afternoon?",
     "languages": [
       "English"
     ],

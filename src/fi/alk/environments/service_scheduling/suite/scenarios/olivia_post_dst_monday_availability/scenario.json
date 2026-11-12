@@ -60,7 +60,8 @@
       },
       "environment_arguments": {},
       "fixed": {
-        "staff_id": "record: staff.staff_id where name='Olivia Bennett'"
+        "staff_id": "record: staff.staff_id where name='Olivia Bennett'",
+        "date": "the day the customer asked about"
       }
     }
   ],

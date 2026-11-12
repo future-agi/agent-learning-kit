@@ -4,20 +4,20 @@
   "scenario_id": "",
   "use_case": "Recognise known contacts and accounts",
   "branch": "Duplicate request with a request key retried: Noah Bergeron's chat request is recorded and his connection drops; upsert_lead twice with the same request key and his email (fix email on the first only).",
-  "tests": "the agent handles an idempotent retry with identical request_key REQ-NOAH-001, updating lead L16 and returning the existing lead on retry without duplicates",
-  "instruction": "You are Gabriel Roy from Prairie Grain Co-op, submitting for Noah Bergeron (noah.bergeron@prairiegrain.example). Submit your request for 40 support seats in Canada (timeline 0-3 months).\n\nYour details:\n- Name: Gabriel Roy\n- Contact on file: Noah Bergeron\n- Company: Prairie Grain Co-op\n- Email: noah.bergeron@prairiegrain.example\n- Seats: 40\n- Use Case: support\n- Country: Canada\n- Timeline: 0-3 months",
+  "tests": "Noah Bergeron's request is recorded on his open lead L16 and a retry with the same request_key REQ-NOAH-001 returns it without a duplicate",
+  "instruction": "You are Noah Bergeron from Prairie Grain Co-op (noah.bergeron@prairiegrain.example). Submit your request for 60 support seats in Canada (timeline 0-3 months), the corrected count from your last email. Your chat drops after you send it, so send exactly the same request again.\n\nYour details:\n- Name: Noah Bergeron\n- Company: Prairie Grain Co-op\n- Email: noah.bergeron@prairiegrain.example\n- Seats: 60\n- Use Case: support\n- Country: Canada\n- Timeline: 0-3 months",
   "keywords": [
     "duplicate"
   ],
   "persona": {
-    "name": "Gabriel Roy",
+    "name": "Noah Bergeron",
     "gender": "male",
     "age_group": "32-40",
     "occupation": "Customer Service",
     "location": "Canada",
     "personality": "Impatient and direct",
     "communication_style": "Direct and concise",
-    "initial_message": "Hi, Gabriel Roy here submitting for Noah Bergeron at Prairie Grain Co-op (noah.bergeron@prairiegrain.example). Submitting our request for 40 support seats in Canada.",
+    "initial_message": "Hi, Noah Bergeron at Prairie Grain Co-op (noah.bergeron@prairiegrain.example). Submitting our request for 60 support seats in Canada, live in 0-3 months.",
     "languages": [
       "English"
     ],
@@ -44,11 +44,13 @@
         "company": "Prairie Grain Co-op",
         "email": "noah.bergeron@prairiegrain.example",
         "use_case": "support",
-        "seats": 40
+        "seats": 60
       },
       "environment_arguments": {},
       "fixed": {
-        "email": "caller: noah.bergeron@prairiegrain.example"
+        "email": "caller: noah.bergeron@prairiegrain.example",
+        "seats": "caller: 60 seats",
+        "timeline": "caller: 0-3 months"
       }
     },
     {
@@ -56,7 +58,7 @@
       "arguments": {
         "country": "Canada",
         "timeline": "0-3 months",
-        "seats": 40,
+        "seats": 60,
         "use_case": "support",
         "name": "Noah Bergeron",
         "email": "noah.bergeron@prairiegrain.example",

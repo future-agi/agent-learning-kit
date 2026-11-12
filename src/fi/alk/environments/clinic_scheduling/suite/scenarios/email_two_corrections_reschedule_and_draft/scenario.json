@@ -41,6 +41,15 @@
   },
   "solution": [
     {
+      "tool": "verify_patient",
+      "arguments": {
+        "full_name": "Aisha Mensah",
+        "dob": "1979-03-22"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
       "tool": "get_thread",
       "arguments": {
         "threadId": "th_c13_two_corrections_p08",
@@ -50,15 +59,6 @@
       "fixed": {
         "threadId": "record: gmail_threads.id"
       }
-    },
-    {
-      "tool": "verify_patient",
-      "arguments": {
-        "full_name": "Aisha Mensah",
-        "dob": "1979-03-22"
-      },
-      "environment_arguments": {},
-      "fixed": {}
     },
     {
       "tool": "find_available_slots",
@@ -84,7 +84,8 @@
       "environment_arguments": {},
       "fixed": {
         "appointment_id": "record: appointments.appointment_id",
-        "confirmed": "rule: \"Read back provider, date, time and location (or the insurer details) and get the patient's yes before booking, rescheduling, cancelling or updating.\""
+        "confirmed": "rule: \"Read back provider, date, time and location (or the insurer details) and get the patient's yes before booking, rescheduling, cancelling or updating.\"",
+        "new_slot_id": "record: the slot the caller confirmed"
       }
     },
     {

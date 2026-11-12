@@ -14,7 +14,7 @@
     "gender": "female",
     "age_group": "32-40",
     "occupation": "Manager",
-    "location": "United Kingdom",
+    "location": "Germany",
     "personality": "Friendly and cooperative",
     "communication_style": "Direct and concise",
     "initial_message": "Hello! I previously submitted an enquiry for Kestrel Mobility. We want to go live within 3-6 months. Can you update and qualify our lead?",
@@ -67,7 +67,8 @@
       },
       "environment_arguments": {},
       "fixed": {
-        "lead_id": "record: L27"
+        "lead_id": "record: L27",
+        "facts": "caller: 3-6 months"
       }
     }
   ],

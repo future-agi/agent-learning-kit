@@ -55,7 +55,8 @@
       },
       "environment_arguments": {},
       "fixed": {
-        "staff_id": "record: staff.staff_id where name='Lucia Fernandez'"
+        "staff_id": "record: staff.staff_id where name='Lucia Fernandez'",
+        "date": "the day the customer asked about"
       }
     }
   ],

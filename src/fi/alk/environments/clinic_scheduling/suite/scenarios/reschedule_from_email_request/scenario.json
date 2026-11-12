@@ -36,17 +36,6 @@
   },
   "solution": [
     {
-      "tool": "get_thread",
-      "arguments": {
-        "threadId": "th_c04_reschedule_p14",
-        "messageFormat": "FULL_CONTENT"
-      },
-      "environment_arguments": {},
-      "fixed": {
-        "threadId": "record: th_c04_reschedule_p14"
-      }
-    },
-    {
       "tool": "verify_patient",
       "arguments": {
         "dob": "1966-04-30",
@@ -56,6 +45,17 @@
       "fixed": {
         "full_name": "caller: James Walsh",
         "dob": "caller: 1966-04-30"
+      }
+    },
+    {
+      "tool": "get_thread",
+      "arguments": {
+        "threadId": "th_c04_reschedule_p14",
+        "messageFormat": "FULL_CONTENT"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "threadId": "record: th_c04_reschedule_p14"
       }
     },
     {
@@ -69,7 +69,8 @@
       "environment_arguments": {},
       "fixed": {
         "confirmed": "rule: \"Read back provider, date, time and location (or the insurer details) and get the patient's yes before booking, rescheduling, cancelling or updating.\"",
-        "appointment_id": "caller: A07"
+        "appointment_id": "caller: A07",
+        "new_slot_id": "record: the slot the caller confirmed"
       }
     }
   ],

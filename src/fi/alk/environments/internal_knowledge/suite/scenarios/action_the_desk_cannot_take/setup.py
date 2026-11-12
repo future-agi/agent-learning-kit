@@ -1,2 +1,3 @@
 def setup(world):
-    """This scenario runs on the base world unchanged."""
+    """The conversation is with Priya Nair (E01), signed in to the session."""
+    world.change("session_caller", "default", {"employee_id": "E01"}, by="id")

@@ -52,7 +52,8 @@
       },
       "environment_arguments": {},
       "fixed": {
-        "lead_id": "record: Quillon lead L11"
+        "lead_id": "record: Quillon lead L11",
+        "facts": "caller: 28 seats"
       }
     }
   ],

@@ -70,7 +70,7 @@
       "tool": "slack_send_message",
       "arguments": {
         "thread_ts": "1793696400.000003",
-        "message": "While Team Events Budget 1.0 section 1 states $100 per head, Tomas Rivera posted a decision in #finance-team on 2026-11-01 increasing the team events cap to $150 per head effective Nov 1 (document update pending).",
+        "message": "While Team Events Budget 1.0 section 1 states $100 per head, Tomas Rivera posted a decision in #finance-team on 2026-10-28 raising the team events cap to $150 per head from 1 November (document update pending).",
         "channel_id": "CH_HELPPOL",
         "approval_id": "APP-KN-403"
       },

@@ -1,2 +1,3 @@
 def setup(world):
-    pass
+    # Who is in this conversation: the session sets it, not anything the desk is told.
+    world.change("session_caller", "default", {"person_id": "C12"}, by="id")

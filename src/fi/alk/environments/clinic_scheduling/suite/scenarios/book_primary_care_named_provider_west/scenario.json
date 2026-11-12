@@ -5,7 +5,7 @@
   "use_case": "Book a new appointment",
   "branch": "P04 asks for Dr. Rohan Patel on Thursday 29 October in the morning at West; books the earliest free slot (09:00).",
   "tests": "the agent verifies Daniel Kim, finds Dr. Rohan Patel's slots at Riverbank West for 29 October, and books the confirmed 09:00 slot",
-  "instruction": "You want to book a primary care appointment with Dr. Rohan Patel on Thursday morning, 29 October 2026, at Riverbank West. When offered the available morning times, choose the earliest slot at 09:00 and confirm the booking when details are read back.\n\nYour details:\n- Full name: Daniel Kim\n- Date of birth: 2001-02-14\n- Email: daniel.kim@example.com\n- Phone: +447700900104\n- Insurance: Bupa (member BU-100234)",
+  "instruction": "You want to book a primary care appointment with Dr. Rohan Patel on Thursday morning, 29 October 2026, at Riverbank West. When offered the available morning times, choose the earliest slot at 09:00 and confirm the booking when details are read back.\n\nYour details:\n- Full name: Daniel Kim\n- Date of birth: 2001-02-14\n- Email: daniel.kim@example.com\n- Phone: +447700900104\n- Insurance: Bupa (member BU-100877)",
   "keywords": [
     "book_appointment",
     "primary_care",

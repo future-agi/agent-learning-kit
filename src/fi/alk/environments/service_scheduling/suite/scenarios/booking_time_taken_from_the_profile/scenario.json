@@ -5,7 +5,7 @@
   "use_case": "New and returning customers and their preferences",
   "branch": "Booking time taken from the profile: CU08 Hana Sato (preference time_of_day = morning) asks for an Initial Consultation with Priya Desai at Shoreditch on Monday 2 November, 'whenever suits me, you have my preferences'. She does not give a time.",
   "tests": "the desk reads the customer's morning preference and offers only morning slots, booking 10:00 am upon confirmation",
-  "instruction": "You want to book an Initial Consultation with Priya Desai at the Shoreditch studio on Monday 2 November 2026. You do not state a specific time, telling the desk to check your file because they have your preferences on file (you prefer mornings). When the desk offers morning slots, choose 10:00 am (2026-11-02T10:00) and confirm when the details are read back in London time (UTC+00:00).\n\nYour details:\n- Name: Hana Aoi\n- Email: hana.sato@example.com\n- Phone: +44 20 7946 0108\n- Service: Initial Consultation\n- Staff: Priya Desai\n- Studio: Shoreditch Studio (London)\n- Date: Monday 2 November 2026\n- Time: Morning (agree to 10:00 am / 2026-11-02T10:00)",
+  "instruction": "You want to book an Initial Consultation with Priya Desai at the Shoreditch studio on Monday 2 November 2026. You do not state a specific time, telling the desk to check your file because they have your preferences on file (you prefer mornings). When the desk offers morning slots, choose 10:00 am (2026-11-02T10:00) and confirm when the details are read back in London time (UTC+00:00).\n\nYour details:\n- Name: Hana Sato\n- Email: hana.sato@example.com\n- Phone: +44 20 7946 0108\n- Service: Initial Consultation\n- Staff: Priya Desai\n- Studio: Shoreditch Studio (London)\n- Date: Monday 2 November 2026\n- Time: Morning (agree to 10:00 am / 2026-11-02T10:00)",
   "keywords": [
     "booking",
     "customer_preference",
@@ -13,7 +13,7 @@
     "shoreditch"
   ],
   "persona": {
-    "name": "Hana Aoi",
+    "name": "Hana Sato",
     "gender": "female",
     "age_group": "25-32",
     "occupation": "Marketing Professional",

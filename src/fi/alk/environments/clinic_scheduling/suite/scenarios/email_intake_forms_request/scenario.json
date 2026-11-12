@@ -38,6 +38,15 @@
   },
   "solution": [
     {
+      "tool": "verify_patient",
+      "arguments": {
+        "dob": "1968-09-30",
+        "full_name": "Grace Okafor"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
       "tool": "get_thread",
       "arguments": {
         "messageFormat": "FULL_CONTENT",
@@ -47,15 +56,6 @@
       "fixed": {
         "threadId": "record: gmail_threads.id"
       }
-    },
-    {
-      "tool": "verify_patient",
-      "arguments": {
-        "dob": "1968-09-30",
-        "full_name": "Grace Okafor"
-      },
-      "environment_arguments": {},
-      "fixed": {}
     },
     {
       "tool": "send_intake_forms",

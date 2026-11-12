@@ -52,7 +52,7 @@
       },
       "environment_arguments": {},
       "fixed": {
-        "passage_id": "record: Client Entertainment Policy 1.0, section 1"
+        "passage_id": "record: Client Entertainment Guidelines 1.0, section 1"
       }
     },
     {
@@ -63,7 +63,7 @@
       },
       "environment_arguments": {},
       "fixed": {
-        "passage_id": "record: Sales Hospitality Guidelines 1.0, section 1"
+        "passage_id": "record: Sales Hospitality Standard 1.0, section 1"
       }
     },
     {
@@ -80,7 +80,7 @@
       "tool": "slack_send_message",
       "arguments": {
         "approval_id": "APP-KN-405",
-        "message": "Client Entertainment Policy 1.0 section 1 specifies $100 per person, while Sales Hospitality Guidelines 1.0 section 1 specifies $150 per person. There is no configured precedence rule between these documents, so this conflict is being routed to the document owners for clarification.",
+        "message": "Client Entertainment Guidelines 1.0 section 1 specifies $100 per person, while Sales Hospitality Standard 1.0 section 1 specifies $150 per person. There is no configured precedence rule between these documents, so this conflict is being routed to the document owners for clarification.",
         "thread_ts": "1793786400.000008",
         "channel_id": "CH_HELPPOL"
       },

@@ -5,12 +5,12 @@
   "use_case": "Post an approved handoff summary in Slack",
   "branch": "Lena Fischer asked in SM04 about Kestrel Mobility's timeline; after Dana approves APP-SH-403, the desk reads the email thread and replies in SM04's thread with 0-3 months",
   "tests": "the desk reads SM04, reads thread th_s02_kestrel_timeline, and posts in SM04's thread with approval APP-SH-403",
-  "instruction": "You want to get a reply posted to Lena Fischer's question in #sales-handoffs regarding whether Kestrel Mobility (L07) has responded about their timeline. Dana Whitfield has provided approval APP-SH-403 for posting the response. If the agent needs details, confirm that approval APP-SH-403 is approved for #sales-handoffs to reply in Lena's thread.\n\nYour details:\n- Channel: #sales-handoffs (CH_SALESHANDOFF)\n- Rep asking: Lena Fischer (U_A04)\n- Lead: Kestrel Mobility (L07)\n- Email thread: th_s02_kestrel_timeline\n- Approval ID: APP-SH-403",
+  "instruction": "You are Ines Carvalho, sales operations at BrightDesk. You want to get a reply posted to Lena Fischer's question in #sales-handoffs regarding whether Kestrel Mobility (L07) has responded about their timeline. Dana Whitfield has provided approval APP-SH-403 for posting the response. If the agent needs details, confirm that approval APP-SH-403 is approved for #sales-handoffs to reply in Lena's thread.\n\nYour details:\n- Name: Ines Carvalho\n- Channel: #sales-handoffs (CH_SALESHANDOFF)\n- Rep asking: Lena Fischer (U_A04)\n- Lead: Kestrel Mobility (L07)\n- Email thread: th_s02_kestrel_timeline\n- Approval ID: APP-SH-403",
   "keywords": [
     "slack_handoff"
   ],
   "persona": {
-    "name": "Anna Keller",
+    "name": "Ines Carvalho",
     "gender": "female",
     "age_group": "25-32",
     "occupation": "Sales Representative",

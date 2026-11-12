@@ -169,7 +169,7 @@
   },
   "qualify_india_lead_in_chat_and_assign_territory_rep": {
     "job": "routing",
-    "mcp": false
+    "mcp": true
   },
   "qualify_kestrel_lead_from_email_followup_and_assign_germany_rep": {
     "job": "qualify",
@@ -209,7 +209,7 @@
   },
   "re_request_for_a_demo_that_is": {
     "job": "demo_booking",
-    "mcp": true
+    "mcp": false
   },
   "rep_follow_up_on_opted_out_lead_declined": {
     "job": "consent",
@@ -295,11 +295,11 @@
     "job": "slack",
     "mcp": true
   },
-  "slack_mapleridge_handoff_recorded_and_posted": {
+  "slack_northwind_status_reply": {
     "job": "slack",
     "mcp": true
   },
-  "slack_northwind_status_reply": {
+  "slack_prairie_grain_handoff_recorded_and_posted": {
     "job": "slack",
     "mcp": true
   },

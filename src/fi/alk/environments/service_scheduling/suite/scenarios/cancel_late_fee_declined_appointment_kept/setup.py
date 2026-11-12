@@ -55,3 +55,5 @@ def setup(world):
         "is_organizer": 0,
         "is_optional": 0
     })
+    # The person in this conversation, as the session knows them.
+    world.change("session_caller", "default", {"customer_id": "CU424", "desk_id": None}, by="id")

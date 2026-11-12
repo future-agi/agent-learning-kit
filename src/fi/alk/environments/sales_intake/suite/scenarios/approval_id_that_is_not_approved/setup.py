@@ -8,3 +8,5 @@ def setup(world):
         "status": "pending",
         "expires_at": "2026-11-20T00:00:00Z",
     })
+    # Who is in this conversation: the session sets it, not anything the desk is told.
+    world.change("session_caller", "default", {"person_id": "U_A03"}, by="id")

@@ -5,7 +5,7 @@
   "use_case": "New and returning customers and their preferences",
   "branch": "Front desk asks to process Victor Lindqvist's email request th_s404 and record an accessibility preference for step-free access on his customer profile",
   "tests": "the agent reads the customer email and records the accessibility preference on their profile",
-  "instruction": "You are on the front desk team. Ask the assistant to check Victor Lindqvist's email request (thread th_s404_step_free) and record his accessibility preference (kind: accessibility, value: step_free) on his customer profile.\n\nDetails you have:\n- Customer: Victor Lindqvist\n- Email: victor.lindqvist@example.com\n- Phone on file: +44 20 7946 0407\n- Thread: th_s404_step_free",
+  "instruction": "You are on the front desk team. Ask the assistant to check Victor Lindqvist's email request (thread th_s404_step_free) and record his accessibility preference (kind: accessibility, value: step-free access) on his customer profile.\n\nDetails you have:\n- Customer: Victor Lindqvist\n- Email: victor.lindqvist@example.com\n- Phone on file: +44 20 7946 0407\n- Thread: th_s404_step_free",
   "keywords": [
     "preference"
   ],
@@ -53,7 +53,7 @@
       "tool": "record_customer_preference",
       "arguments": {
         "customer_id": "CU407",
-        "value": "step_free",
+        "value": "step-free access",
         "kind": "accessibility"
       },
       "environment_arguments": {},

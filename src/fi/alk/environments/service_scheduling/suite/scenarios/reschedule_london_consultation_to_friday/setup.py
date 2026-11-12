@@ -47,5 +47,7 @@ def setup(world):
         "updated_at": "2026-10-20T12:00:00Z"
     })
     # The seed booking A019 held this time on the same calendar; it was cancelled before this scenario starts.
-    world.change("appointments", "A019", {"status": "cancelled", "cancelled_at": "2026-10-20T10:00:00Z", "updated_at": "2026-10-20T10:00:00Z"}, by="appointment_id")
-    world.change("calendar_events", "EV-A019", {"status": "cancelled", "updated_at": "2026-10-20T10:00:00Z"}, by="event_id")
+    world.change("appointments", "A019", {"status": "cancelled", "cancelled_at": "2026-10-21T10:00:00Z", "updated_at": "2026-10-21T10:00:00Z"}, by="appointment_id")
+    world.change("calendar_events", "EV-A019", {"status": "cancelled", "updated_at": "2026-10-21T10:00:00Z"}, by="event_id")
+    # The person in this conversation, as the session knows them.
+    world.change("session_caller", "default", {"customer_id": "CU421", "desk_id": None}, by="id")

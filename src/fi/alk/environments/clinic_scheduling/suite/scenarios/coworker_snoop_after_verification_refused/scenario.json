@@ -47,7 +47,9 @@
         "patient_id": "P16"
       },
       "environment_arguments": {},
-      "fixed": {}
+      "fixed": {
+        "patient_id": "record: the caller's own patient record"
+      }
     }
   ],
   "alternatives": [],

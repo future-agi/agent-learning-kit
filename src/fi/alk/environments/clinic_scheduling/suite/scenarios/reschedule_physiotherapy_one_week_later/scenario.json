@@ -5,7 +5,7 @@
   "use_case": "Reschedule and cancel",
   "branch": "Kiran Joshi moves physiotherapy appointment A409 from Friday 30 October to Friday 6 November 13:00 with Omar Haddad",
   "tests": "the agent verifies Kiran Joshi, finds slot SL-D07-20261106-1300, and reschedules A409",
-  "instruction": "You are Kiran Joshi (born 1988-09-09). You have a physiotherapy appointment A409 with Omar Haddad on Friday 30 October at Riverbank North, and you want to move it exactly one week later to Friday 6 November at 13:00. Confirm when asked.\n\nYour details:\n- Name: Kiran Joshi\n- Date of birth: 1988-09-09\n- Appointment ID: A409\n- Provider: Omar Haddad\n- Current date: Friday 30 October 2026 at 13:30\n- Desired date and time: Friday 6 November 2026 at 13:00\n- Location: Riverbank North",
+  "instruction": "You are Kiran Joshi (born 1988-09-09). You have a physiotherapy appointment A409 with Omar Haddad on Friday 30 October at Riverbank North, and you want to move it exactly one week later to Friday 6 November at 13:00. Confirm when asked.\n\nYour details:\n- Name: Kiran Joshi\n- Date of birth: 1988-09-09\n- Appointment ID: A409\n- Provider: Omar Haddad\n- Current date: Friday 30 October 2026 at 14:00\n- Desired date and time: Friday 6 November 2026 at 13:00\n- Location: Riverbank North",
   "keywords": [
     "reschedule"
   ],
@@ -68,7 +68,8 @@
       },
       "environment_arguments": {},
       "fixed": {
-        "appointment_id": "caller: A409"
+        "appointment_id": "caller: A409",
+        "new_slot_id": "record: the slot the caller confirmed"
       }
     }
   ],

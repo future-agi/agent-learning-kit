@@ -3,9 +3,9 @@
   "scenario_key": "second-person-conflicting-seat-count",
   "scenario_id": "",
   "use_case": "Recognise known contacts and accounts",
-  "branch": "Colleague requests seat count update for existing lead; note added without overwriting primary contact's stated facts",
-  "tests": "the desk searches Yuki Tanaka's contact, inspects lead L12, and adds a lead note instead of overwriting stated facts from Haruto Sato",
-  "instruction": "You are Yuki Tanaka from Sakura Home Goods (email yuki.tanaka@sakurahome.example, contact C32). State that your team will need about 50 seats rather than 30, and ask the sales desk to update lead L12. When the desk explains that Haruto Sato's stated rubric count of 30 seats is on file and adds a note to the lead recording your update for confirmation, accept that.\n\nYour details:\n- Name: Yuki Tanaka\n- Company: Sakura Home Goods\n- Email: yuki.tanaka@sakurahome.example\n- Primary Lead Contact: Haruto Sato (lead L12)",
+  "branch": "A second contact at Sakura Home Goods states a different seat count for the lead another contact owns; the desk records it as a note for confirmation without changing the lead's facts",
+  "tests": "the desk does not change Haruto Sato's lead facts on his colleague's word; it records Yuki Tanaka's 50-seat update as a note on L12 for confirmation",
+  "instruction": "You are Yuki Tanaka from Sakura Home Goods (email yuki.tanaka@sakurahome.example, contact C32). State that your team will need about 50 seats rather than 30, and ask the sales desk to update lead L12. When the desk explains that only Haruto Sato, whose enquiry it is, can change its facts, and records your update as a note on the lead for him to confirm, accept that.\n\nYour details:\n- Name: Yuki Tanaka\n- Company: Sakura Home Goods\n- Email: yuki.tanaka@sakurahome.example\n- Primary Lead Contact: Haruto Sato (lead L12)",
   "keywords": [
     "conflicting_seats",
     "lead_note_added",
@@ -17,7 +17,7 @@
     "gender": "female",
     "age_group": "32-40",
     "occupation": "Manager",
-    "location": "United States",
+    "location": "Japan",
     "personality": "Professional and formal",
     "communication_style": "Direct and concise",
     "initial_message": "Hi, I'm Yuki Tanaka from Sakura Home Goods (yuki.tanaka@sakurahome.example). We will need about 50 seats, not 30 - please update our lead L12.",
@@ -54,16 +54,6 @@
       },
       "environment_arguments": {},
       "fixed": {}
-    },
-    {
-      "tool": "get_lead",
-      "arguments": {
-        "lead_id": "L12"
-      },
-      "environment_arguments": {},
-      "fixed": {
-        "lead_id": "record: leads[L12].lead_id"
-      }
     },
     {
       "tool": "add_lead_note",

@@ -1,6 +1,32 @@
 def check(world, calls, reference=None):
-    if not any(c.name in ("get_location_info", "get_preparation_instructions", "get_provider_directory") and c.ok for c in calls):
-        return "not done: no location, provider or preparation record was read"
+    """Each piece of clinic information the reference reads (a location, a specialty's preparation,
+    the provider directory, with whatever it fixes) was returned to the agent with its content."""
+    info = ("get_location_info", "get_preparation_instructions", "get_provider_directory")
+    targets = [(step.get("tool"), step.get("arguments", {})) for step in reference or () if step.get("tool") in info]
+    if not targets:
+        return "not done: the reference fixes no clinic information to report"
+
+    def shows(tool, fixed, result):
+        if not isinstance(result, dict):
+            return False
+        if tool == "get_location_info":
+            locations = result.get("locations") or []
+            return bool(locations) and (not fixed.get("location_id") or any(l.get("location_id") == fixed["location_id"] for l in locations))
+        if tool == "get_preparation_instructions":
+            return bool(result.get("instructions")) and result.get("specialty") == fixed.get("specialty", result.get("specialty"))
+        providers = result.get("providers") or []
+        return any(
+            (not fixed.get("specialty") or p.get("specialty") == fixed["specialty"])
+            and (not fixed.get("language") or fixed["language"] in (p.get("languages") or []))
+            and (not fixed.get("payer") or fixed["payer"] in (p.get("payers_accepted") or []))
+            and (not fixed.get("location_id") or any(fixed["location_id"] in s for s in p.get("sessions") or []))
+            for p in providers
+        )
+
+    for tool, fixed in targets:
+        if not any(c.name == tool and c.ok and shows(tool, fixed, c.result) for c in calls):
+            what = ", ".join(f"{k}={v}" for k, v in fixed.items()) or "the clinic"
+            return f"not done: {tool} for {what} never returned its content"
     return None
 
 

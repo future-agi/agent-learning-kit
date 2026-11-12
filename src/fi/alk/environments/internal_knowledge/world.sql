@@ -263,6 +263,13 @@ CREATE TABLE document_issues (
     created_at TEXT NOT NULL
 );
 INSERT INTO "document_issues" VALUES('DI-101','remote_v2','E13','broken_link','The link to the stipend document is broken.','E03','open','DI-SEED-101','2026-10-25T09:00:00Z');
+-- The employee signed in to the conversation, set by the session (each scenario's setup): the
+-- knowledge tools answer and act only for them, and the Drive tools read only what their role may.
+CREATE TABLE session_caller (
+    id TEXT PRIMARY KEY NOT NULL,
+    employee_id TEXT
+);
+INSERT INTO "session_caller" VALUES('default',NULL);
 
 -- drive_policy_search: tables attached by attach_capability; the rows are this vertical's own, linked to its records.
 CREATE TABLE drive_audit_log (

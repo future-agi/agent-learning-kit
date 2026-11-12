@@ -5,7 +5,7 @@
   "use_case": "Book a new appointment",
   "branch": "P4022 asks for primary care on Wednesday 28 October morning not realising she already has A4022 scheduled",
   "tests": "passes when the agent checks existing appointments for P4022 and informs her of her existing booking A4022 instead of double booking",
-  "instruction": "You think you need to book a primary care appointment for Wednesday morning 28 October. Provide your name and date of birth when asked. You do not realise you already have an appointment booked for that time (A4022 with Dr. Alicia Nguyen at 10:00). When told about your existing appointment, acknowledge the information.\n\nYour details:\n- Full name: Sunita Sharma\n- Date of birth: 1988-03-14\n- Existing appointment: A4022 (Wednesday 28 October at 10:00, Riverbank Central)",
+  "instruction": "You think you need to book a primary care appointment for Wednesday morning 28 October. Provide your name and date of birth when asked. You do not realise you already have an appointment booked for that time (A4022 with Dr. Alicia Nguyen at 09:30). When told about your existing appointment, acknowledge the information.\n\nYour details:\n- Full name: Sunita Sharma\n- Date of birth: 1988-03-14\n- Existing appointment: A4022 (Wednesday 28 October at 09:30, Riverbank Central)",
   "keywords": [
     "primary_care",
     "already_booked",

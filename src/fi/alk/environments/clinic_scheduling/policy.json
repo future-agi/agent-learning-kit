@@ -2,7 +2,7 @@
   "rules": [
     {
       "id": "verified_patient_only",
-      "text": "Patient records, appointments, referrals and insurance are read or changed only for a patient verified in the conversation by full name and date of birth.",
+      "text": "Patient records, appointments, referrals, insurance and mail about a patient are read or changed only for a patient verified in the conversation by full name and date of birth, by the patient talking or by someone the clinic records as their guardian or proxy.",
       "class": "system_invariant"
     },
     {

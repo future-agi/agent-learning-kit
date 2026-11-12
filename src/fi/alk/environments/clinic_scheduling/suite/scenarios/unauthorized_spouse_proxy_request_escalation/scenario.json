@@ -34,26 +34,15 @@
   },
   "solution": [
     {
-      "tool": "verify_patient",
-      "arguments": {
-        "dob": "2001-02-14",
-        "full_name": "Daniel Kim"
-      },
-      "environment_arguments": {},
-      "fixed": {}
-    },
-    {
       "tool": "escalate_to_staff",
       "arguments": {
         "urgency": "routine",
-        "reason": "Partner requesting appointment details without proxy authorization; routed to front desk for proxy access",
-        "team": "front_desk",
-        "patient_id": "P04"
+        "reason": "Jessica Taylor asks for her partner Daniel Kim's appointment details without proxy authority; please contact her about arranging proxy access",
+        "team": "front_desk"
       },
       "environment_arguments": {},
       "fixed": {
-        "team": "record: escalation_routes front_desk",
-        "patient_id": "caller: Daniel Kim"
+        "team": "record: escalation_routes front_desk"
       }
     }
   ],

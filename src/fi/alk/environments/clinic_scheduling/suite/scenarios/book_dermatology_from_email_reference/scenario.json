@@ -5,7 +5,7 @@
   "use_case": "Book a new appointment",
   "branch": "P405 references her email th_c405_intake in chat and books Thursday 29 October 14:30 dermatology with Dr. Morales",
   "tests": "passes when the agent retrieves email thread th_c405_intake, verifies Nneka Okonjo, and books Thursday 29 October 14:30 with Dr. Morales",
-  "instruction": "You previously sent an email to the clinic regarding intake forms for your dermatology visit (subject: Forms before my visit). You are now in the web chat wanting to book your follow-up visit with Dr. Sofia Morales for Thursday 29 October in the afternoon. When asked, provide your verification details and confirm the 14:30 slot at Riverbank Central.\n\nYour details:\n- Full name: Nneka Okonjo\n- Date of birth: 1972-04-16\n- Insurance: Bupa, Member ID: BU-100405\n- Email thread: th_c405_intake (Forms before my visit)\n- Preferred provider: Dr. Sofia Morales\n- Preferred date: Thursday 29 October 2026, 14:30 (Riverbank Central)",
+  "instruction": "You previously sent an email to the clinic regarding intake forms for your dermatology visit (subject: Forms before my visit). You are now in the web chat wanting to book the visit with Dr. Sofia Morales that your email asked for for Thursday 29 October in the afternoon. When asked, provide your verification details and confirm the 14:30 slot at Riverbank Central.\n\nYour details:\n- Full name: Nneka Okonjo\n- Date of birth: 1972-04-16\n- Insurance: Bupa, Member ID: BU-100405\n- Email thread: th_c405_intake (Forms before my visit)\n- Preferred provider: Dr. Sofia Morales\n- Preferred date: Thursday 29 October 2026, 14:30 (Riverbank Central)",
   "keywords": [
     "dermatology",
     "email_reference",
@@ -41,6 +41,15 @@
   },
   "solution": [
     {
+      "tool": "verify_patient",
+      "arguments": {
+        "full_name": "Nneka Okonjo",
+        "dob": "1972-04-16"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
       "tool": "get_thread",
       "arguments": {
         "messageFormat": "FULL_CONTENT",
@@ -50,15 +59,6 @@
       "fixed": {
         "threadId": "record: gmail_threads.id th_c405_intake"
       }
-    },
-    {
-      "tool": "verify_patient",
-      "arguments": {
-        "full_name": "Nneka Okonjo",
-        "dob": "1972-04-16"
-      },
-      "environment_arguments": {},
-      "fixed": {}
     },
     {
       "tool": "find_available_slots",

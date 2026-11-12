@@ -1,15 +1,34 @@
 def check(world, calls, reference=None):
-    if not any(c.name in ("get_referral_status", "create_referral_request") and c.ok for c in calls):
-        return "not done: the referral was never checked"
+    """The referral the reference fixes (patient and specialty) was read back from the clinic's
+    records before anything was booked or waitlisted, and nothing of that specialty went ahead
+    without an active, unexpired referral."""
+    want = {}
+    for step in reference or ():
+        if step.get("tool") == "get_referral_status":
+            want = {k: v for k, v in step.get("arguments", {}).items() if k in ("patient_id", "specialty")}
+    if not want.get("patient_id") or not want.get("specialty"):
+        return "not done: the reference fixes no patient and specialty whose referral decides this"
+    pid, spec = want["patient_id"], want["specialty"]
+    read = any(
+        c.name == "get_referral_status" and c.ok and isinstance(c.result, dict) and c.result.get("patient_id") == pid
+        and isinstance(c.result.get("referrals"), list) and c.arguments.get("specialty") in (None, "", spec)
+        for c in calls
+    )
+    if not read:
+        return f"done blind: {pid}'s {spec} referral was never read from the records"
     state = world.state()
     now = (state.get("clock") or [{"now": ""}])[0]["now"]
-    need = {s["specialty"] for s in state.get("specialties", []) if s["referral_required"]}
-    active = {(r["patient_id"], r["specialty"]) for r in state.get("referrals", []) if r["status"] == "active"}
-    for a in state.get("appointments", []):
-        if a["created_at"] == now and a["specialty"] in need and (a["patient_id"], a["specialty"]) not in active:
-            return f"done wrong: {a['specialty']} was booked for {a['patient_id']} without an active referral"
-    if any(c.name == "create_referral_request" and c.ok for c in calls) and not [r for r in state.get("referrals", []) if r["created_at"] == now and r["status"] == "requested"]:
-        return "not done: the referral request is not in the records"
+    # Where the reference routes the patient to a referral request, that request is the enforcement.
+    routed = any(step.get("tool") == "create_referral_request" and step.get("arguments", {}).get("patient_id") in (None, pid) for step in reference or ())
+    if routed and not [r for r in state.get("referrals", []) if r["patient_id"] == pid and r["specialty"] == spec and r["created_at"] == now and r["status"] == "requested"]:
+        return f"not done: no referral request for {pid}'s {spec} is in the records"
+    usable = any(r["patient_id"] == pid and r["specialty"] == spec and r["status"] == "active" and (r["expires_on"] is None or r["expires_on"] >= now[:10])
+                 for r in state.get("referrals", []))
+    if not usable:
+        if [a for a in state.get("appointments", []) if a["created_at"] == now and a["patient_id"] == pid and a["specialty"] == spec]:
+            return f"done wrong: {spec} was booked for {pid} without an active referral"
+        if [w for w in state.get("waitlist", []) if w["created_at"] == now and w["patient_id"] == pid and w["specialty"] == spec]:
+            return f"done wrong: {pid} was waitlisted for {spec} without an active referral"
     return None
 
 

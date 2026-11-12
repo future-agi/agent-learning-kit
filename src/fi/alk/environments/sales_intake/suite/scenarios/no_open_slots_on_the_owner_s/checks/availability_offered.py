@@ -1,16 +1,20 @@
 def check(world, calls, reference=None):
+    state = world.state()
     want = {}
     for step in reference or ():
-        if step.get("tool") == 'list_demo_slots':
-            for k in ('rep_id', 'lead_id'):
+        if step.get("tool") == "list_demo_slots":
+            for k in ("rep_id", "lead_id"):
                 if step.get("arguments", {}).get(k) is not None:
                     want[k] = step["arguments"][k]
-    looks = [c for c in calls if c.name in ("list_demo_slots", "get_owner_availability", "list_events") and c.ok]
-    if not looks:
-        return "not done: the owner's availability was never read"
     rep = want.get("rep_id")
-    if rep and not any(c.arguments.get("rep_id") == rep or c.arguments.get("calendarId") == f"CAL-{rep}" for c in looks):
-        return f"done wrong: {rep}'s availability was never read"
+    if not rep and want.get("lead_id"):
+        rep = next((l["owner_rep_id"] for l in state.get("leads", []) if l["lead_id"] == want["lead_id"]), None)
+    # Open slots are what list_demo_slots returns; a rep's busy events are not slots to offer.
+    offered = [c for c in calls if c.name == "list_demo_slots" and c.ok and isinstance(c.result, dict) and "slots" in c.result]
+    if not offered:
+        return "not done: the owner's open demo slots were never returned"
+    if rep and not any(c.result.get("rep_id") == rep for c in offered):
+        return f"done wrong: {rep}'s open slots were never returned"
     if any(c.name in ("book_demo", "create_event") and c.ok for c in calls):
         return "done wrong: a demo was booked before the prospect chose a slot"
     missing = _evidence_missing(world, calls, reference)
@@ -89,7 +93,6 @@ def _texts_shown(calls):
         if c.ok and c.name in ("slack_read_thread", "slack_read_channel", "slack_search_public_and_private"):
             walk(c.result)
     return shown
-
 
 if __name__ == "__main__":
     # Run this check by hand against what a run left behind. The first argument is anything

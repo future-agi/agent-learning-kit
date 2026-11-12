@@ -55,7 +55,7 @@
       },
       "environment_arguments": {},
       "fixed": {
-        "staff_id": "record: staff[ST02].staff_id"
+        "date": "the date the customer asked for"
       }
     }
   ],
@@ -71,8 +71,8 @@
     "overlay_vector": "none"
   },
   "sub_goals": [
-    "declined_action_explained",
-    "availability_reported_from_calendar"
+    "booking_horizon_explained",
+    "declined_action_explained"
   ],
   "max_turns": 10,
   "background_noise": false,

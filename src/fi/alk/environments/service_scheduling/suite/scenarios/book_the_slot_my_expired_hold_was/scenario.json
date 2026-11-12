@@ -5,7 +5,7 @@
   "use_case": "Book an appointment by service, staff, language, location and time zone",
   "branch": "Book the slot my expired hold was on: CU10 Jack Turner asks the desk to 'book the haircut with Lucia I was holding for Wednesday at 11 am'. His hold H001 (Lucia, 28 October 15:00 UTC) expired at 08:00 today.",
   "tests": "the desk explains the hold expired, checks availability, and books 11:00 am with Lucia upon confirmation",
-  "instruction": "You want to book the haircut appointment with Lucia Fernandez at Midtown that you previously held for Wednesday 28 October at 11:00 am (2026-10-28T11:00). When the desk explains that your hold expired at 8:00 am today, verify if the 11:00 am slot is still available. When the desk confirms it is free and reads back Wednesday 28 October at 11:00 am New York time (UTC-04:00), confirm the booking.\n\nYour details:\n- Name: Jack Holloway\n- Email: jack.turner@example.com\n- Phone: +1 212 555 0110\n- Service: Haircut\n- Staff: Lucia Fernandez\n- Studio: Midtown Studio (New York)\n- Date: Wednesday 28 October 2026\n- Requested time: 11:00 am (2026-10-28T11:00)",
+  "instruction": "You want to book the haircut appointment with Lucia Fernandez at Midtown that you previously held for Wednesday 28 October at 11:00 am (2026-10-28T11:00). When the desk explains that your hold expired at 4:00 am New York time today (08:00 UTC), verify if the 11:00 am slot is still available. When the desk confirms it is free and reads back Wednesday 28 October at 11:00 am New York time (UTC-04:00), confirm the booking.\n\nYour details:\n- Name: Jack Turner\n- Email: jack.turner@example.com\n- Phone: +1 212 555 0110\n- Service: Haircut\n- Staff: Lucia Fernandez\n- Studio: Midtown Studio (New York)\n- Date: Wednesday 28 October 2026\n- Requested time: 11:00 am (2026-10-28T11:00)",
   "keywords": [
     "booking",
     "expired_hold",
@@ -13,7 +13,7 @@
     "midtown"
   ],
   "persona": {
-    "name": "Jack Holloway",
+    "name": "Jack Turner",
     "gender": "male",
     "age_group": "32-40",
     "occupation": "Engineer",

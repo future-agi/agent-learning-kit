@@ -5,7 +5,7 @@
   "use_case": "Pick up a Slack question and post the approved reply in its thread",
   "branch": "Grace Kim asked if per diem covers wine at client dinners (KM20) generating 13 chatter replies in the thread; Ivan Petrov provides approval APP-KN-413 to read the thread and post the policy clarification from Meal Per Diem Standard 2.0",
   "tests": "the agent reads Grace's thread (KM20 with replies) and per_diem_v2 section 2, posting that alcohol is not covered in Grace's thread with APP-KN-413",
-  "instruction": "You are Ivan Petrov, Facilities Specialist. Grace Kim asked in #help-policies (KM20) whether wine is covered under per diem, resulting in a long thread of chatter. Ask the Knowledge Desk to read the thread and post the approved reply; you provide approval APP-KN-413.\n\nYour details:\n- Name: Ivan Petrov\n- Employee ID: E16\n- Approval: APP-KN-413",
+  "instruction": "You are Ivan Petrov, Facilities Coordinator. Grace Kim asked in #help-policies (KM20) whether wine is covered under per diem, resulting in a long thread of chatter. Ask the Knowledge Desk to read the thread and post the approved reply; you provide approval APP-KN-413.\n\nYour details:\n- Name: Ivan Petrov\n- Employee ID: E16\n- Approval: APP-KN-413",
   "keywords": [
     "slack",
     "approval"

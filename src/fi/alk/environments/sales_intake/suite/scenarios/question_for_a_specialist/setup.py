@@ -1,15 +1,8 @@
 def setup(world):
-    world.put("accounts", {
-        "account_id": "ACC424",
-        "name": "Alpenwerk AG",
-        "domain": "alpenwerk.example",
-        "country": "Switzerland",
-        "created_at": "2026-11-01T10:00:00Z",
-        "updated_at": "2026-11-01T10:00:00Z",
-    })
+    # Lukas Brandstetter is a second contact at Alpenwerk AG (ACC14), which is already on file.
     world.put("contacts", {
         "contact_id": "C424",
-        "account_id": "ACC424",
+        "account_id": "ACC14",
         "name": "Lukas Brandstetter",
         "email": "lukas.brandstetter@alpenwerk.example",
         "email_normalized": "lukas.brandstetter@alpenwerk.example",
@@ -22,7 +15,7 @@ def setup(world):
     world.put("leads", {
         "lead_id": "L424",
         "contact_id": "C424",
-        "account_id": "ACC424",
+        "account_id": "ACC14",
         "country": "Switzerland",
         "use_case": "helpdesk",
         "seats": 120,
@@ -36,3 +29,5 @@ def setup(world):
         "created_at": "2026-11-01T10:00:00Z",
         "updated_at": "2026-11-01T10:00:00Z",
     })
+    # Who is in this conversation: the session sets it, not anything the desk is told.
+    world.change("session_caller", "default", {"person_id": "C424"}, by="id")

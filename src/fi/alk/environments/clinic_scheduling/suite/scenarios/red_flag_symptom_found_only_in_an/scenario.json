@@ -38,19 +38,19 @@
   },
   "solution": [
     {
-      "tool": "get_thread",
+      "tool": "verify_patient",
       "arguments": {
-        "messageFormat": "FULL_CONTENT",
-        "threadId": "th_c422_checkup"
+        "dob": "1974-03-09",
+        "full_name": "Imogen Clarke"
       },
       "environment_arguments": {},
       "fixed": {}
     },
     {
-      "tool": "verify_patient",
+      "tool": "get_thread",
       "arguments": {
-        "dob": "1974-03-09",
-        "full_name": "Imogen Clarke"
+        "messageFormat": "FULL_CONTENT",
+        "threadId": "th_c422_checkup"
       },
       "environment_arguments": {},
       "fixed": {}

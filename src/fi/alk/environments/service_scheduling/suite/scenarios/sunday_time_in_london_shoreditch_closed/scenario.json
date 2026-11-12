@@ -46,7 +46,9 @@
         "location_id": "L2"
       },
       "environment_arguments": {},
-      "fixed": {}
+      "fixed": {
+        "location_id": "the studio the customer asked about"
+      }
     },
     {
       "tool": "list_slots",

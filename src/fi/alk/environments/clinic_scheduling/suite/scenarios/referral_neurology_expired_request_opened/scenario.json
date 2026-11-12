@@ -57,7 +57,8 @@
       },
       "environment_arguments": {},
       "fixed": {
-        "patient_id": "caller: P10"
+        "patient_id": "caller: P10",
+        "specialty": "record: the patient and the specialty whose referral decides the booking"
       }
     },
     {

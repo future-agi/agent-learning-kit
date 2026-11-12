@@ -1,4 +1,5 @@
 def setup(world):
+    world.change("session_caller", "default", {"employee_id": "E18"}, by="id")
     world.put("drive_files", {
         "file_id": "per_diem_v3",
         "title": "Meal Per Diem Standard 2027.md",

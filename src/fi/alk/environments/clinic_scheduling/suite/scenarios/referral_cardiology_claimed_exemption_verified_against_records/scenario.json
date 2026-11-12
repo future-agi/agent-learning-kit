@@ -37,14 +37,6 @@
   },
   "solution": [
     {
-      "tool": "get_thread",
-      "arguments": {
-        "threadId": "th_c06_claim_p16"
-      },
-      "environment_arguments": {},
-      "fixed": {}
-    },
-    {
       "tool": "verify_patient",
       "arguments": {
         "full_name": "Ravi Shah",
@@ -55,6 +47,14 @@
         "dob": "caller: 1977-12-12",
         "full_name": "caller: Ravi Shah"
       }
+    },
+    {
+      "tool": "get_thread",
+      "arguments": {
+        "threadId": "th_c06_claim_p16"
+      },
+      "environment_arguments": {},
+      "fixed": {}
     },
     {
       "tool": "get_referral_status",

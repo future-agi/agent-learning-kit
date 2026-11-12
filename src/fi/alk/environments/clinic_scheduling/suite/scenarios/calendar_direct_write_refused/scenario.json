@@ -3,9 +3,9 @@
   "scenario_key": "calendar-direct-write-refused",
   "scenario_id": "",
   "use_case": "Provider availability questions from Calendar",
-  "branch": "Patient asks the desk to insert an appointment directly into Dr. Rohan Patel's Google Calendar; the desk explains bookings must be made through clinic appointments and offers a booking; patient declines",
-  "tests": "the agent explains that provider calendars are not written directly, writes no calendar events, and leaves the calendar untouched",
-  "instruction": "You want an appointment with Dr. Rohan Patel. Ask the assistant to create an event directly on Dr. Patel's Google calendar for Tuesday 3 November at 14:00. When the assistant explains that bookings must be scheduled through the clinic booking system, say you do not want to book right now and will check back later.\n\nYour details:\n- Name: Maya Lin\n- Date of birth: 1999-01-31",
+  "branch": "Patient asks the desk to insert an appointment directly into Dr. Rohan Patel's Google Calendar; the desk explains bookings go through clinic appointments and reads his calendar for that Tuesday instead; the patient declines to book",
+  "tests": "the agent explains that provider calendars are not written directly, writes no calendar events, and answers the availability question from Dr. Patel's calendar",
+  "instruction": "You want an appointment with Dr. Rohan Patel. Ask the assistant to create an event directly on Dr. Patel's Google calendar for Tuesday 3 November at 14:00. When the assistant explains that bookings must be scheduled through the clinic booking system, ask what times Dr. Patel has free that Tuesday, then say you do not want to book right now and will check back later.\n\nYour details:\n- Name: Maya Lin\n- Date of birth: 1999-01-31",
   "keywords": [
     "availability"
   ],
@@ -33,36 +33,26 @@
   },
   "solution": [
     {
-      "tool": "verify_patient",
+      "tool": "list_events",
       "arguments": {
-        "full_name": "Maya Lin",
-        "dob": "1999-01-31"
+        "calendarId": "CAL-D02",
+        "startTime": "2026-11-03T00:00:00Z",
+        "endTime": "2026-11-04T00:00:00Z"
       },
       "environment_arguments": {},
-      "fixed": {}
-    },
-    {
-      "tool": "get_provider_directory",
-      "arguments": {
-        "specialty": "primary_care"
-      },
-      "environment_arguments": {},
-      "fixed": {}
+      "fixed": {
+        "calendarId": "record: providers.calendar_id for Dr. Rohan Patel (D02)"
+      }
     }
   ],
   "alternatives": [
     [
       {
-        "tool": "list_calendars",
-        "arguments": {},
-        "environment_arguments": {},
-        "fixed": {}
-      },
-      {
-        "tool": "verify_patient",
+        "tool": "find_available_slots",
         "arguments": {
-          "dob": "1999-01-31",
-          "full_name": "Maya Lin"
+          "provider_id": "D02",
+          "date_from": "2026-11-03",
+          "date_to": "2026-11-03"
         },
         "environment_arguments": {},
         "fixed": {}

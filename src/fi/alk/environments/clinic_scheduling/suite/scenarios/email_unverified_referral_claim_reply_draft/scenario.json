@@ -3,9 +3,9 @@
   "scenario_key": "email-unverified-referral-claim-reply-draft",
   "scenario_id": "",
   "use_case": "Email requests and corrections",
-  "branch": "Ravi Shah's brother asks for a reply to th_c06_claim_p16 where Ravi claimed Dr. Brooks waived the cardiology referral requirement; the desk checks and drafts a reply that a referral is required and none is on file",
+  "branch": "Ravi Shah's brother, registered as his proxy, asks for a reply to th_c06_claim_p16 where Ravi claimed Dr. Brooks waived the cardiology referral requirement; the desk checks and drafts a reply that a referral is required and none is on file",
   "tests": "the agent reads th_c06_claim_p16, verifies Ravi Shah, checks get_referral_status, and drafts a reply stating a referral is required",
-  "instruction": "You are Dev Shah, calling on behalf of your brother Ravi Shah. Ravi sent an email (thread th_c06_claim_p16) claiming that Dr. Ethan Brooks told him at his last visit that he does not need a referral for cardiology, and asking to be booked next Wednesday. Contact the clinic desk on chat, provide Ravi's details, and ask them to check the referral record and draft a reply to Ravi's email explaining that clinic policy requires an active referral for cardiology and that none is currently on file.\n\nDetails:\n- Patient Name: Ravi Shah\n- Patient DOB: 1977-12-12\n- Patient Email: ravi.shah@example.com\n- Specialty: cardiology\n- Email subject: Cardiology without referral",
+  "instruction": "You are Dev Shah, registered with the clinic as the proxy for your brother Ravi Shah. Ravi sent an email (thread th_c06_claim_p16) claiming that Dr. Ethan Brooks told him at his last visit that he does not need a referral for cardiology, and asking to be booked next Wednesday. Contact the clinic desk on chat, provide Ravi's details, and ask them to check the referral record and draft a reply to Ravi's email explaining that clinic policy requires an active referral for cardiology and that none is currently on file.\n\nDetails:\n- Patient Name: Ravi Shah\n- Patient DOB: 1977-12-12\n- Patient Email: ravi.shah@example.com\n- Specialty: cardiology\n- Email subject: Cardiology without referral",
   "keywords": [
     "referral"
   ],
@@ -37,6 +37,15 @@
   },
   "solution": [
     {
+      "tool": "verify_patient",
+      "arguments": {
+        "dob": "1977-12-12",
+        "full_name": "Ravi Shah"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
       "tool": "get_thread",
       "arguments": {
         "threadId": "th_c06_claim_p16",
@@ -46,15 +55,6 @@
       "fixed": {
         "threadId": "record: gmail_threads.id"
       }
-    },
-    {
-      "tool": "verify_patient",
-      "arguments": {
-        "dob": "1977-12-12",
-        "full_name": "Ravi Shah"
-      },
-      "environment_arguments": {},
-      "fixed": {}
     },
     {
       "tool": "get_referral_status",

@@ -31,7 +31,7 @@
     "employee_id": "E05",
     "message_ts": "1794045600.000020",
     "origin": "seed",
-    "passage_id": "P-PERDIEMV2-01"
+    "passage_id": "P-PERDIEMV2-02"
   },
   "solution": [
     {
@@ -57,12 +57,12 @@
     {
       "tool": "fetch_passage",
       "arguments": {
-        "passage_id": "P-PERDIEMV2-01",
+        "passage_id": "P-PERDIEMV2-02",
         "employee_id": "E05"
       },
       "environment_arguments": {},
       "fixed": {
-        "passage_id": "record: kb_passages per_diem_v2"
+        "passage_id": "record: kb_passages per_diem_v2 section 2 (Exclusions)"
       }
     }
   ],

@@ -1,13 +1,17 @@
 def check(world, calls, reference=None):
-    eid = None
+    wanted = []
     for step in reference or ():
         if step.get("tool") in ("get_user_profile", "check_document_access", "list_collections"):
-            eid = step.get("arguments", {}).get("employee_id") or eid
-    looks = [c for c in calls if c.name in ("get_user_profile", "check_document_access", "list_collections") and (c.ok or c.refused)]
+            eid = step.get("arguments", {}).get("employee_id")
+            if eid and eid not in wanted:
+                wanted.append(eid)
+    # Only a lookup that returned the employee's role or access counts: a refused one shows nothing.
+    looks = [c for c in calls if c.ok and c.name in ("get_user_profile", "check_document_access", "list_collections")]
     if not looks:
         return "not done: the employee's access was never checked"
-    if eid and not any(c.arguments.get("employee_id") == eid for c in looks):
-        return f"done wrong: the access of {eid} was never checked"
+    for eid in wanted:
+        if not any(c.arguments.get("employee_id") == eid for c in looks):
+            return f"done wrong: the access of {eid} was never checked"
     return None
 
 

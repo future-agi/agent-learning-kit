@@ -5,7 +5,7 @@
   "use_case": "Qualify an inbound enquiry against the rubric",
   "branch": "Olivia Chen (L23, marketing use case, disqualified) asks for a demo for marketing campaigns; desk looks up contact and lead L23 and explains BrightDesk supports support/customer_service/helpdesk",
   "tests": "the agent searches contacts by email, checks L23, and explains marketing is outside supported use cases",
-  "instruction": "You are Olivia Chen, Marketing Lead at Maple Ridge Telecom in Canada. You want to know if BrightDesk can be used and demonstrated for your marketing team's outbound campaigns. If told that BrightDesk only qualifies support, customer service, or helpdesk use cases, ask if there is an integration or partner tool suited for marketing.\n\nYour details:\n- Name: Olivia Chen\n- Email: olivia.chen@mapleridge.example\n- Company: Maple Ridge Telecom\n- Country: Canada\n- Use case: marketing",
+  "instruction": "You are Olivia Chen, Procurement Manager at Maple Ridge Telecom in Canada, buying for the marketing team. You want to know if BrightDesk can be used and demonstrated for your marketing team's outbound campaigns. If told that BrightDesk only qualifies support, customer service, or helpdesk use cases, ask if there is an integration or partner tool suited for marketing.\n\nYour details:\n- Name: Olivia Chen\n- Email: olivia.chen@mapleridge.example\n- Company: Maple Ridge Telecom\n- Country: Canada\n- Use case: marketing",
   "keywords": [
     "qualify_lead"
   ],
@@ -39,7 +39,9 @@
         "email": "olivia.chen@mapleridge.example"
       },
       "environment_arguments": {},
-      "fixed": {}
+      "fixed": {
+        "email": "caller: olivia.chen@mapleridge.example"
+      }
     },
     {
       "tool": "get_lead",

@@ -40,7 +40,9 @@
         "lead_id": "L30"
       },
       "environment_arguments": {},
-      "fixed": {}
+      "fixed": {
+        "lead_id": "caller: lead L30"
+      }
     },
     {
       "tool": "get_icp_rules",

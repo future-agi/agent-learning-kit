@@ -55,7 +55,10 @@
         "patient_id": "P410"
       },
       "environment_arguments": {},
-      "fixed": {}
+      "fixed": {
+        "patient_id": "record: the patient and the specialty whose referral decides the booking",
+        "specialty": "record: the patient and the specialty whose referral decides the booking"
+      }
     },
     {
       "tool": "create_referral_request",

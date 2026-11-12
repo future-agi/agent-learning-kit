@@ -8,3 +8,4 @@ def setup(world):
         "guardian_name": None,
         "is_new_patient": 0
     })
+    world.change("session_caller", "default", {"caller_id": "P21"}, by="id")

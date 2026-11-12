@@ -1,4 +1,5 @@
 def setup(world):
+    world.change("session_caller", "default", {"employee_id": "E05"}, by="id")
     world.put("slack_messages", {
         "message_id": "KM416",
         "channel_id": "CH_HELPPOL",

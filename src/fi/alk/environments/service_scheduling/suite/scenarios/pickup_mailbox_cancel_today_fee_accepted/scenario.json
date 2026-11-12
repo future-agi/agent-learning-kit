@@ -5,7 +5,7 @@
   "use_case": "Reschedule or cancel an appointment",
   "branch": "agent reads email thread th_s404 from Derrick Cole requesting same-day cancellation, discloses late fee, and cancels appointment A428 upon fee acceptance",
   "tests": "the agent reads thread th_s404, verifies the cancellation is late, discloses the fee, and cancels appointment A428 upon acceptance",
-  "instruction": "You are Derrick Cole. You sent an email (thread th_s404) asking to cancel your consultation with Olivia today at 3:00 pm (appointment A428). In chat, you ask the desk to process your cancellation. When informed about the $25.00 late cancellation fee, accept it and confirm.\n\nYour details:\n- Name: Derrick Cole\n- Email: derrick.cole@example.com\n- Phone: +1 212 555 0428\n- Existing appointment ID: A428\n- Thread ID: th_s404",
+  "instruction": "You are Derrick Cole. You sent an email (thread th_s404) asking to cancel your consultation with Lucia today at 3:00 pm (appointment A428). In chat, you ask the desk to process your cancellation. When informed about the $25.00 late cancellation fee, accept it and confirm.\n\nYour details:\n- Name: Derrick Cole\n- Email: derrick.cole@example.com\n- Phone: +1 212 555 0428\n- Existing appointment ID: A428\n- Thread ID: th_s404",
   "keywords": [
     "cancel_appointment",
     "mailbox_request",

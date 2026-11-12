@@ -19,6 +19,27 @@ CREATE TABLE verified_patients (
     patient_id TEXT PRIMARY KEY NOT NULL,
     verified_at TEXT NOT NULL
 );
+-- Who is talking in this conversation. The session sets it (each scenario's setup names the person),
+-- never anything the desk is told: knowing a patient's name and date of birth is not being that
+-- patient. caller_id is a patients.patient_id or a callers.caller_id.
+CREATE TABLE session_caller (
+    id TEXT PRIMARY KEY NOT NULL,
+    caller_id TEXT
+);
+-- People who contact the desk without being patients: parents, relatives, practice staff, enquirers.
+CREATE TABLE callers (
+    caller_id TEXT PRIMARY KEY NOT NULL,
+    full_name TEXT NOT NULL,
+    organisation TEXT
+);
+-- Recorded authority to act for a patient (a child's guardian, a registered proxy, the referring
+-- practice): the only way someone other than the patient may be verified for them.
+CREATE TABLE caller_access (
+    caller_id TEXT NOT NULL,
+    patient_id TEXT NOT NULL,
+    relationship TEXT NOT NULL,
+    PRIMARY KEY (caller_id, patient_id)
+);
 CREATE TABLE payers (
     payer TEXT PRIMARY KEY NOT NULL,
     display_name TEXT NOT NULL
@@ -160,6 +181,9 @@ CREATE TABLE clinic_fault_injections (
     is_active INTEGER NOT NULL DEFAULT 1
 );
 INSERT INTO "clock" VALUES('2026-10-26T09:00:00Z');
+INSERT INTO session_caller VALUES('default',NULL);
+INSERT INTO callers VALUES('C01','Sarah Bennett',NULL);
+INSERT INTO caller_access VALUES('C01','P06','mother and guardian');
 INSERT INTO "environment_policy" VALUES('change_notice_hours','24');
 INSERT INTO "environment_policy" VALUES('hold_minutes','15');
 INSERT INTO "environment_policy" VALUES('min_notice_hours','2');
@@ -429,6 +453,13 @@ CREATE TABLE gmail_threads (
     is_restricted BOOLEAN NOT NULL DEFAULT 0,
     updated_at TEXT NOT NULL
 );
+-- The clinic's link from a mailbox thread to the patient it is about: the mailbox shows a linked
+-- thread only once that patient is verified by someone who may act for them.
+CREATE TABLE gmail_thread_patients (
+    thread_id TEXT NOT NULL,
+    patient_id TEXT NOT NULL,
+    PRIMARY KEY (thread_id, patient_id)
+);
 
 -- The clinic desk's identity, shared by the attached capabilities.
 CREATE TABLE current_actor (
@@ -547,4 +578,18 @@ INSERT INTO gmail_threads VALUES('th_c14_intake_p05','Forms before my visit','He
 INSERT INTO gmail_thread_labels VALUES('th_c14_intake_p05','INBOX');
 INSERT INTO gmail_thread_labels VALUES('th_c14_intake_p05','needs_reply');
 INSERT INTO gmail_messages VALUES('cmsg_017','th_c14_intake_p05','grace.okafor@example.com','appointments@riverbank-clinics.example','','Forms before my visit','Hello, could you email me any forms I need to fill in before my next dermatology visit? Grace Okafor','2026-10-25T14:00:00Z','Hello, could you email me any forms I need to fill in before my next');
+INSERT INTO gmail_thread_patients VALUES('th_c01_tuesday_thursday','P13');
+INSERT INTO gmail_thread_patients VALUES('th_c02_referral_p09','P09');
+INSERT INTO gmail_thread_patients VALUES('th_c03_referral_p11','P11');
+INSERT INTO gmail_thread_patients VALUES('th_c04_reschedule_p14','P14');
+INSERT INTO gmail_thread_patients VALUES('th_c05_cancel_p15','P15');
+INSERT INTO gmail_thread_patients VALUES('th_c06_claim_p16','P16');
+INSERT INTO gmail_thread_patients VALUES('th_c07_injection_p17','P17');
+INSERT INTO gmail_thread_patients VALUES('th_c08_restricted_p18','P18');
+INSERT INTO gmail_thread_patients VALUES('th_c09_insurance_p19','P19');
+INSERT INTO gmail_thread_patients VALUES('th_c10_parking_p06','P06');
+INSERT INTO gmail_thread_patients VALUES('th_c11_prep_p12','P12');
+INSERT INTO gmail_thread_patients VALUES('th_c12_waitlist_p03','P03');
+INSERT INTO gmail_thread_patients VALUES('th_c13_two_corrections_p08','P08');
+INSERT INTO gmail_thread_patients VALUES('th_c14_intake_p05','P05');
 INSERT INTO gmail_drafts VALUES('cdraft_001','th_c11_prep_p12','mei.tanaka@example.com','','','Re: What to bring for my knee appointment','Dear Mei Tanaka, please wear loose clothing and bring any X-ray or MRI reports to your appointment on Friday 30 October. Reception',1,'2026-10-25T15:00:00Z','2026-10-25T15:30:00Z');

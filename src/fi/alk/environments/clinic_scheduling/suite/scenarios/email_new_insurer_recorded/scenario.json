@@ -35,6 +35,15 @@
   },
   "solution": [
     {
+      "tool": "verify_patient",
+      "arguments": {
+        "full_name": "Isabel Cruz",
+        "dob": "1985-07-23"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
       "tool": "get_thread",
       "arguments": {
         "threadId": "th_c09_insurance_p19"
@@ -43,15 +52,6 @@
       "fixed": {
         "threadId": "the patient's thread"
       }
-    },
-    {
-      "tool": "verify_patient",
-      "arguments": {
-        "full_name": "Isabel Cruz",
-        "dob": "1985-07-23"
-      },
-      "environment_arguments": {},
-      "fixed": {}
     },
     {
       "tool": "update_insurance",

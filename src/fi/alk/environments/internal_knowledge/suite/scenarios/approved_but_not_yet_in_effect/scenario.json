@@ -52,7 +52,9 @@
         "drive_file_id": ""
       },
       "environment_arguments": {},
-      "fixed": {}
+      "fixed": {
+        "family": "record: kb_documents family meal_per_diem"
+      }
     },
     {
       "tool": "get_effective_version",

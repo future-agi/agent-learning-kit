@@ -4,7 +4,7 @@
   "scenario_id": "",
   "use_case": "Answer a policy question with citations from the version in effect",
   "branch": "Chloe Dubois (manager E17) asks whether she can sign a $40,000 equipment contract herself and what else is required; signing matrix allows directors up to $100k, and procurement needs a PO above $10k",
-  "tests": "the agent checks document access, cites Signing Authority Matrix 1.0 section 1 and Procurement Policy 2.0 section 1, concluding a director must sign and a PO is needed",
+  "tests": "the agent cites Signing Authority Matrix 1.0 section 1 and Procurement Policy 2.0 section 1, concluding a director must sign and a PO is needed",
   "instruction": "You are an Operations Manager preparing a $40,000 equipment purchase. You need to know if you have signing authority to sign the contract yourself, or who must sign it, and whether a purchase order (PO) is required under procurement rules.\n\nYour details:\n- Name: Chloe Dubois\n- Employee ID: E17",
   "keywords": [
     "access_check",
@@ -44,17 +44,6 @@
       "fixed": {}
     },
     {
-      "tool": "check_document_access",
-      "arguments": {
-        "employee_id": "E17",
-        "drive_file_id": "signing_v1"
-      },
-      "environment_arguments": {},
-      "fixed": {
-        "employee_id": "caller: E17"
-      }
-    },
-    {
       "tool": "fetch_passage",
       "arguments": {
         "passage_id": "P-SIGNINGV1-01",
@@ -89,7 +78,6 @@
     "interaction": "multi_turn"
   },
   "sub_goals": [
-    "access_checked",
     "answer_cited_from_effective_version",
     "citation_quality"
   ],

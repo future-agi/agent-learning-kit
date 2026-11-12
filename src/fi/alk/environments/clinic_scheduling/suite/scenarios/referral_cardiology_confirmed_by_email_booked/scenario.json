@@ -39,16 +39,6 @@
   },
   "solution": [
     {
-      "tool": "get_thread",
-      "arguments": {
-        "threadId": "th_c03_referral_p11"
-      },
-      "environment_arguments": {},
-      "fixed": {
-        "threadId": "record: gmail_threads th_c03_referral_p11"
-      }
-    },
-    {
       "tool": "verify_patient",
       "arguments": {
         "dob": "1950-10-10",
@@ -58,6 +48,16 @@
       "fixed": {
         "dob": "caller: 1950-10-10",
         "full_name": "caller: Oliver Grant"
+      }
+    },
+    {
+      "tool": "get_thread",
+      "arguments": {
+        "threadId": "th_c03_referral_p11"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "threadId": "record: gmail_threads th_c03_referral_p11"
       }
     },
     {

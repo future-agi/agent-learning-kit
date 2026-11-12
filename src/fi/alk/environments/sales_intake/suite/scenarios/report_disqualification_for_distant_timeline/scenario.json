@@ -5,7 +5,7 @@
   "use_case": "Qualify an inbound enquiry against the rubric",
   "branch": "Felix Gruber (L19, Austria, 70 seats, timeline 6-12 months, disqualified) asks why no one contacted him; desk looks up L19, reads ICP rules, and explains the 6-month timeline requirement",
   "tests": "the agent looks up L19 and ICP rules and explains why a 6-12 month timeline does not qualify for an immediate demo",
-  "instruction": "You are Felix Gruber, Operations Manager at Donau Bank. You submitted a web form enquiry requesting a demo for 70 seats with a planned rollout in 6-12 months, and want to know why no sales rep has reached out yet. If told that BrightDesk requires a 0-6 month timeline to qualify for live rep demos, ask how your team can re-engage when closer to purchasing.\n\nYour details:\n- Name: Felix Gruber\n- Email: felix.gruber@donaubank.example\n- Company: Donau Bank\n- Country: Austria\n- Planned rollout timeline: 6-12 months",
+  "instruction": "You are Felix Gruber, Support Operations Lead at Donau Bank. You submitted a web form enquiry requesting a demo for 70 seats with a planned rollout in 6-12 months, and want to know why no sales rep has reached out yet. If told that BrightDesk requires a 0-6 month timeline to qualify for live rep demos, ask how your team can re-engage when closer to purchasing.\n\nYour details:\n- Name: Felix Gruber\n- Email: felix.gruber@donaubank.example\n- Company: Donau Bank\n- Country: Austria\n- Planned rollout timeline: 6-12 months",
   "keywords": [
     "qualify_lead"
   ],
@@ -14,7 +14,7 @@
     "gender": "male",
     "age_group": "40-50",
     "occupation": "Manager",
-    "location": "United States",
+    "location": "Austria",
     "personality": "Professional and formal",
     "communication_style": "Formal and polite",
     "initial_message": "Good day. I am following up on my enquiry for Donau Bank regarding a platform for 70 seats. Could you provide the status of our demo request?",
@@ -39,7 +39,9 @@
         "email": "felix.gruber@donaubank.example"
       },
       "environment_arguments": {},
-      "fixed": {}
+      "fixed": {
+        "email": "caller: felix.gruber@donaubank.example"
+      }
     },
     {
       "tool": "get_lead",

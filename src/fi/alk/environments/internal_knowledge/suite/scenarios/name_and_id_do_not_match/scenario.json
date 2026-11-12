@@ -40,9 +40,7 @@
         "employee_id": "E15"
       },
       "environment_arguments": {},
-      "fixed": {
-        "employee_id": "caller: E15"
-      }
+      "fixed": {}
     },
     {
       "tool": "get_user_profile",

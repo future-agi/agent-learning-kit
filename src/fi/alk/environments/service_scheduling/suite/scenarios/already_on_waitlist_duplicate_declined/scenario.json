@@ -4,7 +4,7 @@
   "scenario_id": "",
   "use_case": "Waitlist and confirmations",
   "branch": "Customer is already on the waitlist (W401) for Massage on Thursday 29 October at Midtown; asks to join again, desk reports existing entry.",
-  "tests": "passes when the desk attempts to add Nina Johansson to the waitlist and explains she is already on the waitlist for that date.",
+  "tests": "the desk tries the waitlist, learns from the refusal that the customer is already on it (W401), says so and adds nothing",
   "instruction": "You want to be added to the waitlist for Massage Therapy at Midtown Studio on 2026-10-29 (Thursday 29 October 2026). You are unaware that you are already active on the waitlist (W401).\n\nYour details:\n- Name: Nina Johansson\n- Email: nina.johansson@example.com\n- Phone: +44 20 7946 0413\n- Service: Massage Therapy\n- Studio location: Midtown Studio\n- Date: 2026-10-29",
   "keywords": [
     "waitlist",
@@ -46,19 +46,6 @@
       "fixed": {}
     },
     {
-      "tool": "list_slots",
-      "arguments": {
-        "date": "2026-10-29",
-        "staff_id": "ST01",
-        "location_id": "L1",
-        "service_id": "SV2"
-      },
-      "environment_arguments": {},
-      "fixed": {
-        "staff_id": "record: staff.staff_id where name='Olivia Bennett'"
-      }
-    },
-    {
       "tool": "add_waitlist",
       "arguments": {
         "customer_id": "CU413",
@@ -68,7 +55,11 @@
         "preferred_date": "2026-10-29"
       },
       "environment_arguments": {},
-      "fixed": {}
+      "fixed": {
+        "customer_id": "the caller",
+        "service_id": "the service she asked for",
+        "preferred_date": "the date she asked for"
+      }
     }
   ],
   "alternatives": [],
@@ -83,7 +74,7 @@
     "interaction": "single_request"
   },
   "sub_goals": [
-    "availability_reported_from_calendar",
+    "waitlist_duplicate_not_added",
     "declined_action_explained"
   ],
   "max_turns": 6,

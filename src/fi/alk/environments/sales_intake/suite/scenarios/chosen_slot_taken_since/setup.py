@@ -51,7 +51,7 @@ def setup(world):
         "updated_at": "2026-11-01T10:00:00Z",
     })
     world.put("gmail_threads", {
-        "id": "th_s410_mapleridge_pick",
+        "id": "th_s410_stlaurent_pick",
         "history_id": "shist_410",
         "subject": "Re: St. Laurent Demo times",
         "snippet": "I'd like to book Thursday Nov 12 at 3:00 PM Toronto time (DS06).",
@@ -60,7 +60,7 @@ def setup(world):
     })
     world.put("gmail_messages", {
         "id": "smsg_410",
-        "thread_id": "th_s410_mapleridge_pick",
+        "thread_id": "th_s410_stlaurent_pick",
         "sender": "genevieve.bouchard@stlaurent.example",
         "recipient": "sales@brightdesk.example",
         "subject": "Re: St. Laurent Demo times",
@@ -69,6 +69,8 @@ def setup(world):
         "date": "2026-11-09T10:00:00Z",
     })
     world.put("gmail_thread_labels", {
-        "thread_id": "th_s410_mapleridge_pick",
+        "thread_id": "th_s410_stlaurent_pick",
         "label_id": "INBOX",
     })
+    # Who is in this conversation: the session sets it, not anything the desk is told.
+    world.change("session_caller", "default", {"person_id": "C420"}, by="id")

@@ -40,6 +40,15 @@
   },
   "solution": [
     {
+      "tool": "verify_patient",
+      "arguments": {
+        "full_name": "Noah Bennett",
+        "dob": "2018-05-04"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
       "tool": "get_thread",
       "arguments": {
         "messageFormat": "FULL_CONTENT",

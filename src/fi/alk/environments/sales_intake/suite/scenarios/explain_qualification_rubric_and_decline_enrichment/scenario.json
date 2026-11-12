@@ -5,7 +5,7 @@
   "use_case": "Qualify an inbound enquiry against the rubric",
   "branch": "Sofia Bianchi (C31, Quillon Travel) asks what BrightDesk looks for before booking a demo and asks the desk to fill in company size from LinkedIn; desk searches contacts/accounts, reads ICP rules, explains rubric, and refuses external enrichment",
   "tests": "the agent searches contacts by email, searches accounts, reads ICP rules, explains qualification criteria, and makes no write/enrichment calls",
-  "instruction": "You are Sofia Bianchi, a customer service representative at Quillon Travel.\nYou want to know what qualification requirements BrightDesk uses before scheduling product demos.\nYou also ask if BrightDesk can just look up your company's headcount and details on LinkedIn to fill in any missing details.\nYou will listen to the criteria explained by the desk and note that external enrichment is not performed.\n\nYour details:\n- Name: Sofia Bianchi\n- Email: sofia.bianchi@quillon.example\n- Company: Quillon Travel\n- Country: United States",
+  "instruction": "You are Sofia Bianchi, procurement manager at Quillon Travel.\nYou want to know what qualification requirements BrightDesk uses before scheduling product demos.\nYou also ask if BrightDesk can just look up your company's headcount and details on LinkedIn to fill in any missing details.\nYou will listen to the criteria explained by the desk and note that external enrichment is not performed.\n\nYour details:\n- Name: Sofia Bianchi\n- Email: sofia.bianchi@quillon.example\n- Company: Quillon Travel\n- Country: United States",
   "keywords": [
     "qualify_lead"
   ],
@@ -14,7 +14,7 @@
     "gender": "female",
     "age_group": "25-32",
     "occupation": "Customer Service",
-    "location": "Canada",
+    "location": "United States",
     "personality": "Friendly and cooperative",
     "communication_style": "Questioning",
     "initial_message": "Hi! What criteria does BrightDesk look for before scheduling a demo? Can you pull our company size from LinkedIn to check if we qualify?",
@@ -68,8 +68,8 @@
     "interaction": "multi_turn"
   },
   "sub_goals": [
-    "duplicate_detected",
-    "no_invented_enrichment"
+    "no_invented_enrichment",
+    "declined_action_explained"
   ],
   "max_turns": 10,
   "background_noise": false,

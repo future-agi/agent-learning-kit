@@ -1,14 +1,17 @@
 def check(world, calls, reference=None):
-    want = None
+    """The referral record of the patient the reference fixes (and of its specialty, when fixed) was
+    returned to the agent: the status the answer rests on, not only a call."""
+    want = {}
     for step in reference or ():
         if step.get("tool") == "get_referral_status":
-            want = step.get("arguments", {}).get("patient_id") or want
-    looks = [c for c in calls if c.name == "get_referral_status" and c.ok]
-    if not looks:
-        return "not done: the referral was never looked up"
-    if want and not any(c.arguments.get("patient_id") == want for c in looks):
-        return f"done wrong: {want}'s referral was never looked up"
-    return None
+            want = {k: v for k, v in step.get("arguments", {}).items() if k in ("patient_id", "specialty")}
+    if not want.get("patient_id"):
+        return "not done: the reference fixes no patient whose referral to report"
+    for c in calls:
+        if c.name == "get_referral_status" and c.ok and isinstance(c.result, dict) and c.result.get("patient_id") == want["patient_id"] \
+                and isinstance(c.result.get("referrals"), list) and c.arguments.get("specialty") in (None, "", want.get("specialty", c.arguments.get("specialty"))):
+            return None
+    return f"not done: {want['patient_id']}'s referral record was never returned"
 
 
 if __name__ == "__main__":

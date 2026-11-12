@@ -1,4 +1,10 @@
-def handle(args, db):
+def _kept(error):
+    """A fault this world simulates on purpose: what the call wrote before it stays written."""
+    error.keep_writes = True
+    return error
+
+
+def _handle(args, db):
     import json
     import re
 
@@ -93,6 +99,17 @@ def handle(args, db):
             if att_conflicts:
                 raise ToolError(f"Conflict: attendee {em} has a conflicting event {att_conflicts[0]['event_id']}.", category="conflict")
 
+    # A timeout or a refusal before the commit changes nothing but uses the fault up, as in
+    # create_event: only `timeout_after_commit` lands the change and loses the reply.
+    fault = db.one("SELECT * FROM calendar_fault_injections WHERE operation = 'update_event' AND is_active = TRUE AND fault_type != 'timeout_after_commit'")
+    if fault:
+        if fault["trigger_once"]:
+            db.execute("UPDATE calendar_fault_injections SET is_active = FALSE WHERE fault_id = ?", (fault["fault_id"],))
+        if fault["fault_type"] == "timeout":
+            raise _kept(ToolError("Gateway timeout: request timed out waiting for upstream server.", category="timeout_unknown_outcome"))
+        if fault["fault_type"] == "permission_denied":
+            raise _kept(ToolError("Permission denied by upstream API.", category="permission_denied"))
+
     clock_row = db.one("SELECT now FROM clock LIMIT 1")
     now_str = clock_row["now"] if clock_row else "2026-10-26T09:00:00Z"
     new_version = evt["version"] + 1
@@ -115,12 +132,12 @@ def handle(args, db):
         (f"MSG-UPD-{evt_id}-{new_version}", evt_id, f"Rescheduled: {summary}", json.dumps({"start": start_time, "end": end_time}), now_str),
     )
 
-    fault = db.one("SELECT * FROM calendar_fault_injections WHERE operation = 'update_event' AND is_active = TRUE")
+    # A timeout after the commit: the change is made, the reply is lost.
+    fault = db.one("SELECT * FROM calendar_fault_injections WHERE operation = 'update_event' AND is_active = TRUE AND fault_type = 'timeout_after_commit'")
     if fault:
         if fault["trigger_once"]:
             db.execute("UPDATE calendar_fault_injections SET is_active = FALSE WHERE fault_id = ?", (fault["fault_id"],))
-        if fault["fault_type"] in ("timeout_after_commit", "timeout"):
-            raise ToolError("Gateway timeout: request timed out waiting for upstream server response.", category="timeout_unknown_outcome")
+        raise _kept(ToolError("Gateway timeout: request timed out waiting for upstream server response.", category="timeout_unknown_outcome"))
 
     attendees = [
         {
@@ -149,3 +166,43 @@ def handle(args, db):
         "eventType": "DEFAULT",
         "version": new_version,
     }
+
+
+_WRITES = ("calendar_event_attendees", "calendar_events", "calendar_fault_injections", "calendar_simulated_outbox")
+
+def _all_or_nothing(db, run):
+    """Run the call so that a failed call changes nothing. A handler gets no transaction of its own,
+    so every table this tool writes is held first and put back if the call raises, whether a write
+    failed partway or the call refused after writing. Only a fault the world simulates on purpose
+    (an error marked keep_writes: a rival booking, a commit whose reply was lost, a fault used up)
+    keeps what it wrote."""
+    held = {table: db.query(f"SELECT * FROM {table}") for table in _WRITES}
+    try:
+        return run()
+    except Exception as failed:
+        if not getattr(failed, "keep_writes", False):
+            for table, rows in held.items():
+                if _same(db.query(f"SELECT * FROM {table}"), rows):
+                    continue
+                db.execute(f"DELETE FROM {table}")
+                for row in rows:
+                    cols = list(row)
+                    db.execute(
+                        f"INSERT INTO {table} ({', '.join(chr(34) + c + chr(34) for c in cols)}) VALUES ({', '.join('?' * len(cols))})",
+                        [row[c] for c in cols],
+                    )
+        raise
+
+def _same(rows, held):
+    """Whether a table still holds exactly the rows it held, in any order: only a table the call
+    changed is rewritten."""
+    import json
+
+    def key(row):
+        return json.dumps(row, sort_keys=True, default=str)
+
+    return sorted(map(key, rows)) == sorted(map(key, held))
+
+
+def handle(args, db):
+    return _all_or_nothing(db, lambda: _handle(args, db))

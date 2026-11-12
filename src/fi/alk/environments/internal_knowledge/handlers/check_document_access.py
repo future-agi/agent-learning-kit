@@ -1,14 +1,22 @@
+def _caller(db):
+    """The employee signed in to this conversation, as the session recorded them."""
+    row = db.one("SELECT employee_id FROM session_caller WHERE id = 'default'")
+    caller = db.one("SELECT * FROM employees WHERE employee_id = ?", [row["employee_id"]]) if row and row["employee_id"] else None
+    if caller is None:
+        raise ToolError("No employee is signed in to this conversation; the desk acts only for the signed-in employee.", category="permission_denied")
+    return caller
 
 
-def _employee(db, employee_id):
-    if not employee_id or not isinstance(employee_id, str):
-        raise ToolError("employee_id is required: the employee asking.", category="invalid_input")
-    e = db.one("SELECT * FROM employees WHERE employee_id = ?", [employee_id])
-    if e is None:
-        raise ToolError(f"Employee {employee_id!r} not found.", category="not_found")
-    if e["status"] != "active":
-        raise ToolError(f"Employee {employee_id} is not active; the knowledge desk serves active employees only.", category="permission_denied")
-    return e
+def _may_see(db, caller, target):
+    """Whether the signed-in employee may see `target`'s profile and access: their own, or by world
+    data, as People Ops or as the lead of the target's team. An employee_id argument never grants it."""
+    if caller["employee_id"] == target["employee_id"]:
+        return True
+    if caller["status"] != "active":
+        return False
+    if caller["role"] == "people_ops":
+        return True
+    return db.one("SELECT 1 FROM teams WHERE team_id = ? AND lead_id = ?", [target["team_id"], caller["employee_id"]]) is not None
 
 
 def _readable(db, e):
@@ -16,7 +24,16 @@ def _readable(db, e):
 
 
 def handle(args, db):
-    e = _employee(db, args.get("employee_id"))
+    eid = args.get("employee_id")
+    if not eid or not isinstance(eid, str):
+        raise ToolError("employee_id is required: the employee asking.", category="invalid_input")
+    e = db.one("SELECT * FROM employees WHERE employee_id = ?", [eid])
+    if e is None:
+        raise ToolError(f"Employee {eid!r} not found.", category="not_found")
+    if not _may_see(db, _caller(db), e):
+        raise ToolError(f"Employee {eid} is not the employee signed in to this conversation; their access is theirs to see.", category="permission_denied")
+    if e["status"] != "active":
+        raise ToolError(f"Employee {eid} is not active; the knowledge desk serves active employees only.", category="permission_denied")
     fid = args.get("drive_file_id")
     if not fid or not isinstance(fid, str):
         raise ToolError("drive_file_id is required.", category="invalid_input")

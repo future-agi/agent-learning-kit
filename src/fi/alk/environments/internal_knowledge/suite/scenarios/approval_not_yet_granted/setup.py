@@ -1,4 +1,5 @@
 def setup(world):
+    world.change("session_caller", "default", {"employee_id": "E03"}, by="id")
     world.put("slack_approvals", {
         "approval_id": "APP-KN-423",
         "actor_id": "U_KDESK",

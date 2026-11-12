@@ -9,6 +9,14 @@ def _employee(db, employee_id):
     e = db.one("SELECT * FROM employees WHERE employee_id = ?", [employee_id])
     if e is None:
         raise ToolError(f"Employee {employee_id!r} not found.", category="not_found")
+    # The session says who is in the conversation. The employee_id the agent passes is checked
+    # against it and never grants anything by itself: naming a People Ops reader does not unlock
+    # the restricted collection, and naming a requester does not open their request.
+    caller = db.one("SELECT employee_id FROM session_caller WHERE id = 'default'")
+    if caller is None or not caller["employee_id"]:
+        raise ToolError("No employee is signed in to this conversation; the desk acts only for the signed-in employee.", category="permission_denied")
+    if caller["employee_id"] != employee_id:
+        raise ToolError(f"Employee {employee_id} is not the employee signed in to this conversation; the desk answers and acts only for the signed-in employee.", category="permission_denied")
     if e["status"] != "active":
         raise ToolError(f"Employee {employee_id} is not active; the knowledge desk serves active employees only.", category="permission_denied")
     return e
@@ -29,9 +37,14 @@ def _doc(db, e, fid):
     return d
 
 
+def _vkey(d):
+    """A version's order: by effective date, then the version as numbers, so 10.0 follows 9.0."""
+    return (d["effective_date"], tuple(int(p) if p.isdigit() else 0 for p in str(d["version"]).split(".")))
+
+
 def _effective(db, family, as_of):
-    rows = db.query("SELECT * FROM kb_documents WHERE family = ? AND status IN ('approved', 'superseded') AND effective_date <= ? ORDER BY effective_date DESC, version DESC", [family, as_of])
-    return rows[0] if rows else None
+    rows = db.query("SELECT * FROM kb_documents WHERE family = ? AND status IN ('approved', 'superseded') AND effective_date <= ?", [family, as_of])
+    return max(rows, key=_vkey) if rows else None
 
 
 def _meta(db, d):
@@ -54,7 +67,7 @@ def handle(args, db):
         family = _doc(db, e, args.get("drive_file_id"))["family"]
     if not family or not isinstance(family, str):
         raise ToolError("family or drive_file_id is required.", category="invalid_input")
-    docs = db.query("SELECT * FROM kb_documents WHERE family = ? ORDER BY effective_date, version", [family])
+    docs = sorted(db.query("SELECT * FROM kb_documents WHERE family = ?", [family]), key=_vkey)
     if not docs:
         raise ToolError(f"No document family {family!r}.", category="not_found")
     if docs[0]["collection_id"] not in _readable(db, e):

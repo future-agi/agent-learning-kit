@@ -38,15 +38,9 @@
         "specialty": "neurology"
       },
       "environment_arguments": {},
-      "fixed": {}
-    },
-    {
-      "tool": "get_location_info",
-      "arguments": {
-        "location_id": "LOC-CEN"
-      },
-      "environment_arguments": {},
-      "fixed": {}
+      "fixed": {
+        "specialty": "record: Dr. Grace Liu's specialty"
+      }
     }
   ],
   "alternatives": [

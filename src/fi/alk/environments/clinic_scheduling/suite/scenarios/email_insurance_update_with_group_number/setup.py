@@ -38,3 +38,5 @@ def setup(world):
         "thread_id": "th_c404_insurance",
         "label_id": "INBOX"
     })
+    world.change("session_caller", "default", {"caller_id": "P404"}, by="id")
+    world.put("gmail_thread_patients", {"thread_id": "th_c404_insurance", "patient_id": "P404"})

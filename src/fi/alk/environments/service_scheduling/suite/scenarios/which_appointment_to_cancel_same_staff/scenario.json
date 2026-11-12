@@ -5,7 +5,7 @@
   "use_case": "Reschedule or cancel an appointment",
   "branch": "Which appointment? CU01 Ana Morales says 'cancel my appointment with Lucia'. She has two: A001 (Initial Consultation, Tuesday 27 October 10:00) and A011 (Haircut, Friday 6 November 15:30), both with Lucia and both outside the 24-hour window.",
   "tests": "the desk lists both appointments with Lucia, asks which one to cancel, and cancels only A011 without fee",
-  "instruction": "You want to cancel your upcoming appointment with Lucia Fernandez. When the desk checks your account and notices you have two appointments with Lucia (Initial Consultation on Tuesday 27 October and Haircut on Friday 6 November), clarify that you want to cancel the Haircut on Friday 6 November (A011). When the desk confirms there is no late cancellation fee and asks for confirmation to cancel, confirm.\n\nYour details:\n- Name: Ana Morales-Vega\n- Email: ana.morales@example.com\n- Phone: +1 212 555 0101\n- Preferred Language: Spanish (es)\n- Appointment to cancel: Haircut with Lucia on Friday 6 November (A011)",
+  "instruction": "You want to cancel your upcoming appointment with Lucia Fernandez. When the desk checks your account and notices you have two appointments with Lucia (Initial Consultation on Tuesday 27 October and Haircut on Friday 6 November), clarify that you want to cancel the Haircut on Friday 6 November (A011). When the desk confirms there is no late cancellation fee and asks for confirmation to cancel, confirm.\n\nYour details:\n- Name: Ana Morales\n- Email: ana.morales@example.com\n- Phone: +1 212 555 0101\n- Preferred Language: Spanish (es)\n- Appointment to cancel: Haircut with Lucia on Friday 6 November (A011)",
   "keywords": [
     "cancellation",
     "disambiguation",
@@ -13,7 +13,7 @@
     "haircut"
   ],
   "persona": {
-    "name": "Ana Morales-Vega",
+    "name": "Ana Morales",
     "gender": "female",
     "age_group": "25-32",
     "occupation": "Consultant",

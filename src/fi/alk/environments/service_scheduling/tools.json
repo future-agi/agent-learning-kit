@@ -1,7 +1,7 @@
 [
   {
     "name": "get_customer",
-    "description": "Look up a returning customer by the email and phone on file (both must match): profile, time zone and preferences.",
+    "description": "Look up a returning customer by the email and phone on file (both must match): profile, time zone and preferences. Only the person in this conversation (or the front desk) can be looked up.",
     "parameters": {
       "type": "object",
       "required": [
@@ -258,7 +258,7 @@
   },
   {
     "name": "list_slots",
-    "description": "Free start times for a service at a location on one local date, computed from each staff member's calendar, holds and closures. Each slot gives the local time, the UTC instant and the offset.",
+    "description": "Free start times for a service at a location on one local date, computed from each staff member's calendar, holds and closures. Each slot gives the local time, the UTC instant and the offset. When a day has no slots because the studio is closed, the date is past the booking horizon or too soon, unavailable_reason says so.",
     "parameters": {
       "type": "object",
       "required": [
@@ -518,7 +518,7 @@
   },
   {
     "name": "list_customer_appointments",
-    "description": "The customer's appointments, optionally by status, including past and rescheduled ones.",
+    "description": "The customer's appointments, optionally by status, including past and rescheduled ones. Only for the person in this conversation, or the front desk.",
     "parameters": {
       "type": "object",
       "required": [
@@ -754,7 +754,7 @@
   },
   {
     "name": "queue_confirmation",
-    "description": "Queue a confirmation message for a committed change: booked for a booked appointment, rescheduled for a replacement, cancelled for a cancelled one. Never for something not committed.",
+    "description": "Queue a confirmation message for a committed change: booked for a booked appointment, rescheduled for a replacement, cancelled for a cancelled one. Never for something not committed. A repeat of a message still queued on the same channel returns it; a resend after one went out, or on another channel, queues a new one.",
     "parameters": {
       "type": "object",
       "required": [
@@ -918,7 +918,7 @@
   },
   {
     "name": "list_events",
-    "description": "Events on a calendar matching the constraints. Set startTime and endTime only when a specific timeframe is requested. For open-ended keyword searches on the primary calendar use search_events.",
+    "description": "Events on a calendar matching the constraints. Set startTime and endTime only when a specific timeframe is requested. For open-ended keyword searches on the primary calendar use search_events. Another customer's booking shows as busy time ('Booked'), without who is booked, unless the front desk is asking.",
     "parameters": {
       "type": "object",
       "properties": {
@@ -2085,7 +2085,7 @@
   },
   {
     "name": "search_threads",
-    "description": "Lists email threads matching a Gmail search query (label:ID, is:unread, in:inbox, from:, to:, subject:, newer_than:7d, free terms). Full message bodies are not returned; use get_thread for them. Drafts, spam and trash are excluded.",
+    "description": "Lists email threads matching a Gmail search query (label:ID, is:unread, in:inbox, from:, to:, subject:, newer_than:7d, free terms). Full message bodies are not returned; use get_thread for them. Drafts, spam and trash are excluded. A customer sees only the threads they wrote or were written to; the front desk sees the whole mailbox.",
     "parameters": {
       "type": "object",
       "properties": {
@@ -2212,7 +2212,7 @@
   },
   {
     "name": "get_thread",
-    "description": "Retrieves an email thread by ID with its messages in date order (bodies under FULL_CONTENT).",
+    "description": "Retrieves an email thread by ID with its messages in date order (bodies under FULL_CONTENT). A customer can read only a thread they wrote or were written to.",
     "parameters": {
       "type": "object",
       "properties": {

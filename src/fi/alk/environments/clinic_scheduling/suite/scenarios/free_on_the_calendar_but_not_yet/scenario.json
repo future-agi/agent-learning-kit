@@ -4,8 +4,8 @@
   "scenario_id": "",
   "use_case": "Provider availability questions from Calendar",
   "branch": "Free on the calendar but not yet bookable",
-  "tests": "Tests checking availability for a date beyond the 30-day booking horizon and explaining the booking window limit.",
-  "instruction": "You are Julian Price. You want to ask whether Dr. Sofia Morales has any appointments available on Thursday afternoon, 26 November 2026, at Riverbank Central. If the assistant explains that 26 November is beyond the 30-day booking window (which currently reaches up to 25 November 09:00) and cannot be booked yet, and offers either the latest bookable Thursday or checking back later, thank them for the information.",
+  "tests": "Tests checking availability for a date beyond the 30-day booking horizon, explaining the booking window limit, and reporting the open slots on the latest bookable Thursday.",
+  "instruction": "You are Julian Price. You want to ask whether Dr. Sofia Morales has any appointments available on Thursday afternoon, 26 November 2026, at Riverbank Central. If the assistant explains that 26 November is beyond the 30-day booking window (which currently reaches up to 25 November 09:00) and cannot be booked yet, ask what Dr. Morales has free on the latest bookable Thursday afternoon, 19 November, at Riverbank Central, then thank them and say you will book later.",
   "keywords": [
     "availability",
     "calendar"
@@ -35,26 +35,28 @@
   },
   "solution": [
     {
-      "tool": "list_events",
-      "arguments": {
-        "endTime": "2026-11-26T23:59:59Z",
-        "startTime": "2026-11-26T00:00:00Z",
-        "calendarId": "CAL-D03"
-      },
-      "environment_arguments": {},
-      "fixed": {
-        "calendarId": "record: providers.calendar_id for Dr. Sofia Morales (D03)"
-      }
-    },
-    {
       "tool": "find_available_slots",
       "arguments": {
         "date_from": "2026-11-26",
         "date_to": "2026-11-26",
-        "specialty": "dermatology"
+        "provider_id": "D03"
       },
       "environment_arguments": {},
       "fixed": {}
+    },
+    {
+      "tool": "find_available_slots",
+      "arguments": {
+        "date_from": "2026-11-19",
+        "date_to": "2026-11-19",
+        "provider_id": "D03"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "provider_id": "record: Dr. Sofia Morales (D03)",
+        "date_from": "record: the latest bookable Thursday",
+        "date_to": "record: the latest bookable Thursday"
+      }
     }
   ],
   "alternatives": [],

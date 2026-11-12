@@ -1,10 +1,9 @@
 def check(world, calls, reference=None):
-    family = as_of = None
+    wanted = []
     for step in reference or ():
         a = step.get("arguments", {})
         if step.get("tool") in ("get_effective_version", "list_document_versions") and a.get("family"):
-            family = a["family"]
-            as_of = a.get("as_of_date") or as_of
+            wanted.append((a["family"], a.get("as_of_date") or None))
     # The knowledge tools, or the documents themselves read in Drive (plan §3.3): each Drive file maps to its family.
     family_of = {k["drive_file_id"]: k["family"] for k in world.state().get("kb_documents", []) if k.get("drive_file_id")}
     looks = [
@@ -16,10 +15,11 @@ def check(world, calls, reference=None):
     ]
     if not looks:
         return "not done: no version of any document was looked up"
-    if family:
+    for family, as_of in wanted:
         fam_looks = [c for c in looks if c.arguments.get("family") == family or family_of.get(c.arguments.get("fileId")) == family or (isinstance(c.result, dict) and c.result.get("family") == family)]
         if not fam_looks:
             return f"done wrong: the versions of {family} were never looked up"
+        # A date asks which version was in effect then: the lookup for that date, or every version.
         if as_of and not any((c.name == "get_effective_version" and c.arguments.get("as_of_date") == as_of) or c.name == "list_document_versions" for c in fam_looks):
             return f"done wrong: the version in effect on {as_of} was never looked up"
     missing = _evidence_missing(world, calls, reference)
@@ -27,14 +27,17 @@ def check(world, calls, reference=None):
         return f"done blind: the answer rests on {', '.join(missing)}, which was never read"
     return None
 
+
 def _evidence_missing(world, calls, reference):
     """The Slack thread, document or passage the reference fixes and whether its content reached this
     run: the text of every message in the thread (the desk's own posts aside) returned by a thread
-    read, channel read or search; the document read whole or through one of its passages; the passage
-    fetched or read in its document. A search returns a snippet, not the passage."""
+    read, channel read or search; the document's text returned whole, or every one of its passages
+    fetched; the passage's text returned by fetching it or inside its document's text. A search
+    returns a snippet, not the passage, and one section of a document is not the whole of it."""
     state = world.state()
     desk = (state.get("current_actor") or [{}])[0].get("user_id")
     file_of = {p["passage_id"]: p["drive_file_id"] for p in state.get("kb_passages", [])}
+    text_of = {p["passage_id"]: p["text"] for p in state.get("kb_passages", [])}
     wanted = []
     for step in reference or ():
         a = step.get("arguments", {})
@@ -45,26 +48,27 @@ def _evidence_missing(world, calls, reference):
         elif step.get("tool") == "fetch_passage" and a.get("passage_id"):
             wanted.append(("passage", a["passage_id"]))
     texts = _texts_shown(calls)
+    contents = {}
+    fetched = {}
+    for c in calls:
+        if not c.ok or not isinstance(c.result, dict):
+            continue
+        if c.name == "read_file_content" and c.result.get("fileContent"):
+            contents.setdefault(c.arguments.get("fileId"), []).append(c.result["fileContent"])
+        elif c.name == "fetch_passage" and c.result.get("text"):
+            fetched[c.result.get("passage_id")] = c.result["text"]
     missing = []
     for kind, target in wanted:
         if kind == "Slack thread":
             needed = [m["ts"] for m in state.get("slack_messages", []) if (m["ts"] == target or m.get("thread_ts") == target) and m["user_id"] != desk]
             seen = bool(needed) and all(t in texts for t in needed)
+        elif kind == "document":
+            parts = [pid for pid, fid in file_of.items() if fid == target]
+            seen = bool(contents.get(target)) or (bool(parts) and all(fetched.get(pid) == text_of[pid] for pid in parts))
         else:
-            seen = False
-            for c in calls:
-                if not c.ok:
-                    continue
-                if kind == "document":
-                    seen = (c.name == "read_file_content" and c.arguments.get("fileId") == target) or (
-                        c.name == "fetch_passage" and file_of.get(c.arguments.get("passage_id")) == target
-                    )
-                else:
-                    seen = (c.name == "fetch_passage" and c.arguments.get("passage_id") == target) or (
-                        c.name == "read_file_content" and c.arguments.get("fileId") == file_of.get(target)
-                    )
-                if seen:
-                    break
+            seen = (target in text_of and fetched.get(target) == text_of[target]) or any(
+                text_of.get(target, "\0") in body for body in contents.get(file_of.get(target), [])
+            )
         if not seen:
             missing.append(f"{kind} {target}")
     return missing

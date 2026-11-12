@@ -1,12 +1,14 @@
 def check(world, calls, reference=None):
     state = world.state()
     now = (state.get("clock") or [{"now": ""}])[0]["now"]
-    want = {}
+    want, facts = {}, {}
     for step in reference or ():
-        if step.get("tool") == 'qualify_lead':
-            for k in ('lead_id',):
-                if step.get("arguments", {}).get(k) is not None:
-                    want[k] = step["arguments"][k]
+        if step.get("tool") == "qualify_lead":
+            a = step.get("arguments", {})
+            if a.get("lead_id") is not None:
+                want["lead_id"] = a["lead_id"]
+            if isinstance(a.get("facts"), dict):
+                facts.update(a["facts"])
     if not any(c.name == "qualify_lead" and c.ok for c in calls):
         return "not done: qualify_lead was not called successfully"
     leads = {l["lead_id"]: l for l in state.get("leads", [])}
@@ -15,6 +17,9 @@ def check(world, calls, reference=None):
         l = leads.get(lid)
         if not l or l["status"] not in ("qualified", "demo_booked") or l["updated_at"] != now:
             return f"done wrong: lead {lid} is {l['status'] if l else 'missing'}, it should be qualified by this run"
+        for k, v in facts.items():
+            if str(l.get(k)) != str(v):
+                return f"done wrong: lead {lid} records {k} = {l.get(k)!r}, the prospect stated {v!r}"
     for c in calls:
         if c.name == "qualify_lead" and c.ok and lid and c.arguments.get("lead_id") != lid:
             return f"done wrong: lead {c.arguments.get('lead_id')} was evaluated, the conversation was about {lid}"
@@ -94,7 +99,6 @@ def _texts_shown(calls):
         if c.ok and c.name in ("slack_read_thread", "slack_read_channel", "slack_search_public_and_private"):
             walk(c.result)
     return shown
-
 
 if __name__ == "__main__":
     # Run this check by hand against what a run left behind. The first argument is anything

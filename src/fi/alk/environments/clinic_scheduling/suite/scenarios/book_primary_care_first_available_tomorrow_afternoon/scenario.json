@@ -5,7 +5,7 @@
   "use_case": "Book a new appointment",
   "branch": "P151 takes the first free primary-care slot on Tuesday 27 October afternoon (14:30 at Central).",
   "tests": "the agent verifies Lauren Becker, finds available primary care slots for tomorrow afternoon, and books the earliest available slot (14:30)",
-  "instruction": "You need to see any primary care doctor tomorrow afternoon (Tuesday 27 October 2026). When offered the available afternoon slots, choose the earliest available one (14:30 at Riverbank Central with Dr. Rohan Patel) and confirm the booking when asked.\n\nYour details:\n- Full name: Lauren Becker\n- Date of birth: 1988-09-09\n- Email: lauren.becker@example.com\n- Phone: +447700900115\n- Insurance: Bupa (member BU-100245)",
+  "instruction": "You need to see any primary care doctor tomorrow afternoon (Tuesday 27 October 2026). When offered the available afternoon slots, choose the earliest available one (14:30 at Riverbank Central with Dr. Rohan Patel) and confirm the booking when asked.\n\nYour details:\n- Full name: Lauren Becker\n- Date of birth: 1988-09-09\n- Email: lauren.becker@example.com\n- Phone: +447700900151\n- Insurance: Bupa (member BU-100245)",
   "keywords": [
     "book_appointment",
     "primary_care",

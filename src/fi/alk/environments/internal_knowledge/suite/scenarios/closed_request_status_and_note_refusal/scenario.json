@@ -3,9 +3,9 @@
   "scenario_key": "closed-request-status-and-note-refusal",
   "scenario_id": "",
   "use_case": "Report the status of the employee's own knowledge request",
-  "branch": "Sofia Rossi asks to add a note to knowledge request KR-103; it is already closed and cannot be updated, which the agent explains after reading its status",
+  "branch": "Sofia Rossi asks to add a note to knowledge request KR-103; it is already closed and cannot be updated, which the agent explains after reading its status; Sofia then asks what the closing note said, which the desk reads from the request",
   "tests": "the agent looks up KR-103, reports it is closed, and explains why closed requests cannot be updated",
-  "instruction": "You want to add a note to your earlier knowledge request KR-103 regarding contractor laptops. Ask the Knowledge Desk to update it.\n\nYour details:\n- Name: Sofia Rossi\n- Employee ID: E09\n- Request ID: KR-103",
+  "instruction": "You want to add a note to your earlier knowledge request KR-103 regarding contractor laptops. Ask the Knowledge Desk to update it. If the desk says the request is closed and cannot be changed, ask what its closing note said.\n\nYour details:\n- Name: Sofia Rossi\n- Employee ID: E09\n- Request ID: KR-103",
   "keywords": [
     "knowledge_request"
   ],

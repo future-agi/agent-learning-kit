@@ -1,14 +1,50 @@
 def check(world, calls, reference=None):
     want = {**_want(reference, "list_customer_appointments"), **_want(reference, "get_appointment")}
-    looks = [c for c in calls if c.name in ("get_appointment", "list_customer_appointments") and c.ok]
-    if not looks:
-        return "not done: the appointment was never read"
-    if want.get("appointment_id") and not any(c.arguments.get("appointment_id") == want["appointment_id"] or any(a.get("appointment_id") == want["appointment_id"] for a in (c.result or {}).get("appointments") or []) for c in looks):
-        return f"done wrong: {want['appointment_id']} was never read"
-    if want.get("customer_id") and not any(c.arguments.get("customer_id") == want["customer_id"] for c in looks):
-        return f"done wrong: {want['customer_id']}'s appointments were never read"
+    s = world.state()
+    now = _now(s)
+    target, customer = want.get("appointment_id"), want.get("customer_id")
+    if not target and not customer:
+        return "broken: the reference fixes no appointment or customer to report"
+    if target:
+        # The record itself came back (from a read, the cancellation policy for it, or a change to
+        # it), or a refused change named its status.
+        told = target in _records_shown(calls) or any(
+            c.refused and c.arguments.get("appointment_id") == target and str(c.error).startswith("conflict") and target in str(c.error)
+            for c in calls
+        )
+        if not told:
+            return f"not done: {target}'s record never reached the agent"
+    elif not any(c.ok and c.name == "list_customer_appointments" and c.arguments.get("customer_id") == customer and isinstance((c.result or {}).get("appointments"), list) for c in calls):
+        return f"not done: {customer}'s appointments never reached the agent"
+    # A question about an appointment never books the same slot again for the same customer.
+    rows = s.get("appointments", [])
+    for a in rows:
+        if a["created_at"] == now and a["status"] == "booked" and any(
+            b is not a and b["created_at"] != now and b["status"] == "booked" and (b["customer_id"], b["staff_id"], b["start_utc"]) == (a["customer_id"], a["staff_id"], a["start_utc"])
+            for b in rows
+        ):
+            return f"done wrong: {a['appointment_id']} books the same slot as an existing appointment a second time"
     return _blind(world, calls, reference)
 
+
+def _records_shown(calls):
+    """The appointments whose record a successful call returned."""
+    shown = set()
+
+    def walk(value):
+        if isinstance(value, dict):
+            if value.get("appointment_id") and "status" in value:
+                shown.add(value["appointment_id"])
+            for one in value.values():
+                walk(one)
+        elif isinstance(value, list):
+            for one in value:
+                walk(one)
+
+    for c in calls:
+        if c.ok and c.name in ("get_appointment", "list_customer_appointments", "get_cancellation_policy", "book_appointment", "reschedule_appointment", "cancel_appointment"):
+            walk(c.result)
+    return shown
 
 def _now(state):
     return (state.get("clock") or [{"now": ""}])[0]["now"]

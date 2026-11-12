@@ -1,4 +1,5 @@
 def setup(world):
+    world.change("session_caller", "default", {"employee_id": "E13"}, by="id")
     world.put("drive_files", {
         "file_id": "ai_tools_v1_draft",
         "title": "AI Tools Use Draft.md",

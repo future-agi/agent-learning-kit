@@ -5,7 +5,7 @@
   "use_case": "New and returning customers and their preferences",
   "branch": "First visit on a family email that is already on file: Leo Okoye, a first-time customer, gives david.okoye@example.com (his father's email, CU04) and his own phone, +1 212 555 0450. create_customer is refused because the email exists, and get_customer fails because the phone does not match.",
   "tests": "the desk refuses creation on an existing email and creates the customer once a unique personal email is provided",
-  "instruction": "You are a first-time customer trying to register with the booking desk. You initially give your family's shared email david.okoye@example.com and your own mobile phone number +1 212 555 0450. When the desk explains that this email is already associated with an existing account and that each customer must have their own unique email address, provide your personal email leo.okoye@example.com so your profile can be created.\n\nYour details:\n- Name: Leo Okoye-Kanu\n- Initial Email: david.okoye@example.com\n- Mobile Phone: +1 212 555 0450\n- Personal Email: leo.okoye@example.com\n- Preferred Language: English (en)\n- Time Zone: America/New_York",
+  "instruction": "You are a first-time customer trying to register with the booking desk. You initially give your family's shared email david.okoye@example.com and your own mobile phone number +1 212 555 0450. When the desk explains that this email is already associated with an existing account and that each customer must have their own unique email address, provide your personal email leo.okoye@example.com so your profile can be created.\n\nYour details:\n- Name: Leo Okoye\n- Initial Email: david.okoye@example.com\n- Mobile Phone: +1 212 555 0450\n- Personal Email: leo.okoye@example.com\n- Preferred Language: English (en)\n- Time Zone: America/New_York",
   "keywords": [
     "new_customer",
     "email_conflict",
@@ -13,7 +13,7 @@
     "privacy"
   ],
   "persona": {
-    "name": "Leo Okoye-Kanu",
+    "name": "Leo Okoye",
     "gender": "male",
     "age_group": "18-25",
     "occupation": "Student",

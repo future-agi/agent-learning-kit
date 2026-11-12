@@ -20,3 +20,6 @@ def setup(world):
     })
     world.put("gmail_thread_labels", {"thread_id": "th_s401_bluepeak", "label_id": "INBOX"})
     world.put("gmail_thread_labels", {"thread_id": "th_s401_bluepeak", "label_id": "enquiries"})
+    # Who is in this conversation: the session sets it, not anything the desk is told.
+    world.put("slack_users", {"user_id": "U_S401", "name": "Grant Walker", "email": "grant.walker@brightdesk.example", "role": "sdr"})
+    world.change("session_caller", "default", {"person_id": "U_S401"}, by="id")

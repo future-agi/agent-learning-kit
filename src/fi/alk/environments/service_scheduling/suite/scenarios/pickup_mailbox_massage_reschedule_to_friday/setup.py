@@ -14,9 +14,9 @@ def setup(world):
         "service_id": "SV2",
         "staff_id": "ST01",
         "location_id": "L1",
-        "start_utc": "2026-10-29T20:00:00Z",
-        "end_utc": "2026-10-29T21:00:00Z",
-        "local_start": "2026-10-29T16:00",
+        "start_utc": "2026-10-29T19:00:00Z",
+        "end_utc": "2026-10-29T20:00:00Z",
+        "local_start": "2026-10-29T15:00",
         "utc_offset": "-04:00",
         "time_zone": "America/New_York",
         "status": "booked",
@@ -35,8 +35,8 @@ def setup(world):
         "summary": "Massage Therapy - Graham Phillips",
         "description": "appointment:A427",
         "location": "Midtown Studio",
-        "start_time": "2026-10-29T20:00:00Z",
-        "end_time": "2026-10-29T21:00:00Z",
+        "start_time": "2026-10-29T19:00:00Z",
+        "end_time": "2026-10-29T20:00:00Z",
         "time_zone": "America/New_York",
         "status": "confirmed",
         "recurring_event_id": None,
@@ -58,7 +58,7 @@ def setup(world):
     world.put("gmail_threads", {
         "id": "th_s402",
         "subject": "Reschedule my massage",
-        "snippet": "Hi, last month you moved my Thursday massage to Friday...",
+        "snippet": "Hi, could my massage with Olivia this Thursday, 29 October at 3 pm move to Friday...",
         "history_id": "shist_402",
         "is_restricted": 0,
         "updated_at": "2026-10-25T16:00:00Z"
@@ -70,14 +70,13 @@ def setup(world):
         "recipient": "bookings@northlight-studios.example",
         "cc": "",
         "subject": "Reschedule my massage",
-        "body": "Hi, last month you moved my Thursday massage to Friday. My massage with Olivia this Thursday, 29 October at 4 pm: can it move to Friday 30 October at 4 pm instead? Graham Phillips",
+        "body": "Hi, could my massage with Olivia this Thursday, 29 October at 3 pm move to Friday 30 October at 3 pm instead? Graham Phillips",
         "date": "2026-10-25T16:00:00Z",
-        "snippet": "Hi, last month you moved my Thursday massage to Friday..."
+        "snippet": "Hi, could my massage with Olivia this Thursday, 29 October at 3 pm move to Friday..."
     })
     world.put("gmail_thread_labels", {
         "thread_id": "th_s402",
         "label_id": "INBOX"
     })
-    # The seed booking A002 held this time on the same calendar; it was cancelled before this scenario starts.
-    world.change("appointments", "A002", {"status": "cancelled", "cancelled_at": "2026-10-20T10:00:00Z", "updated_at": "2026-10-20T10:00:00Z"}, by="appointment_id")
-    world.change("calendar_events", "EV-A002", {"status": "cancelled", "updated_at": "2026-10-20T10:00:00Z"}, by="event_id")
+    # The person in this conversation, as the session knows them.
+    world.change("session_caller", "default", {"customer_id": "CU427", "desk_id": None}, by="id")

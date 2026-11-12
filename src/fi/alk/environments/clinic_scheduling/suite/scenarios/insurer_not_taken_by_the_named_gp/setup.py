@@ -15,3 +15,4 @@ def setup(world):
         "group_number": "",
         "updated_at": "2026-10-26T09:00:00Z"
     })
+    world.change("session_caller", "default", {"caller_id": "P420"}, by="id")

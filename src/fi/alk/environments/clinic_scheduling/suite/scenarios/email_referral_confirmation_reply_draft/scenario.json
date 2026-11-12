@@ -39,6 +39,15 @@
   },
   "solution": [
     {
+      "tool": "verify_patient",
+      "arguments": {
+        "dob": "1950-10-10",
+        "full_name": "Oliver Grant"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
       "tool": "get_thread",
       "arguments": {
         "messageFormat": "FULL_CONTENT",
@@ -48,15 +57,6 @@
       "fixed": {
         "threadId": "record: gmail_threads.id"
       }
-    },
-    {
-      "tool": "verify_patient",
-      "arguments": {
-        "dob": "1950-10-10",
-        "full_name": "Oliver Grant"
-      },
-      "environment_arguments": {},
-      "fixed": {}
     },
     {
       "tool": "get_referral_status",

@@ -12,7 +12,7 @@ def setup(world):
         "appointment_id": "A429",
         "customer_id": "CU429",
         "service_id": "SV1",
-        "staff_id": "ST01",
+        "staff_id": "ST02",
         "location_id": "L1",
         "start_utc": "2026-10-26T19:00:00Z",
         "end_utc": "2026-10-26T19:45:00Z",
@@ -31,7 +31,7 @@ def setup(world):
     })
     world.put("calendar_events", {
         "event_id": "EV-A429",
-        "calendar_id": "CAL-ST01",
+        "calendar_id": "CAL-ST02",
         "summary": "Initial Consultation - Dominic Wright",
         "description": "appointment:A429",
         "location": "Midtown Studio",
@@ -78,6 +78,5 @@ def setup(world):
         "thread_id": "th_s413",
         "label_id": "INBOX"
     })
-    # The seed booking A004 held this time on the same calendar; it was cancelled before this scenario starts.
-    world.change("appointments", "A004", {"status": "cancelled", "cancelled_at": "2026-10-20T10:00:00Z", "updated_at": "2026-10-20T10:00:00Z"}, by="appointment_id")
-    world.change("calendar_events", "EV-A004", {"status": "cancelled", "updated_at": "2026-10-20T10:00:00Z"}, by="event_id")
+    # The person in this conversation, as the session knows them.
+    world.change("session_caller", "default", {"customer_id": "CU429", "desk_id": None}, by="id")

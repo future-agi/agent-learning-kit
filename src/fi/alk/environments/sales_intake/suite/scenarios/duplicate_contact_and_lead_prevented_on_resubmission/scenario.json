@@ -69,7 +69,11 @@
       },
       "environment_arguments": {},
       "fixed": {
-        "email": "caller: devon.price@solaris-cloud.example"
+        "email": "caller: devon.price@solaris-cloud.example",
+        "seats": "caller: 35 seats",
+        "use_case": "caller: helpdesk",
+        "timeline": "caller: 0-3 months",
+        "budget": "caller: confirmed"
       }
     }
   ],

@@ -16,3 +16,5 @@ def setup(world):
         "status": "new", "owner_rep_id": None, "queue_id": None, "source": "web_form",
         "request_key": None, "created_at": "2026-11-09T10:00:00Z", "updated_at": "2026-11-09T10:00:00Z"
     })
+    # Who is in this conversation: the session sets it, not anything the desk is told.
+    world.change("session_caller", "default", {"person_id": "C401"}, by="id")

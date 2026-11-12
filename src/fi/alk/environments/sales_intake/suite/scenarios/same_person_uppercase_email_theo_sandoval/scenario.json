@@ -4,21 +4,21 @@
   "scenario_id": "",
   "use_case": "Recognise known contacts and accounts",
   "branch": "Theo Sandoval writes THEO.SANDOVAL@CEDARFINCH.EXAMPLE asking for a demo again; search_contacts (fix nothing), get_lead L06: already qualified and with A01. Read-only.",
-  "tests": "the agent finds Theo Sandoval using uppercase email THEO.SANDOVAL@CEDARFINCH.EXAMPLE and reports lead L06 status and assigned owner A01",
-  "instruction": "You are Lucas Morales from Cedar & Finch Retail, inquiring on behalf of Theo Sandoval (THEO.SANDOVAL@CEDARFINCH.EXAMPLE). You want an update on the demo request for Cedar & Finch Retail.\n\nYour details:\n- Name: Lucas Morales\n- Colleague: Theo Sandoval\n- Company: Cedar & Finch Retail\n- Email: THEO.SANDOVAL@CEDARFINCH.EXAMPLE\n- Lead ID: L06",
+  "tests": "the agent finds Theo Sandoval from his uppercase email and reports his lead L06's status and owner A01",
+  "instruction": "You are Theo Sandoval from Cedar & Finch Retail. You want an update on your demo request. Give your email in capitals, exactly as THEO.SANDOVAL@CEDARFINCH.EXAMPLE.\n\nYour details:\n- Name: Theo Sandoval\n- Company: Cedar & Finch Retail\n- Email: THEO.SANDOVAL@CEDARFINCH.EXAMPLE\n- Lead ID: L06",
   "keywords": [
     "duplicate",
     "lead"
   ],
   "persona": {
-    "name": "Lucas Morales",
+    "name": "Theo Sandoval",
     "gender": "male",
     "age_group": "25-32",
     "occupation": "Other",
-    "location": "Canada",
+    "location": "United States",
     "personality": "Detail-oriented",
     "communication_style": "Direct and concise",
-    "initial_message": "Hello, I am checking on behalf of Theo Sandoval (THEO.SANDOVAL@CEDARFINCH.EXAMPLE). Requesting a demo status update for Cedar & Finch Retail.",
+    "initial_message": "Hello, Theo Sandoval here (THEO.SANDOVAL@CEDARFINCH.EXAMPLE). Requesting a demo status update for Cedar & Finch Retail.",
     "languages": [
       "English"
     ],
@@ -40,7 +40,9 @@
         "email": "THEO.SANDOVAL@CEDARFINCH.EXAMPLE"
       },
       "environment_arguments": {},
-      "fixed": {}
+      "fixed": {
+        "email": "caller: THEO.SANDOVAL@CEDARFINCH.EXAMPLE"
+      }
     },
     {
       "tool": "get_lead",

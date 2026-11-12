@@ -4,8 +4,8 @@
   "scenario_id": "",
   "use_case": "Book a demo on the owner's calendar after the prospect picks",
   "branch": "Prospect with an already confirmed demo requests rebooking due to missing invite",
-  "tests": "the desk checks lead L418 and CAL-A06 events, confirms demo D418 on Friday 13 November 09:00 Sydney time without duplicate booking",
-  "instruction": "You are Callum O'Donnell from Tasman Health (email callum.odonnell@tasmanhealth.example, lead L418). You booked a demo previously (demo D418 with Chloe Nguyen) but never received the calendar invitation. Ask the sales desk to check if your demo is confirmed and book it again if needed. When the desk confirms the existing demo is already booked for Friday 13 November at 09:00 Sydney time (2026-11-12T22:00:00Z), thank them.\n\nYour details:\n- Name: Callum O'Donnell\n- Company: Tasman Health\n- Email: callum.odonnell@tasmanhealth.example\n- Lead ID: L418\n- Assigned Rep: Chloe Nguyen (A06)",
+  "tests": "the desk reads lead L418 and its booked demo D418, confirms it for Friday 13 November 13:00 Sydney time, and books nothing again",
+  "instruction": "You are Callum O'Donnell from Tasman Health (email callum.odonnell@tasmanhealth.example, lead L418). You booked a demo previously (demo D418 with Chloe Nguyen) but never received the calendar invitation. Ask the sales desk to check if your demo is confirmed and book it again if needed. When the desk confirms the existing demo is already booked for Friday 13 November at 13:00 Sydney time (2026-11-13T02:00:00Z), thank them.\n\nYour details:\n- Name: Callum O'Donnell\n- Company: Tasman Health\n- Email: callum.odonnell@tasmanhealth.example\n- Lead ID: L418\n- Assigned Rep: Chloe Nguyen (A06)",
   "keywords": [
     "demo_confirmation",
     "calendar_events",
@@ -50,7 +50,7 @@
       {
         "lead_id": "L418",
         "demo_id": "D418",
-        "slot_id": "DS17"
+        "slot_id": "DS418"
       }
     ],
     "origin": "generated"
@@ -65,14 +65,6 @@
       "fixed": {
         "lead_id": "record: leads[L418].lead_id"
       }
-    },
-    {
-      "tool": "list_events",
-      "arguments": {
-        "calendarId": "CAL-A06"
-      },
-      "environment_arguments": {},
-      "fixed": {}
     }
   ],
   "alternatives": [],

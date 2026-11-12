@@ -35,3 +35,4 @@ def setup(world):
         "recurring_event_id": None,
         "original_start_time": None,
     })
+    world.change("session_caller", "default", {"caller_id": "P05"}, by="id")

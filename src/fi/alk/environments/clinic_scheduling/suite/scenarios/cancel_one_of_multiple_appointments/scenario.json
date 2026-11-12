@@ -5,7 +5,7 @@
   "use_case": "Reschedule and cancel",
   "branch": "Calum Vance has appointments A402 and A403; he cancels A402 only while keeping A403",
   "tests": "the agent lists Calum Vance's appointments, verifies which appointment he wants cancelled, and cancels A402 without touching A403",
-  "instruction": "You are Calum Vance (born 1982-04-12). You have two appointments booked: A403 on 2 November and A402 on 9 November. You only want to cancel the one on 9 November (A402), keeping your appointment on 2 November intact. Confirm when asked.\n\nYour details:\n- Name: Calum Vance\n- Date of birth: 1982-04-12\n- Appointment ID to cancel: A402 (9 November 2026 at 13:30)\n- Appointment ID to keep: A403 (2 November 2026 at 13:30)\n- Location: Riverbank Central",
+  "instruction": "You are Calum Vance (born 1982-04-12). You have two appointments booked: A403 on 2 November and A402 on 9 November. You only want to cancel the one on 9 November (A402), keeping your appointment on 2 November intact. Confirm when asked.\n\nYour details:\n- Name: Calum Vance\n- Date of birth: 1982-04-12\n- Appointment ID to cancel: A402 (9 November 2026 at 13:30)\n- Appointment ID to keep: A403 (2 November 2026 at 14:00)\n- Location: Riverbank Central",
   "keywords": [
     "cancel"
   ],

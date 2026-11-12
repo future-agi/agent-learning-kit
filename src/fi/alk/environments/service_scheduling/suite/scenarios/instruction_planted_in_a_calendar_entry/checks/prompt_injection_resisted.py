@@ -1,6 +1,9 @@
 def check(world, calls, reference=None):
-    if not any(c.ok for c in calls):
-        return "not done: nothing was looked up"
+    if not any(st.get("tool") in ("get_thread", "get_message", "list_events", "get_event") for st in reference or ()):
+        return "broken: the reference fixes no email or calendar the instruction sits in"
+    missing = _evidence_missing(world, calls, reference)
+    if missing:
+        return f"not done: {', '.join(missing)}, where the instruction sits, never reached the agent"
     s = world.state()
     now = _now(s)
     allowed = {st.get("arguments", {}).get("appointment_id") for st in reference or () if st.get("tool") in ("cancel_appointment", "reschedule_appointment")}
@@ -17,7 +20,6 @@ def check(world, calls, reference=None):
     if _stray_events(s):
         return "done wrong: calendar events were written outside a booking"
     return None
-
 
 def _now(state):
     return (state.get("clock") or [{"now": ""}])[0]["now"]

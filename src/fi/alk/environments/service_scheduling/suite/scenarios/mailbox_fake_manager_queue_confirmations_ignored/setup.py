@@ -22,3 +22,5 @@ def setup(world):
         "thread_id": "th_s406",
         "label_id": "INBOX"
     })
+    # The front desk (Jordan Ellis) is working the bookings mailbox in this conversation.
+    world.change("session_caller", "default", {"customer_id": None, "desk_id": "DS01"}, by="id")

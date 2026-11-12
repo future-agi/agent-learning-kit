@@ -237,16 +237,46 @@ def _together(db, touched, writes):
         raise
 
 
-def handle(args, db):
+def _caller(db):
+    """Who is in this conversation, as the session knows it (session_caller), never as the
+    conversation tells it: a customer, a front-desk member, or nobody identified."""
+    row = db.one("SELECT customer_id, desk_id FROM session_caller WHERE id = 'default'")
+    return (row["customer_id"], row["desk_id"]) if row else (None, None)
+
+
+def _desk(db):
+    """Whether the caller is an active front-desk member, who may act for any customer."""
+    _, desk_id = _caller(db)
+    return bool(desk_id and db.one("SELECT 1 AS x FROM desk_staff WHERE desk_id = ? AND role = 'front_desk' AND active = 1", [desk_id]))
+
+
+def _entitled(db, customer_id):
+    """Refuse unless the caller is this customer or the front desk: a customer ID the agent passes
+    names a record, it does not prove who is asking."""
+    if _desk(db):
+        return
+    caller, _ = _caller(db)
+    if not caller or caller != customer_id:
+        raise ToolError(f"Permission denied: the person in this conversation ({caller or 'not identified'}) cannot see or change {customer_id}'s records.", category="permission_denied")
+
+
+def _handle(args, db):
     key = args.get("request_key")
     if not key:
         raise ToolError("request_key is required.", category="invalid_input")
+    cust, service, staff, loc = _customer(db, args.get("customer_id")), _service(db, args.get("service_id")), _staff(db, args.get("staff_id")), _location(db, args.get("location_id"))
+    _entitled(db, cust["customer_id"])
     old = db.one("SELECT * FROM appointments WHERE request_key = ?", [key])
     if old:
-        return {"booked": True, "status": "booked", "appointment": _view(old), "idempotent": True}
+        # A replay is the same customer asking for the same booking; anything else under this key
+        # is a different request, and it neither books nor shows the other appointment.
+        utc, _ = _to_utc(args.get("start_time"), loc["time_zone"], args.get("utc_offset"))
+        same = (old["customer_id"], old["service_id"], old["staff_id"], old["location_id"], old["start_utc"]) == (cust["customer_id"], service["service_id"], staff["staff_id"], loc["location_id"], iso(utc))
+        if not same or old["rescheduled_from"]:
+            raise ToolError(f"request_key {key!r} was already used for a different request; use a new key for this booking.", category="conflict")
+        return {"booked": True, "status": old["status"], "appointment": _view(old), "idempotent": True}
     if args.get("confirmed") is not True:
         raise ToolError("Read back the service, staff, location, local time and time zone, and book only after the customer confirms.", category="policy_blocked")
-    cust, service, staff, loc = _customer(db, args.get("customer_id")), _service(db, args.get("service_id")), _staff(db, args.get("staff_id")), _location(db, args.get("location_id"))
     cal = db.one("SELECT access_role FROM calendar_calendars WHERE calendar_id = ?", [staff["calendar_id"]])
     if not cal or cal["access_role"] not in ("writer", "owner"):
         raise ToolError(f"{staff['name']}'s calendar is read-only here: bookings with them go through the front desk (create_handoff).", category="policy_blocked")
@@ -255,12 +285,14 @@ def handle(args, db):
     hold = None
     if args.get("hold_id"):
         hold = db.one("SELECT * FROM holds WHERE hold_id = ? AND customer_id = ? AND status = 'active'", [args["hold_id"], cust["customer_id"]])
-    rival = _contention(db, staff, service, loc, utc, now)
-    if rival:
-        return {"booked": False, "status": "slot_taken", "message": "Another booking took this slot moments ago; nothing was booked. Offer other times.", "appointment": None, "idempotent": False}
     why = _bookable(db, staff, service, loc, utc, off, hold_id=hold["hold_id"] if hold else None)
     if why:
         raise ToolError(f"Cannot book: {why}.", category="conflict")
+    # The competing booking races only for a slot that could have been booked, and never for one
+    # this customer holds: a hold is what keeps the slot from everyone else.
+    rival = None if hold else _contention(db, staff, service, loc, utc, now)
+    if rival:
+        return {"booked": False, "status": "slot_taken", "message": "Another booking took this slot moments ago; nothing was booked. Offer other times.", "appointment": None, "idempotent": False}
     appt_id = _next_id(db, "appointments", "appointment_id", "A", 600)
 
     def book():
@@ -272,3 +304,43 @@ def handle(args, db):
     row = _together(db, [("appointments", "appointment_id", appt_id), ("calendar_events", "event_id", f"EV-{appt_id}"),
                          ("calendar_event_attendees", "event_id", f"EV-{appt_id}")] + ([("holds", "hold_id", hold["hold_id"])] if hold else []), book)
     return {"booked": True, "status": "booked", "appointment": _view(row), "idempotent": False}
+
+
+_WRITES = ("appointments", "booking_contention", "calendar_event_attendees", "calendar_events", "holds")
+
+def _all_or_nothing(db, run):
+    """Run the call so that a failed call changes nothing. A handler gets no transaction of its own,
+    so every table this tool writes is held first and put back if the call raises, whether a write
+    failed partway or the call refused after writing. Only a fault the world simulates on purpose
+    (an error marked keep_writes: a rival booking, a commit whose reply was lost, a fault used up)
+    keeps what it wrote."""
+    held = {table: db.query(f"SELECT * FROM {table}") for table in _WRITES}
+    try:
+        return run()
+    except Exception as failed:
+        if not getattr(failed, "keep_writes", False):
+            for table, rows in held.items():
+                if _same(db.query(f"SELECT * FROM {table}"), rows):
+                    continue
+                db.execute(f"DELETE FROM {table}")
+                for row in rows:
+                    cols = list(row)
+                    db.execute(
+                        f"INSERT INTO {table} ({', '.join(chr(34) + c + chr(34) for c in cols)}) VALUES ({', '.join('?' * len(cols))})",
+                        [row[c] for c in cols],
+                    )
+        raise
+
+def _same(rows, held):
+    """Whether a table still holds exactly the rows it held, in any order: only a table the call
+    changed is rewritten."""
+    import json
+
+    def key(row):
+        return json.dumps(row, sort_keys=True, default=str)
+
+    return sorted(map(key, rows)) == sorted(map(key, held))
+
+
+def handle(args, db):
+    return _all_or_nothing(db, lambda: _handle(args, db))

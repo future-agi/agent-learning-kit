@@ -65,3 +65,5 @@ def setup(world):
         "date": "2026-10-25T11:00:00Z",
         "snippet": "Please cancel my appointment on Wednesday 4 November. Elena Rostova"
     })
+    # The front desk (Jordan Ellis) is working the bookings mailbox in this conversation.
+    world.change("session_caller", "default", {"customer_id": None, "desk_id": "DS01"}, by="id")

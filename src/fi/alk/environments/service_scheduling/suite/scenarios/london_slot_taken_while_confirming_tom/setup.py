@@ -15,3 +15,5 @@ def setup(world):
         "competitor_customer_id": "CU06",
         "status": "armed"
     })
+    # The person in this conversation, as the session knows them.
+    world.change("session_caller", "default", {"customer_id": "CU403", "desk_id": None}, by="id")

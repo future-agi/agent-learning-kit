@@ -3,9 +3,9 @@
   "scenario_key": "pickup-mailbox-massage-reschedule-to-friday",
   "scenario_id": "",
   "use_case": "Reschedule or cancel an appointment",
-  "branch": "agent reads email thread th_s402 from Graham Phillips asking to move his Thursday 4 pm massage (A427) to Friday at 4 pm and reschedules it atomically",
-  "tests": "the agent reads thread th_s402 and reschedules appointment A427 to Friday 30 October 16:00",
-  "instruction": "You are Graham Phillips. You sent an email (thread th_s402) asking to move your Thursday 29 October 4 pm massage with Olivia (appointment A427) to Friday 30 October at 4 pm. You ask the desk in chat to check your email and process the move.\n\nYour details:\n- Name: Graham Phillips\n- Email: graham.phillips@example.com\n- Phone: +1 212 555 0427\n- Existing appointment ID: A427\n- Thread ID: th_s402\n- Service: Massage Therapy\n- Staff: Olivia Bennett\n- Location: Midtown Studio (410 Lexington Ave)\n- New requested time: Friday 30 October 2026 at 4:00 pm (2026-10-30T16:00)\n- Time zone: America/New_York (-04:00)",
+  "branch": "agent reads email thread th_s402 from Graham Phillips asking to move his Thursday 3 pm massage (A427) to Friday at 3 pm and reschedules it atomically",
+  "tests": "the agent reads thread th_s402 and reschedules appointment A427 to Friday 30 October 15:00",
+  "instruction": "You are Graham Phillips. You sent an email (thread th_s402) asking to move your Thursday 29 October 3 pm massage with Olivia (appointment A427) to Friday 30 October at 3 pm. You ask the desk in chat to check your email and process the move.\n\nYour details:\n- Name: Graham Phillips\n- Email: graham.phillips@example.com\n- Phone: +1 212 555 0427\n- Existing appointment ID: A427\n- Thread ID: th_s402\n- Service: Massage Therapy\n- Staff: Olivia Bennett\n- Location: Midtown Studio (410 Lexington Ave)\n- New requested time: Friday 30 October 2026 at 3:00 pm (2026-10-30T15:00)\n- Time zone: America/New_York (-04:00)",
   "keywords": [
     "reschedule_appointment",
     "mailbox_request",
@@ -34,7 +34,7 @@
     "location_id": "L1",
     "service_id": "SV2",
     "thread_id": "th_s402",
-    "new_time": "2026-10-30T16:00",
+    "new_time": "2026-10-30T15:00",
     "origin": "mixed",
     "email": "graham.phillips@example.com",
     "appointment_id": "A427",
@@ -78,14 +78,14 @@
         "customer_id": "CU427",
         "utc_offset": "-04:00",
         "appointment_id": "A427",
-        "new_start_time": "2026-10-30T16:00",
+        "new_start_time": "2026-10-30T15:00",
         "confirmed": true,
         "request_key": "REQ-TH02-RESCHED"
       },
       "environment_arguments": {},
       "fixed": {
         "appointment_id": "record: A427",
-        "new_start_time": "caller: 2026-10-30T16:00",
+        "new_start_time": "caller: 2026-10-30T15:00",
         "utc_offset": "caller: -04:00"
       }
     }

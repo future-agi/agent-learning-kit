@@ -92,7 +92,8 @@
       "environment_arguments": {},
       "fixed": {
         "appointment_id": "record: appointments.appointment_id",
-        "confirmed": "rule: \"Read back provider, date, time and location (or the insurer details) and get the patient's yes before booking, rescheduling, cancelling or updating.\""
+        "confirmed": "rule: \"Read back provider, date, time and location (or the insurer details) and get the patient's yes before booking, rescheduling, cancelling or updating.\"",
+        "new_slot_id": "record: the slot the caller confirmed"
       }
     }
   ],

@@ -5,7 +5,7 @@
   "use_case": "Qualify an inbound enquiry against the rubric",
   "branch": "Anja Weber asks the desk to process Kestrel's lead (L07, needs_information): read thread th_s02_kestrel_timeline (smsg_003 confirms timeline 0-3 months), qualify L07 with {\"timeline\": \"0-3 months\"}, assign A04 (Germany rep)",
   "tests": "the agent reads th_s02_kestrel_timeline, qualifies L07 with timeline 0-3 months, and routes to A04",
-  "instruction": "You are Anja Weber, an internal sales representative at BrightDesk.\nJonas Becker at Kestrel Mobility GmbH sent an email with their deployment timeline in thread th_s02_kestrel_timeline.\nYou want the sales intake desk to review that email thread, qualify Kestrel's open lead (L07), and route it to the territory rep for Germany (A04).\n\nYour details:\n- Name: Anja Weber\n- Role: Sales Representative\n- Email thread: th_s02_kestrel_timeline\n- Lead ID: L07\n- Prospect company: Kestrel Mobility GmbH\n- Country: Germany",
+  "instruction": "You are Anja Weber, a Sales Development Representative at BrightDesk.\nJonas Becker at Kestrel Mobility GmbH sent an email with their deployment timeline in thread th_s02_kestrel_timeline.\nYou want the sales intake desk to review that email thread, qualify Kestrel's open lead (L07), and route it to the territory rep for Germany (A04).\n\nYour details:\n- Name: Anja Weber\n- Role: Sales Development Representative\n- Email thread: th_s02_kestrel_timeline\n- Lead ID: L07\n- Prospect company: Kestrel Mobility GmbH\n- Country: Germany",
   "keywords": [
     "qualify_lead"
   ],
@@ -71,7 +71,8 @@
       },
       "environment_arguments": {},
       "fixed": {
-        "lead_id": "record: L07"
+        "lead_id": "record: L07",
+        "facts": "email: live within the next three months"
       }
     },
     {

@@ -5,7 +5,7 @@
   "use_case": "Recognise known contacts and accounts",
   "branch": "Ruby Ashford's email th_s04 (Fernhill) — Sarah Jenkins asks whether Fernhill is new; read th_s04, search_accounts for Fernhill, search_contacts by Ruby's email; read-only",
   "tests": "the agent reads thread th_s04, checks for account Fernhill Logistics and contact Ruby Ashford, detecting that the company is known while Ruby is a second contact",
-  "instruction": "You are Sarah Jenkins, Sales Operations Lead in the UK. Ask the sales desk to check thread th_s04_fernhill_second_contact from Ruby Ashford, and check if Fernhill Logistics is already an existing account in our records.\n\nYour details:\n- Name: Sarah Jenkins\n- Role: Sales Operations Lead (UK)\n- Thread ID: th_s04_fernhill_second_contact\n- Sender: Ruby Ashford\n- Company: Fernhill Logistics",
+  "instruction": "You are Sarah Jenkins, Inbound SDR at BrightDesk. Ask the sales desk to check thread th_s04_fernhill_second_contact from Ruby Ashford, and check if Fernhill Logistics is already an existing account in our records.\n\nYour details:\n- Name: Sarah Jenkins\n- Role: Inbound SDR\n- Thread ID: th_s04_fernhill_second_contact\n- Sender: Ruby Ashford\n- Company: Fernhill Logistics",
   "keywords": [
     "duplicate",
     "account"
@@ -58,7 +58,9 @@
         "email": "ruby.ashford@fernhill.example"
       },
       "environment_arguments": {},
-      "fixed": {}
+      "fixed": {
+        "email": "record: Ruby Ashford's email on the thread"
+      }
     }
   ],
   "alternatives": [],

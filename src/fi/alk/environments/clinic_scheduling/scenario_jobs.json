@@ -77,7 +77,7 @@
   },
   "calendar_direct_write_refused": {
     "job": "availability",
-    "mcp": false
+    "mcp": true
   },
   "calendar_earliest_primary_care_this_week": {
     "job": "availability",
@@ -209,7 +209,7 @@
   },
   "free_on_the_calendar_but_not_yet": {
     "job": "availability",
-    "mcp": true
+    "mcp": false
   },
   "hold_first_then_book_in_the_same": {
     "job": "book",

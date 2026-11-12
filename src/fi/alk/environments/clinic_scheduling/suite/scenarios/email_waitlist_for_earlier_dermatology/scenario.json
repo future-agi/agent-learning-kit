@@ -35,18 +35,18 @@
   },
   "solution": [
     {
-      "tool": "get_thread",
+      "tool": "verify_patient",
       "arguments": {
-        "threadId": "th_c12_waitlist_p03"
+        "full_name": "Elena Ortiz",
+        "dob": "1975-06-21"
       },
       "environment_arguments": {},
       "fixed": {}
     },
     {
-      "tool": "verify_patient",
+      "tool": "get_thread",
       "arguments": {
-        "full_name": "Elena Ortiz",
-        "dob": "1975-06-21"
+        "threadId": "th_c12_waitlist_p03"
       },
       "environment_arguments": {},
       "fixed": {}

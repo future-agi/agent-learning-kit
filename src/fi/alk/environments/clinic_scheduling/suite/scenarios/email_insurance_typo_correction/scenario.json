@@ -18,7 +18,7 @@
     "location": "United States",
     "personality": "Friendly and cooperative",
     "communication_style": "Direct and concise",
-    "initial_message": "Hello, I'm updating insurance for my wife Isabel Cruz. I made a typo in the member number in my previous note—could you look at her email 'New insurer' and update her record with the Vitality details in her email?",
+    "initial_message": "Hello, I'm updating insurance for my wife Isabel Cruz. Her member number is VT-558201. Sorry, I made a typo in that member number—could you look at her email 'New insurer' and update her record with the Vitality details in her email?",
     "languages": [
       "English"
     ],

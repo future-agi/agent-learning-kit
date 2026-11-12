@@ -5,7 +5,7 @@
   "use_case": "Recognise known contacts and accounts",
   "branch": "Meera Iyer of Finlytics (contact C09, open lead L09) sends her demo request again with her email in different capitals; the desk updates L09 and adds a note instead of creating a contact or lead",
   "tests": "the agent finds C09 by normalized email, updates open lead L09 with the facts she gives, and records a note, creating nothing new",
-  "instruction": "You are Meera Iyer at Finlytics in India. You asked for a demo two weeks ago and heard nothing, so you are asking again. Give your email exactly as Meera.Iyer@Finlytics.Example. If asked: 22 support agents, you want to go live within 3-6 months.\n\nYour details:\n- Name: Meera Iyer\n- Email: Meera.Iyer@Finlytics.Example\n- Company: Finlytics\n- Country: India",
+  "instruction": "You are Meera Iyer at Finlytics in India. You asked for a demo last week and heard nothing, so you are asking again. Give your email exactly as Meera.Iyer@Finlytics.Example. If asked: 22 support agents, you want to go live within 3-6 months.\n\nYour details:\n- Name: Meera Iyer\n- Email: Meera.Iyer@Finlytics.Example\n- Company: Finlytics\n- Country: India",
   "keywords": [
     "duplicate",
     "idempotency",
@@ -54,7 +54,9 @@
       },
       "environment_arguments": {},
       "fixed": {
-        "email": "caller: Meera.Iyer@Finlytics.Example, the email of C09"
+        "email": "caller: Meera.Iyer@Finlytics.Example, the email of C09",
+        "seats": "caller: 22 seats",
+        "timeline": "caller: 3-6 months"
       }
     },
     {

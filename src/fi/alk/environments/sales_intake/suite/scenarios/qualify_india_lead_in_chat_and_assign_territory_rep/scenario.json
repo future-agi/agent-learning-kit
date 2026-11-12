@@ -3,22 +3,22 @@
   "scenario_key": "qualify-india-lead-in-chat-and-assign-territory-rep",
   "scenario_id": "",
   "use_case": "Route leads by territory with a fallback queue",
-  "branch": "Kavita Patel (prospect for Finlytics, lead L09, 22 seats, support, new, timeline unknown) chats and states timeline is 3-6 months; desk qualifies L09 with {\"timeline\": \"3-6 months\"} and routes to India rep A05 (Arjun Mehta)",
-  "tests": "the agent searches contact C09, qualifies L09 with timeline 3-6 months, and assigns owner A05",
-  "instruction": "You are Kavita Patel, Operations Specialist at Finlytics in India, working on Meera Iyer's team. You submitted an enquiry earlier for 22 support seats but did not specify a timeline. You are in chat to confirm that your go-live timeline is within 3-6 months, and you would like the desk to qualify your lead and assign it to the BrightDesk sales representative for India.\n\nYour details:\n- Name: Kavita Patel\n- Colleague: Meera Iyer (meera.iyer@finlytics.example)\n- Company: Finlytics\n- Country: India\n- Seats: 22\n- Timeline: 3-6 months",
+  "branch": "Meera Iyer (Finlytics, lead L09, 22 seats, support, new, timeline unknown) chats and emails that her timeline is 3-6 months; desk qualifies L09 with {\"timeline\": \"3-6 months\"} and routes to India rep A05 (Arjun Mehta)",
+  "tests": "the agent finds Meera Iyer (C09), reads her email, qualifies L09 with timeline 3-6 months, and assigns owner A05",
+  "instruction": "You are Meera Iyer, Head of Support at Finlytics in India. You submitted an enquiry for 22 support seats without a timeline, then emailed it (thread th_s06_finlytics_resubmit). You are in chat to confirm your go-live timeline is within 3-6 months, and you would like the desk to qualify your lead and assign it to BrightDesk's representative for India.\n\nYour details:\n- Name: Meera Iyer\n- Email: meera.iyer@finlytics.example\n- Company: Finlytics\n- Country: India\n- Seats: 22\n- Timeline: 3-6 months",
   "keywords": [
     "qualification",
     "routing"
   ],
   "persona": {
-    "name": "Kavita Patel",
+    "name": "Meera Iyer",
     "gender": "female",
     "age_group": "25-32",
     "occupation": "Accountant",
     "location": "India",
     "personality": "Friendly and cooperative",
     "communication_style": "Direct and concise",
-    "initial_message": "Hello! Following up on the Finlytics enquiry (Meera Iyer's team). We want to go live within 3-6 months. Can you qualify our lead and route it to our rep?",
+    "initial_message": "Hello! Meera Iyer from Finlytics. I emailed our timeline too: we want to go live within 3-6 months. Can you qualify our lead and route it to our rep?",
     "languages": [
       "English"
     ],
@@ -44,6 +44,16 @@
       "fixed": {}
     },
     {
+      "tool": "get_thread",
+      "arguments": {
+        "threadId": "th_s06_finlytics_resubmit"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "threadId": "caller: her email th_s06_finlytics_resubmit"
+      }
+    },
+    {
       "tool": "get_lead",
       "arguments": {
         "lead_id": "L09"
@@ -67,7 +77,8 @@
       },
       "environment_arguments": {},
       "fixed": {
-        "lead_id": "record: L09"
+        "lead_id": "record: L09",
+        "facts": "caller: 3-6 months"
       }
     },
     {

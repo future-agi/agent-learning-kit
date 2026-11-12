@@ -59,7 +59,8 @@
       },
       "environment_arguments": {},
       "fixed": {
-        "calendarId": "record: staff.calendar_id where name='Amelie Laurent'"
+        "calendarId": "record: staff.calendar_id where name='Amelie Laurent'",
+        "startTime": "the day the customer asked about"
       }
     }
   ],

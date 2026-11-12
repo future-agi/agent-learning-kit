@@ -27,9 +27,25 @@ def _need(args, *names):
         raise ToolError(f"Missing required argument(s): {', '.join(missing)}", category="invalid_input")
 
 
+def _caller(db):
+    row = db.one("SELECT caller_id FROM session_caller WHERE id = 'default'")
+    return row["caller_id"] if row else None
+
+
+def _entitled(db, patient_id):
+    """Whether the person signed in to this conversation may act for `patient_id`: the patient
+    themself, or someone the clinic records as their guardian or proxy. The session says who is
+    talking; a patient id, or a name and date of birth, the desk is told grants nothing."""
+    caller = _caller(db)
+    return caller is not None and (caller == patient_id or db.one(
+        "SELECT patient_id FROM caller_access WHERE caller_id = ? AND patient_id = ?", [caller, patient_id]) is not None)
+
+
 def _verified(db, patient_id):
     if not db.one("SELECT patient_id FROM patients WHERE patient_id = ?", [patient_id]):
         raise ToolError(f"Patient {patient_id!r} not found.", category="not_found")
+    if not _entitled(db, patient_id):
+        raise ToolError(f"Permission denied: the person in this conversation is not {patient_id} and holds no recorded guardian or proxy authority for them; a relative or colleague needs proxy access, which the front desk arranges.", category="permission_denied")
     if not db.one("SELECT patient_id FROM verified_patients WHERE patient_id = ?", [patient_id]):
         raise ToolError(f"Patient {patient_id} has not been verified in this conversation; verify the patient's full name and date of birth first.", category="permission_denied")
 
@@ -107,6 +123,14 @@ def _payer_ok(db, patient_id, provider_id):
     return db.one("SELECT payer FROM provider_payers WHERE provider_id = ? AND payer = ?", [provider_id, ins["payer"]]) is not None, ins["payer"]
 
 
+def _next_id(db, table, column, prefix, start):
+    taken = {r[column] for r in db.query(f"SELECT {column} FROM {table}")}
+    n = start + len(taken)
+    while f"{prefix}{n}" in taken:
+        n += 1
+    return f"{prefix}{n}"
+
+
 def _appointment_view(a):
     return {k: a[k] for k in ("appointment_id", "patient_id", "provider_id", "location_id", "specialty", "start_time", "end_time", "reason", "status", "calendar_event_id")}
 
@@ -141,11 +165,25 @@ def _together(db, touched, writes):
         raise
 
 
-def handle(args, db):
+def _kept(error):
+    """A fault this world simulates on purpose: what the call wrote before it stays written."""
+    error.keep_writes = True
+    return error
+
+
+def _handle(args, db):
     _need(args, "appointment_id", "new_slot_id", "request_key")
     a = _own_appointment(db, args["appointment_id"])
-    if a["request_key"] == args["request_key"] and a["status"] == "scheduled":
-        return dict(_appointment_view(a), idempotent=True)
+    # A replayed request_key is the same request only when it names this appointment and the move
+    # already made; reusing a key (the booking's own, or another move's) for a different move is a
+    # conflict, never a success that moved nothing.
+    if db.one("SELECT appointment_id FROM appointments WHERE request_key = ? AND appointment_id != ?", [args["request_key"], a["appointment_id"]]):
+        raise ToolError(f"request_key {args['request_key']!r} already belongs to another appointment; use a new key for this move.", category="conflict")
+    if a["request_key"] == args["request_key"]:
+        m = re.fullmatch(r"SL-(D\d{2})-(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2})", args["new_slot_id"] or "")
+        if m and a["status"] == "scheduled" and a["provider_id"] == m.group(1) and a["start_time"] == f"{m.group(2)}-{m.group(3)}-{m.group(4)}T{m.group(5)}:{m.group(6)}:00Z":
+            return dict(_appointment_view(a), idempotent=True)
+        raise ToolError(f"request_key {args['request_key']!r} already names {a['appointment_id']} at {a['start_time']}; a different move needs a new key.", category="conflict")
     if a["status"] != "scheduled":
         raise ToolError(f"Appointment {a['appointment_id']} is {a['status']}; only a scheduled appointment can be moved.", category="conflict")
     if args.get("confirmed") is not True:
@@ -163,8 +201,20 @@ def handle(args, db):
     ok, payer = _payer_ok(db, a["patient_id"], slot["provider_id"])
     if not ok and not a["self_pay"]:
         raise ToolError(f"{slot['provider_name']} does not accept {payer}.", category="policy_blocked")
-    if _fault(db, "reschedule_appointment", slot["slot_id"]):
-        raise ToolError(f"The new slot {slot['slot_id']} could not be committed (another booking took it). Appointment {a['appointment_id']} is unchanged.", category="conflict")
+    fault = _fault(db, "reschedule_appointment", slot["slot_id"])
+    if fault:
+        # Another caller books the slot first, as in book_appointment: the rival booking is real, so
+        # the slot is gone from availability afterwards rather than free again on the next look.
+        rival = fault["competing_patient_id"] or "P19"
+        rid = _next_id(db, "appointments", "appointment_id", "A", 101)
+
+        def rival_booking():
+            db.execute("INSERT INTO appointments (appointment_id, patient_id, provider_id, location_id, specialty, start_time, end_time, reason, status, calendar_event_id, self_pay, request_key, reschedule_count, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, 'Booked by phone', 'scheduled', ?, 0, ?, 0, ?, ?)",
+                       [rid, rival, slot["provider_id"], slot["location_id"], slot["specialty"], slot["start_time"], slot["end_time"], f"EVT-{rid}", f"phone-{rid}", now, now])
+            _insert_event(db, f"EVT-{rid}", slot, rid, now)
+
+        _together(db, [("appointments", "appointment_id", rid), ("calendar_events", "event_id", f"EVT-{rid}")], rival_booking)
+        raise _kept(ToolError(f"The new slot {slot['slot_id']} could not be committed (another booking took it). Appointment {a['appointment_id']} is unchanged.", category="conflict"))
     why = _conflict(db, slot, a["patient_id"], ignore_event=a["calendar_event_id"])
     if why:
         raise ToolError(f"Slot {slot['slot_id']} is not free: {why}. Appointment {a['appointment_id']} is unchanged.", category="conflict")
@@ -183,3 +233,43 @@ def handle(args, db):
                    ("calendar_events", "event_id", a["calendar_event_id"])] + [("slot_holds", "hold_id", h["hold_id"]) for h in holds], move)
     b = db.one("SELECT * FROM appointments WHERE appointment_id = ?", [a["appointment_id"]])
     return dict(_appointment_view(b), previous_start_time=a["start_time"], previous_provider_id=a["provider_id"], idempotent=False)
+
+
+_WRITES = ("appointments", "calendar_events", "clinic_fault_injections", "slot_holds")
+
+def _all_or_nothing(db, run):
+    """Run the call so that a failed call changes nothing. A handler gets no transaction of its own,
+    so every table this tool writes is held first and put back if the call raises, whether a write
+    failed partway or the call refused after writing. Only a fault the world simulates on purpose
+    (an error marked keep_writes: a rival booking, a commit whose reply was lost, a fault used up)
+    keeps what it wrote."""
+    held = {table: db.query(f"SELECT * FROM {table}") for table in _WRITES}
+    try:
+        return run()
+    except Exception as failed:
+        if not getattr(failed, "keep_writes", False):
+            for table, rows in held.items():
+                if _same(db.query(f"SELECT * FROM {table}"), rows):
+                    continue
+                db.execute(f"DELETE FROM {table}")
+                for row in rows:
+                    cols = list(row)
+                    db.execute(
+                        f"INSERT INTO {table} ({', '.join(chr(34) + c + chr(34) for c in cols)}) VALUES ({', '.join('?' * len(cols))})",
+                        [row[c] for c in cols],
+                    )
+        raise
+
+def _same(rows, held):
+    """Whether a table still holds exactly the rows it held, in any order: only a table the call
+    changed is rewritten."""
+    import json
+
+    def key(row):
+        return json.dumps(row, sort_keys=True, default=str)
+
+    return sorted(map(key, rows)) == sorted(map(key, held))
+
+
+def handle(args, db):
+    return _all_or_nothing(db, lambda: _handle(args, db))

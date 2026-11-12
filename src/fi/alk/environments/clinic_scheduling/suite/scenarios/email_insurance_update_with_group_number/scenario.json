@@ -35,6 +35,15 @@
   },
   "solution": [
     {
+      "tool": "verify_patient",
+      "arguments": {
+        "dob": "1986-11-20",
+        "full_name": "Fiona Gallagher"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
       "tool": "get_thread",
       "arguments": {
         "threadId": "th_c404_insurance"
@@ -43,15 +52,6 @@
       "fixed": {
         "threadId": "record: gmail_threads th_c404_insurance"
       }
-    },
-    {
-      "tool": "verify_patient",
-      "arguments": {
-        "dob": "1986-11-20",
-        "full_name": "Fiona Gallagher"
-      },
-      "environment_arguments": {},
-      "fixed": {}
     },
     {
       "tool": "update_insurance",

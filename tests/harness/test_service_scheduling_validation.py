@@ -201,6 +201,27 @@ WRONG_RUNS = [
         "confirmation_queued_after_commit",
         "not done",
     ),
+    (
+        "a_cancelled_booking_still_sits_on_the",
+        "reads the calendar for another day than the one asked about",
+        lambda k: _swap(k, "list_events", startTime="2026-11-20T00:00:00Z", endTime="2026-11-20T23:59:59Z"),
+        "availability_reported_from_calendar",
+        "not done",
+    ),
+    (
+        "already_on_waitlist_duplicate_declined",
+        "never learns of the existing waitlist entry",
+        lambda k: _without(k, "add_waitlist"),
+        "waitlist_duplicate_not_added",
+        "not done",
+    ),
+    (
+        "human_draft_on_price_thread_left_alone",
+        "lists drafts filtered so the person's draft never shows",
+        lambda k: _swap(k, "list_drafts", query="to:nobody@example.com"),
+        "human_draft_preserved",
+        "not done",
+    ),
 ]
 
 
@@ -295,5 +316,219 @@ def test_a_write_that_fails_partway_leaves_nothing_behind(built: Path, key: str,
         checks = json.loads((HERE / "environment.json").read_text())["world_checks"]
         broken_checks = {n: o.said for n, s in checks.items() if not (o := run_world_check(s, world, name=n)).held}
         assert not broken_checks, broken_checks
+    finally:
+        world.close()
+
+
+# --- every reference step, and the refusals that are the point ----------------------------------
+
+# (scenario, tool): why the reference's call is meant to be refused.
+EXPECTED_REFUSALS = {
+    ("already_on_waitlist_duplicate_declined", "add_waitlist"): "the customer is already on W401; the refusal is how the desk learns it",
+    ("expired_hold_release_request_handled", "release_hold"): "H001 expired at 08:00 UTC; the refusal says the slot is already free",
+    ("first_visit_on_a_family_email_that", "create_customer"): "the first attempt uses his father's email, already on file",
+    ("first_visit_on_a_family_email_that", "get_customer"): "his own phone does not match the father's record",
+    ("privacy_wrong_phone_lookup_refused", "get_customer"): "the phone given is not the one on file",
+    ("returning_customer_registers_as_new_reused", "create_customer"): "her email is already on file; she is looked up instead",
+}
+
+
+@pytest.mark.parametrize(
+    "key", sorted(path.name for path in (SUITE / "scenarios").iterdir() if path.is_dir())
+)
+def test_every_reference_step_succeeds(built: Path, key: str) -> None:
+    world, calls, _refused, _ = _run(_scenario(key), built / WORLD, with_solution=True)
+    try:
+        failed = {(key, c.name): c.error for c in calls if not c.ok}
+    finally:
+        world.close()
+    unexpected = {k: v for k, v in failed.items() if k not in EXPECTED_REFUSALS}
+    assert not unexpected, unexpected
+    expected_here = {k for k in EXPECTED_REFUSALS if k[0] == key}
+    assert expected_here <= set(failed), ("an expected refusal no longer happens", expected_here - set(failed))
+
+
+# --- who is in the conversation --------------------------------------------------------------------
+
+
+def _signed_in(world, customer_id=None, desk_id=None) -> None:
+    """Name the person in the conversation, as a scenario's setup does."""
+    world.store.execute("UPDATE session_caller SET customer_id = ?, desk_id = ? WHERE id = 'default'", (customer_id, desk_id))
+
+
+def _dump(world) -> str:
+    return json.dumps(world.state(), sort_keys=True, default=str)
+
+
+# Each person-scoped tool family, aimed at Ana Morales (CU01) with her real IDs and secrets.
+ANAS_RECORDS = [
+    ("get_customer", {"email": "ana.morales@example.com", "phone": "+1 212 555 0101"}),
+    ("list_customer_appointments", {"customer_id": "CU01"}),
+    ("get_appointment", {"appointment_id": "A001", "customer_id": "CU01"}),
+    ("get_cancellation_policy", {"appointment_id": "A001", "customer_id": "CU01"}),
+    ("cancel_appointment", {"appointment_id": "A001", "customer_id": "CU01", "confirmed": True}),
+    ("reschedule_appointment", {"appointment_id": "A001", "customer_id": "CU01", "new_start_time": "2026-10-28T10:00", "confirmed": True, "request_key": "W-1"}),
+    ("book_appointment", {"customer_id": "CU01", "service_id": "SV1", "staff_id": "ST02", "location_id": "L1", "start_time": "2026-10-29T14:00", "confirmed": True, "request_key": "W-2"}),
+    ("hold_slot", {"customer_id": "CU01", "service_id": "SV1", "staff_id": "ST02", "location_id": "L1", "start_time": "2026-10-29T14:00"}),
+    ("add_waitlist", {"customer_id": "CU01", "service_id": "SV3", "location_id": "L1", "preferred_date": "2026-10-30"}),
+    ("queue_confirmation", {"appointment_id": "A001", "customer_id": "CU01", "kind": "booked", "channel": "sms"}),
+    ("record_customer_preference", {"customer_id": "CU01", "kind": "staff", "value": "ST02"}),
+    ("create_handoff", {"customer_id": "CU01", "category": "complaint", "details": "x"}),
+    ("get_thread", {"threadId": "th_s01_spanish_consultation"}),
+    ("get_message", {"messageId": "smsg_001"}),
+]
+
+
+@pytest.mark.parametrize(("someone_else", "desk"), [("CU02", None), (None, None)], ids=["another_customer", "nobody_identified"])
+@pytest.mark.parametrize(("tool", "arguments"), ANAS_RECORDS, ids=[t for t, _ in ANAS_RECORDS])
+def test_a_person_scoped_tool_refuses_anyone_but_its_person(built: Path, tool: str, arguments: dict, someone_else, desk) -> None:
+    """With someone else (or nobody) signed in, the right IDs and secrets for Ana grant nothing,
+    and the call changes nothing; signed in as Ana, or as the front desk, it is not refused for that."""
+    world = restore(built / WORLD)
+    try:
+        _signed_in(world, someone_else, desk)
+        before = _dump(world)
+        answer = world.call(tool, arguments)
+        assert not answer.ok and "permission_denied" in str(answer.error), (tool, answer.result)
+        assert _dump(world) == before, tool
+        for customer, desk_id in (("CU01", None), (None, "DS01")):
+            _signed_in(world, customer, desk_id)
+            again = world.call(tool, arguments)
+            assert again.ok or "permission_denied" not in str(again.error), (tool, customer, desk_id, again.error)
+            world.close()
+            world = restore(built / WORLD)
+    finally:
+        world.close()
+
+
+def test_the_mailbox_and_calendars_show_a_customer_only_their_own(built: Path) -> None:
+    world = restore(built / WORLD)
+    try:
+        _signed_in(world, "CU02")
+        found = world.call("search_threads", {"query": "Consultation in Spanish"})
+        assert found.ok and found.result["threads"] == [], found.result
+        own = world.call("search_threads", {"query": "massage"})
+        assert {t["id"] for t in own.result["threads"]} == {"th_s02_moved_last_month"}, own.result
+        for tool, arguments in (("list_drafts", {}), ("create_draft", {"to": ["ana.morales@example.com"], "body": "x"}),
+                                ("label_thread", {"threadId": "th_s02_moved_last_month", "labelIds": ["handled"]})):
+            answer = world.call(tool, arguments)
+            assert not answer.ok and "permission_denied" in str(answer.error), tool
+        events = {e["id"]: e for e in world.call("list_events", {"calendarId": "CAL-ST02"}).result["events"]}
+        assert events["EV-A001"]["summary"] == "Booked" and events["EV-A001"]["attendees"] == [], events["EV-A001"]
+        assert world.call("list_events", {"calendarId": "CAL-ST02", "fullText": "Morales"}).result["events"] == []
+        theirs = {e["id"]: e for e in world.call("list_events", {"calendarId": "CAL-ST01"}).result["events"]}
+        assert theirs["EV-A002"]["summary"] == "Massage Therapy - Brian Cole"
+        assert world.call("get_event", {"calendarId": "CAL-ST02", "eventId": "EV-A001"}).result["description"] is None
+        _signed_in(world, None, "DS01")
+        assert world.call("get_event", {"calendarId": "CAL-ST02", "eventId": "EV-A001"}).result["summary"] == "Initial Consultation - Ana Morales"
+    finally:
+        world.close()
+
+
+def test_a_first_time_customer_is_signed_in_by_registering(built: Path) -> None:
+    world = restore(built / WORLD)
+    try:
+        made = world.call("create_customer", {"name": "Pat New", "email": "pat.new@example.com", "phone": "+1 212 555 0777"})
+        assert made.ok
+        assert world.state()["session_caller"][0]["customer_id"] == made.result["customer_id"]
+        again = world.call("create_customer", {"name": "Someone Else", "email": "someone.else@example.com", "phone": "+1 212 555 0778"})
+        assert not again.ok and "permission_denied" in str(again.error)
+    finally:
+        world.close()
+
+
+# --- request keys, the competing booking, read-only calendars, confirmations --------------------
+
+
+def test_a_request_key_replays_only_the_same_request(built: Path) -> None:
+    world = restore(built / WORLD)
+    try:
+        _signed_in(world, "CU01")
+        before = _dump(world)
+        # Brian's key, with Ana's own booking: refused, and Brian's appointment is not shown.
+        other = world.call("book_appointment", {"customer_id": "CU01", "service_id": "SV1", "staff_id": "ST02", "location_id": "L1",
+                                                "start_time": "2026-10-29T14:00", "confirmed": True, "request_key": "SEED-A002"})
+        assert not other.ok and "conflict" in str(other.error) and "CU02" not in str(other.error) and "20:00" not in str(other.error)
+        moved = world.call("reschedule_appointment", {"appointment_id": "A001", "customer_id": "CU01", "new_start_time": "2026-10-28T10:00",
+                                                      "confirmed": True, "request_key": "SEED-A016"})
+        assert not moved.ok and "conflict" in str(moved.error)
+        assert _dump(world) == before
+        args = {"customer_id": "CU01", "service_id": "SV1", "staff_id": "ST02", "location_id": "L1", "start_time": "2026-10-29T14:00", "confirmed": True, "request_key": "R-1"}
+        first = world.call("book_appointment", args)
+        assert first.ok and not first.result["idempotent"]
+        replay = world.call("book_appointment", args)
+        assert replay.ok and replay.result["idempotent"] and replay.result["appointment"]["appointment_id"] == first.result["appointment"]["appointment_id"]
+        changed = world.call("book_appointment", {**args, "start_time": "2026-10-29T15:00"})
+        assert not changed.ok and "conflict" in str(changed.error)
+    finally:
+        world.close()
+
+
+def test_the_competing_booking_races_only_for_a_bookable_unheld_slot(built: Path) -> None:
+    scenario = _scenario("v12_s03_last_slot_taken_during_confirmation")
+    world, _calls, _refused, _ = _run(scenario, built / WORLD, with_solution=False)
+    try:
+        slot = {"customer_id": "CU05", "staff_id": "ST03", "location_id": "L1", "start_time": "2026-10-30T10:00"}
+        wrong = world.call("book_appointment", {**slot, "service_id": "SV1", "confirmed": True, "request_key": "C-1"})
+        assert not wrong.ok and "does not offer" in str(wrong.error)
+        assert not any(a["source"] == "competitor" for a in world.state()["appointments"])
+        held = world.call("hold_slot", {**slot, "service_id": "SV3"})
+        assert held.ok
+        booked = world.call("book_appointment", {**slot, "service_id": "SV3", "confirmed": True, "request_key": "C-2", "hold_id": held.result["hold_id"]})
+        assert booked.ok and booked.result["booked"], booked.result
+        assert not any(a["source"] == "competitor" for a in world.state()["appointments"])
+    finally:
+        world.close()
+
+
+def test_a_read_only_calendar_is_changed_only_through_the_front_desk(built: Path) -> None:
+    world = restore(built / WORLD)
+    try:
+        _signed_in(world, "CU06")
+        before = _dump(world)
+        for tool, arguments in (
+            ("cancel_appointment", {"appointment_id": "A014", "customer_id": "CU06", "confirmed": True}),
+            ("reschedule_appointment", {"appointment_id": "A014", "customer_id": "CU06", "new_start_time": "2026-11-03T10:00", "new_staff_id": "ST04", "confirmed": True, "request_key": "RO-1"}),
+            ("hold_slot", {"customer_id": "CU06", "service_id": "SV1", "staff_id": "ST06", "location_id": "L2", "start_time": "2026-11-03T10:00"}),
+        ):
+            answer = world.call(tool, arguments)
+            assert not answer.ok and "policy_blocked" in str(answer.error), (tool, answer.result)
+        assert _dump(world) == before
+    finally:
+        world.close()
+
+
+def test_a_resend_queues_a_new_confirmation_and_a_repeat_does_not(built: Path) -> None:
+    world = restore(built / WORLD)
+    try:
+        _signed_in(world, "CU01")
+        args = {"appointment_id": "A001", "customer_id": "CU01", "kind": "booked", "channel": "sms"}
+        first = world.call("queue_confirmation", args)
+        assert first.ok and not first.result["idempotent"] and first.result["outbox_id"] != "O001"
+        repeat = world.call("queue_confirmation", args)
+        assert repeat.ok and repeat.result["idempotent"] and repeat.result["outbox_id"] == first.result["outbox_id"]
+    finally:
+        world.close()
+
+
+def test_an_empty_day_says_why(built: Path) -> None:
+    world = restore(built / WORLD)
+    try:
+        for date, word in (("2026-11-30", "horizon"), ("2026-11-01", "closed on Sundays"), ("2026-11-11", "staff training")):
+            answer = world.call("list_slots", {"service_id": "SV3", "location_id": "L1", "date": date})
+            assert answer.ok and answer.result["slots"] == [] and word in answer.result["unavailable_reason"], (date, answer.result)
+        busy = world.call("list_slots", {"service_id": "SV3", "location_id": "L1", "date": "2026-10-30", "staff_id": "ST02"})
+        assert busy.result["slots"] == [] and "unavailable_reason" not in busy.result
+    finally:
+        world.close()
+
+
+def test_a_language_preference_is_stored_as_its_code(built: Path) -> None:
+    world = restore(built / WORLD)
+    try:
+        _signed_in(world, "CU07")
+        said = world.call("record_customer_preference", {"customer_id": "CU07", "kind": "language", "value": "Hindi"})
+        assert said.ok and said.result["value"] == "hi"
+        assert not world.call("record_customer_preference", {"customer_id": "CU07", "kind": "language", "value": "Klingon"}).ok
     finally:
         world.close()

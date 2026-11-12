@@ -1,15 +1,21 @@
 def check(world, calls, reference=None):
-    if not any(c.name == "list_drafts" and c.ok for c in calls):
-        return "not done: the existing drafts were never listed, so the person's draft could not have been seen"
     drafts = world.state().get("gmail_drafts", [])
-    human = [d for d in drafts if d.get("is_human_edited")]
+    thread = _want(reference, "get_thread").get("threadId")
+    human = [d for d in drafts if d.get("is_human_edited") and (not thread or d["thread_id"] == thread)]
     if not human:
-        return "not done: no person's draft exists to preserve"
+        return "broken: no person's draft exists to preserve on that thread"
     for hd in human:
+        # The person's draft reached the agent: listed with its humanEdited mark, or named by the
+        # refusal of a draft on its thread.
+        seen = any(
+            c.ok and c.name == "list_drafts" and any(x.get("id") == hd["id"] and x.get("humanEdited") for x in (c.result or {}).get("drafts") or [])
+            for c in calls
+        ) or any(c.refused and c.name == "create_draft" and hd["id"] in str(c.error) for c in calls)
+        if not seen:
+            return f"not done: the person's draft {hd['id']} never reached the agent"
         if len([d for d in drafts if d["thread_id"] == hd["thread_id"]]) > 1:
             return f"done wrong: another draft was created on {hd['thread_id']}"
-    return None
-
+    return _blind(world, calls, reference)
 
 def _now(state):
     return (state.get("clock") or [{"now": ""}])[0]["now"]

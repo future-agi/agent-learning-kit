@@ -2,3 +2,4 @@ def setup(world):
     world.put("patients", {"patient_id": "P402", "full_name": "Divya Menon", "dob": "1990-11-03", "phone": "+447700900402", "email": "divya.menon@example.com", "guardian_name": None, "is_new_patient": 0})
     world.put("insurance", {"patient_id": "P402", "payer": "AXA Health", "member_id": "AX-990402", "group_number": "", "updated_at": "2026-01-05T09:00:00Z"})
     world.put("waitlist", {"waitlist_id": "W402", "patient_id": "P402", "specialty": "primary_care", "provider_id": "D02", "earliest_date": "2026-10-26", "latest_date": "2026-11-06", "status": "active", "request_key": "seed-W402", "created_at": "2026-10-21T10:00:00Z"})
+    world.change("session_caller", "default", {"caller_id": "P402"}, by="id")

@@ -1,7 +1,7 @@
 [
   {
     "name": "verify_patient",
-    "description": "Verify the person is the patient by full name and date of birth. Every patient-specific tool needs this first in the conversation; a failed match discloses nothing.",
+    "description": "Verify the person is the patient by full name and date of birth. Only the patient talking, or someone the clinic records as their guardian or proxy, can be verified; anyone else gets the same answer as no match. Every patient-specific tool needs this first in the conversation; a failed match discloses nothing.",
     "parameters": {
       "type": "object",
       "required": [
@@ -101,7 +101,7 @@
         },
         "patient_id": {
           "type": "string",
-          "description": "The verified patient, so their own hold counts as free"
+          "description": "The verified patient, so their own hold counts as free (refused for anyone else)"
         }
       }
     },
@@ -546,7 +546,7 @@
         },
         "patient_id": {
           "type": "string",
-          "description": "The patient, when known"
+          "description": "The verified patient the case is about; leave it out for someone the caller may not act for"
         }
       }
     },
@@ -2198,7 +2198,7 @@
   },
   {
     "name": "search_threads",
-    "description": "Lists email threads matching a Gmail search query (label:ID, is:unread, in:inbox, from:, to:, subject:, newer_than:7d, free terms). Full message bodies are not returned; use get_thread for them. Drafts, spam and trash are excluded.",
+    "description": "Lists email threads matching a Gmail search query (label:ID, is:unread, in:inbox, from:, to:, subject:, newer_than:7d, free terms). Full message bodies are not returned; use get_thread for them. Drafts, spam and trash are excluded. Mail about a patient is shown only once that patient is verified in this conversation.",
     "parameters": {
       "type": "object",
       "properties": {
@@ -2325,7 +2325,7 @@
   },
   {
     "name": "get_thread",
-    "description": "Retrieves an email thread by ID with its messages in date order (bodies under FULL_CONTENT).",
+    "description": "Retrieves an email thread by ID with its messages in date order (bodies under FULL_CONTENT). Mail about a patient is shown only once that patient is verified in this conversation.",
     "parameters": {
       "type": "object",
       "properties": {
@@ -2426,7 +2426,7 @@
   },
   {
     "name": "get_message",
-    "description": "Retrieves one email message by its message ID.",
+    "description": "Retrieves one email message by its message ID. Mail about a patient is shown only once that patient is verified in this conversation.",
     "parameters": {
       "type": "object",
       "properties": {
@@ -2621,7 +2621,7 @@
   },
   {
     "name": "list_drafts",
-    "description": "Lists the mailbox's drafts, newest first. humanEdited marks a draft a person has edited.",
+    "description": "Lists the mailbox's drafts, newest first. humanEdited marks a draft a person has edited. Mail about a patient is shown only once that patient is verified in this conversation.",
     "parameters": {
       "type": "object",
       "properties": {
@@ -2710,7 +2710,7 @@
   },
   {
     "name": "create_draft",
-    "description": "Creates a draft email for a person to review and send. To reply in an existing thread pass the original message's ID as replyToMessageId. Addresses are plain (no 'Name <email>'). Attachments are not supported yet. Nothing is sent.",
+    "description": "Creates a draft email for a person to review and send. To reply in an existing thread pass the original message's ID as replyToMessageId. Addresses are plain (no 'Name <email>'). Attachments are not supported yet. Nothing is sent. Mail about a patient is shown only once that patient is verified in this conversation.",
     "parameters": {
       "type": "object",
       "properties": {

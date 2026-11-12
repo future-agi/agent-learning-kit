@@ -31,3 +31,5 @@ def setup(world):
         "thread_id": "th_s405",
         "label_id": "INBOX"
     })
+    # The person in this conversation, as the session knows them.
+    world.change("session_caller", "default", {"customer_id": "CU408", "desk_id": None}, by="id")

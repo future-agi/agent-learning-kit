@@ -78,7 +78,8 @@
       },
       "environment_arguments": {},
       "fixed": {
-        "patient_id": "record: patients.patient_id"
+        "patient_id": "record: patients.patient_id",
+        "slot_id": "record: the slot the caller confirmed"
       }
     }
   ],

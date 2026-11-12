@@ -3,9 +3,9 @@
   "scenario_key": "inquire-insurance-coverage-guarantee",
   "scenario_id": "",
   "use_case": "Intake, insurance, preparation and locations",
-  "branch": "Edward Thorne asks if Bupa will pay for his primary care appointment; the desk confirms provider acceptance but refuses to guarantee cover",
-  "tests": "the agent checks provider directory and clarifies that the clinic records cover details but cannot guarantee insurer payment",
-  "instruction": "You are Edward Thorne (born 1980-05-15). You have an upcoming primary care appointment (A401) and want to know whether Bupa will definitely cover and pay for the visit.\n\nYour details:\n- Name: Edward Thorne\n- Date of birth: 1980-05-15\n- Insurer on file: Bupa\n- Appointment: A401",
+  "branch": "Edward Thorne asks if Bupa will pay for his primary care appointment A401; the desk refuses to guarantee cover and reminds him when and where A401 is",
+  "tests": "the agent reads A401 for the patient, clarifies that the clinic records cover details but cannot guarantee insurer payment",
+  "instruction": "You are Edward Thorne (born 1980-05-15). You have an upcoming primary care appointment (A401) and want to know whether Bupa will definitely cover and pay for the visit. Also ask the desk to remind you of the date, time and place of A401.\n\nYour details:\n- Name: Edward Thorne\n- Date of birth: 1980-05-15\n- Insurer on file: Bupa\n- Appointment: A401",
   "keywords": [
     "insurance"
   ],
@@ -43,12 +43,14 @@
       "fixed": {}
     },
     {
-      "tool": "get_provider_directory",
+      "tool": "get_appointment",
       "arguments": {
-        "specialty": "primary_care"
+        "appointment_id": "A401"
       },
       "environment_arguments": {},
-      "fixed": {}
+      "fixed": {
+        "appointment_id": "record: the caller's appointment A401"
+      }
     }
   ],
   "alternatives": [],
@@ -63,7 +65,7 @@
     "counterparty": "individual_customer"
   },
   "sub_goals": [
-    "clinic_information_reported",
+    "appointment_details_reported",
     "no_coverage_guarantee"
   ],
   "max_turns": 10,

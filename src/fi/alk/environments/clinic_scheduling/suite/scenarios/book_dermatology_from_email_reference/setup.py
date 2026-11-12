@@ -32,9 +32,11 @@ def setup(world):
         "date": "2026-10-25T14:00:00Z",
         "subject": "Forms before my visit",
         "snippet": "Hello, could you email me any forms I need to fill in before my next",
-        "body": "Hello, could you email me any forms I need to fill in before my next dermatology visit? Nneka Okonjo",
+        "body": "Hello, could you email me any forms I need to fill in before my next dermatology visit? I would like that visit with Dr. Sofia Morales on Thursday 29 October in the afternoon, at Riverbank Central if possible. Nneka Okonjo",
     })
     world.put("gmail_thread_labels", {
         "thread_id": "th_c405_intake",
         "label_id": "INBOX",
     })
+    world.change("session_caller", "default", {"caller_id": "P405"}, by="id")
+    world.put("gmail_thread_patients", {"thread_id": "th_c405_intake", "patient_id": "P405"})

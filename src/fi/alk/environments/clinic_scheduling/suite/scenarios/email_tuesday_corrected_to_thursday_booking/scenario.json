@@ -35,6 +35,15 @@
   },
   "solution": [
     {
+      "tool": "verify_patient",
+      "arguments": {
+        "full_name": "Sofia Rossi",
+        "dob": "1996-06-06"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
       "tool": "get_thread",
       "arguments": {
         "threadId": "th_c01_tuesday_thursday"
@@ -43,15 +52,6 @@
       "fixed": {
         "threadId": "the patient's thread"
       }
-    },
-    {
-      "tool": "verify_patient",
-      "arguments": {
-        "full_name": "Sofia Rossi",
-        "dob": "1996-06-06"
-      },
-      "environment_arguments": {},
-      "fixed": {}
     },
     {
       "tool": "find_available_slots",

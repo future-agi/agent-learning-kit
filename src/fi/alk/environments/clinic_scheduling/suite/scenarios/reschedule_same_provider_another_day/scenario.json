@@ -63,7 +63,8 @@
       },
       "environment_arguments": {},
       "fixed": {
-        "appointment_id": "caller: A21"
+        "appointment_id": "caller: A21",
+        "new_slot_id": "record: the slot the caller confirmed"
       }
     }
   ],

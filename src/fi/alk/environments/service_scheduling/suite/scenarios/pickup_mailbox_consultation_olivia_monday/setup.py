@@ -13,3 +13,6 @@ def setup(world):
         "body": "Hello, a consultation with Olivia on Monday 2 November at 10 am please. Hannah Schmidt",
         "snippet": "Hello, a consultation with Olivia on Monday 2 November at 10 am please. Hannah"
     }, by="id")
+    # The person in this conversation, as the session knows them.
+    world.change("session_caller", "default", {"customer_id": "CU419", "desk_id": None}, by="id")
+    world.change("gmail_threads", "th_s12_booking_request_emma", {"snippet": "Hello, a consultation with Olivia on Monday 2 November at 10 am please. Hannah"}, by="id")

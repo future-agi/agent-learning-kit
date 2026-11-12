@@ -5,7 +5,7 @@
   "use_case": "Reschedule and cancel",
   "branch": "Mei Tanaka asks when Dr. Kowalski is free next week; the desk reads list_events on CAL-D05 and reschedules A05 to Friday 6 November 10:00",
   "tests": "the agent reads CAL-D05 events, verifies Mei Tanaka, and moves A05 to SL-D05-20261106-1000",
-  "instruction": "You are Mei Tanaka (born 1971-02-27). You have an orthopaedics appointment A05 with Dr. Mira Kowalski. You want to know her availability next week (2 to 6 November) and reschedule A05 to Friday 6 November at 10:00 at Riverbank West. Confirm when asked.\n\nYour details:\n- Name: Mei Tanaka\n- Date of birth: 1971-02-27\n- Appointment ID: A05\n- Provider: Dr. Mira Kowalski\n- Desired date and time: Friday 6 November 2026 at 10:00\n- Location: Riverbank West",
+  "instruction": "You are Mei Tanaka (born 1971-02-27). You have an orthopaedics appointment A05 with Dr. Mira Kowalski. You want to know her availability next week (2 to 6 November) and reschedule A05 to Friday 6 November at 10:00 at Riverbank Central. Confirm when asked.\n\nYour details:\n- Name: Mei Tanaka\n- Date of birth: 1971-02-27\n- Appointment ID: A05\n- Provider: Dr. Mira Kowalski\n- Desired date and time: Friday 6 November 2026 at 10:00\n- Location: Riverbank Central",
   "keywords": [
     "reschedule",
     "calendar"
@@ -75,7 +75,8 @@
       },
       "environment_arguments": {},
       "fixed": {
-        "appointment_id": "caller: A05"
+        "appointment_id": "caller: A05",
+        "new_slot_id": "record: the slot the caller confirmed"
       }
     }
   ],

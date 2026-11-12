@@ -5,7 +5,7 @@
   "use_case": "Book a new appointment",
   "branch": "P411 retries cardiology booking after disconnection; idempotent request key ensures exactly one appointment is created",
   "tests": "passes when the agent verifies P411, checks referral, and books the confirmed cardiology slot with idempotent request key",
-  "instruction": "You were previously booking a cardiology appointment with Dr. Ethan Brooks for Monday 2 November at 15:00 when your chat dropped right after confirming. You are anxious to ensure you are actually booked and don't end up with duplicate appointments. Provide your details and confirm the booking for Dr. Brooks at 15:00.\n\nYour details:\n- Full name: Oliver Higgins\n- Date of birth: 1950-10-10\n- Insurance: Bupa, Member ID: BU-100241\n- Referral: Active cardiology referral from St Jude Practice\n- Provider: Dr. Ethan Brooks\n- Slot: Monday 2 November 2026, 15:00 (Riverbank Central)",
+  "instruction": "You were previously booking a cardiology appointment with Dr. Ethan Brooks for Monday 2 November at 15:00 when your chat dropped just as you were confirming, so you do not know whether the booking went through. You are anxious to be booked once, without a duplicate appointment. Provide your details and confirm the booking for Dr. Brooks at 15:00.\n\nYour details:\n- Full name: Oliver Higgins\n- Date of birth: 1950-10-10\n- Insurance: Bupa, Member ID: BU-100241\n- Referral: Active cardiology referral from St Jude Practice\n- Provider: Dr. Ethan Brooks\n- Slot: Monday 2 November 2026, 15:00 (Riverbank Central)",
   "keywords": [
     "cardiology",
     "booking",
@@ -80,7 +80,8 @@
       },
       "environment_arguments": {},
       "fixed": {
-        "patient_id": "record: patients.patient_id P411"
+        "patient_id": "record: patients.patient_id P411",
+        "slot_id": "record: the slot the caller confirmed"
       }
     },
     {

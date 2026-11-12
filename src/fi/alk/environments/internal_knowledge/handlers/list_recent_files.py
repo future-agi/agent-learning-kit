@@ -1,3 +1,22 @@
+def _caller_collections(db):
+    """The collections the employee signed in to this conversation may read. The desk opens Drive on
+    their behalf, so a file outside their role's collections stays closed even where the desk's
+    own account could open it."""
+    row = db.one("SELECT employee_id FROM session_caller WHERE id = 'default'")
+    e = db.one("SELECT * FROM employees WHERE employee_id = ?", [row["employee_id"]]) if row and row["employee_id"] else None
+    if e is None or e["status"] != "active":
+        raise ToolError("No active employee is signed in to this conversation; the desk reads Drive only for the signed-in employee.", category="permission_denied")
+    return {r["collection_id"] for r in db.query("SELECT collection_id FROM collection_access WHERE role = ?", [e["role"]])}
+
+
+def _caller_may_read(db, f, readable):
+    """Whether a Drive file is in a collection the caller may read: the corpus document it mirrors
+    names its collection; any other file goes by its folder."""
+    k = db.one("SELECT collection_id FROM kb_documents WHERE drive_file_id = ?", [f["file_id"]])
+    c = k or db.one("SELECT collection_id FROM collections WHERE drive_folder_id = ?", [f["folder_id"]])
+    return c is None or c["collection_id"] in readable
+
+
 def handle(args, db):
     order_by = args.get("orderBy") or "recency"
     if order_by not in ("recency", "lastModified", "lastModifiedByMe"):
@@ -20,12 +39,15 @@ def handle(args, db):
         files = [f for f in files if f["owner_id"] == user_id]
 
     accessible = []
+    readable = _caller_collections(db)
     for f in files:
         if not is_admin:
             perm = db.one("SELECT role FROM drive_permissions WHERE target_type = 'folder' AND target_id = ? AND user_id = ?", (f["folder_id"], user_id))
             file_perm = db.one("SELECT role FROM drive_permissions WHERE target_type = 'file' AND target_id = ? AND user_id = ?", (f["file_id"], user_id))
             if not perm and not file_perm:
                 continue
+        if not _caller_may_read(db, f, readable):
+            continue
         content = f["content"] or ""
         item = {
             "id": f["file_id"],

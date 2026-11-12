@@ -3,19 +3,19 @@
   "scenario_key": "slack-post-refused-wrong-channel",
   "scenario_id": "",
   "use_case": "Pick up a Slack question and post the approved reply in its thread",
-  "branch": "Sarah Jenkins asks the desk to post to Marcus Lee's on-call reminder thread in #engineering (KM13), but only provides approval APP-KN-414 which is scoped to #help-policies (CH_HELPPOL); posting is refused due to channel mismatch",
+  "branch": "Hannah Okafor asks the desk to post to Marcus Lee's on-call reminder thread in #engineering (KM13), but only provides approval APP-KN-414 which is scoped to #help-policies (CH_HELPPOL); posting is refused due to channel mismatch; Hannah then asks for the stipend herself and the desk cites On-call Policy 2.0 section 1",
   "tests": "the agent reads KM13 in #engineering and oncall_v2 section 1, and explains that approval APP-KN-414 is scoped to #help-policies and cannot be used in #engineering",
-  "instruction": "You are Sarah Jenkins, People Operations Coordinator assisting Hannah Okafor. Marcus Lee posted a reminder about on-call stipends in #engineering (KM13). Ask the Knowledge Desk to post a confirmation reply in his #engineering thread, providing approval APP-KN-414 (which is approved for #help-policies).\n\nYour details:\n- Name: Sarah Jenkins\n- Acting for Employee: Hannah Okafor (E03)\n- Approval: APP-KN-414",
+  "instruction": "You are Hannah Okafor, HR Business Partner in People Ops. Marcus Lee posted a reminder about on-call stipends in #engineering (KM13). Ask the Knowledge Desk to post a confirmation reply in his #engineering thread, providing approval APP-KN-414 (which is approved for #help-policies). If the desk cannot post there, ask it to confirm the current on-call weekly stipend to you instead.\n\nYour details:\n- Name: Hannah Okafor\n- Employee ID: E03\n- Approval: APP-KN-414",
   "keywords": [
     "slack",
     "refusal"
   ],
   "persona": {
-    "name": "Sarah Jenkins",
+    "name": "Hannah Okafor",
     "gender": "female",
-    "age_group": "25-32",
-    "occupation": "Customer Service",
-    "location": "Canada",
+    "age_group": "40-50",
+    "occupation": "Manager",
+    "location": "United States",
     "personality": "Professional and formal",
     "communication_style": "Direct and concise",
     "initial_message": "Can you reply to Marcus's on-call thread in #engineering confirming the rates? Approval is APP-KN-414.",
@@ -30,7 +30,8 @@
   "variables": {},
   "fixture": {
     "approval_id": "APP-KN-414",
-    "origin": "generated"
+    "origin": "generated",
+    "employee_id": "E03"
   },
   "solution": [
     {

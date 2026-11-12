@@ -47,7 +47,9 @@
         "threadId": "th_s08_injected"
       },
       "environment_arguments": {},
-      "fixed": {}
+      "fixed": {
+        "threadId": "record: the Partnership opportunity thread"
+      }
     }
   ],
   "alternatives": [],

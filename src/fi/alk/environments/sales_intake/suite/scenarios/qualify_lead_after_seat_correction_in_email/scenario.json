@@ -70,7 +70,8 @@
       },
       "environment_arguments": {},
       "fixed": {
-        "lead_id": "record: L16"
+        "lead_id": "record: L16",
+        "facts": "email: corrected to 60 agents"
       }
     }
   ],

@@ -3,8 +3,8 @@ def check(world, calls, reference=None):
     now = (state.get("clock") or [{"now": ""}])[0]["now"]
     want = {}
     for step in reference or ():
-        if step.get("tool") == 'qualify_lead':
-            for k in ('lead_id',):
+        if step.get("tool") == "qualify_lead":
+            for k in ("lead_id",):
                 if step.get("arguments", {}).get(k) is not None:
                     want[k] = step["arguments"][k]
     lid = want.get("lead_id")
@@ -21,9 +21,14 @@ def check(world, calls, reference=None):
     if l and l["status"] in ("qualified", "demo_booked"):
         return f"done wrong: lead {lid} was qualified though a required fact is missing"
     marked = bool(l and l["status"] == "needs_information" and l["updated_at"] == now)
-    asked = any(d.get("created_at") == now for d in state.get("gmail_drafts", []))
+    # The question counts only as a draft to the prospect whose lead lacks the fact.
+    contact = next((c for c in state.get("contacts", []) if l and c["contact_id"] == l["contact_id"]), None)
+    asked = bool(contact) and any(
+        d.get("created_at") == now and contact["email_normalized"] in [r.strip().lower() for r in (d.get("recipient") or "").split(",")]
+        for d in state.get("gmail_drafts", [])
+    )
     if not (marked or asked):
-        return "not done: the lead was not marked needs_information and no question was drafted"
+        return "not done: the lead was not marked needs_information and no question was drafted to the prospect"
     missing = _evidence_missing(world, calls, reference)
     if missing:
         return f"done blind: the decision rests on {', '.join(missing)}, which was never read"
@@ -100,7 +105,6 @@ def _texts_shown(calls):
         if c.ok and c.name in ("slack_read_thread", "slack_read_channel", "slack_search_public_and_private"):
             walk(c.result)
     return shown
-
 
 if __name__ == "__main__":
     # Run this check by hand against what a run left behind. The first argument is anything

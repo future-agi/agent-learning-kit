@@ -5,7 +5,7 @@
   "use_case": "Reschedule and cancel",
   "branch": "Aisha Mensah emailed (th_c13_two_corrections_p08) moving A03 to 15:00 then corrected to 15:30 on 28 October; the desk honors the second correction",
   "tests": "the agent reads thread th_c13_two_corrections_p08, applies the latest correction, and moves A03 to SL-D04-20261028-1530",
-  "instruction": "You are Aisha Mensah (born 1979-03-22). You sent an email about moving your cardiology appointment A03 on 28 October, and then sent a follow-up correcting the time to 15:30. Ask the desk to update it as per your latest email.\n\nYour details:\n- Name: Aisha Mensah\n- Date of birth: 1979-03-22\n- Appointment ID: A03\n- Desired date and corrected time: Wednesday 28 October 2026 at 15:30\n- Provider: Dr. Daniel Brooks\n- Location: Riverbank North\n- Email thread ID: th_c13_two_corrections_p08",
+  "instruction": "You are Aisha Mensah (born 1979-03-22). You sent an email about moving your cardiology appointment A03 on 28 October, and then sent a follow-up correcting the time to 15:30. Ask the desk to update it as per your latest email.\n\nYour details:\n- Name: Aisha Mensah\n- Date of birth: 1979-03-22\n- Appointment ID: A03\n- Desired date and corrected time: Wednesday 28 October 2026 at 15:30\n- Provider: Dr. Ethan Brooks\n- Location: Riverbank North\n- Email thread ID: th_c13_two_corrections_p08",
   "keywords": [
     "reschedule",
     "email"
@@ -36,17 +36,6 @@
   },
   "solution": [
     {
-      "tool": "get_thread",
-      "arguments": {
-        "messageFormat": "FULL_CONTENT",
-        "threadId": "th_c13_two_corrections_p08"
-      },
-      "environment_arguments": {},
-      "fixed": {
-        "threadId": "record: th_c13_two_corrections_p08"
-      }
-    },
-    {
       "tool": "verify_patient",
       "arguments": {
         "full_name": "Aisha Mensah",
@@ -56,6 +45,17 @@
       "fixed": {
         "dob": "caller: 1979-03-22",
         "full_name": "caller: Aisha Mensah"
+      }
+    },
+    {
+      "tool": "get_thread",
+      "arguments": {
+        "messageFormat": "FULL_CONTENT",
+        "threadId": "th_c13_two_corrections_p08"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "threadId": "record: th_c13_two_corrections_p08"
       }
     },
     {
@@ -69,7 +69,8 @@
       "environment_arguments": {},
       "fixed": {
         "confirmed": "rule: \"Read back provider, date, time and location (or the insurer details) and get the patient's yes before booking, rescheduling, cancelling or updating.\"",
-        "appointment_id": "caller: A03"
+        "appointment_id": "caller: A03",
+        "new_slot_id": "record: the slot the caller confirmed"
       }
     }
   ],

@@ -39,3 +39,5 @@ def setup(world):
         "thread_id": "th_s403_callum_massage",
         "label_id": "needs_reply"
     })
+    # The person in this conversation, as the session knows them.
+    world.change("session_caller", "default", {"customer_id": "CU416", "desk_id": None}, by="id")

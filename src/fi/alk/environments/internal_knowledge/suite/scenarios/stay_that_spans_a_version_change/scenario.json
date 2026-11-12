@@ -5,7 +5,7 @@
   "use_case": "Answer what applied on a past date from the version then in effect",
   "branch": "Grace Kim (E05) claims US hotel nights spanning 2026-02-28 and 2026-03-01; Travel Policy 2.1 ($210) applied in February and 3.0 ($220) from 1 March; desk cites both versions for their respective dates",
   "tests": "the desk checks effective versions on 2026-02-28 ($210 per Travel Policy 2.1) and 2026-03-01 ($220 per Travel Policy 3.0) and answers each night correctly",
-  "instruction": "You are claiming hotel expenses for a 3-night US business trip covering February 27, February 28, and March 1, 2026 (2026-02-28 and 2026-03-01). You ask what reimbursement caps apply across those nights.\n\nYour details:\n- Name: Grace Kim\n- Employee ID: E05\n- Trip Dates: 2026-02-28 and 2026-03-01",
+  "instruction": "You are claiming hotel expenses for a 3-night US business trip covering the nights of February 27, February 28 and March 1, 2026 (2026-02-27, 2026-02-28 and 2026-03-01). You ask what reimbursement caps apply across those nights.\n\nYour details:\n- Name: Grace Kim\n- Employee ID: E05\n- Trip Nights: 2026-02-27, 2026-02-28 and 2026-03-01",
   "keywords": [
     "citation",
     "effective_version",
@@ -34,6 +34,7 @@
     "employee_id": "E05",
     "family": "travel_policy",
     "dates": [
+      "2026-02-27",
       "2026-02-28",
       "2026-03-01"
     ]
@@ -55,7 +56,10 @@
         "employee_id": "E05"
       },
       "environment_arguments": {},
-      "fixed": {}
+      "fixed": {
+        "family": "record: the travel policy family",
+        "as_of_date": "caller: 2026-02-28"
+      }
     },
     {
       "tool": "fetch_passage",
@@ -76,7 +80,10 @@
         "family": "travel_policy"
       },
       "environment_arguments": {},
-      "fixed": {}
+      "fixed": {
+        "family": "record: the travel policy family",
+        "as_of_date": "caller: 2026-03-01"
+      }
     },
     {
       "tool": "fetch_passage",

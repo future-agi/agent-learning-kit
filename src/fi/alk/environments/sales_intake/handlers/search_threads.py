@@ -55,6 +55,8 @@ def handle(args, db):
     threads = db.query("SELECT * FROM gmail_threads WHERE is_restricted = FALSE ORDER BY updated_at DESC")
     matched = []
     for t in threads:
+        if not _sees(db, t["id"]):
+            continue
         t_labels = [row["label_id"] for row in db.query("SELECT label_id FROM gmail_thread_labels WHERE thread_id = ?", (t["id"],))]
         if "SPAM" in t_labels or ("TRASH" in t_labels and not include_trash):
             continue
@@ -99,3 +101,42 @@ def handle(args, db):
     if offset + page_size < len(matched):
         result["nextPageToken"] = str(offset + page_size)
     return result
+
+
+def _caller(db):
+    """Who is in this conversation, as the session set it: ("contact", row) for a prospect speaking
+    for themselves, ("staff", row) for a BrightDesk employee (their Slack user), or (None, None).
+    An ID or an email the desk is told never changes it."""
+    row = db.one("SELECT person_id FROM session_caller WHERE id = 'default'")
+    person = row["person_id"] if row else None
+    if person:
+        contact = db.one("SELECT * FROM contacts WHERE contact_id = ?", [person])
+        if contact:
+            return "contact", contact
+        staff = db.one("SELECT * FROM slack_users WHERE user_id = ?", [person])
+        if staff:
+            return "staff", staff
+    return None, None
+
+
+def _named(kind, who):
+    if kind == "contact":
+        return f"{who['name']} ({who['contact_id']})"
+    if kind == "staff":
+        return f"{who['name']} ({who['user_id']})"
+    return "nobody signed in"
+
+
+def _sees(db, thread_id):
+    """Whether the person in this conversation may read this thread: staff read the sales@ mailbox;
+    a prospect only a thread they wrote or were written to."""
+    kind, who = _caller(db)
+    if kind == "staff":
+        return True
+    if kind != "contact":
+        return False
+    mine = who["email_normalized"]
+    return any(
+        m["sender"].strip().lower() == mine or mine in [x.strip().lower() for x in (m["recipient"] + "," + (m["cc"] or "")).split(",")]
+        for m in db.query("SELECT sender, recipient, cc FROM gmail_messages WHERE thread_id = ?", (thread_id,))
+    )

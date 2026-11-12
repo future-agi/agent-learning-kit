@@ -21,8 +21,8 @@ def setup(world):
         "provider_id": "D01",
         "location_id": "LOC-CEN",
         "specialty": "primary_care",
-        "start_time": "2026-10-28T10:00:00Z",
-        "end_time": "2026-10-28T10:30:00Z",
+        "start_time": "2026-10-28T09:30:00Z",
+        "end_time": "2026-10-28T10:00:00Z",
         "reason": "Medication review",
         "status": "scheduled",
         "calendar_event_id": "EVT-A4022",
@@ -40,8 +40,8 @@ def setup(world):
         "summary": "Clinic appointment A4022",
         "description": "appointment_id: A4022",
         "location": "LOC-CEN",
-        "start_time": "2026-10-28T10:00:00Z",
-        "end_time": "2026-10-28T10:30:00Z",
+        "start_time": "2026-10-28T09:30:00Z",
+        "end_time": "2026-10-28T10:00:00Z",
         "time_zone": "Europe/London",
         "status": "confirmed",
         "recurring_event_id": None,
@@ -51,3 +51,4 @@ def setup(world):
         "created_at": "2026-10-12T10:00:00Z",
         "updated_at": "2026-10-12T10:00:00Z",
     })
+    world.change("session_caller", "default", {"caller_id": "P4022"}, by="id")

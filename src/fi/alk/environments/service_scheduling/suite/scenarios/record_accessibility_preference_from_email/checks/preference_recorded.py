@@ -7,7 +7,13 @@ def check(world, calls, reference=None):
         return "not done: no preference was recorded"
     if want.get("customer_id") and not any(p["customer_id"] == want["customer_id"] for p in rows):
         return f"done wrong: the preference was recorded for {rows[0]['customer_id']}"
-    if want.get("kind") and not any(p["kind"] == want["kind"] and (not want.get("value") or p["value"] == want["value"]) for p in rows):
+    import re
+
+    def words(value):
+        return set(re.sub(r"[^a-z0-9]+", " ", str(value).lower()).split())
+
+    # The value as the customer put it, in any spelling or punctuation: "step_free access" is "Step-free access".
+    if want.get("kind") and not any(p["kind"] == want["kind"] and (not want.get("value") or sorted(words(want["value"])) == sorted(words(p["value"]))) for p in rows):
         return f"done wrong: recorded {[(p['kind'], p['value']) for p in rows]}, the customer said {want.get('kind')} = {want.get('value')}"
     return None
 

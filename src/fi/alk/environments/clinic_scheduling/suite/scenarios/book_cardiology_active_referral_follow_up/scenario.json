@@ -5,7 +5,7 @@
   "use_case": "Book a new appointment",
   "branch": "P082 books a follow-up with Dr. Ethan Brooks on Wednesday 4 November afternoon (has RF012 active cardiology referral).",
   "tests": "the agent verifies Efua Mensah, confirms her active cardiology referral, and books Dr. Ethan Brooks for Wednesday 4 November at 13:00",
-  "instruction": "You have an active cardiology referral and want to book a follow-up appointment with Dr. Ethan Brooks on Wednesday afternoon, 4 November 2026. When slots are provided, choose the 13:00 slot at Riverbank North and confirm the booking.\n\nYour details:\n- Full name: Efua Mensah\n- Date of birth: 1979-03-22\n- Email: efua.mensah@example.com\n- Phone: +447700900108\n- Insurance: AXA Health (member AX-200418)\n- Referral: Cardiology referral from Harbour Family Practice (active)",
+  "instruction": "You have an active cardiology referral and want to book a follow-up appointment with Dr. Ethan Brooks on Wednesday afternoon, 4 November 2026. When slots are provided, choose the 13:00 slot at Riverbank North and confirm the booking.\n\nYour details:\n- Full name: Efua Mensah\n- Date of birth: 1979-03-22\n- Email: efua.mensah@example.com\n- Phone: +447700900182\n- Insurance: AXA Health (member AX-200418)\n- Referral: Cardiology referral from Harbour Family Practice (active)",
   "keywords": [
     "book_appointment",
     "cardiology",

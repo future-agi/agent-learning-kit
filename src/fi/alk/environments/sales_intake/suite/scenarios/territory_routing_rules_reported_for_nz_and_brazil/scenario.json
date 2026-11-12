@@ -3,7 +3,7 @@
   "scenario_key": "territory-routing-rules-reported-for-nz-and-brazil",
   "scenario_id": "",
   "use_case": "Route leads by territory with a fallback queue",
-  "branch": "An AE inquires about territory ownership for New Zealand (mapped to A06) and Brazil (unmapped, routing to fallback queue Q-SDR-FALLBACK)",
+  "branch": "An SDR inquires about territory ownership for New Zealand (mapped to A06) and Brazil (unmapped, routing to fallback queue Q-SDR-FALLBACK)",
   "tests": "the agent checks the routing rules for both countries, identifies that New Zealand routes to rep A06 and Brazil to the fallback queue, and assigns nothing",
   "instruction": "You are Callum MacLeod, an SDR at BrightDesk in Australia. You have inbound prospects coming from both New Zealand and Brazil, and you want to know which account executive owns New Zealand and which queue or rep handles Brazil.\n\nYour details:\n- Name: Callum MacLeod\n- Role: Sales Development Representative\n- Countries in question: New Zealand, Brazil",
   "keywords": [

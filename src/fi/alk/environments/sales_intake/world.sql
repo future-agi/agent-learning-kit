@@ -126,6 +126,21 @@ CREATE TABLE handoffs (
     request_key TEXT,
     created_at TEXT NOT NULL
 );
+-- Every keyed upsert_lead, so a retry is recognised as the same request (same person, same
+-- facts) whether it created a lead or updated one, and a reused key for another request is refused.
+CREATE TABLE lead_request_keys (
+    request_key TEXT PRIMARY KEY NOT NULL,
+    lead_id TEXT NOT NULL,
+    email_normalized TEXT NOT NULL,
+    facts TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+-- Who is in this conversation, set by the session and never by what the desk is told: a contact
+-- (a prospect speaking for themselves) or a BrightDesk employee (their Slack user). NULL is nobody.
+CREATE TABLE session_caller (
+    id TEXT PRIMARY KEY NOT NULL,
+    person_id TEXT
+);
 INSERT INTO "clock" VALUES('2026-11-10T15:00:00Z');
 INSERT INTO "environment_policy" VALUES('fallback_queue','"Q-SDR-FALLBACK"');
 INSERT INTO "environment_policy" VALUES('min_qualifying_seats','20');
@@ -286,6 +301,7 @@ INSERT INTO "demo_slots" VALUES('DS19','A01','2026-11-12T21:00:00Z','2026-11-12T
 INSERT INTO "demo_slots" VALUES('DS20','A03','2026-11-12T16:00:00Z','2026-11-12T16:30:00Z','open');
 INSERT INTO "demos" VALUES('D01','L10','A06','DS17','EV-D01','booked',1,'REQ-L10-DEMO','2026-11-06T09:00:00Z','2026-11-06T09:00:00Z');
 INSERT INTO "handoffs" VALUES('H03','L03','rep_handoff','A02','Maple Ridge Telecom: 60 seats, customer service, 3-6 months, budget confirmed.','posted','REQ-L03-H','2026-11-05T12:00:00Z');
+INSERT INTO "session_caller" VALUES('default',NULL);
 
 -- gmail_inbox_triage: tables attached by attach_capability; the rows are this vertical's own, linked to its records.
 CREATE TABLE gmail_drafts (

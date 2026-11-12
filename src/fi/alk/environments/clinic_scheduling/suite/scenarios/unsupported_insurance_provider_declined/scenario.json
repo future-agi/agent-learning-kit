@@ -62,7 +62,7 @@
     "disposition": "missing_information"
   },
   "sub_goals": [
-    "clinic_information_reported",
+    "insurer_acceptance_reported",
     "declined_action_explained"
   ],
   "max_turns": 10,

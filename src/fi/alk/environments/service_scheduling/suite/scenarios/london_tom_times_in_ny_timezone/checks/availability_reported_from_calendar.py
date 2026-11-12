@@ -1,19 +1,27 @@
 def check(world, calls, reference=None):
     s = world.state()
     cal_of = {r["staff_id"]: r["calendar_id"] for r in s.get("staff", [])}
-    want_staff = _want(reference, "list_slots").get("staff_id")
-    want_cal = _want(reference, "list_events").get("calendarId") or (cal_of.get(want_staff) if want_staff else None)
-    looks = [c for c in calls if c.name in ("list_slots", "list_events", "get_event", "suggest_time") and c.ok]
-    if not looks:
-        return "not done: availability was never read from the calendar"
-    if want_cal:
-        ok = any((c.name == "list_events" and c.arguments.get("calendarId") == want_cal)
-                 or (c.name == "list_slots" and (c.arguments.get("staff_id") == want_staff or any(cal_of.get(x.get("staff_id")) == want_cal for x in (c.result or {}).get("slots") or [])))
-                 for c in looks)
-        if not ok:
-            return f"done wrong: {want_cal} was never read"
-    return _blind(world, calls, reference)
-
+    loc_of = {r["staff_id"]: r["location_id"] for r in s.get("staff", [])}
+    slots_want, events_want = _want(reference, "list_slots"), _want(reference, "list_events")
+    want_staff = slots_want.get("staff_id")
+    want_cal = events_want.get("calendarId") or (cal_of.get(want_staff) if want_staff else None)
+    want_date = str(slots_want.get("date") or events_want.get("startTime") or "")[:10]
+    if not want_cal or not want_date:
+        return "broken: the reference fixes no staff calendar and date to read"
+    target = {v: k for k, v in cal_of.items()}.get(want_cal)
+    for c in calls:
+        if not c.ok or not isinstance(c.result, dict):
+            continue
+        a, r = c.arguments, c.result
+        # Slots computed for that day from that staff member's calendar (asked for by name, or
+        # every staff member at their studio), or the calendar itself over a window that day.
+        if c.name == "list_slots" and r.get("date") == want_date and (a.get("staff_id") == target or (not a.get("staff_id") and r.get("location_id") == loc_of.get(target))):
+            return _blind(world, calls, reference)
+        if c.name == "list_events" and a.get("calendarId") == want_cal:
+            lo, hi = str(a.get("startTime") or "")[:10], str(a.get("endTime") or "")[:10]
+            if (not lo or lo <= want_date) and (not hi or hi >= want_date):
+                return _blind(world, calls, reference)
+    return f"not done: {want_cal}'s availability on {want_date} never reached the agent"
 
 def _now(state):
     return (state.get("clock") or [{"now": ""}])[0]["now"]

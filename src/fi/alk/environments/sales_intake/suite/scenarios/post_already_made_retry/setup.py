@@ -38,3 +38,6 @@ def setup(world):
         "status": "approved",
         "expires_at": "2026-11-20T00:00:00Z",
     })
+    # Who is in this conversation: the session sets it, not anything the desk is told.
+    world.put("slack_users", {"user_id": "U_S410", "name": "Kendra Whitmore", "email": "kendra.whitmore@brightdesk.example", "role": "sales_manager"})
+    world.change("session_caller", "default", {"person_id": "U_S410"}, by="id")
