@@ -219,6 +219,7 @@ def test_target_evidence_excludes_build_sidecar_and_old_target_logs(tmp_path):
 
 # --- listed files in the source are masked out of the logs the repair model reads ---------------
 
+import json  # noqa: E402
 import os  # noqa: E402
 
 import pytest  # noqa: E402
@@ -333,14 +334,13 @@ def test_a_listed_file_reached_through_a_link_is_judged_where_it_resolves(tmp_pa
     )
     # A harmless name that resolves to a listed file inside the root is read as that file.
     os.symlink(source / "real" / ".env", source / "settings.txt")
-    # A listed name that resolves to an unlisted file is not read, nor is one that leaves the root.
-    os.symlink(source / "notes.txt", source / "decoy.pem")
+    # A link that leaves the root is not read. (A listed name that links to an unlisted file inside
+    # the root is read: see test_a_listed_name_that_links_to_an_unlisted_file_is_masked.)
     os.symlink(outside, source / "leaving.env")
     os.symlink(tmp_path, source / "up")
     masks = source_secret_masks(source)
     assert "canary-linked-token-0014" in masks
     assert not any("canary-outside-token-0013" in mask for mask in masks)
-    assert not any("plain notes" in mask for mask in masks)
 
 
 def test_a_file_not_on_the_list_is_left_alone(tmp_path):
@@ -363,11 +363,123 @@ def test_an_ordinary_log_reads_normally(tmp_path):
     assert "<redacted>" not in text
 
 
-def test_the_walk_is_bounded(tmp_path, monkeypatch):
+def test_a_listed_file_over_the_size_bound_raises(tmp_path):
     source = _source(tmp_path, {"big/.env": "KEY=" + "canary-big-" * 10000 + "\n", ".env": "K=canary-small-value-0018\n"})
+    with pytest.raises(OSError):
+        source_secret_masks(source)
+
+
+def test_a_state_file_over_the_size_bound_is_not_skipped(tmp_path):
+    source = _source(tmp_path, {"infra/terraform.tfstate": '{"v": "canary-tfstate-value-0201", "pad": "' + "x" * 70000 + '"}'})
+    with pytest.raises(OSError):
+        source_secret_masks(source)
+
+
+def test_listed_files_past_the_total_bound_raise(tmp_path, monkeypatch):
+    from fi.alk.harness import process_diagnostics
+
+    monkeypatch.setattr(process_diagnostics, "_MAX_MASKED_TOTAL_BYTES", 100)
+    source = _source(tmp_path, {"a/.env": "K=canary-total-value-0202\n" * 3, "b/.env": "K=canary-total-value-0203\n" * 3})
+    with pytest.raises(OSError):
+        source_secret_masks(source)
+
+
+def test_a_walk_past_the_entry_bound_raises(tmp_path, monkeypatch):
+    from fi.alk.harness import process_diagnostics
+
+    monkeypatch.setattr(process_diagnostics, "_MAX_WALKED_ENTRIES", 5)
+    source = _source(tmp_path, {f"data/{n}.txt": "x" for n in range(8)} | {"backend/.env": "K=canary-walk-value-0204\n"})
+    with pytest.raises(OSError):
+        source_secret_masks(source)
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root reads every folder")
+def test_a_folder_that_cannot_be_scanned_raises(tmp_path):
+    source = _source(tmp_path, {"locked/.env": "K=canary-locked-value-0205\n"})
+    (source / "locked").chmod(0)
+    try:
+        with pytest.raises(OSError):
+            source_secret_masks(source)
+    finally:
+        (source / "locked").chmod(0o700)
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root reads every file")
+def test_a_listed_file_that_cannot_be_read_raises(tmp_path):
+    source = _source(tmp_path, {".env": "K=canary-unreadable-value-0206\n"})
+    (source / ".env").chmod(0)
+    try:
+        with pytest.raises(OSError):
+            source_secret_masks(source)
+    finally:
+        (source / ".env").chmod(0o600)
+
+
+def test_a_listed_name_that_links_to_an_unlisted_file_is_masked(tmp_path):
+    source = _source(tmp_path, {"conf/app.txt": "API_TOKEN=canary-linked-name-0207\nPORT=8080\n"})
+    os.symlink(source / "conf" / "app.txt", source / ".env")
+    text = _evidence(tmp_path, source, "token canary-linked-name-0207 on 8080\n")
+    assert "canary-linked-name-0207" not in text and "on 8080" in text
+
+
+def test_an_unlisted_name_that_links_to_a_listed_file_is_still_masked(tmp_path):
+    source = _source(tmp_path, {"real/.env": "API_TOKEN=canary-linked-target-0208\n"})
+    os.symlink(source / "real" / ".env", source / "settings.txt")
+    assert "canary-linked-target-0208" in source_secret_masks(source)
+
+
+def test_an_escaped_pem_in_an_env_value_is_masked_once_expanded(tmp_path):
+    body = "\\n".join(["-----BEGIN PRIVATE KEY-----", "CANARYESCAPEDLINEONEabcdefghijkl", "CANARYESCAPEDLINETWOmnopqrstuvwx", "-----END PRIVATE KEY-----"])
+    source = _source(tmp_path, {".env": f'FIREBASE_PRIVATE_KEY="{body}"\n'})
+    expanded = body.replace("\\n", "\n")
+    log = "key:\n" + expanded + "\nline " + "CANARYESCAPEDLINETWOmnopqrstuvwx" + "\ndone\n"
+    text = _evidence(tmp_path, source, log)
+    assert "CANARYESCAPED" not in text and "done" in text
+    (tmp_path / "crlf").mkdir()
+    (tmp_path / "tab").mkdir()
+    crlf = _source(tmp_path / "crlf", {".env": 'SERVICE_KEY="CANARYCRLFLINEONE0123456789\\r\\nCANARYCRLFLINETWO0123456789"\n'})
+    assert "CANARYCRLFLINETWO0123456789" in source_secret_masks(crlf)
+    tabbed = _source(tmp_path / "tab", {".env": 'SERVICE_KEY="CANARYTABPARTONE01234\\tCANARYTABPARTTWO01234"\n'})
+    assert "CANARYTABPARTONE01234\tCANARYTABPARTTWO01234" in source_secret_masks(tabbed)
+
+
+def test_an_escaped_quote_in_a_quoted_value_is_handled(tmp_path):
+    source = _source(tmp_path, {".env": 'K="ab\\"canary-escaped-quote-0209"\nPORT=8080\n'})
+    log = 'got ab"canary-escaped-quote-0209 and canary-escaped-quote-0209 on 8080\n'
+    text = _evidence(tmp_path, source, log)
+    assert "canary-escaped-quote-0209" not in text and "on 8080" in text
+
+
+def test_a_json_string_that_is_a_multi_line_pem_is_masked_whole_and_by_line(tmp_path):
+    pem = "\n".join(_PEM_LINES)
+    source = _source(tmp_path, {"svc-key.json": json.dumps({"private_key": pem, "name": "svc"})})
     masks = source_secret_masks(source)
-    assert "canary-small-value-0018" in masks
-    assert not any("canary-big-" in mask for mask in masks)
+    assert pem in masks
+    assert _PEM_LINES[1] in masks and _PEM_LINES[2] in masks
+    text = _evidence(tmp_path, source, "line " + _PEM_LINES[2] + " alone\n")
+    assert "CANARYKEYLINETWO" not in text
+
+
+@pytest.mark.parametrize(
+    "name, content, printed",
+    [
+        (".pgpass", "db.internal:5432:app:appuser:canary-pgpass-field-0210\n", "canary-pgpass-field-0210"),
+        (".netrc", "machine host.internal login appuser password canary-netrc-field-0211\n", "canary-netrc-field-0211"),
+        (".git-credentials", "https://appuser:canary-gitcred-field-0212@git.internal\n", "canary-gitcred-field-0212"),
+    ],
+)
+def test_a_credential_field_printed_alone_is_masked(tmp_path, name, content, printed):
+    source = _source(tmp_path, {name: content})
+    text = _evidence(tmp_path, source, f"auth failed with {printed} for appuser\n")
+    assert printed not in text
+
+
+def test_a_value_straddling_the_evidence_cut_is_masked_before_it_is_cut(tmp_path):
+    value = "canary-straddle-value-0213"
+    source = _source(tmp_path, {".env": f"API_TOKEN={value}\n"})
+    log = "x" * (12000 - 12) + value + "\n"
+    text = _evidence(tmp_path, source, log)
+    assert value[:10] not in text and len(text) <= 12000
 
 
 # --- a repair needs the model name, the base URL and the environment name to stay readable -------

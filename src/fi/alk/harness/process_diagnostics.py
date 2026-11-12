@@ -7,7 +7,7 @@ import stat
 import uuid
 from collections.abc import Iterable, Mapping
 from pathlib import Path
-from urllib.parse import urlsplit
+from urllib.parse import unquote, urlsplit
 
 from fi._diagnostics import sanitize_diagnostic
 
@@ -86,8 +86,17 @@ def _line_values(line: str, *, only_secrets: bool = False) -> set[str]:
     values = {raw}
     if raw[:1] in {'"', "'"}:
         quote = raw[0]
-        end = raw.find(quote, 1)
-        values.add(raw[1:end] if end > 0 else raw[1:])
+        # The closing quote is the first one not escaped by a backslash: K="ab\"<v>" holds ab"<v>.
+        end = 1
+        while end < len(raw) and raw[end] != quote:
+            end += 2 if raw[end] == "\\" else 1
+        inner = raw[1:end] if end < len(raw) else raw[1:]
+        values.add(inner)
+        unescaped = inner.replace("\\" + quote, quote).replace("\\\\", "\\")
+        values.add(unescaped)
+        values.update(inner.split("\\" + quote))
+        if raw.find(quote, 1) > 0:
+            values.add(raw[1 : raw.find(quote, 1)])  # a backslash before a closing quote
     else:
         values.add(re.sub(r"\s+#.*$", "", raw).strip())
     values = {value.strip() for value in values}
@@ -96,6 +105,15 @@ def _line_values(line: str, *, only_secrets: bool = False) -> set[str]:
         or any(_looks_like_secret(value) for value in values)
     ):
         return set()
+    # A value written on one line with \n escapes (a PEM) is logged expanded once dotenv reads it.
+    for value in tuple(values):
+        if any(escape in value for escape in ("\\n", "\\r", "\\t")):
+            expanded = (
+                value.replace("\\r\\n", "\n").replace("\\n", "\n")
+                .replace("\\r", "\r").replace("\\t", "\t")
+            )
+            values.add(expanded)
+            values.update(line.strip() for line in expanded.splitlines())
     return values
 
 
@@ -106,12 +124,38 @@ def _json_strings(value) -> set[str]:
     return set().union(*(_json_strings(item) for item in items)) if items else set()
 
 
-def _masks_of(text: str, *, env: bool = False) -> set[str]:
+def _field_masks(text: str, name: str) -> set[str]:
+    """The fields of a credentials file that is not NAME=value, since a field is printed alone:
+    .pgpass (host:port:db:user:password), .netrc (whitespace-separated words) and .git-credentials
+    (a URL per line, whose userinfo holds the password)."""
+    kind = name.casefold().lstrip("_.")
+    fields: set[str] = set()
+    for line in text.splitlines():
+        line = line.strip()
+        if kind == "pgpass":
+            fields.update(part.strip() for part in line.split(":"))
+        elif kind == "netrc":
+            fields.update(line.split())
+        elif kind == "git-credentials":
+            try:
+                parts = urlsplit(line)
+                fields.update(
+                    unquote(field) for field in (parts.password, parts.username) if field
+                )
+                fields.update(field for field in (parts.password, parts.username) if field)
+            except ValueError:
+                pass
+    return fields
+
+
+def _masks_of(text: str, *, env: bool = False, names: tuple[str, ...] = ()) -> set[str]:
     """The strings to mask for one listed file. A non-env file (PEM, JSON key, credentials) is
     masked whole, by line and by value. A settings (.env) file is masked whole, and per setting
     only where the name or the value's shape says secret; a line that is not a setting is masked
     like a line of a non-env file."""
     masks = {text, text.strip()}
+    for name in names:
+        masks |= _field_masks(text, name)
     if not env:
         try:
             # A JSON key file: each string in it, since one is printed without its field name.
@@ -136,8 +180,10 @@ def source_secret_masks(root: Path) -> frozenset[str]:
     """The contents of the files on the secret list in the source, as strings to mask in a log.
 
     Bounded (file size, total size, entries visited), follows no link out of the root, and judges
-    each path by where it resolves, relative to the root. Strings under MIN_MASKED_LENGTH are
-    dropped."""
+    each path by its own name and by where it resolves, relative to the root. Strings under
+    MIN_MASKED_LENGTH are dropped. It never returns a partial set: a folder it cannot scan, a
+    listed file it cannot read or that is over a bound, or a walk past the entry bound raises
+    OSError, and the callers then withhold the evidence."""
     root = root.resolve()
     masks: set[str] = set()
     total = 0
@@ -145,41 +191,47 @@ def source_secret_masks(root: Path) -> frozenset[str]:
     stack = [root]
     while stack:
         folder = stack.pop()
-        try:
-            with os.scandir(folder) as entries:
-                listing = sorted(entries, key=lambda entry: entry.name)
-        except OSError:
-            continue
+        with os.scandir(folder) as entries:  # an unreadable folder raises OSError
+            listing = sorted(entries, key=lambda entry: entry.name)
         for entry in listing:
             visited += 1
             if visited > _MAX_WALKED_ENTRIES:
-                return frozenset(mask for mask in masks if len(mask) >= MIN_MASKED_LENGTH)
+                raise OSError("too many entries to mask the source's listed files")
+            if entry.is_dir(follow_symlinks=False):
+                if entry.name not in _SKIP_DIRS:
+                    stack.append(Path(entry.path))
+                continue
+            own = Path(entry.path).relative_to(root).as_posix()
             try:
-                if entry.is_dir(follow_symlinks=False):
-                    if entry.name not in _SKIP_DIRS:
-                        stack.append(Path(entry.path))
-                    continue
                 resolved = Path(os.path.realpath(entry.path))
                 if not resolved.is_relative_to(root):
                     continue
-                if not secret_text(resolved.relative_to(root).as_posix()):
+                if not (secret_text(own) or secret_text(resolved.relative_to(root).as_posix())):
                     continue
-                if _is_template(resolved.name):
-                    continue
-                fd = os.open(resolved, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
-            except (OSError, ValueError):
+            except ValueError:
                 continue
+            if _is_template(entry.name) or _is_template(resolved.name):
+                continue
+            try:
+                fd = os.open(resolved, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+            except FileNotFoundError:
+                continue  # a dangling link: nothing to read
             with os.fdopen(fd, "rb") as stream:
                 info = os.fstat(stream.fileno())
+                if not stat.S_ISREG(info.st_mode):
+                    continue
                 if (
-                    not stat.S_ISREG(info.st_mode)
-                    or info.st_size > _MAX_MASKED_FILE_BYTES
+                    info.st_size > _MAX_MASKED_FILE_BYTES
                     or total + info.st_size > _MAX_MASKED_TOTAL_BYTES
                 ):
-                    continue
+                    raise OSError("a listed file is too large to mask")
                 total += info.st_size
                 text = stream.read(_MAX_MASKED_FILE_BYTES + 1).decode("utf-8", errors="replace")
-            masks |= _masks_of(text, env=_is_env_file(resolved.name))
+            masks |= _masks_of(
+                text,
+                env=_is_env_file(entry.name) or _is_env_file(resolved.name),
+                names=(entry.name, resolved.name),
+            )
     return frozenset(mask for mask in masks if len(mask) >= MIN_MASKED_LENGTH)
 
 

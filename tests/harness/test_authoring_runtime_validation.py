@@ -3049,3 +3049,206 @@ class Handler(BaseHTTPRequestHandler):
         server.shutdown()
         server.server_close()
         thread.join(timeout=5)
+
+
+def test_startup_failure_withholds_both_process_logs_when_the_masks_cannot_be_built(
+    tmp_path, monkeypatch
+):
+    from fi.alk.harness import bundle_author_v2, process_diagnostics, process_preflight, process_runtime
+
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / ".env").write_text("DB_PASSWORD=canary-source-password-7782\nPORT=8080\n")
+    authoring = tmp_path / "authoring"
+    authoring.mkdir()
+    secrets = tmp_path / "secrets.json"
+    secrets.write_text('{"KEY":"private-startup-token"}')
+    logs = authoring / "generic-harness" / "process-logs"
+    logs.mkdir(parents=True)
+
+    class Provider:
+        def __init__(self, **kwargs):
+            pass
+
+        async def provision(self, *args, **kwargs):
+            raise process_runtime.ProcessRuntimeError(
+                "depends_on", "depends_on_timeout", "readiness probe timed out"
+            )
+
+        async def close(self, **kwargs):
+            (logs / ("worlds-w0-agent-" + "a" * 32 + ".log")).write_text(
+                "connecting with canary-source-password-7782 on port 8080\n"
+            )
+
+    def compile_bundle(**kwargs):
+        return SimpleNamespace(
+            runtime=BundleRuntimeV2(
+                kind=RuntimeKindV2.PROCESS,
+                evidence_seam=EvidenceSeam.HTTP_TOOL,
+                control_service="agent",
+            )
+        )
+
+    def unreadable(root):
+        raise OSError("cannot scan")
+
+    monkeypatch.setattr(process_diagnostics, "source_secret_masks", unreadable)
+    monkeypatch.setattr(process_runtime, "ProcessRuntimeProvider", Provider)
+    monkeypatch.setattr(bundle_author_v2, "author_bundle_v2", compile_bundle)
+    monkeypatch.setattr(process_preflight, "preflight_bundle", lambda *a, **k: None)
+    job = SimpleNamespace(agent=SimpleNamespace(secret_refs={}))
+    with pytest.raises(RuntimeValidationError) as caught:
+        asyncio.run(
+            validate_once(job, source, authoring, secrets_path=secrets, local_runtime=True)
+        )
+    assert caught.value.process_evidence == ""
+    assert caught.value.target_process_evidence == ""
+
+
+def test_the_repair_gets_no_evidence_when_the_masks_cannot_be_built(tmp_path, monkeypatch):
+    from fi.alk.harness import process_diagnostics
+
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / ".env").write_text("DB_PASSWORD=canary-source-password-7783\n")
+    authoring = tmp_path / "authoring"
+    authoring.mkdir()
+    calls = []
+
+    def unreadable(root):
+        raise OSError("cannot scan")
+
+    monkeypatch.setattr(process_diagnostics, "source_secret_masks", unreadable)
+
+    async def validate(*args):
+        calls.append("validate")
+        if len(calls) == 1:
+            error = RuntimeValidationError(
+                "environment", "login failed for canary-source-password-7783"
+            )
+            error.process_evidence = "agent.log\nusing canary-source-password-7783\n"
+            raise error
+        return 10
+
+    seen = []
+
+    async def repair(phase, guidance):
+        seen.append(guidance)
+        return 0
+
+    asyncio.run(
+        validate_and_repair(None, source, authoring, validate=validate, repair=repair)
+    )
+    assert seen and "canary-source-password-7783" not in seen[0]
+    assert "agent.log" not in seen[0] and "login failed" not in seen[0]
+    assert "evidence was withheld" in seen[0]
+
+
+def test_typed_diagnostics_are_masked_before_the_plan_patch_briefing_is_built(
+    tmp_path, monkeypatch
+):
+    from fi.alk.harness import runtime_repair
+
+    value = "canary-typed-diagnostic-8841"
+    source = tmp_path / "source"
+    authoring = tmp_path / "authoring"
+    source.mkdir()
+    authoring.mkdir()
+    (source / ".env").write_text(f"DB_PASSWORD={value}\nPORT=8080\n")
+    (source / "pyproject.toml").write_text("[project]\nname='agent'\nversion='1'\n")
+    contract = AgentContract(agent="unknown-framework", runtime=Runtime())
+    (authoring / "contract.json").write_text(
+        contract.model_dump_json(indent=2) + "\n", encoding="utf-8"
+    )
+    diagnostic = HarnessDiagnostic.create(
+        stage=HarnessStage.BUILDING_ENVIRONMENT,
+        component="runtime_validation",
+        code="generated_runtime_plan_invalid",
+        message=f"agent exited: auth failed for {value} on 8080",
+        evidence_refs=(f"log: password {value}",),
+    )
+    briefings = []
+
+    class CapturingStage:
+        def __init__(self, spec, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            pass
+
+        async def say(self, briefing, *, on_event=None):
+            briefings.append(briefing)
+
+    monkeypatch.setattr(runtime_repair, "Stage", CapturingStage)
+    attempts = []
+
+    async def validate(*_args):
+        attempts.append(1)
+        if len(attempts) > 1:
+            return 1
+        raise RuntimeValidationError("runtime", "launcher", diagnostics=(diagnostic,))
+
+    job = HarnessJob(
+        job_id="repair",
+        run_id="repair",
+        execution="local",
+        source={"kind": "local_repository", "local_path": str(source)},
+        agent={"connector": "auto"},
+        metadata={"generic_harness_v1": True},
+        guidance=[],
+        require_tool_workflow=True,
+    )
+    with pytest.raises(RuntimeValidationError):
+        asyncio.run(validate_and_repair(job, source, authoring, validate=validate, repair=None))
+    assert briefings, "the plan-patch route was not reached"
+    assert value not in briefings[0]
+    assert "auth failed for <redacted> on 8080" in briefings[0]
+
+
+def test_typed_diagnostics_carry_the_codes_only_when_the_masks_cannot_be_built():
+    from fi.alk.harness.authoring_runtime_validation import _mask_diagnostics
+
+    diagnostic = HarnessDiagnostic.create(
+        stage=HarnessStage.BUILDING_ENVIRONMENT,
+        component="runtime_validation",
+        code="generated_runtime_plan_invalid",
+        message="auth failed for canary-codes-only-8842",
+        evidence_refs=("ref canary-codes-only-8842",),
+    )
+    (withheld,) = _mask_diagnostics((diagnostic,), None)
+    assert withheld.code == "generated_runtime_plan_invalid"
+    assert "canary-codes-only-8842" not in withheld.model_dump_json()
+    assert withheld.evidence_refs == ()
+    (masked,) = _mask_diagnostics((diagnostic,), frozenset({"canary-codes-only-8842"}))
+    assert "canary-codes-only-8842" not in masked.model_dump_json()
+
+
+def test_a_value_straddling_the_diagnostic_cut_is_masked_before_it_is_cut(tmp_path):
+    value = "canary-straddle-guidance-8843"
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / ".env").write_text(f"DB_PASSWORD={value}\n")
+    authoring = tmp_path / "authoring"
+    authoring.mkdir()
+    calls = []
+
+    async def validate(*args):
+        calls.append(1)
+        if len(calls) == 1:
+            raise RuntimeValidationError("environment", "x" * 3990 + value + " tail")
+        return 10
+
+    seen = []
+
+    async def repair(phase, guidance):
+        seen.append(guidance)
+        return 0
+
+    asyncio.run(
+        validate_and_repair(None, source, authoring, validate=validate, repair=repair)
+    )
+    assert seen and value[:10] not in seen[0]
+    assert "<redacted>" in seen[0]

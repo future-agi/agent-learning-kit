@@ -591,6 +591,30 @@ def _repair_guidance(diagnostics) -> str:
     return "\n".join(rendered)[:12000]
 
 
+def _mask_diagnostics(diagnostics, masks):
+    """The typed diagnostics as the repair step may see them: message and references masked
+    against the source's listed files (before any cut). With no masks (the walk failed), the codes
+    only."""
+    from .process_diagnostics import mask_source_secrets
+
+    if masks is None:
+        return tuple(
+            item.model_copy(update={"redacted_message": "withheld", "evidence_refs": ()})
+            for item in diagnostics
+        )
+    return tuple(
+        item.model_copy(
+            update={
+                "redacted_message": mask_source_secrets(item.redacted_message, masks),
+                "evidence_refs": tuple(
+                    mask_source_secrets(reference, masks) for reference in item.evidence_refs
+                ),
+            }
+        )
+        for item in diagnostics
+    )
+
+
 def _needs_runtime_plan_repair(diagnostics) -> bool:
     """Route execution construction failures away from world-data authoring."""
 
@@ -1616,10 +1640,15 @@ async def validate_and_repair(
 
     _unmasked_repair = repair
 
-    async def repair(phase, guidance, *more, **options):
+    async def source_masks_or_none():
         try:
-            masks = await asyncio.to_thread(source_secret_masks, source)
+            return await asyncio.to_thread(source_secret_masks, source)
         except Exception:
+            return None
+
+    async def repair(phase, guidance, *more, **options):
+        masks = await source_masks_or_none()
+        if masks is None:
             guidance = "The diagnostic evidence was withheld.\n\n" + base_guidance
         else:
             guidance = mask_source_secrets(guidance, masks)
@@ -1723,11 +1752,16 @@ async def validate_and_repair(
                     if decision.action is RepairAction.PATCH_SCENARIOS
                     else "environment"
                 )
+                # Masked before anything is cut or handed on: the guidance text and the typed
+                # diagnostics both reach the model.
+                repair_diagnostics = _mask_diagnostics(
+                    diagnostics, await source_masks_or_none()
+                )
                 guidance = (
                     "Apply one constrained repair using submitted source evidence only. "
                     "Do not modify source, disable constraints, weaken checks, drop scenarios, "
                     "or invent services/tools. Resolve this complete, redacted diagnostic set:\n"
-                    + _repair_guidance(diagnostics)
+                    + _repair_guidance(repair_diagnostics)
                     + "\n\n"
                     + base_guidance
                 )
@@ -1743,7 +1777,7 @@ async def validate_and_repair(
                         + exc.target_process_evidence
                         + "\n</untrusted_current_target_process_logs>"
                     )
-                _active_repair_diagnostics = diagnostics
+                _active_repair_diagnostics = repair_diagnostics
                 scenarios_before = None
                 if repair_phase == "scenarios":
                     from .scenario_tools import load_scenarios
@@ -1947,12 +1981,16 @@ async def validate_and_repair(
             if exc.phase not in repairs or repairs[exc.phase] >= 2:
                 raise
             repairs[exc.phase] += 1
+            masks = await source_masks_or_none()
+            detail = (
+                "withheld" if masks is None else mask_source_secrets(str(exc), masks)[:4000]
+            )
             guidance = (
                 "Actual hosted runtime validation failed. Repair the generated environment/data "
                 "or scenario setup using the submitted source as authority. Do not modify source, "
                 "disable database constraints, weaken checks or ready conditions, drop scenarios, "
                 "or replace tools with invented implementations. Preserve scenario count and intent. "
-                f"Diagnostic: {str(exc)[:4000]}" + "\n\n" + base_guidance
+                f"Diagnostic: {detail}" + "\n\n" + base_guidance
             )
             if await repair(exc.phase, guidance):
                 raise
