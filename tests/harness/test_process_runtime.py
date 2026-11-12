@@ -58,6 +58,7 @@ from fi.alk.harness import process_runtime as pr
 from fi.alk.harness.job import (
     AgentConnection,
     ExecutionMode,
+    FailureCause,
     FailureDomain,
     HarnessJob,
     HarnessJobMetadata,
@@ -2244,6 +2245,7 @@ def test_depends_on_readiness_probe_timeout_is_a_typed_error() -> None:
         )
     assert excinfo.value.stage == "depends_on"
     assert excinfo.value.code == "depends_on_timeout"
+    assert excinfo.value.cause is FailureCause.AGENT_NOT_READY_IN_TIME
 
 
 def test_depends_on_readiness_fails_immediately_when_source_process_exits() -> None:
@@ -2267,8 +2269,81 @@ def test_depends_on_readiness_fails_immediately_when_source_process_exits() -> N
 
     assert excinfo.value.code == "spawn_failed"
     assert excinfo.value.domain is pr.FailureDomain.AGENT
+    assert excinfo.value.cause is FailureCause.AGENT_EXITED_BEFORE_READY
     assert "prompt service rejected credentials" in str(excinfo.value)
     assert sleeps == []
+
+
+def test_an_agent_that_crashes_at_import_reads_exited_before_ready(
+    tmp_path: Path,
+) -> None:
+    """A real process that raises while importing: the cause is closed, the text stays local."""
+    manifest = _manifest(
+        lambda body: {
+            **body,
+            "readiness": [],
+            "processes": [
+                body["processes"][0],
+                {
+                    **body["processes"][1],
+                    "started_check": {"port": True, "timeout_seconds": 10},
+                },
+                body["processes"][2],
+            ],
+        }
+    )
+    plan = pr.plan_ports(manifest, instances=1)
+    handle = pr.default_process_runner(
+        [sys.executable, "-c", "raise RuntimeError('crashed at import')"],
+        cwd=tmp_path,
+        env={},
+        log_path=tmp_path / "tools-api.log",
+    )
+    spawned = pr.SpawnedWorldProcess(
+        "tools-api", handle, plan.port_for("tools-api", 0), 0
+    )
+
+    with pytest.raises(pr.ProcessRuntimeError) as excinfo:
+        pr.wait_for_dependency(
+            manifest, "tools-api", world_index=0, port_plan=plan, spawned=spawned
+        )
+
+    assert excinfo.value.code == "spawn_failed"
+    assert excinfo.value.cause is FailureCause.AGENT_EXITED_BEFORE_READY
+    assert "crashed at import" in str(excinfo.value)
+
+
+def test_a_managed_engine_that_exits_before_ready_has_no_agent_cause() -> None:
+    manifest = _manifest(
+        lambda body: {
+            **body,
+            "readiness": [
+                {
+                    "capability": "database",
+                    "timeout_seconds": 5,
+                    "interval_seconds": 0.1,
+                }
+            ],
+        }
+    )
+    plan = pr.plan_ports(manifest, instances=1)
+    handle = FakeHandle()
+    handle.terminated = True
+    spawned = pr.SpawnedWorldProcess("postgres", handle, 15000, 0)
+
+    with pytest.raises(pr.ProcessRuntimeError) as excinfo:
+        pr.wait_for_dependency(
+            manifest,
+            "postgres",
+            world_index=0,
+            port_plan=plan,
+            spawned=spawned,
+            prober=lambda **kwargs: False,
+            sleep=lambda s: None,
+        )
+
+    assert excinfo.value.domain is pr.FailureDomain.INFRASTRUCTURE
+    assert excinfo.value.cause is None
 
 
 def test_started_check_log_marker_variant_waits_for_the_marker() -> None:
@@ -2454,6 +2529,7 @@ def test_started_check_port_variant_timeout_when_nothing_listens() -> None:
             sleep=lambda s: ticks.__setitem__("t", ticks["t"] + s),
         )
     assert excinfo.value.code == "depends_on_timeout"
+    assert excinfo.value.cause is FailureCause.AGENT_NOT_READY_IN_TIME
 
 
 def test_spawn_world_spawns_in_dependency_order_and_waits_between(
