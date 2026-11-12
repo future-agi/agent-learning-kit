@@ -62,3 +62,5 @@ def setup(world):
         "status": "active",
         "created_at": "2026-10-22T10:00:00Z",
     })
+    world.put("shipments", {"shipment_id": "SHP476", "order_id": "O476", "carrier": "UPS", "tracking_number": "1Z999AA10000000476", "status": "delivered", "shipped_at": "2026-10-15T18:00:00Z", "delivered_at": "2026-10-19T10:00:00Z", "last_event": "Delivered, left at front door", "last_event_at": "2026-10-19T10:00:00Z"})
+    world.put("invoices", {"invoice_id": "INV476", "order_id": "O476", "issued_at": "2026-10-15T10:00:00Z", "total_cents": 6500, "currency": "USD", "pdf_url": "https://invoices.example.com/INV476.pdf"})

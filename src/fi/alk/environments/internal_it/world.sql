@@ -218,6 +218,10 @@ CREATE TABLE current_actor (
     id TEXT PRIMARY KEY,
     user_id TEXT NOT NULL
 );
+CREATE TABLE session_caller (
+    id TEXT PRIMARY KEY,
+    employee_id TEXT
+);
 
 -- drive_policy_search: tables attached by attach_capability; the rows are this vertical's own, linked to its records.
 CREATE TABLE drive_audit_log (
@@ -283,6 +287,7 @@ INSERT INTO "app_licenses" VALUES('APP-SEC',4);
 INSERT INTO "app_licenses" VALUES('APP-CODE',25);
 INSERT INTO "app_licenses" VALUES('APP-MKT',5);
 INSERT INTO current_actor VALUES('default','U_ITDESK');
+INSERT INTO session_caller VALUES('default',NULL);
 INSERT INTO slack_users VALUES('U_ITDESK','IT Access Desk','it-desk@example.com','it_desk');
 INSERT INTO slack_users VALUES('U_E01','Alice Smith','alice.smith@example.com','analytics');
 INSERT INTO slack_users VALUES('U_E02','Bob Jones','bob.jones@example.com','engineering');

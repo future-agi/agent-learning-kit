@@ -327,6 +327,25 @@ def test_the_access_system_refuses_what_the_plan_says_must_never_happen(built: P
         world.close()
 
 
+def test_only_the_signed_in_approver_can_record_an_approval(built: Path) -> None:
+    """Naming the approver is not being the approver: with someone else signed in to the
+    conversation, an approval that supplies the right manager's ID is refused and mints no token,
+    so the grant that would follow has nothing to accept."""
+    key = "approve_and_grant_in_single_session"
+    for signed_in in ("E01", None):
+        world, _calls, _refused, _ = _run(_scenario(key), built / WORLD, with_solution=False)
+        try:
+            world.change("session_caller", "default", {"employee_id": signed_in}, by="id")
+            before = len(world.state()["approvals"])
+            answer = world.call("record_approval_decision", {"request_id": "AR-101", "decision": "approve", "approver_id": "E05"})
+            assert not answer.ok and "signed in" in answer.error, (signed_in, answer.result)
+            assert len(world.state()["approvals"]) == before, signed_in
+            granted = world.call("grant_synthetic_access", {"request_id": "AR-101", "approval_token": f"TOK-AR-101-{before + 1:03d}"})
+            assert not granted.ok, (signed_in, granted.result)
+        finally:
+            world.close()
+
+
 def test_an_agent_that_does_nothing_fails_every_scenario(built: Path) -> None:
     for path in sorted(p for p in (SUITE / "scenarios").iterdir() if p.is_dir()):
         said = _grade(built, path.name, [])

@@ -53,6 +53,7 @@ Rules: `policy.json` (15 invariants, 6 configurable policies, 8 agent rules). MC
 | `approvals` | 2 | Tokens bound to one request, employee, application and role; one valid, one expired |
 | `audit_log` | 0 | What the access tools did |
 | `current_actor` | 1 | The desk's identity, shared by the attached capabilities |
+| `session_caller` | 1 | The employee signed in to the conversation, set by the session; only they can record an approval decision |
 | `drive_audit_log` | 0 | Reads the Drive tools record (empty in the seed) |
 | `drive_file_revisions` | 0 | Earlier revisions of library documents |
 | `drive_files` | 9 | Policy library: documents in force, superseded, scheduled, draft, restricted, binary, injected, deleted |

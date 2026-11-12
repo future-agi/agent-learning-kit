@@ -44,3 +44,4 @@ def setup(world):
         "last_event": "Delivered, front porch",
         "last_event_at": "2026-10-20T10:00:00Z"
     })
+    world.put("invoices", {"invoice_id": "INV450", "order_id": "O450", "issued_at": "2026-10-15T10:00:00Z", "total_cents": 9800, "currency": "USD", "pdf_url": "https://invoices.example.com/INV450.pdf"})

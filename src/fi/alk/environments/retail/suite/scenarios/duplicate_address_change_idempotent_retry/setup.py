@@ -33,3 +33,5 @@ def setup(world):
         "line_net_cents": 6400,
         "returned_quantity": 0
     })
+    world.put("shipments", {"shipment_id": "SHP451", "order_id": "O451", "carrier": "UPS", "tracking_number": "1Z999AA10000000451", "status": "label_created", "shipped_at": None, "delivered_at": None, "last_event": "Order being prepared at the warehouse", "last_event_at": "2026-10-25T10:00:00Z"})
+    world.put("invoices", {"invoice_id": "INV451", "order_id": "O451", "issued_at": "2026-10-25T10:00:00Z", "total_cents": 6400, "currency": "USD", "pdf_url": "https://invoices.example.com/INV451.pdf"})

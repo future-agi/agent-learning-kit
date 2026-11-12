@@ -1,18 +1,21 @@
 def check(world, calls, reference=None):
-    made = [c for c in calls if c.name == "get_employee_profile" and c.ok]
+    made = [c for c in calls if c.name == "get_leave_balance" and c.ok]
     if not made:
-        return "not done: get_employee_profile was not called successfully"
+        return "not done: get_leave_balance was not called successfully"
+        
     wanted = {}
     if reference:
         for step in reference:
-            if step["tool"] == "get_employee_profile":
-                for k in ("employee_id",):
+            if step["tool"] == "get_leave_balance":
+                for k in ("employee_id", "leave_type"):
                     if k in step.get("arguments", {}):
                         wanted[k] = step["arguments"][k]
+                        
     for field, expected in wanted.items():
         if not any(str(c.arguments.get(field, "")).strip().lower() == str(expected).strip().lower() for c in made):
             got = [c.arguments.get(field) for c in made]
             return f"done wrong: {field} expected {expected!r}, got {got!r}"
+            
     return None
 
 

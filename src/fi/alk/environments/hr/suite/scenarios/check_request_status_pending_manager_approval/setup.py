@@ -11,3 +11,4 @@ def setup(world):
         "reason": "Executive leadership seminar",
         "created_at": "2026-10-20T10:00:00Z"
     })
+    world.change("leave_balances", "BAL-M03-ANN", {"reserved_days": 3, "available_days": 12}, by="balance_id")

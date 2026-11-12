@@ -1,18 +1,13 @@
 def check(world, calls, reference=None):
-    made = [c for c in calls if c.name == "get_employee_profile" and c.ok]
-    if not made:
-        return "not done: get_employee_profile was not called successfully"
-    wanted = {}
-    if reference:
-        for step in reference:
-            if step["tool"] == "get_employee_profile":
-                for k in ("employee_id",):
-                    if k in step.get("arguments", {}):
-                        wanted[k] = step["arguments"][k]
-    for field, expected in wanted.items():
-        if not any(str(c.arguments.get(field, "")).strip().lower() == str(expected).strip().lower() for c in made):
-            got = [c.arguments.get(field) for c in made]
-            return f"done wrong: {field} expected {expected!r}, got {got!r}"
+    mgr = None
+    for step in reference or ():
+        if step.get("tool") == "get_team_absences" and step.get("arguments", {}).get("manager_id"):
+            mgr = step["arguments"]["manager_id"]
+    looks = [c for c in calls if c.name == "get_team_absences" and c.ok]
+    if not looks:
+        return "not done: the team view was never read"
+    if mgr and not any(c.arguments.get("manager_id") == mgr for c in looks):
+        return f"done wrong: the team view of {mgr} was never read"
     return None
 
 

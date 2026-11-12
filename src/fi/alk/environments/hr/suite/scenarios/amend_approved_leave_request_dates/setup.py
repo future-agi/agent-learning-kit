@@ -12,8 +12,8 @@ def setup(world):
         "employee_id": "E404",
         "leave_type": "annual",
         "allocated_days": 25,
-        "used_days": 10,
-        "reserved_days": 5,
+        "used_days": 15,
+        "reserved_days": 0,
         "available_days": 10
     })
     world.put("leave_requests", {

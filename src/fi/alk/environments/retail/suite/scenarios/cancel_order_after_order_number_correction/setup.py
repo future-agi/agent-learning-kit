@@ -63,7 +63,7 @@ def setup(world):
         "order_id": "O431",
         "carrier": "UPS",
         "tracking_number": "1Z999AA10000000431",
-        "status": "created",
+        "status": "label_created",
         "shipped_at": None,
         "delivered_at": None,
         "last_event": "Label created",
@@ -74,9 +74,11 @@ def setup(world):
         "order_id": "O435",
         "carrier": "UPS",
         "tracking_number": "1Z999AA10000000435",
-        "status": "created",
+        "status": "label_created",
         "shipped_at": None,
         "delivered_at": None,
         "last_event": "Label created",
         "last_event_at": "2026-10-26T09:35:00Z",
     })
+    world.put("invoices", {"invoice_id": "INV431", "order_id": "O431", "issued_at": "2026-10-26T09:00:00Z", "total_cents": 9500, "currency": "USD", "pdf_url": "https://invoices.example.com/INV431.pdf"})
+    world.put("invoices", {"invoice_id": "INV435", "order_id": "O435", "issued_at": "2026-10-26T09:30:00Z", "total_cents": 5000, "currency": "USD", "pdf_url": "https://invoices.example.com/INV435.pdf"})

@@ -49,9 +49,10 @@ def setup(world):
         "order_id": "O474",
         "carrier": "UPS",
         "tracking_number": "1Z999AA10000000474",
-        "status": "created",
+        "status": "label_created",
         "shipped_at": None,
         "delivered_at": None,
         "last_event": "Label created",
         "last_event_at": "2026-10-26T09:05:00Z",
     })
+    world.put("invoices", {"invoice_id": "INV474", "order_id": "O474", "issued_at": "2026-10-26T09:00:00Z", "total_cents": 9800, "currency": "USD", "pdf_url": "https://invoices.example.com/INV474.pdf"})

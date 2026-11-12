@@ -44,3 +44,4 @@ def setup(world):
         "last_event": "Departed regional facility, Louisville KY",
         "last_event_at": "2026-10-25T22:10:00Z",
     })
+    world.put("invoices", {"invoice_id": "INV407", "order_id": "O407", "issued_at": "2026-10-24T18:00:00Z", "total_cents": 11000, "currency": "USD", "pdf_url": "https://invoices.example.com/INV407.pdf"})

@@ -14,6 +14,11 @@ def handle(args, db):
         raise ToolError(f"Request {request_id} is {req['status']}; only a pending request can be decided.")
     if req["approver_id"] != approver_id:
         raise ToolError(f"Permission denied: {approver_id} is not the approver of {request_id} ({req['approver_id']} is).")
+    # Who is signed in to this conversation is set by the session, not by anything the desk is told:
+    # naming the approver is not being the approver.
+    caller = db.one("SELECT employee_id FROM session_caller WHERE id = 'default'")
+    if not caller or caller["employee_id"] != approver_id:
+        raise ToolError(f"Permission denied: only {approver_id}, signed in to this conversation, can decide {request_id}; the person signed in is {(caller or {}).get('employee_id') or 'nobody'}.")
     approver = db.one("SELECT status FROM employees WHERE employee_id = ?", [approver_id])
     if not approver or approver["status"] != "active":
         raise ToolError(f"Approver {approver_id} is not an active employee.")
