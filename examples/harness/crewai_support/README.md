@@ -22,10 +22,11 @@ imported, unless the environment already sets those variables.
 - `OPENAI_MODEL`: the model name, default `vertex_ai/gemini-3.7-flash` (a gateway name).
 
 The endpoint must speak chat completions. The model is built as `LLM(..., custom_openai=True)`,
-which keeps CrewAI's OpenAI client on chat completions with the name unchanged. A plain
-`openai/...` string with a base URL also reaches the native OpenAI client, but CrewAI would
-switch that model to the Responses API after a "responses-only" error from the endpoint;
-`custom_openai=True` stops that.
+which keeps CrewAI's OpenAI client on chat completions with the name unchanged, and stops
+CrewAI switching to the Responses API after a "responses-only" error from the endpoint. A plain
+`openai/<a known OpenAI model>` string with a base URL can make that switch, and an `openai/`
+string whose URL comes only from the environment goes to LiteLLM instead, which this example
+doesn't install.
 
 ## Known limits
 
