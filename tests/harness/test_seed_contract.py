@@ -1472,6 +1472,9 @@ def test_a_record_that_cant_be_read_back_is_logged(tmp_path, monkeypatch, caplog
     assert [record.getMessage() for record in caplog.records] == [
         "reading record not carried; class: PermissionError"
     ]
+    # With the trace: a seeded build saved as an unseeded one must show why.
+    [record] = caplog.records
+    assert record.exc_info is not None and record.exc_info[0] is PermissionError
 
 
 def _raise(exc: BaseException):

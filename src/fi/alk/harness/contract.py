@@ -1575,9 +1575,10 @@ def _saved_record(path: Path) -> dict[str, Any]:
     except FileNotFoundError:
         return {}
     except OSError as exc:
-        # The save goes on without it; the class alone, as the seed's own skips are logged.
+        # The save goes on without it, so a seeded build saves as an unseeded one: log the error
+        # in full. The file is the kit's own contract, not the customer's source.
         logging.getLogger(__name__).warning(
-            "reading record not carried; class: %s", type(exc).__name__
+            "reading record not carried; class: %s", type(exc).__name__, exc_info=True
         )
         return {}
     # A contract that never held a record is not parsed again.
