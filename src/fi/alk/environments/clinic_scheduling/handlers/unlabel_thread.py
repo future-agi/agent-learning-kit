@@ -1,4 +1,20 @@
-def _handle(args, db):
+def _withheld(db, thread_id):
+    """The patient a mailbox thread is about whom this conversation may not see yet, or None. The
+    appointments mailbox holds patients' health details: a thread linked to a patient is shown only
+    once that patient is verified by the person talking, who must be them or hold recorded
+    guardian or proxy authority for them."""
+    row = db.one("SELECT caller_id FROM session_caller WHERE id = 'default'")
+    caller = row["caller_id"] if row else None
+    for link in db.query("SELECT patient_id FROM gmail_thread_patients WHERE thread_id = ?", (thread_id,)):
+        pid = link["patient_id"]
+        entitled = caller is not None and (caller == pid or db.one(
+            "SELECT patient_id FROM caller_access WHERE caller_id = ? AND patient_id = ?", (caller, pid)) is not None)
+        if not entitled or not db.one("SELECT patient_id FROM verified_patients WHERE patient_id = ?", (pid,)):
+            return pid
+    return None
+
+
+def handle(args, db):
     thread_id = (args.get("threadId") or "").strip() if isinstance(args.get("threadId"), str) else ""
     if not thread_id:
         raise ToolError("threadId is required", category="invalid_input")
@@ -11,6 +27,9 @@ def _handle(args, db):
         raise ToolError(f"Thread {thread_id!r} not found", category="not_found")
     if t["is_restricted"]:
         raise ToolError(f"Access to thread {thread_id!r} is restricted", category="permission_denied")
+    if _withheld(db, thread_id):
+        # Filing someone's mail is acting on it: only for a patient this conversation may see.
+        raise ToolError(f"Thread {thread_id!r} is about a patient who is not verified in this conversation; verify the patient first.", category="permission_denied")
 
     for lid in label_ids:
         if db.one("SELECT id FROM gmail_labels WHERE id = ?", (lid,)) is None:
@@ -18,43 +37,3 @@ def _handle(args, db):
     for lid in label_ids:
         db.execute("DELETE FROM gmail_thread_labels WHERE thread_id = ? AND label_id = ?", (thread_id, lid))
     return {}
-
-
-_WRITES = ("gmail_thread_labels",)
-
-def _all_or_nothing(db, run):
-    """Run the call so that a failed call changes nothing. A handler gets no transaction of its own,
-    so every table this tool writes is held first and put back if the call raises, whether a write
-    failed partway or the call refused after writing. Only a fault the world simulates on purpose
-    (an error marked keep_writes: a rival booking, a commit whose reply was lost, a fault used up)
-    keeps what it wrote."""
-    held = {table: db.query(f"SELECT * FROM {table}") for table in _WRITES}
-    try:
-        return run()
-    except Exception as failed:
-        if not getattr(failed, "keep_writes", False):
-            for table, rows in held.items():
-                if _same(db.query(f"SELECT * FROM {table}"), rows):
-                    continue
-                db.execute(f"DELETE FROM {table}")
-                for row in rows:
-                    cols = list(row)
-                    db.execute(
-                        f"INSERT INTO {table} ({', '.join(chr(34) + c + chr(34) for c in cols)}) VALUES ({', '.join('?' * len(cols))})",
-                        [row[c] for c in cols],
-                    )
-        raise
-
-def _same(rows, held):
-    """Whether a table still holds exactly the rows it held, in any order: only a table the call
-    changed is rewritten."""
-    import json
-
-    def key(row):
-        return json.dumps(row, sort_keys=True, default=str)
-
-    return sorted(map(key, rows)) == sorted(map(key, held))
-
-
-def handle(args, db):
-    return _all_or_nothing(db, lambda: _handle(args, db))

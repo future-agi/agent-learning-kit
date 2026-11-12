@@ -36,17 +36,6 @@
   },
   "solution": [
     {
-      "tool": "get_event",
-      "arguments": {
-        "calendarId": "CAL-D03",
-        "eventId": "EVT-A410"
-      },
-      "environment_arguments": {},
-      "fixed": {
-        "eventId": "record: EVT-A410"
-      }
-    },
-    {
       "tool": "verify_patient",
       "arguments": {
         "full_name": "Carmela Vega",
@@ -56,6 +45,17 @@
       "fixed": {
         "full_name": "caller: Carmela Vega",
         "dob": "caller: 1975-06-21"
+      }
+    },
+    {
+      "tool": "get_event",
+      "arguments": {
+        "calendarId": "CAL-D03",
+        "eventId": "EVT-A410"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "eventId": "record: EVT-A410"
       }
     },
     {

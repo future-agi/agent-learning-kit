@@ -45,15 +45,23 @@
       "fixed": {}
     },
     {
-      "tool": "read_file_content",
+      "tool": "get_file_metadata",
       "arguments": {
         "fileId": "leave_v2",
-        "revisionId": "",
-        "includeComments": false
+        "excludeContentSnippets": true
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "fetch_passage",
+      "arguments": {
+        "employee_id": "E13",
+        "passage_id": "P-LEAVEV2-01"
       },
       "environment_arguments": {},
       "fixed": {
-        "fileId": "record: drive_files leave_v2"
+        "passage_id": "record: Annual Leave Policy 2.0 section 1 (Entitlement)"
       }
     }
   ],

@@ -1,3 +1,15 @@
+def _caller_slack_id(db):
+    """The Slack user of the employee signed in to this conversation. The desk reads Slack on their
+    behalf: it reads the public channels it belongs to for any active signed-in employee, because a
+    public channel is open to the whole workspace, but a private channel only when the employee is
+    a member too. Nobody signed in, or an inactive employee, is served nothing."""
+    row = db.one("SELECT employee_id FROM session_caller WHERE id = 'default'")
+    e = db.one("SELECT * FROM employees WHERE employee_id = ?", [row["employee_id"]]) if row and row["employee_id"] else None
+    if e is None or e["status"] != "active":
+        raise ToolError("No active employee is signed in to this conversation; the desk reads Slack only for the signed-in employee.", category="permission_denied")
+    return "U_" + e["employee_id"]
+
+
 def handle(args, db):
     channel_id = args.get("channel_id")
     message_ts = args.get("message_ts")
@@ -23,6 +35,9 @@ def handle(args, db):
     member = db.one("SELECT 1 FROM slack_channel_members WHERE channel_id = ? AND user_id = ?", [channel_id, actor_id])
     if channel["is_private"] and member is None:
         raise ToolError(f"Access denied: you are not a member of private channel {channel_id!r}.", category="permission_denied")
+    caller = _caller_slack_id(db)
+    if channel["is_private"] and db.one("SELECT 1 FROM slack_channel_members WHERE channel_id = ? AND user_id = ?", [channel_id, caller]) is None:
+        raise ToolError(f"Access denied: the signed-in employee is not a member of private channel {channel_id!r}.", category="permission_denied")
 
     parent = db.one("SELECT * FROM slack_messages WHERE channel_id = ? AND (ts = ? OR thread_ts = ?)", [channel_id, message_ts, message_ts])
     if parent is None:

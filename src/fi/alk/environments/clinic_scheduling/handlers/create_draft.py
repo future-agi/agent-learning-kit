@@ -14,7 +14,15 @@ def _withheld(db, thread_id):
     return None
 
 
-def _handle(args, db):
+def _patient_hidden(db, pid):
+    row = db.one("SELECT caller_id FROM session_caller WHERE id = 'default'")
+    caller = row["caller_id"] if row else None
+    entitled = caller is not None and (caller == pid or db.one(
+        "SELECT patient_id FROM caller_access WHERE caller_id = ? AND patient_id = ?", (caller, pid)) is not None)
+    return not entitled or not db.one("SELECT patient_id FROM verified_patients WHERE patient_id = ?", (pid,))
+
+
+def handle(args, db):
     def addresses(name):
         value = args.get(name)
         if value is None:
@@ -35,6 +43,17 @@ def _handle(args, db):
     reply_to = args.get("replyToMessageId")
     if reply_to is not None and not isinstance(reply_to, str):
         raise ToolError("replyToMessageId must be a message ID", category="invalid_input")
+
+    # Writing to a patient is acting for them, in a new thread as in a reply: every addressee who is a
+    # patient on file must be one this conversation may see, and a new thread is linked to them so
+    # the draft is listed only where they are.
+    addressed = []
+    for address in to + cc + bcc:
+        p = db.one("SELECT patient_id FROM patients WHERE lower(email) = ?", (address.lower(),))
+        if p:
+            if _patient_hidden(db, p["patient_id"]):
+                raise ToolError(f"{address} is the contact of a patient who is not verified in this conversation; verify the patient first.", category="permission_denied")
+            addressed.append(p["patient_id"])
 
     clock_row = db.one("SELECT now FROM clock")
     now = clock_row["now"] if clock_row else "2026-10-26T10:00:00Z"
@@ -62,6 +81,8 @@ def _handle(args, db):
             "INSERT INTO gmail_threads (id, subject, snippet, history_id, is_restricted, updated_at) VALUES (?, ?, ?, ?, FALSE, ?)",
             (thread_id, subject, (body or html_body)[:80], f"H-{2000 + count}", now),
         )
+        for pid in sorted(set(addressed)):
+            db.execute("INSERT INTO gmail_thread_patients (thread_id, patient_id) VALUES (?, ?)", (thread_id, pid))
 
     existing_human_draft = db.one("SELECT * FROM gmail_drafts WHERE thread_id = ? AND is_human_edited = TRUE", (thread_id,))
     if existing_human_draft:
@@ -87,43 +108,3 @@ def _handle(args, db):
         "htmlBody": html_body,
         "date": now[:10],
     }
-
-
-_WRITES = ("gmail_drafts", "gmail_threads")
-
-def _all_or_nothing(db, run):
-    """Run the call so that a failed call changes nothing. A handler gets no transaction of its own,
-    so every table this tool writes is held first and put back if the call raises, whether a write
-    failed partway or the call refused after writing. Only a fault the world simulates on purpose
-    (an error marked keep_writes: a rival booking, a commit whose reply was lost, a fault used up)
-    keeps what it wrote."""
-    held = {table: db.query(f"SELECT * FROM {table}") for table in _WRITES}
-    try:
-        return run()
-    except Exception as failed:
-        if not getattr(failed, "keep_writes", False):
-            for table, rows in held.items():
-                if _same(db.query(f"SELECT * FROM {table}"), rows):
-                    continue
-                db.execute(f"DELETE FROM {table}")
-                for row in rows:
-                    cols = list(row)
-                    db.execute(
-                        f"INSERT INTO {table} ({', '.join(chr(34) + c + chr(34) for c in cols)}) VALUES ({', '.join('?' * len(cols))})",
-                        [row[c] for c in cols],
-                    )
-        raise
-
-def _same(rows, held):
-    """Whether a table still holds exactly the rows it held, in any order: only a table the call
-    changed is rewritten."""
-    import json
-
-    def key(row):
-        return json.dumps(row, sort_keys=True, default=str)
-
-    return sorted(map(key, rows)) == sorted(map(key, held))
-
-
-def handle(args, db):
-    return _all_or_nothing(db, lambda: _handle(args, db))

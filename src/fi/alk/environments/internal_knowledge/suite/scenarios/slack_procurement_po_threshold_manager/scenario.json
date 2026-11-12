@@ -60,15 +60,14 @@
       }
     },
     {
-      "tool": "read_file_content",
+      "tool": "fetch_passage",
       "arguments": {
-        "includeComments": false,
-        "revisionId": "",
-        "fileId": "proc_v2"
+        "employee_id": "E17",
+        "passage_id": "P-PROCV2-01"
       },
       "environment_arguments": {},
       "fixed": {
-        "fileId": "record: drive_files proc_v2"
+        "passage_id": "record: Procurement Policy 2.0 section 1 (Purchase orders)"
       }
     }
   ],

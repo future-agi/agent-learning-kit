@@ -1,4 +1,4 @@
-def _handle(args, db):
+def handle(args, db):
     def addresses(name):
         value = args.get(name)
         if value is None:
@@ -23,11 +23,22 @@ def _handle(args, db):
     clock_row = db.one("SELECT now FROM clock")
     now = clock_row["now"] if clock_row else "2026-10-26T10:00:00Z"
 
+    # A draft is the desk writing on someone's behalf: staff draft from the sales@ mailbox; a
+    # prospect only to themselves and only on their own correspondence, so a draft can neither
+    # land in another person's thread nor echo its subject back.
+    kind, who = _caller(db)
+    if kind is None:
+        raise ToolError("Permission denied: nobody is signed in to this conversation, so nothing can be drafted.", category="permission_denied")
+    if kind == "contact" and any(a.strip().lower() != who["email_normalized"] for a in to + cc + bcc):
+        raise ToolError(f"Permission denied: {_named(kind, who)} can only have the desk draft to their own address.", category="permission_denied")
+
     if reply_to:
         original = db.one("SELECT * FROM gmail_messages WHERE id = ?", (reply_to,))
         if original is None:
             raise ToolError(f"Message {reply_to!r} not found", category="not_found")
         thread_id = original["thread_id"]
+        if not _sees(db, thread_id):
+            raise ToolError(f"Permission denied: message {reply_to!r} is not the correspondence of the person in this conversation.", category="permission_denied")
         t = db.one("SELECT * FROM gmail_threads WHERE id = ?", (thread_id,))
         if t and t["is_restricted"]:
             raise ToolError(f"Access to thread {thread_id!r} is restricted", category="permission_denied")
@@ -77,41 +88,40 @@ def _handle(args, db):
     }
 
 
-_WRITES = ("gmail_drafts", "gmail_threads")
-
-def _all_or_nothing(db, run):
-    """Run the call so that a failed call changes nothing. A handler gets no transaction of its own,
-    so every table this tool writes is held first and put back if the call raises, whether a write
-    failed partway or the call refused after writing. Only a fault the world simulates on purpose
-    (an error marked keep_writes: a rival booking, a commit whose reply was lost, a fault used up)
-    keeps what it wrote."""
-    held = {table: db.query(f"SELECT * FROM {table}") for table in _WRITES}
-    try:
-        return run()
-    except Exception as failed:
-        if not getattr(failed, "keep_writes", False):
-            for table, rows in held.items():
-                if _same(db.query(f"SELECT * FROM {table}"), rows):
-                    continue
-                db.execute(f"DELETE FROM {table}")
-                for row in rows:
-                    cols = list(row)
-                    db.execute(
-                        f"INSERT INTO {table} ({', '.join(chr(34) + c + chr(34) for c in cols)}) VALUES ({', '.join('?' * len(cols))})",
-                        [row[c] for c in cols],
-                    )
-        raise
-
-def _same(rows, held):
-    """Whether a table still holds exactly the rows it held, in any order: only a table the call
-    changed is rewritten."""
-    import json
-
-    def key(row):
-        return json.dumps(row, sort_keys=True, default=str)
-
-    return sorted(map(key, rows)) == sorted(map(key, held))
+def _caller(db):
+    """Who is in this conversation, as the session set it: ("contact", row) for a prospect speaking
+    for themselves, ("staff", row) for a BrightDesk employee (their Slack user), or (None, None).
+    An ID or an email the desk is told never changes it."""
+    row = db.one("SELECT person_id FROM session_caller WHERE id = 'default'")
+    person = row["person_id"] if row else None
+    if person:
+        contact = db.one("SELECT * FROM contacts WHERE contact_id = ?", [person])
+        if contact:
+            return "contact", contact
+        staff = db.one("SELECT * FROM slack_users WHERE user_id = ?", [person])
+        if staff:
+            return "staff", staff
+    return None, None
 
 
-def handle(args, db):
-    return _all_or_nothing(db, lambda: _handle(args, db))
+def _named(kind, who):
+    if kind == "contact":
+        return f"{who['name']} ({who['contact_id']})"
+    if kind == "staff":
+        return f"{who['name']} ({who['user_id']})"
+    return "nobody signed in"
+
+
+def _sees(db, thread_id):
+    """Whether the person in this conversation may read this thread: staff read the sales@ mailbox;
+    a prospect only a thread they wrote or were written to."""
+    kind, who = _caller(db)
+    if kind == "staff":
+        return True
+    if kind != "contact":
+        return False
+    mine = who["email_normalized"]
+    return any(
+        m["sender"].strip().lower() == mine or mine in [x.strip().lower() for x in (m["recipient"] + "," + (m["cc"] or "")).split(",")]
+        for m in db.query("SELECT sender, recipient, cc FROM gmail_messages WHERE thread_id = ?", (thread_id,))
+    )

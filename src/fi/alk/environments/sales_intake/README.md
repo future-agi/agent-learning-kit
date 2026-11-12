@@ -55,6 +55,8 @@ Limits: no outreach, scraping, enrichment or protected-trait inference; no compa
 
 Who is in the conversation is set by the session (`session_caller`), never by an ID or email the desk is told. A prospect acts on and sees only their own contact, leads, demos and correspondence (a colleague at the same company may add a note to a lead, not change its facts); BrightDesk staff work the whole pipeline; consent changes only at the person's own request. The reps' calendars and Slack are staff-only, internal notes are not shown to prospects, and a reused request_key is a replay only of the same request.
 
+The attached tools follow the same rule. Gmail: staff read and draft from the whole sales@ mailbox (restricted threads stay closed to everyone); a prospect reads, finds by search and sees drafts only on threads they wrote or were written to, and the desk drafts for them only to their own address on their own threads; labels are staff-only. Slack (every read, the channel directory and the post ledger) and Calendar (every read, the calendar list, free/busy and every write) are staff-only; a staff caller reads Slack through the desk's own Slack user, so public channels and the private ones the desk is a member of, never a staff member's own private channels. Nobody signed in reads or drafts nothing.
+
 Rules: `policy.json` (17 invariants, 4 configurable policies, 9 agent rules). MCP capabilities attached by `attach_capability.py`, recorded in `mcp_capabilities.json`: `gmail_inbox_triage`, `calendar_scheduling_desk`, `slack_channel_digest`.
 
 ## Dataset inventory (plan §3.1)

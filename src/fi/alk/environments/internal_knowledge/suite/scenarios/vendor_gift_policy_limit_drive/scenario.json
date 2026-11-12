@@ -44,13 +44,14 @@
       "fixed": {}
     },
     {
-      "tool": "read_file_content",
+      "tool": "fetch_passage",
       "arguments": {
-        "fileId": "conduct_v2"
+        "employee_id": "E18",
+        "passage_id": "P-CONDUCTV2-01"
       },
       "environment_arguments": {},
       "fixed": {
-        "fileId": "record: Code of Conduct 2.0 (conduct_v2)"
+        "passage_id": "record: Code of Conduct 2.0 section 1 (Gifts)"
       }
     }
   ],

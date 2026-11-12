@@ -77,7 +77,7 @@ def _entitled(db, customer_id):
         raise ToolError(f"Permission denied: the person in this conversation ({caller or 'not identified'}) cannot see or change {customer_id}'s records.", category="permission_denied")
 
 
-def _handle(args, db):
+def handle(args, db):
     cust, service, loc = _customer(db, args.get("customer_id")), _service(db, args.get("service_id")), _location(db, args.get("location_id"))
     _entitled(db, cust["customer_id"])
     date = str(args.get("preferred_date") or "")
@@ -95,43 +95,3 @@ def _handle(args, db):
     wid = _next_id(db, "waitlist", "waitlist_id", "W", 600)
     db.execute("INSERT INTO waitlist (waitlist_id, customer_id, service_id, location_id, staff_id, preferred_date, status, created_at) VALUES (?, ?, ?, ?, ?, ?, 'active', ?)", [wid, cust["customer_id"], service["service_id"], loc["location_id"], args.get("staff_id"), date, iso(_now(db))])
     return {"waitlist_id": wid, "status": "active", "preferred_date": date}
-
-
-_WRITES = ("waitlist",)
-
-def _all_or_nothing(db, run):
-    """Run the call so that a failed call changes nothing. A handler gets no transaction of its own,
-    so every table this tool writes is held first and put back if the call raises, whether a write
-    failed partway or the call refused after writing. Only a fault the world simulates on purpose
-    (an error marked keep_writes: a rival booking, a commit whose reply was lost, a fault used up)
-    keeps what it wrote."""
-    held = {table: db.query(f"SELECT * FROM {table}") for table in _WRITES}
-    try:
-        return run()
-    except Exception as failed:
-        if not getattr(failed, "keep_writes", False):
-            for table, rows in held.items():
-                if _same(db.query(f"SELECT * FROM {table}"), rows):
-                    continue
-                db.execute(f"DELETE FROM {table}")
-                for row in rows:
-                    cols = list(row)
-                    db.execute(
-                        f"INSERT INTO {table} ({', '.join(chr(34) + c + chr(34) for c in cols)}) VALUES ({', '.join('?' * len(cols))})",
-                        [row[c] for c in cols],
-                    )
-        raise
-
-def _same(rows, held):
-    """Whether a table still holds exactly the rows it held, in any order: only a table the call
-    changed is rewritten."""
-    import json
-
-    def key(row):
-        return json.dumps(row, sort_keys=True, default=str)
-
-    return sorted(map(key, rows)) == sorted(map(key, held))
-
-
-def handle(args, db):
-    return _all_or_nothing(db, lambda: _handle(args, db))

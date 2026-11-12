@@ -2,7 +2,9 @@ def handle(args, db):
     import re
     from datetime import datetime, timezone
 
-    # The reps' calendars and the desk's Slack are internal: they name other customers.
+    # The desk's Slack is internal: it names other customers. A staff caller reads through the desk's
+    # own Slack user, so only public channels and private ones the desk is a member of; a staff
+    # member's own private channels stay closed to the desk.
     if _caller(db)[0] != "staff":
         raise ToolError("Permission denied: this is BrightDesk's internal workspace; only staff in this conversation can read it.", category="permission_denied")
     keywords = args.get("keywords") or []

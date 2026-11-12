@@ -536,3 +536,105 @@ def test_a_routed_or_booked_lead_is_not_quietly_broken(built: Path) -> None:
         assert raised.ok and raised.result["seats"] == 50 and raised.result["status"] == "qualified", raised.result
     finally:
         world.close()
+
+
+# --- The same boundary on every route (round 2) -----------------------------------------------------
+# For one private record per attached capability, the business tool that guards it and the
+# Gmail, Slack or Calendar route that also reaches it: refused for a caller with no entitlement,
+# allowed for one with it. A search does not refuse; it must simply not return what a read refuses.
+CROSS_ROUTES = [
+    # Theo Sandoval's lead L06 and his email picking a demo time (th_s10, smsg_011).
+    ("mail", ("get_lead", {"lead_id": "L06"}), [
+        ("get_thread", {"threadId": "th_s10_cedarfinch_pick"}),
+        ("get_message", {"messageId": "smsg_011"}),
+        ("create_draft", {"replyToMessageId": "smsg_011", "to": ["theo.sandoval@cedarfinch.example"], "body": "Confirmed."}),
+        ("label_thread", {"threadId": "th_s10_cedarfinch_pick", "labelIds": ["handled"]}),
+    ], "C02", ("C06", "U_A01")),
+    # Fernhill's lead L08 and Oliver's Slack thread about it (SM01).
+    ("slack", ("get_lead", {"lead_id": "L08"}), [
+        ("slack_read_thread", {"channel_id": "CH_SALESHANDOFF", "message_ts": "1794218400.000001"}),
+        ("slack_read_channel", {"channel_id": "CH_SALESHANDOFF"}),
+        ("slack_search_public_and_private", {"keywords": ["Fernhill"]}),
+        ("slack_search_channels", {"keywords": ["handoffs"]}),
+    ], "C02", ("U_A03",)),
+    # Tasman Health's lead L10 and its demo event EV-D01 on Chloe's calendar.
+    ("calendar", ("get_lead", {"lead_id": "L10"}), [
+        ("get_event", {"calendarId": "CAL-A06", "eventId": "EV-D01"}),
+        ("list_events", {"calendarId": "CAL-A06"}),
+        ("search_events", {"query": "Tasman"}),
+        ("list_calendars", {}),
+        ("suggest_time", {"attendeeEmails": ["chloe.nguyen@brightdesk.example"], "startTime": "2026-11-11T00:00:00Z", "endTime": "2026-11-12T00:00:00Z"}),
+    ], "C02", ("U_A06",)),
+]
+
+
+@pytest.mark.parametrize(("route", "business", "capability", "outsider", "entitled"), CROSS_ROUTES, ids=[r[0] for r in CROSS_ROUTES])
+def test_the_business_tool_and_the_capability_route_agree_on_who_may_see(built: Path, route, business, capability, outsider, entitled) -> None:
+    for person, allowed in [(outsider, False), (None, False)] + [(p, True) for p in entitled]:
+        world = restore(built / WORLD)
+        try:
+            _signed_in(world, person)
+            for tool, arguments in [business, *capability]:
+                if tool != business[0] and person and person.startswith("C") and person in entitled:
+                    # The lead's own contact reads their lead, but the reps' calendars and the desk's
+                    # Slack stay internal; their mail they may read.
+                    if route != "mail":
+                        allowed_here = False
+                    else:
+                        allowed_here = tool != "label_thread"
+                else:
+                    allowed_here = allowed
+                before = world.state()
+                answer = world.call(tool, arguments)
+                if allowed_here:
+                    assert answer.ok, (route, person, tool, answer.error)
+                else:
+                    assert not answer.ok and "Permission denied" in answer.error, (route, person, tool, answer.result)
+                    assert world.state() == before, (route, person, tool)
+        finally:
+            world.close()
+
+
+def test_searches_and_drafts_do_not_leak_what_a_read_refuses(built: Path) -> None:
+    world = restore(built / WORLD)
+    try:
+        # Staff draft a reply on Theo's thread; it quotes his thread's subject.
+        _signed_in(world, "U_A01")
+        made = world.call("create_draft", {"replyToMessageId": "smsg_011", "to": ["theo.sandoval@cedarfinch.example"], "body": "Wednesday 11 November, 2 pm Eastern is booked."})
+        assert made.ok, made.error
+        # Marcus (C02) reads none of it by any route: no thread, no snippet, no draft.
+        _signed_in(world, "C02")
+        for query in ("demo times", "Cedar", "2 pm Eastern", "from:theo.sandoval@cedarfinch.example", ""):
+            found = world.call("search_threads", {"query": query}).result["threads"]
+            assert all(t["id"] != "th_s10_cedarfinch_pick" for t in found), (query, found)
+        assert world.call("list_drafts", {}).result["drafts"] == []
+        assert world.call("list_drafts", {"query": "Eastern"}).result["drafts"] == []
+        # A draft to himself on Theo's thread would echo Theo's subject back: refused.
+        hijack = world.call("create_draft", {"replyToMessageId": "smsg_011", "to": ["marcus.bell@bluepeak.example"], "body": "x"})
+        assert not hijack.ok and "Permission denied" in hijack.error, hijack.result
+        # A prospect cannot have the desk draft to someone else, even on a fresh thread.
+        other = world.call("create_draft", {"to": ["theo.sandoval@cedarfinch.example"], "subject": "Hi", "body": "x"})
+        assert not other.ok and "Permission denied" in other.error, other.result
+        # Theo himself finds his thread by search, and the staff draft addressed to him on it.
+        _signed_in(world, "C06")
+        assert any(t["id"] == "th_s10_cedarfinch_pick" for t in world.call("search_threads", {"query": "Eastern"}).result["threads"])
+        assert [d["id"] for d in world.call("list_drafts", {}).result["drafts"]] == [made.result["id"]]
+        # A draft addressed to Theo on someone else's thread is not shown to him either.
+        _signed_in(world, "U_A01")
+        crossed = world.call("create_draft", {"replyToMessageId": "smsg_002", "to": ["theo.sandoval@cedarfinch.example"], "body": "x"})
+        assert crossed.ok, crossed.error
+        _signed_in(world, "C06")
+        assert [d["id"] for d in world.call("list_drafts", {}).result["drafts"]] == [made.result["id"]]
+        # Restricted mail stays closed to staff too, by read and by search.
+        _signed_in(world, "U_MGR")
+        assert not world.call("get_thread", {"threadId": "th_s09_restricted_legal"}).ok
+        assert all(t["id"] != "th_s09_restricted_legal" for t in world.call("search_threads", {"query": "Karoo"}).result["threads"])
+        # Slack search returns only channels the desk may read: never the private leadership channel.
+        hits = world.call("slack_search_public_and_private", {"keywords": ["quotas"]}).result["messages"]
+        assert hits == [], hits
+        assert all(c["channel_id"] != "CH_SALESLEAD" for c in world.call("slack_search_channels", {"channel_types": "public_channel,private_channel"}).result["channels"])
+        # Nobody signed in drafts nothing.
+        _signed_in(world, None)
+        assert not world.call("create_draft", {"to": ["x@example.com"], "body": "x"}).ok
+    finally:
+        world.close()

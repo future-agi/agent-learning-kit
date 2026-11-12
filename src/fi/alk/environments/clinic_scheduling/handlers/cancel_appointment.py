@@ -57,24 +57,7 @@ def _appointment_view(a):
     return {k: a[k] for k in ("appointment_id", "patient_id", "provider_id", "location_id", "specialty", "start_time", "end_time", "reason", "status", "calendar_event_id")}
 
 
-
-def _together(db, touched, writes):
-    """Run `writes` so that every row lands or none does. A handler gets no transaction of its
-    own, so the rows in `touched` ((table, column, value) each) are held first and put back if a
-    write fails: an appointment never survives without its calendar event, or the reverse."""
-    held = [(t, c, v, db.query(f"SELECT * FROM {t} WHERE {c} = ?", [v])) for t, c, v in touched]
-    try:
-        return writes()
-    except Exception:
-        for t, c, v, rows in held:
-            db.execute(f"DELETE FROM {t} WHERE {c} = ?", [v])
-            for row in rows:
-                cols = list(row)
-                db.execute(f"INSERT INTO {t} ({', '.join(cols)}) VALUES ({', '.join('?' * len(cols))})", [row[k] for k in cols])
-        raise
-
-
-def _handle(args, db):
+def handle(args, db):
     _need(args, "appointment_id")
     a = _own_appointment(db, args["appointment_id"])
     if a["status"] == "cancelled":
@@ -87,51 +70,7 @@ def _handle(args, db):
     hours = int(_param(db, "change_notice_hours", 24))
     if _dt(a["start_time"]) - _dt(now) < timedelta(hours=hours):
         raise ToolError(f"Appointment {a['appointment_id']} starts within {hours} hours; late cancellations go to the front desk.", category="policy_blocked")
-
-    def cancel():
-        db.execute("UPDATE appointments SET status = 'cancelled', cancel_reason = ?, cancelled_at = ?, updated_at = ? WHERE appointment_id = ?", [args.get("reason") or "patient request", now, now, a["appointment_id"]])
-        db.execute("UPDATE calendar_events SET status = 'cancelled', updated_at = ? WHERE event_id = ?", [now, a["calendar_event_id"]])
-
-    _together(db, [("appointments", "appointment_id", a["appointment_id"]), ("calendar_events", "event_id", a["calendar_event_id"])], cancel)
+    db.execute("UPDATE appointments SET status = 'cancelled', cancel_reason = ?, cancelled_at = ?, updated_at = ? WHERE appointment_id = ?", [args.get("reason") or "patient request", now, now, a["appointment_id"]])
+    db.execute("UPDATE calendar_events SET status = 'cancelled', updated_at = ? WHERE event_id = ?", [now, a["calendar_event_id"]])
     b = db.one("SELECT * FROM appointments WHERE appointment_id = ?", [a["appointment_id"]])
     return dict(_appointment_view(b), idempotent=False)
-
-
-_WRITES = ("appointments", "calendar_events")
-
-def _all_or_nothing(db, run):
-    """Run the call so that a failed call changes nothing. A handler gets no transaction of its own,
-    so every table this tool writes is held first and put back if the call raises, whether a write
-    failed partway or the call refused after writing. Only a fault the world simulates on purpose
-    (an error marked keep_writes: a rival booking, a commit whose reply was lost, a fault used up)
-    keeps what it wrote."""
-    held = {table: db.query(f"SELECT * FROM {table}") for table in _WRITES}
-    try:
-        return run()
-    except Exception as failed:
-        if not getattr(failed, "keep_writes", False):
-            for table, rows in held.items():
-                if _same(db.query(f"SELECT * FROM {table}"), rows):
-                    continue
-                db.execute(f"DELETE FROM {table}")
-                for row in rows:
-                    cols = list(row)
-                    db.execute(
-                        f"INSERT INTO {table} ({', '.join(chr(34) + c + chr(34) for c in cols)}) VALUES ({', '.join('?' * len(cols))})",
-                        [row[c] for c in cols],
-                    )
-        raise
-
-def _same(rows, held):
-    """Whether a table still holds exactly the rows it held, in any order: only a table the call
-    changed is rewritten."""
-    import json
-
-    def key(row):
-        return json.dumps(row, sort_keys=True, default=str)
-
-    return sorted(map(key, rows)) == sorted(map(key, held))
-
-
-def handle(args, db):
-    return _all_or_nothing(db, lambda: _handle(args, db))

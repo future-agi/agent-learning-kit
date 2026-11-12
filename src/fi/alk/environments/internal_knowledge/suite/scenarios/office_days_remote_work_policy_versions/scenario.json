@@ -45,15 +45,23 @@
       "fixed": {}
     },
     {
-      "tool": "read_file_content",
+      "tool": "get_file_metadata",
       "arguments": {
-        "revisionId": "",
-        "includeComments": false,
-        "fileId": "remote_v2"
+        "fileId": "remote_v2",
+        "excludeContentSnippets": true
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "fetch_passage",
+      "arguments": {
+        "employee_id": "E16",
+        "passage_id": "P-REMOTEV2-01"
       },
       "environment_arguments": {},
       "fixed": {
-        "fileId": "record: drive_files remote_v2"
+        "passage_id": "record: Remote Work Policy 2.0 section 1 (Office days)"
       }
     }
   ],

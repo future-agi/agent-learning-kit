@@ -46,15 +46,14 @@
       }
     },
     {
-      "tool": "read_file_content",
+      "tool": "fetch_passage",
       "arguments": {
-        "includeComments": false,
-        "revisionId": "",
-        "fileId": "sw_std_v1"
+        "employee_id": "E20",
+        "passage_id": "P-SWSTDV1-01"
       },
       "environment_arguments": {},
       "fixed": {
-        "fileId": "record: drive_files sw_std_v1"
+        "passage_id": "record: Software Approval Standard 1.0 section 1 (Security review)"
       }
     }
   ],

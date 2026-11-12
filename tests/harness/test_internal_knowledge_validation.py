@@ -91,6 +91,11 @@ def _plus(key: str, tool: str, **arguments):
     ]
 
 
+def _step(tool: str, **arguments):
+    """One more call, as a wrong run makes it."""
+    return Step(tool=tool, arguments=arguments, environment_arguments={}, fixed={})
+
+
 def _drop(key: str, index: int):
     """The reference solution without its step at `index`."""
     steps = [copy.deepcopy(step) for step in _scenario(key).solution]
@@ -163,14 +168,14 @@ WRONG_RUNS = [
     (
         "hotel_cap_old_figure_in_superseded_doc",
         "reads the superseded version as the one in effect",
-        lambda k: _swap(k, "read_file_content", fileId="trv_policy_v2"),
+        lambda k: [*_without(k, "fetch_passage"), _step("read_file_content", fileId="trv_policy_v2")],
         "answer_cited_from_effective_version",
         None,
     ),
     (
         "leave_entitlement_2027_draft_vs_effective",
         "answers from the 2027 draft",
-        lambda k: _swap(k, "read_file_content", fileId="leave_v3_draft"),
+        lambda k: [*_without(k, "fetch_passage"), _step("read_file_content", fileId="leave_v3_draft")],
         "answer_cited_from_effective_version",
         None,
     ),
@@ -232,11 +237,8 @@ WRONG_RUNS = [
     ),
     (
         "hotel_cap_old_figure_in_superseded_doc",
-        "reads one unrelated section of the document in effect instead of the document",
-        lambda k: [
-            *_without(k, "read_file_content"),
-            Step(tool="fetch_passage", arguments={"employee_id": "E05", "passage_id": "P-TRVPOLICYV3-01"}, environment_arguments={}, fixed={}),
-        ],
+        "reads an unrelated section of the document in effect instead of the hotels section",
+        lambda k: _swap(k, "fetch_passage", passage_id="P-TRVPOLICYV3-01"),
         "answer_cited_from_effective_version",
         "done blind",
     ),
@@ -513,3 +515,102 @@ def test_versions_order_as_numbers_and_scheduled_versions_are_not_in_effect(buil
         assert after == before
     finally:
         world.close()
+
+
+# --- the decision rests on its passage, by whichever route it came back --------------------------
+
+GIFT = "vendor_gift_policy_limit_drive"
+
+
+@pytest.mark.parametrize(
+    ("route", "steps", "word"),
+    [
+        ("the gifts passage alone", [_step("fetch_passage", employee_id="E18", passage_id="P-CONDUCTV2-01")], None),
+        ("the whole document read in Drive", [_step("search_files", query="title contains 'Code of Conduct'"), _step("read_file_content", fileId="conduct_v2")], None),
+        ("an unrelated section of the document in effect", [_step("fetch_passage", employee_id="E18", passage_id="P-CONDUCTV2-02")], "done blind"),
+        ("a search snippet, never the passage", [_step("search_documents", employee_id="E18", query="gifts accepted")], "done blind"),
+        ("the superseded 2024 version", [_step("fetch_passage", employee_id="E18", passage_id="P-CONDUCTV1-01")], "done blind"),
+        ("the superseded version read whole in Drive", [_step("read_file_content", fileId="conduct_v1")], "done blind"),
+    ],
+    ids=lambda v: v if isinstance(v, str) else None,
+)
+def test_the_gift_answer_needs_its_passage_and_nothing_more(built: Path, route: str, steps, word) -> None:
+    said = _grade(built, GIFT, steps)["answer_cited_from_effective_version"]
+    if word is None:
+        assert said is None, (route, said)
+    else:
+        assert said and word in said, (route, said)
+
+
+# --- every route to a private record answers to the same entitlement ------------------------------
+
+
+def _with_desk_in_leadership(world) -> None:
+    """The desk added to the private leadership channel, so the caller's own membership decides."""
+    world.put("slack_channel_members", {"id": "KCM-PROBE", "channel_id": "CH_LEADERSHIP", "user_id": "U_KDESK"})
+
+
+# (what, caller refused, caller allowed, the business route, the attached-capability routes)
+CROSS_ROUTES = [
+    (
+        "a Finance document",
+        "E05",
+        "E11",
+        ("fetch_passage", {"passage_id": "P-CARDV1-01"}),
+        [
+            ("read_file_content", {"fileId": "card_v1"}, "$5,000"),
+            ("search_files", {"query": "fullText contains 'monthly limit'"}, "$5,000"),
+            ("list_recent_files", {"pageSize": 100}, "$5,000"),
+            ("get_file_metadata", {"fileId": "card_v1"}, "$5,000"),
+        ],
+    ),
+    (
+        "the executive compensation review",
+        "E05",
+        "E15",
+        ("fetch_passage", {"passage_id": "P-EXECCOMP2026-01"}),
+        [
+            ("slack_read_channel", {"channel_id": "CH_LEADERSHIP"}, "salaries rise 4%"),
+            ("slack_read_thread", {"channel_id": "CH_LEADERSHIP", "message_ts": "1793869200.000012"}, "salaries rise 4%"),
+            ("slack_search_public_and_private", {"keywords": ["salaries"]}, "salaries rise 4%"),
+            ("slack_search_channels", {"keywords": ["leadership"], "channel_types": "public_channel,private_channel"}, "CH_LEADERSHIP"),
+        ],
+    ),
+]
+
+
+@pytest.mark.parametrize(("what", "refused", "allowed", "business", "routes"), CROSS_ROUTES, ids=[c[0] for c in CROSS_ROUTES])
+def test_every_route_to_a_private_record_answers_to_the_same_entitlement(built: Path, what, refused, allowed, business, routes) -> None:
+    for caller, entitled in ((refused, False), (allowed, True)):
+        world = _signed_in(built, caller)
+        try:
+            _with_desk_in_leadership(world)
+            tool, arguments = business
+            assert world.call(tool, {**arguments, "employee_id": caller}).ok is entitled, (what, caller, tool)
+            for tool, arguments, private in routes:
+                answer = world.call(tool, arguments)
+                shown = private in json.dumps(answer.result if answer.ok else answer.error)
+                assert shown is entitled, (what, caller, tool, answer.result if answer.ok else answer.error)
+        finally:
+            world.close()
+
+
+def test_the_desk_reads_public_channels_for_any_signed_in_employee_and_nothing_for_nobody(built: Path) -> None:
+    # A public channel is open to the whole workspace, so the desk reads it for any active employee.
+    world = _signed_in(built, "E16")
+    try:
+        assert world.call("slack_read_thread", {"channel_id": "CH_FINANCE", "message_ts": "1793268000.000005"}).ok
+    finally:
+        world.close()
+    for caller in (None, "E19"):
+        world = _signed_in(built, caller)
+        try:
+            for tool, arguments in (
+                ("slack_read_channel", {"channel_id": "CH_HELPPOL"}),
+                ("slack_read_thread", {"channel_id": "CH_HELPPOL", "message_ts": "1793628000.000001"}),
+                ("slack_search_public_and_private", {"keywords": ["hotel"]}),
+                ("slack_search_channels", {"keywords": ["help"]}),
+            ):
+                assert world.call(tool, arguments).refused, (caller, tool)
+        finally:
+            world.close()

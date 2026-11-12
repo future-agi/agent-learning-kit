@@ -1,3 +1,30 @@
+def _caller(db):
+    """Who is in this conversation, as the session knows it (session_caller), never as the
+    conversation tells it: a customer, a front-desk member, or nobody identified."""
+    row = db.one("SELECT customer_id, desk_id FROM session_caller WHERE id = 'default'")
+    return (row["customer_id"], row["desk_id"]) if row else (None, None)
+
+
+def _desk(db):
+    """Whether the caller is an active front-desk member, who may act for any customer."""
+    _, desk_id = _caller(db)
+    return bool(desk_id and db.one("SELECT 1 AS x FROM desk_staff WHERE desk_id = ? AND role = 'front_desk' AND active = 1", [desk_id]))
+
+
+def _whose_time(db, attendees):
+    """Free/busy is someone's schedule: the front desk may ask for anyone's; a customer only for
+    themselves and the staff and desk (calendar_attendees); nobody identified only for the staff.
+    Another customer's busy times would show when they are booked."""
+    if _desk(db):
+        return
+    caller, _ = _caller(db)
+    row = db.one("SELECT email FROM customers WHERE customer_id = ?", [caller]) if caller else None
+    mine = {row["email"].lower()} if row else set()
+    staff = {r["email"].lower() for r in db.query("SELECT email FROM calendar_attendees")}
+    others = [e for e in attendees if e.lower() not in mine | staff]
+    if others:
+        raise ToolError(f"Permission denied: the person in this conversation cannot see when {', '.join(others)} is busy.", category="permission_denied")
+
 def handle(args, db):
     import json
     import re
@@ -57,6 +84,7 @@ def handle(args, db):
     buf_row = db.one("SELECT value FROM environment_policy WHERE name = 'buffer_minutes'")
     buffer_min = int(json.loads(buf_row["value"])) if buf_row else 10
 
+    _whose_time(db, attendees)
     allowlist_row = db.one("SELECT value FROM environment_policy WHERE name = 'allowed_domains'")
     allowed = json.loads(allowlist_row["value"]) if allowlist_row else "*"
     if allowed != "*":

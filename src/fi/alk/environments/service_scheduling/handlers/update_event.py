@@ -1,10 +1,29 @@
+def _caller(db):
+    """Who is in this conversation, as the session knows it (session_caller), never as the
+    conversation tells it: a customer, a front-desk member, or nobody identified."""
+    row = db.one("SELECT customer_id, desk_id FROM session_caller WHERE id = 'default'")
+    return (row["customer_id"], row["desk_id"]) if row else (None, None)
+
+
+def _desk(db):
+    """Whether the caller is an active front-desk member, who may act for any customer."""
+    _, desk_id = _caller(db)
+    return bool(desk_id and db.one("SELECT 1 AS x FROM desk_staff WHERE desk_id = ? AND role = 'front_desk' AND active = 1", [desk_id]))
+
+
+def _desk_only(db):
+    """Only the front desk changes the calendars directly. A customer's booking, move or
+    cancellation goes through the booking tools, which check whose appointment it is."""
+    if not _desk(db):
+        raise ToolError("Permission denied: only the front desk can change calendar events directly; bookings go through book_appointment, reschedule_appointment and cancel_appointment.", category="permission_denied")
+
 def _kept(error):
     """A fault this world simulates on purpose: what the call wrote before it stays written."""
     error.keep_writes = True
     return error
 
 
-def _handle(args, db):
+def handle(args, db):
     import json
     import re
 
@@ -32,6 +51,7 @@ def _handle(args, db):
 
     req_app_row = db.one("SELECT value FROM environment_policy WHERE name = 'require_approval_for_mutations'")
     require_app = bool(json.loads(req_app_row["value"])) if req_app_row else True
+    _desk_only(db)
     approval_id = args.get("approval_id")
     if require_app:
         if not approval_id:
@@ -155,43 +175,3 @@ def _handle(args, db):
         "eventType": "DEFAULT",
         "version": new_version,
     }
-
-
-_WRITES = ("calendar_event_attendees", "calendar_events", "calendar_fault_injections", "calendar_simulated_outbox")
-
-def _all_or_nothing(db, run):
-    """Run the call so that a failed call changes nothing. A handler gets no transaction of its own,
-    so every table this tool writes is held first and put back if the call raises, whether a write
-    failed partway or the call refused after writing. Only a fault the world simulates on purpose
-    (an error marked keep_writes: a rival booking, a commit whose reply was lost, a fault used up)
-    keeps what it wrote."""
-    held = {table: db.query(f"SELECT * FROM {table}") for table in _WRITES}
-    try:
-        return run()
-    except Exception as failed:
-        if not getattr(failed, "keep_writes", False):
-            for table, rows in held.items():
-                if _same(db.query(f"SELECT * FROM {table}"), rows):
-                    continue
-                db.execute(f"DELETE FROM {table}")
-                for row in rows:
-                    cols = list(row)
-                    db.execute(
-                        f"INSERT INTO {table} ({', '.join(chr(34) + c + chr(34) for c in cols)}) VALUES ({', '.join('?' * len(cols))})",
-                        [row[c] for c in cols],
-                    )
-        raise
-
-def _same(rows, held):
-    """Whether a table still holds exactly the rows it held, in any order: only a table the call
-    changed is rewritten."""
-    import json
-
-    def key(row):
-        return json.dumps(row, sort_keys=True, default=str)
-
-    return sorted(map(key, rows)) == sorted(map(key, held))
-
-
-def handle(args, db):
-    return _all_or_nothing(db, lambda: _handle(args, db))

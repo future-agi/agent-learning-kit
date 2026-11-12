@@ -4,10 +4,13 @@ def _kept(error):
     return error
 
 
-def _handle(args, db):
+def handle(args, db):
     import json
     import re
 
+    # Only staff write to calendars (demos are booked with book_demo, which checks the lead's own contact).
+    if _caller(db)[0] != "staff":
+        raise ToolError("Permission denied: calendars are written only by BrightDesk staff; only BrightDesk staff in this conversation can change events.", category="permission_denied")
     evt_id = args.get("eventId")
     if not evt_id or not isinstance(evt_id, str):
         raise ToolError("Missing required parameter: eventId", category="invalid_input")
@@ -157,41 +160,25 @@ def _handle(args, db):
     }
 
 
-_WRITES = ("calendar_event_attendees", "calendar_events", "calendar_fault_injections", "calendar_simulated_outbox")
-
-def _all_or_nothing(db, run):
-    """Run the call so that a failed call changes nothing. A handler gets no transaction of its own,
-    so every table this tool writes is held first and put back if the call raises, whether a write
-    failed partway or the call refused after writing. Only a fault the world simulates on purpose
-    (an error marked keep_writes: a rival booking, a commit whose reply was lost, a fault used up)
-    keeps what it wrote."""
-    held = {table: db.query(f"SELECT * FROM {table}") for table in _WRITES}
-    try:
-        return run()
-    except Exception as failed:
-        if not getattr(failed, "keep_writes", False):
-            for table, rows in held.items():
-                if _same(db.query(f"SELECT * FROM {table}"), rows):
-                    continue
-                db.execute(f"DELETE FROM {table}")
-                for row in rows:
-                    cols = list(row)
-                    db.execute(
-                        f"INSERT INTO {table} ({', '.join(chr(34) + c + chr(34) for c in cols)}) VALUES ({', '.join('?' * len(cols))})",
-                        [row[c] for c in cols],
-                    )
-        raise
-
-def _same(rows, held):
-    """Whether a table still holds exactly the rows it held, in any order: only a table the call
-    changed is rewritten."""
-    import json
-
-    def key(row):
-        return json.dumps(row, sort_keys=True, default=str)
-
-    return sorted(map(key, rows)) == sorted(map(key, held))
+def _caller(db):
+    """Who is in this conversation, as the session set it: ("contact", row) for a prospect speaking
+    for themselves, ("staff", row) for a BrightDesk employee (their Slack user), or (None, None).
+    An ID or an email the desk is told never changes it."""
+    row = db.one("SELECT person_id FROM session_caller WHERE id = 'default'")
+    person = row["person_id"] if row else None
+    if person:
+        contact = db.one("SELECT * FROM contacts WHERE contact_id = ?", [person])
+        if contact:
+            return "contact", contact
+        staff = db.one("SELECT * FROM slack_users WHERE user_id = ?", [person])
+        if staff:
+            return "staff", staff
+    return None, None
 
 
-def handle(args, db):
-    return _all_or_nothing(db, lambda: _handle(args, db))
+def _named(kind, who):
+    if kind == "contact":
+        return f"{who['name']} ({who['contact_id']})"
+    if kind == "staff":
+        return f"{who['name']} ({who['user_id']})"
+    return "nobody signed in"

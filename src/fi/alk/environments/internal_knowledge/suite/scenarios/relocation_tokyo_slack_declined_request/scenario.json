@@ -55,13 +55,14 @@
       "fixed": {}
     },
     {
-      "tool": "read_file_content",
+      "tool": "fetch_passage",
       "arguments": {
-        "fileId": "relocation_v1"
+        "employee_id": "E10",
+        "passage_id": "P-RELOCATIONV1-03"
       },
       "environment_arguments": {},
       "fixed": {
-        "fileId": "record: drive_files relocation_v1"
+        "passage_id": "record: Relocation Policy 1.0 section 3 (Other countries)"
       }
     }
   ],

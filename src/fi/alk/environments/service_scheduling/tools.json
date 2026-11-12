@@ -1123,7 +1123,7 @@
   },
   {
     "name": "get_event",
-    "description": "A single event on a calendar.",
+    "description": "A single event on a calendar. Another customer's booking shows as busy time ('Booked') unless the front desk is asking.",
     "parameters": {
       "type": "object",
       "properties": {
@@ -1415,7 +1415,7 @@
   },
   {
     "name": "suggest_time",
-    "description": "Suggests free time slots across the attendees' calendars within a query interval, respecting the configured buffer between events. A suggestion reserves nothing: create the event after the user confirms.",
+    "description": "Suggests free time slots across the attendees' calendars within a query interval, respecting the configured buffer between events. A suggestion reserves nothing: create the event after the user confirms. A customer may ask only about themselves and the staff; the front desk about anyone.",
     "parameters": {
       "type": "object",
       "properties": {
@@ -1521,7 +1521,7 @@
   },
   {
     "name": "create_event",
-    "description": "Creates an event on a calendar. Attendees must be reachable within the attendee domain policy; conflicts with confirmed events are refused. Needs the user's approval of this exact event (approval_id).",
+    "description": "Creates an event on a calendar. Attendees must be reachable within the attendee domain policy; conflicts with confirmed events are refused. Needs the user's approval of this exact event (approval_id). Front desk only.",
     "parameters": {
       "type": "object",
       "properties": {
@@ -1730,7 +1730,7 @@
   },
   {
     "name": "update_event",
-    "description": "Updates an event; fields that are not set are not changed. Moving only the start preserves the duration. Needs approval_id, and expected_version must match the event's current version.",
+    "description": "Updates an event; fields that are not set are not changed. Moving only the start preserves the duration. Needs approval_id, and expected_version must match the event's current version. Front desk only.",
     "parameters": {
       "type": "object",
       "properties": {
@@ -1936,7 +1936,7 @@
   },
   {
     "name": "delete_event",
-    "description": "Cancels an event. For a recurring event, recurring_action says whether this occurrence (default) or the whole series is cancelled. Needs approval_id.",
+    "description": "Cancels an event. For a recurring event, recurring_action says whether this occurrence (default) or the whole series is cancelled. Needs approval_id. Front desk only.",
     "parameters": {
       "type": "object",
       "properties": {
@@ -2313,7 +2313,7 @@
   },
   {
     "name": "get_message",
-    "description": "Retrieves one email message by its message ID.",
+    "description": "Retrieves one email message by its message ID. A customer can read only a message on a thread they wrote or were written to.",
     "parameters": {
       "type": "object",
       "properties": {
@@ -2450,7 +2450,7 @@
   },
   {
     "name": "label_thread",
-    "description": "Adds labels to an entire thread (every message in it). Takes label IDs, not names; use list_labels when unsure of a user label's ID.",
+    "description": "Adds labels to an entire thread (every message in it). Takes label IDs, not names; use list_labels when unsure of a user label's ID. Front desk only.",
     "parameters": {
       "type": "object",
       "properties": {
@@ -2479,7 +2479,7 @@
   },
   {
     "name": "unlabel_thread",
-    "description": "Removes labels from an entire thread. Takes label IDs, not names.",
+    "description": "Removes labels from an entire thread. Takes label IDs, not names. Front desk only.",
     "parameters": {
       "type": "object",
       "properties": {
@@ -2508,7 +2508,7 @@
   },
   {
     "name": "list_drafts",
-    "description": "Lists the mailbox's drafts, newest first. humanEdited marks a draft a person has edited.",
+    "description": "Lists the mailbox's drafts, newest first. humanEdited marks a draft a person has edited. Front desk only.",
     "parameters": {
       "type": "object",
       "properties": {
@@ -2597,7 +2597,7 @@
   },
   {
     "name": "create_draft",
-    "description": "Creates a draft email for a person to review and send. To reply in an existing thread pass the original message's ID as replyToMessageId. Addresses are plain (no 'Name <email>'). Attachments are not supported yet. Nothing is sent.",
+    "description": "Creates a draft email for a person to review and send. To reply in an existing thread pass the original message's ID as replyToMessageId. Addresses are plain (no 'Name <email>'). Attachments are not supported yet. Nothing is sent. Front desk only.",
     "parameters": {
       "type": "object",
       "properties": {

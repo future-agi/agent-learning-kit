@@ -532,3 +532,88 @@ def test_a_language_preference_is_stored_as_its_code(built: Path) -> None:
         assert not world.call("record_customer_preference", {"customer_id": "CU07", "kind": "language", "value": "Klingon"}).ok
     finally:
         world.close()
+
+
+# --- the same private record by every route ------------------------------------------------------
+
+# (what is private, the business-tool route, the attached-capability routes, a marker of the private
+# content). Ana Morales's (CU01) booking A001 and her email: each route must be refused, or must not
+# show the marker, for someone not entitled, and must show it to Ana and to the front desk.
+CROSS_ROUTES = [
+    ("Ana's booking A001 with Lucia",
+     ("get_appointment", {"appointment_id": "A001", "customer_id": "CU01"}),
+     [("get_event", {"calendarId": "CAL-ST02", "eventId": "EV-A001"}),
+      ("list_events", {"calendarId": "CAL-ST02", "startTime": "2026-10-27T00:00:00Z", "endTime": "2026-10-28T00:00:00Z"}),
+      ("list_events", {"calendarId": "CAL-ST02", "fullText": "morales"}),
+      ("suggest_time", {"attendeeEmails": ["ana.morales@example.com"], "startTime": "2026-10-27T13:00:00Z", "endTime": "2026-10-27T16:00:00Z"})],
+     "ana.morales@example.com"),
+    ("Ana's emailed request",
+     ("list_customer_appointments", {"customer_id": "CU01"}),
+     [("get_thread", {"threadId": "th_s01_spanish_consultation"}),
+      ("get_message", {"messageId": "smsg_001"}),
+      ("search_threads", {"query": "Spanish"}),
+      ("search_threads", {"query": "from:ana.morales@example.com"})],
+     "ana.morales@example.com"),
+]
+
+
+def _shows(answer, marker: str) -> bool:
+    """The call returned the private content: it succeeded and the marker is in what came back.
+    suggest_time's free/busy carries no marker, so for it a success is the disclosure."""
+    if not answer.ok:
+        return False
+    if answer.name == "suggest_time":
+        return True
+    return marker in json.dumps(answer.result, default=str).lower()
+
+
+@pytest.mark.parametrize(("what", "business", "capability", "marker"), CROSS_ROUTES, ids=[c[0] for c in CROSS_ROUTES])
+def test_a_private_record_is_closed_or_open_by_every_route_alike(built: Path, what, business, capability, marker) -> None:
+    world = restore(built / WORLD)
+    try:
+        for customer, desk, entitled in (("CU02", None, False), (None, None, False), ("CU01", None, True), (None, "DS01", True)):
+            _signed_in(world, customer, desk)
+            tool, arguments = business
+            answer = world.call(tool, arguments)
+            assert answer.ok is entitled, (what, tool, customer, desk, answer.error)
+            for tool, arguments in capability:
+                answer = world.call(tool, arguments)
+                assert _shows(answer, marker) is entitled, (what, tool, arguments, customer, desk, answer.result if answer.ok else answer.error)
+    finally:
+        world.close()
+
+
+def test_drafts_labels_and_calendar_writes_are_the_front_desks(built: Path) -> None:
+    """No customer route into the mailbox's drafts and labels (a draft quotes other people's mail)
+    or into direct calendar writes (a booking is changed only through the booking tools)."""
+    world = restore(built / WORLD)
+    try:
+        calls = [
+            ("list_drafts", {}),
+            ("create_draft", {"to": ["ana.morales@example.com"], "body": "x", "replyToMessageId": "smsg_001"}),
+            ("create_draft", {"to": ["brian.cole@example.com"], "body": "x", "replyToMessageId": "smsg_002"}),
+            ("label_thread", {"threadId": "th_s02_moved_last_month", "labelIds": ["handled"]}),
+            ("unlabel_thread", {"threadId": "th_s02_moved_last_month", "labelIds": ["needs_reply"]}),
+            ("create_event", {"calendarId": "CAL-ST02", "summary": "x", "startTime": "2026-11-20T10:00:00Z", "endTime": "2026-11-20T11:00:00Z"}),
+            ("update_event", {"calendarId": "CAL-ST01", "eventId": "EV-A002", "summary": "y"}),
+            ("delete_event", {"calendarId": "CAL-ST01", "eventId": "EV-A002"}),
+        ]
+        for customer in ("CU02", None):
+            _signed_in(world, customer)
+            before = _dump(world)
+            for tool, arguments in calls:
+                answer = world.call(tool, arguments)
+                assert not answer.ok and "permission_denied" in str(answer.error), (customer, tool, answer.result)
+            assert _dump(world) == before
+        _signed_in(world, None, "DS01")
+        assert world.call("list_drafts", {}).ok
+        assert world.call("create_draft", {"to": ["brian.cole@example.com"], "body": "x", "replyToMessageId": "smsg_002"}).ok
+        # The desk still needs an approval no tool issues for a direct calendar write.
+        assert "policy_blocked" in str(world.call("delete_event", {"calendarId": "CAL-ST01", "eventId": "EV-A002"}).error)
+        # Restricted mail stays closed to the desk too, by every route.
+        assert not world.call("get_thread", {"threadId": "th_s08_restricted"}).ok
+        assert not world.call("get_message", {"messageId": "smsg_009"}).ok
+        assert "performance plan" not in json.dumps(world.call("search_threads", {"query": "Marcus"}).result).lower()
+        assert not world.call("create_draft", {"to": ["manager@northlight-studios.example"], "body": "x", "replyToMessageId": "smsg_009"}).ok
+    finally:
+        world.close()

@@ -44,13 +44,14 @@
       "fixed": {}
     },
     {
-      "tool": "read_file_content",
+      "tool": "fetch_passage",
       "arguments": {
-        "fileId": "card_v1"
+        "employee_id": "E11",
+        "passage_id": "P-CARDV1-01"
       },
       "environment_arguments": {},
       "fixed": {
-        "fileId": "record: Corporate Card Policy 1.0 (card_v1)"
+        "passage_id": "record: Corporate Card Policy 1.0 section 1 (Limit)"
       }
     }
   ],

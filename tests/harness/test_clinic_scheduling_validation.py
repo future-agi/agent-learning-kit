@@ -563,3 +563,76 @@ def test_the_appointment_shown_by_a_listing_counts_as_looked_up(built: Path) -> 
     steps = [copy.deepcopy(step) for step in _scenario(key).solution if step.tool != "get_appointment"]
     steps.append(Step(tool="list_appointments", arguments={"patient_id": "P419"}, environment_arguments={}, fixed={}))
     assert _grade(built, key, steps) == {"appointment_details_reported": None}
+
+
+# One private record per route: (owner, name, dob, the business call, the attached-capability calls).
+# A caller who may not act for the owner is refused on every route; the owner, verified, is served
+# on every route. Search and listing routes must not show the record either.
+CROSS_ROUTES = [
+    ("P14", "James Walsh", "1966-04-30", ("get_appointment", {"appointment_id": "A07"}), [
+        ("get_thread", {"threadId": "th_c04_reschedule_p14"}),
+        ("get_message", {"messageId": "cmsg_005"}),
+        ("label_thread", {"threadId": "th_c04_reschedule_p14", "labelIds": ["handled"]}),
+        ("create_draft", {"to": ["james.walsh@example.com"], "body": "About A07", "replyToMessageId": "cmsg_005"}),
+        ("create_draft", {"to": ["james.walsh@example.com"], "subject": "Your visit", "body": "About A07"}),
+        ("get_event", {"calendarId": "CAL-D02", "eventId": "EVT-A07"}),
+    ]),
+    ("P12", "Mei Tanaka", "1971-02-27", ("list_appointments", {"patient_id": "P12"}), [
+        ("get_thread", {"threadId": "th_c11_prep_p12"}),
+        ("get_event", {"calendarId": "CAL-D05", "eventId": "EVT-A05"}),
+    ]),
+]
+
+
+def _seen(world, needle: str) -> bool:
+    """Whether any listing or search route shows `needle` (an id, an address, a body fragment)."""
+    shown = [
+        world.call("search_threads", {"query": "in:inbox"}),
+        world.call("list_drafts", {}),
+        world.call("list_events", {"calendarId": "CAL-D02", "startTime": "2026-10-26T00:00:00Z", "endTime": "2026-11-26T00:00:00Z"}),
+        world.call("list_events", {"calendarId": "CAL-D05", "startTime": "2026-10-26T00:00:00Z", "endTime": "2026-11-26T00:00:00Z"}),
+        world.call("list_events", {"calendarId": "CAL-D02", "fullText": needle}),
+    ]
+    return any(needle in json.dumps(call.result) for call in shown if call.ok)
+
+
+@pytest.mark.parametrize(("owner", "name", "dob", "business", "routes"), CROSS_ROUTES, ids=[r[0] for r in CROSS_ROUTES])
+def test_every_route_to_a_private_record_follows_the_caller(built: Path, owner, name, dob, business, routes) -> None:
+    appointment = {"P14": "A07", "P12": "A05"}[owner]
+    # Someone else signed in and verified as themself: every route is refused or shows nothing.
+    world = restore(built / WORLD)
+    try:
+        _as(world, "P02", "Priya Raman", "1990-11-03")
+        before = _everything(world)
+        for tool, arguments in [business, *routes]:
+            call = world.call(tool, arguments)
+            assert not call.ok and call.error.startswith("permission_denied"), (tool, call.result)
+        assert _everything(world) == before
+        for needle in (appointment, f"EVT-{appointment}", next(p["email"] for p in world.state()["patients"] if p["patient_id"] == owner)):
+            assert not _seen(world, needle), needle
+    finally:
+        world.close()
+    # The owner, verified: every route is served.
+    world = restore(built / WORLD)
+    try:
+        _as(world, owner, name, dob)
+        for tool, arguments in [business, *routes]:
+            call = world.call(tool, arguments)
+            assert call.ok, (tool, call.error)
+        assert _seen(world, f"EVT-{appointment}")
+    finally:
+        world.close()
+
+
+def test_a_listed_booking_of_someone_else_is_only_busy_time(built: Path) -> None:
+    world = restore(built / WORLD)
+    try:
+        _as(world, "P02", "Priya Raman", "1990-11-03")
+        events = world.call("list_events", {"calendarId": "CAL-D02", "startTime": "2026-10-29T00:00:00Z", "endTime": "2026-10-30T00:00:00Z"}).result["events"]
+        booked = [e for e in events if e["start"]["dateTime"] == "2026-10-29T10:00:00Z"]
+        assert booked and booked[0]["summary"] == "Busy (booked)" and booked[0]["id"] == "busy" and not booked[0]["description"]
+        # Her own booking she sees in full.
+        own = world.call("list_events", {"calendarId": "CAL-D01", "startTime": "2026-10-28T00:00:00Z", "endTime": "2026-10-29T00:00:00Z"}).result["events"]
+        assert any(e["id"] == "EVT-A08" and e["description"] == "appointment_id: A08" for e in own)
+    finally:
+        world.close()

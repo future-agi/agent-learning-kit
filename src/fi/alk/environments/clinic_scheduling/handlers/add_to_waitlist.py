@@ -58,7 +58,7 @@ def _next_id(db, table, column, prefix, start):
     return f"{prefix}{n}"
 
 
-def _handle(args, db):
+def handle(args, db):
     _need(args, "patient_id", "specialty", "earliest_date", "latest_date", "request_key")
     pid = args["patient_id"]
     _verified(db, pid)
@@ -101,43 +101,3 @@ def _handle(args, db):
     db.execute("INSERT INTO waitlist (waitlist_id, patient_id, specialty, provider_id, earliest_date, latest_date, status, request_key, created_at) VALUES (?, ?, ?, ?, ?, ?, 'active', ?, ?)",
                [wid, pid, args["specialty"], args.get("provider_id"), args["earliest_date"], args["latest_date"], args["request_key"], _now(db)])
     return {"waitlist_id": wid, "status": "active", "earliest_date": args["earliest_date"], "latest_date": args["latest_date"], "idempotent": False}
-
-
-_WRITES = ("waitlist",)
-
-def _all_or_nothing(db, run):
-    """Run the call so that a failed call changes nothing. A handler gets no transaction of its own,
-    so every table this tool writes is held first and put back if the call raises, whether a write
-    failed partway or the call refused after writing. Only a fault the world simulates on purpose
-    (an error marked keep_writes: a rival booking, a commit whose reply was lost, a fault used up)
-    keeps what it wrote."""
-    held = {table: db.query(f"SELECT * FROM {table}") for table in _WRITES}
-    try:
-        return run()
-    except Exception as failed:
-        if not getattr(failed, "keep_writes", False):
-            for table, rows in held.items():
-                if _same(db.query(f"SELECT * FROM {table}"), rows):
-                    continue
-                db.execute(f"DELETE FROM {table}")
-                for row in rows:
-                    cols = list(row)
-                    db.execute(
-                        f"INSERT INTO {table} ({', '.join(chr(34) + c + chr(34) for c in cols)}) VALUES ({', '.join('?' * len(cols))})",
-                        [row[c] for c in cols],
-                    )
-        raise
-
-def _same(rows, held):
-    """Whether a table still holds exactly the rows it held, in any order: only a table the call
-    changed is rewritten."""
-    import json
-
-    def key(row):
-        return json.dumps(row, sort_keys=True, default=str)
-
-    return sorted(map(key, rows)) == sorted(map(key, held))
-
-
-def handle(args, db):
-    return _all_or_nothing(db, lambda: _handle(args, db))

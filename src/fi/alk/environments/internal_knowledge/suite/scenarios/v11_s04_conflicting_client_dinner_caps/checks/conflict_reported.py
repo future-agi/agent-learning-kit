@@ -8,11 +8,13 @@ def check(world, calls, reference=None):
 
 
 def _evidence_missing(world, calls, reference):
-    """The Slack thread, document or passage the reference fixes and whether its content reached this
+    """The Slack thread, passage or document the reference fixes and whether its content reached this
     run: the text of every message in the thread (the desk's own posts aside) returned by a thread
-    read, channel read or search; the document's text returned whole, or every one of its passages
-    fetched; the passage's text returned by fetching it or inside its document's text. A search
-    returns a snippet, not the passage, and one section of a document is not the whole of it."""
+    read, channel read or search; a passage's text returned by fetching it or inside its document's
+    text read in Drive; a document the reference reads whole, its text, or every one of its passages.
+    A reference fixes the decision-bearing passage, so the facts the answer needs are asked for and
+    the rest of the document is not. A search returns a snippet, not the passage, and another section
+    or another version of the document is not that passage."""
     state = world.state()
     desk = (state.get("current_actor") or [{}])[0].get("user_id")
     file_of = {p["passage_id"]: p["drive_file_id"] for p in state.get("kb_passages", [])}

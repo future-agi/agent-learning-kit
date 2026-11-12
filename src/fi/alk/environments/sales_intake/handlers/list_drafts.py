@@ -24,10 +24,11 @@ def handle(args, db):
             raise ToolError(f"Unsupported draft search operator {part!r}; drafts support to:, cc:, bcc: and subject:", category="invalid_input")
 
     drafts = []
-    # Drafts are the desk's work in progress; a prospect sees only those addressed to them.
+    # Drafts are the desk's work in progress; a prospect sees only those addressed to them on
+    # their own correspondence, so a draft cannot quote another person's thread to them.
     kind, who = _caller(db)
     for d in db.query("SELECT * FROM gmail_drafts ORDER BY updated_at DESC"):
-        if kind != "staff" and not (kind == "contact" and who["email_normalized"] in [x.strip().lower() for x in d["recipient"].split(",")]):
+        if kind != "staff" and not (kind == "contact" and who["email_normalized"] in [x.strip().lower() for x in d["recipient"].split(",")] and _sees(db, d["thread_id"])):
             continue
         text = f"{d['subject']} {d['body']} {d['recipient']}".lower()
         if terms and not all(term in text for term in terms):
@@ -79,3 +80,18 @@ def _named(kind, who):
     if kind == "staff":
         return f"{who['name']} ({who['user_id']})"
     return "nobody signed in"
+
+
+def _sees(db, thread_id):
+    """Whether the person in this conversation may read this thread: staff read the sales@ mailbox;
+    a prospect only a thread they wrote or were written to."""
+    kind, who = _caller(db)
+    if kind == "staff":
+        return True
+    if kind != "contact":
+        return False
+    mine = who["email_normalized"]
+    return any(
+        m["sender"].strip().lower() == mine or mine in [x.strip().lower() for x in (m["recipient"] + "," + (m["cc"] or "")).split(",")]
+        for m in db.query("SELECT sender, recipient, cc FROM gmail_messages WHERE thread_id = ?", (thread_id,))
+    )

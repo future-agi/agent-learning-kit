@@ -149,29 +149,13 @@ def _fault(db, operation, target):
     return f
 
 
-def _together(db, touched, writes):
-    """Run `writes` so that every row lands or none does. A handler gets no transaction of its
-    own, so the rows in `touched` ((table, column, value) each) are held first and put back if a
-    write fails: an appointment never survives without its calendar event, or the reverse."""
-    held = [(t, c, v, db.query(f"SELECT * FROM {t} WHERE {c} = ?", [v])) for t, c, v in touched]
-    try:
-        return writes()
-    except Exception:
-        for t, c, v, rows in held:
-            db.execute(f"DELETE FROM {t} WHERE {c} = ?", [v])
-            for row in rows:
-                cols = list(row)
-                db.execute(f"INSERT INTO {t} ({', '.join(cols)}) VALUES ({', '.join('?' * len(cols))})", [row[k] for k in cols])
-        raise
-
-
 def _kept(error):
     """A fault this world simulates on purpose: what the call wrote before it stays written."""
     error.keep_writes = True
     return error
 
 
-def _handle(args, db):
+def handle(args, db):
     _need(args, "appointment_id", "new_slot_id", "request_key")
     a = _own_appointment(db, args["appointment_id"])
     # A replayed request_key is the same request only when it names this appointment and the move
@@ -207,69 +191,19 @@ def _handle(args, db):
         # the slot is gone from availability afterwards rather than free again on the next look.
         rival = fault["competing_patient_id"] or "P19"
         rid = _next_id(db, "appointments", "appointment_id", "A", 101)
-
-        def rival_booking():
-            db.execute("INSERT INTO appointments (appointment_id, patient_id, provider_id, location_id, specialty, start_time, end_time, reason, status, calendar_event_id, self_pay, request_key, reschedule_count, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, 'Booked by phone', 'scheduled', ?, 0, ?, 0, ?, ?)",
-                       [rid, rival, slot["provider_id"], slot["location_id"], slot["specialty"], slot["start_time"], slot["end_time"], f"EVT-{rid}", f"phone-{rid}", now, now])
-            _insert_event(db, f"EVT-{rid}", slot, rid, now)
-
-        _together(db, [("appointments", "appointment_id", rid), ("calendar_events", "event_id", f"EVT-{rid}")], rival_booking)
+        db.execute("INSERT INTO appointments (appointment_id, patient_id, provider_id, location_id, specialty, start_time, end_time, reason, status, calendar_event_id, self_pay, request_key, reschedule_count, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, 'Booked by phone', 'scheduled', ?, 0, ?, 0, ?, ?)",
+                   [rid, rival, slot["provider_id"], slot["location_id"], slot["specialty"], slot["start_time"], slot["end_time"], f"EVT-{rid}", f"phone-{rid}", now, now])
+        _insert_event(db, f"EVT-{rid}", slot, rid, now)
         raise _kept(ToolError(f"The new slot {slot['slot_id']} could not be committed (another booking took it). Appointment {a['appointment_id']} is unchanged.", category="conflict"))
     why = _conflict(db, slot, a["patient_id"], ignore_event=a["calendar_event_id"])
     if why:
         raise ToolError(f"Slot {slot['slot_id']} is not free: {why}. Appointment {a['appointment_id']} is unchanged.", category="conflict")
     # The replacement commits first; the original time is released only after it.
     new_event = f"EVT-{a['appointment_id']}-R{a['reschedule_count'] + 1}"
-    holds = db.query("SELECT hold_id FROM slot_holds WHERE patient_id = ? AND slot_id = ? AND status = 'active'", [a["patient_id"], slot["slot_id"]])
-
-    def move():
-        _insert_event(db, new_event, slot, a["appointment_id"], now)
-        db.execute("UPDATE appointments SET provider_id = ?, location_id = ?, start_time = ?, end_time = ?, calendar_event_id = ?, request_key = ?, reschedule_count = reschedule_count + 1, updated_at = ? WHERE appointment_id = ?",
-                   [slot["provider_id"], slot["location_id"], slot["start_time"], slot["end_time"], new_event, args["request_key"], now, a["appointment_id"]])
-        db.execute("UPDATE calendar_events SET status = 'cancelled', updated_at = ? WHERE event_id = ?", [now, a["calendar_event_id"]])
-        db.execute("UPDATE slot_holds SET status = 'converted', updated_at = ? WHERE patient_id = ? AND slot_id = ? AND status = 'active'", [now, a["patient_id"], slot["slot_id"]])
-
-    _together(db, [("appointments", "appointment_id", a["appointment_id"]), ("calendar_events", "event_id", new_event),
-                   ("calendar_events", "event_id", a["calendar_event_id"])] + [("slot_holds", "hold_id", h["hold_id"]) for h in holds], move)
+    _insert_event(db, new_event, slot, a["appointment_id"], now)
+    db.execute("UPDATE appointments SET provider_id = ?, location_id = ?, start_time = ?, end_time = ?, calendar_event_id = ?, request_key = ?, reschedule_count = reschedule_count + 1, updated_at = ? WHERE appointment_id = ?",
+               [slot["provider_id"], slot["location_id"], slot["start_time"], slot["end_time"], new_event, args["request_key"], now, a["appointment_id"]])
+    db.execute("UPDATE calendar_events SET status = 'cancelled', updated_at = ? WHERE event_id = ?", [now, a["calendar_event_id"]])
+    db.execute("UPDATE slot_holds SET status = 'converted', updated_at = ? WHERE patient_id = ? AND slot_id = ? AND status = 'active'", [now, a["patient_id"], slot["slot_id"]])
     b = db.one("SELECT * FROM appointments WHERE appointment_id = ?", [a["appointment_id"]])
     return dict(_appointment_view(b), previous_start_time=a["start_time"], previous_provider_id=a["provider_id"], idempotent=False)
-
-
-_WRITES = ("appointments", "calendar_events", "clinic_fault_injections", "slot_holds")
-
-def _all_or_nothing(db, run):
-    """Run the call so that a failed call changes nothing. A handler gets no transaction of its own,
-    so every table this tool writes is held first and put back if the call raises, whether a write
-    failed partway or the call refused after writing. Only a fault the world simulates on purpose
-    (an error marked keep_writes: a rival booking, a commit whose reply was lost, a fault used up)
-    keeps what it wrote."""
-    held = {table: db.query(f"SELECT * FROM {table}") for table in _WRITES}
-    try:
-        return run()
-    except Exception as failed:
-        if not getattr(failed, "keep_writes", False):
-            for table, rows in held.items():
-                if _same(db.query(f"SELECT * FROM {table}"), rows):
-                    continue
-                db.execute(f"DELETE FROM {table}")
-                for row in rows:
-                    cols = list(row)
-                    db.execute(
-                        f"INSERT INTO {table} ({', '.join(chr(34) + c + chr(34) for c in cols)}) VALUES ({', '.join('?' * len(cols))})",
-                        [row[c] for c in cols],
-                    )
-        raise
-
-def _same(rows, held):
-    """Whether a table still holds exactly the rows it held, in any order: only a table the call
-    changed is rewritten."""
-    import json
-
-    def key(row):
-        return json.dumps(row, sort_keys=True, default=str)
-
-    return sorted(map(key, rows)) == sorted(map(key, held))
-
-
-def handle(args, db):
-    return _all_or_nothing(db, lambda: _handle(args, db))

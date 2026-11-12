@@ -1,3 +1,15 @@
+def _caller_slack_id(db):
+    """The Slack user of the employee signed in to this conversation. The desk reads Slack on their
+    behalf: it reads the public channels it belongs to for any active signed-in employee, because a
+    public channel is open to the whole workspace, but a private channel only when the employee is
+    a member too. Nobody signed in, or an inactive employee, is served nothing."""
+    row = db.one("SELECT employee_id FROM session_caller WHERE id = 'default'")
+    e = db.one("SELECT * FROM employees WHERE employee_id = ?", [row["employee_id"]]) if row and row["employee_id"] else None
+    if e is None or e["status"] != "active":
+        raise ToolError("No active employee is signed in to this conversation; the desk reads Slack only for the signed-in employee.", category="permission_denied")
+    return "U_" + e["employee_id"]
+
+
 def handle(args, db):
     import re
     from datetime import datetime, timezone
@@ -65,10 +77,11 @@ def handle(args, db):
 
     actor = db.one("SELECT user_id FROM current_actor WHERE id = 'default'")
     actor_id = actor["user_id"] if actor else "U01"
+    caller = _caller_slack_id(db)
     visible = {}
     for channel in db.query("SELECT * FROM slack_channels"):
         member = db.one("SELECT 1 FROM slack_channel_members WHERE channel_id = ? AND user_id = ?", [channel["channel_id"], actor_id]) is not None
-        if channel["is_private"] and not member:
+        if channel["is_private"] and not (member and db.one("SELECT 1 FROM slack_channel_members WHERE channel_id = ? AND user_id = ?", [channel["channel_id"], caller]) is not None):
             continue
         if args.get("only_my_channels") and not member:
             continue

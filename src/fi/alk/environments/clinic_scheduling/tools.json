@@ -1031,7 +1031,7 @@
   },
   {
     "name": "list_events",
-    "description": "Events on a calendar matching the constraints. Set startTime and endTime only when a specific timeframe is requested. For open-ended keyword searches on the primary calendar use search_events.",
+    "description": "Events on a calendar matching the constraints. Set startTime and endTime only when a specific timeframe is requested. For open-ended keyword searches on the primary calendar use search_events. Another patient's booking (or one of a patient not yet verified) is shown only as busy time.",
     "parameters": {
       "type": "object",
       "properties": {
@@ -1236,7 +1236,7 @@
   },
   {
     "name": "get_event",
-    "description": "A single event on a calendar.",
+    "description": "A single event on a calendar. Another patient's booking, or one of a patient not yet verified, is refused.",
     "parameters": {
       "type": "object",
       "properties": {
@@ -1374,7 +1374,7 @@
   },
   {
     "name": "search_events",
-    "description": "Searches events on the user's primary calendar by keywords (case-insensitive).",
+    "description": "Searches events on the user's primary calendar by keywords (case-insensitive). Another patient's booking (or one of a patient not yet verified) is shown only as busy time.",
     "parameters": {
       "type": "object",
       "properties": {
@@ -2563,7 +2563,7 @@
   },
   {
     "name": "label_thread",
-    "description": "Adds labels to an entire thread (every message in it). Takes label IDs, not names; use list_labels when unsure of a user label's ID.",
+    "description": "Adds labels to an entire thread (every message in it). Takes label IDs, not names; use list_labels when unsure of a user label's ID. Mail about a patient is labelled only once that patient is verified in this conversation.",
     "parameters": {
       "type": "object",
       "properties": {
@@ -2592,7 +2592,7 @@
   },
   {
     "name": "unlabel_thread",
-    "description": "Removes labels from an entire thread. Takes label IDs, not names.",
+    "description": "Removes labels from an entire thread. Takes label IDs, not names. Mail about a patient is labelled only once that patient is verified in this conversation.",
     "parameters": {
       "type": "object",
       "properties": {
@@ -2710,7 +2710,7 @@
   },
   {
     "name": "create_draft",
-    "description": "Creates a draft email for a person to review and send. To reply in an existing thread pass the original message's ID as replyToMessageId. Addresses are plain (no 'Name <email>'). Attachments are not supported yet. Nothing is sent. Mail about a patient is shown only once that patient is verified in this conversation.",
+    "description": "Creates a draft email for a person to review and send. To reply in an existing thread pass the original message's ID as replyToMessageId. Addresses are plain (no 'Name <email>'). Attachments are not supported yet. Nothing is sent. Mail about a patient is shown only once that patient is verified in this conversation. A draft addressed to a patient on file needs that patient verified.",
     "parameters": {
       "type": "object",
       "properties": {
