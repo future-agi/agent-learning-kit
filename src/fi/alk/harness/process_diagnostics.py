@@ -3,11 +3,112 @@ from __future__ import annotations
 import os
 import re
 import stat
+import sys
 import uuid
+from collections import Counter
 from collections.abc import Mapping
 from pathlib import Path
 
 from fi._diagnostics import sanitize_diagnostic
+
+_DIGITS = str.maketrans("", "", "0123456789")
+# Numbers that tell two errors apart: a status, exit or signal code, an HTTP code.
+_MEANINGFUL = re.compile(
+    r"(?i)(?:status(?:_code)?|code|exit(?:\s+(?:code|status))?|returncode|signal|http(?:/\d\.\d)?)"
+    r"[\"'\s:=_]*\d+"
+)
+# Opaque ids, so two copies of one record with different ids match: hex runs that carry a digit
+# (uuids, hashes), and letter-and-digit runs of twelve or more (job, request and sandbox ids;
+# shorter names such as a module name stay as they are, so two different errors stay apart).
+# Each alternative starts only where a run starts, so a long run is scanned once, not once per
+# position: the log is written by the tested agent and must not make this slow.
+_OPAQUE_ID = re.compile(
+    r"(?<![0-9A-Za-z-])(?=[0-9a-fA-F-]*\d)[0-9a-fA-F][0-9a-fA-F-]{7,}\b"
+    r"|(?<![A-Za-z0-9])(?=[A-Za-z0-9]*\d)(?=[A-Za-z0-9]*[A-Za-z])[A-Za-z0-9]{12,}(?![A-Za-z0-9])"
+)
+
+
+_CHAINED = (
+    "During handling of the above exception",
+    "The above exception was the direct cause",
+)
+
+
+def _records(lines: list[str]) -> list[list[str]]:
+    """Split log lines into records: a line with its indented continuation lines, and a Python
+    traceback kept whole from its header to its exception line, chained tracebacks included."""
+
+    records: list[list[str]] = []
+    in_traceback = False
+    for line in lines:
+        indented = line[:1] in (" ", "\t")
+        if line.startswith("Traceback (most recent call last)"):
+            # Python prints a blank line between "...direct cause..." and the next traceback.
+            said = [one for one in records[-1] if one.strip()] if records else []
+            if said and said[-1].strip().startswith(_CHAINED):
+                records[-1].append(line)
+            else:
+                records.append([line])
+            in_traceback = True
+        elif records and (indented or not line.strip()):
+            records[-1].append(line)
+        elif records and line.startswith(_CHAINED):
+            records[-1].append(line)
+        elif records and in_traceback:
+            # The exception line closes the traceback.
+            records[-1].append(line)
+            in_traceback = False
+        else:
+            records.append([line])
+            in_traceback = False
+    return records
+
+
+def _shape(record: list[str]) -> str:
+    """A record with its volatile parts (times, ids, counters) removed and its meaningful numbers
+    (status, exit and HTTP codes) kept, so only real copies share a shape."""
+
+    # NUL brackets the placeholders below, so a NUL in the log itself must not reach them.
+    text = _OPAQUE_ID.sub("#", "".join(record).replace("\0", ""))
+    kept: list[str] = []
+
+    def hold(match: re.Match[str]) -> str:
+        kept.append(match.group(0))
+        # A placeholder with no digits, so removing digits cannot touch it.
+        return "\0" + chr(0xE000 + len(kept) - 1) + "\0"
+
+    held = _MEANINGFUL.sub(hold, text).translate(_DIGITS)
+    return re.sub("\0(.)\0", lambda m: kept[ord(m.group(1)) - 0xE000], held)
+
+
+def _collapse_repeated_lines(text: str) -> str:
+    """Keep a repeated log record only where it last appears, above it the count of its earlier
+    copies.
+
+    A healthy process repeats some lines all through its log (stream notices, polling, retries);
+    left in, they push the one line that explains a failure out of the retained tail. A record is
+    a line with its indented continuation, and a traceback stays whole, so two different errors
+    never share or lose frames. Records that differ only in digits (times, counters) or opaque ids
+    (uuids, hashes, long letter-and-digit ids) count as the same record, but a status, exit or
+    HTTP code keeps two errors apart. The kept copy is the
+    last one, so its time is the latest, not the first.
+    """
+
+    records = _records(text.splitlines(keepends=True))
+    shapes = [_shape(record) for record in records]
+    last = {shape: index for index, shape in enumerate(shapes)}
+    copies = Counter(shapes)
+    kept: list[str] = []
+    for index, record in enumerate(records):
+        if last[shapes[index]] != index:
+            continue
+        if copies[shapes[index]] > 1:
+            what = "line" if len(record) == 1 else f"{len(record)} lines"
+            kept.append(
+                f"[earlier copies of the next {what} omitted: {copies[shapes[index]] - 1}]\n"
+            )
+        kept.extend(record)
+    return "".join(kept)
 
 
 def retain_process_log(
@@ -35,9 +136,11 @@ def retain_process_log(
             if offset:
                 # Drop the incomplete first record, including any split credential.
                 raw = raw.partition(b"\n")[2]
-        text = sanitize_diagnostic(
-            raw.decode("utf-8", errors="replace"), secrets, limit=65536
-        )[-8192:]
+        # Collapse before redacting: a redacted value can split lines that differ only in digits.
+        # The omission notes can make the collapsed text longer than the 64 KB read, so all of it
+        # is redacted before the tail is taken.
+        collapsed = _collapse_repeated_lines(raw.decode("utf-8", errors="replace"))
+        text = sanitize_diagnostic(collapsed, secrets, limit=sys.maxsize)[-8192:]
         if not text:
             return
         destination.mkdir(parents=True, exist_ok=True, mode=0o700)
