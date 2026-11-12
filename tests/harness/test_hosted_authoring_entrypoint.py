@@ -3,7 +3,22 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import os
+
+import pytest
+
 from fi.alk.harness import hosted_authoring_entrypoint as entrypoint
+
+
+@pytest.fixture(autouse=True)
+def _restored_environment():
+    # main() writes os.environ directly (the generation values and the controller mark). Without
+    # this, the mark would stay set for every later file in the same pytest session, and turn the
+    # local CLI's .env path into the controller's.
+    saved = dict(os.environ)
+    yield
+    os.environ.clear()
+    os.environ.update(saved)
 
 
 def test_platform_simulator_values_ignore_customer_target_credentials() -> None:
@@ -338,3 +353,69 @@ def test_good_subfolder_continues(tmp_path, monkeypatch):
 
     assert calls == ["compose", "auto"]
     assert not (tmp_path / "authoring" / "failure.json").exists()
+
+
+def test_the_guest_loads_a_repository_env_only_through_the_allowlist(tmp_path, monkeypatch) -> None:
+    from fi.alk.harness.cli import _load_connection_env
+
+    secrets = tmp_path / "secrets.json"
+    gateway = tmp_path / "simulator-secrets.json"
+    secrets.write_text(
+        json.dumps({"SIMULATOR_OPENAI_API_KEY": "platform-openai"}), encoding="utf-8"
+    )
+    gateway.write_text(
+        json.dumps({"AGENTCC_API_KEY": "platform-key", "AGENTCC_BASE_URL": "https://gw.invalid"}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(entrypoint, "_SECRETS_PATH", secrets)
+    monkeypatch.setattr(entrypoint, "_SIMULATOR_SECRETS_PATH", gateway)
+    monkeypatch.setattr(entrypoint, "_ADC_PATH", tmp_path / "adc.json")
+    for name in (
+        "ALK_RUNTIME_CONFIGURATION_NAMES", "HTTPS_PROXY", "ANTHROPIC_BASE_URL",
+        "CLAUDE_CODE_USE_BEDROCK", "PYTHONPATH", "HARNESS_VOICE_RUNNER", "LIVEKIT_URL",
+        "MY_SETTING", "ALK_CLAUDE_GATEWAY_URL", "GOOGLE_CLOUD_LOCATION", "CLOUD_ML_REGION",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / ".env").write_text(
+        "HTTPS_PROXY=http://canary-proxy.invalid\nANTHROPIC_BASE_URL=https://canary.invalid\n"
+        "CLAUDE_CODE_USE_BEDROCK=1\nPYTHONPATH=/repo\nHARNESS_VOICE_RUNNER=/repo/run.py\n"
+        "ALK_CLAUDE_GATEWAY_URL=https://canary.invalid\nGOOGLE_CLOUD_LOCATION=canary\n"
+        "CLOUD_ML_REGION=canary\nAGENTCC_API_KEY=repo-key\nOPENAI_API_KEY=repo-openai\n"
+        "LIVEKIT_URL=wss://repo.invalid\nMY_SETTING=mine\n",
+        encoding="utf-8",
+    )
+
+    def authoring(argv, *, validate_runtime):
+        _load_connection_env(source)
+        return 0
+
+    monkeypatch.setattr(entrypoint, "authoring_main", authoring)
+
+    assert entrypoint.main([]) == 0
+
+    environ = entrypoint.os.environ
+    for name in (
+        "HTTPS_PROXY", "ANTHROPIC_BASE_URL", "CLAUDE_CODE_USE_BEDROCK", "PYTHONPATH",
+        "HARNESS_VOICE_RUNNER", "ALK_CLAUDE_GATEWAY_URL", "GOOGLE_CLOUD_LOCATION", "MY_SETTING",
+    ):
+        assert name not in environ, name
+    for name in ("ANTHROPIC_BASE_URL", "HARNESS_VOICE_RUNNER", "GOOGLE_CLOUD_LOCATION", "MY_SETTING"):
+        assert environ[f"ALK_RUNTIME_VALUE_{name}"] != ""
+    assert environ.get("CLOUD_ML_REGION", "") != "canary"
+    assert environ["AGENTCC_API_KEY"] == "platform-key"
+    assert environ["OPENAI_API_KEY"] == "platform-openai"
+    assert environ["LIVEKIT_URL"] == "wss://repo.invalid"
+
+
+def test_marking_a_controller_keeps_a_manifest_already_there() -> None:
+    from fi.alk.harness.secrets import mark_controller_process
+
+    environ = {"ALK_RUNTIME_CONFIGURATION_NAMES": "A,B"}
+    mark_controller_process(environ)
+    assert environ["ALK_RUNTIME_CONFIGURATION_NAMES"] == "A,B"
+
+    empty: dict[str, str] = {}
+    mark_controller_process(empty)
+    assert empty == {"ALK_RUNTIME_CONFIGURATION_NAMES": ""}

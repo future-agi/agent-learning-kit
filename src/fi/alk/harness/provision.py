@@ -41,6 +41,7 @@ from .livekit_source import infer_livekit_agent_name_from_source
 from .service_catalog import address, profile_for
 from .secrets import (
     CONTROLLER_CONNECTION_NAMES,
+    RUNTIME_CONFIGURATION_NAMES_ENV,
     controller_name_reserved,
     runtime_configuration_value,
 )
@@ -1220,7 +1221,7 @@ def _contract_runtime_configuration_names(contract: Any | None) -> list[str]:
         "HARNESS_PLATFORM_API_KEY",
         "HARNESS_PLATFORM_SECRET_KEY",
     }
-    supplied = os.environ.get("ALK_RUNTIME_CONFIGURATION_NAMES", "")
+    supplied = os.environ.get(RUNTIME_CONFIGURATION_NAMES_ENV, "")
     names.update(
         name
         for name in supplied.split(",")
