@@ -1563,9 +1563,9 @@ class OutboundAdapter:
             target_metrics = getattr(receipt.call, "target_metrics", None)
             if target_metrics:
                 call["target_metrics"] = target_metrics
-            skill_loads = getattr(receipt.call, "skill_loads", None)
-            if skill_loads:
-                call["skill_loads"] = list(skill_loads)
+            skill_usage = getattr(receipt.call, "skill_usage", None)
+            if skill_usage:
+                call["skill_usage"] = dict(skill_usage)
         elif receipt.call is not None:
             # `hosted_scheduler.CallSummary.started_at` is `str | None`, but
             # `outbound.CallSummary.started_at` requires a real timestamp -- per the contract a
@@ -2837,6 +2837,7 @@ async def run_job(
                 _judge_sub_goals_jointly, agent_instructions=_agent_instructions(job, bundle_dir)
             ),
             skills=job_skills(work_directory),
+            instrumentation=_bundle_contract_value(bundle_dir, "instrumentation"),
         )
         result: RunResult = await scheduler.run(scenarios)
 

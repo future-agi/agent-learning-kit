@@ -37,7 +37,6 @@ except Exception:  # noqa: BLE001 - the mark must never cost tool tracing or wor
 
     sys.stderr.write("simulation mark hook: failed\n")
 
-import contextlib
 import functools
 import json
 import logging
@@ -368,8 +367,3 @@ except Exception:  # noqa: BLE001 - optional observation must not affect custome
 
 if not _crewai_observer_installed:
     _install_declared_python_tools()
-
-with contextlib.suppress(Exception):
-    import claude_skill_observer_bootstrap
-
-    claude_skill_observer_bootstrap.install()
