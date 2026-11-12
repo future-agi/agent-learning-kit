@@ -164,9 +164,9 @@ def _cut(value: str) -> str:
 class _CleaningExporter(SpanExporter):
     """Hand the real exporter copies of each span with every string in it cleaned.
 
-    A span that can't be copied is dropped, and a batch that can't be cleaned is dropped whole:
-    nothing raw reaches the exporter, and no exception reaches the SDK, whose own log line would
-    carry the error's text.
+    A span that can't be gathered or copied is dropped, and a batch that can't be cleaned is
+    dropped whole: nothing raw reaches the exporter, and no exception reaches the SDK, whose own
+    log line would carry the error's text.
     """
 
     def __init__(self, inner: Any, secret_values: tuple[str, ...] = ()) -> None:
@@ -190,7 +190,14 @@ class _CleaningExporter(SpanExporter):
         try:
             spans = list(spans)
             flat: list[str] = []
-            plans = [_gather(span, flat, self._secrets) for span in spans]
+            plans: list[Any] = []
+            for span in spans:
+                try:
+                    plans.append(_gather(span, flat, self._secrets))
+                except Exception as dropped:
+                    # Strings this span already put in flat stay there, unused.
+                    error = error or dropped
+                    plans.append(None)
             from fi.alk.providers import agent
 
             # One call for the whole batch, so the cleaner logs at most once per batch. Each
@@ -199,6 +206,8 @@ class _CleaningExporter(SpanExporter):
             cleaned = agent._redact(flat)
             copies = []
             for span, plan in zip(spans, plans):
+                if plan is None:
+                    continue
                 try:
                     copies.append(_rebuild(span, plan, cleaned, self._resource(span.resource)))
                 except Exception as dropped:
@@ -224,8 +233,10 @@ class _CleaningExporter(SpanExporter):
         from fi.alk.providers import agent
 
         flat: list[str] = []
+        # No declared values here: they would also hit platform configuration (the project name),
+        # which the platform routes the job's spans by.
         plan = {
-            key: _take(value, flat, key, self._secrets)
+            key: _take(value, flat, key, ())
             for key, value in (resource.attributes or {}).items()
         }
         cleaned = agent._redact(flat)
@@ -244,6 +255,28 @@ class _CleaningExporter(SpanExporter):
 
 # outbound.redact_outbound_text's floor: a shorter declared value would mask ordinary words.
 _SHORTEST_SECRET = 8
+
+
+def credential_values(
+    values: Mapping[str, str], also: frozenset[str] = frozenset()
+) -> tuple[str, ...]:
+    """The values in an alias -> value channel whose alias names a credential.
+
+    The simulator and gateway channels hold platform configuration too (model names, the Observe
+    project): replacing those in spans would mask every LLM span's model and send the job's traces
+    to a project named "***". ``also`` names secrets whose alias doesn't say so, such as a PIN.
+    """
+    return tuple(
+        str(value)
+        for alias, value in values.items()
+        if value and (_named_secret(str(alias)) or alias in also)
+    )
+
+
+def _mask(text: str, secrets: tuple[str, ...]) -> str:
+    for secret in secrets:
+        text = text.replace(secret, "***")
+    return text
 
 
 def _named_secret(key: str) -> bool:
@@ -268,10 +301,10 @@ def _take(value: Any, flat: list[str], key: str, secrets: tuple[str, ...]) -> An
 
 
 def _take_text(value: str, flat: list[str], key: str, secrets: tuple[str, ...]) -> Any:
-    for secret in secrets:
-        value = value.replace(secret, "***")
     if _named_secret(key):
         return ("as is", "[redacted]")
+    # _cut and _as_json read the value as recorded: replacing a secret first changes its length
+    # (so a value traceai cut is no longer of a cut length) and, inside JSON, its escaping.
     cut = _cut(value)
     if cut == value:
         # traceai records tool input, messages and metadata as JSON. Cleaned as prose, a URL with
@@ -280,8 +313,8 @@ def _take_text(value: str, flat: list[str], key: str, secrets: tuple[str, ...]) 
         # JSON. A value cut short isn't JSON any more, so it is cleaned as text.
         tree = _as_json(value)
         if tree is not None:
-            return ("json", _take_json(tree, flat, key))
-    flat.append(cut)
+            return ("json", _take_json(tree, flat, key, secrets))
+    flat.append(_mask(cut, secrets))
     return ("text", len(flat) - 1)
 
 
@@ -291,24 +324,50 @@ def _as_json(value: str) -> Any:
         return None
     try:
         tree = json.loads(value)
-    except ValueError:
+    except (ValueError, RecursionError):
         return None
-    return tree if isinstance(tree, (dict, list)) else None
+    if not isinstance(tree, (dict, list)) or _too_deep(tree):
+        return None
+    return tree
 
 
-def _take_json(node: Any, flat: list[str], key: str) -> Any:
+# Deeper than this is cleaned as text: the walks below recurse, and the interpreter's limit is
+# not ours to hit inside a batch.
+_JSON_DEPTH = 64
+
+
+def _too_deep(tree: Any) -> bool:
+    """Whether tree nests past _JSON_DEPTH, measured without recursion."""
+    pending = [(tree, 1)]
+    while pending:
+        node, depth = pending.pop()
+        if depth > _JSON_DEPTH:
+            return True
+        children = node.values() if isinstance(node, dict) else node
+        pending.extend(
+            (child, depth + 1) for child in children if isinstance(child, (dict, list))
+        )
+    return False
+
+
+def _take_json(node: Any, flat: list[str], key: str, secrets: tuple[str, ...]) -> Any:
     if isinstance(node, dict):
-        return ("dict", [(name, _take_json(item, flat, str(name))) for name, item in node.items()])
+        pairs = []
+        for name, item in node.items():
+            # The key is a string that goes out too. The key rule reads it raw.
+            flat.append(_mask(str(name), secrets))
+            pairs.append((len(flat) - 1, _take_json(item, flat, str(name), secrets)))
+        return ("dict", pairs)
     if isinstance(node, list):
-        return ("list", [_take_json(item, flat, key) for item in node])
+        return ("list", [_take_json(item, flat, key, secrets) for item in node])
     if isinstance(node, str):
         if _named_secret(key):
             return ("as is", "[redacted]")
         # A string inside JSON can itself be JSON (a tool's input dumped into a message).
         tree = _as_json(node)
         if tree is not None:
-            return ("json text", _take_json(tree, flat, key))
-        flat.append(node)
+            return ("json text", _take_json(tree, flat, key, secrets))
+        flat.append(_mask(node, secrets))
         return ("text", len(flat) - 1)
     return ("as is", node)
 
@@ -327,7 +386,16 @@ def _give(where: Any, cleaned: list[Any]) -> Any:
 def _give_json(where: Any, cleaned: list[Any]) -> Any:
     kind, body = where
     if kind == "dict":
-        return {name: _give_json(item, cleaned) for name, item in body}
+        rebuilt: dict[str, Any] = {}
+        for where_name, item in body:
+            name = cleaned[where_name]
+            # Two keys can clean to the same text: keep both values.
+            unique, count = name, 1
+            while unique in rebuilt:
+                count += 1
+                unique = f"{name} ({count})"
+            rebuilt[unique] = _give_json(item, cleaned)
+        return rebuilt
     if kind == "list":
         return [_give_json(item, cleaned) for item in body]
     if kind == "text":

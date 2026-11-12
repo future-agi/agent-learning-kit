@@ -613,8 +613,7 @@ def test_t15_traceais_recorded_tool_input_is_cleaned(_real_begin):
         instrumentor.uninstrument()
 
 
-# -- change review round 1: the copy's structure, the check's identity half, the inner exporter,
-# -- and the real exporter --------------------------------------------------------------------
+# -- the copy's structure, the check's identity half, the inner exporter, the real exporter -----
 
 
 def test_r1_the_copy_keeps_parent_kind_link_context_and_event_time():
@@ -784,7 +783,7 @@ def test_a_batch_whose_every_span_is_dropped_sends_nothing(_real_begin, monkeypa
     assert bodies == []
 
 
-# -- review (Dileep, #280): JSON values, declared secrets, the key rule, the resource ----------
+# -- JSON values, declared secrets, the key rule, the resource ---------------------------------
 
 
 def _export_one(span, secret_values=()):
@@ -904,3 +903,218 @@ def test_the_resource_is_cleaned_once_and_reused():
     first, second = sink.get_finished_spans()
     assert first.resource.attributes["note"] == "postgres://db/x"
     assert first.resource is second.resource
+
+
+# -- which declared values, the order, keys, depth ----------------------------------------------
+
+# What the gateway sends on the simulator channel: credentials among platform configuration.
+GATEWAY_CHANNEL = {
+    "ALK_HARNESS_MODEL": "vertex_ai/claude-sonnet-4-5",
+    "SIMULATOR_LLM_MODEL": "gemini-2.5-flash-lite",
+    "FI_HARNESS_PROJECT": "hosted-harness-prod",
+    "FI_BASE_URL": "https://api.futureagi.example",
+    "GOOGLE_CLOUD_PROJECT": "platform-project-1",
+    "AGENTCC_API_KEY": "agentcc-key-1234567890",
+    "OPENAI_API_KEY": "sk-OPENAI-1234567890",
+    "FI_SECRET_KEY": "fi-secret-1234567890",
+    "LIVEKIT_API_SECRET": "livekit-secret-1234567890",
+}
+GATEWAY_CREDENTIALS = {
+    "agentcc-key-1234567890",
+    "sk-OPENAI-1234567890",
+    "fi-secret-1234567890",
+    "livekit-secret-1234567890",
+}
+
+
+def test_credential_values_keeps_the_aliases_that_name_a_credential():
+    assert set(observability.credential_values(GATEWAY_CHANNEL)) == GATEWAY_CREDENTIALS
+    assert observability.credential_values(
+        {"A_TOKEN": "", "B_SECRET": "kept-value"}
+    ) == ("kept-value",)
+
+
+def _platform_span():
+    """An LLM span on a resource that names the Observe project, carrying a real credential."""
+    from opentelemetry.sdk.resources import Resource
+
+    memory = InMemorySpanExporter()
+    provider = TracerProvider(
+        resource=Resource({"project_name": "hosted-harness-prod"})
+    )
+    provider.add_span_processor(SimpleSpanProcessor(memory))
+    with provider.get_tracer("test").start_as_current_span(
+        "llm",
+        attributes={
+            "gen_ai.request.model": "vertex_ai/claude-sonnet-4-5",
+            "llm.model_name": "gemini-2.5-flash-lite",
+            "input.value": "the key is sk-OPENAI-1234567890",
+        },
+    ):
+        pass
+    return memory.get_finished_spans()[0]
+
+
+def _assert_platform_config_survives(secret_values):
+    copy = _export_one(_platform_span(), secret_values)
+
+    assert copy.attributes["gen_ai.request.model"] == "vertex_ai/claude-sonnet-4-5"
+    assert copy.attributes["llm.model_name"] == "gemini-2.5-flash-lite"
+    assert copy.resource.attributes["project_name"] == "hosted-harness-prod"
+    assert copy.attributes["input.value"] == "the key is ***"
+
+
+def test_the_gateways_default_values_leave_models_and_project_unchanged():
+    _assert_platform_config_survives(observability.credential_values(GATEWAY_CHANNEL))
+
+
+def test_declared_values_never_touch_the_resource():
+    # Even a value that is the project's name: the platform routes the job's spans by it.
+    span = _platform_span()
+
+    copy = _export_one(span, ("hosted-harness-prod",))
+
+    assert copy.resource.attributes["project_name"] == "hosted-harness-prod"
+
+
+def test_a_declared_value_under_eight_characters_is_not_replaced():
+    copy = _export_one(_readable(**{"output.value": "pin 1234567 ok"}), ("1234567",))
+
+    assert copy.attributes["output.value"] == "pin 1234567 ok"
+
+
+def test_an_array_value_is_read_as_json():
+    # As prose, the URL would take the closing quote and bracket with it and break the JSON.
+    out = _export_one(_readable(**{"input.value": '["https://h/x?key=v", "keep"]'}))
+
+    assert json.loads(out.attributes["input.value"]) == ["https://h/x", "keep"]
+
+
+def test_a_declared_secret_does_not_disarm_the_cut_rule():
+    secret = "sk-JOBSECRET-1234567890"
+    value = _ending(2000)
+    value = secret + value[len(secret) :]
+    assert len(value) == 2000 and secret in value
+
+    out = _export_one(_readable(**{"tool.input": value}), (secret,))
+
+    assert out.attributes["tool.input"].endswith(" [redacted]")
+    assert (
+        "8374" not in out.attributes["tool.input"]
+        and secret not in out.attributes["tool.input"]
+    )
+
+
+def test_a_cut_json_value_is_not_read_as_json_even_when_it_is_complete_json():
+    # The guard is cut == value: a value of a cut length that ends in an address goes as text,
+    # whatever else it parses as.
+    tail = " https://deploy:8374"
+    complete = '["' + "x" * (2000 - 4 - len(tail)) + tail + '"]'
+    assert len(complete) == 2000 and json.loads(complete)
+
+    out = _export_one(_readable(**{"tool.input": complete})).attributes["tool.input"]
+
+    assert "8374" not in out
+    with pytest.raises(ValueError):
+        json.loads(out)
+
+
+@pytest.mark.parametrize("secret", ['pa"ss\\word-12345', "pässword-1234567"])
+def test_a_declared_secret_with_json_escapes_is_replaced_inside_json(secret):
+    value = json.dumps({"note": "login with " + secret, "list": [secret]})
+    assert secret not in value
+
+    out = _export_one(_readable(**{"input.value": value}), (secret,)).attributes[
+        "input.value"
+    ]
+
+    assert json.loads(out) == {"note": "login with ***", "list": ["***"]}
+
+
+def test_a_declared_secret_in_a_json_key_is_replaced():
+    secret = "sk-JOBVALUE-1234567890"
+    value = json.dumps({secret: "ok"})
+
+    out = _export_one(_readable(**{"input.value": value}), (secret,)).attributes[
+        "input.value"
+    ]
+
+    assert json.loads(out) == {"***": "ok"}
+
+
+def test_a_json_key_is_cleaned_as_a_string():
+    value = json.dumps({"https://u:pw@h/x?key=v": "ok"})
+
+    out = _export_one(_readable(**{"input.value": value})).attributes["input.value"]
+
+    assert "pw" not in out and "key=v" not in out
+    assert list(json.loads(out).values()) == ["ok"]
+
+
+def test_two_keys_that_clean_to_the_same_text_both_keep_their_values():
+    value = json.dumps({"https://a:1@h/x": "first", "https://b:2@h/x": "second"})
+
+    out = json.loads(
+        _export_one(_readable(**{"input.value": value})).attributes["input.value"]
+    )
+
+    assert sorted(out.values()) == ["first", "second"]
+    assert len(out) == 2
+
+
+def test_a_key_that_names_a_secret_still_masks_its_value_when_the_key_is_cleaned():
+    value = json.dumps({"token": "abc123def", "n": 1})
+
+    out = _export_one(_readable(**{"input.value": value})).attributes["input.value"]
+
+    assert json.loads(out) == {"token": "[redacted]", "n": 1}
+
+
+def test_json_nested_past_the_cap_is_cleaned_as_text_and_the_batch_goes_on():
+    deep = "[" * 1500 + "]" * 1500
+    spans = [
+        _readable("deep", **{"input.value": deep, "tool.input": URL}),
+        _readable("normal", **{"tool.input": URL}),
+    ]
+    sink = InMemorySpanExporter()
+
+    result = observability._CleaningExporter(sink).export(spans)
+
+    sent = {span.name: span for span in sink.get_finished_spans()}
+    assert set(sent) == {"deep", "normal"}
+    assert sent["normal"].attributes["tool.input"] == CLEAN
+    # Sent as text, unchanged: there is nothing in it to clean.
+    assert sent["deep"].attributes["input.value"] == deep
+    assert not _leaks(sent["deep"].attributes["tool.input"])
+    assert result is not SpanExportResult.FAILURE
+
+
+def test_json_at_the_depth_cap_is_still_read_as_json_and_one_past_it_is_not():
+    depth = observability._JSON_DEPTH
+    inside = "[" * depth + '"https://h/x?key=v"' + "]" * depth
+    past = "[" * (depth + 1) + '"https://h/x?key=v"' + "]" * (depth + 1)
+
+    assert observability._as_json(inside) is not None
+    assert observability._as_json(past) is None
+    assert observability._as_json("[" * 100000 + "]" * 100000) is None
+
+
+def test_a_span_that_cannot_be_gathered_is_dropped_alone(monkeypatch, caplog):
+    caplog.set_level(logging.WARNING)
+    real = observability._gather
+
+    def picky(span, flat, secrets):
+        if span.name == "boom":
+            raise KeyError("planted")
+        return real(span, flat, secrets)
+
+    monkeypatch.setattr(observability, "_gather", picky)
+    sink = InMemorySpanExporter()
+
+    observability._CleaningExporter(sink).export(
+        [_readable("boom"), _readable("fine", **{"tool.input": URL})]
+    )
+
+    assert [span.name for span in sink.get_finished_spans()] == ["fine"]
+    assert sink.get_finished_spans()[0].attributes["tool.input"] == CLEAN
+    assert _warnings(caplog) == ["trace spans dropped: KeyError"]

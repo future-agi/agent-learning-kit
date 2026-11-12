@@ -71,6 +71,30 @@ def _platform_simulator_values(values: dict[str, str]) -> dict[str, str]:
     }
 
 
+# Not named as credentials, but secret: the guest-booking PIN, and its private target number.
+_UNNAMED_SECRETS = frozenset({PIN_ENV, TARGET_PHONE_ENV})
+
+
+def _span_secret_values(
+    all_values: dict[str, str], gateway_values: dict[str, str]
+) -> tuple[str, ...]:
+    """The values spans replace whole. The customer's go whole. The platform's (the SIMULATOR_*
+    aliases, the passthrough and Observe settings, the gateway file) go only where they are
+    credentials, since they also hold model names and the Observe project, which a span keeps."""
+    platform_names = _PASSTHROUGH | _OBSERVABILITY_PASSTHROUGH
+
+    def platform(name: str) -> bool:
+        return name.startswith("SIMULATOR_") or name in platform_names
+
+    customer = tuple(value for name, value in all_values.items() if value and not platform(name))
+    platform_values = {name: value for name, value in all_values.items() if platform(name)}
+    platform_values.update(gateway_values)
+    return (
+        *customer,
+        *observability.credential_values(platform_values, also=_UNNAMED_SECRETS),
+    )
+
+
 def _configure_generation_environment(values: dict[str, str]) -> None:
     for name in _PASSTHROUGH:
         if values.get(name):
@@ -194,13 +218,12 @@ def main(argv: list[str] | None = None) -> int:
         os.environ["ALK_FOREGROUND_COORDINATOR"] = "1"
     job_id, run_id, telemetry = _authoring_job_context(forwarded)
     if job_id:
-        # Every value the job declared, as the outbound channels replace them: spans carry tool
-        # output, and a tool can print a key.
+        # Spans carry tool output, and a tool can print a key.
         observability.begin(
             job_id,
             run_id,
             telemetry,
-            secret_values=(*all_values.values(), *gateway_values.values()),
+            secret_values=_span_secret_values(all_values, gateway_values),
         )
         observability.stage("authoring")
     try:

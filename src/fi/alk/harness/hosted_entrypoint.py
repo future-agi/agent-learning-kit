@@ -2273,9 +2273,14 @@ async def run_job(
     scenarios_client.configure_offline_control(events_spool.root / "control")
 
     # Read once, at boot: the runtime deletes secrets.json on its first provision().
+    customer_secret_values = deps.peek_secret_values()
     declared_secret_values = (
-        *deps.peek_secret_values(),
+        *customer_secret_values,
         *tuple(simulator_secret_values.values()),
+    )
+    span_secret_values = (
+        *customer_secret_values,
+        *observability.credential_values(simulator_secret_values),
     )
     adapter = OutboundAdapter(
         capabilities,
@@ -2493,12 +2498,14 @@ async def run_job(
         if broker_socket is not None:
             os.environ["ALK_COMPOSE_BROKER_SOCKET"] = str(broker_socket)
 
-        # The same declared values the outbound adapter replaces: spans are a channel out too.
+        # Spans are a channel out too. The customer's declared values go whole; the simulator
+        # channel only where its alias names a credential, as it also holds model names and the
+        # Observe project, which a span must keep.
         observability.begin(
             job.job_id,
             job.run_id,
             (job.metadata or {}).get("telemetry"),
-            secret_values=declared_secret_values,
+            secret_values=span_secret_values,
         )
 
         if job.seed is None:

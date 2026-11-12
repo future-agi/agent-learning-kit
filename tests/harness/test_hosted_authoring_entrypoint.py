@@ -338,3 +338,94 @@ def test_good_subfolder_continues(tmp_path, monkeypatch):
 
     assert calls == ["compose", "auto"]
     assert not (tmp_path / "authoring" / "failure.json").exists()
+
+
+def test_authoring_hands_spans_the_customers_values_whole_and_only_the_gateways_credentials(
+    tmp_path, monkeypatch
+) -> None:
+    from unittest import mock
+
+    from opentelemetry.sdk.resources import Resource
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+    from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
+        InMemorySpanExporter,
+    )
+
+    from fi.alk.harness import observability
+
+    secrets = tmp_path / "secrets.json"
+    gateway = tmp_path / "simulator-secrets.json"
+    job = tmp_path / "job.json"
+    secrets.write_text(
+        json.dumps(
+            {
+                "RETELL_API_KEY": "retell-customer-key-1234567890",
+                "CUSTOMER_DSN": "customer-dsn-value-1234567890",
+                # This file also carries platform settings beside the customer's values.
+                "SIMULATOR_LLM_MODEL": "gemini-2.5-flash-lite",
+                "FI_HARNESS_PROJECT": "hosted-harness-prod",
+                "FI_API_KEY": "fi-platform-key-1234567890",
+            }
+        ),
+        encoding="utf-8",
+    )
+    # The gateway's default values: credentials among models and the Observe project.
+    gateway.write_text(
+        json.dumps(
+            {
+                "AGENTCC_API_KEY": "agentcc-key-1234567890",
+                "AGENTCC_BASE_URL": "https://gateway.example.test",
+                "ALK_HARNESS_MODEL": "vertex_ai/claude-sonnet-4-5",
+                "SIMULATOR_LLM_MODEL": "gemini-2.5-flash-lite",
+                "FI_HARNESS_PROJECT": "hosted-harness-prod",
+                "GOOGLE_CLOUD_PROJECT": "platform-project-1",
+                "ALK_CAB_GUEST_POC_PIN": "48213977",
+                "ALK_CAB_GUEST_POC_TARGET_PHONE_NUMBER": "+15550104477",
+            }
+        ),
+        encoding="utf-8",
+    )
+    job.write_text(json.dumps({"job_id": "job-1", "run_id": "run-1"}), encoding="utf-8")
+    monkeypatch.setattr(entrypoint, "_SECRETS_PATH", secrets)
+    monkeypatch.setattr(entrypoint, "_SIMULATOR_SECRETS_PATH", gateway)
+    monkeypatch.setattr(entrypoint, "_ADC_PATH", tmp_path / "adc.json")
+    monkeypatch.setattr(entrypoint, "_TARGET_SECRETS_PATH", tmp_path / "target.json")
+    monkeypatch.setattr(
+        entrypoint, "authoring_main", lambda argv, *, validate_runtime: 0
+    )
+    handed: list[tuple[str, ...]] = []
+
+    def begin(job_id, run_id, context=None, secret_values=()):
+        handed.append(tuple(secret_values))
+
+    monkeypatch.setattr(observability, "begin", begin)
+
+    with mock.patch.dict(entrypoint.os.environ):
+        assert entrypoint.main([str(job)]) == 0
+
+    assert len(handed) == 1
+    memory = InMemorySpanExporter()
+    provider = TracerProvider(
+        resource=Resource({"project_name": "hosted-harness-prod"})
+    )
+    provider.add_span_processor(SimpleSpanProcessor(memory))
+    with provider.get_tracer("test").start_as_current_span(
+        "llm",
+        attributes={
+            "gen_ai.request.model": "vertex_ai/claude-sonnet-4-5",
+            "llm.model_name": "gemini-2.5-flash-lite",
+            "input.value": "a agentcc-key-1234567890 b retell-customer-key-1234567890 "
+            "c customer-dsn-value-1234567890 d fi-platform-key-1234567890 "
+            "e 48213977 f +15550104477",
+        },
+    ):
+        pass
+    sink = InMemorySpanExporter()
+    observability._CleaningExporter(sink, handed[0]).export(memory.get_finished_spans())
+
+    (copy,) = sink.get_finished_spans()
+    assert copy.attributes["gen_ai.request.model"] == "vertex_ai/claude-sonnet-4-5"
+    assert copy.attributes["llm.model_name"] == "gemini-2.5-flash-lite"
+    assert copy.resource.attributes["project_name"] == "hosted-harness-prod"
+    assert copy.attributes["input.value"] == "a *** b *** c *** d *** e *** f ***"

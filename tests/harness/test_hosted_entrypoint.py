@@ -5515,3 +5515,72 @@ def test_the_activity_printed_to_stdout_loses_url_credentials(capsys, monkeypatc
     assert "  [grep https://hooks.example/v1" in printed
     assert "  > agent.py:3: hook = https://hooks.example/v1\n  > agent.py:4: ok" in printed
     assert "The agent posts to https://hooks.example/v1 after." in printed
+
+
+def test_the_job_hands_spans_the_customers_values_whole_and_only_the_gateways_credentials(
+    monkeypatch,
+) -> None:
+    from opentelemetry.sdk.resources import Resource
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+    from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
+        InMemorySpanExporter,
+    )
+
+    from fi.alk.harness import observability
+
+    harness = _build_harness(
+        scenarios=[
+            FakeScenario("passing", "platform-passing", [FakeSubGoal("holds", True)])
+        ]
+    )
+    harness.deps.secrets_path.write_text(
+        json.dumps({"CUSTOMER_DSN": "customer-dsn-value-1234567890"}), encoding="utf-8"
+    )
+    harness.deps.simulator_secrets_path = harness.tmp / "simulator-secrets.json"
+    # The gateway's default values: credentials among models and the Observe project.
+    harness.deps.simulator_secrets_path.write_text(
+        json.dumps(
+            {
+                "AGENTCC_API_KEY": "agentcc-key-1234567890",
+                "ALK_HARNESS_MODEL": "vertex_ai/claude-sonnet-4-5",
+                "SIMULATOR_LLM_MODEL": "gemini-2.5-flash-lite",
+                "FI_HARNESS_PROJECT": "hosted-harness-prod",
+                "GOOGLE_CLOUD_PROJECT": "platform-project-1",
+            }
+        ),
+        encoding="utf-8",
+    )
+    handed: list[tuple[str, ...]] = []
+
+    def begin(job_id, run_id, context=None, secret_values=()):
+        handed.append(tuple(secret_values))
+
+    monkeypatch.setattr(observability, "begin", begin)
+
+    with mock.patch.dict(os.environ):
+        assert _run(harness) == he.EXIT_OK
+
+    assert len(handed) == 1
+    memory = InMemorySpanExporter()
+    provider = TracerProvider(
+        resource=Resource({"project_name": "hosted-harness-prod"})
+    )
+    provider.add_span_processor(SimpleSpanProcessor(memory))
+    with provider.get_tracer("test").start_as_current_span(
+        "llm",
+        attributes={
+            "gen_ai.request.model": "vertex_ai/claude-sonnet-4-5",
+            "llm.model_name": "gemini-2.5-flash-lite",
+            "input.value": "a agentcc-key-1234567890 b customer-dsn-value-1234567890",
+        },
+    ):
+        pass
+    sink = InMemorySpanExporter()
+    observability._CleaningExporter(sink, handed[0]).export(memory.get_finished_spans())
+
+    (copy,) = sink.get_finished_spans()
+    assert copy.attributes["gen_ai.request.model"] == "vertex_ai/claude-sonnet-4-5"
+    assert copy.attributes["llm.model_name"] == "gemini-2.5-flash-lite"
+    assert copy.resource.attributes["project_name"] == "hosted-harness-prod"
+    assert copy.attributes["input.value"] == "a *** b ***"
