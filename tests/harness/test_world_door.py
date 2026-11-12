@@ -141,6 +141,24 @@ def test_a_scenario_s_fault_applies_to_the_agent_s_named_call_only(mode, ran):
     assert door.enter(ToolCall(action="crm.update", name="update")).fault is None
 
 
+def test_a_fault_is_never_guessed_onto_every_call_when_the_log_cannot_count_the_calls():
+    class _Uncountable(MemoryLog):
+        def agent_calls(self, name):
+            raise RuntimeError("log down")
+
+    executor = _Executor()
+    door = _door(
+        executor,
+        faults=[
+            {"action": "crm.update", "mode": "timeout_before_commit", "on_call": 1, "delay_seconds": 0}
+        ],
+        log=_Uncountable(),
+    )
+    outcomes = [door.enter(ToolCall(action="crm.update", name="update")) for _ in range(3)]
+    assert [one.fault for one in outcomes] == [None, None, None]
+    assert len(executor.ran) == 3
+
+
 def test_the_door_never_raises_into_its_caller_when_the_world_or_the_log_fails():
     class _Broken(MemoryLog):
         def write(self, row):
