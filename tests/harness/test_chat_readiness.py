@@ -1362,6 +1362,7 @@ def test_the_readiness_call_reads_calls_from_the_bundle_s_own_evidence_seam(tmp_
         def __init__(self, _artifacts, context):
             seen["seam"] = context.evidence_seam
             self._contract = None
+            self.received = []
 
         async def run(self, _scenario, _runtime):
             return SimpleNamespace(calls=(Call(name="issue_refund", arguments={}),), turns=1)
