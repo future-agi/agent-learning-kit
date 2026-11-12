@@ -465,8 +465,8 @@ class WorldDoor:
         """The fault set on this call of the action, by which call of it this is."""
         try:
             made = self.log.agent_calls(call.name)
-        except Exception:  # noqa: BLE001 - counted from zero when the log cannot say
-            made = 0
+        except Exception:  # noqa: BLE001 - which call this is is unknown: a guess would fault every call as the first
+            return None
         return next(
             (one for one in named if _int(one.get("on_call"), 1) == made + 1), None
         )
