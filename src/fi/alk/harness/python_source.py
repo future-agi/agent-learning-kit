@@ -318,15 +318,6 @@ def decoded_first(
     return taken, text, encoding
 
 
-def _decoded_first(
-    raw: bytes, coding: tuple[str, codecs.CodecInfo] | None, escapes: EscapeBudget | None
-) -> tuple[bool, str | None]:
-    """Whether ``raw``, in the codec ``coding`` names, is decoded before it's searched, and its
-    text as Python reads it: None when Python refuses it. The first of ``_decoded_readings``."""
-    taken, text, _ = _decoded_readings(raw, coding, escapes)
-    return taken, text
-
-
 def _decoded_readings(
     raw: bytes, coding: tuple[str, codecs.CodecInfo] | None, escapes: EscapeBudget | None
 ) -> tuple[bool, str | None, str | None]:

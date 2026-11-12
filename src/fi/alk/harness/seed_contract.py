@@ -367,7 +367,8 @@ def holds_seed(contract: Path, seed: str | Path) -> bool:
         if problem is not None or raw is None:
             return False
         return contract.stat().st_size == len(raw) and contract.read_bytes() == raw
-    except Exception as exc:  # noqa: BLE001 - a contract that can't be compared isn't claimed as the seed
+    # A contract that can't be compared isn't claimed as the seed.
+    except Exception as exc:  # noqa: BLE001
         print_trace(exc)
         return False
 
