@@ -457,6 +457,21 @@ def contract_tools(
                         # is where it is caught, with an explanation.
                     },
                 },
+                "workers": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "id": {"type": "string"},
+                            "name": {"type": "string"},
+                            "tools": {"type": "array", "items": {"type": "string"}},
+                        },
+                        "required": ["id"],
+                    },
+                    "description": "Agents this one hands work to, if any: an id no other worker has, the name the app "
+                    "gives the agent (its spans carry it), and the names of the tools above that it "
+                    "holds. Leave out for an agent that hands no work on.",
+                },
                 "data_schema": {
                     "type": "object",
                     "description": "The shape of the records the agent works on: which fields "
