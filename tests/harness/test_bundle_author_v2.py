@@ -3929,6 +3929,45 @@ def test_adk_servers_are_recognised_however_adk_is_invoked_and_however_the_app_i
     assert _adk_app_name(tmp_path, ".", command) == app_name
 
 
+def test_an_adk_app_without_an_init_file_is_still_the_app_served(tmp_path: Path) -> None:
+    from fi.alk.harness.bundle_author_v2 import _adk_app_name
+
+    # ADK loads agents_dir/app/agent.py whether or not app/__init__.py exists.
+    app = tmp_path / "agents" / "plain_app"
+    app.mkdir(parents=True)
+    (app / "agent.py").write_text("root_agent = object()\n", encoding="utf-8")
+    (tmp_path / "agents" / "notes").mkdir()
+
+    assert _adk_app_name(tmp_path, ".", ["adk", "web", "agents"]) == "plain_app"
+
+    second = tmp_path / "agents" / "other_app"
+    second.mkdir()
+    (second / "agent.py").write_text("root_agent = object()\n", encoding="utf-8")
+    assert _adk_app_name(tmp_path, ".", ["adk", "web", "agents"]) is None
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        ["adk", "web", "agents", "--logo_image_url", "assets"],
+        ["adk", "web", "--logo_image_url", "assets", "agents"],
+        ["adk", "api_server", "--reload", "agents", "--port", "8000"],
+        ["adk", "api_server", "--host=0.0.0.0", "agents", "--a2a"],
+    ],
+)
+def test_the_adk_agents_directory_is_the_positional_argument_not_an_option_value(
+    tmp_path: Path, command: list[str]
+) -> None:
+    from fi.alk.harness.bundle_author_v2 import _adk_app_name
+
+    for app in (tmp_path / "agents" / "real_app", tmp_path / "assets" / "logo_app"):
+        app.mkdir(parents=True)
+        (app / "__init__.py").write_text("", encoding="utf-8")
+        (app / "agent.py").write_text("root_agent = object()\n", encoding="utf-8")
+
+    assert _adk_app_name(tmp_path, ".", command) == "real_app"
+
+
 def test_a_command_that_only_mentions_adk_is_not_its_server() -> None:
     from fi.alk.harness.bundle_author_v2 import _adk_server_arguments
 
