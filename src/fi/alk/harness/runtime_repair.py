@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import shlex
 from pathlib import Path
 from typing import Literal
 from urllib.parse import urljoin, urlsplit
@@ -999,6 +1000,37 @@ def _tool_mapping_selectors_changed(before, after) -> bool:
     )
 
 
+def _runtime_names_credentials(root: Path, runtime: Runtime) -> bool:
+    """Whether any command token or path the runtime names resolves, inside the source, to a listed
+    file. Judged where it resolves and before anything is opened, so a listed file, a link to one
+    and a missing one get one answer."""
+
+    workdir = (root / runtime.workdir).resolve() if runtime.workdir else root
+
+    def listed(raw: str, base: Path) -> bool:
+        resolved = (base / raw).resolve()
+        if resolved.is_relative_to(root):
+            return secret_text(resolved.relative_to(root).as_posix())
+        return secret_text(resolved.as_posix())
+
+    paths = [runtime.workdir, runtime.compose_file, runtime.dockerfile]
+    paths += [*runtime.compose_overrides, *runtime.requirements_files]
+    if any(raw and (listed(raw, root) or listed(raw, workdir)) for raw in paths):
+        return True
+    tokens: list[str] = []
+    for token in runtime.command:
+        tokens.append(token)
+        try:
+            tokens.extend(shlex.split(token))
+        except ValueError:
+            pass
+    for token in tokens:
+        for operand in {token, token.partition("=")[2]} if token.startswith("-") else {token}:
+            if operand and (listed(operand, workdir) or listed(operand, root)):
+                return True
+    return False
+
+
 def validate_runtime_plan_patch(
     source_root: Path,
     contract: AgentContract,
@@ -1051,6 +1083,11 @@ def validate_runtime_plan_patch(
             raise ValueError(f"runtime_repair_evidence_missing: {relative}")
         if evidence.is_file():
             evidence_files.append(evidence)
+
+    if _runtime_names_credentials(root, patch.runtime):
+        # The same answer as for evidence: a run of a listed file would put its first line in a
+        # traceback or build error that goes back to the model.
+        raise ValueError("runtime_repair_runtime_names_credentials")
 
     if ingress_repair:
         if not evidence_files or len(evidence_files) != len(patch.evidence_paths):

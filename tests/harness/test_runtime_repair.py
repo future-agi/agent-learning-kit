@@ -158,7 +158,7 @@ def test_runtime_patch_never_checks_a_command_against_a_listed_file(tmp_path, fo
     contract = AgentContract(agent="agent", runtime=Runtime(language="python"))
     patch = RuntimePlanPatch(
         base_contract_hash=_contract_hash(contract),
-        runtime=Runtime(language="python", workdir="service", start="canaryfakeguess1 run"),
+        runtime=Runtime(language="python", workdir="service", command=["canaryfakeguess1", "run"]),
         evidence_paths=(cited,),
         diagnostic_codes=("generated_runtime_plan_invalid",),
         summary="Use service.",
@@ -171,6 +171,79 @@ def test_runtime_patch_never_checks_a_command_against_a_listed_file(tmp_path, fo
             patch,
             allowed_diagnostic_codes={"generated_runtime_plan_invalid"},
         )
+
+
+_CREDENTIAL_FIELDS = {
+    "command": lambda ref: {"command": ["python", ref]},
+    "command_flag": lambda ref: {"command": ["python", f"--config={ref}", "app.py"]},
+    "command_string": lambda ref: {"command": [f"python {ref}"]},
+    "workdir": lambda ref: {"workdir": ref},
+    "compose_file": lambda ref: {"compose_file": ref},
+    "dockerfile": lambda ref: {"dockerfile": ref},
+}
+
+
+@pytest.mark.parametrize("form", ["present", "link", "missing"])
+@pytest.mark.parametrize("name", [".env", ".aws/credentials"])
+@pytest.mark.parametrize("field", sorted(_CREDENTIAL_FIELDS))
+def test_runtime_patch_refuses_a_runtime_that_names_a_listed_file(
+    tmp_path, field, name, form
+) -> None:
+    # A listed file, a link to one and a missing one get one answer, before anything is read.
+    source = tmp_path / "source"
+    (source / "service").mkdir(parents=True)
+    (source / "service" / "app.py").write_text("print('agent')\n")
+    ref = name
+    if form != "missing":
+        target = source / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("OPENAI_API_KEY=canaryfakeguess1\n", encoding="utf-8")
+    if form == "link":
+        ref = "service/settings_local.cfg"
+        (source / ref).symlink_to(source / name)
+    contract = AgentContract(agent="agent", runtime=Runtime(language="python"))
+    patch = RuntimePlanPatch(
+        base_contract_hash=_contract_hash(contract),
+        runtime=Runtime(language="python", **{"workdir": "service", **_CREDENTIAL_FIELDS[field](ref)}),
+        evidence_paths=("service/app.py",),
+        diagnostic_codes=("generated_runtime_plan_invalid",),
+        summary="Use service.",
+    )
+
+    with pytest.raises(ValueError, match="runtime_repair_runtime_names_credentials"):
+        validate_runtime_plan_patch(
+            source,
+            contract,
+            patch,
+            allowed_diagnostic_codes={"generated_runtime_plan_invalid"},
+        )
+
+
+def test_runtime_patch_still_passes_an_ordinary_runtime(tmp_path) -> None:
+    service = tmp_path / "service"
+    service.mkdir()
+    (service / "pyproject.toml").write_text("[project]\nname='agent'\nversion='1'\n")
+    (service / "main.py").write_text("app = None\n")
+    (service / "Dockerfile").write_text("FROM python:3.12\n")
+    contract = AgentContract(agent="agent", runtime=Runtime(language="python"))
+    patch = RuntimePlanPatch(
+        base_contract_hash=_contract_hash(contract),
+        runtime=Runtime(
+            language="python",
+            workdir="service",
+            dockerfile="service/Dockerfile",
+            command=["python", "-m", "uvicorn", "main:app", "--port=8080", "--app-dir", "."],
+            interface=RuntimeInterface(kind="http", port=8080, path="/chat"),
+        ),
+        evidence_paths=("service/pyproject.toml", "service/main.py"),
+        diagnostic_codes=("generated_runtime_plan_invalid",),
+        summary="Run the HTTP service.",
+    )
+
+    repaired = validate_runtime_plan_patch(
+        tmp_path, contract, patch, allowed_diagnostic_codes={"generated_runtime_plan_invalid"}
+    )
+    assert repaired.runtime == patch.runtime
 
 
 def test_runtime_patch_rejects_stale_contract(tmp_path) -> None:
