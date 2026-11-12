@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Iterable
 from typing import Any
 
@@ -21,6 +22,11 @@ _SQLSTATE_CODES = {
     "42703": "generated_setup_invalid",
     "42601": "generated_setup_invalid",
 }
+
+
+# A data exception's message quotes the authored value; keep the type, never the value.
+_QUOTED_VALUE = re.compile(r'"(?:[^"\\]|\\.)*"')
+_INPUT_TYPE = re.compile(r"for type ([A-Za-z_][A-Za-z0-9_ ]*?)(?::|$)")
 
 
 def _text(value: Any) -> str | None:
@@ -43,22 +49,28 @@ def diagnose_postgres_error(
     sqlstate = _text(getattr(error, "sqlstate", None))
     diag = getattr(error, "diag", None)
     datatype = _text(getattr(diag, "datatype_name", None)) if diag else None
-    code = _SQLSTATE_CODES.get(sqlstate or "", "unsupported_source_construct")
-    if (
-        sqlstate == "22P02"
-        and datatype
-        and (datatype.startswith("_") or datatype.endswith("[]"))
-    ):
-        code = "array_shape_mismatch"
     primary = _text(getattr(diag, "message_primary", None)) if diag else None
     message = primary or _text(error) or "PostgreSQL operation failed"
+    if (sqlstate or "").startswith("22"):
+        # PostgreSQL sends no datatype for 22P02; its message names the type.
+        if datatype is None:
+            named = _INPUT_TYPE.search(message)
+            datatype = named.group(1).strip() if named else None
+        message = _QUOTED_VALUE.sub('"<value>"', message)
+    code = _SQLSTATE_CODES.get(sqlstate or "", "unsupported_source_construct")
+    if sqlstate == "22P02" and (
+        (datatype and (datatype.startswith("_") or datatype.endswith("[]")))
+        or message.startswith("malformed array literal")
+    ):
+        code = "array_shape_mismatch"
     return HarnessDiagnostic.create(
         stage=stage,
         component=component,
         code=code,
         message=f"PostgreSQL {sqlstate or 'unknown SQLSTATE'}: {message}",
         location=DiagnosticLocation(
-            table=_text(getattr(diag, "table_name", None)) if diag else None,
+            table=(_text(getattr(diag, "table_name", None)) if diag else None)
+            or _text(getattr(error, "alk_table", None)),
             column=_text(getattr(diag, "column_name", None)) if diag else None,
             constraint=_text(getattr(diag, "constraint_name", None)) if diag else None,
             datatype=datatype,

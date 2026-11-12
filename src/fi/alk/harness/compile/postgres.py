@@ -259,7 +259,16 @@ def apply_postgres(connection: Any, compiled: PostgresCompileResult) -> None:
 
     with connection.transaction():
         for operation in compiled.operations:
-            connection.execute(operation.statement, operation.params or None)
+            try:
+                connection.execute(operation.statement, operation.params or None)
+            except Exception as error:
+                # PostgreSQL names no table for a value it cannot parse (22P02): carry the
+                # table being written so the diagnosis can point the repair at it.
+                try:
+                    error.alk_table = operation.table  # type: ignore[attr-defined]
+                except AttributeError:
+                    pass
+                raise
         for reset in compiled.sequence_resets:
             qualified = f"{_identifier(reset.schema_name)}.{_identifier(reset.table)}"
             column = _identifier(reset.column)
