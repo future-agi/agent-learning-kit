@@ -290,7 +290,14 @@ class ChatActors:
         if self.history is not None:
             try:
                 return [
-                    {"action": row.get("name"), "arguments": row.get("arguments"), "outcome": row.get("outcome")}
+                    {
+                        "action": row.get("name"),
+                        "arguments": row.get("arguments"),
+                        "outcome": row.get("outcome"),
+                        # What the world said when it refused, as a person would hear it, so the actor can correct it.
+                        **({"world_said": str(row["error"])[:300]} if row.get("outcome") != "committed"
+                           and row.get("error") else {}),
+                    }
                     for row in self.history(key)
                 ]
             except Exception:  # noqa: BLE001 - an unreadable log falls back to what this conversation sent
@@ -343,7 +350,7 @@ class ChatActors:
         """The lines actors write now, after the agent's latest turn, in the scenario's order; their actions in the
         world are sent as they decide them. A `follow_up` asks again, after the agent answered an actor, only the
         actors with live turns left; each that writes or acts spends one."""
-        from fi.simulate.simulation.call_actors import Moment, decision_brief, due, read_decision
+        from fi.simulate.simulation.call_actors import Moment, due, read_decision
 
         if not self._room():
             return []
@@ -371,17 +378,8 @@ class ChatActors:
                 self.done.add(key)
                 self.events.append({"actor": key, "kind": "finished", "reason": "its own line limit reached"})
                 continue
-            brief = decision_brief(
-                actor,
-                situation=str(actor.get("situation") or ""),
-                said=self.written[key],
-                conversation=conversation,
-                language=str(actor.get("language") or ""),
-                seen=self._own_actions(key) if self.act else None,
-                actions={one: self.about.get(one, "") for one in actor.get("permitted_actions") or []} if self.act else {},
-            )
             try:
-                decision = read_decision(await self._write(actor, brief))
+                decision = read_decision(await self._write(actor, self._brief(actor, key, conversation)))
             except ActorModelFailed as failed:
                 # A model that did not answer is never the actor's line: the actor says nothing more this trial.
                 self.done.add(key)
@@ -396,35 +394,19 @@ class ChatActors:
                                     "why": "already committed this action in this trial"})
                 decision = type(decision)(line=decision.line, action="", arguments={}, why=decision.why)
             if decision.action and self.act is not None:
-                self.decisions += 1
-                from ..world_door import record_action
-
-                # Without an identity in that service the actor still acts as itself, never as the agent.
-                identity = (actor.get("identities") or {}).get(decision.action.split(".", 1)[0], "") or str(
-                    actor.get("id") or ""
-                )
-                # A record change the actor may make goes to the world's records, as a scheduled one does; anything
-                # else is a tool call in its service.
-                record = record_action(decision.action) is not None and decision.action in (
-                    actor.get("permitted_actions") or []
-                )
-                outcome = await self.act(
-                    key,
-                    decision.action,
-                    decision.arguments,
-                    key=f"{self.seed}:{key}:c{self.decisions}",
-                    parent=None,
-                    **({"form": "record"} if record else {}),
-                    **({"identity": identity} if identity and record_action(decision.action) is None else {}),
-                )
-                self.events.append(
-                    {"actor": key, "kind": "acted", "action": decision.action, "outcome": outcome, "why": decision.why}
-                )
-                self.acted.setdefault(key, []).append({
-                    "action": decision.action, "arguments": decision.arguments,
-                    "outcome": outcome.get("outcome") if isinstance(outcome, dict) else outcome,
-                })
-                self.waits.answered(actor)
+                if await self._act_on(actor, key, decision) == "refused":
+                    # Told no by the world, a person corrects it straight away (the channel's real name, say), once.
+                    again = await self._decide(actor, key, conversation)
+                    if again is not None:
+                        if again.action and (again.action, again.arguments) != (
+                            decision.action, decision.arguments
+                        ) and not self._already_committed(key, again.action, again.arguments):
+                            await self._act_on(actor, key, again)
+                        # What it says instead (asking someone, say) is still its line.
+                        decision = type(decision)(
+                            line=decision.line or again.line, action=decision.action, arguments=decision.arguments,
+                            why=again.why or decision.why,
+                        )
             if not decision.line:
                 if decision.waits:
                     self.events.append({"actor": key, "kind": "waited", "why": decision.why})
@@ -437,6 +419,62 @@ class ChatActors:
         if out:
             self.turns_taken += 1
         return out
+
+    def _brief(self, actor: dict[str, Any], key: str, conversation: list[str]) -> str:
+        """What the actor decides from: who it is, what it said, what it did in the world and the conversation."""
+        from fi.simulate.simulation.call_actors import decision_brief
+
+        return decision_brief(
+            actor,
+            situation=str(actor.get("situation") or ""),
+            said=self.written[key],
+            conversation=conversation,
+            language=str(actor.get("language") or ""),
+            seen=self._own_actions(key) if self.act else None,
+            actions={one: self.about.get(one, "") for one in actor.get("permitted_actions") or []} if self.act else {},
+        )
+
+    async def _decide(self, actor: dict[str, Any], key: str, conversation: list[str]) -> Any:
+        """The actor's next decision; None when its model did not answer."""
+        from fi.simulate.simulation.call_actors import read_decision
+
+        try:
+            return read_decision(await self._write(actor, self._brief(actor, key, conversation)))
+        except ActorModelFailed:
+            return None
+
+    async def _act_on(self, actor: dict[str, Any], key: str, decision: Any) -> str:
+        """Send the actor's action through the world's door as the actor, and return what the world made of it."""
+        from ..world_door import record_action
+
+        self.decisions += 1
+        # Without an identity in that service the actor still acts as itself, never as the agent.
+        identity = (actor.get("identities") or {}).get(decision.action.split(".", 1)[0], "") or str(
+            actor.get("id") or ""
+        )
+        # A record change the actor may make goes to the world's records, as a scheduled one does; anything
+        # else is a tool call in its service.
+        record = record_action(decision.action) is not None and decision.action in (
+            actor.get("permitted_actions") or []
+        )
+        outcome = await self.act(
+            key,
+            decision.action,
+            decision.arguments,
+            key=f"{self.seed}:{key}:c{self.decisions}",
+            parent=None,
+            **({"form": "record"} if record else {}),
+            **({"identity": identity} if identity and record_action(decision.action) is None else {}),
+        )
+        self.events.append(
+            {"actor": key, "kind": "acted", "action": decision.action, "outcome": outcome, "why": decision.why}
+        )
+        said = outcome.get("outcome") if isinstance(outcome, dict) else outcome
+        self.acted.setdefault(key, []).append(
+            {"action": decision.action, "arguments": decision.arguments, "outcome": said}
+        )
+        self.waits.answered(actor)
+        return str(said or "")
 
     async def _fall_back(self) -> list[tuple[dict[str, Any], str]]:
         """Each actor whose wait ran out: its fallback applied and recorded. A declined request is a labelled line,

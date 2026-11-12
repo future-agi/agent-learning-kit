@@ -666,8 +666,14 @@ def world_actor_tools(
         listing = load_actors(destination)
         current = listing.by_id().get(str(args.get("id") or ""))
         given = {name: value for name, value in args.items() if name not in ("provenance", "share_actions")}
-        shared = {str(one) for one in args.get("share_actions") or []}
-        if given.get("surface") in CHANNELS:
+        confirmed = args.get("share_actions")
+        # One action or a list of them; anything else confirms nothing.
+        shared = (
+            {str(one) for one in confirmed if isinstance(one, str)}
+            if isinstance(confirmed, list)
+            else {confirmed} if isinstance(confirmed, str) else set()
+        )
+        if isinstance(given.get("surface"), str) and given["surface"] in CHANNELS:
             # A way of speaking sent as the place it acts: said back, never saved as a surface no world has.
             return _err(
                 f"Not added: {given['surface']!r} is how an actor speaks in the conversation; send it as `channel`. "
@@ -685,6 +691,11 @@ def world_actor_tools(
             actor = Actor.model_validate({**base, **merged})
         except ValueError as exc:
             return _err(f"Not added: {exc}")
+        from ..actors import ACTOR_MODELS
+
+        if actor.model and actor.model != (current.model if current is not None else None) and actor.model not in ACTOR_MODELS:
+            # A run plays the actor on this model, so an unknown one would fail each of its turns.
+            return _err(f"Not added: model is one of {', '.join(ACTOR_MODELS)}, or left out for the environment's model.")
         if actor.channel:
             problems = entry_problems(
                 CallActor(
@@ -715,6 +726,15 @@ def world_actor_tools(
                 f"Not added: {actor.id} acts in {', '.join(unnamed)} but has no identity there. Give `identities` "
                 f"with who they are in each one's records (the member, user or handle the world seeds for them), "
                 f"for example {{{', '.join(repr(one) + ': ...' for one in unnamed)}}}."
+            )
+        services = sorted({one.split(".", 1)[0] for one in world_actions()})
+        # Only the keys sent now: an actor saved before this check keeps its other edits open.
+        stray = sorted(set(given.get("identities") or {}) - set(services)) if services else []
+        if stray:
+            # An identity is looked up by the service an action goes to; under any other key no action finds it.
+            return _err(
+                f"Not added: identities are keyed by the service the person is known in, one of {', '.join(services)}; "
+                f"{', '.join(repr(one) for one in stray)} {'is not one' if len(stray) == 1 else 'are not'}. Send {{'<service>': '<who they are there>'}}."
             )
         from ..actors import permission_conflicts
 
@@ -1454,7 +1474,7 @@ def world_tools(
 
     @tool(
         "set_modality",
-        "Correct how a person actually reaches this agent: voice, chat or browser. Modality "
+        "Correct how a person actually reaches this agent: voice or chat. Modality "
         "picks the world, the simulated person and the transport, so a wrong one does not weaken "
         "a run, it runs a different test. Use it when the operator says where the agent is "
         "deployed and the contract disagrees: an agent's code reads the same answering a chat "

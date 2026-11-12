@@ -1562,8 +1562,16 @@ def _call_actors_missing(scenario: Scenario, outcome: CallOutcome) -> str:
             why = "not_delivered" if report.get("triggered") else "not_triggered"
             # Why it said nothing, when the call recorded it (its model did not answer, no room): the reader's next step.
             dropped = [str(one) for one in report.get("dropped") or [] if one]
+            # An actor who tried to act and was refused (not a member of the channel, say): the world data's problem.
+            refused = [
+                str(row.get("name") or "")
+                for row in outcome.world_actions
+                if str(row.get("actor_id") or "") == actor_id and row.get("outcome") == "refused"
+            ]
             if why == "not_delivered" and dropped:
                 why = f"{why}: {dropped[0]}"
+            elif why == "not_delivered" and refused:
+                why = f"{why}: the world refused its {refused[0]}"
             missing.append(f"{report.get('name') or actor_id} ({why})")
     # An actor acting through the world that could not act at all (no door, not listed) is the scenario's problem too.
     for report in outcome.call_actors:
@@ -2468,8 +2476,12 @@ class HostedScheduler:
                 )
             )
 
-        # A call with no words, no actions and no recording leaves its judged sub-goals unmeasured, never guessed.
-        if judged_pending and not (calls or call_outcome.messages or call_outcome.recording):
+        # A call with no words, no actions (the agent's or an actor's) and no recording leaves its judged sub-goals
+        # unmeasured, never guessed.
+        evidence = bool(
+            calls or call_outcome.messages or call_outcome.recording or call_outcome.world_actions
+        )
+        if judged_pending and not evidence:
             for slot, goal in judged_pending:
                 sub_goal_results[slot] = SubGoalResult(
                     name=goal.name,
@@ -2477,7 +2489,7 @@ class HostedScheduler:
                     reason=f"{UNMEASURED}the call left no words, actions or recording to judge it from",
                     judged=True,
                 )
-        if judged_pending and (calls or call_outcome.messages or call_outcome.recording):
+        if judged_pending and evidence:
             # A scenario's judged sub-goals can run together, but judge batches from parallel
             # worlds must not overlap on the shared provider session.
             async with self._judge_batch_lock:

@@ -859,7 +859,7 @@ class HostedChatCallRunner:
             tools_url=service.address if service is not None else None,
             service_actions=service_actions(self._contract),
         )
-        acts = DoorActs(door)
+        acts = DoorActs(door, self._contract.model_dump())
         meter = ActorMeter()
         limits = actor_limits(document, self._context.bundle_dir, "chat")
         records = getattr(getattr(target_world, "store", None), "records", None)
@@ -1003,11 +1003,17 @@ class HostedChatCallRunner:
         # through the generated world or fabricate evidence from text.
         transcript.calls[:] = collect_seam_calls(runtime, self._context.evidence_seam, transcript.calls)
 
-        if cast is not None:
-            transcript.call_actors = {"resolved": chat_actors, "summary": cast.summary(), "events": cast.events}
         world_record = _world_actors_record(door, listing, dispatcher, cast, meter, limits, since=trial_started)
         if world_record is not None:
             transcript.world_actors = world_record
+        # Every actor that took part, the ones acting only through the world too, so the call is found by each.
+        summary = list(_chat_actor_summary(cast, world_record, listing))
+        if summary:
+            transcript.call_actors = {
+                "resolved": chat_actors,
+                "summary": summary,
+                "events": cast.events if cast is not None else [],
+            }
         faults = list(document.get("faults") or [])
         said = list(deadline_notices)
         if faults:

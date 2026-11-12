@@ -473,6 +473,112 @@ def test_a_keyed_action_s_row_is_written_before_its_answer_even_on_a_slow_log_so
     assert len(executor.ran) == 1
 
 
+@pytest.mark.parametrize("broken", ["write", "read", "both"])
+def test_a_keyed_action_runs_once_even_when_its_log_cannot_be_written_or_read(broken):
+    class _Failing(MemoryLog):
+        def write(self, row):
+            if broken in ("write", "both"):
+                raise RuntimeError("log down")
+            super().write(row)
+
+        def committed(self, key, actor):
+            if broken in ("read", "both"):
+                raise RuntimeError("log down")
+            return super().committed(key, actor)
+
+    roster = {"manager": {"permitted_actions": ["crm.approve"], "on_behalf_of": None}}
+    executor = _Executor()
+    door = WorldDoor(executor, _Failing(), DictRoster(roster), write_seconds=0.0)
+    call = ToolCall(action="crm.approve", name="approve", arguments={"deal": 7}, actor="manager", key="k")
+    first = door.enter(call)
+    again = door.enter(call)
+    assert len(executor.ran) <= 1
+    if broken == "write":
+        # The door remembers the answer it gave even though the log lost the row.
+        assert (first.outcome, again.outcome) == ("committed", "duplicate")
+    else:
+        # The log cannot say whether the key ran: never run, never run twice.
+        assert executor.ran == [] and {first.outcome, again.outcome} == {"faulted"}
+
+
+def test_a_keyed_action_the_world_failed_mid_way_is_never_run_again():
+    class _Flaky(_Executor):
+        def run(self, call):
+            self.ran.append(call)
+            if len(self.ran) == 1:
+                raise RuntimeError("connection reset after the write")
+            return Executed(200, {"ok": True})
+
+    roster = {"manager": {"permitted_actions": ["crm.approve"], "on_behalf_of": None}}
+    executor = _Flaky()
+    door = WorldDoor(executor, MemoryLog(), DictRoster(roster), write_seconds=0.0)
+    call = ToolCall(action="crm.approve", name="approve", arguments={"deal": 7}, actor="manager", key="k")
+    assert door.enter(call).outcome == "faulted"
+    retry = door.enter(call)
+    assert retry.outcome == "faulted" and "unknown" in retry.reason
+    assert len(executor.ran) == 1
+
+
+def test_two_calls_at_once_never_both_take_a_one_shot_fault():
+    import threading
+    import time as clock
+
+    class _SlowCount(MemoryLog):
+        def agent_calls(self, name):
+            made = super().agent_calls(name)
+            # Both calls read the count before either row lands, unless the door holds them apart.
+            clock.sleep(0.05)
+            return made
+
+    executor = _Executor()
+    door = WorldDoor(
+        executor,
+        _SlowCount(),
+        DictRoster({}),
+        faults=lambda: [{"action": "crm.approve", "on_call": 1, "mode": "timeout_before_commit"}],
+        write_seconds=0.0,
+    )
+    door_outcomes = []
+    calls = [
+        threading.Thread(
+            target=lambda: door_outcomes.append(
+                door.enter(ToolCall(action="crm.approve", name="approve", arguments={"deal": 7})).outcome
+            )
+        )
+        for _ in range(2)
+    ]
+    for one in calls:
+        one.start()
+    for one in calls:
+        one.join()
+    assert sorted(door_outcomes) == ["committed", "faulted"]
+    assert len(executor.ran) == 1
+
+
+@pytest.mark.parametrize("identity", ["U-priya", ""])
+def test_an_actor_never_acts_under_another_s_actor_id_on_any_channel(identity):
+    from fi.alk.harness.actor_dispatch import DoorActs
+
+    contract = {
+        "tools": [{"name": "approve", "args": ["deal", "actor_id"]}],
+        "tool_entrypoints": [{"tool": "approve", "endpoint": "/crm/approve"}],
+    }
+    executor = _Executor()
+    door = _door(executor)
+    asyncio.run(
+        DoorActs(door, contract)(
+            "manager",
+            "crm.approve",
+            {"deal": 7, "actor_id": "U-admin"},
+            key="t:manager:0",
+            parent=None,
+            **({"identity": identity} if identity else {}),
+        )
+    )
+    # The model wrote someone else's id; the world sees the acting actor's own.
+    assert executor.ran[0].arguments == {"deal": 7, "actor_id": identity or "manager"}
+
+
 def _worker_door(executor, limits):
     return WorldDoor(executor, MemoryLog(), DictRoster({}), workers=lambda: limits)
 

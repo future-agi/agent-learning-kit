@@ -114,7 +114,7 @@ from .simulator_voice import (
     voice_providers,
 )
 from .world.errors import WorldUnavailable
-from .world.runtime import Call, runtime_ids, tool_call_attribution, trace_row
+from .world.runtime import Call, graded_calls, runtime_ids, tool_call_attribution, trace_row
 
 logger = logging.getLogger(__name__)
 
@@ -1058,7 +1058,8 @@ def trial_state_changes(
     actor that acted and one per agent worker the world told apart (`worker:<id>`, by the channel it came through),
     with attempted, committed, refused, faulted and duplicate counts, the actions it committed and the ones the world
     refused with why, in order. Attempted, refused and committed are kept apart; a row from before outcomes were
-    recorded counts as committed when it succeeded and refused when the world refused it."""
+    recorded counts as committed when it succeeded and refused when the world refused it. `answer_lost_actions` lists
+    the committed actions whose answer a `timeout_after_commit` fault replaced with a timeout."""
     entries: dict[str, dict[str, Any]] = {}
     chosen = _ChosenActions(decisions)
     for row in log:
@@ -1093,7 +1094,11 @@ def trial_state_changes(
         # A call through the tool proxy is named by the agent's own tool, as its checks are graded, not by its route.
         name = str(row.get("agent_tool") or row.get("name") or "")
         if outcome == "committed":
-            entry["committed_actions"].append(name if who == AGENT else chosen.name(who, name, actor))
+            shown = name if who == AGENT else chosen.name(who, name, actor)
+            entry["committed_actions"].append(shown)
+            if row.get("error") == "response_lost":
+                # Committed, yet the one who acted was told it timed out: a retry after it commits twice.
+                entry.setdefault("answer_lost_actions", []).append(shown)
         elif outcome == "refused":
             # An attempted violation stays visible: what was tried and why the world said no.
             entry["refused_actions"].append(
@@ -1470,13 +1475,22 @@ def _actor_dispatcher(
     return build_dispatcher(
         dict(doc),
         bundle_dir,
-        act=DoorActs(runner_door(tools.address, database.address, budget)),
+        act=DoorActs(runner_door(tools.address, database.address, budget), _bundle_contract(bundle_dir)),
         read_log=_ActionLog(database.address),
         records=_world_records(runtime),
         trial_id=trial_id,
         meter=meter,
         reported=reported,
     )
+
+
+def _bundle_contract(bundle_dir: Path) -> dict[str, Any]:
+    path = Path(bundle_dir) / "contract.json"
+    try:
+        body = json.loads(path.read_text(encoding="utf-8")) if path.is_file() else {}
+    except (OSError, ValueError):
+        return {}
+    return body if isinstance(body, dict) else {}
 
 
 def _private_actions_file(path: Path) -> Path:
@@ -2828,15 +2842,14 @@ class CallRunnerImpl:
         workers_acted = any(
             str(entry.get("who") or "").startswith("worker:") for entry in changes
         )
-        marks = _agent_marks(runtime, self._context.bundle_dir, calls) if acted else []
+        # Hand-off records are not the world's actions: marks pair the graded calls with the action log.
+        graded = graded_calls(calls)
+        marks = _agent_marks(runtime, self._context.bundle_dir, graded) if acted else []
+        mark_of = {id(call): mark for call, mark in zip(graded, marks)}
         if calls:
             tool_trace = "\n".join(
-                json.dumps(
-                    {**trace_row(call), **(marks[index] if marks else {})},
-                    sort_keys=True,
-                    default=str,
-                )
-                for index, call in enumerate(calls)
+                json.dumps({**trace_row(call), **mark_of.get(id(call), {})}, sort_keys=True, default=str)
+                for call in calls
             ).encode("utf-8")
             await self._adapter.upload_artifact(
                 tool_trace,
@@ -2848,17 +2861,24 @@ class CallRunnerImpl:
             combined = result.audio_combined_path
             recording = combined if combined and Path(combined).is_file() else None
             said = [*notices, *self._fault_notices(runtime, faults, calls)]
-            # A call that ended with no words still says what did not take effect, never only logging it.
-            if result.transcript or said:
+            # A call that ended with no words still says what did not take effect, and what actors and workers did in
+            # the world, never only logging it.
+            if result.transcript or said or acted or actor_decisions or workers_acted or took_part.get("call_actors"):
                 transcript_document = {
                     "schema_version": "futureagi.call-transcript.v1",
                     "transcript": result.transcript,
                     "messages": result.messages,
                 }
-                if call_actors:
+                # Every actor that took part, the ones acting only through the world too, so the call is found by each.
+                summary = list(
+                    _with_world_actors(
+                        tuple(took_part.get("call_actors") or ()), actor_decisions, self._context.bundle_dir
+                    )
+                )
+                if call_actors or summary:
                     transcript_document["call_actors"] = {
                         "resolved": call_actors,
-                        "summary": took_part.get("call_actors") or [],
+                        "summary": summary,
                         "events": took_part.get("call_actor_events") or [],
                     }
                 if acted or actor_decisions or workers_acted:

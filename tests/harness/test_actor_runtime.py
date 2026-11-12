@@ -362,34 +362,17 @@ def test_a_trial_s_state_changes_keep_attempted_refused_and_committed_apart_per_
     assert changes[0]["committed_actions"] == ["deals.request_approval", "deals.apply_discount"]
 
 
-def test_a_worker_s_attempts_are_its_own_participant_with_each_refusal_and_why():
+def test_a_commit_whose_answer_was_lost_is_named_apart_so_a_retry_reads_as_a_second_commit():
     from fi.alk.harness.call_runner import trial_state_changes
 
     log = [
-        {"name": "orders.get", "outcome": "committed", "worker_id": "order_lookup"},
-        {
-            "name": "orders.update_status",
-            "outcome": "refused",
-            "worker_id": "order_lookup",
-            "refusal_code": "not_permitted",
-            "refusal": "orders.update_status is not permitted for order_lookup",
-        },
-        {"name": "refunds.issue", "outcome": "committed", "worker_id": "refund"},
-        {"name": "send_reply", "outcome": "committed"},
+        {"name": "apply_discount", "outcome": "committed", "error": "response_lost"},
+        {"name": "apply_discount", "outcome": "committed"},
     ]
-    changes = trial_state_changes(log, {})
-    assert [(c["who"], c["name"], c["attempted"], c["committed"], c["refused"]) for c in changes] == [
-        ("agent", "the agent", 1, 1, 0),
-        ("worker:order_lookup", "order_lookup", 2, 1, 1),
-        ("worker:refund", "refund", 1, 1, 0),
-    ]
-    assert changes[1]["refused_actions"] == [
-        {
-            "action": "orders.update_status",
-            "code": "not_permitted",
-            "reason": "orders.update_status is not permitted for order_lookup",
-        }
-    ]
+    agent = trial_state_changes(log, {})[0]
+    assert agent["committed_actions"] == ["apply_discount", "apply_discount"]
+    assert agent["answer_lost_actions"] == ["apply_discount"]
+    assert "answer_lost_actions" not in trial_state_changes(log[1:], {})[0]
 
 
 def test_an_actor_s_action_is_shown_by_its_full_name_where_its_permissions_name_one():
@@ -654,6 +637,62 @@ def test_an_actor_needs_its_identity_where_its_action_s_tool_names_who_acts(tmp_
         )
     )
     assert not ok.get("is_error") and load_actors(tmp_path).by_id()["lead"].identities == {"chat": "lead"}
+
+
+def test_an_identity_is_keyed_by_a_service_of_the_world_never_by_a_record_field(tmp_path):
+    from fi.alk.harness.actors import load_actors
+    from fi.alk.harness.world.tools import world_actor_tools
+
+    world = {
+        "tools": [{"name": "post_message", "args": ["channel", "text"]}, {"name": "get_deal", "args": ["deal_id"]}],
+        "tool_entrypoints": [
+            {"tool": "post_message", "endpoint": "chat/post_message"},
+            {"tool": "get_deal", "endpoint": "crm/get_deal"},
+        ],
+    }
+    add, _drop = world_actor_tools(tmp_path, SimpleNamespace(modality="chat", model_dump=lambda: world))
+    # Keyed by the record field the handle sits in, the world could never find who the actor is in a service.
+    out = asyncio.run(
+        add.handler({"id": "lead", "name": "Sam", "permitted_actions": ["chat.post_message"], "identities": {"author": "lead"}})
+    )
+    text = out["content"][0]["text"]
+    assert out.get("is_error") and "'author'" in text and "chat, crm" in text
+    assert load_actors(tmp_path).actors == []
+    ok = asyncio.run(
+        add.handler({"id": "lead", "name": "Sam", "permitted_actions": ["chat.post_message"], "identities": {"chat": "lead", "crm": "u7"}})
+    )
+    assert not ok.get("is_error") and load_actors(tmp_path).by_id()["lead"].identities == {"chat": "lead", "crm": "u7"}
+    # An actor saved earlier under a field key can still be changed in its other fields.
+    from fi.alk.harness.actors import Actor, ActorList, save_actors
+
+    save_actors(tmp_path, ActorList(actors=[Actor(id="old", name="Kim", identities={"member": "kim"})]))
+    edited = asyncio.run(add.handler({"id": "old", "role": "the caller's manager"}))
+    assert not edited.get("is_error") and load_actors(tmp_path).by_id()["old"].role == "the caller's manager"
+
+
+def test_the_builder_gives_an_actor_only_a_model_a_run_can_play_it_on(tmp_path):
+    from fi.alk.harness.actors import ACTOR_MODELS, Actor, ActorList, load_actors, save_actors
+    from fi.alk.harness.world.tools import world_actor_tools
+
+    add, _drop = world_actor_tools(tmp_path, SimpleNamespace(modality="chat", model_dump=lambda: {"tools": []}))
+    out = asyncio.run(add.handler({"id": "lead", "name": "Sam", "model": "gpt-unknown"}))
+    assert out.get("is_error") and ACTOR_MODELS[0] in out["content"][0]["text"]
+    assert load_actors(tmp_path).actors == []
+    ok = asyncio.run(add.handler({"id": "lead", "name": "Sam", "model": ACTOR_MODELS[1]}))
+    assert not ok.get("is_error") and load_actors(tmp_path).by_id()["lead"].model == ACTOR_MODELS[1]
+    # An actor saved earlier with another model keeps its other edits open.
+    save_actors(tmp_path, ActorList(actors=[Actor(id="old", name="Kim", model="retired-model")]))
+    edited = asyncio.run(add.handler({"id": "old", "role": "the caller's manager"}))
+    assert not edited.get("is_error") and load_actors(tmp_path).by_id()["old"].role == "the caller's manager"
+
+
+@pytest.mark.parametrize("field, value", [("surface", ["chat"]), ("surface", {"a": 1}), ("share_actions", 1), ("share_actions", True)])
+def test_the_builder_answers_an_actor_of_the_wrong_shape_and_never_raises(tmp_path, field, value):
+    from fi.alk.harness.world.tools import world_actor_tools
+
+    add, _drop = world_actor_tools(tmp_path, SimpleNamespace(modality="voice", model_dump=lambda: {"tools": []}))
+    out = asyncio.run(add.handler({"id": "lead", "name": "Sam", field: value}))
+    assert isinstance(out, dict) and out["content"][0]["text"]
 
 
 def test_a_person_folded_into_the_caller_is_refused_and_a_kept_scenario_reads_its_cast_back(tmp_path):
@@ -1185,3 +1224,33 @@ def test_a_speaking_actor_can_come_in_on_a_tool_the_agent_s_tools_service_runs()
     # A tool that truly runs only inside the agent is still refused.
     refused = _call_actors_that_cannot_run(scenario, listing, trial, False, tools, set())
     assert refused and "runs only inside the agent" in refused[0]
+
+
+def test_a_worker_s_attempts_are_its_own_participant_with_each_refusal_and_why():
+    from fi.alk.harness.call_runner import trial_state_changes
+
+    log = [
+        {"name": "orders.get", "outcome": "committed", "worker_id": "order_lookup"},
+        {
+            "name": "orders.update_status",
+            "outcome": "refused",
+            "worker_id": "order_lookup",
+            "refusal_code": "not_permitted",
+            "refusal": "orders.update_status is not permitted for order_lookup",
+        },
+        {"name": "refunds.issue", "outcome": "committed", "worker_id": "refund"},
+        {"name": "send_reply", "outcome": "committed"},
+    ]
+    changes = trial_state_changes(log, {})
+    assert [(c["who"], c["name"], c["attempted"], c["committed"], c["refused"]) for c in changes] == [
+        ("agent", "the agent", 1, 1, 0),
+        ("worker:order_lookup", "order_lookup", 2, 1, 1),
+        ("worker:refund", "refund", 1, 1, 0),
+    ]
+    assert changes[1]["refused_actions"] == [
+        {
+            "action": "orders.update_status",
+            "code": "not_permitted",
+            "reason": "orders.update_status is not permitted for order_lookup",
+        }
+    ]

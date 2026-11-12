@@ -4362,6 +4362,18 @@ def test_a_call_whose_only_evidence_is_its_recording_is_still_judged(monkeypatch
     assert receipt.status == "passed"
 
 
+def test_a_call_whose_only_evidence_is_an_actor_s_action_in_the_world_is_still_judged(monkeypatch) -> None:
+    async def _all(goals, world, calls, *, messages=()):
+        return {goal.name: (True, "the manager approved") for goal in goals}
+
+    silent = replace(
+        _call_outcome(turns=0),
+        world_actions=({"name": "approve", "actor_id": "manager", "outcome": "committed"},),
+    )
+    receipt, _ = _two_judged(monkeypatch, _all, silent=True, outcome=silent)
+    assert receipt.status == "passed"
+
+
 def test_joint_judging_is_the_default_and_separate_turns_it_off(monkeypatch) -> None:
     async def _all(goals, world, calls, *, messages=()):
         return {goal.name: (True, "held together") for goal in goals}
@@ -4853,7 +4865,8 @@ def test_an_actor_who_speaks_but_only_acted_in_the_world_reached_the_agent() -> 
     )
     assert hs._call_actors_missing(scenario, posted) == ""
     refused = replace(posted, world_actions=({"actor_id": "jordan", "outcome": "refused", "name": "post_message"},))
-    assert hs._call_actors_missing(scenario, refused) == "Jordan (not_delivered)"
+    # Its refused attempt is the reason it said nothing, so the reader looks at the world data, not the agent.
+    assert hs._call_actors_missing(scenario, refused) == "Jordan (not_delivered: the world refused its post_message)"
 
 
 def _graded(goals, outcome):

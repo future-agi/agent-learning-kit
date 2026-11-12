@@ -66,10 +66,12 @@ class Acts(Protocol):
 
 
 class DoorActs:
-    """The world's door in this process: the harness itself is the caller, so no token is needed."""
+    """The world's door in this process: the harness itself is the caller, so no token is needed. On every channel an
+    action whose tool declares who acts carries the acting actor's own identity, whatever the actor's model wrote."""
 
-    def __init__(self, door: Any) -> None:
+    def __init__(self, door: Any, contract: dict[str, Any] | None = None) -> None:
         self.door = door
+        self.names_actor = actions_naming_actor(contract or {})
 
     async def __call__(
         self,
@@ -84,6 +86,8 @@ class DoorActs:
     ) -> dict[str, Any]:
         from .world_door import ToolCall
 
+        if action in self.names_actor:
+            arguments = {**arguments, "actor_id": identity or actor}
         call = ToolCall(
             action=action,
             name=action.rsplit(".", 1)[-1],
@@ -322,8 +326,9 @@ class ActorDispatcher:
         from .world_door import record_action
 
         service = action.split(".", 1)[0]
-        if action in self.names_actor and "actor_id" not in arguments:
-            # A world that checks who acts takes the actor's id in the call: its identity there, else its own id.
+        if action in self.names_actor:
+            # A world that checks who acts takes the actor's id in the call: its identity there, else its own id,
+            # never one the actor's model wrote.
             arguments = {**arguments, "actor_id": actor.identities.get(service) or actor.id}
         # Every service the actor acts in learns who it is beside the call, so its action is never the agent's.
         # Without an identity there the actor still acts as itself, so the world never credits it to the agent.
@@ -370,6 +375,14 @@ class ActorDispatcher:
             }
         )
 
+    def _turn_left(self, actor: Actor) -> bool:
+        """Whether a live turn is within the actor's own cap and the trial's: every way a live turn starts asks this."""
+        own = actor.max_turns if actor.max_turns is not None else self.turns_per_actor
+        return (
+            self.live_turns.get(actor.id, 0) < own
+            and sum(self.live_turns.values()) < self.turns_per_trial
+        )
+
     def _live_due(
         self, actor: Actor, elapsed: float, log: list[dict[str, Any]]
     ) -> str | None:
@@ -377,14 +390,13 @@ class ActorDispatcher:
         met; None when nothing calls for it."""
         if actor.id in self.fell_back or actor.id in self.looped:
             return None
-        own = actor.max_turns if actor.max_turns is not None else self.turns_per_actor
-        if self.live_turns[actor.id] >= own:
-            return None
-        if sum(self.live_turns.values()) >= self.turns_per_trial:
+        if not self._turn_left(actor):
             return None
         for row in log:
             key = str(row.get("action_id") or "")
-            if key and key not in self.answered[actor.id] and self._sees(actor, row):
+            # Its own action refused is news to it too: a person told no tries again, or stops.
+            refused_own = row.get("actor_id") == actor.id and row.get("outcome") == "refused"
+            if key and key not in self.answered[actor.id] and (self._sees(actor, row) or refused_own):
                 self.answered[actor.id].add(key)
                 return key
         if actor.id in self.woken:
@@ -406,6 +418,9 @@ class ActorDispatcher:
                     "action": r.get("name"),
                     "arguments": r.get("arguments"),
                     "outcome": r.get("outcome"),
+                    # What the world told it when its own action was refused, so it can correct it.
+                    **({"world_said": str(r["error"])[:300]} if r.get("actor_id") == actor.id
+                       and r.get("outcome") != "committed" and r.get("error") else {}),
                 },
                 default=str,
             )
@@ -580,7 +595,9 @@ class ActorDispatcher:
                 self.live.append(instead)
                 self.live_turns[instead.id] = 0
                 self.answered[instead.id] = set()
-            await self._live_turn(instead, cause, log)
+            # Answering for another is a live turn like any other, held to the same limits.
+            if self._turn_left(instead):
+                await self._live_turn(instead, cause, log)
             return
         for one, index, action in [
             one for one in self.pending if one[0].id == instead.id

@@ -465,6 +465,17 @@ def test_another_actor_answers_instead_when_the_approver_times_out(play):
     assert sent[0][1]["X-ALK-Parent-Event"] == "a1"
 
 
+@pytest.mark.parametrize("cap", ["turns_per_actor", "turns_per_trial"])
+def test_an_actor_answering_for_another_is_held_to_the_live_turn_limits(cap):
+    dispatcher, clock, sent = _approver("deputy", instead_play="live")
+    # The limit is already reached: answering instead would be one turn past it.
+    setattr(dispatcher, cap, 0)
+    asyncio.run(_wait_out(dispatcher, clock, 30))
+    assert ("manager", "timeout", "answered_by") in _timeline(dispatcher)
+    assert sent == []
+    assert dispatcher.live_turns.get("deputy", 0) == 0
+
+
 def _channel(names, decide):
     """Live actors who can all post in one Slack channel, in a world whose log records each post."""
     log = []
@@ -560,6 +571,37 @@ def test_a_live_actor_never_answers_its_own_action():
     log.append({"name": "post_message", "actor_id": "agent", "action_id": "a1", "arguments": {"text": "Thoughts?"}})
     asyncio.run(_ticks(dispatcher, count=5))
     assert [row["actor_id"] for row in log] == ["agent", "manager"]
+
+
+def test_a_live_actor_told_no_hears_why_and_tries_once_more_in_the_place_the_world_names():
+    situations = []
+
+    async def decide(situation):
+        situations.append(situation)
+        channel = "#sales" if "is not in sales" in situation else "sales"
+        return '{"action": "slack.post_message", "arguments": {"channel": "%s", "text": "approved"}, "why": "x"}' % channel
+
+    log = []
+    actors = {"lead": Actor(id="lead", name="Lee", play="live", permitted_actions=["slack.post_message"])}
+
+    def send(url, headers, arguments):
+        ok = arguments.get("channel") == "#sales"
+        log.append({"name": "post_message", "actor_id": headers["X-ALK-Actor"], "action_id": f"r{len(log)}",
+                    "arguments": arguments, "outcome": "committed" if ok else "refused",
+                    **({} if ok else {"error": '{"detail": "lead is not in sales"}'})})
+        return 200 if ok else 403
+
+    dispatcher = ActorDispatcher(
+        actors, [ScenarioActor(id="lead")], trial_id="trial-1", proxy_url="http://proxy/", token="t0ken",
+        read_log=lambda: list(log), seed="trial-1", timeout=60.0, clock=_Clock(), send=send, decide=decide,
+    )
+    log.append({"name": "post_message", "actor_id": "agent", "action_id": "a1", "outcome": "committed",
+                "arguments": {"channel": "#sales", "text": "Was deal 7 approved?"}})
+    asyncio.run(_ticks(dispatcher, count=6))
+    assert [row["outcome"] for row in log if row["actor_id"] == "lead"] == ["refused", "committed"]
+    assert "lead is not in sales" in situations[1]
+    # Committed, it is not woken by its own action again.
+    assert len(situations) == 2
 
 
 def test_a_scenario_s_own_trigger_decides_when_the_world_starts_waiting_on_an_actor():

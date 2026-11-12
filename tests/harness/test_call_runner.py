@@ -2623,18 +2623,18 @@ def test_a_world_actor_s_actions_are_sealed_with_the_transcript_never_as_the_age
     ] == [("records.approve", "reviewer")]
 
 
-def test_a_worker_s_refused_attempt_is_sealed_in_the_trial_s_state_changes_without_any_actor(
+def test_a_hand_off_record_among_the_agent_s_calls_takes_no_action_id_and_moves_none(
     tmp_path, monkeypatch
 ) -> None:
     _job_obj, context = _context(
         tmp_path=tmp_path, evidence_seam=EvidenceSeam.TOOL_TRACE
     )
     _write_scenario_doc(context.bundle_dir, scenario_key="k1")
-    columns = ["name", "arguments", "result", "ok", "error", "at", "action_id", "actor_id", "worker_id", "outcome",
-               "refusal_code", "refusal"]
+    _with_actors(context.bundle_dir)
+    columns = ["name", "arguments", "result", "ok", "error", "at", "action_id", "actor_id", "outcome"]
     rows = [
-        ("update_status", {}, None, False, "", 1.0, "a1", "agent", "order_lookup", "refused", "not_permitted",
-         "orders.update_status is not permitted for order_lookup"),
+        ("request_approval", {}, None, True, "", 1.0, "a1", "agent", "committed"),
+        ("approve", {}, None, True, "", 2.0, "a2", "reviewer", "committed"),
     ]
     monkeypatch.setitem(sys.modules, "psycopg", _FakePsycopg(rows, columns))
 
@@ -2645,6 +2645,12 @@ def test_a_worker_s_refused_attempt_is_sealed_in_the_trial_s_state_changes_witho
 
     adapter = FakeAdapter()
     runner = cr.CallRunnerImpl(adapter, context, place_call=place_call)
+    # The worker's run comes first in the record; it is not one of the world's actions.
+    calls = (
+        Call(name="Approvals worker", arguments={}, delegated_to="Approvals worker", handoff=True),
+        Call(name="request_approval", arguments={}, ok=True, at=1.0),
+    )
+    monkeypatch.setattr(runner, "_collect_calls", lambda _runtime: calls)
     _run(
         runner,
         _FakeScenario("k1"),
@@ -2654,12 +2660,72 @@ def test_a_worker_s_refused_attempt_is_sealed_in_the_trial_s_state_changes_witho
         ),
     )
     sealed = {kind: data for kind, _key, data in adapter.uploads}
-    changes = json.loads(sealed[cr.ArtifactKind.TRANSCRIPT])["world_actors"]["state_changes"]
-    # The agent keeps its own line ("no change"); the worker's refused attempt is its own entry.
-    assert [(one["who"], one["refused"], [r["code"] for r in one["refused_actions"]]) for one in changes] == [
-        ("agent", 0, []),
-        ("worker:order_lookup", 1, ["not_permitted"]),
+    trace = [json.loads(line) for line in sealed[cr.ArtifactKind.TOOL_TRACE].decode().splitlines()]
+    assert [(one["name"], one.get("action_id")) for one in trace] == [
+        ("Approvals worker", None),
+        ("request_approval", "a1"),
     ]
+
+
+def test_a_call_with_no_words_still_seals_what_an_actor_did_in_the_world(tmp_path, monkeypatch) -> None:
+    _job_obj, context = _context(tmp_path=tmp_path, evidence_seam=EvidenceSeam.TOOL_TRACE)
+    _write_scenario_doc(context.bundle_dir, scenario_key="k1")
+    _with_actors(context.bundle_dir)
+    columns = ["name", "arguments", "result", "ok", "error", "at", "action_id", "actor_id", "outcome"]
+    rows = [("approve", {}, None, True, "", 2.0, "a2", "reviewer", "committed")]
+    monkeypatch.setitem(sys.modules, "psycopg", _FakePsycopg(rows, columns))
+
+    async def place_call(spec):
+        return _report(transcript="", messages=[])
+
+    adapter = FakeAdapter()
+    runner = cr.CallRunnerImpl(adapter, context, place_call=place_call)
+    _run(
+        runner,
+        _FakeScenario("k1"),
+        _runtime(endpoints={"database": _postgres_endpoint()}, metadata={"livekit_agent_name": "agent-w0"}),
+    )
+    sealed = {kind: data for kind, _key, data in adapter.uploads}
+    transcript = json.loads(sealed[cr.ArtifactKind.TRANSCRIPT])
+    assert [(one["name"], one["actor_id"]) for one in transcript["world_actors"]["actions"]] == [
+        ("records.approve", "reviewer")
+    ]
+
+
+def test_a_call_where_only_a_world_actor_took_part_lists_it_in_the_call_s_actor_record(
+    tmp_path, monkeypatch
+) -> None:
+    _job_obj, context = _context(
+        tmp_path=tmp_path, evidence_seam=EvidenceSeam.TOOL_TRACE
+    )
+    _write_scenario_doc(context.bundle_dir, scenario_key="k1")
+    _with_actors(context.bundle_dir)
+    columns = ["name", "arguments", "result", "ok", "error", "at", "action_id", "actor_id", "outcome"]
+    rows = [("approve", {}, None, True, "", 2.0, "a2", "reviewer", "committed")]
+    monkeypatch.setitem(sys.modules, "psycopg", _FakePsycopg(rows, columns))
+    adapter = FakeAdapter()
+    runner = cr.CallRunnerImpl(adapter, context, place_call=None)
+
+    outcome = asyncio.run(
+        runner._translate_report(
+            _report(transcript="user: hello", messages=[{"role": "user", "content": "hello"}]),
+            runtime=_runtime(endpoints={"database": _postgres_endpoint()}),
+            scenario_key="k1",
+            started_at=datetime.now(timezone.utc),
+            actor_decisions=[
+                {"actor": "reviewer", "play": "mocked", "action": "records.approve", "outcome": "committed"}
+            ],
+        )
+    )
+
+    row = {"actor": "reviewer", "name": "Robin", "triggered": True, "delivered": 1, "dropped": [],
+           "acts_in_world": True}
+    assert row in outcome.call_actors
+    [transcript] = [
+        json.loads(data) for kind, _key, data in adapter.uploads if kind is cr.ArtifactKind.TRANSCRIPT
+    ]
+    # The run's actor filter reads this record, so a call where only the world actor took part is found by it.
+    assert transcript["call_actors"]["summary"] == [row]
 
 
 def test_a_trial_s_faults_go_to_the_world_database_and_are_cleared_after_the_call(tmp_path, monkeypatch) -> None:
@@ -2806,6 +2872,65 @@ def test_the_speaking_actors_actions_file_is_the_run_s_alone(tmp_path):
     assert path.read_text() == ""
 
 
+def test_a_voice_call_with_no_words_still_seals_the_notice_for_a_fault_it_never_reached(tmp_path, monkeypatch) -> None:
+    _job_obj, context = _context(tmp_path=tmp_path, evidence_seam=EvidenceSeam.TOOL_TRACE)
+    _write_scenario_doc(context.bundle_dir, scenario_key="k1")
+    document = context.bundle_dir / "scenarios" / "k1" / "scenario.json"
+    body = json.loads(document.read_text())
+    body["faults"] = [{"action": "approve", "mode": "timeout_before_commit"}]
+    document.write_text(json.dumps(body))
+    monkeypatch.setattr(cr, "_write_trial_state", lambda runtime, faults: None)
+
+    async def place_call(spec):
+        return _report(transcript="", messages=[])
+
+    adapter = FakeAdapter()
+    runner = cr.CallRunnerImpl(adapter, context, place_call=place_call)
+    _run(runner, _FakeScenario("k1"), _runtime(metadata={"livekit_agent_name": "agent-w0"}))
+    sealed = {kind: data for kind, _key, data in adapter.uploads}
+    # The trial ran without its fault; with no words, that is the only place the person learns it.
+    assert json.loads(sealed[cr.ArtifactKind.TRANSCRIPT])["notices"][0]["code"] in ("fault_not_applied", "fault_not_triggered")
+
+
+def test_a_worker_s_refused_attempt_is_sealed_in_the_trial_s_state_changes_without_any_actor(
+    tmp_path, monkeypatch
+) -> None:
+    _job_obj, context = _context(
+        tmp_path=tmp_path, evidence_seam=EvidenceSeam.TOOL_TRACE
+    )
+    _write_scenario_doc(context.bundle_dir, scenario_key="k1")
+    columns = ["name", "arguments", "result", "ok", "error", "at", "action_id", "actor_id", "worker_id", "outcome",
+               "refusal_code", "refusal"]
+    rows = [
+        ("update_status", {}, None, False, "", 1.0, "a1", "agent", "order_lookup", "refused", "not_permitted",
+         "orders.update_status is not permitted for order_lookup"),
+    ]
+    monkeypatch.setitem(sys.modules, "psycopg", _FakePsycopg(rows, columns))
+
+    async def place_call(spec):
+        return _report(
+            transcript="user: hello", messages=[{"role": "user", "content": "hello"}]
+        )
+
+    adapter = FakeAdapter()
+    runner = cr.CallRunnerImpl(adapter, context, place_call=place_call)
+    _run(
+        runner,
+        _FakeScenario("k1"),
+        _runtime(
+            endpoints={"database": _postgres_endpoint()},
+            metadata={"livekit_agent_name": "agent-w0"},
+        ),
+    )
+    sealed = {kind: data for kind, _key, data in adapter.uploads}
+    changes = json.loads(sealed[cr.ArtifactKind.TRANSCRIPT])["world_actors"]["state_changes"]
+    # The agent keeps its own line ("no change"); the worker's refused attempt is its own entry.
+    assert [(one["who"], one["refused"], [r["code"] for r in one["refused_actions"]]) for one in changes] == [
+        ("agent", 0, []),
+        ("worker:order_lookup", 1, ["not_permitted"]),
+    ]
+
+
 @pytest.mark.parametrize(
     ("budget", "expected"),
     [(30, True), (0, False), (-5, False), (True, False), ("30", False), (None, False)],
@@ -2932,23 +3057,3 @@ def test_a_logged_call_is_graded_under_the_agent_s_own_tool_name_when_the_world_
     monkeypatch.setitem(sys.modules, "psycopg", _FakePsycopg(rows, columns))
     calls = cr._collect_tool_trace_calls(_runtime(endpoints={"database": _postgres_endpoint()}))
     assert [one.name for one in calls] == ["list_refunds", "get_deal"]
-
-
-def test_a_voice_call_with_no_words_still_seals_the_notice_for_a_fault_it_never_reached(tmp_path, monkeypatch) -> None:
-    _job_obj, context = _context(tmp_path=tmp_path, evidence_seam=EvidenceSeam.TOOL_TRACE)
-    _write_scenario_doc(context.bundle_dir, scenario_key="k1")
-    document = context.bundle_dir / "scenarios" / "k1" / "scenario.json"
-    body = json.loads(document.read_text())
-    body["faults"] = [{"action": "approve", "mode": "timeout_before_commit"}]
-    document.write_text(json.dumps(body))
-    monkeypatch.setattr(cr, "_write_trial_state", lambda runtime, faults: None)
-
-    async def place_call(spec):
-        return _report(transcript="", messages=[])
-
-    adapter = FakeAdapter()
-    runner = cr.CallRunnerImpl(adapter, context, place_call=place_call)
-    _run(runner, _FakeScenario("k1"), _runtime(metadata={"livekit_agent_name": "agent-w0"}))
-    sealed = {kind: data for kind, _key, data in adapter.uploads}
-    # The trial ran without its fault; with no words, that is the only place the person learns it.
-    assert json.loads(sealed[cr.ArtifactKind.TRANSCRIPT])["notices"][0]["code"] in ("fault_not_applied", "fault_not_triggered")

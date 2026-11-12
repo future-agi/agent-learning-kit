@@ -570,6 +570,35 @@ def test_job_id_placeholder_scopes_external_dispatch_identity() -> None:
     assert rendered == "agent-job-123-w2"
 
 
+def test_job_id_comes_from_the_platform_job_file(tmp_path: Path) -> None:
+    (tmp_path / "job.json").write_text('{"job_id": " job-123 "}', encoding="utf-8")
+    assert pr._read_job_id(tmp_path) == "job-123"
+
+
+@pytest.mark.parametrize(
+    "job_file", [None, '{"runtime": {"cpu_units": 1}}', "not json"]
+)
+def test_a_missing_job_id_never_falls_back_to_a_shared_dispatch_name(
+    tmp_path: Path, job_file: str | None
+) -> None:
+    if job_file is not None:
+        (tmp_path / "job.json").write_text(job_file, encoding="utf-8")
+    first, second = pr._read_job_id(tmp_path), pr._read_job_id(tmp_path)
+    assert first.startswith("local-") and second.startswith("local-")
+    assert first != second
+
+
+def test_each_attempt_of_a_job_gets_its_own_dispatch_identity() -> None:
+    """A retry or rerun is a new attempt of the same job; the superseded attempt's sandbox can
+    still be registered with LiveKit, so the two must never share a dispatch name."""
+    first = pr._dispatch_identity("job-123", "attempt-a")
+    second = pr._dispatch_identity("job-123", "attempt-b")
+    assert first != second
+    assert "job-123" in first and "job-123" in second
+    # Without an attempt (local runs), the job identity is used as before.
+    assert pr._dispatch_identity("job-123", None) == "job-123"
+
+
 def test_an_unresolvable_token_is_an_internal_error_not_a_preflight_code() -> None:
     """`preflight_bundle` already validated every token against the closed vocabulary before this
     ever runs — a token this function cannot resolve is a bug, not a bundle defect, so it is NOT
@@ -7771,6 +7800,42 @@ def test_provision_surfaces_dispatch_identity_on_runtime_metadata(
         {"livekit_agent_name": "agent-w0"},
         {"livekit_agent_name": "agent-w1"},
     ]
+
+
+def test_provision_gives_each_attempt_its_own_dispatch_name(tmp_path: Path) -> None:
+    """A retry of the same job must register a different LiveKit agent name than the attempt it
+    supersedes, whose sandbox may still be running."""
+
+    def add_dispatch_env(body: dict[str, Any]) -> dict[str, Any]:
+        for process in body["processes"]:
+            if process["name"] == "agent":
+                process["environment"]["LIVEKIT_AGENT_NAME"] = (
+                    "agent-{{JOB_ID}}-w{{WORLD_INDEX}}"
+                )
+        return body
+
+    names = []
+    for attempt in ("attempt-aaaa", "attempt-bbbb"):
+        work = tmp_path / attempt
+        work.mkdir()
+        (work / "job.json").write_text('{"job_id": "job-123"}', encoding="utf-8")
+        source, bundle_dir = _provision_dirs(work)
+        provider = _sql_spy_provider(
+            secrets_path=work / "secrets.json", provider_attempt_id=attempt
+        )
+        runtimes = asyncio.run(
+            provider.provision(
+                _manifest(add_dispatch_env),
+                source=source,
+                bundle_dir=bundle_dir,
+                work_directory=work,
+                instances=1,
+                require_declared_user=False,
+            )
+        )
+        names.append(runtimes[0].metadata["livekit_agent_name"])
+    assert names[0] != names[1]
+    assert all(name.startswith("agent-job-123-") for name in names)
 
 
 # ============================================================================================

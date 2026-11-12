@@ -370,6 +370,8 @@ def cycles(actors: dict[str, "Actor"], entries: list["ScenarioActor"]) -> list[l
     """Actors that bring each other in: each one comes in once a record exists that only the next may write. A cycle
     is a scenario problem refused when the scenario is written, never a loop discovered during a run."""
     triggered_by: dict[str, set[str]] = {}
+    # Only the scenario's own actors act in its runs.
+    in_scene = {entry.id for entry in entries if entry.id in actors}
     for entry in entries:
         actor = actors.get(entry.id)
         if actor is None:
@@ -384,24 +386,51 @@ def cycles(actors: dict[str, "Actor"], entries: list["ScenarioActor"]) -> list[l
             other.id
             for other in actors.values()
             if other.id != entry.id
+            and other.id in in_scene
             and any(name in (one, one.rsplit(".", 1)[-1]) for one in other.permitted_actions for name in names)
         }
+    # Over the whole graph: an actor comes in once any one of the scenario's actors who may write its record has come
+    # in. Those with no record to wait for come in on their own, and so does one whose record none of them writes (the
+    # agent may).
+    came_in = {one for one, writers in triggered_by.items() if not writers}
+    while True:
+        more = {
+            one
+            for one, writers in triggered_by.items()
+            if one not in came_in and any(w not in triggered_by or w in came_in for w in writers)
+        }
+        if not more:
+            break
+        came_in |= more
+    stuck = {one: triggered_by[one] & set(triggered_by) - came_in for one in triggered_by if one not in came_in}
+    # Each group of stuck actors that wait on one another, as one cycle, in a stable order.
     found: list[list[str]] = []
-    for start in triggered_by:
-        path, at = [start], start
-        while True:
-            nexts = sorted(triggered_by.get(at, set()) & set(triggered_by))
-            if not nexts:
-                break
-            at = nexts[0]
-            if at == start:
-                if sorted(path) not in [sorted(one) for one in found]:
-                    found.append(path)
-                break
-            if at in path:
-                break
-            path.append(at)
+    placed: set[str] = set()
+    for start in sorted(stuck):
+        if start in placed:
+            continue
+        reach, frontier = {start}, [start]
+        while frontier:
+            at = frontier.pop()
+            for nxt in stuck.get(at, ()):
+                if nxt not in reach:
+                    reach.add(nxt)
+                    frontier.append(nxt)
+        group = sorted(one for one in reach if start in _reaches(stuck, one))
+        if len(group) > 1:
+            found.append(group)
+            placed |= set(group)
     return found
+
+
+def _reaches(graph: dict[str, set[str]], start: str) -> set[str]:
+    seen, frontier = {start}, [start]
+    while frontier:
+        for nxt in graph.get(frontier.pop(), ()):
+            if nxt not in seen:
+                seen.add(nxt)
+                frontier.append(nxt)
+    return seen
 
 
 def load_actors(root: Path) -> ActorList:

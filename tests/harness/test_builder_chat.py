@@ -625,6 +625,22 @@ def test_one_yes_to_every_change_runs_the_rest_of_its_message_and_the_next_messa
     ]
 
 
+def test_the_question_before_a_change_shows_names_as_they_are_written(tmp_path, monkeypatch):
+    from fi.alk.harness.hosted_chat_entrypoint import _CONFIRM
+
+    runtime, guarded, ran, _offered = _guarded_refund_changes(tmp_path, monkeypatch, lambda asked: _CONFIRM)
+    questions = []
+    asked = runtime._ask
+
+    async def ask(tool, payload, context):
+        questions.append(payload["question"])
+        return await asked(tool, payload, context)
+
+    runtime._ask = ask
+    assert asyncio.run(guarded("add_actor")({"id": "zoe", "name": "Zoë Müller"})).get("is_error") is None
+    assert "Zoë Müller" in questions[0] and "\\u00eb" not in questions[0]
+
+
 def test_a_yes_to_one_change_runs_only_that_change_and_a_no_still_refuses(tmp_path, monkeypatch):
     from fi.alk.harness.hosted_chat_entrypoint import _CONFIRM
 
