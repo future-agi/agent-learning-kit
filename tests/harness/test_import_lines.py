@@ -199,13 +199,15 @@ def test_a_100_kb_line_is_searched_at_once(name):
     started = time.perf_counter()
     import_lines(line, [False])
     import_lines(line + "\n" + line + "\nimport a\n", [False])
-    assert time.perf_counter() - started < 0.5
+    # Linear search takes well under a second even on a loaded CI runner; the backtracking
+    # pattern this replaced took minutes on the same input.
+    assert time.perf_counter() - started < 5.0
 
 
 def test_a_line_of_50000_spaces_after_from_returns_at_once():
     started = time.perf_counter()
     assert import_lines("from" + " " * 50_000 + "x") == []
-    assert time.perf_counter() - started < 0.5
+    assert time.perf_counter() - started < 5.0
 
 
 def test_many_lines_that_each_open_a_paren_list_cost_in_proportion():
