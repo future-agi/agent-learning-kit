@@ -204,6 +204,43 @@ def test_records_that_differ_only_in_times_ids_or_counters_still_collapse():
     assert collapsed.count("INFO poll") == 1
 
 
+def test_poll_lines_with_iso_offset_timestamps_collapse_so_the_root_error_survives(tmp_path):
+    from fi.alk.harness.process_diagnostics import retain_process_log
+
+    work = tmp_path / "work"
+    work.mkdir()
+    log = work / "process.log"
+    # Milliseconds such as .123 sit next to a numeric offset, so they look like a bare code.
+    polls = "".join(
+        f"2026-11-09T12:{i // 60 % 60:02d}:{i % 60:02d}.{100 + i % 400:03d}+00:00 INFO poll ok\n"
+        for i in range(500)
+    )
+    log.write_text("ERROR stt: provider returned HTTP 402 Payment Required\n" + polls)
+    retain_process_log(log, work=work, destination=tmp_path / "artifacts", secrets={})
+    body = next((tmp_path / "artifacts").rglob("*.log")).read_text()
+    assert "provider returned HTTP 402 Payment Required" in body
+    assert "[earlier copies of the next line omitted: 499]" in body
+
+
+def test_omission_notes_that_outgrow_the_read_still_keep_the_last_root_error(tmp_path):
+    import itertools
+    import string
+
+    from fi.alk.harness.process_diagnostics import retain_process_log
+
+    work = tmp_path / "work"
+    work.mkdir()
+    log = work / "process.log"
+    # Short lines that each repeat once: every kept line gains a longer omission note.
+    words = ("".join(w) for w in itertools.product(string.ascii_lowercase, repeat=3))
+    pairs = "".join(f"{word}\n{word}\n" for word in itertools.islice(words, 5000))
+    log.write_text(pairs + "ERROR worker: root cause is a missing api key\n")
+    assert log.stat().st_size < 48 * 1024
+    retain_process_log(log, work=work, destination=tmp_path / "artifacts", secrets={})
+    body = next((tmp_path / "artifacts").rglob("*.log")).read_text()
+    assert body.endswith("ERROR worker: root cause is a missing api key\n")
+
+
 def test_retention_write_failure_does_not_prevent_cleanup(tmp_path, monkeypatch):
     from fi.alk.harness import process_diagnostics
 

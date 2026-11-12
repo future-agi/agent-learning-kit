@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import re
 import stat
+import sys
 import uuid
 from collections import Counter
 from collections.abc import Mapping
@@ -14,7 +15,7 @@ _DIGITS = str.maketrans("", "", "0123456789")
 # Numbers that tell two errors apart: a status, exit or signal code, an HTTP code.
 _MEANINGFUL = re.compile(
     r"(?i)(?:status(?:_code)?|code|exit(?:\s+(?:code|status))?|returncode|signal|http(?:/\d\.\d)?)"
-    r"[\"'\s:=_]*\d+|\b[1-5]\d\d\b"
+    r"[\"'\s:=_]*\d+"
 )
 # Opaque ids: hex runs that carry a digit, so two copies of one record with different ids match.
 _OPAQUE_ID = re.compile(r"\b(?=[0-9a-fA-F-]*\d)[0-9a-fA-F][0-9a-fA-F-]{7,}\b")
@@ -127,11 +128,10 @@ def retain_process_log(
                 # Drop the incomplete first record, including any split credential.
                 raw = raw.partition(b"\n")[2]
         # Collapse before redacting: a redacted value can split lines that differ only in digits.
-        text = sanitize_diagnostic(
-            _collapse_repeated_lines(raw.decode("utf-8", errors="replace")),
-            secrets,
-            limit=65536,
-        )[-8192:]
+        # The omission notes can make the collapsed text longer than the 64 KB read, so all of it
+        # is redacted before the tail is taken.
+        collapsed = _collapse_repeated_lines(raw.decode("utf-8", errors="replace"))
+        text = sanitize_diagnostic(collapsed, secrets, limit=sys.maxsize)[-8192:]
         if not text:
             return
         destination.mkdir(parents=True, exist_ok=True, mode=0o700)
