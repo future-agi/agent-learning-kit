@@ -646,6 +646,46 @@ def test_host_escape_compose_features_are_rejected(service):
         _validate_compose_security({"services": {"agent": service}})
 
 
+@pytest.mark.parametrize(
+    ("config", "expected"),
+    [
+        ({"services": {"agent": {"network_mode": "container:other"}}}, "agent: network_mode=container:other"),
+        ({"services": {"agent": {"network_mode": "platform_default"}}}, "agent: network_mode=platform_default"),
+        ({"services": {"agent": {"network_mode": "bridge"}}}, "agent: network_mode=bridge"),
+        ({"services": {"agent": {"network_mode": "host"}}}, "agent: network_mode=host"),
+        ({"services": {"agent": {"network_mode": "service:missing"}}}, "agent: network_mode=service:missing"),
+        (
+            {"name": "job", "services": {"agent": {}}, "networks": {"shared": {"name": "shared", "external": True}}},
+            "network shared: external",
+        ),
+        (
+            {"name": "job", "services": {"agent": {}}, "networks": {"default": {"name": "otherproject_default"}}},
+            "network default: name outside the project",
+        ),
+    ],
+)
+def test_compose_network_joins_outside_the_project_are_rejected(config, expected):
+    with pytest.raises(ProvisionError, match="forbidden host access") as error:
+        _validate_compose_security(config)
+    assert expected in str(error.value)
+
+
+@pytest.mark.parametrize(
+    "config",
+    [
+        {"services": {"agent": {"network_mode": "service:db"}, "db": {}}},
+        {"services": {"agent": {"network_mode": "none"}}},
+        {"services": {"agent": {}}},
+        {"services": {"agent": {"network_mode": ""}}},
+        {"name": "job", "services": {"agent": {}}, "networks": {"default": {"name": "job_default"}}},
+        {"name": "job", "services": {"agent": {}}, "networks": {"default": None}},
+        {"name": "job", "services": {"agent": {}}},
+    ],
+)
+def test_compose_network_settings_inside_the_project_are_accepted(config):
+    _validate_compose_security(config)
+
+
 def test_clickhouse_is_generated_when_contract_declares_it_without_compose(tmp_path):
     source = tmp_path / "agent"
     source.mkdir()

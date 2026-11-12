@@ -513,9 +513,14 @@ def _validate_compose_security(config: dict[str, Any]) -> None:
     for name, service in config["services"].items():
         if service.get("privileged"):
             violations.append(f"{name}: privileged")
-        for key in ("network_mode", "pid", "ipc"):
+        for key in ("pid", "ipc"):
             if str(service.get(key) or "").lower() == "host":
                 violations.append(f"{name}: {key}=host")
+        mode = str(service.get("network_mode") or "").strip()
+        if mode and mode.lower() != "none":
+            sibling = mode[len("service:") :] if mode.startswith("service:") else None
+            if sibling is None or sibling not in config["services"]:
+                violations.append(f"{name}: network_mode={mode}")
         if service.get("devices"):
             violations.append(f"{name}: host devices")
         for volume in service.get("volumes") or []:
@@ -529,6 +534,15 @@ def _validate_compose_security(config: dict[str, Any]) -> None:
                 or "docker.sock:" in source
             ):
                 violations.append(f"{name}: Docker socket mount")
+    project = str(config.get("name") or "")
+    for key, spec in (config.get("networks") or {}).items():
+        if not isinstance(spec, dict):
+            continue
+        if spec.get("external"):
+            violations.append(f"network {key}: external")
+        declared = spec.get("name")
+        if declared and declared != f"{project}_{key}":
+            violations.append(f"network {key}: name outside the project")
     if violations:
         raise ProvisionError(
             "submitted Compose requests forbidden host access: " + ", ".join(violations)
