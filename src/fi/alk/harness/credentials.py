@@ -341,6 +341,11 @@ def _plugin_key_names(node: ast.Call, provider: str) -> tuple[str, ...]:
         and _CODE_ENV_NAME.fullmatch(value.args[0].value)
     ):
         name = value.args[0].value
+        if name in _NON_USER_CONFIGURATION or name.startswith("ALK_"):
+            # A name the customer can never supply. Some plugins then fall back to their own
+            # variable (``api_key or os.environ.get(...)``: Cartesia, Deepgram TTS, OpenAI
+            # realtime); others refuse an explicit None. Ask for the plugin's own name.
+            return fallback
         default = value.args[1] if len(value.args) > 1 else None
         for keyword in value.keywords:
             if keyword.arg == "default" and default is None:
@@ -657,12 +662,9 @@ def discover_credentials(
             for name, origin in _python_sdk_requirements(content):
                 record(name, required=True)
                 if name not in findings:
-                    # A reserved name the code passes as its key: record() leaves it out,
-                    # and the plugin's own name isn't asked for either. The agent can never
-                    # be given that value, so the plugin gets None and refuses to start
-                    # (LiveKit treats an explicit None as given, it doesn't fall back to its
-                    # own variable). The check marks such an agent ready; it fails at the
-                    # plugin, not here. No agent in the kit does this.
+                    # A reserved name record() leaves out. _plugin_key_names already asks for
+                    # the plugin's own name instead (getenv); this keeps any other form from
+                    # raising KeyError here.
                     continue
                 detected = findings[name]["detected_from"]
                 assert isinstance(detected, set)

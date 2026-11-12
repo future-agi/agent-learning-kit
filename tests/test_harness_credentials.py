@@ -1190,18 +1190,20 @@ def test_an_unreadable_api_key_keeps_the_plugins_own_requirement(tmp_path, call,
     [
         ("openai", 'LLM(api_key=os.getenv("ALK_CLAUDE_GATEWAY_API_KEY"))', "OPENAI_API_KEY"),
         ("deepgram", 'STT(api_key=os.getenv("HOST"))', "DEEPGRAM_API_KEY"),
+        ("cartesia", 'TTS(api_key=os.getenv("ALK_X"))', "CARTESIA_API_KEY"),
+        ("openai", 'realtime.RealtimeModel(api_key=os.getenv("ALK_X"))', "OPENAI_API_KEY"),
     ],
 )
-def test_a_reserved_name_passed_as_the_key_does_not_break_the_check(
+def test_a_reserved_name_passed_as_the_key_asks_for_the_plugins_own_name(
     tmp_path, plugin, call, own_name
 ):
     _plugin_agent(tmp_path, plugin, call)
     _, found = _lk(tmp_path)
     assert "ALK_CLAUDE_GATEWAY_API_KEY" not in found and "HOST" not in found
-    # Nothing is asked for: the plugin is handed the reserved name's value, never its own
-    # name, so asking for its own name could not help (see credentials.py's guard).
-    assert own_name not in found
-    assert _missing(tmp_path) == set()
+    assert "ALK_X" not in found
+    # The customer can never supply the reserved name, and several plugins then read their own
+    # variable, so the check asks for that rather than calling the agent ready.
+    assert own_name in _missing(tmp_path)
 
 
 def test_a_bare_getenv_imported_from_os_keeps_the_plugins_own_requirement(tmp_path):
