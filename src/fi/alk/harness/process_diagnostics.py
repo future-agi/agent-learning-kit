@@ -17,8 +17,13 @@ _MEANINGFUL = re.compile(
     r"(?i)(?:status(?:_code)?|code|exit(?:\s+(?:code|status))?|returncode|signal|http(?:/\d\.\d)?)"
     r"[\"'\s:=_]*\d+"
 )
-# Opaque ids: hex runs that carry a digit, so two copies of one record with different ids match.
-_OPAQUE_ID = re.compile(r"\b(?=[0-9a-fA-F-]*\d)[0-9a-fA-F][0-9a-fA-F-]{7,}\b")
+# Opaque ids, so two copies of one record with different ids match: hex runs that carry a digit
+# (uuids, hashes), and letter-and-digit runs of twelve or more (job, request and sandbox ids;
+# shorter names such as a module name stay as they are, so two different errors stay apart).
+_OPAQUE_ID = re.compile(
+    r"\b(?=[0-9a-fA-F-]*\d)[0-9a-fA-F][0-9a-fA-F-]{7,}\b"
+    r"|(?<![A-Za-z0-9])(?=[A-Za-z0-9]*\d)(?=[A-Za-z0-9]*[A-Za-z])[A-Za-z0-9]{12,}(?![A-Za-z0-9])"
+)
 
 
 _CHAINED = (
@@ -61,7 +66,8 @@ def _shape(record: list[str]) -> str:
     """A record with its volatile parts (times, ids, counters) removed and its meaningful numbers
     (status, exit and HTTP codes) kept, so only real copies share a shape."""
 
-    text = _OPAQUE_ID.sub("#", "".join(record))
+    # NUL brackets the placeholders below, so a NUL in the log itself must not reach them.
+    text = _OPAQUE_ID.sub("#", "".join(record).replace("\0", ""))
     kept: list[str] = []
 
     def hold(match: re.Match[str]) -> str:

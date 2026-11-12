@@ -241,6 +241,55 @@ def test_omission_notes_that_outgrow_the_read_still_keep_the_last_root_error(tmp
     assert body.endswith("ERROR worker: root cause is a missing api key\n")
 
 
+def test_poll_lines_with_letter_and_digit_ids_collapse_so_the_root_error_survives(tmp_path):
+    import random
+    import string
+
+    from fi.alk.harness.process_diagnostics import retain_process_log
+
+    work = tmp_path / "work"
+    work.mkdir()
+    log = work / "process.log"
+    pick = random.Random(7)
+    alphabet = string.ascii_letters + string.digits
+    polls = "".join(
+        "INFO polling job_"
+        + "".join(pick.choice(alphabet) for _ in range(15))
+        + str(i % 10)
+        + " state=pending\n"
+        for i in range(500)
+    )
+    log.write_text("ERROR stt: provider returned HTTP 402 Payment Required\n" + polls)
+    retain_process_log(log, work=work, destination=tmp_path / "artifacts", secrets={})
+    body = next((tmp_path / "artifacts").rglob("*.log")).read_text()
+    assert "provider returned HTTP 402 Payment Required" in body
+    assert "[earlier copies of the next line omitted: 499]" in body
+
+
+def test_short_names_with_digits_still_tell_two_errors_apart():
+    from fi.alk.harness.process_diagnostics import _collapse_repeated_lines
+
+    first = "ModuleNotFoundError: No module named 'boto3client'"
+    second = "ModuleNotFoundError: No module named 's3transfer2'"
+    collapsed = _collapse_repeated_lines(f"{first}\nINFO poll\n{second}\n")
+    assert first in collapsed and second in collapsed
+
+
+def test_a_nul_byte_in_the_log_does_not_break_collapsing(tmp_path):
+    from fi.alk.harness.process_diagnostics import retain_process_log
+
+    work = tmp_path / "work"
+    work.mkdir()
+    log = work / "process.log"
+    log.write_bytes(
+        b"binary \x00a\x00 junk\n" * 3 + b"ERROR worker: root cause is a missing api key\n"
+    )
+    retain_process_log(log, work=work, destination=tmp_path / "artifacts", secrets={})
+    body = next((tmp_path / "artifacts").rglob("*.log")).read_text()
+    assert body.endswith("ERROR worker: root cause is a missing api key\n")
+    assert "[earlier copies of the next line omitted: 2]" in body
+
+
 def test_retention_write_failure_does_not_prevent_cleanup(tmp_path, monkeypatch):
     from fi.alk.harness import process_diagnostics
 
