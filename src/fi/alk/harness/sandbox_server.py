@@ -103,7 +103,8 @@ class LocalSandboxRequest(BaseModel):
         ):
             raise ValueError("exactly_one_source_required")
         if self.provider_only and (
-            self.connector not in {"retell", "retell_chat", "vapi", "livekit"}
+            self.connector
+            not in {"retell", "retell_chat", "vapi", "livekit", "copilot_studio", "foundry"}
             or self.connector_mode is not ProviderExecutionMode.CONNECT_ONLY
         ):
             raise ValueError("provider_only_requires_connect_only_provider")

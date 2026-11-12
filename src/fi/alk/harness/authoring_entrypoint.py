@@ -28,10 +28,17 @@ from .failure_file import FAILURE_FILE
 from .job import HarnessJob, ProviderExecutionMode, SourceKind
 from .hosted_compose_bootstrap import initialize_hosted_compose
 from .provider_import import inspect_provider_target
+from .microsoft_import import (
+    MICROSOFT_CLIENT_SECRET,
+    MICROSOFT_CONNECTORS,
+    inspect_microsoft_agent,
+)
 from .scenarios import load as load_written
 from .understand import PROVIDER_IMPORT_PROFILE_PATH_ENV
 
-PROVIDER_MANAGED_CONNECTORS = frozenset({"vapi", "retell", "retell_chat"})
+PROVIDER_MANAGED_CONNECTORS = frozenset(
+    {"vapi", "retell", "retell_chat", *MICROSOFT_CONNECTORS}
+)
 
 
 def _persist_authored_scenario_count(
@@ -514,16 +521,24 @@ def _load_provider_import_profile(
     if not isinstance(values, dict):
         raise RuntimeError("provider_import_authoring_secrets_invalid")
     connector = job.agent.connector.strip().lower()
-    provider = "retell" if connector == "retell_chat" else connector
-    secret_name = "VAPI_API_KEY" if provider == "vapi" else "RETELL_API_KEY"
-    target_key = "assistant_id" if provider == "vapi" else "agent_id"
-    profile = inspect_provider_target(
-        provider,
-        source_target_id=str(job.agent.config.get(target_key) or ""),
-        api_key=str(values.get(secret_name) or ""),
-        api_base_url=str(job.agent.config.get("provider_api_base_url") or "") or None,
-        target_modality="chat" if connector == "retell_chat" else "voice",
-    )
+    if connector in MICROSOFT_CONNECTORS:
+        profile = inspect_microsoft_agent(
+            connector,
+            config=job.agent.config,
+            client_secret=str(values.get(MICROSOFT_CLIENT_SECRET) or ""),
+        )
+    else:
+        provider = "retell" if connector == "retell_chat" else connector
+        secret_name = "VAPI_API_KEY" if provider == "vapi" else "RETELL_API_KEY"
+        target_key = "assistant_id" if provider == "vapi" else "agent_id"
+        profile = inspect_provider_target(
+            provider,
+            source_target_id=str(job.agent.config.get(target_key) or ""),
+            api_key=str(values.get(secret_name) or ""),
+            api_base_url=str(job.agent.config.get("provider_api_base_url") or "")
+            or None,
+            target_modality="chat" if connector == "retell_chat" else "voice",
+        )
     if profile_cache_path is not None:
         profile_cache_path.write_text(
             json.dumps(profile, indent=2, sort_keys=True) + "\n", encoding="utf-8"
