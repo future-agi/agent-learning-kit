@@ -124,13 +124,14 @@ def _worker_deadlines() -> dict:
 
 def _worker_limits() -> dict:
     """What this trial's workers may do: the sealed allow-lists, when the bundle has them, and the deadline. A seal
-    that is present but unreadable is an empty allow-list: it never widens what a worker may do."""
+    that is present but unreadable is an empty allow-list, and so is a missing one while this trial gave its workers
+    channels (the bundle that made the channels sealed their allow-lists): it never widens what a worker may do."""
     limits: dict = {
         "deadline_at": _worker_deadline(),
         "deadlines": _worker_deadlines(),
         "routes": list((_read_json(ACTIONS_FILE) or {}).keys()),
     }
-    if os.path.exists(WORKER_PERMISSIONS_FILE):
+    if os.path.exists(WORKER_PERMISSIONS_FILE) or _channels_given():
         sealed = _read_json(WORKER_PERMISSIONS_FILE) or {}
         limits["permissions"] = {
             key.removeprefix("worker:"): (value or {}).get("allow")

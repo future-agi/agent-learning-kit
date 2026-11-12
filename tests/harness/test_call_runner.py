@@ -2892,6 +2892,24 @@ def test_a_voice_call_with_no_words_still_seals_the_notice_for_a_fault_it_never_
     assert json.loads(sealed[cr.ArtifactKind.TRANSCRIPT])["notices"][0]["code"] in ("fault_not_applied", "fault_not_triggered")
 
 
+def test_a_voice_call_hands_the_scheduler_the_notice_that_worker_limits_were_not_held(tmp_path, monkeypatch) -> None:
+    _job_obj, context = _context(tmp_path=tmp_path, evidence_seam=EvidenceSeam.TOOL_TRACE)
+    _write_scenario_doc(context.bundle_dir, scenario_key="k1")
+    document = context.bundle_dir / "scenarios" / "k1" / "scenario.json"
+    body = json.loads(document.read_text())
+    body["worker_budget_seconds"] = 30
+    document.write_text(json.dumps(body))
+    monkeypatch.setattr(cr, "_write_trial_state", lambda *args, **kwargs: None)
+
+    async def place_call(spec):
+        return _report(transcript="hello", messages=[])
+
+    runner = cr.CallRunnerImpl(FakeAdapter(), context, place_call=place_call)
+    outcome = _run(runner, _FakeScenario("k1"), _runtime(metadata={"livekit_agent_name": "agent-w0"}))
+    # The bundle was sealed without a door that holds worker limits: the scheduler must hear it to hold the grading.
+    assert [one["code"] for one in outcome.notices] == ["worker_limits_not_enforced"]
+
+
 def test_a_worker_s_refused_attempt_is_sealed_in_the_trial_s_state_changes_without_any_actor(
     tmp_path, monkeypatch
 ) -> None:
@@ -2967,6 +2985,26 @@ def test_worker_budgets_on_a_door_sealed_before_worker_limits_are_said_not_enfor
     assert cr.trial_worker_deadlines({}, tmp_path) == (None, {}, [])
     # No sealed bundle (the harness's own proxy): enforced, nothing said.
     assert cr.trial_worker_deadlines({"worker_budget_seconds": 30}, None) == (1030.0, {}, [])
+
+
+def test_a_permission_only_scenario_on_a_door_sealed_before_worker_limits_is_said_not_enforced(tmp_path):
+    # No budget, but the agent declares a worker held to its own tools: an old door holds none of it.
+    (tmp_path / "contract.json").write_text(
+        json.dumps({"workers": [{"id": "refund", "binding": "separate", "address_env": "REFUND_URL"}]})
+    )
+    [notice] = cr.trial_worker_deadlines({}, tmp_path)[2]
+    assert notice["code"] == "worker_limits_not_enforced"
+    (tmp_path / "contract.json").write_text(json.dumps({"workers": [{"id": "refund", "allowed_tools": ["get"]}]}))
+    assert cr.trial_worker_deadlines({}, tmp_path)[2]
+    # A worker with no limits of its own relies on nothing the door must hold.
+    (tmp_path / "contract.json").write_text(json.dumps({"workers": [{"id": "refund", "tools": ["get"]}]}))
+    assert cr.trial_worker_deadlines({}, tmp_path)[2] == []
+    # Sealed with worker limits: nothing to say.
+    door = tmp_path / "generated" / "tool-proxy"
+    door.mkdir(parents=True)
+    (door / "door.json").write_text('{"worker_deadlines": "per_worker"}')
+    (tmp_path / "contract.json").write_text(json.dumps({"workers": [{"id": "refund", "binding": "separate"}]}))
+    assert cr.trial_worker_deadlines({}, tmp_path)[2] == []
 
 
 def test_a_trial_with_a_worker_deadline_writes_it_beside_its_faults(monkeypatch):

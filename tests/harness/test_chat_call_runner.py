@@ -1828,3 +1828,10 @@ def test_a_chat_agent_without_a_tool_proxy_says_its_workers_budgets_were_not_hel
     assert notice["code"] == "worker_limits_not_enforced"
     assert chat._unproxied_worker_notices({"worker_budget_seconds": 30})
     assert chat._unproxied_worker_notices({}) == []
+
+
+def test_a_chat_agent_without_a_tool_proxy_says_its_workers_permissions_were_not_held(tmp_path) -> None:
+    (tmp_path / "contract.json").write_text(json.dumps({"workers": [{"id": "refund", "allowed_tools": ["get"]}]}))
+    [notice] = chat._unproxied_worker_notices({}, tmp_path)
+    assert notice["code"] == "worker_limits_not_enforced"
+    assert "permitted actions" in notice["message"]

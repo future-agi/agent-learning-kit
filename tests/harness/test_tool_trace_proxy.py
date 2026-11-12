@@ -471,6 +471,32 @@ def test_a_worker_s_request_for_a_route_that_is_no_world_action_is_refused_befor
     assert (row["worker_id"], row["outcome"], row["refusal_code"]) == ("order_lookup", "refused", "not_permitted")
 
 
+def test_a_worker_s_call_is_refused_when_the_sealed_allow_lists_are_missing_while_channels_were_given(
+    proxy, monkeypatch, tmp_path
+):
+    """Channels come only from a bundle that sealed its workers' allow-lists: without them, no worker may act."""
+    shipped = tmp_path / "shipped"
+    shipped.mkdir()
+    (shipped / "proxy.py").write_bytes(_PROXY.read_bytes())
+    (shipped / "world_door.py").write_bytes(_PROXY.with_name("world_door.py").read_bytes())
+    (tmp_path / "channels.json").write_text(json.dumps(CHANNELS), encoding="utf-8")
+    monkeypatch.setenv("WORKER_CHANNELS_FILE", str(tmp_path / "channels.json"))
+    url, rows = proxy
+    spec = importlib.util.spec_from_file_location("tool_trace_proxy_no_permissions", shipped / "proxy.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    server = _serve(module.Handler)
+    try:
+        status, _payload = _post(f"http://127.0.0.1:{server.server_port}", "/w/c-refund/ok", {})
+    finally:
+        server.shutdown()
+    assert status == 403
+    assert _World.seen == []
+    assert [(one["worker_id"], one["outcome"], one["refusal_code"]) for one in rows()] == [
+        ("refund", "refused", "not_permitted")
+    ]
+
+
 def test_a_channel_no_worker_of_this_trial_owns_is_refused(worker_proxy):
     url, rows = worker_proxy
     assert _post(url, "/w/c-stolen/ok", {})[0] == 403

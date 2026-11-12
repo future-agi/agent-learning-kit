@@ -65,7 +65,7 @@ from .bundle_v2 import (
     load_bundle_v2,
     seal_bundle_v2,
 )
-from .contract import AgentContract, DataStore, Runtime, ToolEntry, runtime_public_environment
+from .contract import _CHANNEL_WORKER_ID, AgentContract, DataStore, Runtime, ToolEntry, runtime_public_environment
 from .generated_runtime import (
     GeneratedRuntimeError,
     framework_instrumentation_command,
@@ -2073,15 +2073,20 @@ def _seal_tool_proxy(generated: Path, contract_body: dict[str, Any] | None) -> N
 
 
 def _with_worker_channels(plan: EnvironmentPlanV2, contract_body: dict[str, Any] | None) -> EnvironmentPlanV2:
-    """Point each separately wired worker's tool address at its own channel on the tool proxy, so the world can tell
-    the workers apart and hold each to its own tools."""
+    """Point each separately wired worker's tool address at its own channel on the tool proxy, so the world attributes
+    each worker's calls to it and applies its allow-list and deadline. Cooperative attribution, not isolation: every
+    worker runs in the agent's one process, which can read every channel and the proxy's own address."""
     if not any(process.name == "tool-proxy" for process in plan.processes):
         return plan
     workers = AgentContract.model_validate(contract_body or {}).workers
+    separate = [one for one in workers if one.binding == "separate" and one.address_env.strip()]
+    addresses = [one.address_env for one in separate]
+    # Only a worker the world can name and tell apart gets a channel: one address read by two workers, or an id no
+    # channel placeholder can carry, would hand one worker's calls to another (validation returns both to authoring).
     channels = {
         one.address_env: f"{{{{TOOLS_API_URL}}}}/w/{{{{WORKER_CHANNEL_{one.id}}}}}"
-        for one in workers
-        if one.binding == "separate" and one.address_env.strip()
+        for one in separate
+        if addresses.count(one.address_env) == 1 and _CHANNEL_WORKER_ID.fullmatch(one.id)
     }
     if not channels:
         return plan

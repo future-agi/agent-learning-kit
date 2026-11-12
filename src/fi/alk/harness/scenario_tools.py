@@ -2520,12 +2520,13 @@ def scenario_tools(
                             "minProperties": 1,
                         },
                     ],
-                    "description": "Only for an agent with workers: seconds from the start of the trial after "
-                    "which a worker's call no longer reaches the world, counted from the trial's start, not from "
-                    "a hand-off. A number holds every worker to one deadline. An object of worker id to seconds "
-                    "holds only those workers, so one worker can time out while the others finish: to test one "
-                    "timed-out worker, give only that worker a budget shorter than its work, and leave the "
-                    "workers it depends on out. A worker still acting then is refused and ends timed out. Leave "
+                    "description": "Only for an agent with workers: a worker-action deadline, seconds from the "
+                    "start of the trial after which a worker's call no longer reaches the world, counted from the "
+                    "trial's start, not from a hand-off. A number holds every worker to one deadline. An object of "
+                    "worker id to seconds holds only those workers, so one worker can pass its deadline while the "
+                    "others finish: to test one worker past its deadline, give only that worker a budget shorter "
+                    "than its work, and leave the workers it depends on out. A worker still acting then has its "
+                    "world calls refused as past its deadline; the deadline does not stop the worker itself. Leave "
                     "out to use the run's own limit.",
                 },
                 "coverage": {

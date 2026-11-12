@@ -202,6 +202,29 @@ def test_declared_workers_name_contract_tools_and_reach_the_brief():
     assert "order_lookup (Order-lookup worker): get_order" in contract.brief()
 
 
+def test_separate_workers_sharing_an_address_or_with_an_id_no_channel_can_carry_are_returned_to_authoring():
+    contract = AgentContract.model_validate(
+        {
+            "agent": "returns",
+            "real_use_cases": ["refund an order"],
+            "tools": [{"name": "get_order"}],
+            "workers": [
+                {"id": "refund", "binding": "separate", "address_env": "TOOLS_URL"},
+                {"id": "order_lookup", "binding": "separate", "address_env": "TOOLS_URL"},
+                {"id": "Order lookup", "binding": "separate", "address_env": "LOOKUP_URL"},
+                {"id": "audit", "binding": "separate"},
+                {"id": "Shared one", "binding": "shared", "address_env": "TOOLS_URL"},
+            ],
+        }
+    )
+    problems = validate_contract(contract)
+    assert [one.split(":")[0] + ":" + one.split(":")[1] for one in problems] == [
+        "worker[2]:id-not-usable-for-a-channel",
+        "worker[3]:separate-without-address-env",
+        "duplicate-worker-address-env:TOOLS_URL",
+    ]
+
+
 def test_a_worker_without_an_id_of_its_own_is_returned_to_authoring_and_keeps_only_contract_tools():
     contract = AgentContract.model_validate(
         {

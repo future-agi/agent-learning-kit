@@ -259,6 +259,8 @@ class CallOutcome:
     world_actions: tuple[dict[str, Any], ...] = ()
     # What each actor was told to play from, so a judge can tell an actor that strayed from it.
     actor_briefs: dict[str, str] = field(default_factory=dict)
+    # What the person is told about this trial (a fault that did not take effect, worker limits not enforced).
+    notices: tuple[dict[str, Any], ...] = ()
 
 
 class CallAborted(RuntimeError):
@@ -420,6 +422,8 @@ class OutboundPort(Protocol):
 # job-abort signal for spine v1.12 §5.4's closed job-level failure vocabulary for stage `running`
 # (domain infrastructure).
 
+WORKER_LIMITS_NOT_ENFORCED = "worker_limits_not_enforced"
+
 _CODE_DOMAIN: dict[str, FailureDomain] = {
     "setup_crashed": FailureDomain.SIMULATOR,
     "setup_timeout": FailureDomain.SIMULATOR,
@@ -432,6 +436,8 @@ _CODE_DOMAIN: dict[str, FailureDomain] = {
     "caller_off_script": FailureDomain.SIMULATOR,
     "evidence_missing": FailureDomain.SIMULATOR,
     "actor_missing": FailureDomain.SIMULATOR,
+    # The scenario relies on worker limits the environment's sealed world door cannot hold; rebuilding it fixes that.
+    "worker_limits_not_enforced": FailureDomain.SIMULATOR,
     "world_usage": FailureDomain.SIMULATOR,
     "world_unavailable": FailureDomain.ENVIRONMENT,
     "state_too_large": FailureDomain.SIMULATOR,
@@ -2376,6 +2382,33 @@ class HostedScheduler:
                 call=self._call_summary(call_outcome),
             )
 
+        unenforced = next(
+            (
+                str(one.get("message") or "")
+                for one in call_outcome.notices
+                if isinstance(one, dict) and one.get("code") == WORKER_LIMITS_NOT_ENFORCED
+            ),
+            None,
+        )
+        if unenforced is not None:
+            # The scenario relies on worker limits this trial could not hold: grading it would count a limit nobody
+            # enforced as the agent's doing, so it is held, every check unmeasured, until the environment is rebuilt.
+            return self._fault(
+                scenario,
+                world_index,
+                attempt,
+                _failure(
+                    WORKER_LIMITS_NOT_ENFORCED,
+                    "inconclusive: scenario problem, not the agent's: "
+                    + (unenforced or "worker limits were not enforced in this trial"),
+                ),
+                sub_goals=tuple(
+                    SubGoalResult(name=goal.name, held=None, reason=None, judged=goal.judged != "")
+                    for goal in scenario.sub_goals
+                ),
+                call=self._call_summary(call_outcome),
+                retry=False,
+            )
         sub_goal_results: list[SubGoalResult] = []
         judged_pending: list[tuple[int, Any]] = []
         off_script = ""

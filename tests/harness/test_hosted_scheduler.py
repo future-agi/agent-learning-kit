@@ -4979,3 +4979,24 @@ def test_a_worker_that_passed_its_deadline_has_its_own_checks_inconclusive_and_t
     refund, lookup, task = receipt.sub_goals
     assert (refund.verdict, lookup.verdict, task.verdict) == ("inconclusive", "pass", "pass")
     assert refund.reason == "Inconclusive: worker refund passed its deadline, so its result is partial"
+
+
+def test_a_trial_that_could_not_hold_the_worker_limits_its_scenario_relies_on_is_held_not_graded() -> None:
+    outcome = replace(
+        _call_outcome(turns=2, calls=(hs.Call(name="issue_refund", arguments={}),)),
+        notices=({"code": "worker_limits_not_enforced", "message": "sealed before worker limits"},),
+    )
+    ran: list[str] = []
+    receipt = _graded(
+        [
+            _WorkerGoal("refund_refused", lambda w, c: ran.append("worker") or False, worker="refund"),
+            _WorkerGoal("task_done", lambda w, c: ran.append("task") or False),
+        ],
+        outcome,
+    )
+    # Nothing nobody enforced is counted against the agent: no check ran, none settled, the scenario is not failed.
+    assert ran == []
+    assert receipt.status != "failed"
+    assert receipt.failure is not None and receipt.failure.code == "worker_limits_not_enforced"
+    assert "not the agent's" in receipt.failure.message
+    assert [one.held for one in receipt.sub_goals] == [None, None]

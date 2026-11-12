@@ -5982,6 +5982,30 @@ def test_a_separately_wired_worker_s_tool_address_points_at_its_own_channel_on_t
     assert _with_worker_channels(without_proxy, contract) is without_proxy
 
 
+def test_workers_sharing_an_address_or_with_an_id_no_channel_can_carry_get_no_channel(tmp_path):
+    from fi.alk.harness.bundle_author_v2 import EnvironmentPlanV2, _tool_proxy_process, _with_worker_channels
+
+    agent = _tool_proxy_process().model_copy(update={"name": "agent", "environment": {}, "depends_on": []})
+    plan = EnvironmentPlanV2(
+        packaging="process",
+        control_service="agent",
+        processes=(agent, _tool_proxy_process().model_copy(update={"depends_on": []})),
+        capabilities={},
+        readiness=(),
+    )
+    contract = {
+        "workers": [
+            {"id": "refund", "binding": "separate", "address_env": "TOOLS_URL"},
+            {"id": "order_lookup", "binding": "separate", "address_env": "TOOLS_URL"},
+            {"id": "Order lookup", "binding": "separate", "address_env": "LOOKUP_URL"},
+            {"id": "audit", "binding": "separate", "address_env": "AUDIT_URL"},
+        ]
+    }
+    wired = {p.name: p.environment for p in _with_worker_channels(plan, contract).processes}
+    # One address read by two workers would hand one's calls to the other; an id with a space names no placeholder.
+    assert wired["agent"] == {"AUDIT_URL": "{{TOOLS_API_URL}}/w/{{WORKER_CHANNEL_audit}}"}
+
+
 def test_each_routed_tool_is_sealed_under_the_world_action_its_route_names():
     from fi.alk.harness.bundle_author_v2 import _tool_actions
 

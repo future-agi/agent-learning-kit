@@ -108,16 +108,18 @@ async def _record_text_usage(
 DEFAULT_CHAT_TARGET_TIMEOUT_SECONDS = 300.0
 
 
-def _unproxied_worker_notices(document: Mapping[str, Any]) -> list[dict[str, Any]]:
-    """A chat agent whose tool calls the harness runs itself has no tool proxy, so nothing holds a worker's budget:
-    the trial says so rather than read as if it were held."""
+def _unproxied_worker_notices(document: Mapping[str, Any], bundle_dir: Any = None) -> list[dict[str, Any]]:
+    """A chat agent whose tool calls the harness runs itself has no tool proxy, so nothing holds a worker's deadline or
+    permitted actions: a scenario that relies on either says so, and is held rather than graded."""
+    from .call_runner import declares_worker_limits
+
     budget = document.get("worker_budget_seconds")
-    if not budget or isinstance(budget, bool):
+    if (not budget or isinstance(budget, bool)) and not declares_worker_limits(bundle_dir):
         return []
     return [{
         "code": "worker_limits_not_enforced",
-        "message": "This agent's tools are not reached through the world's tool proxy, so no worker's deadline was "
-        "enforced in this trial.",
+        "message": "This agent's tools are not reached through the world's tool proxy, so no worker's deadline or "
+        "permitted actions were enforced in this trial, and its checks were not graded.",
     }]
 
 
@@ -919,7 +921,7 @@ class HostedChatCallRunner:
             # Every trial writes its own faults, none included, so nothing an earlier trial left can apply to this one.
             _set_trial_faults(runtime, list(document.get("faults") or []), deadline, deadlines)
         else:
-            deadline_notices = _unproxied_worker_notices(document)
+            deadline_notices = _unproxied_worker_notices(document, self._context.bundle_dir)
         try:
             if dispatcher is not None:
                 # What the actors wrote before T0 is in the world before the conversation starts.
@@ -1043,6 +1045,7 @@ class HostedChatCallRunner:
         outcome = CallOutcome(
             calls=calls,
             turns=len(transcript.exchanges),
+            notices=tuple(said),
             started_at=format_rfc3339_millis(started),
             ended_at=format_rfc3339_millis(ended),
             duration_ms=_duration_ms(started, ended),

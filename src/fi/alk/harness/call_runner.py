@@ -1365,18 +1365,31 @@ def worker_deadlines(document: Mapping[str, Any]) -> dict[str, float]:
 def trial_worker_deadlines(
     document: Mapping[str, Any], bundle_dir: Path | str | None
 ) -> tuple[float | None, dict[str, float], list[dict[str, Any]]]:
-    """This trial's deadline for all workers, each named worker's own, and what the person should be told. A tool
-    proxy sealed before this release has no worker limits at all, so no budget is enforced there: the trial says so
-    rather than read as if it were."""
+    """This trial's worker-action deadline for all workers, each named worker's own, and what the person should be
+    told. A tool proxy sealed before this release has no worker limits at all, so neither a budget nor a worker's
+    permitted actions are held there: a scenario that relies on either says so, and is held rather than graded."""
     deadline, deadlines = worker_deadline(document), worker_deadlines(document)
-    if not (deadline or deadlines) or _door_holds_worker_limits(bundle_dir):
+    relies = bool(deadline or deadlines) or declares_worker_limits(bundle_dir)
+    if not relies or _door_holds_worker_limits(bundle_dir):
         return deadline, deadlines, []
     notice = {
         "code": "worker_limits_not_enforced",
         "message": "This environment was sealed before worker limits, so no worker's deadline or permitted actions "
-        "were enforced in this trial. Rebuild the environment to enforce them.",
+        "were enforced in this trial, and its checks were not graded. Rebuild the environment to enforce them.",
     }
     return deadline, deadlines, [notice]
+
+
+def declares_worker_limits(bundle_dir: Path | str | None) -> bool:
+    """Whether this environment's agent declares a worker held to its own permitted tools: a separately wired worker,
+    or one allowed fewer tools than it holds."""
+    if bundle_dir is None:
+        return False
+    workers = _bundle_contract(Path(bundle_dir)).get("workers")
+    return any(
+        isinstance(one, dict) and (one.get("binding") == "separate" or bool(one.get("allowed_tools")))
+        for one in workers or []
+    )
 
 
 def _door_holds_worker_limits(bundle_dir: Path | str | None) -> bool:
@@ -2933,6 +2946,7 @@ class CallRunnerImpl:
         base = CallOutcome(
             calls=calls,
             turns=turns,
+            notices=tuple(notices),
             started_at=format_rfc3339_millis(case_started_at),
             ended_at=format_rfc3339_millis(ended_at),
             duration_ms=_duration_ms(case_started_at, ended_at),
