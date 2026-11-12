@@ -7,6 +7,10 @@ generated world failed for a reason of ours) or ``agent`` (anything else, the ag
 services included). ``message`` is one redacted line of the harness's own text; the agent's
 output, which follows it in the error, is never copied.
 
+The file is diagnostic only. The tested agent runs under the same OS user and can write
+``/work``, so nothing may treat ``domain`` as authoritative (for gating a run or deciding who
+owns a failure) until the writer is isolated or the record is authenticated.
+
 Each failed validation replaces the record and a passing one removes it, so after the run it
 names the failure that ended it: a certify that does not repair re-raises a generic error that
 is never recorded.

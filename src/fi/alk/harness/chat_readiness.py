@@ -406,10 +406,11 @@ async def request_uncovered_tools(
     At most ``limit`` requests within ``budget`` seconds in all, so a check stays well
     inside its deadline; the tools left over are recorded as ``not_asked``.
 
-    The world is disposable and reset after qualification, so a tool is asked whatever it
-    changes there; only a tool the contract says leaves the world (no reachable
-    implementation, or a dependency the environment cannot copy) is not asked, since the
-    request could reach a real system. Each request is a fresh one-message conversation
+    A request must never change anything, so a tool the contract says has effects is never
+    asked (``has_effects``), whether or not the world logs its calls: a logged call is
+    observable, not safe. A tool the contract says leaves the world (no reachable
+    implementation, or a dependency the environment cannot copy) is not asked either
+    (``reaches_outside``), since the request could reach a real system. Each request is a fresh one-message conversation
     driven like a scenario's, so tool calls the agent returns are run at the world. Its
     routing is read from the world's side as in the conversation. Never raises.
     """
@@ -424,7 +425,6 @@ async def request_uncovered_tools(
     body.setdefault("unobserved", [])
     shown = {one["tool"] for one in [*body["tools"], *body["unobserved"]]}
     outside = _outside_world(contract)
-    logged = _logged_tools(contract, runtime, bundle)
     # Requests already sent by an earlier attempt of this check: their answers are reused
     # and their count and time spent stay within one bound for the whole check.
     ledger = _request_ledger(authoring)
@@ -437,15 +437,14 @@ async def request_uncovered_tools(
             # Asking could reach a real system: the contract says the tool leaves the world.
             body["unobserved"].append({"tool": tool.name, "reason": "reaches_outside"})
             continue
+        if getattr(tool, "effects", None):
+            # Asking could change something; a synthetic request must only read.
+            body["unobserved"].append({"tool": tool.name, "reason": "has_effects"})
+            continue
         if tool.name in ledger["asked"]:
             earlier = ledger["asked"][tool.name]
             body["tools"].extend(earlier["tools"])
             body["unobserved"].extend(earlier["unobserved"])
-            continue
-        if tool.name not in logged and getattr(tool, "effects", None):
-            # The world keeps no record of this tool's calls, so asking could only change
-            # something for no evidence.
-            body["unobserved"].append({"tool": tool.name, "reason": "not_observable"})
             continue
         left = deadline - time.monotonic()
         if asked_count >= limit or left <= 0:
@@ -472,7 +471,9 @@ async def request_uncovered_tools(
                 scenario_key=key,
                 scenario_id=key,
             )
-            await target.say(_tool_request(tool))
+            # One bound for the whole request: say() may call the agent up to eight times.
+            async with asyncio.timeout(request_timeout):
+                await target.say(_tool_request(tool))
             reported = [
                 *target.world.calls,
                 *_collect_file_tool_calls(runtime)[traced:],

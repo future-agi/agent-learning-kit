@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 from types import SimpleNamespace
+
+import pytest
 
 from fi.alk.harness import call_runner, chat_call_runner, chat_readiness
 from fi.alk.harness.chat_readiness import TOOL_ROUTING, record_tool_routing
@@ -240,13 +243,27 @@ def test_each_uncalled_tool_is_asked_once_and_routed_only_when_the_world_receive
     assert body["tools"] == [
         # The agent returned the call and the harness ran it at the world.
         {"tool": "get_hours", "routed": True, "calls": 1, "outcomes": ["ok"], "source": "tool_request"},
-        {"tool": "issue_refund", "routed": False, "reason": "not_received", "source": "tool_request"},
         {"tool": "lookup_order", "routed": True, "calls": 1, "outcomes": ["ok"]},
         {"tool": "track_parcel", "routed": True, "calls": 1, "outcomes": ["ok"], "source": "tool_request"},
     ]
-    assert body["unobserved"] == [{"tool": "send_sms", "reason": "reaches_outside"}]
-    assert len(sent) == 4  # three tools, one continuation after the returned call
-    assert not any("send_sms" in text or "lookup_order" in text for text in sent)
+    assert body["unobserved"] == [
+        {"tool": "issue_refund", "reason": "has_effects"},
+        {"tool": "send_sms", "reason": "reaches_outside"},
+    ]
+    assert len(sent) == 3  # two tools, one continuation after the returned call
+    assert not any(
+        "send_sms" in text or "lookup_order" in text or "issue_refund" in text for text in sent
+    )
+
+
+def test_a_tool_the_agent_says_it_ran_that_the_world_never_received_is_not_routed(
+    tmp_path, monkeypatch
+):
+    body, _ = _requests(tmp_path, monkeypatch, names=NAMES, track_parcel="reported")
+
+    assert {
+        "tool": "track_parcel", "routed": False, "reason": "not_received", "source": "tool_request"
+    } in body["tools"]
 
 
 def test_a_request_the_agent_cannot_answer_or_ignores_leaves_the_tool_unobserved(
@@ -266,8 +283,8 @@ def test_requests_past_the_limit_are_recorded_as_not_asked(tmp_path, monkeypatch
     assert len(sent) == 1
     asked = [one["tool"] for one in body["tools"] if one.get("source") == "tool_request"]
     left = sorted(one["tool"] for one in body["unobserved"] if one["reason"] == "not_asked")
-    assert len(asked) + len(left) == 3
-    assert len(left) == 2
+    assert len(asked) + len(left) == 2  # issue_refund has effects and is never asked
+    assert len(left) == 1
     assert all(one.get("reason") != "not_asked" for one in body["tools"])
 
 
@@ -277,7 +294,10 @@ def test_no_request_is_sent_once_the_time_is_spent(tmp_path, monkeypatch):
     )
 
     assert sent == []
-    assert sorted(one["tool"] for one in body["unobserved"] if one["reason"] == "not_asked") == sorted(NAMES)
+    assert sorted(one["tool"] for one in body["unobserved"] if one["reason"] == "not_asked") == [
+        "get_hours",
+        "track_parcel",
+    ]
 
 
 def test_the_request_names_the_tool_and_an_example_from_its_contract():
@@ -324,10 +344,59 @@ def test_a_later_attempt_of_the_check_reuses_the_answers_and_stays_within_the_li
     assert again["unobserved"] == first["unobserved"]
 
 
-def test_a_tool_that_changes_state_and_leaves_no_world_record_is_not_asked(
+@pytest.mark.parametrize("runtime", [PROXIED, NO_PROXY], ids=["world_logs_it", "no_world_record"])
+def test_a_tool_with_effects_is_never_asked_even_when_the_world_logs_its_calls(
+    tmp_path, monkeypatch, runtime
+):
+    body, sent = _requests(
+        tmp_path, monkeypatch, runtime=runtime, names=NAMES, issue_refund="world"
+    )
+
+    assert {"tool": "issue_refund", "reason": "has_effects"} in body["unobserved"]
+    assert not any("issue_refund" in text for text in sent)
+    assert all(one["tool"] != "issue_refund" for one in body["tools"])
+
+
+def test_one_request_stays_within_the_budget_however_many_times_the_agent_is_called(
     tmp_path, monkeypatch
 ):
-    body, sent = _requests(tmp_path, monkeypatch, runtime=NO_PROXY, names=NAMES)
+    """Each wrapper call is slow and returns another tool call, so ``say()`` would call the
+    agent eight times; the whole request must still end within the shared budget."""
+    calls = []
 
-    assert {"tool": "issue_refund", "reason": "not_observable"} in body["unobserved"]
-    assert not any("issue_refund" in text for text in sent)
+    class Slow:
+        async def call(self, agent_input):
+            calls.append(1)
+            await asyncio.sleep(0.2)
+            return SimpleNamespace(
+                content="",
+                tool_calls=[{"id": f"c{len(calls)}", "name": "get_hours", "arguments": {}}],
+                tool_responses=[],
+                metadata={},
+            )
+
+    monkeypatch.setattr(chat_readiness, "create_chat_wrapper", lambda *a, **k: Slow())
+    monkeypatch.setattr(chat_call_runner, "_tool_world", lambda *a, **k: _World())
+    monkeypatch.setattr(call_runner, "_collect_file_tool_calls", lambda runtime: ())
+    monkeypatch.setattr(call_runner, "_collect_tool_trace_calls", lambda runtime: ())
+    record_tool_routing(tmp_path, "s-1", _contract(), PROXIED, received=[], reported=[])
+    started = time.monotonic()
+    asyncio.run(
+        chat_readiness.request_uncovered_tools(
+            interface=None,
+            endpoint="http://agent",
+            runtime=PROXIED,
+            contract=_contract(),
+            authoring=tmp_path,
+            bundle=tmp_path,
+            source=None,
+            secret_values={},
+            budget=0.5,
+            timeout=0.5,
+        )
+    )
+
+    assert time.monotonic() - started < 1.0
+    assert len(calls) < 8
+    body = _body(tmp_path)
+    assert {"tool": "lookup_order", "reason": "request_failed"} in body["unobserved"]
