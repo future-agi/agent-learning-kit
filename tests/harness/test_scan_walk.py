@@ -827,7 +827,7 @@ def test_describe_entry_stops_at_its_deadline_with_partial(
     assert (capped.partial, capped.env_names) == (True, ("FIRST",))
 
 
-# The 46 SDK setting names, typed here rather than taken from `_SDK_SETTINGS`, so a change to
+# The 43 SDK setting names, typed here rather than taken from `_SDK_SETTINGS`, so a change to
 # either fails `test_the_sdk_names`: the only names a template adds to a row.
 SDK_NAMES = frozenset(
     {
@@ -850,9 +850,6 @@ SDK_NAMES = frozenset(
         "DEEPGRAM_API_KEY",
         "CARTESIA_API_KEY",
         "ELEVEN_API_KEY",
-        "FI_API_KEY",
-        "FI_SECRET_KEY",
-        "FI_BASE_URL",
         "FI_PROJECT_NAME",
         "OTEL_SERVICE_NAME",
         "HF_TOKEN",
@@ -2005,7 +2002,7 @@ def test_a_rows_setting_names_are_its_first_fifty(tmp_path: Path, names: int) ->
     assert row.env_names == expected
     assert described is not None and described.env_names == expected
     if names == 0:
-        # With no code names, a template fills at most the 46 SDK names, sorted.
+        # With no code names, a template fills at most the 43 SDK names, sorted.
         assert row.env_names == tuple(sorted(SDK_NAMES))
     if names == 49:
         # One SDK name fills the 50th place.
@@ -2609,8 +2606,43 @@ def test_a_shared_module_does_not_vouch_for_a_template_name(tmp_path: Path) -> N
 
 
 def test_the_sdk_names() -> None:
-    assert len(SDK_NAMES) == 46
+    assert len(SDK_NAMES) == 43
     assert scan_walk._SDK_SETTINGS == SDK_NAMES
+
+
+def test_no_sdk_name_is_one_the_runner_refuses() -> None:
+    # The connect form shows these names to fill in; one the runner refuses as reserved would be
+    # a field whose value fails every run.
+    from fi.alk.harness.sandbox_server import _RUNNER_RESERVED_ENVIRONMENT
+
+    assert not scan_walk._SDK_SETTINGS & _RUNNER_RESERVED_ENVIRONMENT
+
+
+def test_the_livekit_names_are_credentials_own() -> None:
+    from fi.alk.harness.credentials import (
+        _CONNECTOR_REQUIREMENTS,
+        _LIVEKIT_PROVIDER_CREDENTIALS,
+    )
+
+    livekit = set(_CONNECTOR_REQUIREMENTS["livekit"])
+    livekit.update(name for names in _LIVEKIT_PROVIDER_CREDENTIALS.values() for name in names)
+    assert livekit <= scan_walk._SDK_SETTINGS
+
+
+def test_a_tracing_template_lists_no_platform_account_name(tmp_path: Path) -> None:
+    source = tmp_path / "repo"
+    _write(
+        source,
+        {
+            "bot.py": CLIENT,
+            ".env.example": (
+                "FI_API_KEY=\nFI_SECRET_KEY=\nFI_BASE_URL=\nFI_PROJECT_NAME=\nOPENAI_API_KEY=\n"
+            ),
+        },
+    )
+
+    [agent] = _walk(source).agents
+    assert agent.env_names == ("FI_PROJECT_NAME", "OPENAI_API_KEY")
 
 
 def test_each_folder_is_charged_once_across_the_two_passes(tmp_path: Path) -> None:

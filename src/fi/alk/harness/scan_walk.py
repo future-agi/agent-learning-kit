@@ -44,6 +44,7 @@ from .framework_detection import (
     _Work,
 )
 from .bundle_author_v2 import _IGNORED_ARTIFACT_PARTS as _BUILD_IGNORED
+from .credentials import _CONNECTOR_REQUIREMENTS, _LIVEKIT_PROVIDER_CREDENTIALS
 from .reading_entry import MaskSecrets
 from .source_folder import _FOLDER_FORM, _FOLDER_MAX
 
@@ -98,8 +99,8 @@ _PACKAGE_FILE = "package.json"
 _TEMPLATES = (".env.example", ".env.sample", ".env.template")
 # The setting names an SDK reads for itself when the code passes no value, so the customer's
 # code never names them. These are the only names a template adds to a row (`_env_names`).
-# The LiveKit names and the per-provider keys copy `credentials.py`'s `_CONNECTOR_REQUIREMENTS`
-# and `_LIVEKIT_PROVIDER_CREDENTIALS`, which this module doesn't import.
+# The LiveKit names and the per-provider keys of its plugins come from `credentials.py`, which
+# says what a LiveKit agent needs.
 # Left out on purpose:
 # - `GOOGLE_APPLICATION_CREDENTIALS`: a key file, which the platform takes through its
 #   credential-file control, not a text field;
@@ -108,6 +109,8 @@ _TEMPLATES = (".env.example", ".env.sample", ".env.template")
 #   collector;
 # - LiteLLM's provider names and the provider keys of LiveKit's OpenAI plugin (`with_cerebras`,
 #   `with_x_ai`, ...), too many to list;
+# - `FI_API_KEY`, `FI_SECRET_KEY` and `FI_BASE_URL`: the platform's own tracing account, which
+#   the runner and the connect form refuse as reserved names;
 # - the platform's own `ALK_*` names.
 _SDK_SETTINGS: frozenset[str] = frozenset(
     {
@@ -126,18 +129,11 @@ _SDK_SETTINGS: frozenset[str] = frozenset(
         "GOOGLE_GENAI_USE_VERTEXAI",
         "GOOGLE_CLOUD_PROJECT",
         "GOOGLE_CLOUD_LOCATION",
-        # LiveKit and its Deepgram, Cartesia and ElevenLabs plugins: installed, grepped. The
-        # plugin reads `ELEVEN_API_KEY`; `credentials.py` names `ELEVENLABS_API_KEY` (below).
-        "LIVEKIT_URL",
-        "LIVEKIT_API_KEY",
-        "LIVEKIT_API_SECRET",
-        "DEEPGRAM_API_KEY",
-        "CARTESIA_API_KEY",
+        # LiveKit's ElevenLabs plugin reads `ELEVEN_API_KEY`, where `credentials.py` names
+        # `ELEVENLABS_API_KEY`, the name ElevenLabs' own SDK reads (below): installed, grepped.
         "ELEVEN_API_KEY",
-        # Future AGI's tracing (`fi_instrumentation`): installed, grepped.
-        "FI_API_KEY",
-        "FI_SECRET_KEY",
-        "FI_BASE_URL",
+        # Future AGI's tracing (`fi_instrumentation`): installed, grepped. The account names are
+        # left out (above).
         "FI_PROJECT_NAME",
         # OpenTelemetry's SDK (`opentelemetry.sdk.environment_variables`): installed, grepped.
         "OTEL_SERVICE_NAME",
@@ -170,6 +166,8 @@ _SDK_SETTINGS: frozenset[str] = frozenset(
         "AWS_REGION",
         "AWS_DEFAULT_REGION",
     }
+    | frozenset(_CONNECTOR_REQUIREMENTS["livekit"])
+    | frozenset(name for names in _LIVEKIT_PROVIDER_CREDENTIALS.values() for name in names)
 )
 _LANGGRAPH = "langgraph.json"
 _SCRIPT_SUFFIXES = (".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs")
