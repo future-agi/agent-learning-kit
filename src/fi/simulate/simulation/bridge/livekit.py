@@ -214,6 +214,9 @@ class LiveKitAudioBridge:
             while True:
                 chunk = await queue.get()
                 if chunk is None:
+                    # The pump has finished. Surface its error, such as a coded
+                    # provider timeout, instead of treating it as a normal end.
+                    await pump
                     break
                 pcm, sample_rate = chunk
                 if sample_rate != ROOM_SAMPLE_RATE:

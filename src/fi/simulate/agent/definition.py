@@ -1,7 +1,15 @@
 import re
 from typing import Annotated, Literal, Optional
+from urllib.parse import urlsplit, urlunsplit
 
-from pydantic import AnyHttpUrl, AnyUrl, BaseModel, Field, model_validator
+from pydantic import (
+    AnyHttpUrl,
+    AnyUrl,
+    BaseModel,
+    Field,
+    field_validator,
+    model_validator,
+)
 
 
 # Always .fullmatch, never .match: "$" also matches immediately before a
@@ -229,17 +237,35 @@ class VapiTargetConfig(BaseModel):
     )
 
 
+RETELL_WEB_CALL_URL = "https://api.retellai.com/v3/create-web-call"
+_RETELL_LEGACY_WEB_CALL_PATH = "/v2/create-web-call"
+_RETELL_WEB_CALL_PATH = "/v3/create-web-call"
+
+
+def retell_web_call_url(configured: object) -> str:
+    """Return the v3 web-call URL for a configured value.
+
+    Retell retired ``/v2/create-web-call``. Only that path is rewritten, so a
+    custom scheme and host (a proxy) are kept. An empty value gives the default.
+    """
+    url = str(configured or "").strip()
+    if not url:
+        return RETELL_WEB_CALL_URL
+    parts = urlsplit(url)
+    path = parts.path.rstrip("/")
+    if path.endswith(_RETELL_LEGACY_WEB_CALL_PATH):
+        prefix = path[: -len(_RETELL_LEGACY_WEB_CALL_PATH)]
+        return urlunsplit(parts._replace(path=prefix + _RETELL_WEB_CALL_PATH))
+    return url
+
+
 class RetellTargetConfig(BaseModel):
     """Non-secret configuration for a Retell agent under test."""
 
     provider: Literal["retell"] = "retell"
     agent_id: str = Field(..., min_length=1)
     api_url: AnyHttpUrl = Field(
-        "https://api.retellai.com/v2/create-web-call",
-        validate_default=True,
-    )
-    livekit_url: AnyUrl = Field(
-        "wss://retell-ai-4ihahnq7.livekit.cloud",
+        "https://api.retellai.com/v3/create-web-call",
         validate_default=True,
     )
     api_key_env: str = Field(
@@ -247,11 +273,10 @@ class RetellTargetConfig(BaseModel):
         pattern=r"^[A-Za-z_][A-Za-z0-9_]*$",
     )
 
-    @model_validator(mode="after")
-    def _check_livekit_url(self) -> "RetellTargetConfig":
-        if self.livekit_url.scheme not in {"ws", "wss"}:
-            raise ValueError("retell_livekit_url_invalid: URL must use ws:// or wss://")
-        return self
+    @field_validator("api_url", mode="before")
+    @classmethod
+    def _upgrade_legacy_api_url(cls, value: object) -> object:
+        return retell_web_call_url(value)
 
 
 VoiceProviderTarget = Annotated[
