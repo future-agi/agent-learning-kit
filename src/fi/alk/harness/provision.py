@@ -39,7 +39,11 @@ from .generated_runtime import (
 )
 from .livekit_source import infer_livekit_agent_name_from_source
 from .service_catalog import address, profile_for
-from .secrets import runtime_configuration_value
+from .secrets import (
+    CONTROLLER_CONNECTION_NAMES,
+    controller_name_reserved,
+    runtime_configuration_value,
+)
 
 MANIFEST = "environment.json"
 COMPOSE_FILES = (
@@ -2860,20 +2864,22 @@ def activate_voice_environment(
     run artifacts. Existing platform-wide simulator settings always win.
     """
     values = runtime_environment(destination)
+    # Only connection names the controller itself reads, and never a name the controller
+    # reserves: a job's GOOGLE_CLOUD_LOCATION must not join the host's Vertex credentials.
     allowed = {
         "LIVEKIT_URL",
         "LIVEKIT_API_KEY",
         "LIVEKIT_API_SECRET",
         "DEEPGRAM_API_KEY",
-        "GOOGLE_APPLICATION_CREDENTIALS",
-        "GOOGLE_CLOUD_PROJECT",
-        "GOOGLE_CLOUD_LOCATION",
         "GEMINI_API_KEY",
-        "GOOGLE_API_KEY",
         "OPENAI_API_KEY",
-        "CARTESIA_API_KEY",
         "ELEVEN_API_KEY",
         "ELEVENLABS_API_KEY",
+    }
+    allowed = {
+        name
+        for name in allowed
+        if name in CONTROLLER_CONNECTION_NAMES and not controller_name_reserved(name)
     }
     activated: dict[str, str] = {}
     for name in allowed:
