@@ -164,7 +164,7 @@ def test_runtime_patch_never_checks_a_command_against_a_listed_file(tmp_path, fo
         summary="Use service.",
     )
 
-    with pytest.raises(ValueError, match="runtime_repair_evidence_holds_credentials"):
+    with pytest.raises(ValueError, match="runtime_repair_evidence_kept_out"):
         validate_runtime_plan_patch(
             source,
             contract,
@@ -210,7 +210,7 @@ def test_runtime_patch_refuses_a_runtime_that_names_a_listed_file(
         summary="Use service.",
     )
 
-    with pytest.raises(ValueError, match="runtime_repair_runtime_names_credentials"):
+    with pytest.raises(ValueError, match="runtime_repair_runtime_names_kept_out_file"):
         validate_runtime_plan_patch(
             source,
             contract,
@@ -1090,6 +1090,137 @@ def test_generated_runtime_repair_rejects_unrelated_secret_file_alias(
                 {"GOOGLE_APPLICATION_CREDENTIALS_JSON", "UNRELATED_JSON"}
             ),
         )
+
+
+@pytest.mark.parametrize("repair", ["secret_file", "config_file"])
+def test_alias_binding_repair_still_works_when_the_compose_file_name_is_listed(
+    tmp_path, monkeypatch, repair
+) -> None:
+    # compose.env.yaml matches a secret-list glob; the kit reads its own compose file, so the
+    # kit's own alias-binding repairs must not be refused for citing it.
+    import asyncio
+
+    from fi.alk.harness import runtime_repair
+    from fi.alk.harness.diagnostics import HarnessDiagnostic
+    from fi.alk.harness.job import HarnessStage
+
+    monkeypatch.setenv("ALK_COMPOSE_BROKER_SOCKET", "/private/alk/broker.sock")
+    (tmp_path / "compose.env.yaml").write_text(
+        "services:\n  app:\n    image: example/app\n    ports: ['8080:8080']\n"
+    )
+    extra = (
+        {
+            "secret_files": {
+                "app": [
+                    RuntimeSecretFile(
+                        alias="GOOGLE_APPLICATION_CREDENTIALS",
+                        destination="/app/google-creds.json",
+                        environment_variable="GOOGLE_APPLICATION_CREDENTIALS",
+                    )
+                ]
+            }
+        }
+        if repair == "secret_file"
+        else {
+            "config_files": {
+                ".env": RuntimeConfigFile(
+                    values={"REGION": "global"},
+                    secret_aliases={
+                        "GOOGLE_APPLICATION_CREDENTIALS": "GOOGLE_APPLICATION_CREDENTIALS"
+                    },
+                )
+            }
+        }
+    )
+    contract = AgentContract(
+        agent="fixture",
+        runtime=Runtime(
+            execution="compose",
+            compose_file="compose.env.yaml",
+            service="app",
+            interface=RuntimeInterface(kind="http", port=8080, path="/chat"),
+            **extra,
+        ),
+    )
+    code = (
+        "compose_secret_file_target_reference_required"
+        if repair == "secret_file"
+        else "compose_config_target_reference_required"
+    )
+    diagnostic = HarnessDiagnostic.create(
+        stage=HarnessStage.BUILDING_ENVIRONMENT,
+        component="runtime_validation",
+        code="generated_runtime_plan_invalid",
+        message=f"ValueError: {code}",
+    )
+    monkeypatch.setattr(
+        runtime_repair,
+        "Stage",
+        lambda *_args, **_kwargs: pytest.fail("the kit's own repair should bypass the model"),
+    )
+    patch = asyncio.run(
+        runtime_repair.request_runtime_plan_patch(
+            tmp_path,
+            contract,
+            (diagnostic,),
+            available_secret_aliases=frozenset({"GOOGLE_APPLICATION_CREDENTIALS_JSON"}),
+        )
+    )
+    assert patch is not None
+    assert patch.evidence_paths == ("compose.env.yaml",)
+
+    # The orchestrator applies it, which validates again: the kit's own patch still goes through.
+    authoring = tmp_path.parent / f"{tmp_path.name}-authoring"
+    authoring.mkdir()
+    contract_path = authoring / "contract.json"
+    contract_path.write_text(contract.model_dump_json(indent=2) + "\n")
+    codes = {"generated_runtime_plan_invalid"}
+    aliases = frozenset({"GOOGLE_APPLICATION_CREDENTIALS_JSON"})
+    applied = apply_runtime_plan_patch(
+        tmp_path, contract_path, patch, allowed_diagnostic_codes=codes,
+        available_secret_aliases=aliases,
+    )
+    assert applied.runtime.compose_file == "compose.env.yaml"
+    # The same patch as a model would submit it (its JSON, so no kit mark) is refused.
+    contract_path.write_text(contract.model_dump_json(indent=2) + "\n")
+    submitted = RuntimePlanPatch.model_validate_json(patch.model_dump_json())
+    with pytest.raises(ValueError, match="runtime_repair_evidence_kept_out"):
+        apply_runtime_plan_patch(
+            tmp_path, contract_path, submitted, allowed_diagnostic_codes=codes,
+            available_secret_aliases=aliases,
+        )
+
+
+def test_model_facing_validation_still_refuses_a_listed_compose_file_name(tmp_path) -> None:
+    (tmp_path / "compose.env.yaml").write_text(
+        "services:\n  app:\n    image: example/app\n", encoding="utf-8"
+    )
+    (tmp_path / "app.py").write_text("print('agent')\n", encoding="utf-8")
+    contract = AgentContract(agent="fixture", runtime=Runtime(language="python"))
+    base = {
+        "base_contract_hash": _contract_hash(contract),
+        "diagnostic_codes": ("generated_runtime_plan_invalid",),
+        "summary": "Use the compose file.",
+    }
+    as_evidence = RuntimePlanPatch(
+        runtime=Runtime(language="python"), evidence_paths=("compose.env.yaml",), **base
+    )
+    as_runtime = RuntimePlanPatch(
+        runtime=Runtime(execution="compose", compose_file="compose.env.yaml", service="app"),
+        evidence_paths=("app.py",),
+        **base,
+    )
+    for patch, code in (
+        (as_evidence, "runtime_repair_evidence_kept_out"),
+        (as_runtime, "runtime_repair_runtime_names_kept_out_file"),
+    ):
+        with pytest.raises(ValueError, match=code):
+            validate_runtime_plan_patch(
+                tmp_path,
+                contract,
+                patch,
+                allowed_diagnostic_codes={"generated_runtime_plan_invalid"},
+            )
 
 
 def test_missing_compose_config_alias_uses_unique_supplied_file_alias(

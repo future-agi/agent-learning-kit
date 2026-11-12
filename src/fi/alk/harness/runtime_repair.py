@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Literal
 from urllib.parse import urljoin, urlsplit
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, field_validator
 
 from .backends import SessionSpec, tool, tool_server
 from .backends.base import ToolSpec
@@ -76,6 +76,9 @@ class RuntimePlanPatch(BaseModel):
     evidence_paths: tuple[str, ...] = Field(min_length=1, max_length=32)
     diagnostic_codes: tuple[str, ...] = Field(min_length=1, max_length=16)
     summary: str = Field(min_length=1, max_length=1000)
+    # Set only by the kit's own alias-binding repairs, never from a model's submission (a private
+    # attribute isn't part of the schema or of model_validate input).
+    _kit_made: bool = PrivateAttr(default=False)
 
     @field_validator("evidence_paths")
     @classmethod
@@ -643,9 +646,11 @@ def _config_file_alias_candidate(
             patch,
             allowed_diagnostic_codes={"generated_runtime_plan_invalid"},
             available_secret_aliases=available_secret_aliases,
+            check_secret_list=False,  # the kit's own repair; nothing here reaches the model
         )
     except (OSError, ValueError):
         return None
+    patch._kit_made = True
     return patch
 
 
@@ -699,9 +704,11 @@ def _secret_file_alias_candidate(
             patch,
             allowed_diagnostic_codes={"generated_runtime_plan_invalid"},
             available_secret_aliases=available_secret_aliases,
+            check_secret_list=False,  # the kit's own repair; nothing here reaches the model
         )
     except (OSError, ValueError):
         return None
+    patch._kit_made = True
     return patch
 
 
@@ -1000,7 +1007,7 @@ def _tool_mapping_selectors_changed(before, after) -> bool:
     )
 
 
-def _runtime_names_credentials(root: Path, runtime: Runtime) -> bool:
+def _runtime_names_listed_file(root: Path, runtime: Runtime) -> bool:
     """Whether any command token or path the runtime names resolves, inside the source, to a listed
     file. Judged where it resolves and before anything is opened, so a listed file, a link to one
     and a missing one get one answer."""
@@ -1039,8 +1046,13 @@ def validate_runtime_plan_patch(
     allowed_diagnostic_codes: set[str],
     available_secret_aliases: frozenset[str] = frozenset(),
     allow_ingress_repair: bool = False,
+    check_secret_list: bool = True,
 ) -> AgentContract:
-    """Validate a proposed plan without executing or changing submitted source."""
+    """Validate a proposed plan without executing or changing submitted source.
+
+    check_secret_list=False is for the kit's own alias-binding repairs only (they cite the
+    runtime's compose file, which they read themselves, and nothing reaches the model). Anything
+    that takes a model's patch leaves it on."""
 
     root = source_root.resolve()
     # A patch replaces the whole runtime and its schema doesn't show the folder, so the
@@ -1075,19 +1087,19 @@ def validate_runtime_plan_patch(
             evidence.relative_to(root)
         except ValueError as exc:
             raise ValueError("runtime_repair_evidence_escapes_repository") from exc
-        if secret_text(evidence.relative_to(root).as_posix()):
+        if check_secret_list and secret_text(evidence.relative_to(root).as_posix()):
             # Judged where it resolves, before it is opened or checked for: a listed file, a link
             # to one and one that is missing get this same answer, so no guess is ever checked.
-            raise ValueError(f"runtime_repair_evidence_holds_credentials: {relative}")
+            raise ValueError(f"runtime_repair_evidence_kept_out: {relative}")
         if not evidence.exists():
             raise ValueError(f"runtime_repair_evidence_missing: {relative}")
         if evidence.is_file():
             evidence_files.append(evidence)
 
-    if _runtime_names_credentials(root, patch.runtime):
+    if check_secret_list and _runtime_names_listed_file(root, patch.runtime):
         # The same answer as for evidence: a run of a listed file would put its first line in a
         # traceback or build error that goes back to the model.
-        raise ValueError("runtime_repair_runtime_names_credentials")
+        raise ValueError("runtime_repair_runtime_names_kept_out_file")
 
     if ingress_repair:
         if not evidence_files or len(evidence_files) != len(patch.evidence_paths):
@@ -1587,6 +1599,7 @@ def apply_runtime_plan_patch(
         allowed_diagnostic_codes=allowed_diagnostic_codes,
         available_secret_aliases=available_secret_aliases,
         allow_ingress_repair=allow_ingress_repair,
+        check_secret_list=not patch._kit_made,
     )
     # write_contract writes beside the file, syncs it and moves it into place.
     return write_contract(repaired, contract_path.parent)

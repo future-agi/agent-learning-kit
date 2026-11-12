@@ -3980,6 +3980,12 @@ def test_every_kind_of_env_file_takes_the_same_rule(root, file):
         pytest.param(".env", "MODEL_SERVER=admin:hunter2@db", "admin:hunter2@db", id="bare-login"),
         pytest.param(".env", "LLM_ENDPOINT=gpt-4o@llm.internal", "gpt-4o@llm.internal", id="user-at-host"),
         pytest.param(".env", "MODEL_ID=gpt-4o@evil.example", "gpt-4o@evil.example", id="model-then-host"),
+        # A version is 3 to 8 digits or lowercase `latest`, after a name with no / or :.
+        # (user@123 and fakepw@123456 look like codestral@2405 and are not told apart by shape.)
+        pytest.param(".env", "MODEL_SERVER=root@0", "root@0", id="login-one-digit-host"),
+        pytest.param(".env", "MODEL_SERVER=admin@2130706433", "admin@2130706433", id="login-decimal-ip-host"),
+        pytest.param(".env", "MODEL_SERVER=scott/fakepw@1521", "scott/fakepw@1521", id="login-with-slash-and-port"),
+        pytest.param(".env", "MODEL_SERVER=user@LATEST", "user@LATEST", id="login-uppercase-latest"),
         pytest.param(
             ".env",
             "DB_ENGINE_URL=postgresql://admin:fake@db/app",

@@ -624,9 +624,13 @@ def _env_value(line: str) -> str | None:
     return value
 
 
-# A Vertex model name carries its version after an @ (claude-3-5-sonnet@20240620); any other @ in
-# a value is a login (user@host, user:password@host).
-_VERSIONED_NAME = re.compile(r"[^@:]+@(?:\d+|latest)", re.IGNORECASE)
+# A Vertex model name carries its version after an @ (claude-3-5-sonnet@20240620, mistral-large@2407,
+# text-bison@001, claude-3-5-sonnet-v2@latest): 3 to 8 digits or exactly lowercase `latest`, after a
+# name with no `/` or `:` (those make it a login or a path: scott/pw@1521, user:pw@host). Any
+# other @ in a value is a login (user@host, user:password@host).
+# This is a whole-value guess only, never letter by letter, but a login whose host is 3 to 8 digits
+# (user@123, fakepw@123456) can't be told from codestral@2405 by shape, so it is accepted too.
+_VERSIONED_NAME = re.compile(r"[^@:/]+@(?:\d{3,8}|latest)")
 
 
 def _env_value_is_a_locator(value: str) -> bool:
