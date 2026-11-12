@@ -22,11 +22,14 @@ _INTEGER = re.compile(r"[+-]?\d+")
 _CAST = re.compile(r"::\s*\w+(?:\s*\(\s*\d+(?:\s*,\s*\d+)?\s*\))?\s*$")
 
 
-def seed_files(source: Path) -> list[tuple[str, Path]]:
-    """The agent's seed SQL files: named for seeding, outside its tests."""
+def seed_files(source: Path, folder: str = "") -> list[tuple[str, Path]]:
+    """The agent's seed SQL files: named for seeding, outside its tests.
+
+    With a ``folder``, a sibling agent's seed is not this agent's starting data.
+    """
     return [
         (name, path)
-        for name, path in source_files(Path(source)).items()
+        for name, path in source_files(Path(source), folder).items()
         if name.endswith(".sql")
         and "seed" in name.lower()
         and not any(part.lower().startswith("test") for part in Path(name).parts)
@@ -120,10 +123,12 @@ def normal(value: object) -> str:
     return str(value)
 
 
-def seed_rows(source: Path) -> dict[str, list[tuple[str, dict[str, str | None]]]]:
+def seed_rows(
+    source: Path, folder: str = ""
+) -> dict[str, list[tuple[str, dict[str, str | None]]]]:
     """Per table (lower-cased), the rows the seed inserts: (file, {column: literal or None})."""
     found: dict[str, list[tuple[str, dict[str, str | None]]]] = {}
-    for name, path in seed_files(source):
+    for name, path in seed_files(source, folder):
         try:
             sql = _uncommented(path.read_text(encoding="utf-8"))
         except (OSError, UnicodeDecodeError):
@@ -150,14 +155,14 @@ def primary_key(connection: sqlite3.Connection, table: str) -> str | None:
 
 
 def missing_seed_rows(
-    connection: sqlite3.Connection, source: Path
+    connection: sqlite3.Connection, source: Path, folder: str = ""
 ) -> dict[str, tuple[str, list[str], list[str]]]:
     """Seed rows a SQLite world lacks: {table: (key column, missing keys, seed files)}.
 
     Only tables the world has. By primary key where the world has one and the seed lists it;
     a table with no usable key is only held to having rows when the seed puts rows in it.
     """
-    seeded = seed_rows(source)
+    seeded = seed_rows(source, folder)
     tables = {
         str(row[0]).lower(): str(row[0])
         for row in connection.execute(
@@ -186,14 +191,16 @@ def missing_seed_rows(
     return missing
 
 
-def only_seed_rows(connection: sqlite3.Connection, source: Path, table: str) -> bool:
+def only_seed_rows(
+    connection: sqlite3.Connection, source: Path, table: str, folder: str = ""
+) -> bool:
     """Whether every row in the table is one the agent's seed inserts, by primary key."""
     column = primary_key(connection, table)
     if column is None:
         return False
     keys = {
         row.get(column.lower())
-        for _name, row in seed_rows(source).get(table.lower(), [])
+        for _name, row in seed_rows(source, folder).get(table.lower(), [])
     }
     held = [
         normal(value)

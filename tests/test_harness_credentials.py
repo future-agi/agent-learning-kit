@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 
 import pytest
@@ -784,3 +785,449 @@ def test_client_name_reserved_passes_ordinary_runtime_settings(name):
 @pytest.mark.parametrize("name", ["LD_PRELOAD", "http_proxy", "GIT_SSH_COMMAND", "MY_SETTING", "LK_URL", "DEEPGRAM_API_KEY"])
 def test_controller_owned_name_leaves_client_and_neutral_names(name):
     assert not controller_owned_name(name)
+def _agents_repo(root, files):
+    for name, body in files.items():
+        (root / name).parent.mkdir(parents=True, exist_ok=True)
+        (root / name).write_text(body, encoding="utf-8")
+    return root
+
+
+def _required(manifest):
+    return {item.environment_name: item.required for item in manifest.requirements}
+
+
+def test_shared_code_the_folder_imports_requires_its_values(tmp_path):
+    root = _agents_repo(
+        tmp_path,
+        {
+            "common/__init__.py": "",
+            "common/llm.py": 'import os\nKEY = os.environ["SHARED_API_KEY"]\n',
+            "agents/a/agent.py": "from common import llm\n",
+            "agents/b/agent.py": 'import os\nKEY = os.environ["B_ONLY_API_KEY"]\n',
+        },
+    )
+
+    required = _required(discover_credentials(root, agent_subfolder="agents/a"))
+
+    assert required["SHARED_API_KEY"] is True
+    assert required["B_ONLY_API_KEY"] is False
+
+
+def test_imports_are_followed_past_the_first_file(tmp_path):
+    root = _agents_repo(
+        tmp_path,
+        {
+            "common/first.py": "from . import second\n",
+            "common/second.py": 'import os\nKEY = os.environ["DEEP_API_KEY"]\n',
+            "agents/a/agent.py": "import common.first\n",
+        },
+    )
+
+    assert _required(discover_credentials(root, agent_subfolder="agents/a"))["DEEP_API_KEY"] is True
+
+
+def test_a_siblings_connector_requires_nothing(tmp_path):
+    root = _agents_repo(
+        tmp_path, {"agents/a/agent.py": "x = 1\n", "agents/b/agent.py": "import livekit\n"}
+    )
+    with_folder = discover_credentials(root, agent_subfolder="agents/a")
+    without = discover_credentials(root)
+
+    assert with_folder.detected_connectors == []
+    assert without.detected_connectors != []
+
+
+def test_no_folder_keeps_every_hit_required(tmp_path):
+    root = _agents_repo(
+        tmp_path, {"agents/b/agent.py": 'import os\nKEY = os.environ["B_ONLY_API_KEY"]\n'}
+    )
+
+    assert _required(discover_credentials(root))["B_ONLY_API_KEY"] is True
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        'import { llm } from "../../packages/shared/llm";',
+        'const llm = require("../../packages/shared/llm.ts");',
+        'const llm = await import("../../packages/shared/llm");',
+        'import { llm } from "packages/shared/llm";',
+    ],
+)
+def test_shared_scripts_the_folder_imports_require_their_values(tmp_path, line):
+    root = _agents_repo(
+        tmp_path,
+        {
+            "packages/shared/llm.ts": "export const key = process.env.SHARED_API_KEY;\n",
+            "packages/other/x.ts": "export const key = process.env.OTHER_API_KEY;\n",
+            "agents/a/index.ts": f"{line}\n",
+        },
+    )
+
+    required = _required(discover_credentials(root, agent_subfolder="agents/a"))
+
+    assert required["SHARED_API_KEY"] is True
+    assert required["OTHER_API_KEY"] is False
+
+
+def test_a_script_import_reaches_an_index_and_a_compiled_name(tmp_path):
+    root = _agents_repo(
+        tmp_path,
+        {
+            "lib/index.ts": 'export * from "./real.js";\n',
+            "lib/real.ts": "export const key = process.env.REAL_API_KEY;\n",
+            "agents/a/index.js": 'import "../../lib";\n',
+        },
+    )
+
+    assert _required(discover_credentials(root, agent_subfolder="agents/a"))["REAL_API_KEY"] is True
+
+
+@pytest.mark.parametrize("make", ["link", "fifo"])
+def test_the_import_walk_does_not_read_a_link_or_a_pipe(tmp_path, make):
+    from fi.alk.harness.credentials import imported_by_agent
+
+    root = _agents_repo(tmp_path, {"agents/a/agent.py": "x = 1\n"})
+    target = root / "agents" / "a" / "x.py"
+    if make == "link":
+        target.symlink_to("/dev/zero")
+    else:
+        os.mkfifo(target)
+
+    assert imported_by_agent(root, "agents/a") == frozenset()
+
+
+def test_the_import_walk_does_not_follow_a_link_out_or_read_an_oversized_file(tmp_path):
+    from fi.alk.harness import credentials
+
+    outside = tmp_path / "outside.py"
+    outside.write_text("x = 1\n")
+    root = _agents_repo(
+        tmp_path / "repo",
+        {
+            "common/big.py": "#" * (credentials._MAX_FILE_BYTES + 1),
+            "agents/a/agent.py": "import common.big\nimport linked\n",
+        },
+    )
+    (root / "linked.py").symlink_to(outside)
+
+    assert credentials.imported_by_agent(root, "agents/a") == frozenset()
+
+
+@pytest.mark.parametrize(
+    "budget, stopped",
+    [
+        ({}, False),
+        ({"_MAX_WALK_IMPORTS": 1}, True),
+        # The folder's own two files, then nothing left for common/llm.py.
+        ({"_MAX_FILES": 2}, True),
+        ({"_MAX_WALK_BYTES": 1}, True),
+    ],
+    ids=["none", "names", "files", "bytes"],
+)
+def test_the_import_walk_says_when_a_limit_stopped_it(tmp_path, monkeypatch, caplog, budget, stopped):
+    from fi.alk.harness import credentials
+
+    root = _agents_repo(
+        tmp_path,
+        {
+            "common/__init__.py": "",
+            "common/llm.py": 'import os\nKEY = os.environ["SHARED_API_KEY"]\n',
+            "agents/a/agent.py": "import nowhere\nimport common.llm\n",
+            # Read first, so a limit on names leaves no file waiting: only the cut says so.
+            "agents/a/aaa.py": "x = 1\n",
+        },
+    )
+    for name, value in budget.items():
+        monkeypatch.setattr(credentials, name, value)
+    said: list[bool] = []
+
+    credentials.imported_by_agent(root, "agents/a", stopped=said)
+    with caplog.at_level("WARNING", logger="fi.alk.harness.credentials"):
+        manifest = credentials.discover_credentials(root, agent_subfolder="agents/a")
+
+    assert said == [stopped]
+    # The key in the file it didn't reach is optional, and the manifest says the scan was cut.
+    assert manifest.truncated is stopped
+    assert ("stopped at its limits" in caplog.text) is stopped
+
+
+def test_the_import_walk_stops_at_the_file_limit(tmp_path, monkeypatch):
+    from fi.alk.harness import credentials
+
+    root = _agents_repo(
+        tmp_path,
+        {
+            "common/one.py": "import common.two\n",
+            "common/two.py": "x = 1\n",
+            "agents/a/agent.py": "import common.one\n",
+        },
+    )
+    monkeypatch.setattr(credentials, "_MAX_FILES", 1)
+
+    assert credentials.imported_by_agent(root, "agents/a") == frozenset({(root / "common/one.py").resolve()})
+
+
+_STRICT_COMPOSE = "services:\n  billing:\n    environment:\n      STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY:?}\n"
+
+
+def test_a_root_compose_file_requires_nothing_unless_it_is_named(tmp_path):
+    root = _agents_repo(
+        tmp_path, {"docker-compose.yml": _STRICT_COMPOSE, "agents/a/agent.py": "x = 1\n"}
+    )
+
+    unnamed = discover_credentials(root, agent_subfolder="agents/a")
+    named = discover_credentials(
+        root, agent_subfolder="agents/a", agent_compose_file="docker-compose.yml"
+    )
+
+    assert _required(unnamed)["STRIPE_SECRET_KEY"] is False
+    assert _required(named)["STRIPE_SECRET_KEY"] is True
+
+
+def test_a_compose_file_in_the_folder_is_the_agents(tmp_path):
+    root = _agents_repo(tmp_path, {"agents/a/docker-compose.yml": _STRICT_COMPOSE})
+
+    assert _required(discover_credentials(root, agent_subfolder="agents/a"))["STRIPE_SECRET_KEY"] is True
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "import" + " " * 400_000 + "y",
+        "import(" + " " * 400_000 + "y",
+        "require(" + " " * 400_000 + "y",
+        "from" + " " * 400_000 + "y",
+        "import type" + " " * 400_000 + "y",
+        "import " * 100_000,
+        "import type a " * 40_000,
+    ],
+    ids=["import", "import-call", "require", "from", "type", "repeated", "repeated-type"],
+)
+def test_an_odd_script_keeps_the_import_walk_quick(tmp_path, line):
+    import time
+
+    from fi.alk.harness.credentials import imported_by_agent
+
+    root = _agents_repo(tmp_path, {"agents/a/x.js": line})
+    started = time.monotonic()
+
+    imported_by_agent(root, "agents/a")
+
+    assert time.monotonic() - started < 5
+
+
+@pytest.mark.parametrize(
+    ("name", "body"),
+    [
+        ("routes.js", 'const note = from "/";\n'),
+        ("routes.ts", 'const url = from "";\nconst other = require("\\0");\n'),
+        ("deep.py", "from " + "." * 40 + " import x\n"),
+        ("deep2.py", "from " + "." * 40 + "pkg import x\n"),
+    ],
+)
+def test_one_odd_import_does_not_stop_the_walk(tmp_path, name, body):
+    from fi.alk.harness.credentials import imported_by_agent
+
+    root = _agents_repo(
+        tmp_path,
+        {
+            "common/llm.py": "x = 1\n",
+            f"agents/a/{name}": body,
+            "agents/a/agent.py": "import common.llm\n",
+        },
+    )
+
+    assert (root / "common/llm.py").resolve() in imported_by_agent(root, "agents/a")
+
+
+def test_an_import_runs_the_packages_above_it(tmp_path):
+    root = _agents_repo(
+        tmp_path,
+        {
+            "pkg/__init__.py": "from . import config\n",
+            "pkg/config.py": 'import os\nKEY = os.environ["PACKAGE_API_KEY"]\n',
+            "pkg/mod.py": "x = 1\n",
+            "agents/a/agent.py": "from pkg.mod import x\n",
+        },
+    )
+
+    assert _required(discover_credentials(root, agent_subfolder="agents/a"))["PACKAGE_API_KEY"] is True
+
+
+def test_a_siblings_default_does_not_clear_the_agents_requirement(tmp_path):
+    root = _agents_repo(
+        tmp_path,
+        {
+            "agents/a/agent.py": 'import os\nNAME = os.environ["MODEL_NAME"]\n',
+            "agents/b/.env.example": "MODEL_NAME=gpt-4o\n",
+        },
+    )
+
+    assert _required(discover_credentials(root, agent_subfolder="agents/a"))["MODEL_NAME"] is True
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        '// import { key } from "../b/llm";',
+        '/* const key = require("../b/llm"); */',
+        'import type { Key } from "../b/llm";',
+    ],
+)
+def test_a_comment_or_a_type_import_is_not_followed(tmp_path, line):
+    root = _agents_repo(
+        tmp_path,
+        {
+            "agents/a/ui.ts": f"{line}\n",
+            "agents/b/llm.ts": "export const key = process.env.BILLING_API_KEY;\n",
+        },
+    )
+
+    assert _required(discover_credentials(root, agent_subfolder="agents/a"))["BILLING_API_KEY"] is False
+
+
+def test_a_byte_order_mark_does_not_hide_a_files_imports(tmp_path):
+    root = _agents_repo(
+        tmp_path,
+        {
+            "common/llm.py": 'import os\nKEY = os.environ["SHARED_API_KEY"]\n',
+            "agents/a/agent.py": "\ufeffimport common.llm\n",
+        },
+    )
+
+    assert _required(discover_credentials(root, agent_subfolder="agents/a"))["SHARED_API_KEY"] is True
+
+
+def test_the_file_limit_reads_the_agents_files_first(tmp_path, monkeypatch):
+    from fi.alk.harness import credentials
+
+    root = _agents_repo(
+        tmp_path,
+        {
+            "aaa/one.py": "x = 1\n",
+            "aaa/two.py": "x = 1\n",
+            "agents/a/agent.py": 'import os\nKEY = os.environ["A_ONLY_API_KEY"]\n',
+        },
+    )
+    monkeypatch.setattr(credentials, "_MAX_FILES", 1)
+
+    assert _required(discover_credentials(root, agent_subfolder="agents/a"))["A_ONLY_API_KEY"] is True
+
+
+def test_the_same_import_many_times_counts_once_against_the_budget(tmp_path):
+    from fi.alk.harness.credentials import _MAX_WALK_IMPORTS, imported_by_agent
+
+    body = 'import"./gone";' * (_MAX_WALK_IMPORTS + 1) + 'import"../../common/real";'
+    root = _agents_repo(
+        tmp_path,
+        {
+            "common/real.js": 'import "./deep";\n',
+            "common/deep.js": "export const x = 1;\n",
+            "agents/a/x.js": body,
+        },
+    )
+
+    assert (root / "common/deep.js").resolve() in imported_by_agent(root, "agents/a")
+
+
+def test_the_import_walk_stops_at_its_byte_budget(tmp_path, monkeypatch):
+    from fi.alk.harness import credentials
+
+    root = _agents_repo(
+        tmp_path,
+        {
+            "common/one.py": "import common.two\n",
+            "common/two.py": "x = 1\n",
+            "agents/a/agent.py": "import common.one\n",
+        },
+    )
+    monkeypatch.setattr(credentials, "_MAX_WALK_BYTES", 1)
+
+    assert credentials.imported_by_agent(root, "agents/a") == frozenset(
+        {(root / "common/one.py").resolve()}
+    )
+
+
+def test_the_import_walk_stops_at_its_import_budget(tmp_path, monkeypatch):
+    from fi.alk.harness import credentials
+
+    root = _agents_repo(
+        tmp_path,
+        {
+            "common/one.py": "import common.two\n",
+            "common/two.py": "x = 1\n",
+            "agents/a/agent.py": "import common.one\n",
+        },
+    )
+    monkeypatch.setattr(credentials, "_MAX_WALK_IMPORTS", 1)
+
+    assert credentials.imported_by_agent(root, "agents/a") == frozenset(
+        {(root / "common/one.py").resolve()}
+    )
+
+
+def test_the_walk_reads_the_folders_own_files_before_a_chain(tmp_path, monkeypatch):
+    from fi.alk.harness import credentials
+
+    root = _agents_repo(
+        tmp_path,
+        {
+            "agents/a/agent.py": "import common.web\n",
+            "agents/a/zz.py": "import chain.one\n",
+            "chain/one.py": "import chain.two\n",
+            "chain/two.py": "import chain.three\n",
+            "chain/three.py": "x = 1\n",
+            "common/web.py": "import common.deep\n",
+            "common/deep.py": "x = 1\n",
+        },
+    )
+    monkeypatch.setattr(credentials, "_MAX_WALK_IMPORTS", 3)
+
+    assert (root / "common/deep.py").resolve() in credentials.imported_by_agent(root, "agents/a")
+
+
+def test_the_walk_prefers_the_folders_copy_of_a_module(tmp_path):
+    from fi.alk.harness.credentials import imported_by_agent
+
+    root = _agents_repo(
+        tmp_path,
+        {
+            "agents/a/agent.py": "import shared\n",
+            "agents/a/shared.py": "x = 1\n",
+            "shared.py": "x = 1\n",
+        },
+    )
+
+    found = imported_by_agent(root, "agents/a")
+
+    assert (root / "agents/a/shared.py").resolve() in found
+    assert (root / "shared.py").resolve() not in found
+
+
+def test_an_odd_script_import_does_not_stop_the_files_other_imports(tmp_path):
+    from fi.alk.harness.credentials import imported_by_agent
+
+    root = _agents_repo(
+        tmp_path,
+        {
+            "common/util.js": "export const x = 1;\n",
+            # "/" can't name a module, and makes the path code raise.
+            "agents/a/routes.js": 'import a from "/";\nimport b from "../../common/util.js";\n',
+        },
+    )
+
+    assert (root / "common/util.js").resolve() in imported_by_agent(root, "agents/a")
+
+
+def test_a_walk_that_cant_parse_a_file_marks_the_manifest_truncated(tmp_path):
+    root = tmp_path.resolve()
+    (root / "agents" / "a").mkdir(parents=True)
+    (root / "agents" / "a" / "main.py").write_text("import common.helpers\n")
+    (root / "common").mkdir()
+    (root / "common" / "__init__.py").write_text("")
+    (root / "common" / "helpers.py").write_text("from common import web\nNAME = 'a" + "\u0301" * 40 + "'\n")
+    (root / "common" / "web.py").write_text("import os\nKEY = os.environ['WEB_API_KEY']\n")
+
+    manifest = discover_credentials(root, agent_subfolder="agents/a")
+    assert manifest.truncated

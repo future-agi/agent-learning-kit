@@ -217,9 +217,12 @@ class Stage:
         name: str = "",
         backend: HarnessBackend | None = None,
         overheard: bool = True,
+        idle_retries: int | None = None,
     ) -> None:
         self._spec = spec
         self._backend = backend
+        # None follows the process-wide setting, read when each message is sent.
+        self._idle_retries = idle_retries
         # Whether this stage's turns are echoed to the run's conversation channel.
         self._overheard = overheard
         self._session: HarnessSession | None = None
@@ -454,14 +457,15 @@ class Stage:
         self, message: str, *, on_event: Callable[[Event], None] | None = None
     ) -> Turn:
         """Send a message and wait for the whole reply."""
-        for attempt in range(STAGE_IDLE_RETRIES + 1):
+        retries = STAGE_IDLE_RETRIES if self._idle_retries is None else self._idle_retries
+        for attempt in range(retries + 1):
             try:
                 async for event in self.stream(message):
                     if on_event:
                         on_event(event)
                 return self.history[-1]
             except StageIdleTimeout:
-                if attempt >= STAGE_IDLE_RETRIES:
+                if attempt >= retries:
                     raise
                 # A timed-out receive has been cancelled and the provider session may still be
                 # waiting on a dead stream.  Reusing it can only reproduce the dead stream.

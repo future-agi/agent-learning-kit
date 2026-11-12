@@ -56,9 +56,21 @@ class RepositorySource(BaseModel):
     archive_artifact_id: str | None = None
     image: str | None = None
     endpoint: str | None = None
+    subfolder: str | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _empty_subfolder_is_none(cls, data):
+        # The platform sends "" for "no folder"; the echo compares the value exactly,
+        # so anything else is kept as sent.
+        if isinstance(data, dict) and data.get("subfolder") == "":
+            return {**data, "subfolder": None}
+        return data
 
     @model_validator(mode="after")
     def _required_locator(self) -> "RepositorySource":
+        if self.subfolder and self.kind is not SourceKind.GITHUB:
+            raise ValueError("subfolder_requires_github_source")
         # A connected provider agent is itself the source of truth. Its ID lives
         # in AgentConnection.config and its definition is fetched with the
         # run-scoped provider credential during authoring, so no repository
@@ -190,6 +202,27 @@ class ProviderExecutionMode(str, Enum):
     CONNECT_ONLY = "connect_only"
     ENVIRONMENT_BACKED = "environment_backed"
     PROVIDER_IMPORT = "provider_import"
+
+
+PROVIDER_MANAGED_CONNECTORS = frozenset({"vapi", "retell", "retell_chat"})
+
+
+def provider_profile_source(agent: AgentConnection) -> str | None:
+    """Where the build loads this agent's profile from, if it loads one.
+
+    A profile from the provider's API or from the job's own config: ``"phone"`` or
+    ``"livekit"`` for a connect-only job on those connectors, ``"provider"`` for an import or a
+    connect-only job on a provider-managed connector, and ``None`` when there is none.
+    """
+    connector = agent.connector.strip().lower()
+    if agent.mode is ProviderExecutionMode.CONNECT_ONLY and connector in {"phone", "livekit"}:
+        return connector
+    if agent.mode is ProviderExecutionMode.PROVIDER_IMPORT or (
+        agent.mode is ProviderExecutionMode.CONNECT_ONLY
+        and connector in PROVIDER_MANAGED_CONNECTORS
+    ):
+        return "provider"
+    return None
 
 
 class ArtifactLevel(str, Enum):

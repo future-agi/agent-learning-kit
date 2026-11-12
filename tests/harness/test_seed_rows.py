@@ -168,12 +168,8 @@ def test_a_big_integer_key_the_world_holds_is_not_reported_missing(tmp_path):
     assert only_seed_rows(world, source, "drivers")
 
 
-@pytest.mark.parametrize(
-    ("key_type", "seeded"), [("TEXT", "'UB7F3A2C91'"), ("BIGINT", str(_BIG))]
-)
-def test_a_seeded_in_flight_row_is_not_refused_as_left_over_from_building(
-    tmp_path, key_type, seeded
-):
+def _rides_saver(tmp_path, key_type, seeded, runtime=None):
+    """A world holding one booking, and a ``saved(source_root)`` that runs its save_world."""
     from fi.alk.harness.catalogue import Catalogue, SubGoal, save_catalogue
     from fi.alk.harness.contract import AgentContract, ToolSpec
     from fi.alk.harness.simulator import save_simulator_prompt
@@ -223,6 +219,7 @@ def test_a_seeded_in_flight_row_is_not_refused_as_left_over_from_building(
         conversational=True,
         real_use_cases=["book a ride"],
         tools=[ToolSpec(name="book", args=["ref"], arg_values={"ref": ["UB_NEW"]})],
+        runtime=runtime,
     )
     save_catalogue(
         Catalogue(
@@ -248,6 +245,17 @@ def test_a_seeded_in_flight_row_is_not_refused_as_left_over_from_building(
         handler = next(one.handler for one in server.tools if one.name == "save_world")
         return asyncio.run(handler({}))
 
+    return saved
+
+
+@pytest.mark.parametrize(
+    ("key_type", "seeded"), [("TEXT", "'UB7F3A2C91'"), ("BIGINT", str(_BIG))]
+)
+def test_a_seeded_in_flight_row_is_not_refused_as_left_over_from_building(
+    tmp_path, key_type, seeded
+):
+    saved = _rides_saver(tmp_path, key_type, seeded)
+
     refused = saved("")
     assert refused.get("is_error") and "left over from building" in str(refused)
 
@@ -260,3 +268,61 @@ def test_a_seeded_in_flight_row_is_not_refused_as_left_over_from_building(
     kept = saved(str(source))
     assert "left over from building" not in str(kept), kept
     assert not kept.get("is_error"), kept
+
+
+def test_seed_rows_ignore_a_siblings_seed(tmp_path):
+    from fi.alk.harness.contract import Runtime
+
+    source = tmp_path / "source"
+    for name, ref in (("a", "'UB_OWN'"), ("b", "'UB7F3A2C91'")):
+        (source / "agents" / name / "db").mkdir(parents=True)
+        (source / "agents" / name / "db" / "seed.sql").write_text(
+            f"INSERT INTO bookings (booking_ref, status) VALUES ({ref}, 'matched');\n",
+            encoding="utf-8",
+        )
+    world = sqlite3.connect(":memory:")
+    world.executescript(
+        "CREATE TABLE bookings (booking_ref TEXT PRIMARY KEY, status TEXT);"
+        "INSERT INTO bookings VALUES ('UB7F3A2C91', 'matched');"
+    )
+
+    assert [name for name, _ in seed_files(source, "agents/a")] == ["agents/a/db/seed.sql"]
+    assert [name for name, _ in seed_files(source)] == [
+        "agents/a/db/seed.sql",
+        "agents/b/db/seed.sql",
+    ]
+    assert set(missing_seed_rows(world, source, "agents/a")) == {"bookings"}
+    assert missing_seed_rows(world, source, "agents/b") == {}
+    assert not only_seed_rows(world, source, "bookings", "agents/a")
+    assert only_seed_rows(world, source, "bookings", "agents/b")
+    assert set(seed_rows(source, "agents/a")) == {"bookings"}
+
+    folder = Runtime(source_subfolder="agents/a", workdir="agents/a")
+    refused = _rides_saver(tmp_path / "in", "TEXT", "'UB7F3A2C91'", folder)(str(source))
+    assert refused.get("is_error") and "left over from building" in str(refused)
+    whole = _rides_saver(tmp_path / "out", "TEXT", "'UB7F3A2C91'")(str(source))
+    assert "left over from building" not in str(whole), whole
+
+
+def test_store_hints_leave_out_a_siblings_stores(tmp_path):
+    from fi.alk.harness.contract import AgentContract, Runtime
+    from fi.alk.harness.world.tools import world_tools
+
+    source = tmp_path / "source"
+    for name in ("a", "b"):
+        (source / "agents" / name).mkdir(parents=True)
+        (source / "agents" / name / f"{name}_orders.db").write_text("x", encoding="utf-8")
+    (source / "shared.sqlite").write_text("x", encoding="utf-8")
+
+    def said(runtime):
+        contract = AgentContract(agent="demo", runtime=runtime)
+        server, _world = world_tools(contract, tmp_path / "ws", source_root=str(source))
+        handler = next(one.handler for one in server.tools if one.name == "adopt_store")
+        return asyncio.run(handler({"path": "missing.db"}))["content"][0]["text"]
+
+    own = said(Runtime(source_subfolder="agents/a", workdir="agents/a"))
+    whole = said(None)
+
+    assert "agents/a/a_orders.db" in own and "shared.sqlite" in own
+    assert "b_orders.db" not in own
+    assert "b_orders.db" in whole

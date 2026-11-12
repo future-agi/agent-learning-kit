@@ -21,7 +21,7 @@ import json
 import logging
 import re
 import sqlite3
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 from ..backends import tool, tool_server
@@ -47,6 +47,7 @@ from ..catalogue import (
 from ..checks import reference_of, run_check, run_world_check
 from ..contract import AgentContract, is_data_free_conversation
 from ..seed_rows import only_seed_rows
+from ..source_folder import agent_scope, contract_folder, in_agent_scope
 from ..simulator import (
     load_simulator_prompt,
     save_simulator_prompt,
@@ -292,8 +293,11 @@ def _base_data_problems(
 STORE_SUFFIXES = (".db", ".sqlite", ".sqlite3", ".duckdb", ".dump", ".sql")
 
 
-def _stores_here(source_root: str) -> str:
+def _stores_here(source_root: str, folder: str = "") -> str:
     """Where the agent's code is, and which files under it look like a store.
+
+    With a ``folder``, only the agent's own and those in the folders above it: another agent's
+    store is not a hint for this one.
 
     Said rather than left to be guessed. A message that reports a path was wrong without saying
     what the right ones are turns one call into a search, and the search is over a filesystem this
@@ -305,10 +309,17 @@ def _stores_here(source_root: str) -> str:
             "to resolve against. Give an absolute path, or say that the source root is missing."
         )
     root = Path(source_root)
+    scope = agent_scope(root, folder)
     seen: list[str] = []
     for path in sorted(root.rglob("*")):
         if len(seen) >= 12:
             break
+        if (
+            scope is not None
+            and path.is_file()
+            and not in_agent_scope(PurePosixPath(path.relative_to(root).as_posix()), scope)
+        ):
+            continue
         if path.is_file() and path.suffix.lower() in STORE_SUFFIXES:
             size = path.stat().st_size
             measure = f"{size // 1024} KB" if size else "empty"
@@ -682,7 +693,9 @@ def world_tools(
     )
     world.refusal_signature = contract.refusal_signature
     if source_root:
-        world.reach(source_root)
+        world.reach(
+            source_root, contract_folder(contract)
+        )
     kind = for_contract(contract)
     catalogue = catalogue if catalogue is not None else load_catalogue(destination)
     scores: list[float] = []
@@ -938,7 +951,8 @@ def world_tools(
             if under.exists():
                 found = under
         if not found.exists():
-            return _err(f"nothing at {found}.\n{_stores_here(source_root)}")
+            folder = contract_folder(contract)
+            return _err(f"nothing at {found}.\n{_stores_here(source_root, folder)}")
         if found.is_file() and found.stat().st_size == 0:
             return _err(
                 f"{found} is empty, so there is nothing to adopt. If the agent builds or "
@@ -1794,10 +1808,11 @@ def world_tools(
         connection = getattr(world.store, "connection", None)
         if dirty and source_root and isinstance(connection, sqlite3.Connection):
             # The agent's own seed rows, even in-flight ones, are its starting state.
+            folder = contract_folder(contract)
             dirty = [
                 name
                 for name in dirty
-                if not only_seed_rows(connection, Path(source_root), name)
+                if not only_seed_rows(connection, Path(source_root), name, folder)
             ]
         if dirty:
             counts = world.state()

@@ -16,9 +16,11 @@ import os
 import sys
 import time
 import uuid
+from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
 
+from ..providers.agent import _redact
 from . import spend
 from . import observability
 from .build import open_stage as build_stage
@@ -46,7 +48,7 @@ from .secrets import (
 )
 from .sessions import Session, new_id, save as save_session
 from .sources import resolve, supported
-from .understand import load, open_stage, opening
+from .understand import SUBMIT_REMINDER, load, open_stage, opening, reading_settings
 from .world.snapshot import saved as world_saved
 
 
@@ -68,7 +70,9 @@ def _source_root(destination: Path, explicit: str = "") -> str:
 
 
 def _render(event: Event) -> None:
-    line = event.line()
+    # The platform keeps the tail of this output, so a URL's password, query and fragment are
+    # dropped first, in one call per event, as emit_model_event drops them from the job's events.
+    line = _redact(event.line())
     if event.kind == TEXT:
         print(line, end="", flush=True)
     else:
@@ -115,7 +119,11 @@ async def _drain_authoring_commands(stage) -> None:
                     emitted.append(event.text)
 
             await stage.say(content, on_event=receive)
-            text = "".join(emitted).strip() or "I’m still working on the active authoring stage."
+            # Sent to the platform's chat as the hosted builder's replies are, so cleaned the same way.
+            text = (
+                _redact("".join(emitted).strip())
+                or "I’m still working on the active authoring stage."
+            )
             await client.emit(
                 "assistant_message",
                 message_id=str(uuid.uuid4()),
@@ -175,11 +183,12 @@ async def _ask_operator(_tool_name: str, payload: dict[str, Any], _context: Any)
 
 
 def _guidance(args: argparse.Namespace) -> str:
-    instructions = [
-        str(item).strip()
-        for item in (getattr(args, "guidance", None) or [])
-        if str(item).strip()
-    ]
+    return guidance_text(getattr(args, "guidance", None) or [])
+
+
+def guidance_text(guidance: Iterable[Any]) -> str:
+    """A job's guidance as every stage that reads it is told it; empty when there is none."""
+    instructions = [str(item).strip() for item in guidance if str(item).strip()]
     if not instructions:
         return ""
     return (
@@ -279,6 +288,12 @@ def _report_failure_file(output: Path) -> None:
 
 
 async def _understand(args: argparse.Namespace) -> int:
+    job = getattr(args, "job", None)
+    subfolder = (
+        job.source.subfolder
+        if job is not None and getattr(job, "source", None) is not None
+        else None
+    )
     if args.kind == "provider":
         source = resolve(
             args.kind,
@@ -287,25 +302,14 @@ async def _understand(args: argparse.Namespace) -> int:
             scratch=args.path,
         )
     else:
-        source = resolve(args.kind, name=args.name, root=args.path)
-    job = getattr(args, "job", None)
-    offered = (
-        (getattr(job, "metadata", None) or {}).get("available_evals") if job else None
-    )
-    generic = bool(
-        job is not None
-        and isinstance(getattr(job, "metadata", None), dict)
-        and job.metadata.get("generic_harness_v1") is True
-    )
+        source = resolve(args.kind, name=args.name, root=args.path, subfolder=subfolder)
     stage, destination = open_stage(
         source,
         out=Path(args.out) if args.out else None,
         # Unattended, there is nobody to answer, so the model records what it could not
         # resolve in open_questions rather than blocking on a prompt nobody will see.
         ask=permission_gate(_ask_operator) if args.interactive else None,
-        available_evals=offered if isinstance(offered, list) else None,
-        require_setup_contract=generic and not args.interactive,
-        max_turns=140 if generic and not args.interactive else 70,
+        **reading_settings(job, interactive=args.interactive),
     )
 
     print(f"agent: {source.name}  ({source.kind})")
@@ -322,10 +326,7 @@ async def _understand(args: argparse.Namespace) -> int:
         interactive=args.interactive,
         until=lambda: load(destination) is not None
         or (destination / FAILURE_FILE).is_file(),
-        nudge=(
-            "Nothing was saved: you finished without calling submit_contract. Call it now "
-            "with the contract you worked out."
-        ),
+        nudge=SUBMIT_REMINDER,
     )
 
     if (destination / FAILURE_FILE).is_file():
@@ -1077,12 +1078,15 @@ async def _auto(args: argparse.Namespace) -> int:
             for key in ("target", "label", "call_id", "is_error", "path", "outcome", "cost_usd")
             if key in detail
         }
+        # The job response carries these, so a URL's password or query is dropped first, in
+        # one call, before the text is cut.
+        text, safe_detail = _redact([event.text or None, safe_detail])
         emit(
             "harness.activity",
             str(detail.get("stage") or "authoring"),
             event_kind=event.kind,
             tool=event.tool or None,
-            text=event.text[:2000] if event.text else None,
+            text=text[:2000] if text else None,
             detail=safe_detail,
         )
 
