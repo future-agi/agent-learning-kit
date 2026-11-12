@@ -636,3 +636,25 @@ def test_a_listed_booking_of_someone_else_is_only_busy_time(built: Path) -> None
         assert any(e["id"] == "EVT-A08" and e["description"] == "appointment_id: A08" for e in own)
     finally:
         world.close()
+
+
+@pytest.mark.parametrize(
+    "to",
+    [
+        ["James Walsh <james.walsh@example.com>"],
+        ["front.desk@example.com, james.walsh@example.com"],
+        ["JAMES.WALSH@EXAMPLE.COM"],
+    ],
+)
+def test_a_patient_s_address_is_recognised_however_it_is_written(built: Path, to: list[str]) -> None:
+    """A draft to another patient is refused whatever form the address takes: behind a display
+    name or inside a comma-separated list (refused as not a plain address), or in capitals."""
+    world = restore(built / WORLD)
+    try:
+        _as(world, "P02", "Priya Raman", "1990-11-03")
+        before = len(world.state()["gmail_drafts"])
+        drafted = world.call("create_draft", {"to": to, "subject": "Your visit", "body": "About A07"})
+        assert not drafted.ok, drafted.result
+        assert len(world.state()["gmail_drafts"]) == before
+    finally:
+        world.close()

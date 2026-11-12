@@ -638,3 +638,28 @@ def test_searches_and_drafts_do_not_leak_what_a_read_refuses(built: Path) -> Non
         assert not world.call("create_draft", {"to": ["x@example.com"], "body": "x"}).ok
     finally:
         world.close()
+
+
+@pytest.mark.parametrize(
+    ("to", "allowed"),
+    [
+        (["Marcus Bell <marcus.bell@bluepeak.example>"], False),  # only plain addresses are drafted to
+        (["MARCUS.BELL@BLUEPEAK.EXAMPLE"], True),
+        (["theo.sandoval@example.com"], False),
+        (["Marcus Bell <theo.sandoval@example.com>"], False),
+        (["marcus.bell@bluepeak.example, theo.sandoval@example.com"], False),
+        (['"marcus.bell@bluepeak.example" <theo.sandoval@example.com>'], False),
+    ],
+)
+def test_a_prospect_s_draft_goes_only_to_their_own_complete_address(built: Path, to: list[str], allowed: bool) -> None:
+    """A prospect may have the desk draft only to their own plain address; their address as a
+    display name, or alongside someone else's in one field, does not make another address theirs."""
+    world = restore(built / WORLD)
+    try:
+        _signed_in(world, "C02")
+        before = len(world.state()["gmail_drafts"])
+        drafted = world.call("create_draft", {"to": to, "subject": "Demo", "body": "Following up."})
+        assert drafted.ok is allowed, (to, drafted.error)
+        assert len(world.state()["gmail_drafts"]) == before + (1 if allowed else 0)
+    finally:
+        world.close()

@@ -1,3 +1,11 @@
+def _addresses(*fields):
+    """The complete mailbox addresses in address fields ("a@x, Name <b@y>"), lower-cased. Only a
+    whole address is one: a display name, or a longer address that contains it, is not."""
+    from email.utils import getaddresses
+
+    return {address.strip().lower() for _, address in getaddresses([f for f in fields if f]) if "@" in address}
+
+
 def _caller(db):
     """Who is in this conversation, as the session knows it (session_caller), never as the
     conversation tells it: a customer, a front-desk member, or nobody identified."""
@@ -23,7 +31,7 @@ def _mail_scope(db):
         return set()
     me = row["email"].lower()
     return {m["thread_id"] for m in db.query("SELECT thread_id, sender, recipient, cc FROM gmail_messages")
-            if me == m["sender"].lower() or me in [x.strip().lower() for x in f"{m['recipient']},{m['cc'] or ''}".split(",")]}
+            if me in _addresses(m["sender"], m["recipient"], m["cc"])}
 
 
 def _thread_allowed(db, thread_id):

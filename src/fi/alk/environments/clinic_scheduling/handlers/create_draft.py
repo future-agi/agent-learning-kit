@@ -1,3 +1,11 @@
+def _addresses(*fields):
+    """The complete mailbox addresses in address fields ("a@x, Name <b@y>"), lower-cased. Only a
+    whole address is one: a display name, or a longer address that contains it, is not."""
+    from email.utils import getaddresses
+
+    return {address.strip().lower() for _, address in getaddresses([f for f in fields if f]) if "@" in address}
+
+
 def _withheld(db, thread_id):
     """The patient a mailbox thread is about whom this conversation may not see yet, or None. The
     appointments mailbox holds patients' health details: a thread linked to a patient is shown only
@@ -48,8 +56,8 @@ def handle(args, db):
     # patient on file must be one this conversation may see, and a new thread is linked to them so
     # the draft is listed only where they are.
     addressed = []
-    for address in to + cc + bcc:
-        p = db.one("SELECT patient_id FROM patients WHERE lower(email) = ?", (address.lower(),))
+    for address in sorted(_addresses(*(to + cc + bcc))):
+        p = db.one("SELECT patient_id FROM patients WHERE lower(email) = ?", (address,))
         if p:
             if _patient_hidden(db, p["patient_id"]):
                 raise ToolError(f"{address} is the contact of a patient who is not verified in this conversation; verify the patient first.", category="permission_denied")

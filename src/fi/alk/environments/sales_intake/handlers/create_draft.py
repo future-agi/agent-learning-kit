@@ -1,3 +1,11 @@
+def _addresses(*fields):
+    """The complete mailbox addresses in address fields ("a@x, Name <b@y>"), lower-cased. Only a
+    whole address is one: a display name, or a longer address that contains it, is not."""
+    from email.utils import getaddresses
+
+    return {address.strip().lower() for _, address in getaddresses([f for f in fields if f]) if "@" in address}
+
+
 def handle(args, db):
     def addresses(name):
         value = args.get(name)
@@ -29,7 +37,7 @@ def handle(args, db):
     kind, who = _caller(db)
     if kind is None:
         raise ToolError("Permission denied: nobody is signed in to this conversation, so nothing can be drafted.", category="permission_denied")
-    if kind == "contact" and any(a.strip().lower() != who["email_normalized"] for a in to + cc + bcc):
+    if kind == "contact" and (_addresses(*(to + cc + bcc)) - {who["email_normalized"]} or len(_addresses(*(to + cc + bcc))) < len(to + cc + bcc)):
         raise ToolError(f"Permission denied: {_named(kind, who)} can only have the desk draft to their own address.", category="permission_denied")
 
     if reply_to:
@@ -122,6 +130,6 @@ def _sees(db, thread_id):
         return False
     mine = who["email_normalized"]
     return any(
-        m["sender"].strip().lower() == mine or mine in [x.strip().lower() for x in (m["recipient"] + "," + (m["cc"] or "")).split(",")]
+        mine in _addresses(m["sender"], m["recipient"], m["cc"])
         for m in db.query("SELECT sender, recipient, cc FROM gmail_messages WHERE thread_id = ?", (thread_id,))
     )

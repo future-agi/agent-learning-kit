@@ -1,3 +1,11 @@
+def _addresses(*fields):
+    """The complete mailbox addresses in address fields ("a@x, Name <b@y>"), lower-cased. Only a
+    whole address is one: a display name, or a longer address that contains it, is not."""
+    from email.utils import getaddresses
+
+    return {address.strip().lower() for _, address in getaddresses([f for f in fields if f]) if "@" in address}
+
+
 def handle(args, db):
     page_size = args.get("pageSize")
     if page_size is None:
@@ -92,6 +100,6 @@ def _sees(db, thread_id):
         return False
     mine = who["email_normalized"]
     return any(
-        m["sender"].strip().lower() == mine or mine in [x.strip().lower() for x in (m["recipient"] + "," + (m["cc"] or "")).split(",")]
+        mine in _addresses(m["sender"], m["recipient"], m["cc"])
         for m in db.query("SELECT sender, recipient, cc FROM gmail_messages WHERE thread_id = ?", (thread_id,))
     )
