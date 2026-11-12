@@ -13,7 +13,6 @@ import asyncio
 import functools
 import logging
 import time
-from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -66,7 +65,6 @@ _INTERRUPT_WAIT_SECONDS = 60.0
 # comes by soft + 90 s, which leaves the rest of the margin to the document.
 _CLOSE_SECONDS = 20.0
 
-_COUNTS = ("tokens_in", "tokens_out", "tokens_cached")
 
 
 def _soft_limit() -> float:
@@ -105,43 +103,24 @@ class _ReadingStage(Stage):
         *,
         name: str,
         backend: Any,
-        running_totals: bool,
     ) -> None:
-        # Never replayed after a quiet stream: a replayed turn is paid for again, and a new
-        # session would restart Claude's running totals under the baseline the difference is
-        # taken from.
+        # Never replayed after a quiet stream: a replayed turn is paid for again.
         super().__init__(spec, name=name, backend=backend, idle_retries=0)
-        self.running_totals = running_totals
         self.done: list[StageDone] = []
         self.in_flight = False
         self.opened = False
-        self._last_cost = 0.0
-        self._last_counts = dict.fromkeys(_COUNTS, 0)
 
     async def __aenter__(self) -> "_ReadingStage":
         await super().__aenter__()
         self.opened = True
         return self
 
-    def _own(self, reported: StageDone) -> StageDone:
-        # Claude reports the session's running total on every result, so adding results as
-        # reported would count every earlier turn again.
-        if not self.running_totals:
-            return reported
-        cost = reported.cost_usd
-        if cost is not None:
-            cost, self._last_cost = max(0.0, cost - self._last_cost), cost
-        counts: dict[str, int] = {}
-        for key in _COUNTS:
-            total = int(getattr(reported, key) or 0)
-            counts[key] = max(0, total - self._last_counts[key])
-            self._last_counts[key] = total
-        return replace(reported, cost_usd=cost, **counts)
-
     def _events(self, received: Any, turn: Any) -> list[Any]:
         if not isinstance(received, StageDone):
             return super()._events(received, turn)
-        done = self._own(received)
+        # Each backend reports a turn's own figures (the Claude backend takes the difference of
+        # the CLI's running totals itself), so a turn is kept as reported.
+        done = received
         events = super()._events(done, turn)
         self.done.append(done)
         self.in_flight = False
@@ -278,7 +257,6 @@ async def _reading(
         opened.spec,
         name=opened.name,
         backend=backend,
-        running_totals=getattr(backend, "name", "") == "claude",
     )
     stopping = asyncio.Event()
     # The build's opening, the job's guidance included: a generic job's runtime advice changes

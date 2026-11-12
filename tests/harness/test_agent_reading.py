@@ -1114,8 +1114,8 @@ def test_an_oversized_contract_is_refused(tmp_path, model, size, passes):
 
 def test_no_contract_after_the_reminder_is_incomplete(tmp_path, model):
     _repo(tmp_path)
-    # Claude's results carry the session's running total.
-    fake = model(_ends(cost_usd=0.07875), _ends(cost_usd=0.1575))
+    # Each turn's own figures, as the Claude backend reports them.
+    fake = model(_ends(cost_usd=0.07875), _ends(cost_usd=0.07875))
     output = tmp_path / "reading"
 
     assert _run(tmp_path) == 78
@@ -1243,7 +1243,7 @@ def test_an_error_flag_without_a_status_still_gets_the_reminder(tmp_path, model)
     _repo(tmp_path)
     fake = model(
         _ends(outcome="success", is_error=True, cost_usd=0.1),
-        _writes(CHAT, cost_usd=0.2),
+        _writes(CHAT, cost_usd=0.1),
     )
     output = tmp_path / "reading"
 
@@ -1318,9 +1318,9 @@ def _gemini_calls(name: str, args: dict, n: int):
 def _gemini_priced(calls: int) -> float:
     # The fake's 1,000 tokens in and 10 out per call, at the table's own rates, kept to the
     # six places the spend record keeps.
-    from fi.alk.harness.backends.vertex_gemini import PRICES_PER_MILLION
+    from fi.alk.harness.backends.vertex_gemini import current_rates
 
-    rate_in, rate_out = PRICES_PER_MILLION[_PRICED_GEMINI][:2]
+    rate_in, rate_out = current_rates(_PRICED_GEMINI)
     return round(calls * (1000 * rate_in + 10 * rate_out) / 1_000_000, 6)
 
 
@@ -2041,11 +2041,13 @@ def _stage_entry() -> dict:
     return entry
 
 
-def test_claude_running_totals_are_counted_once(tmp_path, model):
+def test_claude_turns_are_added_as_the_backend_reports_them(tmp_path, model):
+    # The Claude backend reports each turn's own figures (it takes the difference of the CLI's
+    # running totals itself), so the reading adds them as reported and never subtracts again.
     _repo(tmp_path)
     model(
         _ends(cost_usd=0.07875, tokens_in=100_000),
-        _ends(cost_usd=0.1575, tokens_in=200_000),
+        _ends(cost_usd=0.07875, tokens_in=100_000),
     )
     output = tmp_path / "reading"
 
