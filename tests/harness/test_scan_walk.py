@@ -2616,6 +2616,8 @@ def test_no_sdk_name_is_one_the_runner_refuses() -> None:
     from fi.alk.harness.sandbox_server import _RUNNER_RESERVED_ENVIRONMENT
 
     assert not scan_walk._SDK_SETTINGS & _RUNNER_RESERVED_ENVIRONMENT
+    # The runner refuses every ALK_ name as well, not only the exact set.
+    assert not [name for name in scan_walk._SDK_SETTINGS if name.startswith("ALK_")]
 
 
 def test_the_livekit_names_are_credentials_own() -> None:
@@ -2624,6 +2626,9 @@ def test_the_livekit_names_are_credentials_own() -> None:
         _LIVEKIT_PROVIDER_CREDENTIALS,
     )
 
+    # Imported, not copied: a copy could drift from what credentials.py says an agent needs.
+    assert scan_walk._CONNECTOR_REQUIREMENTS is _CONNECTOR_REQUIREMENTS
+    assert scan_walk._LIVEKIT_PROVIDER_CREDENTIALS is _LIVEKIT_PROVIDER_CREDENTIALS
     livekit = set(_CONNECTOR_REQUIREMENTS["livekit"])
     livekit.update(name for names in _LIVEKIT_PROVIDER_CREDENTIALS.values() for name in names)
     assert livekit <= scan_walk._SDK_SETTINGS
