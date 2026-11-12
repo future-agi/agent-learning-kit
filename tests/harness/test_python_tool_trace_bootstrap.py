@@ -8,6 +8,8 @@ import subprocess
 import sys
 import time
 
+import pytest
+
 
 def _trace_environment(tmp_path: Path, bindings: list[dict[str, str]]):
     bootstrap = Path(__file__).resolve().parents[2] / "src/fi/alk/harness/livekit_tool_trace_bootstrap.py"
@@ -131,3 +133,270 @@ def test_declared_python_tool_is_traced_when_module_runs_as_script(
     assert [(record["name"], record["output"]) for record in records] == [
         ("lookup", "declared")
     ]
+
+
+_CHAT_MARK = "ALK_OPENAI_AGENTS_CHAT_COMPLETIONS"
+_STANDIN_AGENTS = (
+    "import os\n"
+    "def _note(line):\n"
+    "    with open(os.environ['STANDIN_CALLS'], 'a') as handle:\n"
+    "        handle.write(line + '\\n')\n"
+    "_note('module-ran')\n"
+    "def set_default_openai_api(api):\n"
+    "    _note(api)\n"
+)
+
+
+def _real_openai_agents_installed() -> bool:
+    import importlib.metadata
+
+    try:
+        importlib.metadata.distribution("openai-agents")
+    except importlib.metadata.PackageNotFoundError:
+        return False
+    return True
+
+
+def _chat_style_run(
+    tmp_path: Path,
+    code: str,
+    *,
+    mark: bool | str = True,
+    dist: bool = True,
+    agents_source: str = _STANDIN_AGENTS,
+    hook_on_path: bool = True,
+    flags: tuple[str, ...] = (),
+):
+    hook = tmp_path / "hook"
+    hook.mkdir()
+    bootstrap = (
+        Path(__file__).resolve().parents[2]
+        / "src/fi/alk/harness/livekit_tool_trace_bootstrap.py"
+    )
+    shutil.copy2(bootstrap, hook / "sitecustomize.py")
+    standin = tmp_path / "standin"
+    (standin / "agents").mkdir(parents=True)
+    (standin / "agents" / "__init__.py").write_text(agents_source)
+    if dist:
+        info = standin / "openai_agents-0.24.0.dist-info"
+        info.mkdir()
+        (info / "METADATA").write_text(
+            "Metadata-Version: 2.1\nName: openai-agents\nVersion: 0.24.0\n"
+        )
+    calls = tmp_path / "calls.txt"
+    env = {
+        key: value
+        for key, value in os.environ.items()
+        if key not in {_CHAT_MARK, "HARNESS_TOOL_TRACE", "PYTHONPATH"}
+    }
+    env["STANDIN_CALLS"] = str(calls)
+    env["PYTHONPATH"] = os.pathsep.join(
+        [str(hook), str(standin)] if hook_on_path else [str(standin)]
+    )
+    if mark:
+        env[_CHAT_MARK] = "1" if mark is True else mark
+    result = subprocess.run(
+        [sys.executable, *flags, "-c", code],
+        text=True,
+        capture_output=True,
+        env=env,
+        check=False,
+    )
+    lines = calls.read_text().splitlines() if calls.exists() else []
+    return result, lines
+
+
+def _note_line(line: str) -> str:
+    return f"open(__import__('os').environ['STANDIN_CALLS'], 'a').write({line!r} + '\\n')\n"
+
+
+def test_openai_agents_chat_style_is_set_after_the_sdk_ran_and_only_on_import(
+    tmp_path: Path,
+) -> None:
+    code = (
+        _note_line("before-import")
+        + "import agents\n"
+        + _note_line("after-import")
+    )
+    result, lines = _chat_style_run(tmp_path, code)
+    assert result.returncode == 0, result.stderr
+    assert lines == ["before-import", "module-ran", "chat_completions", "after-import"]
+
+
+def test_openai_agents_chat_style_is_not_set_at_start_up(tmp_path: Path) -> None:
+    result, lines = _chat_style_run(tmp_path, _note_line("started"))
+    assert result.returncode == 0, result.stderr
+    assert lines == ["started"]
+
+
+def test_openai_agents_chat_style_needs_the_mark(tmp_path: Path) -> None:
+    result, lines = _chat_style_run(tmp_path, "import agents\n", mark=False)
+    assert result.returncode == 0, result.stderr
+    assert lines == ["module-ran"]
+
+
+def test_openai_agents_chat_style_needs_the_mark_to_be_exactly_one(
+    tmp_path: Path,
+) -> None:
+    result, lines = _chat_style_run(tmp_path, "import agents\n", mark="true")
+    assert result.returncode == 0, result.stderr
+    assert lines == ["module-ran"]
+
+
+def test_openai_agents_chat_style_leaves_a_customer_package_named_agents_alone(
+    tmp_path: Path,
+) -> None:
+    if _real_openai_agents_installed():
+        pytest.skip("openai-agents is installed in the test interpreter")
+    result, lines = _chat_style_run(tmp_path, "import agents\n", dist=False)
+    assert result.returncode == 0, result.stderr
+    assert lines == ["module-ran"]
+
+
+def test_openai_agents_chat_style_failure_is_one_stderr_line_and_the_import_succeeds(
+    tmp_path: Path,
+) -> None:
+    result, lines = _chat_style_run(
+        tmp_path,
+        "import agents\nprint('imported')\n",
+        agents_source="x = 1\n",
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "imported"
+    assert result.stderr.splitlines() == [
+        "alk: could not set the OpenAI Agents SDK to chat completions: AttributeError"
+    ]
+
+
+def test_openai_agents_own_later_choice_stays_the_last_value(tmp_path: Path) -> None:
+    result, lines = _chat_style_run(
+        tmp_path,
+        "import agents\nagents.set_default_openai_api('responses')\n",
+    )
+    assert result.returncode == 0, result.stderr
+    assert lines == ["module-ran", "chat_completions", "responses"]
+
+
+def test_openai_agents_import_error_reaches_the_importer_without_the_setting(
+    tmp_path: Path,
+) -> None:
+    result, lines = _chat_style_run(
+        tmp_path,
+        "try:\n"
+        "    import agents\n"
+        "except RuntimeError as exc:\n"
+        "    print('raised', exc)\n",
+        agents_source=(
+            _STANDIN_AGENTS + "raise RuntimeError('sdk import failed')\n"
+        ),
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "raised sdk import failed"
+    assert lines == ["module-ran"]
+    assert result.stderr == ""
+
+
+def test_openai_agents_chat_style_is_set_once_across_a_reimport(tmp_path: Path) -> None:
+    result, lines = _chat_style_run(
+        tmp_path,
+        "import sys\nimport agents\ndel sys.modules['agents']\nimport agents\n",
+    )
+    assert result.returncode == 0, result.stderr
+    assert lines == ["module-ran", "chat_completions", "module-ran"]
+
+
+def test_openai_agents_chat_style_is_set_at_once_when_agents_is_already_imported(
+    tmp_path: Path,
+) -> None:
+    hook = tmp_path / "hook"
+    code = (
+        "import agents, site, sys\n"
+        + _note_line("before-bootstrap")
+        + f"site.addsitedir({str(hook)!r})\n"
+        + "import sitecustomize\n"
+        + _note_line("after-bootstrap")
+        + "del sys.modules['agents']\n"
+        + "import agents\n"
+    )
+    result, lines = _chat_style_run(
+        tmp_path, code, hook_on_path=False, flags=("-S",)
+    )
+    assert result.returncode == 0, result.stderr
+    assert lines == [
+        "module-ran",
+        "before-bootstrap",
+        "chat_completions",
+        "after-bootstrap",
+        "module-ran",
+    ]
+
+
+def test_real_openai_agents_sdk_is_on_chat_completions_with_the_mark(
+    tmp_path: Path,
+) -> None:
+    if not _real_openai_agents_installed():
+        pytest.skip("openai-agents is not installed in the test interpreter")
+    hook = tmp_path / "hook"
+    hook.mkdir()
+    bootstrap = (
+        Path(__file__).resolve().parents[2]
+        / "src/fi/alk/harness/livekit_tool_trace_bootstrap.py"
+    )
+    shutil.copy2(bootstrap, hook / "sitecustomize.py")
+    env = {
+        key: value
+        for key, value in os.environ.items()
+        if key not in {"HARNESS_TOOL_TRACE", "PYTHONPATH"}
+    }
+    env.update({"PYTHONPATH": str(hook), _CHAT_MARK: "1"})
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import agents\n"
+            "print(agents.models._openai_shared.get_use_responses_by_default())\n",
+        ],
+        text=True,
+        capture_output=True,
+        env=env,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "False"
+
+
+def test_openai_agents_hook_does_not_hide_a_later_finder_that_refuses_agents(
+    tmp_path: Path,
+) -> None:
+    code = (
+        "import sys\n"
+        "class Refuse:\n"
+        "    def find_spec(self, name, path=None, target=None):\n"
+        "        if name == 'agents':\n"
+        "            raise ImportError('refused by the policy finder')\n"
+        "sys.meta_path.insert(1, Refuse())\n"
+        "import agents\n"
+    )
+    result, lines = _chat_style_run(tmp_path, code)
+    assert result.returncode != 0
+    assert "refused by the policy finder" in result.stderr
+    assert lines == []
+
+
+def test_openai_agents_chat_style_survives_an_early_spec_lookup(tmp_path: Path) -> None:
+    code = "import importlib.util\nimportlib.util.find_spec('agents')\nimport agents\n"
+    result, lines = _chat_style_run(tmp_path, code)
+    assert result.returncode == 0, result.stderr
+    assert lines == ["module-ran", "chat_completions"]
+
+
+def test_openai_agents_reload_keeps_the_agent_own_choice(tmp_path: Path) -> None:
+    code = (
+        "import importlib\n"
+        "import agents\n"
+        "agents.set_default_openai_api('responses')\n"
+        "importlib.reload(agents)\n"
+    )
+    result, lines = _chat_style_run(tmp_path, code)
+    assert result.returncode == 0, result.stderr
+    assert lines == ["module-ran", "chat_completions", "responses", "module-ran"]

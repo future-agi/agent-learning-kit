@@ -83,7 +83,7 @@ from .source_folder import (
     saved_runtime,
 )
 from .job import HarnessJob
-from .job import ProviderExecutionMode, SourceKind
+from .job import ProviderExecutionMode, SourceKind, routed_through_gateway
 from .process_preflight import preflight_bundle
 from .provision import source_fingerprint
 from .provider_lifecycle import ProviderRepositoryManifest, load_provider_manifest
@@ -2591,6 +2591,9 @@ def resolve_environment_plan(
                 environment["TOOLS_API_URL"] = "{{TOOLS_API_URL}}"
             if service_name == control_name:
                 environment = {**declared_runtime_environment, **environment}
+                if routed_through_gateway(job.agent.config.get("target_model")):
+                    # Read at start-up by the shared sitecustomize hook.
+                    environment["ALK_OPENAI_AGENTS_CHAT_COMPLETIONS"] = "1"
             if is_livekit and service_name == control_name:
                 environment.setdefault(
                     "LIVEKIT_AGENT_NAME",
@@ -2858,6 +2861,9 @@ def resolve_environment_plan(
         )
         if port is not None and not is_livekit:
             environment["PORT"] = f"{{{{PORT_{control_name}}}}}"
+        if routed_through_gateway(job.agent.config.get("target_model")):
+            # Read at start-up by the shared sitecustomize hook.
+            environment["ALK_OPENAI_AGENTS_CHAT_COMPLETIONS"] = "1"
         callback_entrypoint = (
             discovered_callback or _callback_entrypoint(run_folder)
             if is_callback

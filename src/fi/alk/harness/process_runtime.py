@@ -2293,6 +2293,7 @@ def spawn_source_process(
         livekit_hook_due = (
             "HARNESS_TOOL_TRACE" in process.environment
             or "FI_WORKER_HEALTH_PORT" in process.environment
+            or "ALK_OPENAI_AGENTS_CHAT_COMPLETIONS" in process.environment
         )
         mark_hook_due = "FI_SIMULATION_EXPORT" in customer_code_environment
         if livekit_hook_due or mark_hook_due:

@@ -7604,6 +7604,36 @@ def test_spawn_source_process_injects_sitecustomize_for_worker_isolation_alone(
     assert (world_dir / "sitecustomize.py").is_file()
 
 
+def test_spawn_source_process_injects_sitecustomize_for_the_openai_agents_mark_alone(
+    tmp_path: Path,
+) -> None:
+    build_dir = tmp_path / "build" / "svc"
+    build_dir.mkdir(parents=True)
+    captured: dict[str, Any] = {}
+
+    def fake_runner(argv, *, cwd, env, log_path, user=None, group=None):
+        captured.update(argv=argv, env=env)
+        return FakeHandle()
+
+    process = _source_process(
+        environment={"ALK_OPENAI_AGENTS_CHAT_COMPLETIONS": "1"}
+    ).model_copy(update={"run_command": [".venv/bin/python", "agent.py"]})
+    world_dir = tmp_path / "worlds" / "w0" / "svc"
+    pr.spawn_source_process(
+        process,
+        build_dir=build_dir,
+        world_dir=world_dir,
+        world_index=0,
+        port_plan=_solo_port_plan("svc"),
+        configuration_addresses={},
+        secret_values={},
+        secret_purposes={},
+        runner=fake_runner,
+    )
+    assert captured["env"]["PYTHONPATH"].split(os.pathsep)[0] == str(world_dir)
+    assert (world_dir / "sitecustomize.py").read_bytes() == _LIVEKIT_HOOK.read_bytes()
+
+
 def test_dispatch_metadata_sets_the_key_only_for_exactly_one_distinct_name(
     caplog: pytest.LogCaptureFixture,
 ) -> None:

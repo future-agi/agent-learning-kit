@@ -234,6 +234,101 @@ def _install_worker_isolation() -> None:
         return
 
 
+def _set_openai_agents_chat_style(module: Any, reason: str = "") -> None:
+    try:
+        if reason:
+            raise RuntimeError(reason)
+        module.set_default_openai_api("chat_completions")
+    except Exception as exc:  # noqa: BLE001 - a setting we could not make must not stop the agent
+        sys.stderr.write(
+            "alk: could not set the OpenAI Agents SDK to chat completions: "
+            f"{reason or type(exc).__name__}\n"
+        )
+
+
+class _ChatStyleLoader:
+    """Stands in for the SDK's own loader on its spec only, so a loader shared with other
+    modules (a zipimporter) is never changed."""
+
+    def __init__(self, finder: "_OpenAIAgentsFinder", loader: Any) -> None:
+        self._finder = finder
+        self._loader = loader
+
+    def create_module(self, spec: Any) -> Any:
+        create = getattr(self._loader, "create_module", None)
+        return create(spec) if create is not None else None
+
+    def exec_module(self, module: Any) -> None:
+        # The SDK's own errors reach the importer unchanged, and the hook stays armed.
+        self._loader.exec_module(module)
+        if self._finder.armed and module.__name__ == "agents":
+            self._finder.armed = False
+            _set_openai_agents_chat_style(module)
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._loader, name)
+
+
+class _OpenAIAgentsFinder:
+    """First on ``sys.meta_path``; armed until the SDK has run once, so the setting is made
+    after the SDK's own import but the SDK is never imported by this hook. It is never removed
+    from the list, since removing it while the import system walks the list skips the next
+    finder."""
+
+    def __init__(self) -> None:
+        self.armed = True
+
+    def find_spec(self, fullname: str, path: Any = None, target: Any = None) -> Any:
+        if fullname != "agents" or not self.armed:
+            return None
+        spec = None
+        for finder in list(sys.meta_path):
+            if finder is self:
+                continue
+            find_spec = getattr(finder, "find_spec", None)
+            if find_spec is None:
+                continue
+            try:
+                spec = find_spec(fullname, path, target)
+            except Exception:  # noqa: BLE001 - the import system reaches the same finder next
+                return None
+            if spec is not None:
+                break
+        if spec is None:
+            return None
+        loader = getattr(spec, "loader", None)
+        if getattr(loader, "exec_module", None) is None:
+            # Not ours to load (a namespace package or an old-style loader): the SDK imports as
+            # without the kit, and the log says it stays on its default style.
+            self.armed = False
+            _set_openai_agents_chat_style(None, "its loader cannot be wrapped")
+            return spec
+        spec.loader = _ChatStyleLoader(self, loader)
+        return spec
+
+
+def _install_openai_agents_chat_style() -> None:
+    # The gateway serves the Responses request style only for OpenAI's own models, so a routed
+    # model name needs the SDK on chat completions. Looked up by distribution name so a
+    # customer's own package called ``agents`` is never touched.
+    if os.environ.get("ALK_OPENAI_AGENTS_CHAT_COMPLETIONS") != "1":
+        return
+    try:
+        import importlib.metadata
+
+        importlib.metadata.distribution("openai-agents")
+    except Exception:  # noqa: BLE001 - no SDK installed: nothing to switch
+        return
+    if "agents" in sys.modules:
+        _set_openai_agents_chat_style(sys.modules["agents"])
+        return
+    sys.meta_path.insert(0, _OpenAIAgentsFinder())
+
+
+try:
+    _install_openai_agents_chat_style()
+except Exception:  # noqa: BLE001 - must not cost tool tracing or worker isolation
+    pass
 _install()
 _install_worker_isolation()
 
