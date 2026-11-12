@@ -1856,13 +1856,15 @@ _ADK_SERVER_FLAGS = frozenset(
         "-v",
         "--verbose",
         "--trace_to_cloud",
-        "--no-trace_to_cloud",
         "--otel_to_cloud",
         "--reload",
         "--no-reload",
         "--a2a",
         "--reload_agents",
+        "--use_local_storage",
+        "--no_use_local_storage",
         "--auto_create_session",
+        "--express_mode",
         "--with_ui",
     }
 )
@@ -1917,7 +1919,8 @@ def _adk_app_name(
     ADK serves the agents directory named by the command's positional argument (default: its
     working directory). That directory is one app when it holds ``agent.py`` or
     ``root_agent.yaml`` itself; otherwise ADK discovers applications as its immediate
-    subdirectories with an ``agent.py`` (``__init__.py`` is optional) or a ``root_agent.yaml``.
+    subdirectories with an ``agent.py`` (``__init__.py`` is optional), a ``root_agent.yaml``, or
+    an ``__init__.py`` that defines ``root_agent``. An app name must be a Python identifier.
     Keep this source-derived and deterministic: when a checkout contains more than one possible
     app, authoring must describe the desired HTTP boundary instead of the compiler guessing.
     """
@@ -1933,21 +1936,45 @@ def _adk_app_name(
     agents_arg = _adk_agents_dir_argument(_adk_server_arguments(command or []) or [])
     if agents_arg is not None:
         agents_dir = (workdir / agents_arg).resolve()
-        if agents_dir.is_relative_to(root.resolve()) and agents_dir.is_dir():
-            workdir = agents_dir
+        # A named directory ADK cannot serve from this checkout is no app to guess from.
+        if not agents_dir.is_relative_to(root.resolve()) or not agents_dir.is_dir():
+            return None
+        workdir = agents_dir
     # ADK treats a directory as one app when it holds agent.py or root_agent.yaml.
-    if (workdir / "agent.py").is_file() or (workdir / "root_agent.yaml").is_file():
+    if _is_adk_app_directory(workdir, package=False):
+        # The checkout root is copied under a per-process directory at run time, so its
+        # name there is not this one.
+        if workdir == root.resolve() or not _ADK_APP_NAME.fullmatch(workdir.name):
+            return None
         return workdir.name
     candidates = sorted(
         path.name
         for path in workdir.iterdir()
         if path.is_dir()
         and path.name not in _IGNORED_ARTIFACT_PARTS
-        and (
-            (path / "agent.py").is_file() or (path / "root_agent.yaml").is_file()
-        )
+        and _ADK_APP_NAME.fullmatch(path.name)
+        and _is_adk_app_directory(path, package=True)
     )
     return candidates[0] if len(candidates) == 1 else None
+
+
+# ADK loads only apps whose name is a Python identifier made of these characters.
+_ADK_APP_NAME = re.compile(r"[A-Za-z0-9_]+")
+
+
+def _is_adk_app_directory(path: Path, *, package: bool) -> bool:
+    """Whether ADK loads an app from ``path``: ``agent.py``, ``root_agent.yaml`` or, for a
+    sub-app, a package whose ``__init__.py`` defines ``root_agent``."""
+
+    if (path / "agent.py").is_file() or (path / "root_agent.yaml").is_file():
+        return True
+    init = path / "__init__.py"
+    if not package or not init.is_file():
+        return False
+    try:
+        return "root_agent" in init.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return False
 
 
 def _adk_web_interface(root: Path, runtime: dict[str, Any]) -> dict[str, Any] | None:

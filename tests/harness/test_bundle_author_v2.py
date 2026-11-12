@@ -4249,6 +4249,91 @@ def test_the_adk_agents_directory_is_the_positional_argument_not_an_option_value
     assert _adk_app_name(tmp_path, ".", command) == "real_app"
 
 
+@pytest.mark.parametrize("server", ["web", "api_server"])
+def test_every_adk_server_flag_that_takes_no_value_is_known(server: str) -> None:
+    import click
+    from google.adk.cli.cli_tools_click import main
+
+    from fi.alk.harness.bundle_author_v2 import _ADK_SERVER_FLAGS
+
+    flags = {
+        name
+        for param in main.commands[server].params
+        if isinstance(param, click.Option) and param.is_flag
+        for name in (*param.opts, *param.secondary_opts)
+    }
+    assert flags <= _ADK_SERVER_FLAGS
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        ["adk", "web", "--use_local_storage", "agents"],
+        ["adk", "api_server", "--express_mode", "agents"],
+        ["adk", "web", "--logo-image-url", "assets", "agents"],
+    ],
+)
+def test_adk_flags_without_a_value_do_not_swallow_the_agents_directory(
+    tmp_path: Path, command: list[str]
+) -> None:
+    from fi.alk.harness.bundle_author_v2 import _adk_app_name
+
+    for app in (tmp_path / "agents" / "real_app", tmp_path / "assets" / "logo_app"):
+        app.mkdir(parents=True)
+        (app / "agent.py").write_text("root_agent = object()\n", encoding="utf-8")
+    (tmp_path / "top_app").mkdir()
+    (tmp_path / "top_app" / "agent.py").write_text("root_agent = 1\n", encoding="utf-8")
+
+    assert _adk_app_name(tmp_path, ".", command) == "real_app"
+
+
+@pytest.mark.parametrize("agents_dir", ["missing", "../outside", "notes.txt"])
+def test_an_agents_directory_adk_cannot_serve_resolves_no_app(
+    tmp_path: Path, agents_dir: str
+) -> None:
+    from fi.alk.harness.bundle_author_v2 import _adk_app_name
+
+    source = tmp_path / "source"
+    (source / "only_app").mkdir(parents=True)
+    (source / "only_app" / "agent.py").write_text("root_agent = 1\n", encoding="utf-8")
+    (source / "notes.txt").write_text("", encoding="utf-8")
+    (tmp_path / "outside" / "other").mkdir(parents=True)
+    (tmp_path / "outside" / "other" / "agent.py").write_text("x = 1\n", encoding="utf-8")
+
+    assert _adk_app_name(source, ".", ["adk", "web", agents_dir]) is None
+
+
+@pytest.mark.parametrize("command", [["adk", "web"], ["adk", "api_server", "."]])
+def test_an_app_at_the_checkout_root_resolves_no_name(
+    tmp_path: Path, command: list[str]
+) -> None:
+    from fi.alk.harness.bundle_author_v2 import _adk_app_name
+
+    # At run time the checkout sits under a per-process directory, so ADK would serve the
+    # root app under that directory's name, not the checkout's.
+    (tmp_path / "agent.py").write_text("root_agent = object()\n", encoding="utf-8")
+
+    assert _adk_app_name(tmp_path, ".", command) is None
+
+
+def test_only_apps_adk_can_load_are_candidates(tmp_path: Path) -> None:
+    from fi.alk.harness.bundle_author_v2 import _adk_app_name
+
+    agents = tmp_path / "agents"
+    for name in ("my-app", ".hidden"):
+        (agents / name).mkdir(parents=True)
+        (agents / name / "agent.py").write_text("root_agent = 1\n", encoding="utf-8")
+    package = agents / "package_app"
+    package.mkdir()
+    (package / "__init__.py").write_text("root_agent = object()\n", encoding="utf-8")
+    helpers = agents / "helpers"
+    helpers.mkdir()
+    (helpers / "__init__.py").write_text("", encoding="utf-8")
+
+    assert _adk_app_name(tmp_path, ".", ["adk", "web", "agents"]) == "package_app"
+    assert _adk_app_name(tmp_path, ".", ["adk", "web", "agents/my-app"]) is None
+
+
 def test_a_command_that_only_mentions_adk_is_not_its_server() -> None:
     from fi.alk.harness.bundle_author_v2 import _adk_server_arguments
 
