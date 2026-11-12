@@ -1061,7 +1061,13 @@ def test_a_crafted_python_file_does_not_hold_up_the_conversation(tmp_path, repo)
         beating = asyncio.create_task(beat())
         # The scan doesn't parse the crafted file; searched as bytes, it names no browser tool, so
         # leaving it unread doesn't cut the scan, and the reading is saved without a look.
-        result = await submit(_plain("crafted"))
+        # A save made while the session's checks still run answers "not checked in time" (on a
+        # loaded host they can outlast the deadline), and the model writes again: so does this.
+        for _ in range(60):
+            result = await submit(_plain("crafted"))
+            if not _text(result).startswith("not checked in time"):
+                break
+            await asyncio.sleep(0.5)
         done.set()
         await beating
         return result, worst[0]

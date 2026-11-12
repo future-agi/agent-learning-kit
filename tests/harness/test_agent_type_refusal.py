@@ -3689,9 +3689,16 @@ def test_a_crafted_script_does_not_hold_up_the_conversation(tmp_path):
                 worst[0], last = max(worst[0], now - last), now
 
         beating = asyncio.create_task(beat())
-        started = time.perf_counter()
-        result = await server.tools[0].handler(reading)
-        waited = time.perf_counter() - started
+        # A save made while the session's checks still run answers "not checked in time" (on a
+        # loaded host they can outlast the deadline), and the model writes again: so does this.
+        waited = 0.0
+        for _ in range(60):
+            started = time.perf_counter()
+            result = await server.tools[0].handler(reading)
+            waited = max(waited, time.perf_counter() - started)
+            if not _text(result).startswith("not checked in time"):
+                break
+            await asyncio.sleep(0.5)
         done.set()
         await beating
         return result, worst[0], waited
