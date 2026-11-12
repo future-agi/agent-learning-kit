@@ -125,8 +125,8 @@ def _provider():
             OTLPSpanExporter,
         )
         from opentelemetry.sdk.resources import Resource
-        from opentelemetry.sdk.trace import SpanProcessor, TracerProvider
-        from opentelemetry.sdk.trace.export import BatchSpanProcessor
+        from opentelemetry.sdk.trace import ReadableSpan, SpanProcessor, TracerProvider
+        from opentelemetry.sdk.trace.export import BatchSpanProcessor, SpanExporter
 
         class _Stamp(SpanProcessor):
             """Stamps a span started after an unmeasured call was seen."""
@@ -134,6 +134,44 @@ def _provider():
             def on_start(self, span, parent_context=None):
                 if _state["partial"]:
                     span.set_attribute(STATE_KEY, PARTIAL)
+
+        def _without_tool_definitions(span):
+            kept = _kept_attributes(span.attributes)
+            if kept is None:
+                return span
+            return ReadableSpan(
+                name=span.name,
+                context=span.context,
+                parent=span.parent,
+                resource=span.resource,
+                attributes=kept,
+                events=span.events,
+                links=span.links,
+                kind=span.kind,
+                status=span.status,
+                start_time=span.start_time,
+                end_time=span.end_time,
+                instrumentation_scope=span.instrumentation_scope,
+            )
+
+        class _WithoutToolDefinitions(SpanExporter):
+            """Sends each span without the agent's tool definitions (names, descriptions,
+            argument schemas), which no TraceConfig flag hides: what leaves is the model, the
+            tokens and the timing. Only our exporter is wrapped; the agent's own are not."""
+
+            def __init__(self, exporter):
+                self._exporter = exporter
+
+            def export(self, spans):
+                return self._exporter.export(
+                    [_without_tool_definitions(span) for span in spans]
+                )
+
+            def shutdown(self):
+                self._exporter.shutdown()
+
+            def force_flush(self, timeout_millis=30000):
+                return self._exporter.force_flush(timeout_millis)
 
         exporter = OTLPSpanExporter(
             endpoint=os.environ[_ENDPOINT],
@@ -146,10 +184,33 @@ def _provider():
         provider = TracerProvider(resource=Resource.create())
         provider.add_span_processor(_Stamp())
         provider.add_span_processor(
-            BatchSpanProcessor(exporter, schedule_delay_millis=_BATCH_DELAY_MS)
+            BatchSpanProcessor(
+                _WithoutToolDefinitions(exporter), schedule_delay_millis=_BATCH_DELAY_MS
+            )
         )
         _state["provider"] = provider
         return provider
+
+
+# The attributes the SDK instrumentors write the request's tool definitions under: the list
+# and each tool's JSON schema (traceAI), and OpenInference's older form.
+_TOOL_DEFINITION_KEYS = ("gen_ai.tool.definitions", "llm.tools")
+
+
+def _kept_attributes(attributes):
+    """The span's attributes without its tool definitions, or None when it carries none."""
+    if not attributes:
+        return None
+    dropped = {
+        name
+        for name in attributes
+        if any(
+            name == key or name.startswith(f"{key}.") for key in _TOOL_DEFINITION_KEYS
+        )
+    }
+    if not dropped:
+        return None
+    return {name: value for name, value in attributes.items() if name not in dropped}
 
 
 def _hidden_content():

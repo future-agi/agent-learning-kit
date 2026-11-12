@@ -44,6 +44,9 @@ CALL = "call-7f3a"
 PROMPT = "PROMPT-TEXT-1c9e"
 SYSTEM = "SYSTEM-TEXT-5b2d"
 REPLY = "REPLY-TEXT-8e41"
+TOOL_NAME = "lookup_tool_4d7a"
+TOOL_TEXT = "TOOL-DESCRIPTION-9b31"
+TOOL_FIELD = "tool_field_2e6c"
 INGEST = ("ingest-api-key", "ingest-secret-key")
 STATE = simulation_measure.STATE_KEY
 HOOK_MODULES = (
@@ -74,6 +77,40 @@ def ask():
     out = client.messages.create(
         model="claude-3-5-haiku-latest", max_tokens=50, system="{SYSTEM}",
         messages=[{{"role": "user", "content": "{PROMPT}"}}],
+    )
+    return out.content[0].text
+"""
+
+OPENAI_TOOLS_CALL = f"""
+import os, openai
+
+client = openai.OpenAI(api_key="sk-test", base_url=os.environ["MODEL_URL"] + "/v1")
+
+def ask():
+    out = client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[{{"role": "user", "content": "{PROMPT}"}}],
+        tools=[{{"type": "function", "function": {{
+            "name": "{TOOL_NAME}", "description": "{TOOL_TEXT}",
+            "parameters": {{"type": "object", "properties": {{"{TOOL_FIELD}": {{"type": "string"}}}}}},
+        }}}}],
+    )
+    return out.choices[0].message.content
+"""
+
+ANTHROPIC_TOOLS_CALL = f"""
+import os, anthropic
+
+client = anthropic.Anthropic(api_key="sk-test", base_url=os.environ["MODEL_URL"])
+
+def ask():
+    out = client.messages.create(
+        model="claude-3-5-haiku-latest", max_tokens=50,
+        messages=[{{"role": "user", "content": "{PROMPT}"}}],
+        tools=[{{
+            "name": "{TOOL_NAME}", "description": "{TOOL_TEXT}",
+            "input_schema": {{"type": "object", "properties": {{"{TOOL_FIELD}": {{"type": "string"}}}}}},
+        }}],
     )
     return out.content[0].text
 """
@@ -327,6 +364,40 @@ def test_an_untraced_agents_model_call_is_measured_without_its_text(
     # Sent under the agent's ingest key.
     _path, headers, _body = collector.received[0]
     assert (headers["x-api-key"], headers["x-secret-key"]) == INGEST
+
+
+@pytest.mark.parametrize(
+    "sdk, call, model",
+    [
+        ("openai", OPENAI_TOOLS_CALL, "gpt-4o-mini"),
+        ("anthropic", ANTHROPIC_TOOLS_CALL, "claude-3-5-haiku"),
+    ],
+    ids=["openai", "anthropic"],
+)
+def test_a_measured_call_never_carries_the_agents_tool_definitions(
+    tmp_path: Path, collector: Collector, sdk: str, call: str, model: str
+) -> None:
+    # The instrumentors write the request's tools, which no TraceConfig flag hides: the
+    # measured span still carries the model, the tokens and the call, and nothing of the tools.
+    _needs(sdk, _measured_scope(sdk))
+    result = _run(call + "print(ask())", _environment(tmp_path, collector))
+
+    assert result.returncode == 0, result.stderr
+    [span] = _settled(collector, 1)
+    attributes = span["attributes"]
+    assert attributes["fi.simulator.call_execution_id"] == CALL
+    assert model in str(
+        attributes.get("gen_ai.request.model") or attributes.get("llm.model_name")
+    )
+    assert attributes["gen_ai.usage.input_tokens"] == 11
+    assert attributes["gen_ai.usage.output_tokens"] == 7
+    assert not [
+        name
+        for name in attributes
+        if name.startswith(("gen_ai.tool.definitions", "llm.tools"))
+    ]
+    for text in (TOOL_NAME, TOOL_TEXT, TOOL_FIELD):
+        assert text.encode() not in collector.raw()
 
 
 def test_nothing_is_measured_or_imported_without_the_switch(
