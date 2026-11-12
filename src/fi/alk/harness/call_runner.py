@@ -1352,13 +1352,22 @@ def _actor_dispatcher(
     return build_dispatcher(
         dict(doc),
         bundle_dir,
-        act=DoorActs(runner_door(tools.address, database.address, budget)),
+        act=DoorActs(runner_door(tools.address, database.address, budget), _bundle_contract(bundle_dir)),
         read_log=_ActionLog(database.address),
         records=_world_records(runtime),
         trial_id=trial_id,
         meter=meter,
         reported=reported,
     )
+
+
+def _bundle_contract(bundle_dir: Path) -> dict[str, Any]:
+    path = Path(bundle_dir) / "contract.json"
+    try:
+        body = json.loads(path.read_text(encoding="utf-8")) if path.is_file() else {}
+    except (OSError, ValueError):
+        return {}
+    return body if isinstance(body, dict) else {}
 
 
 def _private_actions_file(path: Path) -> Path:
@@ -2719,8 +2728,9 @@ class CallRunnerImpl:
             combined = result.audio_combined_path
             recording = combined if combined and Path(combined).is_file() else None
             notices = self._fault_notices(runtime, faults, calls)
-            # A call that ended with no words still says what did not take effect, never only logging it.
-            if result.transcript or notices:
+            # A call that ended with no words still says what did not take effect, and what actors did in the world,
+            # never only logging it.
+            if result.transcript or notices or acted or actor_decisions or took_part.get("call_actors"):
                 transcript_document = {
                     "schema_version": "futureagi.call-transcript.v1",
                     "transcript": result.transcript,

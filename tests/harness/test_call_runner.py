@@ -2667,6 +2667,31 @@ def test_a_hand_off_record_among_the_agent_s_calls_takes_no_action_id_and_moves_
     ]
 
 
+def test_a_call_with_no_words_still_seals_what_an_actor_did_in_the_world(tmp_path, monkeypatch) -> None:
+    _job_obj, context = _context(tmp_path=tmp_path, evidence_seam=EvidenceSeam.TOOL_TRACE)
+    _write_scenario_doc(context.bundle_dir, scenario_key="k1")
+    _with_actors(context.bundle_dir)
+    columns = ["name", "arguments", "result", "ok", "error", "at", "action_id", "actor_id", "outcome"]
+    rows = [("approve", {}, None, True, "", 2.0, "a2", "reviewer", "committed")]
+    monkeypatch.setitem(sys.modules, "psycopg", _FakePsycopg(rows, columns))
+
+    async def place_call(spec):
+        return _report(transcript="", messages=[])
+
+    adapter = FakeAdapter()
+    runner = cr.CallRunnerImpl(adapter, context, place_call=place_call)
+    _run(
+        runner,
+        _FakeScenario("k1"),
+        _runtime(endpoints={"database": _postgres_endpoint()}, metadata={"livekit_agent_name": "agent-w0"}),
+    )
+    sealed = {kind: data for kind, _key, data in adapter.uploads}
+    transcript = json.loads(sealed[cr.ArtifactKind.TRANSCRIPT])
+    assert [(one["name"], one["actor_id"]) for one in transcript["world_actors"]["actions"]] == [
+        ("records.approve", "reviewer")
+    ]
+
+
 def test_a_call_where_only_a_world_actor_took_part_lists_it_in_the_call_s_actor_record(
     tmp_path, monkeypatch
 ) -> None:

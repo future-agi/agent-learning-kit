@@ -4362,6 +4362,18 @@ def test_a_call_whose_only_evidence_is_its_recording_is_still_judged(monkeypatch
     assert receipt.status == "passed"
 
 
+def test_a_call_whose_only_evidence_is_an_actor_s_action_in_the_world_is_still_judged(monkeypatch) -> None:
+    async def _all(goals, world, calls, *, messages=()):
+        return {goal.name: (True, "the manager approved") for goal in goals}
+
+    silent = replace(
+        _call_outcome(turns=0),
+        world_actions=({"name": "approve", "actor_id": "manager", "outcome": "committed"},),
+    )
+    receipt, _ = _two_judged(monkeypatch, _all, silent=True, outcome=silent)
+    assert receipt.status == "passed"
+
+
 def test_joint_judging_is_the_default_and_separate_turns_it_off(monkeypatch) -> None:
     async def _all(goals, world, calls, *, messages=()):
         return {goal.name: (True, "held together") for goal in goals}

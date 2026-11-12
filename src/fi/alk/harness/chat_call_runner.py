@@ -841,7 +841,7 @@ class HostedChatCallRunner:
             tools_url=service.address if service is not None else None,
             service_actions=service_actions(self._contract),
         )
-        acts = DoorActs(door)
+        acts = DoorActs(door, self._contract.model_dump())
         meter = ActorMeter()
         limits = actor_limits(document, self._context.bundle_dir, "chat")
         records = getattr(getattr(target_world, "store", None), "records", None)

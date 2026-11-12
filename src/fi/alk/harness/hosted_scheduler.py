@@ -2442,8 +2442,12 @@ class HostedScheduler:
                 )
             )
 
-        # A call with no words, no actions and no recording leaves its judged sub-goals unmeasured, never guessed.
-        if judged_pending and not (calls or call_outcome.messages or call_outcome.recording):
+        # A call with no words, no actions (the agent's or an actor's) and no recording leaves its judged sub-goals
+        # unmeasured, never guessed.
+        evidence = bool(
+            calls or call_outcome.messages or call_outcome.recording or call_outcome.world_actions
+        )
+        if judged_pending and not evidence:
             for slot, goal in judged_pending:
                 sub_goal_results[slot] = SubGoalResult(
                     name=goal.name,
@@ -2451,7 +2455,7 @@ class HostedScheduler:
                     reason=f"{UNMEASURED}the call left no words, actions or recording to judge it from",
                     judged=True,
                 )
-        if judged_pending and (calls or call_outcome.messages or call_outcome.recording):
+        if judged_pending and evidence:
             # A scenario's judged sub-goals can run together, but judge batches from parallel
             # worlds must not overlap on the shared provider session.
             async with self._judge_batch_lock:

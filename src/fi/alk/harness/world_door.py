@@ -170,6 +170,10 @@ class WorldDoor:
         self.faults_by_tool = faults_by_tool
         self._keys_lock = threading.Lock()
         self._key_locks: dict[str, threading.Lock] = {}
+        # Each keyed action this door ran, by actor and key: "pending" while it runs, "committed" with its answer, or
+        # "unknown" when the world may have applied it but did not say. Kept here as well as in the log, so a log that
+        # cannot be written or read never lets a retry run the action again.
+        self._keyed: dict[str, tuple[str, Any, Any]] = {}
 
     def enter(self, call: ToolCall) -> Outcome:
         """The outcome of one call. Never raises: whatever goes wrong comes back as an outcome."""
@@ -243,18 +247,45 @@ class WorldDoor:
                     on_behalf_of,
                 )
         else:
-            fault = self._fault(call)
-            if fault is not None:
-                return self._faulted(call, fault)
+            named = self._named_faults(call)
+            if named:
+                # Which call of this action this is, and its row, are decided under one lock: two calls at once
+                # never both take a one-shot fault set on the same call number.
+                with self._key_lock(f"\x01calls\x00{call.name}"):
+                    fault = self._fault(call, named)
+                    if fault is not None:
+                        return self._faulted(call, fault)
+                    return self._run(call, None, None, wait=True)
         key = (call.key or "").strip() if acting else ""
         if not key:
             return self._run(call, None, on_behalf_of)
         # A key is one actor's own: another actor's identical key is a different action.
-        with self._key_lock(f"{call.actor}\x00{key}"):
-            earlier = self._committed(key, call.actor)
-            if earlier is None:
-                return self._run(call, key, on_behalf_of)
-            if earlier[0] != call.arguments:
+        slot = f"{call.actor}\x00{key}"
+        with self._key_lock(slot):
+            known = self._keyed.get(slot)
+            if known is None:
+                try:
+                    earlier = self.log.committed(key, call.actor)
+                except Exception:  # noqa: BLE001 - the log cannot say: running again could apply the action twice
+                    return self._key_unknown(call, key, on_behalf_of)
+                if earlier is not None:
+                    known = ("committed", *earlier)
+            if known is None:
+                self._keyed[slot] = ("pending", call.arguments, None)
+                outcome = self._run(call, key, on_behalf_of)
+                if outcome.outcome == "committed":
+                    self._keyed[slot] = ("committed", call.arguments, outcome.result)
+                elif outcome.outcome == "faulted":
+                    # The world failed mid-action: whether it applied it is unknown, so the key is never run again.
+                    self._keyed[slot] = ("unknown", call.arguments, None)
+                else:
+                    # Refused: nothing took effect, and a retry is a new attempt.
+                    del self._keyed[slot]
+                return outcome
+            state, arguments, result = known
+            if state != "committed":
+                return self._key_unknown(call, key, on_behalf_of)
+            if arguments != call.arguments:
                 outcome = Outcome(
                     "refused",
                     409,
@@ -264,9 +295,19 @@ class WorldDoor:
                 self._write(call, outcome, key=key, on_behalf_of=on_behalf_of)
                 return outcome
             # Answered from the first result; the world never sees the same action twice.
-            outcome = Outcome("duplicate", 200, result=earlier[1])
+            outcome = Outcome("duplicate", 200, result=result)
             self._write(call, outcome, key=key, on_behalf_of=on_behalf_of)
             return outcome
+
+    def _key_unknown(self, call: ToolCall, key: str, on_behalf_of: str | None) -> Outcome:
+        """A keyed action whose first attempt may have taken effect without a recorded answer: never run again."""
+        outcome = Outcome(
+            "faulted",
+            503,
+            reason="whether this idempotency key's first action took effect is unknown; it is not run again",
+        )
+        self._write(call, outcome, key=key, on_behalf_of=on_behalf_of)
+        return outcome
 
     def _refused(
         self, call: ToolCall, code: str, reason: str, on_behalf_of: str | None = None
@@ -276,16 +317,17 @@ class WorldDoor:
         self._write(call, outcome, on_behalf_of=on_behalf_of)
         return outcome
 
-    def _fault(self, call: ToolCall) -> dict[str, Any] | None:
-        """The fault this trial sets on this call of the agent's, if any: by action and which call of it."""
+    def _named_faults(self, call: ToolCall) -> list[dict[str, Any]]:
+        """The faults this trial sets on this action of the agent's, whichever call of it they name."""
         try:
             faults = [one for one in self.faults() or [] if isinstance(one, dict)]
         except Exception:  # noqa: BLE001 - unreadable faults are no faults
-            return None
+            return []
         names = (call.action, call.name) if self.faults_by_tool else (call.action,)
-        named = [one for one in faults if one.get("action") in names]
-        if not named:
-            return None
+        return [one for one in faults if one.get("action") in names]
+
+    def _fault(self, call: ToolCall, named: list[dict[str, Any]]) -> dict[str, Any] | None:
+        """The fault set on this call of the action, by which call of it this is."""
         try:
             made = self.log.agent_calls(call.name)
         except Exception:  # noqa: BLE001 - counted from zero when the log cannot say
@@ -307,10 +349,10 @@ class WorldDoor:
                 body=None,
                 refusal_code=None,
             )
-            self._write(call, logged)
+            self._write(call, logged, wait=True)
             return logged
         outcome = Outcome("faulted", 504, reason="timeout_before_commit", fault=fault)
-        self._write(call, outcome)
+        self._write(call, outcome, wait=True)
         return outcome
 
     def _execute(self, call: ToolCall) -> Outcome:
@@ -335,18 +377,19 @@ class WorldDoor:
         )
 
     def _run(
-        self, call: ToolCall, key: str | None, on_behalf_of: str | None
+        self, call: ToolCall, key: str | None, on_behalf_of: str | None, *, wait: bool = False
     ) -> Outcome:
         outcome = self._execute(call)
-        # A keyed action's row is written before the answer, so a retry always finds the first result.
-        self._write(call, outcome, key=key, on_behalf_of=on_behalf_of, wait=key is not None)
+        # A keyed action's row is written before the answer, so a retry always finds the first result; so is the row
+        # of an action a fault is set on, so the next call of it is counted after this one.
+        self._write(
+            call,
+            outcome,
+            key=key,
+            on_behalf_of=on_behalf_of,
+            wait=wait or key is not None,
+        )
         return outcome
-
-    def _committed(self, key: str, actor: str) -> tuple[Any, Any] | None:
-        try:
-            return self.log.committed(key, actor)
-        except Exception:  # noqa: BLE001 - unknown is treated as not yet answered
-            return None
 
     def _key_lock(self, key: str) -> threading.Lock:
         with self._keys_lock:

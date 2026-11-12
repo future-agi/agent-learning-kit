@@ -913,6 +913,30 @@ def test_an_actor_s_model_is_routed_like_the_harness_s_own_and_a_failed_call_is_
     assert asked == ["vertex_ai/gemini-3.8-flash", "vertex_ai/gemini-3.7-flash"]
 
 
+def test_a_cycle_another_actor_breaks_is_no_cycle_whichever_actor_ids_sort_first():
+    def waits_on(collection):
+        return Trigger(kind="conditional", collection=collection)
+
+    actors = {
+        # The manager comes in once an approval exists; two actors may write one.
+        "m": Actor(id="m", name="M", permitted_actions=["deals.change"]),
+        # This one waits on a deal only the manager writes: on its own, a cycle with the manager.
+        "a": Actor(id="a", name="A", permitted_actions=["approvals.change"]),
+        # This one waits on an invoice someone with no trigger of their own writes, so it comes in, and so does m.
+        "b": Actor(id="b", name="B", permitted_actions=["approvals.put"]),
+        "x": Actor(id="x", name="X", permitted_actions=["invoices.put"]),
+    }
+    entries = [
+        ScenarioActor(id="m", trigger=waits_on("approvals")),
+        ScenarioActor(id="a", trigger=waits_on("deals")),
+        ScenarioActor(id="b", trigger=waits_on("invoices")),
+        ScenarioActor(id="x"),
+    ]
+    assert cycles(actors, entries) == []
+    # Without the actor that breaks it, the manager and `a` wait on each other.
+    assert cycles(actors, [one for one in entries if one.id != "b"]) == [["a", "m"]]
+
+
 def test_actors_triggered_by_the_agent_s_calls_never_form_a_cycle_whatever_they_may_do():
     actors = {
         "rep": Actor(id="rep", name="R", permitted_actions=["crm.request"]),

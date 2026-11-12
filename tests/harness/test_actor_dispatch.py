@@ -465,6 +465,17 @@ def test_another_actor_answers_instead_when_the_approver_times_out(play):
     assert sent[0][1]["X-ALK-Parent-Event"] == "a1"
 
 
+@pytest.mark.parametrize("cap", ["turns_per_actor", "turns_per_trial"])
+def test_an_actor_answering_for_another_is_held_to_the_live_turn_limits(cap):
+    dispatcher, clock, sent = _approver("deputy", instead_play="live")
+    # The limit is already reached: answering instead would be one turn past it.
+    setattr(dispatcher, cap, 0)
+    asyncio.run(_wait_out(dispatcher, clock, 30))
+    assert ("manager", "timeout", "answered_by") in _timeline(dispatcher)
+    assert sent == []
+    assert dispatcher.live_turns.get("deputy", 0) == 0
+
+
 def _channel(names, decide):
     """Live actors who can all post in one Slack channel, in a world whose log records each post."""
     log = []
