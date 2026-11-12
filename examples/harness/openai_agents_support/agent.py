@@ -70,11 +70,17 @@ async def agent_callback(agent_input):
         {"role": message["role"], "content": message["content"]}
         for message in agent_input.messages
     ]
+    api_key = os.getenv("OPENAI_API_KEY")
+    base_url = os.getenv("OPENAI_BASE_URL")
+    # With no base URL the client falls back to api.openai.com and would send the key there.
+    if api_key and not base_url:
+        raise RuntimeError(
+            "OPENAI_API_KEY is set but OPENAI_BASE_URL is empty: set OPENAI_BASE_URL to the "
+            "endpoint the key belongs to."
+        )
     # Each request runs in its own event loop, and the SDK does not close a client it was
     # handed, so the client lives and dies with the call.
-    async with AsyncOpenAI(
-        base_url=os.getenv("OPENAI_BASE_URL"), api_key=os.getenv("OPENAI_API_KEY")
-    ) as client:
+    async with AsyncOpenAI(base_url=base_url, api_key=api_key) as client:
         # A model object, because the SDK's default provider rejects a prefixed name
         # such as vertex_ai/..., and this endpoint speaks chat completions.
         model = OpenAIChatCompletionsModel(model=MODEL, openai_client=client)
