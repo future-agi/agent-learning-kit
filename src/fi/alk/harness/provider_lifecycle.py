@@ -348,8 +348,13 @@ def run_lifecycle_invocation(
     *,
     log_path: Path,
     run: Callable[..., Any],
+    user: int | None = None,
+    group: int | None = None,
 ) -> int:
-    """Execute one bounded lifecycle command without a shell and without logging its env."""
+    """Execute one bounded lifecycle command without a shell and without logging its env.
+
+    ``user`` and ``group`` are the world identity the command runs as, when the caller has one.
+    """
     log_path.parent.mkdir(parents=True, exist_ok=True)
     environment = {
         key: value
@@ -357,6 +362,7 @@ def run_lifecycle_invocation(
         if key in {"PATH", "LANG", "LC_ALL", "SSL_CERT_FILE", "SSL_CERT_DIR"}
     }
     environment.update(invocation.environment)
+    identity = {} if user is None else {"user": user, "group": group}
     try:
         result = run(
             list(invocation.argv),
@@ -366,6 +372,7 @@ def run_lifecycle_invocation(
             text=True,
             timeout=invocation.timeout_seconds,
             check=False,
+            **identity,
         )
     except (TimeoutError, subprocess.TimeoutExpired) as exc:
         raise ProviderLifecycleError("provider_lifecycle_command_timed_out") from exc

@@ -123,10 +123,13 @@ COPY src ./src
 COPY hosted-snapshot/catalog.json /opt/alk/hosted-snapshot-catalog.json
 # Only the files this install creates are made read-only: a recursive chmod of the whole venv in
 # this layer would copy every file of the dependency layer into it.
+# /opt/alk/process-isolation tells the platform this harness can run each customer process as
+# its own OS user (`privilege.py`); a platform starts it with that grant only when it is present.
 RUN --mount=type=cache,target=/root/.cache/uv \
     touch /tmp/alk-install-start \
     && UV_LINK_MODE=copy uv pip install --python /opt/alk-venv/bin/python --no-deps . \
     && find /opt/alk-venv -cnewer /tmp/alk-install-start -exec chmod a-w {} + \
+    && install -m 0444 /dev/null /opt/alk/process-isolation \
     && chmod -R a-w /opt/alk \
     && rm /tmp/alk-install-start
 

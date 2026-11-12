@@ -738,7 +738,7 @@ async def validate_once(
     from .process_runtime import (
         ProcessRuntimeProvider,
         default_user_resolver,
-        fixed_sandbox_user_resolver,
+        hosted_user_resolution,
     )
     from .scenario_source import does_nothing, load_scenarios
     from .source_data_invariants import author_invariants, check_invariants
@@ -851,14 +851,13 @@ async def validate_once(
             secrets_path=secrets,
             secret_purpose_map=job_secret_purposes(job),
             # A local parity run shares the host/container process namespace and must resolve
-            # the same unprivileged identities installed in its image. E2B, however, launches
-            # the guest as one fixed OS identity and does not grant setuid/chown capabilities.
-            user_resolver=(
-                default_user_resolver
+            # the same unprivileged identities installed in its image. A hosted sandbox runs
+            # each declared user only when the platform granted per-user isolation.
+            **(
+                {"user_resolver": default_user_resolver, "require_declared_user": False}
                 if local_runtime and os.environ.get("ALK_FIXED_SANDBOX_USER") != "1"
-                else fixed_sandbox_user_resolver
+                else hosted_user_resolution()
             ),
-            require_declared_user=False,
             public_url_resolver=(
                 None
                 if capabilities is None

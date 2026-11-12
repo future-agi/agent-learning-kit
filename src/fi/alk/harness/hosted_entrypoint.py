@@ -28,6 +28,7 @@ import os
 import random
 import re
 import signal
+import sys
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -63,14 +64,15 @@ from .job import (
     HarnessJob,
     HarnessStage,
 )
+from .privilege import IsolationUnavailable, establish_isolation
 from .process_preflight import PreflightError, preflight_bundle
 from .process_runtime import (
     SECTION_2F_DOMAIN,
     EnvironmentRuntime,
     ProcessRuntimeError,
     ProcessRuntimeProvider,
-    fixed_sandbox_user_resolver,
     RuntimeEndpoint,
+    hosted_user_resolution,
 )
 from .judge import judge_sub_goal as _judge_sub_goal
 from .joint_judge import judge_sub_goals_jointly as _judge_sub_goals_jointly
@@ -2042,13 +2044,13 @@ class HostedEntrypointDeps:
     # Daytona forces the sandbox to a fixed non-root user (svc-control) and ignores os_user
     # overrides, so the guest cannot setuid/chown to the bundle's svc-agent/svc-tools/svc-data
     # users -- every process runs uniformly as svc-control. The bundle may still DECLARE those
-    # users (the model validates them); they are simply not enforced at runtime here.
+    # users (the model validates them); they are enforced only where the platform granted
+    # per-user isolation (`privilege.py`).
     build_provider: Callable[
         [ob.HostedCapabilities, ob.Transport], WorldProvisioner
     ] = field(
         default=lambda capabilities, transport: ProcessRuntimeProvider(
-            user_resolver=fixed_sandbox_user_resolver,
-            require_declared_user=False,
+            **hosted_user_resolution(),
             public_url_resolver=lambda port, ttl: _resolve_hosted_public_url(
                 capabilities, transport, port=port, expires_in_seconds=ttl
             ),
@@ -2900,6 +2902,12 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--output", required=True, type=Path, help="/work/artifacts")
     args = parser.parse_args(argv)
+    try:
+        establish_isolation()
+    except IsolationUnavailable as exc:
+        # Infrastructure, not the agent: the platform retries within its attempt budget.
+        print(f"IsolationUnavailable: {exc}", file=sys.stderr, flush=True)
+        return EXIT_CRASHED
     try:
         return asyncio.run(run_job(args.job, args.source, args.output))
     finally:
