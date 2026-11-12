@@ -3666,7 +3666,7 @@ def apply_postgres_world_ir(
                 HarnessDiagnostic.create(
                     stage=HarnessStage.VALIDATING_ENVIRONMENT,
                     component="world_ir",
-                    code="value_shape_mismatch",
+                    code="world_ir_artifact_invalid",
                     message="canonical World IR artifact is invalid",
                     evidence_refs=("artifact://world-ir",),
                 ),

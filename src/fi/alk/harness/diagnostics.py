@@ -98,6 +98,11 @@ _POLICIES = MappingProxyType(
             owner=RepairOwner.AUTHORING,
             repair_strategy="author_value_in_declared_shape",
         ),
+        "world_ir_artifact_invalid": DiagnosticPolicy(
+            domain=FailureDomain.ENVIRONMENT,
+            owner=RepairOwner.COMPILER,
+            repair_strategy="regenerate_world_from_current_source_model",
+        ),
         "unknown_table": DiagnosticPolicy(
             domain=FailureDomain.ENVIRONMENT,
             owner=RepairOwner.AUTHORING,

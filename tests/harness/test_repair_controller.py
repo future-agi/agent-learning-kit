@@ -362,3 +362,42 @@ def test_a_seeded_value_in_a_generated_column_goes_to_authoring_repair() -> None
         )
     )
     assert decision.action is RepairAction.PATCH_ENVIRONMENT
+
+
+def test_an_unreadable_generated_world_ir_goes_to_the_compiler_not_authoring(
+    tmp_path, monkeypatch
+) -> None:
+    """A corrupt generated world-ir.json is not authored data: authoring repair would have to
+    parse it to patch it, so the controller must regenerate it, not ask authoring."""
+    import sys
+    import types
+    from contextlib import nullcontext
+
+    from fi.alk.harness import process_runtime as pr
+
+    monkeypatch.setitem(
+        sys.modules,
+        "psycopg",
+        types.SimpleNamespace(connect=lambda **_: nullcontext(object())),
+    )
+    world_ir = tmp_path / "world-ir.json"
+    world_ir.write_text("{not json")
+    with pytest.raises(pr.GenericWorldSeedError) as raised:
+        pr.apply_postgres_world_ir(
+            world_ir,
+            port=14000,
+            dbname="baseline",
+            credentials=pr.EngineCredentials(username="harness", password="pw"),
+            source_digest="a" * 64,
+        )
+
+    diagnostics = raised.value.diagnostics
+    assert [one.code for one in diagnostics] == ["world_ir_artifact_invalid"]
+    decision = RepairController().decide(
+        CandidateObservation(
+            candidate_hash="cand-a",
+            phase=RepairPhase.ENVIRONMENT,
+            diagnostics=diagnostics,
+        )
+    )
+    assert decision.action is RepairAction.RECOMPILE

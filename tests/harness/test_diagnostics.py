@@ -89,6 +89,7 @@ def test_unknown_code_requires_explicit_taxonomy_change() -> None:
         ("source_model_fingerprint_mismatch", RepairOwner.COMPILER),
         ("generated_column_authored", RepairOwner.AUTHORING),
         ("value_shape_mismatch", RepairOwner.AUTHORING),
+        ("world_ir_artifact_invalid", RepairOwner.COMPILER),
         ("array_shape_mismatch", RepairOwner.AUTHORING),
         ("unknown_table", RepairOwner.AUTHORING),
         ("unknown_column", RepairOwner.AUTHORING),
