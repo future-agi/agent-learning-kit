@@ -2316,8 +2316,10 @@ def spawn_source_process(
                         _SIMULATION_MARK_SITECUSTOMIZE, encoding="utf-8"
                     )
                 sitecustomize_hook.chmod(0o444)
-        if mark_hook_due:
-            # The customer's interpreter has no `fi.alk`, so the module sits beside the hook.
+        if sitecustomize_hook is not None:
+            # The customer's interpreter has no `fi.alk`, so the module sits beside the hook;
+            # it carries the one copy of the hand-on to the next `sitecustomize`, so every
+            # process that gets the hook gets it.
             mark_module = world_dir / "simulation_mark_bootstrap.py"
             if not mark_module.exists():
                 mark_module.write_bytes(

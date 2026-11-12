@@ -6526,6 +6526,7 @@ def test_bundle_main_matching_folder_passes(tmp_path, monkeypatch):
 
 
 _GATEWAY_MARK = "ALK_OPENAI_AGENTS_CHAT_COMPLETIONS"
+_TRACING_OFF = "OPENAI_AGENTS_DISABLE_TRACING"
 
 
 def _gateway_job(target_model: str | None) -> HarnessJob:
@@ -6577,6 +6578,53 @@ def test_routed_target_model_marks_the_agent_process_for_chat_completions(
         tmp_path, lane, "vertex_ai/gemini-3.7-flash"
     )
     assert environment[_GATEWAY_MARK] == "1"
+    assert environment[_TRACING_OFF] == "1"
+
+
+@pytest.mark.parametrize("lane", ["callback", "declared"])
+def test_routed_sdk_agent_in_a_repo_with_an_agents_folder_has_tracing_off(
+    tmp_path: Path, lane: str
+) -> None:
+    text, runtime, kind = _LANES[lane]
+    source = _repo(
+        tmp_path,
+        {
+            "pyproject.toml": _PROJECT,
+            "agents/__init__.py": "",
+            "agent.py": "from agents import Agent, Runner\n" + text,
+        },
+    )
+    plan = resolve_environment_plan(
+        source,
+        _gateway_job("vertex_ai/gemini-3.7-flash"),
+        contract_modality="chat",
+        contract_interface_kind=kind,
+        contract_runtime=dict(runtime),
+    )
+    environment = next(
+        p for p in plan.processes if p.name == plan.control_service
+    ).environment
+    assert environment[_GATEWAY_MARK] == "1"
+    assert environment[_TRACING_OFF] == "1"
+
+
+def test_routed_declared_tracing_value_is_overridden(tmp_path: Path) -> None:
+    source = _repo(tmp_path, {"pyproject.toml": _PROJECT, "agent.py": "x = 1\n"})
+    plan = resolve_environment_plan(
+        source,
+        _gateway_job("vertex_ai/gemini-3.7-flash"),
+        contract_modality="chat",
+        contract_interface_kind="command",
+        contract_runtime={
+            "command": ["python", "agent.py"],
+            "interface": {"kind": "command"},
+            "environment": {_TRACING_OFF: "0"},
+        },
+    )
+    environment = next(
+        p for p in plan.processes if p.name == plan.control_service
+    ).environment
+    assert environment[_TRACING_OFF] == "1"
 
 
 @pytest.mark.parametrize("lane", ["callback", "declared", "compose"])
@@ -6586,3 +6634,77 @@ def test_unrouted_target_model_leaves_the_agent_process_unmarked(
 ) -> None:
     environment = _gateway_control_environment(tmp_path, lane, target_model)
     assert _GATEWAY_MARK not in environment
+    assert _TRACING_OFF not in environment
+
+
+def _compose_gateway_environment(tmp_path, monkeypatch, resolved, target_model, env_block):
+    from fi.alk.harness.compose_integration import compile_bundle
+
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "compose.yaml").write_text(
+        "services:\n  chat:\n    image: example/chat:latest\n" + env_block
+    )
+    authoring = tmp_path / "authoring"
+    authoring.mkdir()
+    contract = {
+        "modality": "chat",
+        "runtime": {
+            "execution": "compose",
+            "compose_file": "compose.yaml",
+            "service": "chat",
+            "interface": {
+                "kind": "http",
+                "protocol": "json_template",
+                "port": 8000,
+                "path": "/chat",
+            },
+        },
+    }
+    job = _gateway_job(target_model)
+    monkeypatch.setenv("ALK_TRUSTED_COMPOSE_SOCKET", "/private/alk/docker.sock")
+    compile_bundle(
+        source=source,
+        job=job,
+        authoring=authoring,
+        output=tmp_path / "bundle",
+        contract=contract,
+        include_scenarios=False,
+    )
+    return json.loads((tmp_path / "bundle" / "compose.json").read_text())["services"]["chat"]
+
+
+@pytest.mark.parametrize(
+    "env_block",
+    [
+        "",
+        "    environment:\n      MODE: small\n",
+        "    environment:\n      - MODE=small\n      - OPENAI_AGENTS_DISABLE_TRACING=0\n",
+    ],
+    ids=["none", "mapping", "list_with_customer_value"],
+)
+def test_routed_compose_control_service_has_agents_sdk_tracing_off(
+    tmp_path, monkeypatch, resolved_compose_images, env_block
+):
+    service = _compose_gateway_environment(
+        tmp_path, monkeypatch, resolved_compose_images,
+        "vertex_ai/gemini-3.7-flash", env_block,
+    )
+    environment = service["environment"]
+    if isinstance(environment, dict):
+        assert environment[_TRACING_OFF] == "1"
+        assert environment.get("MODE", "small") == "small"
+    else:
+        assert environment.count(f"{_TRACING_OFF}=1") == 1
+        assert not any(item == f"{_TRACING_OFF}=0" for item in environment)
+        assert "MODE=small" in environment or "MODE" not in env_block
+
+
+@pytest.mark.parametrize("target_model", ["gpt-4o", "openai/gpt-4o", None])
+def test_unrouted_compose_control_service_is_left_alone(
+    tmp_path, monkeypatch, resolved_compose_images, target_model
+):
+    service = _compose_gateway_environment(
+        tmp_path, monkeypatch, resolved_compose_images, target_model, ""
+    )
+    assert "environment" not in service

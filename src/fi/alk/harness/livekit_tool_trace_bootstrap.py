@@ -235,15 +235,15 @@ def _install_worker_isolation() -> None:
 
 
 def _set_openai_agents_chat_style(module: Any, reason: str = "") -> None:
-    try:
-        if reason:
-            raise RuntimeError(reason)
-        module.set_default_openai_api("chat_completions")
-    except Exception as exc:  # noqa: BLE001 - a setting we could not make must not stop the agent
-        sys.stderr.write(
-            "alk: could not set the OpenAI Agents SDK to chat completions: "
-            f"{reason or type(exc).__name__}\n"
-        )
+    if not reason:
+        try:
+            module.set_default_openai_api("chat_completions")
+            return
+        except Exception as exc:  # noqa: BLE001 - a setting we could not make must not stop the agent
+            reason = type(exc).__name__
+    sys.stderr.write(
+        f"alk: could not set the OpenAI Agents SDK to chat completions: {reason}\n"
+    )
 
 
 class _ChatStyleLoader:
@@ -309,15 +309,15 @@ class _OpenAIAgentsFinder:
 
 def _install_openai_agents_chat_style() -> None:
     # The gateway serves the Responses request style only for OpenAI's own models, so a routed
-    # model name needs the SDK on chat completions. Looked up by distribution name so a
-    # customer's own package called ``agents`` is never touched.
+    # model name needs the SDK on chat completions. The check proves the openai-agents
+    # distribution is installed, not that the ``agents`` that gets imported came from it.
     if os.environ.get("ALK_OPENAI_AGENTS_CHAT_COMPLETIONS") != "1":
         return
-    try:
-        import importlib.metadata
+    import importlib.metadata
 
+    try:
         importlib.metadata.distribution("openai-agents")
-    except Exception:  # noqa: BLE001 - no SDK installed: nothing to switch
+    except importlib.metadata.PackageNotFoundError:
         return
     if "agents" in sys.modules:
         _set_openai_agents_chat_style(sys.modules["agents"])
@@ -327,8 +327,10 @@ def _install_openai_agents_chat_style() -> None:
 
 try:
     _install_openai_agents_chat_style()
-except Exception:  # noqa: BLE001 - must not cost tool tracing or worker isolation
-    pass
+except Exception as exc:  # noqa: BLE001 - must not cost tool tracing or worker isolation
+    sys.stderr.write(
+        f"alk: could not prepare the OpenAI Agents SDK setting: {type(exc).__name__}\n"
+    )
 _install()
 _install_worker_isolation()
 
@@ -462,3 +464,11 @@ except Exception:  # noqa: BLE001 - optional observation must not affect custome
 
 if not _crewai_observer_installed:
     _install_declared_python_tools()
+
+# The chain normally ran inside the mark module's install(); this covers an install() that returned
+# before reaching it, and does nothing once the guard is set.
+if not getattr(sys, "_alk_sitecustomize_chained", False):
+    try:
+        simulation_mark_bootstrap._chain()
+    except (NameError, AttributeError):  # the module is absent or broken: already reported
+        pass

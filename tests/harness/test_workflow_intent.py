@@ -359,6 +359,9 @@ def test_routed_target_model_is_briefed_to_use_the_openai_prefix(tmp_path, targe
     briefing = "\n".join(job.authoring_guidance())
     assert f"openai/{target_model}" in briefing
     assert briefing.count("OpenAI Agents SDK") == 1
+    assert "Agent(model=...) or RunConfig(model=...)" in briefing
+    assert "OpenAIChatCompletionsModel(model=...) is sent unchanged" in briefing
+    assert "takes its model as a name" not in briefing
 
 
 @pytest.mark.parametrize("target_model", ["gpt-4o", "openai/gpt-4o", None])

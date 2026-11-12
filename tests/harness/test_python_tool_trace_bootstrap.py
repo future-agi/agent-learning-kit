@@ -310,9 +310,9 @@ def test_openai_agents_chat_style_is_set_at_once_when_agents_is_already_imported
 ) -> None:
     hook = tmp_path / "hook"
     code = (
-        "import agents, site, sys\n"
+        "import agents, sys\n"
         + _note_line("before-bootstrap")
-        + f"site.addsitedir({str(hook)!r})\n"
+        + f"sys.path.insert(0, {str(hook)!r})\n"
         + "import sitecustomize\n"
         + _note_line("after-bootstrap")
         + "del sys.modules['agents']\n"
@@ -400,3 +400,73 @@ def test_openai_agents_reload_keeps_the_agent_own_choice(tmp_path: Path) -> None
     result, lines = _chat_style_run(tmp_path, code)
     assert result.returncode == 0, result.stderr
     assert lines == ["module-ran", "chat_completions", "responses", "module-ran"]
+
+
+def _load_hook(monkeypatch: pytest.MonkeyPatch, mark: str | None = None):
+    import importlib.util
+
+    if mark is None:
+        monkeypatch.delenv(_CHAT_MARK, raising=False)
+    else:
+        monkeypatch.setenv(_CHAT_MARK, mark)
+    monkeypatch.delenv("HARNESS_TOOL_TRACE", raising=False)
+    spec = importlib.util.spec_from_file_location(
+        "alk_hook_under_test",
+        Path(__file__).resolve().parents[2]
+        / "src/fi/alk/harness/livekit_tool_trace_bootstrap.py",
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_openai_agents_missing_distribution_is_silent_and_other_errors_are_not_swallowed(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    import importlib.metadata
+
+    hook = _load_hook(monkeypatch)
+    monkeypatch.setenv(_CHAT_MARK, "1")
+
+    def missing(name):
+        raise importlib.metadata.PackageNotFoundError(name)
+
+    monkeypatch.setattr(importlib.metadata, "distribution", missing)
+    hook._install_openai_agents_chat_style()
+    assert capsys.readouterr().err == ""
+
+    def broken(name):
+        raise OSError("unreadable metadata")
+
+    monkeypatch.setattr(importlib.metadata, "distribution", broken)
+    with pytest.raises(OSError):
+        hook._install_openai_agents_chat_style()
+
+
+def test_openai_agents_setup_failure_is_one_alk_line_and_the_hook_goes_on(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    import importlib.metadata
+
+    def broken(name):
+        raise OSError("unreadable metadata")
+
+    monkeypatch.setattr(importlib.metadata, "distribution", broken)
+    hook = _load_hook(monkeypatch, mark="1")
+    assert capsys.readouterr().err.splitlines() == [
+        "alk: could not prepare the OpenAI Agents SDK setting: OSError"
+    ]
+    assert callable(hook._install_declared_python_tools)
+
+
+def test_openai_agents_setting_without_reason_writes_the_exception_name(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    hook = _load_hook(monkeypatch)
+    hook._set_openai_agents_chat_style(object())
+    hook._set_openai_agents_chat_style(None, "its loader cannot be wrapped")
+    assert capsys.readouterr().err.splitlines() == [
+        "alk: could not set the OpenAI Agents SDK to chat completions: AttributeError",
+        "alk: could not set the OpenAI Agents SDK to chat completions: "
+        "its loader cannot be wrapped",
+    ]

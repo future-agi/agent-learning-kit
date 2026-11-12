@@ -392,11 +392,13 @@ class HarnessJob(BaseModel):
             )
         if routed_through_gateway(target_model):
             instructions.append(
-                "If the agent uses the OpenAI Agents SDK and takes its model as a name, give it "
+                "If the agent uses the OpenAI Agents SDK and passes its model as a name to "
+                "Agent(model=...) or RunConfig(model=...), give it "
                 f"the requested model written as openai/{target_model}: the SDK refuses or "
                 "reroutes a name whose first segment is not openai, and it removes openai/ and "
-                "sends the rest unchanged to its configured endpoint. Never change the model "
-                "itself."
+                "sends the rest unchanged to its configured endpoint. A name handed to a model "
+                "object such as OpenAIChatCompletionsModel(model=...) is sent unchanged, so "
+                "leave it as the requested model. Never change the model itself."
             )
         if self.require_tool_workflow:
             instructions.append(
