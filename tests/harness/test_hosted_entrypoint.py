@@ -5495,6 +5495,26 @@ def test_activity_events_in_the_job_response_lose_url_credentials(tmp_path, monk
     assert "hunter2" not in events and "sk-1" not in events
 
 
+def test_a_tool_result_is_cleaned_before_it_is_cut_at_600_characters():
+    """TH-9500 X1 (plan v1.1 section 6, r1 M1): session.py:388 cleans before it cuts, so a key
+    past character 597 is masked whole, and a query URL before it can't move the cut rules."""
+    from fi.alk.harness.backends.base import SessionSpec, ToolReturned
+    from fi.alk.harness.session import RESULT, Stage, Turn
+
+    key = "ghp_" + "A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8"
+    # Cut first, 6 of the key's characters would be left before the "...": too few for the
+    # rule that masks a key cut short.
+    text = "see https://h.example/x?a=1 then " + "y " * 277 + key
+    assert text.index(key) + len("ghp_A1b2C3") == 597
+    stage = Stage(SessionSpec(system_prompt=""), name="understand")
+
+    [event] = stage._events(ToolReturned(id="c1", text=text), Turn())
+
+    assert event.kind == RESULT
+    assert "A1b2C3" not in event.text
+    assert event.text == "see https://h.example/x then " + "y " * 277 + "[redacted]"
+
+
 def test_the_activity_printed_to_stdout_loses_url_credentials(capsys, monkeypatch):
     """Change review r1, A-H1: the platform keeps the tail of the guest's stdout."""
     from fi.alk.harness import cli

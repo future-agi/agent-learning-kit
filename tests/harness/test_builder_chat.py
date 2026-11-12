@@ -2707,3 +2707,1365 @@ def test_random_splits_never_send_a_credential_the_stripped_whole_drops():
         if leaked:
             found.append((text, leaked))
     assert found == []
+
+
+# -- TH-9500: the hold rule for secrets matched across whitespace (plan v1.1, C1-C4) --------------
+# Every key-shaped value is fake. The cases are the design reviewers' lists, copied as data.
+
+_GH = "ghp_" + "A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8"
+_SKP = "sk-proj-" + "FAKEfake0123456789abcdefFAKEfake0123456789ab"
+_AK = "AKIA" + "FAKEFAKE12345678"
+_XB = "xoxb-12345678901-12345678901-" + "FAKEfakeFAKEfakeFAKEfake"
+_SLACK = "https://hooks.slack.com/services/" + "T00FAKE00/B00FAKE00/" + "FAKEfakeFAKEfakeFAKEfake"
+_TG = "https://api.telegram.org/bot123456789:AAFAKEfakeFAKEfakeFAKEfakeFAKEfake_x/sendMessage"
+_JWT = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJmYWtlIn0.FAKEsigFAKEsig"
+_PEM = "-----BEGIN RSA PRIVATE KEY-----\nMIIEFAKEFAKEFAKE\nABCDEFFAKE==\n-----END RSA PRIVATE KEY-----"
+# Round 1's cases (r1cases.py) and the addendum's three: round 2's 1,919 stream splits.
+_ROUND1 = {
+    "page: ws in password": "https://bot:hun ter2@h/v1",
+    "page: lb in password": "see https://bot:hun\n    ter2@h/v1 is the hook",
+    "page: tab in password": "see https://bot:hun\tter2@h/v1 is the hook",
+    "page: query next line": "see https://u:pw@h/x\n  ?key=sk-1 and more",
+    "page: ?# in password": "https://bot:8812#x@db/",
+    "page: / in password": "https://bot:pa/ss@db",
+    "page: :// in password": "https://bot:pa://ss@db",
+    "bare ghp prose": f"Use {_GH} to push.",
+    "bare sk-proj prose": f"key is {_SKP}.",
+    "bare AKIA quoted": f'aws="{_AK}"',
+    "bare xoxb json": f'{{"t": "{_XB}"}}',
+    "slack hook": f"Post to {_SLACK} daily",
+    "telegram": f"Call {_TG} now",
+    "jwt prose": f"Bearer {_JWT}",
+    "pem": f"key:\n{_PEM}\nend",
+    "pem header only": "-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXktdjEAAAAAFAKE\n(truncated)",
+    "assign pw": "password=hunter22",
+    "assign spaced": "token: s3cr3tvalue99",
+    "tab query": "see https://h/x\t?key=sk-1 more",
+    "mid-query break": "see https://h/x?a=1&\n    key=sk-1 more",
+    "break before ? no indent": "see https://h/x\n?key=sk-1 more",
+    "nbsp query": "see https://h/x\xa0?key=sk-1 more",
+    "nbsp password": "https://bot:hun\xa0ter2@h/v1",
+    "H port+email": "Run at http://localhost:3000 and email support@acme.com",
+    "H query email": "https://host:8080/path?email=a@b.com",
+    "H npm scoped": "Install from https://registry.npmjs.org:443/@babel/core today",
+    "H medium": "Read https://medium.com/@user for more",
+    "H port then mention": "Open http://localhost:8080 and ping @oncall in Slack",
+    "H md amp": "See https://docs.x.com/a\n&copy=2024 Acme",
+    "H password required": "password: required",
+    "H token expires": "the token: expires hourly",
+    "H secret never": "secret: never tell anyone",
+    "H env": 'api_key=os.environ["OPENAI_API_KEY"]',
+    "H env placeholder": "Send the token: ${SLACK_BOT_TOKEN} in the header",
+    "H commit": "Fixed in 1ac329e16b0f2c9a8e7d6c5b4a3f2e1d0c9b8a7f",
+    "H uuid": "order 123e4567-e89b-12d3-a456-426614174000",
+    "H b64img": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==",
+    "H order": "Order ID ORD-2024-000123 and SKU AKIAMODEL",
+    "H token count": "max_tokens: 4096 and token=streaming",
+    "a1": 'config "password": "Zq8wYv3Lp9" ok',
+    "a3": "use https://bot:hun ter2@h/v1 now",
+    "a4": f"key:\n{_PEM}\nend",
+}
+# The design page's chat-test list, each with trailing text.
+_RUN = "/".join(["a" * 50] * 90)
+_CHAT_CASES = {
+    "ghp in a long run": '{"x":"'
+    + _RUN[:3000]
+    + '","t":"'
+    + _GH
+    + '","y":"'
+    + _RUN[:2000]
+    + '"} done now',
+    "named value at its ': '": 'config "password": "Zq8wYv3Lp9" ok then more',
+    "rule 1 at its space": "use https://bot:hun ter2@h/v1 now and later",
+    "rule 1 at a break + 4": "see https://bot:hun\n    ter2@h/v1 is the hook",
+    "block": f"key:\n{_PEM}\nend of message here",
+    "block in YAML": f"tls:\n  key: |\n    {_PEM.replace(chr(10), chr(10) + '    ')}\n  ok: true",
+    "block CRLF": f"Here:\r\n{_PEM.replace(chr(10), chr(13) + chr(10))}\r\nKeep it safe.",
+    "block encrypted": "Here:\n-----BEGIN RSA PRIVATE KEY-----\nProc-Type: 4,ENCRYPTED\nDEK-Info: "
+    "AES-128-CBC,3F17F5316E2BAC89\n\nMIIEFAKEQUJDREVG\n-----END RSA PRIVATE KEY-----\nKeep it.",
+    "block one line": "Use this: -----BEGIN RSA PRIVATE KEY----- MIIEFAKEQUJDREVG "
+    "-----END RSA PRIVATE KEY----- then restart",
+    "login query": "Login at https://h.example/login?user=bob&password=Sunshine then stop",
+    "oauth code": "POST https://oauth2.googleapis.com/token?code=4/0AXfakeFAKEcode123&grant_type=x and wait",
+    "telegram path": f"Call {_TG}?chat_id=1 now please",
+    "a URL holding a name and a prefix": "Open https://h.example/cb/token?ref=sk-not-a-key&session=Qm9vZmFrZQ then go",
+    "rule 2 on the next line": "see https://h/x?a=1\n&token=Sunshine and more",
+    "named md label": "- **Password:** Zq8wYv3Lp9 then go on",
+    "named camel json": '{"clientSecret": "Zq8wYv3Lp9Kd2xT", "x": 1} done now',
+    "named env pass": "DB_PASS=Zq8wYv3Lp9\nSMTP_PASS=hunter22x9\nok",
+    "named 16 spaces": 'admin = "x"\npassword                = "Zq8wYv3Lp9" ok',
+    "named kebab": "cloud.aws.credentials.secret-key: Zq8wYv3Lp9Kd2xT ok",
+    "named quoted with spaces": 'cfg "password": "correct horse battery 9" ok more',
+    "named break + 4": "password:\n   Zq8wYv3Lp9 ok",
+    "conn string": "Use DefaultEndpointsProtocol=https;AccountName=acct;AccountKey=FAKEazureFAKEkey0123"
+    "456789abcdef==;EndpointSuffix=core.windows.net then go",
+    "azure key, spaced": "set AZURE_KEY = "
+    + ("FAKEazureFAKEkey0123456789abcdefFAKE+/" * 3)[:86]
+    + "== ok",
+}
+_PLANTED = [
+    "hun ter2",
+    "ter2@",
+    "hunter22",
+    "Zq8wYv3Lp9",
+    "s3cr3tvalue99",
+    "MIIEFAKE",
+    "ABCDEFFAKE",
+    _GH,
+    _SKP,
+    "battery 9",
+    "FAKEazureFAKEkey0123",
+    "Sunshine",
+    "4/0AXfake",
+    "Qm9vZmFrZQ",
+    "AAFAKEfake",
+    "key=sk-1",
+    "FAKEfakeFAKEfakeFAKEfake",
+    "FAKEsigFAKEsig",
+    "QUJDREVG",
+]
+
+
+def _events_of(deltas: list[str]) -> list[str]:
+    from fi.alk.harness.hosted_chat_entrypoint import _DeltaCleaner
+
+    cleaner = _DeltaCleaner()
+    events = [cleaner.feed(delta) for delta in deltas]
+    events.append(cleaner.flush())
+    return [event for event in events if event]
+
+
+def _removed_fragments(text: str, whole: str) -> set[str]:
+    """k1_stream's frags(): 6-character fragments of what the whole clean removes, less any
+    that also occur in what it keeps (r4 L8)."""
+    import difflib
+
+    matcher = difflib.SequenceMatcher(None, text, whole, autojunk=False)
+    removed = [
+        text[start:end]
+        for op, start, end, _, _ in matcher.get_opcodes()
+        if op in ("delete", "replace") and len(text[start:end].strip()) >= 6
+    ]
+    fragments = {
+        piece[at : at + 6] for piece in removed for at in range(len(piece) - 5)
+    }
+    return {fragment for fragment in fragments if fragment not in whole}
+
+
+def _split_problems(text: str, splits: list[list[str]]) -> list[str]:
+    """C1's three checks, for each way of splitting `text` into deltas: the joined events equal
+    one whole clean; no 6-character fragment of a removed string is in any event; no planted
+    secret the whole clean drops is in the joined events."""
+    from fi.alk.providers.agent import _redact
+
+    whole = _redact(text)
+    fragments = _removed_fragments(text, whole)
+    problems = []
+    for deltas in splits:
+        events = _events_of(deltas)
+        joined = "".join(events)
+        if joined != whole:
+            problems.append(f"unequal at {[len(d) for d in deltas][:3]}")
+        elif any(
+            event[at : at + 6] in fragments
+            for event in events
+            for at in range(len(event) - 5)
+        ):
+            problems.append(f"a fragment at {[len(d) for d in deltas][:3]}")
+        elif any(
+            secret in text and secret not in whole and secret in joined
+            for secret in _PLANTED
+        ):
+            problems.append(f"a planted secret at {[len(d) for d in deltas][:3]}")
+    return problems
+
+
+def _every_split(text: str) -> list[list[str]]:
+    return [[text[:at], text[at:]] for at in range(1, len(text))] + [list(text)]
+
+
+def test_round_twos_1919_stream_splits_each_equal_one_whole_clean() -> None:
+    """C2 (W3): round 1's cases and the addendum's, every two-way split and char by char."""
+    splits = {name: _every_split(text) for name, text in _ROUND1.items()}
+    assert sum(len(each) for each in splits.values()) == 1919
+
+    problems = {
+        name: _split_problems(_ROUND1[name], each) for name, each in splits.items()
+    }
+
+    assert {name: found[:3] for name, found in problems.items() if found} == {}
+
+
+@pytest.mark.parametrize("name", list(_CHAT_CASES))
+def test_each_chat_case_split_at_every_offset_equals_one_whole_clean(name: str) -> None:
+    """C1: every offset (sampled in the long run), and 1-, 3- and 7-character deltas."""
+    text = _CHAT_CASES[name]
+    offsets = range(1, len(text)) if len(text) < 2000 else range(1, len(text), 7)
+    splits = [[text[:at], text[at:]] for at in offsets]
+    splits += [
+        [text[at : at + size] for at in range(0, len(text), size)] for size in (1, 3, 7)
+    ]
+
+    assert _split_problems(text, splits)[:3] == []
+
+
+def test_every_event_the_pump_sends_masks_a_secret_split_across_its_whitespace(
+    tmp_path, monkeypatch
+):
+    """C1 through _pump_events: assistant_delta, tool_result and the turn's assistant_message
+    (the question is below). A named value split at its ': ' and a password at its space."""
+    from fi.alk.providers.agent import _redact
+
+    client = BuilderClient()
+    runtime = _runtime(tmp_path, client, monkeypatch)
+    queue: asyncio.Queue = asyncio.Queue()
+    said = 'Set "password": "Zq8wYv3Lp9" and use https://bot:hun ter2@h.example/v1 then go.'
+    colon, space = said.index(": ") + 1, said.index("hun ") + 4
+    pieces = [
+        said[:colon],
+        said[colon : colon + 1],
+        said[colon + 1 : space],
+        said[space:],
+    ]
+    for piece in pieces:
+        queue.put_nowait(
+            RuntimeEvent(kind="text", text=piece, detail={"partial": True})
+        )
+    queue.put_nowait(
+        RuntimeEvent(kind="tool", tool="mcp__x__Read", detail={"call_id": "r"})
+    )
+    queue.put_nowait(
+        RuntimeEvent(
+            kind="result", text=f".env:1: GITHUB_TOKEN={_GH}", detail={"call_id": "r"}
+        )
+    )
+    queue.put_nowait(None)
+
+    asyncio.run(
+        runtime._pump_events(
+            queue,
+            assistant_message_id="a-1",
+            fallback_invocation_id="turn-1",
+            emitted_text=[],
+            turn_failures=[],
+        )
+    )
+
+    shown = json.dumps(client.events)
+    assert "Zq8wYv3Lp9" not in shown and "ter2" not in shown and _GH[4:12] not in shown
+    assert "".join(_deltas(client)) == _redact(said)
+    [result] = [one["payload"] for one in client.events if one["kind"] == "tool_result"]
+    assert result["text"] == ".env:1: GITHUB_TOKEN=[redacted]"
+
+
+def test_the_turns_assistant_message_masks_a_key_split_between_its_pieces(
+    tmp_path, monkeypatch
+):
+    client = BuilderClient()
+    runtime = _runtime(tmp_path, client, monkeypatch)
+    runtime._published_fingerprint()
+    runtime.conversation = _Saying(
+        tmp_path, _texts(["Saved password: ", "Zq8wYv3Lp9 ", "for you."])
+    )
+
+    _turn(runtime, {"content": "save it"})
+
+    assert "Zq8wYv3Lp9" not in json.dumps(client.events)
+    assert "".join(_deltas(client)) == "Saved password: [redacted] for you."
+    assert _reply(client) == "Saved password: [redacted] for you."
+
+
+def test_a_question_the_model_asks_masks_a_named_value(tmp_path, monkeypatch):
+    client = BuilderClient()
+    runtime = _runtime(tmp_path, client, monkeypatch)
+    runtime.stopping.set()
+
+    asyncio.run(
+        runtime._ask(
+            "AskUserQuestion",
+            {
+                "question": "Keep DB_PASSWORD=Zq8wYv3Lp9 ?",
+                "options": [f"use {_GH}", "drop it"],
+            },
+            None,
+        )
+    )
+
+    asked = next(one for one in client.events if one["kind"] == "question_requested")
+    assert asked["payload"] == {
+        "prompt": "Keep DB_PASSWORD=[redacted] ?",
+        "options": ["use [redacted]", "drop it"],
+    }
+
+
+def _seconds(deltas: list[str]) -> float:
+    import time
+
+    best = 9.0
+    for _ in range(3):
+        start = time.perf_counter()
+        _events_of(deltas)
+        best = min(best, time.perf_counter() - start)
+    return best
+
+
+def test_the_seams_work_per_delta_is_bounded_by_the_delta() -> None:
+    """C3 (r4 H2, r1 M7): each under 0.5 s, best of 3."""
+    words = "The quick brown fox jumps over the lazy dog while the build runs. "
+    refuse = (
+        "If a user pastes -----BEGIN PRIVATE KEY----- text, refuse. "
+        + (words * 700)[: 40 * 1024]
+    )
+    # 10,000 pairs, so a build that looks over the whole held text on every delta shows.
+    no_space = "Here: " + "a/" * 10_000 + _GH + " done"
+    saml = (
+        "Sign in at https://idp.example.com/sso?SAMLRequest="
+        + ("fZJNT8MwDIbvSPyHKPeuWwdbDEFAKE" * 160)[:4200]
+        + "&tok="
+        + _GH
+        + "&RelayState=Sunshine then come back"
+    )
+    quoted = 'cfg "password": "' + "a b c " * 500 + '" ok'
+    named_lines = ("token: Zq8wYv3Lp9 and password = abc\n" * 1200)[: 40 * 1024]
+
+    times = {
+        "honest BEGIN + 40 KiB, 4-char deltas": _seconds(
+            [refuse[i : i + 4] for i in range(0, len(refuse), 4)]
+        ),
+        "20,000 with no space + ghp_, 1-char deltas": _seconds(list(no_space)),
+        "4 KB SAML query past N, 1-char deltas": _seconds(list(saml)),
+        "3 KB quoted value, 4-char deltas": _seconds(
+            [quoted[i : i + 4] for i in range(0, len(quoted), 4)]
+        ),
+        "a name on every line, 40 KiB, 4-char deltas": _seconds(
+            [named_lines[i : i + 4] for i in range(0, len(named_lines), 4)]
+        ),
+    }
+
+    assert {name: seconds for name, seconds in times.items() if seconds >= 0.5} == {}
+
+
+def test_a_lone_webhook_broken_by_a_line_break_before_prose_is_cleaned_as_one_url() -> (
+    None
+):
+    """C4 (r4 M2): before the text is known to be prose, the seam never cuts at \\n."""
+    from fi.alk.providers.agent import _redact
+
+    text = "https://hooks.slack.com/services/" + "T00FAKE00/B00FAKE00/\nFAKEfakeFAKEfakeFAKEfake"
+    for size in (1, 3, 7):
+        joined = "".join(
+            _events_of([text[i : i + size] for i in range(0, len(text), size)])
+        )
+        assert joined == _redact(text) == "https://hooks.slack.com/services/[redacted]"
+
+
+@pytest.mark.parametrize("at", [4058, 4070, 4080, 4090, 4095])
+def test_a_key_straddling_the_soft_bound_in_a_held_url_query_never_streams(
+    at: int,
+) -> None:
+    """C4 (r4 M1, r1 L6), at 1-character deltas: no head of the key in any event, and the honest
+    word after the URL ("then") is kept."""
+    from fi.alk.providers.agent import _redact
+
+    url = "https://idp.example.com/sso?SAMLRequest="
+    filler = ("fZJNT8MwDIbvSPyHKPeuWwdbDEFAKE" * 160)[: at - len(url) - len("&tok=")]
+    text = (
+        "Sign in at "
+        + url
+        + filler
+        + "&tok="
+        + _GH
+        + "&RelayState=Sunshine then come back"
+    )
+
+    events = _events_of(list(text))
+
+    assert "".join(events) == _redact(text)
+    assert "".join(events).endswith(" then come back")
+    assert not any(_GH[:6] in event for event in events)
+
+
+def test_a_key_block_longer_than_the_hard_bound_is_held_never_streamed() -> None:
+    """C4 (r4 L7): an 18 KB block is held whole, whatever M is."""
+    from fi.alk.providers.agent import _redact
+
+    lines = [f"L{i:03d}FAKEQUJDREVGR0hJSktM" + "A" * 36 for i in range(300)]
+    text = (
+        "Key:\n-----BEGIN RSA PRIVATE KEY-----\n"
+        + "\n".join(lines)
+        + "\n-----END RSA PRIVATE KEY-----\nKeep it safe."
+    )
+    assert len(text) > 16_384
+
+    events = _events_of([text[i : i + 7] for i in range(0, len(text), 7)])
+
+    assert "".join(events) == _redact(text) == "Key:\n[redacted]\nKeep it safe."
+    assert not any(line[4:30] in event for line in lines for event in events)
+
+
+# -- TH-9500 change review r1 (cr1): what streams past the soft bound ---------------------------
+
+# cr1 M3: a named value longer than N, plain, quoted with spaces, AWS's guard name, and a URL as
+# the value. Past N the shed sent the value cleaned only as far as it was held, then the rest
+# with no name in front of it, or the URL whole.
+_LONG_NAMED = {
+    "plain": "Note token: " + "Zq8w" * 1100 + " ok then",
+    "quoted with spaces": 'cfg "password": "' + "a1 b2 c3 " * 540 + '" ok then',
+    "aws guard": "aws_secret_access_key = "
+    + "wJalrXUtnFEMIFAKEK7MD" * 210
+    + " ok then",
+    "a URL as the value": "Note token: https://h.example/" + "a" * 4200 + " ok then",
+}
+
+
+@pytest.mark.parametrize("name", list(_LONG_NAMED))
+def test_a_named_value_longer_than_the_soft_bound_streams_as_one_whole_clean(
+    name: str,
+) -> None:
+    """cr1 M3: held as a key is, up to the hard bound, at 1-, 5- and 50-character deltas."""
+    text = _LONG_NAMED[name]
+    splits = [
+        [text[at : at + size] for at in range(0, len(text), size)]
+        for size in (1, 5, 50)
+    ]
+
+    assert _split_problems(text, splits) == []
+
+
+@pytest.mark.parametrize("at", [4070, 4090])
+@pytest.mark.parametrize("size", [1, 5])
+def test_a_key_straddling_the_soft_bound_in_a_run_with_no_space_never_streams(
+    at: int, size: int
+) -> None:
+    """cr1 M5 (round 3's w3_flush shape): a ghp_ key in a whitespace-free run, across the
+    4,096th held character. The key is held whole, up to the hard bound."""
+    from fi.alk.providers.agent import _redact
+
+    text = "Here: " + ("a/" * 3000)[: at - 6] + _GH + "/" + "b/" * 300 + " done now"
+    assert text.find(_GH) == at
+
+    events = _events_of([text[i : i + size] for i in range(0, len(text), size)])
+
+    assert "".join(events) == _redact(text)
+    assert not any(_GH[:12] in event or _GH[-20:] in event for event in events)
+
+
+def test_the_seam_stays_linear_on_an_honest_begin_then_256_kib_of_prose() -> None:
+    """cr1 M6: the per-delta END search is bounded by the delta (r4 H2), at 256 KiB, best of
+    3, under 1.5 s. Searched from the block's header on every delta, it took 3.5 s."""
+    words = "The quick brown fox jumps over the lazy dog while the build runs. "
+    refuse = (
+        "If a user pastes -----BEGIN PRIVATE KEY----- text, refuse. "
+        + (words * 4100)[: 256 * 1024]
+    )
+
+    seconds = _seconds([refuse[i : i + 4] for i in range(0, len(refuse), 4)])
+
+    assert seconds < 1.5, f"{seconds:.3f} s"
+
+
+def test_text_after_an_end_split_across_two_deltas_streams_before_the_flush() -> None:
+    """cr1 L3: an END line split between two deltas closes the block when its second half
+    arrives, so what follows streams then, not only at the message's end."""
+    from fi.alk.harness.hosted_chat_entrypoint import _DeltaCleaner
+
+    text = f"key:\n{_PEM}\nThen restart the service and check the logs."
+    split = text.index("-----END") + len("-----END RSA PRI")
+    after = text.index("Then")
+    cleaner = _DeltaCleaner()
+
+    streamed = "".join(
+        cleaner.feed(delta) for delta in (text[:split], text[split:after], text[after:])
+    )
+
+    assert streamed.startswith("key:\n[redacted]\nThen restart the service and")
+    assert (
+        streamed + cleaner.flush()
+        == "key:\n[redacted]\nThen restart the service and check the logs."
+    )
+
+
+# -- TH-9500 rule 1b: an @ before the password's / (design addendum v2.5.2) ----------------------
+# The rows test_secret_shapes.py's R1B_CLEANED and R1B_KEPT check on the whole text, copied as
+# data. 1b's span and its host lookahead cross no whitespace and no ://, so ChatHold is
+# unchanged (L5); a one-URL value runs step 1 on its joined token, as `_clean` does (M3, M-A).
+_R1B_ROWS = [
+    "postgres://admin:Xk9/Qp+Zr8@db.example.com:5432/app",
+    "https://user:pa#ss@host.example/x",
+    "postgres://admin:P@ss/Xk9@db.example.com:5432/app",
+    "smtp://me@gmail.com:app/pass@smtp.gmail.com:587",
+    "redis://:p@w/x9@cache.internal:6379/0",
+    "postgres://admin:P@ss:99/Xk9@db.example.com/app",
+    "postgres://admin:P@ss/Xk9@localhost/app",
+    "postgres://admin:P@ss/Xk9@db/app",
+    "postgres://admin:P@ss/Xk9@[::1]:5432/app",
+    "postgres://admin:P@ss/Xk9@postgres_db:5432/app",
+    "postgres://admin:P@ss/Xk9@my_db/app",
+    "`redis://:p@w/x9@redis`",
+    "postgres://admin:P@ss/Xk9@db:${DB_PORT}/app",
+    "postgres://admin:P@ss/Xk9@db:$DB_PORT/app",
+    "postgres://admin:P@ss/Xk9@db?sslmode=disable",
+    "redis://:p@w/x9@redis#0",
+    "(amqp://u:p@w/x9@rabbitmq)",
+    "amqp://u:p@w/x9@rabbitmq, then",
+    "amqp://u:p@w/x9@rabbitmq; then",
+    "<amqp://u:p@w/x9@rabbitmq>",
+    "[amqp://u:p@w/x9@rabbitmq]",
+    "postgres://admin:P@ss/Xk9@[fe80::1%25en0]:5432/app",
+    "a://u:x://v:p@h/x@host.example",
+    "http://admin@localhost:8080/bob@example.com",
+    "ssh://git@gitlab.example.com:2222/ops@infra.example/repo.git",
+    "https://ci@registry.example.com:8443/lodash@4.17.21",
+    "ssh://git@host.example:22/org@team/repo",
+    "http://admin@[::1]/bob@example.com",
+    "ssh://git@[fd00::5]/org@team/repo",
+    "https://ci@registry.example.com/lodash@4.17.21",
+    "ssh://git@github.com/org@team/repo",
+    "Mail https://u:p@h.example/to@~team now",
+]
+# M3 and M-A: equal and clean when the URL stands alone (in prose, a break inside the span is a
+# named limit).
+_R1B_BROKEN = {
+    "postgres://admin:P@ss/Xk\n9@db.example.com:5432/app": "postgres://db.example.com:5432/app",
+    "postgres://admin:Pa\nss@w/x9@db.example.com/app": "postgres://db.example.com/app",
+    "redis://:pa\nss@w/x9@cache.internal:6379/0": "redis://cache.internal:6379/0",
+    "a://u:x://v:p@h/\nx@host.example": "a://host.example",
+}
+
+
+@pytest.mark.parametrize("text", _R1B_ROWS, ids=range(len(_R1B_ROWS)))
+def test_rule_1b_streams_as_the_whole_text_cleans_at_every_split(text: str) -> None:
+    """Alone and in prose, every two-way split and char by char, with C1's three checks."""
+    for each in (text, f"Use {text} now, then {text} again."):
+        assert _split_problems(each, _every_split(each))[:3] == [], each
+
+
+@pytest.mark.parametrize("text", list(_R1B_BROKEN), ids=range(len(_R1B_BROKEN)))
+def test_a_one_url_value_broken_inside_1bs_span_streams_equal_and_clean(
+    text: str,
+) -> None:
+    from fi.alk.providers.agent import _redact
+
+    assert _redact(text) == _R1B_BROKEN[text]
+    assert _split_problems(text, _every_split(text)) == []
+
+
+# -- TH-9500 change review r2 (cr2) -----------------------------------------------------------------
+
+# cr2 H1: a reply that is one URL, with a key or a named value at the start of a later line.
+# Cleaning the whole text masks it before the join; before prose, so does the stream. Each row
+# is (reply, the secret that must not stream). Owl's ten shapes, then rows longer than N, which
+# go through `_shed`'s branch before prose.
+_AKIA = "AKIA" + "FAKEFAKEFAKE1234"
+_JWT_LONG = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJmYWtlIn0.FAKEsigFAKEsigFAKEsig"
+_LONG_URL = "https://h.example/" + "a" * 4100
+_LINE_STARTS = {
+    "url \\n ghp": ("https://github.com/settings/tokens\n" + _GH, _GH),
+    "url \\t ghp": ("https://github.com/settings/tokens\t" + _GH, _GH),
+    "url \\r\\n ghp": ("https://h.example/p\r\n" + _GH, _GH),
+    "url \\n AKIA": ("https://console.aws.amazon.com/iam\n" + _AKIA, _AKIA),
+    "url \\n jwt": ("https://jwt.io\n" + _JWT_LONG, "FAKEsigFAKEsigFAKEsig"),
+    "url \\n sk-proj": ("https://platform.openai.com/api-keys\n" + _SKP, _SKP),
+    "url \\n token=": ("https://h.example/p\ntoken=Zq8wYv3Lp9Kd2xT", "Zq8wYv3Lp9Kd2xT"),
+    "url \\n DB_PASSWORD=": (
+        "https://h.example/p\nDB_PASSWORD=Zq8wYv3Lp9Kd2xT",
+        "Zq8wYv3Lp9Kd2xT",
+    ),
+    "url \\n url \\n ghp": ("https://a.example/x\nhttps://b.example/y\n" + _GH, _GH),
+    "1b url \\n ghp": (
+        "postgres://admin:P@ss/Xk9@db.example.com:5432/app\n" + _GH,
+        _GH,
+    ),
+    "past N \\n ghp": (_LONG_URL + "\n" + _GH, _GH),
+    "past N \\n token: \\n value": (
+        _LONG_URL + "\ntoken:\nZq8wYv3Lp9Kd2xT",
+        "Zq8wYv3Lp9Kd2xT",
+    ),
+    "past N \\n ghp \\n url": (_LONG_URL + "\n" + _GH + "\nhttps://c.example/z", _GH),
+    # A URL on the key's own line: the cut there sends the key's line, masked at its start.
+    "past N \\n ghp/url": (_LONG_URL + "\n" + _GH + "/https://c.example/z", _GH),
+    "past N, many lines": ("https://h.example/x" + "\nabc" * 1100 + "\n" + _GH, _GH),
+    # cr3 M5: a key on the line after a slash, glued to a URL.
+    "past N /\\n AKIA glued to url": (
+        _LONG_URL + "/\n" + _AKIA + "https://c.example/z",
+        _AKIA,
+    ),
+}
+
+
+@pytest.mark.parametrize("name", list(_LINE_STARTS))
+def test_a_key_at_a_line_start_in_a_one_url_reply_never_streams(name: str) -> None:
+    """cr2 H1: at 1- and 7-character deltas and as one delta, the stream equals cleaning the
+    whole text, and no event holds the secret's tail, in any case: a value cleaned as part of
+    a scheme comes out lower-cased (cr3 H1)."""
+    from fi.alk.providers.agent import _redact
+
+    text, secret = _LINE_STARTS[name]
+    tail = secret[-12:].lower()
+    whole = _redact(text)
+    assert tail not in whole.lower()
+    for size in (1, 7, len(text)):
+        events = _events_of([text[i : i + size] for i in range(0, len(text), size)])
+        assert "".join(events) == whole, size
+        assert not any(tail in event.lower() for event in events), size
+
+
+# cr3 H1: past N before prose, a named value or a key on the line before a URL line. The
+# branches find URL starts on the joined text, where that line is glued onto the URL's scheme;
+# a cut there sent the name alone and cleaned the value as a scheme, lower-cased. Hawk's rows
+# 1, 3 and 5.
+_V = "Zq8wYv3Lp9Kd2xT"
+_GRAFANA = "\n".join(
+    f"https://grafana.example.com/d/service-{i}/latency" for i in range(90)
+)
+_LINE_BEFORE_A_URL = {
+    "a long URL, DB_PASSWORD=V, a URL": (
+        _LONG_URL + "\nDB_PASSWORD=" + _V + "\nhttps://b.example/y",
+        _V,
+    ),
+    "a long URL, token=V glued to a URL": (
+        _LONG_URL + "\ntoken=" + _V + "https://c.example/z",
+        _V,
+    ),
+    "90 grafana URLs, GITHUB_TOKEN=ghp_, a URL": (
+        _GRAFANA + "\nGITHUB_TOKEN=" + _GH + "\nhttps://github.com/org/repo",
+        _GH,
+    ),
+    # A name and its value on the next line go together.
+    "a long URL, token:, V, a URL": (
+        _LONG_URL + "\ntoken:\n" + _V + "\nhttps://c.example/z",
+        _V,
+    ),
+    # A cut never splits a URL's userinfo from its host.
+    "a long user, :V@host on the next line, a URL": (
+        "https://" + "u" * 4100 + "\n:" + _V + "@host.example/x\nhttps://c.example/z",
+        _V,
+    ),
+}
+
+
+@pytest.mark.parametrize("name", list(_LINE_BEFORE_A_URL))
+@pytest.mark.parametrize("size", [1, 4, 512, 0])
+def test_a_value_on_the_line_before_a_url_never_streams(name: str, size: int) -> None:
+    """cr3 H1: before prose, a shed cuts only at a line boundary, at 1-, 4- and 512-character
+    deltas and as one delta."""
+    from fi.alk.providers.agent import _redact
+
+    text, secret = _LINE_BEFORE_A_URL[name]
+    size = size or len(text)
+    tail = secret[-12:].lower()
+    whole = _redact(text)
+    assert tail not in whole.lower()
+
+    events = _events_of([text[i : i + size] for i in range(0, len(text), size)])
+
+    assert "".join(events) == whole
+    assert not any(tail in event.lower() for event in events)
+
+
+@pytest.mark.parametrize("size", [1, 7, 0])
+def test_a_line_start_masked_in_the_stream_is_logged_once(
+    size: int, caplog: pytest.LogCaptureFixture
+) -> None:
+    """cr2 H1: the line-start mask's kinds go on the cleaner's one log line."""
+    text = "https://github.com/settings/tokens\n" + _GH
+    size = size or len(text)
+    with caplog.at_level("WARNING"):
+        _events_of([text[i : i + size] for i in range(0, len(text), size)])
+
+    assert [
+        r.getMessage() for r in caplog.records if r.name == "fi.alk.providers.agent"
+    ] == ["secrets redacted: kinds=github"]
+
+
+@pytest.mark.parametrize("size", [1, 7, 0])
+def test_a_line_start_masked_by_a_shed_is_logged_once(
+    size: int, caplog: pytest.LogCaptureFixture
+) -> None:
+    """cr3 L3: past N, the shed sends the key's line, masked, and logs its kind once."""
+    text = _LONG_URL + "\n" + _GH + "/\nhttps://c.example/z"
+    size = size or len(text)
+    with caplog.at_level("WARNING"):
+        events = _events_of([text[i : i + size] for i in range(0, len(text), size)])
+
+    assert "[redacted]/" in events[0]
+    assert [
+        r.getMessage() for r in caplog.records if r.name == "fi.alk.providers.agent"
+    ] == ["secrets redacted: kinds=github"]
+
+
+# cr3 M6 and L1: an opening that fills N with scheme characters and no :// is prose, so the
+# URL lines after it aren't glued onto it. L1's named limit ("an opening of 4,096 or more scheme
+# characters with no ://") is closed by it, and its row now passes.
+_LONG_OPENINGS = {
+    "M6: a query value on a later URL line": (
+        "Zq8w" * 1100 + "\nhttps://registry.example.com/x\n&tok=" + _V,
+        _V,
+    ),
+    "L1: a key on the next line": ("a" * 4100 + "\n" + _GH, _GH),
+}
+
+
+@pytest.mark.parametrize("name", list(_LONG_OPENINGS))
+@pytest.mark.parametrize("size", [1, 7, 64, 0])
+def test_a_long_opening_with_no_scheme_streams_as_prose(name: str, size: int) -> None:
+    from fi.alk.providers.agent import _redact
+
+    text, secret = _LONG_OPENINGS[name]
+    size = size or len(text)
+    tail = secret[-12:].lower()
+    whole = _redact(text)
+    assert tail not in whole.lower()
+
+    events = _events_of([text[i : i + size] for i in range(0, len(text), size)])
+
+    assert "".join(events) == whole
+    assert not any(tail in event.lower() for event in events)
+
+
+# cr2 M2: rule 1 across whitespace, then rule 2's next piece (S's r1r2.py).
+_RULE1_THEN_RULE2 = [
+    "See redis://:pa ss@h:6379\n?code=s3cr3tvalue99 then",
+    "See redis://u:pa ss@h.example:6379 &tok=s3cr3tvalue99 then",
+    "Try postgres://admin:Xk9/Qp+Zr\n  8@db.example.com:5432/app\n&tok=s3cr3tvalue99 ok",
+    # cr3 M2: the address piece's query ends in &, so rule 2 reaches the next piece.
+    "See redis://:pa ss@h:6379/?a=1& tok=s3cr3tvalue99 then",
+]
+
+
+@pytest.mark.parametrize("text", _RULE1_THEN_RULE2, ids=range(len(_RULE1_THEN_RULE2)))
+def test_rule_2s_next_piece_holds_after_a_password_broken_by_whitespace(
+    text: str,
+) -> None:
+    """cr2 M2: the piece a rule 1 match ends in is an address piece, at 1- and 5-character
+    deltas, and at every two-way split, where the @ arrives in the delta its piece ends in
+    (cr3 M2)."""
+    splits = [
+        [text[i : i + size] for i in range(0, len(text), size)] for size in (1, 5)
+    ] + _every_split(text)
+
+    assert _split_problems(text, splits) == []
+    assert not any("s3cr3tvalue99" in event for event in _events_of(list(text)))
+
+
+def test_a_password_broken_by_a_crlf_split_between_deltas_never_streams() -> None:
+    """cr2 M3: `\\r` and `\\n` in separate deltas, at 1-, 2- and 3-character deltas; and with
+    spaces and a tab before the `\\r` (cr3 M3)."""
+    for text in (
+        "Try postgres://admin:Xk9/Qp+Zr\r\n8@db.example.com:5432/app now",
+        "Try postgres://admin:Xk9/Qp+Zr \t\r\n8@db.example.com:5432/app now",
+    ):
+        splits = [
+            [text[i : i + size] for i in range(0, len(text), size)]
+            for size in (1, 2, 3)
+        ]
+
+        assert _split_problems(text, splits) == [], text
+
+
+def test_an_open_quoted_value_longer_than_the_hard_bound_still_streams() -> None:
+    """cr2 M4: a named value is held up to M (`_LONGEST_HELD_KEY`), not past it: text streams
+    before the message ends."""
+    from fi.alk.harness.hosted_chat_entrypoint import _DeltaCleaner
+
+    words = "The quick brown fox jumps over the lazy dog while the build runs. "
+    text = 'Set "password": "' + (words * 320)[: 20 * 1024]
+    cleaner = _DeltaCleaner()
+
+    streamed = "".join(cleaner.feed(text[i : i + 4]) for i in range(0, len(text), 4))
+
+    assert len(streamed) > 1024
+
+
+def test_one_large_delta_of_passwords_broken_by_spaces_stays_linear() -> None:
+    """cr3 M1: `_address` finds its piece by bisection. One 256 KiB delta of rule 1 matches
+    that cross a space takes at most twice the same text with no broken password, best of 3,
+    interleaved (cr4 L1: an absolute time failed on a loaded machine)."""
+    import time
+
+    from fi.alk.harness.hosted_chat_entrypoint import _DeltaCleaner
+
+    def text(unit: str) -> str:
+        return (unit * (256 * 1024 // len(unit) + 1))[: 256 * 1024]
+
+    broken, control = (
+        text("See redis://:pa ss@h x y z "),
+        text("See redis://h:6379 x y z now "),
+    )
+    best = {broken: 99.0, control: 99.0}
+    for _ in range(3):
+        for each in (broken, control):
+            cleaner = _DeltaCleaner()
+            start = time.perf_counter()
+            cleaner.feed(each)
+            best[each] = min(best[each], time.perf_counter() - start)
+
+    assert best[broken] <= 2 * best[control], (
+        f"{best[broken]:.3f} s, {best[control]:.3f} s"
+    )
+
+
+# -- TH-9500 change review r4 (cr4) -----------------------------------------------------------------
+
+# cr4 H1: Dileep's rule 1b input with its password broken by a line break, after the / and
+# before it, past N before prose. A cut between the password's lines sent its first half; the
+# cut holds while the text after it, up to the next ://, may still be that URL's userinfo.
+_RULE1B_BROKEN_PAST_N = {
+    "after the /": _LONG_URL
+    + "\npostgres://admin:Xk9/Qp+Zr\n8@db.example.com:5432/app\nhttps://c.example/z",
+    "before the /": _LONG_URL
+    + "\npostgres://admin:Xk\n9/Qp+Zr8@db.example.com:5432/app\nhttps://c.example/z",
+}
+
+
+@pytest.mark.parametrize("name", list(_RULE1B_BROKEN_PAST_N))
+@pytest.mark.parametrize("size", [1, 7, 512, 0])
+def test_a_rule_1b_password_broken_by_a_line_break_past_n_never_streams(
+    name: str, size: int
+) -> None:
+    from fi.alk.providers.agent import _redact
+
+    text = _RULE1B_BROKEN_PAST_N[name]
+    size = size or len(text)
+    whole = _redact(text)
+    assert "qp+zr" not in whole.lower()
+
+    events = _events_of([text[i : i + size] for i in range(0, len(text), size)])
+
+    assert "".join(events) == whole
+    assert not any("qp+zr" in event.lower() for event in events)
+
+
+# cr4 M1: honest replies that are only URLs, one per line. Each line ends in scheme characters,
+# so joined it is glued onto the next line's scheme; the cut must still fall between them.
+_URL_LISTS = {
+    "400 grafana dashboards": "\n".join(
+        f"https://grafana.example.com/d/service-{i}/latency" for i in range(400)
+    ),
+    "800 bare hosts": "\n".join(f"https://host{i}.example.com" for i in range(800)),
+    "400 GitHub repositories": "\n".join(
+        f"https://github.com/org-{i}/repo-{i}" for i in range(400)
+    ),
+}
+
+
+@pytest.mark.parametrize("name", list(_URL_LISTS))
+@pytest.mark.parametrize("size", [7, 512, 0])
+def test_an_honest_url_list_streams_before_its_end(name: str, size: int) -> None:
+    """cr4 M1: the stream equals the whole text, and most of it goes before the flush."""
+    from fi.alk.harness.hosted_chat_entrypoint import _DeltaCleaner
+    from fi.alk.providers.agent import _redact
+
+    text = _URL_LISTS[name]
+    size = size or len(text)
+    cleaner = _DeltaCleaner()
+
+    streamed = "".join(
+        cleaner.feed(text[i : i + size]) for i in range(0, len(text), size)
+    )
+
+    assert streamed + cleaner.flush() == _redact(text)
+    assert len(streamed) > len(text) // 2
+
+
+def _best_interleaved(texts: dict[str, str], size: int = 4) -> dict[str, float]:
+    """Each text fed in `size`-character deltas, best of 3, the texts taking turns so that a
+    loaded machine slows them alike."""
+    import time
+
+    from fi.alk.harness.hosted_chat_entrypoint import _DeltaCleaner
+
+    best = dict.fromkeys(texts, 99.0)
+    for _ in range(3):
+        for name, text in texts.items():
+            cleaner = _DeltaCleaner()
+            start = time.perf_counter()
+            for i in range(0, len(text), size):
+                cleaner.feed(text[i : i + size])
+            cleaner.flush()
+            best[name] = min(best[name], time.perf_counter() - start)
+    return best
+
+
+# 16 KiB held in 4-character deltas costs the same for any text it holds, a cut that is walked
+# once or one that is walked again on every delta aside; one URL with no breaks is the control.
+_HELD_16K = 16 * 1024
+_HELD_CONTROL = ("https://a.example/" + "x" * _HELD_16K)[:_HELD_16K]
+
+
+def test_a_held_cut_is_not_walked_again_on_every_delta() -> None:
+    """cr4 M2: while a cut holds, the held text grows by lines it can't cut at; they are walked
+    once, not on every delta. R's shape at 16 KiB in 4-character deltas takes at most twice a
+    control (walked on every delta, about a minute)."""
+    held = ("https://hostA\nhttps://hostB" + "\nx" * _HELD_16K)[:_HELD_16K]
+    # The cut held at a line that is only a URL's own `://` keeps its place too.
+    at_scheme = ("https://hostA/a\nhttps\n://hostB/p\nhttps://c/" + "\nx" * _HELD_16K)[:_HELD_16K]
+
+    best = _best_interleaved({"held": held, "at_scheme": at_scheme, "control": _HELD_CONTROL})
+
+    assert best["held"] <= 2 * best["control"], best
+    assert best["at_scheme"] <= 2 * best["control"], best
+
+
+def test_a_cut_the_userinfo_guard_holds_is_not_walked_again_on_every_delta() -> None:
+    """cr4b M2: the other way a cut is held: an @ line before the next URL. The guard path
+    keeps the held cut too."""
+    held = (
+        "https://a.example/\nalice@example.com\nhttps://b.example/" + "\nx" * _HELD_16K
+    )[:_HELD_16K]
+
+    best = _best_interleaved({"held": held, "control": _HELD_CONTROL})
+
+    assert best["held"] <= 2 * best["control"], best
+
+
+@pytest.mark.parametrize("size", [7, 512, 0])
+def test_a_cut_held_by_an_at_line_is_released_by_the_url_lines_after_it(
+    size: int,
+) -> None:
+    """cr4b M2: a long URL, an email line, then 800 URL lines (24,844 joined). The cut the
+    @ line holds moves on with the URL starts after it: the list streams as stored, not as
+    `[redacted]`, at every size (a held cut that stays put past a later start fails at 7)."""
+    from fi.alk.providers.agent import _redact
+
+    text = (
+        _LONG_URL
+        + "\nalice@example.com\nhttps://c.example/z"
+        + "".join(f"\nhttps://h{i}.example.com/p" for i in range(800))
+    )
+    step = size or len(text)
+
+    events = _events_of([text[i : i + step] for i in range(0, len(text), step)])
+
+    assert "".join(events).strip() == _redact(text.strip())
+    assert sum(len(event) for event in events[:-1]) > len(text) // 2
+
+
+def test_tab_split_lines_are_cut_without_one_call_blocking() -> None:
+    """cr4b H3: a URL whose lines are split by tabs, 1 MiB of them, then a :// that moves the
+    cut. No call takes a second (a search back to the held text's start for every line took
+    2 s at 1 MiB, 9 s at 2), and the held text, breaks counted, stays within the hard bound."""
+    import time
+
+    from fi.alk.harness.hosted_chat_entrypoint import _HOLD_HARD, _DeltaCleaner
+
+    run = 128
+    text = (
+        "https://a.example/@x"
+        + ("\t" * run + "x") * (1024 * 1024 // (run + 1))
+        + "://b"
+    )
+    cleaner = _DeltaCleaner()
+    slowest = most = 0
+    for i in range(0, len(text), 4096):
+        start = time.perf_counter()
+        cleaner.feed(text[i : i + 4096])
+        slowest = max(slowest, time.perf_counter() - start)
+        most = max(most, len(cleaner.held))
+    cleaner.flush()
+
+    assert slowest < 1.0, f"{slowest:.2f} s"
+    assert most <= _HOLD_HARD + 4096
+
+
+def test_the_walk_over_tab_split_lines_costs_each_line_its_own_length() -> None:
+    """cr4b H3: `_line_cut` on 1 MiB of tab-split lines, with the cut on the first, takes at
+    most twice the same on newline-split lines (searching back for every line took 2 s)."""
+    import time
+
+    from fi.alk.harness.hosted_chat_entrypoint import _URL_BREAKS, _DeltaCleaner
+
+    run = 128
+    unit = ("\t" * run + "x", "\n" * run + "x")
+    best = [99.0, 99.0]
+    for _ in range(3):
+        for n, each in enumerate(unit):
+            raw = "https://a.example/@x" + each * (1024 * 1024 // (run + 1)) + "://b"
+            start = time.perf_counter()
+            _DeltaCleaner()._line_cut(raw, raw.translate(_URL_BREAKS), 0)
+            best[n] = min(best[n], time.perf_counter() - start)
+
+    assert best[0] <= 2 * best[1] + 0.05, best
+
+
+def test_a_name_its_equals_and_its_value_on_three_lines_past_n_is_a_named_limit() -> (
+    None
+):
+    """cr4 M3, a named limit: before prose and past N, a name, its `=` and its value each on a
+    line of its own, then a URL line. No cut keeps all three lines with the name: the value
+    streams joined onto the URL's scheme, lower-cased, where the whole text masks it. The
+    stream is pinned as it is, at every size."""
+    text = _LONG_URL + "\ntoken\t=\tZq8wYv3Lp9Kd2xT\nhttps://c.example/z"
+    for size in (1, 7, 512, len(text)):
+        events = _events_of([text[i : i + size] for i in range(0, len(text), size)])
+        assert "".join(events) == (
+            _LONG_URL + "token=zq8wyv3lp9kd2xthttps://c.example/z"
+        ), size
+
+
+# -- TH-9500 change review r5 (cr5): the offset sweeps as tests -------------------------------------
+
+# Three rounds of hand-picked rows each passed and then failed the next offset class a sweep
+# found. So each class is swept here: a break at every offset after the ://, or at every place
+# the input has one, and the rule is the one chat has: the stream, joined, is the stored message
+# (`_redact(reply.strip())`), and no event holds the secret, compared lower-cased. A sweep that
+# ran fewer cases than it should have, or whose check was taken out, fails on its count.
+_SWEEP_BREAKS = {"n": "\n", "t": "\t", "rn": "\r\n"}
+_SWEEP_GRAFANA = "\n".join(
+    f"https://grafana.example.com/d/service-{i}/latency" for i in range(90)
+)
+# (url, the tail of the password that must never stream)
+_SWEEP_URLS = {
+    "1b": ("postgres://admin:Xk9/Qp+Zr8@db.example.com:5432/app", "qp+zr"),
+    "r1": ("postgres://admin:S3cretPw9x@db.example.com/app", "cretp"),
+    "r1-nouser": ("redis://:S3cretPw9x@cache.internal:6379/0", "cretp"),
+    "1b-at": ("postgres://admin:P@ss/Xk9@db.example.com:5432/app", "ss/xk"),
+    "1b-ash": ("redis://:p@w/x9@cache.internal:6379/0", "w/x9"),
+    "1b-pass": ("postgres://admin:Pass@w/x9@db.example.com/app", "w/x9"),
+}
+_SWEEP_TAILS = ("\nhttps://c.example/z", "https://c.example/z")
+
+
+def _swept(cases, size: int) -> tuple[int, list[str], int]:
+    """(cases held, the ones that were not, cases skipped) over `cases` of (label, text,
+    secret): each streamed in deltas of `size`. A case whose stored message keeps the secret is
+    skipped: that is the base cleaner's, not the stream's."""
+    from fi.alk.providers.agent import _redact
+
+    held, bad, skipped = 0, [], 0
+    for label, text, secret in cases:
+        whole = _redact(text.strip())
+        if secret in whole.lower():
+            skipped += 1
+            continue
+        events = _events_of([text[i : i + size] for i in range(0, len(text), size)])
+        joined = "".join(events)
+        leak = any(secret in event.lower() for event in events)
+        if leak or joined.strip() != whole:
+            bad.append(f"{label}: {'leak' if leak else 'unequal'}")
+        else:
+            held += 1
+    return held, bad, skipped
+
+
+def _assert_swept(cases, size: int, at_least: int) -> None:
+    held, bad, skipped = _swept(cases, size)
+    assert not bad, f"{len(bad)} of {held + len(bad)}: {bad[:6]}"
+    # Every case is held or bad, so an emptied sweep, or a check taken out, changes this.
+    assert held >= at_least, f"swept {held}, skipped {skipped}"
+
+
+def test_a_sweep_reports_a_leak_and_an_unequal_stream(monkeypatch) -> None:
+    """The sweeps' own check, on streams made to fail it: a sweep that cannot see a leak or a
+    difference would pass on any tree."""
+    import sys
+
+    here = sys.modules[__name__]
+    case = [("c", "See https://h.example/p now", "zzzzz")]
+
+    monkeypatch.setattr(
+        here, "_events_of", lambda deltas: ["See https://h.example/p now"]
+    )
+    assert _swept(case, 5) == (1, [], 0)
+    monkeypatch.setattr(
+        here, "_events_of", lambda deltas: ["See https://h.example/p ZZZZZ"]
+    )
+    assert _swept(case, 5) == (0, ["c: leak"], 0)
+    monkeypatch.setattr(
+        here, "_events_of", lambda deltas: ["See https://h.example/q now"]
+    )
+    assert _swept(case, 5) == (0, ["c: unequal"], 0)
+    # The base cleaner's own miss is no stream's: skipped, not held.
+    assert _swept([("k", "See zzzzz now", "zzzzz")], 5) == (0, [], 1)
+
+
+def _url_sweep(size: int, brk: str):
+    """A credentialed URL after a long URL, with the break at every offset after its ://."""
+    # One delta per character over the long URL alone keeps the 1-character run short.
+    prefixes = (_LONG_URL,) if size == 1 else (_LONG_URL, _SWEEP_GRAFANA)
+    tails = _SWEEP_TAILS[:1] if size == 1 else _SWEEP_TAILS
+    for pn, prefix in enumerate(prefixes):
+        for name, (url, secret) in _SWEEP_URLS.items():
+            for k in range(url.index("://") + 3, len(url) + 1):
+                for tn, tail in enumerate(tails):
+                    text = prefix + "\n" + url[:k] + brk + url[k:] + tail
+                    yield f"{name}/{pn}/{k}/{tn}", text, secret
+
+
+@pytest.mark.parametrize("brk", list(_SWEEP_BREAKS))
+@pytest.mark.parametrize("size", [1, 7, 64, 512])
+def test_a_credentialed_url_broken_at_any_offset_past_n_streams_as_stored(
+    size: int, brk: str
+) -> None:
+    """cr4b H1, H2: U's sweep. After a long URL (or a URL list), a credentialed URL with a
+    break at every offset from just after its :// to its end, before and after its @, inside its
+    host, and before its port."""
+    _assert_swept(_url_sweep(size, _SWEEP_BREAKS[brk]), size, 215 if size == 1 else 860)
+
+
+def _rule_1b_sweep(brk: str):
+    """R's: a rule 1b password (it holds a /) broken after each of its characters."""
+    for pn, prefix in enumerate((_LONG_URL, _SWEEP_GRAFANA)):
+        for password in ("Xk9/Qp+Zr8", "Xk9/Qp+Zr8Wv5Ty", "ab/cdEFgh12"):
+            for k in range(1, len(password) + 1):
+                for tn, tail in enumerate(
+                    ("\nhttps://c.example/z", "https://c.example/z")
+                ):
+                    text = (
+                        prefix
+                        + "\npostgres://admin:"
+                        + password[:k]
+                        + brk
+                        + password[k:]
+                        + "@db.example.com:5432/app"
+                        + tail
+                    )
+                    yield (
+                        f"{pn}/{password}/{k}/{tn}",
+                        text,
+                        password.split("/")[1][:5].lower(),
+                    )
+
+
+@pytest.mark.parametrize("brk", list(_SWEEP_BREAKS))
+@pytest.mark.parametrize("size", [1, 7, 64, 512])
+def test_a_rule_1b_password_broken_at_any_offset_past_n_streams_as_stored(
+    size: int, brk: str
+) -> None:
+    """cr4 H1: R's sweep, a break after each character of a password that holds a /."""
+    _assert_swept(_rule_1b_sweep(_SWEEP_BREAKS[brk]), size, 144)
+
+
+def _dodge_cases(brk: str):
+    """Every :// held is broken by a line break, so the guard that looks for one finds none
+    (cr4b H2), and rule 1b passwords broken after the @ or inside the host (cr4b H1)."""
+    long = _LONG_URL + "/"
+    z = "https://c.example/" + "z" * 4100
+    cases = {
+        "a :/ break /": (
+            long + "\npostgres:/\n/admin:Xk9/Qp+Zr\n8@db.example.com:5432/app\n" + z,
+            "qp+zr",
+        ),
+        "b : break //": (
+            long + "\npostgres:\n//admin:Xk9/Qp+Zr\n8@db.example.com:5432/app\n" + z,
+            "qp+zr",
+        ),
+        "c :/ break /, P@ss/Xk9@": (
+            long + "\npostgres:/\n/admin:P@ss/Xk9@\ndb.example.com:5432/app\n" + z,
+            "ss/xk9",
+        ),
+        "d pw broken twice": (
+            long + "\npostgres:/\n/admin:Xk9/Qp\n+Zr\n8@db.example.com:5432/app\n" + z,
+            "qp+zr",
+        ),
+        "e control, :// whole": (
+            long + "\npostgres://admin:Xk9/Qp+Zr\n8@db.example.com:5432/app\n" + z,
+            "qp+zr",
+        ),
+    }
+    long_url = _LONG_URL
+    other = "https://c.example/z"
+    h123 = {
+        "H1 broken after the path's @": (
+            long_url
+            + "\npostgres://admin:P@ss/Xk9@\ndb.example.com:5432/app\n"
+            + other,
+            "ss/xk9",
+        ),
+        "H1 addendum shape, port in password": (
+            long_url + "\npostgres://admin:P@ss:99/Xk9@\ndb.example.com/app\n" + other,
+            "ss:99/xk9",
+        ),
+        "H1 redis 1b, glued URL after": (
+            long_url + "\nredis://:p@w/x9@\ncache.internal:6379/0" + other,
+            "w/x9",
+        ),
+        "H1 broken inside the host": (
+            long_url
+            + "\npostgres://admin:P@ss/Xk9@db.\nexample.com:5432/app\n"
+            + other,
+            "ss/xk9",
+        ),
+        "H1 control, under N": (
+            "https://h.example/p\npostgres://admin:P@ss/Xk9@\ndb.example.com:5432/app\n"
+            + other,
+            "ss/xk9",
+        ),
+        "H2 :/ break /, password broken": (
+            long_url
+            + "/\npostgres:/\n/admin:Xk9/Qp+Zr\n8@db.example.com:5432/app\nhttps://c.example/"
+            + "z" * 4100,
+            "qp+zr",
+        ),
+        "H2 control, :// whole": (
+            long_url
+            + "/\npostgres://admin:Xk9/Qp+Zr\n8@db.example.com:5432/app\nhttps://c.example/"
+            + "z" * 4100,
+            "qp+zr",
+        ),
+    }
+    for name, (text, secret) in {**cases, **h123}.items():
+        yield name, text.replace("\n", brk), secret
+
+
+@pytest.mark.parametrize("brk", list(_SWEEP_BREAKS))
+@pytest.mark.parametrize("size", [1, 7, 64, 512])
+def test_a_url_whose_own_scheme_or_host_is_broken_past_n_streams_as_stored(
+    size: int, brk: str
+) -> None:
+    """cr4b H1, H2: the guard may not depend on a :// being whole in the text held, nor on the
+    break falling in a place that leaves the password's host on the next line."""
+    _assert_swept(_dodge_cases(_SWEEP_BREAKS[brk]), size, 12)
+
+
+def _honest_lists() -> dict[str, str]:
+    def alt(n: int, a: str, b: str) -> str:
+        return "\n".join(a.format(i=i) + "\n" + b.format(i=i) for i in range(n))
+
+    return {
+        "github + email x300": alt(
+            300, "https://github.com/user{i}", "user{i}@example.com"
+        ),
+        "email + github x300": "https://example.com/team\n"
+        + "\n".join(
+            f"user{i}@example.com\nhttps://github.com/user{i}" for i in range(300)
+        ),
+        "url + git@ x300": alt(
+            300,
+            "https://gitlab.example.com/org/repo{i}",
+            "git@gitlab.example.com:org/repo{i}.git",
+        ),
+        "url + mailto x300": alt(
+            300, "https://example.com/people/p{i}", "mailto:p{i}@example.com"
+        ),
+        "url + @mention x400": alt(
+            400, "https://github.com/org/repo{i}/pull/{i}", "@reviewer{i}"
+        ),
+        "url + img@sha256 x150": alt(
+            150,
+            "https://hub.docker.com/r/org/img{i}",
+            "org/img{i}@sha256:" + "ab12" * 16,
+        ),
+        "medium /@user x500": "\n".join(
+            f"https://medium.com/@writer{i}" for i in range(500)
+        ),
+        "npm /@scope/pkg x500": "\n".join(
+            f"https://www.npmjs.com/package/@scope{i}/pkg" for i in range(500)
+        ),
+        "control: github only x600": "\n".join(
+            f"https://github.com/user{i}" for i in range(600)
+        ),
+    }
+
+
+# The lists that stream: an @ in a URL's own path or a /@ segment is no userinfo.
+_STREAMING_LISTS = (
+    "medium /@user x500",
+    "npm /@scope/pkg x500",
+    "control: github only x600",
+)
+# cr4b M1, a named limit: an @ on the line before a URL could be the end of a userinfo, and the
+# cut after it can't tell, so the held text isn't cut while a later URL follows an @ line. Past
+# _HOLD_HARD it is sent as `[redacted]` and the rest of the token is dropped; short of it,
+# nothing goes before the flush. (Holding only while rule 1 finds a userinfo that would cross
+# the cut was tried: rule 1 is the cross-whitespace rule, and the plain userinfo of a URL on one
+# line isn't its span, so it let passwords through.) The raw text is counted toward the bound,
+# breaks too, so a list of about 16,000 joined characters with a break per URL is past it.
+_AT_LINE_LISTS_REDACTED = (
+    "url + git@ x300",
+    "url + @mention x400",
+    "url + img@sha256 x150",
+    "url + mailto x300",
+)
+_AT_LINE_LISTS_HELD = ("github + email x300", "email + github x300")
+
+
+def _fed(text: str, size: int) -> tuple[str, str]:
+    """What the stream sends before the flush, and what the flush sends."""
+    from fi.alk.harness.hosted_chat_entrypoint import _DeltaCleaner
+
+    cleaner = _DeltaCleaner()
+    sent = "".join(cleaner.feed(text[i : i + size]) for i in range(0, len(text), size))
+    return sent, cleaner.flush()
+
+
+@pytest.mark.parametrize("size", [7, 512, 0])
+def test_an_honest_url_list_streams_as_stored_and_before_its_end(size: int) -> None:
+    """URL-only lists past _HOLD_SOFT joined with an @ in a path: the stream is the stored
+    message, and most of it goes before the flush."""
+    from fi.alk.providers.agent import _redact
+
+    lists = _honest_lists()
+    for name in _STREAMING_LISTS:
+        text = lists[name]
+        sent, flushed = _fed(text, size or len(text))
+        assert (sent + flushed).strip() == _redact(text.strip()), name
+        assert len(sent) > len(text) // 2, name
+    assert (
+        len(_STREAMING_LISTS) + len(_AT_LINE_LISTS_REDACTED) + len(_AT_LINE_LISTS_HELD)
+        == 9
+    )
+    assert len(lists) == 9
+
+
+@pytest.mark.parametrize("size", [7, 512, 0])
+def test_an_honest_url_list_with_an_at_line_before_each_url_is_a_named_limit(
+    size: int,
+) -> None:
+    """cr4b M1, a named limit: pinned as it is, so that a change to it shows."""
+    from fi.alk.providers.agent import _redact
+
+    lists = _honest_lists()
+    for name in _AT_LINE_LISTS_REDACTED + _AT_LINE_LISTS_HELD:
+        text = lists[name]
+        sent, flushed = _fed(text, size or len(text))
+        if name in _AT_LINE_LISTS_REDACTED:
+            assert sent + flushed == "[redacted]", name
+        else:
+            assert sent == "", name
+            assert flushed.strip() == _redact(text.strip()), name
+
+
+# -- TH-9500 change review r5, H1: a break just before a credentialed URL's own :// -----------------
+_PRE_SCHEME_URLS = {
+    "1b": ("postgres://admin:Xk9/Qp+Zr8@db.example.com:5432/app", "qp+zr"),
+    "1b-at": ("postgres://admin:P@ss/Xk9@db.example.com:5432/app", "ss/xk"),
+    "1b-port": ("postgres://admin:P@ss:99/Xk9@db.example.com/app", "ss:99"),
+    "1b-ash": ("redis://:p@w/x9@cache.internal:6379/0", "w/x9"),
+    "r1": ("postgres://admin:S3cretPw9x@db.example.com/app", "cretp"),
+}
+
+
+def _pre_scheme_cases():
+    for name, (url, secret) in _PRE_SCHEME_URLS.items():
+        at = url.index("://")
+        for kind, brk in _SWEEP_BREAKS.items():
+            text = _LONG_URL + "\n" + url[:at] + brk + url[at:] + "\nhttps://c.example/z"
+            yield f"{name}/{kind}", text, secret
+
+
+@pytest.mark.parametrize("size", [1, 7, 64, 512, 0], ids=lambda size: f"size_{size or 'whole'}")
+def test_a_credentialed_url_broken_just_before_its_scheme_past_n_streams_as_stored(size) -> None:
+    """Past N before prose, the line cut can fall between a URL's scheme and its own ://, where
+    the text after the cut still holds the userinfo. Each of 5 URLs × 3 breaks streams equal to
+    the stored message, with no part of its password in any event."""
+    cases = list(_pre_scheme_cases())
+    assert len(cases) == 15
+    if size == 0:
+        held = sum(_swept([case], len(case[1]))[0] for case in cases)
+        bad = [b for case in cases for b in _swept([case], len(case[1]))[1]]
+        assert not bad, bad
+        assert held == len(cases)
+        return
+    _assert_swept(cases, size, at_least=len(cases))
+
+
+@pytest.mark.parametrize("size", [1, 7, 64])
+def test_a_scheme_line_then_a_lone_colon_line_past_n_streams_as_stored(size) -> None:
+    """The scheme, its `:` and its `//` on three lines, with a password holding `://` and an @
+    on a line of its own: the cut must not fall between the scheme and its `://`."""
+    text = (
+        _LONG_URL
+        + "\npostgres\n:\n//admin:S3cretPw9x/a://b\n@\ndb.example.com/app\nhttps://c.example/z"
+    )
+    _assert_swept([("scheme, :, //", text, "s3cretpw9x")], size, at_least=1)

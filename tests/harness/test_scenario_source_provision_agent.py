@@ -143,7 +143,7 @@ def test_a_url_urlsplit_refuses_is_registered_redacted_and_logged_by_class_only(
     # Once for the document and once for the prompt.
     logged = [record for record in caplog.records if record.name == "fi.alk.providers.agent"]
     assert [record.getMessage() for record in logged] == [
-        "a URL was redacted whole: class=ValueError"
+        "secrets redacted: url=ValueError"
     ] * 2
     assert all(record.exc_info is None for record in logged)
     assert "hunter2" not in caplog.text
@@ -452,3 +452,210 @@ def test_the_document_and_the_reading_hold_the_same_cleaned_prompt(tmp_path: Pat
     assert payload["agent"]["agent"]["behaviour"][0]["instructions"] == cleaned
     assert reading["agent"]["behaviour"][0]["instructions"] == cleaned
     assert "hunter2" not in json.dumps(reading) and "sk-1" not in json.dumps(reading)
+
+
+# -- TH-9500: the persona record is cleaned before it leaves (plan v1.1 section 5, test P1) ------
+
+_FAKE_KEY = "ghp_" + "A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8"
+
+
+def test_a_key_in_each_cleaned_persona_field_is_masked_and_the_rest_sent_as_written() -> (
+    None
+):
+    body = {
+        "name": f"Dana {_FAKE_KEY}",
+        "use_case": f"Refund {_FAKE_KEY}",
+        "instruction": f"She pastes {_FAKE_KEY} into the chat",
+        "tests": "The agent refuses password=Zq8wYv3Lp9 politely",
+        "persona": {
+            "role": f"admin {_FAKE_KEY}",
+            "background": f"keeps {_FAKE_KEY} in a note",
+            "secret_motive": "wants a refund",
+            "traits": ["calm", f"uses {_FAKE_KEY}"],
+        },
+    }
+    scenario = SimpleNamespace(
+        presented=ss._presented(body, scenario_key="refund-ghp_key-s1"),
+        presented_fields=ss._presented(
+            body, scenario_key="refund-ghp_key-s1", fields=True
+        ),
+        scenario_key="refund-ghp_key-s1",
+    )
+
+    payload = ss._provision_payload(
+        "Run ghp_x", [scenario], ["task_completion"], "", "chat", agent_name="Desk"
+    )
+
+    [persona] = payload["personas"]
+    assert _FAKE_KEY not in json.dumps(payload)
+    assert "Zq8wYv3Lp9" not in json.dumps(payload)
+    assert persona == {
+        "name": "Dana [redacted]",
+        "scenario_name": "Refund [redacted]",
+        "role": "admin [redacted]",
+        "situation": "She pastes [redacted] into the chat",
+        "outcome": "The agent refuses password=[redacted] politely",
+        "persona": {
+            "role": "admin [redacted]",
+            # The key markers apply to the persona's own keys too.
+            "background": "keeps [redacted] in a note",
+            "secret_motive": "[redacted]",
+            "traits": ["calm", "uses [redacted]"],
+        },
+        "scenario_key": "refund-ghp_key-s1",
+    }
+    # As written: the platform matches on scenario_key, and the rest is the kit's own.
+    assert payload["name"] == "Run ghp_x"
+    assert payload["agent_name"] == "Desk"
+    assert payload["chosen_evals"] == ["task_completion"]
+    assert payload["modality"] == "chat"
+    # The judge's record is left as it was.
+    assert scenario.presented["name"] == f"Dana {_FAKE_KEY}"
+
+
+def _sent(body: dict[str, Any], scenario_key: str = "s1") -> tuple[dict, dict]:
+    """The payload's persona for a scenario built from `body` as `_load_one` builds it, and the
+    record the judge reads."""
+    presented = ss._presented(body, scenario_key=scenario_key)
+    scenario = SimpleNamespace(
+        presented=presented,
+        presented_fields=ss._presented(body, scenario_key=scenario_key, fields=True),
+        scenario_key=scenario_key,
+    )
+    [persona] = ss._provision_payload("Run", [scenario], (), "", "chat")["personas"]
+    return persona, presented
+
+
+def _straddling(at: int) -> str:
+    text = ("Caller says: " + "please help me with the refund " * 10)[:at]
+    text += " " + _FAKE_KEY + " and then hangs up politely."
+    assert text.index(_FAKE_KEY) == at + 1
+    return text
+
+
+def _masked(text: str) -> str:
+    at = text.index(_FAKE_KEY)
+    return text[:at] + "[redacted]" + text[at + len(_FAKE_KEY) :]
+
+
+@pytest.mark.parametrize("at", [222, 244])
+@pytest.mark.parametrize("where", ["persona", "name_falls_back_to_the_scenario"])
+def test_a_key_straddling_the_255_character_cut_of_name_and_role_is_masked(
+    at: int, where: str
+) -> None:
+    """P1 (cr1 M4, cr2 M1): `persona_of` cuts `name` and `role` at 255 characters, so the record
+    sent is `persona_of` over cleaned fields, including a name that falls back to the scenario's
+    own. The record the judge reads stays as written."""
+    text = _straddling(at)
+    if where == "persona":
+        body = {"persona": {"name": text, "role": text}, "name": "s1"}
+    else:
+        body = {"persona": {"role": text}, "name": text}
+    body.update(instruction=text, tests="ok", use_case="Refund")
+
+    persona, presented = _sent(body)
+
+    for field in ("name", "role"):
+        assert persona[field] == _masked(text)[:255]
+    assert _FAKE_KEY[:6] not in json.dumps(persona)
+    assert presented["name"] == presented["role"] == text[:255]
+
+
+@pytest.mark.parametrize("at", [222, 244])
+@pytest.mark.parametrize("where", ["use_case", "tests"])
+def test_a_key_straddling_the_cut_of_scenario_name_is_masked(
+    at: int, where: str
+) -> None:
+    """cr2 M1: `display_scenario_name` cuts `use_case`, or `tests` when there is no `use_case`
+    and no `scenario_key` to make one from, at 255 characters."""
+    text = _straddling(at)
+    body = {"persona": {"name": "Dana"}, "name": "s1", "instruction": "x", where: text}
+
+    persona, presented = _sent(body, scenario_key="")
+
+    assert persona["scenario_name"] == _masked(text)[:255]
+    assert _FAKE_KEY[:6] not in json.dumps(persona)
+    assert presented["scenario_name"] == text[:255]
+
+
+def test_a_key_in_a_scenario_name_the_display_rewrites_is_masked() -> None:
+    """cr2 M1: with no `use_case`, `tests` or `scenario_key`, the shown name is the scenario's
+    `name` with `-` and `_` made spaces, which takes a key out of its shape (`ghp A1b2…`)."""
+    body = {"persona": {"name": "Dana"}, "name": f"call about {_FAKE_KEY} please"}
+
+    persona, presented = _sent(body, scenario_key="")
+
+    assert persona["scenario_name"] == "Call about [redacted] please"
+    assert _FAKE_KEY[4:20] not in json.dumps(persona)
+    assert presented["scenario_name"] == f"Call about ghp {_FAKE_KEY[4:]} please"
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"persona": {"name": "N" * 300, "role": "R" * 300}, "name": "S"},
+        {"persona": {"occupation": "O" * 300}, "name": "S" * 300},
+        {"persona": {}, "name": ""},
+        {"persona": "not a dict", "name": "S"},
+        {"persona": {"name": "", "role": ""}, "name": "S"},
+        {"name": "refund-for_bob", "tests": "", "use_case": ""},
+        {},
+    ],
+    ids=[
+        "persona",
+        "occupation_and_fallback",
+        "caller",
+        "persona_not_a_dict",
+        "empty",
+        "name_rewritten",
+        "bare",
+    ],
+)
+def test_the_record_sent_is_the_record_shown_when_nothing_is_secret(body) -> None:
+    """cr2 M1, cr3 L4: cleaning first changes no honest field, so each fallback `persona_of`
+    takes is the same in the record sent."""
+    for scenario_key in ("s1", ""):
+        persona, presented = _sent(body, scenario_key=scenario_key)
+        assert persona == {**presented, "scenario_key": scenario_key}
+
+
+def test_a_key_the_shown_name_rewrites_into_shape_is_masked() -> None:
+    """cr3 M4: `call_AKIA…` isn't a key's shape (a key's own character comes before it), but the
+    shown name makes `_` a space, `Call AKIA…`. The clean after `persona_of` masks it."""
+    body = {"persona": {"name": "Dana"}, "name": "call_AKIAFAKEFAKEFAKE1234 now"}
+
+    persona, _ = _sent(body, scenario_key="")
+
+    assert persona["scenario_name"] == "Call [redacted] now"
+    assert "AKIAFAKE" not in json.dumps(persona)
+
+
+def test_loading_a_scenario_logs_nothing_and_the_send_logs_one_line(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """cr3 L4: the clean and its log line are the send's. Loading a scenario cleans nothing, so
+    a run that loads scenarios and never sends them logs nothing."""
+    body = {"persona": {"name": f"Dana {_FAKE_KEY}"}, "name": "s1"}
+    with caplog.at_level(logging.WARNING):
+        presented = ss._presented(body, scenario_key="s1")
+        read = ss._presented(body, scenario_key="s1", fields=True)
+        loaded = [r for r in caplog.records if r.name == "fi.alk.providers.agent"]
+        scenario = SimpleNamespace(
+            presented=presented, presented_fields=read, scenario_key="s1"
+        )
+        ss._provision_payload("Run", [scenario], (), "", "chat")
+        sent = [r for r in caplog.records if r.name == "fi.alk.providers.agent"]
+
+    assert loaded == []
+    assert read["persona"]["name"] == f"Dana {_FAKE_KEY}"
+    assert [r.getMessage() for r in sent] == ["secrets redacted: kinds=github"]
+
+
+def test_a_compiled_scenario_carries_the_fields_to_send() -> None:
+    """The one place a scenario is built from its document fills `presented_fields`."""
+    import inspect
+
+    assert (
+        "presented_fields=_presented(body, scenario_key=scenario_key, fields=True)"
+        in inspect.getsource(ss._load_one)
+    )

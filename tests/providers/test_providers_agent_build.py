@@ -109,7 +109,7 @@ def test_a_refused_url_inside_prose_becomes_redacted_and_the_rest_stays(
 
     # One line for the call, however many URLs in it were refused (#271).
     [logged] = [record for record in caplog.records if record.name == "fi.alk.providers.agent"]
-    assert logged.getMessage() == "a URL was redacted whole: class=ValueError"
+    assert logged.getMessage() == "secrets redacted: url=ValueError"
     assert "hunter2" not in caplog.text
 
 
@@ -140,9 +140,59 @@ def test_many_refused_urls_in_one_document_log_one_line(
     assert agent["behaviour"][0]["instructions"] == "[redacted]"
     assert agent["tools"][0]["parameters"]["properties"]["k"]["enum"] == ["[redacted]"] * 1001
     [logged] = [record for record in caplog.records if record.name == "fi.alk.providers.agent"]
-    assert logged.getMessage() == "a URL was redacted whole: class=ValueError"
+    assert logged.getMessage() == "secrets redacted: url=ValueError"
     assert logged.exc_info is None
     assert "hunter2" not in caplog.text
+
+
+def test_the_log_line_names_the_url_class_and_the_kinds_once_per_call(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """TH-9500 (plan v1.1 section 2, S6): one line per call, naming what was removed, never
+    the text."""
+    document = {
+        "a": "password=Zq8wYv3Lp9",
+        "b": ["https://u:p@h/x?k=1", "ghp_" + "A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8"],
+        "c": "Before https://admin:hunter2\uff03x@db.example/ after",
+    }
+
+    with caplog.at_level(logging.DEBUG, logger="fi.alk.providers.agent"):
+        _redact(document)
+
+    [logged] = [
+        record for record in caplog.records if record.name == "fi.alk.providers.agent"
+    ]
+    assert logged.getMessage() == "secrets redacted: url=ValueError; kinds=github,named"
+    assert "Zq8wYv3Lp9" not in caplog.text and "hunter2" not in caplog.text
+
+
+def test_the_log_line_names_the_kinds_alone_when_no_url_was_refused(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    with caplog.at_level(logging.DEBUG, logger="fi.alk.providers.agent"):
+        assert _redact("see https://bot:hun ter2@h/v1") == "see https://h/v1"
+
+    assert [
+        r.getMessage() for r in caplog.records if r.name == "fi.alk.providers.agent"
+    ] == ["secrets redacted: kinds=rule1"]
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "password: required",
+        "see https://h.example/x?k=1",
+        "password=[redacted]",
+        "no secret",
+    ],
+)
+def test_nothing_is_logged_when_no_secret_rule_changed_the_text(
+    caplog: pytest.LogCaptureFixture, text: str
+) -> None:
+    with caplog.at_level(logging.DEBUG, logger="fi.alk.providers.agent"):
+        _redact(text)
+
+    assert [r for r in caplog.records if r.name == "fi.alk.providers.agent"] == []
 
 
 # -- TH-9491: a URL inside prose (plan v5.1) -------------------------------------------------------
@@ -225,13 +275,104 @@ def _lone_urls(draw: Any) -> str:
 @_PROPERTY
 @given(_lone_urls())
 def test_a_single_url_field_is_cleaned_as_the_base_cleans_it(url: str) -> None:
-    """B5: a single-URL field, after W1's join, gives the frozen base's result."""
+    """B5: a single-URL field, after W1's join, gives the frozen base's result. TH-9500's rule 1
+    first removes a userinfo whose text after "user:" a tab or a line break splits, which is
+    what the base's join used to read as one password. The oracle runs `leftovers`, so it can't
+    see a rule 1b condition that fires wrongly or not at all; the rows in
+    test_secret_shapes.py (R1B_CLEANED, R1B_KEPT, R1B_LIMITS) pin those (cr2 L4)."""
     from fi.alk.providers.agent import _START
+    from fi.alk.providers.secret_shapes import leftovers
 
     joined = url.replace("\t", "").replace("\r", "").replace("\n", "")
     if len(_START.findall(joined)) != 1:
         return
-    assert _redact(url) == _frozen_base_url(url), url
+    # A one-URL value runs step 1 on its joined token (v2.5.2, M-A), as chat does.
+    assert _redact(url) == _frozen_base_url(leftovers(joined)), url
+    assert _only_userinfo_and_query_values_taken(joined, leftovers(joined)), url
+
+
+_QUERY_VALUE = re.compile(r"[^&#\s]*")
+
+
+def _only_userinfo_and_query_values_taken(url: str, left: str) -> bool:
+    """What `leftovers` may take from a lone URL, checked without it (cr1 L1): the oracle above
+    runs `leftovers` itself, so a rule 1 bug moves both sides alike. Rule 1 takes the userinfo
+    right after the ://, up to and including its one @; rule 2 takes whole query values, each
+    after an =. Rule 1b takes the userinfo up to the first path segment's @. Nothing else
+    changes. It bounds what may go, not when: a 1b condition that fires wrongly or not at all
+    passes it, and the rows in test_secret_shapes.py pin those (cr2 L4)."""
+    head = url.index("://") + 3
+    if left[:head] != url[:head]:
+        return False
+    rests = [url[head:]]
+    at = url.find("@", head)
+    if at >= 0:
+        rests.append(url[at + 1 :])
+    slash = url.find("/", head)
+    path_at = url.find("@", slash) if slash >= 0 else -1
+    if path_at >= 0:
+        rests.append(url[path_at + 1 :])
+    return any(_values_taken(rest, left[head:]) for rest in rests)
+
+
+def _values_taken(full: str, left: str) -> bool:
+    """Whether `left` is `full` less whole query values. A value taken is the whole run after
+    its =, so the next character left is one that ends a value, never the value's first."""
+    at = kept = 0
+    while at < len(full):
+        if at and full[at - 1] == "=":
+            value = _QUERY_VALUE.match(full, at).group()
+            if value and not left.startswith(value, kept):
+                at += len(value)
+                continue
+        if kept >= len(left) or full[at] != left[kept]:
+            return False
+        at += 1
+        kept += 1
+    return kept == len(left)
+
+
+# R's adversarial lone URLs (change review r1, b5.py): hosts that are names, ports that read as
+# values, userinfo split by breaks, rule 2's query on the next line, and brackets.
+_ADVERSARIAL_URLS = [
+    f"https://{userinfo}{host}{port}{path}"
+    for userinfo in ("", "u:p@")
+    for host in ("token", "secret", "password", "a")
+    for port in (":8443", ":0", ":{PORT}", "")
+    for path in ("/a1", "")
+] + [
+    "https://u:pa\nss@h/x",
+    "https://u:pa\tss@h/x",
+    "https://u:p[a\nb@h/x",
+    "https://u:a]b\n c@h/x",
+    "https://u:12\nab@h",
+    "https://u:{P}\nab@h",
+    "https://u:ab\r\ncd@h/x?y=1",
+    "https://u:ab\ncd@token:8443/a1",
+    "redis://:pw\nx@cache:6379/0",
+    "https://u:p@h/token=a1b2",
+    "https://h/x\n?a=1",
+    "https://h/x\n&a=1/b",
+    "https://u:p@h/x\n&a=1/b",
+    "https://u:x\ny@h/a\tb",
+    "https://u:p@[fd00::5]:8443/x",
+]
+
+
+def test_leftovers_takes_only_a_userinfo_and_query_values_from_a_lone_url() -> None:
+    """cr1 L1, beside B5 and without hypothesis: rule 1 and rule 2 checked independently."""
+    from fi.alk.providers.secret_shapes import leftovers
+
+    taken = {url: leftovers(url) for url in _ADVERSARIAL_URLS}
+
+    assert {
+        url: left
+        for url, left in taken.items()
+        if not _only_userinfo_and_query_values_taken(url, left)
+    } == {}
+    # Each rule takes something here, so the check is not passing on untouched input.
+    assert taken["https://u:pa\nss@h/x"] == "https://h/x"
+    assert taken["https://h/x\n?a=1"] == "https://h/x\n?a="
 
 
 @st.composite

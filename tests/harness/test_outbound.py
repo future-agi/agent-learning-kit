@@ -3400,7 +3400,7 @@ def test_build_event_record_redacts_a_dsn_in_world_unhealthy_cause() -> None:
     )
     cause = record["payload"]["cause"]
     assert "s3cr3t" not in cause
-    assert cause == "connect failed: postgresql://harness:***@localhost:14000/w0"
+    assert cause == "connect failed: postgresql://localhost:14000/w0"
     # The digest must match the REDACTED bytes actually spooled, not the original with the secret.
     assert record["digest"] == event_payload_digest(record["payload"])
 
@@ -3423,7 +3423,7 @@ def test_build_event_record_redacts_terminal_failure_message() -> None:
     )
     message = record["payload"]["failure"]["message"]
     assert "hunter2" not in message
-    assert "postgresql://harness:***@localhost:14000/w0" in message
+    assert "postgresql://localhost:14000/w0" in message
 
 
 def test_build_result_receipt_redacts_sub_goal_and_evaluation_reasons_and_failure_message() -> (
@@ -3463,11 +3463,9 @@ def test_build_result_receipt_redacts_sub_goal_and_evaluation_reasons_and_failur
         },
     )
     assert "pw123" not in str(receipt)
-    assert (
-        receipt["sub_goals"][0]["reason"] == "leaked postgresql://harness:***@host/db"
-    )
-    assert receipt["evaluations"][0]["reason"] == "saw postgresql://harness:***@host/db"
-    assert receipt["failure"]["message"] == "postgresql://harness:***@host/db"
+    assert receipt["sub_goals"][0]["reason"] == "leaked postgresql://host/db"
+    assert receipt["evaluations"][0]["reason"] == "saw postgresql://host/db"
+    assert receipt["failure"]["message"] == "postgresql://host/db"
     # The digest must match the redacted bytes.
     ResultReceiptDraft.model_validate(receipt)  # round-trips cleanly, digest agrees
 
@@ -3475,7 +3473,7 @@ def test_build_result_receipt_redacts_sub_goal_and_evaluation_reasons_and_failur
 def test_redact_outbound_text_scrubs_userinfo_and_extra_secrets() -> None:
     assert (
         redact_outbound_text("postgresql://harness:pw@localhost/db")
-        == "postgresql://harness:***@localhost/db"
+        == "postgresql://localhost/db"
     )
     assert redact_outbound_text("no secrets here") == "no secrets here"
     assert (
@@ -3498,12 +3496,12 @@ def test_redact_outbound_text_scrubs_userinfo_and_extra_secrets() -> None:
     [
         # P3: the empty-username shape -- the canonical Redis/RabbitMQ/Mongo DSN form -- used to
         # leave the password verbatim (the old pattern required a NON-empty username group).
-        ("redis://:secretpw@h:6379/0", "redis://:***@h:6379/0"),
+        ("redis://:secretpw@h:6379/0", "redis://h:6379/0"),
         # A password containing '@' must not truncate the mask at the first '@' seen.
-        ("mysql://u:p@ss@h/db", "mysql://u:***@h/db"),
+        ("mysql://u:p@ss@h/db", "mysql://h/db"),
         # A bare token/username-only userinfo (no ':') is the standard shape a bearer token takes
         # in git/registry output -- must be masked outright, not treated as "just a username."
-        ("https://ghp_TOKEN@github.com/o/r.git", "https://***@github.com/o/r.git"),
+        ("https://ghp_TOKEN@github.com/o/r.git", "https://github.com/o/r.git"),
         # Negative: a path segment containing '@' with no userinfo before it must be left alone.
         ("https://example.com/a@b", "https://example.com/a@b"),
         # Negative: no "://" at all -- not a userinfo shape.
@@ -3514,6 +3512,73 @@ def test_redact_outbound_text_handles_the_empty_username_and_bare_token_userinfo
     raw: str, expected: str
 ) -> None:
     assert redact_outbound_text(raw) == expected
+
+
+# -- TH-9500: the kit's one cleaner runs here too (plan v1.1 section 4, test O1) ----------------
+
+_FAKE_KEY = "ghp_" + "A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8"
+
+
+def test_a_declared_secret_is_matched_whole_before_the_cleaner_can_mask_part_of_it() -> (
+    None
+):
+    """The order: extra values first. A declared secret holding a word and a key would lose
+    only its key to the cleaner, and the rest would no longer match it exactly (r1 M5)."""
+    declared = f"deploy {_FAKE_KEY}"
+
+    out = redact_outbound_text(f"ran {declared} ok", extra_secret_values=(declared,))
+
+    assert out == "ran *** ok"
+    assert "deploy" not in out
+
+
+def test_a_key_and_a_broken_password_are_masked_with_one_log_line(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    with caplog.at_level(logging.DEBUG):
+        out = redact_outbound_text(
+            f"push with {_FAKE_KEY} to https://bot:hun ter2@h.example/v1 now"
+        )
+
+    assert out == "push with [redacted] to https://h.example/v1 now"
+    assert [
+        r.getMessage() for r in caplog.records if r.name == "fi.alk.providers.agent"
+    ] == ["secrets redacted: kinds=github,rule1"]
+
+
+def test_nothing_masked_logs_nothing(caplog: pytest.LogCaptureFixture) -> None:
+    with caplog.at_level(logging.DEBUG):
+        assert (
+            redact_outbound_text("token: required, see docs")
+            == "token: required, see docs"
+        )
+
+    assert [r for r in caplog.records if r.name == "fi.alk.providers.agent"] == []
+
+
+# Rule 1b (design addendum v2.5.2): Dileep's #278 threads P1 and P3, and Ash's two inputs.
+_RULE1B_ROWS = {
+    "postgres://admin:Xk9/Qp+Zr8@db.example.com:5432/app": (
+        "postgres://db.example.com:5432/app"
+    ),
+    "https://user:pa#ss@host.example/x": "https://host.example/x",
+    "postgres://admin:P@ss/Xk9@db.example.com:5432/app": (
+        "postgres://db.example.com:5432/app"
+    ),
+    "smtp://me@gmail.com:app/pass@smtp.gmail.com:587": "smtp://smtp.gmail.com:587",
+}
+
+
+@pytest.mark.parametrize("raw", list(_RULE1B_ROWS), ids=range(len(_RULE1B_ROWS)))
+def test_a_password_holding_an_at_sign_or_a_slash_leaves_no_part_behind(
+    raw: str,
+) -> None:
+    expected = _RULE1B_ROWS[raw]
+
+    assert redact_outbound_text(raw) == expected
+    assert redact_outbound_text(f"failed on {raw} twice") == (
+        f"failed on {expected} twice"
+    )
 
 
 # --- ArtifactsClient -----------------------------------------------------------------------------
