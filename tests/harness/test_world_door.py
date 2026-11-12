@@ -519,6 +519,46 @@ def test_a_keyed_action_runs_once_even_when_its_log_cannot_be_written_or_read(br
         assert executor.ran == [] and {first.outcome, again.outcome} == {"faulted"}
 
 
+def test_a_keyed_action_whose_row_was_lost_is_not_run_again_by_the_next_door():
+    """The world applied the action but the log refused its row: a later door over the same world finds the key
+    claimed and never runs it again."""
+
+    class _WriteFails(MemoryLog):
+        refuse = True
+
+        def write(self, row):
+            if self.refuse:
+                raise RuntimeError("log write refused")
+            super().write(row)
+
+    roster = {"manager": {"permitted_actions": ["crm.approve"], "on_behalf_of": None}}
+    executor = _Executor()
+    log = _WriteFails()
+    call = ToolCall(action="crm.approve", name="approve", arguments={"deal": 7}, actor="manager", key="k")
+    first = WorldDoor(executor, log, DictRoster(roster), write_seconds=0.0).enter(call)
+    log.refuse = False
+    retry = WorldDoor(executor, log, DictRoster(roster), write_seconds=0.0).enter(call)
+    assert first.outcome == "committed"
+    assert retry.outcome == "faulted" and "unknown" in retry.reason
+    assert len(executor.ran) == 1
+
+
+def test_a_refused_keyed_action_releases_its_key_for_a_retry_by_the_next_door():
+    class _RefusesFirst(_Executor):
+        def run(self, call):
+            self.ran.append(call)
+            return Executed(403, {"detail": "not yet"}) if len(self.ran) == 1 else Executed(200, {"ok": True})
+
+    roster = {"manager": {"permitted_actions": ["crm.approve"], "on_behalf_of": None}}
+    log = MemoryLog()
+    executor = _RefusesFirst()
+    call = ToolCall(action="crm.approve", name="approve", arguments={"deal": 7}, actor="manager", key="k")
+    refused = WorldDoor(executor, log, DictRoster(roster), write_seconds=0.0).enter(call)
+    retry = WorldDoor(executor, log, DictRoster(roster), write_seconds=0.0).enter(call)
+    assert (refused.outcome, retry.outcome) == ("refused", "committed")
+    assert len(executor.ran) == 2
+
+
 def test_a_keyed_action_the_world_failed_mid_way_is_never_run_again():
     class _Flaky(_Executor):
         def run(self, call):

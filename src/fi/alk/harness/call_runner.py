@@ -877,6 +877,10 @@ def _clear_tool_trace_calls(dsn: str) -> None:
 
         with psycopg.connect(dsn, autocommit=True, connect_timeout=5) as connection:
             connection.execute(f'DELETE FROM "{_TOOL_TRACE_TABLE}"')  # noqa: S608 - fixed identifier, no interpolated user input
+            # The keys actors' actions claimed go with the rows they guard.
+            connection.execute(
+                "DO $$ BEGIN IF to_regclass('_alk_action_keys') IS NOT NULL THEN DELETE FROM _alk_action_keys; END IF; END $$"
+            )
     except Exception as exc:  # noqa: BLE001 - best-effort housekeeping only, never a call-blocking failure
         # WHY: never log exc_info / str(exc) here -- a psycopg connection failure embeds the raw
         # DSN (including the world DB password) in its own exception message; only the exception
