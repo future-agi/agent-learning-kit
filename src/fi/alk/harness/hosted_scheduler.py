@@ -40,14 +40,16 @@ import re
 import threading
 import tempfile
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import asdict, dataclass, replace
+from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Protocol, Sequence
 
 from . import observability
 from .job import FailureDomain, HarnessStage
+from .sub_actor import sub_actors_enabled
 from .checks import reference_of, takes_reference
 from .joint_judge import OFF_SCRIPT
+from .judge import verdict_named
 from .judge import judge_sub_goal as _judge
 from .outbound import (
     HostedAttemptSupersededError,
@@ -321,6 +323,11 @@ class SubGoalResult:
     held: bool | None
     reason: str | None
     judged: bool
+    # Derived from held and reason, so a result changed with `replace` never disagrees with it.
+    verdict: str | None = field(default=None, init=False)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "verdict", verdict_named(self.held, self.reason))
 
 
 @dataclass(frozen=True)
@@ -363,6 +370,8 @@ class ResultReceipt:
     evaluations: tuple[Evaluation, ...]
     call: CallSummary | None
     failure: ReceiptFailure | None
+    # Why a scenario was skipped, when there is a reason to give.
+    reason: str | None = None
 
 
 # --- outbound (this module's own minimal sink; see the module docstring's decoupling note) ----
@@ -1519,6 +1528,12 @@ class RunResult:
     fenced: BaseException | None = None
 
 
+def _switched_off(scenario: Scenario) -> bool:
+    """A scenario with sub-actors while they are off: running it without them would look like a normal
+    result for a test that never happened."""
+    return bool(getattr(scenario, "sub_actors", ())) and not sub_actors_enabled()
+
+
 def _skipped_receipt(scenario: Scenario) -> ResultReceipt:
     # Exact body per outbound-channels.md Channel 2, "skipped receipt body (exact)".
     return ResultReceipt(
@@ -1531,6 +1546,7 @@ def _skipped_receipt(scenario: Scenario) -> ResultReceipt:
         evaluations=(),
         call=None,
         failure=None,
+        reason="sub-actors are switched off" if _switched_off(scenario) else None,
     )
 
 
@@ -1717,6 +1733,8 @@ class HostedScheduler:
                     or self._pool.fenced is not None
                     or self._cancel_requested()
                 ):
+                    return
+                if _switched_off(scenario):
                     return
                 context = _ScenarioContext()
                 try:
@@ -2397,8 +2415,18 @@ class HostedScheduler:
         for slot, verdict in checked.items():
             if not verdict.held:
                 judged = sub_goal_results[slot]
+                # A judge that found the sub-goal not applicable or could not decide does not explain a failed check.
+                explained = (
+                    judged.reason if judged.verdict in ("pass", "fail") else None
+                )
                 reason = " ".join(
-                    filter(None, [_sub_goal_reason(scenario.sub_goals[slot], verdict), judged.reason or None])
+                    filter(
+                        None,
+                        [
+                            _sub_goal_reason(scenario.sub_goals[slot], verdict),
+                            explained,
+                        ],
+                    )
                 )
                 sub_goal_results[slot] = replace(judged, held=False, reason=reason or None)
 

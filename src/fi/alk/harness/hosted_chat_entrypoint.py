@@ -71,11 +71,15 @@ _NEEDS_CONFIRMATION = frozenset(
         "add_rule",
         "drop_rule",
         "add_sub_goal",
+        "add_sub_actor",
+        "drop_sub_actor",
     }
 )
-# Removals and changes to the world or contract: each asks on its own, even after a yes to every change.
+# Removals and changes to the world, its cast or the contract: each asks on its own, even after a yes to every change.
 _ASKS_ALONE = frozenset(
     {
+        "add_sub_actor",
+        "drop_sub_actor",
         "drop_scenario",
         "drop_scenarios",
         "change_world",
@@ -108,6 +112,7 @@ _PUBLISHED_PARTS = (
     "scenarios",
     "scenarios.json",
     "sub_goals.json",
+    "sub_actors.json",
     "contract.json",
     "simulator_prompt.md",
     "world.sqlite",
@@ -572,6 +577,18 @@ class HostedChatRuntime:
 
         async def guarded(args: dict[str, Any]) -> Any:
             if self._from_platform:
+                if spec.name == "drop_sub_actor":
+                    return {
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": "Not done: during the build and its check the environment keeps "
+                                "the sub-actors it lists. Give each a level in aim_for so some scenarios "
+                                "include it; removing one is for the person to ask for in the chat.",
+                            }
+                        ],
+                        "is_error": True,
+                    }
                 if spec.name in ("drop_scenarios", "drop_scenario") or (
                     spec.name in _SUBMITS and self._changes_situation(args)
                 ):
@@ -629,7 +646,15 @@ class HostedChatRuntime:
         """Whether a submission changes what an existing scenario tests, not how it is graded."""
         return self._changes(
             args,
-            ("instruction", "use_case", "branch", "tests", "coverage", "fixture"),
+            (
+                "instruction",
+                "use_case",
+                "branch",
+                "tests",
+                "coverage",
+                "fixture",
+                "sub_actors",
+            ),
             whole_persona=True,
         )
 
@@ -640,7 +665,17 @@ class HostedChatRuntime:
 
     def _changes_meaning(self, args: dict[str, Any]) -> bool:
         """Whether a submission rewrites an existing scenario's test rather than its surface."""
-        return self._changes(args, ("instruction", "use_case", "branch", "sub_goals", "solution"))
+        return self._changes(
+            args,
+            (
+                "instruction",
+                "use_case",
+                "branch",
+                "sub_goals",
+                "solution",
+                "sub_actors",
+            ),
+        )
 
     def _changes(self, args: dict[str, Any], fields: tuple[str, ...], whole_persona: bool = False) -> bool:
         """Whether a submission changes any of these fields of an existing scenario, or who its person is.
