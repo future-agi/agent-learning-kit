@@ -2,10 +2,14 @@ from __future__ import annotations
 
 import ast
 import json
+import os
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
 
+from fi.alk.harness import instrumentation_evidence
 from fi.alk.harness.instrumentation_evidence import detect_instrumentation
 from fi.alk.harness.tools import accept_contract
 
@@ -354,4 +358,106 @@ def test_a_file_the_parser_cannot_nest_through_counts_for_nothing(
 
     monkeypatch.setattr(ast, "parse", parse)
 
+    assert detect_instrumentation(source) == "traceai"
+
+
+def _detect_in_a_child(source: Path) -> str:
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import sys; from pathlib import Path; "
+            "from fi.alk.harness.instrumentation_evidence import detect_instrumentation; "
+            "print(detect_instrumentation(Path(sys.argv[1])))",
+            str(source),
+        ],
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert result.returncode == 0, result.stderr
+    return result.stdout.strip()
+
+
+def test_a_file_with_a_byte_order_mark_is_read(tmp_path: Path) -> None:
+    (tmp_path / "agent.py").write_bytes(b"\xef\xbb\xbfimport traceai_openai\n")
+
+    assert detect_instrumentation(tmp_path) == "traceai"
+
+
+def test_a_latin_1_file_with_a_coding_line_is_read(tmp_path: Path) -> None:
+    (tmp_path / "agent.py").write_bytes(
+        "# -*- coding: latin-1 -*-\nimport traceai_openai\nNAME = 'caf\u00e9'\n".encode(
+            "latin-1"
+        )
+    )
+
+    assert detect_instrumentation(tmp_path) == "traceai"
+
+
+@pytest.mark.skipif(
+    not hasattr(os, "O_NOFOLLOW") or not Path("/dev/zero").exists(),
+    reason="needs O_NOFOLLOW and /dev/zero",
+)
+def test_a_symlink_to_a_device_is_not_read(tmp_path: Path) -> None:
+    source = _repository(tmp_path, {"agent.py": "import traceai_openai\n"})
+    (source / "zero.py").symlink_to("/dev/zero")
+
+    assert _detect_in_a_child(source) == "traceai"
+
+
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="needs named pipes")
+def test_a_named_pipe_is_not_waited_on(tmp_path: Path) -> None:
+    source = _repository(tmp_path, {"agent.py": "import traceai_openai\n"})
+    os.mkfifo(source / "pipe.py")
+
+    assert _detect_in_a_child(source) == "traceai"
+
+
+def test_running_out_of_memory_on_one_file_keeps_the_others(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = _repository(
+        tmp_path, {"agent.py": "import traceai_openai\n", "huge.py": "x = 1\n"}
+    )
+    real_parse = ast.parse
+
+    def parse(text: str, *args: object, **kwargs: object) -> ast.AST:
+        if text == "x = 1\n":
+            raise MemoryError
+        return real_parse(text, *args, **kwargs)
+
+    monkeypatch.setattr(ast, "parse", parse)
+
+    assert detect_instrumentation(source) == "traceai"
+
+
+def test_a_file_with_an_overlong_line_is_skipped(tmp_path: Path) -> None:
+    long_line = "DATA = '" + "a" * (64 * 1024 + 1) + "'\n"
+    source = _repository(
+        tmp_path, {"generated.py": "import traceai_openai\n" + long_line}
+    )
+
+    assert detect_instrumentation(source) == "none"
+
+
+def test_a_file_larger_than_what_is_left_to_read_is_skipped(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = _repository(tmp_path, {"agent.py": "import traceai_openai\n" + "#" * 100})
+
+    monkeypatch.setattr(instrumentation_evidence, "_READ_LIMIT", 50)
+    assert detect_instrumentation(source) == "none"
+    monkeypatch.setattr(instrumentation_evidence, "_READ_LIMIT", 10_000)
+    assert detect_instrumentation(source) == "traceai"
+
+
+def test_reading_stops_at_the_file_limit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = _repository(tmp_path, {"agent.py": "import traceai_openai\n"})
+
+    monkeypatch.setattr(instrumentation_evidence, "_FILE_LIMIT", 0)
+    assert detect_instrumentation(source) == "none"
+    monkeypatch.setattr(instrumentation_evidence, "_FILE_LIMIT", 1)
     assert detect_instrumentation(source) == "traceai"
