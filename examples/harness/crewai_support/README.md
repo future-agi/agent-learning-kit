@@ -22,8 +22,10 @@ imported, unless the environment already sets those variables.
 - `OPENAI_MODEL`: the model name, default `vertex_ai/gemini-3.7-flash` (a gateway name).
 
 The endpoint must speak chat completions. The model is built as `LLM(..., custom_openai=True)`,
-which keeps CrewAI's OpenAI client on chat completions with the name unchanged. A name string
-such as `openai/...` would select LiteLLM or the Responses API instead.
+which keeps CrewAI's OpenAI client on chat completions with the name unchanged. A plain
+`openai/...` string with a base URL also reaches the native OpenAI client, but CrewAI would
+switch that model to the Responses API after a "responses-only" error from the endpoint;
+`custom_openai=True` stops that.
 
 ## Known limits
 
@@ -34,3 +36,6 @@ such as `openai/...` would select LiteLLM or the Responses API instead.
   that is checked by a real run.
 
 Install with `pip install -r requirements.txt` on Python 3.12.
+
+`agent-simulate` is pinned in `requirements.txt` because the kit's callback bridge imports
+`fi.simulate.AgentInput`.

@@ -11,25 +11,29 @@ import asyncio
 import json
 import os
 import shutil
-import subprocess
 import sys
 import textwrap
 from pathlib import Path
 
 import pytest
-from test_bundle_author_v2 import _authoring, _github_job, _write_callable_contract
+from reference_agents import (
+    DETECTION_CASES,
+    REPO,
+    TOOLS,
+    TRACE_HOOK,
+    assert_detected,
+    assert_pins,
+    build_control_service,
+    fresh_import,
+    run_tracer,
+    write_callable_contract,
+    write_stand_ins,
+)
 
-from fi.alk.harness.bundle_author_v2 import author_bundle_v2
-from fi.alk.harness.framework_detection import detect_framework, folder_findings
 from fi.simulate import AgentInput
 
-REPO = Path(__file__).resolve().parents[2]
 SUBFOLDER = "examples/harness/crewai_support"
 EXAMPLE = REPO / SUBFOLDER
-BOOTSTRAP = REPO / "src/fi/alk/harness/livekit_tool_trace_bootstrap.py"
-
-TOOLS = ("look_up_order", "start_return", "return_policy")
-CREWAI = {"name": "crewai", "version": None}
 
 # Follows CrewAI 1.15.33:
 # - `tool(fn)` needs a docstring and returns `Tool(name=fn.__name__, func=fn)`
@@ -160,102 +164,30 @@ CLEARED_ENV = (
 )
 
 
-def _copy_example(destination: Path) -> Path:
-    shutil.copytree(EXAMPLE, destination, ignore=shutil.ignore_patterns("__pycache__"))
-    return destination
-
-
-def _write_stand_in(root: Path) -> Path:
-    for relative, source in STAND_IN_FILES.items():
-        path = root / relative
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(source, encoding="utf-8")
-    return root
-
-
-def _clear_env(monkeypatch) -> None:
-    for name in CLEARED_ENV:
-        # Set, then removed, so that on teardown a variable the example sets at import is
-        # taken out again instead of leaking into the next test.
-        monkeypatch.setenv(name, "placeholder")
-        monkeypatch.delenv(name)
-
-
 @pytest.fixture
 def example_module(tmp_path, monkeypatch):
     """A fresh import of the example's `agent.py` on the stand-in library, with nothing set."""
-    _clear_env(monkeypatch)
-    stand_in = _write_stand_in(tmp_path / "stand-in")
-    run = tmp_path / "run"
-    run.mkdir()
-    shutil.copy2(EXAMPLE / "agent.py", run / "agent.py")
-    saved = dict(sys.modules)
-    for name in list(sys.modules):
-        if name.split(".")[0] in {"crewai", "agent"}:
-            del sys.modules[name]
-    monkeypatch.syspath_prepend(str(run))
-    monkeypatch.syspath_prepend(str(stand_in))
-
-    def load():
-        import agent
-
-        return agent
-
-    yield load
-    for name in list(sys.modules):
-        if name not in saved:
-            del sys.modules[name]
-    sys.modules.update(saved)
+    with fresh_import(
+        tmp_path,
+        monkeypatch,
+        EXAMPLE,
+        stand_in=STAND_IN_FILES,
+        clear_env=CLEARED_ENV,
+        purge=("crewai",),
+    ) as load:
+        yield load
 
 
 # T1: detection ------------------------------------------------------------------------------
 
 
-def test_example_is_found_as_the_run_folder(tmp_path: Path) -> None:
-    run = _copy_example(tmp_path / "run")
-
-    assert detect_framework(run) == CREWAI
-    assert folder_findings(run).blockers == frozenset()
-
-
-def test_example_is_found_as_a_subfolder_of_a_bigger_tree(tmp_path: Path) -> None:
-    repo = tmp_path / "repo"
-    _copy_example(repo / SUBFOLDER)
-    # A package of the same name deep in the tree must not make the library import look
-    # like the customer's own module.
-    nested = repo / "src/pkg/crewai"
-    nested.mkdir(parents=True)
-    (nested / "__init__.py").write_text("", encoding="utf-8")
-    (nested / "score.py").write_text("def score():\n    return 1\n", encoding="utf-8")
-    (repo / "main.py").write_text("print('hello')\n", encoding="utf-8")
-
-    found = folder_findings(repo / SUBFOLDER, repo_root=repo)
-
-    assert detect_framework(repo / SUBFOLDER, repo_root=repo) == CREWAI
-    assert found.blockers == frozenset()
-
-
-def test_example_in_place_is_not_shadowed_by_the_repository() -> None:
-    # Nothing named `crewai` may sit on the example's path or inside it, or it would shadow
-    # the library and block detection.
-    assert "crewai" not in EXAMPLE.relative_to(REPO).parts
-    assert not [
-        path
-        for path in EXAMPLE.rglob("*")
-        if path.name in {"crewai", "crewai.py"} and "__pycache__" not in path.parts
-    ]
-    assert detect_framework(EXAMPLE, repo_root=REPO) == CREWAI
-
-
-def test_a_module_named_crewai_beside_the_agent_hides_the_framework(
-    tmp_path: Path,
-) -> None:
-    run = _copy_example(tmp_path / "run")
-    assert detect_framework(run) == CREWAI
-
-    (run / "crewai.py").write_text("def helper():\n    return 1\n", encoding="utf-8")
-
-    assert detect_framework(run) != CREWAI
+@pytest.mark.parametrize("where", DETECTION_CASES)
+def test_example_is_detected_as_crewai(tmp_path: Path, where: str) -> None:
+    # `crewai` is the library's top-level package, so a package or module of that name near
+    # the example would pass for the customer's own.
+    assert_detected(
+        EXAMPLE, "crewai", "crewai", where=where, tmp_path=tmp_path, subfolder=SUBFOLDER
+    )
 
 
 # T2: the build ------------------------------------------------------------------------------
@@ -264,41 +196,15 @@ def test_a_module_named_crewai_beside_the_agent_hides_the_framework(
 def test_build_runs_the_callback_bridge_with_the_generic_tool_tracer(
     tmp_path: Path,
 ) -> None:
-    source = tmp_path / "source"
-    _copy_example(source / SUBFOLDER)
-    (source / "README.md").write_text("many examples\n", encoding="utf-8")
-    authoring = _authoring(tmp_path)
-    _write_callable_contract(authoring)
-    contract_path = authoring / "contract.json"
-    contract = json.loads(contract_path.read_text(encoding="utf-8"))
-    contract["tool_entrypoints"] = [
-        {"tool": name, "mode": "import", "module": "agent", "callable": name}
-        for name in TOOLS
-    ]
-    contract_path.write_text(json.dumps(contract), encoding="utf-8")
-
-    bundle = author_bundle_v2(
-        source=source,
-        job=_github_job(
-            SUBFOLDER,
-            with_secrets=True,
-            secret_aliases=("OPENAI_API_KEY", "OPENAI_BASE_URL"),
-        ),
-        authoring=authoring,
-        output=tmp_path / "bundle",
+    agent = build_control_service(
+        tmp_path, write_callable_contract, "agent", subfolder=SUBFOLDER, example=EXAMPLE
     )
 
-    agent = next(
-        p for p in bundle.processes if p.name == bundle.runtime.control_service
-    )
     assert "ThreadingHTTPServer" in json.dumps(agent.run_command)
     assert agent.environment["ALK_CALLBACK_ENTRYPOINT"] == "agent:agent_callback"
     assert agent.environment["PORT"] == "{{PORT_agent}}"
     assert "requirements.txt" in json.dumps(agent.build_commands)
-    assert (
-        agent.environment["HARNESS_TOOL_TRACE"]
-        == "{{WORLD_DIR}}/agent-tool-calls.jsonl"
-    )
+    assert agent.environment["HARNESS_TOOL_TRACE"] == "{{WORLD_DIR}}/agent-tool-calls.jsonl"
     bindings = json.loads(agent.environment["ALK_TOOL_TRACE_BINDINGS"])
     assert sorted(bindings, key=lambda item: item["name"]) == sorted(
         ({"name": name, "module": "agent", "callable": name} for name in TOOLS),
@@ -349,19 +255,19 @@ def test_tools_called_the_way_crewai_calls_them_are_traced(tmp_path: Path) -> No
         "    return 'not declared'\n",
         encoding="utf-8",
     )
-    shutil.copy2(BOOTSTRAP, run / "sitecustomize.py")
-    stand_in = _write_stand_in(tmp_path / "stand-in")
+    hook = tmp_path / "hook"
+    hook.mkdir()
+    shutil.copy2(TRACE_HOOK, hook / "sitecustomize.py")
+    stand_in = write_stand_ins(tmp_path / "stand-in", STAND_IN_FILES)
     trace = tmp_path / "calls.jsonl"
     bindings = [{"name": name, "module": "agent", "callable": name} for name in TOOLS]
 
-    completed = subprocess.run(
+    completed = run_tracer(
         [sys.executable, "-c", DRIVER],
-        check=True,
-        capture_output=True,
-        text=True,
-        cwd=run,
-        env={
-            **{k: v for k, v in os.environ.items() if k not in CLEARED_ENV},
+        hook,
+        run,
+        {
+            **dict.fromkeys(CLEARED_ENV),
             "OPENAI_BASE_URL": "http://gateway.test/v1",
             "PYTHONPATH": os.pathsep.join([str(stand_in), str(run)]),
             "TOOL_NAMES": json.dumps(TOOLS),
@@ -372,9 +278,7 @@ def test_tools_called_the_way_crewai_calls_them_are_traced(tmp_path: Path) -> No
 
     outputs = json.loads(completed.stdout.splitlines()[-1])
     assert outputs[3] == "not declared"
-    records = [
-        json.loads(line) for line in trace.read_text(encoding="utf-8").splitlines()
-    ]
+    records = [json.loads(line) for line in trace.read_text(encoding="utf-8").splitlines()]
     assert [(record["name"], record["arguments"]) for record in records] == [
         (TOOLS[0], {"order_id": "A1001"}),
         (TOOLS[1], {"order_id": "A1001", "reason": "too small"}),
@@ -614,6 +518,4 @@ def test_folder_holds_exactly_the_example_files() -> None:
 
 
 def test_requirements_and_python_version_are_pinned() -> None:
-    lines = (EXAMPLE / "requirements.txt").read_text(encoding="utf-8").splitlines()
-    assert lines == ["crewai==1.15.33", "agent-simulate==0.1.3"]
-    assert (EXAMPLE / ".python-version").read_text(encoding="utf-8").strip() == "3.12"
+    assert_pins(EXAMPLE, ["crewai==1.15.33", "agent-simulate==0.1.3"])

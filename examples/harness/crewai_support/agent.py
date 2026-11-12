@@ -50,9 +50,9 @@ async def agent_callback(agent_input):
     # bound to the loop they were first used in, so the model and the agent live for one
     # call. `tool()` wraps here, not at import, so the module's functions stay the plain
     # ones the kit's tool tracer is bound to.
-    # `custom_openai` keeps the model on the OpenAI-compatible chat-completions client with
-    # the name unchanged. A model string would be routed by its prefix, and
-    # `openai/vertex_ai/...` falls back to LiteLLM, which cannot take a gateway base URL.
+    # `custom_openai` keeps the name unchanged and stops CrewAI switching to the Responses
+    # API when the endpoint answers a "responses-only" error; the gateway serves chat
+    # completions only.
     llm = LLM(
         model=MODEL,
         custom_openai=True,
