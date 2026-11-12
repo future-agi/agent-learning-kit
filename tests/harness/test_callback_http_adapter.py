@@ -20,7 +20,22 @@ def _free_port() -> int:
         return probe.getsockname()[1]
 
 
-def _serve(tmp_path, entrypoint):
+STUB_FI = {
+    "fi/__init__.py": "",
+    # What an older published agent-simulate offers: AgentInput, and no fi.simulate.agent.content.
+    "fi/simulate/__init__.py": (
+        "class AgentInput:\n"
+        "    def __init__(self, **fields):\n"
+        "        self.__dict__.update(fields)\n"
+        "\n"
+        "    @classmethod\n"
+        "    def model_validate(cls, payload):\n"
+        "        return cls(**payload)\n"
+    ),
+}
+
+
+def _serve(tmp_path, entrypoint, stub_fi=False):
     (tmp_path / "chat_agent.py").write_text(
         "def reply(agent_input):\n"
         "    return {'content': 'thread ' + agent_input.thread_id}\n"
@@ -36,6 +51,14 @@ def _serve(tmp_path, entrypoint):
     # Bundles embed the adapter's source and run it from the bundle, not from the package.
     script = tmp_path / "adapter.py"
     script.write_text(ADAPTER.read_text(encoding="utf-8"), encoding="utf-8")
+    if stub_fi:
+        # The agent's own venv: the stub is the only `fi`, and the repo's `src` is not on the path.
+        for name, text in STUB_FI.items():
+            (tmp_path / name).parent.mkdir(parents=True, exist_ok=True)
+            (tmp_path / name).write_text(text, encoding="utf-8")
+        python_path = str(tmp_path)
+    else:
+        python_path = os.pathsep.join([str(tmp_path), os.environ.get("PYTHONPATH", "")])
     port = _free_port()
     process = subprocess.Popen(
         [sys.executable, str(script)],
@@ -43,9 +66,7 @@ def _serve(tmp_path, entrypoint):
             **os.environ,
             "ALK_CALLBACK_ENTRYPOINT": entrypoint,
             "PORT": str(port),
-            "PYTHONPATH": os.pathsep.join(
-                [str(tmp_path), os.environ.get("PYTHONPATH", "")]
-            ),
+            "PYTHONPATH": python_path,
         },
         stderr=subprocess.PIPE,
     )
@@ -91,7 +112,7 @@ def test_a_callback_answers_from_the_request_thread(adapter):
         assert json.loads(response.read())["content"] == "thread t1"
 
 
-def test_a_block_list_reply_keeps_only_its_text(thinking_adapter):
+def _ask(base):
     body = json.dumps(
         {
             "thread_id": "t1",
@@ -100,11 +121,22 @@ def test_a_block_list_reply_keeps_only_its_text(thinking_adapter):
         }
     ).encode()
     request = urllib.request.Request(
-        f"{thinking_adapter}/invoke",
-        data=body,
-        headers={"Content-Type": "application/json"},
+        f"{base}/invoke", data=body, headers={"Content-Type": "application/json"}
     )
     with urllib.request.urlopen(request, timeout=30) as response:
-        content = json.loads(response.read())["content"]
+        return json.loads(response.read())["content"]
+
+
+def test_a_block_list_reply_keeps_only_its_text(thinking_adapter):
+    content = _ask(thinking_adapter)
     assert content == "The status is complete."
     assert "signature" not in content and "thinking" not in content
+
+
+def test_the_adapter_runs_against_an_fi_simulate_without_agent_content(tmp_path):
+    """The agent's own venv holds a published fi.simulate that only exports AgentInput."""
+    served = _serve(tmp_path, "chat_agent:thinking_reply", stub_fi=True)
+    try:
+        assert _ask(next(served)) == "The status is complete."
+    finally:
+        next(served, None)
