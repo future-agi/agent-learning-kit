@@ -552,12 +552,30 @@ def test_loading_refuses_flow_nesting_past_16(repo):
 
 
 @pytest.mark.parametrize("name", ["docker-compose.yml", "alk.yaml"])
-def test_deep_flow_nesting_does_not_hold_up_the_save(tmp_path, repo, name):
-    import time
+def test_deep_flow_nesting_does_not_hold_up_the_save(tmp_path, repo, name, monkeypatch):
+    from fi.alk.harness import runtime_selection
 
-    # About 4 s to read before the limit.
+    # About 4 s to read before the limit. The bound is shown by the loader's work, not the runner's
+    # clock: the scanner stops at the sixteenth open group, a handful of tokens in, however long
+    # the file is. Without the limit, a sixth of this file takes about 19,000 token fetches.
     (repo / "agents" / "a" / name).write_text(_deep_groups(400, 120_000))
-    started = time.monotonic()
+    loader = runtime_selection._BoundedLoader
+    fetch, opening = loader.fetch_more_tokens, loader.fetch_flow_collection_start
+    fetched, refused = [0], []
+
+    def counted(self):
+        fetched[0] += 1
+        return fetch(self)
+
+    def opened(self, token_class):
+        try:
+            return opening(self, token_class)
+        except runtime_selection.YamlTooLarge:
+            refused.append(self.flow_level)
+            raise
+
+    monkeypatch.setattr(loader, "fetch_more_tokens", counted)
+    monkeypatch.setattr(loader, "fetch_flow_collection_start", opened)
 
     result = accept_contract(
         payload(runtime={"language": "python"}),
@@ -566,8 +584,9 @@ def test_deep_flow_nesting_does_not_hold_up_the_save(tmp_path, repo, name):
         subfolder="agents/a",
     )
 
-    assert time.monotonic() - started < 1
     assert not result.get("is_error"), result
+    assert refused == [16]
+    assert fetched[0] < 100
 
 
 def test_loading_refuses_a_long_tag_prefix():

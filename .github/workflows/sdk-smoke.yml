@@ -56,9 +56,10 @@ jobs:
         # pre-existing failures unrelated to the voice engine (CLI golden-path,
         # init presets, plus test_config_and_facades hangs) — track those
         # separately so this gate stays green and meaningful.
-        # Deselected below, failing on dev too: the two sandbox-server tests are TH-8978. (The
-        # run is one folded line, so the ticket is named here rather than beside each
-        # --deselect.)
+        # Deselected below, failing on dev too: the two sandbox-server tests are TH-8978, and the
+        # six in tests/test_harness.py fail on dev 70fc43bd as they do here (recorded in the
+        # older-findings register). (The run is one folded line, so they are named here rather
+        # than beside each --deselect.)
         run: >-
           python -m pytest -q
           tests/runtime/test_livekit_engine.py
@@ -76,6 +77,15 @@ jobs:
           --deselect tests/test_harness_sandbox_server.py::test_public_github_branch_url_populates_job_ref
           tests/test_harness_architecture.py
           tests/test_harness_credentials.py
+          tests/test_harness.py
+          --deselect tests/test_harness.py::test_hosted_claude_session_uses_durable_resume_and_restricted_tools
+          --deselect tests/test_harness.py::test_a_skill_only_names_tools_its_stage_actually_has
+          --deselect tests/test_harness.py::test_connect_only_provider_world_cannot_create_shadow_state
+          --deselect tests/test_harness.py::test_the_system_prompt_stays_within_budget
+          --deselect tests/test_harness.py::test_a_save_refused_for_the_suites_shape_is_accepted_on_the_second_try
+          --deselect tests/test_harness.py::test_dropping_every_scenario_needs_an_explicit_everything
+          tests/harness/test_contract_model.py
+          tests/harness/test_contract_writer.py
           tests/harness/test_runtime_repair.py
           tests/harness/test_runtime_selection_admission.py
           tests/harness/test_nudge_turn.py
