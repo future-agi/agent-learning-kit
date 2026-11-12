@@ -328,9 +328,11 @@ class HostedChatRuntime:
         # One confirmation open at a time: the platform takes an answer to the latest only.
         self._confirming = asyncio.Lock()
         self._restart_after_turn = False
-        # The rebuild command this sandbox runs, and the spend when its turn began.
+        # The rebuild command this sandbox runs.
         self._nudge: dict[str, Any] | None = None
-        self._nudge_spent: dict[str, Any] = {}
+        # The spend when the running turn began: every turn reports what it spent with its
+        # ending, so the platform can meter a turn no build ledger covers.
+        self._turn_spent: dict[str, Any] = {}
         # The last report_update's arguments, and whether a write came after it.
         self._nudge_reported: dict[str, Any] = {}
         self._nudge_dirty = False
@@ -1285,9 +1287,6 @@ class HostedChatRuntime:
             await self._handle_command(command)
             return
         # A rebuild turn ends this sandbox: the platform starts chat again once it lands.
-        from . import spend
-
-        self._nudge_spent = spend.snapshot()
         await self.conversation.close()
         self._nudge = dict(command.get("payload") or {})
         try:
@@ -1296,12 +1295,10 @@ class HostedChatRuntime:
             self.stopping.set()
 
     def _turn_usage(self) -> dict[str, Any]:
-        if self._nudge is None:
-            return {}
         from . import spend
         from .nudge import usage_delta
 
-        return {"usage": usage_delta(self._nudge_spent, spend.snapshot())}
+        return {"usage": usage_delta(self._turn_spent, spend.snapshot())}
 
     def _nudge_note(self) -> str:
         if self._nudge is None:
@@ -1465,6 +1462,9 @@ class HostedChatRuntime:
         self._turn_acknowledged_through = sequence
         self._tool_names.clear()
         self._turn_message_id = message_id
+        from . import spend
+
+        self._turn_spent = spend.snapshot()
         await self.client.emit(
             "turn_started",
             stage=self.conversation.stage_name,

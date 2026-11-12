@@ -1252,14 +1252,39 @@ def test_a_failed_rebuild_turn_still_reports_usage_and_ends_the_sandbox(
     assert runtime.stopping.is_set()
 
 
-def test_a_chat_turn_carries_no_usage_and_keeps_the_sandbox(tmp_path, monkeypatch):
+class SpendingConversation(EditingConversation):
+    """A builder whose one turn costs what its model call reports."""
+
+    async def say(self, message, on_event=None):
+        from fi.alk.harness import spend
+
+        spend.record("builder", 0.02, turns=1, models={"m2"}, tokens_in=40, tokens_out=6)
+        await super().say(message, on_event)
+
+
+def test_a_chat_turn_reports_what_it_spent_and_keeps_the_sandbox(tmp_path, monkeypatch):
+    from fi.alk.harness import spend
+
+    monkeypatch.setattr(spend, "_stages", {})
+    # Spent before this turn: an earlier turn's, which it must not report again.
+    spend.record("builder", 0.5, turns=1, models={"m1"}, tokens_in=100, tokens_out=10)
     client = BuilderClient()
     runtime = _runtime(tmp_path, client, monkeypatch)
-    runtime.conversation = EditingConversation(tmp_path, writes=False)
+    runtime.conversation = SpendingConversation(tmp_path, writes=False)
 
     _turn(runtime, {"content": "hello"})
 
-    assert "usage" not in client.events[-1]["payload"]
+    completed = client.events[-1]
+    assert completed["kind"] == "turn_completed"
+    # The platform meters a turn no build's ledger covers from what its ending reports.
+    assert completed["payload"]["usage"] == {
+        "tokens_in": 40,
+        "tokens_out": 6,
+        "tokens_cached": 0,
+        "usd": 0.02,
+        "unpriced_turns": 0,
+        "models": ["m1", "m2"],
+    }
     assert not runtime.stopping.is_set()
 
 
