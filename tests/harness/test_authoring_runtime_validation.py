@@ -8,7 +8,10 @@ import pytest
 
 from fi.alk.harness.bundle_author_v2 import world_ir_is_imported
 from fi.alk.harness.compile.postgres import compile_postgres
-from fi.alk.harness.world_import.sqlite import import_sqlite_world
+from fi.alk.harness.world_import.sqlite import (
+    SQLiteWorldImportError,
+    import_sqlite_world,
+)
 from fi.alk.harness.authoring_runtime_validation import (
     _database_lanes,
     _fallback_diagnostic,
@@ -32,7 +35,7 @@ from fi.alk.harness.certification import (
 )
 from fi.alk.harness.job import HarnessJob, ProviderExecutionMode
 from fi.alk.harness.bundle_v2 import BundleRuntimeV2, EvidenceSeam, RuntimeKindV2
-from fi.alk.harness.diagnostics import HarnessDiagnostic
+from fi.alk.harness.diagnostics import DiagnosticLocation, HarnessDiagnostic
 from fi.alk.harness.job import HarnessStage
 from fi.alk.harness.repair_controller import (
     CandidateObservation,
@@ -290,6 +293,114 @@ def test_generic_validation_uses_typed_patch_policy_and_persists_history(
     proof = json.loads((authoring / "runtime-validation.json").read_text())
     assert proof["generic_harness"] == "v1"
     assert proof["setup_ready_scenarios"] == 5
+
+
+@pytest.mark.parametrize(
+    ("logical_type", "code"),
+    [
+        (LogicalType.JSON, "value_shape_mismatch"),
+        (LogicalType.ARRAY, "array_shape_mismatch"),
+    ],
+)
+def test_a_seed_value_in_the_wrong_shape_is_rewritten_by_authoring_repair(
+    tmp_path, logical_type, code
+) -> None:
+    source = tmp_path / "source"
+    authoring = tmp_path / "authoring"
+    source.mkdir()
+    authoring.mkdir()
+    (source / "agent.py").write_text("agent", encoding="utf-8")
+    model = SourceModel.create(
+        source_digest="sha256:" + "a" * 64,
+        engine="postgres",
+        tables=(
+            SourceTable(
+                name="users",
+                primary_key=("id",),
+                columns=(
+                    SourceColumn(
+                        name="id",
+                        logical_type=LogicalType.STRING,
+                        native_type="text",
+                        nullable=False,
+                        has_default=False,
+                    ),
+                    SourceColumn(
+                        name="labels",
+                        logical_type=logical_type,
+                        native_type=logical_type.value,
+                        nullable=False,
+                        has_default=False,
+                        element_type=LogicalType.STRING
+                        if logical_type is LogicalType.ARRAY
+                        else None,
+                    ),
+                ),
+            ),
+        ),
+    )
+    world = authoring / "world.sqlite"
+    with sqlite3.connect(world) as database:
+        database.execute("CREATE TABLE users (id TEXT, labels TEXT)")
+        database.execute("INSERT INTO users VALUES ('u1', 'blue')")
+    calls = []
+
+    async def validate(*args):
+        calls.append("validate")
+        with sqlite3.connect(world) as database:
+            try:
+                imported = import_sqlite_world(database, model)
+            except SQLiteWorldImportError as error:
+                raise RuntimeValidationError(
+                    "environment",
+                    "invalid",
+                    diagnostics=(
+                        HarnessDiagnostic.create(
+                            stage=HarnessStage.VALIDATING_ENVIRONMENT,
+                            component="world_import",
+                            code="array_shape_mismatch"
+                            if error.code == "array_value_invalid"
+                            else "value_shape_mismatch",
+                            message=f"reason={error.code},expected="
+                            f"{error.logical_type.value},sqlite_type={error.sqlite_type}",
+                            location=DiagnosticLocation(
+                                table=error.table, column=error.column
+                            ),
+                        ),
+                    ),
+                ) from error
+        row = imported.world.tables[0].rows[0]
+        assert row.values["labels"].value == ["blue"]
+        return 1
+
+    async def repair(phase, guidance):
+        calls.append("repair")
+        assert phase == "environment"
+        assert f"{code}@world_import" in guidance
+        assert "strategy=author_value_in_declared_shape" in guidance
+        assert '"column":"labels"' in guidance
+        assert '"table":"users"' in guidance
+        assert f"expected={logical_type.value},sqlite_type=str" in guidance
+        with sqlite3.connect(world) as database:
+            database.execute(
+                "UPDATE users SET labels = ? WHERE id = 'u1'",
+                ('["blue"]',),
+            )
+        return 0
+
+    job = SimpleNamespace(metadata={"generic_harness_v1": True})
+    asyncio.run(
+        validate_and_repair(job, source, authoring, validate=validate, repair=repair)
+    )
+
+    assert calls == ["validate", "repair", "validate"]
+    history = json.loads(
+        (authoring / "generic-harness" / "repair-history.json").read_text()
+    )
+    assert [item["action"] for item in history["decisions"]] == [
+        RepairAction.PATCH_ENVIRONMENT.value,
+        RepairAction.CERTIFY.value,
+    ]
 
 
 def test_generic_repair_without_typed_patch_keeps_validation_failure(
@@ -753,9 +864,9 @@ def test_generic_validation_rejects_unchanged_compiler_failure(tmp_path) -> None
     (source / "agent.py").write_text("agent", encoding="utf-8")
     diagnostic = HarnessDiagnostic.create(
         stage=HarnessStage.VALIDATING_ENVIRONMENT,
-        component="world_import",
-        code="array_shape_mismatch",
-        message="malformed array",
+        component="world_ir",
+        code="schema_type_mismatch",
+        message="expected array, got string",
     )
     calls = []
 
