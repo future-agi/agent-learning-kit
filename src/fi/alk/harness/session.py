@@ -25,6 +25,7 @@ from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass, field
 from typing import Any
 
+from ..providers.agent import _redact
 from . import spend
 from .live import Channel, carrying, folded_in
 from .backends import (
@@ -385,7 +386,7 @@ class Stage:
             events = [
                 Event(
                     RESULT,
-                    text=_shown(received.text),
+                    text=_shown(_redact(received.text)),
                     detail={
                         "is_error": received.is_error,
                         "call_id": received.id,

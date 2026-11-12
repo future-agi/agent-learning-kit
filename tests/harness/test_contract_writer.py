@@ -494,7 +494,7 @@ def test_one_save_logs_one_line_however_many_urls_are_refused(
 
     logged = [record for record in caplog.records if record.name == "fi.alk.providers.agent"]
     assert [record.getMessage() for record in logged] == [
-        "a URL was redacted whole: class=ValueError"
+        "secrets redacted: url=ValueError"
     ]
     assert PASSWORD not in caplog.text
     assert PASSWORD not in (tmp_path / "contract.json").read_text(encoding="utf-8")
