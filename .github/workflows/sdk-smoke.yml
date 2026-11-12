@@ -94,6 +94,7 @@ jobs:
           tests/harness/test_openai_agents_reference.py
           tests/harness/test_hosted_entrypoint.py
           tests/harness/test_hosted_entrypoint_provision_retry.py
+          tests/harness/test_pydantic_ai_reference.py
           tests/harness/test_instrumentation_evidence.py
           tests/harness/test_agent_type_refusal.py
           tests/harness/test_python_source_codecs.py
