@@ -3956,6 +3956,9 @@ def test_every_kind_of_env_file_takes_the_same_rule(root, file):
         pytest.param(".env", "MODELfake123", "MODELfake123", id="no-setting"),
         pytest.param(".env", "OPENAI_MODEL=${DB_PASSWORD:-fakeguess1}", "fakeguess1", id="other-setting-compose-default"),
         pytest.param(".env", 'OPENAI_MODEL="${OPENAI_API_KEY:-sk-fakeguess1}"', "sk-fakeguess1", id="quoted-other-setting-compose-default"),
+        # A braced name with a model word but a secret part is still a secret's default.
+        pytest.param(".env", "OPENAI_MODEL=${MODEL_API_KEY:-sk-fakeguess1}", "sk-fakeguess1", id="model-secret-compose-default"),
+        pytest.param(".env", "CHAT_MODEL=${llm_token:-fakeguess1}", "fakeguess1", id="lowercase-model-secret-compose-default"),
     ],
 )
 def test_a_env_line_that_holds_a_secret_or_sets_nothing_is_refused(root, file, written, name):
