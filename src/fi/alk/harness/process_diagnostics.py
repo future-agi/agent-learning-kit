@@ -7,6 +7,7 @@ import stat
 import uuid
 from collections.abc import Iterable, Mapping
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from fi._diagnostics import sanitize_diagnostic
 
@@ -21,17 +22,67 @@ MIN_MASKED_LENGTH = 10
 _MAX_MASKED_FILE_BYTES = 64 * 1024  # a credential file is small; a state file is not
 _MAX_MASKED_TOTAL_BYTES = 1024 * 1024  # all listed files together
 _MAX_WALKED_ENTRIES = 50_000  # directory entries visited, so a huge tree cannot stall a run
-_ENV_LINE = re.compile(r"^\s*(?:export\s+)?[A-Za-z_][A-Za-z0-9_.-]*\s*[=:]\s*(.*?)\s*$")
+_ENV_LINE = re.compile(
+    r"^\s*(?:export\s+)?(?P<name>[A-Za-z_][A-Za-z0-9_.-]*)\s*[=:]\s*(?P<value>.*?)\s*$"
+)
 _PLACEHOLDER = "<redacted>"
+# Committed placeholders, not secrets: no masks are built from them.
+_TEMPLATE_SUFFIXES = (".example", ".sample", ".template", ".dist")
+# A settings name that holds one of these parts has its value masked whatever the value looks like.
+_SECRET_NAME_PARTS = ("KEY", "TOKEN", "SECRET", "PASS", "PWD", "AUTH", "CREDENTIAL", "DSN")
+_ENV_FILE_NAME = re.compile(r"(^|\.)env($|\.)", re.IGNORECASE)
+_LONG_RUN = re.compile(r"[A-Za-z0-9+/=_-]{32,}")
+_HEX_RUN = re.compile(r"[0-9a-fA-F]{32,}")
+_PADDED_BASE64 = re.compile(r"[A-Za-z0-9+/]{8,}={1,3}")
 
 
-def _line_values(line: str) -> set[str]:
+def _is_template(name: str) -> bool:
+    return name.casefold().endswith(_TEMPLATE_SUFFIXES)
+
+
+def _is_env_file(name: str) -> bool:
+    return bool(_ENV_FILE_NAME.search(name))
+
+
+def _secret_name(name: str) -> bool:
+    upper = name.upper()
+    return any(part in upper for part in _SECRET_NAME_PARTS)
+
+
+def _looks_like_secret(value: str) -> bool:
+    """Whether a value, whatever its setting is called, has the shape of a secret: a URL with
+    userinfo (user:pw@host) or a query string, or a token-like string. Plain words, model names and
+    URLs with neither userinfo nor query (https://api.openai.com/v1) do not."""
+    if not value or any(char.isspace() for char in value):
+        return False
+    if "://" in value:
+        try:
+            parts = urlsplit(value)
+            return "@" in parts.netloc or bool(parts.query)
+        except ValueError:
+            return True
+    if len(value) >= 16 and any(c.isalpha() for c in value) and any(c.isdigit() for c in value):
+        return True
+    if _HEX_RUN.fullmatch(value):
+        return True
+    return bool(
+        _LONG_RUN.fullmatch(value)
+        and sum(
+            (any(c.islower() for c in value), any(c.isupper() for c in value),
+             any(c.isdigit() for c in value))
+        )
+        >= 2
+    )
+
+
+def _line_values(line: str, *, only_secrets: bool = False) -> set[str]:
     """The values a NAME=value, export NAME=value or NAME: value line holds: as written, with
-    quotes stripped, and without a trailing comment."""
+    quotes stripped, and without a trailing comment. With ``only_secrets``, none unless the
+    setting's name or the value's shape says it is one."""
     match = _ENV_LINE.match(line)
     if not match:
         return set()
-    raw = match.group(1)
+    raw = match.group("value")
     values = {raw}
     if raw[:1] in {'"', "'"}:
         quote = raw[0]
@@ -39,7 +90,13 @@ def _line_values(line: str) -> set[str]:
         values.add(raw[1:end] if end > 0 else raw[1:])
     else:
         values.add(re.sub(r"\s+#.*$", "", raw).strip())
-    return {value.strip() for value in values}
+    values = {value.strip() for value in values}
+    if only_secrets and not (
+        _secret_name(match.group("name"))
+        or any(_looks_like_secret(value) for value in values)
+    ):
+        return set()
+    return values
 
 
 def _json_strings(value) -> set[str]:
@@ -49,16 +106,29 @@ def _json_strings(value) -> set[str]:
     return set().union(*(_json_strings(item) for item in items)) if items else set()
 
 
-def _masks_of(text: str) -> set[str]:
+def _masks_of(text: str, *, env: bool = False) -> set[str]:
+    """The strings to mask for one listed file. A non-env file (PEM, JSON key, credentials) is
+    masked whole, by line and by value. A settings (.env) file is masked whole, and per setting
+    only where the name or the value's shape says secret; a line that is not a setting is masked
+    like a line of a non-env file."""
     masks = {text, text.strip()}
-    try:
-        # A JSON key file: each string in it, since one is printed without its field name.
-        masks |= _json_strings(json.loads(text))
-    except (ValueError, RecursionError):
-        pass
+    if not env:
+        try:
+            # A JSON key file: each string in it, since one is printed without its field name.
+            masks |= _json_strings(json.loads(text))
+        except (ValueError, RecursionError):
+            pass
     for line in text.splitlines():
-        masks.add(line.strip())
-        masks |= _line_values(line)
+        if not env:
+            masks.add(line.strip())
+            masks |= _line_values(line)
+            continue
+        match = _ENV_LINE.match(line)
+        if match and not _PADDED_BASE64.fullmatch(line.strip()):
+            masks |= _line_values(line, only_secrets=True)
+        else:
+            # Not a setting (a PEM line inside a quoted value, a padded base64 line, a comment).
+            masks.add(line.strip())
     return masks
 
 
@@ -94,6 +164,8 @@ def source_secret_masks(root: Path) -> frozenset[str]:
                     continue
                 if not secret_text(resolved.relative_to(root).as_posix()):
                     continue
+                if _is_template(resolved.name):
+                    continue
                 fd = os.open(resolved, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
             except (OSError, ValueError):
                 continue
@@ -107,7 +179,7 @@ def source_secret_masks(root: Path) -> frozenset[str]:
                     continue
                 total += info.st_size
                 text = stream.read(_MAX_MASKED_FILE_BYTES + 1).decode("utf-8", errors="replace")
-            masks |= _masks_of(text)
+            masks |= _masks_of(text, env=_is_env_file(resolved.name))
     return frozenset(mask for mask in masks if len(mask) >= MIN_MASKED_LENGTH)
 
 

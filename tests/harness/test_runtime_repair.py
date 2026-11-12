@@ -317,6 +317,9 @@ def _validate_native(tmp_path, command, **fields):
         pytest.param(["bun", "--print", "1"], id="bun-print"),
         pytest.param(["bun", "-p", "1"], id="bun-p"),
         pytest.param(["deno", "--eval=1"], id="deno-eval"),
+        pytest.param(["node", "-e", "x"], id="node-e-exact"),
+        pytest.param(["python", "-c", "x"], id="python-c-exact"),
+        pytest.param(["env", "A=1", "sh", "-c", "x"], id="env-then-shell-c"),
     ],
 )
 def test_runtime_patch_refuses_inline_code_joined_to_its_flag(tmp_path, command) -> None:
@@ -337,6 +340,8 @@ def test_runtime_patch_refuses_inline_code_joined_to_its_flag(tmp_path, command)
         ["python", "--check-hash-based-pycs", "default", "app.py"],
         ["python", "-Wignore", "app.py"],
         ["python", "-m", "uvicorn", "-Bc"],
+        ["python", "-m", "uvicorn", "main:app", "-e", "x"],
+        ["python", "app.py", "-e", "staging", "--eval", "-c", "-p", "--print"],
     ],
 )
 def test_runtime_patch_still_passes_a_command_with_flags_after_the_script(tmp_path, command) -> None:
@@ -3267,3 +3272,30 @@ def test_repair_reads_the_folders_alk_yaml(tmp_path) -> None:
     )
 
     _select_repair_runtime(root, _folder_contract().runtime)
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        ["uvicorn", "main:app", "-e", "x"],
+        ["python", "-m", "uvicorn", "main:app", "-e", "x"],
+        ["node", "server.js", "-e", "staging"],
+        ["node", "server.js", "--eval", "-c", "-p", "--print"],
+        ["gunicorn", "app:app", "-c", "gunicorn.conf.py"],
+        ["python", "app.py", "-c", "-e", "-p"],
+    ],
+)
+def test_an_exact_inline_flag_after_the_script_or_on_another_program_is_not_inline_code(command) -> None:
+    from fi.alk.harness.runtime_repair import _runs_inline_code
+
+    assert not _runs_inline_code(command)
+
+
+@pytest.mark.parametrize(
+    "command",
+    [["python", "-c", "x"], ["node", "-e", "x"], ["python3", "-B", "-c", "x"], ["node", "--print", "x"]],
+)
+def test_an_exact_inline_flag_among_the_interpreters_own_options_is_inline_code(command) -> None:
+    from fi.alk.harness.runtime_repair import _runs_inline_code
+
+    assert _runs_inline_code(command)

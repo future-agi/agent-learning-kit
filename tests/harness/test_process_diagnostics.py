@@ -368,3 +368,73 @@ def test_the_walk_is_bounded(tmp_path, monkeypatch):
     masks = source_secret_masks(source)
     assert "canary-small-value-0018" in masks
     assert not any("canary-big-" in mask for mask in masks)
+
+
+# --- a repair needs the model name, the base URL and the environment name to stay readable -------
+
+_TYPICAL_ENV = (
+    "MODEL=gpt-4o-mini\nOPENAI_BASE_URL=https://api.openai.com/v1\nAPP_ENV=production\n"
+    "SERVER_URL=http://localhost:8000\nREGION=us-east-1\nOPENAI_API_KEY=canary-sk-proj-Ab12Cd34Ef56\n"
+)
+_TYPICAL_LOG = (
+    "INFO:     Uvicorn running on http://localhost:8000 (Press CTRL+C to quit)\n"
+    "INFO:     Application startup complete in production mode\n"
+    "openai.NotFoundError: The model gpt-4o-mini does not exist (base_url=https://api.openai.com/v1)\n"
+    "KeyError: 'OPENAI_API_KEY' and key canary-sk-proj-Ab12Cd34Ef56 leaked\n"
+)
+
+
+def test_a_typical_env_masks_the_key_and_leaves_the_diagnostics_readable(tmp_path):
+    source = _source(
+        tmp_path, {".env": _TYPICAL_ENV, ".env.example": _TYPICAL_ENV.replace("canary-sk-proj-Ab12Cd34Ef56", "your-key-here-1234")}
+    )
+    text = _evidence(tmp_path, source, _TYPICAL_LOG)
+    for readable in ("gpt-4o-mini", "https://api.openai.com/v1", "http://localhost:8000", "production"):
+        assert readable in text
+    assert "The model gpt-4o-mini does not exist (base_url=https://api.openai.com/v1)" in text
+    assert "canary-sk-proj-Ab12Cd34Ef56" not in text
+    assert "key <redacted> leaked" in text
+
+
+@pytest.mark.parametrize("name", [".env.example", ".env.sample", ".env.template", ".env.dist", "prod.env.example", "creds.json.example"])
+def test_a_template_file_builds_no_masks(tmp_path, name):
+    source = _source(tmp_path, {name: "API_TOKEN=canary-template-token-0101\nDB_PASSWORD=canary-template-pass-0102\n"})
+    text = _evidence(tmp_path, source, "canary-template-token-0101 canary-template-pass-0102\n")
+    assert source_secret_masks(source) == frozenset()
+    assert "canary-template-token-0101" in text and "canary-template-pass-0102" in text
+
+
+def test_a_secret_named_setting_with_a_plain_word_is_masked(tmp_path):
+    source = _source(tmp_path, {".env": "DB_PASSWORD=correcthorsebattery\nAPIKEY=plainwordsecret\nMODEL=plainwordmodel\n"})
+    text = _evidence(tmp_path, source, "pw correcthorsebattery key plainwordsecret model plainwordmodel\n")
+    assert "correcthorsebattery" not in text and "plainwordsecret" not in text
+    assert "model plainwordmodel" in text
+
+
+def test_a_token_like_value_under_a_plain_name_is_masked(tmp_path):
+    source = _source(
+        tmp_path,
+        {".env": "SESSION_ID=a1b2c3d4e5f6a7b8c9d0\nBLOB=" + "AbCdEfGhIjKlMnOpQrStUvWxYzAbCdEfGh" + "\nHEX=" + "0" * 32 + "\n"},
+    )
+    log = "id a1b2c3d4e5f6a7b8c9d0 blob AbCdEfGhIjKlMnOpQrStUvWxYzAbCdEfGh hex " + "0" * 32 + "\n"
+    text = _evidence(tmp_path, source, log)
+    assert "a1b2c3d4e5f6a7b8c9d0" not in text and "AbCdEfGhIjKl" not in text and "0" * 32 not in text
+
+
+@pytest.mark.parametrize(
+    "value",
+    ["postgres://app:canary-pw-0103@db.internal:5432/app", "https://api.example.com/v1?sig=canary0104"],
+)
+def test_a_url_with_userinfo_or_a_query_is_masked(tmp_path, value):
+    source = _source(tmp_path, {".env": f"BACKEND_URL={value}\n"})
+    text = _evidence(tmp_path, source, f"connecting to {value} failed\n")
+    assert value not in text and "canary" not in text
+
+
+def test_a_line_of_an_env_file_that_is_not_a_setting_is_masked_like_a_line(tmp_path):
+    source = _source(
+        tmp_path,
+        {".env": 'PRIVATE_BLOB="-----BEGIN KEY-----\nCANARYPEMLINE0105abcdefghijklmnop\nAAAAB3NzaC1yc2EAAAADAQABAA==\n-----END KEY-----"\n'},
+    )
+    text = _evidence(tmp_path, source, "line CANARYPEMLINE0105abcdefghijklmnop and AAAAB3NzaC1yc2EAAAADAQABAA==\n")
+    assert "CANARYPEMLINE" not in text and "AAAAB3NzaC1yc2E" not in text

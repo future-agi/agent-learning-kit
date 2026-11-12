@@ -1015,17 +1015,17 @@ _SCRIPT_VALUE_OPTIONS = frozenset({"-r", "--require", "--import"})
 
 
 def _runs_inline_code(command: list[str]) -> bool:
-    """Whether the command hands an interpreter its program as an argument. The exact flags are
-    refused wherever they stand; the forms joined to their value (-cexec(...), --print=...,
-    -pexpr) and node's --print/-p are judged among the interpreter's own options, so a script's
-    own -p (a port) is not mistaken for code."""
-    if any(token in {"-c", "--eval", "-e"} for token in command[1:]):
-        return True
+    """Whether the command hands an interpreter its program as an argument. Every form (-c, -e,
+    --eval, -p, --print, and those joined to their value: -cexec(...), --print=..., -pexpr) is
+    judged only among the interpreter's own options, up to its script or module, so a script's own
+    -e or -p (an environment name, a port) and a program that is not an interpreter are not
+    mistaken for code."""
     for index, token in enumerate(command):
         name = Path(token).name.casefold()
         python = name.startswith("python")
-        script = name in {"node", "nodejs", "bun", "deno"}
-        if not (python or script):
+        script = name in {"node", "nodejs", "bun", "deno", "perl", "ruby", "php"}
+        shell = name in _SHELL_LAUNCHERS
+        if not (python or script or shell):
             continue
         # Every token up to the script or module is an option of the interpreter itself; the
         # value of one that takes a value is not mistaken for the script.
@@ -1034,7 +1034,9 @@ def _runs_inline_code(command: list[str]) -> bool:
         for option in options:
             if not option.startswith("-") or option == "-m":
                 break
-            if python and _python_cluster_runs_code(option):
+            if option in {"-c", "-e", "--eval", "-p", "--print"}:
+                return True
+            if (python or shell) and _python_cluster_runs_code(option, shell=shell):
                 return True
             if script and option.startswith(("--eval", "--print", "-e", "-p")):
                 return True
@@ -1045,7 +1047,7 @@ def _runs_inline_code(command: list[str]) -> bool:
     return False
 
 
-def _python_cluster_runs_code(option: str) -> bool:
+def _python_cluster_runs_code(option: str, *, shell: bool = False) -> bool:
     """Whether a single-dash cluster of python's own flag letters carries ``c`` (-c, -Bc, -uc,
     -IBc, -cexec(...)). Letters are read left to right as python reads them: -W and -X take the
     rest of the cluster as their value and -m names a module, so nothing after them is a flag."""
@@ -1054,7 +1056,7 @@ def _python_cluster_runs_code(option: str) -> bool:
     for letter in option[1:]:
         if letter == "c":
             return True
-        if letter in "WXm" or not letter.isalpha():
+        if letter in ("" if shell else "WXm") or not letter.isalpha():
             return False
     return False
 
