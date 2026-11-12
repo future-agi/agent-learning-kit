@@ -657,7 +657,12 @@ def discover_credentials(
             for name, origin in _python_sdk_requirements(content):
                 record(name, required=True)
                 if name not in findings:
-                    # A reserved name the code passes as its key: record() leaves it out.
+                    # A reserved name the code passes as its key: record() leaves it out,
+                    # and the plugin's own name isn't asked for either. The agent can never
+                    # be given that value, so the plugin gets None and refuses to start
+                    # (LiveKit treats an explicit None as given, it doesn't fall back to its
+                    # own variable). The check marks such an agent ready; it fails at the
+                    # plugin, not here. No agent in the kit does this.
                     continue
                 detected = findings[name]["detected_from"]
                 assert isinstance(detected, set)
