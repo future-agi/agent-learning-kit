@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import collections.abc
 import json
+import logging
 import os
 import re
 import shlex
@@ -1483,6 +1484,10 @@ KEPT_AS_WRITTEN = (
     "RuntimeHttpSetupRequest",
 )
 CONTRACT_FILE = "contract.json"
+# What a reading was made from, saved beside its contract and outside the model: a build handed
+# that reading is told apart from one that read the agent itself by this key alone, so every
+# later save of the contract keeps it.
+READING_RECORD = "reading_inputs"
 _SEQUENCES = (
     list,
     tuple,
@@ -1562,6 +1567,32 @@ def _holders(contract: AgentContract, body: dict[str, Any], model: str) -> list[
     return pairs
 
 
+def _saved_record(path: Path) -> dict[str, Any]:
+    """The reading's record in the contract saved at ``path``, as ``{key: value}``; empty when
+    there is no file, no record in it, or it can't be read as a JSON object."""
+    try:
+        raw = path.read_bytes()
+    except FileNotFoundError:
+        return {}
+    except OSError as exc:
+        # The save goes on without it, so a seeded build saves as an unseeded one: log the error
+        # in full. The file is the kit's own contract, not the customer's source.
+        logging.getLogger(__name__).warning(
+            "reading record not carried; class: %s", type(exc).__name__, exc_info=True
+        )
+        return {}
+    # A contract that never held a record is not parsed again.
+    if READING_RECORD.encode() not in raw:
+        return {}
+    try:
+        saved = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError, RecursionError):
+        return {}
+    if not isinstance(saved, dict) or READING_RECORD not in saved:
+        return {}
+    return {READING_RECORD: saved[READING_RECORD]}
+
+
 def write_contract(contract: AgentContract, destination: Path) -> AgentContract:
     """Save the contract to ``destination/contract.json``, its free text cleaned of URL credentials.
 
@@ -1570,6 +1601,10 @@ def write_contract(contract: AgentContract, destination: Path) -> AgentContract:
     so a write that fails partway leaves the earlier contract as it was. Only then are the
     cleaned values copied back onto ``contract`` itself, in place: the stage and its tools hold
     that object, and a fresh one would leave them working from the raw text. It is returned too.
+
+    The record of what a reading was made from is not part of the model. When the contract
+    already saved at ``destination`` holds one, the new save keeps its value, first, as the
+    reading put it; a save where none is held writes none.
     """
     body = contract.model_dump()
     places: list[tuple[Any, Any, Any, str]] = []
@@ -1589,8 +1624,11 @@ def write_contract(contract: AgentContract, destination: Path) -> AgentContract:
     destination.mkdir(parents=True, exist_ok=True)
     path = destination / CONTRACT_FILE
     partial = destination / f".{CONTRACT_FILE}.{os.getpid()}.{threading.get_ident()}"
+    written = {**_saved_record(path), **body}
     try:
-        partial.write_text(json.dumps(body, indent=2, ensure_ascii=False), encoding="utf-8")
+        partial.write_text(
+            json.dumps(written, indent=2, ensure_ascii=False), encoding="utf-8"
+        )
         # Synced before the move, so the move never publishes a file the disk does not hold.
         descriptor = os.open(partial, os.O_RDONLY)
         try:
