@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import pytest
+
 from fi.alk.harness.world.tools import _still_refusing, _tables_the_source_lacks
 
 
@@ -33,8 +35,10 @@ def test_the_same_refusal_a_third_time_becomes_advice():
     assert _still_refusing(counts, "schema", ["orders.{size}"])
 
 
-def _array_world(tmp_path):
-    """A provider chat world whose users table copies a Postgres array default."""
+def _array_world(tmp_path, *, tables=None, create=None, source_root=""):
+    """A provider chat world whose users table copies a Postgres array default. ``tables``
+    replaces the recorded source model's tables, ``create`` the world's DDL, and
+    ``source_root`` is the agent's own code."""
     import asyncio
 
     from fi.alk.harness.catalogue import Catalogue, SubGoal, save_catalogue
@@ -80,7 +84,9 @@ def _array_world(tmp_path):
         SourceModel.create(
             source_digest="sha256:" + "a" * 64,
             engine="postgres",
-            tables=(
+            tables=tables
+            if tables is not None
+            else (
                 SourceTable(
                     name="users",
                     primary_key=("rider_id",),
@@ -106,7 +112,7 @@ def _array_world(tmp_path):
             ),
         )
     )
-    server, _ = world_tools(contract, tmp_path)
+    server, _ = world_tools(contract, tmp_path, source_root=source_root)
     tools = {one.name: one.handler for one in server.tools}
 
     def call(name, args):
@@ -115,7 +121,8 @@ def _array_world(tmp_path):
     assert not call(
         "create_schema",
         {
-            "sql": "CREATE TABLE users (rider_id TEXT PRIMARY KEY, "
+            "sql": create
+            or "CREATE TABLE users (rider_id TEXT PRIMARY KEY, "
             "accessibility_needs TEXT[] DEFAULT '{}');"
         },
     ).get("is_error")
@@ -181,3 +188,110 @@ def test_save_world_refuses_an_array_cell_the_seed_cannot_read(tmp_path):
     assert refused["is_error"]
     assert "users.accessibility_needs" in refused["content"][0]["text"]
     assert not (tmp_path / "world.sqlite").exists()
+
+
+def _json_world(tmp_path, world_type="TEXT"):
+    """A world as a repository agent leaves it at authoring: its own ``db/schema.sql`` types
+    ``users.profile`` jsonb, the world copied it as TEXT, and the recorded source model has
+    no tables, since the seed-time model is read from a running database only at validation."""
+    agent = tmp_path / "agent"
+    (agent / "db").mkdir(parents=True)
+    (agent / "db" / "schema.sql").write_text(
+        "CREATE TABLE users (rider_id TEXT PRIMARY KEY, profile JSONB);\n"
+    )
+    return _array_world(
+        tmp_path,
+        tables=(),
+        create="CREATE TABLE users (rider_id TEXT PRIMARY KEY NOT NULL, "
+        f"profile {world_type});",
+        source_root=str(agent),
+    )
+
+
+def _seed_time_model():
+    """The model validation reads off the agent's running database for the seed import."""
+    from fi.alk.harness.source_model import (
+        LogicalType,
+        SourceColumn,
+        SourceModel,
+        SourceTable,
+    )
+
+    return SourceModel.create(
+        source_digest="sha256:" + "b" * 64,
+        engine="postgres",
+        tables=(
+            SourceTable(
+                name="users",
+                primary_key=("rider_id",),
+                columns=(
+                    SourceColumn(
+                        name="rider_id",
+                        logical_type=LogicalType.STRING,
+                        native_type="text",
+                        nullable=False,
+                        has_default=False,
+                    ),
+                    SourceColumn(
+                        name="profile",
+                        logical_type=LogicalType.JSON,
+                        native_type="jsonb",
+                        nullable=True,
+                        has_default=False,
+                    ),
+                ),
+            ),
+        ),
+    )
+
+
+# A hosted build was seen copying jsonb as JSON; SQLite stores bare text there all the same.
+@pytest.mark.parametrize("world_type", ["TEXT", "JSON"])
+def test_save_world_refuses_bare_text_in_a_json_column(tmp_path, world_type):
+    import sqlite3
+
+    from fi.alk.harness.world_import.sqlite import import_sqlite_world
+
+    call = _json_world(tmp_path, world_type)
+    assert not call(
+        "seed",
+        {"table": "users", "rows": [{"rider_id": "r1", "profile": "2026-06-03"}]},
+    ).get("is_error")
+
+    refused = call("save_world", {})
+
+    assert refused["is_error"]
+    said = refused["content"][0]["text"]
+    assert "users.profile" in said and '"2026-06-03"' in said
+    assert not (tmp_path / "world.sqlite").exists()
+
+    # The refused world is the one the seed import fails on at validation.
+    assert not call(
+        "change_data",
+        {"sql": "UPDATE users SET profile = '\"2026-06-03\"' WHERE rider_id = 'r1'"},
+    ).get("is_error")
+    saved = call("save_world", {})
+    assert not saved.get("is_error"), saved
+    with sqlite3.connect(tmp_path / "world.sqlite") as connection:
+        imported = import_sqlite_world(connection, _seed_time_model())
+    assert imported.world.tables[0].rows[0].values["profile"].value == "2026-06-03"
+
+
+@pytest.mark.parametrize("profile", [{"tier": "gold"}, ["a"], '"gold"', None])
+def test_save_world_keeps_what_a_json_column_may_hold(tmp_path, profile):
+    import sqlite3
+
+    from fi.alk.harness.world_import.sqlite import import_sqlite_world
+
+    call = _json_world(tmp_path)
+    assert not call(
+        "seed", {"table": "users", "rows": [{"rider_id": "r1", "profile": profile}]}
+    ).get("is_error")
+
+    saved = call("save_world", {})
+
+    assert not saved.get("is_error"), saved
+    with sqlite3.connect(tmp_path / "world.sqlite") as connection:
+        imported = import_sqlite_world(connection, _seed_time_model())
+    expected = "gold" if profile == '"gold"' else profile
+    assert imported.world.tables[0].rows[0].values["profile"].value == expected

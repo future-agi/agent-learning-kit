@@ -358,6 +358,76 @@ def test_world_change_is_all_or_nothing_and_reports_counts(tmp_path):
     assert "a: 2, b: 1" in world_change(tmp_path, "UPDATE b SET id = '2'")
 
 
+def _meta_world(out: Path, value: str) -> Path:
+    """An authoring world as a repository agent leaves it: the agent's own schema types
+    ``meta.value`` jsonb, the world copied it as TEXT, and no source model records tables
+    (at authoring the seed-time model does not exist yet). Returns the agent's source root."""
+    import sqlite3
+
+    agent = out / "agent"
+    (agent / "db").mkdir(parents=True)
+    (agent / "db" / "schema.sql").write_text(
+        "CREATE TABLE meta (key TEXT PRIMARY KEY, value JSONB NOT NULL);\n"
+    )
+    db = sqlite3.connect(out / "world.sqlite")
+    db.execute("CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+    db.execute("INSERT INTO meta VALUES ('session', ?)", (value,))
+    db.commit()
+    db.close()
+    return agent
+
+
+def _meta(out: Path) -> list[tuple[str, str]]:
+    import sqlite3
+
+    db = sqlite3.connect(out / "world.sqlite")
+    try:
+        return db.execute("SELECT key, value FROM meta ORDER BY key").fetchall()
+    finally:
+        db.close()
+
+
+def test_change_world_refuses_bare_text_in_a_json_column_and_leaves_the_world(tmp_path):
+    agent = _meta_world(tmp_path, "{}")
+    server = builder.suite_server(tmp_path, [], source_root=agent)
+    change = next(one for one in server.tools if one.name == "change_world")
+
+    said = asyncio.run(
+        change.handler({"sql": "UPDATE meta SET value = '2026-06-03' WHERE key = 'session'"})
+    )["content"][0]["text"]
+
+    assert said.startswith("Not changed")
+    assert "meta.value" in said and '\'"2026-06-03"\'' in said
+    assert _meta(tmp_path) == [("session", "{}")]
+
+
+def test_world_change_keeps_json_text_in_a_json_column(tmp_path):
+    from fi.alk.harness.builder import world_change
+
+    agent = _meta_world(tmp_path, "{}")
+
+    said = world_change(
+        tmp_path,
+        "INSERT INTO meta VALUES ('current_date', '\"2026-06-03\"')",
+        source_root=agent,
+    )
+
+    assert "1 rows changed" in said
+    assert _meta(tmp_path) == [("current_date", '"2026-06-03"'), ("session", "{}")]
+
+
+def test_world_change_is_not_blocked_by_bare_text_the_world_already_held(tmp_path):
+    from fi.alk.harness.builder import world_change
+
+    agent = _meta_world(tmp_path, "already-bare")
+
+    said = world_change(
+        tmp_path, "INSERT INTO meta VALUES ('flags', '[]')", source_root=agent
+    )
+
+    assert "1 rows changed" in said
+
+
 def test_meaning_changes_wait_for_a_yes_to_that_call_but_surface_edits_do_not(tmp_path, monkeypatch):
     from fi.alk.harness.backends import ToolSpec
     from fi.alk.harness.hosted_chat_entrypoint import _CONFIRM

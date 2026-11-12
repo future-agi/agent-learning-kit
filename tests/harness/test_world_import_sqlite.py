@@ -491,3 +491,41 @@ def test_a_serial_column_sqlite_numbers_as_its_rowid_holds() -> None:
     assert connection.execute("SELECT id, seq FROM users").fetchall() == [("b", 1)]
     stored = import_sqlite_world(connection, source).world
     assert world_holds(stored, added, source)
+
+
+@pytest.mark.parametrize(
+    ("stored", "read"),
+    [
+        ('{"a": 1}', {"a": 1}),
+        ("[]", []),
+        ('"2026-06-03"', "2026-06-03"),
+        (7, 7),
+        (None, None),
+    ],
+)
+def test_json_value_reads_what_a_json_column_may_hold(stored, read) -> None:
+    from fi.alk.harness.world_import.sqlite import json_value
+
+    assert json_value(stored) == read
+
+
+def test_json_value_refuses_bare_text_as_the_import_does() -> None:
+    from fi.alk.harness.world_import.sqlite import json_value
+
+    with pytest.raises(ValueError, match="json_value_invalid"):
+        json_value("2026-06-03")
+
+
+def test_unreadable_json_columns_names_each_json_column_holding_bare_text() -> None:
+    from fi.alk.harness.world_import.sqlite import unreadable_json_columns
+
+    # Typed by the agent's schema, named without regard to case; the world's own DDL is TEXT.
+    json_columns = {("USERS", "Payload"), ("users", "missing"), ("absent", "payload")}
+    connection = sqlite3.connect(":memory:")
+    connection.execute("CREATE TABLE users (id TEXT, payload TEXT, note TEXT)")
+    connection.execute("INSERT INTO users VALUES ('u1', '{\"a\": 1}', 'plain')")
+    assert unreadable_json_columns(connection, json_columns) == []
+
+    # A text column may hold anything; a JSON column holding bare text is what the seed refuses.
+    connection.execute("INSERT INTO users VALUES ('u2', '2026-06-03', 'plain')")
+    assert unreadable_json_columns(connection, json_columns) == ["users.payload"]
