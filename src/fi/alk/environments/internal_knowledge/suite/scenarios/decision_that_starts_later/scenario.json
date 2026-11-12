@@ -1,0 +1,98 @@
+{
+  "name": "decision_that_starts_later",
+  "scenario_key": "decision-that-starts-later",
+  "scenario_id": "",
+  "use_case": "Weigh a Slack decision against the document it updates",
+  "branch": "Tomas posted decision KM414 raising mileage rate to $0.70 from 2027-01-01; Ivan asks what rate applies next week; desk weighs Slack decision against mileage_v1 ($0.67) and explains $0.67 applies now and $0.70 starts in 2027",
+  "tests": "the desk reads the Slack decision and mileage_v1, explaining that $0.67 applies now and $0.70 takes effect 1 January 2027 per the owner's decision",
+  "instruction": "You saw a Slack message in #finance-team (ts 1794100000.000414) from Tomas Rivera stating the mileage rate increases to $0.70 a mile from January 1, 2027. You ask what mileage rate applies to your drive next week.\n\nYour details:\n- Name: Ivan Petrov\n- Employee ID: E16\n- Channel: CH_FINANCE\n- Message TS: 1794100000.000414",
+  "keywords": [
+    "citation",
+    "effective_version",
+    "slack_vs_document"
+  ],
+  "persona": {
+    "name": "Ivan Petrov",
+    "gender": "male",
+    "age_group": "32-40",
+    "occupation": "Customer Service",
+    "location": "United States",
+    "personality": "Impatient and direct",
+    "communication_style": "Direct and concise",
+    "initial_message": "Hi Desk, Tomas posted a decision in #finance-team (message ts 1794100000.000414) raising the mileage rate to $0.70. What mileage rate should I claim for my client visit next week?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "channel_id": "CH_FINANCE",
+    "message_ts": "1794100000.000414",
+    "family": "mileage",
+    "origin": "generated",
+    "employee_id": "E16"
+  },
+  "solution": [
+    {
+      "tool": "get_user_profile",
+      "arguments": {
+        "employee_id": "E16"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "slack_read_thread",
+      "arguments": {
+        "cursor": "",
+        "latest": "",
+        "message_ts": "1794100000.000414",
+        "channel_id": "CH_FINANCE",
+        "response_format": "",
+        "limit": 10,
+        "oldest": ""
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "message_ts": "caller: 1794100000.000414",
+        "channel_id": "caller: CH_FINANCE"
+      }
+    },
+    {
+      "tool": "fetch_passage",
+      "arguments": {
+        "employee_id": "E16",
+        "passage_id": "P-MILEAGEV1-01"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "passage_id": "record: Mileage Reimbursement 1.0 section 1"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "task": "slack_vs_document",
+    "overlay_intensity": "absent",
+    "overlay": "none",
+    "counterparty": "standard_employee",
+    "interface": "slack",
+    "disposition": "future_effective_slack_decision",
+    "overlay_vector": "none",
+    "interaction": "multi_turn"
+  },
+  "sub_goals": [
+    "slack_evidence_weighed",
+    "citation_quality"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

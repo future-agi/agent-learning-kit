@@ -1,0 +1,77 @@
+{
+  "name": "update_open_sabbatical_request",
+  "scenario_key": "update-open-sabbatical-request",
+  "scenario_id": "",
+  "use_case": "Report missing evidence and open a knowledge request with consent",
+  "branch": "Priya Nair adds a note stating she reaches five years of service in March to her open sabbatical knowledge request KR-101",
+  "tests": "the agent updates knowledge request KR-101 with Priya's note while keeping its status open",
+  "instruction": "You have an open knowledge request KR-101 about the sabbatical policy. Ask the Knowledge Desk to add a note to it saying that you reach five years of service in March.\n\nYour details:\n- Name: Priya Nair\n- Employee ID: E01\n- Request ID: KR-101",
+  "keywords": [
+    "knowledge_request"
+  ],
+  "persona": {
+    "name": "Priya Nair",
+    "gender": "female",
+    "age_group": "25-32",
+    "occupation": "Engineer",
+    "location": "United Kingdom",
+    "personality": "Detail-oriented",
+    "communication_style": "Direct and concise",
+    "initial_message": "Can you add a note to my knowledge request KR-101 saying I reach five years of service in March?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "request_id": "KR-101",
+    "origin": "seed",
+    "employee_id": "E01"
+  },
+  "solution": [
+    {
+      "tool": "get_user_profile",
+      "arguments": {
+        "employee_id": "E01"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "update_knowledge_request",
+      "arguments": {
+        "request_id": "KR-101",
+        "note": "I reach five years in March",
+        "employee_id": "E01"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "request_id": "caller: KR-101"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "disposition": "missing_information",
+    "overlay": "none",
+    "task": "missing_evidence",
+    "interaction": "single_turn",
+    "interface": "clean_prose",
+    "overlay_intensity": "absent",
+    "overlay_vector": "none",
+    "counterparty": "internal_lead"
+  },
+  "sub_goals": [
+    "knowledge_request_updated"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

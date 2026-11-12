@@ -1,0 +1,120 @@
+{
+  "name": "switch_the_hold_to_another_time",
+  "scenario_key": "switch-the-hold-to-another-time",
+  "scenario_id": "",
+  "use_case": "Answer availability from the staff calendars and hold slots",
+  "branch": "Switch the hold to another time: CU444 Daniel Reeve holds a consultation with Priya Desai at Shoreditch on Thursday 29 October at 10:00 London. A minute later he asks to move the hold to 14:00 the same day instead. Priya's 12:00-13:00 lunch block and A019 at 13:00 rule out the middle of the day.",
+  "tests": "the desk releases the first hold and places a new hold at the requested alternative time",
+  "instruction": "You want to place a hold on an Initial Consultation slot with Priya Desai at Shoreditch on Thursday 29 October 2026. Initially ask to hold the 10:00 am slot. Once the hold is placed, change your mind and ask to switch the hold to 2:00 pm (14:00) on the same day instead. When the desk releases the 10:00 am hold and places a new hold on 14:00, confirm.\n\nYour details:\n- Name: Daniel Reeve\n- Email: daniel.reeve@example.com\n- Phone: +44 20 7946 0444\n- Service: Initial Consultation (SV1)\n- Staff: Priya Desai (ST04)\n- Location: Shoreditch Studio (L2)\n- Initial Held Time: 10:00 am (2026-10-29T10:00)\n- Switched Held Time: 2:00 pm (2026-10-29T14:00)",
+  "keywords": [
+    "hold_slot",
+    "release_hold",
+    "switch_hold",
+    "consultation"
+  ],
+  "persona": {
+    "name": "Daniel Reeve",
+    "gender": "male",
+    "age_group": "32-40",
+    "occupation": "Engineer",
+    "location": "United Kingdom",
+    "personality": "Friendly and cooperative",
+    "communication_style": "Direct and concise",
+    "initial_message": "Hi, I'd like to put a hold on an Initial Consultation with Priya Desai at Shoreditch on Thursday 29 October at 10 am while I finalize my schedule. My email is daniel.reeve@example.com and phone is +44 20 7946 0444.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "origin": "mixed",
+    "customer": "CU444"
+  },
+  "solution": [
+    {
+      "tool": "get_customer",
+      "arguments": {
+        "email": "daniel.reeve@example.com",
+        "phone": "+44 20 7946 0444"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "list_slots",
+      "arguments": {
+        "date": "2026-10-29",
+        "language": null,
+        "staff_id": "ST04",
+        "location_id": "L2",
+        "service_id": "SV1"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "hold_slot",
+      "arguments": {
+        "customer_id": "CU444",
+        "location_id": "L2",
+        "staff_id": "ST04",
+        "start_time": "2026-10-29T10:00",
+        "service_id": "SV1",
+        "utc_offset": "+00:00"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "release_hold",
+      "arguments": {
+        "hold_id": "H600",
+        "customer_id": "CU444"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "hold_slot",
+      "arguments": {
+        "customer_id": "CU444",
+        "location_id": "L2",
+        "utc_offset": "+00:00",
+        "service_id": "SV1",
+        "start_time": "2026-10-29T14:00",
+        "staff_id": "ST04"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "start_time": "caller: 2026-10-29T14:00",
+        "customer_id": "record: customers[CU444].customer_id",
+        "staff_id": "record: staff[ST04].staff_id"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "overlay": "none",
+    "task": "answer_availability_from_the_staff_calendars_and_hold_slots",
+    "disposition": "switch_hold",
+    "interaction": "multi_turn",
+    "counterparty": "returning",
+    "interface": "clean_prose",
+    "overlay_vector": "none",
+    "overlay_intensity": "absent"
+  },
+  "sub_goals": [
+    "hold_released",
+    "hold_placed"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

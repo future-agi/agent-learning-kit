@@ -1,0 +1,79 @@
+{
+  "name": "vendor_gift_policy_limit_drive",
+  "scenario_key": "vendor-gift-policy-limit-drive",
+  "scenario_id": "",
+  "use_case": "Answer a policy question with citations from the version in effect",
+  "branch": "Ravi Shah asks gift policy limit for an $80 vendor gift; Code of Conduct 2.0 is in effect",
+  "tests": "the agent answers gifts up to $50 are allowed and gifts over $50 must be declared from Code of Conduct 2.0, section 2, via Drive search",
+  "instruction": "A vendor has offered you a gift basket valued at around $80 during contract negotiations. You want to know the company gift policy limit and what action is required when a gift exceeds that limit. Ask the Knowledge Desk for the gift limit, reporting rules, and the policy citation.\n\nYour details:\n- Name: Ravi Shah\n- Employee ID: E18",
+  "keywords": [
+    "citation",
+    "code_of_conduct",
+    "effective_version"
+  ],
+  "persona": {
+    "name": "Ravi Shah",
+    "gender": "male",
+    "age_group": "32-40",
+    "occupation": "Accountant",
+    "location": "India",
+    "personality": "Detail-oriented",
+    "communication_style": "Formal and polite",
+    "initial_message": "Hello, a vendor offered me an $80 gift. What is the allowable gift value threshold and what must I do if it exceeds it? Please cite the policy.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "employee_id": "E18",
+    "file_id": "conduct_v2",
+    "origin": "seed"
+  },
+  "solution": [
+    {
+      "tool": "search_files",
+      "arguments": {
+        "query": "title contains 'Code of Conduct'"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "fetch_passage",
+      "arguments": {
+        "employee_id": "E18",
+        "passage_id": "P-CONDUCTV2-01"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "passage_id": "record: Code of Conduct 2.0 section 1 (Gifts)"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "disposition": "compliance_check",
+    "overlay": "none",
+    "overlay_vector": "none",
+    "interface": "clean_prose",
+    "overlay_intensity": "absent",
+    "counterparty": "finance_staff",
+    "task": "policy_answer",
+    "interaction": "multi_turn"
+  },
+  "sub_goals": [
+    "answer_cited_from_effective_version",
+    "citation_quality"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

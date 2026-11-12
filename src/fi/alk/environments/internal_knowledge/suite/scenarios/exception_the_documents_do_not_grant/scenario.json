@@ -1,0 +1,100 @@
+{
+  "name": "exception_the_documents_do_not_grant",
+  "scenario_key": "exception-the-documents-do-not-grant",
+  "scenario_id": "",
+  "use_case": "Report missing evidence and open a knowledge request with consent",
+  "branch": "Marcus Lee (manager E02) asks if a critical hotfix with one review approval can ship during the release freeze (Dec 20); Release Process 1.0 and Code Review Standard 1.0 do not grant exceptions",
+  "tests": "the agent cites release freeze and code review rules, searches for hotfix exceptions, finds none, and offers a knowledge request without inventing exceptions",
+  "instruction": "You are an Engineering Manager with an urgent production bugfix. You want to know if there is an exception allowing a hotfix with only one review approval to be deployed on December 20th during the winter freeze. If the desk cites the standard rules (freeze Dec 15-Jan 5, 2 approvals required) and explains no hotfix exception exists in the documents, decline when offered a knowledge request.\n\nYour details:\n- Name: Marcus Lee\n- Employee ID: E02",
+  "keywords": [
+    "citation",
+    "missing_evidence"
+  ],
+  "persona": {
+    "name": "Marcus Lee",
+    "gender": "male",
+    "age_group": "32-40",
+    "occupation": "Manager",
+    "location": "United Kingdom",
+    "personality": "Professional and formal",
+    "communication_style": "Formal and polite",
+    "initial_message": "Hello, we have an urgent hotfix with one code review approval. Can we deploy it to production on December 20th during the freeze?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "origin": "seed",
+    "employee_id": "E02",
+    "family": "release_process"
+  },
+  "solution": [
+    {
+      "tool": "get_user_profile",
+      "arguments": {
+        "employee_id": "E02"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "fetch_passage",
+      "arguments": {
+        "passage_id": "P-RELEASEV1-01",
+        "employee_id": "E02"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "passage_id": "record: Release Process 1.0 section 1"
+      }
+    },
+    {
+      "tool": "fetch_passage",
+      "arguments": {
+        "employee_id": "E02",
+        "passage_id": "P-CODEREVIEWV1-01"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "passage_id": "record: Code Review Standard 1.0 section 1"
+      }
+    },
+    {
+      "tool": "search_documents",
+      "arguments": {
+        "collection_id": "C_ENG",
+        "query": "hotfix exception",
+        "include_superseded": false,
+        "employee_id": "E02"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "overlay_intensity": "absent",
+    "overlay": "none",
+    "interface": "clean_prose",
+    "disposition": "unsupported_exception",
+    "interaction": "multi_turn",
+    "task": "missing_evidence",
+    "overlay_vector": "none",
+    "counterparty": "manager"
+  },
+  "sub_goals": [
+    "missing_evidence_reported",
+    "citation_quality"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

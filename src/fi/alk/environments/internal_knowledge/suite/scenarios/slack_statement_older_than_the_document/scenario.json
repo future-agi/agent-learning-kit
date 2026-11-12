@@ -1,0 +1,107 @@
+{
+  "name": "slack_statement_older_than_the_document",
+  "scenario_key": "slack-statement-older-than-the-document",
+  "scenario_id": "",
+  "use_case": "Weigh a Slack decision against the document it updates",
+  "branch": "Tomas posted reminder KM411 ($210) on 16 Feb 2026; Daniel cites it for a trip next week; desk explains the message predates Travel Policy 3.0 (effective 1 March 2026), which sets the US cap at $220",
+  "tests": "the desk reads the Slack message and Travel Policy 3.0, explaining that the message predates version 3.0 which took effect 1 March 2026 with a $220 US cap",
+  "instruction": "You saw a Slack message in #finance-team (ts 1771200000.000411) from Tomas Rivera stating the hotel cap is $210 a night. You ask whether that cap applies to your US trip next week.\n\nYour details:\n- Name: Daniel Brooks\n- Employee ID: E06\n- Channel: CH_FINANCE\n- Message TS: 1771200000.000411",
+  "keywords": [
+    "citation",
+    "effective_version",
+    "slack_vs_document"
+  ],
+  "persona": {
+    "name": "Daniel Brooks",
+    "gender": "male",
+    "age_group": "40-50",
+    "occupation": "Manager",
+    "location": "Canada",
+    "personality": "Professional and formal",
+    "communication_style": "Direct and concise",
+    "initial_message": "Hi Desk, I saw Tomas's message in #finance-team (ts 1771200000.000411) saying the hotel cap is $210. Is that what I should book under for my US trip next week?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "origin": "generated",
+    "employee_id": "E06",
+    "family": "travel_policy",
+    "channel_id": "CH_FINANCE",
+    "message_ts": "1771200000.000411"
+  },
+  "solution": [
+    {
+      "tool": "get_user_profile",
+      "arguments": {
+        "employee_id": "E06"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "slack_read_thread",
+      "arguments": {
+        "cursor": "",
+        "response_format": "",
+        "oldest": "",
+        "limit": 10,
+        "latest": "",
+        "message_ts": "1771200000.000411",
+        "channel_id": "CH_FINANCE"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "message_ts": "caller: 1771200000.000411",
+        "channel_id": "caller: CH_FINANCE"
+      }
+    },
+    {
+      "tool": "get_effective_version",
+      "arguments": {
+        "employee_id": "E06",
+        "family": "travel_policy"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "fetch_passage",
+      "arguments": {
+        "passage_id": "P-TRVPOLICYV3-02",
+        "employee_id": "E06"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "passage_id": "record: Travel Policy 3.0 section 2"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "interface": "slack",
+    "overlay_vector": "none",
+    "overlay_intensity": "absent",
+    "overlay": "none",
+    "counterparty": "manager",
+    "task": "slack_vs_document",
+    "disposition": "obsolete_slack_reminder",
+    "interaction": "multi_turn"
+  },
+  "sub_goals": [
+    "slack_evidence_weighed",
+    "citation_quality"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

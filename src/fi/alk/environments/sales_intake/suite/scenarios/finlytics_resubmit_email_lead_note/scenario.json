@@ -1,0 +1,94 @@
+{
+  "name": "finlytics_resubmit_email_lead_note",
+  "scenario_key": "finlytics-resubmit-email-lead-note",
+  "scenario_id": "",
+  "use_case": "Recognise known contacts and accounts",
+  "branch": "Finlytics resubmit by email: read th_s06_finlytics_resubmit (fix), upsert_lead with Meera's email as written (fix), add a note to L09",
+  "tests": "the agent reads Meera Iyer's resubmission email on thread th_s06_finlytics_resubmit, updates lead L09, and records a lead note without duplicating records",
+  "instruction": "You are Arjun Mehta, AE for India (A05). Meera Iyer at Finlytics sent a follow-up email on thread th_s06_finlytics_resubmit. Ask the sales desk to read thread th_s06_finlytics_resubmit, update the lead with upsert_lead using her email and the facts she wrote, and add a note to lead L09.\n\nYour details:\n- Name: Arjun Mehta\n- Role: Account Executive (India, A05)\n- Thread ID: th_s06_finlytics_resubmit\n- Contact: Meera Iyer\n- Email: Meera.Iyer@Finlytics.Example\n- Lead ID: L09",
+  "keywords": [
+    "duplicate"
+  ],
+  "persona": {
+    "name": "Arjun Mehta",
+    "gender": "male",
+    "age_group": "32-40",
+    "occupation": "Sales Representative",
+    "location": "India",
+    "personality": "Professional and formal",
+    "communication_style": "Formal and polite",
+    "initial_message": "Meera Iyer at Finlytics sent a follow-up email on thread th_s06_finlytics_resubmit. Please update their lead L09 and add a note about her resubmission.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "thread_id": "th_s06_finlytics_resubmit",
+    "origin": "seed",
+    "lead_id": "L09"
+  },
+  "solution": [
+    {
+      "tool": "get_thread",
+      "arguments": {
+        "threadId": "th_s06_finlytics_resubmit"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "threadId": "record: Meera's thread th_s06_finlytics_resubmit"
+      }
+    },
+    {
+      "tool": "upsert_lead",
+      "arguments": {
+        "email": "Meera.Iyer@Finlytics.Example",
+        "request_key": "REQ-L09-RESUBMIT",
+        "seats": 22,
+        "timeline": "3-6 months"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "email": "caller: Meera.Iyer@Finlytics.Example",
+        "seats": "email: 22 support agents",
+        "timeline": "email: live within 3-6 months"
+      }
+    },
+    {
+      "tool": "add_lead_note",
+      "arguments": {
+        "lead_id": "L09",
+        "body": "Meera Iyer resubmitted demo request via email thread th_s06."
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "lead_id": "record: Finlytics lead L09"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "interface": "email_thread",
+    "overlay": "none",
+    "counterparty": "colleague",
+    "disposition": "duplicate",
+    "interaction": "multi_turn",
+    "overlay_intensity": "absent",
+    "overlay_vector": "none",
+    "task": "deduplicate"
+  },
+  "sub_goals": [
+    "lead_updated_not_duplicated",
+    "lead_note_added"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

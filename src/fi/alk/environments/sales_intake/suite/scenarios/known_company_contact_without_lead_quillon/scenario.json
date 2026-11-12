@@ -1,0 +1,77 @@
+{
+  "name": "known_company_contact_without_lead_quillon",
+  "scenario_key": "known-company-contact-without-lead-quillon",
+  "scenario_id": "",
+  "use_case": "Recognise known contacts and accounts",
+  "branch": "Sofia Bianchi asks whether she and Quillon Travel are on file and whether she has a demo; she is a known contact with no open lead",
+  "tests": "the agent finds Sofia Bianchi's own contact C31 and Quillon Travel, and reports no open lead or demo without creating anything",
+  "instruction": "You are Sofia Bianchi, procurement manager at Quillon Travel (sofia.bianchi@quillon.example). Ask the sales desk whether you and Quillon Travel are already in BrightDesk's records, and whether you have an open enquiry or a demo scheduled. When told you are on file with no open lead or demo, thank the desk.\n\nYour details:\n- Name: Sofia Bianchi\n- Company: Quillon Travel\n- Email: sofia.bianchi@quillon.example",
+  "keywords": [
+    "duplicate",
+    "contact",
+    "account"
+  ],
+  "persona": {
+    "name": "Sofia Bianchi",
+    "gender": "female",
+    "age_group": "25-32",
+    "occupation": "Customer Service",
+    "location": "United States",
+    "personality": "Friendly and cooperative",
+    "communication_style": "Simple and clear",
+    "initial_message": "Hi, I'm Sofia Bianchi from Quillon Travel (sofia.bianchi@quillon.example). Are we already in your records, and do I have a demo scheduled?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "contact_id": "C31",
+    "account_id": "ACC11",
+    "origin": "seed"
+  },
+  "solution": [
+    {
+      "tool": "search_contacts",
+      "arguments": {
+        "email": "sofia.bianchi@quillon.example"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "email": "caller: sofia.bianchi@quillon.example"
+      }
+    },
+    {
+      "tool": "search_accounts",
+      "arguments": {
+        "name": "Quillon Travel"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "disposition": "duplicate",
+    "interface": "clean_prose",
+    "overlay_vector": "none",
+    "overlay_intensity": "absent",
+    "overlay": "none",
+    "interaction": "multi_turn",
+    "task": "deduplicate",
+    "counterparty": "prospect"
+  },
+  "sub_goals": [
+    "duplicate_detected"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

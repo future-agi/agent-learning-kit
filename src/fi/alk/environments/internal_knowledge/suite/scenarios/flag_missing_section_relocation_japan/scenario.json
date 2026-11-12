@@ -1,0 +1,81 @@
+{
+  "name": "flag_missing_section_relocation_japan",
+  "scenario_key": "flag-missing-section-relocation-japan",
+  "scenario_id": "",
+  "use_case": "Flag a document problem to its owner",
+  "branch": "Kenji Tanaka notes that relocation_v1 does not specify an allowance for Japan and agrees to flag relocation_v1 as missing_section",
+  "tests": "the agent raises one missing_section issue on relocation_v1 after Kenji agrees",
+  "instruction": "You noticed that the Relocation Policy does not contain allowance details for Japan or non-US/UK countries. Ask the Knowledge Desk to flag a missing section on the Relocation Policy.\n\nYour details:\n- Name: Kenji Tanaka\n- Employee ID: E10",
+  "keywords": [
+    "missing_evidence"
+  ],
+  "persona": {
+    "name": "Kenji Tanaka",
+    "gender": "male",
+    "age_group": "25-32",
+    "occupation": "Engineer",
+    "location": "Australia",
+    "personality": "Friendly and cooperative",
+    "communication_style": "Collaborative",
+    "initial_message": "The Relocation Policy doesn't have an allowance section for Japan. Can you flag it as a missing section?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "drive_file_id": "relocation_v1",
+    "origin": "seed",
+    "employee_id": "E10"
+  },
+  "solution": [
+    {
+      "tool": "get_user_profile",
+      "arguments": {
+        "employee_id": "E10"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "flag_document_issue",
+      "arguments": {
+        "request_key": "DI-E10-RELOC-MISSING",
+        "employee_id": "E10",
+        "issue_type": "missing_section",
+        "details": "Relocation policy does not specify allowance amounts for Japan or Asian offices.",
+        "drive_file_id": "relocation_v1"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "issue_type": "caller: flag a missing section",
+        "drive_file_id": "record: drive_files relocation_v1"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "overlay_intensity": "absent",
+    "interface": "clean_prose",
+    "task": "issue_flagging",
+    "interaction": "single_turn",
+    "disposition": "missing_information",
+    "counterparty": "internal_lead",
+    "overlay": "none",
+    "overlay_vector": "none"
+  },
+  "sub_goals": [
+    "document_issue_flagged",
+    "consent_before_request"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

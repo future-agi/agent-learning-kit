@@ -1,0 +1,96 @@
+{
+  "name": "waitlist_added_physiotherapy_no_availability",
+  "scenario_key": "waitlist-added-physiotherapy-no-availability",
+  "scenario_id": "",
+  "use_case": "Waitlist, concurrency and failure recovery",
+  "branch": "Greta Weber requests physiotherapy earlier than any open slot at North between 27 and 28 October; desk finds no open slots and adds her to the waitlist",
+  "tests": "the agent verifies Greta Weber, checks availability between 2026-10-27 and 2026-10-28, and adds her to the waitlist for physiotherapy",
+  "instruction": "You are Greta Weber (born 1993-08-15). You need a physiotherapy appointment as soon as possible at Riverbank North, ideally between Tuesday 27 and Wednesday 28 October. If there are no open slots at Riverbank North on those days, ask to be added to the waitlist for that date range.\n\nYour details:\n- Name: Greta Weber\n- Date of birth: 1993-08-15\n- Requested specialty: Physiotherapy\n- Preferred location: Riverbank North\n- Desired date range: 27 October 2026 to 28 October 2026",
+  "keywords": [
+    "waitlist"
+  ],
+  "persona": {
+    "name": "Greta Weber",
+    "gender": "female",
+    "age_group": "25-32",
+    "occupation": "Engineer",
+    "location": "Canada",
+    "personality": "Impatient and direct",
+    "communication_style": "Assertive",
+    "initial_message": "Hello, do you have any physiotherapy openings at Riverbank North on 27 or 28 October? If not, please put me on the waitlist.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "location_id": "LOC-NOR",
+    "patient_id": "P410",
+    "origin": "generated",
+    "specialty": "physiotherapy"
+  },
+  "solution": [
+    {
+      "tool": "verify_patient",
+      "arguments": {
+        "dob": "1993-08-15",
+        "full_name": "Greta Weber"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "find_available_slots",
+      "arguments": {
+        "location_id": "LOC-NOR",
+        "date_from": "2026-10-27",
+        "date_to": "2026-10-28",
+        "specialty": "physiotherapy",
+        "provider_id": "",
+        "patient_id": ""
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "add_to_waitlist",
+      "arguments": {
+        "earliest_date": "2026-10-27",
+        "request_key": "req_wl_p410",
+        "latest_date": "2026-10-28",
+        "patient_id": "P410",
+        "specialty": "physiotherapy",
+        "provider_id": "D07"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "specialty": "caller: physiotherapy",
+        "patient_id": "record: patients"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "overlay": "none",
+    "overlay_vector": "none",
+    "disposition": "no_availability",
+    "overlay_intensity": "absent",
+    "interaction": "single_turn",
+    "interface": "clean_prose",
+    "task": "waitlist",
+    "counterparty": "first_time"
+  },
+  "sub_goals": [
+    "waitlist_added"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

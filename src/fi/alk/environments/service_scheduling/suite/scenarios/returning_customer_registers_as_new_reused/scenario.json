@@ -1,0 +1,78 @@
+{
+  "name": "returning_customer_registers_as_new_reused",
+  "scenario_key": "returning-customer-registers-as-new-reused",
+  "scenario_id": "",
+  "use_case": "New and returning customers and their preferences",
+  "branch": "A returning customer believes she is new and asks to register; create_customer is refused because the email exists on file, so the agent looks up and reuses her profile",
+  "tests": "the agent attempts registration, handles the email conflict refusal, and looks up the existing customer profile",
+  "instruction": "You think you are a first-time customer and ask to register an account with Northlight Studios. Provide your details (name Ana Morales, email ana.morales@example.com, phone +1 212 555 0101).\n\nYour details:\n- Name: Ana Morales\n- Email: ana.morales@example.com\n- Phone: +1 212 555 0101",
+  "keywords": [
+    "customer"
+  ],
+  "persona": {
+    "name": "Ana S. Morales",
+    "gender": "",
+    "age_group": "",
+    "occupation": "",
+    "location": "United Kingdom",
+    "personality": "Friendly and cooperative",
+    "communication_style": "Casual and friendly",
+    "initial_message": "Hi! I think this is my first time booking with Northlight Studios. Can you register me? My name is Ana Morales, email is ana.morales@example.com, and phone is +1 212 555 0101.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "email": "ana.morales@example.com",
+    "customer_id": "CU01",
+    "origin": "seed"
+  },
+  "solution": [
+    {
+      "tool": "create_customer",
+      "arguments": {
+        "preferred_language": "es",
+        "name": "Ana Morales",
+        "phone": "+1 212 555 0101",
+        "time_zone": "America/New_York",
+        "email": "ana.morales@example.com"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_customer",
+      "arguments": {
+        "phone": "+1 212 555 0101",
+        "email": "ana.morales@example.com"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "interface": "clean_prose",
+    "interaction": "single_request",
+    "disposition": "claims_first_time",
+    "overlay_intensity": "absent",
+    "task": "returning_customer",
+    "counterparty": "returning_customer",
+    "overlay": "none",
+    "overlay_vector": "none"
+  },
+  "sub_goals": [
+    "customer_created_or_reused"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

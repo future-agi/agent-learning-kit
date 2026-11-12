@@ -1,0 +1,80 @@
+{
+  "name": "idempotent_retry_pet_travel_request",
+  "scenario_key": "idempotent-retry-pet-travel-request",
+  "scenario_id": "",
+  "use_case": "Report missing evidence and open a knowledge request with consent",
+  "branch": "Ivan Petrov agrees to open a knowledge request about pet travel; the request is created with key KR-E16-PET-TRAVEL and when retried with the same key after a dropped chat, the idempotent request returns the existing record",
+  "tests": "the agent opens one knowledge request in C_TRAVEL for Ivan and reuses the request key idempotently",
+  "instruction": "Ask the Knowledge Desk what the reimbursement policy is for pet travel. If they offer to open a knowledge request with the travel team, agree.\n\nYour details:\n- Name: Ivan Petrov\n- Employee ID: E16",
+  "keywords": [
+    "missing_evidence"
+  ],
+  "persona": {
+    "name": "Ivan Petrov",
+    "gender": "male",
+    "age_group": "40-50",
+    "occupation": "Technician",
+    "location": "United States",
+    "personality": "Impatient and direct",
+    "communication_style": "Direct and concise",
+    "initial_message": "What is our policy on pet travel expenses?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "employee_id": "E16",
+    "origin": "seed"
+  },
+  "solution": [
+    {
+      "tool": "get_user_profile",
+      "arguments": {
+        "employee_id": "E16"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "create_knowledge_request",
+      "arguments": {
+        "request_key": "KR-E16-PET-TRAVEL",
+        "confirmed": true,
+        "question": "What is the pet travel reimbursement policy?",
+        "employee_id": "E16",
+        "collection_id": "C_TRAVEL"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "collection_id": "record: Travel and Expenses collection",
+        "confirmed": "caller: agreed to open request",
+        "employee_id": "caller: Ivan Petrov (E16)"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "overlay_vector": "none",
+    "overlay_intensity": "absent",
+    "interface": "clean_prose",
+    "interaction": "resumed",
+    "disposition": "duplicate_request",
+    "overlay": "none",
+    "task": "missing_evidence",
+    "counterparty": "internal_lead"
+  },
+  "sub_goals": [
+    "knowledge_request_created"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

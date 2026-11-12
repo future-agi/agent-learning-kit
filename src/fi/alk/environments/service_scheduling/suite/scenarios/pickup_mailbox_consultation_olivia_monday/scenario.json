@@ -1,0 +1,120 @@
+{
+  "name": "pickup_mailbox_consultation_olivia_monday",
+  "scenario_key": "pickup-mailbox-consultation-olivia-monday",
+  "scenario_id": "",
+  "use_case": "Book an appointment by service, staff, language, location and time zone",
+  "branch": "agent picks up email booking request th_s12_booking_request_emma and books Olivia for a consultation on Monday 2 November at 10:00",
+  "tests": "the agent reads email thread th_s12_booking_request_emma and books Olivia for Hannah Schmidt on 2 November 10:00",
+  "instruction": "You are Hannah Schmidt. You previously sent an email (thread th_s12_booking_request_emma) requesting a consultation with Olivia on Monday 2 November at 10:00 am. You follow up in chat across two quick messages asking the desk to review the thread and book the consultation for you.\n\nYour details:\n- Name: Hannah Schmidt\n- Email: hannah.schmidt@example.com\n- Phone: +1 212 555 0419\n- Service: Initial Consultation (SV1)\n- Staff: Olivia Bennett (ST01)\n- Location: Midtown Studio (L1)\n- Date and time: Monday 2 November 2026 at 10:00 am (2026-11-02T10:00)\n- Time zone: America/New_York (-05:00)",
+  "keywords": [
+    "book_appointment",
+    "mailbox_request",
+    "consultation"
+  ],
+  "persona": {
+    "name": "Hannah Schmidt",
+    "gender": "female",
+    "age_group": "32-40",
+    "occupation": "Teacher",
+    "location": "Australia",
+    "personality": "Friendly and cooperative",
+    "communication_style": "Direct and concise",
+    "initial_message": "Hi, I sent an email regarding my booking request (thread th_s12_booking_request_emma). Could you check it and book the consultation with Olivia on Monday Nov 2 at 10 am?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "customer_id": "CU419",
+    "thread_id": "th_s12_booking_request_emma",
+    "location_id": "L1",
+    "origin": "mixed",
+    "email": "hannah.schmidt@example.com",
+    "staff_id": "ST01",
+    "name": "Hannah Schmidt",
+    "service_id": "SV1",
+    "time": "2026-11-02T10:00",
+    "phone": "+1 212 555 0419"
+  },
+  "solution": [
+    {
+      "tool": "get_thread",
+      "arguments": {
+        "messageFormat": "FULL_CONTENT",
+        "threadId": "th_s12_booking_request_emma"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "threadId": "record: th_s12_booking_request_emma"
+      }
+    },
+    {
+      "tool": "get_customer",
+      "arguments": {
+        "phone": "+1 212 555 0419",
+        "email": "hannah.schmidt@example.com"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "list_slots",
+      "arguments": {
+        "date": "2026-11-02",
+        "staff_id": "ST01",
+        "location_id": "L1",
+        "service_id": "SV1"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "book_appointment",
+      "arguments": {
+        "customer_id": "CU419",
+        "start_time": "2026-11-02T10:00",
+        "service_id": "SV1",
+        "request_key": "REQ-TH12-BOOK",
+        "location_id": "L1",
+        "confirmed": true,
+        "utc_offset": "-05:00",
+        "staff_id": "ST01"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "location_id": "record: L1",
+        "start_time": "caller: 2026-11-02T10:00",
+        "service_id": "record: SV1",
+        "utc_offset": "caller: -05:00",
+        "customer_id": "record: CU419",
+        "staff_id": "record: ST01"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "disposition": "mailbox_request",
+    "interaction": "multi_turn",
+    "overlay": "none",
+    "interface": "split_message",
+    "task": "book_appointment",
+    "counterparty": "returning_customer",
+    "overlay_vector": "none",
+    "overlay_intensity": "absent"
+  },
+  "sub_goals": [
+    "appointment_booked_as_confirmed",
+    "timezone_and_instant_confirmed"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

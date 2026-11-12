@@ -1,0 +1,93 @@
+{
+  "name": "slack_northwind_status_reply",
+  "scenario_key": "slack-northwind-status-reply",
+  "scenario_id": "",
+  "use_case": "Post an approved handoff summary in Slack",
+  "branch": "Jordan Ellis asked in SM03 whether Northwind is his; after Dana Whitfield approves APP-SH-402, the desk replies in SM03's thread that L01 is new and not yet routed",
+  "tests": "the desk reads Jordan's message SM03, checks lead L01, and posts in SM03's thread with approval APP-SH-402",
+  "instruction": "You are Ben Okoro, sales operations at BrightDesk. You want to get a reply posted to Jordan Ellis's question in #sales-handoffs regarding whether the Northwind Support lead (L01) is assigned to him. Dana Whitfield has provided approval APP-SH-402 for posting. If the agent needs details or clarification, confirm that approval APP-SH-402 is approved for #sales-handoffs to reply to Jordan's thread.\n\nYour details:\n- Name: Ben Okoro\n- Channel: #sales-handoffs (CH_SALESHANDOFF)\n- Rep asking: Jordan Ellis (U_A01)\n- Lead: Northwind Support Co (L01)\n- Approval ID: APP-SH-402",
+  "keywords": [
+    "slack_handoff"
+  ],
+  "persona": {
+    "name": "Ben Okoro",
+    "gender": "male",
+    "age_group": "32-40",
+    "occupation": "Customer Service",
+    "location": "United States",
+    "personality": "Professional and formal",
+    "communication_style": "Direct and concise",
+    "initial_message": "Can you reply to Jordan's message in #sales-handoffs about Northwind? Dana approved it with APP-SH-402.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "origin": "mixed",
+    "lead_id": "L01",
+    "message_id": "SM03",
+    "approval_id": "APP-SH-402",
+    "channel_id": "CH_SALESHANDOFF"
+  },
+  "solution": [
+    {
+      "tool": "slack_read_thread",
+      "arguments": {
+        "channel_id": "CH_SALESHANDOFF",
+        "message_ts": "1794232800.000003"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "channel_id": "record: #sales-handoffs",
+        "message_ts": "record: Jordan's message SM03"
+      }
+    },
+    {
+      "tool": "get_lead",
+      "arguments": {
+        "lead_id": "L01"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "slack_send_message",
+      "arguments": {
+        "approval_id": "APP-SH-402",
+        "channel_id": "CH_SALESHANDOFF",
+        "thread_ts": "1794232800.000003",
+        "message": "Northwind Support Co (L01) is currently status new and has not yet been routed."
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "channel_id": "record: #sales-handoffs",
+        "thread_ts": "record: Jordan's thread"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "overlay_intensity": "absent",
+    "overlay_vector": "none",
+    "disposition": "channel_query",
+    "interaction": "multi_turn",
+    "task": "slack_handoff",
+    "interface": "slack_thread",
+    "counterparty": "colleague",
+    "overlay": "none"
+  },
+  "sub_goals": [
+    "handoff_posted_in_thread"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

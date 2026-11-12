@@ -1,0 +1,98 @@
+{
+  "name": "v11_s04_conflicting_client_dinner_caps",
+  "scenario_key": "v11-s04-conflicting-client-dinner-caps",
+  "scenario_id": "",
+  "use_case": "Report conflicting current sources without choosing one",
+  "branch": "Lucas Martin asks which client dinner cap applies; the Client Entertainment Guidelines ($100) and the Sales Hospitality Standard ($150) are both in effect from 2026-07-01 and no precedence is configured",
+  "tests": "the agent cites both documents, checks precedence, says none is configured, does not pick one, and routes the question to the owners",
+  "instruction": "You are taking a client to dinner and found two documents with different per-person limits. Ask the Knowledge Desk which cap you should use.\n\nYour details:\n- Name: Lucas Martin\n- Employee ID: E14",
+  "keywords": [
+    "conflict",
+    "precedence"
+  ],
+  "persona": {
+    "name": "Lucas Martin",
+    "gender": "male",
+    "age_group": "32-40",
+    "occupation": "Sales Representative",
+    "location": "Canada",
+    "personality": "Confident",
+    "communication_style": "Direct and concise",
+    "initial_message": "For a client dinner, which per-person cap do I use? I've seen two different numbers.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "origin": "seed",
+    "employee_id": "E14"
+  },
+  "solution": [
+    {
+      "tool": "get_user_profile",
+      "arguments": {
+        "employee_id": "E14"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "fetch_passage",
+      "arguments": {
+        "employee_id": "E14",
+        "passage_id": "P-CLIENTENTV1-01"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "passage_id": "record: Client Entertainment Guidelines, section 1"
+      }
+    },
+    {
+      "tool": "fetch_passage",
+      "arguments": {
+        "employee_id": "E14",
+        "passage_id": "P-SALESHOSPV1-01"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "passage_id": "record: Sales Hospitality Standard, section 1"
+      }
+    },
+    {
+      "tool": "get_precedence_rules",
+      "arguments": {
+        "employee_id": "E14",
+        "family": "client_entertainment",
+        "other_family": "sales_hospitality"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "task": "conflict",
+    "disposition": "ambiguous_request",
+    "interaction": "multi_turn",
+    "counterparty": "standard_employee",
+    "interface": "clean_prose",
+    "overlay": "none",
+    "overlay_vector": "none",
+    "overlay_intensity": "absent"
+  },
+  "sub_goals": [
+    "conflict_reported",
+    "citation_quality"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

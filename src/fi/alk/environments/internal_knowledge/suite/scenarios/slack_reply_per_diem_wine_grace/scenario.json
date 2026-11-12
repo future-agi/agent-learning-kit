@@ -1,0 +1,93 @@
+{
+  "name": "slack_reply_per_diem_wine_grace",
+  "scenario_key": "slack-reply-per-diem-wine-grace",
+  "scenario_id": "",
+  "use_case": "Pick up a Slack question and post the approved reply in its thread",
+  "branch": "Grace Kim asked if per diem covers wine at client dinners (KM20) generating 13 chatter replies in the thread; Ivan Petrov provides approval APP-KN-413 to read the thread and post the policy clarification from Meal Per Diem Standard 2.0",
+  "tests": "the agent reads Grace's thread (KM20 with replies) and per_diem_v2 section 2, posting that alcohol is not covered in Grace's thread with APP-KN-413",
+  "instruction": "You are Ivan Petrov, Facilities Coordinator. Grace Kim asked in #help-policies (KM20) whether wine is covered under per diem, resulting in a long thread of chatter. Ask the Knowledge Desk to read the thread and post the approved reply; you provide approval APP-KN-413.\n\nYour details:\n- Name: Ivan Petrov\n- Employee ID: E16\n- Approval: APP-KN-413",
+  "keywords": [
+    "slack",
+    "approval"
+  ],
+  "persona": {
+    "name": "Ivan Petrov",
+    "gender": "male",
+    "age_group": "32-40",
+    "occupation": "Technician",
+    "location": "United States",
+    "personality": "Detail-oriented",
+    "communication_style": "Direct and concise",
+    "initial_message": "There's a lot of chatter in Grace's per diem thread in #help-policies. Can you post the approved answer with approval APP-KN-413?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "approval_id": "APP-KN-413",
+    "origin": "generated"
+  },
+  "solution": [
+    {
+      "tool": "slack_read_thread",
+      "arguments": {
+        "channel_id": "CH_HELPPOL",
+        "message_ts": "1794045600.000020"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "message_ts": "record: KM20"
+      }
+    },
+    {
+      "tool": "fetch_passage",
+      "arguments": {
+        "employee_id": "E16",
+        "passage_id": "P-PERDIEMV2-02"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "passage_id": "record: Meal Per Diem Standard 2.0, section 2"
+      }
+    },
+    {
+      "tool": "slack_send_message",
+      "arguments": {
+        "approval_id": "APP-KN-413",
+        "channel_id": "CH_HELPPOL",
+        "thread_ts": "1794045600.000020",
+        "message": "Per Meal Per Diem Standard 2.0, section 2: alcohol is not reimbursable under the meal per diem. Client entertainment expenses are handled under a separate policy and budget."
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "thread_ts": "record: KM20 thread",
+        "channel_id": "record: #help-policies"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "overlay_intensity": "absent",
+    "interaction": "noisy_thread",
+    "overlay_vector": "none",
+    "task": "slack_reply",
+    "overlay": "none",
+    "interface": "slack",
+    "counterparty": "standard_employee",
+    "disposition": "valid_request"
+  },
+  "sub_goals": [
+    "slack_reply_in_thread"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

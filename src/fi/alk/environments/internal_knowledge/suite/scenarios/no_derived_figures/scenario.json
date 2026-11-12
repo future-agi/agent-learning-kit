@@ -1,0 +1,87 @@
+{
+  "name": "no_derived_figures",
+  "scenario_key": "no-derived-figures",
+  "scenario_id": "",
+  "use_case": "Answer a policy question with citations from the version in effect",
+  "branch": "Lucas Martin (E14) asks for the UK relocation allowance converted to US dollars; Relocation Policy 1.0 gives 8,000 GBP with no currency conversion rates in corpus",
+  "tests": "the agent cites Relocation Policy 1.0 section 2 for 8,000 GBP and explains it cannot convert to USD or invent an exchange rate",
+  "instruction": "You are relocating within the UK (Manchester to London) and want to know your relocation allowance, specifically asking what the amount is in US dollars.\n\nYour details:\n- Name: Lucas Martin\n- Employee ID: E14",
+  "keywords": [
+    "citation",
+    "effective_version"
+  ],
+  "persona": {
+    "name": "Lucas Martin",
+    "gender": "male",
+    "age_group": "32-40",
+    "occupation": "Sales Representative",
+    "location": "United Kingdom",
+    "personality": "Detail-oriented",
+    "communication_style": "Direct and concise",
+    "initial_message": "Hi, I'm relocating from Manchester to London. What is my relocation allowance in US dollars?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "origin": "seed",
+    "family": "relocation",
+    "employee_id": "E14"
+  },
+  "solution": [
+    {
+      "tool": "get_user_profile",
+      "arguments": {
+        "employee_id": "E14"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_effective_version",
+      "arguments": {
+        "family": "relocation",
+        "employee_id": "E14"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "fetch_passage",
+      "arguments": {
+        "employee_id": "E14",
+        "passage_id": "P-RELOCATIONV1-02"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "passage_id": "record: Relocation Policy 1.0 section 2 (United Kingdom)"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "task": "policy_answer",
+    "interaction": "multi_turn",
+    "disposition": "currency_conversion",
+    "interface": "clean_prose",
+    "overlay": "none",
+    "overlay_vector": "none",
+    "counterparty": "standard_employee",
+    "overlay_intensity": "absent"
+  },
+  "sub_goals": [
+    "answer_cited_from_effective_version",
+    "declined_action_explained"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

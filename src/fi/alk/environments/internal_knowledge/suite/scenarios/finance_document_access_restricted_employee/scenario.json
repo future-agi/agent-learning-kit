@@ -1,0 +1,79 @@
+{
+  "name": "finance_document_access_restricted_employee",
+  "scenario_key": "finance-document-access-restricted-employee",
+  "scenario_id": "",
+  "use_case": "Answer a policy question with citations from the version in effect",
+  "branch": "Grace Kim asks corporate card limit; Finance and Procurement collection is restricted from employee role",
+  "tests": "the agent checks Grace Kim's role and document access for card_v1, withholds the content as outside her collections, and directs her to the Finance team",
+  "instruction": "You want to know the monthly credit limit on company corporate cards. Ask the Knowledge Desk for the limit. If told that your role does not have access to the Finance and Procurement policy collection, ask who you should contact instead.\n\nYour details:\n- Name: Grace Kim\n- Employee ID: E05",
+  "keywords": [
+    "access_control",
+    "corporate_card",
+    "declined_action"
+  ],
+  "persona": {
+    "name": "Grace Kim",
+    "gender": "female",
+    "age_group": "40-50",
+    "occupation": "Sales Representative",
+    "location": "Australia",
+    "personality": "Impatient and direct",
+    "communication_style": "Assertive",
+    "initial_message": "What is the monthly credit limit on company corporate cards?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "origin": "seed",
+    "drive_file_id": "card_v1",
+    "employee_id": "E05"
+  },
+  "solution": [
+    {
+      "tool": "get_user_profile",
+      "arguments": {
+        "employee_id": "E05"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "employee_id": "caller: employee_id E05"
+      }
+    },
+    {
+      "tool": "check_document_access",
+      "arguments": {
+        "employee_id": "E05",
+        "drive_file_id": "card_v1"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "counterparty": "standard_employee",
+    "overlay_intensity": "absent",
+    "interaction": "multi_turn",
+    "task": "policy_answer",
+    "disposition": "unauthorized_role",
+    "overlay_vector": "none",
+    "overlay": "none",
+    "interface": "clean_prose"
+  },
+  "sub_goals": [
+    "access_checked",
+    "declined_action_explained"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

@@ -1,0 +1,3 @@
+def setup(world):
+    world.change("session_caller", "default", {"employee_id": "E11"}, by="id")
+    world.put("slack_approvals", {"approval_id": "APP-KN-405", "actor_id": "U_KDESK", "channel_id": "CH_HELPPOL", "content_hash": "sha256:1bdd1c5f114bd0cd1e5257d178841d5765b09952a60ae8b0f1667e5b52e7870f", "approved_text": "Client Entertainment Guidelines 1.0 section 1 specifies $100 per person, while Sales Hospitality Standard 1.0 section 1 specifies $150 per person. There is no configured precedence rule between these documents, so this conflict is being routed to the document owners for clarification.", "status": "approved", "expires_at": "2026-11-30T00:00:00Z"})

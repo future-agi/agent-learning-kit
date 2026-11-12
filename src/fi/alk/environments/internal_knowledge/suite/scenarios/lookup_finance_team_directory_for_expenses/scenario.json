@@ -1,0 +1,83 @@
+{
+  "name": "lookup_finance_team_directory_for_expenses",
+  "scenario_key": "lookup-finance-team-directory-for-expenses",
+  "scenario_id": "",
+  "use_case": "Flag a document problem to its owner",
+  "branch": "Sam Taylor asks who in Finance handles expense receipts and travel questions; the agent consults the Finance team directory and reports the owner of receipts_v2",
+  "tests": "the agent reads the Finance team directory and receipts_v2 owner to answer Sam",
+  "instruction": "You have questions about submitting travel expenses and receipts. Ask the Knowledge Desk who in the Finance team handles expense receipts.\n\nYour details:\n- Name: Sam Taylor\n- Employee ID: E20",
+  "keywords": [
+    "owner"
+  ],
+  "persona": {
+    "name": "Sam Taylor",
+    "gender": "male",
+    "age_group": "18-25",
+    "occupation": "Sales Representative",
+    "location": "United Kingdom",
+    "personality": "Friendly and cooperative",
+    "communication_style": "Casual and friendly",
+    "initial_message": "Who in Finance handles travel expense receipts?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "origin": "seed",
+    "employee_id": "E20",
+    "team_id": "T_FIN",
+    "drive_file_id": "receipts_v2"
+  },
+  "solution": [
+    {
+      "tool": "get_user_profile",
+      "arguments": {
+        "employee_id": "E20"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_team_directory",
+      "arguments": {
+        "team_id": "T_FIN"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_document_owner",
+      "arguments": {
+        "drive_file_id": "receipts_v2",
+        "employee_id": "E20"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "overlay": "none",
+    "task": "issue_flagging",
+    "disposition": "missing_information",
+    "overlay_intensity": "absent",
+    "overlay_vector": "none",
+    "interaction": "single_turn",
+    "interface": "clean_prose",
+    "counterparty": "finance"
+  },
+  "sub_goals": [
+    "owner_identified"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

@@ -1,0 +1,106 @@
+{
+  "name": "v17_s01_qualified_inbound_lead_demo_offered",
+  "scenario_key": "v17-s01-qualified-inbound-lead-demo-offered",
+  "scenario_id": "",
+  "use_case": "Qualify an inbound enquiry against the rubric",
+  "branch": "Samira Holt of Northwind Support Co (L01, United States, 40 support seats, live within three months) asks for a demo; the lead meets the rubric, goes to the US owner A01, and the owner's open slots are offered",
+  "tests": "the agent qualifies L01 on the rubric with the facts on file, assigns it to A01 by territory, and offers A01's open demo slots without booking one",
+  "instruction": "You lead customer support at Northwind Support Co in the United States and filled in BrightDesk's web form last week. You want a demo for your team. If asked: 40 support agents, you want to go live within three months, budget not confirmed yet. When you are offered demo times, say you will check with your team and come back; do not pick one yet.\n\nYour details:\n- Name: Samira Holt\n- Email: samira.holt@northwind-support.example\n- Company: Northwind Support Co\n- Country: United States\n- Lead reference: L01",
+  "keywords": [
+    "qualification",
+    "routing",
+    "workbook"
+  ],
+  "persona": {
+    "name": "Samira Holt",
+    "gender": "female",
+    "age_group": "32-40",
+    "occupation": "Head of Support",
+    "location": "United States",
+    "personality": "Professional and formal",
+    "communication_style": "Direct and concise",
+    "initial_message": "Hi, please arrange a demo of BrightDesk for our support team.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "lead_id": "L01",
+    "rep_id": "A01",
+    "origin": "seed"
+  },
+  "solution": [
+    {
+      "tool": "get_lead",
+      "arguments": {
+        "lead_id": "L01"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_icp_rules",
+      "arguments": {},
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "qualify_lead",
+      "arguments": {
+        "lead_id": "L01",
+        "facts": {}
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "lead_id": "record: Northwind's lead L01"
+      }
+    },
+    {
+      "tool": "assign_owner",
+      "arguments": {
+        "lead_id": "L01",
+        "rep_id": "A01"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "lead_id": "record: L01",
+        "rep_id": "rule: United States is A01's territory"
+      }
+    },
+    {
+      "tool": "list_demo_slots",
+      "arguments": {
+        "rep_id": "A01"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "task": "qualify_lead",
+    "disposition": "eligible",
+    "interaction": "multi_turn",
+    "counterparty": "prospect",
+    "interface": "clean_prose",
+    "overlay": "none",
+    "overlay_vector": "none",
+    "overlay_intensity": "absent"
+  },
+  "sub_goals": [
+    "lead_qualified_by_rubric",
+    "owner_assigned_by_territory",
+    "demo_time_in_prospect_timezone"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

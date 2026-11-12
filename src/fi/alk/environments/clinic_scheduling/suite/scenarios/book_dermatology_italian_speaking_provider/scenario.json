@@ -1,0 +1,97 @@
+{
+  "name": "book_dermatology_italian_speaking_provider",
+  "scenario_key": "book-dermatology-italian-speaking-provider",
+  "scenario_id": "",
+  "use_case": "Book a new appointment",
+  "branch": "P131 wants a dermatologist who speaks Italian; get_provider_directory with language Italian finds Dr. Sofia Morales, then books her Thursday 29 October 13:00 slot.",
+  "tests": "the agent verifies Alessia DeLuca, looks up Italian-speaking dermatology providers, and books Dr. Sofia Morales for Thursday 29 October at 13:00",
+  "instruction": "You need to see a dermatologist who speaks Italian. Ask the assistant to find an Italian-speaking dermatologist and book an appointment with them. When Dr. Sofia Morales is identified and slots are offered, select Thursday 29 October at 13:00 at Riverbank Central and confirm the booking.\n\nYour details:\n- Full name: Alessia DeLuca\n- Date of birth: 1996-06-06\n- Email: alessia.deluca@example.com\n- Phone: +447700900131\n- Insurance: Vitality (member VT-300128)",
+  "keywords": [
+    "book_appointment",
+    "dermatology",
+    "language_preference",
+    "italian"
+  ],
+  "persona": {
+    "name": "Alessia DeLuca",
+    "gender": "female",
+    "age_group": "25-32",
+    "occupation": "Marketing Professional",
+    "location": "United States",
+    "personality": "Friendly and cooperative",
+    "communication_style": "Detailed and elaborate",
+    "initial_message": "Hi, I need to see a dermatologist who speaks Italian. Can you help me find someone and book?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "origin": "generated",
+    "full_name": "Alessia DeLuca",
+    "dob": "1996-06-06",
+    "patient_id": "P131"
+  },
+  "solution": [
+    {
+      "tool": "verify_patient",
+      "arguments": {
+        "dob": "1996-06-06",
+        "full_name": "Alessia DeLuca"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_provider_directory",
+      "arguments": {
+        "specialty": "dermatology",
+        "language": "Italian"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "find_available_slots",
+      "arguments": {
+        "patient_id": "P131",
+        "date_to": "2026-11-06",
+        "provider_id": "D03",
+        "date_from": "2026-10-26"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "book_appointment",
+      "arguments": {
+        "slot_id": "SL-D03-20261029-1300",
+        "reason": "Skin consultation in Italian",
+        "confirmed": true,
+        "self_pay": false,
+        "patient_id": "P131",
+        "request_key": "req-p131-d03-1029"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "patient_id": "record: patients.patient_id P131",
+        "slot_id": "the slot the patient confirmed"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {},
+  "sub_goals": [
+    "appointment_booked_as_confirmed"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

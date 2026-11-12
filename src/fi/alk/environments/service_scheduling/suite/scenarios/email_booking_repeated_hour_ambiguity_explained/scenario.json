@@ -1,0 +1,82 @@
+{
+  "name": "email_booking_repeated_hour_ambiguity_explained",
+  "scenario_key": "email-booking-repeated-hour-ambiguity-explained",
+  "scenario_id": "",
+  "use_case": "Concurrency, clock changes and failures",
+  "branch": "An email thread th_s405 asks to book 1:30 am on Sunday 1 November in New York; the agent checks the thread and location, notices the ambiguous DST transition hour and Sunday closure, explains without booking.",
+  "tests": "the agent checks the customer's email request and studio hours, notices the ambiguous DST transition time, and commits nothing",
+  "instruction": "You sent an email to Northlight Studios asking to book a haircut with Marcus Hale at Midtown at 1:30 am on Sunday 1 November. You are following up on your email thread th_s405. If the agent explains that 1:30 am is ambiguous due to daylight saving time ending and the studio is closed on Sundays, acknowledge and ask for regular studio hours.\n\nYour details:\n- Name: Siddharth Rao\n- Email: siddharth.rao@example.com\n- Phone: +91 98200 00408\n- Thread ID: th_s405\n- Studio: Midtown (L1)",
+  "keywords": [
+    "email",
+    "dst",
+    "ambiguity",
+    "midtown",
+    "thread"
+  ],
+  "persona": {
+    "name": "Siddharth Rao",
+    "gender": "male",
+    "age_group": "25-32",
+    "occupation": "Consultant",
+    "location": "India",
+    "personality": "Detail-oriented",
+    "communication_style": "Detailed and elaborate",
+    "initial_message": "Hello, I sent an email regarding booking a haircut with Marcus at Midtown at 1:30 am on Sunday Nov 1 (thread th_s405). Can you look into it?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "email": "siddharth.rao@example.com",
+    "customer_id": "CU408",
+    "location_id": "L1",
+    "origin": "generated",
+    "thread_id": "th_s405"
+  },
+  "solution": [
+    {
+      "tool": "get_thread",
+      "arguments": {
+        "messageFormat": "FULL_CONTENT",
+        "threadId": "th_s405"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_location",
+      "arguments": {
+        "location_id": "L1"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "location_id": "caller: L1"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "task": "concurrency",
+    "overlay_intensity": "absent",
+    "interaction": "multi_turn",
+    "overlay_vector": "none",
+    "counterparty": "individual_customer",
+    "disposition": "repeated_hour",
+    "interface": "email_thread",
+    "overlay": "none"
+  },
+  "sub_goals": [
+    "ambiguous_time_not_committed"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

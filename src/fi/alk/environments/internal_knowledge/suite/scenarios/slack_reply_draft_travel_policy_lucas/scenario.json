@@ -1,0 +1,93 @@
+{
+  "name": "slack_reply_draft_travel_policy_lucas",
+  "scenario_key": "slack-reply-draft-travel-policy-lucas",
+  "scenario_id": "",
+  "use_case": "Pick up a Slack question and post the approved reply in its thread",
+  "branch": "Lucas Martin asked in #help-policies if he can book hotels at the $250 rate from the 2027 draft (KM18); Marcus Lee provides approval APP-KN-411 to reply in his thread confirming the draft is not in effect and citing Travel Policy 3.0 ($220)",
+  "tests": "the agent reads Lucas's thread (KM18) and trv_policy_v3 section 2, posting in Lucas's thread with APP-KN-411 that the draft is not in effect and the current rate is $220",
+  "instruction": "You are Marcus Lee, Engineering Manager. Lucas Martin asked in #help-policies whether he can book hotels under the 2027 travel policy draft ($250). Ask the Knowledge Desk to post the approved reply in his thread explaining the draft is not in effect and providing the current rate; you provide approval APP-KN-411.\n\nYour details:\n- Name: Marcus Lee\n- Employee ID: E02\n- Approval: APP-KN-411",
+  "keywords": [
+    "slack",
+    "approval"
+  ],
+  "persona": {
+    "name": "Marcus Lee",
+    "gender": "male",
+    "age_group": "40-50",
+    "occupation": "Manager",
+    "location": "United Kingdom",
+    "personality": "Professional and formal",
+    "communication_style": "Direct and concise",
+    "initial_message": "Can you post the approved answer to Lucas's question in #help-policies about the 2027 draft travel policy using approval APP-KN-411?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "approval_id": "APP-KN-411",
+    "origin": "generated"
+  },
+  "solution": [
+    {
+      "tool": "slack_read_thread",
+      "arguments": {
+        "channel_id": "CH_HELPPOL",
+        "message_ts": "1793966400.000018"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "message_ts": "record: KM18"
+      }
+    },
+    {
+      "tool": "fetch_passage",
+      "arguments": {
+        "passage_id": "P-TRVPOLICYV3-02",
+        "employee_id": "E02"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "passage_id": "record: Travel Policy 3.0, section 2"
+      }
+    },
+    {
+      "tool": "slack_send_message",
+      "arguments": {
+        "message": "The 2027 Travel Policy (v4.0) with $250 hotel reimbursement is a draft and is not in effect. The version in effect is Travel Policy 3.0, section 2, which reimburses US hotel stays up to $220 per night.",
+        "channel_id": "CH_HELPPOL",
+        "thread_ts": "1793966400.000018",
+        "approval_id": "APP-KN-411"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "thread_ts": "record: KM18 thread",
+        "channel_id": "record: #help-policies"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "counterparty": "manager",
+    "overlay_intensity": "absent",
+    "interaction": "multi_turn",
+    "overlay_vector": "none",
+    "disposition": "draft_version_cited",
+    "overlay": "none",
+    "interface": "slack",
+    "task": "slack_reply"
+  },
+  "sub_goals": [
+    "slack_reply_in_thread"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

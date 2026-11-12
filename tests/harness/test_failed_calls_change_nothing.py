@@ -21,7 +21,16 @@ from fi.alk.harness.folder import read_folder
 from fi.alk.harness.prove import _run, play_reference_step
 from fi.alk.harness.releases import WORLD
 
-VERTICALS = ("retail", "hr", "internal_it", "saas_subscriptions")
+VERTICALS = (
+    "retail",
+    "hr",
+    "internal_it",
+    "saas_subscriptions",
+    "clinic_scheduling",
+    "service_scheduling",
+    "sales_intake",
+    "internal_knowledge",
+)
 WRITES = ("INSERT", "UPDATE", "DELETE")
 
 

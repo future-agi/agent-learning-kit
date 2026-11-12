@@ -1,0 +1,103 @@
+{
+  "name": "slack_reply_software_security_threshold_sam",
+  "scenario_key": "slack-reply-software-security-threshold-sam",
+  "scenario_id": "",
+  "use_case": "Pick up a Slack question and post the approved reply in its thread",
+  "branch": "Sam Taylor asked in #help-policies whether software over $1,500 needs security review (KM19); Maya Patel provides approval APP-KN-412 to post the approved reply applying precedence rule PR-01 and Software Standards 1.0 ($1,000 threshold)",
+  "tests": "the agent reads Sam's thread (KM19), sw_std_v1, checks precedence, and posts in Sam's thread with APP-KN-412 that $1,500 needs review under the $1,000 threshold",
+  "instruction": "You are Maya Patel, QA Engineer. Sam Taylor asked in #help-policies whether software over $1,500 needs a security review since Procurement and Software standards differ. Ask the Knowledge Desk to post the approved reply in his thread applying the precedence rule; you provide approval APP-KN-412.\n\nYour details:\n- Name: Maya Patel\n- Employee ID: E13\n- Approval: APP-KN-412",
+  "keywords": [
+    "slack",
+    "approval"
+  ],
+  "persona": {
+    "name": "Maya Patel",
+    "gender": "female",
+    "age_group": "25-32",
+    "occupation": "Engineer",
+    "location": "United Kingdom",
+    "personality": "Analytical",
+    "communication_style": "Technical",
+    "initial_message": "Please answer Sam's software security review question in #help-policies with approval APP-KN-412.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "approval_id": "APP-KN-412",
+    "origin": "generated"
+  },
+  "solution": [
+    {
+      "tool": "slack_read_thread",
+      "arguments": {
+        "message_ts": "1794042000.000019",
+        "channel_id": "CH_HELPPOL"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "message_ts": "record: KM19"
+      }
+    },
+    {
+      "tool": "fetch_passage",
+      "arguments": {
+        "employee_id": "E13",
+        "passage_id": "P-SWSTDV1-01"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "passage_id": "record: Software Approval Standard 1.0, section 1"
+      }
+    },
+    {
+      "tool": "get_precedence_rules",
+      "arguments": {
+        "employee_id": "E13",
+        "family": "software_approval",
+        "other_family": "procurement"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "slack_send_message",
+      "arguments": {
+        "approval_id": "APP-KN-412",
+        "message": "Under precedence rule PR-01, Software Approval Standard 1.0 section 1 prevails over the Procurement Policy: software purchases over $1,000 require an IT security review, so a $1,500 software purchase requires review.",
+        "channel_id": "CH_HELPPOL",
+        "thread_ts": "1794042000.000019"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "thread_ts": "record: KM19 thread",
+        "channel_id": "record: #help-policies"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "overlay_vector": "none",
+    "overlay_intensity": "absent",
+    "disposition": "conflict_present",
+    "task": "slack_reply",
+    "interface": "slack",
+    "interaction": "multi_turn",
+    "counterparty": "standard_employee",
+    "overlay": "none"
+  },
+  "sub_goals": [
+    "slack_reply_in_thread"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

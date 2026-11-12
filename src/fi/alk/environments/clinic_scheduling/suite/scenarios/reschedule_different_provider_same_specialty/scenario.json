@@ -1,0 +1,104 @@
+{
+  "name": "reschedule_different_provider_same_specialty",
+  "scenario_key": "reschedule-different-provider-same-specialty",
+  "scenario_id": "",
+  "use_case": "Reschedule and cancel",
+  "branch": "Aarav Raman moves A22 from Dr. Nguyen to Dr. Rohan Patel on Tuesday 3 November 15:30",
+  "tests": "the agent verifies Aarav Raman, finds slots for Dr. Patel, and moves A22 to SL-D02-20261103-1530",
+  "instruction": "You are Aarav Raman (born 1990-11-03). You have a primary care appointment A22 with Dr. Nguyen, but you would prefer to see Dr. Rohan Patel on Tuesday 3 November at 15:30 at Riverbank Central instead. Confirm when asked.\n\nYour details:\n- Full name: Aarav Raman\n- Date of birth: 1990-11-03\n- Current appointment: A22 (with Dr. Nguyen)\n- Target: Tuesday 3 November at 15:30 with Dr. Rohan Patel at Central",
+  "keywords": [
+    "reschedule",
+    "provider_change",
+    "calendar"
+  ],
+  "persona": {
+    "name": "Aarav Raman",
+    "gender": "male",
+    "age_group": "32-40",
+    "occupation": "Manager",
+    "location": "United Kingdom",
+    "personality": "Friendly and cooperative",
+    "communication_style": "Casual and friendly",
+    "initial_message": "Hello, could I move my primary care visit to Dr. Rohan Patel on Tuesday 3 November at 3:30 pm at Central?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "records": {
+      "appointment_id": "A22"
+    },
+    "identity": {
+      "patient_id": "P22",
+      "name": "Aarav Raman",
+      "dob": "1990-11-03"
+    },
+    "origin": "generated"
+  },
+  "solution": [
+    {
+      "tool": "verify_patient",
+      "arguments": {
+        "full_name": "Aarav Raman",
+        "dob": "1990-11-03"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "full_name": "caller: Aarav Raman",
+        "dob": "caller: 1990-11-03"
+      }
+    },
+    {
+      "tool": "find_available_slots",
+      "arguments": {
+        "date_to": "2026-11-03",
+        "provider_id": "D02",
+        "date_from": "2026-11-03",
+        "patient_id": "",
+        "specialty": "primary_care",
+        "location_id": ""
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "reschedule_appointment",
+      "arguments": {
+        "appointment_id": "A22",
+        "confirmed": true,
+        "new_slot_id": "SL-D02-20261103-1530",
+        "request_key": "req_resched_p22"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "appointment_id": "caller: A22",
+        "new_slot_id": "record: the slot the caller confirmed"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "interaction": "single_turn",
+    "interface": "clean_prose",
+    "task": "reschedule",
+    "overlay_intensity": "absent",
+    "counterparty": "first_time",
+    "disposition": "happy_path",
+    "overlay": "none",
+    "overlay_vector": "none"
+  },
+  "sub_goals": [
+    "appointment_rescheduled_atomically"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

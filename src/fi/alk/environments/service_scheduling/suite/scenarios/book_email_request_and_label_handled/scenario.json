@@ -1,0 +1,123 @@
+{
+  "name": "book_email_request_and_label_handled",
+  "scenario_key": "book-email-request-and-label-handled",
+  "scenario_id": "",
+  "use_case": "Pick up a booking request from the bookings mailbox",
+  "branch": "Front desk asks to book Ana Morales's email request (th_s01) for a Thursday 29 Oct 2 pm consultation with Lucia and apply the 'handled' label to the thread",
+  "tests": "the agent books the consultation requested in the email and labels the thread as handled",
+  "instruction": "You are on the front desk team. Ask the assistant to book Ana Morales's email request (thread th_s01_spanish_consultation) for an Initial Consultation with Lucia Fernandez at Midtown on Thursday 29 October 2026-10-29T14:00, and label the thread as handled.\n\nDetails you have:\n- Customer: Ana Morales\n- Email: ana.morales@example.com\n- Phone on file: +1 212 555 0101",
+  "keywords": [
+    "booking",
+    "consultation"
+  ],
+  "persona": {
+    "name": "Cameron Lee",
+    "gender": "",
+    "age_group": "",
+    "occupation": "Customer Service",
+    "location": "Canada",
+    "personality": "Professional and formal",
+    "communication_style": "Direct and concise",
+    "initial_message": "Please process Ana Morales's email request in thread th_s01_spanish_consultation: book her Thursday 29 October 2 pm consultation with Lucia at Midtown, and add the 'handled' label to her thread.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "origin": "seed",
+    "thread_id": "th_s01_spanish_consultation"
+  },
+  "solution": [
+    {
+      "tool": "get_thread",
+      "arguments": {
+        "threadId": "th_s01_spanish_consultation"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "threadId": "the email the request came in"
+      }
+    },
+    {
+      "tool": "get_customer",
+      "arguments": {
+        "email": "ana.morales@example.com",
+        "phone": "+1 212 555 0101"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "list_slots",
+      "arguments": {
+        "location_id": "L1",
+        "staff_id": "ST02",
+        "date": "2026-10-29",
+        "service_id": "SV1"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "book_appointment",
+      "arguments": {
+        "location_id": "L1",
+        "staff_id": "ST02",
+        "start_time": "2026-10-29T14:00",
+        "customer_id": "CU01",
+        "request_key": "REQ-CU01-SV1-1029",
+        "service_id": "SV1",
+        "confirmed": true
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "customer_id": "record: customers customer_id for CU01",
+        "service_id": "record: services service_id for Initial Consultation",
+        "location_id": "record: locations location_id for Midtown Studio",
+        "staff_id": "record: staff staff_id for Lucia Fernandez",
+        "start_time": "caller: 2026-10-29T14:00",
+        "confirmed": "caller: front desk instructs to book"
+      }
+    },
+    {
+      "tool": "label_thread",
+      "arguments": {
+        "labelIds": [
+          "handled"
+        ],
+        "threadId": "th_s01_spanish_consultation"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "threadId": "Ana Morales's thread",
+        "labelIds": "the label the desk asked for"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "overlay": "none",
+    "interface": "clean_prose",
+    "disposition": "label_thread",
+    "interaction": "multi_turn",
+    "overlay_intensity": "absent",
+    "task": "pickup_email_case",
+    "overlay_vector": "none",
+    "counterparty": "staff_member"
+  },
+  "sub_goals": [
+    "appointment_booked_as_confirmed",
+    "thread_labelled"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

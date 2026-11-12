@@ -1,0 +1,121 @@
+{
+  "name": "book_consultation_with_hold_first",
+  "scenario_key": "book-consultation-with-hold-first",
+  "scenario_id": "",
+  "use_case": "Book an appointment by service, staff, language, location and time zone",
+  "branch": "customer places a temporary hold on a consultation slot with Olivia and then confirms and books it",
+  "tests": "the agent holds the requested slot for the customer and completes the booking upon customer confirmation",
+  "instruction": "You want to place a temporary hold on an Initial Consultation slot with Olivia Bennett at Midtown on Thursday 5 November 2026 at 11:00 am. After the slot is held, you confirm that you want to go ahead and book it.\n\nYour details:\n- Name: Samuel Green\n- Email: samuel.green@example.com\n- Phone: +1 212 555 0410\n- Service: Initial Consultation\n- Staff: Olivia Bennett\n- Location: Midtown Studio (410 Lexington Ave)\n- Date and time: Thursday 5 November 2026 at 11:00 am (2026-11-05T11:00)\n- Time zone: America/New_York (-05:00)",
+  "keywords": [
+    "book_appointment",
+    "hold_slot",
+    "consultation"
+  ],
+  "persona": {
+    "name": "Samuel Green",
+    "gender": "male",
+    "age_group": "32-40",
+    "occupation": "Manager",
+    "location": "United Kingdom",
+    "personality": "Friendly and cooperative",
+    "communication_style": "Direct and concise",
+    "initial_message": "Hi, could you please place a hold on an Initial Consultation with Olivia at Midtown on Thursday November 5th at 11:00 am while I verify my calendar?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "origin": "mixed",
+    "email": "samuel.green@example.com",
+    "customer_id": "CU410",
+    "time": "2026-11-05T11:00",
+    "location_id": "L1",
+    "name": "Samuel Green",
+    "service_id": "SV1",
+    "phone": "+1 212 555 0410",
+    "staff_id": "ST01"
+  },
+  "solution": [
+    {
+      "tool": "get_customer",
+      "arguments": {
+        "phone": "+1 212 555 0410",
+        "email": "samuel.green@example.com"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "list_slots",
+      "arguments": {
+        "service_id": "SV1",
+        "location_id": "L1",
+        "staff_id": "ST01",
+        "date": "2026-11-05"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "hold_slot",
+      "arguments": {
+        "location_id": "L1",
+        "start_time": "2026-11-05T11:00",
+        "customer_id": "CU410",
+        "staff_id": "ST01",
+        "utc_offset": "-05:00",
+        "service_id": "SV1"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "book_appointment",
+      "arguments": {
+        "customer_id": "CU410",
+        "staff_id": "ST01",
+        "hold_id": "H600",
+        "service_id": "SV1",
+        "request_key": "REQ-CU410-HOLD",
+        "start_time": "2026-11-05T11:00",
+        "confirmed": true,
+        "utc_offset": "-05:00",
+        "location_id": "L1"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "service_id": "record: SV1",
+        "utc_offset": "caller: -05:00",
+        "customer_id": "record: CU410",
+        "location_id": "record: L1",
+        "staff_id": "record: ST01",
+        "start_time": "caller: 2026-11-05T11:00"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "interface": "clean_prose",
+    "counterparty": "returning_customer",
+    "disposition": "hold_first",
+    "interaction": "multi_turn",
+    "overlay_intensity": "absent",
+    "overlay_vector": "none",
+    "task": "book_appointment",
+    "overlay": "none"
+  },
+  "sub_goals": [
+    "appointment_booked_as_confirmed"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

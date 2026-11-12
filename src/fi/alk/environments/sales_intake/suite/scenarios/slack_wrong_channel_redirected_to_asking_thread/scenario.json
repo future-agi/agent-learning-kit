@@ -1,0 +1,93 @@
+{
+  "name": "slack_wrong_channel_redirected_to_asking_thread",
+  "scenario_key": "slack-wrong-channel-redirected-to-asking-thread",
+  "scenario_id": "",
+  "use_case": "Post an approved handoff summary in Slack",
+  "branch": "Oliver Hughes asks the desk to post the Fernhill summary in #sales-reps; with approval APP-SH-407 for #sales-handoffs the desk posts in the asking thread SM01 instead",
+  "tests": "the desk posts the approved summary in the asking thread of #sales-handoffs rather than the unapproved #sales-reps channel",
+  "instruction": "You are Nell Quinlan, a sales support specialist at BrightDesk. Oliver asked to get the Fernhill Logistics (L08) summary posted into the #sales-reps channel. Dana Whitfield approved posting the summary with approval APP-SH-407, but the approval is scoped for #sales-handoffs (CH_SALESHANDOFF). If the sales desk explains that handoff summaries may only be posted in the approved asking thread in #sales-handoffs rather than #sales-reps, agree and confirm posting to Oliver's thread in #sales-handoffs.\n\nYour details:\n- Name: Nell Quinlan\n- Requested channel: #sales-reps (CH_SALESREPS)\n- Approved channel: #sales-handoffs (CH_SALESHANDOFF)\n- Asking thread: Oliver's message SM01 (ts: 1794218400.000001)\n- Lead: Fernhill Logistics (L08)\n- Approval ID: APP-SH-407",
+  "keywords": [
+    "slack_handoff"
+  ],
+  "persona": {
+    "name": "Nell Quinlan",
+    "gender": "female",
+    "age_group": "25-32",
+    "occupation": "Customer Service",
+    "location": "Australia",
+    "personality": "Friendly and cooperative",
+    "communication_style": "Casual and friendly",
+    "initial_message": "Oliver wants the Fernhill summary posted in #sales-reps. Dana gave approval APP-SH-407 for #sales-handoffs. Can you post it?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "approval_id": "APP-SH-407",
+    "message_id": "SM01",
+    "lead_id": "L08",
+    "origin": "mixed",
+    "channel_id": "CH_SALESHANDOFF"
+  },
+  "solution": [
+    {
+      "tool": "slack_read_thread",
+      "arguments": {
+        "message_ts": "1794218400.000001",
+        "channel_id": "CH_SALESHANDOFF"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "channel_id": "record: #sales-handoffs",
+        "message_ts": "record: Oliver's request SM01"
+      }
+    },
+    {
+      "tool": "get_lead",
+      "arguments": {
+        "lead_id": "L08"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "slack_send_message",
+      "arguments": {
+        "approval_id": "APP-SH-407",
+        "channel_id": "CH_SALESHANDOFF",
+        "thread_ts": "1794218400.000001",
+        "message": "Fernhill Logistics (L08): qualified, customer service, 80 seats, 3-6 months, budget confirmed; owner Oliver Hughes."
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "channel_id": "record: #sales-handoffs",
+        "thread_ts": "record: Oliver's asking thread"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "overlay_vector": "none",
+    "disposition": "exception",
+    "interaction": "multi_turn",
+    "overlay": "none",
+    "task": "slack_handoff",
+    "counterparty": "colleague",
+    "overlay_intensity": "absent",
+    "interface": "pasted_blob"
+  },
+  "sub_goals": [
+    "handoff_posted_in_thread"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

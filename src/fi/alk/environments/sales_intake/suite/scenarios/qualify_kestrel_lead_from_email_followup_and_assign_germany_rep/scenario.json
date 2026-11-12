@@ -1,0 +1,120 @@
+{
+  "name": "qualify_kestrel_lead_from_email_followup_and_assign_germany_rep",
+  "scenario_key": "qualify-kestrel-lead-from-email-followup-and-assign-germany-rep",
+  "scenario_id": "",
+  "use_case": "Qualify an inbound enquiry against the rubric",
+  "branch": "Anja Weber asks the desk to process Kestrel's lead (L07, needs_information): read thread th_s02_kestrel_timeline (smsg_003 confirms timeline 0-3 months), qualify L07 with {\"timeline\": \"0-3 months\"}, assign A04 (Germany rep)",
+  "tests": "the agent reads th_s02_kestrel_timeline, qualifies L07 with timeline 0-3 months, and routes to A04",
+  "instruction": "You are Anja Weber, a Sales Development Representative at BrightDesk.\nJonas Becker at Kestrel Mobility GmbH sent an email with their deployment timeline in thread th_s02_kestrel_timeline.\nYou want the sales intake desk to review that email thread, qualify Kestrel's open lead (L07), and route it to the territory rep for Germany (A04).\n\nYour details:\n- Name: Anja Weber\n- Role: Sales Development Representative\n- Email thread: th_s02_kestrel_timeline\n- Lead ID: L07\n- Prospect company: Kestrel Mobility GmbH\n- Country: Germany",
+  "keywords": [
+    "qualify_lead"
+  ],
+  "persona": {
+    "name": "Anja Weber",
+    "gender": "female",
+    "age_group": "25-32",
+    "occupation": "Sales Representative",
+    "location": "Canada",
+    "personality": "Professional and formal",
+    "communication_style": "Collaborative",
+    "initial_message": "Hi! Jonas Becker at Kestrel emailed his timeline in thread th_s02_kestrel_timeline. Could you qualify lead L07 and route it to the Germany rep?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "rep_id": "A04",
+    "thread_id": "th_s02_kestrel_timeline",
+    "lead_id": "L07",
+    "origin": "seed"
+  },
+  "solution": [
+    {
+      "tool": "get_thread",
+      "arguments": {
+        "messageFormat": "FULL_CONTENT",
+        "threadId": "th_s02_kestrel_timeline"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "threadId": "record: th_s02_kestrel_timeline"
+      }
+    },
+    {
+      "tool": "get_lead",
+      "arguments": {
+        "lead_id": "L07"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "lead_id": "record: L07"
+      }
+    },
+    {
+      "tool": "get_icp_rules",
+      "arguments": {},
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "qualify_lead",
+      "arguments": {
+        "facts": {
+          "timeline": "0-3 months"
+        },
+        "lead_id": "L07"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "lead_id": "record: L07",
+        "facts": "email: live within the next three months"
+      }
+    },
+    {
+      "tool": "get_routing_rules",
+      "arguments": {
+        "country": "Germany"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "assign_owner",
+      "arguments": {
+        "lead_id": "L07",
+        "rep_id": "A04"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "rep_id": "record: A04",
+        "lead_id": "record: L07"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "disposition": "missing_information_resolved",
+    "interface": "email_thread",
+    "overlay": "none",
+    "task": "qualify_lead",
+    "overlay_vector": "none",
+    "overlay_intensity": "absent",
+    "counterparty": "colleague",
+    "interaction": "multi_turn"
+  },
+  "sub_goals": [
+    "lead_qualified_by_rubric",
+    "owner_assigned_by_territory"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

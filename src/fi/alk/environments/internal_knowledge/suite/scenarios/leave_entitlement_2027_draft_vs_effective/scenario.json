@@ -1,0 +1,89 @@
+{
+  "name": "leave_entitlement_2027_draft_vs_effective",
+  "scenario_key": "leave-entitlement-2027-draft-vs-effective",
+  "scenario_id": "",
+  "use_case": "Answer which version is in effect, or was on a date",
+  "branch": "Maya Patel heard leave is 28 days next year; the agent checks Annual Leave Policy versions, sees v3 is a draft, and reads leave_v2 (25 days)",
+  "tests": "whether the agent checks version history, clarifies that 28 days is a draft not in effect, and answers 25 days from Annual Leave Policy v2.0",
+  "instruction": "You heard rumors that annual leave is increasing to 28 days next year. Ask the Knowledge Desk what the current annual leave policy is and whether the 28-day increase is in effect.\n\nYour details:\n- Name: Maya Patel\n- Employee ID: E13",
+  "keywords": [
+    "draft",
+    "version"
+  ],
+  "persona": {
+    "name": "Maya Patel",
+    "gender": "female",
+    "age_group": "25-32",
+    "occupation": "Engineer",
+    "location": "United States",
+    "personality": "Friendly and cooperative",
+    "communication_style": "Casual and friendly",
+    "initial_message": "I heard annual leave is going up to 28 days next year. Is that in effect right now, or what is our current entitlement?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "origin": "seed",
+    "employee_id": "E13",
+    "family": "annual_leave"
+  },
+  "solution": [
+    {
+      "tool": "list_document_versions",
+      "arguments": {
+        "employee_id": "E13",
+        "drive_file_id": "",
+        "family": "annual_leave"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_file_metadata",
+      "arguments": {
+        "fileId": "leave_v2",
+        "excludeContentSnippets": true
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "fetch_passage",
+      "arguments": {
+        "employee_id": "E13",
+        "passage_id": "P-LEAVEV2-01"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "passage_id": "record: Annual Leave Policy 2.0 section 1 (Entitlement)"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "overlay_intensity": "absent",
+    "overlay_vector": "none",
+    "task": "version_question",
+    "counterparty": "standard_employee",
+    "interface": "clean_prose",
+    "interaction": "multi_turn",
+    "overlay": "none",
+    "disposition": "draft_inquiry"
+  },
+  "sub_goals": [
+    "version_history_consulted",
+    "answer_cited_from_effective_version"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

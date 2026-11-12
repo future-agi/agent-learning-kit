@@ -1,0 +1,93 @@
+{
+  "name": "slack_reply_corrected_parental_leave_maya",
+  "scenario_key": "slack-reply-corrected-parental-leave-maya",
+  "scenario_id": "",
+  "use_case": "Pick up a Slack question and post the approved reply in its thread",
+  "branch": "Maya Patel asked about office days in KM09 but immediately corrected her question in KM10 to parental leave for secondary caregivers; Ben Carter provides approval APP-KN-406 to answer the corrected question in the thread",
+  "tests": "the agent reads Maya's thread (KM09 and KM10 correction), reads parental_v1 section 2, and posts 4 weeks in Maya's thread with APP-KN-406",
+  "instruction": "You are Ben Carter, People Coordinator. Maya Patel posted in #help-policies (KM09) and replied to her own thread (KM10) clarifying she wants to know about secondary caregiver parental leave, not office days. Ask the Knowledge Desk to post the approved reply to the corrected question in her thread; you provide approval APP-KN-406.\n\nYour details:\n- Name: Ben Carter\n- Employee ID: E12\n- Approval: APP-KN-406",
+  "keywords": [
+    "slack",
+    "approval"
+  ],
+  "persona": {
+    "name": "Ben Carter",
+    "gender": "male",
+    "age_group": "25-32",
+    "occupation": "Customer Service",
+    "location": "United Kingdom",
+    "personality": "Friendly and cooperative",
+    "communication_style": "Casual and friendly",
+    "initial_message": "Hi, Maya corrected her question in the #help-policies thread to secondary caregiver parental leave. Can you post the approved answer with approval APP-KN-406?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "origin": "generated",
+    "approval_id": "APP-KN-406"
+  },
+  "solution": [
+    {
+      "tool": "slack_read_thread",
+      "arguments": {
+        "channel_id": "CH_HELPPOL",
+        "message_ts": "1793793600.000009"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "message_ts": "record: KM09"
+      }
+    },
+    {
+      "tool": "fetch_passage",
+      "arguments": {
+        "passage_id": "P-PARENTALV1-02",
+        "employee_id": "E12"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "passage_id": "record: Parental Leave Policy 1.0, section 2"
+      }
+    },
+    {
+      "tool": "slack_send_message",
+      "arguments": {
+        "approval_id": "APP-KN-406",
+        "message": "Per Parental Leave Policy 1.0, section 2: secondary caregivers are entitled to 4 weeks of paid parental leave.",
+        "channel_id": "CH_HELPPOL",
+        "thread_ts": "1793793600.000009"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "thread_ts": "record: KM09 thread",
+        "channel_id": "record: #help-policies"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "overlay": "none",
+    "disposition": "valid_request",
+    "task": "slack_reply",
+    "overlay_vector": "none",
+    "interface": "slack",
+    "counterparty": "standard_employee",
+    "overlay_intensity": "absent",
+    "interaction": "self_correction"
+  },
+  "sub_goals": [
+    "slack_reply_in_thread"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

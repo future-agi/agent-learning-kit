@@ -1,0 +1,402 @@
+{
+  "a_cancelled_event_still_shows_on_the": {
+    "job": "availability",
+    "mcp": true
+  },
+  "book_cardiology_active_referral_follow_up": {
+    "job": "book",
+    "mcp": false
+  },
+  "book_cardiology_retry_idempotent_request_key": {
+    "job": "book",
+    "mcp": false
+  },
+  "book_dermatology_from_email_reference": {
+    "job": "book",
+    "mcp": true
+  },
+  "book_dermatology_italian_speaking_provider": {
+    "job": "book",
+    "mcp": false
+  },
+  "book_dermatology_non_urgent_symptom": {
+    "job": "urgent_privacy",
+    "mcp": false
+  },
+  "book_dermatology_unaccepted_insurer_self_pay_agreed": {
+    "job": "book",
+    "mcp": false
+  },
+  "book_pediatrics_child_appointment_by_mother": {
+    "job": "book",
+    "mcp": false
+  },
+  "book_physiotherapy_unaccepted_insurer_self_pay_declined": {
+    "job": "book",
+    "mcp": false
+  },
+  "book_primary_care_already_booked_detected": {
+    "job": "book",
+    "mcp": false
+  },
+  "book_primary_care_calendar_block_earliest_free_slot": {
+    "job": "book",
+    "mcp": true
+  },
+  "book_primary_care_check_calendar_first": {
+    "job": "book",
+    "mcp": true
+  },
+  "book_primary_care_first_available_tomorrow_afternoon": {
+    "job": "book",
+    "mcp": false
+  },
+  "book_primary_care_named_provider_west": {
+    "job": "book",
+    "mcp": false
+  },
+  "book_primary_care_no_session_friday_alternative_accepted": {
+    "job": "book",
+    "mcp": false
+  },
+  "book_primary_care_slot_held_alternative_booked": {
+    "job": "book",
+    "mcp": false
+  },
+  "book_the_slot_i_held_yesterday": {
+    "job": "book",
+    "mcp": false
+  },
+  "calendar_availability_then_new_patient_booking": {
+    "job": "availability",
+    "mcp": false
+  },
+  "calendar_brooks_monday_meeting_check": {
+    "job": "availability",
+    "mcp": true
+  },
+  "calendar_direct_write_refused": {
+    "job": "availability",
+    "mcp": true
+  },
+  "calendar_earliest_primary_care_this_week": {
+    "job": "availability",
+    "mcp": false
+  },
+  "calendar_morales_annual_leave_check": {
+    "job": "availability",
+    "mcp": true
+  },
+  "calendar_morales_availability_thursday": {
+    "job": "availability",
+    "mcp": true
+  },
+  "cancel_appointment_confirmed": {
+    "job": "reschedule_cancel",
+    "mcp": false
+  },
+  "cancel_completed_appointment_declined": {
+    "job": "reschedule_cancel",
+    "mcp": false
+  },
+  "cancel_from_calendar_inquiry": {
+    "job": "reschedule_cancel",
+    "mcp": true
+  },
+  "cancel_inside_notice_window_escalated": {
+    "job": "reschedule_cancel",
+    "mcp": false
+  },
+  "cancel_one_of_multiple_appointments": {
+    "job": "reschedule_cancel",
+    "mcp": false
+  },
+  "change_my_contact_details_and_send_my": {
+    "job": "urgent_privacy",
+    "mcp": false
+  },
+  "chat_insurance_update_bupa": {
+    "job": "intake_insurance",
+    "mcp": false
+  },
+  "chat_pasted_system_prompt_injection_resisted": {
+    "job": "urgent_privacy",
+    "mcp": false
+  },
+  "clinic_directory_dr_liu_working_days": {
+    "job": "availability",
+    "mcp": false
+  },
+  "coworker_snoop_after_verification_refused": {
+    "job": "urgent_privacy",
+    "mcp": false
+  },
+  "email_cancel_physiotherapy": {
+    "job": "email",
+    "mcp": true
+  },
+  "email_cancellation_confirmation_draft": {
+    "job": "email",
+    "mcp": true
+  },
+  "email_insurance_typo_correction": {
+    "job": "email",
+    "mcp": true
+  },
+  "email_insurance_update_with_group_number": {
+    "job": "intake_insurance",
+    "mcp": true
+  },
+  "email_intake_forms_request": {
+    "job": "email",
+    "mcp": true
+  },
+  "email_new_insurer_recorded": {
+    "job": "intake_insurance",
+    "mcp": true
+  },
+  "email_parking_info_draft": {
+    "job": "email",
+    "mcp": true
+  },
+  "email_preparation_human_draft_preserved": {
+    "job": "email",
+    "mcp": true
+  },
+  "email_prompt_injection_ignored": {
+    "job": "urgent_privacy",
+    "mcp": true
+  },
+  "email_prompt_injection_resisted": {
+    "job": "email",
+    "mcp": true
+  },
+  "email_referral_confirmation_reply_draft": {
+    "job": "email",
+    "mcp": true
+  },
+  "email_restricted_safeguarding_thread_withheld": {
+    "job": "email",
+    "mcp": true
+  },
+  "email_search_sender_reschedule": {
+    "job": "email",
+    "mcp": true
+  },
+  "email_tuesday_corrected_to_thursday_booking": {
+    "job": "email",
+    "mcp": true
+  },
+  "email_two_corrections_reschedule_and_draft": {
+    "job": "email",
+    "mcp": true
+  },
+  "email_unverified_referral_claim_reply_draft": {
+    "job": "email",
+    "mcp": true
+  },
+  "email_waitlist_for_earlier_dermatology": {
+    "job": "waitlist_concurrency",
+    "mcp": true
+  },
+  "email_waitlist_no_earlier_slot_draft": {
+    "job": "email",
+    "mcp": true
+  },
+  "failed_verification_withholds_records": {
+    "job": "urgent_privacy",
+    "mcp": false
+  },
+  "free_on_the_calendar_but_not_yet": {
+    "job": "availability",
+    "mcp": false
+  },
+  "hold_first_then_book_in_the_same": {
+    "job": "book",
+    "mcp": false
+  },
+  "hold_slot_while_patient_decides": {
+    "job": "waitlist_concurrency",
+    "mcp": false
+  },
+  "inquire_insurance_coverage_guarantee": {
+    "job": "intake_insurance",
+    "mcp": false
+  },
+  "insurer_not_taken_by_the_named_gp": {
+    "job": "book",
+    "mcp": false
+  },
+  "intake_forms_by_sms": {
+    "job": "intake_insurance",
+    "mcp": false
+  },
+  "intake_forms_fallback_to_sms": {
+    "job": "intake_insurance",
+    "mcp": false
+  },
+  "location_accessibility_riverbank_west": {
+    "job": "intake_insurance",
+    "mcp": false
+  },
+  "lookup_appointment_details_and_location": {
+    "job": "intake_insurance",
+    "mcp": false
+  },
+  "move_to_a_provider_who_does_not": {
+    "job": "reschedule_cancel",
+    "mcp": false
+  },
+  "new_insurer_that_my_booked_provider_does": {
+    "job": "intake_insurance",
+    "mcp": false
+  },
+  "pediatrics_availability_from_calendar": {
+    "job": "availability",
+    "mcp": true
+  },
+  "preparation_instructions_cardiology": {
+    "job": "intake_insurance",
+    "mcp": false
+  },
+  "red_flag_symptom_found_only_in_an": {
+    "job": "urgent_privacy",
+    "mcp": true
+  },
+  "referral_cardiology_claimed_exemption_verified_against_records": {
+    "job": "referral",
+    "mcp": true
+  },
+  "referral_cardiology_confirmed_by_email_booked": {
+    "job": "referral",
+    "mcp": true
+  },
+  "referral_cardiology_request_already_open_status_reported": {
+    "job": "referral",
+    "mcp": false
+  },
+  "referral_dermatology_no_referral_needed_info": {
+    "job": "referral",
+    "mcp": false
+  },
+  "referral_neurology_expired_request_opened": {
+    "job": "referral",
+    "mcp": false
+  },
+  "referral_neurology_waitlist_blocked_request_created": {
+    "job": "referral",
+    "mcp": false
+  },
+  "referral_orthopedics_chase_paperwork_escalated": {
+    "job": "referral",
+    "mcp": false
+  },
+  "referral_orthopedics_pending_booking_blocked": {
+    "job": "referral",
+    "mcp": false
+  },
+  "referral_orthopedics_practice_email_pending_checked": {
+    "job": "referral",
+    "mcp": true
+  },
+  "referral_orthopedics_request_created_for_knee_pain": {
+    "job": "referral",
+    "mcp": false
+  },
+  "release_active_slot_hold": {
+    "job": "waitlist_concurrency",
+    "mcp": false
+  },
+  "reschedule_calendar_check_before_moving": {
+    "job": "reschedule_cancel",
+    "mcp": true
+  },
+  "reschedule_cross_specialty_declined": {
+    "job": "reschedule_cancel",
+    "mcp": false
+  },
+  "reschedule_different_provider_same_specialty": {
+    "job": "reschedule_cancel",
+    "mcp": false
+  },
+  "reschedule_duplicate_request_idempotent": {
+    "job": "reschedule_cancel",
+    "mcp": false
+  },
+  "reschedule_from_email_request": {
+    "job": "reschedule_cancel",
+    "mcp": true
+  },
+  "reschedule_from_email_two_corrections": {
+    "job": "reschedule_cancel",
+    "mcp": true
+  },
+  "reschedule_inside_notice_window_escalated": {
+    "job": "reschedule_cancel",
+    "mcp": false
+  },
+  "reschedule_physiotherapy_one_week_later": {
+    "job": "reschedule_cancel",
+    "mcp": false
+  },
+  "reschedule_same_provider_another_day": {
+    "job": "reschedule_cancel",
+    "mcp": false
+  },
+  "reschedule_slot_conflict_recovery": {
+    "job": "waitlist_concurrency",
+    "mcp": false
+  },
+  "symptom_diagnosis_inquiry_to_nurse_line": {
+    "job": "urgent_privacy",
+    "mcp": false
+  },
+  "too_soon_to_book_this_morning": {
+    "job": "book",
+    "mcp": false
+  },
+  "unauthorized_spouse_proxy_request_escalation": {
+    "job": "urgent_privacy",
+    "mcp": false
+  },
+  "unsupported_insurance_provider_declined": {
+    "job": "intake_insurance",
+    "mcp": false
+  },
+  "unverified_referral_claim_checked_and_declined": {
+    "job": "urgent_privacy",
+    "mcp": false
+  },
+  "urgent_child_fever_and_rash_escalation": {
+    "job": "urgent_privacy",
+    "mcp": false
+  },
+  "v02_s01_reschedule_within_constraints": {
+    "job": "reschedule_cancel",
+    "mcp": false
+  },
+  "v02_s02_referral_required": {
+    "job": "referral",
+    "mcp": false
+  },
+  "v02_s03_slot_taken_during_confirmation": {
+    "job": "waitlist_concurrency",
+    "mcp": false
+  },
+  "v02_s04_urgent_symptom_during_scheduling": {
+    "job": "urgent_privacy",
+    "mcp": false
+  },
+  "v02_s05_other_patient_records_withheld": {
+    "job": "urgent_privacy",
+    "mcp": false
+  },
+  "waitlist_added_physiotherapy_no_availability": {
+    "job": "waitlist_concurrency",
+    "mcp": false
+  },
+  "waitlist_duplicate_entry_reported": {
+    "job": "waitlist_concurrency",
+    "mcp": false
+  }
+}

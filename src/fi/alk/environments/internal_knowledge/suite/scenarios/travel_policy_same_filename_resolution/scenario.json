@@ -1,0 +1,99 @@
+{
+  "name": "travel_policy_same_filename_resolution",
+  "scenario_key": "travel-policy-same-filename-resolution",
+  "scenario_id": "",
+  "use_case": "Answer which version is in effect, or was on a date",
+  "branch": "Sam Taylor finds two files titled 'Travel Policy.md' in Drive; the agent inspects their metadata to determine that v3 is approved and in effect while v2.1 is superseded, and reads v3",
+  "tests": "whether the agent differentiates two files with the same filename using metadata and cites the effective version (v3)",
+  "instruction": "You found two different files called \"Travel Policy.md\" in Google Drive. Ask the Knowledge Desk which one is currently in effect and what the hotel nightly cap is.\n\nYour details:\n- Name: Sam Taylor\n- Employee ID: E20",
+  "keywords": [
+    "drive",
+    "version"
+  ],
+  "persona": {
+    "name": "Sam Taylor",
+    "gender": "male",
+    "age_group": "18-25",
+    "occupation": "Sales Representative",
+    "location": "United States",
+    "personality": "Detail-oriented",
+    "communication_style": "Simple and clear",
+    "initial_message": "I found two different files called 'Travel Policy.md' in Google Drive. Which one is the active policy, and what is the hotel limit?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "origin": "seed",
+    "family": "travel_policy",
+    "employee_id": "E20"
+  },
+  "solution": [
+    {
+      "tool": "search_files",
+      "arguments": {
+        "excludeContentSnippets": false,
+        "pageToken": "",
+        "pageSize": 10,
+        "query": "title contains 'Travel Policy'"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_document_metadata",
+      "arguments": {
+        "employee_id": "E20",
+        "drive_file_id": "trv_policy_v2_1"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_document_metadata",
+      "arguments": {
+        "drive_file_id": "trv_policy_v3",
+        "employee_id": "E20"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "fetch_passage",
+      "arguments": {
+        "employee_id": "E20",
+        "passage_id": "P-TRVPOLICYV3-02"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "passage_id": "record: Travel Policy 3.0 section 2 (Hotels)"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "overlay_intensity": "absent",
+    "overlay_vector": "none",
+    "interaction": "multi_turn",
+    "interface": "clean_prose",
+    "disposition": "same_filename",
+    "overlay": "none",
+    "task": "version_question",
+    "counterparty": "standard_employee"
+  },
+  "sub_goals": [
+    "version_history_consulted",
+    "answer_cited_from_effective_version"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

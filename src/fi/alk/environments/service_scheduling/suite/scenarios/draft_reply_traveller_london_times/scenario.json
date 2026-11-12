@@ -1,0 +1,90 @@
+{
+  "name": "draft_reply_traveller_london_times",
+  "scenario_key": "draft-reply-traveller-london-times",
+  "scenario_id": "",
+  "use_case": "Pick up a booking request from the bookings mailbox",
+  "branch": "Isabel Reyes emailed from New York asking for a London consultation on Wednesday 4 November at 3 pm London time with both time zones; the front desk asks for a draft reply listing Priya's free times",
+  "tests": "the agent reads the email and Priya's computed slots, and drafts a reply on Isabel's thread, to her, without booking",
+  "instruction": "You are on the front desk team. Ask the assistant to draft a reply to Isabel Reyes's email about a London consultation, saying what times Priya has free that day. Do not ask it to book.",
+  "keywords": [],
+  "persona": {
+    "name": "Grace Mbeki",
+    "gender": "female",
+    "age_group": "32-40",
+    "occupation": "Front desk",
+    "location": "United States",
+    "personality": "Detail-oriented",
+    "communication_style": "Technical",
+    "initial_message": "Please draft a reply to Isabel Reyes's email with Priya's free times that Wednesday.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "origin": "seed"
+  },
+  "solution": [
+    {
+      "tool": "get_thread",
+      "arguments": {
+        "threadId": "th_s10_travelling"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "threadId": "the customer's email thread"
+      }
+    },
+    {
+      "tool": "list_slots",
+      "arguments": {
+        "service_id": "SV1",
+        "location_id": "L2",
+        "date": "2026-11-04",
+        "staff_id": "ST04"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "create_draft",
+      "arguments": {
+        "to": [
+          "isabel.reyes@example.com"
+        ],
+        "subject": "Re: Booking while I'm in London",
+        "body": "Hi Isabel, Priya has a consultation free on Wednesday 4 November at 3:00 pm London time (10:00 am New York time). Reply to confirm and we will book it.",
+        "replyToMessageId": "smsg_011"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "to": "the customer who wrote",
+        "replyToMessageId": "her message"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "task": "draft_reply",
+    "disposition": "timezone_question",
+    "interaction": "multi_turn",
+    "counterparty": "staff_member",
+    "interface": "email_thread",
+    "overlay": "none",
+    "overlay_vector": "none",
+    "overlay_intensity": "absent"
+  },
+  "sub_goals": [
+    "draft_created_for_review"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

@@ -1,0 +1,110 @@
+{
+  "name": "book_haircut_after_dst_fallback_newyork",
+  "scenario_key": "book-haircut-after-dst-fallback-newyork",
+  "scenario_id": "",
+  "use_case": "Book an appointment by service, staff, language, location and time zone",
+  "branch": "a customer books an appointment on the Monday immediately following the autumn clock change, confirming the standard time UTC-05:00 offset",
+  "tests": "the agent applies the updated standard time offset UTC-05:00 for New York after daylight saving time ends and books 17:00 on Monday 2 November",
+  "instruction": "You want to book a haircut with Lucia Fernandez at the Midtown studio for Monday 2 November 2026 at 5:00 pm (17:00).\nNote that daylight saving time ended over the weekend on 1 November, so New York is now on Eastern Standard Time (UTC-05:00, 22:00 UTC).\nWhen the agent asks for your details or reads back the booking confirmation, confirm them.\n\nYour details:\n- Name: Evelyn Reed\n- Email: evelyn.reed@example.com\n- Phone: +1 212 555 0405\n- Service: Haircut\n- Staff: Lucia Fernandez\n- Location: Midtown Studio (410 Lexington Ave)\n- Date and time: Monday 2 November 2026 at 5:00 pm (17:00)\n- Time zone: America/New_York (-05:00)",
+  "keywords": [
+    "book_appointment",
+    "dst_transition",
+    "haircut"
+  ],
+  "persona": {
+    "name": "Evelyn Reed",
+    "gender": "female",
+    "age_group": "25-32",
+    "occupation": "Marketing Professional",
+    "location": "United States",
+    "personality": "Friendly and cooperative",
+    "communication_style": "Direct and concise",
+    "initial_message": "Hi, I'd like to book a haircut with Lucia at Midtown on Monday, November 2nd at 5:00 pm.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "name": "Evelyn Reed",
+    "email": "evelyn.reed@example.com",
+    "staff_id": "ST02",
+    "service_id": "SV3",
+    "time": "2026-11-02T17:00",
+    "phone": "+1 212 555 0405",
+    "location_id": "L1",
+    "origin": "mixed",
+    "customer_id": "CU405"
+  },
+  "solution": [
+    {
+      "tool": "get_customer",
+      "arguments": {
+        "email": "evelyn.reed@example.com",
+        "phone": "+1 212 555 0405"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "list_slots",
+      "arguments": {
+        "staff_id": "ST02",
+        "language": "en",
+        "location_id": "L1",
+        "service_id": "SV3",
+        "date": "2026-11-02"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "book_appointment",
+      "arguments": {
+        "start_time": "2026-11-02T17:00",
+        "customer_id": "CU405",
+        "confirmed": true,
+        "location_id": "L1",
+        "staff_id": "ST02",
+        "service_id": "SV3",
+        "hold_id": null,
+        "request_key": "REQ-SC5",
+        "utc_offset": "-05:00"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "staff_id": "record: ST02",
+        "start_time": "caller: 2026-11-02T17:00",
+        "location_id": "record: L1",
+        "service_id": "record: SV3",
+        "customer_id": "record: CU405",
+        "utc_offset": "caller: -05:00"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "interface": "clean_prose",
+    "interaction": "single_request",
+    "overlay_vector": "none",
+    "overlay_intensity": "absent",
+    "task": "book_appointment",
+    "overlay": "none",
+    "counterparty": "returning_customer",
+    "disposition": "dst_transition"
+  },
+  "sub_goals": [
+    "appointment_booked_as_confirmed",
+    "timezone_and_instant_confirmed"
+  ],
+  "max_turns": 6,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

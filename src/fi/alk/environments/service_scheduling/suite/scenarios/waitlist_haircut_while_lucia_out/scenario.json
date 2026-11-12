@@ -1,0 +1,91 @@
+{
+  "name": "waitlist_haircut_while_lucia_out",
+  "scenario_key": "waitlist-haircut-while-lucia-out",
+  "scenario_id": "",
+  "use_case": "Waitlist and confirmations",
+  "branch": "Ana Morales wants a haircut with Lucia on Friday 30 October, when Lucia is out of office; she goes on the waitlist for that day",
+  "tests": "the agent finds no slot with Lucia that day, offers the waitlist, adds Ana once, and says it is not a booking",
+  "instruction": "You want a haircut with Lucia on Friday 30 October at Midtown. If she has nothing, ask to go on the waiting list for that day with her.\n\nYour details:\n- Name: Ana Morales\n- Email: ana.morales@example.com\n- Phone: +1 212 555 0101",
+  "keywords": [],
+  "persona": {
+    "name": "Ana Morales",
+    "gender": "female",
+    "age_group": "32-40",
+    "occupation": "Engineer",
+    "location": "United States",
+    "personality": "Professional and formal",
+    "communication_style": "Direct and concise",
+    "initial_message": "Hola, can I get a haircut with Lucia this Friday?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "origin": "seed"
+  },
+  "solution": [
+    {
+      "tool": "get_customer",
+      "arguments": {
+        "email": "ana.morales@example.com",
+        "phone": "+1 212 555 0101"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "list_slots",
+      "arguments": {
+        "service_id": "SV3",
+        "location_id": "L1",
+        "date": "2026-10-30",
+        "staff_id": "ST02"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "add_waitlist",
+      "arguments": {
+        "customer_id": "CU01",
+        "service_id": "SV3",
+        "location_id": "L1",
+        "preferred_date": "2026-10-30",
+        "staff_id": "ST02"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "customer_id": "caller",
+        "service_id": "the service",
+        "location_id": "the studio",
+        "preferred_date": "the day asked for",
+        "staff_id": "the stylist asked for"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "task": "waitlist",
+    "disposition": "staff_out",
+    "interaction": "multi_turn",
+    "counterparty": "individual_customer",
+    "interface": "clean_prose",
+    "overlay": "none",
+    "overlay_vector": "none",
+    "overlay_intensity": "absent"
+  },
+  "sub_goals": [
+    "waitlist_added"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

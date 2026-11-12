@@ -1,0 +1,79 @@
+{
+  "name": "corporate_card_monthly_limit_drive",
+  "scenario_key": "corporate-card-monthly-limit-drive",
+  "scenario_id": "",
+  "use_case": "Answer a policy question with citations from the version in effect",
+  "branch": "Laura Chen asks corporate card limit; Corporate Card Policy 1.0 is in effect and accessible to managers",
+  "tests": "the agent answers $5,000 monthly limit from Corporate Card Policy 1.0, section 1, via Drive search",
+  "instruction": "You are the finance controller and want to verify the standard monthly spending limit on corporate credit cards. Ask the Knowledge Desk for the monthly limit and the policy document citation.\n\nYour details:\n- Name: Laura Chen\n- Employee ID: E11",
+  "keywords": [
+    "citation",
+    "corporate_card",
+    "effective_version"
+  ],
+  "persona": {
+    "name": "Laura Chen",
+    "gender": "female",
+    "age_group": "32-40",
+    "occupation": "Accountant",
+    "location": "Canada",
+    "personality": "Analytical",
+    "communication_style": "Formal and polite",
+    "initial_message": "Hello, what is the default monthly credit limit for company corporate cards, and which document specifies it?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "file_id": "card_v1",
+    "origin": "seed",
+    "employee_id": "E11"
+  },
+  "solution": [
+    {
+      "tool": "search_files",
+      "arguments": {
+        "query": "title contains 'Corporate Card'"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "fetch_passage",
+      "arguments": {
+        "employee_id": "E11",
+        "passage_id": "P-CARDV1-01"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "passage_id": "record: Corporate Card Policy 1.0 section 1 (Limit)"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "counterparty": "finance_staff",
+    "disposition": "finance_review",
+    "overlay_vector": "none",
+    "task": "policy_answer",
+    "overlay": "none",
+    "interaction": "multi_turn",
+    "overlay_intensity": "absent",
+    "interface": "clean_prose"
+  },
+  "sub_goals": [
+    "answer_cited_from_effective_version",
+    "citation_quality"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

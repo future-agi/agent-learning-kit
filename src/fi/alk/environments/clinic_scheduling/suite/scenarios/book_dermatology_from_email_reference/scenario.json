@@ -1,0 +1,111 @@
+{
+  "name": "book_dermatology_from_email_reference",
+  "scenario_key": "book-dermatology-from-email-reference",
+  "scenario_id": "",
+  "use_case": "Book a new appointment",
+  "branch": "P405 references her email th_c405_intake in chat and books Thursday 29 October 14:30 dermatology with Dr. Morales",
+  "tests": "passes when the agent retrieves email thread th_c405_intake, verifies Nneka Okonjo, and books Thursday 29 October 14:30 with Dr. Morales",
+  "instruction": "You previously sent an email to the clinic regarding intake forms for your dermatology visit (subject: Forms before my visit). You are now in the web chat wanting to book the visit with Dr. Sofia Morales that your email asked for for Thursday 29 October in the afternoon. When asked, provide your verification details and confirm the 14:30 slot at Riverbank Central.\n\nYour details:\n- Full name: Nneka Okonjo\n- Date of birth: 1972-04-16\n- Insurance: Bupa, Member ID: BU-100405\n- Email thread: th_c405_intake (Forms before my visit)\n- Preferred provider: Dr. Sofia Morales\n- Preferred date: Thursday 29 October 2026, 14:30 (Riverbank Central)",
+  "keywords": [
+    "dermatology",
+    "email_reference",
+    "booking"
+  ],
+  "persona": {
+    "name": "Nneka Okonjo",
+    "gender": "female",
+    "age_group": "50-60",
+    "occupation": "Accountant",
+    "location": "United States",
+    "personality": "Confident",
+    "communication_style": "Direct and concise",
+    "initial_message": "Hi, I sent an email earlier (subject regarding intake forms) about booking my next dermatology check with Dr. Morales for Thursday 29 October afternoon. Can we book it now?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "created_records": [
+      "patients.P405",
+      "insurance.P405",
+      "gmail_threads.th_c405_intake",
+      "gmail_messages.cmsg_405"
+    ],
+    "origin": "generated",
+    "thread_id": "th_c405_intake"
+  },
+  "solution": [
+    {
+      "tool": "verify_patient",
+      "arguments": {
+        "full_name": "Nneka Okonjo",
+        "dob": "1972-04-16"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_thread",
+      "arguments": {
+        "messageFormat": "FULL_CONTENT",
+        "threadId": "th_c405_intake"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "threadId": "record: gmail_threads.id th_c405_intake"
+      }
+    },
+    {
+      "tool": "find_available_slots",
+      "arguments": {
+        "provider_id": "D03",
+        "patient_id": "P405",
+        "date_from": "2026-10-29",
+        "date_to": "2026-10-29"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "book_appointment",
+      "arguments": {
+        "reason": "Dermatology follow-up",
+        "self_pay": false,
+        "request_key": "req-p405-d03-1029",
+        "patient_id": "P405",
+        "confirmed": true,
+        "slot_id": "SL-D03-20261029-1430"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "patient_id": "record: patients.patient_id P405",
+        "slot_id": "the slot the patient confirmed"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "overlay_vector": "none",
+    "counterparty": "patient",
+    "disposition": "none",
+    "task": "book_appointment",
+    "interaction": "multi_turn",
+    "overlay": "none",
+    "interface": "clean",
+    "overlay_intensity": "absent"
+  },
+  "sub_goals": [
+    "appointment_booked_as_confirmed"
+  ],
+  "max_turns": 8,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

@@ -1,0 +1,123 @@
+{
+  "name": "booking_then_email_confirmation_queued",
+  "scenario_key": "booking-then-email-confirmation-queued",
+  "scenario_id": "",
+  "use_case": "Waitlist and confirmations",
+  "branch": "Book a consultation with Olivia on Monday 9 November at 15:00 Midtown, then queue an email confirmation for the committed booking.",
+  "tests": "passes when Sean MacLeod is booked for an Initial Consultation and an email confirmation is queued for the committed booking.",
+  "instruction": "You want to book an Initial Consultation with Olivia Bennett at Midtown Studio on Monday 9 November 2026 at 3:00 PM (15:00). After confirming the booking details, you explicitly request that an email confirmation be queued and sent to you.\n\nYour details:\n- Name: Sean MacLeod\n- Email: sean.macleod@example.com\n- Phone: +1 416 555 0414\n- Service: Initial Consultation\n- Staff: Olivia Bennett\n- Studio location: Midtown Studio\n- Date: Monday 9 November 2026\n- Time: 3:00 PM (15:00)\n- Confirmation preference: email",
+  "keywords": [
+    "booking",
+    "confirmation",
+    "email",
+    "consultation"
+  ],
+  "persona": {
+    "name": "Sean MacLeod",
+    "gender": "male",
+    "age_group": "50-60",
+    "occupation": "Retired",
+    "location": "Canada",
+    "personality": "Friendly and cooperative",
+    "communication_style": "Formal and polite",
+    "initial_message": "Hello, I would like to book an Initial Consultation with Olivia Bennett at Midtown on Monday 9 November at 3:00 PM and receive an email confirmation.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "email": "sean.macleod@example.com",
+    "service": "Initial Consultation (SV1)",
+    "phone": "+1 416 555 0414",
+    "date": "2026-11-09",
+    "staff": "Olivia Bennett (ST01)",
+    "customer_id": "CU414",
+    "location": "Midtown Studio (L1)",
+    "start_time": "2026-11-09T15:00",
+    "origin": "generated"
+  },
+  "solution": [
+    {
+      "tool": "get_customer",
+      "arguments": {
+        "email": "sean.macleod@example.com",
+        "phone": "+1 416 555 0414"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "list_slots",
+      "arguments": {
+        "service_id": "SV1",
+        "date": "2026-11-09",
+        "location_id": "L1",
+        "staff_id": "ST01"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "book_appointment",
+      "arguments": {
+        "hold_id": null,
+        "customer_id": "CU414",
+        "location_id": "L1",
+        "start_time": "2026-11-09T15:00",
+        "staff_id": "ST01",
+        "request_key": "REQ-BK-SEAN-1109",
+        "utc_offset": "-05:00",
+        "service_id": "SV1",
+        "confirmed": true
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "service_id": "caller: Initial Consultation (SV1)",
+        "staff_id": "record: staff.staff_id where name='Olivia Bennett'",
+        "start_time": "caller: Monday 9 November at 15:00",
+        "confirmed": "rule: \"Book an appointment after the customer confirmed it\"",
+        "customer_id": "caller: Sean MacLeod (CU414)",
+        "location_id": "record: locations.location_id where name='Midtown Studio'"
+      }
+    },
+    {
+      "tool": "queue_confirmation",
+      "arguments": {
+        "customer_id": "CU414",
+        "channel": "email",
+        "kind": "booked",
+        "appointment_id": "A600"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "customer_id": "caller: Sean MacLeod (CU414)"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "overlay_intensity": "absent",
+    "interface": "clean_prose",
+    "disposition": "booking_with_confirmation",
+    "task": "queue_confirmation",
+    "interaction": "multi_turn",
+    "counterparty": "individual",
+    "overlay_vector": "none",
+    "overlay": "none"
+  },
+  "sub_goals": [
+    "appointment_booked_as_confirmed",
+    "confirmation_queued_after_commit"
+  ],
+  "max_turns": 8,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

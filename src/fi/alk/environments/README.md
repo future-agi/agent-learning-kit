@@ -22,8 +22,11 @@ Each package's `README.md` lists its tools, scenarios, coverage map and known ga
 | `retail` | V15 Retail | 17 + Gmail 8 + Drive 5 | 100 | 5/5 | Wave A increment 3: linked support mailbox and policy library, 100 scenarios across 8 jobs, `tests/harness/test_retail_validation.py` |
 | `saas_subscriptions` | V16 SaaS subscriptions | 18 + Gmail 8 + Slack 6 | 100 | 5/5 | Wave A increment 6: Gmail and Slack in one world, 100 scenarios across 8 jobs, `tests/harness/test_saas_subscriptions_validation.py` |
 | `internal_it` | V20 Internal IT | 17 + Slack 6 + Drive 5 | 100 | 5/5 | Wave A increment 5: linked #it-access workspace and access-policy library, 100 scenarios across 8 jobs, `tests/harness/test_internal_it_validation.py`; 37 scenarios use Slack or Drive against the plan's estimate of 42 |
+| `clinic_scheduling` | V02 Clinic scheduling | 18 + Calendar 8 + Gmail 8 | 100 | 5/5 | Wave A increment 7: providers' calendars as the availability source, bookings write the record and the event together, 100 scenarios across 8 jobs, `tests/harness/test_clinic_scheduling_validation.py`; `appointment_booking` stays as the clinic reference |
+| `service_scheduling` | V12 Service scheduling | 18 + Calendar 8 + Gmail 8 | 100 | 5/5 | Wave A increment 8: two time zones and a clock change, holds, waitlist and confirmations after commit, 100 scenarios across 8 jobs, `tests/harness/test_service_scheduling_validation.py` |
+| `sales_intake` | V17 Sales intake | 18 + Gmail 8 + Calendar 8 + Slack 6 | 100 | 5/5 | Wave A increment 9: three capabilities in one world, rubric, territories with a fallback queue, demos on the owner's calendar, 100 scenarios across 8 jobs, `tests/harness/test_sales_intake_validation.py` |
+| `internal_knowledge` | V11 Internal knowledge | 15 + Drive 5 + Slack 6 | 100 | 5/5 | Wave A increment 10: the corpus is the business system, versions, precedence and Slack decisions, 100 scenarios across 8 jobs, `tests/harness/test_internal_knowledge_validation.py` |
 
-Not yet built: V11 Internal knowledge, V12 Service scheduling, V17 Sales intake (plan stage 4).
 
 ## MCP capabilities
 

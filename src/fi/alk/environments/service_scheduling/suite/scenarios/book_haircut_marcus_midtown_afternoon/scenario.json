@@ -1,0 +1,110 @@
+{
+  "name": "book_haircut_marcus_midtown_afternoon",
+  "scenario_key": "book-haircut-marcus-midtown-afternoon",
+  "scenario_id": "",
+  "use_case": "Book an appointment by service, staff, language, location and time zone",
+  "branch": "a returning customer books a Tuesday afternoon haircut with Marcus at Midtown",
+  "tests": "the agent identifies the customer, checks slots for Marcus on 3 November, and books 16:30 at Midtown",
+  "instruction": "You want to book a haircut with Marcus at the Midtown studio on Tuesday, 3 November 2026 at 4:30 pm.\nWhen the agent asks for your details or reads back the booking summary, confirm them.\n\nYour details:\n- Name: Martin Silva\n- Email: martin.silva@example.com\n- Phone: +1 212 555 0401\n- Service: Haircut\n- Staff: Marcus Hale\n- Location: Midtown Studio (410 Lexington Ave)\n- Date and time: Tuesday 3 November 2026 at 4:30 pm (16:30)\n- Time zone: America/New_York (-05:00)",
+  "keywords": [
+    "book_appointment",
+    "haircut",
+    "returning_customer"
+  ],
+  "persona": {
+    "name": "Martin Silva",
+    "gender": "male",
+    "age_group": "32-40",
+    "occupation": "Accountant",
+    "location": "United States",
+    "personality": "Friendly and cooperative",
+    "communication_style": "Direct and concise",
+    "initial_message": "Hi, I would like to book a haircut with Marcus at Midtown for next Tuesday, November 3rd at 4:30 pm.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "staff_id": "ST03",
+    "name": "Martin Silva",
+    "time": "2026-11-03T16:30",
+    "phone": "+1 212 555 0401",
+    "service_id": "SV3",
+    "email": "martin.silva@example.com",
+    "location_id": "L1",
+    "origin": "mixed",
+    "customer_id": "CU401"
+  },
+  "solution": [
+    {
+      "tool": "get_customer",
+      "arguments": {
+        "phone": "+1 212 555 0401",
+        "email": "martin.silva@example.com"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "list_slots",
+      "arguments": {
+        "date": "2026-11-03",
+        "service_id": "SV3",
+        "location_id": "L1",
+        "language": "en",
+        "staff_id": "ST03"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "book_appointment",
+      "arguments": {
+        "utc_offset": "-05:00",
+        "location_id": "L1",
+        "hold_id": null,
+        "customer_id": "CU401",
+        "service_id": "SV3",
+        "start_time": "2026-11-03T16:30",
+        "request_key": "REQ-SC1",
+        "staff_id": "ST03",
+        "confirmed": true
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "service_id": "record: SV3",
+        "location_id": "record: L1",
+        "staff_id": "record: ST03",
+        "start_time": "caller: 2026-11-03T16:30",
+        "utc_offset": "caller: -05:00",
+        "customer_id": "record: CU401"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "overlay_vector": "none",
+    "task": "book_appointment",
+    "disposition": "clean",
+    "overlay": "none",
+    "interaction": "single_request",
+    "counterparty": "returning_customer",
+    "overlay_intensity": "absent",
+    "interface": "clean_prose"
+  },
+  "sub_goals": [
+    "appointment_booked_as_confirmed",
+    "timezone_and_instant_confirmed"
+  ],
+  "max_turns": 6,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

@@ -1,0 +1,69 @@
+{
+  "name": "human_draft_on_price_thread_left_alone",
+  "scenario_key": "human-draft-on-price-thread-left-alone",
+  "scenario_id": "",
+  "use_case": "Pick up a booking request from the bookings mailbox",
+  "branch": "Hana Sato emailed about colour treatment prices; a person on the front desk already drafted the reply, so the agent leaves that draft",
+  "tests": "the agent reads the thread, lists the drafts, finds the person's draft, and adds no draft of its own",
+  "instruction": "You are on the front desk team. Ask the assistant to draft a reply to Hana Sato's email about colour treatment prices.",
+  "keywords": [],
+  "persona": {
+    "name": "Grace Mbeki",
+    "gender": "male",
+    "age_group": "60+",
+    "occupation": "Front desk",
+    "location": "Australia",
+    "personality": "Reserved",
+    "communication_style": "Formal and polite",
+    "initial_message": "Can you draft a reply to Hana Sato's email about colour prices?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "origin": "seed"
+  },
+  "solution": [
+    {
+      "tool": "get_thread",
+      "arguments": {
+        "threadId": "th_s09_prices"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "threadId": "Hana Sato's price thread"
+      }
+    },
+    {
+      "tool": "list_drafts",
+      "arguments": {},
+      "environment_arguments": {},
+      "fixed": {}
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "task": "draft_reply",
+    "disposition": "human_draft",
+    "interaction": "multi_turn",
+    "counterparty": "staff_member",
+    "interface": "email_thread",
+    "overlay": "none",
+    "overlay_vector": "none",
+    "overlay_intensity": "absent"
+  },
+  "sub_goals": [
+    "human_draft_preserved"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

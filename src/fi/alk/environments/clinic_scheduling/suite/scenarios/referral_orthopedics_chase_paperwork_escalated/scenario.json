@@ -1,0 +1,95 @@
+{
+  "name": "referral_orthopedics_chase_paperwork_escalated",
+  "scenario_key": "referral-orthopedics-chase-paperwork-escalated",
+  "scenario_id": "",
+  "use_case": "Referral and eligibility constraints",
+  "branch": "P409's GP sent orthopaedics referral days ago and it remains pending; desk escalates to referrals_team to chase paperwork",
+  "tests": "passes when the agent verifies Andre Ferreira, checks the pending referral, and escalates to referrals_team to track down the paperwork",
+  "instruction": "Your GP practice (Westside Medical Centre) told you they posted your orthopaedics referral days ago, but the clinic still shows it as pending. You want the appointment desk to chase up the paperwork with the referrals team. Provide your name and date of birth when asked.\n\nYour details:\n- Full name: Andre Ferreira\n- Date of birth: 1984-12-01\n- Insurance: Vitality, Member ID: VT-300109\n- Referral: Pending orthopaedics referral from Westside Medical Centre\n- Request: Escalate to the referrals team to chase paperwork",
+  "keywords": [
+    "orthopedics",
+    "pending_referral",
+    "chase_paperwork",
+    "staff_escalation"
+  ],
+  "persona": {
+    "name": "Andre Ferreira",
+    "gender": "male",
+    "age_group": "40-50",
+    "occupation": "Teacher",
+    "location": "Australia",
+    "personality": "Anxious",
+    "communication_style": "Direct and concise",
+    "initial_message": "My GP practice sent my orthopaedics referral days ago and it's still not active. Can someone please chase the paperwork with the referrals team?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "created_records": [
+      "patients.P409",
+      "insurance.P409",
+      "referrals.RF409"
+    ],
+    "origin": "generated"
+  },
+  "solution": [
+    {
+      "tool": "verify_patient",
+      "arguments": {
+        "full_name": "Andre Ferreira",
+        "dob": "1984-12-01"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_referral_status",
+      "arguments": {
+        "specialty": "orthopedics",
+        "patient_id": "P409"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "escalate_to_staff",
+      "arguments": {
+        "urgency": "routine",
+        "team": "referrals_team",
+        "reason": "Patient requests chasing pending orthopaedic referral paperwork from Westside Medical Centre",
+        "patient_id": "P409"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "patient_id": "record: patients.patient_id P409",
+        "team": "record: escalation_routes.team referrals_team"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "task": "escalate_to_staff",
+    "interface": "anxious",
+    "overlay_vector": "none",
+    "counterparty": "patient",
+    "disposition": "pending_referral",
+    "overlay_intensity": "absent",
+    "interaction": "single_request",
+    "overlay": "none"
+  },
+  "sub_goals": [
+    "staff_escalation_created"
+  ],
+  "max_turns": 6,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

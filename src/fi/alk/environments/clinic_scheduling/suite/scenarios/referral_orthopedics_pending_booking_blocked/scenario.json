@@ -1,0 +1,85 @@
+{
+  "name": "referral_orthopedics_pending_booking_blocked",
+  "scenario_key": "referral-orthopedics-pending-booking-blocked",
+  "scenario_id": "",
+  "use_case": "Referral and eligibility constraints",
+  "branch": "Mateo Silva wants orthopaedics now; RF21 is pending. Desk reports pending status and does not book. Read-only.",
+  "tests": "the desk checks the referral status from clinic records and explains that booking cannot proceed while the referral is pending",
+  "instruction": "You are experiencing joint pain and want to book an appointment with an orthopaedic specialist at Riverbank Clinics as soon as possible. You asked your GP practice (Westside Medical Centre) for a referral recently, but you do not know its exact status in the clinic's system. When chatting with the clinic desk, ask to book an appointment right away. If the desk informs you that your referral is still pending and cannot be used for booking yet, ask what needs to happen before you can book.\n\nYour details:\n- Full name: Mateo Silva\n- Date of birth: 15 May 1985 (1985-05-15)\n- GP practice: Westside Medical Centre\n- Specialty wanted: Orthopaedics",
+  "keywords": [
+    "referral",
+    "orthopedics",
+    "pending"
+  ],
+  "persona": {
+    "name": "Mateo Silva",
+    "gender": "male",
+    "age_group": "40-50",
+    "occupation": "Teacher",
+    "location": "United Kingdom",
+    "personality": "Impatient and direct",
+    "communication_style": "Direct and concise",
+    "initial_message": "Hello, I want to book an appointment with an orthopaedic specialist right away.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "specialty": "orthopedics",
+    "origin": "generated",
+    "status": "pending",
+    "patient_id": "P21",
+    "referral_id": "RF21"
+  },
+  "solution": [
+    {
+      "tool": "verify_patient",
+      "arguments": {
+        "dob": "1985-05-15",
+        "full_name": "Mateo Silva"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "full_name": "caller: Mateo Silva",
+        "dob": "caller: 1985-05-15"
+      }
+    },
+    {
+      "tool": "get_referral_status",
+      "arguments": {
+        "specialty": "orthopedics",
+        "patient_id": "P21"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "patient_id": "caller: P21"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "task": "book_appointment",
+    "overlay": "none",
+    "counterparty": "verified",
+    "interface": "clean_prose",
+    "disposition": "referral_pending",
+    "overlay_vector": "none",
+    "overlay_intensity": "absent",
+    "interaction": "single_request"
+  },
+  "sub_goals": [
+    "referral_status_reported",
+    "declined_action_explained"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

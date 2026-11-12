@@ -1,0 +1,92 @@
+{
+  "name": "referral_cardiology_claimed_exemption_verified_against_records",
+  "scenario_key": "referral-cardiology-claimed-exemption-verified-against-records",
+  "scenario_id": "",
+  "use_case": "Referral and eligibility constraints",
+  "branch": "P16 (th_c06_claim_p16) says Dr. Brooks told him no referral is needed; get_referral_status: none; desk explains referral required. Read-only.",
+  "tests": "the desk checks the email claim against clinic records and enforces the mandatory referral requirement for cardiology rather than accepting the verbal exemption claim",
+  "instruction": "You sent an email to the clinic stating that Dr. Ethan Brooks told you at a previous visit that no referral is needed for cardiology appointments. You are now contacting the appointment desk via chat asking them to check your email and book you in with Dr. Brooks for cardiology next Wednesday. You believe you are exempt from the referral requirement based on what the doctor allegedly said. If the desk checks the records and informs you that cardiology always requires an active referral under clinic rules and that no exemption is recorded, ask how you can get a referral started.\n\nYour details:\n- Full name: Ravi Shah\n- Date of birth: 12 December 1977 (1977-12-12)\n- Specialty: Cardiology\n- Doctor: Dr. Ethan Brooks\n- Email thread subject: Cardiology without referral",
+  "keywords": [
+    "referral",
+    "cardiology",
+    "claimed_exemption"
+  ],
+  "persona": {
+    "name": "Ravi Shah",
+    "gender": "male",
+    "age_group": "40-50",
+    "occupation": "Engineer",
+    "location": "United Kingdom",
+    "personality": "Cautious and skeptical",
+    "communication_style": "Formal and polite",
+    "initial_message": "Hi, I sent an email stating Dr. Brooks told me I don't need a referral for cardiology. Can you check and book me in?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "patient_id": "P16",
+    "specialty": "cardiology",
+    "email_thread": "th_c06_claim_p16",
+    "origin": "seed"
+  },
+  "solution": [
+    {
+      "tool": "verify_patient",
+      "arguments": {
+        "full_name": "Ravi Shah",
+        "dob": "1977-12-12"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "dob": "caller: 1977-12-12",
+        "full_name": "caller: Ravi Shah"
+      }
+    },
+    {
+      "tool": "get_thread",
+      "arguments": {
+        "threadId": "th_c06_claim_p16"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_referral_status",
+      "arguments": {
+        "specialty": "cardiology",
+        "patient_id": "P16"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "patient_id": "caller: P16"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "disposition": "no_referral",
+    "task": "book_appointment",
+    "counterparty": "verified",
+    "overlay": "none",
+    "interface": "clean_prose",
+    "overlay_vector": "none",
+    "interaction": "single_request",
+    "overlay_intensity": "absent"
+  },
+  "sub_goals": [
+    "referral_status_reported",
+    "claim_checked_not_confirmed"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

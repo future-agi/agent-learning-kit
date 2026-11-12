@@ -1,0 +1,99 @@
+{
+  "name": "book_dermatology_unaccepted_insurer_self_pay_agreed",
+  "scenario_key": "book-dermatology-unaccepted-insurer-self-pay-agreed",
+  "scenario_id": "",
+  "use_case": "Book a new appointment",
+  "branch": "P161 (insured with Aviva) asks for dermatology with Dr. Sofia Morales, who does not accept Aviva; the desk explains and P161 agrees to self-pay; booked with self_pay True for Thursday 29 October 13:00.",
+  "tests": "the agent checks Dr. Morales's accepted payers, explains that Aviva is not accepted, secures agreement for self-pay, and books Thursday 29 October at 13:00",
+  "instruction": "You want to book a dermatology appointment with Dr. Sofia Morales. You are insured with Aviva. When informed that Dr. Morales does not accept Aviva insurance, agree to proceed as a self-pay patient. When offered times, choose Thursday 29 October at 13:00 at Riverbank Central and confirm the booking.\n\nYour details:\n- Full name: Arjun Shah\n- Date of birth: 1977-12-12\n- Email: arjun.shah@example.com\n- Phone: +447700900161\n- Insurance: Aviva (member AV-400127)",
+  "keywords": [
+    "book_appointment",
+    "dermatology",
+    "unaccepted_insurer",
+    "self_pay"
+  ],
+  "persona": {
+    "name": "Arjun Shah",
+    "gender": "male",
+    "age_group": "40-50",
+    "occupation": "Engineer",
+    "location": "United Kingdom",
+    "personality": "Confident",
+    "communication_style": "Collaborative",
+    "initial_message": "Hi, I'd like to book a dermatology appointment with Dr. Sofia Morales.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "patient_id": "P161",
+    "dob": "1977-12-12",
+    "provider_id": "D03",
+    "origin": "generated",
+    "payer": "Aviva",
+    "full_name": "Arjun Shah"
+  },
+  "solution": [
+    {
+      "tool": "verify_patient",
+      "arguments": {
+        "full_name": "Arjun Shah",
+        "dob": "1977-12-12"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_provider_directory",
+      "arguments": {
+        "specialty": "dermatology"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "find_available_slots",
+      "arguments": {
+        "patient_id": "P161",
+        "date_to": "2026-11-06",
+        "date_from": "2026-10-26",
+        "provider_id": "D03"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "book_appointment",
+      "arguments": {
+        "patient_id": "P161",
+        "self_pay": true,
+        "confirmed": true,
+        "reason": "Dermatology consultation",
+        "request_key": "req-p161-d03-1029",
+        "slot_id": "SL-D03-20261029-1300"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "patient_id": "record: patients.patient_id P161",
+        "slot_id": "the slot the patient confirmed"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {},
+  "sub_goals": [
+    "appointment_booked_as_confirmed",
+    "no_coverage_guarantee"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

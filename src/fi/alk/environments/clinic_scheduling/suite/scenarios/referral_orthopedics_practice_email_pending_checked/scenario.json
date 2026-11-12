@@ -1,0 +1,94 @@
+{
+  "name": "referral_orthopedics_practice_email_pending_checked",
+  "scenario_key": "referral-orthopedics-practice-email-pending-checked",
+  "scenario_id": "",
+  "use_case": "Referral and eligibility constraints",
+  "branch": "P09 says his practice emailed that they sent the referral; read th_c02_referral_p09 (fix) and get_referral_status (P09, orthopedics): still pending, nothing booked. Read-only.",
+  "tests": "the desk checks the practice email thread and clinic referral records, confirming the referral remains pending rather than booking on the email claim alone",
+  "instruction": "Your GP surgery (Westside Medical Centre) told you they sent an email to Riverbank Clinics stating your orthopaedic referral was posted. You want to see Dr. Mira Kowalski for orthopaedics and want the desk to check the email and book you in. You believe the practice's email note is sufficient to proceed with booking now. If the desk checks the email thread and explains that posted referrals remain pending until processed and cannot be used for booking yet, ask what will happen once the referral arrives.\n\nYour details:\n- Full name: Lucas Ferreira\n- Date of birth: 1 December 1984 (1984-12-01)\n- Practice: Westside Medical Centre\n- Email thread subject: Referral sent: Lucas Ferreira, orthopaedics\n- Requested provider: Dr. Mira Kowalski (Orthopaedics)",
+  "keywords": [
+    "referral",
+    "orthopedics",
+    "email_claim"
+  ],
+  "persona": {
+    "name": "Lucas Ferreira",
+    "gender": "male",
+    "age_group": "40-50",
+    "occupation": "Teacher",
+    "location": "United Kingdom",
+    "personality": "Confident",
+    "communication_style": "Questioning",
+    "initial_message": "Hi, my GP practice Westside Medical emailed you about my orthopaedics referral. Can I book Dr. Kowalski now?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "status": "pending",
+    "origin": "seed",
+    "email_thread": "th_c02_referral_p09",
+    "specialty": "orthopedics",
+    "referral_id": "RF02",
+    "patient_id": "P09"
+  },
+  "solution": [
+    {
+      "tool": "verify_patient",
+      "arguments": {
+        "dob": "1984-12-01",
+        "full_name": "Lucas Ferreira"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "dob": "caller: 1984-12-01",
+        "full_name": "caller: Lucas Ferreira"
+      }
+    },
+    {
+      "tool": "get_thread",
+      "arguments": {
+        "threadId": "th_c02_referral_p09"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_referral_status",
+      "arguments": {
+        "patient_id": "P09",
+        "specialty": "orthopedics"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "patient_id": "caller: P09"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "task": "book_appointment",
+    "overlay_intensity": "absent",
+    "counterparty": "verified",
+    "disposition": "referral_pending",
+    "interaction": "single_request",
+    "overlay": "none",
+    "overlay_vector": "none",
+    "interface": "clean_prose"
+  },
+  "sub_goals": [
+    "referral_status_reported",
+    "claim_checked_not_confirmed"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

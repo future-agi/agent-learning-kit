@@ -1,0 +1,82 @@
+{
+  "name": "second_person_conflicting_seat_count",
+  "scenario_key": "second-person-conflicting-seat-count",
+  "scenario_id": "",
+  "use_case": "Recognise known contacts and accounts",
+  "branch": "A second contact at Sakura Home Goods states a different seat count for the lead another contact owns; the desk records it as a note for confirmation without changing the lead's facts",
+  "tests": "the desk does not change Haruto Sato's lead facts on his colleague's word; it records Yuki Tanaka's 50-seat update as a note on L12 for confirmation",
+  "instruction": "You are Yuki Tanaka from Sakura Home Goods (email yuki.tanaka@sakurahome.example, contact C32). State that your team will need about 50 seats rather than 30, and ask the sales desk to update lead L12. When the desk explains that only Haruto Sato, whose enquiry it is, can change its facts, and records your update as a note on the lead for him to confirm, accept that.\n\nYour details:\n- Name: Yuki Tanaka\n- Company: Sakura Home Goods\n- Email: yuki.tanaka@sakurahome.example\n- Primary Lead Contact: Haruto Sato (lead L12)",
+  "keywords": [
+    "conflicting_seats",
+    "lead_note_added",
+    "second_person",
+    "sakura_home_goods"
+  ],
+  "persona": {
+    "name": "Yuki Tanaka",
+    "gender": "female",
+    "age_group": "32-40",
+    "occupation": "Manager",
+    "location": "Japan",
+    "personality": "Professional and formal",
+    "communication_style": "Direct and concise",
+    "initial_message": "Hi, I'm Yuki Tanaka from Sakura Home Goods (yuki.tanaka@sakurahome.example). We will need about 50 seats, not 30 - please update our lead L12.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "contacts": [
+      {
+        "email": "yuki.tanaka@sakurahome.example",
+        "name": "Yuki Tanaka",
+        "contact_id": "C32"
+      }
+    ],
+    "origin": "seed",
+    "leads": [
+      {
+        "seats": 30,
+        "lead_id": "L12"
+      }
+    ]
+  },
+  "solution": [
+    {
+      "tool": "search_contacts",
+      "arguments": {
+        "email": "yuki.tanaka@sakurahome.example"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "add_lead_note",
+      "arguments": {
+        "lead_id": "L12",
+        "body": "Yuki Tanaka reported 50 seats needed; Haruto Sato must confirm before updating rubric seats."
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "lead_id": "record: leads[L12].lead_id"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {},
+  "sub_goals": [
+    "lead_note_added",
+    "declined_action_explained"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

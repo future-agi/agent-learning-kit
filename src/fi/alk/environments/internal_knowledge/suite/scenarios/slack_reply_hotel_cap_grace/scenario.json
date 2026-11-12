@@ -1,0 +1,102 @@
+{
+  "name": "slack_reply_hotel_cap_grace",
+  "scenario_key": "slack-reply-hotel-cap-grace",
+  "scenario_id": "",
+  "use_case": "Pick up a Slack question and post the approved reply in its thread",
+  "branch": "Grace Kim asked about the current hotel cap in #help-policies (KM01) citing an old $200 figure; Nora Walsh gives approval APP-KN-402 to post the approved reply in her thread from Travel Policy 3.0",
+  "tests": "the agent reads KM01's thread and Travel Policy 3.0, posting $220 US / $300 international in Grace's thread with APP-KN-402",
+  "instruction": "You are Nora Walsh, Head of People. Grace Kim posted in #help-policies asking what the current hotel cap is for a trip to Chicago after seeing $200 in an old document. Ask the Knowledge Desk to answer in her thread; you provide approval APP-KN-402.\n\nYour details:\n- Name: Nora Walsh\n- Employee ID: E15\n- Approval: APP-KN-402",
+  "keywords": [
+    "slack",
+    "approval"
+  ],
+  "persona": {
+    "name": "Nora Walsh",
+    "gender": "female",
+    "age_group": "40-50",
+    "occupation": "Manager",
+    "location": "United Kingdom",
+    "personality": "Analytical",
+    "communication_style": "Formal and polite",
+    "initial_message": "Can you answer Grace's hotel cap question in #help-policies? She saw $200 in an old doc. Approval is APP-KN-402.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "approval_id": "APP-KN-402",
+    "origin": "generated"
+  },
+  "solution": [
+    {
+      "tool": "slack_read_thread",
+      "arguments": {
+        "message_ts": "1793628000.000001",
+        "channel_id": "CH_HELPPOL"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "message_ts": "record: KM01"
+      }
+    },
+    {
+      "tool": "get_effective_version",
+      "arguments": {
+        "family": "travel_policy",
+        "employee_id": "E15"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "fetch_passage",
+      "arguments": {
+        "passage_id": "P-TRVPOLICYV3-02",
+        "employee_id": "E15"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "passage_id": "record: Travel Policy 3.0, section 2"
+      }
+    },
+    {
+      "tool": "slack_send_message",
+      "arguments": {
+        "thread_ts": "1793628000.000001",
+        "message": "Hotel stays are reimbursed up to $220 per night in the US and up to $300 per night internationally per Travel Policy 3.0, section 2.",
+        "channel_id": "CH_HELPPOL",
+        "approval_id": "APP-KN-402"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "channel_id": "record: #help-policies",
+        "thread_ts": "record: KM01 thread"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "overlay_intensity": "absent",
+    "interaction": "multi_turn",
+    "interface": "slack",
+    "disposition": "superseded_version_cited",
+    "overlay_vector": "none",
+    "counterparty": "internal_lead",
+    "task": "slack_reply",
+    "overlay": "none"
+  },
+  "sub_goals": [
+    "slack_reply_in_thread"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

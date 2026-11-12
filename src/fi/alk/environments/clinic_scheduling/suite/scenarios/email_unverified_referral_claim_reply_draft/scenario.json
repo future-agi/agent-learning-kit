@@ -1,0 +1,110 @@
+{
+  "name": "email_unverified_referral_claim_reply_draft",
+  "scenario_key": "email-unverified-referral-claim-reply-draft",
+  "scenario_id": "",
+  "use_case": "Email requests and corrections",
+  "branch": "Ravi Shah's brother, registered as his proxy, asks for a reply to th_c06_claim_p16 where Ravi claimed Dr. Brooks waived the cardiology referral requirement; the desk checks and drafts a reply that a referral is required and none is on file",
+  "tests": "the agent reads th_c06_claim_p16, verifies Ravi Shah, checks get_referral_status, and drafts a reply stating a referral is required",
+  "instruction": "You are Dev Shah, registered with the clinic as the proxy for your brother Ravi Shah. Ravi sent an email (thread th_c06_claim_p16) claiming that Dr. Ethan Brooks told him at his last visit that he does not need a referral for cardiology, and asking to be booked next Wednesday. Contact the clinic desk on chat, provide Ravi's details, and ask them to check the referral record and draft a reply to Ravi's email explaining that clinic policy requires an active referral for cardiology and that none is currently on file.\n\nDetails:\n- Patient Name: Ravi Shah\n- Patient DOB: 1977-12-12\n- Patient Email: ravi.shah@example.com\n- Specialty: cardiology\n- Email subject: Cardiology without referral",
+  "keywords": [
+    "referral"
+  ],
+  "persona": {
+    "name": "Dev Shah",
+    "gender": "male",
+    "age_group": "40-50",
+    "occupation": "Consultant",
+    "location": "India",
+    "personality": "Professional and formal",
+    "communication_style": "Direct and concise",
+    "initial_message": "Hello, my brother Ravi Shah sent an email claiming Dr. Brooks waived the cardiology referral requirement. Could you check his referral record and draft a reply to his email?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "origin": "seed",
+    "patient_id": "P16",
+    "email": "ravi.shah@example.com",
+    "thread_id": "th_c06_claim_p16",
+    "full_name": "Ravi Shah",
+    "dob": "1977-12-12"
+  },
+  "solution": [
+    {
+      "tool": "verify_patient",
+      "arguments": {
+        "dob": "1977-12-12",
+        "full_name": "Ravi Shah"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_thread",
+      "arguments": {
+        "threadId": "th_c06_claim_p16",
+        "messageFormat": "FULL_CONTENT"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "threadId": "record: gmail_threads.id"
+      }
+    },
+    {
+      "tool": "get_referral_status",
+      "arguments": {
+        "patient_id": "P16",
+        "specialty": "cardiology"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "create_draft",
+      "arguments": {
+        "attachments": null,
+        "body": "Dear Ravi Shah, we have checked our records and confirm that an active referral from your GP practice is required before booking a cardiology appointment. We do not currently have an active referral on file for you. Riverbank Appointments Desk",
+        "htmlBody": null,
+        "to": [
+          "ravi.shah@example.com"
+        ],
+        "cc": null,
+        "bcc": null,
+        "subject": "Re: Cardiology without referral",
+        "replyToMessageId": "cmsg_007"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "replyToMessageId": "record: gmail_messages.id",
+        "to": "record: gmail_messages.sender"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "task": "referral",
+    "disposition": "unverified_claim",
+    "overlay": "none",
+    "interface": "email_thread",
+    "overlay_intensity": "absent",
+    "interaction": "multi_turn",
+    "overlay_vector": "none",
+    "counterparty": "third_party"
+  },
+  "sub_goals": [
+    "draft_created_for_review",
+    "claim_checked_not_confirmed"
+  ],
+  "max_turns": 8,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

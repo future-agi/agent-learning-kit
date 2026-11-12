@@ -1,0 +1,2697 @@
+[
+  {
+    "name": "get_customer",
+    "description": "Look up a returning customer by the email and phone on file (both must match): profile, time zone and preferences. Only the person in this conversation (or the front desk) can be looked up.",
+    "parameters": {
+      "type": "object",
+      "required": [
+        "email",
+        "phone"
+      ],
+      "properties": {
+        "email": {
+          "type": "string",
+          "description": "Email on file"
+        },
+        "phone": {
+          "type": "string",
+          "description": "Phone on file"
+        }
+      }
+    },
+    "mutates_state": false,
+    "returns": {
+      "type": "object",
+      "required": [
+        "customer_id",
+        "name"
+      ],
+      "properties": {
+        "customer_id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "email": {
+          "type": "string"
+        },
+        "preferred_language": {
+          "type": "string"
+        },
+        "time_zone": {
+          "type": "string"
+        },
+        "preferences": {
+          "type": "array"
+        }
+      }
+    }
+  },
+  {
+    "name": "create_customer",
+    "description": "Create a first-time customer. Refused when the email already belongs to a customer: look them up instead.",
+    "parameters": {
+      "type": "object",
+      "required": [
+        "name",
+        "email",
+        "phone"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Full name"
+        },
+        "email": {
+          "type": "string",
+          "description": "Email"
+        },
+        "phone": {
+          "type": "string",
+          "description": "Phone"
+        },
+        "preferred_language": {
+          "type": "string",
+          "description": "Language code, e.g. en, es"
+        },
+        "time_zone": {
+          "type": "string",
+          "description": "IANA time zone, e.g. America/New_York"
+        }
+      }
+    },
+    "mutates_state": true,
+    "returns": {
+      "type": "object",
+      "required": [
+        "customer_id"
+      ],
+      "properties": {
+        "customer_id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        }
+      }
+    }
+  },
+  {
+    "name": "record_customer_preference",
+    "description": "Record or replace one preference for a customer: language, staff, location, time_of_day, accessibility or contact_channel.",
+    "parameters": {
+      "type": "object",
+      "required": [
+        "customer_id",
+        "kind",
+        "value"
+      ],
+      "properties": {
+        "customer_id": {
+          "type": "string",
+          "description": "The customer"
+        },
+        "kind": {
+          "type": "string",
+          "description": "Preference kind",
+          "enum": [
+            "language",
+            "staff",
+            "location",
+            "time_of_day",
+            "accessibility",
+            "contact_channel"
+          ]
+        },
+        "value": {
+          "type": "string",
+          "description": "The value, e.g. es, ST02, L2, morning"
+        }
+      }
+    },
+    "mutates_state": true,
+    "returns": {
+      "type": "object",
+      "required": [
+        "customer_id",
+        "kind",
+        "value"
+      ],
+      "properties": {
+        "customer_id": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string"
+        },
+        "value": {
+          "type": "string"
+        },
+        "replaced": {
+          "type": "boolean"
+        }
+      }
+    }
+  },
+  {
+    "name": "get_services",
+    "description": "The services offered: id, name, duration in minutes, price and which staff offer them.",
+    "parameters": {
+      "type": "object",
+      "required": [],
+      "properties": {}
+    },
+    "mutates_state": false,
+    "returns": {
+      "type": "object",
+      "required": [
+        "services"
+      ],
+      "properties": {
+        "services": {
+          "type": "array"
+        }
+      }
+    }
+  },
+  {
+    "name": "find_staff",
+    "description": "Staff who match a service, location and language: name, languages, location, services and whether their calendar takes online bookings.",
+    "parameters": {
+      "type": "object",
+      "required": [],
+      "properties": {
+        "service_id": {
+          "type": "string",
+          "description": "A service, e.g. SV1"
+        },
+        "location_id": {
+          "type": "string",
+          "description": "A location, e.g. L1"
+        },
+        "language": {
+          "type": "string",
+          "description": "A language code, e.g. es"
+        }
+      }
+    },
+    "mutates_state": false,
+    "returns": {
+      "type": "object",
+      "required": [
+        "staff"
+      ],
+      "properties": {
+        "staff": {
+          "type": "array"
+        }
+      }
+    }
+  },
+  {
+    "name": "get_location",
+    "description": "A location's address, time zone, current UTC offset, opening hours and closed dates.",
+    "parameters": {
+      "type": "object",
+      "required": [
+        "location_id"
+      ],
+      "properties": {
+        "location_id": {
+          "type": "string",
+          "description": "L1 or L2"
+        }
+      }
+    },
+    "mutates_state": false,
+    "returns": {
+      "type": "object",
+      "required": [
+        "location_id",
+        "time_zone"
+      ],
+      "properties": {
+        "location_id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "time_zone": {
+          "type": "string"
+        },
+        "utc_offset_now": {
+          "type": "string"
+        },
+        "hours": {
+          "type": "object"
+        },
+        "closed_dates": {
+          "type": "array"
+        },
+        "clock_changes": {
+          "type": "array"
+        }
+      }
+    }
+  },
+  {
+    "name": "list_slots",
+    "description": "Free start times for a service at a location on one local date, computed from each staff member's calendar, holds and closures. Each slot gives the local time, the UTC instant and the offset. When a day has no slots because the studio is closed, the date is past the booking horizon or too soon, unavailable_reason says so.",
+    "parameters": {
+      "type": "object",
+      "required": [
+        "service_id",
+        "location_id",
+        "date"
+      ],
+      "properties": {
+        "service_id": {
+          "type": "string",
+          "description": "The service"
+        },
+        "location_id": {
+          "type": "string",
+          "description": "The location"
+        },
+        "date": {
+          "type": "string",
+          "description": "Local date, YYYY-MM-DD"
+        },
+        "staff_id": {
+          "type": "string",
+          "description": "Only this staff member"
+        },
+        "language": {
+          "type": "string",
+          "description": "Only staff who speak this language"
+        }
+      }
+    },
+    "mutates_state": false,
+    "returns": {
+      "type": "object",
+      "required": [
+        "slots"
+      ],
+      "properties": {
+        "slots": {
+          "type": "array"
+        },
+        "date": {
+          "type": "string"
+        },
+        "time_zone": {
+          "type": "string"
+        }
+      }
+    }
+  },
+  {
+    "name": "hold_slot",
+    "description": "Hold a free slot for a customer while they decide; the hold expires after the hold policy's minutes.",
+    "parameters": {
+      "type": "object",
+      "required": [
+        "customer_id",
+        "service_id",
+        "staff_id",
+        "location_id",
+        "start_time"
+      ],
+      "properties": {
+        "customer_id": {
+          "type": "string",
+          "description": "The customer"
+        },
+        "service_id": {
+          "type": "string",
+          "description": "The service"
+        },
+        "staff_id": {
+          "type": "string",
+          "description": "The staff member"
+        },
+        "location_id": {
+          "type": "string",
+          "description": "The location"
+        },
+        "start_time": {
+          "type": "string",
+          "description": "Local wall-clock start at the location, e.g. 2026-10-29T14:00"
+        },
+        "utc_offset": {
+          "type": "string",
+          "description": "UTC offset that picks one occurrence of a time that happens twice when clocks go back, e.g. -05:00"
+        }
+      }
+    },
+    "mutates_state": true,
+    "returns": {
+      "type": "object",
+      "required": [
+        "hold_id",
+        "expires_at"
+      ],
+      "properties": {
+        "hold_id": {
+          "type": "string"
+        },
+        "start_utc": {
+          "type": "string"
+        },
+        "expires_at": {
+          "type": "string"
+        }
+      }
+    }
+  },
+  {
+    "name": "release_hold",
+    "description": "Release a customer's active hold so others can book the slot.",
+    "parameters": {
+      "type": "object",
+      "required": [
+        "hold_id",
+        "customer_id"
+      ],
+      "properties": {
+        "hold_id": {
+          "type": "string",
+          "description": "The hold"
+        },
+        "customer_id": {
+          "type": "string",
+          "description": "Its customer"
+        }
+      }
+    },
+    "mutates_state": true,
+    "returns": {
+      "type": "object",
+      "required": [
+        "hold_id",
+        "status"
+      ],
+      "properties": {
+        "hold_id": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        }
+      }
+    }
+  },
+  {
+    "name": "book_appointment",
+    "description": "Book an appointment after the customer confirmed it: writes the appointment and its event on the staff member's calendar together. If another booking takes the slot first, nothing is booked for this customer and the result says so. A repeated request_key returns the existing booking.",
+    "parameters": {
+      "type": "object",
+      "required": [
+        "customer_id",
+        "service_id",
+        "staff_id",
+        "location_id",
+        "start_time",
+        "confirmed",
+        "request_key"
+      ],
+      "properties": {
+        "customer_id": {
+          "type": "string",
+          "description": "The customer"
+        },
+        "service_id": {
+          "type": "string",
+          "description": "The service"
+        },
+        "staff_id": {
+          "type": "string",
+          "description": "The staff member"
+        },
+        "location_id": {
+          "type": "string",
+          "description": "The location"
+        },
+        "start_time": {
+          "type": "string",
+          "description": "Local wall-clock start at the location, e.g. 2026-10-29T14:00"
+        },
+        "utc_offset": {
+          "type": "string",
+          "description": "UTC offset that picks one occurrence of a time that happens twice when clocks go back, e.g. -05:00"
+        },
+        "confirmed": {
+          "type": "boolean",
+          "description": "True only after the customer confirmed the service, staff, location, local time and time zone"
+        },
+        "request_key": {
+          "type": "string",
+          "description": "Idempotency key, e.g. REQ-CU01-BOOK"
+        },
+        "hold_id": {
+          "type": "string",
+          "description": "The customer's hold on this slot, if any"
+        }
+      }
+    },
+    "mutates_state": true,
+    "returns": {
+      "type": "object",
+      "required": [
+        "booked"
+      ],
+      "properties": {
+        "booked": {
+          "type": "boolean"
+        },
+        "status": {
+          "type": "string"
+        },
+        "appointment": {
+          "type": "object"
+        },
+        "idempotent": {
+          "type": "boolean"
+        }
+      }
+    }
+  },
+  {
+    "name": "get_appointment",
+    "description": "One of the customer's appointments: service, staff, location, local time, UTC instant, status and calendar event.",
+    "parameters": {
+      "type": "object",
+      "required": [
+        "appointment_id",
+        "customer_id"
+      ],
+      "properties": {
+        "appointment_id": {
+          "type": "string",
+          "description": "The appointment"
+        },
+        "customer_id": {
+          "type": "string",
+          "description": "The customer it belongs to"
+        }
+      }
+    },
+    "mutates_state": false,
+    "returns": {
+      "type": "object",
+      "required": [
+        "appointment_id",
+        "status"
+      ],
+      "properties": {
+        "appointment_id": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        }
+      }
+    }
+  },
+  {
+    "name": "list_customer_appointments",
+    "description": "The customer's appointments, optionally by status, including past and rescheduled ones. Only for the person in this conversation, or the front desk.",
+    "parameters": {
+      "type": "object",
+      "required": [
+        "customer_id"
+      ],
+      "properties": {
+        "customer_id": {
+          "type": "string",
+          "description": "The customer"
+        },
+        "status": {
+          "type": "string",
+          "description": "booked, cancelled, rescheduled or completed"
+        }
+      }
+    },
+    "mutates_state": false,
+    "returns": {
+      "type": "object",
+      "required": [
+        "appointments"
+      ],
+      "properties": {
+        "appointments": {
+          "type": "array"
+        }
+      }
+    }
+  },
+  {
+    "name": "reschedule_appointment",
+    "description": "Move a booked appointment after the customer confirmed the new time: the replacement is committed first and the original released only after; if the replacement cannot be committed the original stays booked.",
+    "parameters": {
+      "type": "object",
+      "required": [
+        "appointment_id",
+        "customer_id",
+        "new_start_time",
+        "confirmed",
+        "request_key"
+      ],
+      "properties": {
+        "appointment_id": {
+          "type": "string",
+          "description": "The appointment"
+        },
+        "customer_id": {
+          "type": "string",
+          "description": "Its customer"
+        },
+        "new_start_time": {
+          "type": "string",
+          "description": "Local wall-clock start at the location, e.g. 2026-10-29T14:00"
+        },
+        "utc_offset": {
+          "type": "string",
+          "description": "UTC offset that picks one occurrence of a time that happens twice when clocks go back, e.g. -05:00"
+        },
+        "new_staff_id": {
+          "type": "string",
+          "description": "Another staff member at the same location, if asked"
+        },
+        "confirmed": {
+          "type": "boolean",
+          "description": "True only after the customer confirmed the new time"
+        },
+        "request_key": {
+          "type": "string",
+          "description": "Idempotency key"
+        }
+      }
+    },
+    "mutates_state": true,
+    "returns": {
+      "type": "object",
+      "required": [
+        "rescheduled"
+      ],
+      "properties": {
+        "rescheduled": {
+          "type": "boolean"
+        },
+        "status": {
+          "type": "string"
+        },
+        "original": {
+          "type": "object"
+        },
+        "replacement": {
+          "type": "object"
+        }
+      }
+    }
+  },
+  {
+    "name": "get_cancellation_policy",
+    "description": "The cancellation window and late fee; for an appointment, whether cancelling now is late and what fee applies.",
+    "parameters": {
+      "type": "object",
+      "required": [],
+      "properties": {
+        "appointment_id": {
+          "type": "string",
+          "description": "An appointment"
+        },
+        "customer_id": {
+          "type": "string",
+          "description": "Its customer"
+        }
+      }
+    },
+    "mutates_state": false,
+    "returns": {
+      "type": "object",
+      "required": [
+        "window_hours",
+        "late_fee_cents"
+      ],
+      "properties": {
+        "window_hours": {
+          "type": "integer"
+        },
+        "late_fee_cents": {
+          "type": "integer"
+        },
+        "late": {
+          "type": "boolean"
+        },
+        "fee_applies_cents": {
+          "type": "integer"
+        }
+      }
+    }
+  },
+  {
+    "name": "cancel_appointment",
+    "description": "Cancel a booked appointment after the customer confirmed. Inside the late window the fee must have been disclosed and accepted (acknowledged_fee true) or the cancellation is refused. Cancels its calendar event.",
+    "parameters": {
+      "type": "object",
+      "required": [
+        "appointment_id",
+        "customer_id",
+        "confirmed"
+      ],
+      "properties": {
+        "appointment_id": {
+          "type": "string",
+          "description": "The appointment"
+        },
+        "customer_id": {
+          "type": "string",
+          "description": "Its customer"
+        },
+        "confirmed": {
+          "type": "boolean",
+          "description": "True only after the customer confirmed the cancellation"
+        },
+        "acknowledged_fee": {
+          "type": "boolean",
+          "description": "True only after a late fee was disclosed and the customer accepted it"
+        }
+      }
+    },
+    "mutates_state": true,
+    "returns": {
+      "type": "object",
+      "required": [
+        "appointment_id",
+        "status"
+      ],
+      "properties": {
+        "appointment_id": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "late_fee_cents": {
+          "type": "integer"
+        }
+      }
+    }
+  },
+  {
+    "name": "add_waitlist",
+    "description": "Put a customer on the waitlist for a service at a location on a date, optionally with one staff member. One active entry per customer, service and date.",
+    "parameters": {
+      "type": "object",
+      "required": [
+        "customer_id",
+        "service_id",
+        "location_id",
+        "preferred_date"
+      ],
+      "properties": {
+        "customer_id": {
+          "type": "string",
+          "description": "The customer"
+        },
+        "service_id": {
+          "type": "string",
+          "description": "The service"
+        },
+        "location_id": {
+          "type": "string",
+          "description": "The location"
+        },
+        "preferred_date": {
+          "type": "string",
+          "description": "Local date, YYYY-MM-DD"
+        },
+        "staff_id": {
+          "type": "string",
+          "description": "A preferred staff member"
+        }
+      }
+    },
+    "mutates_state": true,
+    "returns": {
+      "type": "object",
+      "required": [
+        "waitlist_id"
+      ],
+      "properties": {
+        "waitlist_id": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        }
+      }
+    }
+  },
+  {
+    "name": "queue_confirmation",
+    "description": "Queue a confirmation message for a committed change: booked for a booked appointment, rescheduled for a replacement, cancelled for a cancelled one. Never for something not committed. A repeat of a message still queued on the same channel returns it; a resend after one went out, or on another channel, queues a new one.",
+    "parameters": {
+      "type": "object",
+      "required": [
+        "appointment_id",
+        "customer_id",
+        "kind"
+      ],
+      "properties": {
+        "appointment_id": {
+          "type": "string",
+          "description": "The appointment"
+        },
+        "customer_id": {
+          "type": "string",
+          "description": "Its customer"
+        },
+        "kind": {
+          "type": "string",
+          "description": "What is confirmed",
+          "enum": [
+            "booked",
+            "rescheduled",
+            "cancelled"
+          ]
+        },
+        "channel": {
+          "type": "string",
+          "description": "email or sms",
+          "enum": [
+            "email",
+            "sms"
+          ]
+        }
+      }
+    },
+    "mutates_state": true,
+    "returns": {
+      "type": "object",
+      "required": [
+        "outbox_id"
+      ],
+      "properties": {
+        "outbox_id": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string"
+        },
+        "idempotent": {
+          "type": "boolean"
+        }
+      }
+    }
+  },
+  {
+    "name": "create_handoff",
+    "description": "Hand a case to the front desk team: read-only calendars, out-of-scope requests (payments, insurance, eligibility), complaints and failures.",
+    "parameters": {
+      "type": "object",
+      "required": [
+        "category",
+        "details"
+      ],
+      "properties": {
+        "customer_id": {
+          "type": "string",
+          "description": "The customer, if known"
+        },
+        "category": {
+          "type": "string",
+          "description": "Why",
+          "enum": [
+            "read_only_calendar",
+            "out_of_scope",
+            "complaint",
+            "failure",
+            "other"
+          ]
+        },
+        "details": {
+          "type": "string",
+          "description": "What the team needs to know"
+        }
+      }
+    },
+    "mutates_state": true,
+    "returns": {
+      "type": "object",
+      "required": [
+        "handoff_id"
+      ],
+      "properties": {
+        "handoff_id": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        }
+      }
+    }
+  },
+  {
+    "name": "list_calendars",
+    "description": "The calendars the user has access to, with their IDs; resolves a calendar name to its calendar_id. accessRole says what the user may do on each.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "pageSize": {
+          "type": "integer",
+          "description": "Max results per page. Default 100, max 250."
+        },
+        "pageToken": {
+          "type": "string"
+        }
+      }
+    },
+    "mutates_state": false,
+    "returns": {
+      "type": "object",
+      "properties": {
+        "calendars": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "summary": {
+                "type": "string"
+              },
+              "description": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "timeZone": {
+                "type": "string"
+              },
+              "accessRole": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "summary",
+              "timeZone",
+              "accessRole"
+            ]
+          }
+        },
+        "nextPageToken": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "calendars"
+      ]
+    }
+  },
+  {
+    "name": "list_events",
+    "description": "Events on a calendar matching the constraints. Set startTime and endTime only when a specific timeframe is requested. For open-ended keyword searches on the primary calendar use search_events. Another customer's booking shows as busy time ('Booked'), without who is booked, unless the front desk is asking.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "calendarId": {
+          "type": "string",
+          "description": "Calendar ID from list_calendars. Default: the primary calendar."
+        },
+        "pageSize": {
+          "type": "integer",
+          "description": "Max events per page (default 100, max 250). Recommended: 10."
+        },
+        "pageToken": {
+          "type": "string"
+        },
+        "startTime": {
+          "type": "string",
+          "description": "Start of the timeframe (ISO 8601, for example '2026-04-30T10:00:00Z')."
+        },
+        "endTime": {
+          "type": "string",
+          "description": "End of the timeframe (ISO 8601, for example '2026-04-30T10:00:00Z')."
+        },
+        "timeZone": {
+          "type": "string",
+          "description": "IANA Time Zone Database name (for example America/Los_Angeles)."
+        },
+        "orderBy": {
+          "type": "string",
+          "description": "default, startTime, startTimeDesc or lastModified."
+        },
+        "fullText": {
+          "type": "string",
+          "description": "Free-form search over title, description, location and attendees (all terms must match)."
+        },
+        "eventType": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "mutates_state": false,
+    "returns": {
+      "type": "object",
+      "properties": {
+        "summary": {
+          "type": "string"
+        },
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "updated": {
+          "type": "string"
+        },
+        "timeZone": {
+          "type": "string"
+        },
+        "accessRole": {
+          "type": "string"
+        },
+        "defaultReminders": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        },
+        "events": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "status": {
+                "type": "string"
+              },
+              "htmlLink": {
+                "type": "string"
+              },
+              "created": {
+                "type": "string"
+              },
+              "updated": {
+                "type": "string"
+              },
+              "summary": {
+                "type": "string"
+              },
+              "description": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "location": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "start": {
+                "type": "object",
+                "properties": {
+                  "dateTime": {
+                    "type": "string"
+                  },
+                  "date": {
+                    "type": "string"
+                  },
+                  "timeZone": {
+                    "type": "string"
+                  }
+                }
+              },
+              "end": {
+                "type": "object",
+                "properties": {
+                  "dateTime": {
+                    "type": "string"
+                  },
+                  "date": {
+                    "type": "string"
+                  },
+                  "timeZone": {
+                    "type": "string"
+                  }
+                }
+              },
+              "recurrence": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "recurringEventId": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "attendees": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "email": {
+                      "type": "string"
+                    },
+                    "displayName": {
+                      "type": "string"
+                    },
+                    "responseStatus": {
+                      "type": "string"
+                    },
+                    "organizer": {
+                      "type": "boolean"
+                    },
+                    "optionalAttendee": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "email",
+                    "responseStatus"
+                  ]
+                }
+              },
+              "eventType": {
+                "type": "string"
+              },
+              "version": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "id",
+              "status",
+              "summary",
+              "start",
+              "end",
+              "attendees",
+              "version"
+            ]
+          }
+        },
+        "nextPageToken": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "summary",
+        "timeZone",
+        "accessRole",
+        "events"
+      ]
+    }
+  },
+  {
+    "name": "get_event",
+    "description": "A single event on a calendar. Another customer's booking shows as busy time ('Booked') unless the front desk is asking.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "eventId": {
+          "type": "string",
+          "description": "Event ID."
+        },
+        "calendarId": {
+          "type": "string",
+          "description": "Calendar ID from list_calendars. Default: the primary calendar."
+        }
+      },
+      "required": [
+        "eventId"
+      ]
+    },
+    "mutates_state": false,
+    "returns": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "htmlLink": {
+          "type": "string"
+        },
+        "created": {
+          "type": "string"
+        },
+        "updated": {
+          "type": "string"
+        },
+        "summary": {
+          "type": "string"
+        },
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "location": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "start": {
+          "type": "object",
+          "properties": {
+            "dateTime": {
+              "type": "string"
+            },
+            "date": {
+              "type": "string"
+            },
+            "timeZone": {
+              "type": "string"
+            }
+          }
+        },
+        "end": {
+          "type": "object",
+          "properties": {
+            "dateTime": {
+              "type": "string"
+            },
+            "date": {
+              "type": "string"
+            },
+            "timeZone": {
+              "type": "string"
+            }
+          }
+        },
+        "recurrence": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "recurringEventId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "attendees": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "email": {
+                "type": "string"
+              },
+              "displayName": {
+                "type": "string"
+              },
+              "responseStatus": {
+                "type": "string"
+              },
+              "organizer": {
+                "type": "boolean"
+              },
+              "optionalAttendee": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "email",
+              "responseStatus"
+            ]
+          }
+        },
+        "eventType": {
+          "type": "string"
+        },
+        "version": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "id",
+        "status",
+        "summary",
+        "start",
+        "end",
+        "attendees",
+        "version"
+      ]
+    }
+  },
+  {
+    "name": "search_events",
+    "description": "Searches events on the user's primary calendar by keywords (case-insensitive).",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "query": {
+          "type": "string",
+          "description": "Query string to search for events."
+        },
+        "pageSize": {
+          "type": "integer"
+        },
+        "pageToken": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "query"
+      ]
+    },
+    "mutates_state": false,
+    "returns": {
+      "type": "object",
+      "properties": {
+        "events": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "status": {
+                "type": "string"
+              },
+              "htmlLink": {
+                "type": "string"
+              },
+              "created": {
+                "type": "string"
+              },
+              "updated": {
+                "type": "string"
+              },
+              "summary": {
+                "type": "string"
+              },
+              "description": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "location": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "start": {
+                "type": "object",
+                "properties": {
+                  "dateTime": {
+                    "type": "string"
+                  },
+                  "date": {
+                    "type": "string"
+                  },
+                  "timeZone": {
+                    "type": "string"
+                  }
+                }
+              },
+              "end": {
+                "type": "object",
+                "properties": {
+                  "dateTime": {
+                    "type": "string"
+                  },
+                  "date": {
+                    "type": "string"
+                  },
+                  "timeZone": {
+                    "type": "string"
+                  }
+                }
+              },
+              "recurrence": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "recurringEventId": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "attendees": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "email": {
+                      "type": "string"
+                    },
+                    "displayName": {
+                      "type": "string"
+                    },
+                    "responseStatus": {
+                      "type": "string"
+                    },
+                    "organizer": {
+                      "type": "boolean"
+                    },
+                    "optionalAttendee": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "email",
+                    "responseStatus"
+                  ]
+                }
+              },
+              "eventType": {
+                "type": "string"
+              },
+              "version": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "id",
+              "status",
+              "summary",
+              "start",
+              "end",
+              "attendees",
+              "version"
+            ]
+          }
+        },
+        "nextPageToken": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "events"
+      ]
+    }
+  },
+  {
+    "name": "suggest_time",
+    "description": "Suggests free time slots across the attendees' calendars within a query interval, respecting the configured buffer between events. A suggestion reserves nothing: create the event after the user confirms. A customer may ask only about themselves and the staff; the front desk about anyone.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "attendeeEmails": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Attendee emails to find free time for."
+        },
+        "startTime": {
+          "type": "string",
+          "description": "Query interval start (ISO 8601, for example '2026-04-30T10:00:00Z')."
+        },
+        "endTime": {
+          "type": "string",
+          "description": "Query interval end (ISO 8601, for example '2026-04-30T10:00:00Z')."
+        },
+        "timeZone": {
+          "type": "string",
+          "description": "IANA Time Zone Database name (for example America/Los_Angeles)."
+        },
+        "durationMinutes": {
+          "type": "integer",
+          "description": "Default 30."
+        },
+        "preferences": {
+          "type": "object",
+          "properties": {
+            "startHour": {
+              "type": "string",
+              "description": "HH:mm, 24-hour."
+            },
+            "endHour": {
+              "type": "string",
+              "description": "HH:mm, 24-hour."
+            },
+            "excludeWeekends": {
+              "type": "boolean"
+            },
+            "pageSize": {
+              "type": "integer",
+              "description": "Number of slots; default 5."
+            }
+          }
+        }
+      },
+      "required": [
+        "attendeeEmails",
+        "startTime",
+        "endTime"
+      ]
+    },
+    "mutates_state": false,
+    "returns": {
+      "type": "object",
+      "properties": {
+        "timeSlots": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "start": {
+                "type": "object",
+                "properties": {
+                  "dateTime": {
+                    "type": "string"
+                  },
+                  "date": {
+                    "type": "string"
+                  },
+                  "timeZone": {
+                    "type": "string"
+                  }
+                }
+              },
+              "end": {
+                "type": "object",
+                "properties": {
+                  "dateTime": {
+                    "type": "string"
+                  },
+                  "date": {
+                    "type": "string"
+                  },
+                  "timeZone": {
+                    "type": "string"
+                  }
+                }
+              }
+            },
+            "required": [
+              "start",
+              "end"
+            ]
+          }
+        }
+      },
+      "required": [
+        "timeSlots"
+      ]
+    }
+  },
+  {
+    "name": "create_event",
+    "description": "Creates an event on a calendar. Attendees must be reachable within the attendee domain policy; conflicts with confirmed events are refused. Needs the user's approval of this exact event (approval_id). Front desk only.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "summary": {
+          "type": "string",
+          "description": "Title."
+        },
+        "startTime": {
+          "type": "string",
+          "description": "Start time (ISO 8601, for example '2026-04-30T10:00:00Z')."
+        },
+        "endTime": {
+          "type": "string",
+          "description": "End time (ISO 8601, for example '2026-04-30T10:00:00Z')."
+        },
+        "attendees": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "email": {
+                "type": "string"
+              },
+              "displayName": {
+                "type": "string"
+              },
+              "optionalAttendee": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "email"
+            ]
+          }
+        },
+        "attendeeEmails": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Deprecated: use attendees."
+        },
+        "recurrenceData": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "RRULE, RDATE or EXDATE strings (RFC 5545)."
+        },
+        "calendarId": {
+          "type": "string",
+          "description": "Calendar ID from list_calendars. Default: the primary calendar."
+        },
+        "description": {
+          "type": "string"
+        },
+        "location": {
+          "type": "string"
+        },
+        "allDay": {
+          "type": "boolean"
+        },
+        "timeZone": {
+          "type": "string",
+          "description": "IANA Time Zone Database name (for example America/Los_Angeles)."
+        },
+        "notificationLevel": {
+          "type": "string",
+          "description": "NONE, EXTERNAL_ONLY or ALL."
+        },
+        "addGoogleMeetUrl": {
+          "type": "boolean"
+        },
+        "visibility": {
+          "type": "string"
+        },
+        "approval_id": {
+          "type": "string",
+          "description": "The approval authorizing this change; required while the environment requires approval for mutations."
+        }
+      },
+      "required": [
+        "summary",
+        "startTime",
+        "endTime"
+      ]
+    },
+    "mutates_state": true,
+    "returns": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "htmlLink": {
+          "type": "string"
+        },
+        "created": {
+          "type": "string"
+        },
+        "updated": {
+          "type": "string"
+        },
+        "summary": {
+          "type": "string"
+        },
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "location": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "start": {
+          "type": "object",
+          "properties": {
+            "dateTime": {
+              "type": "string"
+            },
+            "date": {
+              "type": "string"
+            },
+            "timeZone": {
+              "type": "string"
+            }
+          }
+        },
+        "end": {
+          "type": "object",
+          "properties": {
+            "dateTime": {
+              "type": "string"
+            },
+            "date": {
+              "type": "string"
+            },
+            "timeZone": {
+              "type": "string"
+            }
+          }
+        },
+        "recurrence": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "recurringEventId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "attendees": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "email": {
+                "type": "string"
+              },
+              "displayName": {
+                "type": "string"
+              },
+              "responseStatus": {
+                "type": "string"
+              },
+              "organizer": {
+                "type": "boolean"
+              },
+              "optionalAttendee": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "email",
+              "responseStatus"
+            ]
+          }
+        },
+        "eventType": {
+          "type": "string"
+        },
+        "version": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "id",
+        "status",
+        "summary",
+        "start",
+        "end",
+        "attendees",
+        "version"
+      ]
+    }
+  },
+  {
+    "name": "update_event",
+    "description": "Updates an event; fields that are not set are not changed. Moving only the start preserves the duration. Needs approval_id, and expected_version must match the event's current version. Front desk only.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "eventId": {
+          "type": "string",
+          "description": "The ID of the event to update."
+        },
+        "calendarId": {
+          "type": "string",
+          "description": "Calendar ID from list_calendars. Default: the primary calendar."
+        },
+        "summary": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "location": {
+          "type": "string"
+        },
+        "startTime": {
+          "type": "string",
+          "description": "New start time (ISO 8601, for example '2026-04-30T10:00:00Z')."
+        },
+        "endTime": {
+          "type": "string",
+          "description": "New end time (ISO 8601, for example '2026-04-30T10:00:00Z')."
+        },
+        "allDay": {
+          "type": "boolean"
+        },
+        "timeZone": {
+          "type": "string",
+          "description": "IANA Time Zone Database name (for example America/Los_Angeles)."
+        },
+        "addedAttendees": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "email": {
+                "type": "string"
+              },
+              "displayName": {
+                "type": "string"
+              },
+              "optionalAttendee": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "email"
+            ]
+          }
+        },
+        "addedAttendeeEmails": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Deprecated: use addedAttendees."
+        },
+        "removedAttendeeEmails": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "notificationLevel": {
+          "type": "string"
+        },
+        "approval_id": {
+          "type": "string",
+          "description": "The approval authorizing this change; required while the environment requires approval for mutations."
+        },
+        "expected_version": {
+          "type": "integer",
+          "description": "The event version the change was decided on; a stale version is refused."
+        }
+      },
+      "required": [
+        "eventId"
+      ]
+    },
+    "mutates_state": true,
+    "returns": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "htmlLink": {
+          "type": "string"
+        },
+        "created": {
+          "type": "string"
+        },
+        "updated": {
+          "type": "string"
+        },
+        "summary": {
+          "type": "string"
+        },
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "location": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "start": {
+          "type": "object",
+          "properties": {
+            "dateTime": {
+              "type": "string"
+            },
+            "date": {
+              "type": "string"
+            },
+            "timeZone": {
+              "type": "string"
+            }
+          }
+        },
+        "end": {
+          "type": "object",
+          "properties": {
+            "dateTime": {
+              "type": "string"
+            },
+            "date": {
+              "type": "string"
+            },
+            "timeZone": {
+              "type": "string"
+            }
+          }
+        },
+        "recurrence": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "recurringEventId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "attendees": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "email": {
+                "type": "string"
+              },
+              "displayName": {
+                "type": "string"
+              },
+              "responseStatus": {
+                "type": "string"
+              },
+              "organizer": {
+                "type": "boolean"
+              },
+              "optionalAttendee": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "email",
+              "responseStatus"
+            ]
+          }
+        },
+        "eventType": {
+          "type": "string"
+        },
+        "version": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "id",
+        "status",
+        "summary",
+        "start",
+        "end",
+        "attendees",
+        "version"
+      ]
+    }
+  },
+  {
+    "name": "delete_event",
+    "description": "Cancels an event. For a recurring event, recurring_action says whether this occurrence (default) or the whole series is cancelled. Needs approval_id. Front desk only.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "eventId": {
+          "type": "string",
+          "description": "The ID of the event to delete."
+        },
+        "calendarId": {
+          "type": "string",
+          "description": "Calendar ID from list_calendars. Default: the primary calendar."
+        },
+        "notificationLevel": {
+          "type": "string"
+        },
+        "approval_id": {
+          "type": "string",
+          "description": "The approval authorizing this change; required while the environment requires approval for mutations."
+        },
+        "recurring_action": {
+          "type": "string",
+          "description": "this_event (default) or all_events."
+        }
+      },
+      "required": [
+        "eventId"
+      ]
+    },
+    "mutates_state": true,
+    "returns": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "htmlLink": {
+          "type": "string"
+        },
+        "created": {
+          "type": "string"
+        },
+        "updated": {
+          "type": "string"
+        },
+        "summary": {
+          "type": "string"
+        },
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "location": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "start": {
+          "type": "object",
+          "properties": {
+            "dateTime": {
+              "type": "string"
+            },
+            "date": {
+              "type": "string"
+            },
+            "timeZone": {
+              "type": "string"
+            }
+          }
+        },
+        "end": {
+          "type": "object",
+          "properties": {
+            "dateTime": {
+              "type": "string"
+            },
+            "date": {
+              "type": "string"
+            },
+            "timeZone": {
+              "type": "string"
+            }
+          }
+        },
+        "recurrence": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "recurringEventId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "attendees": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "email": {
+                "type": "string"
+              },
+              "displayName": {
+                "type": "string"
+              },
+              "responseStatus": {
+                "type": "string"
+              },
+              "organizer": {
+                "type": "boolean"
+              },
+              "optionalAttendee": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "email",
+              "responseStatus"
+            ]
+          }
+        },
+        "eventType": {
+          "type": "string"
+        },
+        "version": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "id",
+        "status",
+        "summary",
+        "start",
+        "end",
+        "attendees",
+        "version"
+      ]
+    }
+  },
+  {
+    "name": "search_threads",
+    "description": "Lists email threads matching a Gmail search query (label:ID, is:unread, in:inbox, from:, to:, subject:, newer_than:7d, free terms). Full message bodies are not returned; use get_thread for them. Drafts, spam and trash are excluded. A customer sees only the threads they wrote or were written to; the front desk sees the whole mailbox.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "pageSize": {
+          "type": "integer",
+          "description": "Threads per page; default 20, maximum 50."
+        },
+        "pageToken": {
+          "type": "string"
+        },
+        "query": {
+          "type": "string",
+          "description": "Gmail search syntax."
+        },
+        "includeTrash": {
+          "type": "boolean",
+          "description": "Include trashed threads (default false)."
+        },
+        "view": {
+          "type": "string",
+          "description": "THREAD_VIEW_UNSPECIFIED, THREAD_VIEW_METADATA_ONLY or THREAD_VIEW_MINIMAL (default)."
+        }
+      }
+    },
+    "mutates_state": false,
+    "returns": {
+      "type": "object",
+      "properties": {
+        "threads": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "messages": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "snippet": {
+                      "type": "string"
+                    },
+                    "subject": {
+                      "type": "string"
+                    },
+                    "sender": {
+                      "type": "string"
+                    },
+                    "toRecipients": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "ccRecipients": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "date": {
+                      "type": "string"
+                    },
+                    "plaintextBody": {
+                      "type": "string"
+                    },
+                    "htmlBody": {
+                      "type": "string"
+                    },
+                    "attachmentIds": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "attachments": {
+                      "type": "array",
+                      "items": {
+                        "type": "object"
+                      }
+                    },
+                    "labelIds": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "snippet",
+                    "subject",
+                    "sender",
+                    "toRecipients",
+                    "date",
+                    "labelIds"
+                  ]
+                }
+              }
+            },
+            "required": [
+              "id",
+              "messages"
+            ]
+          }
+        },
+        "nextPageToken": {
+          "type": "string"
+        },
+        "resultCountEstimate": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "threads",
+        "resultCountEstimate"
+      ]
+    }
+  },
+  {
+    "name": "get_thread",
+    "description": "Retrieves an email thread by ID with its messages in date order (bodies under FULL_CONTENT). A customer can read only a thread they wrote or were written to.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "threadId": {
+          "type": "string",
+          "description": "The unique identifier of the thread."
+        },
+        "messageFormat": {
+          "type": "string",
+          "description": "MESSAGE_FORMAT_UNSPECIFIED, MINIMAL, FULL_CONTENT (default; bodies included) or METADATA_ONLY."
+        }
+      },
+      "required": [
+        "threadId"
+      ]
+    },
+    "mutates_state": false,
+    "returns": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "messages": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "snippet": {
+                "type": "string"
+              },
+              "subject": {
+                "type": "string"
+              },
+              "sender": {
+                "type": "string"
+              },
+              "toRecipients": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "ccRecipients": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "date": {
+                "type": "string"
+              },
+              "plaintextBody": {
+                "type": "string"
+              },
+              "htmlBody": {
+                "type": "string"
+              },
+              "attachmentIds": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "attachments": {
+                "type": "array",
+                "items": {
+                  "type": "object"
+                }
+              },
+              "labelIds": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            },
+            "required": [
+              "id",
+              "snippet",
+              "subject",
+              "sender",
+              "toRecipients",
+              "date",
+              "labelIds"
+            ]
+          }
+        }
+      },
+      "required": [
+        "id",
+        "messages"
+      ]
+    }
+  },
+  {
+    "name": "get_message",
+    "description": "Retrieves one email message by its message ID. A customer can read only a message on a thread they wrote or were written to.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "messageId": {
+          "type": "string",
+          "description": "The unique identifier of the message."
+        },
+        "messageFormat": {
+          "type": "string",
+          "description": "MESSAGE_FORMAT_UNSPECIFIED, MINIMAL, FULL_CONTENT (default; bodies included) or METADATA_ONLY."
+        }
+      },
+      "required": [
+        "messageId"
+      ]
+    },
+    "mutates_state": false,
+    "returns": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "snippet": {
+          "type": "string"
+        },
+        "subject": {
+          "type": "string"
+        },
+        "sender": {
+          "type": "string"
+        },
+        "toRecipients": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "ccRecipients": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "date": {
+          "type": "string"
+        },
+        "plaintextBody": {
+          "type": "string"
+        },
+        "htmlBody": {
+          "type": "string"
+        },
+        "attachmentIds": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "attachments": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        },
+        "labelIds": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "id",
+        "snippet",
+        "subject",
+        "sender",
+        "toRecipients",
+        "date",
+        "labelIds"
+      ]
+    }
+  },
+  {
+    "name": "list_labels",
+    "description": "Lists the user-defined labels of the mailbox with their IDs. System label IDs (INBOX, UNREAD, STARRED, IMPORTANT, SENT, DRAFT, SPAM, TRASH) are usable without listing.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "pageSize": {
+          "type": "integer"
+        },
+        "pageToken": {
+          "type": "string"
+        }
+      }
+    },
+    "mutates_state": false,
+    "returns": {
+      "type": "object",
+      "properties": {
+        "labels": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "labelId": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "threadsTotal": {
+                "type": "integer"
+              },
+              "threadsUnread": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "labelId",
+              "name"
+            ]
+          }
+        },
+        "nextPageToken": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "labels"
+      ]
+    }
+  },
+  {
+    "name": "label_thread",
+    "description": "Adds labels to an entire thread (every message in it). Takes label IDs, not names; use list_labels when unsure of a user label's ID. Front desk only.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "threadId": {
+          "type": "string",
+          "description": "The unique identifier of the thread."
+        },
+        "labelIds": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Label IDs (system IDs such as INBOX, UNREAD, IMPORTANT, or user label IDs from list_labels), never names."
+        }
+      },
+      "required": [
+        "threadId",
+        "labelIds"
+      ]
+    },
+    "mutates_state": true,
+    "returns": {
+      "type": "object",
+      "properties": {}
+    }
+  },
+  {
+    "name": "unlabel_thread",
+    "description": "Removes labels from an entire thread. Takes label IDs, not names. Front desk only.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "threadId": {
+          "type": "string",
+          "description": "The unique identifier of the thread."
+        },
+        "labelIds": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Label IDs (system IDs such as INBOX, UNREAD, IMPORTANT, or user label IDs from list_labels), never names."
+        }
+      },
+      "required": [
+        "threadId",
+        "labelIds"
+      ]
+    },
+    "mutates_state": true,
+    "returns": {
+      "type": "object",
+      "properties": {}
+    }
+  },
+  {
+    "name": "list_drafts",
+    "description": "Lists the mailbox's drafts, newest first. humanEdited marks a draft a person has edited. Front desk only.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "pageSize": {
+          "type": "integer",
+          "description": "Drafts per page; default 20, maximum 50."
+        },
+        "pageToken": {
+          "type": "string"
+        },
+        "query": {
+          "type": "string",
+          "description": "Gmail search syntax."
+        },
+        "view": {
+          "type": "string",
+          "description": "DRAFT_VIEW_UNSPECIFIED, DRAFT_VIEW_METADATA_ONLY or DRAFT_VIEW_FULL (default)."
+        }
+      }
+    },
+    "mutates_state": false,
+    "returns": {
+      "type": "object",
+      "properties": {
+        "drafts": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "subject": {
+                "type": "string"
+              },
+              "threadId": {
+                "type": "string"
+              },
+              "toRecipients": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "ccRecipients": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "bccRecipients": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "plaintextBody": {
+                "type": "string"
+              },
+              "htmlBody": {
+                "type": "string"
+              },
+              "date": {
+                "type": "string"
+              },
+              "humanEdited": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "id",
+              "threadId",
+              "toRecipients",
+              "date"
+            ]
+          }
+        },
+        "nextPageToken": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "drafts"
+      ]
+    }
+  },
+  {
+    "name": "create_draft",
+    "description": "Creates a draft email for a person to review and send. To reply in an existing thread pass the original message's ID as replyToMessageId. Addresses are plain (no 'Name <email>'). Attachments are not supported yet. Nothing is sent. Front desk only.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "to": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Recipient email addresses."
+        },
+        "cc": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "bcc": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "subject": {
+          "type": "string"
+        },
+        "body": {
+          "type": "string",
+          "description": "Plain-text body."
+        },
+        "htmlBody": {
+          "type": "string"
+        },
+        "replyToMessageId": {
+          "type": "string",
+          "description": "The message this draft replies to; the draft joins its thread."
+        },
+        "attachments": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        }
+      }
+    },
+    "mutates_state": true,
+    "returns": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "subject": {
+          "type": "string"
+        },
+        "threadId": {
+          "type": "string"
+        },
+        "toRecipients": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "ccRecipients": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "bccRecipients": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "plaintextBody": {
+          "type": "string"
+        },
+        "htmlBody": {
+          "type": "string"
+        },
+        "date": {
+          "type": "string"
+        },
+        "humanEdited": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "id",
+        "threadId",
+        "toRecipients",
+        "date"
+      ]
+    }
+  }
+]

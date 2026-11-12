@@ -1,0 +1,82 @@
+{
+  "name": "flag_conflicting_client_entertainment_doc",
+  "scenario_key": "flag-conflicting-client-entertainment-doc",
+  "scenario_id": "",
+  "use_case": "Flag a document problem to its owner",
+  "branch": "Lucas Martin wants the conflict between the Client Entertainment Guidelines and the Sales Hospitality Standard reported to the owner of the Guidelines",
+  "tests": "the agent names Tomas Rivera as owner and raises one conflict issue on the Client Entertainment Guidelines after Lucas agrees",
+  "instruction": "You found that the Client Entertainment Guidelines ($100 a person) contradict the Sales Hospitality Standard ($150). Ask the Knowledge Desk to report the problem on the Client Entertainment Guidelines to whoever owns it.\n\nYour details:\n- Name: Lucas Martin\n- Employee ID: E14",
+  "keywords": [
+    "document_issue",
+    "owner"
+  ],
+  "persona": {
+    "name": "Lucas Martin",
+    "gender": "male",
+    "age_group": "32-40",
+    "occupation": "Sales Representative",
+    "location": "Canada",
+    "personality": "Confident",
+    "communication_style": "Direct and concise",
+    "initial_message": "The Client Entertainment Guidelines contradict the Sales Hospitality Standard. Can you report it to the owner?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "origin": "seed",
+    "employee_id": "E14"
+  },
+  "solution": [
+    {
+      "tool": "get_document_owner",
+      "arguments": {
+        "employee_id": "E14",
+        "drive_file_id": "client_ent_v1"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "flag_document_issue",
+      "arguments": {
+        "employee_id": "E14",
+        "drive_file_id": "client_ent_v1",
+        "issue_type": "conflict",
+        "details": "Caps $100 per person; the Sales Hospitality Standard caps $150 from the same date.",
+        "request_key": "DI-E14-CLIENT-ENT"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "drive_file_id": "caller: the Client Entertainment Guidelines",
+        "issue_type": "caller: they contradict another document"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "task": "issue_flagging",
+    "disposition": "valid_request",
+    "interaction": "multi_turn",
+    "counterparty": "standard_employee",
+    "interface": "clean_prose",
+    "overlay": "none",
+    "overlay_vector": "none",
+    "overlay_intensity": "absent"
+  },
+  "sub_goals": [
+    "document_issue_flagged",
+    "consent_before_request"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

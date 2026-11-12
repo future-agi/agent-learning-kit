@@ -1,0 +1,114 @@
+{
+  "name": "email_move_thursday_massage_to_friday_and_confirm",
+  "scenario_key": "email-move-thursday-massage-to-friday-and-confirm",
+  "scenario_id": "",
+  "use_case": "Reschedule or cancel an appointment",
+  "branch": "Brian Cole emailed (recalling last month's move from Thursday to Friday) asking to move this Thursday's 4 pm massage with Olivia (A002) to Friday 30 October at 4 pm; the move is committed and a rescheduled confirmation queued",
+  "tests": "the agent reads the email, moves A002 with reschedule_appointment (replacement first), then queues a 'rescheduled' confirmation for the new appointment",
+  "instruction": "You emailed asking to move your Thursday 29 October 4 pm massage with Olivia to Friday 30 October at 4 pm. Ask the desk to do it, confirm when read back, and ask for an email confirmation.\n\nYour details:\n- Name: Brian Cole\n- Email: brian.cole@example.com\n- Phone: +1 212 555 0102\n- Appointment: A002",
+  "keywords": [],
+  "persona": {
+    "name": "Brian Cole",
+    "gender": "male",
+    "age_group": "40-50",
+    "occupation": "Business Owner",
+    "location": "United States",
+    "personality": "Impatient and direct",
+    "communication_style": "Assertive",
+    "initial_message": "Hi, I emailed about moving my Thursday massage to Friday. Can you do that and send me a confirmation?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "origin": "seed"
+  },
+  "solution": [
+    {
+      "tool": "get_thread",
+      "arguments": {
+        "threadId": "th_s02_moved_last_month"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "threadId": "the customer's email thread"
+      }
+    },
+    {
+      "tool": "get_customer",
+      "arguments": {
+        "email": "brian.cole@example.com",
+        "phone": "+1 212 555 0102"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_appointment",
+      "arguments": {
+        "appointment_id": "A002",
+        "customer_id": "CU02"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "reschedule_appointment",
+      "arguments": {
+        "appointment_id": "A002",
+        "customer_id": "CU02",
+        "new_start_time": "2026-10-30T16:00",
+        "confirmed": true,
+        "request_key": "REQ-A002-MOVE"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "appointment_id": "caller: A002",
+        "customer_id": "caller",
+        "new_start_time": "the new local time",
+        "confirmed": "the customer agreed"
+      }
+    },
+    {
+      "tool": "queue_confirmation",
+      "arguments": {
+        "appointment_id": "A600",
+        "customer_id": "CU02",
+        "kind": "rescheduled",
+        "channel": "email"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "appointment_id": "the replacement appointment",
+        "customer_id": "caller",
+        "kind": "a reschedule"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "task": "reschedule",
+    "disposition": "history",
+    "interaction": "multi_turn",
+    "counterparty": "individual_customer",
+    "interface": "email_thread",
+    "overlay": "none",
+    "overlay_vector": "none",
+    "overlay_intensity": "absent"
+  },
+  "sub_goals": [
+    "appointment_rescheduled_atomically",
+    "confirmation_queued_after_commit"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

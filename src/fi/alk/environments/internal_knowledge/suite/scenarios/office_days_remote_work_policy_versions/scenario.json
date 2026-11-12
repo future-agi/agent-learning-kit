@@ -1,0 +1,89 @@
+{
+  "name": "office_days_remote_work_policy_versions",
+  "scenario_key": "office-days-remote-work-policy-versions",
+  "scenario_id": "",
+  "use_case": "Answer which version is in effect, or was on a date",
+  "branch": "Ivan Petrov asks when the office attendance requirement changed from 2 days to 3 days; Remote Work Policy v2 took effect 2026-09-01",
+  "tests": "whether the agent checks the remote work policy versions and answers from Remote Work Policy v2.0 that the 3 office days requirement took effect on 2026-09-01",
+  "instruction": "You are planning facilities logistics and need to know when the required office days changed from 2 to 3 days a week, and what days are required under the current policy. Ask the Knowledge Desk.\n\nYour details:\n- Name: Ivan Petrov\n- Employee ID: E16",
+  "keywords": [
+    "effective_date",
+    "version"
+  ],
+  "persona": {
+    "name": "Ivan Petrov",
+    "gender": "male",
+    "age_group": "40-50",
+    "occupation": "Technician",
+    "location": "United Kingdom",
+    "personality": "Detail-oriented",
+    "communication_style": "Simple and clear",
+    "initial_message": "When did our office attendance requirement change to 3 days a week, and what is the current policy?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "family": "remote_work",
+    "employee_id": "E16",
+    "origin": "seed"
+  },
+  "solution": [
+    {
+      "tool": "list_document_versions",
+      "arguments": {
+        "drive_file_id": "",
+        "employee_id": "E16",
+        "family": "remote_work"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_file_metadata",
+      "arguments": {
+        "fileId": "remote_v2",
+        "excludeContentSnippets": true
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "fetch_passage",
+      "arguments": {
+        "employee_id": "E16",
+        "passage_id": "P-REMOTEV2-01"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "passage_id": "record: Remote Work Policy 2.0 section 1 (Office days)"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "interaction": "multi_turn",
+    "overlay_vector": "none",
+    "overlay": "none",
+    "overlay_intensity": "absent",
+    "task": "version_question",
+    "counterparty": "standard_employee",
+    "interface": "formal",
+    "disposition": "superseded_doc"
+  },
+  "sub_goals": [
+    "version_history_consulted",
+    "answer_cited_from_effective_version"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

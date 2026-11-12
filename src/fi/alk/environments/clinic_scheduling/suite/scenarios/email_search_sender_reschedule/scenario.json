@@ -1,0 +1,120 @@
+{
+  "name": "email_search_sender_reschedule",
+  "scenario_key": "email-search-sender-reschedule",
+  "scenario_id": "",
+  "use_case": "Email requests and corrections",
+  "branch": "James Walsh cannot recall his email's subject; the desk finds it by his sender address and moves A07 to Thursday 5 November 10:00 at Riverbank West",
+  "tests": "the agent searches threads by sender, reads th_c04_reschedule_p14, finds slots for D02 on 2026-11-05, and reschedules A07 to SL-D02-20261105-1000",
+  "instruction": "You are James Walsh. You sent the clinic an email asking to reschedule your blood pressure review A07, but you cannot recall its subject line. Contact the clinic desk on chat, give your verification details, ask them to find your email by your sender address (james.walsh@example.com), and move appointment A07 to Thursday 5 November at 10:00 at Riverbank West. Confirm when prompted.\n\nYour details:\n- Name: James Walsh\n- Date of birth: 1966-04-30\n- Email: james.walsh@example.com\n- Appointment: A07",
+  "keywords": [
+    "reschedule"
+  ],
+  "persona": {
+    "name": "James Walsh",
+    "gender": "male",
+    "age_group": "50-60",
+    "occupation": "Engineer",
+    "location": "Australia",
+    "personality": "Friendly and cooperative",
+    "communication_style": "Direct and concise",
+    "initial_message": "Hi, I emailed you about moving my blood pressure review A07 but I can't remember the subject. My address is james.walsh@example.com.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "email": "james.walsh@example.com",
+    "appointment_id": "A07",
+    "origin": "seed",
+    "dob": "1966-04-30",
+    "full_name": "James Walsh",
+    "provider_id": "D02",
+    "patient_id": "P14",
+    "thread_id": "th_c04_reschedule_p14"
+  },
+  "solution": [
+    {
+      "tool": "verify_patient",
+      "arguments": {
+        "full_name": "James Walsh",
+        "dob": "1966-04-30"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "search_threads",
+      "arguments": {
+        "pageSize": 10,
+        "view": null,
+        "includeTrash": false,
+        "query": "from:james.walsh@example.com",
+        "pageToken": null
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_thread",
+      "arguments": {
+        "messageFormat": "FULL_CONTENT",
+        "threadId": "th_c04_reschedule_p14"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "find_available_slots",
+      "arguments": {
+        "patient_id": "P14",
+        "location_id": null,
+        "date_from": "2026-11-05",
+        "date_to": "2026-11-05",
+        "specialty": null,
+        "provider_id": "D02"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "reschedule_appointment",
+      "arguments": {
+        "confirmed": true,
+        "appointment_id": "A07",
+        "request_key": "REQ-P14-A07",
+        "new_slot_id": "SL-D02-20261105-1000"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "appointment_id": "record: appointments.appointment_id",
+        "confirmed": "rule: \"Read back provider, date, time and location (or the insurer details) and get the patient's yes before booking, rescheduling, cancelling or updating.\"",
+        "new_slot_id": "record: the slot the caller confirmed"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "interface": "email_thread",
+    "counterparty": "proxy",
+    "overlay_vector": "none",
+    "disposition": "missing_information",
+    "task": "reschedule",
+    "overlay_intensity": "absent",
+    "overlay": "none",
+    "interaction": "multi_turn"
+  },
+  "sub_goals": [
+    "appointment_rescheduled_atomically"
+  ],
+  "max_turns": 8,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

@@ -1,0 +1,123 @@
+{
+  "name": "book_someone_else_now_and_wait_for",
+  "scenario_key": "book-someone-else-now-and-wait-for",
+  "scenario_id": "",
+  "use_case": "Waitlist and confirmations",
+  "branch": "Book someone else now and wait for Lucia: CU449 Marta Kovacs wants an Initial Consultation with Lucia Fernandez on Friday 30 October at Midtown. Lucia is out of office. Marta needs a consultation that day anyway, so she books Olivia Bennett at 10:00 and also asks to be told if Lucia frees up.",
+  "tests": "the desk books an available alternative staff member and also adds the customer to the waitlist for their preferred staff member",
+  "instruction": "You want an Initial Consultation at Midtown on Friday 30 October 2026, preferably with Lucia Fernandez. When the desk explains that Lucia is out of office that day, book a morning slot with Olivia Bennett instead (agree to 10:00 am). Then, ask to also be placed on the waitlist for Lucia on Friday 30 October in case a slot opens up with her. Confirm when details are read back in New York time (UTC-04:00).\n\nYour details:\n- Name: Marta Kovacs\n- Email: marta.kovacs@example.com\n- Phone: +1 212 555 0449\n- Service: Initial Consultation (SV1)\n- Preferred Staff: Lucia Fernandez (ST02)\n- Booked Alternative Staff: Olivia Bennett (ST01)\n- Location: Midtown Studio (L1)\n- Date: Friday 30 October 2026\n- Booked Time: 10:00 am (2026-10-30T10:00)",
+  "keywords": [
+    "booking",
+    "waitlist",
+    "alternative_staff",
+    "consultation"
+  ],
+  "persona": {
+    "name": "Marta Kovacs",
+    "gender": "female",
+    "age_group": "25-32",
+    "occupation": "Accountant",
+    "location": "United States",
+    "personality": "Friendly and cooperative",
+    "communication_style": "Direct and concise",
+    "initial_message": "Hi, I'd like to book an Initial Consultation with Lucia Fernandez at Midtown this Friday, 30 October. My email is marta.kovacs@example.com and phone is +1 212 555 0449.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "origin": "mixed",
+    "customer": "CU449"
+  },
+  "solution": [
+    {
+      "tool": "get_customer",
+      "arguments": {
+        "phone": "+1 212 555 0449",
+        "email": "marta.kovacs@example.com"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "list_slots",
+      "arguments": {
+        "date": "2026-10-30",
+        "location_id": "L1",
+        "service_id": "SV1",
+        "staff_id": null,
+        "language": null
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "book_appointment",
+      "arguments": {
+        "request_key": "REQ-CU449-01",
+        "hold_id": null,
+        "confirmed": true,
+        "start_time": "2026-10-30T10:00",
+        "utc_offset": "-04:00",
+        "location_id": "L1",
+        "staff_id": "ST01",
+        "service_id": "SV1",
+        "customer_id": "CU449"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "start_time": "caller: 2026-10-30T10:00",
+        "service_id": "record: services[SV1].service_id",
+        "staff_id": "record: staff[ST01].staff_id",
+        "location_id": "record: locations[L1].location_id",
+        "customer_id": "record: customers[CU449].customer_id",
+        "utc_offset": "record: locations[L1].utc_offset -04:00"
+      }
+    },
+    {
+      "tool": "add_waitlist",
+      "arguments": {
+        "preferred_date": "2026-10-30",
+        "staff_id": "ST02",
+        "customer_id": "CU449",
+        "service_id": "SV1",
+        "location_id": "L1"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "preferred_date": "caller: 2026-10-30",
+        "customer_id": "record: customers[CU449].customer_id",
+        "staff_id": "record: staff[ST02].staff_id",
+        "location_id": "record: locations[L1].location_id",
+        "service_id": "record: services[SV1].service_id"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "disposition": "alternative_plus_waitlist",
+    "counterparty": "returning",
+    "overlay_intensity": "absent",
+    "task": "waitlist_and_confirmations",
+    "interface": "clean_prose",
+    "overlay": "none",
+    "interaction": "multi_turn",
+    "overlay_vector": "none"
+  },
+  "sub_goals": [
+    "appointment_booked_as_confirmed",
+    "waitlist_added",
+    "timezone_and_instant_confirmed"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

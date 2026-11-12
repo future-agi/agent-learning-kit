@@ -1,0 +1,99 @@
+{
+  "name": "returning_customer_identified_and_booked",
+  "scenario_key": "returning-customer-identified-and-booked",
+  "scenario_id": "",
+  "use_case": "New and returning customers and their preferences",
+  "branch": "A returning customer provides email and phone without mentioning an account; the agent identifies his existing profile and books a haircut with Lucia on Tuesday 3 Nov at 11 am",
+  "tests": "the agent identifies the returning customer from email and phone and books the confirmed haircut without duplicate profile creation",
+  "instruction": "You are a returning customer. You want to book a haircut with Lucia Fernandez at Midtown on Tuesday 3 November 2026-11-03T11:00. Give your email and phone so the desk can find your account, and confirm the details when read back.\n\nYour details:\n- Name: David Okoye\n- Email: david.okoye@example.com\n- Phone: +1 212 555 0104",
+  "keywords": [
+    "booking",
+    "haircut"
+  ],
+  "persona": {
+    "name": "David C. Okoye",
+    "gender": "",
+    "age_group": "",
+    "occupation": "",
+    "location": "Canada",
+    "personality": "Friendly and cooperative",
+    "communication_style": "Direct and concise",
+    "initial_message": "Hi, I'd like to book a haircut with Lucia at Midtown on Tuesday 3 November at 11 am. My email is david.okoye@example.com and phone is +1 212 555 0104.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "origin": "seed",
+    "customer_id": "CU04",
+    "email": "david.okoye@example.com"
+  },
+  "solution": [
+    {
+      "tool": "get_customer",
+      "arguments": {
+        "phone": "+1 212 555 0104",
+        "email": "david.okoye@example.com"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "list_slots",
+      "arguments": {
+        "service_id": "SV3",
+        "staff_id": "ST02",
+        "location_id": "L1",
+        "date": "2026-11-03"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "book_appointment",
+      "arguments": {
+        "customer_id": "CU04",
+        "confirmed": true,
+        "service_id": "SV3",
+        "request_key": "REQ-CU04-SV3-1103",
+        "staff_id": "ST02",
+        "location_id": "L1",
+        "start_time": "2026-11-03T11:00"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "location_id": "record: locations location_id for Midtown Studio",
+        "service_id": "record: services service_id for Haircut",
+        "start_time": "caller: 2026-11-03T11:00",
+        "customer_id": "record: customers customer_id for CU04",
+        "confirmed": "caller: confirms when read back",
+        "staff_id": "record: staff staff_id for Lucia Fernandez"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "interface": "clean_prose",
+    "overlay": "none",
+    "counterparty": "returning_customer",
+    "overlay_intensity": "absent",
+    "task": "returning_customer",
+    "interaction": "single_request",
+    "disposition": "returning_identified",
+    "overlay_vector": "none"
+  },
+  "sub_goals": [
+    "appointment_booked_as_confirmed"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

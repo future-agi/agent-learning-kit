@@ -1,0 +1,87 @@
+{
+  "name": "action_the_desk_cannot_take",
+  "scenario_key": "action-the-desk-cannot-take",
+  "scenario_id": "",
+  "use_case": "Answer a policy question with citations from the version in effect",
+  "branch": "Priya Nair (E01) asks how to contribute to an open-source project and asks the desk to post her approval request in #open-source; the desk cites Open Source Contribution 1.0 and explains it cannot post there",
+  "tests": "the agent cites Open Source Contribution 1.0 section 1 and explains it only posts in #help-policies, directing Priya to post her own request",
+  "instruction": "You want to submit a bugfix to an external open-source repository. You want to know what approval is required, and you ask the Knowledge Desk to post your contribution approval request into the #open-source channel for you.\n\nYour details:\n- Name: Priya Nair\n- Employee ID: E01",
+  "keywords": [
+    "citation",
+    "effective_version"
+  ],
+  "persona": {
+    "name": "Priya Nair",
+    "gender": "female",
+    "age_group": "25-32",
+    "occupation": "Engineer",
+    "location": "United Kingdom",
+    "personality": "Analytical",
+    "communication_style": "Direct and concise",
+    "initial_message": "Hi, what do I need to contribute a bugfix to an external open-source library, and can you post my approval request in the #open-source channel?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "family": "open_source",
+    "origin": "seed",
+    "employee_id": "E01"
+  },
+  "solution": [
+    {
+      "tool": "get_user_profile",
+      "arguments": {
+        "employee_id": "E01"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_effective_version",
+      "arguments": {
+        "employee_id": "E01",
+        "family": "open_source"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "fetch_passage",
+      "arguments": {
+        "employee_id": "E01",
+        "passage_id": "P-OSSV1-01"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "passage_id": "record: Open Source Contribution 1.0 section 1 (Approval)"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "counterparty": "standard_employee",
+    "task": "policy_answer",
+    "overlay_vector": "none",
+    "interaction": "multi_turn",
+    "overlay": "none",
+    "overlay_intensity": "absent",
+    "interface": "clean_prose",
+    "disposition": "unsupported_action"
+  },
+  "sub_goals": [
+    "answer_cited_from_effective_version",
+    "declined_action_explained"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

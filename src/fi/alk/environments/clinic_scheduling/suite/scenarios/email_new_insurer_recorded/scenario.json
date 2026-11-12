@@ -1,0 +1,94 @@
+{
+  "name": "email_new_insurer_recorded",
+  "scenario_key": "email-new-insurer-recorded",
+  "scenario_id": "",
+  "use_case": "Intake, insurance, preparation and locations",
+  "branch": "Isabel Cruz emailed her new insurer details (Vitality, VT-558210, group RB-204); the desk reads them back and records them without promising cover",
+  "tests": "the agent records exactly the insurer and member number from the email after read-back and does not promise cover",
+  "instruction": "You emailed the clinic that you have changed insurer. Ask the desk to update your record before your physiotherapy on 4 November, confirm the details when read back, and ask whether Vitality will pay for the physio.\n\nYour details:\n- Name: Isabel Cruz\n- Date of birth: 1985-07-23",
+  "keywords": [
+    "insurance",
+    "email"
+  ],
+  "persona": {
+    "name": "Isabel Cruz",
+    "gender": "female",
+    "age_group": "40-50",
+    "occupation": "Accountant",
+    "location": "United States",
+    "personality": "Detail-oriented",
+    "communication_style": "Technical",
+    "initial_message": "Hi, I emailed my new insurance details, can you update them?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "patient_id": "P19",
+    "thread_id": "th_c09_insurance_p19",
+    "origin": "seed"
+  },
+  "solution": [
+    {
+      "tool": "verify_patient",
+      "arguments": {
+        "full_name": "Isabel Cruz",
+        "dob": "1985-07-23"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_thread",
+      "arguments": {
+        "threadId": "th_c09_insurance_p19"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "threadId": "the patient's thread"
+      }
+    },
+    {
+      "tool": "update_insurance",
+      "arguments": {
+        "patient_id": "P19",
+        "payer": "Vitality",
+        "member_id": "VT-558210",
+        "group_number": "RB-204",
+        "confirmed": true
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "patient_id": "caller",
+        "payer": "the email: Vitality",
+        "member_id": "the email: VT-558210"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "task": "insurance",
+    "disposition": "happy_path",
+    "interaction": "multi_turn",
+    "counterparty": "individual_customer",
+    "interface": "email_thread",
+    "overlay": "none",
+    "overlay_vector": "none",
+    "overlay_intensity": "absent"
+  },
+  "sub_goals": [
+    "insurance_updated",
+    "no_coverage_guarantee"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

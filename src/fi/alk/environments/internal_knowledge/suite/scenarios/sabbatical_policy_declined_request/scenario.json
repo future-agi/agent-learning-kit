@@ -1,0 +1,84 @@
+{
+  "name": "sabbatical_policy_declined_request",
+  "scenario_key": "sabbatical-policy-declined-request",
+  "scenario_id": "",
+  "use_case": "Report missing evidence and open a knowledge request with consent",
+  "branch": "Marcus Lee asks whether there is a company sabbatical policy; neither the documents nor search find one and Marcus declines opening a knowledge request",
+  "tests": "the agent searches for sabbatical policies, reports that no policy exists, and does not open a knowledge request after Marcus declines",
+  "instruction": "Ask the Knowledge Desk whether the company has a sabbatical policy for employees with five or more years of service. If they offer to open a knowledge request, decline it.\n\nYour details:\n- Name: Marcus Lee\n- Employee ID: E02",
+  "keywords": [
+    "missing_evidence"
+  ],
+  "persona": {
+    "name": "Marcus Lee",
+    "gender": "male",
+    "age_group": "40-50",
+    "occupation": "Manager",
+    "location": "United Kingdom",
+    "personality": "Professional and formal",
+    "communication_style": "Direct and concise",
+    "initial_message": "Does the company have a sabbatical policy for long-tenured employees?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "employee_id": "E02",
+    "origin": "seed"
+  },
+  "solution": [
+    {
+      "tool": "get_user_profile",
+      "arguments": {
+        "employee_id": "E02"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "search_documents",
+      "arguments": {
+        "employee_id": "E02",
+        "include_superseded": false,
+        "collection_id": "C_PEOPLE",
+        "query": "sabbatical"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "search_files",
+      "arguments": {
+        "query": "fullText contains 'sabbatical'"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "counterparty": "manager",
+    "overlay_intensity": "absent",
+    "overlay_vector": "none",
+    "disposition": "valid_request",
+    "task": "missing_evidence",
+    "overlay": "none",
+    "interface": "clean_prose",
+    "interaction": "multi_turn"
+  },
+  "sub_goals": [
+    "missing_evidence_reported",
+    "citation_quality"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

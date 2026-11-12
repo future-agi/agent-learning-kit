@@ -1,0 +1,115 @@
+{
+  "name": "partly_covered",
+  "scenario_key": "partly-covered",
+  "scenario_id": "",
+  "use_case": "Report missing evidence and open a knowledge request with consent",
+  "branch": "Ivan Petrov (E16) asks about mileage reimbursement and motorway tolls; mileage is covered ($0.67/mi) but tolls are not; desk answers mileage and opens a request for tolls with Ivan's agreement",
+  "tests": "the agent cites mileage_v1 section 1, states tolls are not covered, and creates a knowledge request in C_TRAVEL upon consent",
+  "instruction": "You drove your personal car to a client site and want to know: (1) what the mileage reimbursement rate is, and (2) whether motorway tolls are reimbursed. If the desk answers the mileage rate and notes tolls are not covered in the policy, agree when it offers to open a knowledge request for the toll policy question.\n\nYour details:\n- Name: Ivan Petrov\n- Employee ID: E16",
+  "keywords": [
+    "citation",
+    "missing_evidence"
+  ],
+  "persona": {
+    "name": "Ivan Petrov",
+    "gender": "male",
+    "age_group": "32-40",
+    "occupation": "Customer Service",
+    "location": "United Kingdom",
+    "personality": "Friendly and cooperative",
+    "communication_style": "Collaborative",
+    "initial_message": "Hello! What is our mileage reimbursement rate for driving to a client site, and are motorway tolls also reimbursed?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "origin": "seed",
+    "employee_id": "E16",
+    "collection_id": "C_TRAVEL",
+    "family": "mileage"
+  },
+  "solution": [
+    {
+      "tool": "get_user_profile",
+      "arguments": {
+        "employee_id": "E16"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_effective_version",
+      "arguments": {
+        "family": "mileage",
+        "employee_id": "E16"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "fetch_passage",
+      "arguments": {
+        "passage_id": "P-MILEAGEV1-01",
+        "employee_id": "E16"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "passage_id": "record: Mileage Reimbursement 1.0 section 1"
+      }
+    },
+    {
+      "tool": "search_documents",
+      "arguments": {
+        "include_superseded": false,
+        "collection_id": "C_TRAVEL",
+        "employee_id": "E16",
+        "query": "tolls"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "create_knowledge_request",
+      "arguments": {
+        "employee_id": "E16",
+        "question": "Are motorway tolls reimbursed when driving to a client site?",
+        "confirmed": true,
+        "collection_id": "C_TRAVEL",
+        "request_key": "KR-TOLLS-E16"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "employee_id": "caller: E16",
+        "collection_id": "record: C_TRAVEL"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "interface": "clean_prose",
+    "task": "missing_evidence",
+    "disposition": "partially_covered",
+    "overlay_intensity": "absent",
+    "counterparty": "standard_employee",
+    "overlay": "none",
+    "interaction": "multi_turn",
+    "overlay_vector": "none"
+  },
+  "sub_goals": [
+    "knowledge_request_created",
+    "consent_before_request",
+    "citation_quality"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

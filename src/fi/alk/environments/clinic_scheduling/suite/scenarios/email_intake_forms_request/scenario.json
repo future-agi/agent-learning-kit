@@ -1,0 +1,94 @@
+{
+  "name": "email_intake_forms_request",
+  "scenario_key": "email-intake-forms-request",
+  "scenario_id": "",
+  "use_case": "Email requests and corrections",
+  "branch": "Grace Okafor asks the desk to process her email request th_c14_intake_p05 to send dermatology intake forms by email for her next visit (A403 on Thursday 5 November 14:00)",
+  "tests": "the agent verifies Grace Okafor, reads th_c14_intake_p05, and sends dermatology intake forms by email",
+  "instruction": "You sent an email asking the clinic to email you any forms you need to fill in before your upcoming dermatology appointment A403 on Thursday 5 November at 14:00. You are now contacting the clinic desk on chat to ask them to process the request and send the intake forms to your email.\n\nYour details:\n- Full name: Grace Okafor\n- Date of birth: 1968-09-30\n- Email: grace.okafor@example.com\n- Appointment reference: A403 (dermatology review)\n- Preferred channel: email\n- Email subject: Forms before my visit",
+  "keywords": [
+    "intake"
+  ],
+  "persona": {
+    "name": "Grace Adebayo",
+    "gender": "female",
+    "age_group": "50-60",
+    "occupation": "Doctor",
+    "location": "United Kingdom",
+    "personality": "Friendly and cooperative",
+    "communication_style": "Direct and concise",
+    "initial_message": "Hello, I sent an email asking for the intake forms for my next dermatology appointment A403. Could you please send them to my email?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "patient_id": "P05",
+    "full_name": "Grace Okafor",
+    "thread_id": "th_c14_intake_p05",
+    "dob": "1968-09-30",
+    "origin": "generated",
+    "email": "grace.okafor@example.com",
+    "appointment_id": "A403"
+  },
+  "solution": [
+    {
+      "tool": "verify_patient",
+      "arguments": {
+        "dob": "1968-09-30",
+        "full_name": "Grace Okafor"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_thread",
+      "arguments": {
+        "messageFormat": "FULL_CONTENT",
+        "threadId": "th_c14_intake_p05"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "threadId": "record: gmail_threads.id"
+      }
+    },
+    {
+      "tool": "send_intake_forms",
+      "arguments": {
+        "channel": "email",
+        "appointment_id": "A403",
+        "patient_id": "P05"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "patient_id": "record: patients.patient_id",
+        "channel": "caller: email"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "overlay": "none",
+    "overlay_vector": "none",
+    "interface": "email_thread",
+    "overlay_intensity": "absent",
+    "disposition": "happy_path",
+    "interaction": "multi_turn",
+    "task": "intake",
+    "counterparty": "proxy"
+  },
+  "sub_goals": [
+    "intake_forms_sent"
+  ],
+  "max_turns": 8,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

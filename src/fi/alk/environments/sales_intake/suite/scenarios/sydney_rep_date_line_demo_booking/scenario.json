@@ -1,0 +1,90 @@
+{
+  "name": "sydney_rep_date_line_demo_booking",
+  "scenario_key": "sydney-rep-date-line-demo-booking",
+  "scenario_id": "",
+  "use_case": "Book a demo on the owner's calendar after the prospect picks",
+  "branch": "Isla Ruawai of Kiwi Freight (lead L18, owner A06) in New Zealand picks Thursday 12 November at 12:00 PM Auckland time (DS16, 11 Nov 23:00Z); the desk books DS16 on Chloe Nguyen's calendar",
+  "tests": "the agent offers Chloe Nguyen's slots in Auckland local time and books DS16 when Isla chooses 12 November 12:00 PM NZ time",
+  "instruction": "You are Isla Ruawai at Kiwi Freight in New Zealand. You are looking to schedule a BrightDesk demo with Chloe Nguyen. When offered demo times, pick Thursday 12 November at 12:00 PM (noon) Auckland time and confirm.\n\nYour details:\n- Name: Isla Ruawai\n- Email: isla.ruawai@kiwifreight.example\n- Company: Kiwi Freight\n- Location: New Zealand (Auckland time)",
+  "keywords": [
+    "calendar"
+  ],
+  "persona": {
+    "name": "Isla Ruawai",
+    "gender": "female",
+    "age_group": "25-32",
+    "occupation": "",
+    "location": "New Zealand",
+    "personality": "Friendly and cooperative",
+    "communication_style": "Collaborative",
+    "initial_message": "Kia ora, I'm Isla Ruawai with Kiwi Freight in New Zealand. We'd like to book our demo with Chloe Nguyen. What times do you have available?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "rep_id": "A06",
+    "lead_id": "L18",
+    "origin": "seed",
+    "slot_id": "DS16"
+  },
+  "solution": [
+    {
+      "tool": "get_lead",
+      "arguments": {
+        "lead_id": "L18"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "list_demo_slots",
+      "arguments": {
+        "rep_id": "A06"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "book_demo",
+      "arguments": {
+        "slot_id": "DS16",
+        "lead_id": "L18",
+        "prospect_confirmed": true,
+        "request_key": "REQ-L18-DEMO"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "slot_id": "caller: 12 November 12:00 Auckland (DS16)",
+        "lead_id": "record: Isla's lead L18",
+        "prospect_confirmed": "caller: confirmed"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "overlay_intensity": "absent",
+    "counterparty": "prospect",
+    "interface": "clean_prose",
+    "task": "book_demo",
+    "disposition": "exception",
+    "interaction": "multi_turn",
+    "overlay": "none",
+    "overlay_vector": "none"
+  },
+  "sub_goals": [
+    "demo_booked_on_owner_calendar",
+    "demo_time_in_prospect_timezone"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

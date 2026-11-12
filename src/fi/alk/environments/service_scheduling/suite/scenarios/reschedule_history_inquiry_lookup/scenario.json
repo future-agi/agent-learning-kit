@@ -1,0 +1,77 @@
+{
+  "name": "reschedule_history_inquiry_lookup",
+  "scenario_key": "reschedule-history-inquiry-lookup",
+  "scenario_id": "",
+  "use_case": "Pick up a booking request from the bookings mailbox",
+  "branch": "The customer asks about their appointment history to find out what date their September massage was moved to; the agent looks up the customer record and lists appointments",
+  "tests": "the agent verifies the customer and reads their appointment history to report the rescheduled date",
+  "instruction": "You want to check your appointment history. Ask the desk what date your September massage was moved to.\n\nYour details:\n- Name: Brian Cole\n- Email: brian.cole@example.com\n- Phone: +1 212 555 0102",
+  "keywords": [
+    "history",
+    "reschedule"
+  ],
+  "persona": {
+    "name": "Brian D. Cole",
+    "gender": "",
+    "age_group": "",
+    "occupation": "",
+    "location": "Canada",
+    "personality": "Easy-going",
+    "communication_style": "Casual and friendly",
+    "initial_message": "Hi! I know you had to reschedule my massage last month from Thursday to Friday. Could you check my account history and remind me what the exact dates were for that reschedule? My email is brian.cole@example.com and phone is +1 212 555 0102.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "origin": "seed",
+    "email": "brian.cole@example.com",
+    "customer_id": "CU02"
+  },
+  "solution": [
+    {
+      "tool": "get_customer",
+      "arguments": {
+        "email": "brian.cole@example.com",
+        "phone": "+1 212 555 0102"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "list_customer_appointments",
+      "arguments": {
+        "customer_id": "CU02"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "customer_id": "record: customers customer_id for CU02"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "interface": "clean_prose",
+    "overlay": "none",
+    "disposition": "history_inquiry",
+    "counterparty": "individual_customer",
+    "overlay_vector": "none",
+    "task": "pickup_email_case",
+    "overlay_intensity": "absent",
+    "interaction": "single_request"
+  },
+  "sub_goals": [
+    "appointment_status_reported"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

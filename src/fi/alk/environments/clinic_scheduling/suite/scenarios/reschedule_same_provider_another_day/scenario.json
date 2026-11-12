@@ -1,0 +1,92 @@
+{
+  "name": "reschedule_same_provider_another_day",
+  "scenario_key": "reschedule-same-provider-another-day",
+  "scenario_id": "",
+  "use_case": "Reschedule and cancel",
+  "branch": "Gordon Reid moves A21 with Dr. Nguyen at North on 29 October to Wednesday 4 November 10:00 at Central",
+  "tests": "the agent verifies Gordon Reid, confirms new slot details, and moves A21 to SL-D01-20261104-1000",
+  "instruction": "You are Gordon Reid (born 1959-07-08). You have an appointment (A21) with Dr. Alicia Nguyen on Thursday 29 October at Riverbank North, but you need to move it to Wednesday 4 November at 10:00 at Riverbank Central with Dr. Nguyen. Confirm when the desk asks.\n\nYour details:\n- Full name: Gordon Reid\n- Date of birth: 1959-07-08\n- Current appointment: A21 (29 October at North with Dr. Nguyen)\n- Target slot: Wednesday 4 November at 10:00 with Dr. Nguyen at Central",
+  "keywords": [
+    "reschedule",
+    "provider_change",
+    "calendar"
+  ],
+  "persona": {
+    "name": "Gordon Reid",
+    "gender": "male",
+    "age_group": "60+",
+    "occupation": "Consultant",
+    "location": "United Kingdom",
+    "personality": "Confident",
+    "communication_style": "Direct and concise",
+    "initial_message": "Good morning, I need to reschedule my appointment with Dr. Nguyen to Wednesday 4 November at 10:00 at Central.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "identity": {
+      "dob": "1959-07-08",
+      "name": "Gordon Reid",
+      "patient_id": "P21"
+    },
+    "records": {
+      "appointment_id": "A21"
+    },
+    "origin": "generated"
+  },
+  "solution": [
+    {
+      "tool": "verify_patient",
+      "arguments": {
+        "dob": "1959-07-08",
+        "full_name": "Gordon Reid"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "full_name": "caller: Gordon Reid",
+        "dob": "caller: 1959-07-08"
+      }
+    },
+    {
+      "tool": "reschedule_appointment",
+      "arguments": {
+        "new_slot_id": "SL-D01-20261104-1000",
+        "request_key": "req_resched_p21",
+        "confirmed": true,
+        "appointment_id": "A21"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "appointment_id": "caller: A21",
+        "new_slot_id": "record: the slot the caller confirmed"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "task": "reschedule",
+    "interface": "clean_prose",
+    "counterparty": "first_time",
+    "overlay_intensity": "absent",
+    "disposition": "happy_path",
+    "overlay": "none",
+    "interaction": "single_turn",
+    "overlay_vector": "none"
+  },
+  "sub_goals": [
+    "appointment_rescheduled_atomically",
+    "confirmation_obtained_before_change"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

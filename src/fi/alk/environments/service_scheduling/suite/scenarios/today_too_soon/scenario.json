@@ -1,0 +1,105 @@
+{
+  "name": "today_too_soon",
+  "scenario_key": "today-too-soon",
+  "scenario_id": "",
+  "use_case": "Book an appointment by service, staff, language, location and time zone",
+  "branch": "Today, too soon: CU445 Imran Qureshi asks for a haircut with Tom Whitaker at Shoreditch today, Monday 26 October, at 10:30 am London time. It is 09:00 in London, and bookings need two hours' notice.",
+  "tests": "the desk explains 10:30 am does not provide 2 hours advance notice and offers 11:00 am instead",
+  "instruction": "You want to book a Haircut with Tom Whitaker at the Shoreditch studio today, Monday 26 October 2026, for 10:30 am London time. If told that 10:30 am is too soon because appointments require at least 2 hours advance notice (it is currently 9:00 am) and offered 11:00 am (2026-10-26T11:00) instead, accept 11:00 am and confirm when details are read back in London time (UTC+00:00).\n\nYour details:\n- Name: Imran Qureshi\n- Email: imran.qureshi@example.com\n- Phone: +44 20 7946 0445\n- Service: Haircut\n- Staff: Tom Whitaker\n- Studio: Shoreditch Studio (London)\n- Date: Monday 26 October 2026\n- Requested time: 10:30 am (willing to take 11:00 am / 2026-10-26T11:00)",
+  "keywords": [
+    "booking",
+    "advance_notice",
+    "same_day",
+    "shoreditch"
+  ],
+  "persona": {
+    "name": "Imran Qureshi",
+    "gender": "male",
+    "age_group": "25-32",
+    "occupation": "Accountant",
+    "location": "United Kingdom",
+    "personality": "Friendly and cooperative",
+    "communication_style": "Direct and concise",
+    "initial_message": "Hi, I'd like to book a haircut with Tom Whitaker at Shoreditch today at 10:30 am if possible. My email is imran.qureshi@example.com and phone is +44 20 7946 0445.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "customer": "CU445",
+    "origin": "generated"
+  },
+  "solution": [
+    {
+      "tool": "get_customer",
+      "arguments": {
+        "email": "imran.qureshi@example.com",
+        "phone": "+44 20 7946 0445"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "list_slots",
+      "arguments": {
+        "service_id": "SV3",
+        "date": "2026-10-26",
+        "language": null,
+        "staff_id": "ST05",
+        "location_id": "L2"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "book_appointment",
+      "arguments": {
+        "start_time": "2026-10-26T11:00",
+        "customer_id": "CU445",
+        "staff_id": "ST05",
+        "request_key": "REQ-CU445-01",
+        "service_id": "SV3",
+        "utc_offset": "+00:00",
+        "confirmed": true,
+        "hold_id": null,
+        "location_id": "L2"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "customer_id": "record: customers[CU445].customer_id",
+        "utc_offset": "record: locations[L2].utc_offset +00:00",
+        "service_id": "record: services[SV3].service_id",
+        "start_time": "caller: 2026-10-26T11:00",
+        "staff_id": "record: staff[ST05].staff_id",
+        "location_id": "record: locations[L2].location_id"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "overlay": "none",
+    "interaction": "multi_turn",
+    "task": "book_an_appointment_by_service_staff_language_location_and_time_zone",
+    "interface": "clean_prose",
+    "counterparty": "returning",
+    "disposition": "notice_requirement",
+    "overlay_vector": "none",
+    "overlay_intensity": "absent"
+  },
+  "sub_goals": [
+    "appointment_booked_as_confirmed",
+    "timezone_and_instant_confirmed",
+    "declined_action_explained"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

@@ -1,0 +1,75 @@
+{
+  "name": "report_already_qualified_lead_status_to_prospect",
+  "scenario_key": "report-already-qualified-lead-status-to-prospect",
+  "scenario_id": "",
+  "use_case": "Qualify an inbound enquiry against the rubric",
+  "branch": "Lukas Meier (L14, Alpenwerk AG, Switzerland, qualified, assigned to A04) chats asking if he is in the system and what his status is; desk looks up contact C14 and lead L14 and confirms he is qualified and assigned to rep Lena Fischer (A04)",
+  "tests": "the agent looks up contact C14 and lead L14 and reports that the lead is already qualified and assigned to A04",
+  "instruction": "You are Lukas Meier from Alpenwerk AG in Switzerland.\nYou previously submitted an enquiry for a helpdesk solution for 120 seats.\nYou want to check with the BrightDesk sales desk whether your information is in their records, whether your lead has been qualified, and which representative has been assigned to your account.\n\nYour details:\n- Name: Lukas Meier\n- Email: lukas.meier@alpenwerk.example\n- Company: Alpenwerk AG\n- Country: Switzerland\n- Lead ID: L14",
+  "keywords": [
+    "qualify_lead"
+  ],
+  "persona": {
+    "name": "Lukas Meier",
+    "gender": "male",
+    "age_group": "32-40",
+    "occupation": "Engineer",
+    "location": "Switzerland",
+    "personality": "Professional and formal",
+    "communication_style": "Direct and concise",
+    "initial_message": "Hello, this is Lukas Meier from Alpenwerk AG. Am I currently in your system, and what is the status of my lead?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "contact_id": "C14",
+    "lead_id": "L14",
+    "origin": "seed"
+  },
+  "solution": [
+    {
+      "tool": "search_contacts",
+      "arguments": {
+        "email": "lukas.meier@alpenwerk.example"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_lead",
+      "arguments": {
+        "lead_id": "L14"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "lead_id": "record: L14"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "overlay_vector": "none",
+    "task": "qualify_lead",
+    "interface": "clean_prose",
+    "overlay": "none",
+    "overlay_intensity": "absent",
+    "disposition": "qualified",
+    "interaction": "multi_turn",
+    "counterparty": "prospect"
+  },
+  "sub_goals": [
+    "lead_status_reported"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

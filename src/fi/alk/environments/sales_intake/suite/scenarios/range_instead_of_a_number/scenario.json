@@ -1,0 +1,101 @@
+{
+  "name": "range_instead_of_a_number",
+  "scenario_key": "range-instead-of-a-number",
+  "scenario_id": "",
+  "use_case": "Ask for missing facts instead of inventing them",
+  "branch": "Prospect provides a seat count range rather than a definite number; lead kept as needs_information",
+  "tests": "the desk evaluates lead L425 with missing exact seats, keeping it in needs_information without guessing a seat count from the range",
+  "instruction": "You are Avril Bouchard from Quillon Travel (contact C425, lead L425). When chatting with the sales desk to get qualified, and asked for your team seat count, explain that your team size varies and is 'somewhere between 15 and 25, depends on the season' and that you cannot narrow it down to an exact number right now. When the desk explains that an exact seat count is required to complete rubric qualification and keeps the lead in needs_information status, accept the explanation.\n\nYour details:\n- Name: Avril Bouchard\n- Company: Quillon Travel\n- Email: avril.bouchard@quillon.example\n- Title: Operations Lead\n- Seat Range: 15-25 seats (unconfirmed exact count)",
+  "keywords": [
+    "ambiguous_seats",
+    "missing_fact",
+    "missing_info_requested",
+    "quillon_travel",
+    "seat_range"
+  ],
+  "persona": {
+    "name": "Avril Bouchard",
+    "gender": "female",
+    "age_group": "25-32",
+    "occupation": "Manager",
+    "location": "United States",
+    "personality": "Friendly and cooperative",
+    "communication_style": "Direct and concise",
+    "initial_message": "Hi, I'm Avril Bouchard from Quillon Travel (avril.bouchard@quillon.example). I'd like to see if our team qualifies for BrightDesk.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "contacts": [
+      {
+        "account_id": "ACC11",
+        "email": "avril.bouchard@quillon.example",
+        "name": "Avril Bouchard",
+        "contact_id": "C425"
+      }
+    ],
+    "leads": [
+      {
+        "seats": null,
+        "lead_id": "L425",
+        "status": "needs_information"
+      }
+    ],
+    "origin": "generated",
+    "accounts": [
+      {
+        "name": "Quillon Travel",
+        "account_id": "ACC11"
+      }
+    ]
+  },
+  "solution": [
+    {
+      "tool": "search_contacts",
+      "arguments": {
+        "email": "avril.bouchard@quillon.example"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_lead",
+      "arguments": {
+        "lead_id": "L425"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "lead_id": "record: leads[L425].lead_id"
+      }
+    },
+    {
+      "tool": "qualify_lead",
+      "arguments": {
+        "facts": {},
+        "lead_id": "L425"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "lead_id": "record: leads[L425].lead_id"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {},
+  "sub_goals": [
+    "missing_info_requested",
+    "declined_action_explained"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

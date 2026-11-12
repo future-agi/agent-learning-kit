@@ -1,0 +1,87 @@
+{
+  "name": "ambiguous_question",
+  "scenario_key": "ambiguous-question",
+  "scenario_id": "",
+  "use_case": "Answer a policy question with citations from the version in effect",
+  "branch": "Sam Taylor (E20) asks \"how much can I spend on dinner?\"; the desk asks for clarification between personal per diem, client entertainment, and team events; Sam clarifies it is his own dinner on a US business trip",
+  "tests": "the agent asks for clarification on dinner context before citing Meal Per Diem Standard 2.0 section 1 ($75/day)",
+  "instruction": "You are going on a work trip within the US and want to know how much you can spend on dinner. You ask broadly \"how much can I spend on dinner?\". If asked whether this is your individual travel meal, entertaining a client, or a team dinner, explain that it's just your own dinner while travelling on company business in the US.\n\nYour details:\n- Name: Sam Taylor\n- Employee ID: E20",
+  "keywords": [
+    "citation",
+    "effective_version"
+  ],
+  "persona": {
+    "name": "Sam Taylor",
+    "gender": "male",
+    "age_group": "25-32",
+    "occupation": "Sales Representative",
+    "location": "United States",
+    "personality": "Friendly and cooperative",
+    "communication_style": "Casual and friendly",
+    "initial_message": "Hi! How much can I spend on dinner?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "family": "meal_per_diem",
+    "employee_id": "E20",
+    "origin": "seed"
+  },
+  "solution": [
+    {
+      "tool": "get_user_profile",
+      "arguments": {
+        "employee_id": "E20"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_effective_version",
+      "arguments": {
+        "employee_id": "E20",
+        "family": "meal_per_diem"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "fetch_passage",
+      "arguments": {
+        "employee_id": "E20",
+        "passage_id": "P-PERDIEMV2-01"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "passage_id": "record: Meal Per Diem Standard 2.0 section 1 (Rates)"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "interface": "clean_prose",
+    "counterparty": "standard_employee",
+    "overlay_vector": "none",
+    "overlay_intensity": "absent",
+    "disposition": "ambiguous_request",
+    "interaction": "multi_turn",
+    "overlay": "none",
+    "task": "policy_answer"
+  },
+  "sub_goals": [
+    "answer_cited_from_effective_version",
+    "citation_quality"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

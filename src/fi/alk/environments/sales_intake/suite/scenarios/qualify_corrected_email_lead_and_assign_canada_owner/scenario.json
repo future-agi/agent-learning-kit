@@ -1,0 +1,120 @@
+{
+  "name": "qualify_corrected_email_lead_and_assign_canada_owner",
+  "scenario_key": "qualify-corrected-email-lead-and-assign-canada-owner",
+  "scenario_id": "",
+  "use_case": "Qualify an inbound enquiry against the rubric",
+  "branch": "Priya Raman (A02, Canada owner) asks the desk to qualify Prairie Grain's lead (L16) from thread th_s13_prairie_correction and assign it to her; desk qualifies with seats 60 and assigns A02",
+  "tests": "the agent reads th_s13_prairie_correction, qualifies L16 with seats 60, and assigns owner A02",
+  "instruction": "You are Priya Raman, Account Executive for Canada at BrightDesk. You want the sales intake desk to qualify Prairie Grain Co-op's lead (L16) from their email thread th_s13_prairie_correction (using the corrected 60 seat count) and route the lead to you as the territory owner.\n\nYour details:\n- Name: Priya Raman\n- Role: Account Executive (Canada)\n- Email thread: th_s13_prairie_correction\n- Lead ID: L16\n- Prospect: Noah Bergeron (Prairie Grain Co-op)\n- Rep ID: A02",
+  "keywords": [
+    "qualify_lead"
+  ],
+  "persona": {
+    "name": "Priya Raman",
+    "gender": "female",
+    "age_group": "32-40",
+    "occupation": "Sales Representative",
+    "location": "Canada",
+    "personality": "Professional and formal",
+    "communication_style": "Collaborative",
+    "initial_message": "Hi, I saw Prairie Grain's email thread th_s13_prairie_correction with the seat correction. Could you qualify lead L16 and route it to me for Canada?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "thread_id": "th_s13_prairie_correction",
+    "origin": "seed",
+    "lead_id": "L16",
+    "rep_id": "A02"
+  },
+  "solution": [
+    {
+      "tool": "get_thread",
+      "arguments": {
+        "messageFormat": "FULL_CONTENT",
+        "threadId": "th_s13_prairie_correction"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "threadId": "record: th_s13_prairie_correction"
+      }
+    },
+    {
+      "tool": "get_lead",
+      "arguments": {
+        "lead_id": "L16"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "lead_id": "record: L16"
+      }
+    },
+    {
+      "tool": "get_icp_rules",
+      "arguments": {},
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "qualify_lead",
+      "arguments": {
+        "lead_id": "L16",
+        "facts": {
+          "seats": 60
+        }
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "lead_id": "record: L16",
+        "facts": "email: corrected to 60 agents"
+      }
+    },
+    {
+      "tool": "get_routing_rules",
+      "arguments": {
+        "country": "Canada"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "assign_owner",
+      "arguments": {
+        "rep_id": "A02",
+        "lead_id": "L16"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "rep_id": "record: A02",
+        "lead_id": "record: L16"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "overlay": "none",
+    "overlay_intensity": "absent",
+    "overlay_vector": "none",
+    "counterparty": "colleague",
+    "task": "qualify_lead",
+    "interface": "email_thread",
+    "disposition": "self_correction",
+    "interaction": "multi_turn"
+  },
+  "sub_goals": [
+    "lead_qualified_by_rubric",
+    "owner_assigned_by_territory"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

@@ -1,0 +1,82 @@
+{
+  "name": "repeated_booking_request_same_request_key",
+  "scenario_key": "repeated-booking-request-same-request-key",
+  "scenario_id": "",
+  "use_case": "Concurrency, clock changes and failures",
+  "branch": "The chat dropped right after the booking committed (A450, request key REQ-MARCUS-REPEAT); the customer asks whether it went through. The desk finds the booking in his appointments and books nothing again (a retry with the same request_key would only return A450).",
+  "tests": "the agent handles a repeated booking request with the same request key idempotently returning the single committed appointment",
+  "instruction": "You want to book Massage Therapy with Olivia Bennett at Midtown Studio on Monday 2 November at 10:00 am (2026-11-02T10:00). You previously attempted to book with request key REQ-MARCUS-REPEAT right before your chat disconnected. You are reconnecting to confirm the booking for that exact slot.\n\nYour details:\n- Name: Marcus Zhao\n- Email: marcus.zhao@example.com\n- Phone: +61 2 9555 0405\n- Customer ID: CU405\n- Location: L1\n- Staff: ST01\n- Service: SV2\n- Start Time: 2026-11-02T10:00\n- UTC Offset: -05:00",
+  "keywords": [
+    "concurrency",
+    "idempotency",
+    "request_key",
+    "midtown",
+    "retry"
+  ],
+  "persona": {
+    "name": "Marcus Zhao",
+    "gender": "male",
+    "age_group": "32-40",
+    "occupation": "Engineer",
+    "location": "Australia",
+    "personality": "Detail-oriented",
+    "communication_style": "Direct and concise",
+    "initial_message": "Hi, my chat dropped earlier while booking Massage Therapy with Olivia for Monday Nov 2 at 10:00 am. Can you confirm if my appointment went through?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "location_id": "L1",
+    "customer_id": "CU405",
+    "email": "marcus.zhao@example.com",
+    "origin": "generated",
+    "phone": "+61 2 9555 0405"
+  },
+  "solution": [
+    {
+      "tool": "get_customer",
+      "arguments": {
+        "email": "marcus.zhao@example.com",
+        "phone": "+61 2 9555 0405"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "list_customer_appointments",
+      "arguments": {
+        "customer_id": "CU405"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "customer_id": "the caller"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "interaction": "multi_turn",
+    "overlay": "none",
+    "overlay_intensity": "absent",
+    "disposition": "idempotent_retry",
+    "counterparty": "individual_customer",
+    "overlay_vector": "none",
+    "task": "concurrency",
+    "interface": "clean_prose"
+  },
+  "sub_goals": [
+    "appointment_status_reported"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

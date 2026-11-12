@@ -1,0 +1,76 @@
+{
+  "name": "territory_routing_rules_reported_for_nz_and_brazil",
+  "scenario_key": "territory-routing-rules-reported-for-nz-and-brazil",
+  "scenario_id": "",
+  "use_case": "Route leads by territory with a fallback queue",
+  "branch": "An SDR inquires about territory ownership for New Zealand (mapped to A06) and Brazil (unmapped, routing to fallback queue Q-SDR-FALLBACK)",
+  "tests": "the agent checks the routing rules for both countries, identifies that New Zealand routes to rep A06 and Brazil to the fallback queue, and assigns nothing",
+  "instruction": "You are Callum MacLeod, an SDR at BrightDesk in Australia. You have inbound prospects coming from both New Zealand and Brazil, and you want to know which account executive owns New Zealand and which queue or rep handles Brazil.\n\nYour details:\n- Name: Callum MacLeod\n- Role: Sales Development Representative\n- Countries in question: New Zealand, Brazil",
+  "keywords": [
+    "routing",
+    "territory"
+  ],
+  "persona": {
+    "name": "Callum MacLeod",
+    "gender": "male",
+    "age_group": "25-32",
+    "occupation": "Sales Representative",
+    "location": "Australia",
+    "personality": "Detail-oriented",
+    "communication_style": "Direct and concise",
+    "initial_message": "Can you check who owns territory routing for New Zealand, and where leads from Brazil get routed?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "territories": [
+      "New Zealand",
+      "Brazil"
+    ],
+    "origin": "seed"
+  },
+  "solution": [
+    {
+      "tool": "get_routing_rules",
+      "arguments": {
+        "country": "New Zealand"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_routing_rules",
+      "arguments": {
+        "country": "Brazil"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "overlay_intensity": "absent",
+    "disposition": "territory_inquiry",
+    "task": "route_lead",
+    "interface": "clean_prose",
+    "interaction": "single_request",
+    "overlay_vector": "none",
+    "overlay": "none",
+    "counterparty": "colleague"
+  },
+  "sub_goals": [
+    "routing_rule_reported"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

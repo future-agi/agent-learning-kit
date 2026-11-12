@@ -1,0 +1,87 @@
+{
+  "name": "sunday_time_in_london_shoreditch_closed",
+  "scenario_key": "sunday-time-in-london-shoreditch-closed",
+  "scenario_id": "",
+  "use_case": "Concurrency, clock changes and failures",
+  "branch": "The customer asks for 1:30 on 1 November at Shoreditch (no clock change there, but closed on Sundays) and accepts Monday.",
+  "tests": "the agent checks location opening days and explains Sunday closure instead of confusing London with New York DST",
+  "instruction": "You want to book an Initial Consultation at the Shoreditch Studio in London on Sunday 1 November at 1:30 pm. You believe the studio is open on Sundays. If you are told that the Shoreditch Studio is closed on Sundays, ask what times are available on Monday 2 November instead.\n\nYour details:\n- Name: Layla Mahmoud\n- Email: layla.mahmoud@example.com\n- Phone: +44 20 7946 0401\n- Location: Shoreditch Studio (London)\n- Service: Initial Consultation",
+  "keywords": [
+    "concurrency",
+    "clock_changes",
+    "hours",
+    "london",
+    "shoreditch",
+    "closed_day"
+  ],
+  "persona": {
+    "name": "Layla Mahmoud",
+    "gender": "female",
+    "age_group": "25-32",
+    "occupation": "Marketing Professional",
+    "location": "United Kingdom",
+    "personality": "Friendly and cooperative",
+    "communication_style": "Casual and friendly",
+    "initial_message": "Hi there, I'd like to book an Initial Consultation at Shoreditch Studio on Sunday 1 November around 1:30 pm please.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "location_id": "L2",
+    "customer_id": "CU401",
+    "phone": "+44 20 7946 0401",
+    "email": "layla.mahmoud@example.com",
+    "origin": "generated"
+  },
+  "solution": [
+    {
+      "tool": "get_location",
+      "arguments": {
+        "location_id": "L2"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "location_id": "the studio the customer asked about"
+      }
+    },
+    {
+      "tool": "list_slots",
+      "arguments": {
+        "language": "en",
+        "location_id": "L2",
+        "date": "2026-11-02",
+        "service_id": "SV1",
+        "staff_id": "ST04"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "disposition": "closed_day",
+    "interface": "clean_prose",
+    "overlay_vector": "none",
+    "interaction": "multi_turn",
+    "overlay_intensity": "absent",
+    "overlay": "none",
+    "counterparty": "individual_customer",
+    "task": "concurrency"
+  },
+  "sub_goals": [
+    "ambiguous_time_not_committed",
+    "declined_action_explained"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

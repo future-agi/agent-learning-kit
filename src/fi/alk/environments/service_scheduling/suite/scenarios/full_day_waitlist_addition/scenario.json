@@ -1,0 +1,103 @@
+{
+  "name": "full_day_waitlist_addition",
+  "scenario_key": "full-day-waitlist-addition",
+  "scenario_id": "",
+  "use_case": "Waitlist and confirmations",
+  "branch": "Olivia Bennett's schedule on Thursday 5 November is completely booked; customer joins waitlist for that date.",
+  "tests": "passes when Tariq Vance is added to the waitlist for Olivia Bennett on fully-booked Thursday 5 November.",
+  "instruction": "You want to book a Massage Therapy session with Olivia Bennett at Midtown Studio on Thursday 5 November 2026. When informed that Olivia has no openings for that entire day, you ask to be placed on the waitlist for Olivia on Thursday 5 November.\n\nYour details:\n- Name: Tariq Vance\n- Email: tariq.vance@example.com\n- Phone: +91 98200 00404\n- Service: Massage Therapy\n- Preferred Staff: Olivia Bennett\n- Studio location: Midtown Studio\n- Preferred Date: Thursday 5 November 2026",
+  "keywords": [
+    "waitlist",
+    "fully_booked",
+    "massage",
+    "midtown"
+  ],
+  "persona": {
+    "name": "Tariq Vance",
+    "gender": "male",
+    "age_group": "25-32",
+    "occupation": "Engineer",
+    "location": "India",
+    "personality": "Analytical",
+    "communication_style": "Direct and concise",
+    "initial_message": "Hello, I'd like to book a Massage with Olivia at Midtown on Thursday 5 November.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "origin": "generated",
+    "customer_id": "CU404",
+    "staff": "Olivia Bennett (ST01)",
+    "phone": "+91 98200 00404",
+    "service": "Massage Therapy (SV2)",
+    "date": "2026-11-05",
+    "location": "Midtown Studio (L1)",
+    "email": "tariq.vance@example.com"
+  },
+  "solution": [
+    {
+      "tool": "get_customer",
+      "arguments": {
+        "email": "tariq.vance@example.com",
+        "phone": "+91 98200 00404"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "list_slots",
+      "arguments": {
+        "location_id": "L1",
+        "service_id": "SV2",
+        "date": "2026-11-05",
+        "staff_id": "ST01"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "add_waitlist",
+      "arguments": {
+        "staff_id": "ST01",
+        "service_id": "SV2",
+        "preferred_date": "2026-11-05",
+        "customer_id": "CU404",
+        "location_id": "L1"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "customer_id": "caller: Tariq Vance (CU404)",
+        "location_id": "record: locations.location_id where name='Midtown Studio'",
+        "preferred_date": "caller: Thursday 5 November",
+        "service_id": "caller: Massage Therapy (SV2)",
+        "staff_id": "caller: Olivia Bennett (ST01)"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "disposition": "fully_booked_waitlist",
+    "task": "add_waitlist",
+    "overlay_intensity": "absent",
+    "overlay_vector": "none",
+    "overlay": "none",
+    "counterparty": "individual",
+    "interface": "clean_prose",
+    "interaction": "multi_turn"
+  },
+  "sub_goals": [
+    "waitlist_added"
+  ],
+  "max_turns": 8,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

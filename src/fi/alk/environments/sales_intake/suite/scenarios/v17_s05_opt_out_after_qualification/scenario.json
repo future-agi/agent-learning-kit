@@ -1,0 +1,82 @@
+{
+  "name": "v17_s05_opt_out_after_qualification",
+  "scenario_key": "v17-s05-opt-out-after-qualification",
+  "scenario_id": "",
+  "use_case": "Record consent and stop outreach",
+  "branch": "Imogen Pryce of Harbourline Insurance (C05, qualified lead L05, a follow-up email planned) tells the desk not to email or call her again; the opt-out is recorded and the planned follow-up stops",
+  "tests": "the agent finds C05, confirms, records the opt-out, and the planned follow-up OQ05 is cancelled, with no further outreach",
+  "instruction": "You are Imogen Pryce at Harbourline Insurance in the United Kingdom. You spoke to BrightDesk at an event, but your company has chosen another vendor. Tell them not to email or call you again. Confirm when asked. If they ask, you are fine with them keeping a record that you opted out.\n\nYour details:\n- Name: Imogen Pryce\n- Email: imogen.pryce@harbourline.example\n- Company: Harbourline Insurance",
+  "keywords": [
+    "consent",
+    "opt-out",
+    "workbook"
+  ],
+  "persona": {
+    "name": "Imogen Pryce",
+    "gender": "female",
+    "age_group": "50-60",
+    "occupation": "VP Customer Experience",
+    "location": "United Kingdom",
+    "personality": "Cautious and skeptical",
+    "communication_style": "Questioning",
+    "initial_message": "Hi, please do not email or call me any more. This is Imogen Pryce from Harbourline.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "contact_id": "C05",
+    "origin": "seed"
+  },
+  "solution": [
+    {
+      "tool": "search_contacts",
+      "arguments": {
+        "email": "imogen.pryce@harbourline.example"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "update_contact_consent",
+      "arguments": {
+        "contact_id": "C05",
+        "status": "opted_out",
+        "source": "chat",
+        "confirmed": true
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "contact_id": "record: Imogen Pryce, C05",
+        "status": "caller: opt out",
+        "confirmed": "caller: confirmed"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "task": "consent",
+    "disposition": "opt_out",
+    "interaction": "multi_turn",
+    "counterparty": "prospect",
+    "interface": "clean_prose",
+    "overlay": "none",
+    "overlay_vector": "none",
+    "overlay_intensity": "absent"
+  },
+  "sub_goals": [
+    "consent_recorded_and_respected",
+    "facts_confirmed_before_write"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

@@ -1,0 +1,95 @@
+{
+  "name": "hold_slot_while_patient_decides",
+  "scenario_key": "hold-slot-while-patient-decides",
+  "scenario_id": "",
+  "use_case": "Waitlist, concurrency and failure recovery",
+  "branch": "Lucia Bianchi asks to place a hold on Thursday 29 October 14:30 with Dr. Morales while checking work availability",
+  "tests": "the agent verifies Lucia Bianchi and creates a live hold for slot SL-D03-20261029-1430",
+  "instruction": "You are Lucia Bianchi (born 1996-06-06). You are considering a dermatology appointment with Dr. Sofia Morales on Thursday 29 October at 14:30 at Riverbank Central, but need to check with your workplace first. Ask the desk to put a temporary hold on that slot for you.\n\nYour details:\n- Name: Lucia Bianchi\n- Date of birth: 1996-06-06\n- Desired date and time: Thursday 29 October 2026 at 14:30\n- Provider: Dr. Sofia Morales\n- Specialty: Dermatology\n- Location: Riverbank Central",
+  "keywords": [
+    "hold",
+    "concurrency"
+  ],
+  "persona": {
+    "name": "Lucia Bianchi",
+    "gender": "female",
+    "age_group": "25-32",
+    "occupation": "Freelancer",
+    "location": "United States",
+    "personality": "Cautious and skeptical",
+    "communication_style": "Questioning",
+    "initial_message": "Hi! Can you put a temporary hold on the 2:30 pm slot with Dr. Morales on Thursday 29 October while I check my schedule?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "origin": "generated",
+    "patient_id": "P413",
+    "provider_id": "D03"
+  },
+  "solution": [
+    {
+      "tool": "verify_patient",
+      "arguments": {
+        "full_name": "Lucia Bianchi",
+        "dob": "1996-06-06"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "full_name": "caller: Lucia Bianchi",
+        "dob": "caller: 1996-06-06"
+      }
+    },
+    {
+      "tool": "find_available_slots",
+      "arguments": {
+        "specialty": "dermatology",
+        "provider_id": "D03",
+        "date_from": "2026-10-29",
+        "location_id": "",
+        "date_to": "2026-10-29",
+        "patient_id": ""
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "hold_slot",
+      "arguments": {
+        "request_key": "req_hold_p413",
+        "slot_id": "SL-D03-20261029-1430",
+        "patient_id": "P413"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "patient_id": "record: patients"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "overlay_intensity": "absent",
+    "counterparty": "first_time",
+    "interface": "clean_prose",
+    "overlay": "none",
+    "disposition": "concurrency",
+    "overlay_vector": "none",
+    "interaction": "single_turn",
+    "task": "book"
+  },
+  "sub_goals": [
+    "slot_held"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

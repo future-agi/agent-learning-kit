@@ -1,0 +1,92 @@
+{
+  "name": "opt_out_requested_via_email",
+  "scenario_key": "opt-out-requested-via-email",
+  "scenario_id": "",
+  "use_case": "Record consent and stop outreach",
+  "branch": "George Whitaker of Harbourline Insurance (contact C25) sends email thread th_s406_optout requesting to opt out of all outreach; the desk reads the thread and records the opt-out for C25",
+  "tests": "the agent reads email thread th_s406_optout and updates C25 consent status to opted_out",
+  "instruction": "You are George Whitaker at Harbourline Insurance. You previously sent an email (thread th_s406_optout) asking to be marked opted_out from all future marketing and sales communications. Ask the desk to process your opt-out request.\n\nYour details:\n- Name: George Whitaker\n- Email: george.whitaker@harbourline.example\n- Company: Harbourline Insurance",
+  "keywords": [
+    "consent",
+    "opt_out",
+    "email"
+  ],
+  "persona": {
+    "name": "George Whitaker",
+    "gender": "male",
+    "age_group": "40-50",
+    "occupation": "",
+    "location": "United Kingdom",
+    "personality": "Professional and formal",
+    "communication_style": "Formal and polite",
+    "initial_message": "Hello, I sent an email asking to be marked opted_out from all BrightDesk outreach. Could you ensure my opt-out is recorded?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "origin": "mixed",
+    "thread_id": "th_s406_optout",
+    "contact_id": "C25"
+  },
+  "solution": [
+    {
+      "tool": "get_thread",
+      "arguments": {
+        "threadId": "th_s406_optout"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "threadId": "record: gmail_threads.th_s406_optout"
+      }
+    },
+    {
+      "tool": "search_contacts",
+      "arguments": {
+        "email": "george.whitaker@harbourline.example"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "update_contact_consent",
+      "arguments": {
+        "source": "email: please opt out",
+        "confirmed": true,
+        "status": "opted_out",
+        "contact_id": "C25"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "status": "caller: opted_out",
+        "contact_id": "record: George Whitaker, C25",
+        "confirmed": "caller: confirmed"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "interaction": "multi_turn",
+    "disposition": "opt_out",
+    "task": "consent",
+    "interface": "email_thread",
+    "counterparty": "prospect",
+    "overlay_intensity": "absent",
+    "overlay": "none",
+    "overlay_vector": "none"
+  },
+  "sub_goals": [
+    "consent_recorded_and_respected"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

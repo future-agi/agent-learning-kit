@@ -1,0 +1,82 @@
+{
+  "name": "report_disqualification_due_to_small_seat_count",
+  "scenario_key": "report-disqualification-due-to-small-seat-count",
+  "scenario_id": "",
+  "use_case": "Qualify an inbound enquiry against the rubric",
+  "branch": "Ciara Walsh (L13, 5 seats, status disqualified) chats asking if BrightDesk can provide a demo for her 5-person team; desk checks L13 and ICP rules and explains qualification threshold >= 20 seats",
+  "tests": "the agent looks up L13, consults ICP rules, and explains that 5 seats does not meet the 20-seat threshold without changing the lead",
+  "instruction": "You are Ciara Walsh, VP Customer Experience at Liffey Analytics in Ireland. You want to see if BrightDesk can provide a product demo for your team of 5 support agents. If told that your team size does not meet the minimum qualification threshold of 20 seats, ask what other options or resources are available for smaller teams.\n\nYour details:\n- Name: Ciara Walsh\n- Email: ciara.walsh@liffey.example\n- Company: Liffey Analytics\n- Country: Ireland\n- Team size: 5 seats",
+  "keywords": [
+    "qualify_lead"
+  ],
+  "persona": {
+    "name": "Ciara Walsh",
+    "gender": "female",
+    "age_group": "25-32",
+    "occupation": "Engineer",
+    "location": "Ireland",
+    "personality": "Friendly and cooperative",
+    "communication_style": "Direct and concise",
+    "initial_message": "Hi! I submitted a request for Liffey Analytics. We have a 5-person support team. Can we schedule a demo?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "lead_id": "L13",
+    "origin": "seed",
+    "contact_id": "C13"
+  },
+  "solution": [
+    {
+      "tool": "search_contacts",
+      "arguments": {
+        "email": "ciara.walsh@liffey.example"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_lead",
+      "arguments": {
+        "lead_id": "L13"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "lead_id": "record: L13"
+      }
+    },
+    {
+      "tool": "get_icp_rules",
+      "arguments": {},
+      "environment_arguments": {},
+      "fixed": {}
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "interface": "clean_prose",
+    "counterparty": "prospect",
+    "overlay": "none",
+    "overlay_vector": "none",
+    "overlay_intensity": "absent",
+    "disposition": "disqualified",
+    "task": "qualify_lead",
+    "interaction": "multi_turn"
+  },
+  "sub_goals": [
+    "lead_status_reported",
+    "declined_action_explained"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

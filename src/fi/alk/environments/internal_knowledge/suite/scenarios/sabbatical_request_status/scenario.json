@@ -1,0 +1,76 @@
+{
+  "name": "sabbatical_request_status",
+  "scenario_key": "sabbatical-request-status",
+  "scenario_id": "",
+  "use_case": "Report the status of the employee's own knowledge request",
+  "branch": "Priya Nair asks what happened to her sabbatical question KR-101, still open with Hannah Okafor",
+  "tests": "the agent reads KR-101 and reports it open with the People team, inventing no answer",
+  "instruction": "A few weeks ago you asked whether there is a sabbatical policy after five years; your request number is KR-101. Ask the Knowledge Desk where it stands.\n\nYour details:\n- Name: Priya Nair\n- Employee ID: E01\n- Request: KR-101",
+  "keywords": [
+    "knowledge_request"
+  ],
+  "persona": {
+    "name": "Priya Nair",
+    "gender": "female",
+    "age_group": "32-40",
+    "occupation": "Engineer",
+    "location": "United States",
+    "personality": "Professional and formal",
+    "communication_style": "Direct and concise",
+    "initial_message": "Any update on my knowledge request KR-101 about sabbaticals?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "origin": "seed",
+    "employee_id": "E01",
+    "request_id": "KR-101"
+  },
+  "solution": [
+    {
+      "tool": "get_user_profile",
+      "arguments": {
+        "employee_id": "E01"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_knowledge_request_status",
+      "arguments": {
+        "employee_id": "E01",
+        "request_id": "KR-101"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "request_id": "caller: KR-101"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "task": "request_status",
+    "disposition": "valid_request",
+    "interaction": "multi_turn",
+    "counterparty": "standard_employee",
+    "interface": "clean_prose",
+    "overlay": "none",
+    "overlay_vector": "none",
+    "overlay_intensity": "absent"
+  },
+  "sub_goals": [
+    "knowledge_request_status_reported"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

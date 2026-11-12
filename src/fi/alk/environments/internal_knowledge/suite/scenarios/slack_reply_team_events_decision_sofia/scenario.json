@@ -1,0 +1,104 @@
+{
+  "name": "slack_reply_team_events_decision_sofia",
+  "scenario_key": "slack-reply-team-events-decision-sofia",
+  "scenario_id": "",
+  "use_case": "Pick up a Slack question and post the approved reply in its thread",
+  "branch": "Sofia Rossi asked about the team events budget in #help-policies (KM03); Daniel Brooks provides approval APP-KN-403 to post the reply reflecting Tomas Rivera's newer decision in #finance-team (KM04) over the $100 document figure",
+  "tests": "the agent reads KM03, KM04 in #finance-team, and team_events_v1, posting the $150 decision in Sofia's thread with APP-KN-403",
+  "instruction": "You are Daniel Brooks, Sales Director. Sofia Rossi asked in #help-policies if the team events budget is still $100 a head for offsite planning. Ask the Knowledge Desk to post an approved answer in her thread, referencing the decision from Tomas in #finance-team; you provide approval APP-KN-403.\n\nYour details:\n- Name: Daniel Brooks\n- Employee ID: E06\n- Approval: APP-KN-403",
+  "keywords": [
+    "slack",
+    "approval"
+  ],
+  "persona": {
+    "name": "Daniel Brooks",
+    "gender": "male",
+    "age_group": "40-50",
+    "occupation": "Manager",
+    "location": "United States",
+    "personality": "Confident",
+    "communication_style": "Direct and concise",
+    "initial_message": "Please post the approved reply to Sofia's team events question in #help-policies using approval APP-KN-403, noting the Finance decision.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "approval_id": "APP-KN-403",
+    "origin": "generated"
+  },
+  "solution": [
+    {
+      "tool": "slack_read_thread",
+      "arguments": {
+        "message_ts": "1793696400.000003",
+        "channel_id": "CH_HELPPOL"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "message_ts": "record: KM03"
+      }
+    },
+    {
+      "tool": "slack_read_thread",
+      "arguments": {
+        "message_ts": "1793203200.000004",
+        "channel_id": "CH_FINANCE"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "message_ts": "record: KM04"
+      }
+    },
+    {
+      "tool": "fetch_passage",
+      "arguments": {
+        "employee_id": "E06",
+        "passage_id": "P-TEAMEVENTSV1-01"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "passage_id": "record: Team Events Budget 1.0, section 1"
+      }
+    },
+    {
+      "tool": "slack_send_message",
+      "arguments": {
+        "thread_ts": "1793696400.000003",
+        "message": "While Team Events Budget 1.0 section 1 states $100 per head, Tomas Rivera posted a decision in #finance-team on 2026-10-28 raising the team events cap to $150 per head from 1 November (document update pending).",
+        "channel_id": "CH_HELPPOL",
+        "approval_id": "APP-KN-403"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "thread_ts": "record: KM03 thread",
+        "channel_id": "record: #help-policies"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "overlay_intensity": "absent",
+    "counterparty": "manager",
+    "interface": "slack",
+    "task": "slack_reply",
+    "overlay": "none",
+    "interaction": "multi_turn",
+    "overlay_vector": "none",
+    "disposition": "decision_overrides_doc"
+  },
+  "sub_goals": [
+    "slack_reply_in_thread"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

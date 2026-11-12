@@ -1,0 +1,114 @@
+{
+  "name": "reschedule",
+  "scenario_key": "reschedule",
+  "scenario_id": "",
+  "use_case": "Book a demo on the owner's calendar after the prospect picks",
+  "branch": "Prospect reschedules existing demo to another open slot",
+  "tests": "the desk cancels demo D419 on Chloe Nguyen's calendar and books new demo on slot DS18 upon prospect choice",
+  "instruction": "You are Declan Fraser from Tasman Health (lead L419, email declan.fraser@tasmanhealth.example). You have a demo D419 booked with Chloe Nguyen for Friday 13 November at 10:00 Sydney time (slot DS419). Ask the sales desk to reschedule your demo. When offered alternative slots on Chloe's calendar, choose Friday 13 November at 11:00 AM Sydney time (slot DS18) and confirm.\n\nYour details:\n- Name: Declan Fraser\n- Company: Tasman Health\n- Email: declan.fraser@tasmanhealth.example\n- Lead ID: L419\n- Existing demo ID: D419\n- Assigned Rep: Chloe Nguyen (A06)",
+  "keywords": [
+    "reschedule",
+    "cancel_demo",
+    "book_demo",
+    "tasman_health"
+  ],
+  "persona": {
+    "name": "Declan Fraser",
+    "gender": "male",
+    "age_group": "32-40",
+    "occupation": "Manager",
+    "location": "Australia",
+    "personality": "Friendly and cooperative",
+    "communication_style": "Direct and concise",
+    "initial_message": "Hi, Declan Fraser from Tasman Health (declan.fraser@tasmanhealth.example). I need to reschedule our demo D419 currently set for Friday 10am Sydney time.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "origin": "generated",
+    "leads": [
+      {
+        "owner_rep_id": "A06",
+        "country": "Australia",
+        "lead_id": "L419",
+        "status": "demo_booked"
+      }
+    ],
+    "contacts": [
+      {
+        "name": "Declan Fraser",
+        "email": "declan.fraser@tasmanhealth.example",
+        "contact_id": "C419"
+      }
+    ],
+    "demos": [
+      {
+        "slot_id": "DS419",
+        "lead_id": "L419",
+        "demo_id": "D419"
+      }
+    ]
+  },
+  "solution": [
+    {
+      "tool": "get_lead",
+      "arguments": {
+        "lead_id": "L419"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "cancel_demo",
+      "arguments": {
+        "demo_id": "D419",
+        "confirmed": true
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "demo_id": "record: demos[D419].demo_id"
+      }
+    },
+    {
+      "tool": "list_demo_slots",
+      "arguments": {
+        "rep_id": "A06"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "book_demo",
+      "arguments": {
+        "prospect_confirmed": true,
+        "slot_id": "DS18",
+        "request_key": "REQ-L419-RESCHED",
+        "lead_id": "L419"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "lead_id": "record: leads[L419].lead_id",
+        "slot_id": "record: demo_slots[DS18].slot_id"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {},
+  "sub_goals": [
+    "demo_cancelled_as_requested",
+    "demo_booked_on_owner_calendar",
+    "demo_time_in_prospect_timezone"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

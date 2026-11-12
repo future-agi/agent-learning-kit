@@ -1,0 +1,76 @@
+{
+  "name": "location_accessibility_riverbank_west",
+  "scenario_key": "location-accessibility-riverbank-west",
+  "scenario_id": "",
+  "use_case": "Intake, insurance, preparation and locations",
+  "branch": "Oliver Grant inquires about accessibility and step-free access at the Riverbank West clinic location",
+  "tests": "the agent looks up location info and reports accessibility details for Riverbank West",
+  "instruction": "You are Oliver Grant (born 1950-10-10). You want to check the accessibility and step-free access at the Riverbank West clinic location before planning a future visit.\n\nYour details:\n- Name: Oliver Grant\n- Date of birth: 1950-10-10\n- Location: Riverbank West",
+  "keywords": [
+    "locations"
+  ],
+  "persona": {
+    "name": "Oliver Grant",
+    "gender": "male",
+    "age_group": "60+",
+    "occupation": "Retired",
+    "location": "United Kingdom",
+    "personality": "Cautious and skeptical",
+    "communication_style": "Formal and polite",
+    "initial_message": "Hello, could you tell me about the step-free access at Riverbank West?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "patient_id": "P11",
+    "origin": "seed",
+    "location_id": "LOC-WES"
+  },
+  "solution": [
+    {
+      "tool": "verify_patient",
+      "arguments": {
+        "dob": "1950-10-10",
+        "full_name": "Oliver Grant"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_location_info",
+      "arguments": {
+        "location_id": "LOC-WES"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "location_id": "caller: Riverbank West (LOC-WES)"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "interaction": "multi_turn",
+    "overlay": "none",
+    "counterparty": "individual_customer",
+    "overlay_vector": "none",
+    "interface": "clean_prose",
+    "overlay_intensity": "absent",
+    "disposition": "happy_path",
+    "task": "locations"
+  },
+  "sub_goals": [
+    "clinic_information_reported"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

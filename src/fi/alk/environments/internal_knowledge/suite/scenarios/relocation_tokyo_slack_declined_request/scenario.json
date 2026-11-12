@@ -1,0 +1,89 @@
+{
+  "name": "relocation_tokyo_slack_declined_request",
+  "scenario_key": "relocation-tokyo-slack-declined-request",
+  "scenario_id": "",
+  "use_case": "Report missing evidence and open a knowledge request with consent",
+  "branch": "Kenji Tanaka posted in #help-policies about relocation allowance for Japan; Relocation Policy section 3 sets no allowance for non-US/UK countries and Kenji declines opening a knowledge request",
+  "tests": "the agent reads Kenji's Slack message, consults the Relocation Policy, reports no set allowance exists, and does not open a knowledge request after Kenji declines",
+  "instruction": "You posted a message in #help-policies asking what relocation allowance applies for Tokyo. Ask the Knowledge Desk about your question. If they offer to open a knowledge request, decline it.\n\nYour details:\n- Name: Kenji Tanaka\n- Employee ID: E10\n- Channel: #help-policies",
+  "keywords": [
+    "missing_evidence",
+    "slack"
+  ],
+  "persona": {
+    "name": "Kenji Tanaka",
+    "gender": "male",
+    "age_group": "25-32",
+    "occupation": "Engineer",
+    "location": "Australia",
+    "personality": "Easy-going",
+    "communication_style": "Simple and clear",
+    "initial_message": "I posted in #help-policies about relocation to Tokyo—what does the policy say about it?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "message_ts": "1793703600.000007",
+    "employee_id": "E10",
+    "origin": "seed"
+  },
+  "solution": [
+    {
+      "tool": "slack_read_thread",
+      "arguments": {
+        "channel_id": "CH_HELPPOL",
+        "message_ts": "1793703600.000007"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "channel_id": "record: slack_channels #help-policies",
+        "message_ts": "record: KM07 in #help-policies"
+      }
+    },
+    {
+      "tool": "search_files",
+      "arguments": {
+        "query": "title contains 'Relocation'"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "fetch_passage",
+      "arguments": {
+        "employee_id": "E10",
+        "passage_id": "P-RELOCATIONV1-03"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "passage_id": "record: Relocation Policy 1.0 section 3 (Other countries)"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "overlay_intensity": "absent",
+    "overlay": "none",
+    "task": "missing_evidence",
+    "overlay_vector": "none",
+    "disposition": "valid_request",
+    "interaction": "single_turn",
+    "interface": "slack",
+    "counterparty": "standard_employee"
+  },
+  "sub_goals": [
+    "missing_evidence_reported"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}
