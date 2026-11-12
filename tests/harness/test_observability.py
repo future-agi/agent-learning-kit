@@ -978,9 +978,24 @@ def test_declared_values_never_touch_the_resource():
 
 
 def test_a_declared_value_under_eight_characters_is_not_replaced():
-    copy = _export_one(_readable(**{"output.value": "pin 1234567 ok"}), ("1234567",))
+    copy = _export_one(_readable(**{"output.value": "word abc1234 ok"}), ("abc1234",))
 
-    assert copy.attributes["output.value"] == "pin 1234567 ok"
+    assert copy.attributes["output.value"] == "word abc1234 ok"
+
+
+def test_a_short_all_digit_value_is_replaced_only_as_a_whole_number():
+    copy = _export_one(
+        _readable(**{"output.value": "pin 4821, again 4821. not 14821 or 48210"}),
+        ("4821",),
+    )
+
+    assert copy.attributes["output.value"] == "pin ***, again ***. not 14821 or 48210"
+
+
+def test_a_declared_value_under_four_digits_is_not_replaced():
+    copy = _export_one(_readable(**{"output.value": "code 482 ok"}), ("482",))
+
+    assert copy.attributes["output.value"] == "code 482 ok"
 
 
 def test_an_array_value_is_read_as_json():
@@ -1118,3 +1133,59 @@ def test_a_span_that_cannot_be_gathered_is_dropped_alone(monkeypatch, caplog):
     assert [span.name for span in sink.get_finished_spans()] == ["fine"]
     assert sink.get_finished_spans()[0].attributes["tool.input"] == CLEAN
     assert _warnings(caplog) == ["trace spans dropped: KeyError"]
+
+
+def test_a_declared_secret_running_into_a_cut_address_goes_whole():
+    # The cut is decided on the recorded length but made on the masked text, so it can't take the
+    # secret's tail with the address and leave its head.
+    secret = "A1B2C3_D4E5F6G7"
+    tail = " key=" + secret + "https://deploy:8374"
+    value = "x" * (2000 - len(tail)) + tail
+
+    out = _export_one(_readable(**{"tool.input": value}), (secret,)).attributes[
+        "tool.input"
+    ]
+
+    assert "A1B2C3" not in out and "8374" not in out
+    assert out.endswith(" key=***[redacted]")
+
+
+@pytest.mark.parametrize("secret", ["pässword-1234567", 'pa"ss\\word-12345'])
+def test_a_secret_json_escapes_is_replaced_in_text_that_is_not_parsed(secret):
+    node = {"pw": "x", "note": "login " + secret}
+    for _ in range(65):
+        node = [node]
+    deep = json.dumps(node)
+    short = json.dumps({"note": "login " + secret + " " + "z" * 1200})[:1000]
+
+    for value in (deep, short):
+        out = _export_one(_readable(**{"input.value": value}), (secret,)).attributes[
+            "input.value"
+        ]
+        assert json.dumps(secret)[1:-1] not in out and secret not in out
+
+
+def test_a_secret_in_json_text_inside_json_text_is_replaced():
+    secret = "sk-NESTED-FAKE-1234567890"
+    inner = json.dumps({"k": "token " + secret})
+    value = json.dumps({"role": "tool", "content": json.dumps({"message": inner})})
+
+    out = _export_one(_readable(**{"input.value": value}), (secret,)).attributes[
+        "input.value"
+    ]
+
+    assert secret not in out
+    level1 = json.loads(json.loads(out)["content"])
+    assert json.loads(level1["message"]) == {"k": "token ***"}
+
+
+def test_three_json_keys_that_clean_alike_keep_all_three_values():
+    value = json.dumps(
+        {"https://a:1@h/x": "1", "https://b:2@h/x": "2", "https://c:3@h/x": "3"}
+    )
+
+    out = json.loads(
+        _export_one(_readable(**{"input.value": value})).attributes["input.value"]
+    )
+
+    assert sorted(out.values()) == ["1", "2", "3"]

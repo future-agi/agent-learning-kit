@@ -2278,6 +2278,10 @@ async def run_job(
         *customer_secret_values,
         *tuple(simulator_secret_values.values()),
     )
+    # Spans: secrets.json goes whole, since the platform writes only the customer's declared
+    # values and the Observe export secrets there. The simulator channel goes only where an alias
+    # names a credential. Its other values (models, the Observe project, the SIP trunk and caller
+    # number, base URLs) are platform settings, not secrets, and a span keeps them.
     span_secret_values = (
         *customer_secret_values,
         *observability.credential_values(simulator_secret_values),
@@ -2498,9 +2502,7 @@ async def run_job(
         if broker_socket is not None:
             os.environ["ALK_COMPOSE_BROKER_SOCKET"] = str(broker_socket)
 
-        # Spans are a channel out too. The customer's declared values go whole; the simulator
-        # channel only where its alias names a credential, as it also holds model names and the
-        # Observe project, which a span must keep.
+        # Spans are a channel out too (span_secret_values says which values they replace).
         observability.begin(
             job.job_id,
             job.run_id,

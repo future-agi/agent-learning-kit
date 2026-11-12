@@ -12,6 +12,7 @@ import contextlib
 import json
 import logging
 import os
+import re
 from typing import Any, Iterator, Mapping
 
 from opentelemetry.sdk.trace.export import SpanExporter
@@ -152,6 +153,10 @@ def _cut(value: str) -> str:
     """
     if len(value) not in _CUTS:
         return value
+    return _cut_address(value)
+
+
+def _cut_address(value: str) -> str:
     at = value.rfind("://")
     if at < 0 or any(character.isspace() for character in value[at + 3 :]):
         return value
@@ -173,13 +178,7 @@ class _CleaningExporter(SpanExporter):
         self._inner = inner
         # The job's own secret values, replaced whole as the other outbound channels replace them
         # (outbound.redact_outbound_text): a key a tool printed has no shape to recognise.
-        self._secrets = tuple(
-            sorted(
-                {value for value in secret_values if len(value) >= _SHORTEST_SECRET},
-                key=len,
-                reverse=True,
-            )
-        )
+        self._secrets = _secret_patterns(secret_values)
         # One cleaned copy per resource, made the first time it is seen.
         self._resources: dict[int, tuple[Any, Any]] = {}
 
@@ -255,6 +254,7 @@ class _CleaningExporter(SpanExporter):
 
 # outbound.redact_outbound_text's floor: a shorter declared value would mask ordinary words.
 _SHORTEST_SECRET = 8
+_SHORTEST_PIN = 4
 
 
 def credential_values(
@@ -273,9 +273,36 @@ def credential_values(
     )
 
 
-def _mask(text: str, secrets: tuple[str, ...]) -> str:
+def _secret_patterns(secret_values: tuple[str, ...]) -> tuple[Any, ...]:
+    """What _mask replaces: each value of 8 or more characters, also as JSON escapes it (text that
+    isn't parsed as JSON carries it escaped), longest first; then one pattern for short all-digit
+    values such as a 4-digit PIN, matched only between non-digits so it can't hit inside a longer
+    number. Other short values would hit ordinary words, so they are left."""
+    long = {value for value in secret_values if len(value) >= _SHORTEST_SECRET}
+    forms = set(long)
+    for value in long:
+        for ascii_only in (True, False):
+            forms.add(json.dumps(value, ensure_ascii=ascii_only)[1:-1])
+    short = {
+        value
+        for value in secret_values
+        if _SHORTEST_PIN <= len(value) < _SHORTEST_SECRET
+        and value.isascii()
+        and value.isdigit()
+    }
+    patterns: list[Any] = sorted(forms, key=len, reverse=True)
+    if short:
+        alternatives = "|".join(re.escape(value) for value in sorted(short, key=len, reverse=True))
+        patterns.append(re.compile(rf"(?<![0-9])(?:{alternatives})(?![0-9])"))
+    return tuple(patterns)
+
+
+def _mask(text: str, secrets: tuple[Any, ...]) -> str:
     for secret in secrets:
-        text = text.replace(secret, "***")
+        if isinstance(secret, str):
+            text = text.replace(secret, "***")
+        else:
+            text = secret.sub("***", text)
     return text
 
 
@@ -287,7 +314,7 @@ def _named_secret(key: str) -> bool:
     return lowered == "headers" or any(marker in lowered for marker in _REDACTION_MARKERS)
 
 
-def _take(value: Any, flat: list[str], key: str, secrets: tuple[str, ...]) -> Any:
+def _take(value: Any, flat: list[str], key: str, secrets: tuple[Any, ...]) -> Any:
     """Put each string of an attribute value in flat; return where to find it again.
 
     Only strings are cleaned: a number or a bool under a key such as gen_ai.usage.input_tokens
@@ -300,7 +327,7 @@ def _take(value: Any, flat: list[str], key: str, secrets: tuple[str, ...]) -> An
     return ("as is", value)
 
 
-def _take_text(value: str, flat: list[str], key: str, secrets: tuple[str, ...]) -> Any:
+def _take_text(value: str, flat: list[str], key: str, secrets: tuple[Any, ...]) -> Any:
     if _named_secret(key):
         return ("as is", "[redacted]")
     # _cut and _as_json read the value as recorded: replacing a secret first changes its length
@@ -314,7 +341,9 @@ def _take_text(value: str, flat: list[str], key: str, secrets: tuple[str, ...]) 
         tree = _as_json(value)
         if tree is not None:
             return ("json", _take_json(tree, flat, key, secrets))
-    flat.append(_mask(cut, secrets))
+    # The cut is decided on the value as recorded, but made on the masked text: cutting first can
+    # take a secret's tail with the address and leave its head, which no longer matches.
+    flat.append(_cut_address(_mask(value, secrets)) if cut != value else _mask(value, secrets))
     return ("text", len(flat) - 1)
 
 
@@ -350,7 +379,7 @@ def _too_deep(tree: Any) -> bool:
     return False
 
 
-def _take_json(node: Any, flat: list[str], key: str, secrets: tuple[str, ...]) -> Any:
+def _take_json(node: Any, flat: list[str], key: str, secrets: tuple[Any, ...]) -> Any:
     if isinstance(node, dict):
         pairs = []
         for name, item in node.items():
@@ -379,7 +408,7 @@ def _give(where: Any, cleaned: list[Any]) -> Any:
     if kind == "sequence":
         return tuple(_give(item, cleaned) for item in body)
     if kind == "json":
-        return json.dumps(_give_json(body, cleaned), ensure_ascii=False)
+        return json.dumps(_give_json(body, cleaned))
     return body
 
 
@@ -401,11 +430,11 @@ def _give_json(where: Any, cleaned: list[Any]) -> Any:
     if kind == "text":
         return cleaned[body]
     if kind == "json text":
-        return json.dumps(_give_json(body, cleaned), ensure_ascii=False)
+        return json.dumps(_give_json(body, cleaned))
     return body
 
 
-def _gather(span: Any, flat: list[str], secrets: tuple[str, ...]) -> Any:
+def _gather(span: Any, flat: list[str], secrets: tuple[Any, ...]) -> Any:
     def mapping(attributes: Any) -> Any:
         return {
             key: _take(value, flat, key, secrets) for key, value in (attributes or {}).items()

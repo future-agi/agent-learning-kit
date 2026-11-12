@@ -357,30 +357,34 @@ def test_authoring_hands_spans_the_customers_values_whole_and_only_the_gateways_
     secrets = tmp_path / "secrets.json"
     gateway = tmp_path / "simulator-secrets.json"
     job = tmp_path / "job.json"
+    # secrets.json: the customer's declared values, some under names the platform also uses, and
+    # an Observe export secret. A SIMULATOR_* model name is the platform's and must survive.
     secrets.write_text(
         json.dumps(
             {
                 "RETELL_API_KEY": "retell-customer-key-1234567890",
                 "CUSTOMER_DSN": "customer-dsn-value-1234567890",
-                # This file also carries platform settings beside the customer's values.
+                "OPENAI_API_KEY": "sk-customer-FAKE-AAAA2222",
+                "AGENTCC_API_KEY": "cust-own-agentcc-key-fake-123",
+                "GOOGLE_CLOUD_PROJECT": "cust-gcp-proj-fake-778899",
+                "FI_API_KEY": "fi-observe-export-key-1234567890",
                 "SIMULATOR_LLM_MODEL": "gemini-2.5-flash-lite",
-                "FI_HARNESS_PROJECT": "hosted-harness-prod",
-                "FI_API_KEY": "fi-platform-key-1234567890",
             }
         ),
         encoding="utf-8",
     )
-    # The gateway's default values: credentials among models and the Observe project.
+    # The gateway's default values: credentials among models and the Observe project, some under
+    # the same names as the customer's, and the guest-booking PIN and target number.
     gateway.write_text(
         json.dumps(
             {
+                "OPENAI_API_KEY": "sk-platform-FAKE-BBBB2222",
                 "AGENTCC_API_KEY": "agentcc-key-1234567890",
                 "AGENTCC_BASE_URL": "https://gateway.example.test",
                 "ALK_HARNESS_MODEL": "vertex_ai/claude-sonnet-4-5",
-                "SIMULATOR_LLM_MODEL": "gemini-2.5-flash-lite",
                 "FI_HARNESS_PROJECT": "hosted-harness-prod",
                 "GOOGLE_CLOUD_PROJECT": "platform-project-1",
-                "ALK_CAB_GUEST_POC_PIN": "48213977",
+                "ALK_CAB_GUEST_POC_PIN": "4821",
                 "ALK_CAB_GUEST_POC_TARGET_PHONE_NUMBER": "+15550104477",
             }
         ),
@@ -416,8 +420,10 @@ def test_authoring_hands_spans_the_customers_values_whole_and_only_the_gateways_
             "gen_ai.request.model": "vertex_ai/claude-sonnet-4-5",
             "llm.model_name": "gemini-2.5-flash-lite",
             "input.value": "a agentcc-key-1234567890 b retell-customer-key-1234567890 "
-            "c customer-dsn-value-1234567890 d fi-platform-key-1234567890 "
-            "e 48213977 f +15550104477",
+            "c customer-dsn-value-1234567890 d sk-customer-FAKE-AAAA2222 "
+            "e cust-own-agentcc-key-fake-123 f cust-gcp-proj-fake-778899 "
+            "g fi-observe-export-key-1234567890 h sk-platform-FAKE-BBBB2222 "
+            "i pin 4821. j +15550104477 k 14821",
         },
     ):
         pass
@@ -428,4 +434,6 @@ def test_authoring_hands_spans_the_customers_values_whole_and_only_the_gateways_
     assert copy.attributes["gen_ai.request.model"] == "vertex_ai/claude-sonnet-4-5"
     assert copy.attributes["llm.model_name"] == "gemini-2.5-flash-lite"
     assert copy.resource.attributes["project_name"] == "hosted-harness-prod"
-    assert copy.attributes["input.value"] == "a *** b *** c *** d *** e *** f ***"
+    assert copy.attributes["input.value"] == (
+        "a *** b *** c *** d *** e *** f *** g *** h *** i pin ***. j *** k 14821"
+    )

@@ -78,20 +78,25 @@ _UNNAMED_SECRETS = frozenset({PIN_ENV, TARGET_PHONE_ENV})
 def _span_secret_values(
     all_values: dict[str, str], gateway_values: dict[str, str]
 ) -> tuple[str, ...]:
-    """The values spans replace whole. The customer's go whole. The platform's (the SIMULATOR_*
-    aliases, the passthrough and Observe settings, the gateway file) go only where they are
-    credentials, since they also hold model names and the Observe project, which a span keeps."""
-    platform_names = _PASSTHROUGH | _OBSERVABILITY_PASSTHROUGH
+    """The values spans replace whole, chosen by where each comes from, never by its name: a
+    customer may declare OPENAI_API_KEY or GOOGLE_CLOUD_PROJECT as well as the platform.
 
-    def platform(name: str) -> bool:
-        return name.startswith("SIMULATOR_") or name in platform_names
-
-    customer = tuple(value for name, value in all_values.items() if value and not platform(name))
-    platform_values = {name: value for name, value in all_values.items() if platform(name)}
-    platform_values.update(gateway_values)
+    - secrets.json holds the customer's declared values and the Observe export secrets; they go
+      whole, apart from the platform's SIMULATOR_* aliases, which customers can't use;
+    - those, and the gateway file, also hold model names and the Observe project, which a span
+      keeps, so only their credentials go. The two are filtered apart, never merged, so a customer
+      value can't be lost under a name the gateway also sends.
+    """
+    customer = tuple(
+        value
+        for name, value in all_values.items()
+        if value and not name.startswith("SIMULATOR_")
+    )
+    simulator = {name: value for name, value in all_values.items() if name.startswith("SIMULATOR_")}
     return (
         *customer,
-        *observability.credential_values(platform_values, also=_UNNAMED_SECRETS),
+        *observability.credential_values(simulator, also=_UNNAMED_SECRETS),
+        *observability.credential_values(gateway_values, also=_UNNAMED_SECRETS),
     )
 
 
