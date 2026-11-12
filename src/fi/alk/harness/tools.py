@@ -406,6 +406,17 @@ def _checked_against_source(
             problems.append(str(invalid))
     elif runtime is not None and runtime.source_subfolder:
         runtime = runtime.model_copy(update={"source_subfolder": ""})
+    if runtime is not None and source_root is not None:
+        # The first save is the only place a listed name can be stopped from entering the
+        # contract: a later repair judges only the names it adds. Only this model-facing route
+        # asks (the kit's own write_contract does not pass through here). The name isn't echoed.
+        from .runtime_repair import _runtime_names_listed_file
+
+        if _runtime_names_listed_file(source_root.resolve(), runtime):
+            problems.append(
+                "runtime: a command or path in the runtime names a file that is kept out of "
+                "this task; name only the program and the source files it runs"
+            )
     if problems:
         return _problems(problems, arrived)
     return contract.model_copy(

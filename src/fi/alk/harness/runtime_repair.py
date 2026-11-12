@@ -1007,6 +1007,35 @@ def _tool_mapping_selectors_changed(before, after) -> bool:
     )
 
 
+_FOLDER_FLAGS = ("--directory", "--cwd", "--chdir", "--project", "--prefix", "--dir")
+
+
+def _runs_inline_code(command: list[str]) -> bool:
+    """Whether the command hands an interpreter its program as an argument. The exact flags are
+    refused wherever they stand; the forms joined to their value (-cexec(...), --print=...,
+    -pexpr) and node's --print/-p are judged among the interpreter's own options, so a script's
+    own -p (a port) is not mistaken for code."""
+    if any(token in {"-c", "--eval", "-e"} for token in command[1:]):
+        return True
+    for index, token in enumerate(command):
+        name = Path(token).name.casefold()
+        python = name.startswith("python")
+        script = name in {"node", "nodejs", "bun", "deno"}
+        if not (python or script):
+            continue
+        options = iter(command[index + 1:])
+        for option in options:
+            if not option.startswith("-") or option == "-m":
+                break
+            if python and option.startswith("-c"):
+                return True
+            if script and option.startswith(("--eval", "--print", "-e", "-p")):
+                return True
+            if python and option in {"-W", "-X"}:
+                next(options, None)
+    return False
+
+
 def _runtime_names_listed_file(
     root: Path, runtime: Runtime, existing: Runtime | None = None
 ) -> bool:
@@ -1042,16 +1071,40 @@ def _runtime_names_listed_file(
     paths += new_only(list(runtime.requirements_files), old("requirements_files"))
     if any(raw and (listed(raw, root) or listed(raw, workdir)) for raw in paths):
         return True
-    tokens: list[str] = []
-    for token in new_only(list(runtime.command), old("command")):
-        tokens.append(token)
-        try:
-            tokens.extend(shlex.split(token))
-        except ValueError:
-            pass
-    for token in tokens:
+    def split(values: list[str]) -> list[str]:
+        out: list[str] = []
+        for token in values:
+            out.append(token)
+            try:
+                out.extend(shlex.split(token))
+            except ValueError:
+                pass
+        return out
+
+    # A flag that changes folder (uv --directory secrets, bun --cwd, -C, --chdir) moves where
+    # every later operand resolves, so operands are judged under that folder too.
+    bases = [workdir]
+    everything = split(list(runtime.command))
+    for position, token in enumerate(everything):
+        folder = None
+        if token in _FOLDER_FLAGS or token == "-C":
+            folder = next(iter(everything[position + 1:position + 2]), None)
+        elif token.startswith(tuple(f"{flag}=" for flag in _FOLDER_FLAGS)):
+            folder = token.partition("=")[2]
+        elif token.startswith("-C") and not token.startswith("--"):
+            folder = token[2:]
+        if folder:
+            bases.append((workdir / folder).resolve())
+    # Files the kit writes itself from the runtime's config_files are the model's own values,
+    # not the customer's file of that name.
+    generated = {
+        (base / key).resolve() for key in runtime.config_files for base in (root, workdir)
+    }
+    for token in split(new_only(list(runtime.command), old("command"))):
         for operand in {token, token.partition("=")[2]} if token.startswith("-") else {token}:
-            if operand and (listed(operand, workdir) or listed(operand, root)):
+            if not operand or any((base / operand).resolve() in generated for base in (root, workdir)):
+                continue
+            if any(listed(operand, base) for base in (*bases, root)):
                 return True
     return False
 
@@ -1461,9 +1514,7 @@ def validate_runtime_plan_patch(
         raise ValueError("runtime_repair_workdir_missing")
     if runtime.command:
         launcher = Path(runtime.command[0]).name.casefold()
-        if launcher in _SHELL_LAUNCHERS or any(
-            token in {"-c", "--eval", "-e"} for token in runtime.command[1:]
-        ):
+        if launcher in _SHELL_LAUNCHERS or _runs_inline_code(runtime.command):
             raise ValueError("runtime_repair_inline_or_shell_command_forbidden")
         if launcher not in _SAFE_RUNTIME_LAUNCHERS:
             declared = "\n".join(

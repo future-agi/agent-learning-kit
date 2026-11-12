@@ -3923,6 +3923,17 @@ def test_a_env_setting_named_for_a_model_by_any_of_its_words_is_accepted(root, w
         pytest.param("VERTEX_MODEL=claude-3-5-sonnet-v2@latest", "claude-3-5-sonnet-v2@latest", id="vertex-latest"),
         pytest.param("VERTEX_MODEL=mistral-large@2407", "mistral-large@2407", id="vertex-short-version"),
         pytest.param("VERTEX_MODEL=text-bison@001", "text-bison@001", id="vertex-three-digit-version"),
+        pytest.param("VERTEX_MODEL=vertex_ai/mistral-large@2407", "vertex_ai/mistral-large@2407", id="vertex-ai-prefix"),
+        pytest.param(
+            "VERTEX_MODEL=publishers/google/models/gemini-1.0-pro@001",
+            "publishers/google/models/gemini-1.0-pro@001",
+            id="vertex-publishers-path",
+        ),
+        pytest.param(
+            "VERTEX_MODEL=projects/x/locations/y/publishers/anthropic/models/claude-3-5-sonnet@20240620",
+            "projects/x/locations/y/publishers/anthropic/models/claude-3-5-sonnet@20240620",
+            id="vertex-full-resource-path",
+        ),
         pytest.param("BEDROCK_MODEL=anthropic.claude-3-5-sonnet-20240620-v1:0", "anthropic.claude-3-5-sonnet-20240620-v1:0", id="bedrock-colon"),
     ],
 )
@@ -3981,10 +3992,10 @@ def test_every_kind_of_env_file_takes_the_same_rule(root, file):
         pytest.param(".env", "LLM_ENDPOINT=gpt-4o@llm.internal", "gpt-4o@llm.internal", id="user-at-host"),
         pytest.param(".env", "MODEL_ID=gpt-4o@evil.example", "gpt-4o@evil.example", id="model-then-host"),
         # A version is 3 to 8 digits or lowercase `latest`, after a name with no / or :.
-        # (user@123 and fakepw@123456 look like codestral@2405 and are not told apart by shape.)
+        # (user@123, fakepw@123456 and scott/fakepw@1521 look like model names and are not told
+        # apart by shape.)
         pytest.param(".env", "MODEL_SERVER=root@0", "root@0", id="login-one-digit-host"),
         pytest.param(".env", "MODEL_SERVER=admin@2130706433", "admin@2130706433", id="login-decimal-ip-host"),
-        pytest.param(".env", "MODEL_SERVER=scott/fakepw@1521", "scott/fakepw@1521", id="login-with-slash-and-port"),
         pytest.param(".env", "MODEL_SERVER=user@LATEST", "user@LATEST", id="login-uppercase-latest"),
         pytest.param(
             ".env",
@@ -4027,3 +4038,38 @@ def test_a_backup_copy_of_a_credential_file_is_refused(root):
     problems, _, _ = checked(root, {"name": "changeme", "path": ".pgpass.bak", "line": 1})
 
     assert problems == [kept_out(".pgpass.bak")]
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        pytest.param(["python", ".env"], id="listed-file"),
+        pytest.param(["python", "--config=.aws/credentials", "app.py"], id="listed-in-flag"),
+        pytest.param(["uv", "--directory", ".aws", "python", "credentials"], id="folder-flag"),
+    ],
+)
+def test_a_first_save_whose_runtime_names_a_listed_file_is_refused(tmp_path, root, command):
+    destination = tmp_path / "out"
+
+    result = accept_contract(
+        payload(runtime={"language": "python", "command": command}),
+        destination,
+        source_root=root,
+    )
+
+    assert result.get("is_error"), result
+    assert "kept out of this task" in text_of(result)
+    assert not (destination / "contract.json").exists()
+
+
+def test_a_first_save_with_an_ordinary_runtime_command_is_saved(tmp_path, root):
+    destination = tmp_path / "out"
+
+    result = accept_contract(
+        payload(runtime={"language": "python", "command": ["python", "agent.py"]}),
+        destination,
+        source_root=root,
+    )
+
+    assert not result.get("is_error"), result
+    assert saved(destination)["runtime"]["command"] == ["python", "agent.py"]

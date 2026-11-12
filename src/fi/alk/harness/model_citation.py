@@ -625,12 +625,15 @@ def _env_value(line: str) -> str | None:
 
 
 # A Vertex model name carries its version after an @ (claude-3-5-sonnet@20240620, mistral-large@2407,
-# text-bison@001, claude-3-5-sonnet-v2@latest): 3 to 8 digits or exactly lowercase `latest`, after a
-# name with no `/` or `:` (those make it a login or a path: scott/pw@1521, user:pw@host). Any
-# other @ in a value is a login (user@host, user:password@host).
-# This is a whole-value guess only, never letter by letter, but a login whose host is 3 to 8 digits
-# (user@123, fakepw@123456) can't be told from codestral@2405 by shape, so it is accepted too.
-_VERSIONED_NAME = re.compile(r"[^@:/]+@(?:\d{3,8}|latest)")
+# text-bison@001, claude-3-5-sonnet-v2@latest), and may sit under a path of `/` segments
+# (vertex_ai/mistral-large@2407, publishers/google/models/gemini-1.0-pro@001, projects/x/locations/y/
+# publishers/anthropic/models/claude-3-5-sonnet@20240620): 3 to 8 digits or exactly lowercase
+# `latest`, after a last name with no `:` (that makes it a login: user:pw@host). Any other @ in a
+# value is a login (user@host, user:password@host).
+# This is a whole-value guess only, never letter by letter. A login that has the same shape
+# (scott/fakepw@1521, user@123, fakepw@123456) can't be told from a model name by shape, so values
+# like those are accepted too: they can only be confirmed whole, never letter by letter.
+_VERSIONED_NAME = re.compile(r"(?:[\w.-]+/)*[^@:/]+@(?:\d{3,8}|latest)")
 
 
 def _env_value_is_a_locator(value: str) -> bool:
