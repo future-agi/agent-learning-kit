@@ -18,13 +18,24 @@ import pytest
 from pydantic import BaseModel, ValidationError
 
 from fi.alk.harness import (
+    amend,
     authoring_entrypoint,
+    authoring_runtime_validation,
+    builder,
     cli,
+    nudge,
     reading_entry,
     reading_result,
+    runtime_repair,
     seed_contract,
+    tools,
 )
-from fi.alk.harness.contract import AgentContract
+from fi.alk.harness.contract import (
+    AgentContract,
+    Runtime,
+    RuntimeInterface,
+    write_contract,
+)
 from fi.alk.harness.framework_detection import detect_framework
 from fi.alk.harness.hosted_chat_entrypoint import HostedChatRuntime
 from fi.alk.harness.job import HarnessJob
@@ -1423,6 +1434,50 @@ def test_a_source_model_already_there_survives_a_take_back(tmp_path, monkeypatch
     assert not (output / "contract.json").exists()
 
 
+def test_a_build_after_a_take_back_saves_no_record(tmp_path, monkeypatch):
+    job = _job(source=UPLOAD)
+    seed = _place(tmp_path, _seed_bytes(job, _body("")))
+    output = tmp_path / "authoring"
+    _setup_fails(tmp_path, monkeypatch, None)
+
+    assert use_seed(seed, job, _source(tmp_path), output) == ("setup_failed", [])
+
+    # A seeded contract saved elsewhere first leaves nothing behind: the build reads the agent
+    # itself, and its own save holds no record.
+    other = tmp_path / "other"
+    other.mkdir()
+    (other / "contract.json").write_bytes(_seed_bytes(job, _body("")))
+    write_contract(AgentContract.model_validate(_body("")), other)
+    assert RECORD_KEY in json.loads((other / "contract.json").read_bytes())
+    write_contract(AgentContract.model_validate(_body("")), output)
+    assert RECORD_KEY not in json.loads((output / "contract.json").read_bytes())
+
+
+def test_a_record_that_cant_be_read_back_is_logged(tmp_path, monkeypatch, caplog):
+    job = _job(source=UPLOAD)
+    output = tmp_path / "authoring"
+    output.mkdir()
+    saved = output / "contract.json"
+    saved.write_bytes(_seed_bytes(job))
+    real = Path.read_bytes
+    monkeypatch.setattr(
+        Path,
+        "read_bytes",
+        lambda path: _raise(PermissionError()) if path == saved else real(path),
+    )
+
+    with caplog.at_level(logging.WARNING, logger="fi.alk.harness.contract"):
+        write_contract(AgentContract.model_validate(_body("")), output)
+
+    assert [record.getMessage() for record in caplog.records] == [
+        "reading record not carried; class: PermissionError"
+    ]
+
+
+def _raise(exc: BaseException):
+    raise exc
+
+
 def test_a_group_holding_a_validation_error_prints_nothing(capsys):
     import builtins
 
@@ -1745,3 +1800,176 @@ def test_a_broken_stderr_does_not_undo_a_used_seed(tmp_path, monkeypatch):
     again = tmp_path / "again"
     assert use_seed(seed, job, _source(tmp_path), again) == ("setup_failed", [])
     assert not (again / "contract.json").exists()
+
+
+# -- every save after the seed keeps the record ------------------------------------------------
+
+# An uploaded folder is the agent itself: an archive job names no subfolder.
+UPLOAD = {"kind": "archive", "archive_artifact_id": "upload-1"}
+SOURCES = {"upload": (UPLOAD, ""), "github": (GITHUB, FOLDER)}
+REPAIR = "generated_runtime_plan_invalid"
+
+
+def _at(folder: str, name: str) -> str:
+    return f"{folder}/{name}" if folder else name
+
+
+def _body(folder: str) -> dict:
+    runtime = {"language": "python", "workdir": folder or "."}
+    if folder:
+        runtime["source_subfolder"] = folder
+    # A tool entry for a tool the contract doesn't have, so the saves that drop one save.
+    stale = [{"tool": "gone", "mode": "unreachable"}]
+    return {**CONTRACT, "runtime": runtime, "tool_entrypoints": stale}
+
+
+def _agent_source(tmp_path: Path, folder: str) -> Path:
+    source = tmp_path / "source"
+    agent = source / folder if folder else source
+    agent.mkdir(parents=True)
+    (agent / "agent.py").write_text("x = 1\n", encoding="utf-8")
+    (agent / "pyproject.toml").write_text(
+        "[project]\nname='agent'\nversion='1'\n", encoding="utf-8"
+    )
+    (agent / "tools.py").write_text(
+        "def cancel():\n    return 'ok'\n", encoding="utf-8"
+    )
+    return source
+
+
+def _repair_runtime(output: Path, source: Path, job: HarnessJob, folder: str) -> None:
+    runtime_repair.apply_runtime_plan_patch(
+        source,
+        output / "contract.json",
+        runtime_repair.RuntimePlanPatch(
+            base_contract_hash=runtime_repair._contract_hash(load(output)),
+            runtime=Runtime(
+                language="python",
+                workdir=folder,
+                command=["python", "agent.py"],
+                interface=RuntimeInterface(kind="http", port=8080, path="/chat"),
+            ),
+            evidence_paths=(_at(folder, "pyproject.toml"), _at(folder, "agent.py")),
+            diagnostic_codes=(REPAIR,),
+            summary="Run the HTTP service the folder declares.",
+        ),
+        allowed_diagnostic_codes={REPAIR},
+    )
+
+
+def _promote_data_store(
+    output: Path, source: Path, job: HarnessJob, folder: str
+) -> None:
+    candidate = output.parent / "candidate"
+    candidate.mkdir()
+    (candidate / "contract.json").write_text(
+        AgentContract(
+            agent="support", data_store={"kind": "in_memory"}
+        ).model_dump_json(),
+        encoding="utf-8",
+    )
+    promoted = authoring_runtime_validation._promote_data_store(
+        load(output), output, candidate
+    )
+    assert promoted == 0
+
+
+def _declare_tool(output: Path, source: Path, job: HarnessJob, folder: str) -> None:
+    server = builder.suite_server(output, [], load(output), source)
+    declare = next(one for one in server.tools if one.name == "declare_tool")
+    said = asyncio.run(
+        declare.handler(
+            {
+                "name": "cancel",
+                "description": "cancels",
+                "evidence_file": _at(folder, "tools.py"),
+                "evidence_quote": "def cancel():",
+                "why": "the agent has it",
+            }
+        )
+    )
+    assert not said.get("is_error")
+
+
+def _add_rule(output: Path, source: Path, job: HarnessJob, folder: str) -> None:
+    added, _ = amend.add_rule(load(output), output, rule="Confirm first", why="asked")
+    assert added
+
+
+RESAVES = {
+    "runtime_plan_repair": _repair_runtime,
+    "data_store_repair": _promote_data_store,
+    "submit_contract": lambda output, source, job, folder: tools._save_contract(
+        load(output), output
+    ),
+    "amend": _add_rule,
+    "declare_tool": _declare_tool,
+    "nudge": lambda output, source, job, folder: nudge.drop_stale_tool_references(
+        output
+    ),
+    "source_facts": lambda output, source, job, folder: (
+        authoring_entrypoint._refresh_source_facts(job, source, output)
+    ),
+}
+
+
+@pytest.mark.parametrize(
+    ("made_from", "resave"),
+    [*(("upload", name) for name in RESAVES), ("github", "runtime_plan_repair")],
+    ids=[*(f"upload-{name}" for name in RESAVES), "github-runtime_plan_repair"],
+)
+def test_a_save_after_the_seed_keeps_the_record(tmp_path, made_from, resave):
+    source_entry, folder = SOURCES[made_from]
+    job = _job(source=source_entry)
+    seed = _place(tmp_path, _seed_bytes(job, _body(folder)))
+    source = _agent_source(tmp_path, folder)
+    output = tmp_path / "authoring"
+    assert use_seed(seed, job, source, output) == ("used", [])
+    installed = (output / "contract.json").read_bytes()
+
+    RESAVES[resave](output, source, job, folder)
+
+    raw = (output / "contract.json").read_bytes()
+    assert raw != installed
+    saved = json.loads(raw)
+    assert next(iter(saved)) == RECORD_KEY
+    assert seed_contract._canon(saved[RECORD_KEY]) == seed_contract._canon(
+        json.loads(installed)[RECORD_KEY]
+    )
+    # What the platform checks: the saved contract is still the reading made for this job.
+    assert differs(saved, job) == []
+
+
+@pytest.mark.parametrize("resave", list(RESAVES))
+def test_a_save_of_a_contract_without_a_record_writes_none(tmp_path, resave):
+    job = _job(source=UPLOAD)
+    source = _agent_source(tmp_path, "")
+    output = tmp_path / "authoring"
+    output.mkdir()
+    unrecorded = _seed_bytes(job, _body(""), record=False)
+    (output / "contract.json").write_bytes(unrecorded)
+
+    RESAVES[resave](output, source, job, "")
+
+    raw = (output / "contract.json").read_bytes()
+    assert raw != unrecorded
+    assert RECORD_KEY not in json.loads(raw)
+
+
+def test_a_readings_saves_hold_only_the_record_the_reading_put_in(tmp_path):
+    job = _job(source=UPLOAD)
+    source = _agent_source(tmp_path, "")
+    reading = tmp_path / "reading"
+    contract = AgentContract.model_validate(_body(""))
+    saved = reading / "contract.json"
+
+    # The first save finds no file, and a save in the session after it finds no record.
+    for _ in range(2):
+        write_contract(contract, reading)
+        assert RECORD_KEY not in json.loads(saved.read_bytes())
+
+    assert document(job, source, reading) == 0
+    assert json.loads(saved.read_bytes())[RECORD_KEY] == record_for(job)
+
+    write_contract(contract, reading)
+    assert json.loads(saved.read_bytes())[RECORD_KEY] == record_for(job)
