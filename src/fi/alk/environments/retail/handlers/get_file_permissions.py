@@ -7,6 +7,9 @@ def handle(args, db):
     if not file_row or file_row["is_deleted"]:
         raise ToolError(f"File '{file_id}' not found or has been deleted.", category="not_found")
 
+    # Drive holds the store's policy library, not any customer's records, so the desk reads it by
+    # its own recorded permissions (current_actor) whoever is in the conversation; the restricted
+    # Trust and Safety folder stays closed to it. The customer signed in changes nothing here.
     actor_row = db.one("SELECT user_id FROM current_actor WHERE id = 'default'")
     user_id = actor_row["user_id"] if actor_row else "u_alice"
     user_record = db.one("SELECT role FROM drive_users WHERE user_id = ?", (user_id,))

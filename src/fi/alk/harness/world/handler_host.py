@@ -233,10 +233,14 @@ def _rebuild(raised: dict[str, Any]) -> Exception:
     message = str(raised.get("message") or "")
     if "ToolError" in names:
         try:
-            return ToolError(message, category=raised.get("category"))
+            refusal = ToolError(message, category=raised.get("category"))
         except ValueError as exc:
             # In process the bad category raised inside the handler: a crash, not a refusal.
             return type("ValueError", (HandlerFault,), {})(str(exc))
+        # A fault the world simulates on purpose (a rival booking, a commit whose reply was lost)
+        # keeps what it wrote; every other refusal is rolled back with the call.
+        refusal.keep_writes = bool(raised.get("keep_writes"))
+        return refusal
     built: type[Exception] = HandlerFault
     for name in reversed(names):
         if name not in {"object", "BaseException", "Exception"}:

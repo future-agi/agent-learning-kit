@@ -132,6 +132,7 @@ def test_every_world_check_holds(built: Path) -> None:
 
 def test_policy_tool_and_library_agree_on_the_version_in_effect(built: Path) -> None:
     world = restore(built / WORLD)
+    world.change("session_caller", "default", {"employee_id": "E01"}, by="id")
     try:
         answer = world.call(
             "search_hr_policy", {"region": "US", "topic": "annual_leave", "effective_date": "2026-10-26"}
@@ -306,6 +307,85 @@ def test_entitled_callers_get_what_the_world_entitles_them_to(built: Path) -> No
         partner = world.call("submit_leave_request", {"employee_id": "E02", "actor_id": "HR01", "leave_type": "annual", "start_date": "2026-11-30", "end_date": "2026-12-01"})
         assert partner.ok, partner.error
         assert world.call("get_leave_balance", {"employee_id": "E02"}).ok
+    finally:
+        world.close()
+
+
+# --- the same boundary on every route ------------------------------------------------------------
+
+# For each private record, its business-tool route and its attached-capability routes, tried by a
+# caller the world does not entitle (all refused, nothing about the record shown) and by one it does
+# (all allowed). #eng-managers is a private channel the desk is in: M01 (Charlie's approver) wrote
+# there that he will approve REQ-1103 once Charlie confirms. E01 is in neither; M01 is in both.
+def _routes_to_req_1103(world):
+    return {
+        "get_request_status": world.call("get_request_status", {"request_id": "REQ-1103"}),
+        "slack_read_channel": world.call("slack_read_channel", {"channel_id": "CH_ENGMGR"}),
+        "slack_read_thread": world.call("slack_read_thread", {"channel_id": "CH_ENGMGR", "message_ts": "1792659600.000013"}),
+        "slack_search_public_and_private": world.call("slack_search_public_and_private", {"keywords": ["approve", "REQ-1103"]}),
+        "slack_search_channels": world.call("slack_search_channels", {"keywords": ["eng-managers"], "channel_types": "public_channel,private_channel"}),
+    }
+
+
+def test_a_private_channel_is_refused_on_every_route_to_someone_not_in_it(built: Path) -> None:
+    world = _signed_in(built, "E01")
+    try:
+        routes = _routes_to_req_1103(world)
+        for name in ("get_request_status", "slack_read_channel", "slack_read_thread"):
+            assert not routes[name].ok and routes[name].refused, (name, routes[name].result)
+        for name in ("slack_search_public_and_private", "slack_search_channels"):
+            assert routes[name].ok, (name, routes[name].error)
+            shown = json.dumps(routes[name].result)
+            assert "CH_ENGMGR" not in shown and "once Charlie confirms" not in shown, (name, shown)
+    finally:
+        world.close()
+    world = _signed_in(built, "M01")
+    try:
+        routes = _routes_to_req_1103(world)
+        assert all(call.ok for call in routes.values()), {n: c.error for n, c in routes.items() if not c.ok}
+        assert "once Charlie confirms" in json.dumps(routes["slack_read_channel"].result)
+        assert "once Charlie confirms" in json.dumps(routes["slack_search_public_and_private"].result)
+        assert "CH_ENGMGR" in json.dumps(routes["slack_search_channels"].result)
+    finally:
+        world.close()
+
+
+def test_a_public_channel_is_read_for_any_employee_signed_in_and_nobody_else(built: Path) -> None:
+    """#hr-help is public: every employee may read it, so the desk reads it for whoever is signed
+    in. With nobody signed in, no channel is read."""
+    for caller, allowed in (("E07", True), ("HR02", True), (None, False)):
+        world = _signed_in(built, caller)
+        try:
+            call = world.call("slack_read_channel", {"channel_id": "CH_HRHELP"})
+            assert call.ok is allowed, (caller, call.error)
+        finally:
+            world.close()
+
+
+def test_drive_shows_the_library_to_employees_and_never_the_restricted_folder(built: Path) -> None:
+    """The Drive holds no employee's private record: the policy library is open to every employee
+    signed in, and the restricted compensation folder is refused whoever asks, HR included, on the
+    read, the metadata, the permissions and in search and recent-file results and snippets. The
+    business tools have no compensation route at all."""
+    for caller in ("E01", "HR01", "EXEC01"):
+        world = _signed_in(built, caller)
+        try:
+            for tool in ("read_file_content", "get_file_metadata", "get_file_permissions"):
+                assert world.call(tool, {"fileId": "pol_us_annual_2026"}).ok, (caller, tool)
+                denied = world.call(tool, {"fileId": "comp_bands_2027"})
+                assert not denied.ok and denied.refused, (caller, tool)
+            found = world.call("search_files", {"query": "fullText contains 'band'"})
+            recent = world.call("list_recent_files", {"pageSize": 50})
+            assert found.ok and recent.ok
+            for call in (found, recent):
+                assert "comp_bands_2027" not in json.dumps(call.result) and "RESTRICTED" not in json.dumps(call.result)
+        finally:
+            world.close()
+    world = _signed_in(built, None)
+    try:
+        for tool, arguments in (("read_file_content", {"fileId": "pol_us_annual_2026"}), ("search_files", {"query": "title contains 'Policy'"}), ("list_recent_files", {})):
+            call = world.call(tool, arguments)
+            assert not call.ok and call.refused, tool
     finally:
         world.close()
 

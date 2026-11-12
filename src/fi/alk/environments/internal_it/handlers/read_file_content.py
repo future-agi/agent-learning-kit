@@ -8,6 +8,9 @@ def handle(args, db):
     if not file_row or file_row["is_deleted"]:
         raise ToolError(f"File '{file_id}' not found or has been deleted.", category="not_found")
 
+    _drive_reader(db)
+    if _restricted(db, file_row["folder_id"]):
+        raise ToolError(f"Permission denied: '{file_id}' is in a restricted folder the desk does not read for anyone.", category="permission_denied")
     actor_row = db.one("SELECT user_id FROM current_actor WHERE id = 'default'")
     user_id = actor_row["user_id"] if actor_row else "u_alice"
     user_record = db.one("SELECT role FROM drive_users WHERE user_id = ?", (user_id,))
@@ -40,3 +43,21 @@ def handle(args, db):
     if revision_id:
         result["revisionId"] = str(revision_id)
     return result
+
+
+def _drive_reader(db):
+    """The person signed in to the conversation, who must be an active employee for the desk to
+    read the policy library for them. The library's internal folders are every employee's to read;
+    a restricted folder is read only by its own owners, never through the desk (whose Drive grants
+    do not reach it), whoever is signed in."""
+    row = db.one("SELECT employee_id FROM session_caller WHERE id = 'default'")
+    caller = row["employee_id"] if row else None
+    emp = db.one("SELECT status FROM employees WHERE employee_id = ?", [caller]) if caller else None
+    if not emp or emp["status"] != "active":
+        raise ToolError(f"Permission denied: nobody active is signed in to this conversation ({caller or 'nobody'}), so the desk reads no documents.", category="permission_denied")
+    return caller
+
+
+def _restricted(db, folder_id):
+    folder = db.one("SELECT access_level FROM drive_folders WHERE folder_id = ?", [folder_id])
+    return not folder or folder["access_level"] != "internal"

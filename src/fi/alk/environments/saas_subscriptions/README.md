@@ -62,6 +62,7 @@ Rules: `policy.json` (17 invariants, 4 configurable policies, 7 agent rules). MC
 | `gmail_labels` | 13 | System and desk labels |
 | `gmail_messages` | 18 | Messages of those threads |
 | `gmail_thread_labels` | 36 | Labels on threads |
+| `gmail_thread_tenants` | 14 | The tenant each mailbox thread is filed under; scenarios file the threads they add |
 | `gmail_threads` | 14 | Support mailbox threads, each linked to the vertical's records |
 | `invoice_lines` | 26 | Lines of the invoices the conversations discuss |
 | `invoices` | 42 | Three months of invoices per tenant, two open add-on invoices |
@@ -75,13 +76,14 @@ Rules: `policy.json` (17 invariants, 4 configurable policies, 7 agent rules). MC
 | `slack_channels` | 2 | The desk's channel and others, some private |
 | `slack_message_ledger` | 0 | Posts the desk made (empty in the seed) |
 | `slack_messages` | 12 | Messages and threads linked to the vertical's records: corrections, claimed approvals, an injected instruction |
+| `slack_thread_tenants` | 8 | The tenant each Slack escalation thread concerns; scenarios file the threads they add |
 | `slack_users` | 5 | The desk and every employee; scenarios add the staff who call the desk |
 | `subscriptions` | 20 | Active and cancelled subscriptions with their period |
 | `tenants` | 12 | 12 business tenants |
 | `usage_records` | 12 | Active seats per tenant |
 | `users` | 24 | A billing admin and a member per tenant |
 
-World checks (`environment.json`), all holding on the built world: `active_subscriptions_valid`, `admin_users_exist`, `clock_set`, `plans_populated`, `check_mailbox_billing_consistency`, `check_slack_billing_consistency`, `check_billing_records`, `check_prices_and_people` (renewal price = plan base + seats × seat price, invoice total = subtotal + tax, the current invoice bills the subscription's seats, a pending change fits its plan, no person or email recorded twice, the signed-in caller and every account assignment name real people).
+World checks (`environment.json`), all holding on the built world: `active_subscriptions_valid`, `admin_users_exist`, `clock_set`, `plans_populated`, `check_mailbox_billing_consistency`, `check_slack_billing_consistency`, `check_billing_records`, `check_prices_and_people` (renewal price = plan base + seats × seat price, invoice total = subtotal + tax, the current invoice bills the subscription's seats, a pending change fits its plan, no person or email recorded twice, the signed-in caller and every account assignment name real people), `check_mail_and_slack_filed` (every mailbox thread with mail is filed under a tenant, every Slack filing names a real thread and tenant).
 
 ## Scenarios (100)
 
@@ -277,6 +279,12 @@ Evidence-aware checks read their target from the scenario's fixed values and req
 ## Who the desk acts for
 
 Every scenario signs its caller in (`session_caller`). Each billing tool takes `actor_id`, which must be that person: naming the right admin while someone else is signed in is refused and changes nothing. What the caller may do comes from the world: a tenant's billing admin sees and changes their own tenant; a member sees their subscription, role and cases and opens cases; Cloudnest staff in a billing role (billing lead, support, operations, finance) read any tenant's billing records and open cases, an account manager only for the tenants in `account_assignments`; only the tenant's billing admin changes a plan, a cancellation or the billing contact. The scenarios in which staff used to act as a tenant's admin now act as themselves.
+
+The mailbox and Slack keep the same boundary, so they are not a way around it:
+
+- Gmail (`search_threads`, `get_thread`, `get_message`, `list_drafts`, `create_draft`, `label_thread`, `unlabel_thread`): each thread is filed under a tenant (`gmail_thread_tenants`). A tenant's billing admin sees that tenant's threads, a member only threads they wrote or were sent, staff in a billing role every thread, an account manager only their tenants' threads, nobody signed in nothing. Search returns only threads a direct read would open (no subject, snippet or sender of anything else), drafts are listed only with a thread the caller may read, a reply draft goes only on such a thread, and a new-thread draft is filed under the caller's tenant (or, for staff, the addressee's). The mailbox ACL's restricted threads stay closed to everyone.
+- Slack (`slack_read_channel`, `slack_read_thread`, `slack_search_public_and_private`, `slack_check_message_status`): the desk reads Slack as itself, so only public channels and private channels it is a member of. For a staff caller the desk reads the shared #billing-escalations channel on their behalf: that is deliberate, it is the staff channel the desk is in. A tenant's user sees only the escalation threads filed under their own tenant (`slack_thread_tenants`); channel reads and searches drop the rest before paging. `slack_search_channels` lists channel names and topics only, a directory fact left open.
+- No Drive or Calendar tools are attached to this vertical.
 
 ## Validation evidence (plan §3.2)
 

@@ -15,7 +15,7 @@ def _for_caller(db, customer_id, what):
 import json
 from datetime import datetime
 
-def _handle(args, db):
+def handle(args, db):
     order_id = args.get("order_id")
     customer_id = args.get("customer_id")
     original_sku = args.get("original_sku")
@@ -91,43 +91,3 @@ def _handle(args, db):
         db.execute("INSERT INTO store_credits (credit_id, customer_id, amount_cents, source, issued_at, expires_at) VALUES (?, ?, ?, ?, ?, ?)", [f"SCR{credit_count + 1:02d}", customer_id, -difference, f"price difference on exchange {exchange_id}", clock, clock[:4].replace(clock[:4], str(int(clock[:4]) + 1)) + clock[4:]])
         db.execute("UPDATE customers SET store_credit_cents = store_credit_cents + ? WHERE customer_id = ?", [-difference, customer_id])
     return {"exchange_id": exchange_id, "order_id": order_id, "original_sku": original_sku, "replacement_sku": replacement_sku, "quantity": quantity, "price_difference_cents": difference, "difference_note": ("charged before the replacement ships" if difference > 0 else "issued as store credit" if difference < 0 else "no difference"), "status": "authorized", "idempotent": False}
-
-
-_WRITES = ("customers", "exchanges", "order_items", "store_credits")
-
-def _all_or_nothing(db, run):
-    """Run the call so that a failed call changes nothing. A handler gets no transaction of its own,
-    so every table this tool writes is held first and put back if the call raises, whether a write
-    failed partway or the call refused after writing. Only a fault the world simulates on purpose
-    (an error marked keep_writes: a rival booking, a commit whose reply was lost, a fault used up)
-    keeps what it wrote."""
-    held = {table: db.query(f"SELECT * FROM {table}") for table in _WRITES}
-    try:
-        return run()
-    except Exception as failed:
-        if not getattr(failed, "keep_writes", False):
-            for table, rows in held.items():
-                if _same(db.query(f"SELECT * FROM {table}"), rows):
-                    continue
-                db.execute(f"DELETE FROM {table}")
-                for row in rows:
-                    cols = list(row)
-                    db.execute(
-                        f"INSERT INTO {table} ({', '.join(chr(34) + c + chr(34) for c in cols)}) VALUES ({', '.join('?' * len(cols))})",
-                        [row[c] for c in cols],
-                    )
-        raise
-
-def _same(rows, held):
-    """Whether a table still holds exactly the rows it held, in any order: only a table the call
-    changed is rewritten."""
-    import json
-
-    def key(row):
-        return json.dumps(row, sort_keys=True, default=str)
-
-    return sorted(map(key, rows)) == sorted(map(key, held))
-
-
-def handle(args, db):
-    return _all_or_nothing(db, lambda: _handle(args, db))

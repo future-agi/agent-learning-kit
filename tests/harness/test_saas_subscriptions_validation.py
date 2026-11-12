@@ -483,6 +483,98 @@ def test_the_waiver_claim_patterns_match_a_claim() -> None:
             assert not re.search(pattern, "no credit has been issued yet; finance decides the case."), goal["name"]
 
 
+# One private record per route, with the business tool that guards the same data: (who may, who
+# may not, the business call, the mail or Slack call). Each call names the right target; only the
+# person signed in changes.
+CROSS_ROUTE = [
+    ("U09_ADMIN", "U01_ADMIN", ("get_invoice_lines", {"tenant_id": "T09", "invoice_id": "inv_09_addon"}),
+     ("get_thread", {"threadId": "th_b08_card_declined"})),
+    ("U09_ADMIN", "U01_ADMIN", ("get_payment_status", {"tenant_id": "T09", "invoice_id": "inv_09_addon"}),
+     ("get_message", {"messageId": "bmsg_010"})),
+    ("U09_ADMIN", "U_AM2", ("get_payment_status", {"tenant_id": "T09", "invoice_id": "inv_09_addon"}),
+     ("label_thread", {"threadId": "th_b08_card_declined", "labelIds": ["INBOX"]})),
+    ("U_FIN1", "U01_MEMBER", ("get_invoice_lines", {"tenant_id": "T09", "invoice_id": "inv_09_addon"}),
+     ("create_draft", {"to": ["ian@innosoft.com"], "replyToMessageId": "bmsg_010", "body": "x"})),
+    ("U11_ADMIN", "U01_ADMIN", ("get_payment_status", {"tenant_id": "T11", "invoice_id": "inv_11_addon"}),
+     ("slack_read_thread", {"channel_id": "CH_BILLESC", "message_ts": "1791968400.000005"})),
+    ("U06_ADMIN", "U07_ADMIN", ("get_credit_notes", {"tenant_id": "T06", "invoice_id": "inv_06_curr"}),
+     ("slack_read_thread", {"channel_id": "CH_BILLESC", "message_ts": "1791799200.000001"})),
+]
+
+
+@pytest.mark.parametrize(("may", "may_not", "business", "capability"), CROSS_ROUTE,
+                         ids=[f"{b[0]}+{c[0]}" for _m, _n, b, c in CROSS_ROUTE])
+def test_the_mail_and_slack_routes_keep_the_billing_boundary(built: Path, may, may_not, business, capability) -> None:
+    """Rishav's probe, generalised: what the billing tool refuses a caller, the mailbox or Slack must
+    not hand them either, and both open for the person entitled to the record."""
+    for caller, allowed in ((may, True), (may_not, False), (None, False)):
+        world = _signed_in(built, caller)
+        try:
+            tool, arguments = business
+            answer = world.call(tool, {**arguments, "actor_id": caller or "U09_ADMIN"})
+            assert answer.ok is allowed, (caller, tool, answer.error)
+            before = world.state()
+            tool, arguments = capability
+            answer = world.call(tool, arguments)
+            assert answer.ok is allowed, (caller, tool, answer.error)
+            if not allowed:
+                assert world.state() == before, (caller, tool)
+        finally:
+            world.close()
+
+
+def test_search_listing_and_channel_reads_show_only_what_a_direct_read_would(built: Path) -> None:
+    def threads(world, query):
+        return {t["id"] for t in world.call("search_threads", {"query": query}).result["threads"]}
+
+    def texts(world, call, arguments):
+        answer = world.call(call, arguments)
+        assert answer.ok, answer.error
+        return " ".join(m["text"] for m in answer.result["messages"])
+
+    world = _signed_in(built, "U01_ADMIN")
+    try:
+        assert threads(world, "inv_09_addon") == set()
+        assert threads(world, "") == {"th_b02_seat_correction", "th_b12_member_downgrade"}
+        assert world.call("list_drafts", {}).result["drafts"] == []
+        assert "inv_11_addon" not in texts(world, "slack_search_public_and_private", {"keywords": ["inv_11_addon"]})
+        assert "KiteWorks" not in texts(world, "slack_read_channel", {"channel_id": "CH_BILLESC"})
+    finally:
+        world.close()
+    world = _signed_in(built, "U01_MEMBER")
+    try:
+        assert threads(world, "") == {"th_b12_member_downgrade"}
+        assert not world.call("get_thread", {"threadId": "th_b02_seat_correction"}).ok
+    finally:
+        world.close()
+    world = _signed_in(built, "U10_ADMIN")
+    try:
+        assert {d["id"] for d in world.call("list_drafts", {}).result["drafts"]} == {"bdraft_h01"}
+    finally:
+        world.close()
+    world = _signed_in(built, "U11_ADMIN")
+    try:
+        assert "th_b14_retry_payment" in threads(world, "inv_11_addon")
+        assert "inv_11_addon" in texts(world, "slack_search_public_and_private", {"keywords": ["inv_11_addon"]})
+    finally:
+        world.close()
+    # Staff: the desk reads #billing-escalations for them; an account manager's mail is their tenants'.
+    world = _signed_in(built, "U_AM2")
+    try:
+        assert "inv_11_addon" in texts(world, "slack_read_channel", {"channel_id": "CH_BILLESC"})
+        assert threads(world, "") == {"th_b01_discount_claim", "th_b03_cancel_term_end", "th_b10_refund_request",
+                                      "th_b14_retry_payment"}
+    finally:
+        world.close()
+    world = _signed_in(built, None)
+    try:
+        assert threads(world, "") == set()
+        assert world.call("list_drafts", {}).result["drafts"] == []
+        assert not world.call("slack_read_thread", {"channel_id": "CH_BILLESC", "message_ts": "1791885600.000004"}).ok
+    finally:
+        world.close()
+
+
 # Reference steps that are the refused attempt the scenario is about.
 EXPECTED_REFUSALS = {
     ("invoice_that_does_not_exist", "get_invoice_lines"): "the invoice the admin names does not exist",

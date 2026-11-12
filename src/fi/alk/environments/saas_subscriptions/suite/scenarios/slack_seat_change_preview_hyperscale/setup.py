@@ -9,4 +9,5 @@ def setup(world):
         "user_id": "U_AM2"
     })
     world.put("account_assignments", {"tenant_id": "T08", "user_id": "U_AM2"})
+    world.put("slack_thread_tenants", {"channel_id": "CH_BILLESC", "thread_ts": "1792000000.000402", "tenant_id": "T08"})
     world.change("session_caller", "default", {"actor_id": "U_AM2"}, by="id")

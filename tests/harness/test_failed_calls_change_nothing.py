@@ -1,8 +1,10 @@
 """A failed call changes nothing (plan §3.3), in every Wave A vertical: for each scenario, each
-successful call of its reference solution that writes is played again with the store failing at
-each of its writes in turn, and the world must come out exactly as it went in. A paired write
-(an appointment and its event, a grant and its entitlement, a demo and its slot) can then never
-be left half done, whatever fails between the writes.
+successful call of its reference solution that writes is played again with the store refusing
+every write from one of its writes onward, in turn, and the world must come out exactly as it
+went in; with the store working again, the same call then succeeds as a new request. A paired
+write (an appointment and its event, a grant and its entitlement, a demo and its slot) can never
+be left half done, however long the store keeps failing: the harness runs each call as one
+transaction, and rolling it back needs no writes.
 """
 
 from __future__ import annotations
@@ -32,7 +34,7 @@ def _rows(world) -> dict[str, list[str]]:
 
 
 class _Failing:
-    """Counts the writes that reach the store, and fails the one numbered `at`."""
+    """Counts the writes that reach the store, and fails every one from the one numbered `at`."""
 
     def __init__(self, execute, at: int = 0) -> None:
         self.execute, self.at, self.writes = execute, at, 0
@@ -40,8 +42,8 @@ class _Failing:
     def __call__(self, sql, params=()):
         if sql.lstrip().upper().startswith(WRITES):
             self.writes += 1
-            if self.writes == self.at:
-                raise RuntimeError(f"injected: write {self.at} failed")
+            if self.at and self.writes >= self.at:
+                raise RuntimeError(f"injected: the store refuses writes from write {self.at}")
         return self.execute(sql, params)
 
 
@@ -70,7 +72,11 @@ def test_a_call_that_fails_partway_changes_nothing(vertical: str, tmp_path: Path
                         world.store.execute = real
                         tried += 1
                         if failed.ok or _rows(world) != before:
-                            left_behind.append(f"{folder.name}: {step.tool} failing at write {at}")
+                            left_behind.append(f"{folder.name}: {step.tool} failing from write {at}")
+                            continue
+                        again = play_reference_step(world, step)
+                        if not again.ok or (isinstance(again.result, dict) and again.result.get("idempotent")):
+                            left_behind.append(f"{folder.name}: {step.tool} not redone after failing from write {at}")
                     world.revert(mark)
                     play_reference_step(world, step)
         finally:

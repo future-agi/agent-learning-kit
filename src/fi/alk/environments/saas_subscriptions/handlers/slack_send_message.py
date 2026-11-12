@@ -5,7 +5,7 @@ def _plain(text):
     return " ".join((text or "").split())
 
 
-def _handle(args, db):
+def handle(args, db):
     channel_id = args.get("channel_id")
     text = args.get("message")
     if not channel_id or not isinstance(channel_id, str):
@@ -45,10 +45,29 @@ def _handle(args, db):
     if len_pol and len(text) > int(json.loads(len_pol["value"])):
         raise ToolError(f"Message length {len(text)} exceeds max length {json.loads(len_pol['value'])}.", category="policy_blocked")
 
-    # Approval-gated posting (workbook C06): the approval names the actor, the destination and
-    # the content it covers.
     clock_row = db.one("SELECT now FROM clock", [])
     now_str = clock_row["now"] if clock_row else "2026-10-26T12:00:00Z"
+    # Idempotency (workbook C07), checked first: a retry after a lost reply returns the message
+    # already posted without posting again or needing a fresh approval. Only the same sender's same
+    # message replays; the same key for another destination, thread, text or sender is a conflict.
+    if request_key:
+        existing = db.one("SELECT * FROM slack_message_ledger WHERE request_key = ?", [request_key])
+        if existing:
+            msg = db.one("SELECT * FROM slack_messages WHERE message_id = ?", [existing["message_id"]])
+            if (existing["channel_id"], existing["thread_ts"] or None, _plain(existing["text"]), msg["user_id"] if msg else None) != (channel_id, thread_ts or None, _plain(text), actor_id):
+                raise ToolError(f"request_key {request_key!r} was already used for a different message; use a new key for a new message.", category="conflict")
+            return {
+                "channel_id": existing["channel_id"],
+                "ts": msg["ts"] if msg else "",
+                "message_id": existing["message_id"],
+                "permalink": msg["permalink"] if msg else f"https://slack.example.com/archives/{existing['channel_id']}/{existing['message_id']}",
+                "status": "idempotent_replay",
+                "request_key": request_key,
+                "thread_ts": existing["thread_ts"],
+            }
+
+    # Approval-gated posting (workbook C06): the approval names the actor, the destination and
+    # the content it covers.
     if mode == "approval_gated":
         if not approval_id:
             raise ToolError("Posting needs an approval_id: ask for approval of the exact text and destination first.", category="policy_blocked")
@@ -67,24 +86,6 @@ def _handle(args, db):
             raise ToolError(f"Approval {approval_id!r} covers different text; post exactly the approved text, or ask for approval of this one.", category="policy_blocked")
         if app["expires_at"] and app["expires_at"] <= now_str:
             raise ToolError(f"Approval {approval_id!r} expired at {app['expires_at']}.", category="policy_blocked")
-
-    # Idempotency (workbook C07): a repeated request_key returns the message already posted, and
-    # only that message: the same key for another destination, thread or text is a different request.
-    if request_key:
-        existing = db.one("SELECT * FROM slack_message_ledger WHERE request_key = ?", [request_key])
-        if existing:
-            if (existing["channel_id"], existing["thread_ts"] or None, _plain(existing["text"])) != (channel_id, thread_ts or None, _plain(text)):
-                raise ToolError(f"request_key {request_key!r} was already used for a different message; use a new key for a new message.", category="conflict")
-            msg = db.one("SELECT * FROM slack_messages WHERE message_id = ?", [existing["message_id"]])
-            return {
-                "channel_id": existing["channel_id"],
-                "ts": msg["ts"] if msg else "",
-                "message_id": existing["message_id"],
-                "permalink": msg["permalink"] if msg else f"https://slack.example.com/archives/{existing['channel_id']}/{existing['message_id']}",
-                "status": "idempotent_replay",
-                "request_key": request_key,
-                "thread_ts": existing["thread_ts"],
-            }
 
     cnt = db.one("SELECT COUNT(*) as c FROM slack_messages", [])["c"]
     message_id = f"M{cnt + 1:02d}"
@@ -111,43 +112,3 @@ def _handle(args, db):
         "request_key": request_key or message_id,
         "thread_ts": thread_ts,
     }
-
-
-_WRITES = ("slack_approvals", "slack_message_ledger", "slack_messages")
-
-def _all_or_nothing(db, run):
-    """Run the call so that a failed call changes nothing. A handler gets no transaction of its own,
-    so every table this tool writes is held first and put back if the call raises, whether a write
-    failed partway or the call refused after writing. Only a fault the world simulates on purpose
-    (an error marked keep_writes: a rival booking, a commit whose reply was lost, a fault used up)
-    keeps what it wrote."""
-    held = {table: db.query(f"SELECT * FROM {table}") for table in _WRITES}
-    try:
-        return run()
-    except Exception as failed:
-        if not getattr(failed, "keep_writes", False):
-            for table, rows in held.items():
-                if _same(db.query(f"SELECT * FROM {table}"), rows):
-                    continue
-                db.execute(f"DELETE FROM {table}")
-                for row in rows:
-                    cols = list(row)
-                    db.execute(
-                        f"INSERT INTO {table} ({', '.join(chr(34) + c + chr(34) for c in cols)}) VALUES ({', '.join('?' * len(cols))})",
-                        [row[c] for c in cols],
-                    )
-        raise
-
-def _same(rows, held):
-    """Whether a table still holds exactly the rows it held, in any order: only a table the call
-    changed is rewritten."""
-    import json
-
-    def key(row):
-        return json.dumps(row, sort_keys=True, default=str)
-
-    return sorted(map(key, rows)) == sorted(map(key, held))
-
-
-def handle(args, db):
-    return _all_or_nothing(db, lambda: _handle(args, db))

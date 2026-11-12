@@ -20,4 +20,5 @@ def setup(world):
     })
     world.put("gmail_thread_labels", {"thread_id": "th_s401_upgrade", "label_id": "INBOX"})
     world.put("gmail_thread_labels", {"thread_id": "th_s401_upgrade", "label_id": "billing"})
+    world.put("gmail_thread_tenants", {"thread_id": "th_s401_upgrade", "tenant_id": "T12"})
     world.change("session_caller", "default", {"actor_id": "U12_ADMIN"}, by="id")

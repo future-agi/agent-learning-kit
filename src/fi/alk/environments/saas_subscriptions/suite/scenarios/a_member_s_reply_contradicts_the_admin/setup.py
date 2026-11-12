@@ -33,4 +33,5 @@ def setup(world):
         "thread_id": "th_s403_seat_request",
         "label_id": "INBOX"
     })
+    world.put("gmail_thread_tenants", {"thread_id": "th_s403_seat_request", "tenant_id": "T03"})
     world.change("session_caller", "default", {"actor_id": "U03_ADMIN"}, by="id")

@@ -54,8 +54,22 @@ class SqliteStore(Records):
         cursor = self.connection.execute(
             statement, tuple(_sqlite_value(value) for value in params)
         )
-        self.connection.commit()
+        if not getattr(self, "_held", False):
+            self.connection.commit()
         return cursor.rowcount
+
+    def hold(self) -> None:
+        """Keep every write from here on in one transaction, until ``release``: one tool call's
+        writes land together or not at all, and undoing them needs no writes of its own."""
+        self.connection.commit()
+        self._held = True
+
+    def release(self, keep: bool) -> None:
+        self._held = False
+        if keep:
+            self.connection.commit()
+        else:
+            self.connection.rollback()
 
     def apply(self, script: str) -> None:
         """Several statements at once, which is how a schema or a seed arrives."""

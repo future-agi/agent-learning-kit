@@ -324,6 +324,19 @@ CREATE TABLE session_caller (
     id TEXT PRIMARY KEY,
     actor_id TEXT
 );
+-- Which tenant each billing-mailbox thread is filed under, and which tenant each Slack escalation
+-- thread concerns: the mail and Slack tools show a tenant's user only their own tenant's, the same
+-- boundary the billing tools keep.
+CREATE TABLE gmail_thread_tenants (
+    thread_id TEXT PRIMARY KEY,
+    tenant_id TEXT NOT NULL
+);
+CREATE TABLE slack_thread_tenants (
+    channel_id TEXT NOT NULL,
+    thread_ts TEXT NOT NULL,
+    tenant_id TEXT NOT NULL,
+    PRIMARY KEY (channel_id, thread_ts)
+);
 -- Which account manager looks after which tenant: an account manager may read that tenant's
 -- billing records and open a case for it, and nothing else.
 CREATE TABLE account_assignments (
@@ -579,3 +592,25 @@ INSERT INTO account_assignments VALUES('T12','U_AM1');
 INSERT INTO account_assignments VALUES('T02','U_AM2');
 INSERT INTO account_assignments VALUES('T07','U_AM2');
 INSERT INTO account_assignments VALUES('T11','U_AM2');
+INSERT INTO gmail_thread_tenants VALUES('th_b01_discount_claim','T02');
+INSERT INTO gmail_thread_tenants VALUES('th_b02_seat_correction','T01');
+INSERT INTO gmail_thread_tenants VALUES('th_b03_cancel_term_end','T11');
+INSERT INTO gmail_thread_tenants VALUES('th_b04_invoice_question','T06');
+INSERT INTO gmail_thread_tenants VALUES('th_b05_injected','T09');
+INSERT INTO gmail_thread_tenants VALUES('th_b06_collections','T08');
+INSERT INTO gmail_thread_tenants VALUES('th_b07_renewal_question','T10');
+INSERT INTO gmail_thread_tenants VALUES('th_b08_card_declined','T09');
+INSERT INTO gmail_thread_tenants VALUES('th_b09_contact_change','T04');
+INSERT INTO gmail_thread_tenants VALUES('th_b10_refund_request','T07');
+INSERT INTO gmail_thread_tenants VALUES('th_b11_invoice_list','T12');
+INSERT INTO gmail_thread_tenants VALUES('th_b12_member_downgrade','T01');
+INSERT INTO gmail_thread_tenants VALUES('th_b13_other_tenant','T05');
+INSERT INTO gmail_thread_tenants VALUES('th_b14_retry_payment','T11');
+INSERT INTO slack_thread_tenants VALUES('CH_BILLESC','1791799200.000001','T06');
+INSERT INTO slack_thread_tenants VALUES('CH_BILLESC','1791883800.000003','T02');
+INSERT INTO slack_thread_tenants VALUES('CH_BILLESC','1791885600.000004','T12');
+INSERT INTO slack_thread_tenants VALUES('CH_BILLESC','1791968400.000005','T11');
+INSERT INTO slack_thread_tenants VALUES('CH_BILLESC','1791972000.000008','T07');
+INSERT INTO slack_thread_tenants VALUES('CH_BILLESC','1791973800.000009','T08');
+INSERT INTO slack_thread_tenants VALUES('CH_FINANCE','1791802800.000011','T06');
+INSERT INTO slack_thread_tenants VALUES('CH_FINANCE','1791889200.000012','T08');

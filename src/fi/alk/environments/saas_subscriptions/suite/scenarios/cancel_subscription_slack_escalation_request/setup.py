@@ -8,4 +8,5 @@ def setup(world):
         "thread_ts": None,
         "permalink": "https://cloudnest.slack.example.com/archives/CH_BILLESC/p1792000000000401"
     })
+    world.put("slack_thread_tenants", {"channel_id": "CH_BILLESC", "thread_ts": "1792000000.000401", "tenant_id": "T11"})
     world.change("session_caller", "default", {"actor_id": "U11_ADMIN"}, by="id")

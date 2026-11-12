@@ -1,3 +1,20 @@
+def _signed_in(db):
+    """The person in this conversation. The HR policy library is the company's, open to every
+    employee signed in; nobody signed in reads nothing."""
+    row = db.one("SELECT employee_id FROM session_caller WHERE id = 'default'")
+    if not row or not row["employee_id"]:
+        raise ToolError("Permission denied: nobody is signed in to this conversation.", category="permission_denied")
+    return row["employee_id"]
+
+
+def _restricted(db, folder_id):
+    """Whether a file's folder is restricted (compensation). No employee role in this world is
+    entitled to it through the desk, HR included, so it is refused whoever is signed in, whatever
+    the desk's own grants say."""
+    row = db.one("SELECT access_level FROM drive_folders WHERE folder_id = ?", (folder_id,))
+    return bool(row) and row["access_level"] == "restricted"
+
+
 def handle(args, db):
     if not args.get("fileId"):
         raise ToolError("Missing required argument: fileId", category="invalid_input")
@@ -6,6 +23,9 @@ def handle(args, db):
     file_row = db.one("SELECT * FROM drive_files WHERE file_id = ?", (file_id,))
     if not file_row or file_row["is_deleted"]:
         raise ToolError(f"File '{file_id}' not found or has been deleted.", category="not_found")
+    _signed_in(db)
+    if _restricted(db, file_row["folder_id"]):
+        raise ToolError(f"Permission denied: You do not have access to file '{file_id}'.", category="permission_denied")
 
     actor_row = db.one("SELECT user_id FROM current_actor WHERE id = 'default'")
     user_id = actor_row["user_id"] if actor_row else "u_alice"

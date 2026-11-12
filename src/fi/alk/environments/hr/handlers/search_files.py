@@ -1,3 +1,20 @@
+def _signed_in(db):
+    """The person in this conversation. The HR policy library is the company's, open to every
+    employee signed in; nobody signed in reads nothing."""
+    row = db.one("SELECT employee_id FROM session_caller WHERE id = 'default'")
+    if not row or not row["employee_id"]:
+        raise ToolError("Permission denied: nobody is signed in to this conversation.", category="permission_denied")
+    return row["employee_id"]
+
+
+def _restricted(db, folder_id):
+    """Whether a file's folder is restricted (compensation). No employee role in this world is
+    entitled to it through the desk, HR included, so it is refused whoever is signed in, whatever
+    the desk's own grants say."""
+    row = db.one("SELECT access_level FROM drive_folders WHERE folder_id = ?", (folder_id,))
+    return bool(row) and row["access_level"] == "restricted"
+
+
 def handle(args, db):
     import re
 
@@ -28,6 +45,7 @@ def handle(args, db):
             raise ToolError(f"{term} does not support {op}", category="invalid_input")
         clauses.append((term, op, value.replace("\\'", "'")))
 
+    _signed_in(db)
     actor_row = db.one("SELECT user_id FROM current_actor WHERE id = 'default'")
     user_id = actor_row["user_id"] if actor_row else "u_alice"
     user_record = db.one("SELECT role FROM drive_users WHERE user_id = ?", (user_id,))
@@ -56,6 +74,9 @@ def handle(args, db):
     files = db.query("SELECT * FROM drive_files WHERE NOT is_deleted ORDER BY file_id")
     accessible = []
     for f in files:
+        # A result and its snippet are what a read would show: never a restricted file.
+        if _restricted(db, f["folder_id"]):
+            continue
         if not is_admin:
             perm = db.one("SELECT role FROM drive_permissions WHERE target_type = 'folder' AND target_id = ? AND user_id = ?", (f["folder_id"], user_id))
             file_perm = db.one("SELECT role FROM drive_permissions WHERE target_type = 'file' AND target_id = ? AND user_id = ?", (f["file_id"], user_id))

@@ -1,3 +1,31 @@
+def _caller_slack_user(db):
+    """The Slack user of the person signed in to this conversation, matched to their employee record
+    by email; None when nobody is signed in."""
+    row = db.one("SELECT employee_id FROM session_caller WHERE id = 'default'")
+    if not row or not row["employee_id"]:
+        return None
+    user = db.one(
+        "SELECT s.user_id FROM employees e JOIN slack_users s ON lower(s.email) = lower(e.email) WHERE e.employee_id = ?",
+        (row["employee_id"],),
+    )
+    return user["user_id"] if user else ""
+
+
+def _caller_may_read(db, channel, caller_user):
+    """Whether the desk may show this channel's messages to the person signed in. The desk being in
+    a channel is necessary, never enough: a public channel is open to every employee, so the desk
+    reads it for whoever is signed in; a private one (#eng-managers) only for a caller who is a
+    member of it, whatever the desk itself can see."""
+    if caller_user is None:
+        return False
+    if not channel["is_private"]:
+        return True
+    return db.one(
+        "SELECT 1 FROM slack_channel_members WHERE channel_id = ? AND user_id = ?",
+        (channel["channel_id"], caller_user),
+    ) is not None
+
+
 def handle(args, db):
     channel_id = args.get("channel_id")
     message_ts = args.get("message_ts")
@@ -23,6 +51,8 @@ def handle(args, db):
     member = db.one("SELECT 1 FROM slack_channel_members WHERE channel_id = ? AND user_id = ?", [channel_id, actor_id])
     if channel["is_private"] and member is None:
         raise ToolError(f"Access denied: you are not a member of private channel {channel_id!r}.", category="permission_denied")
+    if not _caller_may_read(db, channel, _caller_slack_user(db)):
+        raise ToolError(f"Access denied: the person signed in may not read channel {channel_id!r}.", category="permission_denied")
 
     parent = db.one("SELECT * FROM slack_messages WHERE channel_id = ? AND (ts = ? OR thread_ts = ?)", [channel_id, message_ts, message_ts])
     if parent is None:

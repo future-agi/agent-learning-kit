@@ -615,6 +615,70 @@ def test_the_world_check_catches_the_inconsistencies_the_audit_found(built: Path
             world.close()
 
 
+def _texts(result) -> str:
+    return json.dumps(result)
+
+
+def test_each_private_record_is_refused_by_every_route_and_allowed_by_every_route(built: Path) -> None:
+    """The business tool and the attached Slack or Drive route agree on who may see a record: a
+    caller who is not entitled gets it from neither, one who is gets it from both."""
+    def run(who, tool, arguments):
+        world = restore(built / WORLD)
+        try:
+            world.change("session_caller", "default", {"employee_id": who}, by="id")
+            return world.call(tool, arguments)
+        finally:
+            world.close()
+
+    # AR-102's approval token, which IM06 posted in #it-access (every employee reads that channel).
+    token = "TOK-AR102-7Q4"
+    for who, entitled in (("E16", False), ("E18", False), ("E17", True), ("E05", True), ("E21", True)):
+        business = run(who, "get_approval_status", {"request_id": "AR-102"})
+        routes = [
+            run(who, "slack_read_channel", {"channel_id": "CH_ITACCESS"}),
+            run(who, "slack_read_thread", {"channel_id": "CH_ITACCESS", "message_ts": "1792830600.000006"}),
+            run(who, "slack_search_public_and_private", {"keywords": ["token"]}),
+        ]
+        assert all(r.ok for r in routes), (who, [r.error for r in routes])
+        assert business.ok == entitled, (who, business.error)
+        for r in routes:
+            assert (token in _texts(r.result)) == entitled, (who, r.name, r.result)
+        searched = run(who, "slack_search_public_and_private", {"keywords": [token]})
+        assert searched.ok and bool(searched.result["messages"]) == entitled, (who, searched.result)
+
+    # Bob Jones's (E02) deployer expiry, which IM13 posted in #it-ops.
+    for who, entitled in (("E16", False), ("E01", False), ("E02", True), ("E21", True)):
+        business = run(who, "get_entitlement_expiry", {"employee_id": "E02"})
+        read = run(who, "slack_read_channel", {"channel_id": "CH_ITOPS"})
+        thread = run(who, "slack_read_thread", {"channel_id": "CH_ITOPS", "message_ts": "1792933200.000013"})
+        searched = run(who, "slack_search_public_and_private", {"keywords": ["deployer"]})
+        channels = run(who, "slack_search_channels", {"keywords": ["ops"]})
+        assert business.ok == entitled and read.ok == entitled and thread.ok == entitled, (who, business.error, read.error, thread.error)
+        assert ("IM13" in _texts(searched.result)) == entitled, (who, searched.result)
+        assert ("CH_ITOPS" in _texts(channels.result)) == entitled, (who, channels.result)
+
+    # The private security channel: the desk is not in it, so no caller gets it, its members included.
+    for who in ("E19", "E04", "E21"):
+        assert not run(who, "slack_read_channel", {"channel_id": "CH_SECTEAM"}).ok, who
+        assert "IM12" not in _texts(run(who, "slack_search_public_and_private", {"keywords": ["incident"]}).result), who
+
+    # The access policy in effect: any active employee signed in, through either route; nobody else.
+    for who, entitled in ((None, False), ("E20", False), ("E16", True), ("E21", True)):
+        business = run(who, "check_access_policy", {"employee_id": "E16", "app_id": "APP-FIN", "role_name": "viewer"})
+        read = run(who, "read_file_content", {"fileId": "acc_pol_v3"})
+        searched = run(who, "search_files", {"query": "fullText contains 'approval token'"})
+        assert read.ok == entitled and searched.ok == entitled, (who, read.error, searched.error)
+        assert (business.ok and business.result["source"]["file_id"] == "acc_pol_v3") == (entitled and who in ("E16", "E21")), (who, business.error)
+
+    # The restricted incident playbook: refused to everyone by every Drive route, snippets included.
+    for who in ("E04", "E19", "E21"):
+        for tool in ("read_file_content", "get_file_metadata", "get_file_permissions"):
+            assert not run(who, tool, {"fileId": "secops_playbook"}).ok, (who, tool)
+        for tool, arguments in (("search_files", {"query": "fullText contains 'break-glass'"}), ("list_recent_files", {})):
+            answer = run(who, tool, arguments)
+            assert answer.ok and "secops_playbook" not in _texts(answer.result) and "Break-glass" not in _texts(answer.result), (who, tool)
+
+
 def test_an_agent_that_does_nothing_fails_every_scenario(built: Path) -> None:
     for path in sorted(p for p in (SUITE / "scenarios").iterdir() if p.is_dir()):
         said = _grade(built, path.name, [])

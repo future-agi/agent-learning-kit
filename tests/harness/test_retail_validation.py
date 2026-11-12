@@ -675,3 +675,88 @@ def test_correct_paths_the_checks_used_to_refuse(built: Path) -> None:
     key = "email_human_draft_preserved_on_thread"
     steps = _plus(_without(key, "list_drafts"), "create_draft", to=["rachel.green@example.com"], subject="Re: store credit", body="b", replyToMessageId="rmsg_015")
     assert not any(_grade(built, key, steps).values())
+
+
+# (business call, the attached-capability calls that reach the same private record, its owner)
+CROSS_ROUTES = [
+    # Return R90 and its refund: the return record, and the customer's email about it.
+    (("get_return_status", {"return_id": "R90"}),
+     [("get_thread", {"threadId": "th_r05_refund_status"}), ("get_message", {"messageId": "rmsg_007"}),
+      ("search_threads", {"query": "R90"})],
+     "C09"),
+    # What Rachel paid for AP03 on O18: the invoice, and her email quoting it.
+    (("get_order_invoice", {"order_id": "O18", "customer_id": "C18"}),
+     [("get_thread", {"threadId": "th_r04_return_request_rachel"}), ("get_message", {"messageId": "rmsg_006"}),
+      ("search_threads", {"query": "AP03"})],
+     "C18"),
+    # Where O32 ships: the tracking record, and Noah's email with his office address.
+    (("get_shipment_tracking", {"order_id": "O32", "customer_id": "C14"}),
+     [("get_thread", {"threadId": "th_r07_ship_to_office"}), ("search_threads", {"query": "Lincoln"})],
+     "C14"),
+]
+
+
+def _reaches(call, tool: str) -> bool:
+    """Whether a call handed the record over: a search reaches it only by listing a hit."""
+    if not call.ok:
+        return False
+    if tool == "search_threads":
+        return bool(call.result["threads"])
+    return True
+
+
+@pytest.mark.parametrize(("business", "routes", "owner"), CROSS_ROUTES, ids=[b[0] for b, _r, _o in CROSS_ROUTES])
+def test_every_route_to_a_private_record_answers_alike(built: Path, business, routes, owner: str) -> None:
+    """The business tool and the mailbox route to the same record are both refused for a customer
+    who is not entitled to it (and for nobody signed in), and both served to its owner."""
+    for caller, entitled in (("C02" if owner != "C02" else "C01", False), (None, False), (owner, True)):
+        world = _signed_in(built, caller)
+        try:
+            tool, arguments = business
+            assert _reaches(world.call(tool, arguments), tool) is entitled, (caller, tool)
+            for tool, arguments in routes:
+                assert _reaches(world.call(tool, arguments), tool) is entitled, (caller, tool, arguments)
+        finally:
+            world.close()
+
+
+def test_drafts_quoting_a_customer_are_listed_only_to_them(built: Path) -> None:
+    """The human draft on Rachel's store-credit thread quotes her balance: the balance tool and the
+    draft listing are both refused to someone else and both served to her."""
+    key = "email_human_draft_preserved_on_thread"
+    for caller, entitled in (("C02", False), ("C18", True)):
+        world, _calls, _refused, _ = _run(_scenario(key), built / WORLD, with_solution=False)
+        try:
+            world.change("session_caller", "default", {"customer_id": caller}, by="id")
+            balance = world.call("get_store_credit_balance", {"customer_id": "C18", "postal_code": "10014"})
+            listed = world.call("list_drafts", {"pageSize": 50})
+            assert balance.ok is entitled
+            assert any(d["id"] == "D-401" for d in listed.result["drafts"]) is entitled
+            reply = world.call("create_draft", {"to": ["rachel.green@example.com"], "subject": "Re", "body": "b", "replyToMessageId": "rmsg_015"})
+            assert not reply.ok  # her own thread already holds a person's draft; a stranger is refused first
+        finally:
+            world.close()
+
+
+def test_the_policy_library_is_read_by_the_desks_own_access(built: Path) -> None:
+    """Drive holds the store's policy library, not customer records: the desk reads it by its own
+    recorded permissions whoever is in the conversation, and the restricted Trust and Safety folder
+    is refused to every caller, by direct read, metadata, search and the recent list alike."""
+    for caller in (None, "C11", "C18"):
+        world = _signed_in(built, caller)
+        try:
+            state = world.state()
+            people = [c["email"] for c in state["customers"]] + [c["customer_id"] for c in state["customers"]]
+            for f in state["drive_files"]:
+                assert not any(p in (f["content"] or "") for p in people), f["file_id"]
+            for tool in ("read_file_content", "get_file_metadata", "get_file_permissions"):
+                assert not world.call(tool, {"fileId": "ts_watchlist"}).ok, (caller, tool)
+                assert world.call(tool, {"fileId": "ret_pol_v3"}).ok, (caller, tool)
+            for found in (
+                world.call("search_files", {"query": "fullText contains 'abuse'"}),
+                world.call("search_files", {"query": "title contains 'Watchlist'"}),
+                world.call("list_recent_files", {"pageSize": 50}),
+            ):
+                assert found.ok and all(f["parentId"] != "f_trust_safety" for f in found.result["files"])
+        finally:
+            world.close()

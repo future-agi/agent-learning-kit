@@ -83,6 +83,8 @@ def handle(args, db):
     for m in db.query("SELECT message_id, channel_id, user_id, text, ts, thread_ts, permalink FROM slack_messages ORDER BY ts DESC"):
         if m["channel_id"] not in visible:
             continue
+        if not _may_see_message(db, m):
+            continue
         if from_users and m["user_id"] not in from_users:
             continue
         at = float(m["ts"])
@@ -111,3 +113,25 @@ def handle(args, db):
     if result["has_more"]:
         result["next_cursor"] = str(offset + limit)
     return result
+
+
+def _may_see_message(db, message):
+    """Whether the person signed in to the conversation (session_caller) may see this Slack message.
+    The desk reads Slack as itself (current_actor): only public channels and the private channels it
+    is a member of, which the caller above has already applied. For a Cloudnest staff caller that is
+    the whole answer: #billing-escalations is the shared staff channel the desk is in, and the desk
+    reads it on their behalf. A tenant's user is a customer, not staff: they see only the threads
+    filed under their own tenant (slack_thread_tenants), never another tenant's escalation. Nobody
+    signed in sees nothing."""
+    row = db.one("SELECT actor_id FROM session_caller WHERE id = 'default'")
+    caller = row["actor_id"] if row else None
+    if not caller:
+        return False
+    if db.one("SELECT 1 FROM slack_users WHERE user_id = ?", [caller]) is not None:
+        return True
+    user = db.one("SELECT tenant_id FROM users WHERE actor_id = ?", [caller])
+    if user is None:
+        return False
+    thread = message["thread_ts"] or message["ts"]
+    filed = db.one("SELECT tenant_id FROM slack_thread_tenants WHERE channel_id = ? AND thread_ts = ?", [message["channel_id"], thread])
+    return filed is not None and filed["tenant_id"] == user["tenant_id"]

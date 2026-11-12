@@ -165,6 +165,7 @@ def _raised(exc: BaseException) -> dict[str, Any]:
         if isinstance(exc, ToolError)
         else str(exc),
         "category": getattr(exc, "category", None),
+        "keep_writes": bool(getattr(exc, "keep_writes", False)),
     }
 
 
