@@ -744,7 +744,7 @@ def test_worker_environment_never_lets_a_job_replace_or_add_a_host_name():
         "BUILDKIT_HOST", "BUILDX_CONFIG", "GIT_SSH_COMMAND", "CLAUDE_CODE_X",
         "SSH_ASKPASS", "XDG_CONFIG_HOME", " ssh_askpass ", "xdg_config_home",
         "GODEBUG", "GLIBC_TUNABLES", "LOCPATH", "NLSPATH", "OPENSSL_MODULES", "OPENSSL_ENGINES",
-        "BROWSER", "PYTHONWARNINGS", "PYTHONINSPECT",
+        "BROWSER", "PYTHONWARNINGS", "PYTHONINSPECT", "CLAUDE_CONFIG_DIR",
         "PATH", "HOME", "TMPDIR", "LANG", "LC_ALL", "DOCKER_HOST", "SSL_CERT_FILE",
         "SSL_CERT_DIR", "NO_PROXY", "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE",
         "LOCALDOMAIN", "RES_OPTIONS", "HOSTALIASES", "GCONV_PATH", "BASH_ENV", "ENV",

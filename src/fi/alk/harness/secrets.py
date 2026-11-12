@@ -163,6 +163,7 @@ _CLIENT_EXACT = frozenset(
         "OPENSSL_MODULES",
         "OPENSSL_ENGINES",
         "BROWSER",
+        "CLAUDE_CONFIG_DIR",
         "PYTHONWARNINGS",
         "PYTHONINSPECT",
         # Code-loading names.
