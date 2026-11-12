@@ -96,3 +96,65 @@ def test_verifier_checks_materialized_orchestration(tmp_path: Path) -> None:
     assert result.stdout.strip() == (
         "3 multi-agent references and 1 source trees verified"
     )
+
+
+def test_returns_reference_declares_the_workers_and_tools_its_app_builds() -> None:
+    import ast
+
+    app = ROOT / "examples" / "harness" / "returns_reference"
+    reference = json.loads((app / "reference.json").read_text(encoding="utf-8"))
+    built = {}
+    for node in ast.walk(ast.parse((app / "agent.py").read_text(encoding="utf-8"))):
+        if isinstance(node, ast.Call) and getattr(node.func, "id", "") == "Agent":
+            fields = {one.arg: one.value for one in node.keywords}
+            tools = fields["tools"].elts
+            built[ast.literal_eval(fields["name"])] = sorted(
+                one.id for one in tools if isinstance(one, ast.Name)
+            )
+    topology = reference["topology"]
+    assert topology["coordinator"] in built
+    assert {one["name"]: sorted(one["tools"]) for one in topology["workers"]} == {
+        name: tools for name, tools in built.items() if name != topology["coordinator"]
+    }
+
+
+def test_the_returns_reference_answers_every_turn_of_a_conversation_on_one_event_loop(monkeypatch) -> None:
+    """A model client keeps loop-bound connections between turns, so every turn must run on the same loop: a fresh
+    loop per request answered the first turn and failed the next with "Event loop is closed"."""
+    import asyncio
+    import importlib.util
+    import types
+
+    held = {}
+
+    class _Runner:
+        @staticmethod
+        async def run(_agent, conversation):
+            # Like a cached HTTP client: its connections belong to the loop of the first turn, and using them from
+            # another turn schedules work on that loop.
+            loop = held.setdefault("loop", asyncio.get_running_loop())
+            loop.call_soon(lambda: None)
+            return types.SimpleNamespace(final_output=f"turn {len(conversation)}")
+
+    class _Agent:
+        def __init__(self, **fields):
+            self.__dict__.update(fields)
+
+        def as_tool(self, **_fields):
+            return self
+
+    stub = types.ModuleType("agents")
+    stub.Agent, stub.Runner = _Agent, _Runner
+    stub.function_tool = lambda function: function
+    stub.set_trace_processors = lambda _processors: None
+    monkeypatch.setitem(sys.modules, "agents", stub)
+    spec = importlib.util.spec_from_file_location(
+        "returns_reference_agent", ROOT / "examples" / "harness" / "returns_reference" / "agent.py"
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    first = [{"role": "user", "content": "Refund order 1043"}]
+    assert module.reply(first) == "turn 1"
+    assert module.reply([*first, {"role": "assistant", "content": "Done"}, {"role": "user", "content": "Thanks"}]) == (
+        "turn 3"
+    )

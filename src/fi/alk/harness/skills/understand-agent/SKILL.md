@@ -60,6 +60,9 @@ Find, in roughly this order:
    schema, a tool array. Record the exact callable name the model would emit, not a friendly
    label.
 
+   If the agent hands work to other agents, record each one in `workers`: an `id`, the `name` the
+   app gives it, and the contract tools it holds. Every worker tool is also in `tools`.
+
 2. **Argument names and types.** Read the signature. An argument declared as a list is a
    different tool from one declared as a single value, and an environment built on the wrong one
    fails at the first call. Record types wherever the source states them.
@@ -114,8 +117,9 @@ Find, in roughly this order:
    `system_prompt_from`, every part it is assembled from: it is copied into the contract as written,
    and every later stage decides what the agent should do from it.
 
-7. **The modality.** How a person reaches this agent: a voice session, a text interface, or a
-   browser it drives. This decides how it is later run, so getting it wrong reroutes every test.
+7. **The modality.** How this agent is run: a voice session, a text conversation, or work it
+   carries out on websites or a computer. This decides how it is later run, so getting it wrong
+   reroutes every test.
    **Decide it from the source and always record it.** A run is unattended, so there is nobody to
    ask, and a modality left unsaid is read as chat: a voice agent then never places a call and the
    whole run tests nothing. Read it off what the agent depends on:
@@ -124,7 +128,12 @@ Find, in roughly this order:
      name, an STT or TTS provider, an audio session it enters on connect.
    - **chat** if a person reaches it as text: an HTTP endpoint taking messages, a completions-shaped
      API, a socket carrying turns.
-   - **browser** if it drives a page rather than being talked to.
+   - **browser** if a person uses it to carry out work on websites or a computer rather than for
+     a conversation: driving a browser, operating a computer or crawling sites is its main job.
+     Ask: does a person come to this agent for a conversation, or to have it carry out that work?
+     An agent that looks things up on the web to answer a person (research, comparison, support)
+     is chat, or voice if it takes calls, even if it can't work without that tool. So is one with a
+     web page in front of it. A coding agent is chat.
 
    When an agent genuinely ships more than one runtime, take the one its entrypoint starts, and say
    in `notes` which others exist and that you chose by entrypoint. Never leave the field out.
@@ -309,8 +318,8 @@ directory. **List what you found and ask which one is being tested.** Do not pic
 contract for the wrong one wastes every stage after it, and the person who pointed you here knows
 which they meant.
 
-**One agent with several runtimes.** The same tools reachable over voice, over chat, or through a
-browser. That is one agent, and what to ask about is the modality, not which agent.
+**One agent with several runtimes.** The same tools reachable over voice or over chat. That is one
+agent, and what to ask about is the modality, not which agent.
 
 How to tell them apart: look for repeated structure. Several directories that each define their own
 set of tools, their own instructions and their own data are several agents. Several entry points

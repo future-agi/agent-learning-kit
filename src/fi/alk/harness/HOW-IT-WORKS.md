@@ -78,6 +78,13 @@ not exist, or — the one that mattered most in practice — *every* tool having
 means the arguments were read and then not recorded. Problems are returned **into the
 conversation**, so the model corrects and resubmits rather than a bad contract landing.
 
+A browser reading gets one second look first, naming any browser, crawling or
+computer-use tool the code check found in the source. So does a chat or voice reading of source
+where the check found one. The next submission stands: a browser answer is refused to
+`failure.json` and the build exits 78, and a chat or voice answer is saved. The look gives a value
+to send back, which only tells apart calls in one model message: those run before the model reads
+any result. The rule and its state are `SecondLook` in `agent_type_check.py`. A browser answer to a chat or voice look is refused at once, since that look said browser stops the build. When calls in one message run one after another, or together once the first scan is done, a later call is taken as the answer before the model has read the look.
+
 **How it is changed later** (`amend.py`). The contract is not frozen, but every change is
 recorded with a reason in `amendments[]`, so months later you can still tell what came from the
 agent and what came from us:
