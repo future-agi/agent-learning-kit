@@ -108,10 +108,6 @@ def _configure_generation_environment(values: dict[str, str]) -> None:
 
 # Unprefixed, so read from the raw channel rather than the SIMULATOR_ view.
 _OBSERVABILITY_PASSTHROUGH = {
-    "FI_API_KEY",
-    "FI_BASE_URL",
-    "FI_HARNESS_PROJECT",
-    "FI_SECRET_KEY",
     "HARNESS_OBSERVABILITY",
 }
 

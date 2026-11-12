@@ -203,11 +203,6 @@ _SIMULATOR_SECRET_ALIASES = frozenset(
         "ALK_VERTEX_LOCATION",
         "CARTESIA_API_KEY",
         "DEEPGRAM_API_KEY",
-        # Observe configuration: the platform's own account, never the customer's.
-        "FI_API_KEY",
-        "FI_BASE_URL",
-        "FI_HARNESS_PROJECT",
-        "FI_SECRET_KEY",
         "GEMINI_API_KEY",
         "GOOGLE_API_KEY",
         "GOOGLE_APPLICATION_CREDENTIALS",
