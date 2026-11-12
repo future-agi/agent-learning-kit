@@ -38,6 +38,7 @@ from pydantic import BaseModel, Field, SecretStr, model_validator
 
 from fi.simulate.runtime.spec import SecretRef
 
+from ..providers.agent import _redact
 from .credentials import (
     CredentialManifest,
     CredentialRequirement,
@@ -62,6 +63,7 @@ from .job import (
 from .packaging import PackagingManifest, inspect_packaging
 from .provision import ProvisionError, source_fingerprint, stop
 from .secrets import SecretResolutionError, resolve_worker_secrets, worker_environment
+from .source_folder import SubfolderNotFound, agent_folder, subfolder_not_found
 
 
 _CONTROLLER_TOKEN = uuid.uuid4().hex
@@ -78,6 +80,7 @@ class LocalSandboxRequest(BaseModel):
     github_commit_sha: str | None = None
     github_visibility: SourceVisibility = SourceVisibility.PUBLIC
     github_installation_id: str | None = None
+    github_subfolder: str | None = None
     scenario_count: int = Field(default=10, ge=1, le=200)
     seed: int | None = None
     agent_name: str | None = None
@@ -107,6 +110,14 @@ class LocalSandboxRequest(BaseModel):
             or self.connector_mode is not ProviderExecutionMode.CONNECT_ONLY
         ):
             raise ValueError("provider_only_requires_connect_only_provider")
+        if self.github_subfolder:
+            if not self.github_repository:
+                raise ValueError("A subfolder needs a GitHub repository to read it from.")
+            # The older authoring path would ignore the folder without saying so.
+            if self.metadata.get("generic_harness_v1") is not True:
+                raise ValueError(
+                    "A subfolder needs the generic harness, which this job didn't ask for."
+                )
         _validate_environment_values(self.environment_values, self.secret_refs)
         return self
 
@@ -581,6 +592,7 @@ class LocalSandbox:
                     commit_sha=request.github_commit_sha,
                     visibility=request.github_visibility,
                     installation_id=request.github_installation_id,
+                    subfolder=request.github_subfolder,
                 )
             )
             job = HarnessJob(
@@ -1079,16 +1091,21 @@ class LocalSandbox:
                             await asyncio.sleep(delay)
                     if source is None:
                         raise SourceAcquisitionError("github_checkout_missing")
+                agent_folder(source, job.source.subfolder)
                 packaging_manifest = inspect_packaging(
                     source,
                     external_environment=bool(
                         job.metadata.get("environment_value_names", [])
                     ),
                 )
-                credential_manifest = discover_credentials(
+                # The import walk reads the agent's files at bundling's limits, seconds on a
+                # crafted repository; off the loop, the server keeps answering meanwhile.
+                credential_manifest = await asyncio.to_thread(
+                    discover_credentials,
                     source,
                     secret_refs=job.agent.secret_refs,
                     provided_environment=job.agent.config,
+                    agent_subfolder=job.source.subfolder,
                     template_secrets_required=(
                         job.metadata.get("generic_harness_v1") is not True
                     ),
@@ -1236,6 +1253,17 @@ class LocalSandbox:
                         completed_scenarios=result.get("completed_scenarios", 0),
                         failure=result.get("failure"),
                         attempt=state.get("attempt", 1),
+                        updated_at=_now(),
+                    )
+                    _write_json(state_path, state)
+            except SubfolderNotFound as exc:
+                state = _read_json(state_path)
+                if state.get("stage") != HarnessStage.CANCELED.value:
+                    failure = subfolder_not_found(exc.subfolder)
+                    state.update(
+                        stage=HarnessStage.FAILED.value,
+                        detail=failure.message,
+                        failure=failure.model_dump(mode="json"),
                         updated_at=_now(),
                     )
                     _write_json(state_path, state)
@@ -1840,14 +1868,19 @@ def _stage_outputs(run_root: Path) -> list[dict[str, Any]]:
             for tool in contract.get("tools", [])
             if isinstance(tool, dict) and tool.get("name")
         ]
+        # One call: a contract written before write_contract cleaned its prose is cleaned here.
+        one_liner, *rules = _redact(
+            [
+                str(contract.get("one_liner") or ""),
+                *(str(item) for item in contract.get("hard_constraints", [])),
+            ]
+        )
         data = {
-            "one_liner": str(contract.get("one_liner") or ""),
+            "one_liner": one_liner,
             "modality": str(contract.get("modality") or "unknown"),
             "runtime": contract.get("runtime") or {},
             "tools": tools,
-            "hard_constraints": [
-                str(item) for item in contract.get("hard_constraints", [])
-            ],
+            "hard_constraints": rules,
         }
         outputs.append(
             {

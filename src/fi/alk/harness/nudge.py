@@ -42,6 +42,7 @@ from .source_data_invariants import (
     sqlite_regexp,
     validate_evidence,
 )
+from .source_folder import saved_folder
 from .tools import schema
 from .understand import load as load_contract
 from .world.snapshot import (
@@ -564,7 +565,9 @@ def seed_row_problems(workspace: Path, source: Path | None) -> list[dict]:
     try:
         connection = sqlite3.connect(f"file:{database}?mode=ro", uri=True)
         try:
-            missing = missing_seed_rows(connection, Path(source))
+            missing = missing_seed_rows(
+                connection, Path(source), saved_folder(workspace)
+            )
         finally:
             connection.close()
     except sqlite3.Error:
@@ -831,7 +834,9 @@ def guard_renames(server: ToolServer, workspace: Path) -> ToolServer:
     return tool_server(name=server.name, version=server.version, tools=tools)
 
 
-def citation_refusal(args: dict[str, Any], source: Path | None) -> str:
+def citation_refusal(
+    args: dict[str, Any], source: Path | None, folder: str = ""
+) -> str:
     """Why this world check edit does not cite the agent's source, or ""."""
     if source is None or not Path(source).is_dir():
         return "Not changed: the agent's source is not here to cite."
@@ -847,7 +852,7 @@ def citation_refusal(args: dict[str, Any], source: Path | None) -> str:
                     }
                 ],
             },
-            source_files(Path(source)),
+            source_files(Path(source), folder),
         )
     except ValueError as exc:
         return f"Not changed: {exc}. Cite the agent's changed source, such as its seed."
@@ -855,7 +860,7 @@ def citation_refusal(args: dict[str, Any], source: Path | None) -> str:
 
 
 def cite_world_checks(
-    one: ToolSpec, held: dict[str, Any], source: Path | None
+    one: ToolSpec, held: dict[str, Any], source: Path | None, folder: str = ""
 ) -> ToolSpec:
     """``add_world_check`` that refuses an edit not citing the agent's source, and records the
     cited file in ``held["checks"]`` (environment nudge turns). An agent with no source here
@@ -867,7 +872,7 @@ def cite_world_checks(
         citable = source is not None and any(
             path.is_file() for path in Path(source).rglob("*")
         )
-        said = citation_refusal(args, source) if citable else ""
+        said = citation_refusal(args, source, folder) if citable else ""
         if said:
             return _err(said)
         result = await add(args)
@@ -920,7 +925,8 @@ def revise_invariant(workspace: Path, args: dict[str, Any], source: Path | None)
     sql = str(args.get("violations_sql") or "").strip() or str(
         held.get("violations_sql") or ""
     )
-    said = citation_refusal({**args, "code": sql}, source)
+    folder = saved_folder(workspace)
+    said = citation_refusal({**args, "code": sql}, source, folder)
     if said:
         return said
     cites = str(args.get("source_path") or "")
@@ -941,7 +947,8 @@ def revise_invariant(workspace: Path, args: dict[str, Any], source: Path | None)
                 ],
                 "scenarios": held.get("scenarios") or [],
             },
-            source_files(Path(source)),
+            # The citation was checked against the folder above; this only records the file.
+            {cites: Path(source).resolve() / cites},
         )
         kept = [revised if one is held else one for one in checks]
         done = f"revised, cites {cites}"
@@ -952,15 +959,19 @@ def revise_invariant(workspace: Path, args: dict[str, Any], source: Path | None)
 
 
 def track_world(
-    server: ToolServer, held: dict[str, Any], source: Path | None = None
+    server: ToolServer,
+    held: dict[str, Any],
+    source: Path | None = None,
+    folder: str = "",
 ) -> ToolServer:
     """The same world server, recording in ``held["unsaved"]`` whether a world change has been
     made since the last successful save_world (environment nudge turns). A world check edit
-    has to cite ``source``, the agent's source, when it holds any file."""
+    has to cite ``source``, the agent's source, when it holds any file; with a ``folder``,
+    only a file of that agent or of the folders above it."""
     tools = []
     for one in server.tools:
         if one.name == "add_world_check":
-            one = cite_world_checks(one, held, source)
+            one = cite_world_checks(one, held, source, folder)
         if one.name in WORLD_WRITES or one.name == "save_world":
             call = one.handler
 

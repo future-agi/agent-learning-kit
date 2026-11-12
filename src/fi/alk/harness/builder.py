@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 from .backends import (
@@ -27,6 +27,7 @@ from .catalogue import Catalogue
 from .config import SKILLS_ROOT, chosen_model, discovered_skills, load_skill
 from .contract import AgentContract
 from .scenario import Scenario, voicemail_enabled
+from .source_folder import contract_folder
 from .scenario_tools import SCENARIO_SERVER, load_scenarios, scenario_tools, world_summary
 from .scenarios import writer_worker
 from .session import Stage
@@ -279,6 +280,7 @@ def suite_server(
     async def declare_tool(args: dict[str, Any]) -> dict[str, Any]:
         from .amend import _persist
         from .contract import ToolSpec, validate_contract
+        from .source_folder import agent_scope, in_agent_scope
 
         if contract is None:
             return _err("there is no contract loaded to add a tool to")
@@ -290,6 +292,15 @@ def suite_server(
         target = (root / str(args.get("evidence_file") or "")).resolve()
         if source_root is None or root.resolve() not in target.parents or not target.is_file():
             return _err("evidence_file must be a file inside the agent's source")
+        folder = contract_folder(contract)
+        scope = agent_scope(root, folder)
+        if scope is not None and not in_agent_scope(
+            PurePosixPath(target.relative_to(root.resolve()).as_posix()), scope
+        ):
+            return _err(
+                f"evidence_file must be in the agent's folder {folder} or in a folder above it, "
+                "not in another agent's"
+            )
         if not quote or quote not in target.read_text(encoding="utf-8", errors="replace"):
             return _err(f"the quoted line is not in {args.get('evidence_file')}; quote it exactly")
         if not str(args.get("why") or "").strip():
@@ -660,10 +671,17 @@ def open_builder(
             "tell the person what you found and fixed:\n- " + "\n- ".join(health[:40])
         )
     )
+    folder = contract_folder(contract)
     where = (
         f"\n\nThe environment's files are in {out}: contract.json, sub_goals.json, coverage.json, "
         "simulator_prompt.md, scenarios/ and the sealed environment-bundle/."
         + (f" The agent's own source is in {source_root}." if source_root else "")
+        + (
+            f" The agent lives in its folder {folder}; other folders there belong to other "
+            "agents."
+            if source_root and folder
+            else ""
+        )
     )
     spec = SessionSpec(
         system_prompt=(

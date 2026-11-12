@@ -7,19 +7,49 @@ external packages and non-Python implementations still require runtime proof.
 from __future__ import annotations
 
 import ast
-import io
 import re
 import tokenize
 from pathlib import Path
 
 from .contract import AgentContract
+from .python_source import EscapeBudget, ParseBudget, TokenBudget, parsed, read_module
+from .runtime_selection import charged_path
+from .source_folder import SubfolderNotFound, agent_folder, is_within
 
 _NOT_AGENT_CODE = {"tests", "test", "node_modules", "site-packages", "venv", "__pycache__"}
+# Certification runs in the job, not while a conversation waits, so it reads what bundling reads.
+_LARGEST_TOOL_MODULE = 1024 * 1024
 
 
-def tool_evidence_problems(contract: AgentContract, source: Path) -> list[str]:
+def _file_in(candidate: Path, root: Path) -> bool:
+    """A file, resolving inside ``root``. The resolve is charged to the save's path budget: a
+    module's name can be dozens of links. A name past the system's limit can't be a file."""
+    try:
+        return candidate.is_file() and is_within(charged_path(candidate), root)
+    except (OSError, RuntimeError, ValueError):
+        return False
+
+
+def tool_evidence_problems(
+    contract: AgentContract, source: Path, subfolder: str | None = None
+) -> list[str]:
     root = source.resolve()
+    bases = [root, root / "src"]
+    if subfolder:
+        # The run imports from the agent's folder first, so the check reads what will run.
+        try:
+            folder = agent_folder(root, subfolder)
+        except SubfolderNotFound:
+            pass  # The folder check reports this.
+        else:
+            bases = [folder, folder / "src", *bases]
     problems = []
+    # Many entries can name one module; each is read once, and all of them under one budget.
+    read: dict[Path, tuple[ast.Module, str] | None] = {}
+    commented: dict[Path, list[str] | None] = {}
+    budget = ParseBudget()
+    tokens = TokenBudget()
+    escapes = EscapeBudget()
     for entry in contract.tool_entrypoints:
         if entry.mode not in {"import", "construct"} or not entry.module:
             continue
@@ -29,25 +59,19 @@ def tool_evidence_problems(contract: AgentContract, source: Path) -> list[str]:
         module = Path(*parts)
         candidates = [
             base / relative
-            for base in (root, root / "src")
+            for base in bases
             for relative in (module.with_suffix(".py"), module / "__init__.py")
         ]
-        path = next(
-            (p for p in candidates if p.is_file() and p.resolve().is_relative_to(root)),
-            None,
-        )
+        path = next((p for p in candidates if _file_in(p, root)), None)
         if path is None:
             continue
-        try:
-            text = path.read_text(encoding="utf-8")
-            tree = ast.parse(text)
-            comments = [
-                token.string
-                for token in tokenize.generate_tokens(io.StringIO(text).readline)
-                if token.type == tokenize.COMMENT
-            ]
-        except (UnicodeError, SyntaxError, tokenize.TokenError):
+        if path not in read:
+            text = read_module(path, escapes=escapes)
+            tree = parsed(text) if text is not None and budget.spend(text) else None
+            read[path] = None if tree is None else (tree, text)
+        if read[path] is None:
             continue  # The actual source interpreter/package validator owns these failures.
+        tree, text = read[path]
         name = entry.callable.rsplit(".", 1)[-1]
         if not name.isidentifier():
             continue
@@ -67,11 +91,13 @@ def tool_evidence_problems(contract: AgentContract, source: Path) -> list[str]:
             for node in ast.walk(tree)
             if isinstance(node, ast.alias)
         )
-        commented = any(
-            re.search(r"\b(?:async\s+)?def\s+" + re.escape(name) + r"\s*\(", line)
-            for line in comments
-        )
-        if commented and name not in bindings:
+        written = re.compile(r"\b(?:async\s+)?def\s+" + re.escape(name) + r"\s*\(")
+        # A comment is in the text as written, so only a file with the line is tokenized.
+        if name in bindings or not written.search(text):
+            continue
+        if path not in commented:
+            commented[path] = _comments(text, tokens)
+        if commented[path] is not None and any(written.search(line) for line in commented[path]):
             problems.append(
                 f"tool[{entry.tool}]:commented-only-entrypoint:{entry.module}.{entry.callable} — "
                 "the named callable exists only in comments, not executable Python. Remove "
@@ -79,6 +105,19 @@ def tool_evidence_problems(contract: AgentContract, source: Path) -> list[str]:
                 "custom tools must use tools=[]; do not invent a tool or backing data."
             )
     return problems
+
+
+def _comments(text: str, tokens: TokenBudget) -> list[str] | None:
+    """The file's comments, or None past the total, which leaves the check unproven."""
+    if not tokens.spend(text):
+        return None
+    try:
+        found = tokens.tokens(text)
+    except (SyntaxError, tokenize.TokenError):
+        return None
+    if found is None:
+        return None
+    return [token.string for token in found if token.type == tokenize.COMMENT]
 
 
 def defined_tool_names(source: Path) -> set[str]:
@@ -89,9 +128,8 @@ def defined_tool_names(source: Path) -> set[str]:
         parts = path.relative_to(root).parts[:-1]
         if any(part.startswith(".") or part in _NOT_AGENT_CODE for part in parts):
             continue
-        try:
-            tree = ast.parse(path.read_text(encoding="utf-8"))
-        except (OSError, UnicodeError, SyntaxError, ValueError):
+        text = read_module(path, _LARGEST_TOOL_MODULE)
+        if text is None or (tree := parsed(text)) is None:
             continue
         for node in ast.walk(tree):
             if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):

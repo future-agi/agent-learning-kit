@@ -3968,7 +3968,7 @@ def test_every_contract_field_is_advertised_to_the_model(tmp_path):
 
     advertised = asyncio.run(advertised_fields())
     # Set by the amendment tools during later stages, never by whoever submits the contract.
-    ours = {"amendments", "instrumentation"}
+    ours = {"amendments", "instrumentation", "source_subfolder", "unconfirmed_prompt_from"}
 
     def named(model: type[BaseModel]) -> list[str]:
         """Every field the model would have to fill, nested ones included.
@@ -7332,6 +7332,90 @@ def test_voice_suite_evals_use_the_documented_platform_inputs(monkeypatch):
         ),
     ]
     assert all(verdict.holds for verdict in verdicts)
+
+
+_SUITE_EVAL_URL = "https://bot:hunter2@hooks.example/v1?key=sk-1#frag"
+
+
+def test_suite_eval_agent_prompt_loses_url_credentials(monkeypatch):
+    """B3 (TH-9491): the suite eval's agent_prompt, from a contract no writer cleaned."""
+    from fi.alk.harness.catalogue import default_suite_evals
+    from fi.alk.harness.contract import AgentContract
+    from fi.alk.harness.run import platform_evals
+    from fi.alk.harness.run.conversation import Exchange, Transcript
+    from fi.alk.harness.run.grade import judge_suite_evals
+    from fi.alk.harness.scenario import Scenario
+
+    sent = []
+
+    def judge_builtin(name, inputs):
+        sent.append(inputs)
+        return {"output": "Pass", "why": "ok", "model": "turing_flash"}
+
+    monkeypatch.setattr(platform_evals, "configured", lambda: True)
+    monkeypatch.setattr(platform_evals, "judge_builtin", judge_builtin)
+    contract = AgentContract(
+        agent="voice-agent",
+        modality="voice",
+        system_prompt_excerpt=f"Post each call to {_SUITE_EVAL_URL} after.",
+    )
+    judge_suite_evals(
+        default_suite_evals(),
+        Scenario(name="s", instruction="i", sub_goals=[]),
+        Transcript(exchanges=[Exchange("agent", "hello")]),
+        contract,
+    )
+
+    prompts = [inputs["agent_prompt"] for inputs in sent if "agent_prompt" in inputs]
+    assert prompts == ["Post each call to https://hooks.example/v1 after."]
+    assert "hunter2" not in json.dumps(sent) and "sk-1" not in json.dumps(sent)
+
+
+def test_suite_eval_rules_stored_on_the_platform_lose_url_credentials(monkeypatch):
+    """B3b (TH-9491): each rule passed to platform_evals.ensure."""
+    from fi.alk.harness.contract import AgentContract
+    from fi.alk.harness.run import grade, platform_evals
+    from fi.alk.harness.run.conversation import Transcript
+    from fi.alk.harness.scenario import Scenario
+
+    ensured = []
+    monkeypatch.setattr(
+        platform_evals, "ensure", lambda name, claim, agent, rules: ensured.append(list(rules))
+    )
+    monkeypatch.setattr(
+        platform_evals, "judge", lambda name, record: {"held": True, "why": "ok", "model": "m"}
+    )
+    contract = AgentContract(
+        agent="desk", hard_constraints=[f"Always post to {_SUITE_EVAL_URL}", "Be brief"]
+    )
+
+    grade._on_platform(
+        [("claim one", "one"), ("claim two", "two")],
+        Scenario(name="s", instruction="i", sub_goals=[]),
+        Transcript(),
+        contract,
+        "",
+    )
+
+    assert ensured == [["Always post to https://hooks.example/v1", "Be brief"]] * 2
+
+
+def test_suite_eval_local_judge_prompt_loses_url_credentials():
+    """B3c (TH-9491): the local judge's prompt, the summary and each rule."""
+    from fi.alk.harness.contract import AgentContract
+    from fi.alk.harness.run.grade import _judge_prompt
+
+    prompt = _judge_prompt(
+        AgentContract(
+            agent="desk",
+            one_liner=f"Books desks through {_SUITE_EVAL_URL}",
+            hard_constraints=[f"Always post to {_SUITE_EVAL_URL}"],
+        )
+    )
+
+    assert "THE AGENT UNDER TEST: desk - Books desks through https://hooks.example/v1\n" in prompt
+    assert "  - Always post to https://hooks.example/v1" in prompt
+    assert "hunter2" not in prompt and "sk-1" not in prompt
 
 
 def test_hosted_voice_marks_unavailable_required_evals_as_grading_failures(
