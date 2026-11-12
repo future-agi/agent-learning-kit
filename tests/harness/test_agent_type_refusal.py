@@ -614,9 +614,10 @@ def test_a_file_that_raises_something_unexpected_costs_only_that_file(
     monkeypatch.setattr(agent_type_check, "read_module", odd)
     with caplog.at_level("WARNING", logger=agent_type_check.__name__):
         assert browser_tools_found(tmp_path) == ["playwright"]
-    [record] = caplog.records
-    assert record.getMessage() == "agent type scan skipped a file: LookupError"
-    assert record.exc_info is None
+    skipped, cut = caplog.records
+    assert skipped.getMessage() == "agent type scan skipped a file: LookupError"
+    assert skipped.exc_info is None
+    assert cut.getMessage() == "agent type scan cut by skipped 1"
 
 
 def test_a_skip_logs_its_type_once_and_its_path_at_debug_only_with_no_trace(
@@ -636,7 +637,7 @@ def test_a_skip_logs_its_type_once_and_its_path_at_debug_only_with_no_trace(
     loud = [record for record in caplog.records if record.levelno >= 20]
     assert [record.getMessage() for record in loud] == [
         "agent type scan skipped a file: LookupError",
-        "agent type scan skipped 2 files",
+        "agent type scan cut by skipped 2",
     ]
     assert not any(
         "SOURCE-LINE" in record.getMessage() or "odd" in record.getMessage() or record.exc_info
@@ -658,12 +659,12 @@ def test_a_skip_logs_its_type_once_and_its_path_at_debug_only_with_no_trace(
 @pytest.mark.skipif(sys.version_info < (3, 12), reason="3.11's tokenizer reads a NUL byte")
 def test_a_file_with_a_nul_byte_is_left_unread_without_stopping_the_scan(tmp_path, caplog):
     # Through the shared reader a NUL byte is a file Python can't parse, an expected answer, not
-    # an error: it's left unread and nothing is logged. A file naming nothing isn't even read.
+    # an error: it's left unread and only the cut is logged. A file naming nothing isn't even read.
     (tmp_path / "a_blob.py").write_bytes(b" x = 1\n\x00")
     (tmp_path / "b_blob.py").write_bytes(b"import playwright\n\x00")
     with caplog.at_level("WARNING", logger=agent_type_check.__name__):
         assert browser_tools_found(tmp_path) == []
-    assert caplog.records == []
+    assert [r.getMessage() for r in caplog.records] == ["agent type scan cut by parse_failed 1"]
 
 
 @pytest.mark.skipif(sys.version_info < (3, 12), reason="3.11's tokenizer reads a NUL byte")
@@ -673,7 +674,10 @@ def test_a_nul_byte_the_tokenizer_breaks_on_reaches_no_warning(tmp_path, caplog)
     (tmp_path / "agent.py").write_text("import playwright\n", encoding="utf-8")
     with caplog.at_level("DEBUG", logger=agent_type_check.__name__):
         assert browser_tools_found(tmp_path) == ["playwright"]
-    assert [record for record in caplog.records if record.levelno >= 20] == []
+    # The tokenizer's fault reaches no WARNING of its own. The files name a tool and can't be
+    # parsed, so they cut the scan, and that line holds names and counts only.
+    loud = [record.getMessage() for record in caplog.records if record.levelno >= 20]
+    assert loud == ["agent type scan cut by parse_failed 30"]
     assert "SOURCE-LINE" not in caplog.text
 
 
@@ -1975,11 +1979,11 @@ def test_unknown_modality_gets_a_problem_not_a_save(tmp_path, plain_repo):
 def test_the_scan_runs_off_the_event_loop(tmp_path, monkeypatch):
     threads = []
 
-    def scan(_root):
+    def scan(_root, subfolder=None, reached=None):
         threads.append(threading.current_thread())
-        return []
+        return [], frozenset()
 
-    monkeypatch.setattr(tools, "browser_tools_found", scan)
+    monkeypatch.setattr(tools, "browser_scan", scan)
     _submitter(tmp_path / "out", tmp_path)(_reading("chat"))
     assert threads and threads[0] is not threading.main_thread()
 
@@ -1988,11 +1992,11 @@ def test_the_scan_runs_off_the_event_loop(tmp_path, monkeypatch):
 def test_a_refusal_during_the_scan_stops_this_call_too(tmp_path, monkeypatch, modality):
     output = tmp_path / "out"
 
-    def scan(_root):
+    def scan(_root, subfolder=None, reached=None):
         write_failure_file(agent_type_failure(["playwright"]), output)
-        return []
+        return [], frozenset()
 
-    monkeypatch.setattr(tools, "browser_tools_found", scan)
+    monkeypatch.setattr(tools, "browser_scan", scan)
     answer = _submitter(output, tmp_path)(_reading(modality))
     assert not (output / "contract.json").exists()
     # The stop itself, not a second look: the reading was refused while the scan ran. A browser
@@ -2770,13 +2774,13 @@ def test_conversation_with_no_tool_saves_with_no_second_look(tmp_path, plain_rep
 
 def _counted_scans(monkeypatch) -> list[Path]:
     scans: list[Path] = []
-    real_scan = tools.browser_tools_found
+    real_scan = tools.browser_scan
 
-    def counted(root):
+    def counted(root, subfolder=None, reached=None):
         scans.append(root)
-        return real_scan(root)
+        return real_scan(root, subfolder, reached)
 
-    monkeypatch.setattr(tools, "browser_tools_found", counted)
+    monkeypatch.setattr(tools, "browser_scan", counted)
     return scans
 
 
@@ -2823,12 +2827,12 @@ def test_a_call_cancelled_while_waiting_on_the_scan_leaves_it_to_the_others(
 ):
     started, release = threading.Event(), threading.Event()
 
-    def slow(_root):
+    def slow(_root, subfolder=None, reached=None):
         started.set()
         release.wait(10)
-        return []
+        return [], frozenset()
 
-    monkeypatch.setattr(tools, "browser_tools_found", slow)
+    monkeypatch.setattr(tools, "browser_scan", slow)
     tool = _submit_tool(contract_tools(tmp_path / "out", scan_root=plain_repo))
 
     async def first_message():
@@ -2844,15 +2848,15 @@ def test_a_call_cancelled_while_waiting_on_the_scan_leaves_it_to_the_others(
 
 
 def test_a_scan_that_fails_is_run_again_by_the_next_call(tmp_path, plain_repo, monkeypatch):
-    outcomes = iter([OSError("gone"), []])
+    outcomes = iter([OSError("gone"), ([], frozenset())])
 
-    def scan(_root):
+    def scan(_root, subfolder=None, reached=None):
         outcome = next(outcomes)
         if isinstance(outcome, Exception):
             raise outcome
         return outcome
 
-    monkeypatch.setattr(tools, "browser_tools_found", scan)
+    monkeypatch.setattr(tools, "browser_scan", scan)
     submit = _submitter(tmp_path / "out", plain_repo)
     with pytest.raises(OSError, match="gone"):
         submit(_reading("chat"))
@@ -2862,15 +2866,15 @@ def test_a_scan_that_fails_is_run_again_by_the_next_call(tmp_path, plain_repo, m
 def test_a_scan_that_fails_is_run_again_by_the_next_call_in_the_same_message(
     tmp_path, plain_repo, monkeypatch
 ):
-    outcomes = iter([OSError("gone"), []])
+    outcomes = iter([OSError("gone"), ([], frozenset())])
 
-    def scan(_root):
+    def scan(_root, subfolder=None, reached=None):
         outcome = next(outcomes)
         if isinstance(outcome, Exception):
             raise outcome
         return outcome
 
-    monkeypatch.setattr(tools, "browser_tools_found", scan)
+    monkeypatch.setattr(tools, "browser_scan", scan)
     tool = _submit_tool(contract_tools(tmp_path / "out", scan_root=plain_repo))
 
     async def one_message():
@@ -2887,13 +2891,13 @@ def test_a_scan_that_finished_after_its_only_caller_was_cancelled_is_not_run_aga
     started, release = threading.Event(), threading.Event()
     scans: list[Path] = []
 
-    def slow(root):
+    def slow(root, subfolder=None, reached=None):
         scans.append(root)
         started.set()
         release.wait(10)
-        return []
+        return [], frozenset()
 
-    monkeypatch.setattr(tools, "browser_tools_found", slow)
+    monkeypatch.setattr(tools, "browser_scan", slow)
     tool = _submit_tool(contract_tools(tmp_path / "out", scan_root=plain_repo))
 
     async def cancelled_then_next():
@@ -2913,14 +2917,14 @@ def test_a_scan_left_running_on_a_closed_loop_is_started_again(tmp_path, plain_r
     started, release = threading.Event(), threading.Event()
     scans: list[Path] = []
 
-    def scan(root):
+    def scan(root, subfolder=None, reached=None):
         scans.append(root)
         if len(scans) == 1:
             started.set()
             release.wait(10)
-        return []
+        return [], frozenset()
 
-    monkeypatch.setattr(tools, "browser_tools_found", scan)
+    monkeypatch.setattr(tools, "browser_scan", scan)
     tool = _submit_tool(contract_tools(tmp_path / "out", scan_root=plain_repo))
     closed = asyncio.new_event_loop()
     try:
@@ -3465,9 +3469,17 @@ def test_the_scan_parses_python_only_up_to_its_total(tmp_path, monkeypatch, tota
     assert browser_tools_found(repo) == expected
 
 
-def test_the_walk_while_the_conversation_waits_follows_only_small_files(tmp_path):
+@pytest.mark.parametrize("search, expected", [(None, ["playwright"]), (1, [])])
+def test_the_walk_while_the_conversation_waits_parses_only_small_files(
+    tmp_path, monkeypatch, search, expected
+):
     from fi.alk.harness.credentials import imported_by_agent
     from fi.alk.harness.python_source import LARGEST_PARSED_MODULE
+
+    # A file over the parse limit isn't parsed; its import lines are searched instead, so what it
+    # names is still followed, until the walk's search total has no room for it.
+    if search is not None:
+        monkeypatch.setattr(agent_type_check, "_WALKED_SEARCHED", search)
 
     repo = _tree(
         tmp_path / "repo",
@@ -3478,14 +3490,17 @@ def test_the_walk_while_the_conversation_waits_follows_only_small_files(tmp_path
         },
     )
 
-    assert browser_tools_in_agent(repo, "agents/a") == []
+    assert browser_tools_in_agent(repo, "agents/a") == expected
     # Bundling, with no conversation waiting, still follows it.
     assert (repo / "common" / "web.py").resolve() in imported_by_agent(repo, "agents/a")
 
 
-@pytest.mark.parametrize("total, expected", [(36, ["playwright"]), (35, [])])
+@pytest.mark.parametrize(
+    "total, search, expected",
+    [(36, None, ["playwright"]), (35, None, ["playwright"]), (35, 1, [])],
+)
 def test_the_walk_while_the_conversation_waits_parses_only_up_to_its_total(
-    tmp_path, monkeypatch, total, expected
+    tmp_path, monkeypatch, total, search, expected
 ):
     from fi.alk.harness import agent_type_check
 
@@ -3499,6 +3514,9 @@ def test_the_walk_while_the_conversation_waits_parses_only_up_to_its_total(
     )
     # The walk's own total: the browser scan's stays as it is.
     monkeypatch.setattr(agent_type_check, "_WALKED_PARSED", total)
+    # Past it a file's import lines are searched, not parsed, unless that has no room either.
+    if search is not None:
+        monkeypatch.setattr(agent_type_check, "_WALKED_SEARCHED", search)
 
     assert browser_tools_in_agent(repo, "agents/a") == expected
 
@@ -3738,10 +3756,16 @@ _SHARED_IMPORT = 'import { x } from "../../common/web.js";\n'
 
 
 @pytest.mark.parametrize(
-    "budget, followed", [(len(_SHARED_IMPORT), True), (len(_SHARED_IMPORT) - 1, False)]
+    "budget, search, followed",
+    [
+        (len(_SHARED_IMPORT), None, True),
+        # Past the script total the imports are matched under the search total instead.
+        (len(_SHARED_IMPORT) - 1, None, True),
+        (len(_SHARED_IMPORT) - 1, 1, False),
+    ],
 )
 def test_the_walk_while_the_conversation_waits_reads_scripts_only_up_to_a_total(
-    tmp_path, monkeypatch, budget, followed
+    tmp_path, monkeypatch, budget, search, followed
 ):
     from fi.alk.harness.credentials import imported_by_agent
 
@@ -3751,6 +3775,8 @@ def test_the_walk_while_the_conversation_waits_reads_scripts_only_up_to_a_total(
         {"agents/a/main.js": script, "common/web.js": 'const server = "@playwright/mcp";\n'},
     )
     monkeypatch.setattr(agent_type_check, "_WALKED_SCRIPTS", budget)
+    if search is not None:
+        monkeypatch.setattr(agent_type_check, "_WALKED_SEARCHED", search)
 
     assert browser_tools_in_agent(repo, "agents/a") == (["Playwright MCP"] if followed else [])
     # Bundling, with no conversation waiting, reads them all.
@@ -3889,8 +3915,14 @@ def test_the_walk_counts_its_parse_limit_in_bytes(tmp_path):
     )
     shared = (repo / "common" / "web.py").resolve()
 
-    assert shared not in imported_by_agent(repo, "agents/a", parse_limit=128 * 1024)
+    # 128 KB of bytes is over a 128 KB limit once the comment's two-byte characters count; with no
+    # room to search it, the import isn't followed.
+    assert shared not in imported_by_agent(
+        repo, "agents/a", parse_limit=128 * 1024, search_total=0
+    )
     assert shared in imported_by_agent(repo, "agents/a", parse_limit=256 * 1024)
+    # The refusal search is the save's alone: given no search total, the walk's answer is as it was.
+    assert shared not in imported_by_agent(repo, "agents/a", parse_limit=128 * 1024)
 
 
 def _nested_packages(repo: Path, depth: int) -> Path:
@@ -4430,9 +4462,9 @@ def test_the_walk_charges_a_file_found_for_each_part_of_its_path(tmp_path, monke
     charged: list[tuple[Path, float]] = []
     real = credentials._file_inside
 
-    def spy(candidate, root, deepest, left=None, unread=None):
+    def spy(candidate, root, deepest, left=None, unread=None, too_big=None):
         before = left[0]
-        hit = real(candidate, root, deepest, left, unread)
+        hit = real(candidate, root, deepest, left, unread, too_big)
         charged.append((candidate, before - left[0]))
         return hit
 
@@ -5603,7 +5635,7 @@ def test_a_stopped_save_walk_logs_how_many_files_it_reached(tmp_path, caplog, mo
     ).resolve()
     monkeypatch.setattr(agent_type_check, "_WALKED_LOOKUPS", 200)
     with caplog.at_level("WARNING", logger=agent_type_check.__name__):
-        found = agent_type_check._walked(repo, "agents/a")
+        found, _ = agent_type_check._walked(repo, "agents/a")
 
     assert f"stopped at its limits or left code unread; {len(found)} files reached" in caplog.text
     assert len(found) >= 1
@@ -6020,7 +6052,7 @@ def test_plain_files_ahead_of_the_agents_imports_dont_use_up_the_parse_total(tmp
         },
     ).resolve()
 
-    assert repo / "common" / "web.py" in agent_type_check._walked(repo, "agents/a")
+    assert repo / "common" / "web.py" in agent_type_check._walked(repo, "agents/a")[0]
 
 
 def test_a_file_the_parse_total_cuts_says_the_walk_stopped(tmp_path):
@@ -6218,6 +6250,7 @@ def _save_walk(repo: Path, subfolder: str = "agents/a"):
         import_limit=agent_type_check._WALKED_IMPORTS,
         lookup_limit=agent_type_check._WALKED_LOOKUPS,
         stopped=stopped,
+        search_total=agent_type_check._WALKED_SEARCHED,
     )
     return found, stopped[0]
 
@@ -6241,9 +6274,6 @@ def _behind(tmp_path: Path, helper: bytes) -> Path:
             marks=pytest.mark.skipif(sys.version_info >= (3, 13), reason="parses on 3.13"),
         ),
         pytest.param(b"from common import web\nNAME = 'a" + "\u0301".encode() * 40 + b"'\n", id="marks"),
-        pytest.param(
-            b"# coding: latin-1\nfrom common import web\n# " + b"\xe9" * 70_000 + b"\n", id="oversize-as-utf8"
-        ),
         # Any syntax error counts: the parser can't tell newer syntax from Python 2 or a template.
         pytest.param(b"from common import web\nprint 'py2'\n", id="python-2"),
         pytest.param(b"{% if web %}\nfrom common import web\n{% endif %}\n", id="template"),
@@ -6256,14 +6286,26 @@ def test_a_file_the_walk_cant_parse_says_it_stopped(tmp_path, helper):
     assert stopped and repo / "common" / "web.py" not in found
 
 
-def test_a_file_past_the_parse_total_says_the_walk_stopped(tmp_path, monkeypatch):
+def test_a_file_over_the_parse_limit_as_utf8_says_stopped_and_is_line_searched(tmp_path):
+    helper = b"# coding: latin-1\nfrom common import web\n# " + b"\xe9" * 70_000 + b"\n"
+    repo = _behind(tmp_path, helper)
+
+    found, stopped = _save_walk(repo)
+    assert stopped and repo / "common" / "web.py" in found
+
+
+@pytest.mark.parametrize("search, followed", [(None, True), (1, False)])
+def test_a_file_past_the_parse_total_says_the_walk_stopped(tmp_path, monkeypatch, search, followed):
     from fi.alk.harness import agent_type_check
 
     repo = _behind(tmp_path, b"from common import web\n" + b"x = 1\n" * 50)
     monkeypatch.setattr(agent_type_check, "_WALKED_PARSED", 40)
+    if search is not None:
+        monkeypatch.setattr(agent_type_check, "_WALKED_SEARCHED", search)
 
+    # Not parsed, so the walk says it stopped; its import lines are searched unless that has no room.
     found, stopped = _save_walk(repo)
-    assert stopped and repo / "common" / "web.py" not in found
+    assert stopped and (repo / "common" / "web.py" in found) is followed
 
 
 _ESCAPED_LINE = b"# coding: unicode-escape\n"
@@ -6311,7 +6353,7 @@ def test_files_read_two_ways_base_parsed_are_still_parsed(tmp_path):
     assert not stopped and {repo / "common" / "web.py", repo / "common" / "page.py"} <= found
 
 
-@pytest.mark.parametrize("where", ["own-py", "imported-py", "imported-script", "grew-since"])
+@pytest.mark.parametrize("where", ["own-py", "imported-py", "grew-since"])
 def test_a_file_over_the_read_limit_says_the_walk_stopped(tmp_path, monkeypatch, where):
     from fi.alk.harness import credentials
 
@@ -6323,19 +6365,30 @@ def test_a_file_over_the_read_limit_says_the_walk_stopped(tmp_path, monkeypatch,
     elif where == "imported-py":
         (repo / "agents" / "a" / "main.py").write_text("import common.big\n")
         (repo / "common" / "big.py").write_bytes(big)
-    elif where == "imported-script":
-        (repo / "agents" / "a" / "index.js").write_text('import "./big.js";\n')
-        (repo / "agents" / "a" / "big.js").write_bytes(b'import "../../common/web.py";\n' + b"//" + b"x" * 1_000_100 + b"\n")
     else:
         (repo / "agents" / "a" / "main.py").write_bytes(big)
         real = credentials._plain_file
         # Small when looked at, past the limit once read.
         monkeypatch.setattr(
-            credentials, "_plain_file", lambda path, unread=None: path.name == "main.py" or real(path, unread)
+            credentials, "_plain_file", lambda path, unread=None, too_big=None: path.name == "main.py" or real(path, unread, too_big)
         )
 
     found, stopped = _save_walk(repo)
     assert stopped
+
+
+def test_a_script_over_the_read_limit_is_matched_not_left_unread(tmp_path):
+    # The save's walk reaches a script past the read cap, up to the search cap, and matches it.
+    repo = _tree(tmp_path / "repo", {"common/__init__.py": "", "common/web.py": ""}).resolve()
+    (repo / "agents" / "a").mkdir(parents=True)
+    (repo / "agents" / "a" / "index.js").write_text('import "./big.js";\n')
+    (repo / "agents" / "a" / "big.js").write_bytes(
+        b'import "../../common/web.py";\n' + b"//" + b"x" * 1_000_100 + b"\n"
+    )
+
+    found, stopped = _save_walk(repo)
+    assert repo / "common" / "web.py" in found
+    assert not stopped
 
 
 def test_a_large_data_file_a_script_imports_doesnt_say_stopped(tmp_path):

@@ -1070,6 +1070,8 @@ def test_a_crafted_python_file_does_not_hold_up_the_conversation(tmp_path, repo)
                 worst[0], last = max(worst[0], now - last), now
 
         beating = asyncio.create_task(beat())
+        # The scan doesn't parse the crafted file; searched as bytes, it names no browser tool, so
+        # leaving it unread doesn't cut the scan, and the reading is saved without a look.
         result = await submit(_plain("crafted"))
         done.set()
         await beating
