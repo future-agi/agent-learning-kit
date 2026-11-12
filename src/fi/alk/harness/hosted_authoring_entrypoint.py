@@ -71,32 +71,24 @@ def _platform_simulator_values(values: dict[str, str]) -> dict[str, str]:
     }
 
 
-# Not named as credentials, but secret: the guest-booking PIN, and its private target number.
-_UNNAMED_SECRETS = frozenset({PIN_ENV, TARGET_PHONE_ENV})
+# In secrets.json only names a customer can't declare may be kept: SIMULATOR_* and FI_* are the
+# platform's. A customer may declare GOOGLE_CLOUD_PROJECT, so under that name it is masked there.
+_PLATFORM_ONLY_SETTINGS = frozenset(
+    name
+    for name in observability.NON_SECRET_SETTINGS
+    if name.startswith(("SIMULATOR_", "FI_"))
+)
 
 
 def _span_secret_values(
     all_values: dict[str, str], gateway_values: dict[str, str]
 ) -> tuple[str, ...]:
-    """The values spans replace whole, chosen by where each comes from, never by its name: a
-    customer may declare OPENAI_API_KEY or GOOGLE_CLOUD_PROJECT as well as the platform.
-
-    - secrets.json holds the customer's declared values and the Observe export secrets; they go
-      whole, apart from the platform's SIMULATOR_* aliases, which customers can't use;
-    - those, and the gateway file, also hold model names and the Observe project, which a span
-      keeps, so only their credentials go. The two are filtered apart, never merged, so a customer
-      value can't be lost under a name the gateway also sends.
-    """
-    customer = tuple(
-        value
-        for name, value in all_values.items()
-        if value and not name.startswith("SIMULATOR_")
-    )
-    simulator = {name: value for name, value in all_values.items() if name.startswith("SIMULATOR_")}
+    """The values spans replace whole: everything in both files, except the platform settings a
+    span keeps. Each file is read on its own and the tuples joined, so a name in both masks both
+    values."""
     return (
-        *customer,
-        *observability.credential_values(simulator, also=_UNNAMED_SECRETS),
-        *observability.credential_values(gateway_values, also=_UNNAMED_SECRETS),
+        *observability.declared_values(all_values, _PLATFORM_ONLY_SETTINGS),
+        *observability.declared_values(gateway_values),
     )
 
 

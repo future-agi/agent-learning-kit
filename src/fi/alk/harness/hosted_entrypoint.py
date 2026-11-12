@@ -2278,13 +2278,12 @@ async def run_job(
         *customer_secret_values,
         *tuple(simulator_secret_values.values()),
     )
-    # Spans: secrets.json goes whole, since the platform writes only the customer's declared
-    # values and the Observe export secrets there. The simulator channel goes only where an alias
-    # names a credential. Its other values (models, the Observe project, the SIP trunk and caller
-    # number, base URLs) are platform settings, not secrets, and a span keeps them.
+    # Spans: the customer's values go whole (no names come with them here). The simulator channel
+    # goes whole too, apart from the platform settings named in NON_SECRET_SETTINGS, which a span
+    # keeps.
     span_secret_values = (
         *customer_secret_values,
-        *observability.credential_values(simulator_secret_values),
+        *observability.declared_values(simulator_secret_values),
     )
     adapter = OutboundAdapter(
         capabilities,

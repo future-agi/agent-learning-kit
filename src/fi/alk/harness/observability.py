@@ -257,19 +257,53 @@ _SHORTEST_SECRET = 8
 _SHORTEST_PIN = 4
 
 
-def credential_values(
-    values: Mapping[str, str], also: frozenset[str] = frozenset()
-) -> tuple[str, ...]:
-    """The values in an alias -> value channel whose alias names a credential.
+# Platform settings the simulator and gateway channels carry beside their credentials. A span
+# keeps these: masking them hid every LLM span's model and sent a job's traces to a project
+# named "***". Any name not listed is treated as a secret, so a new setting fails closed (masked)
+# until it is added here.
+NON_SECRET_SETTINGS = frozenset(
+    {
+        "AGENTCC_BASE_URL",
+        "ALK_BACKGROUND_NOISE",
+        "ALK_BACKGROUND_NOISE_CATALOG",
+        "ALK_GOOGLE_ADK_EXPLICITLY_APPROVED_BY_USER",
+        "ALK_HARNESS",
+        "ALK_HARNESS_MODEL",
+        "ALK_HARNESS_THINKING",
+        "ALK_JUDGE_MODE",
+        "ALK_VERTEX_LOCATION",
+        "ALK_VOICEMAIL_SCENARIOS",
+        "FI_BASE_URL",
+        "FI_HARNESS_PROJECT",
+        "GOOGLE_CLOUD_LOCATION",
+        "GOOGLE_CLOUD_PROJECT",
+        "GOOGLE_GENAI_USE_VERTEXAI",
+        "HARNESS_BACKGROUND_NOISE_VOLUME",
+        "HARNESS_CALLER_BARGE_IN_RATE",
+        "HARNESS_OBSERVABILITY",
+        "LIVEKIT_URL",
+        "SIMULATOR_LLM_FALLBACK_MODELS",
+        "SIMULATOR_LLM_MODEL",
+        "SIMULATOR_LLM_PROVIDER",
+        "SIMULATOR_LLM_THINKING",
+        "SIMULATOR_STT_MODEL",
+        "SIMULATOR_STT_PROVIDER",
+        "SIMULATOR_TTS_MODEL",
+        "SIMULATOR_TTS_PROVIDER",
+    }
+)
 
-    The simulator and gateway channels hold platform configuration too (model names, the Observe
-    project): replacing those in spans would mask every LLM span's model and send the job's traces
-    to a project named "***". ``also`` names secrets whose alias doesn't say so, such as a PIN.
+
+def declared_values(
+    values: Mapping[str, str], settings: frozenset[str] = NON_SECRET_SETTINGS
+) -> tuple[str, ...]:
+    """Every value in one alias -> value source, except those under a name in ``settings``.
+
+    Call it once per source and join the tuples. Merging the sources first would let one value
+    overwrite another under the same name, and the overwritten one would never be masked.
     """
     return tuple(
-        str(value)
-        for alias, value in values.items()
-        if value and (_named_secret(str(alias)) or alias in also)
+        str(value) for alias, value in values.items() if value and alias not in settings
     )
 
 

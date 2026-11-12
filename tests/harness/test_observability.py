@@ -927,11 +927,28 @@ GATEWAY_CREDENTIALS = {
 }
 
 
-def test_credential_values_keeps_the_aliases_that_name_a_credential():
-    assert set(observability.credential_values(GATEWAY_CHANNEL)) == GATEWAY_CREDENTIALS
-    assert observability.credential_values(
-        {"A_TOKEN": "", "B_SECRET": "kept-value"}
-    ) == ("kept-value",)
+def test_declared_values_keeps_every_value_but_the_listed_settings():
+    channel = {
+        **GATEWAY_CHANNEL,
+        "SOME_NEW_SETTING": "unlisted-value-1234",
+        "EMPTY": "",
+    }
+
+    assert set(observability.declared_values(channel)) == GATEWAY_CREDENTIALS | {
+        "unlisted-value-1234"
+    }
+    assert observability.declared_values({"A": "x-value-123"}, frozenset({"A"})) == ()
+
+
+def test_the_non_secret_settings_are_simulator_aliases_and_none_names_a_credential():
+    from fi.alk.harness.hosted_entrypoint import _SIMULATOR_SECRET_ALIASES
+
+    assert observability.NON_SECRET_SETTINGS <= _SIMULATOR_SECRET_ALIASES
+    assert not [
+        name
+        for name in observability.NON_SECRET_SETTINGS
+        if observability._named_secret(name)
+    ]
 
 
 def _platform_span():
@@ -965,7 +982,7 @@ def _assert_platform_config_survives(secret_values):
 
 
 def test_the_gateways_default_values_leave_models_and_project_unchanged():
-    _assert_platform_config_survives(observability.credential_values(GATEWAY_CHANNEL))
+    _assert_platform_config_survives(observability.declared_values(GATEWAY_CHANNEL))
 
 
 def test_declared_values_never_touch_the_resource():

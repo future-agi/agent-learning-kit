@@ -5517,7 +5517,7 @@ def test_the_activity_printed_to_stdout_loses_url_credentials(capsys, monkeypatc
     assert "The agent posts to https://hooks.example/v1 after." in printed
 
 
-def test_the_job_hands_spans_the_customers_values_whole_and_only_the_gateways_credentials(
+def test_the_job_masks_every_value_in_spans_but_the_platform_settings(
     monkeypatch,
 ) -> None:
     from opentelemetry.sdk.resources import Resource
@@ -5535,14 +5535,24 @@ def test_the_job_hands_spans_the_customers_values_whole_and_only_the_gateways_cr
         ]
     )
     harness.deps.secrets_path.write_text(
-        json.dumps({"CUSTOMER_DSN": "customer-dsn-value-1234567890"}), encoding="utf-8"
+        json.dumps(
+            {
+                "CUSTOMER_DSN": "customer-dsn-value-1234567890",
+                "OPENAI_API_KEY": "sk-customer-FAKE-AAAA2222",
+                "GOOGLE_CLOUD_PROJECT": "cust-gcp-proj-fake-778899",
+            }
+        ),
+        encoding="utf-8",
     )
     harness.deps.simulator_secrets_path = harness.tmp / "simulator-secrets.json"
-    # The gateway's default values: credentials among models and the Observe project.
+    # The gateway's values: credentials among models and the Observe project, one name the customer
+    # also declared, and a value under a name not on the settings list.
     harness.deps.simulator_secrets_path.write_text(
         json.dumps(
             {
                 "AGENTCC_API_KEY": "agentcc-key-1234567890",
+                "OPENAI_API_KEY": "sk-platform-FAKE-BBBB2222",
+                "SIP_OUTBOUND_FROM_NUMBER": "+15550109988",
                 "ALK_HARNESS_MODEL": "vertex_ai/claude-sonnet-4-5",
                 "SIMULATOR_LLM_MODEL": "gemini-2.5-flash-lite",
                 "FI_HARNESS_PROJECT": "hosted-harness-prod",
@@ -5572,7 +5582,9 @@ def test_the_job_hands_spans_the_customers_values_whole_and_only_the_gateways_cr
         attributes={
             "gen_ai.request.model": "vertex_ai/claude-sonnet-4-5",
             "llm.model_name": "gemini-2.5-flash-lite",
-            "input.value": "a agentcc-key-1234567890 b customer-dsn-value-1234567890",
+            "input.value": "a agentcc-key-1234567890 b customer-dsn-value-1234567890 "
+            "c sk-customer-FAKE-AAAA2222 d cust-gcp-proj-fake-778899 "
+            "e sk-platform-FAKE-BBBB2222 f +15550109988",
         },
     ):
         pass
@@ -5583,4 +5595,4 @@ def test_the_job_hands_spans_the_customers_values_whole_and_only_the_gateways_cr
     assert copy.attributes["gen_ai.request.model"] == "vertex_ai/claude-sonnet-4-5"
     assert copy.attributes["llm.model_name"] == "gemini-2.5-flash-lite"
     assert copy.resource.attributes["project_name"] == "hosted-harness-prod"
-    assert copy.attributes["input.value"] == "a *** b ***"
+    assert copy.attributes["input.value"] == "a *** b *** c *** d *** e *** f ***"

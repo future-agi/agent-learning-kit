@@ -340,7 +340,7 @@ def test_good_subfolder_continues(tmp_path, monkeypatch):
     assert not (tmp_path / "authoring" / "failure.json").exists()
 
 
-def test_authoring_hands_spans_the_customers_values_whole_and_only_the_gateways_credentials(
+def test_authoring_masks_every_value_in_spans_but_the_platform_settings(
     tmp_path, monkeypatch
 ) -> None:
     from unittest import mock
@@ -386,6 +386,7 @@ def test_authoring_hands_spans_the_customers_values_whole_and_only_the_gateways_
                 "GOOGLE_CLOUD_PROJECT": "platform-project-1",
                 "ALK_CAB_GUEST_POC_PIN": "4821",
                 "ALK_CAB_GUEST_POC_TARGET_PHONE_NUMBER": "+15550104477",
+                "SOME_NEW_GATEWAY_VALUE": "unlisted-gateway-value-42",
             }
         ),
         encoding="utf-8",
@@ -423,7 +424,7 @@ def test_authoring_hands_spans_the_customers_values_whole_and_only_the_gateways_
             "c customer-dsn-value-1234567890 d sk-customer-FAKE-AAAA2222 "
             "e cust-own-agentcc-key-fake-123 f cust-gcp-proj-fake-778899 "
             "g fi-observe-export-key-1234567890 h sk-platform-FAKE-BBBB2222 "
-            "i pin 4821. j +15550104477 k 14821",
+            "i pin 4821. j +15550104477 k 14821 l unlisted-gateway-value-42",
         },
     ):
         pass
@@ -435,5 +436,5 @@ def test_authoring_hands_spans_the_customers_values_whole_and_only_the_gateways_
     assert copy.attributes["llm.model_name"] == "gemini-2.5-flash-lite"
     assert copy.resource.attributes["project_name"] == "hosted-harness-prod"
     assert copy.attributes["input.value"] == (
-        "a *** b *** c *** d *** e *** f *** g *** h *** i pin ***. j *** k 14821"
+        "a *** b *** c *** d *** e *** f *** g *** h *** i pin ***. j *** k 14821 l ***"
     )
