@@ -1312,7 +1312,10 @@ def fault_notices(
             notices.append({**base, "code": "fault_not_applied",
                             "message": f"The {mode} fault on call {on_call} of {action} could not be applied: {unreachable}."})
             continue
-        rows = [row for row in log or [] if _same_action(action, str(row.get("name") or ""))]
+        rows = [
+            row for row in log or []
+            if _same_action(action, str(row.get("name") or "")) or _same_action(action, str(row.get("agent_tool") or ""))
+        ]
         if any(_fault_applied(row) for row in rows):
             continue
         made = sum(1 for call in calls if _same_action(action, call.name))

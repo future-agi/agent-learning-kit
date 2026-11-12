@@ -458,7 +458,11 @@ class WorldDoor:
             faults = [one for one in self.faults() or [] if isinstance(one, dict)]
         except Exception:  # noqa: BLE001 - unreadable faults are no faults
             return []
-        names = (call.action, call.name) if self.faults_by_tool else (call.action,)
+        names = {call.action, call.name} if self.faults_by_tool else {call.action}
+        if call.tool:
+            # A route's sealed tool is the agent's own name for it: a fault naming the tool holds its call on every
+            # surface, a worker's channel included.
+            names.add(call.tool)
         return [one for one in faults if one.get("action") in names]
 
     def _fault(self, call: ToolCall, named: list[dict[str, Any]]) -> dict[str, Any] | None:

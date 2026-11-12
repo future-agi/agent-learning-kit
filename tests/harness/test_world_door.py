@@ -141,6 +141,19 @@ def test_a_scenario_s_fault_applies_to_the_agent_s_named_call_only(mode, ran):
     assert door.enter(ToolCall(action="crm.update", name="update")).fault is None
 
 
+def test_a_fault_naming_the_tool_holds_its_call_through_the_proxy_and_a_worker_s_channel():
+    executor = _Executor()
+    door = _door(
+        executor,
+        faults=[{"action": "get_order", "mode": "timeout_before_commit", "on_call": 1, "delay_seconds": 0}],
+    )
+    # Over HTTP the call is named by its route; its sealed tool is `get_order`.
+    first = door.enter(ToolCall(action="orders.get", name="get", tool="get_order", worker="order_lookup"))
+    second = door.enter(ToolCall(action="orders.get", name="get", tool="get_order", worker="order_lookup"))
+    assert first.fault is not None and second.fault is None
+    assert len(executor.ran) == 1
+
+
 def test_a_fault_is_never_guessed_onto_every_call_when_the_log_cannot_count_the_calls():
     class _Uncountable(MemoryLog):
         def agent_calls(self, name):
