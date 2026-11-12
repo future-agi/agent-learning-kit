@@ -2,8 +2,9 @@
 
 The sandbox copies this file into a customer process's world directory beside a
 ``sitecustomize.py`` that calls :func:`install`, so it runs inside the CUSTOMER's interpreter,
-which has no ``fi``. It therefore uses the standard library only, imports nothing of
-OpenTelemetry itself, and is written for Python 3.9 syntax.
+which has no ``fi``. It therefore uses the standard library only and is written for Python 3.9
+syntax. It imports OpenTelemetry only inside a process that already uses it, to give a span asked
+for before any provider was set the sandbox's provider.
 
 Why it exists: OpenTelemetry's own environment parsing reaches ``Resource.create`` only. Code
 that builds ``Resource(attributes=...)`` directly, or that names its own project, never sees
@@ -21,6 +22,13 @@ When the sandbox names a call file, every span the process starts is also stampe
 the call the sandbox is running at that moment. The stamp rides on the SDK tracer rather than a
 span processor, because a provider subclass such as traceAI's may drop processors it did not add.
 
+When the sandbox names a tool trace, each tool span the process ends is written to it with the
+agent that made the call, read from the agent and tool spans any framework instrumentation marks,
+so a multi-agent app is observed without changes to it; ``simulation_worker_events``, beside this file, turns the
+spans into trace lines. With the observe switch on, the traceAI
+instrumentor the build installed for each framework is turned on when that framework is imported,
+unless the process instruments it itself.
+
 It never reads or writes the customer's files and never imports their modules on its own. It does
 run the next ``sitecustomize`` on the path, which is theirs, so a repository's own startup hook is
 not lost behind this one; a failure of that hook is reported as Python reports it, never as ours.
@@ -32,6 +40,7 @@ from __future__ import annotations
 
 import collections.abc
 import functools
+import importlib
 import importlib.machinery
 import importlib.util
 import inspect
@@ -69,7 +78,7 @@ _PATCHES: dict = {}
 
 
 def _write(outcome: str) -> None:
-    """Write the one fixed stderr line. ``failed`` at most once, so a broken merge on every
+    """Write one fixed-form stderr status line. ``failed`` at most once, so a broken merge on every
     resource the process builds cannot flood its log."""
     global _failed_written
     try:
@@ -361,22 +370,160 @@ def _restamp_at_end(span, call: str) -> None:
     span.end = end
 
 
-def _patch_tracer(module, path: str) -> None:
+_TOOL_TRACE = "HARNESS_TOOL_TRACE"
+
+
+def _events():
+    """The worker-event module beside this one: a sibling in the customer's interpreter, from the package in ours."""
+    name = "simulation_worker_events"
+    return importlib.import_module(f"{__package__}.{name}" if __package__ else name)
+
+
+def _patch_autogen_tools(module, path) -> None:
+    _events()._patch_autogen_tools(module, path)
+
+
+_OBSERVE = "ALK_OBSERVE_FRAMEWORKS"
+# A framework's top module, and the traceAI instrumentor that marks its agent and tool spans.
+# The build installs the instrumentors beside the frameworks it finds installed; one that is
+# missing or fails leaves that framework untraced, never the process stopped.
+_INSTRUMENTORS = {
+    "agents": ("traceai_openai_agents", "OpenAIAgentsInstrumentor"),
+    "langchain_core": ("traceai_langchain", "LangChainInstrumentor"),
+    "crewai": ("traceai_crewai", "CrewAIInstrumentor"),
+    "google.adk": ("traceai_google_adk", "GoogleADKInstrumentor"),
+    "autogen_agentchat": ("traceai_autogen", "AutogenInstrumentor"),
+    "smolagents": ("traceai_smolagents", "SmolagentsInstrumentor"),
+    "claude_agent_sdk": ("traceai_claude_agent_sdk", "ClaudeAgentInstrumentor"),
+    "llama_index.core": ("traceai_llamaindex", "LlamaIndexInstrumentor"),
+    "pydantic_ai": ("traceai_pydantic_ai", "PydanticAIInstrumentor"),
+    "strands": ("traceai_strands", "StrandsInstrumentor"),
+}
+
+
+@functools.lru_cache(maxsize=1)
+def _sandbox_provider():
+    """A provider for a process that set none, exporting where the sandbox names."""
+    from opentelemetry.sdk.trace import TracerProvider
+
+    provider = TracerProvider()
+    if os.environ.get(_TRACES_ENDPOINT) or os.environ.get(_GENERIC_ENDPOINT):
+        try:
+            from opentelemetry.exporter.otlp.proto.http.trace_exporter import (
+                OTLPSpanExporter,
+            )
+            from opentelemetry.sdk.trace.export import BatchSpanProcessor
+
+            provider.add_span_processor(BatchSpanProcessor(OTLPSpanExporter()))
+        except Exception:
+            pass
+    return provider
+
+
+def _patch_proxy(module) -> None:
+    """Serve a span asked for before any provider is set from ours, leaving the process free to set its own."""
+    cls = module.ProxyTracer
+    for method in ("start_span", "start_as_current_span"):
+        original = getattr(cls, method)
+        if getattr(original, _PATCHED, False):
+            continue
+
+        def wrapper(self, *args, __original=original, __method=method, **kwargs):
+            try:
+                if getattr(module, "_TRACER_PROVIDER", None) is None:
+                    tracer = _sandbox_provider().get_tracer(
+                        self._instrumenting_module_name
+                    )
+                    return getattr(tracer, __method)(*args, **kwargs)
+            except Exception:
+                pass
+            return __original(self, *args, **kwargs)
+
+        functools.update_wrapper(wrapper, original)
+        setattr(wrapper, _PATCHED, True)
+        setattr(cls, method, wrapper)
+
+
+def _instrument(module, target) -> None:
+    """Turn on the framework's instrumentor unless the process already has; it reads the global provider per span."""
+    name, attribute = target
+    if name in sys.modules:
+        # The process imports the instrumentor itself, and this framework import is part of
+        # that: it instruments with its own settings.
+        return
+    try:
+        instrumentor = getattr(importlib.import_module(name), attribute)()
+    except ImportError:
+        # The build could not install it: this framework's calls go unobserved, and the log says so.
+        _write("unobserved " + module.__name__ + ", its instrumentor is not installed")
+        return
+    if getattr(instrumentor, "is_instrumented_by_opentelemetry", False):
+        return
+    instrumentor.instrument()
+    _yield_to_process(type(instrumentor))
+    if module.__name__ == "agents":
+        _keep_agents_processors()
+
+
+def _yield_to_process(cls) -> None:
+    """Let the process instrument again with its own settings, which the instrumentor would otherwise ignore."""
+    original = cls.instrument
+    if getattr(original, _PATCHED, False):
+        return
+
+    def instrument(self, *args, __original=original, **kwargs):
+        if kwargs and getattr(self, "is_instrumented_by_opentelemetry", False):
+            self.uninstrument()
+        return __original(self, *args, **kwargs)
+
+    functools.update_wrapper(instrument, original)
+    setattr(instrument, _PATCHED, True)
+    cls.instrument = instrument
+
+
+def _keep_agents_processors() -> None:
+    """Keep our processor when an OpenAI Agents app replaces its trace processors, unless the new list has its kind."""
+    from agents.tracing import get_trace_provider, provider
+
+    ours = tuple(get_trace_provider()._multi_processor._processors)
+    cls = provider.SynchronousMultiTracingProcessor
+    original = cls.set_processors
+
+    def wrapper(self, processors, __original=original):
+        kinds = {type(one) for one in processors}
+        return __original(
+            self, [*processors, *(one for one in ours if type(one) not in kinds)]
+        )
+
+    functools.update_wrapper(wrapper, original)
+    cls.set_processors = wrapper
+
+
+def _patch_tracer(module, path, tool_trace) -> None:
     cls = module.Tracer
     original = cls.start_span
     if getattr(original, _PATCHED, False):
         return
 
-    call_file = _CallFile(path)
+    call_file = _CallFile(path) if path else None
+    tools = None
+    if tool_trace:
+        try:
+            tools = _events()._ToolSpans(tool_trace)
+        except ImportError:
+            # The call stamp still lands; only the tool trace goes unwritten.
+            _write("failed")
 
     @functools.wraps(original)
     def wrapper(self, *args, **kwargs):
         span = original(self, *args, **kwargs)
         try:
-            call = call_file.current()
+            call = call_file.current() if call_file is not None else None
             if call and span.is_recording():
                 span.set_attribute(_CALL_KEY, call)
                 _restamp_at_end(span, call)
+            if tools is not None and span.is_recording():
+                tools.started(span)
         except Exception:
             pass
         return span
@@ -455,8 +602,11 @@ def install() -> None:
         if pairs is not None:
             _PATCHES[_RESOURCES] = functools.partial(_patch, pairs=pairs)
         call_file = os.environ.get(_CALL_FILE)
-        if call_file:
-            _PATCHES[_TRACE] = functools.partial(_patch_tracer, path=call_file)
+        tool_trace = os.environ.get(_TOOL_TRACE)
+        if call_file or tool_trace:
+            _PATCHES[_TRACE] = functools.partial(
+                _patch_tracer, path=call_file, tool_trace=tool_trace
+            )
         ingest = None
         try:
             ingest = _read_ingest()
@@ -467,6 +617,13 @@ def install() -> None:
                 _PATCHES[name] = functools.partial(
                     _patch_exporter, ingest=ingest, lower=lower
                 )
+        if os.environ.get(_OBSERVE) == "1" and tool_trace:
+            _PATCHES["opentelemetry.trace"] = _patch_proxy
+            for name, target in _INSTRUMENTORS.items():
+                _PATCHES.setdefault(name, functools.partial(_instrument, target=target))
+            _PATCHES["autogen_core.tools"] = functools.partial(
+                _patch_autogen_tools, path=tool_trace
+            )
         if not _PATCHES:
             return
         # The finder goes in first so that a failed patch of an already imported module still

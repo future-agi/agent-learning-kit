@@ -36,7 +36,7 @@ from typing import TYPE_CHECKING, Any
 
 from ..contract import AgentContract
 from ..scenario import Scenario
-from ..world.runtime import Call, tool_call_attribution
+from ..world.runtime import Call, runtime_ids, tool_call_attribution
 from .grade import Judgement, Result
 
 if TYPE_CHECKING:
@@ -997,6 +997,8 @@ def _semantic_calls(path: Path, *, contract: AgentContract | None = None) -> lis
             refused=failed,
             error=str(output) if failed else "",
             **tool_call_attribution(record),
+            runtime_ids=runtime_ids(record),
+            handoff=record.get("kind") == "handoff",
             at=float(record.get("at") or 0.0),
         )
         # A harness-aware worker may mirror a local state-machine action to the world for

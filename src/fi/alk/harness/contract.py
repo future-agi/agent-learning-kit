@@ -200,6 +200,19 @@ class ToolEntry(BaseModel):
     notes: str = ""
 
 
+class DeclaredWorker(BaseModel):
+    """An agent the app hands work to, as its source declares it.
+
+    Declared is not observed: a run shows whether the worker actually took part, from the spans the app exports.
+    ``name`` is the name the app gives the agent, because that is the name its spans carry.
+    """
+
+    id: str
+    name: str = ""
+    # The contract tools this worker holds, by name.
+    tools: list[str] = Field(default_factory=list)
+
+
 class PromptSource(BaseModel):
     """Lines of the agent's source that hold part of its prompt."""
 
@@ -1127,6 +1140,8 @@ class AgentContract(BaseModel):
     system_prompt_from: list[PromptSource] = Field(default_factory=list)
     hard_constraints: list[str] = Field(default_factory=list)
     tools: list[ToolSpec] = Field(default_factory=list)
+    # Empty for an agent that hands no work to other agents.
+    workers: list[DeclaredWorker] = Field(default_factory=list)
     data_schema: dict[str, Any] = Field(default_factory=dict)
     base_environment: dict[str, Any] = Field(default_factory=dict)
     # What the environment stage has to build before any tool can be answered.
@@ -1158,6 +1173,21 @@ class AgentContract(BaseModel):
     # than blended in, and whoever reads it later can tell the two apart.
     amendments: list[str] = Field(default_factory=list)
     instrumentation: str = "none"
+
+    @model_validator(mode="after")
+    def _resolvable_workers(self) -> AgentContract:
+        # A worker holds only tools the contract has; its id is checked by `validate_contract`.
+        self.workers = [
+            worker.model_copy(
+                update={
+                    "tools": [
+                        tool for tool in worker.tools if tool in self.tool_names()
+                    ]
+                }
+            )
+            for worker in self.workers
+        ]
+        return self
 
     def tool_names(self) -> set[str]:
         return {tool.name for tool in self.tools}
@@ -1258,6 +1288,14 @@ class AgentContract(BaseModel):
                     for one in self.dependencies
                 )
                 + "\nThe agent's code is never edited; the environment must match its existing seam."
+            )
+        if self.workers:
+            parts.append(
+                "WORKERS (agents this one hands work to, and the tools each holds):\n  - "
+                + "\n  - ".join(
+                    f"{one.id} ({one.name or one.id}): {', '.join(one.tools) or 'no tools'}"
+                    for one in self.workers
+                )
             )
         if self.real_use_cases:
             # Every one of them. A scenario writer covers what it is shown, so a truncated
@@ -1475,4 +1513,17 @@ def validate_contract(contract: AgentContract) -> list[str]:
     duplicates = sorted({name for name in names if names.count(name) > 1})
     if duplicates:
         problems.append(f"duplicate-tool-names:{','.join(duplicates)}")
+    for index, worker in enumerate(contract.workers):
+        if not worker.id.strip():
+            problems.append(
+                f"worker[{index}]:no-id: give this worker the id the agent's source uses for it, "
+                "one that no other worker has."
+            )
+    worker_ids = [worker.id for worker in contract.workers if worker.id.strip()]
+    repeated = sorted({one for one in worker_ids if worker_ids.count(one) > 1})
+    if repeated:
+        problems.append(
+            f"duplicate-worker-ids:{','.join(repeated)}: each worker is one agent of the app: "
+            "merge the entries that are the same agent, or give each its own id."
+        )
     return problems
