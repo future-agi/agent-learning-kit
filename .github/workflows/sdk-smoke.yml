@@ -102,6 +102,7 @@ jobs:
           tests/harness/test_scan_walk.py
           tests/harness/test_scan_folders.py
           tests/harness/test_scan_document.py
+          tests/harness/test_claude_agent_sdk_reference.py
           tests/harness/test_scan_ai.py
           tests/harness/test_agent_scan.py
           tests/harness/test_authoring_entrypoint_find_agents.py
