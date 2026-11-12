@@ -967,6 +967,319 @@ def test_load_simulator_secret_values_is_allowlisted_and_destructive(
     assert not path.exists()
 
 
+_VALUES_A_HOSTED_RUN_DOES_NOT_USE = {
+    "FI_API_KEY": "unused-api-key-value",
+    "FI_BASE_URL": "https://unused.example.test",
+    "FI_HARNESS_PROJECT": "unused-project-name",
+    "FI_SECRET_KEY": "unused-secret-key-value",
+}
+_NAMES_A_HOSTED_RUN_DOES_NOT_USE = tuple(_VALUES_A_HOSTED_RUN_DOES_NOT_USE)
+
+# Every name a hosted run reads from the simulator values document, listed by hand so that
+# dropping one from the loader is caught here.
+_EVERY_VALUE_A_HOSTED_RUN_USES = {
+    "AGENTCC_API_KEY": "gateway-key-placeholder",
+    "AGENTCC_BASE_URL": "https://gateway.example.test",
+    "ALK_BACKGROUND_NOISE": "1",
+    "ALK_BACKGROUND_NOISE_CATALOG": "[]",
+    "ALK_GOOGLE_ADK_EXPLICITLY_APPROVED_BY_USER": "1",
+    "ALK_HARNESS": "harness-backend-name",
+    "ALK_HARNESS_MODEL": "gemini-3.7-flash",
+    "ALK_HARNESS_THINKING": "disabled",
+    "ALK_JUDGE_MODE": "separate",
+    "ALK_VERTEX_LOCATION": "global",
+    "ALK_VOICEMAIL_SCENARIOS": "1",
+    "CARTESIA_API_KEY": "speech-out-placeholder",
+    "DEEPGRAM_API_KEY": "speech-in-placeholder",
+    "GEMINI_API_KEY": "model-placeholder",
+    "GOOGLE_API_KEY": "google-placeholder",
+    "GOOGLE_APPLICATION_CREDENTIALS": "/run/placeholder/google.json",
+    "GOOGLE_CLOUD_LOCATION": "us-central1",
+    "GOOGLE_CLOUD_PROJECT": "platform-project",
+    "GOOGLE_GENAI_USE_VERTEXAI": "false",
+    "HARNESS_BACKGROUND_NOISE_VOLUME": "0.3",
+    "HARNESS_CALLER_BARGE_IN_RATE": "0.2",
+    "HARNESS_OBSERVABILITY": "off",
+    "LIVEKIT_API_KEY": "livekit-placeholder",
+    "LIVEKIT_API_SECRET": "livekit-secret-placeholder",
+    "LIVEKIT_URL": "wss://livekit.example.test",
+    "OPENAI_API_KEY": "openai-placeholder",
+    "SIMULATOR_LLM_FALLBACK_MODELS": "gemini-3.6-flash",
+    "SIMULATOR_LLM_MODEL": "gemini-3.7-flash",
+    "SIMULATOR_LLM_PROVIDER": "vertex",
+    "SIMULATOR_LLM_THINKING": "disabled",
+    "SIMULATOR_STT_MODEL": "speech-in-model",
+    "SIMULATOR_STT_PROVIDER": "deepgram",
+    "SIMULATOR_TTS_MODEL": "speech-out-model",
+    "SIMULATOR_TTS_PROVIDER": "cartesia",
+    "SIP_OUTBOUND_FROM_NUMBER": "+15550000000",
+    "SIP_OUTBOUND_TRUNK_ID": "trunk-placeholder",
+}
+
+_GATEWAY_VALUES = {
+    "AGENTCC_API_KEY": "gateway-key-placeholder",
+    "AGENTCC_BASE_URL": "https://gateway.example.test",
+}
+
+
+@contextlib.contextmanager
+def _process_environment_without(*names: str):
+    """The process environment with `names` removed, restored afterwards.
+
+    `run_job` writes the loaded simulator values into the process environment, so every run here
+    happens inside this block and leaves nothing behind for later tests.
+    """
+    with mock.patch.dict(os.environ):
+        for name in names:
+            os.environ.pop(name, None)
+        yield
+
+
+def _with_simulator_values(harness: Harness, values: dict[str, str]) -> None:
+    harness.deps.simulator_secrets_path = harness.tmp / "simulator-secrets.json"
+    harness.deps.simulator_secrets_path.write_text(json.dumps(values), encoding="utf-8")
+
+
+def _record_tracing_registrations(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
+    """Stand in for the tracing package and record every attempt to start tracing.
+
+    The stand-in offers everything the tracing module imports, so an attempt reaches `register`
+    rather than stopping at an import error, and `register` refuses so nothing is exported.
+    """
+    import sys
+    import types
+
+    registered: list[dict[str, Any]] = []
+
+    def register(**kwargs: Any) -> Any:
+        registered.append(kwargs)
+        raise RuntimeError("tracing is not available in this test")
+
+    package = types.ModuleType("fi_instrumentation")
+    package.register = register
+    for name in ("FITracer", "using_metadata", "using_session", "using_tags", "using_user"):
+        setattr(package, name, lambda *args, **kwargs: None)
+    kinds = types.ModuleType("fi_instrumentation.fi_types")
+    kinds.ProjectType = SimpleNamespace(OBSERVE="observe")
+    package.fi_types = kinds
+    monkeypatch.setitem(sys.modules, "fi_instrumentation", package)
+    monkeypatch.setitem(sys.modules, "fi_instrumentation.fi_types", kinds)
+    return registered
+
+
+def test_load_simulator_secret_values_keeps_only_the_names_a_hosted_run_uses(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "simulator-secrets.json"
+    path.write_text(
+        json.dumps(
+            {
+                **_EVERY_VALUE_A_HOSTED_RUN_USES,
+                **_VALUES_A_HOSTED_RUN_DOES_NOT_USE,
+                "UNRELATED": "must-not-load",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    values = he.load_simulator_secret_values(path)
+
+    assert values == _EVERY_VALUE_A_HOSTED_RUN_USES
+    assert not set(_NAMES_A_HOSTED_RUN_DOES_NOT_USE) & set(values)
+    assert not path.exists()
+
+
+def test_load_simulator_secret_values_still_loads_every_name_a_hosted_run_uses(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "simulator-secrets.json"
+    path.write_text(json.dumps(_EVERY_VALUE_A_HOSTED_RUN_USES), encoding="utf-8")
+
+    assert he.load_simulator_secret_values(path) == _EVERY_VALUE_A_HOSTED_RUN_USES
+    assert not path.exists()
+
+
+def test_hosted_run_environment_leaves_out_names_the_run_does_not_use() -> None:
+    """Loading the simulator values document adds none of the names a hosted run does not use to
+    the process environment, and still adds the ones it does use."""
+    harness = _build_harness(scenarios=[], instances=1)
+    _with_simulator_values(
+        harness,
+        {
+            **_GATEWAY_VALUES,
+            "HARNESS_OBSERVABILITY": "off",
+            **_VALUES_A_HOSTED_RUN_DOES_NOT_USE,
+        },
+    )
+
+    with _process_environment_without(
+        *_NAMES_A_HOSTED_RUN_DOES_NOT_USE, *_GATEWAY_VALUES, "HARNESS_OBSERVABILITY"
+    ):
+        code = _run(harness)
+        left_in_environment = sorted(
+            name for name in _NAMES_A_HOSTED_RUN_DOES_NOT_USE if name in os.environ
+        )
+        gateway = {name: os.environ.get(name) for name in _GATEWAY_VALUES}
+        tracing_switch = os.environ.get("HARNESS_OBSERVABILITY")
+
+    assert code == he.EXIT_OK
+    assert left_in_environment == []
+    assert gateway == _GATEWAY_VALUES
+    assert tracing_switch == "off"
+    assert not harness.deps.simulator_secrets_path.exists()
+
+
+def test_hosted_guest_stays_untraced_when_the_values_document_names_values_it_does_not_use(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from fi.alk.harness import observability
+
+    registered = _record_tracing_registrations(monkeypatch)
+    harness = _build_harness(scenarios=[], instances=1)
+    # No tracing switch at all: leaving these names out has to be enough on its own.
+    _with_simulator_values(
+        harness, {**_GATEWAY_VALUES, **_VALUES_A_HOSTED_RUN_DOES_NOT_USE}
+    )
+    observability.end()
+    try:
+        with _process_environment_without(
+            *_NAMES_A_HOSTED_RUN_DOES_NOT_USE, *_GATEWAY_VALUES, "HARNESS_OBSERVABILITY"
+        ):
+            code = _run(harness)
+            tracing_enabled = observability.enabled()
+    finally:
+        observability.end()
+
+    assert code == he.EXIT_OK
+    assert registered == []
+    assert tracing_enabled is False
+
+
+@pytest.mark.parametrize(
+    "document_names_them",
+    [True, False],
+    ids=["values-document-names-them", "values-document-omits-them"],
+)
+def test_hosted_run_judges_and_reports_without_the_names_it_does_not_use(
+    monkeypatch: pytest.MonkeyPatch, document_names_them: bool
+) -> None:
+    """A hosted run decides a judged sub-goal through the gateway and reports it, with none of the
+    names it does not use in its environment, whether or not the values document carries them."""
+    from fi.alk.harness import judge as judge_module
+
+    explanation = "The agent noted what the caller asked for and confirmed it back."
+    document = {
+        **_GATEWAY_VALUES,
+        "ALK_HARNESS_MODEL": "gemini-3.7-flash",
+        # One sub-goal, judged on its own, so a single gateway reply decides it.
+        "ALK_JUDGE_MODE": "separate",
+        "HARNESS_OBSERVABILITY": "off",
+    }
+    if document_names_them:
+        document.update(_VALUES_A_HOSTED_RUN_DOES_NOT_USE)
+    scenario = FakeScenario(
+        "judged",
+        "platform-judged",
+        [
+            FakeSubGoal(
+                "request_noted",
+                True,
+                judged="The agent notes what the caller asks for.",
+            )
+        ],
+    )
+    harness = _build_harness(scenarios=[scenario], instances=1)
+    _with_simulator_values(harness, document)
+    gateway_calls: list[dict[str, Any]] = []
+
+    class _GatewayReply:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict[str, Any]:
+            decide = {
+                "verdict": "pass",
+                "explanation": explanation,
+                "evidence": "the action the agent took",
+            }
+            return {
+                "choices": [
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "tool_calls": [
+                                {
+                                    "id": "decide-1",
+                                    "type": "function",
+                                    "function": {
+                                        "name": "decide",
+                                        "arguments": json.dumps(decide),
+                                    },
+                                }
+                            ],
+                        }
+                    }
+                ],
+                "usage": {"prompt_tokens": 10, "completion_tokens": 5},
+            }
+
+    def _post(url: str, **kwargs: Any) -> _GatewayReply:
+        gateway_calls.append(
+            {
+                "url": url,
+                "authorization": kwargs["headers"].get("Authorization"),
+                "model": kwargs["json"]["model"],
+                "names_in_environment": sorted(
+                    name for name in _NAMES_A_HOSTED_RUN_DOES_NOT_USE if name in os.environ
+                ),
+            }
+        )
+        return _GatewayReply()
+
+    monkeypatch.setattr(judge_module.requests, "post", _post)
+
+    with _process_environment_without(
+        *_NAMES_A_HOSTED_RUN_DOES_NOT_USE,
+        *document,
+        # These would route the judge somewhere other than the gateway values above.
+        "ALK_CLAUDE_GATEWAY_URL",
+        "ALK_CLAUDE_GATEWAY_API_KEY",
+        "AGENTCC_CLAUDE_MODEL_ALIAS",
+        judge_module.JUDGE_MODEL_ALIAS,
+    ):
+        code = _run(harness)
+        left_in_environment = sorted(
+            name for name in _NAMES_A_HOSTED_RUN_DOES_NOT_USE if name in os.environ
+        )
+
+    assert code == he.EXIT_OK
+    assert left_in_environment == []
+    assert gateway_calls == [
+        {
+            "url": "https://gateway.example.test/v1/chat/completions",
+            "authorization": "Bearer gateway-key-placeholder",
+            "model": "gemini-3.7-flash",
+            "names_in_environment": [],
+        }
+    ]
+
+    terminals = harness.transport.terminal_events()
+    assert len(terminals) == 1
+    assert terminals[0]["payload"]["stage"] == "completed"
+    assert terminals[0]["payload"]["scenario_counts"] == {
+        "passed": 1,
+        "failed": 0,
+        "errored": 0,
+        "skipped": 0,
+    }
+    receipt = harness.transport.receipts[("job-1", "judged")]
+    assert receipt["status"] == "passed"
+    assert receipt["sub_goals"] == [
+        {"name": "request_noted", "held": True, "reason": explanation, "judged": True}
+    ]
+    assert not harness.deps.simulator_secrets_path.exists()
+
+
 def test_peek_target_provider_secret_values_filters_by_purpose_and_keeps_the_alias() -> (
     None
 ):
