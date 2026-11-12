@@ -1353,41 +1353,67 @@ _IMPORT_LINE_NAME = re.compile(r"[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*")
 _FROM_LINE = re.compile(r"from[ \t]+(\.*)[ \t]*([A-Za-z_][\w.]*)?[ \t]+import\b(.*)", re.DOTALL)
 
 
+_COMPOUND_START = re.compile(
+    r"(?:if|elif|else|for|while|try|except|finally|with|async|def|class|match|case)\b"
+)
+_MOST_COLONS_TRIED = 8
+
+
+def _statements(code: str) -> list[str]:
+    """The pieces of one source line (its comment already cut) a statement can start at: each
+    ``;`` segment, and for a segment that opens a compound statement (``if True: import x``) the
+    text after each of its first few ``:``. A piece that is no import is skipped by the caller.
+    A line search, so a ``;`` or ``:`` inside a string splits it too, which only adds a candidate."""
+    pieces: list[str] = []
+    for segment in code.split(";"):
+        segment = segment.strip()
+        pieces.append(segment)
+        if _COMPOUND_START.match(segment):
+            at = -1
+            for _ in range(_MOST_COLONS_TRIED):
+                at = segment.find(":", at + 1)
+                if at < 0:
+                    break
+                pieces.append(segment[at + 1 :].strip())
+    return pieces
+
+
 def _import_lines(content: str) -> list[tuple[int, str]]:
     """The names a line search finds ``content`` importing, each with its level, in the shape
     ``_python_imports`` gives: ``import a.b, c`` and ``from .x import y`` / ``from a.b import c``
-    at the start of a line (indented or not), whatever follows a ``#`` or a ``;`` ignored. A
+    at the start of a line (indented or not), a ``;`` segment, or the text after a compound
+    statement's ``:``, whatever follows a ``#`` ignored. A
     parenthesised list is read across its lines. No parse, so no budget: the caller charges the
     bytes to the walk's search total.
 
     It misses an import built at run time (``importlib.import_module(name)``, ``__import__``), one
-    inside a multi-line string or after a ``;``, and a name only a decoded codec spells.
+    inside a multi-line string, and a name only a decoded codec spells.
     """
     names: list[tuple[int, str]] = []
     lines = iter(content.split("\n"))
     for line in lines:
-        code = line.split("#", 1)[0].split(";", 1)[0].strip()
-        if code.startswith("import") and code[6:7] in (" ", "\t"):
-            for part in code[6:].split(","):
-                words = part.split()
-                if words and _IMPORT_LINE_NAME.fullmatch(words[0]):
-                    names.append((0, words[0]))
-        elif code.startswith("from") and (found := _FROM_LINE.fullmatch(code)):
-            dots, module, tail = found.groups()
-            level, module = len(dots), module or ""
-            if "(" in tail and ")" not in tail:
-                # The rest of a parenthesised list, up to the line that closes it.
-                for more in lines:
-                    more = more.split("#", 1)[0]
-                    tail += " " + more
-                    if ")" in more:
-                        break
-            if module:
-                names.append((level, module))
-            for part in tail.replace("(", " ").replace(")", " ").replace("\\", " ").split(","):
-                words = part.split()
-                if words and _IMPORT_LINE_NAME.fullmatch(words[0]):
-                    names.append((level, f"{module}.{words[0]}".lstrip(".")))
+        for code in _statements(line.split("#", 1)[0]):
+            if code.startswith("import") and code[6:7] in (" ", "\t"):
+                for part in code[6:].split(","):
+                    words = part.split()
+                    if words and _IMPORT_LINE_NAME.fullmatch(words[0]):
+                        names.append((0, words[0]))
+            elif code.startswith("from") and (found := _FROM_LINE.fullmatch(code)):
+                dots, module, tail = found.groups()
+                level, module = len(dots), module or ""
+                if "(" in tail and ")" not in tail:
+                    # The rest of a parenthesised list, up to the line that closes it.
+                    for more in lines:
+                        more = more.split("#", 1)[0]
+                        tail += " " + more
+                        if ")" in more:
+                            break
+                if module:
+                    names.append((level, module))
+                for part in tail.replace("(", " ").replace(")", " ").replace("\\", " ").split(","):
+                    words = part.split()
+                    if words and _IMPORT_LINE_NAME.fullmatch(words[0]):
+                        names.append((level, f"{module}.{words[0]}".lstrip(".")))
     return names
 
 
@@ -1658,16 +1684,25 @@ def imported_by_agent(
             # A regular code file over the read cap, in a walk that searches: its import lines are
             # searched, up to the cap for an unread file, where a parse would refuse it.
         largest = _LARGEST_UNREAD_SEARCHED if over_cap[0] else _MAX_FILE_BYTES
+        if over_cap[0]:
+            # Over the search's cap for a file: not opened, a limit cut as an unread file is.
+            try:
+                too_big = path.lstat().st_size > largest
+            except (OSError, ValueError):
+                continue
+            if too_big:
+                unread[0] = limited[0] = True
+                continue
         read += 1
         try:
             with path.open("rb") as handle:
                 raw = handle.read(largest + 1)
         except OSError:
             continue
+        bytes_read += len(raw)
         if len(raw) > largest:
             unread[0] = limited[0] = True
             continue  # Grew since it was looked at.
-        bytes_read += len(raw)
         # A .py in a codec that can spell a name in other bytes is read as Python reads it while
         # the walk's total lasts: decoded after its line ends, so hz's `~` before a CRLF joins.
         taken, decoded, encoding = (
@@ -1722,8 +1757,9 @@ def imported_by_agent(
             unread[0] |= budget is not None and budget.left < 0
             if any(refused):
                 # Not parsed for a limit, a syntax error being no limit: its import lines are
-                # searched instead, which is a cut only when the search has no room.
-                if search_room(len(raw)):
+                # searched instead (in a walk that searches), which is a cut only when the
+                # search has no room.
+                if searches and search_room(len(raw)):
                     results = [
                         _import_lines(reading) if skipped else result
                         for reading, result, skipped in zip(readings, results, refused)

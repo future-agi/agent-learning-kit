@@ -3921,6 +3921,8 @@ def test_the_walk_counts_its_parse_limit_in_bytes(tmp_path):
         repo, "agents/a", parse_limit=128 * 1024, search_total=0
     )
     assert shared in imported_by_agent(repo, "agents/a", parse_limit=256 * 1024)
+    # The refusal search is the save's alone: given no search total, the walk's answer is as it was.
+    assert shared not in imported_by_agent(repo, "agents/a", parse_limit=128 * 1024)
 
 
 def _nested_packages(repo: Path, depth: int) -> Path:

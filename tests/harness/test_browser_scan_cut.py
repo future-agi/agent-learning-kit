@@ -900,6 +900,49 @@ def test_targets_left_in_the_queue_by_the_import_limit_are_a_cut(tmp_path, monke
     assert browser_scan(repo, "agents/a") == ([], frozenset({"import_walk"}))
 
 
+@pytest.mark.parametrize(
+    "line",
+    ["x = 1; import common.util", "if True: import common.util", "x = 1;import common.util"],
+)
+def test_an_import_after_a_semicolon_or_a_colon_is_line_searched_and_no_cut(tmp_path, line):
+    # Dileep's padding keeps z_main.py from being parsed; its import isn't at the line's start.
+    repo = _padded(
+        tmp_path / "source",
+        **{"agents/a/z_main.py": f"{line}\n", "common/util.py": "import playwright\n"},
+    )
+    assert browser_scan(repo, "agents/a") == (["playwright"], frozenset())
+
+
+def test_a_file_over_the_search_cap_is_not_opened_and_is_a_cut(tmp_path, monkeypatch):
+    # Ten sparse 5 MiB files in the agent's folder: each is over the 4 MiB a file is searched at,
+    # so none is opened (the bytes used to be read, then dropped uncharged).
+    repo = _tree(tmp_path / "source", {"agents/a/agent.py": "x = 1\n"})
+    for at in range(10):
+        with (repo / f"agents/a/big_{at}.py").open("wb") as handle:
+            handle.truncate(5 * 1024 * 1024)
+    read = [0]
+    real_open = Path.open
+
+    def counting_open(self, mode="r", *args, **kwargs):
+        handle = real_open(self, mode, *args, **kwargs)
+        if not self.name.startswith("big_"):
+            return handle
+        real_read = handle.read
+
+        def read_counted(size=-1):
+            data = real_read(size)
+            read[0] += len(data)
+            return data
+
+        handle.read = read_counted
+        return handle
+
+    monkeypatch.setattr(Path, "open", counting_open)
+    names, cut = browser_scan(repo, "agents/a")
+    assert names == [] and "import_walk" in cut
+    assert read[0] <= agent_type_check._LARGEST_UNREAD_SEARCHED
+
+
 def test_ci_runs_this_file():
     workflows = (
         Path(__file__).resolve().parents[2] / ".github" / "workflows" / "sdk-smoke.yml"
