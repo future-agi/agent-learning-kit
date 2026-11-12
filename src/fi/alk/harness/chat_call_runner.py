@@ -828,6 +828,8 @@ class HostedChatCallRunner:
         # The tool proxy logs the agent's own calls (and the faults it applies) in the world's table: read that table
         # whenever the trial is proxied, cast or not, so the trial record and the fault notices see those calls.
         proxied = runtime.endpoints.get("tool_proxy") is not None
+        # The scenario's faults are a rule of its graded trials; a readiness probe checks the tools' binding without them.
+        faults = [] if self._context.readiness_probe else list(document.get("faults") or [])
         door = chat_door(
             target_world,
             world_db.address
@@ -837,7 +839,7 @@ class HostedChatCallRunner:
                 one.id: {"permitted_actions": list(one.permitted_actions), "on_behalf_of": one.on_behalf_of}
                 for one in listing.actors
             },
-            list(document.get("faults") or []),
+            faults,
             tools_url=service.address if service is not None else None,
             service_actions=service_actions(self._contract),
         )
@@ -897,7 +899,7 @@ class HostedChatCallRunner:
             from .call_runner import _set_trial_faults
 
             # Every trial writes its own faults, none included, so nothing an earlier trial left can apply to this one.
-            _set_trial_faults(runtime, list(document.get("faults") or []))
+            _set_trial_faults(runtime, faults)
         try:
             if dispatcher is not None:
                 # What the actors wrote before T0 is in the world before the conversation starts.
@@ -992,7 +994,6 @@ class HostedChatCallRunner:
                 "summary": summary,
                 "events": cast.events if cast is not None else [],
             }
-        faults = list(document.get("faults") or [])
         if faults:
             from .call_runner import fault_notices
 

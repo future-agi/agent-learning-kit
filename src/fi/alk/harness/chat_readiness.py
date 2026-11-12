@@ -313,6 +313,7 @@ async def probe_chat_workflow(
                 target_provider_secret_values=secret_values,
                 attempt_number=1,
                 source_directory=source,
+                readiness_probe=True,
             ),
         )
         async with asyncio.timeout(timeout):

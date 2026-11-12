@@ -287,6 +287,8 @@ class CallRunnerContext:
     source_directory: Path | None = None
     simulator_provider_secret_values: Mapping[str, str] = field(default_factory=dict)
     usage_reporter: UsageReporter | None = None
+    # A readiness probe checks how the agent's tools reach the world, not the scenario's own trial rules.
+    readiness_probe: bool = False
 
 
 # --- pre-dial validation -----------------------------------------------------------------------
