@@ -586,7 +586,9 @@ def test_the_check_runs_off_the_loop_and_a_refusal_meanwhile_wins(tmp_path, repo
     from fi.alk.harness.failure_file import FAILURE_FILE
 
     destination = tmp_path / "out"
-    server = contract_tools(destination, source_root=repo, scan_root=repo, subfolder="agents/a")
+    server = contract_tools(
+        destination, source_root=repo, scan_root=repo, subfolder="agents/a", save_checks="thread"
+    )
     arguments = payload(
         runtime={"language": "python"}, hard_constraints=["be polite"], data_store={"kind": "none"}
     )
@@ -938,9 +940,15 @@ def test_loading_counts_mapping_keys(repo):
         bounded_yaml_load(text, [30])
 
 
-def _racing_server(tmp_path, repo):
+def _racing_server(tmp_path, repo, save_checks=None):
     destination = tmp_path / "out"
-    server = contract_tools(destination, source_root=repo, scan_root=repo, subfolder="agents/a")
+    server = contract_tools(
+        destination,
+        source_root=repo,
+        scan_root=repo,
+        subfolder="agents/a",
+        save_checks=save_checks,
+    )
     return destination, server.tools[0].handler
 
 
@@ -960,7 +968,7 @@ def test_the_contract_sent_last_is_saved_when_an_earlier_one_finishes_later(
 
     from fi.alk.harness import tools
 
-    destination, submit = _racing_server(tmp_path, repo)
+    destination, submit = _racing_server(tmp_path, repo, "thread")
     second_checked = threading.Event()
     real = tools._checked_contract
 
@@ -991,7 +999,7 @@ def test_a_refusal_during_the_check_wins_though_its_failure_file_is_not_written(
 
     from fi.alk.harness import tools
 
-    destination, submit = _racing_server(tmp_path, repo)
+    destination, submit = _racing_server(tmp_path, repo, "thread")
     checking, refused = threading.Event(), threading.Event()
     real = tools._checked_contract
 
@@ -1051,7 +1059,15 @@ def test_a_crafted_python_file_does_not_hold_up_the_conversation(tmp_path, repo)
                 worst[0], last = max(worst[0], now - last), now
 
         beating = asyncio.create_task(beat())
-        result = await submit(_plain("crafted"))
+        # The scan doesn't parse the crafted file; searched as bytes, it names no browser tool, so
+        # leaving it unread doesn't cut the scan, and the reading is saved without a look.
+        # A save made while the session's checks still run answers "not checked in time" (on a
+        # loaded host they can outlast the deadline), and the model writes again: so does this.
+        for _ in range(60):
+            result = await submit(_plain("crafted"))
+            if not _text(result).startswith("not checked in time"):
+                break
+            await asyncio.sleep(0.5)
         done.set()
         await beating
         return result, worst[0]
@@ -1123,7 +1139,7 @@ def test_an_earlier_contract_is_saved_when_the_later_ones_write_fails(tmp_path, 
 
     from fi.alk.harness import tools
 
-    destination, submit = _racing_server(tmp_path, repo)
+    destination, submit = _racing_server(tmp_path, repo, "thread")
     second_written = threading.Event()
     real_check, real_save = tools._checked_contract, tools._save_contract
 
@@ -2023,7 +2039,9 @@ def test_the_save_walks_the_agents_imports_once(tmp_path, repo, monkeypatch):
         lambda root, subfolder, **limits: walks.append(subfolder) or real(root, subfolder, **limits),
     )
     destination = tmp_path / "out"
-    server = contract_tools(destination, source_root=repo, scan_root=repo, subfolder="agents/a")
+    server = contract_tools(
+        destination, source_root=repo, scan_root=repo, subfolder="agents/a", save_checks="thread"
+    )
 
     _submit(server, payload(runtime={"language": "python"}), destination)
 
@@ -2114,3 +2132,323 @@ def test_a_path_past_twice_the_system_limit_is_refused_before_any_lookup(monkeyp
     with pytest.raises(ValueError):
         runtime_selection.charged_path(Path("/" + "../" * 3000 + "x"))
     assert looked == []
+
+
+# The save's checks in the save checker's child. Each row runs its calls on one event loop, which
+# the child serves, and counts the saves sent to it.
+
+_STAND_IN = "_save_stand_ins"
+_PAST_THE_DEADLINE = 3.0
+
+
+def _child_server(tmp_path, repo):
+    destination = tmp_path / "out"
+    server = contract_tools(
+        destination,
+        source_root=repo,
+        scan_root=repo,
+        subfolder="agents/a",
+        save_checks="child",
+        save_stand_in=_STAND_IN,
+    )
+    handler = server.tools[0].handler
+    return destination, handler, _checker(handler)
+
+
+def _checker(handler):
+    import inspect
+
+    return inspect.getclosurevars(handler).nonlocals["checker"]
+
+
+def _session(repo: Path, **said) -> None:
+    (repo / "save-stand-in.json").write_text(json.dumps(said))
+
+
+def _text(answer) -> str:
+    return answer["content"][0]["text"]
+
+
+async def _until(path: Path, seconds: float = 10.0) -> None:
+    import time
+
+    until = time.monotonic() + seconds
+    while not path.exists():
+        assert time.monotonic() < until, f"{path.name} never appeared"
+        await asyncio.sleep(0.005)
+
+
+@pytest.mark.parametrize("together", [True, False], ids=["one-message", "one-after-another"])
+def test_a_call_cut_after_a_refused_one_saves_nothing(tmp_path, repo, together):
+    destination, submit, checker = _child_server(tmp_path, repo)
+
+    async def calls():
+        if together:
+            # The refused call holds the child at tool evidence until the cut call is sent, so
+            # the order the two reach the save lock is fixed, not left to the loop's scheduling.
+            refused = asyncio.ensure_future(submit(_plain("tool_evidence:wait model:refuse")))
+            await _until(repo / ".tool_evidence-running")
+            cut = asyncio.ensure_future(submit(_plain("contract:sleep")))
+            await asyncio.sleep(0.05)
+            (repo / ".tool_evidence-go").write_text("")
+            return await refused, await cut
+        return await submit(_plain("model:refuse")), await submit(_plain("contract:sleep"))
+
+    first, second = asyncio.run(calls())
+
+    assert "stand-in: model refused" in _text(first)
+    assert "not checked in time" in _text(second)
+    assert not (destination / "contract.json").exists()
+    assert checker.ran_in_child == 2
+
+
+def test_a_save_during_the_session_job_is_not_checked_in_time(tmp_path, repo):
+    _session(repo, scan={"after": ".go"})
+    destination, submit, checker = _child_server(tmp_path, repo)
+
+    async def calls():
+        early = await submit(_plain("early"))
+        (repo / ".go").write_text("")
+        return early, await submit(_plain("later"))
+
+    early, later = asyncio.run(calls())
+
+    assert "the folder's checks are still running" in _text(early)
+    assert "second-look" not in _text(early)
+    assert not later.get("is_error"), later
+    assert _saved(destination)["notes"] == "later"
+    assert checker.ran_in_child == 1
+
+
+def test_what_a_refusal_asked_holds_across_a_call_cut_after_it(tmp_path, repo):
+    destination, submit, checker = _child_server(tmp_path, repo)
+
+    async def calls():
+        return [
+            await submit(_plain(notes))
+            for notes in ("model:refuse", "model:refuse contract:sleep", "model:refuse")
+        ]
+
+    refused, cut, kept = asyncio.run(calls())
+
+    assert "model: if the model is refused again, it is left out" in _text(refused)
+    assert "not checked in time" in _text(cut)
+    # Asked once, by the refusal: the citation is left out rather than refused again.
+    assert not kept.get("is_error"), kept
+    assert "model" not in _saved(destination)
+    assert checker.ran_in_child == 3
+
+
+def test_a_quote_given_in_one_call_checks_the_lines_another_names_in_the_same_message(
+    tmp_path, repo
+):
+    (repo / "agents" / "a" / "prompt.py").write_text('PROMPT = "Answer in one short line."\n')
+    destination, submit, checker = _child_server(tmp_path, repo)
+    quote = "You are a careful assistant who confirms every order before adding an item to it."
+    lines = [{"path": "agents/a/prompt.py", "start_line": 1, "end_line": 1}]
+
+    async def one_message():
+        return await asyncio.gather(
+            submit({**_plain("quoted"), "system_prompt_excerpt": quote}),
+            submit({**_plain("named"), "system_prompt_from": lines}),
+        )
+
+    quoted, named = asyncio.run(one_message())
+
+    # The quote's call is asked for lines, and the lines' call is checked against that quote.
+    assert "system_prompt_from names no lines" in _text(quoted)
+    assert "don't hold the quote you gave before" in _text(named)
+    assert not (destination / "contract.json").exists()
+    assert checker.ran_in_child == 1
+
+
+def test_null_optional_fields_save_in_the_child_and_pass_the_quick_check(tmp_path, repo):
+    from fi.alk.harness import tools
+
+    destination, submit, checker = _child_server(tmp_path, repo)
+    arguments = {
+        **_plain("nulls"),
+        "one_liner": None,
+        "agent_languages": None,
+        "runtime": {"language": "python", "command": None, "workdir": None},
+    }
+
+    assert tools._quick_schema(arguments, sorted(arguments)) is None
+    answer = asyncio.run(submit(arguments))
+
+    assert not answer.get("is_error"), answer
+    assert _saved(destination)["runtime"]["workdir"] == "agents/a"
+    assert checker.ran_in_child == 1
+
+
+def test_the_scan_wait_and_the_checks_share_one_deadline(tmp_path, repo):
+    import time
+
+    from fi.alk.harness.save_checker import SAVE_DEADLINE
+
+    _session(repo, scan={"after": ".go", "sleep": 1.0})
+    destination, submit, checker = _child_server(tmp_path, repo)
+
+    async def call():
+        await _until(repo / ".scan-waiting")
+        (repo / ".go").write_text("")
+        started = time.monotonic()
+        # Under the deadline alone, but not in what the scan's wait leaves of it.
+        answer = await submit(_plain("model:sleep:0.8"))
+        return answer, time.monotonic() - started
+
+    answer, took = asyncio.run(call())
+
+    assert "not checked in time: submit it once, alone" in _text(answer)
+    assert not (destination / "contract.json").exists()
+    assert took < SAVE_DEADLINE + 0.4
+    assert checker.ran_in_child == 1
+
+
+def test_a_call_on_a_second_loop_runs_in_this_process(tmp_path, repo):
+    destination, submit, checker = _child_server(tmp_path, repo)
+
+    first = asyncio.run(submit(_plain("first loop")))
+    second = asyncio.run(submit(_plain("second loop")))
+
+    assert not first.get("is_error"), first
+    assert not second.get("is_error"), second
+    assert _saved(destination)["notes"] == "second loop"
+    assert checker.ran_in_child == 1
+
+
+def test_a_second_loop_call_reads_the_code_the_folder_reaches_itself(tmp_path, repo):
+    (repo / "agents" / "a" / "agent.py").write_text("from common import tracing\n")
+    (repo / "common").mkdir()
+    (repo / "common" / "__init__.py").write_text("")
+    (repo / "common" / "tracing.py").write_text("import traceai_openai\n")
+    _session(repo, scan="real", instrumentation={"hold": 10})
+    destination, submit, checker = _child_server(tmp_path, repo)
+
+    async def first_call():
+        await _until(repo / ".scan-done")
+        return await submit(_plain("first loop"))
+
+    first = asyncio.run(first_call())
+    # The scan is cached from the child, which keeps what it reached: this loop walks it again.
+    second = asyncio.run(submit(_plain("second loop")))
+
+    assert "not checked in time: submit it once, alone" in _text(first)
+    assert not second.get("is_error"), second
+    assert _saved(destination)["instrumentation"] == "traceai"
+    assert checker.ran_in_child == 0
+
+
+def test_an_instrumentation_part_that_raises_twice_saves_with_none(tmp_path, repo):
+    from fi.alk.harness.save_checker import SessionChecksFailed
+
+    (repo / "agents" / "a" / "agent.py").write_text("import traceai_openai\n")
+    _session(repo, instrumentation="raise")
+    destination, submit, checker = _child_server(tmp_path, repo)
+
+    async def calls():
+        with pytest.raises(SessionChecksFailed):
+            await submit(_plain("first"))
+        return await submit(_plain("second"))
+
+    answer = asyncio.run(calls())
+
+    assert not answer.get("is_error"), answer
+    assert _saved(destination)["instrumentation"] == "none"
+    assert checker.ran_in_child == 1
+
+
+def test_after_two_deaths_the_checks_run_here_with_the_sessions_instrumentation(tmp_path, repo):
+    _session(repo, instrumentation={"value": "traceai"})
+    destination, submit, checker = _child_server(tmp_path, repo)
+
+    async def calls():
+        ended = [await submit(_plain("tool_evidence:exit")) for _ in range(2)]
+        return ended, await submit(_plain("after"))
+
+    ended, after = asyncio.run(calls())
+
+    assert all("not checked in time" in _text(one) for one in ended), ended
+    assert not after.get("is_error"), after
+    # This folder's own code says none: the answer is the one the child's session job gave.
+    assert _saved(destination)["instrumentation"] == "traceai"
+    assert checker.ran_in_child == 2
+
+
+def test_a_job_with_no_roots_starts_no_child(tmp_path):
+    import multiprocessing
+
+    from fi.alk.harness import save_checker
+
+    before = {child.pid for child in multiprocessing.active_children()}
+    server = contract_tools(tmp_path / "out", save_checks="child")
+    handler = server.tools[0].handler
+    checker = _checker(handler)
+
+    answer = asyncio.run(handler(_plain("no roots")))
+
+    assert not answer.get("is_error"), answer
+    assert checker.ran_in_child == 0
+    assert checker not in save_checker._OPEN
+    assert {child.pid for child in multiprocessing.active_children()} <= before
+
+
+def test_a_save_sent_before_the_child_is_up_waits_for_it(tmp_path, repo):
+    destination, submit, checker = _child_server(tmp_path, repo)
+
+    answer = asyncio.run(submit(_plain("at once")))
+
+    assert not answer.get("is_error"), answer
+    assert _saved(destination)["notes"] == "at once"
+    assert checker.ran_in_child == 1
+
+
+def test_a_refusal_during_the_childs_check_wins_though_its_failure_file_is_not_written(
+    tmp_path, repo, monkeypatch
+):
+    from fi.alk.harness import agent_type_check, tools
+
+    destination, submit, checker = _child_server(tmp_path, repo)
+
+    def unwritable(*args):
+        raise OSError("disk full")
+
+    # The reading's verdict, as SecondLook asks for it.
+    monkeypatch.setattr(
+        agent_type_check,
+        "decide",
+        lambda claimed, *args, **kwargs: "refuse" if claimed == "browser" else "keep",
+    )
+    monkeypatch.setattr(tools, "write_failure_file", unwritable)
+
+    async def both():
+        saving = asyncio.ensure_future(submit(_plain("tool_evidence:wait")))
+        # The refusal comes once the check is under way in the child.
+        await _until(repo / ".tool_evidence-running", 1.5)
+        with pytest.raises(OSError):
+            await submit({**_plain("refusing"), "modality": "browser"})
+        (repo / ".tool_evidence-go").write_text("")
+        return await saving
+
+    saving = asyncio.run(both())
+
+    assert not (destination / "contract.json").exists()
+    assert "Don't submit again" in _text(saving)
+    assert checker.ran_in_child == 1
+
+
+def test_the_childs_trial_passes_on_a_fork_server_the_agent_scan_started(tmp_path, repo):
+    import multiprocessing.forkserver
+    import time
+
+    from fi.alk.harness.scan_folders import FolderChecker
+
+    # The fork server's preload is fixed by whoever starts it first; here, the agent scan.
+    multiprocessing.forkserver._forkserver._stop()
+    with FolderChecker() as folders:
+        folders.check(repo, "agents/a", deadline=time.monotonic() + 30)
+        destination, submit, checker = _child_server(tmp_path, repo)
+        answer = asyncio.run(submit(_plain("after the agent scan")))
+
+    assert not answer.get("is_error"), answer
+    assert checker.ran_in_child == 1

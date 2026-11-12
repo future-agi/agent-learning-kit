@@ -113,8 +113,8 @@ def _submit_tool(server):
     return next(one for one in server.tools if one.name == "submit_contract")
 
 
-def _submitter(destination: Path, scan_root: Path | None = None):
-    tool = _submit_tool(contract_tools(destination, scan_root=scan_root))
+def _submitter(destination: Path, scan_root: Path | None = None, save_checks=None):
+    tool = _submit_tool(contract_tools(destination, scan_root=scan_root, save_checks=save_checks))
     return lambda payload: asyncio.run(tool.handler(payload))
 
 
@@ -614,9 +614,10 @@ def test_a_file_that_raises_something_unexpected_costs_only_that_file(
     monkeypatch.setattr(agent_type_check, "read_module", odd)
     with caplog.at_level("WARNING", logger=agent_type_check.__name__):
         assert browser_tools_found(tmp_path) == ["playwright"]
-    [record] = caplog.records
-    assert record.getMessage() == "agent type scan skipped a file: LookupError"
-    assert record.exc_info is None
+    skipped, cut = caplog.records
+    assert skipped.getMessage() == "agent type scan skipped a file: LookupError"
+    assert skipped.exc_info is None
+    assert cut.getMessage() == "agent type scan cut by skipped 1"
 
 
 def test_a_skip_logs_its_type_once_and_its_path_at_debug_only_with_no_trace(
@@ -636,7 +637,7 @@ def test_a_skip_logs_its_type_once_and_its_path_at_debug_only_with_no_trace(
     loud = [record for record in caplog.records if record.levelno >= 20]
     assert [record.getMessage() for record in loud] == [
         "agent type scan skipped a file: LookupError",
-        "agent type scan skipped 2 files",
+        "agent type scan cut by skipped 2",
     ]
     assert not any(
         "SOURCE-LINE" in record.getMessage() or "odd" in record.getMessage() or record.exc_info
@@ -658,12 +659,12 @@ def test_a_skip_logs_its_type_once_and_its_path_at_debug_only_with_no_trace(
 @pytest.mark.skipif(sys.version_info < (3, 12), reason="3.11's tokenizer reads a NUL byte")
 def test_a_file_with_a_nul_byte_is_left_unread_without_stopping_the_scan(tmp_path, caplog):
     # Through the shared reader a NUL byte is a file Python can't parse, an expected answer, not
-    # an error: it's left unread and nothing is logged. A file naming nothing isn't even read.
+    # an error: it's left unread and only the cut is logged. A file naming nothing isn't even read.
     (tmp_path / "a_blob.py").write_bytes(b" x = 1\n\x00")
     (tmp_path / "b_blob.py").write_bytes(b"import playwright\n\x00")
     with caplog.at_level("WARNING", logger=agent_type_check.__name__):
         assert browser_tools_found(tmp_path) == []
-    assert caplog.records == []
+    assert [r.getMessage() for r in caplog.records] == ["agent type scan cut by parse_failed 1"]
 
 
 @pytest.mark.skipif(sys.version_info < (3, 12), reason="3.11's tokenizer reads a NUL byte")
@@ -673,7 +674,10 @@ def test_a_nul_byte_the_tokenizer_breaks_on_reaches_no_warning(tmp_path, caplog)
     (tmp_path / "agent.py").write_text("import playwright\n", encoding="utf-8")
     with caplog.at_level("DEBUG", logger=agent_type_check.__name__):
         assert browser_tools_found(tmp_path) == ["playwright"]
-    assert [record for record in caplog.records if record.levelno >= 20] == []
+    # The tokenizer's fault reaches no WARNING of its own. The files name a tool and can't be
+    # parsed, so they cut the scan, and that line holds names and counts only.
+    loud = [record.getMessage() for record in caplog.records if record.levelno >= 20]
+    assert loud == ["agent type scan cut by parse_failed 30"]
     assert "SOURCE-LINE" not in caplog.text
 
 
@@ -1975,12 +1979,12 @@ def test_unknown_modality_gets_a_problem_not_a_save(tmp_path, plain_repo):
 def test_the_scan_runs_off_the_event_loop(tmp_path, monkeypatch):
     threads = []
 
-    def scan(_root):
+    def scan(_root, subfolder=None, reached=None):
         threads.append(threading.current_thread())
-        return []
+        return [], frozenset()
 
-    monkeypatch.setattr(tools, "browser_tools_found", scan)
-    _submitter(tmp_path / "out", tmp_path)(_reading("chat"))
+    monkeypatch.setattr(tools, "browser_scan", scan)
+    _submitter(tmp_path / "out", tmp_path, "thread")(_reading("chat"))
     assert threads and threads[0] is not threading.main_thread()
 
 
@@ -1988,12 +1992,12 @@ def test_the_scan_runs_off_the_event_loop(tmp_path, monkeypatch):
 def test_a_refusal_during_the_scan_stops_this_call_too(tmp_path, monkeypatch, modality):
     output = tmp_path / "out"
 
-    def scan(_root):
+    def scan(_root, subfolder=None, reached=None):
         write_failure_file(agent_type_failure(["playwright"]), output)
-        return []
+        return [], frozenset()
 
-    monkeypatch.setattr(tools, "browser_tools_found", scan)
-    answer = _submitter(output, tmp_path)(_reading(modality))
+    monkeypatch.setattr(tools, "browser_scan", scan)
+    answer = _submitter(output, tmp_path, "thread")(_reading(modality))
     assert not (output / "contract.json").exists()
     # The stop itself, not a second look: the reading was refused while the scan ran. A browser
     # reading would otherwise be asked for a second look before the write's own check.
@@ -2770,13 +2774,13 @@ def test_conversation_with_no_tool_saves_with_no_second_look(tmp_path, plain_rep
 
 def _counted_scans(monkeypatch) -> list[Path]:
     scans: list[Path] = []
-    real_scan = tools.browser_tools_found
+    real_scan = tools.browser_scan
 
-    def counted(root):
+    def counted(root, subfolder=None, reached=None):
         scans.append(root)
-        return real_scan(root)
+        return real_scan(root, subfolder, reached)
 
-    monkeypatch.setattr(tools, "browser_tools_found", counted)
+    monkeypatch.setattr(tools, "browser_scan", counted)
     return scans
 
 
@@ -2785,7 +2789,7 @@ def test_one_scan_and_one_look_when_an_answer_comes_back_without_its_value(
 ):
     output = tmp_path / "out"
     scans = _counted_scans(monkeypatch)
-    submit = _submitter(output, browser_repo)
+    submit = _submitter(output, browser_repo, "thread")
     assert "second-look" in _text(submit(_reading("chat")))
     # An answer with the value stands, even when the contract is then sent back for another fix.
     rejected = submit(_reading("chat", real_use_cases=[], second_look_read=_READ))
@@ -2809,7 +2813,7 @@ def test_a_different_answer_without_the_value_after_an_answer_gets_a_look(tmp_pa
 
 def test_calls_waiting_on_the_first_scan_share_it(tmp_path, plain_repo, monkeypatch):
     scans = _counted_scans(monkeypatch)
-    tool = _submit_tool(contract_tools(tmp_path / "out", scan_root=plain_repo))
+    tool = _submit_tool(contract_tools(tmp_path / "out", scan_root=plain_repo, save_checks="thread"))
 
     async def first_message():
         return await asyncio.gather(*(tool.handler(_reading("browser")) for _ in range(3)))
@@ -2823,13 +2827,13 @@ def test_a_call_cancelled_while_waiting_on_the_scan_leaves_it_to_the_others(
 ):
     started, release = threading.Event(), threading.Event()
 
-    def slow(_root):
+    def slow(_root, subfolder=None, reached=None):
         started.set()
         release.wait(10)
-        return []
+        return [], frozenset()
 
-    monkeypatch.setattr(tools, "browser_tools_found", slow)
-    tool = _submit_tool(contract_tools(tmp_path / "out", scan_root=plain_repo))
+    monkeypatch.setattr(tools, "browser_scan", slow)
+    tool = _submit_tool(contract_tools(tmp_path / "out", scan_root=plain_repo, save_checks="thread"))
 
     async def first_message():
         cancelled = asyncio.ensure_future(tool.handler(_reading("browser")))
@@ -2844,16 +2848,16 @@ def test_a_call_cancelled_while_waiting_on_the_scan_leaves_it_to_the_others(
 
 
 def test_a_scan_that_fails_is_run_again_by_the_next_call(tmp_path, plain_repo, monkeypatch):
-    outcomes = iter([OSError("gone"), []])
+    outcomes = iter([OSError("gone"), ([], frozenset())])
 
-    def scan(_root):
+    def scan(_root, subfolder=None, reached=None):
         outcome = next(outcomes)
         if isinstance(outcome, Exception):
             raise outcome
         return outcome
 
-    monkeypatch.setattr(tools, "browser_tools_found", scan)
-    submit = _submitter(tmp_path / "out", plain_repo)
+    monkeypatch.setattr(tools, "browser_scan", scan)
+    submit = _submitter(tmp_path / "out", plain_repo, "thread")
     with pytest.raises(OSError, match="gone"):
         submit(_reading("chat"))
     assert not submit(_reading("chat")).get("is_error")
@@ -2862,16 +2866,16 @@ def test_a_scan_that_fails_is_run_again_by_the_next_call(tmp_path, plain_repo, m
 def test_a_scan_that_fails_is_run_again_by_the_next_call_in_the_same_message(
     tmp_path, plain_repo, monkeypatch
 ):
-    outcomes = iter([OSError("gone"), []])
+    outcomes = iter([OSError("gone"), ([], frozenset())])
 
-    def scan(_root):
+    def scan(_root, subfolder=None, reached=None):
         outcome = next(outcomes)
         if isinstance(outcome, Exception):
             raise outcome
         return outcome
 
-    monkeypatch.setattr(tools, "browser_tools_found", scan)
-    tool = _submit_tool(contract_tools(tmp_path / "out", scan_root=plain_repo))
+    monkeypatch.setattr(tools, "browser_scan", scan)
+    tool = _submit_tool(contract_tools(tmp_path / "out", scan_root=plain_repo, save_checks="thread"))
 
     async def one_message():
         with pytest.raises(OSError, match="gone"):
@@ -2887,14 +2891,14 @@ def test_a_scan_that_finished_after_its_only_caller_was_cancelled_is_not_run_aga
     started, release = threading.Event(), threading.Event()
     scans: list[Path] = []
 
-    def slow(root):
+    def slow(root, subfolder=None, reached=None):
         scans.append(root)
         started.set()
         release.wait(10)
-        return []
+        return [], frozenset()
 
-    monkeypatch.setattr(tools, "browser_tools_found", slow)
-    tool = _submit_tool(contract_tools(tmp_path / "out", scan_root=plain_repo))
+    monkeypatch.setattr(tools, "browser_scan", slow)
+    tool = _submit_tool(contract_tools(tmp_path / "out", scan_root=plain_repo, save_checks="thread"))
 
     async def cancelled_then_next():
         cancelled = asyncio.ensure_future(tool.handler(_reading("browser")))
@@ -2913,15 +2917,15 @@ def test_a_scan_left_running_on_a_closed_loop_is_started_again(tmp_path, plain_r
     started, release = threading.Event(), threading.Event()
     scans: list[Path] = []
 
-    def scan(root):
+    def scan(root, subfolder=None, reached=None):
         scans.append(root)
         if len(scans) == 1:
             started.set()
             release.wait(10)
-        return []
+        return [], frozenset()
 
-    monkeypatch.setattr(tools, "browser_tools_found", scan)
-    tool = _submit_tool(contract_tools(tmp_path / "out", scan_root=plain_repo))
+    monkeypatch.setattr(tools, "browser_scan", scan)
+    tool = _submit_tool(contract_tools(tmp_path / "out", scan_root=plain_repo, save_checks="thread"))
     closed = asyncio.new_event_loop()
     try:
         closed.create_task(tool.handler(_reading("browser")))
@@ -3685,9 +3689,16 @@ def test_a_crafted_script_does_not_hold_up_the_conversation(tmp_path):
                 worst[0], last = max(worst[0], now - last), now
 
         beating = asyncio.create_task(beat())
-        started = time.perf_counter()
-        result = await server.tools[0].handler(reading)
-        waited = time.perf_counter() - started
+        # A save made while the session's checks still run answers "not checked in time" (on a
+        # loaded host they can outlast the deadline), and the model writes again: so does this.
+        waited = 0.0
+        for _ in range(60):
+            started = time.perf_counter()
+            result = await server.tools[0].handler(reading)
+            waited = max(waited, time.perf_counter() - started)
+            if not _text(result).startswith("not checked in time"):
+                break
+            await asyncio.sleep(0.5)
         done.set()
         await beating
         return result, worst[0], waited
@@ -6698,3 +6709,94 @@ def test_a_decode_total_spent_exactly_doesnt_say_the_walk_stopped(tmp_path, monk
 
     found, stopped = _save_walk(repo)
     assert not stopped and repo / "common" / "web.py" in found
+
+
+# The scan and the save in the save checker's child, through every way the server is held
+
+
+def _checker_of(handler):
+    import inspect
+
+    return inspect.getclosurevars(handler).nonlocals["checker"]
+
+
+def test_a_scan_that_raises_twice_in_the_child_counts_as_cut(tmp_path, plain_repo):
+    from fi.alk.harness.save_checker import SessionChecksFailed
+
+    (plain_repo / "save-stand-in.json").write_text(json.dumps({"scan": "raise"}))
+    tool = _submit_tool(
+        contract_tools(
+            tmp_path / "out",
+            scan_root=plain_repo,
+            save_checks="child",
+            save_stand_in="_save_stand_ins",
+        )
+    )
+
+    async def calls():
+        with pytest.raises(SessionChecksFailed):
+            await tool.handler(_reading("chat"))
+        return await tool.handler(_reading("chat"))
+
+    answer = asyncio.run(calls())
+
+    # A scan that never answered can't say there is no browser tool: the reading gets a look.
+    assert "second-look" in _text(answer)
+    assert "stopped before reading all of the agent's code" in _text(answer)
+    assert not (tmp_path / "out" / "contract.json").exists()
+    assert _checker_of(tool.handler).ran_in_child == 0
+
+
+def test_the_hosted_builders_copy_of_the_server_saves_in_the_child(
+    tmp_path, plain_repo, monkeypatch
+):
+    import gc
+
+    from fi.alk.harness.builder import open_for_building
+
+    monkeypatch.delenv("ALK_SAVE_CHECKS", raising=False)
+    output = tmp_path / "out"
+    stage = open_for_building(None, out=output, source=RepoSource(name="fixture", root=plain_repo))
+    # The hosted chat puts a copy of each server in place of the one the stage opened with.
+    _runtime(tmp_path)._guard(stage.spec)
+    gc.collect()
+    tool = _submit_tool(_server_of(stage))
+
+    async def calls():
+        # The first is asked for the prompt's lines; the second is accepted.
+        await tool.handler(_reading("chat"))
+        return await tool.handler(_reading("chat"))
+
+    answer = asyncio.run(calls())
+
+    assert not answer.get("is_error"), answer
+    assert load(output).modality == "chat"
+    assert _checker_of(tool.handler).ran_in_child == 1
+
+
+def test_a_stage_opened_again_leaves_no_child_behind(tmp_path, plain_repo, monkeypatch):
+    import gc
+    import multiprocessing
+
+    from fi.alk.harness.builder import open_for_building
+
+    monkeypatch.delenv("ALK_SAVE_CHECKS", raising=False)
+    source = RepoSource(name="fixture", root=plain_repo)
+    before = {child.pid for child in multiprocessing.active_children()}
+    first = open_for_building(None, out=tmp_path / "out", source=source)
+    handler = _submit_tool(_server_of(first)).handler
+
+    async def calls(handler):
+        await handler(_reading("chat"))
+        return await handler(_reading("chat"))
+
+    assert not asyncio.run(calls(handler)).get("is_error")
+    started = {child.pid for child in multiprocessing.active_children()} - before
+    assert started
+
+    del first, handler
+    again = open_for_building(None, out=tmp_path / "out", source=source)
+    gc.collect()
+
+    assert not started & {child.pid for child in multiprocessing.active_children()}
+    assert _submit_tool(_server_of(again))
