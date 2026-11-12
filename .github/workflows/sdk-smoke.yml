@@ -70,6 +70,7 @@ jobs:
           tests/test_harness_architecture.py
           tests/test_harness_credentials.py
           tests/harness/test_controller_env.py
+          tests/harness/test_call_runner.py
           tests/harness/test_runtime_repair.py
           tests/harness/test_runtime_selection_admission.py
           tests/harness/test_nudge_turn.py

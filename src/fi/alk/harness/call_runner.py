@@ -99,6 +99,12 @@ GOOGLE_APPLICATION_CREDENTIALS_ALIAS = "GOOGLE_APPLICATION_CREDENTIALS"
 GOOGLE_CLOUD_PROJECT_ALIAS = "GOOGLE_CLOUD_PROJECT"
 GOOGLE_CLOUD_LOCATION_ALIAS = "GOOGLE_CLOUD_LOCATION"
 GOOGLE_GENAI_USE_VERTEXAI_ALIAS = "GOOGLE_GENAI_USE_VERTEXAI"
+# Settings of the job's own Google credentials file; used only with that file (see CallRunnerImpl).
+_JOB_GOOGLE_SETTING_ALIASES = (
+    GOOGLE_CLOUD_LOCATION_ALIAS,
+    GOOGLE_CLOUD_PROJECT_ALIAS,
+    GOOGLE_GENAI_USE_VERTEXAI_ALIAS,
+)
 OPENAI_API_KEY_ALIAS = "OPENAI_API_KEY"
 VAPI_API_KEY_ALIAS = "VAPI_API_KEY"
 VAPI_PUBLIC_API_KEY_ALIAS = "VAPI_PUBLIC_API_KEY"
@@ -1046,6 +1052,8 @@ class CallRunnerImpl:
         # Local SDK runs remain BYOK and historically carry simulator keys in the one local
         # target map. Hosted runs deliberately do not fall back: their simulator credentials must
         # come from platform configuration and must not be confused with customer-agent keys.
+        job_google_credentials = False
+        job_google_settings: dict[str, str] = {}
         if context.job.execution is ExecutionMode.LOCAL:
             for alias in (
                 LIVEKIT_URL_ALIAS,
@@ -1056,9 +1064,6 @@ class CallRunnerImpl:
                 GEMINI_API_KEY_ALIAS,
                 GOOGLE_API_KEY_ALIAS,
                 GOOGLE_APPLICATION_CREDENTIALS_JSON_ALIAS,
-                GOOGLE_CLOUD_PROJECT_ALIAS,
-                GOOGLE_CLOUD_LOCATION_ALIAS,
-                GOOGLE_GENAI_USE_VERTEXAI_ALIAS,
                 OPENAI_API_KEY_ALIAS,
                 SIMULATOR_LLM_PROVIDER_ALIAS,
                 SIMULATOR_LLM_MODEL_ALIAS,
@@ -1071,6 +1076,14 @@ class CallRunnerImpl:
                     value = context.target_provider_secret_values.get(alias)
                     if value:
                         simulator_secret_values[alias] = value
+                        if alias == GOOGLE_APPLICATION_CREDENTIALS_JSON_ALIAS:
+                            job_google_credentials = True
+            # The job's Google settings go with the job's own credentials file, not before.
+            for alias in _JOB_GOOGLE_SETTING_ALIASES:
+                if alias not in simulator_secret_values:
+                    value = context.target_provider_secret_values.get(alias)
+                    if value:
+                        job_google_settings[alias] = value
         # Provider libraries read ambient credentials. Supply a private snapshot to
         # each call subprocess, never export credentials into the parent process.
         ambient = os.environ if environ is None else environ
@@ -1103,6 +1116,16 @@ class CallRunnerImpl:
             value = context.target_provider_secret_values.get(alias)
             if value:
                 target_environ[alias] = value
+        # The job's own credentials file is in effect only if it is the one copied from the job's
+        # target values and no GOOGLE_APPLICATION_CREDENTIALS is set (_materialize_vertex_adc
+        # writes the file only then). Then the job's project, location and Vertex switch replace
+        # the host's, which would otherwise win. Otherwise they are dropped.
+        if job_google_credentials and not target_environ.get(
+            GOOGLE_APPLICATION_CREDENTIALS_ALIAS
+        ):
+            for alias in _JOB_GOOGLE_SETTING_ALIASES:
+                target_environ.pop(alias, None)
+            target_environ.update(job_google_settings)
         for alias in (
             LIVEKIT_URL_ALIAS,
             LIVEKIT_API_KEY_ALIAS,

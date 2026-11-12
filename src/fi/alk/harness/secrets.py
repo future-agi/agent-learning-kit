@@ -212,6 +212,24 @@ def client_name_reserved(name: str) -> bool:
     )
 
 
+# Carries the aliases the caller sent as target_provider refs to the worker, beside
+# ALK_RUNTIME_CONFIGURATION_NAMES. The server always defines it, empty when there are none.
+TARGET_PROVIDER_ALIASES_ENV = "ALK_TARGET_PROVIDER_ALIASES"
+
+
+def target_provider_aliases(environment: Mapping[str, str] | None = None) -> frozenset[str]:
+    """The names the caller sent as target_provider refs: the agent's, never the controller's.
+
+    A hosted worker always has the names manifest; if it lacks this variable, every manifest
+    name is treated as the agent's, so a missing variable can't promote anything.
+    """
+    source = environment if environment is not None else os.environ
+    raw = source.get(TARGET_PROVIDER_ALIASES_ENV)
+    if raw is None:
+        raw = source.get("ALK_RUNTIME_CONFIGURATION_NAMES", "")
+    return frozenset(name for name in raw.split(",") if name)
+
+
 def controller_owned_name(name: str) -> bool:
     """True for a name the runner owns: its credentials, topology and model settings."""
     key = str(name).strip().upper()
@@ -353,11 +371,13 @@ __all__ = [
     "CONTROLLER_CONNECTION_NAMES",
     "RUNNER_RESERVED_ENVIRONMENT",
     "SecretResolutionError",
+    "TARGET_PROVIDER_ALIASES_ENV",
     "WORKER_ENVIRONMENT_NAMES",
     "client_name_reserved",
     "controller_name_reserved",
     "controller_owned_name",
     "resolve_worker_secrets",
+    "target_provider_aliases",
     "runtime_configuration_environment",
     "runtime_configuration_value",
     "worker_environment",

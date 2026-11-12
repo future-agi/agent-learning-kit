@@ -66,6 +66,8 @@ from .secrets import (
     CONTROLLER_CONNECTION_NAMES,
     RUNNER_RESERVED_ENVIRONMENT as _RUNNER_RESERVED_ENVIRONMENT,
     SecretResolutionError,
+    TARGET_PROVIDER_ALIASES_ENV,
+    client_name_reserved,
     controller_name_reserved,
     resolve_worker_secrets,
     worker_environment,
@@ -171,7 +173,9 @@ class SandboxRerunRequest(BaseModel):
     @model_validator(mode="after")
     def _valid_environment(self) -> "SandboxRerunRequest":
         _validate_environment_values(self.environment_values, self.secret_refs)
-        _validate_secret_alias_shapes(self.secret_refs)
+        # The same alias checks a submit runs: a rerun's refs reach docker compose's environment
+        # under their own names just as a submit's do.
+        _validate_controller_names({}, self.secret_refs)
         return self
 
 
@@ -270,6 +274,9 @@ class LocalSandbox:
         # job. Persisted job/state artifacts contain the opaque mounted references created below.
         self._ephemeral_secrets: dict[str, dict[str, str]] = {}
         self._ephemeral_secret_file_names: dict[str, set[str]] = {}
+        # The aliases the caller sent as target_provider refs for the latest run of each job (a
+        # rerun rebuilds them from its own refs). They never become controller variables.
+        self._ephemeral_target_aliases: dict[str, frozenset[str]] = {}
         self._recover_orphans()
 
     async def upload_secret_file(
@@ -750,6 +757,10 @@ class LocalSandbox:
         runtime_configuration.update(resolved)
         self._ephemeral_secrets[job_id] = dict(runtime_configuration)
         self._ephemeral_secret_file_names[job_id] = secret_file_names
+        # Rebuilt from this request's own refs, not the submit's.
+        self._ephemeral_target_aliases[job_id] = _caller_target_aliases(
+            request.secret_refs, {*request.environment_values, *secret_file_names}
+        )
 
         state_path = self.jobs_root / job_id / "state.json"
         state = _read_json(state_path)
@@ -801,17 +812,22 @@ class LocalSandbox:
                 shutil.copytree(output / "environment-bundle", replay_root)
                 runtime_configuration = self._ephemeral_secrets.get(job.job_id, {})
                 file_names = self._ephemeral_secret_file_names.get(job.job_id, set())
+                target_aliases = self._rerun_target_aliases(job)
                 child_environment = worker_environment(
                     {
                         name: value
                         for name, value in runtime_configuration.items()
                         if name in CONTROLLER_CONNECTION_NAMES
                         and name not in file_names
+                        and name not in target_aliases
                     },
                     runtime_configuration=runtime_configuration,
                 )
                 child_environment["ALK_RUNTIME_CONFIGURATION_NAMES"] = ",".join(
                     sorted(runtime_configuration)
+                )
+                child_environment[TARGET_PROVIDER_ALIASES_ENV] = ",".join(
+                    sorted(target_aliases)
                 )
                 child_environment["ALK_RUNTIME_SECRET_FILE_NAMES"] = ",".join(
                     sorted(self._ephemeral_secret_file_names.get(job.job_id, set()))
@@ -948,6 +964,7 @@ class LocalSandbox:
                 self._tasks.pop(job.job_id, None)
                 self._ephemeral_secrets.pop(job.job_id, None)
                 self._ephemeral_secret_file_names.pop(job.job_id, None)
+                self._ephemeral_target_aliases.pop(job.job_id, None)
                 self._delete_job_secret_files(job.job_id)
                 shutil.rmtree(replay_root, ignore_errors=True)
 
@@ -1036,6 +1053,11 @@ class LocalSandbox:
                 "Agent credential discovery continues inside the sandbox after checkout."
             ],
         )
+
+    def _rerun_target_aliases(self, job: HarnessJob) -> frozenset[str]:
+        """The aliases this rerun's own refs carried; the saved job's if none are held."""
+        held = self._ephemeral_target_aliases.get(job.job_id)
+        return held if held is not None else _job_target_aliases(job)
 
     def _resolve_job_secrets(self, job: HarnessJob) -> dict[str, str]:
         """Resolve a job's refs; vault refs only from this job's own map."""
@@ -1162,6 +1184,7 @@ class LocalSandbox:
                         if archived.exists():
                             shutil.rmtree(archived)
                         output.replace(archived)
+                    target_aliases = _job_target_aliases(job)
                     runtime_names = {
                         str(name)
                         for name in job.metadata.get("environment_value_names", [])
@@ -1196,6 +1219,7 @@ class LocalSandbox:
                             if name in runtime_names
                             and name in CONTROLLER_CONNECTION_NAMES
                             and name not in file_names
+                            and name not in target_aliases
                         },
                         **{
                             name: value
@@ -1212,6 +1236,9 @@ class LocalSandbox:
                     # in this child process environment and never enter the job or bundle.
                     child_environment["ALK_RUNTIME_CONFIGURATION_NAMES"] = ",".join(
                         sorted(runtime_configuration)
+                    )
+                    child_environment[TARGET_PROVIDER_ALIASES_ENV] = ",".join(
+                        sorted(target_aliases)
                     )
                     child_environment["ALK_RUNTIME_SECRET_FILE_NAMES"] = ",".join(
                         sorted(self._ephemeral_secret_file_names.get(job.job_id, set()))
@@ -1336,6 +1363,7 @@ class LocalSandbox:
                 self._tasks.pop(job.job_id, None)
                 self._ephemeral_secrets.pop(job.job_id, None)
                 self._ephemeral_secret_file_names.pop(job.job_id, None)
+                self._ephemeral_target_aliases.pop(job.job_id, None)
                 self._delete_job_secret_files(job.job_id)
 
     def get(self, job_id: str) -> SandboxJobResponse:
@@ -1506,6 +1534,7 @@ class LocalSandbox:
             _write_json(state_path, state)
         self._ephemeral_secrets.pop(job_id, None)
         self._ephemeral_secret_file_names.pop(job_id, None)
+        self._ephemeral_target_aliases.pop(job_id, None)
         self._delete_job_secret_files(job_id)
         return self.get(job_id)
 
@@ -1592,11 +1621,41 @@ def _validate_controller_names(
         if _target_alias(reference):
             # The customer agent's own credential (ANTHROPIC_API_KEY, GOOGLE_API_KEY): it reaches
             # only the agent's runtime namespace, so it takes the rule environment values take.
-            if alias in _RUNNER_RESERVED_ENVIRONMENT or alias.startswith("ALK_"):
+            if (
+                alias in _RUNNER_RESERVED_ENVIRONMENT
+                or alias.startswith("ALK_")
+                or client_name_reserved(alias)
+            ):
                 raise ValueError(f"secret_alias_reserved: {alias}")
             continue
-        if controller_name_reserved(alias):
+        # A job-set base URL in the controller would steer the simulator's OpenAI client. Refused
+        # here, for controller aliases only: controller_name_reserved also guards key reads.
+        if controller_name_reserved(alias) or str(alias).strip().upper() == "OPENAI_BASE_URL":
             raise ValueError(f"secret_alias_reserved: {alias}")
+
+
+def _job_target_aliases(job: HarnessJob) -> frozenset[str]:
+    """A submitted job's caller-sent target aliases, from its saved refs and value names."""
+    return _caller_target_aliases(
+        job.agent.secret_refs,
+        {str(name) for name in job.metadata.get("environment_value_names", [])},
+    )
+
+
+def _caller_target_aliases(
+    references: dict[str, SecretRef], environment_value_names: set[str]
+) -> frozenset[str]:
+    """The aliases the caller sent as target_provider refs.
+
+    The server mints every environment value (and upload) as a target_provider ref too, so the
+    caller's own refs are told apart by name: an alias in ``environment_value_names`` is an
+    environment value, never one of these.
+    """
+    return frozenset(
+        str(alias)
+        for alias, reference in references.items()
+        if _target_alias(reference) and str(alias) not in environment_value_names
+    )
 
 
 def _target_alias(reference: SecretRef) -> bool:

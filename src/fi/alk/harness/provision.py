@@ -42,6 +42,7 @@ from .service_catalog import address, profile_for
 from .secrets import (
     CONTROLLER_CONNECTION_NAMES,
     controller_name_reserved,
+    target_provider_aliases,
     runtime_configuration_value,
 )
 
@@ -2876,10 +2877,15 @@ def activate_voice_environment(
         "ELEVEN_API_KEY",
         "ELEVENLABS_API_KEY",
     }
+    # Nor a value the caller sent as a target_provider ref: the compose config is rendered with
+    # those under their own names, so only the name tells them from the repository's own.
+    target_aliases = target_provider_aliases()
     allowed = {
         name
         for name in allowed
-        if name in CONTROLLER_CONNECTION_NAMES and not controller_name_reserved(name)
+        if name in CONTROLLER_CONNECTION_NAMES
+        and not controller_name_reserved(name)
+        and name not in target_aliases
     }
     activated: dict[str, str] = {}
     for name in allowed:
