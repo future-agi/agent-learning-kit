@@ -86,6 +86,8 @@ jobs:
           tests/harness/test_hosted_authoring_entrypoint.py
           tests/harness/test_certify_only.py
           tests/harness/test_bundle_author_v2.py
+          tests/harness/test_python_tool_trace_bootstrap.py
+          tests/harness/test_workflow_intent.py
           tests/harness/test_simulation_mark_bootstrap.py
           tests/harness/test_process_preflight.py
           tests/providers
