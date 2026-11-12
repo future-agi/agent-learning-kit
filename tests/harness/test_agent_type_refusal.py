@@ -6353,7 +6353,7 @@ def test_files_read_two_ways_base_parsed_are_still_parsed(tmp_path):
     assert not stopped and {repo / "common" / "web.py", repo / "common" / "page.py"} <= found
 
 
-@pytest.mark.parametrize("where", ["own-py", "imported-py", "imported-script", "grew-since"])
+@pytest.mark.parametrize("where", ["own-py", "imported-py", "grew-since"])
 def test_a_file_over_the_read_limit_says_the_walk_stopped(tmp_path, monkeypatch, where):
     from fi.alk.harness import credentials
 
@@ -6365,9 +6365,6 @@ def test_a_file_over_the_read_limit_says_the_walk_stopped(tmp_path, monkeypatch,
     elif where == "imported-py":
         (repo / "agents" / "a" / "main.py").write_text("import common.big\n")
         (repo / "common" / "big.py").write_bytes(big)
-    elif where == "imported-script":
-        (repo / "agents" / "a" / "index.js").write_text('import "./big.js";\n')
-        (repo / "agents" / "a" / "big.js").write_bytes(b'import "../../common/web.py";\n' + b"//" + b"x" * 1_000_100 + b"\n")
     else:
         (repo / "agents" / "a" / "main.py").write_bytes(big)
         real = credentials._plain_file
@@ -6378,6 +6375,20 @@ def test_a_file_over_the_read_limit_says_the_walk_stopped(tmp_path, monkeypatch,
 
     found, stopped = _save_walk(repo)
     assert stopped
+
+
+def test_a_script_over_the_read_limit_is_matched_not_left_unread(tmp_path):
+    # The save's walk reaches a script past the read cap, up to the search cap, and matches it.
+    repo = _tree(tmp_path / "repo", {"common/__init__.py": "", "common/web.py": ""}).resolve()
+    (repo / "agents" / "a").mkdir(parents=True)
+    (repo / "agents" / "a" / "index.js").write_text('import "./big.js";\n')
+    (repo / "agents" / "a" / "big.js").write_bytes(
+        b'import "../../common/web.py";\n' + b"//" + b"x" * 1_000_100 + b"\n"
+    )
+
+    found, stopped = _save_walk(repo)
+    assert repo / "common" / "web.py" in found
+    assert not stopped
 
 
 def test_a_large_data_file_a_script_imports_doesnt_say_stopped(tmp_path):

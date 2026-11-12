@@ -23,6 +23,12 @@ from typing import Any, Literal
 
 from .credentials import imported_by_agent
 from .failure_file import FAILURE_FILE
+from .import_lines import (
+    LARGEST_SEARCHED,
+    SCRIPT_COMMENT_OR_STRING as _SCRIPT_COMMENT_OR_STRING,
+    SEARCH_TOTAL,
+    script_kept as _script_kept,
+)
 from .instrumentation_evidence import _SKIPPED_DIRECTORIES, _imports
 from .job import FailureDomain, HarnessFailure, HarnessStage
 from .python_source import (
@@ -135,6 +141,11 @@ _WHOLE_NAMES = {
     )
     for name in BROWSER_IMPORTS
 }
+# The same, as bytes, for the unread files whose bytes are searched (see _may_name_a_tool).
+_WHOLE_NAMES_BYTES = [
+    (name.encode(), re.compile(pattern.pattern.encode(), re.ASCII))
+    for name, pattern in _WHOLE_NAMES.items()
+]
 # A Python file that names none of these holds no browser import or tool marker, so it isn't parsed.
 _PYTHON_NAMES = (
     *(name.encode() for name in sorted(BROWSER_IMPORTS)),
@@ -150,13 +161,13 @@ _LARGEST_RAW_SEARCH = 1024 * 1024
 # A file too big to read is searched as bytes for the names that would make it matter (see
 # _may_name_a_tool), up to this size: a generated or data module of a few MB is cleared. Larger
 # ones aren't read at all.
-_LARGEST_UNREAD_SEARCHED = 4 * 1024 * 1024
+_LARGEST_UNREAD_SEARCHED = LARGEST_SEARCHED
 # And what one scan searches of them in all. Every name is looked for in each file: about 18 ms a
 # MiB on 3.12.3, crafted near misses included, so this much is about 0.15 s. A coding line naming a
 # codec costs more: the lookup normalises the name in Python, so two crafted 4 MiB names took
 # 0.31 s, and encodings._cache keeps each name it misses, 8 M characters for those two, for as long
 # as the process runs. read_module looks up the names of files it reads the same way.
-_UNREAD_SEARCH_TOTAL = 8 * 1024 * 1024
+_UNREAD_SEARCH_TOTAL = SEARCH_TOTAL
 # Past this a repository holds the conversation up for longer than the rest of the scan is worth.
 _LARGEST_SCAN = 128 * 1024 * 1024
 # Scripts are read by regular expressions that call back for every string or comment: 128 MB of
@@ -195,31 +206,6 @@ _NEAREST_RECORD_FOLDERS = 4
 # and this is about 0.5 s of them. A whole 411-package environment unpacked in one folder came
 # to 6.4 MiB.
 _RECORDS_AT_AND_ABOVE = 16 * 1024 * 1024
-# Strings are matched first and kept, so "https://..." or "src/**/*.ts" isn't read as a comment.
-# An unclosed one ends at its line or the file: a start that could fail makes a customer's odd file
-# cost the square of its size, which holds up the build's conversation until it's done.
-# A regex literal is kept the same way, so the "/*" in /\/*$/ doesn't hide the rest of the file. A
-# slash where a value is expected starts one: after punctuation or at a line's start, never after a
-# name or a number, where it divides. Its closing slash must be followed as a regex's is, by flags
-# and then no name, quote, "/" or "*": a division that starts a line, or a "/" in JSX text, then
-# reads as division, not as a literal that eats a string's opening quote.
-# Such a start can fail, so a class holds no "[" and the rest no "]", and a literal that meets one
-# is kept to its line's end: a failed literal then can't run over the classes of the slashes after
-# it, which would make the line cost its square, and the quotes and backticks it holds can't open a
-# string or a template that swaps code and strings for the rest of the file. The "]" also stops a
-# literal that runs on through escaped line ends, which would cost the square of their number.
-# Kept to its line's end, such a literal can take in a template's opening backtick later on that
-# line too; a "/*" inside that template then reads as a comment. That trade is the price of a line
-# that can't run away.
-_SCRIPT_COMMENT_OR_STRING = re.compile(
-    r"""("(?:\\.|[^"\\\n])*(?:"|(?=\n)|\\?\Z)|'(?:\\.|[^'\\\n])*(?:'|(?=\n)|\\?\Z)|`(?:\\.|[^`\\])*(?:`|\\?\Z)"""
-    r"""|(?<![^\n(,=:\[!&|?{};>])[ \t]*/(?![/*])(?:\\.|\[(?:\\.|[^\]\[\\\n])*(?:\]|(?=\n)|\\?\Z)|[^/\\\n\[\]])*"""
-    r"""(?:/(?=[dgimsuvy]*(?![\w$/*"'`]))|(?=\n)|\\?\Z|(?:\[(?=(?:\\.|[^\]\[\\\n])*\[)|\])[^\n]*))"""
-    r"""|//[^\n]*|/\*.*?(?:\*/|\Z)""",
-    re.DOTALL,
-)
-
-
 # The whole name, test data, or a test word and a helper word: "integration_tests" and
 # "test_utils" hold tests, while "e2e_agent" and "testing_agent" hold agents, and test automation
 # is a main kind of browser agent.
@@ -493,14 +479,6 @@ def _python_code(tokens: list[tokenize.TokenInfo]) -> str:
     return " ".join(token.string for token in tokens if token.type != tokenize.COMMENT)
 
 
-def _script_kept(hit: re.Match[str]) -> str:
-    kept = hit.group(1) or ""
-    # A lone apostrophe, as in JSX text, isn't a string, so it can't protect a comment after it.
-    if kept.startswith("'") and not kept.endswith("'"):
-        return kept.split("//", 1)[0]
-    return kept
-
-
 def _python_markers(text: str, tokens: TokenBudget, path: Path) -> set[str] | None:
     """The tool markers in ``text``'s code, or None when the scan's tokenizing ran out first."""
     if not _MARKER_START.search(text):
@@ -551,11 +529,11 @@ def _may_name_a_tool(path: Path, size: int, left: list[int]) -> bool:
     """Whether a file too big to read, of ``size`` bytes, may name a tool, so leaving it unread
     cuts the scan.
 
-    Its bytes are searched for the names a Python file must hold to be read at all
-    (``_PYTHON_NAMES``, as ``read_module`` searches them), "omputer" aside: that is a word in
-    prose, so it counts only where a ``_MARKER_START`` match starts. Every such match holds
-    "omputer" or "playwright", so this covers a script's tool markers too. It's never decoded or
-    parsed. A Python file whose coding line names a codec not proven safe to search as bytes can
+    Its bytes are searched, never decoded or parsed. A Python file may name a tool by a whole
+    package name (``_WHOLE_NAMES``: "steelblue" is no "steel"), by the toolkit's name, or by a
+    tool marker, which counts only where a ``_MARKER_START`` match starts: "omputer" alone is a
+    word in prose. A script is searched for markers only, since a read script contributes
+    nothing else (``_markers_in``): a package it imports is declared in its ``package.json``. A Python file whose coding line names a codec not proven safe to search as bytes can
     spell a name its bytes don't show, so it may; so may one whose coding line Python refuses,
     since the codec can be registered at run time before the file is imported. A file that can't
     be cleared may: one over ``_LARGEST_UNREAD_SEARCHED``, over what is ``left`` of the scan's
@@ -582,9 +560,12 @@ def _may_name_a_tool(path: Path, size: int, left: list[int]) -> bool:
         coding = _coding(raw)
         if coding is None or coding[1].name not in _RAW_SAFE_CODECS:
             return True
-    if any(name in raw for name in _PYTHON_NAMES if name != b"omputer"):
+    if path.suffix == ".py" and (
+        _TOOLKIT.encode() in raw
+        or any(name in raw and whole.search(raw) for name, whole in _WHOLE_NAMES_BYTES)
+    ):
         return True
-    return b"omputer" in raw and _MARKER_START_BYTES.search(raw) is not None
+    return _MARKER_START_BYTES.search(raw) is not None
 
 
 def browser_tools_found(source_root: Path | None) -> list[str]:
@@ -667,20 +648,33 @@ def _scan(
     # The record the budget left unread may be the one naming a package unpacked at the top,
     # so no folder there shows the agent wrote it: every import counts as the agent's.
     local = set() if left[0] < 0 else _modules_at_top(root, at_top)
-    return _tools_in(files, local)
+    names, cut = _tools_in(files, local)
+    _log_cut(cut)
+    return names, frozenset(cut)
+
+
+def _log_cut(cut: Counter[str]) -> None:
+    """One line for a scan's cuts, once the scan has all of them."""
+    if cut:
+        # Names and counts only: a path can name the customer's business.
+        logger.warning(
+            "agent type scan cut by %s",
+            ", ".join(f"{name} {count}" for name, count in sorted(cut.items())),
+        )
 
 
 def _tools_in(
     paths: Iterable[Path], local: set[str], first: Path | None = None
-) -> tuple[tuple[str, ...], frozenset[str]]:
+) -> tuple[tuple[str, ...], Counter[str]]:
     """The browser tools ``paths`` import or name, the files in ``first`` read before the rest:
     the totals below cut the files read last, and the agent's own mustn't be those.
 
-    And the limits that cut the scan, by name: each left code unread or unparsed, so finding
-    nothing then doesn't say there's nothing, and the reading gets a second look. A file that
-    names no tool, or that Python can't decode, isn't one: it can't import what Python runs. A
-    file too big to read is searched as bytes to say whether it names one (``_may_name_a_tool``),
-    so a large data module that doesn't isn't one either.
+    And the limits that cut the scan, by name and count: each left code unread or unparsed, so
+    finding nothing then doesn't say there's nothing, and the reading gets a second look. A file
+    that names no tool, or that Python can't decode, isn't one: it can't import what Python
+    runs. A file too big to read is searched as bytes to say whether it names one
+    (``_may_name_a_tool``), so a large data module that doesn't isn't one either. The caller
+    logs the cuts (``_log_cut``), once it has added its own.
     """
     found: set[str] = set()
     imported: set[str] = set()
@@ -768,7 +762,7 @@ def _tools_in(
             # A skipped file may be the agent's main one, and the reading then finds nothing. No
             # trace at any level, since a trace can quote a line of the customer's code; the type
             # only at WARNING, once a scan, since a path can name their business. The count is in
-            # the cut line below.
+            # the cut line.
             cut["skipped"] += 1
             if cut["skipped"] == 1:
                 logger.warning("agent type scan skipped a file: %s", type(error).__name__)
@@ -777,12 +771,6 @@ def _tools_in(
     if escapes.left < 0:
         # A file past the total was searched as bytes, which can miss a name its codec spells.
         cut["decode_total"] = 1
-    if cut:
-        # Names and counts only: a path can name the customer's business.
-        logger.warning(
-            "agent type scan cut by %s",
-            ", ".join(f"{name} {count}" for name, count in sorted(cut.items())),
-        )
     for name in imported:
         top = name.split(".")[0]
         if top in local:
@@ -791,7 +779,7 @@ def _tools_in(
             found.add(top)
         elif name.endswith(f".{_TOOLKIT}"):
             found.add(_TOOLKIT)
-    return tuple(sorted({name.replace("_", "-") for name in found})), frozenset(cut)
+    return tuple(sorted({name.replace("_", "-") for name in found})), cut
 
 
 def _files_in(folder: Path) -> list[Path]:
@@ -831,6 +819,7 @@ def _walked(root: Path, subfolder: str) -> tuple[frozenset[Path], bool]:
         stopped=stopped,
         limit_cut=limit_cut,
         search_total=_WALKED_SEARCHED,
+        search_file_limit=_LARGEST_UNREAD_SEARCHED,
     )
     if stopped and stopped[0]:
         logger.warning(
@@ -948,9 +937,12 @@ def _scanned_agent(
     names, cut = _tools_in(
         dict.fromkeys((*_agent_files(folder), *above, *shared, *manifests)), local, folder
     )
-    # A budget or limit left code the walk reached unread, so what it would have led to is
-    # unknown (TH-9512, Dileep's C2). _tools_in has already logged its own cuts.
-    return names, (cut | {"import_walk"} if walk_cut else cut)
+    if walk_cut:
+        # A budget or limit left code the walk reached unread, so what it would have led to is
+        # unknown.
+        cut["import_walk"] += 1
+    _log_cut(cut)
+    return names, frozenset(cut)
 
 
 def modality_text(value: Any) -> str:

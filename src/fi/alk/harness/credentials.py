@@ -26,6 +26,13 @@ import yaml
 
 from fi.simulate.runtime.spec import SecretRef
 
+from .import_lines import (
+    LARGEST_SEARCHED,
+    SEARCH_TOTAL,
+    SCRIPT_COMMENT_OR_STRING,
+    import_lines,
+    script_kept,
+)
 from .python_source import EscapeBudget, ParseBudget, decoded_first, parsed, utf8_size
 from .secrets import process_secret_environment_names
 from .source_folder import SubfolderNotFound, agent_folder, agent_scope, in_agent_scope, is_within
@@ -678,20 +685,26 @@ def _file_inside(
     left: list[float] | None = None,
     unread: list[bool] | None = None,
     too_big: list[bool] | None = None,
+    largest: int | None = None,
 ) -> Path | None:
     """``candidate`` resolved, if it's a plain file in ``root`` at most ``deepest`` parts long.
 
     ``left`` is the lookups on disk still allowed: one for the file, then one for each part of
     its path, which resolving it looks up in turn. Given ``unread``, its one item is set when a
     candidate is refused for its depth, or as a code file too big to read or a link to one: code
-    may be there that the walk doesn't follow.
+    may be there that the walk doesn't follow. ``largest`` is the size of file it returns, the
+    read cap when not given: a walk that line-searches code over the read cap gives its own.
     """
     if len(candidate.parts) > deepest:
         _mark(unread)
         return None
     if left is not None:
         left[0] -= 1
-    if not _plain_file(candidate, unread, too_big):
+    if not (
+        _plain_file(candidate, unread, too_big)
+        if largest is None
+        else _plain_file(candidate, unread, too_big, largest)
+    ):
         return None
     if left is not None:
         left[0] -= len(candidate.parts)
@@ -1299,7 +1312,10 @@ def _read_in_place(real: Path, folder: Path) -> bool:
 
 
 def _plain_file(
-    path: Path, unread: list[bool] | None = None, too_big: list[bool] | None = None
+    path: Path,
+    unread: list[bool] | None = None,
+    too_big: list[bool] | None = None,
+    largest: int = _MAX_FILE_BYTES,
 ) -> bool:
     """A regular file small enough to read: a committed link can point at anything, so it isn't
     followed. Given ``unread``, its one item is set when a code file is refused for its size or
@@ -1310,7 +1326,7 @@ def _plain_file(
         details = path.lstat()
     except (OSError, ValueError):
         return False
-    if stat.S_ISREG(details.st_mode) and details.st_size <= _MAX_FILE_BYTES:
+    if stat.S_ISREG(details.st_mode) and details.st_size <= largest:
         return True
     if (
         too_big is not None
@@ -1349,86 +1365,8 @@ def _python_imports(
     return [(level, name) for level, name in names if name]
 
 
-_IMPORT_LINE_NAME = re.compile(r"[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*")
-_FROM_LINE = re.compile(r"from[ \t]+(\.*)[ \t]*([A-Za-z_][\w.]*)?[ \t]+import\b(.*)", re.DOTALL)
-
-
-_COMPOUND_START = re.compile(
-    r"(?:if|elif|else|for|while|try|except|finally|with|async|def|class|match|case)\b"
-)
-_MOST_COLONS_TRIED = 8
-
-
-def _statements(code: str, capped: list[bool] | None = None) -> list[str]:
-    """The pieces of one source line (its comment already cut) a statement can start at: each
-    ``;`` segment, and for a segment that opens a compound statement (``if True: import x``) the
-    text after each of its first few ``:``. A piece that is no import is skipped by the caller.
-    A line search, so a ``;`` or ``:`` inside a string splits it too, which only adds a candidate.
-    Given ``capped``, its one item is set when a segment has more colons than are tried and an
-    ``import`` after the last one tried: that import isn't searched, so the caller cuts."""
-    pieces: list[str] = []
-    for segment in code.split(";"):
-        segment = segment.strip()
-        pieces.append(segment)
-        if _COMPOUND_START.match(segment):
-            at = -1
-            for _ in range(_MOST_COLONS_TRIED):
-                at = segment.find(":", at + 1)
-                if at < 0:
-                    break
-                pieces.append(segment[at + 1 :].strip())
-            else:
-                rest = segment[at + 1 :]
-                if capped is not None and ":" in rest and "import" in rest:
-                    capped[0] = True
-    return pieces
-
-
-def _import_lines(content: str, capped: list[bool] | None = None) -> list[tuple[int, str]]:
-    """The names a line search finds ``content`` importing, each with its level, in the shape
-    ``_python_imports`` gives: ``import a.b, c`` and ``from .x import y`` / ``from a.b import c``
-    at the start of a line (indented or not), a ``;`` segment, or the text after a compound
-    statement's ``:``, whatever follows a ``#`` ignored. A
-    parenthesised list is read across its lines. No parse, so no budget: the caller charges the
-    bytes to the walk's search total.
-
-    It misses an import built at run time (``importlib.import_module(name)``, ``__import__``), one
-    inside a multi-line string, and a name only a decoded codec spells. Given ``capped``, its one
-    item is set when a line had an import past the colons tried (``_statements``).
-    """
-    names: list[tuple[int, str]] = []
-    lines = iter(content.split("\n"))
-    for line in lines:
-        for code in _statements(line.split("#", 1)[0], capped):
-            if code.startswith("import") and code[6:7] in (" ", "\t"):
-                for part in code[6:].split(","):
-                    words = part.split()
-                    if words and _IMPORT_LINE_NAME.fullmatch(words[0]):
-                        names.append((0, words[0]))
-            elif code.startswith("from") and (found := _FROM_LINE.fullmatch(code)):
-                dots, module, tail = found.groups()
-                level, module = len(dots), module or ""
-                if "(" in tail and ")" not in tail:
-                    # The rest of a parenthesised list, up to the line that closes it.
-                    for more in lines:
-                        more = more.split("#", 1)[0]
-                        tail += " " + more
-                        if ")" in more:
-                            break
-                if module:
-                    names.append((level, module))
-                for part in tail.replace("(", " ").replace(")", " ").replace("\\", " ").split(","):
-                    words = part.split()
-                    if words and _IMPORT_LINE_NAME.fullmatch(words[0]):
-                        names.append((level, f"{module}.{words[0]}".lstrip(".")))
-    return names
-
-
 def _script_imports(content: str) -> list[str]:
-    # Here because agent_type_check imports this module.
-    from .agent_type_check import _SCRIPT_COMMENT_OR_STRING, _script_kept
-
-    code = _without_type_imports(_SCRIPT_COMMENT_OR_STRING.sub(_script_kept, content))
+    code = _without_type_imports(SCRIPT_COMMENT_OR_STRING.sub(script_kept, content))
     return [hit.group(1) for hit in _SCRIPT_IMPORT_OR_STRING.finditer(code) if hit.group(1)]
 
 
@@ -1493,6 +1431,7 @@ def imported_by_agent(
     stopped: list[bool] | None = None,
     limit_cut: list[bool] | None = None,
     search_total: int | None = None,
+    search_file_limit: int | None = None,
 ) -> frozenset[Path]:
     """The files the agent's folder imports, followed as far as they go.
 
@@ -1512,10 +1451,12 @@ def imported_by_agent(
     its imports can't be known.
 
     A file the parse total or the parse size keeps from being parsed, and a script the script
-    budget refuses, aren't left unknown: their import lines are searched instead (``_import_lines``,
+    budget refuses, aren't left unknown: their import lines are searched instead (``import_lines``,
     ``_script_imports``), and what they name is followed under every other limit. That search has
-    one total for the walk, ``search_total`` bytes (``_UNREAD_SEARCH_TOTAL`` when not given), and
-    ``_LARGEST_UNREAD_SEARCHED`` for a file.
+    one total for the walk, ``search_total`` bytes, and ``search_file_limit`` for a file (the
+    caller's caps; ``SEARCH_TOTAL`` and ``LARGEST_SEARCHED`` when not given). A walk that
+    searches also reaches a regular code file over the read cap, up to that file limit, and
+    searches it; a larger one is a cut.
 
     Given ``limit_cut``, its one item says the narrower thing: a limit left code the walk reached
     unread, and the line search didn't cover it. That is targets still queued when the loop ended
@@ -1524,15 +1465,14 @@ def imported_by_agent(
     untried. A file the parse total skipped but the search covered, a name dropped for its length
     or depth, a link, a file the parser refuses (syntax error) and a codec refusal are not.
     """
-    from .agent_type_check import _LARGEST_UNREAD_SEARCHED, _UNREAD_SEARCH_TOTAL
-
-    search_left = [_UNREAD_SEARCH_TOTAL if search_total is None else search_total]
+    search_left = [SEARCH_TOTAL if search_total is None else search_total]
+    search_largest = LARGEST_SEARCHED if search_file_limit is None else search_file_limit
     # Bundling, given no search total, keeps its read cap: only the save's walk searches past it.
     searches = search_total is not None
 
     def search_room(size: int) -> bool:
         """Charge ``size`` bytes to the line search's total, if it and the file's cap allow."""
-        if size > _LARGEST_UNREAD_SEARCHED or size > search_left[0]:
+        if size > search_largest or size > search_left[0]:
             return False
         search_left[0] -= size
         return True
@@ -1603,7 +1543,15 @@ def imported_by_agent(
                     lookups_left[0] -= 1
                     hit = None
                 else:
-                    hit = _file_inside(place, root, deepest, lookups_left, unread, limited)
+                    hit = _file_inside(
+                        place,
+                        root,
+                        deepest,
+                        lookups_left,
+                        unread,
+                        limited,
+                        *((search_largest,) if searches else ()),
+                    )
                 if hit is not None or candidate.name == "__init__.py":
                     looked_up[candidate] = hit
             if hit is not None:
@@ -1684,13 +1632,15 @@ def imported_by_agent(
             unread[0] = True
             continue
         over_cap = [False]
-        if not _plain_file(path, unread, over_cap):
+        link_or_big = [False]
+        if not _plain_file(path, link_or_big, over_cap):
             if not (over_cap[0] and searches):
+                unread[0] |= link_or_big[0]
                 limited[0] |= over_cap[0]
                 continue
             # A regular code file over the read cap, in a walk that searches: its import lines are
             # searched, up to the cap for an unread file, where a parse would refuse it.
-        largest = _LARGEST_UNREAD_SEARCHED if over_cap[0] else _MAX_FILE_BYTES
+        largest = search_largest if over_cap[0] else _MAX_FILE_BYTES
         if over_cap[0]:
             # Over the search's cap for a file: not opened, a limit cut as an unread file is.
             try:
@@ -1769,7 +1719,7 @@ def imported_by_agent(
                 if searches and search_room(len(raw)):
                     capped = [False]
                     results = [
-                        _import_lines(reading, capped) if skipped else result
+                        import_lines(reading, capped) if skipped else result
                         for reading, result, skipped in zip(readings, results, refused)
                     ]
                     # An import past the colons tried isn't followed: a cut, never silent.
