@@ -56,7 +56,7 @@ def _unauthenticated_development_server(monkeypatch):
 # Any argv text naming the package is guarded, and so is a guarded program in any word of it
 # (`env docker ...`, `timeout 60 claude ...`, `sh -c "docker ..."`): the names are the real
 # console scripts of pyproject `[project.scripts]` plus docker and claude.
-_GUARDED = ("fi.alk",)
+_GUARDED = ("fi.alk", "fi/alk/", "fi\\alk\\", f"fi{os.sep}alk{os.sep}")
 _GUARDED_PROGRAMS = (
     "docker",
     "docker-compose",
@@ -89,12 +89,19 @@ class _WorkerGuard:
         self.on_start = None
 
     @staticmethod
-    def guarded(args) -> str | None:
+    def guarded(args, executable=None) -> str | None:
         if isinstance(args, (str, bytes, os.PathLike)):
             text = os.fsdecode(args)
         else:
             text = " ".join(os.fsdecode(part) for part in args)
-        words = [os.path.basename(word.strip("\"'`;&|()")) for word in text.split()]
+        # The program can hide in the `executable=` kwarg (argv[0] is then only a label).
+        if executable is not None:
+            text = f"{os.fsdecode(executable)} {text}"
+        # Shell glue without spaces ("cd /tmp&&docker ...", "true;docker ...") joins words.
+        words = [
+            os.path.basename(word.strip("\"'`()"))
+            for word in re.split(r"[\s;&|]+", text)
+        ]
         if any(name in text for name in _GUARDED) or any(
             word in _GUARDED_PROGRAMS for word in words
         ):
@@ -102,7 +109,7 @@ class _WorkerGuard:
         return None
 
     def popen(self, args, *more, **kwargs):
-        text = self.guarded(args)
+        text = self.guarded(args, kwargs.get("executable"))
         if text is None:
             return self.real_popen(args, *more, **kwargs)
         self.launches.append(Launch(text, kwargs.get("env")))
@@ -2676,6 +2683,33 @@ def test_a_group_seen_gone_is_not_killed_afterwards(monkeypatch):
     assert calls == [signal.SIGTERM, 0]
 
 
+def test_a_group_that_may_not_be_probed_is_killed_afterwards(monkeypatch):
+    calls = []
+    real_killpg = os.killpg
+
+    def record(pgid, sig):
+        calls.append(sig)
+        if sig == 0:
+            # A zombie leader (macOS) answers the probe with PermissionError: the group is
+            # not known to be gone, so the SIGKILL that follows is the designed path.
+            raise PermissionError
+        real_killpg(pgid, sig)
+
+    child = subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(30)"], start_new_session=True
+    )
+    monkeypatch.setattr(sandbox_server, "_STOP_GRACE_SECONDS", 2.0)
+    monkeypatch.setattr(os, "killpg", record)
+    try:
+        sandbox_server._stop_worker(child)
+    finally:
+        if child.poll() is None:
+            real_killpg(child.pid, signal.SIGKILL)
+        child.wait()
+
+    assert calls == [signal.SIGTERM, 0, signal.SIGKILL]
+
+
 def test_a_cancel_before_the_start_still_cleans_up(tmp_path, monkeypatch, stops):
     import threading
 
@@ -2756,10 +2790,18 @@ def test_the_guard_swaps_every_worker_start():
     guard.popen([sys.executable, "-m", "fi.alk.harness", "simulate"])
     guard.popen("/usr/bin/env docker compose up", shell=True)
     guard.popen(["timeout", "60", "claude", "-p"])
+    guard.popen([sys.executable, "/repo/src/fi/alk/harness/sandbox_worker.py", "job.json"])
+    guard.popen(
+        [sys.executable, "/venv/lib/python3.12/site-packages/fi/alk/harness/cli.py", "simulate"]
+    )
+    guard.popen([sys.executable, "/repo/src/fi/alk/harness/run/sdk_voice.py", "case"])
+    guard.popen("cd /tmp&&docker compose up", shell=True)
+    guard.popen("true;docker compose up", shell=True)
+    guard.popen(["worker", "compose", "up"], executable="/usr/bin/docker")
     guard.popen(["git", "status"])
 
-    assert seen == [_HARMLESS] * 6 + [["git", "status"]]
-    assert len(guard.unexpected()) == 6
+    assert seen == [_HARMLESS] * 12 + [["git", "status"]]
+    assert len(guard.unexpected()) == 12
 
 
 def test_a_test_that_starts_a_worker_unasked_fails(pytester):
