@@ -389,7 +389,8 @@ def _unlisted_actors(scenario: Scenario, world_root: Path) -> list[str]:
     for loop in cycles(listed, scenario.actors):
         problems.append(
             "actors: " + " and ".join(loop) + " bring each other in (each one's trigger is an action only the next "
-            "can take): a cycle no run can settle; give one of them a trigger of its own"
+            "can take; the agent and the seed are not counted as writing those records): a cycle no run can settle; "
+            "give one of them a trigger of its own"
         )
     return problems
 
