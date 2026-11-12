@@ -136,7 +136,7 @@ def test_worker_inherits_runner_topology_but_uploaded_values_cannot_replace_it()
 
 def test_worker_never_inherits_host_voice_provider_credentials():
     child = worker_environment(
-        {"LIVEKIT_API_KEY": "job-livekit"},
+        {"LIVEKIT_API_KEY": "job-livekit", "CARTESIA_API_KEY": "job-cartesia"},
         host_environment={
             "PATH": "/bin",
             "LIVEKIT_API_KEY": "runner-livekit",
@@ -149,7 +149,10 @@ def test_worker_never_inherits_host_voice_provider_credentials():
     assert child["LIVEKIT_API_KEY"] == "job-livekit"
     assert "LIVEKIT_API_SECRET" not in child
     assert "DEEPGRAM_API_KEY" not in child
-    assert "CARTESIA_API_KEY" not in child
+    # The one exception: the runner's Cartesia key voices the simulated caller
+    # (call_runner.py, `cartesia_key`), so the worker inherits it (f0b3fcea, #69), and a job's
+    # own value can't replace it.
+    assert child["CARTESIA_API_KEY"] == "runner-cartesia"
 
 
 def test_worker_inherits_runner_model_roles_but_jobs_cannot_replace_them():
