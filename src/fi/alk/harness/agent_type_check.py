@@ -178,6 +178,10 @@ _WALKED_PARSED = 512 * 1024
 # And the lookups on disk it makes then, a file found costing one for each part of its path: a name
 # can resolve a package for each of its parts, and 1,000 crafted names took the save 12 s.
 _WALKED_LOOKUPS = 100_000
+# And the import lines it searches then, in the files its parse total keeps from being parsed, in
+# all: the size of the unread-file search (see _UNREAD_SEARCH_TOTAL). Past it, the code left
+# unread is a cut.
+_WALKED_SEARCHED = _UNREAD_SEARCH_TOTAL
 # Per scan, each record read once; a reopen of unchanged files reads none. Each row is parsed and
 # kept, so short rows cost the most: a scan through 16 MiB of 7-byte rows takes 0.9 s. A whole
 # 411-package environment unpacked in one folder came to 6.4 MiB.
@@ -808,11 +812,14 @@ def _below_shared(path: Path, folder: Path) -> tuple[str, ...]:
     return held[common:]
 
 
-def _walked(root: Path, subfolder: str) -> frozenset[Path]:
-    """What the agent's folder imports, followed with the save's limits. A walk a limit stopped
+def _walked(root: Path, subfolder: str) -> tuple[frozenset[Path], bool]:
+    """What the agent's folder imports, followed with the save's limits, and whether a budget or
+    limit left code it reached unread (the scan's ``import_walk`` cut). A walk a limit stopped
     is logged: what it didn't reach, the save's checks don't see, and bundling's walk, with no
-    limit, may."""
+    limit, may. A stop for a name's length or depth, a link, a syntax error or a codec the
+    parser refuses is logged but isn't a cut."""
     stopped: list[bool] = []
+    limit_cut: list[bool] = []
     found = imported_by_agent(
         root,
         subfolder,
@@ -822,6 +829,8 @@ def _walked(root: Path, subfolder: str) -> frozenset[Path]:
         import_limit=_WALKED_IMPORTS,
         lookup_limit=_WALKED_LOOKUPS,
         stopped=stopped,
+        limit_cut=limit_cut,
+        search_total=_WALKED_SEARCHED,
     )
     if stopped and stopped[0]:
         logger.warning(
@@ -830,7 +839,7 @@ def _walked(root: Path, subfolder: str) -> frozenset[Path]:
             subfolder,
             len(found),
         )
-    return found
+    return found, bool(limit_cut and limit_cut[0])
 
 
 def code_the_agent_reaches(source_root: Path, subfolder: str) -> list[Path]:
@@ -865,7 +874,8 @@ def _scanned_agent(
     source_root: Path, subfolder: str, reached: list[Path] | None
 ) -> tuple[tuple[str, ...], frozenset[str]]:
     """``browser_tools_in_agent``'s scan, and the limits that cut it. The walk's own stops aren't
-    among them: they're logged by ``_walked``."""
+    among them, except ``import_walk`` when a budget or limit left code unread; the walk's other
+    stops are logged by ``_walked``."""
     root = Path(source_root).resolve()
     folder = agent_folder(root, subfolder)
     above = [
@@ -904,7 +914,8 @@ def _scanned_agent(
                     break
         return False
 
-    walked = sorted(_walked(root, subfolder))
+    reached_files, walk_cut = _walked(root, subfolder)
+    walked = sorted(reached_files)
     shared = [
         path
         for path in walked
@@ -934,9 +945,12 @@ def _scanned_agent(
         for parent in path.parents
         if is_within(parent, root) and (parent / "package.json").is_file()
     ]
-    return _tools_in(
+    names, cut = _tools_in(
         dict.fromkeys((*_agent_files(folder), *above, *shared, *manifests)), local, folder
     )
+    # A budget or limit left code the walk reached unread, so what it would have led to is
+    # unknown (TH-9512, Dileep's C2). _tools_in has already logged its own cuts.
+    return names, (cut | {"import_walk"} if walk_cut else cut)
 
 
 def modality_text(value: Any) -> str:

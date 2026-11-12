@@ -808,14 +808,68 @@ def test_a_large_honest_repository_gets_a_look(tmp_path, monkeypatch):
     assert _text(answer) == _look(_CUT_CHAT.format(claimed="chat"))
 
 
-def test_the_walks_stop_is_no_cut(tmp_path, caplog):
-    # Over the walk's 512 KB parse total in modules that import, none of them naming a tool.
-    module = "import os\n" + "x = 1\n" * (100 * 1024 // 6)
+_PADDING = "import os\n" + "x = 1\n" * (100 * 1024 // 6)
+
+
+def _padded(root: Path, **more: str) -> Path:
+    # Six modules that import, over the walk's 512 KB parse total, are read before z_main.py.
+    return _tree(
+        root,
+        {
+            **{f"agents/a/m_{at}.py": _PADDING for at in range(6)},
+            "agents/a/z_main.py": "import common.util\n",
+            "common/__init__.py": "",
+            **more,
+        },
+    )
+
+
+def test_a_file_the_parse_total_skipped_is_line_searched_and_no_cut(tmp_path, caplog):
+    # Dileep's C2: z_main.py is never parsed, so common.util used to go unfollowed.
+    repo = _padded(tmp_path / "source", **{"common/util.py": "import playwright\n"})
+    with caplog.at_level(logging.WARNING, logger=agent_type_check.__name__):
+        assert browser_scan(repo, "agents/a") == (["playwright"], frozenset())
+    assert any("stopped at its limits" in record.getMessage() for record in caplog.records)
+
+
+def test_a_name_in_a_file_only_the_line_search_reached_is_found_and_no_cut(tmp_path):
+    # common/deep.py is reached only through util.py's import line, and util.py only through
+    # z_main.py's: neither was parsed.
+    repo = _padded(
+        tmp_path / "source",
+        **{"common/util.py": "import common.deep\n", "common/deep.py": "import playwright\n"},
+    )
+    assert browser_scan(repo, "agents/a") == (["playwright"], frozenset())
+
+
+def test_a_line_search_with_no_room_left_is_a_cut(tmp_path, monkeypatch):
+    monkeypatch.setattr(agent_type_check, "_WALKED_SEARCHED", 8)
+    repo = _padded(tmp_path / "source", **{"common/util.py": "import playwright\n"})
+    assert browser_scan(repo, "agents/a") == ([], frozenset({"import_walk"}))
+    answer = _submitter(tmp_path / "out", repo, "agents/a")(_reading("chat"))
+    assert _text(answer) == _look(_CUT_CHAT.format(claimed="chat"))
+    assert decide("chat", [], looked_again=False, cut=frozenset({"import_walk"})) == "second_look"
+
+
+def test_a_name_dropped_for_its_depth_alone_is_no_cut(tmp_path, caplog):
+    deep = ".".join(f"p{at}" for at in range(80))
+    repo = _tree(tmp_path / "source", {"agents/a/agent.py": f"import {deep}\nx = 1\n"})
+    with caplog.at_level(logging.WARNING, logger=agent_type_check.__name__):
+        assert browser_scan(repo, "agents/a") == ([], frozenset())
+    # The walk still logs that it left a name unread.
+    assert any(
+        "stopped at its limits" in record.getMessage() for record in caplog.records
+    )
+    answer = _submitter(tmp_path / "out", repo, "agents/a")(_reading("chat"))
+    assert not answer.get("is_error"), answer
+
+
+def test_a_file_python_refuses_alone_is_no_cut(tmp_path, caplog):
     repo = _tree(
         tmp_path / "source",
         {
-            **{f"agents/a/m_{at}.py": module for at in range(6)},
-            "agents/a/z_main.py": "import common.util\n",
+            "agents/a/agent.py": "import common.util\n",
+            "agents/a/broken.py": "import os\ndef (:\n",
             "common/__init__.py": "",
             "common/util.py": "x = 1\n",
         },
@@ -825,10 +879,25 @@ def test_the_walks_stop_is_no_cut(tmp_path, caplog):
     assert any(
         "stopped at its limits" in record.getMessage() for record in caplog.records
     )
-    output = tmp_path / "out"
-    answer = _submitter(output, repo, "agents/a")(_reading("chat"))
+    answer = _submitter(tmp_path / "out", repo, "agents/a")(_reading("chat"))
     assert not answer.get("is_error"), answer
-    assert load(output).modality == "chat"
+
+
+def test_targets_left_in_the_queue_by_the_import_limit_are_a_cut(tmp_path, monkeypatch):
+    # Two imports are the walk's whole allowance, so the two modules they reach are queued, not
+    # read: common/m2.py may import anything.
+    monkeypatch.setattr(agent_type_check, "_WALKED_IMPORTS", 2)
+    repo = _tree(
+        tmp_path / "source",
+        {
+            "agents/a/agent.py": "import common.m1\nimport common.m2\n",
+            "common/__init__.py": "",
+            "common/m1.py": "x = 1\n",
+            "common/m2.py": "import common.m3\n",
+            "common/m3.py": "import playwright\n",
+        },
+    )
+    assert browser_scan(repo, "agents/a") == ([], frozenset({"import_walk"}))
 
 
 def test_ci_runs_this_file():

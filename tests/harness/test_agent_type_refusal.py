@@ -3469,9 +3469,17 @@ def test_the_scan_parses_python_only_up_to_its_total(tmp_path, monkeypatch, tota
     assert browser_tools_found(repo) == expected
 
 
-def test_the_walk_while_the_conversation_waits_follows_only_small_files(tmp_path):
+@pytest.mark.parametrize("search, expected", [(None, ["playwright"]), (1, [])])
+def test_the_walk_while_the_conversation_waits_parses_only_small_files(
+    tmp_path, monkeypatch, search, expected
+):
     from fi.alk.harness.credentials import imported_by_agent
     from fi.alk.harness.python_source import LARGEST_PARSED_MODULE
+
+    # A file over the parse limit isn't parsed; its import lines are searched instead, so what it
+    # names is still followed, until the walk's search total has no room for it.
+    if search is not None:
+        monkeypatch.setattr(agent_type_check, "_WALKED_SEARCHED", search)
 
     repo = _tree(
         tmp_path / "repo",
@@ -3482,14 +3490,17 @@ def test_the_walk_while_the_conversation_waits_follows_only_small_files(tmp_path
         },
     )
 
-    assert browser_tools_in_agent(repo, "agents/a") == []
+    assert browser_tools_in_agent(repo, "agents/a") == expected
     # Bundling, with no conversation waiting, still follows it.
     assert (repo / "common" / "web.py").resolve() in imported_by_agent(repo, "agents/a")
 
 
-@pytest.mark.parametrize("total, expected", [(36, ["playwright"]), (35, [])])
+@pytest.mark.parametrize(
+    "total, search, expected",
+    [(36, None, ["playwright"]), (35, None, ["playwright"]), (35, 1, [])],
+)
 def test_the_walk_while_the_conversation_waits_parses_only_up_to_its_total(
-    tmp_path, monkeypatch, total, expected
+    tmp_path, monkeypatch, total, search, expected
 ):
     from fi.alk.harness import agent_type_check
 
@@ -3503,6 +3514,9 @@ def test_the_walk_while_the_conversation_waits_parses_only_up_to_its_total(
     )
     # The walk's own total: the browser scan's stays as it is.
     monkeypatch.setattr(agent_type_check, "_WALKED_PARSED", total)
+    # Past it a file's import lines are searched, not parsed, unless that has no room either.
+    if search is not None:
+        monkeypatch.setattr(agent_type_check, "_WALKED_SEARCHED", search)
 
     assert browser_tools_in_agent(repo, "agents/a") == expected
 
@@ -3742,10 +3756,16 @@ _SHARED_IMPORT = 'import { x } from "../../common/web.js";\n'
 
 
 @pytest.mark.parametrize(
-    "budget, followed", [(len(_SHARED_IMPORT), True), (len(_SHARED_IMPORT) - 1, False)]
+    "budget, search, followed",
+    [
+        (len(_SHARED_IMPORT), None, True),
+        # Past the script total the imports are matched under the search total instead.
+        (len(_SHARED_IMPORT) - 1, None, True),
+        (len(_SHARED_IMPORT) - 1, 1, False),
+    ],
 )
 def test_the_walk_while_the_conversation_waits_reads_scripts_only_up_to_a_total(
-    tmp_path, monkeypatch, budget, followed
+    tmp_path, monkeypatch, budget, search, followed
 ):
     from fi.alk.harness.credentials import imported_by_agent
 
@@ -3755,6 +3775,8 @@ def test_the_walk_while_the_conversation_waits_reads_scripts_only_up_to_a_total(
         {"agents/a/main.js": script, "common/web.js": 'const server = "@playwright/mcp";\n'},
     )
     monkeypatch.setattr(agent_type_check, "_WALKED_SCRIPTS", budget)
+    if search is not None:
+        monkeypatch.setattr(agent_type_check, "_WALKED_SEARCHED", search)
 
     assert browser_tools_in_agent(repo, "agents/a") == (["Playwright MCP"] if followed else [])
     # Bundling, with no conversation waiting, reads them all.
@@ -3893,7 +3915,11 @@ def test_the_walk_counts_its_parse_limit_in_bytes(tmp_path):
     )
     shared = (repo / "common" / "web.py").resolve()
 
-    assert shared not in imported_by_agent(repo, "agents/a", parse_limit=128 * 1024)
+    # 128 KB of bytes is over a 128 KB limit once the comment's two-byte characters count; with no
+    # room to search it, the import isn't followed.
+    assert shared not in imported_by_agent(
+        repo, "agents/a", parse_limit=128 * 1024, search_total=0
+    )
     assert shared in imported_by_agent(repo, "agents/a", parse_limit=256 * 1024)
 
 
@@ -4434,9 +4460,9 @@ def test_the_walk_charges_a_file_found_for_each_part_of_its_path(tmp_path, monke
     charged: list[tuple[Path, float]] = []
     real = credentials._file_inside
 
-    def spy(candidate, root, deepest, left=None, unread=None):
+    def spy(candidate, root, deepest, left=None, unread=None, too_big=None):
         before = left[0]
-        hit = real(candidate, root, deepest, left, unread)
+        hit = real(candidate, root, deepest, left, unread, too_big)
         charged.append((candidate, before - left[0]))
         return hit
 
@@ -5607,7 +5633,7 @@ def test_a_stopped_save_walk_logs_how_many_files_it_reached(tmp_path, caplog, mo
     ).resolve()
     monkeypatch.setattr(agent_type_check, "_WALKED_LOOKUPS", 200)
     with caplog.at_level("WARNING", logger=agent_type_check.__name__):
-        found = agent_type_check._walked(repo, "agents/a")
+        found, _ = agent_type_check._walked(repo, "agents/a")
 
     assert f"stopped at its limits or left code unread; {len(found)} files reached" in caplog.text
     assert len(found) >= 1
@@ -6024,7 +6050,7 @@ def test_plain_files_ahead_of_the_agents_imports_dont_use_up_the_parse_total(tmp
         },
     ).resolve()
 
-    assert repo / "common" / "web.py" in agent_type_check._walked(repo, "agents/a")
+    assert repo / "common" / "web.py" in agent_type_check._walked(repo, "agents/a")[0]
 
 
 def test_a_file_the_parse_total_cuts_says_the_walk_stopped(tmp_path):
@@ -6222,6 +6248,7 @@ def _save_walk(repo: Path, subfolder: str = "agents/a"):
         import_limit=agent_type_check._WALKED_IMPORTS,
         lookup_limit=agent_type_check._WALKED_LOOKUPS,
         stopped=stopped,
+        search_total=agent_type_check._WALKED_SEARCHED,
     )
     return found, stopped[0]
 
@@ -6245,9 +6272,6 @@ def _behind(tmp_path: Path, helper: bytes) -> Path:
             marks=pytest.mark.skipif(sys.version_info >= (3, 13), reason="parses on 3.13"),
         ),
         pytest.param(b"from common import web\nNAME = 'a" + "\u0301".encode() * 40 + b"'\n", id="marks"),
-        pytest.param(
-            b"# coding: latin-1\nfrom common import web\n# " + b"\xe9" * 70_000 + b"\n", id="oversize-as-utf8"
-        ),
         # Any syntax error counts: the parser can't tell newer syntax from Python 2 or a template.
         pytest.param(b"from common import web\nprint 'py2'\n", id="python-2"),
         pytest.param(b"{% if web %}\nfrom common import web\n{% endif %}\n", id="template"),
@@ -6260,14 +6284,26 @@ def test_a_file_the_walk_cant_parse_says_it_stopped(tmp_path, helper):
     assert stopped and repo / "common" / "web.py" not in found
 
 
-def test_a_file_past_the_parse_total_says_the_walk_stopped(tmp_path, monkeypatch):
+def test_a_file_over_the_parse_limit_as_utf8_says_stopped_and_is_line_searched(tmp_path):
+    helper = b"# coding: latin-1\nfrom common import web\n# " + b"\xe9" * 70_000 + b"\n"
+    repo = _behind(tmp_path, helper)
+
+    found, stopped = _save_walk(repo)
+    assert stopped and repo / "common" / "web.py" in found
+
+
+@pytest.mark.parametrize("search, followed", [(None, True), (1, False)])
+def test_a_file_past_the_parse_total_says_the_walk_stopped(tmp_path, monkeypatch, search, followed):
     from fi.alk.harness import agent_type_check
 
     repo = _behind(tmp_path, b"from common import web\n" + b"x = 1\n" * 50)
     monkeypatch.setattr(agent_type_check, "_WALKED_PARSED", 40)
+    if search is not None:
+        monkeypatch.setattr(agent_type_check, "_WALKED_SEARCHED", search)
 
+    # Not parsed, so the walk says it stopped; its import lines are searched unless that has no room.
     found, stopped = _save_walk(repo)
-    assert stopped and repo / "common" / "web.py" not in found
+    assert stopped and (repo / "common" / "web.py" in found) is followed
 
 
 _ESCAPED_LINE = b"# coding: unicode-escape\n"
@@ -6335,7 +6371,7 @@ def test_a_file_over_the_read_limit_says_the_walk_stopped(tmp_path, monkeypatch,
         real = credentials._plain_file
         # Small when looked at, past the limit once read.
         monkeypatch.setattr(
-            credentials, "_plain_file", lambda path, unread=None: path.name == "main.py" or real(path, unread)
+            credentials, "_plain_file", lambda path, unread=None, too_big=None: path.name == "main.py" or real(path, unread, too_big)
         )
 
     found, stopped = _save_walk(repo)
