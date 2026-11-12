@@ -264,6 +264,15 @@ class HarnessJobMetadata(BaseModel):
     customer_code_environment: dict[str, str] = Field(default_factory=dict)
 
 
+class JobSkill(BaseModel):
+    model_config = ConfigDict(strict=True, extra="ignore", frozen=True)
+
+    name: str = Field(min_length=1, max_length=64)
+    version_number: int = Field(ge=1)
+    path: str = Field(min_length=1, max_length=512)
+    kind: str = Field(pattern=r"^(skill|context)$")
+
+
 class HarnessJob(BaseModel):
     schema_version: str = HARNESS_JOB_SCHEMA_VERSION
     job_id: str
