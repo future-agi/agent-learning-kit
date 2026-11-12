@@ -11,19 +11,25 @@ rather than a bad contract reaching disk.
 
 from __future__ import annotations
 
+import collections.abc
 import json
+import os
 import re
 import shlex
+import threading
+import typing
 from pathlib import Path
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, Field, field_validator, model_serializer, model_validator
+from pydantic.json_schema import SkipJsonSchema
 
 from fi.simulate.agent.wrappers.http_events import (
     CompletedToolEvents,
     CompletedToolRows,
 )
 
+from ..providers.agent import _redact
 from .observations import HttpObservation
 
 # How a person reaches an agent. This decides how it is later run — voice goes out as a live
@@ -205,6 +211,21 @@ class PromptSource(BaseModel):
     path: str
     start_line: int
     end_line: int
+
+
+class ModelSource(BaseModel):
+    """The model the agent talks to the person with, and the line its name is written on."""
+
+    provider: str = ""
+    name: str = ""
+    path: str = ""
+    line: int = 0
+
+    @model_validator(mode="before")
+    @classmethod
+    def _bare_name(cls, value: Any) -> Any:
+        # A bare string is the name alone; the save then asks for path and line.
+        return {"name": value} if isinstance(value, str) else value
 
 
 class DataStore(BaseModel):
@@ -823,6 +844,18 @@ class Runtime(BaseModel):
     # repository.
     interface: RuntimeInterface | None = None
 
+    # The folder of the repository this agent lives in. The harness records it when the
+    # contract is saved, so it is kept out of the schema the model writes against and out of
+    # the dump when empty.
+    source_subfolder: SkipJsonSchema[str] = ""
+
+    @model_serializer(mode="wrap")
+    def _omit_empty_subfolder(self, handler: Any) -> dict[str, Any]:
+        data = handler(self)
+        if not data.get("source_subfolder"):
+            data.pop("source_subfolder", None)
+        return data
+
     @model_validator(mode="after")
     def _validate_selection(self) -> "Runtime":
         from .world.files import validate_bindings
@@ -1056,6 +1089,20 @@ def _reached(one: Dependency) -> str:
     return "; ".join(said)
 
 
+def prompt_quote(payload: Any) -> str:
+    """The quote of the prompt as AgentContract reads it from a payload: under its own name or
+    the first alias that has one, a list joined by lines. The save holds it before validating."""
+    if not isinstance(payload, dict):
+        return ""
+    for key in ("system_prompt_excerpt", *_ALIASES["system_prompt_excerpt"]):
+        value = payload.get(key)
+        if value:
+            if isinstance(value, list):
+                return "\n".join(str(item) for item in value)
+            return value if isinstance(value, str) else str(value)
+    return ""
+
+
 class AgentContract(BaseModel):
     """What the agent verifiably is. Nothing downstream may contradict this."""
 
@@ -1114,6 +1161,12 @@ class AgentContract(BaseModel):
     system_prompt_excerpt: str = ""
     # When given, the excerpt is replaced by these lines copied from the source as written.
     system_prompt_from: list[PromptSource] = Field(default_factory=list)
+    # Set by the save, never by the reading: lines named for the prompt that twice didn't hold
+    # the quote given for it. The quote went out instead, or, when the quote was too short to
+    # stand for the prompt, the lines did, unconfirmed. Empty for nearly every contract.
+    unconfirmed_prompt_from: list[PromptSource] = Field(default_factory=list)
+    # None is unknown. Kept only when its name was found on the line cited in the source.
+    model: ModelSource | None = None
     hard_constraints: list[str] = Field(default_factory=list)
     tools: list[ToolSpec] = Field(default_factory=list)
     data_schema: dict[str, Any] = Field(default_factory=dict)
@@ -1147,6 +1200,18 @@ class AgentContract(BaseModel):
     # than blended in, and whoever reads it later can tell the two apart.
     amendments: list[str] = Field(default_factory=list)
     instrumentation: str = "none"
+
+    @model_serializer(mode="wrap")
+    def _omit_absent_model(self, handler: Any) -> dict[str, Any]:
+        # A contract with no model writes the same bytes as before the field existed, so its
+        # setup fingerprint is unchanged.
+        data = handler(self)
+        if data.get("model") is None:
+            data.pop("model", None)
+        # The same for the record of unconfirmed prompt lines, kept only when there are some.
+        if not data.get("unconfirmed_prompt_from"):
+            data.pop("unconfirmed_prompt_from", None)
+        return data
 
     def tool_names(self) -> set[str]:
         return {tool.name for tool in self.tools}
@@ -1330,6 +1395,222 @@ class AgentContract(BaseModel):
         """Whether this tool has code of its own that should be run instead of replaced."""
         found = self.entry_for(tool)
         return bool(found and found.mode in ("import", "construct", "service"))
+
+
+# Which parts of the contract are prose, written by the reader in its own words, and which are
+# read as written by the build, the world or the runtime. Prose is cleaned of URL credentials
+# (userinfo, query and fragment) whenever the contract is saved; the rest is never changed.
+# A test walks every model the contract reaches and fails on a field in neither tuple.
+FREE_TEXT = (
+    "AgentContract.one_liner",
+    "AgentContract.system_prompt_excerpt",
+    "AgentContract.hard_constraints",
+    "AgentContract.implementation",
+    "AgentContract.real_use_cases",
+    "AgentContract.caller_identity",
+    "AgentContract.notes",
+    "AgentContract.open_questions",
+    "AgentContract.amendments",
+    "ToolSpec.description",
+    "ToolSpec.refuses",
+    "ToolSpec.effects",
+    "ToolEntry.notes",
+    "Dependency.what",
+)
+# A field that holds models is kept for itself, and its models' fields are classified in their
+# own right. A name without a dot is a whole technical model, every field of it kept.
+KEPT_AS_WRITTEN = (
+    "AgentContract.agent",
+    "AgentContract.modality",
+    "AgentContract.call_direction",
+    "AgentContract.agent_languages",
+    "AgentContract.conversational",
+    "AgentContract.system_prompt_from",
+    "AgentContract.unconfirmed_prompt_from",
+    # The model name the code cites, with its file and line: read as written, like the prompt lines.
+    "AgentContract.model",
+    "AgentContract.tools",
+    "AgentContract.data_schema",
+    "AgentContract.base_environment",
+    "AgentContract.dependencies",
+    "AgentContract.runtime_dependencies",
+    "AgentContract.tool_entrypoints",
+    # world/runtime.py matches its quoted markers against tool results, so cleaning it would
+    # change what counts as a refusal.
+    "AgentContract.refusal_signature",
+    "AgentContract.data_store",
+    "AgentContract.runtime",
+    "AgentContract.chosen_evals",
+    "AgentContract.instrumentation",
+    "ToolSpec.name",
+    "ToolSpec.args",
+    "ToolSpec.arg_types",
+    # The world answers with these as written.
+    "ToolSpec.arg_values",
+    "ToolSpec.requires",
+    "ToolSpec.inputs_from",
+    "ToolEntry.tool",
+    "ToolEntry.mode",
+    "ToolEntry.module",
+    "ToolEntry.callable",
+    "ToolEntry.factory",
+    "ToolEntry.first_arg",
+    "ToolEntry.service",
+    # The tool proxy calls it as written.
+    "ToolEntry.endpoint",
+    "ToolEntry.method",
+    "Dependency.name",
+    "Dependency.kind",
+    "Dependency.used_by",
+    "Dependency.engine",
+    "Dependency.version",
+    "Dependency.reached",
+    "PromptSource",
+    "ModelSource",
+    "Reached",
+    "DataStore",
+    "Runtime",
+    "HttpObservation",
+    "ObservationParameter",
+    "RuntimeSecretFile",
+    "RuntimeConfigFile",
+    "RuntimeInterface",
+    "CompletedToolEvents",
+    "CompletedToolFailureEvent",
+    "CompletedToolRows",
+    "LocalHttpAuth",
+    "RuntimeHttpFailureRule",
+    "RuntimeHttpSetupRequest",
+)
+CONTRACT_FILE = "contract.json"
+_SEQUENCES = (
+    list,
+    tuple,
+    set,
+    frozenset,
+    collections.abc.Sequence,
+    collections.abc.MutableSequence,
+)
+_MAPPINGS = (dict, collections.abc.Mapping, collections.abc.MutableMapping)
+
+
+def _walks_as_sequence(origin: Any) -> bool:
+    """Whether _holders walks a field of this origin as a sequence: any subclass of those above
+    (an abc registration counts), but never text."""
+    return (
+        isinstance(origin, type)
+        and issubclass(origin, _SEQUENCES)
+        and not issubclass(origin, (str, bytes, bytearray))
+    )
+
+
+def _walks_as_mapping(origin: Any) -> bool:
+    """Whether _holders walks a field of this origin as a mapping: any subclass of those above,
+    such as an OrderedDict."""
+    return isinstance(origin, type) and issubclass(origin, _MAPPINGS)
+
+
+def _holders(contract: AgentContract, body: dict[str, Any], model: str) -> list[tuple[Any, Any]]:
+    """Each (saved form, held object) of one free-text model, wherever the contract holds it.
+
+    The walk follows each field's type, so a model is found in a field of any shape: a list, a
+    tuple or a Sequence, a dict's or a Mapping's values (a subclass of each, such as an
+    OrderedDict, too), an Optional or a Union, or inside another model, and an empty one is
+    passed over. A model kept whole is not looked inside. The contract itself is
+    ``AgentContract``.
+    """
+    if model == "AgentContract":
+        return [(body, contract)]
+    pairs: list[tuple[Any, Any]] = []
+    seen: set[int] = set()
+
+    def walk(annotation: Any, saved: Any, held: Any) -> None:
+        if saved is None or held is None:
+            return
+        if isinstance(annotation, type) and issubclass(annotation, BaseModel):
+            if isinstance(held, BaseModel):
+                if not isinstance(held, annotation):
+                    return
+                annotation = type(held)
+            if annotation.__name__ in KEPT_AS_WRITTEN or not isinstance(saved, dict):
+                return
+            if annotation.__name__ == model and id(saved) not in seen:
+                seen.add(id(saved))
+                pairs.append((saved, held))
+            for key, field in annotation.model_fields.items():
+                inner = held.get(key) if isinstance(held, dict) else getattr(held, key, None)
+                walk(field.annotation, saved.get(key), inner)
+            return
+        origin, arguments = typing.get_origin(annotation), typing.get_args(annotation)
+        if _walks_as_sequence(origin):
+            # model_dump keeps a tuple a tuple. A tuple[A, B] has a type for each place.
+            if arguments and isinstance(saved, (list, tuple)) and isinstance(held, (list, tuple)):
+                fixed = origin is tuple and not (len(arguments) == 2 and arguments[1] is Ellipsis)
+                for index, (saved_item, held_item) in enumerate(zip(saved, held)):
+                    if not fixed or index < len(arguments):
+                        walk(arguments[index if fixed else 0], saved_item, held_item)
+        elif _walks_as_mapping(origin):
+            if len(arguments) == 2 and isinstance(saved, dict) and isinstance(held, dict):
+                for key, held_item in held.items():
+                    walk(arguments[1], saved.get(key), held_item)
+        else:
+            # Optional, Union and Annotated: each type it may be.
+            for argument in arguments:
+                walk(argument, saved, held)
+
+    walk(type(contract), body, contract)
+    return pairs
+
+
+def write_contract(contract: AgentContract, destination: Path) -> AgentContract:
+    """Save the contract to ``destination/contract.json``, its free text cleaned of URL credentials.
+
+    Every writer of the contract goes through here, so no saved contract holds a URL's password,
+    query or fragment in its prose. The file is written beside its place, synced and moved in,
+    so a write that fails partway leaves the earlier contract as it was. Only then are the
+    cleaned values copied back onto ``contract`` itself, in place: the stage and its tools hold
+    that object, and a fresh one would leave them working from the raw text. It is returned too.
+    """
+    body = contract.model_dump()
+    places: list[tuple[Any, Any, Any, str]] = []
+    for name in FREE_TEXT:
+        model, field = name.split(".")
+        for saved, held in _holders(contract, body, model):
+            if isinstance(saved, dict) and isinstance(saved.get(field), (str, list)):
+                places.append((saved, held, saved[field], field))
+    # One call for the whole save, over a list with no keys: only the URL rule applies, and a
+    # refused URL is logged once per save rather than once per string.
+    values = [value for _, _, value, _ in places]
+    cleaned = _redact(values)
+    for (saved, _, _, field), value in zip(places, cleaned):
+        saved[field] = value
+
+    destination = Path(destination)
+    destination.mkdir(parents=True, exist_ok=True)
+    path = destination / CONTRACT_FILE
+    partial = destination / f".{CONTRACT_FILE}.{os.getpid()}.{threading.get_ident()}"
+    try:
+        partial.write_text(json.dumps(body, indent=2, ensure_ascii=False), encoding="utf-8")
+        # Synced before the move, so the move never publishes a file the disk does not hold.
+        descriptor = os.open(partial, os.O_RDONLY)
+        try:
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
+        os.replace(partial, path)
+    finally:
+        partial.unlink(missing_ok=True)
+
+    for saved, held, _, field in places:
+        value = saved[field]
+        current = held.get(field) if isinstance(held, dict) else getattr(held, field, None)
+        if isinstance(current, list) and isinstance(value, list):
+            current[:] = value
+        elif isinstance(held, dict):
+            held[field] = value
+        else:
+            setattr(held, field, value)
+    return contract
 
 
 def runtime_owns_tools(contract: AgentContract) -> bool:

@@ -2432,3 +2432,214 @@ def test_ingress_openai_default_profile_also_requires_source_evidence(tmp_path, 
     with pytest.raises(ValueError, match="profile_evidence_required"):
         validate_runtime_plan_patch(tmp_path, contract, patch,
             allowed_diagnostic_codes={"chat_ingress_failed"}, allow_ingress_repair=True)
+
+
+def _folder_repo(tmp_path):
+    source = tmp_path / "source"
+    for name in ("a", "b"):
+        (source / "agents" / name).mkdir(parents=True)
+        (source / "agents" / name / "pyproject.toml").write_text(
+            f"[project]\nname='agent-{name}'\nversion='1'\n"
+        )
+        (source / "agents" / name / "app.py").write_text("# entrypoint\n")
+    return source
+
+
+def _folder_contract(**runtime) -> AgentContract:
+    return AgentContract(
+        agent="support-agent",
+        runtime=Runtime(
+            language="python",
+            source_subfolder="agents/a",
+            workdir="agents/a",
+            **runtime,
+        ),
+    )
+
+
+def _folder_patch(contract: AgentContract, *, mode="runtime_plan", codes=None, **changes):
+    runtime = Runtime(
+        language="python",
+        workdir="agents/a",
+        command=["python", "app.py"],
+        interface=RuntimeInterface(kind="http", port=8080, path="/chat"),
+        **changes,
+    )
+    return RuntimePlanPatch(
+        mode=mode,
+        base_contract_hash=_contract_hash(contract),
+        runtime=runtime,
+        evidence_paths=("agents/a/pyproject.toml", "agents/a/app.py"),
+        diagnostic_codes=tuple(codes or ("generated_runtime_plan_invalid",)),
+        summary="Run the HTTP service declared by the agent's folder.",
+    )
+
+
+def test_dependency_root_uses_subfolder(tmp_path) -> None:
+    from fi.alk.harness.runtime_repair import _dependency_root
+
+    root = _folder_repo(tmp_path).resolve()
+    (root / "pyproject.toml").write_text("[project]\nname='top'\nversion='1'\n")
+    # A sibling's callback must not decide where this agent installs from.
+    (root / "agents" / "b" / "agent.py").write_text("def agent_callback(m):\n    return m\n")
+
+    assert _dependency_root(root, _folder_contract().runtime) == root / "agents" / "a"
+
+
+def test_dependency_root_keeps_compose_branch(tmp_path) -> None:
+    from fi.alk.harness.runtime_repair import _dependency_root
+
+    root = _folder_repo(tmp_path).resolve()
+    (root / "agents" / "a" / "app").mkdir()
+    (root / "agents" / "a" / "compose.yaml").write_text(
+        "services:\n  agent:\n    build: ./app\n    command: [python, app.py]\n"
+    )
+
+    assert _dependency_root(root, _folder_contract().runtime) == root / "agents" / "a" / "app"
+
+
+def test_repair_patch_drops_a_folder_the_contract_never_recorded(tmp_path) -> None:
+    source = _folder_repo(tmp_path)
+    contract = AgentContract(agent="support-agent", runtime=Runtime(language="python"))
+
+    repaired = validate_runtime_plan_patch(
+        source,
+        contract,
+        _folder_patch(contract, source_subfolder="agents/b"),
+        allowed_diagnostic_codes={"generated_runtime_plan_invalid"},
+    )
+
+    assert repaired.runtime.source_subfolder == ""
+
+
+def test_repair_patch_keeps_recorded_folder(tmp_path) -> None:
+    source = _folder_repo(tmp_path)
+    contract = _folder_contract()
+    allowed = {"generated_runtime_plan_invalid"}
+
+    kept = validate_runtime_plan_patch(
+        source, contract, _folder_patch(contract), allowed_diagnostic_codes=allowed
+    )
+    assert kept.runtime.source_subfolder == "agents/a"
+
+    # A folder the model wrote is replaced by the one the contract recorded.
+    written = validate_runtime_plan_patch(
+        source,
+        contract,
+        _folder_patch(contract, source_subfolder="agents/b"),
+        allowed_diagnostic_codes=allowed,
+    )
+    assert written.runtime.source_subfolder == "agents/a"
+
+    # The key on disk survives a patch that never names it.
+    path = tmp_path / "contract.json"
+    path.write_text(contract.model_dump_json(indent=2) + "\n")
+    applied = apply_runtime_plan_patch(
+        source, path, _folder_patch(contract), allowed_diagnostic_codes=allowed
+    )
+    assert applied.runtime.source_subfolder == "agents/a"
+    assert json.loads(path.read_text())["runtime"]["source_subfolder"] == "agents/a"
+
+
+def test_repair_patch_keeps_recorded_folder_for_ingress_repair(tmp_path) -> None:
+    source = _folder_repo(tmp_path)
+    contract = AgentContract(
+        agent="support-agent",
+        modality="chat",
+        runtime=Runtime(
+            language="python",
+            source_subfolder="agents/a",
+            workdir="agents/a",
+            command=["python", "app.py"],
+            interface=RuntimeInterface(kind="http", port=8081, path="/chat"),
+        ),
+    )
+
+    repaired = validate_runtime_plan_patch(
+        source,
+        contract,
+        _folder_patch(
+            contract, mode="chat_ingress", codes=("chat_ingress_failed",)
+        ),
+        allowed_diagnostic_codes={"chat_ingress_failed"},
+        allow_ingress_repair=True,
+    )
+
+    assert repaired.runtime.interface.port == 8080
+    assert repaired.runtime.source_subfolder == "agents/a"
+
+
+def test_repair_patch_refuses_climbing_command(tmp_path) -> None:
+    source = _folder_repo(tmp_path)
+    contract = _folder_contract()
+    patch = _folder_patch(contract)
+    patch = patch.model_copy(
+        update={
+            "runtime": patch.runtime.model_copy(
+                update={"command": ["python", "../b/app.py"]}
+            )
+        }
+    )
+
+    with pytest.raises(ValueError, match="runtime_command_outside_subfolder"):
+        validate_runtime_plan_patch(
+            source,
+            contract,
+            patch,
+            allowed_diagnostic_codes={"generated_runtime_plan_invalid"},
+        )
+
+
+def test_repair_prompt_names_the_folder(tmp_path, monkeypatch) -> None:
+    import asyncio
+
+    from fi.alk.harness import runtime_repair
+    from fi.alk.harness.diagnostics import HarnessDiagnostic
+    from fi.alk.harness.job import HarnessStage
+
+    prompts: list[str] = []
+
+    class InspectingStage:
+        def __init__(self, spec, **kwargs):
+            prompts.append(spec.system_prompt)
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            pass
+
+        async def say(self, briefing, *, on_event=None):
+            pass
+
+    monkeypatch.setattr(runtime_repair, "Stage", InspectingStage)
+    diagnostic = HarnessDiagnostic.create(
+        stage=HarnessStage.BUILDING_ENVIRONMENT,
+        component="runtime",
+        code="generated_runtime_plan_invalid",
+        message="bad runtime",
+    )
+    for contract in (_folder_contract(), AgentContract(agent="x", runtime=Runtime())):
+        with pytest.raises(RuntimeError, match="typed_runtime_plan_patch_not_submitted"):
+            asyncio.run(
+                runtime_repair.request_runtime_plan_patch(tmp_path, contract, (diagnostic,))
+            )
+
+    assert "This agent is the folder agents/a." in prompts[0]
+    # Every service is checked at the save, not only the control one.
+    assert "every service the stack runs must build this folder" in prompts[0]
+    assert "Compose file may sit in it or above it" in prompts[0]
+    assert "This agent is the folder" not in prompts[-1]
+
+
+def test_repair_reads_the_folders_alk_yaml(tmp_path) -> None:
+    from fi.alk.harness.runtime_repair import _select_repair_runtime
+
+    root = _folder_repo(tmp_path).resolve()
+    # The repository-level file is unusable on purpose: only the agent folder's is read.
+    (root / "alk.yaml").write_text("runtime: 5\n")
+    (root / "agents" / "a" / "alk.yaml").write_text(
+        "runtime:\n  environment:\n    MODE: test\n"
+    )
+
+    _select_repair_runtime(root, _folder_contract().runtime)

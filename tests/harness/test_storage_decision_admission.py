@@ -80,6 +80,7 @@ def test_stage_scopes_setup_admission_to_repository_sources(
         workdir=lambda: tmp_path,
         servers=lambda: {},
         builtin_tools=lambda: (),
+        subfolder="",
     )
     understand.open_stage(source, out=tmp_path, require_setup_contract=True)
     assert captured["require_setup_contract"] is required
@@ -221,3 +222,39 @@ def test_chat_interface_schema_teaches_the_supported_bridge(tmp_path, required):
     canonical = RuntimeInterface.model_json_schema()["properties"]
     assert canonical["kind"]["description"] == fields["kind"]["description"]
     assert canonical["protocol"]["description"] == fields["protocol"]["description"]
+
+
+def test_understand_passes_subfolder(tmp_path, monkeypatch):
+    import asyncio
+    from types import SimpleNamespace
+    from fi.alk.harness import cli
+
+    captured = {}
+
+    def resolve(*args, **kwargs):
+        captured.update(kwargs)
+        return SimpleNamespace(name="fixture", kind="repo")
+
+    async def converse(*args, **kwargs):
+        pass
+
+    monkeypatch.setattr(cli, "resolve", resolve)
+    monkeypatch.setattr(cli, "open_stage", lambda *args, **kwargs: (object(), tmp_path))
+    monkeypatch.setattr(cli, "_converse", converse)
+    monkeypatch.setattr(cli, "opening", lambda _: "")
+    monkeypatch.setattr(cli, "_guidance", lambda _: "")
+    monkeypatch.setattr(cli, "load", lambda _: None)
+    args = SimpleNamespace(
+        kind="repo",
+        name="fixture",
+        path=tmp_path,
+        out=tmp_path,
+        interactive=False,
+        job=SimpleNamespace(
+            metadata={}, source=SimpleNamespace(subfolder="agents/a")
+        ),
+    )
+
+    asyncio.run(cli._understand(args))
+
+    assert captured["subfolder"] == "agents/a"

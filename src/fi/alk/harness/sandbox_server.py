@@ -9,7 +9,10 @@ from __future__ import annotations
 import asyncio
 from datetime import datetime, timezone
 import hashlib
+import hmac
+import ipaddress
 import json
+import logging
 import os
 from pathlib import Path
 from pathlib import PurePosixPath
@@ -35,6 +38,7 @@ from pydantic import BaseModel, Field, SecretStr, model_validator
 
 from fi.simulate.runtime.spec import SecretRef
 
+from ..providers.agent import _redact
 from .credentials import (
     CredentialManifest,
     CredentialRequirement,
@@ -58,10 +62,13 @@ from .job import (
 )
 from .packaging import PackagingManifest, inspect_packaging
 from .provision import ProvisionError, source_fingerprint, stop
-from .secrets import resolve_worker_secrets, worker_environment
+from .secrets import SecretResolutionError, resolve_worker_secrets, worker_environment
+from .source_folder import SubfolderNotFound, agent_folder, subfolder_not_found
 
 
 _CONTROLLER_TOKEN = uuid.uuid4().hex
+_SANDBOX_JOB_PREFIX = "ALK_JOB_"
+_SANDBOX_FILE_PREFIX = "ALK_SECRET_FILE_"
 
 
 class LocalSandboxRequest(BaseModel):
@@ -73,6 +80,7 @@ class LocalSandboxRequest(BaseModel):
     github_commit_sha: str | None = None
     github_visibility: SourceVisibility = SourceVisibility.PUBLIC
     github_installation_id: str | None = None
+    github_subfolder: str | None = None
     scenario_count: int = Field(default=10, ge=1, le=200)
     seed: int | None = None
     agent_name: str | None = None
@@ -102,6 +110,14 @@ class LocalSandboxRequest(BaseModel):
             or self.connector_mode is not ProviderExecutionMode.CONNECT_ONLY
         ):
             raise ValueError("provider_only_requires_connect_only_provider")
+        if self.github_subfolder:
+            if not self.github_repository:
+                raise ValueError("A subfolder needs a GitHub repository to read it from.")
+            # The older authoring path would ignore the folder without saying so.
+            if self.metadata.get("generic_harness_v1") is not True:
+                raise ValueError(
+                    "A subfolder needs the generic harness, which this job didn't ask for."
+                )
         _validate_environment_values(self.environment_values, self.secret_refs)
         return self
 
@@ -469,6 +485,69 @@ class LocalSandbox:
                 )
                 _write_json(path, state)
 
+    def _job_secret_refs(
+        self, identifier: str, request: LocalSandboxRequest, *, hosted: bool
+    ) -> tuple[dict[str, SecretRef], dict[str, str], set[str]]:
+        """Refs, values (keyed by internal key), and secret-file names for one new job."""
+        # Job keys are public through GET /v1/jobs, so a sandbox prefix proves nothing about
+        # who minted a key. Refusing every incoming ref that uses one, except an upload the
+        # claim binds to its own alias, is what lets the resolver trust a prefixed vault key.
+        for alias, reference in request.secret_refs.items():
+            if reference.key.startswith(_SANDBOX_JOB_PREFIX) or (
+                reference.key.startswith(_SANDBOX_FILE_PREFIX)
+                and reference.manager != "mounted"
+            ):
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"sandbox_secret_reference_refused: {alias}",
+                )
+            if hosted and reference.manager == "platform-vault":
+                # The resolver answers only the vault keys this sandbox mints for the job, so an
+                # incoming one could only fail later, after the job took a slot. Refuse it now,
+                # with the code the resolver would give.
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"sandbox_vault_reference_unknown: {alias}",
+                )
+        claimed_files, secret_file_names = self._claim_secret_files(
+            identifier, request.secret_refs
+        )
+        # Hosted jobs admit only vault refs. The sandbox stands in for the hosting side's
+        # vault, and resolves these keys from this job's in-memory values only.
+        manager = "platform-vault" if hosted else "mounted"
+        refs = {
+            alias: reference
+            for alias, reference in request.secret_refs.items()
+            if not reference.key.startswith((_SANDBOX_JOB_PREFIX, _SANDBOX_FILE_PREFIX))
+        }
+        values: dict[str, str] = {}
+        job_prefix = f"{_SANDBOX_JOB_PREFIX}{identifier.replace('-', '').upper()}_"
+        for index, (name, value) in enumerate(request.environment_values.items()):
+            internal_key = f"{job_prefix}{index}"
+            refs[name] = SecretRef(
+                manager=manager,
+                key=internal_key,
+                # Values entered for a run configure the submitted target runtime. Bundle V2
+                # admits secrets by purpose, so a descriptive free-form purpose causes the
+                # certified process provider to drop an otherwise valid value.
+                purpose="target_provider",
+            )
+            values[internal_key] = value.get_secret_value()
+        # Only an upload the claim bound to this alias is minted. The claim's digest check already
+        # binds every mounted upload key to its alias, so this is a second guard behind it, not
+        # the only one: nothing should rely on it alone.
+        for alias, reference in request.secret_refs.items():
+            if (
+                reference.manager == "mounted"
+                and reference.key.startswith(_SANDBOX_FILE_PREFIX)
+                and alias in secret_file_names
+            ):
+                refs[alias] = SecretRef(
+                    manager=manager, key=reference.key, purpose="target_provider"
+                )
+        values.update(claimed_files)
+        return refs, values, secret_file_names
+
     def submit(self, request: LocalSandboxRequest) -> SandboxJobResponse:
         source = (
             _allowed_source(request.source_path)
@@ -487,24 +566,12 @@ class LocalSandbox:
             else None
         )
         github_repository = github_location.repository if github_location else None
-        mounted_refs: dict[str, SecretRef] = {}
-        mounted_values: dict[str, str] = {}
-        for index, (name, value) in enumerate(request.environment_values.items()):
-            internal_key = f"ALK_JOB_{identifier.replace('-', '').upper()}_{index}"
-            mounted_refs[name] = SecretRef(
-                manager="mounted",
-                key=internal_key,
-                # Values entered for a run configure the submitted target runtime. Bundle V2
-                # admits secrets by purpose, so a descriptive free-form purpose causes the
-                # certified process provider to drop an otherwise valid value.
-                purpose="target_provider",
-            )
-            mounted_values[internal_key] = value.get_secret_value()
-        claimed_files, secret_file_names = self._claim_secret_files(
-            identifier, request.secret_refs
-        )
-        mounted_values.update(claimed_files)
+        hosted = bool(request.source_id or request.github_repository)
         try:
+            # Inside the try so a refusal or raise after the claim still deletes the claim.
+            job_refs, mounted_values, secret_file_names = self._job_secret_refs(
+                identifier, request, hosted=hosted
+            )
             source_spec = (
                 RepositorySource(kind=SourceKind.PROVIDER)
                 if request.provider_only
@@ -525,22 +592,19 @@ class LocalSandbox:
                     commit_sha=request.github_commit_sha,
                     visibility=request.github_visibility,
                     installation_id=request.github_installation_id,
+                    subfolder=request.github_subfolder,
                 )
             )
             job = HarnessJob(
                 job_id=identifier,
                 run_id=run_id,
-                execution=(
-                    ExecutionMode.HOSTED
-                    if request.source_id or request.github_repository
-                    else ExecutionMode.LOCAL
-                ),
+                execution=ExecutionMode.HOSTED if hosted else ExecutionMode.LOCAL,
                 source=source_spec,
                 agent=AgentConnection(
                     connector=request.connector,
                     mode=request.connector_mode,
                     config=request.connector_config,
-                    secret_refs={**request.secret_refs, **mounted_refs},
+                    secret_refs=job_refs,
                 ),
                 scenario_count=request.scenario_count,
                 seed=request.seed,
@@ -562,7 +626,7 @@ class LocalSandbox:
                     # Both dotenv values and credential-file paths are runtime configuration. Only
                     # their names are persisted; values and provider-local paths remain ephemeral.
                     "environment_value_names": sorted(
-                        {*mounted_refs, *secret_file_names}
+                        {*request.environment_values, *secret_file_names}
                     ),
                     "secret_file_names": sorted(secret_file_names),
                 },
@@ -600,6 +664,32 @@ class LocalSandbox:
         self._tasks[identifier] = asyncio.create_task(self._execute(job, source))
         return self.get(identifier)
 
+    @staticmethod
+    def _hosted_rerun_secrets(
+        references: dict[str, SecretRef],
+        claimed_files: dict[str, str],
+        secret_file_names: set[str],
+    ) -> dict[str, str]:
+        """Resolve a hosted rerun's refs from the files it just claimed, and nothing else."""
+        resolved: dict[str, str] = {}
+        for alias, reference in references.items():
+            # Any other ref would resolve from this server's environment, which holds the
+            # runner's own credentials. Only an upload claimed under its own alias passes. The
+            # last two conditions repeat what the claim's digest check guarantees: a second
+            # guard behind it, not the only one.
+            if (
+                reference.manager != "mounted"
+                or not reference.key.startswith(_SANDBOX_FILE_PREFIX)
+                or reference.key not in claimed_files
+                or alias not in secret_file_names
+            ):
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"sandbox_rerun_secret_refused: {alias}",
+                )
+            resolved[str(alias)] = claimed_files[reference.key]
+        return resolved
+
     def rerun(self, job_id: str, request: SandboxRerunRequest) -> SandboxJobResponse:
         response = self.get(job_id)
         if not response.status.stage.terminal:
@@ -631,10 +721,15 @@ class LocalSandbox:
             job_id, request.secret_refs
         )
         try:
-            resolved = resolve_worker_secrets(
-                request.secret_refs,
-                environment={**os.environ, **claimed_files},
-            )
+            if response.job.execution is ExecutionMode.HOSTED:
+                resolved = self._hosted_rerun_secrets(
+                    request.secret_refs, claimed_files, secret_file_names
+                )
+            else:
+                resolved = resolve_worker_secrets(
+                    request.secret_refs,
+                    environment={**os.environ, **claimed_files},
+                )
         except Exception:
             self._delete_job_secret_files(job_id)
             raise
@@ -921,6 +1016,37 @@ class LocalSandbox:
             ],
         )
 
+    def _resolve_job_secrets(self, job: HarnessJob) -> dict[str, str]:
+        """Resolve a job's refs; vault refs only from this job's own map."""
+        # Read here rather than passed in, so no caller can hand the resolver a wider store.
+        values = self._ephemeral_secrets.get(job.job_id, {})
+        own_job_prefix = f"{_SANDBOX_JOB_PREFIX}{job.job_id.replace('-', '').upper()}_"
+        resolved: dict[str, str] = {}
+        others: dict[str, SecretRef] = {}
+        for alias, reference in job.agent.secret_refs.items():
+            if reference.manager != "platform-vault":
+                others[alias] = reference
+                continue
+            # A vault ref never reads the process environment, which holds this server's own
+            # credentials, and never another job's values.
+            if reference.key.startswith(_SANDBOX_JOB_PREFIX):
+                if not reference.key.startswith(own_job_prefix):
+                    raise SecretResolutionError(
+                        f"sandbox_vault_reference_unknown: {alias}"
+                    )
+            elif not reference.key.startswith(_SANDBOX_FILE_PREFIX):
+                raise SecretResolutionError(f"sandbox_vault_reference_unknown: {alias}")
+            value = values.get(reference.key)
+            # Empty counts as missing, as it does for the other managers.
+            if not value:
+                raise SecretResolutionError(f"secret_reference_unavailable: {alias}")
+            resolved[str(alias)] = value
+        if others:
+            resolved.update(
+                resolve_worker_secrets(others, environment={**os.environ, **values})
+            )
+        return resolved
+
     async def _execute(self, job: HarnessJob, source: Path | None) -> None:
         directory = self.jobs_root / job.job_id
         state_path = directory / "state.json"
@@ -965,16 +1091,21 @@ class LocalSandbox:
                             await asyncio.sleep(delay)
                     if source is None:
                         raise SourceAcquisitionError("github_checkout_missing")
+                agent_folder(source, job.source.subfolder)
                 packaging_manifest = inspect_packaging(
                     source,
                     external_environment=bool(
                         job.metadata.get("environment_value_names", [])
                     ),
                 )
-                credential_manifest = discover_credentials(
+                # The import walk reads the agent's files at bundling's limits, seconds on a
+                # crafted repository; off the loop, the server keeps answering meanwhile.
+                credential_manifest = await asyncio.to_thread(
+                    discover_credentials,
                     source,
                     secret_refs=job.agent.secret_refs,
                     provided_environment=job.agent.config,
+                    agent_subfolder=job.source.subfolder,
                     template_secrets_required=(
                         job.metadata.get("generic_harness_v1") is not True
                     ),
@@ -994,13 +1125,7 @@ class LocalSandbox:
                     directory / "configuration-admission.json",
                     admission.model_dump(mode="json"),
                 )
-                resolved_secrets = resolve_worker_secrets(
-                    job.agent.secret_refs,
-                    environment={
-                        **os.environ,
-                        **self._ephemeral_secrets.get(job.job_id, {}),
-                    },
-                )
+                resolved_secrets = self._resolve_job_secrets(job)
                 submitted_source_digest = source_fingerprint(source)
                 result: dict[str, Any] = {}
                 return_code = 1
@@ -1128,6 +1253,17 @@ class LocalSandbox:
                         completed_scenarios=result.get("completed_scenarios", 0),
                         failure=result.get("failure"),
                         attempt=state.get("attempt", 1),
+                        updated_at=_now(),
+                    )
+                    _write_json(state_path, state)
+            except SubfolderNotFound as exc:
+                state = _read_json(state_path)
+                if state.get("stage") != HarnessStage.CANCELED.value:
+                    failure = subfolder_not_found(exc.subfolder)
+                    state.update(
+                        stage=HarnessStage.FAILED.value,
+                        detail=failure.message,
+                        failure=failure.model_dump(mode="json"),
                         updated_at=_now(),
                     )
                     _write_json(state_path, state)
@@ -1732,14 +1868,19 @@ def _stage_outputs(run_root: Path) -> list[dict[str, Any]]:
             for tool in contract.get("tools", [])
             if isinstance(tool, dict) and tool.get("name")
         ]
+        # One call: a contract written before write_contract cleaned its prose is cleaned here.
+        one_liner, *rules = _redact(
+            [
+                str(contract.get("one_liner") or ""),
+                *(str(item) for item in contract.get("hard_constraints", [])),
+            ]
+        )
         data = {
-            "one_liner": str(contract.get("one_liner") or ""),
+            "one_liner": one_liner,
             "modality": str(contract.get("modality") or "unknown"),
             "runtime": contract.get("runtime") or {},
             "tools": tools,
-            "hard_constraints": [
-                str(item) for item in contract.get("hard_constraints", [])
-            ],
+            "hard_constraints": rules,
         }
         outputs.append(
             {
@@ -1841,16 +1982,101 @@ _TERMINAL_STAGES = {
 }
 
 
-def _authorize(authorization: str | None = Header(default=None)) -> None:
-    expected = os.getenv("ALK_SANDBOX_TOKEN")
-    if expected and authorization != f"Bearer {expected}":
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid token"
+logger = logging.getLogger(__name__)
+
+_TOKEN_ENV = "ALK_SANDBOX_TOKEN"
+_ALLOW_ENV = "ALK_SANDBOX_ALLOW_UNAUTHENTICATED"
+
+
+def _sandbox_token() -> str | None:
+    # Returned unstripped so the server compares exactly the bytes the platform sends.
+    token = os.getenv(_TOKEN_ENV)
+    if not token or not token.strip():
+        return None
+    try:
+        # A value that isn't valid UTF-8 can never match a header; treating it as unset
+        # keeps every request a clean refusal instead of a 500.
+        token.encode()
+    except UnicodeEncodeError:
+        return None
+    return token
+
+
+def _unauthenticated_allowed() -> bool:
+    # Only an exact "1": "0", "false" or an empty value must never open the server.
+    return os.getenv(_ALLOW_ENV) == "1"
+
+
+def _is_loopback(host: str) -> bool:
+    # A name such as "localhost" can resolve anywhere, so only an IP literal counts.
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
+def _startup_refusal(host: str, token: str | None, allow: bool) -> str | None:
+    # A padded token would never match what the platform sends, so refuse it loudly
+    # rather than start a server that rejects every job. These messages end up in
+    # container logs, so they name variables, never values.
+    if token:
+        try:
+            token.encode()
+        except UnicodeEncodeError:
+            return f"{_TOKEN_ENV} is not valid UTF-8. Set it to a plain text value."
+    if token and token != token.strip():
+        return (
+            f"{_TOKEN_ENV} is blank or has leading or trailing whitespace. Set it "
+            "without any, and the same value as ALK_HARNESS_SANDBOX_TOKEN for the "
+            "platform."
         )
+    if token:
+        return None
+    if not allow:
+        return (
+            f"{_TOKEN_ENV} is not set. Set {_TOKEN_ENV} on the sandbox, and the "
+            "same value as ALK_HARNESS_SANDBOX_TOKEN for the platform. For a "
+            f"development server on your own laptop only, set {_ALLOW_ENV}=1 with "
+            "a loopback ALK_SANDBOX_HOST."
+        )
+    if not _is_loopback(host):
+        return (
+            f"{_ALLOW_ENV}=1 works only on a loopback address, and ALK_SANDBOX_HOST "
+            f"is {host!r}. Use 127.0.0.1 or ::1 (not localhost), or set {_TOKEN_ENV}."
+        )
+    return None
+
+
+def _authorize(authorization: str | None = Header(default=None)) -> None:
+    token = _sandbox_token()
+    if token is not None:
+        # Bytes, so a missing or non-ASCII header is a 401 rather than a TypeError.
+        if not hmac.compare_digest(
+            (authorization or "").encode(), f"Bearer {token}".encode()
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid token"
+            )
+        return
+    if _unauthenticated_allowed():
+        return
+    # The operator, not the caller, has to fix this, so it is not a 401.
+    raise HTTPException(
+        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        detail="sandbox_token_not_configured",
+    )
 
 
 def create_app(root: Path | None = None) -> FastAPI:
-    app = FastAPI(title="ALK local sandbox", version="1")
+    # No schema or docs pages: they skip the token check, and a closed server shows nothing to
+    # a caller without one.
+    app = FastAPI(
+        title="ALK local sandbox",
+        version="1",
+        docs_url=None,
+        redoc_url=None,
+        openapi_url=None,
+    )
     sandbox = LocalSandbox(
         root or Path(os.getenv("ALK_SANDBOX_ROOT", "./artifacts/sandbox")),
         max_concurrency=int(os.getenv("ALK_SANDBOX_MAX_CONCURRENCY", "2")),
@@ -1966,11 +2192,24 @@ app = create_app()
 
 
 def main() -> None:
+    # One value for both the check and the bind, so the check sees the real host.
+    host = os.getenv("ALK_SANDBOX_HOST", "127.0.0.1")
+    refusal = _startup_refusal(host, os.getenv(_TOKEN_ENV), _unauthenticated_allowed())
+    if refusal is not None:
+        print(refusal, file=sys.stderr)
+        sys.exit(2)
+    if _sandbox_token() is None:
+        logger.warning(
+            "unauthenticated sandbox: for a developer's own laptop only; any container "
+            "on this machine, including the agent under test, can submit jobs and read "
+            "this server's values"
+        )
+
     import uvicorn
 
     uvicorn.run(
         "fi.alk.harness.sandbox_server:app",
-        host=os.getenv("ALK_SANDBOX_HOST", "127.0.0.1"),
+        host=host,
         port=int(os.getenv("ALK_SANDBOX_PORT", "8788")),
     )
 

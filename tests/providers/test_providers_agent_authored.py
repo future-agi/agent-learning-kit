@@ -166,3 +166,107 @@ def test_authored_keeps_the_host_of_a_url_with_a_placeholder_port() -> None:
     assert stored["braces"] == "http://{host}/v1"
     assert stored["shell"] == "http://localhost/v1"
     assert stored["numeric"] == "http://localhost:8080/v1"
+
+
+def test_framework_written_beside_contract() -> None:
+    contract = _contract()
+    framework = {"name": "other", "version": "1.2", "label": "dspy"}
+
+    agent = build_authored_agent(contract, framework=framework)
+
+    assert set(agent["extension"]) == {"contract", "framework"}
+    assert agent["extension"]["framework"] == framework
+    assert agent["setup_hash"] == compute_setup_hash(agent)
+    assert agent["setup_hash"] != build_authored_agent(contract)["setup_hash"]
+
+
+def test_no_framework_leaves_extension_and_hash() -> None:
+    recorded = json.loads((AUTHORED / "chat_source.json").read_text())
+
+    agent = build_authored_agent(recorded["contract"], framework=None)
+
+    assert agent == recorded["agent"]
+    assert set(agent["extension"]) == {"contract"}
+
+
+_ABSENT = object()
+
+
+def _chat_contract() -> dict:
+    # A raw dict, not through AgentContract, so a model of any shape reaches
+    # build_authored_agent unchanged.
+    return copy.deepcopy(
+        json.loads((AUTHORED / "chat_source.json").read_text())["contract"]
+    )
+
+
+@pytest.mark.parametrize(
+    "model",
+    [_ABSENT, None, "gpt-4o", {"name": "  "}],
+    ids=["absent", "none", "raw-string", "blank-name"],
+)
+def test_no_model_leaves_the_document_and_hash(model: object) -> None:
+    recorded = json.loads((AUTHORED / "chat_source.json").read_text())
+    contract = _chat_contract()
+    expected = copy.deepcopy(recorded["agent"])
+    if model is not _ABSENT:
+        contract["model"] = model
+        # The stored contract echoes the value whatever its shape, so only that
+        # echo and the hash over it may differ from the recorded document.
+        expected["extension"]["contract"]["model"] = model
+        expected["setup_hash"] = compute_setup_hash(expected)
+
+    agent = build_authored_agent(contract)
+
+    assert agent["model"] is None
+    assert agent == expected
+
+
+def test_model_goes_to_the_document() -> None:
+    def built(model: dict) -> dict:
+        return build_authored_agent({**_chat_contract(), "model": model})
+
+    without = build_authored_agent(_chat_contract())
+    saved = {"provider": "  openai ", "name": " gpt-4o ", "path": "agent.py", "line": 9}
+    agent = built(saved)
+
+    assert agent["model"] == {
+        "provider": "openai",
+        "name": "gpt-4o",
+        "temperature": None,
+        "max_tokens": None,
+    }
+    assert agent["extension"]["contract"]["model"] == saved
+    assert set(agent["extension"]) == {"contract"}
+    assert agent["setup_hash"] == compute_setup_hash(agent)
+    assert agent["setup_hash"] != without["setup_hash"]
+
+    for provider in ("", "   ", None):
+        assert built({"provider": provider, "name": "gpt-4o"})["model"] == {
+            "provider": None,
+            "name": "gpt-4o",
+            "temperature": None,
+            "max_tokens": None,
+        }
+
+    long = built({"provider": "p" * 300, "name": "m" * 300, "path": "a.py", "line": 1})
+    assert long["model"]["provider"] == "p" * 255
+    assert long["model"]["name"] == "m" * 255
+
+    with_url = built(
+        {
+            "provider": "openai",
+            "name": "https://u:p@host.example:8443/v1/m?token=abc",
+            "path": "agent.py",
+            "line": 9,
+        }
+    )
+    assert with_url["model"]["name"] == "https://host.example:8443/v1/m"
+    assert with_url["extension"]["contract"]["model"] == {
+        "provider": "openai",
+        "name": "https://host.example:8443/v1/m",
+        "path": "agent.py",
+        "line": 9,
+    }
+    assert "token=abc" not in json.dumps(with_url)
+    assert "u:p@" not in json.dumps(with_url)

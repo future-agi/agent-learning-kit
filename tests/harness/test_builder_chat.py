@@ -2005,3 +2005,705 @@ def test_the_build_and_its_check_change_without_asking_and_a_question_gets_no_on
     answer = asyncio.run(runtime._ask("AskUserQuestion", {"question": "Which?"}, None))
     assert "Nobody answers" in answer["content"][0]["text"]
     assert calls == [corrected]
+
+
+def _two_agent_world(tmp_path: Path, folder: str):
+    """A saved environment whose contract records ``folder``, over a repository of two agents."""
+    from test_nudge_turn import _suite
+
+    from fi.alk.harness.contract import Runtime
+    from fi.alk.harness.scenario_tools import load_scenarios
+    from fi.alk.harness.understand import load
+
+    root = _suite(tmp_path / "ws", "adds-a-big-mac")
+    source = tmp_path / "source"
+    for name in ("a", "b"):
+        (source / "agents" / name).mkdir(parents=True)
+        (source / "agents" / name / "agent.py").write_text(
+            f"def cancel_{name}():\n    return 'ok'\n", encoding="utf-8"
+        )
+    contract = load(root)
+    if folder:
+        contract.runtime = Runtime(source_subfolder=folder, workdir=folder)
+    return root, source, contract, load_scenarios(root)
+
+
+def test_the_builder_is_told_which_folder_is_the_agent(tmp_path):
+    root, source, contract, _ = _two_agent_world(tmp_path, "agents/a")
+
+    named = builder.open_builder(contract, out=root, source_root=source)
+    contract.runtime = None
+    whole = builder.open_builder(contract, out=root, source_root=source)
+
+    assert "The agent lives in its folder agents/a" in named.spec.system_prompt
+    assert "The agent lives in its folder" not in whole.spec.system_prompt
+
+
+def test_declared_tool_evidence_must_be_in_the_agents_folder(tmp_path):
+    root, source, contract, kept = _two_agent_world(tmp_path, "agents/a")
+    server = builder.suite_server(root, kept, contract, source)
+    declare = next(one for one in server.tools if one.name == "declare_tool")
+
+    def declared(path: str, name: str) -> dict:
+        return asyncio.run(
+            declare.handler(
+                {
+                    "name": name,
+                    "description": "cancel",
+                    "evidence_file": path,
+                    "evidence_quote": f"def {name}():",
+                    "why": "the agent has it",
+                }
+            )
+        )
+
+    sibling = declared("agents/b/agent.py", "cancel_b")
+    own = declared("agents/a/agent.py", "cancel_a")
+
+    assert sibling["is_error"] and "agents/a" in sibling["content"][0]["text"]
+    assert not own.get("is_error"), own
+
+
+# -- Change review r2, A-H1: what the chat sends the platform loses URL credentials ------------------
+
+_SECRET_URL = "https://bot:hunter2@hooks.example/v1?key=sk-1#frag"
+_SEEN = "https://hooks.example/v1"
+_LEAKS = ("hunter2", "bot:", "sk-1", "key=", "frag", "hun", "ter2")
+
+
+def _leaks(events: list[dict]) -> list[dict]:
+    return [
+        one
+        for one in events
+        if any(leak in json.dumps(one.get("payload"), ensure_ascii=False) for leak in _LEAKS)
+    ]
+
+
+def _deltas(client: BuilderClient) -> list[str]:
+    return [one["payload"]["text"] for one in client.events if one["kind"] == "assistant_delta"]
+
+
+def test_every_event_the_pump_sends_loses_url_credentials(tmp_path, monkeypatch):
+    client = BuilderClient()
+    runtime = _runtime(tmp_path, client, monkeypatch)
+    queue: asyncio.Queue = asyncio.Queue()
+    pieces = [
+        # One URL split three ways, inside its "://" and inside its password.
+        "Your agent posts to https:",
+        "//bot:hun",
+        "ter2@hooks.example/v1?key=sk-1#frag. It also ",
+        "reads https://bot:hunter2@hooks.example/v2",
+    ]
+    for piece in pieces[:3]:
+        queue.put_nowait(RuntimeEvent(kind="text", text=piece, detail={"partial": True}))
+    queue.put_nowait(RuntimeEvent(kind="tool", tool="mcp__x__Read", detail={"call_id": "r"}))
+    queue.put_nowait(
+        RuntimeEvent(kind="result", text=f"agent.py:3: HOOK = '{_SECRET_URL}'", detail={"call_id": "r"})
+    )
+    queue.put_nowait(
+        RuntimeEvent(kind="artifact", detail={"path": "https://bot:hunter2@hooks.example/out/c.json"})
+    )
+    queue.put_nowait(RuntimeEvent(kind="text", text=pieces[3], detail={"partial": True}))
+    queue.put_nowait(None)
+    said: list[str] = []
+
+    asyncio.run(
+        runtime._pump_events(
+            queue,
+            assistant_message_id="a-1",
+            fallback_invocation_id="turn-1",
+            emitted_text=said,
+            turn_failures=[],
+        )
+    )
+
+    assert _leaks(client.events) == []
+    assert "".join(_deltas(client)) == (
+        f"Your agent posts to {_SEEN} It also reads https://hooks.example/v2"
+    )
+    # The text after the last space is held until the message ends, then sent.
+    assert client.events[-1]["kind"] == "assistant_delta"
+    assert client.events[-1]["payload"]["text"] == "https://hooks.example/v2"
+    results = [one["payload"] for one in client.events if one["kind"] == "tool_result"]
+    assert results[0]["text"] == f"agent.py:3: HOOK = '{_SEEN}"
+    assert results[1] == {"artifact": "https://hooks.example/out/c.json"}
+    # The turn's own record of what was said stays as said; only what is sent is cleaned.
+    assert said == pieces
+
+
+class _Saying(EditingConversation):
+    def __init__(self, workspace: Path, events: list[RuntimeEvent]):
+        super().__init__(workspace, writes=False)
+        self.events = events
+
+    async def say(self, message, on_event=None):
+        for event in self.events:
+            on_event(event)
+
+
+@pytest.mark.parametrize("ending", ["success", "interrupted", "failed"])
+def test_the_turns_assistant_message_loses_url_credentials(tmp_path, monkeypatch, ending):
+    client = BuilderClient()
+    runtime = _runtime(tmp_path, client, monkeypatch)
+    runtime._published_fingerprint()
+    events = [
+        RuntimeEvent(kind="text", text="Saved https://bot:hun", detail={"stage": "builder"}),
+        RuntimeEvent(kind="text", text="ter2@hooks.example/v1?key=sk-1#frag for you.", detail={}),
+    ]
+    if ending == "failed":
+        events.append(
+            RuntimeEvent(kind="done", detail={"outcome": "failed", "error": f"provider said {_SECRET_URL}"})
+        )
+    if ending == "interrupted":
+
+        async def interrupted(self, turn, *, command_sequence):
+            await turn
+            return {"kind": "interrupt", "message_id": "m-4", "sequence": 4}
+
+        monkeypatch.setattr(HostedChatRuntime, "_turn_until_interrupted", interrupted)
+    runtime.conversation = _Saying(tmp_path, events)
+
+    _turn(runtime, {"content": "save it"})
+
+    assert _leaks(client.events) == []
+    assert "".join(_deltas(client)) == f"Saved {_SEEN} for you."
+    expected = {
+        "success": f"Saved {_SEEN} for you.",
+        "interrupted": f"Saved {_SEEN} for you.",
+        "failed": f"I couldn't complete that turn: provider said {_SEEN}",
+    }[ending]
+    assert _reply(client) == expected
+
+
+def test_a_question_the_model_asks_loses_url_credentials(tmp_path, monkeypatch):
+    client = BuilderClient()
+    runtime = _runtime(tmp_path, client, monkeypatch)
+    runtime.stopping.set()
+    question = f"Should the hook stay {_SECRET_URL} ?"
+    options = [{"label": "keep", "description": f"post to {_SECRET_URL}"}, "drop it"]
+
+    asyncio.run(runtime._ask("AskUserQuestion", {"question": question, "options": options}, None))
+
+    asked = next(one for one in client.events if one["kind"] == "question_requested")
+    assert asked["payload"] == {
+        "prompt": f"Should the hook stay {_SEEN} ?",
+        "options": [f"keep: post to {_SEEN}", "drop it"],
+    }
+    # The file a resumed turn matches against keeps the question as asked.
+    pending = json.loads((tmp_path / ".futureagi-pending-question.json").read_text())
+    assert pending["question"] == question
+
+
+def test_the_authoring_drain_sends_its_reply_cleaned(monkeypatch):
+    from fi.alk.harness import cli
+
+    class DrainClient:
+        command_watermark = 0
+
+        def __init__(self):
+            self.events: list[dict] = []
+
+        async def commands(self):
+            return [{"sequence": 1, "message_id": "c-1", "payload": {"content": "where?"}}]
+
+        async def emit(self, kind, **kwargs):
+            self.events.append({"kind": kind, **kwargs})
+
+    class Stage:
+        async def say(self, content, on_event):
+            on_event(RuntimeEvent(kind="text", text=f"It posts to {_SECRET_URL} today."))
+
+    client = DrainClient()
+    monkeypatch.delenv("ALK_FOREGROUND_COORDINATOR", raising=False)
+    monkeypatch.setattr(cli, "_AUTHORING_CLIENT", client)
+
+    asyncio.run(cli._drain_authoring_commands(Stage()))
+
+    reply = next(one for one in client.events if one["kind"] == "assistant_message")
+    assert reply["payload"]["text"] == f"It posts to {_SEEN} today."
+    assert _leaks(client.events) == []
+
+
+# -- The holdback on its own: bounded, and nothing of a URL's credentials let out --------------------
+
+
+def _stream(text: str, size: int):
+    from fi.alk.harness.hosted_chat_entrypoint import _DeltaCleaner
+
+    cleaner = _DeltaCleaner()
+    out: list[str] = []
+    most = 0
+    for start in range(0, len(text), size):
+        out.append(cleaner.feed(text[start : start + size]))
+        most = max(most, len(cleaner.held))
+    out.append(cleaner.flush())
+    return "".join(out), most
+
+
+def test_a_long_run_with_no_space_is_shed_without_its_credentials():
+    from fi.alk.harness.hosted_chat_entrypoint import _HOLD_HARD
+    from fi.alk.providers.agent import _redact
+
+    text = "x" * 50_000 + _SECRET_URL + "y" * 50_000 + " and after."
+    assert len(text) > 100_000
+
+    out, most = _stream(text, 7)
+
+    assert most <= _HOLD_HARD
+    assert "hunter2" not in out and "sk-1" not in out and "bot:" not in out
+    # The query owns the rest of its token, so the ys go with it, as cleaning the whole drops them.
+    assert out == _redact(text) == "x" * 50_000 + _SEEN + " and after."
+
+
+def test_a_url_longer_than_the_hard_cap_is_sent_as_redacted():
+    from fi.alk.harness.hosted_chat_entrypoint import _HOLD_HARD
+
+    text = "Before https://h.example/" + "p" * _HOLD_HARD + "?key=sk-1&pw=hunter2 after."
+
+    out, most = _stream(text, 100)
+
+    assert most <= _HOLD_HARD
+    assert out == "Before [redacted] after."
+
+
+def test_prose_around_a_streamed_url_is_kept():
+    from fi.alk.providers.agent import _redact
+
+    text = "Read the docs at https://u:hunter2@docs.example/a?x=sk-1 then\tcall us.\n"
+
+    out, _most = _stream(text, 3)
+
+    assert out == _redact(text) == "Read the docs at https://docs.example/a then\tcall us.\n"
+
+
+def test_a_message_that_is_one_url_broken_by_a_line_break_is_cleaned_whole():
+    # The cleaner joins a value that is one URL broken by a line break, so no cut is made there.
+    out, _most = _stream("https://bot:hun\nter2@hooks.example/v1?key=sk-1", 5)
+
+    assert out == _SEEN
+
+
+def test_a_scheme_split_at_its_colon_is_held_over_a_shed():
+    from fi.alk.harness.hosted_chat_entrypoint import _DeltaCleaner
+
+    cleaner = _DeltaCleaner()
+    # Past the soft bound with no URL start, so it is shed, all but the ":".
+    out = cleaner.feed("z" * 5_000 + "https:")
+    out += cleaner.feed("//bot:hunter2@hooks.example/v1 done") + cleaner.flush()
+
+    assert out == "z" * 5_000 + "https://hooks.example/v1 done"
+
+
+def test_a_shed_inside_a_query_drops_the_rest_of_the_token():
+    text = "see https://h.example/cb?a=1&next=https://x.example/y&token=sk-1" + "z" * 5_000 + " ok"
+
+    out, _most = _stream(text, 9)
+
+    assert out == "see https://h.example/cb ok"
+
+
+# -- Change review r2, coordinator items: cuts at any whitespace, and nothing lost past the bound ----
+
+
+@pytest.mark.parametrize("gap", ["\t", "\n"], ids=["tab", "line_break"])
+def test_a_tab_or_a_line_break_releases_the_held_text(gap):
+    from fi.alk.harness.hosted_chat_entrypoint import _DeltaCleaner
+
+    cleaner = _DeltaCleaner()
+
+    out = cleaner.feed(f"See https://bot:hunter2@hooks.example/v1?key=sk-1{gap}next")
+
+    assert out == f"See {_SEEN}{gap}"
+    assert cleaner.held == "next"
+
+
+def test_a_message_with_no_space_is_cut_at_a_line_break_once_its_opening_is_prose():
+    from fi.alk.harness.hosted_chat_entrypoint import _DeltaCleaner
+
+    cleaner = _DeltaCleaner()
+
+    out = cleaner.feed(f"Steps:\n1.{_SECRET_URL}\nnext")
+
+    assert out == f"Steps:\n1.{_SEEN}\n"
+    assert cleaner.held == "next"
+
+
+def test_a_line_break_after_a_streamed_url_is_kept():
+    from fi.alk.harness.hosted_chat_entrypoint import _DeltaCleaner
+    from fi.alk.providers.agent import _redact
+
+    pieces = ["Read\n", "https://u:hunter2@docs.example/a\n", "ok"]
+
+    cleaner = _DeltaCleaner()
+    out = "".join(cleaner.feed(piece) for piece in pieces) + cleaner.flush()
+
+    assert out == _redact("".join(pieces)) == "Read\nhttps://docs.example/a\nok"
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Start https://u:hunter2@h.example/" + "p" * 5_000 + "?key=sk-1" + "q" * 100 + " and the rest.",
+        "Start " + "x" * 5_000 + "https://u:hunter2@h.example/path and the rest.",
+    ],
+    ids=["with_a_query", "after_a_long_word"],
+)
+def test_past_the_soft_bound_a_held_url_is_sent_cleaned_and_nothing_else_is_lost(text):
+    """What is shed is the text cleaned, as cleaning the whole would give: the host and path go
+    out, only the password and query are lost, and the words after the URL are kept."""
+    from fi.alk.providers.agent import _redact
+
+    out, _most = _stream(text, 50)
+
+    assert out == _redact(text)
+    assert "hunter2" not in out and "sk-1" not in out
+    assert "h.example/" in out and out.endswith(" and the rest.")
+
+
+# -- Change review r3, B-H1 and A-M1/M2: a message that may be one URL broken by a line break ---
+#
+# The cleaner joins a value that begins with a scheme and :// and has no whitespace but tabs and
+# line breaks. The stored reply is the model's text stripped, so the stream must never send what
+# cleaning that stripped whole drops, however it is split.
+
+_PAD = "https://docs.example/" + "a" * 5_000
+_ONE_URL_SHAPES = {
+    # B-H1: past the soft bound, the kept text starts at a URL start that is not a letter.
+    "digit_dot_start_tab_in_password": _PAD + "/1.https://bot:hun\tter2@hooks.example/v1?key=sk-1",
+    "digit_dot_start_break_before_query": (
+        _PAD + "/1.https://bot:hunter2@hooks.example/v1\n?key=sk-1"
+    ),
+    "schemeless_start_break_in_password": _PAD + "/://bot:hun\nter2@hooks.example/v1?key=sk-1",
+    "dash_start_break_before_userinfo": _PAD + "/-https://\nbot:hunter2@hooks.example/v1",
+    # A-M1, shape 2: whitespace before the first character and after the last.
+    "leading_line_breaks": "\n\nhttps://bot:hun\nter2@hooks.example/v1\n?key=sk-1",
+    "leading_space": " \thttps://bot:hun\nter2@hooks.example/v1?key=sk-1",
+    "trailing_spaces": "x://bot:PW1@localho\tst:443/#FS1  ",
+    "trailing_space_after_a_query": "https://bot:hun\nter2@hooks.example/v1?key=sk-1 \n",
+    # A-M1, shape 3: an opening run of scheme letters longer than the soft bound.
+    "long_scheme_run": (
+        "a" * 4_097 + "https://U:PW2@hooks.exampl\te/x.json?key=QS1/获取数据x://y"
+    ),
+    "long_digit_led_run": "x." * 3_000 + "x://10.\t0.0.1/a/b?key=sk-1",
+    # A held text that starts at its :// after a shed, and grows past the bound before its query.
+    "schemeless_held_past_the_bound": (
+        "a" * 4_097 + "://bot:hun\tter2@hooks.example/" + "p" * 4_200 + "?key=sk-1"
+    ),
+    # Round 2's W1 case, for the record.
+    "one_url_broken_by_a_line_break": "https://bot:hun\nter2@hooks.example/v1?key=sk-1",
+    # Fix check, B-M2: the spaced shed of a held lone URL must clean what it lets out.
+    "lone_url_shed_at_a_space": "https://bot:hun\nter2@h.example/" + "p" * 4_200 + " ",
+    # Fix check, B-M3: dropping a held query ends only at a space while prose isn't known.
+    "dropped_query_runs_past_a_line_break": "https://h.example/" + "p" * 4_200 + "?k=v\nQS9tail",
+}
+_ONE_URL_SECRETS = (
+    "hunter2", "hun\t", "hun\n", "ter2", "sk-1", "key=", "bot:", "PW1", "PW2", "FS1", "QS1",
+    "QS9",
+)
+
+
+@pytest.mark.parametrize(
+    "size", [None, 1, 2, 3, 7, 50], ids=lambda size: f"size_{size or 'whole'}"
+)
+@pytest.mark.parametrize("name", list(_ONE_URL_SHAPES))
+def test_a_message_that_may_be_one_url_streams_as_its_stripped_whole_is_cleaned(name, size):
+    from fi.alk.providers.agent import _redact
+
+    text = _ONE_URL_SHAPES[name]
+
+    out, _most = _stream(text, size or len(text))
+
+    reply = _redact(text.strip())
+    assert [secret for secret in _ONE_URL_SECRETS if secret in out] == []
+    assert out.strip() == reply
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        # A1: a shed of a run holding two URL starts, the first with userinfo and no query.
+        "Mirror at https://bot:hunter2@hooks.example/"
+        + "a" * 5_000
+        + "https://cdn.example/x then more",
+        # A4: the shed with no URL start keeps a trailing ":/".
+        "Blob " + "b" * 4_100 + "https://bot:hunter2@hooks.example/v1 then more",
+    ],
+    ids=["two_starts_in_one_shed", "scheme_tail_held_over_a_shed"],
+)
+@pytest.mark.parametrize("split", ["size_7", "after_the_scheme_tail"])
+def test_each_shed_sends_what_cleaning_the_whole_sends(text, split):
+    """Change review r3, A-M2: each must equal the whole, so a one-token plant in _shed fails."""
+    from fi.alk.harness.hosted_chat_entrypoint import _DeltaCleaner
+    from fi.alk.providers.agent import _redact
+
+    if split == "size_7":
+        out, _most = _stream(text, 7)
+    else:
+        cut = text.rindex("https:/") + len("https:/")
+        cleaner = _DeltaCleaner()
+        out = cleaner.feed(text[:cut]) + cleaner.feed(text[cut:]) + cleaner.flush()
+
+    assert "hunter2" not in out and "bot:" not in out
+    assert out == _redact(text)
+
+
+def test_a_shed_splits_a_run_where_cleaning_the_whole_splits_it():
+    """Each URL starts at its scheme's first letter, as _redact_token starts it, so a digit or
+    dot before the letter stays with the URL before (here, as part of its port)."""
+    from fi.alk.providers.agent import _redact
+
+    text = "See https://h.example:80" + "1.ftp://files.example/" + "p" * 4_200 + " then"
+
+    out, _most = _stream(text, 7)
+
+    assert out == _redact(text) == "See https://h.example" + "ftp://files.example/" + "p" * 4_200 + " then"
+
+
+def test_a_shed_finds_a_query_only_after_the_first_url_start():
+    """A ? before the URL is not its query, so the shed keeps the URL and the rest of the token
+    (reviewer A's plant A2 searched from the token's start, and dropped them)."""
+    from fi.alk.providers.agent import _redact
+
+    text = "Ask q?" + "/" * 100 + "https://h.example/" + "p" * 4_200 + " then"
+
+    out, _most = _stream(text, 7)
+
+    assert out == _redact(text) == text
+
+
+def test_a_space_after_a_long_url_ends_its_token_before_prose_is_known():
+    """A space with nothing after it yet doesn't make the reply prose, but nothing after it can
+    join the token before it, so a shed there must not drop the next word."""
+    from fi.alk.harness.hosted_chat_entrypoint import _DeltaCleaner
+    from fi.alk.providers.agent import _redact
+
+    pieces = ["https://bot:hunter2@h.example/" + "p" * 4_200 + "?key=sk-1 ", "then more"]
+
+    cleaner = _DeltaCleaner()
+    out = "".join(cleaner.feed(piece) for piece in pieces) + cleaner.flush()
+
+    assert out == _redact("".join(pieces)) == "https://h.example/" + "p" * 4_200 + " then more"
+
+
+def test_text_held_before_the_reply_is_known_to_be_prose_is_cut_with_it():
+    """What was held while the reply might be one URL keeps its line breaks once it is prose."""
+    from fi.alk.harness.hosted_chat_entrypoint import _DeltaCleaner
+    from fi.alk.providers.agent import _redact
+
+    # The long run comes in a delta of its own, so it is held past the soft bound with the text
+    # before it, and shed.
+    pieces = ["https://h.example/a\n1.https://h.example/b\n ", "中" * 5_000, " end"]
+
+    cleaner = _DeltaCleaner()
+    out = "".join(cleaner.feed(piece) for piece in pieces) + cleaner.flush()
+
+    assert out == _redact("".join(pieces)) == "".join(pieces)
+
+
+class _SayingAndWriting(_Saying):
+    """Says its pieces and leaves one scenario unsaved, so the reply gains the save note."""
+
+    async def say(self, message, on_event=None):
+        (self.workspace / "scenarios" / "late_driver").mkdir(parents=True)
+        (self.workspace / "scenarios" / "late_driver" / "scenario.json").write_text("{}")
+        await super().say(message, on_event)
+
+
+_BROKEN_URL_PIECES = ["https://bot:hun", "\nter2@hooks.example/v1", "?key=sk-1"]
+
+
+def _texts(pieces: list[str], stage: str = "builder") -> list[RuntimeEvent]:
+    return [RuntimeEvent(kind="text", text=piece, detail={"stage": stage}) for piece in pieces]
+
+
+def test_the_reply_is_cleaned_before_the_save_note_and_the_health_lines_are_added(
+    tmp_path, monkeypatch
+):
+    """Change review r3, A-M1 shape 1: notes added first made a one-URL reply prose."""
+    client = BuilderClient()
+    runtime = _runtime(tmp_path, client, monkeypatch)
+    runtime._published_fingerprint()
+    monkeypatch.setattr("fi.alk.harness.bundle_author_v2.reseal_scenarios", lambda root: None)
+    runtime.conversation = _SayingAndWriting(tmp_path, _texts(_BROKEN_URL_PIECES))
+    runtime._last_health = f"The hook check failed for {_SECRET_URL}"
+
+    _turn(runtime, {"content": "save it"})
+
+    assert _leaks(client.events) == []
+    assert "".join(_deltas(client)) == _SEEN
+    assert _reply(client) == (
+        f"{_SEEN}\n\nSaved to the environment: added #41 late_driver. It now has 41 scenarios."
+        f"\n\nStill open from the last health check (1): The hook check failed for {_SEEN}"
+    )
+
+
+def test_the_save_note_is_cleaned_on_its_own(tmp_path, monkeypatch):
+    class NamingClient(BuilderClient):
+        async def publish(self, digest):
+            result = await super().publish(digest)
+            result["added"] = [{"number": 41, "name": f"posts to {_SECRET_URL}"}]
+            return result
+
+    client = NamingClient()
+    runtime = _runtime(tmp_path, client, monkeypatch)
+    runtime._published_fingerprint()
+    monkeypatch.setattr("fi.alk.harness.bundle_author_v2.reseal_scenarios", lambda root: None)
+    runtime.conversation = _SayingAndWriting(tmp_path, _texts(["Added it."]))
+
+    _turn(runtime, {"content": "save it"})
+
+    assert _leaks(client.events) == []
+    # The full stop after #frag is part of the fragment, so it goes too.
+    assert _reply(client) == (
+        f"Added it.\n\nSaved to the environment: added #41 posts to {_SEEN} It now has 41 scenarios."
+    )
+
+
+def test_a_failed_reseal_sends_the_reply_cleaned_before_its_note(tmp_path, monkeypatch):
+    client = BuilderClient()
+    runtime = _runtime(tmp_path, client, monkeypatch)
+    runtime._published_fingerprint()
+
+    def fails(root):
+        raise RuntimeError("seed import failed")
+
+    monkeypatch.setattr("fi.alk.harness.bundle_author_v2.reseal_scenarios", fails)
+    runtime.conversation = _SayingAndWriting(tmp_path, _texts(_BROKEN_URL_PIECES))
+
+    _turn(runtime, {"content": "save it"})
+
+    reply = next(e for e in client.events if e["kind"] == "assistant_message")
+    assert _leaks(client.events) == []
+    assert reply["payload"]["error"] == "reseal_failed"
+    assert reply["payload"]["text"].startswith(f"{_SEEN}\n\nThese changes were NOT saved")
+
+
+@pytest.mark.parametrize(
+    ("error", "shown"),
+    [
+        ("https://bot:hun\nter2@hooks.example/v1?key=sk-1", _SEEN),
+        # Cut first at 400, the password 4242 would be kept as the address's port.
+        ("x" * 383 + " https://bot:4242@hooks.example/v1", ("x" * 383 + " " + _SEEN)[:400]),
+        # Fix check B-M1: whitespace around a lone line-broken URL is stripped before cleaning.
+        ("\n\nhttps://bot:hun\nter2@hooks.example/v1\n?key=sk-1 \n", _SEEN),
+    ],
+    ids=[
+        "one_url_broken_by_a_line_break",
+        "cut_right_after_a_numeric_password",
+        "whitespace_around_one_line_broken_url",
+    ],
+)
+def test_a_failed_stage_cleans_its_detail_whole_before_cutting_it(
+    tmp_path, monkeypatch, error, shown
+):
+    """Change review r3, A-M1 and round 2's L2: the detail is cleaned before the prefix and cut."""
+    client = BuilderClient()
+    runtime = _runtime(tmp_path, client, monkeypatch)
+    runtime._published_fingerprint()
+    events = [RuntimeEvent(kind="done", detail={"outcome": "failed", "error": error})]
+    runtime.conversation = _Saying(tmp_path, events)
+
+    _turn(runtime, {"content": "go"})
+
+    reply = next(e for e in client.events if e["kind"] == "assistant_message")
+    assert reply["payload"]["text"] == f"I couldn't complete that turn: {shown}"
+    assert "4242" not in reply["payload"]["text"] and _leaks(client.events) == []
+
+
+@pytest.mark.parametrize("ending", ["success", "interrupted"])
+def test_whitespace_around_a_one_url_reply_leaves_the_stream_as_clean_as_the_reply(
+    tmp_path, monkeypatch, ending
+):
+    """Change review r3, A-M1 shape 2: the reply is stripped, so the stream is read as it is.
+    Fix check B-M4: the interrupted ending strips its reply too."""
+    client = BuilderClient()
+    runtime = _runtime(tmp_path, client, monkeypatch)
+    runtime._published_fingerprint()
+    pieces = ["\n\nhttps://bot:hun", "\nter2@hooks.example/v1", "\n?key=sk-1", " \n"]
+    if ending == "interrupted":
+
+        async def interrupted(self, turn, *, command_sequence):
+            await turn
+            return {"kind": "interrupt", "message_id": "m-4", "sequence": 4}
+
+        monkeypatch.setattr(HostedChatRuntime, "_turn_until_interrupted", interrupted)
+    runtime.conversation = _Saying(tmp_path, _texts(pieces))
+
+    _turn(runtime, {"content": "go"})
+
+    assert _leaks(client.events) == []
+    assert "".join(_deltas(client)).strip() == _reply(client) == _SEEN
+
+
+def _fuzzed_message(rng) -> tuple[str, list[str]]:
+    secrets: list[str] = []
+
+    def secret(kind: str) -> str:
+        value = f"{kind}{rng.randrange(10**6, 10**7)}Z"
+        secrets.append(value)
+        return value
+
+    def url() -> str:
+        scheme = rng.choice(["https", "x", "postgres", "1.https", "-https", "", "${S}", "a.b-c"])
+        parts = [scheme, "://"]
+        if rng.random() < 0.7:
+            parts.append(f"{rng.choice(['bot', secret('UU')])}:{secret('PW')}@")
+        parts.append(rng.choice(["hooks.example", "h", "[::1]", "10.0.0.1"]))
+        parts.append(rng.choice(["", "/", "/v1", "/a/b"]))
+        if rng.random() < 0.5:
+            parts.append(f"?key={secret('QS')}")
+        if rng.random() < 0.2:
+            parts.append(f"#{secret('FS')}")
+        text = "".join(parts)
+        if rng.random() < 0.5:
+            at = rng.randrange(1, len(text))
+            text = text[:at] + rng.choice(["\n", "\t", "\r\n"]) + text[at:]
+        return text
+
+    pieces = [rng.choice(["", "", "\n", " ", "\t\n"])]
+    if rng.random() < 0.15:
+        # An opening past the soft bound with no space, to reach every shed.
+        pieces.append(rng.choice(["a", "x.", "/a", "a\n"]) * rng.randrange(2_100, 2_600))
+    for _ in range(rng.randrange(1, 6)):
+        word = rng.choice(["see", "/", "-", "1.", "://", ","])
+        pieces.append(url() if rng.random() < 0.6 else word)
+        if rng.random() < 0.3:
+            pieces.append(rng.choice([" ", "\n", "\t", "\xa0"]))
+    pieces.append(rng.choice(["", "", " ", "\n", "  \n"]))
+    return "".join(pieces), secrets
+
+
+def _random_pieces(text: str, rng) -> list[str]:
+    cuts = set(rng.sample(range(1, len(text)), min(len(text) - 1, rng.randrange(0, 20))))
+    cuts |= {
+        at + rng.randrange(2)
+        for at, char in enumerate(text)
+        if char in ":@?#\n\t" and rng.random() < 0.5
+    }
+    cuts = sorted(at for at in cuts if 0 < at < len(text))
+    return [text[start:end] for start, end in zip([0, *cuts], [*cuts, len(text)]) if start < end]
+
+
+def test_random_splits_never_send_a_credential_the_stripped_whole_drops():
+    """Change review r3: a bounded random-split fuzz. Whatever the split, no secret leaves the
+    stream unless cleaning the stripped whole keeps it too (case aside: the whole lowers a
+    scheme that a shed already let out)."""
+    import random
+
+    from fi.alk.harness.hosted_chat_entrypoint import _DeltaCleaner
+    from fi.alk.providers.agent import _redact
+
+    rng = random.Random(9491)
+    found: list[tuple[str, list[str]]] = []
+    for _ in range(600):
+        text, secrets = _fuzzed_message(rng)
+        if not text.strip():
+            continue
+        cleaner = _DeltaCleaner()
+        out = "".join(cleaner.feed(piece) for piece in _random_pieces(text, rng)) + cleaner.flush()
+        whole = _redact(text.strip()).lower()
+        shown = out.lower()
+        leaked = [one for one in secrets if one.lower() in shown and one.lower() not in whole]
+        if leaked:
+            found.append((text, leaked))
+    assert found == []

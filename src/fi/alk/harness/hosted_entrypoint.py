@@ -35,12 +35,15 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Protocol, Sequence
 
+from ..providers.agent import _redact
 from . import observability
 from . import outbound as ob
 from .backends import GOOGLE_ADK_APPROVAL_ENV
 from .bundle_v2 import BundleV2Error, EnvironmentBundleV2, RuntimeKindV2, load_bundle_v2
 from .compose_broker import BrokerError, ComposeBrokerClient
+from .framework_detection import FrameworkFolders, framework_folders_for
 from .hosted_compose_bootstrap import initialize_hosted_compose
+from .source_folder import folder_failure
 from .world.observation import ObservationWorldFactory
 from .call_runner import CallRunnerContext, CallRunnerImpl
 from .hosted_scheduler import (
@@ -573,6 +576,29 @@ def _find_postgres_endpoint(runtime: EnvironmentRuntime) -> RuntimeEndpoint:
     )
 
 
+def _framework_folders(
+    job: HarnessJob,
+    manifest: EnvironmentBundleV2,
+    *,
+    source: Path,
+    bundle_dir: Path,
+    work_directory: Path,
+) -> FrameworkFolders:
+    # Called outside the `try` around `build`: an exception here would end the run with no
+    # terminal event, and all that is at stake is a label.
+    try:
+        return framework_folders_for(
+            job,
+            manifest,
+            source=source,
+            bundle_dir=bundle_dir,
+            work_directory=work_directory,
+        )
+    except Exception as exc:
+        logger.warning("framework folders failed: class=%s", type(exc).__name__)
+        return FrameworkFolders(source, source, None)
+
+
 def load_build_output(work_directory: Path) -> dict[str, Any]:
     """`write_build_output` (process_runtime.py) writes `<work_directory>/artifacts/build.json`.
     Read fresh each call — cheap, and the row counts are immutable after baseline freeze, so
@@ -757,7 +783,8 @@ def _agent_instructions(job: Any, bundle_dir: Path) -> str:
             parts.append(f"Summary: {summary}")
         if rules:
             parts.append("Rules:\n- " + "\n- ".join(rules))
-    return "\n\n".join(parts)
+    # The whole text, once: the job's own prompt, the summary and the rules may each hold a URL.
+    return _redact("\n\n".join(parts))
 
 
 def _bundle_contract_value(bundle_dir: Path, key: str) -> str | None:
@@ -2444,6 +2471,14 @@ async def run_job(
             logger.error("job.json invalid: %s", exc)
             return EXIT_CRASHED
 
+        if (unusable := folder_failure(source, job.source.subfolder)) is not None:
+            return await _fail(
+                domain=unusable.domain,
+                fail_stage=unusable.stage,
+                code=unusable.code,
+                message=unusable.message,
+            )
+
         try:
             broker_socket = await asyncio.to_thread(initialize_hosted_compose, job, source)
         except BrokerError as exc:
@@ -2724,7 +2759,15 @@ async def run_job(
         if isinstance(scenario_source, NotWiredScenarioSource) and bundle_has_scenarios(
             bundle_dir
         ):
-            scenario_source = BundleScenarioSource()
+            scenario_source = BundleScenarioSource(
+                framework_folders=_framework_folders(
+                    job,
+                    manifest,
+                    source=source,
+                    bundle_dir=bundle_dir,
+                    work_directory=work_directory,
+                )
+            )
         try:
             scenarios = await scenario_source.build(
                 job,

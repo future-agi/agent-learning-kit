@@ -1,12 +1,18 @@
 import asyncio
+import hmac
 from io import BytesIO
 import json
 import os
+import re
+import uuid
 
-from fastapi import UploadFile
+from fastapi import HTTPException, UploadFile
 from fastapi.testclient import TestClient
+from pydantic import Field, ValidationError
 import pytest
 
+from fi.alk.harness import sandbox_server
+from fi.alk.harness.job import HarnessJob
 from fi.alk.harness.sandbox_server import (
     LocalSandbox,
     LocalSandboxRequest,
@@ -15,10 +21,25 @@ from fi.alk.harness.sandbox_server import (
     _CONTROLLER_TOKEN,
     _presentation_value,
     _process_identity,
+    _startup_refusal,
     _worker_failure_retryable,
     create_app,
+    main,
 )
-from fi.alk.harness.secrets import resolve_worker_secrets
+from fi.alk.harness.secrets import SecretResolutionError, resolve_worker_secrets
+from fi.simulate.runtime.spec import RuntimeIsolation, RuntimeRequirements, SecretRef
+
+_TOKEN = "ALK_SANDBOX_TOKEN"
+_FLAG = "ALK_SANDBOX_ALLOW_UNAUTHENTICATED"
+_SENTINEL = "tok-sentinel-7f3e9b"
+
+
+@pytest.fixture(autouse=True)
+def _unauthenticated_development_server(monkeypatch):
+    # The server fails closed without a token; most tests here exercise job logic on
+    # a tokenless app, and a token exported in the shell must not change them.
+    monkeypatch.setenv(_FLAG, "1")
+    monkeypatch.delenv(_TOKEN, raising=False)
 
 
 def test_presentation_redaction_handles_prose_with_email_before_url():
@@ -189,6 +210,14 @@ def test_local_sandbox_reports_live_stage_timestamp_and_detail_from_events(
     source = tmp_path / "sources" / "agent"
     source.mkdir(parents=True)
     monkeypatch.setenv("ALK_SANDBOX_SOURCE_ROOTS", str(tmp_path / "sources"))
+
+    # The stage comes from the event file, not the job. Left to run, the job reaches its
+    # worker's start, where the client's loop closing after the request cancels it and waits
+    # on a worker half started, or, past it, leaves a real worker running after the test.
+    async def idle(self, _job, _source):
+        await asyncio.sleep(0)
+
+    monkeypatch.setattr(LocalSandbox, "_execute", idle)
     state_root = tmp_path / "state"
     client = TestClient(create_app(state_root))
     submitted = client.post("/v1/jobs", json={"source_path": str(source)}).json()
@@ -932,3 +961,1174 @@ def test_acquisition_defers_inventory_and_unselected_packaging_to_authoring(
         )["status"]
         == "missing"
     )
+
+
+class _Acquirer:
+    """Stands in for the clone: a repository holding two agents, counting how often it is asked."""
+
+    calls = 0
+    on_acquire = None
+
+    def __init__(self, _token_provider) -> None:
+        pass
+
+    async def acquire(self, job, workspace):
+        type(self).calls += 1
+        checkout = workspace / "repository"
+        for name, variable in (("a", "A_ONLY_API_KEY"), ("b", "B_ONLY_API_KEY")):
+            (checkout / "agents" / name).mkdir(parents=True)
+            (checkout / "agents" / name / "agent.py").write_text(
+                f'import os\nKEY = os.environ["{variable}"]\n'
+            )
+        if type(self).on_acquire is not None:
+            type(self).on_acquire(job)
+        return checkout
+
+
+@pytest.fixture
+def cloning(monkeypatch):
+    from fi.alk.harness import sandbox_server
+
+    _Acquirer.calls = 0
+    _Acquirer.on_acquire = None
+    monkeypatch.setattr(sandbox_server, "GitHubSourceAcquirer", _Acquirer)
+    return sandbox_server
+
+
+@pytest.fixture
+def hosted_github_job(monkeypatch):
+    # submit() builds a GitHub job without the dedicated-VM runtime a hosted job requires, so
+    # today it refuses every GitHub submission. These tests cover what follows that step.
+    from fi.alk.harness import sandbox_server
+    from fi.alk.harness.job import RuntimeIsolation, RuntimeRequirements
+
+    class HostedJob(sandbox_server.HarnessJob):
+        runtime: RuntimeRequirements = Field(
+            default_factory=lambda: RuntimeRequirements(isolation=RuntimeIsolation.DEDICATED_VM)
+        )
+
+    monkeypatch.setattr(sandbox_server, "HarnessJob", HostedJob)
+
+
+def _github_request(subfolder: str, **extra) -> LocalSandboxRequest:
+    return LocalSandboxRequest(
+        github_repository="acme/agents",
+        github_commit_sha="a" * 40,
+        github_subfolder=subfolder,
+        metadata={"generic_harness_v1": True},
+        **extra,
+    )
+
+
+def _executed(sandbox: LocalSandbox, request: LocalSandboxRequest):
+    async def run():
+        response = sandbox.submit(request)
+        await sandbox._tasks[response.job.job_id]
+        return response.job.job_id
+
+    job_id = asyncio.run(run())
+    return json.loads((sandbox.jobs_root / job_id / "state.json").read_text())
+
+
+def test_github_subfolder_reaches_source(tmp_path, hosted_github_job):
+    sandbox = LocalSandbox(tmp_path / "state")
+    seen = {}
+
+    async def idle(job, _source):
+        seen["subfolder"] = job.source.subfolder
+
+    sandbox._execute = idle
+
+    async def run():
+        response = sandbox.submit(_github_request("agents/a"))
+        await sandbox._tasks[response.job.job_id]
+
+    asyncio.run(run())
+
+    assert seen == {"subfolder": "agents/a"}
+
+
+def test_github_subfolder_requires_repository(tmp_path):
+    with pytest.raises(ValueError, match="needs a GitHub repository"):
+        LocalSandboxRequest(
+            source_path=str(tmp_path),
+            github_subfolder="agents/a",
+            metadata={"generic_harness_v1": True},
+        )
+    assert LocalSandboxRequest(source_path=str(tmp_path), github_subfolder="").source_path
+
+
+def test_github_subfolder_requires_generic(tmp_path):
+    with pytest.raises(ValueError, match="needs the generic harness"):
+        LocalSandboxRequest(github_repository="acme/agents", github_subfolder="agents/a")
+
+
+def test_bad_subfolder_fails_once_without_retry(tmp_path, cloning, hosted_github_job):
+    sandbox = LocalSandbox(tmp_path / "state")
+
+    state = _executed(sandbox, _github_request("agents/missing"))
+
+    assert _Acquirer.calls == 1
+    assert state["stage"] == "failed"
+    failure = state["failure"]
+    assert (failure["domain"], failure["stage"], failure["code"], failure["retryable"]) == (
+        "agent",
+        "acquiring_source",
+        "subfolder_not_found",
+        False,
+    )
+    assert failure["details"] == {"subfolder": "agents/missing"}
+
+
+def test_bad_subfolder_keeps_canceled(tmp_path, cloning, hosted_github_job):
+    sandbox = LocalSandbox(tmp_path / "state")
+
+    def cancel(job):
+        path = sandbox.jobs_root / job.job_id / "state.json"
+        state = json.loads(path.read_text())
+        state["stage"] = "canceled"
+        path.write_text(json.dumps(state))
+
+    _Acquirer.on_acquire = cancel
+
+    state = _executed(sandbox, _github_request("agents/missing"))
+
+    assert state["stage"] == "canceled"
+    assert not state.get("failure")
+
+
+def test_the_credentials_walk_runs_off_the_servers_loop(
+    tmp_path, cloning, monkeypatch, hosted_github_job
+):
+    import threading
+
+    from fi.alk.harness import sandbox_server
+
+    # The walk reads the agent's files at bundling's limits: seconds, on a crafted repository.
+    sandbox = LocalSandbox(tmp_path / "state")
+    threads: list[threading.Thread] = []
+    discover = sandbox_server.discover_credentials
+
+    def recorded(*args, **kwargs):
+        threads.append(threading.current_thread())
+        return discover(*args, **kwargs)
+
+    def stop(*args, **kwargs):
+        raise RuntimeError("stop after the credentials are written")
+
+    monkeypatch.setattr(sandbox_server, "discover_credentials", recorded)
+    monkeypatch.setattr(cloning, "resolve_worker_secrets", stop)
+
+    async def run():
+        response = sandbox.submit(_github_request("agents/a"))
+        await sandbox._tasks[response.job.job_id]
+
+    asyncio.run(run())
+
+    assert threads and threading.main_thread() not in threads
+
+
+def test_subfolder_scopes_credentials(tmp_path, cloning, monkeypatch, hosted_github_job):
+    sandbox = LocalSandbox(tmp_path / "state")
+
+    def stop(*args, **kwargs):
+        raise RuntimeError("stop after the credentials are written")
+
+    monkeypatch.setattr(cloning, "resolve_worker_secrets", stop)
+
+    async def run():
+        response = sandbox.submit(_github_request("agents/a"))
+        await sandbox._tasks[response.job.job_id]
+        return response.job.job_id
+
+    job_id = asyncio.run(run())
+
+    manifest = json.loads((sandbox.jobs_root / job_id / "credentials.json").read_text())
+    required = {item["environment_name"]: item["required"] for item in manifest["requirements"]}
+    assert required["A_ONLY_API_KEY"] is True
+    assert required["B_ONLY_API_KEY"] is False
+
+
+def test_live_contract_output_loses_url_credentials_from_a_raw_contract(tmp_path):
+    """B3d (TH-9491, plan v5.1 §W9): a contract.json written directly, not by write_contract,
+    as a job from before the fix left it, is cleaned on its way to the live run view."""
+    from fi.alk.harness.sandbox_server import _stage_outputs
+
+    url = "https://bot:hunter2@hooks.example/v1?key=sk-1#frag"
+    (tmp_path / "contract.json").write_text(
+        json.dumps(
+            {
+                "one_liner": f"Books rides through {url}",
+                "modality": "voice",
+                "tools": [{"name": "book_ride"}],
+                "hard_constraints": [f"Always post to {url}", "Confirm before booking"],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    [contract] = [item for item in _stage_outputs(tmp_path) if item["kind"] == "contract"]
+
+    assert contract["data"]["one_liner"] == "Books rides through https://hooks.example/v1"
+    assert contract["data"]["hard_constraints"] == [
+        "Always post to https://hooks.example/v1",
+        "Confirm before booking",
+    ]
+    assert "hunter2" not in json.dumps(contract) and "sk-1" not in json.dumps(contract)
+
+
+@pytest.mark.parametrize("flag", [None, "0", "false", "", "true", "yes", " 1", "1 "])
+def test_tokenless_server_refuses_jobs_unless_the_flag_is_exactly_one(
+    tmp_path, monkeypatch, caplog, flag
+):
+    caplog.set_level("DEBUG")
+    if flag is None:
+        monkeypatch.delenv(_FLAG)
+    else:
+        monkeypatch.setenv(_FLAG, flag)
+    client = TestClient(create_app(tmp_path / "state"))
+
+    response = client.get("/v1/jobs", headers={"Authorization": f"Bearer {_SENTINEL}"})
+
+    assert response.status_code == 503
+    assert response.json() == {"detail": "sandbox_token_not_configured"}
+    assert _SENTINEL not in response.text
+    assert _SENTINEL not in caplog.text
+
+
+@pytest.mark.parametrize("token", ["", "   ", "tok\udcff"])
+def test_blank_or_unusable_token_refuses_jobs_without_the_flag(
+    tmp_path, monkeypatch, token
+):
+    monkeypatch.delenv(_FLAG)
+    monkeypatch.setenv(_TOKEN, token)
+    client = TestClient(create_app(tmp_path / "state"), raise_server_exceptions=False)
+
+    response = client.get("/v1/jobs", headers={"Authorization": "Bearer "})
+
+    assert response.status_code == 503
+    assert response.json() == {"detail": "sandbox_token_not_configured"}
+
+
+def test_padded_token_is_compared_exactly_at_request_time(tmp_path, monkeypatch):
+    monkeypatch.setenv(_TOKEN, f" {_SENTINEL}")
+    client = TestClient(create_app(tmp_path / "state"))
+
+    response = client.get("/v1/jobs", headers={"Authorization": f"Bearer {_SENTINEL}"})
+
+    assert response.status_code == 401
+
+
+def test_every_route_but_health_refuses_without_a_token(tmp_path, monkeypatch):
+    # Walks the app itself, so a route added without the guard fails here.
+    monkeypatch.delenv(_FLAG)
+    app = create_app(tmp_path / "state")
+    client = TestClient(app, raise_server_exceptions=False)
+    checked = 0
+    for route in app.routes:
+        if route.path == "/health":
+            continue
+        path = re.sub(r"\{[^}]+\}", "x", route.path)
+        for method in sorted(route.methods - {"HEAD"}):
+            response = client.request(method, path)
+            assert response.status_code == 503, (method, route.path)
+            checked += 1
+
+    assert checked >= 9
+
+
+@pytest.mark.parametrize("path", ["/docs", "/redoc", "/openapi.json"])
+def test_no_schema_or_docs_pages(tmp_path, monkeypatch, path):
+    monkeypatch.setenv(_TOKEN, _SENTINEL)
+    client = TestClient(create_app(tmp_path / "state"))
+
+    assert client.get(path).status_code == 404
+
+
+def test_tokenless_server_serves_jobs_under_the_flag(tmp_path):
+    client = TestClient(create_app(tmp_path / "state"))
+
+    assert client.get("/v1/jobs").status_code == 200
+
+
+@pytest.mark.parametrize("flag", ["1", None])
+@pytest.mark.parametrize(
+    ("authorization", "expected"),
+    [
+        (f"Bearer {_SENTINEL}", 200),
+        ("Bearer wrong", 401),
+        (None, 401),
+        ("Bearer té".encode(), 401),
+        (f"Bearer {_SENTINEL}x", 401),
+        (f"Bearer {_SENTINEL[:-1]}", 401),
+        (_SENTINEL, 401),
+    ],
+)
+def test_set_token_is_required_even_under_the_flag(
+    tmp_path, monkeypatch, caplog, flag, authorization, expected
+):
+    caplog.set_level("DEBUG")
+    monkeypatch.setenv(_TOKEN, _SENTINEL)
+    if flag is None:
+        monkeypatch.delenv(_FLAG)
+    else:
+        monkeypatch.setenv(_FLAG, flag)
+    client = TestClient(create_app(tmp_path / "state"), raise_server_exceptions=False)
+    headers = {} if authorization is None else {"Authorization": authorization}
+
+    response = client.get("/v1/jobs", headers=headers)
+
+    assert response.status_code == expected
+    if expected == 401:
+        assert response.json() == {"detail": "invalid token"}
+    assert _SENTINEL not in response.text
+    assert _SENTINEL not in caplog.text
+
+
+def test_token_is_compared_in_constant_time_on_bytes(tmp_path, monkeypatch):
+    monkeypatch.setenv(_TOKEN, _SENTINEL)
+    real = hmac.compare_digest
+    calls = []
+
+    def spy(left, right):
+        calls.append((type(left), type(right)))
+        return real(left, right)
+
+    monkeypatch.setattr(hmac, "compare_digest", spy)
+    client = TestClient(create_app(tmp_path / "state"))
+
+    response = client.get("/v1/jobs", headers={"Authorization": f"Bearer {_SENTINEL}"})
+
+    assert response.status_code == 200
+    assert calls == [(bytes, bytes)]
+
+
+@pytest.mark.parametrize(
+    "host",
+    [
+        "",
+        "0.0.0.0",
+        "::",
+        "localhost",
+        "192.168.1.10",
+        "127.0.0.1.example.com",
+        "127.0.0.1:8788",
+    ],
+)
+def test_flag_refuses_to_start_on_a_non_loopback_host(host):
+    reason = _startup_refusal(host, None, True)
+
+    assert reason is not None
+    assert _FLAG in reason
+    assert "127.0.0.1" in reason and "::1" in reason
+
+
+@pytest.mark.parametrize("host", ["127.0.0.1", "127.0.0.2", "::1"])
+def test_flag_starts_on_a_loopback_host(host):
+    assert _startup_refusal(host, None, True) is None
+    assert _startup_refusal(host, "", True) is None
+
+
+@pytest.mark.parametrize("token", [None, "", "   "])
+@pytest.mark.parametrize("host", ["127.0.0.1", "0.0.0.0"])
+def test_missing_token_refuses_to_start_without_the_flag(host, token):
+    reason = _startup_refusal(host, token, False)
+
+    assert reason is not None
+    assert _TOKEN in reason
+
+
+def test_missing_token_refusal_names_both_sides_and_the_flag():
+    reason = _startup_refusal("0.0.0.0", None, False)
+
+    assert reason is not None
+    assert _TOKEN in reason
+    assert "ALK_HARNESS_SANDBOX_TOKEN" in reason
+    assert _FLAG in reason
+
+
+@pytest.mark.parametrize("allow", [False, True])
+@pytest.mark.parametrize("host", ["0.0.0.0", "127.0.0.1", "10.0.0.5", ""])
+def test_set_token_starts_on_any_host(host, allow):
+    assert _startup_refusal(host, _SENTINEL, allow) is None
+
+
+@pytest.mark.parametrize(("host", "allow"), [("0.0.0.0", False), ("127.0.0.1", True)])
+@pytest.mark.parametrize("token", [f" {_SENTINEL} ", f"{_SENTINEL}\n", "   "])
+def test_padded_or_blank_token_refuses_to_start_without_naming_it(host, allow, token):
+    reason = _startup_refusal(host, token, allow)
+
+    assert reason is not None
+    assert _TOKEN in reason
+    assert _SENTINEL not in reason
+
+
+@pytest.fixture
+def stubbed_uvicorn(monkeypatch):
+    monkeypatch.delenv(_FLAG, raising=False)
+    monkeypatch.delenv(_TOKEN, raising=False)
+    monkeypatch.delenv("ALK_SANDBOX_HOST", raising=False)
+    calls = []
+    monkeypatch.setattr("uvicorn.run", lambda *args, **kwargs: calls.append(kwargs))
+    return calls
+
+
+@pytest.mark.parametrize("token", [None, "", "   ", f" {_SENTINEL} "])
+def test_main_refuses_to_start_without_a_usable_token(
+    monkeypatch, capsys, caplog, stubbed_uvicorn, token
+):
+    caplog.set_level("DEBUG")
+    if token is not None:
+        monkeypatch.setenv(_TOKEN, token)
+
+    with pytest.raises(SystemExit) as exited:
+        main()
+
+    assert exited.value.code == 2
+    assert stubbed_uvicorn == []
+    err = capsys.readouterr().err
+    assert _TOKEN in err
+    assert _SENTINEL not in err
+    assert _SENTINEL not in caplog.text
+
+
+def test_main_refuses_a_blank_token_even_under_the_flag_on_loopback(
+    monkeypatch, stubbed_uvicorn
+):
+    monkeypatch.setenv(_FLAG, "1")
+    monkeypatch.setenv("ALK_SANDBOX_HOST", "127.0.0.1")
+    monkeypatch.setenv(_TOKEN, "   ")
+
+    with pytest.raises(SystemExit) as exited:
+        main()
+
+    assert exited.value.code == 2
+    assert stubbed_uvicorn == []
+
+
+def test_unusable_token_refuses_to_start():
+    assert _startup_refusal("127.0.0.1", "tok\udcff", True) is not None
+
+
+@pytest.mark.parametrize("host", ["10.0.0.5", "0.0.0.0", ""])
+def test_main_checks_the_host_it_binds(monkeypatch, stubbed_uvicorn, host):
+    monkeypatch.setenv(_FLAG, "1")
+    monkeypatch.setenv("ALK_SANDBOX_HOST", host)
+
+    with pytest.raises(SystemExit) as exited:
+        main()
+
+    assert exited.value.code == 2
+    assert stubbed_uvicorn == []
+
+
+def test_main_starts_with_a_token_on_the_configured_host(
+    monkeypatch, caplog, stubbed_uvicorn
+):
+    caplog.set_level("DEBUG")
+    monkeypatch.setenv(_TOKEN, _SENTINEL)
+    monkeypatch.setenv("ALK_SANDBOX_HOST", "0.0.0.0")
+
+    main()
+
+    assert [call["host"] for call in stubbed_uvicorn] == ["0.0.0.0"]
+    assert "unauthenticated sandbox" not in caplog.text
+    assert _SENTINEL not in caplog.text
+
+
+def test_main_warns_when_starting_unauthenticated_on_loopback(
+    monkeypatch, caplog, stubbed_uvicorn
+):
+    caplog.set_level("WARNING")
+    monkeypatch.setenv(_FLAG, "1")
+
+    main()
+
+    assert [call["host"] for call in stubbed_uvicorn] == ["127.0.0.1"]
+    assert "unauthenticated sandbox" in caplog.text
+    assert "developer's own laptop only" in caplog.text
+    assert "including the agent under test" in caplog.text
+
+
+def test_health_needs_no_token_or_flag(tmp_path, monkeypatch):
+    monkeypatch.delenv(_FLAG)
+    client = TestClient(create_app(tmp_path / "state"))
+
+    assert client.get("/health").status_code == 200
+
+
+class _DedicatedVmJob(HarnessJob):
+    # Hosted jobs require the dedicated_vm runtime, which submit does not set yet. A
+    # subclass rather than a factory, because get() rebuilds jobs with model_validate.
+    runtime: RuntimeRequirements = Field(
+        default_factory=lambda: RuntimeRequirements(
+            isolation=RuntimeIsolation.DEDICATED_VM
+        )
+    )
+
+
+class _AwaitingDedicatedIsolation(Exception):
+    """The route failed only on the runtime isolation hosted jobs still lack."""
+
+
+async def _idle_execute(*_args):
+    return None
+
+
+@pytest.fixture
+def hosted_sandbox(tmp_path, monkeypatch):
+    monkeypatch.setattr(sandbox_server, "HarnessJob", _DedicatedVmJob)
+    return LocalSandbox(
+        tmp_path / "state",
+        upload_root=tmp_path / "uploads",
+        secret_file_root=tmp_path / "secret-files",
+    )
+
+
+@pytest.fixture
+def launched_workers(monkeypatch):
+    launched = []
+
+    class Worker:
+        async def wait(self):
+            return 0
+
+    async def fake_worker(*args, **kwargs):
+        launched.append(kwargs["env"])
+        return Worker()
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_worker)
+    return launched
+
+
+def _ref(manager, key):
+    return SecretRef(manager=manager, key=key, purpose="target_provider")
+
+
+def _job_key(job_id, index):
+    return f"ALK_JOB_{job_id.replace('-', '').upper()}_{index}"
+
+
+def _with_refs(job, refs):
+    return job.model_copy(
+        update={"agent": job.agent.model_copy(update={"secret_refs": refs})}
+    )
+
+
+async def _upload_archive(sandbox):
+    uploaded = await sandbox.upload_source(
+        [UploadFile(filename="agent.py", file=BytesIO(b"print('ready')\n"))],
+        ["agent.py"],
+        "customer-agent",
+    )
+    return uploaded.source_id
+
+
+async def _upload_credential(sandbox, name, body=b"credential-body"):
+    uploaded = await sandbox.upload_secret_file(
+        UploadFile(filename="credential", file=BytesIO(body)), name
+    )
+    return uploaded.secret_ref.key
+
+
+async def _parked_submit(sandbox, **fields):
+    # Parking _execute keeps the job's directory, state and in-memory values live, so a
+    # test can run the real _execute or resolver on a job it crafts afterwards.
+    sandbox._execute = _idle_execute
+    try:
+        response = sandbox.submit(LocalSandboxRequest(**fields))
+        await sandbox._tasks.pop(response.job.job_id)
+    finally:
+        del sandbox._execute
+    return response.job
+
+
+async def _terminal_job(sandbox, **fields):
+    job = await _parked_submit(sandbox, **fields)
+    run_root = sandbox.artifacts_root / job.run_id
+    (run_root / "environment-bundle").mkdir(parents=True)
+    for path in (
+        run_root / "contract.json",
+        run_root / "scenarios.json",
+        run_root / "environment-bundle" / "manifest.json",
+        run_root / "platform.json",
+    ):
+        path.write_text("{}", encoding="utf-8")
+    state_path = sandbox.jobs_root / job.job_id / "state.json"
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    state["stage"] = "completed"
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+    sandbox._execute_rerun = _idle_execute
+    return job
+
+
+def _assert_nothing_left(sandbox):
+    assert list(sandbox.jobs_root.iterdir()) == []
+    assert list((sandbox.secret_files_root / "jobs").iterdir()) == []
+
+
+def _assert_failed_before_launch(sandbox, job_id, launched, message):
+    state = json.loads((sandbox.jobs_root / job_id / "state.json").read_text())
+    assert state["stage"] == "failed"
+    assert state["failure"]["code"] == "SecretResolutionError"
+    assert state["failure"]["message"] == message
+    assert launched == []
+
+
+@pytest.mark.parametrize(
+    ("manager", "key_kind"),
+    [
+        ("platform-vault", "job"),
+        ("mounted", "job"),
+        ("platform-vault", "upload"),
+        ("environment", "upload"),
+        ("Mounted", "upload"),
+        ("other", "upload"),
+    ],
+)
+def test_hosted_submit_refuses_incoming_sandbox_prefixed_refs(
+    hosted_sandbox, manager, key_kind
+):
+    sandbox = hosted_sandbox
+    sandbox._execute = _idle_execute
+
+    async def submit():
+        source_id = await _upload_archive(sandbox)
+        upload = await _upload_credential(sandbox, "GOOD")
+        key = upload if key_kind == "upload" else _job_key(str(uuid.uuid4()), 0)
+        with pytest.raises(HTTPException) as refused:
+            sandbox.submit(
+                LocalSandboxRequest(
+                    source_id=source_id, secret_refs={"X": _ref(manager, key)}
+                )
+            )
+        return refused.value
+
+    refused = asyncio.run(submit())
+
+    assert refused.status_code == 400
+    assert refused.detail == "sandbox_secret_reference_refused: X"
+    _assert_nothing_left(sandbox)
+
+
+@pytest.mark.parametrize(
+    "manager",
+    [
+        "environment",
+        "futureagi",
+        "platform-vault",
+        "platform-config",
+        "Mounted",
+        "other",
+    ],
+)
+def test_local_submit_refuses_a_second_alias_for_an_upload(tmp_path, manager):
+    sandbox = LocalSandbox(
+        tmp_path / "state",
+        upload_root=tmp_path / "uploads",
+        secret_file_root=tmp_path / "secret-files",
+    )
+    sandbox._execute = _idle_execute
+
+    async def submit():
+        upload = await _upload_credential(sandbox, "GOOD")
+        with pytest.raises(HTTPException) as refused:
+            sandbox.submit(
+                LocalSandboxRequest(
+                    provider_only=True,
+                    connector="livekit",
+                    connector_mode="connect_only",
+                    connector_config={
+                        "agent_name": "returns-agent",
+                        "target_system_prompt": "You handle returns.",
+                    },
+                    secret_refs={
+                        "GOOD": _ref("mounted", upload),
+                        "PYTHONPATH": _ref(manager, upload),
+                    },
+                )
+            )
+        return refused.value
+
+    refused = asyncio.run(submit())
+
+    assert refused.status_code == 400
+    assert refused.detail == "sandbox_secret_reference_refused: PYTHONPATH"
+    _assert_nothing_left(sandbox)
+
+
+@pytest.mark.parametrize("source_kind", ["archive", "github"])
+def test_hosted_submit_refuses_an_incoming_vault_ref_before_any_claim(
+    hosted_sandbox, source_kind
+):
+    sandbox = hosted_sandbox
+    sandbox._execute = _idle_execute
+
+    async def submit():
+        upload = await _upload_credential(sandbox, "GOOD")
+        source = (
+            {"source_id": await _upload_archive(sandbox)}
+            if source_kind == "archive"
+            else {"github_repository": "acme/agent", "github_commit_sha": "a" * 40}
+        )
+        with pytest.raises(HTTPException) as refused:
+            sandbox.submit(
+                LocalSandboxRequest(
+                    **source,
+                    secret_refs={
+                        "GOOD": _ref("mounted", upload),
+                        "PLATFORM": _ref(
+                            "platform-vault", "harness-organization-secret"
+                        ),
+                    },
+                )
+            )
+        return refused.value
+
+    refused = asyncio.run(submit())
+
+    assert refused.status_code == 400
+    assert refused.detail == "sandbox_vault_reference_unknown: PLATFORM"
+    _assert_nothing_left(sandbox)
+    # Refused before the claim, so the upload is still there to submit again.
+    assert any(sandbox.secret_files_root.joinpath("pending").iterdir())
+
+
+def test_a_local_vault_ref_is_accepted_at_submit_and_refused_at_resolve(tmp_path):
+    # Only hosted jobs refuse it at the door; a local job keeps its old path, failing when its
+    # refs are resolved.
+    sandbox = LocalSandbox(tmp_path / "state")
+    platform = _ref("platform-vault", "harness-organization-secret")
+
+    job = asyncio.run(
+        _parked_submit(
+            sandbox,
+            provider_only=True,
+            connector="retell",
+            connector_mode="connect_only",
+            connector_config={"agent_id": "agent_example"},
+            secret_refs={"PLATFORM": platform},
+        )
+    )
+
+    assert job.execution.value == "local"
+    assert job.agent.secret_refs["PLATFORM"] == platform
+    with pytest.raises(
+        SecretResolutionError, match="sandbox_vault_reference_unknown: PLATFORM"
+    ):
+        sandbox._resolve_job_secrets(job)
+
+
+def test_hosted_submit_lets_a_platform_config_ref_through(hosted_sandbox):
+    # Only incoming vault refs are refused at the door; other managers keep their own path.
+    sandbox = hosted_sandbox
+    config_ref = SecretRef(
+        manager="platform-config", key="simulator-key", purpose="simulator_provider"
+    )
+
+    async def submit():
+        return await _parked_submit(
+            sandbox,
+            source_id=await _upload_archive(sandbox),
+            secret_refs={"SIMULATOR": config_ref},
+        )
+
+    job = asyncio.run(submit())
+
+    assert job.agent.secret_refs["SIMULATOR"] == config_ref
+
+
+@pytest.mark.parametrize("source_kind", ["archive", "github"])
+def test_hosted_submit_names_its_own_values_platform_vault(hosted_sandbox, source_kind):
+    sandbox = hosted_sandbox
+
+    async def submit():
+        upload = await _upload_credential(sandbox, "GOOD", b"credential-never-persist")
+        source = (
+            {"source_id": await _upload_archive(sandbox)}
+            if source_kind == "archive"
+            else {"github_repository": "acme/agent", "github_commit_sha": "a" * 40}
+        )
+        job = await _parked_submit(
+            sandbox,
+            **source,
+            environment_values={"OPENAI_API_KEY": "value-never-persist"},
+            secret_refs={"GOOD": _ref("mounted", upload)},
+        )
+        return job, upload
+
+    job, upload = asyncio.run(submit())
+    claimed_path = str(sandbox.secret_files_root / "jobs" / job.job_id / "GOOD")
+    directory = sandbox.jobs_root / job.job_id
+    persisted = (directory / "job.json").read_text() + (
+        directory / "state.json"
+    ).read_text()
+
+    assert job.execution.value == "hosted"
+    assert job.agent.secret_refs == {
+        "OPENAI_API_KEY": _ref("platform-vault", _job_key(job.job_id, 0)),
+        "GOOD": _ref("platform-vault", upload),
+    }
+    assert job.metadata["environment_value_names"] == ["GOOD", "OPENAI_API_KEY"]
+    assert sandbox._ephemeral_secrets[job.job_id] == {
+        _job_key(job.job_id, 0): "value-never-persist",
+        upload: claimed_path,
+    }
+    assert "value-never-persist" not in persisted
+    assert "credential-never-persist" not in persisted
+    assert claimed_path not in persisted
+
+
+def test_hosted_submit_still_refuses_a_mounted_server_key(hosted_sandbox):
+    sandbox = hosted_sandbox
+    sandbox._execute = _idle_execute
+
+    async def submit():
+        source_id = await _upload_archive(sandbox)
+        upload = await _upload_credential(sandbox, "GOOD")
+        with pytest.raises(
+            ValidationError, match="hosted_secret_manager_unsupported: AGENTCC_API_KEY"
+        ):
+            sandbox.submit(
+                LocalSandboxRequest(
+                    source_id=source_id,
+                    environment_values={"OPENAI_API_KEY": "value"},
+                    secret_refs={
+                        "GOOD": _ref("mounted", upload),
+                        "AGENTCC_API_KEY": _ref("mounted", "AGENTCC_API_KEY"),
+                    },
+                )
+            )
+
+    asyncio.run(submit())
+
+    _assert_nothing_left(sandbox)
+
+
+def test_hosted_submit_refuses_a_vault_alias_for_another_aliases_upload(
+    hosted_sandbox,
+):
+    sandbox = hosted_sandbox
+    sandbox._execute = _idle_execute
+
+    async def submit():
+        source_id = await _upload_archive(sandbox)
+        upload = await _upload_credential(sandbox, "GOOD")
+        with pytest.raises(HTTPException) as refused:
+            sandbox.submit(
+                LocalSandboxRequest(
+                    source_id=source_id,
+                    secret_refs={
+                        "GOOD": _ref("mounted", upload),
+                        "PYTHONPATH": _ref("platform-vault", upload),
+                    },
+                )
+            )
+        return upload, refused.value
+
+    upload, refused = asyncio.run(submit())
+    pending = str(uuid.UUID(hex=upload.removeprefix("ALK_SECRET_FILE_")[:32].lower()))
+
+    assert refused.status_code == 400
+    assert refused.detail == "sandbox_secret_reference_refused: PYTHONPATH"
+    _assert_nothing_left(sandbox)
+    # The refusal precedes the claim, so the upload was never consumed.
+    assert (sandbox.secret_files_root / "pending" / pending).is_file()
+
+
+def test_hosted_execute_resolves_its_own_values(hosted_sandbox, launched_workers):
+    sandbox = hosted_sandbox
+
+    async def submit():
+        source_id = await _upload_archive(sandbox)
+        upload = await _upload_credential(sandbox, "GOOD")
+        response = sandbox.submit(
+            LocalSandboxRequest(
+                source_id=source_id,
+                environment_values={"OPENAI_API_KEY": "own-value"},
+                secret_refs={"GOOD": _ref("mounted", upload)},
+            )
+        )
+        await sandbox._tasks[response.job.job_id]
+        return response.job
+
+    job = asyncio.run(submit())
+    state = json.loads((sandbox.jobs_root / job.job_id / "state.json").read_text())
+
+    assert state["stage"] == "completed", state.get("detail")
+    assert len(launched_workers) == 1
+    assert launched_workers[0]["ALK_RUNTIME_VALUE_OPENAI_API_KEY"] == "own-value"
+    assert launched_workers[0]["ALK_RUNTIME_VALUE_GOOD"] == str(
+        sandbox.secret_files_root / "jobs" / job.job_id / "GOOD"
+    )
+
+
+def test_hosted_execute_never_reads_a_vault_key_from_the_environment(
+    hosted_sandbox, launched_workers, monkeypatch
+):
+    sandbox = hosted_sandbox
+
+    async def execute():
+        source_id = await _upload_archive(sandbox)
+        job = await _parked_submit(sandbox, source_id=source_id)
+        # This job's own key shape, set only in the environment.
+        key = _job_key(job.job_id, 9)
+        monkeypatch.setenv(key, "server-environment-value")
+        await sandbox._execute(
+            _with_refs(job, {"X": _ref("platform-vault", key)}),
+            sandbox.uploads_root / source_id,
+        )
+        return job
+
+    job = asyncio.run(execute())
+
+    _assert_failed_before_launch(
+        sandbox, job.job_id, launched_workers, "secret_reference_unavailable: X"
+    )
+
+
+@pytest.mark.parametrize(
+    ("key_kind", "message"),
+    [
+        ("upload", "secret_reference_unavailable: X"),
+        ("job", "sandbox_vault_reference_unknown: X"),
+    ],
+)
+def test_hosted_execute_never_reads_another_jobs_values(
+    hosted_sandbox, launched_workers, key_kind, message
+):
+    sandbox = hosted_sandbox
+
+    async def execute():
+        source_id = await _upload_archive(sandbox)
+        upload = await _upload_credential(sandbox, "GOOD")
+        # The other job stays parked, so its values and claimed file are live throughout.
+        other = await _parked_submit(
+            sandbox,
+            source_id=source_id,
+            environment_values={"OPENAI_API_KEY": "other-job-value"},
+            secret_refs={"GOOD": _ref("mounted", upload)},
+        )
+        job = await _parked_submit(sandbox, source_id=source_id)
+        key = upload if key_kind == "upload" else _job_key(other.job_id, 0)
+        await sandbox._execute(
+            _with_refs(job, {"X": _ref("platform-vault", key)}),
+            sandbox.uploads_root / source_id,
+        )
+        return job, other
+
+    job, other = asyncio.run(execute())
+
+    _assert_failed_before_launch(sandbox, job.job_id, launched_workers, message)
+    assert other.job_id in sandbox._ephemeral_secrets
+
+
+@pytest.mark.parametrize("key_kind", ["server_token", "foreign_job", "platform"])
+def test_resolver_refuses_vault_keys_it_did_not_mint_for_this_job(
+    hosted_sandbox, monkeypatch, key_kind
+):
+    sandbox = hosted_sandbox
+    monkeypatch.setenv("ALK_SANDBOX_TOKEN", "server-token-value")
+
+    async def submit():
+        return await _parked_submit(
+            sandbox,
+            source_id=await _upload_archive(sandbox),
+            environment_values={"OPENAI_API_KEY": "own-value"},
+        )
+
+    job = asyncio.run(submit())
+    foreign = _job_key(str(uuid.uuid4()), 0)
+    # Seeded into this job's own map, so only the job-id check can refuse it.
+    sandbox._ephemeral_secrets[job.job_id][foreign] = "foreign-value"
+    key = {
+        "server_token": "ALK_SANDBOX_TOKEN",
+        "foreign_job": foreign,
+        "platform": "harness-organization-secret",
+    }[key_kind]
+
+    with pytest.raises(SecretResolutionError) as refused:
+        sandbox._resolve_job_secrets(
+            _with_refs(job, {"X": _ref("platform-vault", key)})
+        )
+
+    assert str(refused.value) == "sandbox_vault_reference_unknown: X"
+
+
+def test_resolver_returns_own_values_and_treats_empty_as_missing(hosted_sandbox):
+    sandbox = hosted_sandbox
+
+    async def submit():
+        return await _parked_submit(
+            sandbox,
+            source_id=await _upload_archive(sandbox),
+            environment_values={"OPENAI_API_KEY": "own-value"},
+        )
+
+    job = asyncio.run(submit())
+
+    assert sandbox._resolve_job_secrets(job) == {"OPENAI_API_KEY": "own-value"}
+    sandbox._ephemeral_secrets[job.job_id][_job_key(job.job_id, 0)] = ""
+    with pytest.raises(SecretResolutionError) as refused:
+        sandbox._resolve_job_secrets(job)
+    assert str(refused.value) == "secret_reference_unavailable: OPENAI_API_KEY"
+
+
+def test_resolver_keeps_local_mounted_and_environment_refs(tmp_path, monkeypatch):
+    source = tmp_path / "sources" / "agent"
+    source.mkdir(parents=True)
+    monkeypatch.setenv("ALK_SANDBOX_SOURCE_ROOTS", str(tmp_path / "sources"))
+    monkeypatch.setenv("SANDBOX_TEST_SHELL_VALUE", "shell-value")
+    sandbox = LocalSandbox(
+        tmp_path / "state",
+        upload_root=tmp_path / "uploads",
+        secret_file_root=tmp_path / "secret-files",
+    )
+
+    async def submit():
+        return await _parked_submit(
+            sandbox,
+            source_path=str(source),
+            environment_values={"OPENAI_API_KEY": "local-value"},
+            secret_refs={"SHELL": _ref("environment", "SANDBOX_TEST_SHELL_VALUE")},
+        )
+
+    job = asyncio.run(submit())
+    expected = resolve_worker_secrets(
+        job.agent.secret_refs,
+        environment={**os.environ, **sandbox._ephemeral_secrets[job.job_id]},
+    )
+
+    assert job.execution.value == "local"
+    assert job.agent.secret_refs["OPENAI_API_KEY"].manager == "mounted"
+    assert sandbox._resolve_job_secrets(job) == expected
+    assert expected == {"OPENAI_API_KEY": "local-value", "SHELL": "shell-value"}
+
+
+def test_hosted_rerun_resolves_a_claimed_file_from_its_claim(hosted_sandbox):
+    sandbox = hosted_sandbox
+
+    async def rerun():
+        job = await _terminal_job(sandbox, source_id=await _upload_archive(sandbox))
+        upload = await _upload_credential(sandbox, "GOOD")
+        sandbox.rerun(
+            job.job_id,
+            SandboxRerunRequest(
+                secret_refs={"GOOD": _ref("mounted", upload)},
+                environment_values={"OPENAI_API_KEY": "fresh-value"},
+            ),
+        )
+        await sandbox._tasks.pop(job.job_id)
+        return job
+
+    job = asyncio.run(rerun())
+
+    assert sandbox._ephemeral_secrets[job.job_id] == {
+        "OPENAI_API_KEY": "fresh-value",
+        "GOOD": str(sandbox.secret_files_root / "jobs" / job.job_id / "GOOD"),
+    }
+
+
+@pytest.mark.parametrize(
+    ("manager", "key_kind"),
+    [
+        ("mounted", "server"),
+        ("environment", "server"),
+        ("futureagi", "server"),
+        ("platform-vault", "job"),
+        ("environment", "upload"),
+    ],
+)
+def test_hosted_rerun_refuses_refs_other_than_its_claimed_files(
+    hosted_sandbox, monkeypatch, manager, key_kind
+):
+    sandbox = hosted_sandbox
+    monkeypatch.setenv("AGENTCC_API_KEY", "server-credential-value")
+
+    async def rerun():
+        job = await _terminal_job(sandbox, source_id=await _upload_archive(sandbox))
+        upload = await _upload_credential(sandbox, "GOOD")
+        key = {
+            "server": "AGENTCC_API_KEY",
+            "job": _job_key(job.job_id, 0),
+            "upload": upload,
+        }[key_kind]
+        state_before = (sandbox.jobs_root / job.job_id / "state.json").read_text()
+        with pytest.raises(HTTPException) as refused:
+            sandbox.rerun(
+                job.job_id,
+                SandboxRerunRequest(
+                    secret_refs={
+                        "GOOD": _ref("mounted", upload),
+                        "X": _ref(manager, key),
+                    }
+                ),
+            )
+        return job, state_before, refused.value
+
+    job, state_before, refused = asyncio.run(rerun())
+
+    assert refused.status_code == 400
+    assert refused.detail == "sandbox_rerun_secret_refused: X"
+    assert job.job_id not in sandbox._ephemeral_secrets
+    assert job.job_id not in sandbox._tasks
+    assert not (sandbox.secret_files_root / "jobs" / job.job_id).exists()
+    assert (sandbox.jobs_root / job.job_id / "state.json").read_text() == state_before
+
+
+def test_local_rerun_still_resolves_a_mounted_server_side_ref(tmp_path, monkeypatch):
+    source = tmp_path / "sources" / "agent"
+    source.mkdir(parents=True)
+    monkeypatch.setenv("ALK_SANDBOX_SOURCE_ROOTS", str(tmp_path / "sources"))
+    monkeypatch.setenv("SANDBOX_TEST_SHELL_VALUE", "shell-value")
+    sandbox = LocalSandbox(
+        tmp_path / "state",
+        upload_root=tmp_path / "uploads",
+        secret_file_root=tmp_path / "secret-files",
+    )
+
+    async def rerun():
+        job = await _terminal_job(sandbox, source_path=str(source))
+        sandbox.rerun(
+            job.job_id,
+            SandboxRerunRequest(
+                secret_refs={"X": _ref("mounted", "SANDBOX_TEST_SHELL_VALUE")}
+            ),
+        )
+        await sandbox._tasks.pop(job.job_id)
+        return job
+
+    job = asyncio.run(rerun())
+
+    assert sandbox._ephemeral_secrets[job.job_id] == {"X": "shell-value"}
+
+
+@pytest.mark.xfail(
+    strict=True,
+    raises=_AwaitingDedicatedIsolation,
+    reason="submit does not yet give hosted jobs the dedicated_vm runtime",
+)
+def test_hosted_github_route_accepts_a_submitted_value(tmp_path, monkeypatch):
+    monkeypatch.delenv("ALK_SANDBOX_TOKEN", raising=False)
+    monkeypatch.setattr(LocalSandbox, "_execute", _idle_execute)
+    client = TestClient(create_app(tmp_path / "state"))
+
+    try:
+        response = client.post(
+            "/v1/jobs",
+            json={
+                "github_repository": "acme/agent",
+                "github_commit_sha": "a" * 40,
+                "environment_values": {"OPENAI_API_KEY": "route-value"},
+            },
+        )
+    except ValidationError as exc:
+        if "hosted_isolation_must_be_dedicated_vm" in str(exc):
+            raise _AwaitingDedicatedIsolation from exc
+        raise
+
+    assert response.status_code == 200
+    job = response.json()["job"]
+    assert job["execution"] == "hosted"
+    assert job["agent"]["secret_refs"]["OPENAI_API_KEY"]["manager"] == "platform-vault"
+    assert "route-value" not in response.text
