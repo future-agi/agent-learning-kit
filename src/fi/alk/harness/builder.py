@@ -279,6 +279,7 @@ def suite_server(
     )
     async def declare_tool(args: dict[str, Any]) -> dict[str, Any]:
         from .amend import _persist
+        from .backends.files import secret_text
         from .contract import ToolSpec, validate_contract
         from .source_folder import agent_scope, in_agent_scope
 
@@ -290,7 +291,16 @@ def suite_server(
         quote = str(args.get("evidence_quote") or "").strip()
         root = source_root or Path("/nonexistent")
         target = (root / str(args.get("evidence_file") or "")).resolve()
-        if source_root is None or root.resolve() not in target.parents or not target.is_file():
+        if source_root is None or root.resolve() not in target.parents:
+            return _err("evidence_file must be a file inside the agent's source")
+        if secret_text(target.relative_to(root.resolve()).as_posix()):
+            # Judged where it resolves, before the file is opened: a listed file, a link to one
+            # and one that is missing get this same answer, and a guess is never checked.
+            return _err(
+                f"{args.get('evidence_file')} is kept out of this session because it holds "
+                "credentials; name a file in the agent's code or configuration"
+            )
+        if not target.is_file():
             return _err("evidence_file must be a file inside the agent's source")
         folder = contract_folder(contract)
         scope = agent_scope(root, folder)

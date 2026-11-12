@@ -624,6 +624,20 @@ def _env_value(line: str) -> str | None:
     return value
 
 
+# A Vertex model name carries its version after an @ (claude-3-5-sonnet@20240620); any other @ in
+# a value is a login (user@host, user:password@host).
+_VERSIONED_NAME = re.compile(r"[^@:]+@(?:\d{8}|latest)", re.IGNORECASE)
+
+
+def _env_value_is_a_locator(value: str) -> bool:
+    """A .env value that is a URL, or holds a login: MODEL_SERVER=postgres://admin:pw@db/app is
+    where a model is served from, with its credentials, not which model. `:` alone is a model
+    name's (anthropic.claude-3-5-sonnet-20240620-v1:0), and so is a version after an @."""
+    if "://" in value or "\uff20" in value:
+        return True
+    return "@" in value and not _VERSIONED_NAME.fullmatch(value)
+
+
 def model_problems(contract: AgentContract, source_root: Path) -> list[str]:
     """Problems with contract.model, checked against the cited line. On success, strips name and
     provider and stores path as the resolved file relative to the root, in POSIX form. Resolves
@@ -703,7 +717,9 @@ def model_problems(contract: AgentContract, source_root: Path) -> list[str]:
     # In a .env file the name must be the value of the one setting that names the model, so a
     # guess is never checked against another setting on the same line.
     if env_file and (
-        not _names_a_model(lines[model.line - 1]) or _env_value(lines[model.line - 1]) != name
+        not _names_a_model(lines[model.line - 1])
+        or _env_value(lines[model.line - 1]) != name
+        or _env_value_is_a_locator(name)
     ):
         return [
             f"model: in a .env file, cite the line whose setting names the model (such as "

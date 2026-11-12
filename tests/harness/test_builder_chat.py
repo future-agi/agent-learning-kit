@@ -2101,6 +2101,70 @@ def test_declared_tool_evidence_must_be_in_the_agents_folder(tmp_path):
     assert not own.get("is_error"), own
 
 
+def _declare_from(tmp_path, evidence_file: str, quote: str):
+    root, source, contract, kept = _two_agent_world(tmp_path, "")
+    server = builder.suite_server(root, kept, contract, source)
+    declare = next(one for one in server.tools if one.name == "declare_tool")
+    return source, asyncio.run(
+        declare.handler(
+            {
+                "name": "cancel_a",
+                "description": "cancel",
+                "evidence_file": evidence_file,
+                "evidence_quote": quote,
+                "why": "the agent has it",
+            }
+        )
+    )
+
+
+def test_declared_tool_evidence_never_checks_a_guess_against_a_listed_file(tmp_path):
+    answers = []
+    for case, make in {
+        "listed": lambda src: (src / ".env").write_text("API_KEY=canary-value\n"),
+        "link": lambda src: (
+            (src / ".env").write_text("API_KEY=canary-value\n"),
+            (src / "notes.txt").symlink_to(src / ".env"),
+        ),
+        "missing": lambda src: None,
+    }.items():
+        world = tmp_path / case
+        world.mkdir()
+        root, source, contract, kept = _two_agent_world(world, "")
+        make(source)
+        server = builder.suite_server(root, kept, contract, source)
+        declare = next(one for one in server.tools if one.name == "declare_tool")
+        path = "notes.txt" if case == "link" else ".env"
+        for quote in ("API_KEY=canary-value", "API_KEY=c", "API_KEY=zzz"):
+            answers.append(
+                asyncio.run(
+                    declare.handler(
+                        {
+                            "name": "cancel_a",
+                            "description": "cancel",
+                            "evidence_file": path,
+                            "evidence_quote": quote,
+                            "why": "x",
+                        }
+                    )
+                )
+            )
+
+    texts = {one["content"][0]["text"] for one in answers}
+    # A link is named differently from the file it points at, so its text differs only by name.
+    assert all(one["is_error"] for one in answers)
+    assert {t.replace("notes.txt", ".env") for t in texts} == {
+        ".env is kept out of this session because it holds credentials; "
+        "name a file in the agent's code or configuration"
+    }
+
+
+def test_declared_tool_evidence_from_a_normal_file_still_works(tmp_path):
+    _, result = _declare_from(tmp_path, "agents/a/agent.py", "def cancel_a():")
+
+    assert not result.get("is_error"), result
+
+
 # -- Change review r2, A-H1: what the chat sends the platform loses URL credentials ------------------
 
 _SECRET_URL = "https://bot:hunter2@hooks.example/v1?key=sk-1#frag"

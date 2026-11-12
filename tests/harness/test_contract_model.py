@@ -2680,7 +2680,7 @@ def test_a_crafted_long_word_costs_little(root):
     took = time.perf_counter() - started
 
     assert answer is not None
-    assert took < 0.25
+    assert took < QUICK_SECONDS
 
 
 # Scripts written without spaces: each character is a word
@@ -2812,7 +2812,7 @@ def test_a_crafted_file_of_one_byte_lines_and_triple_quotes_costs_little(root):
 
     _, _, took = checked(root, {"name": "gpt-4o", "path": "crafted.py", "line": line})
 
-    assert took < 0.25
+    assert took < QUICK_SECONDS
 
 
 @pytest.mark.parametrize(
@@ -2954,7 +2954,7 @@ def test_a_long_first_word_is_charged_on_every_try(root):
     took = time.perf_counter() - started
 
     assert answer is not None
-    assert took < 0.25
+    assert took < QUICK_SECONDS
 
 
 def test_a_short_unspaced_quote_is_still_searched_with_gaps(tmp_path, root):
@@ -3187,7 +3187,7 @@ def test_an_unclosed_string_of_escapes_costs_one_pass(root, quote):
 
     _, _, took = checked(root, {"name": "gpt-4o", "path": "crafted.ts", "line": 1})
 
-    assert took < 0.25
+    assert took < QUICK_SECONDS
 
 
 @pytest.mark.parametrize(
@@ -3901,6 +3901,29 @@ def test_a_env_setting_named_for_a_model_by_any_of_its_words_is_accepted(root, w
     assert problems == []
 
 
+@pytest.mark.parametrize(
+    "written, name",
+    [
+        pytest.param("VERTEX_MODEL=claude-3-5-sonnet@20240620", "claude-3-5-sonnet@20240620", id="vertex-version"),
+        pytest.param("VERTEX_MODEL=claude-3-5-sonnet-v2@latest", "claude-3-5-sonnet-v2@latest", id="vertex-latest"),
+        pytest.param("BEDROCK_MODEL=anthropic.claude-3-5-sonnet-20240620-v1:0", "anthropic.claude-3-5-sonnet-20240620-v1:0", id="bedrock-colon"),
+    ],
+)
+def test_a_env_model_name_with_an_at_or_a_colon_of_its_own_is_still_accepted(root, written, name):
+    (root / ".env").write_text(f"{written}\n", encoding="utf-8")
+
+    problems, _, _ = checked(root, {"name": name, "path": ".env", "line": 1})
+
+    assert problems == []
+
+
+def test_a_fullwidth_at_in_a_env_value_is_refused():
+    from fi.alk.harness.model_citation import _env_value_is_a_locator
+
+    assert _env_value_is_a_locator("admin\uff20llm.internal")
+    assert not _env_value_is_a_locator("claude-3-5-sonnet@20240620")
+
+
 @pytest.mark.parametrize("file", ["prod.env", "deploy/app.env", ".env.production"])
 def test_every_kind_of_env_file_takes_the_same_rule(root, file):
     (root / file).parent.mkdir(parents=True, exist_ok=True)
@@ -3934,6 +3957,12 @@ def test_every_kind_of_env_file_takes_the_same_rule(root, file):
         pytest.param(".env", "MODEL_URI=fake-guess", "fake-guess", id="part-uri"),
         pytest.param(".env", "LLM_DSN=fake-guess", "fake-guess", id="part-dsn"),
         pytest.param(".env", "MODEL_URL=https://admin:fake@llm.local/v1", "https://admin:fake@llm.local/v1", id="model-url"),
+        pytest.param(".env", "MODEL_SERVER=postgres://admin:hunter2@db/app", "postgres://admin:hunter2@db/app", id="model-server-url-with-login"),
+        pytest.param(".env", "LLM_ENDPOINT=https://admin:pw@llm.internal/v1", "https://admin:pw@llm.internal/v1", id="llm-endpoint-url-with-login"),
+        pytest.param(".env", "MODEL_HOST=https://llm.internal/v1", "https://llm.internal/v1", id="url-without-login"),
+        pytest.param(".env", "MODEL_SERVER=admin:hunter2@db", "admin:hunter2@db", id="bare-login"),
+        pytest.param(".env", "LLM_ENDPOINT=gpt-4o@llm.internal", "gpt-4o@llm.internal", id="user-at-host"),
+        pytest.param(".env", "MODEL_ID=gpt-4o@evil.example", "gpt-4o@evil.example", id="model-then-host"),
         pytest.param(
             ".env",
             "DB_ENGINE_URL=postgresql://admin:fake@db/app",

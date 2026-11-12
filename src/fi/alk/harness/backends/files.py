@@ -139,29 +139,17 @@ SECRET_GLOBS: tuple[str, ...] = (
     "**/*_key.json",
     "**/*-sa.json",
 )
-# Exact names whose `.bak` copy is a credential too. `.kube/config.*` already covers its own.
+# Every glob with no `*` after its `**/` names one exact file or folder, and its `.bak` copy is a
+# credential too (`.netrc.bak`), so those forms are derived from the list rather than written
+# out: a name added to SECRET_GLOBS gets its backup form with it. `*.kubeconfig` has a `*` but is
+# kept as well. `.kube/config.*` already covers its own.
 _WITH_BACKUP: tuple[str, ...] = (
-    "**/kubeconfig",
-    "**/kubeconfig.yaml",
-    "**/kubeconfig.yml",
+    *(glob for glob in SECRET_GLOBS if "*" not in glob.removeprefix("**/")),
     "**/*.kubeconfig",
-    "**/.docker/config.json",
-    "**/.dockercfg",
-    "**/.pgpass",
-    "**/.htpasswd",
-    "**/.git-credentials",
-    "**/.my.cnf",
-    "**/.s3cfg",
-    "**/.boto",
-    "**/.vault-token",
-    "**/id_rsa",
-    "**/id_dsa",
-    "**/id_ecdsa",
-    "**/id_ed25519",
-    "**/id_ecdsa_sk",
-    "**/id_ed25519_sk",
 )
-ALL_SECRET_GLOBS: tuple[str, ...] = SECRET_GLOBS + tuple(f"{glob}.bak" for glob in _WITH_BACKUP)
+ALL_SECRET_GLOBS: tuple[str, ...] = SECRET_GLOBS + tuple(
+    dict.fromkeys(f"{glob}.bak" for glob in _WITH_BACKUP)
+)
 # The settings files a model citation may name, under its own rule (`model_citation`).
 _ENV_GLOBS = ("**/.env*", "**/*.env", "**/*.env.*")
 # The platform's own roots, which are paths, not names.

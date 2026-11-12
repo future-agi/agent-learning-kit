@@ -167,7 +167,14 @@ def test_every_glob_is_one_the_cli_takes_as_written() -> None:
         assert re.fullmatch(r"[A-Za-z0-9._*/-]+", glob), glob
     backups = ALL_SECRET_GLOBS[len(SECRET_GLOBS) :]
     assert all(glob.endswith(".bak") for glob in backups)
-    assert len(backups) == len(BACKED_UP)
+    # The backup forms are derived: one for each glob with no `*` after `**/`, and `*.kubeconfig`.
+    # Built here from the hand-written TABLE, not from the module.
+    exact = [glob for glob, _ in TABLE if "*" not in glob.removeprefix("**/")]
+    assert set(backups) == {f"{glob}.bak" for glob in [*exact, "**/*.kubeconfig"]}
+    assert len(set(backups)) == len(backups)
+    # The CLI's deny rules come from the same derived list.
+    assert secret_read_rules() == [f"Read(//{glob})" for glob in ALL_SECRET_GLOBS]
+    assert all(f"Read(//{glob})" in secret_read_rules() for glob in backups)
 
 
 def test_a_glob_means_the_path_or_any_folder_above_it() -> None:
@@ -193,6 +200,29 @@ def test_every_listed_name_is_refused_however_it_is_written(
     assert secret_path(f"plainfolder/{target.name}", tmp_path)
     if sample in BACKED_UP:
         assert secret_text(f"{sample}.bak")
+    if "*" not in glob.removeprefix("**/"):
+        # The exact name's own backup, however it is written, and the backup glob is needed for it
+        # (it is the one glob among the rest that matches this form).
+        name = f"{glob.removeprefix('**/')}.bak"
+        for written in (name, f"a/b/{name}", name.upper(), f"/abs/x/{name}"):
+            assert secret_text(written), written
+        lone = [other for other in ALL_SECRET_GLOBS if other != f"{glob}.bak"]
+        covered = re.search("|".join(files._glob_pattern(g) for g in lone), name, re.I)
+        # `.kube/config.*` and `.dev.vars.*` already say these two; no other name is covered twice.
+        assert (covered is None) == (glob not in ("**/.kube/config", "**/.dev.vars")), name
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        ".netrc.bak", ".npmrc.bak", ".pypirc.bak", ".databrickscfg.bak", ".terraformrc.bak",
+        ".cargo/credentials.bak", ".gem/credentials.bak", "functions/local.settings.json.bak",
+        ".secrets.bak", ".authoring-credentials.bak", "android/key.properties.bak",
+        ".config/gh/hosts.yml.bak", ".ssh.bak",
+    ],
+)  # fmt: skip
+def test_the_backup_copy_of_every_exact_name_is_refused(name: str) -> None:
+    assert secret_text(name) and secret_text(f"a/b/{name}")
 
 
 @pytest.mark.parametrize("name", NEAR_MISSES)
