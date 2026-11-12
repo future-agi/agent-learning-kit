@@ -1,8 +1,9 @@
 """Read an agent version's tools inside a hosted check, for one the platform has never read.
 
-A pairing check certifies the environment's saved contract and makes no model call, so a new
-agent version's own tools are never seen by it. When the platform asks, this runs the understand
-stage on the uploaded source first, with the same generation credentials an authoring run gets,
+A pairing check certifies against the environment's saved contract: it talks to the agent, but
+never reads a new agent version's own tools from its source. When the platform asks, this runs the
+understand stage (a model call) on the uploaded source first, with the same generation credentials
+an authoring run gets,
 and writes the agent document the platform stores for the version: ``agent.json`` holding
 ``{"sdk_version", "agent"}``, built from the contract the way a build's registration builds it.
 

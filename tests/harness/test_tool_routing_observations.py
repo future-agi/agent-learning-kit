@@ -400,3 +400,51 @@ def test_one_request_stays_within_the_budget_however_many_times_the_agent_is_cal
     assert len(calls) < 8
     body = _body(tmp_path)
     assert {"tool": "lookup_order", "reason": "request_failed"} in body["unobserved"]
+
+
+def test_a_request_runs_only_the_asked_tool_at_the_world(tmp_path, monkeypatch):
+    """Asked for one read-only tool, the agent returns a tool with effects instead: the world
+    refuses it rather than running it, and the routing file names the refusal."""
+    world = _World()
+
+    class Agent:
+        def __init__(self):
+            self.turn = 0
+
+        async def call(self, agent_input):
+            self.turn += 1
+            if self.turn == 1:
+                return SimpleNamespace(
+                    content="",
+                    tool_calls=[
+                        {"id": "c1", "name": "issue_refund", "arguments": {"order_id": "A-1"}}
+                    ],
+                    tool_responses=[],
+                    metadata={},
+                )
+            return SimpleNamespace(content="done", tool_calls=[], tool_responses=[], metadata={})
+
+    monkeypatch.setattr(chat_readiness, "create_chat_wrapper", lambda *a, **k: Agent())
+    monkeypatch.setattr(chat_call_runner, "_tool_world", lambda *a, **k: world)
+    monkeypatch.setattr(call_runner, "_collect_file_tool_calls", lambda runtime: ())
+    monkeypatch.setattr(call_runner, "_collect_tool_trace_calls", lambda runtime: ())
+    record_tool_routing(tmp_path, "s-1", _contract(), PROXIED, received=[], reported=[])
+
+    asyncio.run(
+        chat_readiness.request_uncovered_tools(
+            interface=None,
+            endpoint="http://agent",
+            runtime=PROXIED,
+            contract=_contract(),
+            authoring=tmp_path,
+            bundle=tmp_path,
+            source=None,
+            secret_values={},
+            limit=1,
+        )
+    )
+
+    ran = [call.name for call in world.calls if not getattr(call, "refused", False)]
+    assert "issue_refund" not in ran
+    body = json.loads((tmp_path / "generic-harness" / TOOL_ROUTING).read_text())
+    assert body["refused_during_requests"][0]["refused"] == ["issue_refund"]

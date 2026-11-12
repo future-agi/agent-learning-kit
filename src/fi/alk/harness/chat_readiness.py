@@ -406,13 +406,16 @@ async def request_uncovered_tools(
     At most ``limit`` requests within ``budget`` seconds in all, so a check stays well
     inside its deadline; the tools left over are recorded as ``not_asked``.
 
-    A request must never change anything, so a tool the contract says has effects is never
-    asked (``has_effects``), whether or not the world logs its calls: a logged call is
-    observable, not safe. A tool the contract says leaves the world (no reachable
-    implementation, or a dependency the environment cannot copy) is not asked either
-    (``reaches_outside``), since the request could reach a real system. Each request is a fresh one-message conversation
-    driven like a scenario's, so tool calls the agent returns are run at the world. Its
-    routing is read from the world's side as in the conversation. Never raises.
+    A tool the contract says has effects is never asked (``has_effects``), whether or not the
+    world logs its calls: a logged call is observable, not safe. A tool the contract says
+    leaves the world (no reachable implementation, or a dependency the environment cannot
+    copy) is not asked either (``reaches_outside``). Each request is a fresh one-message
+    conversation driven like a scenario's; at the world only the asked tool runs, and any
+    other call the agent returns is refused and listed under ``refused_during_requests``. A
+    tool whose contract leaves ``effects`` empty is treated as read-only. A callback agent
+    runs its own tools before answering, which the harness cannot stop; the world is reset
+    after the check. Routing is read from the world's side as in the conversation. Never
+    raises.
     """
     from .call_runner import _collect_file_tool_calls
     from .chat_call_runner import _HostedChatTarget, _tool_world
@@ -467,7 +470,7 @@ async def request_uncovered_tools(
                     local_auth_values=local_auth_values,
                 ),
                 contract=contract,
-                world=_tool_world(bundle, contract, runtime, source),
+                world=_OnlyAsked(_tool_world(bundle, contract, runtime, source), tool.name),
                 scenario_key=key,
                 scenario_id=key,
             )
@@ -496,6 +499,10 @@ async def request_uncovered_tools(
             if one["tool"] == tool.name
         ]
         left_over = [one for one in unobserved if one["tool"] == tool.name]
+        if target.world.refused:
+            body.setdefault("refused_during_requests", []).append(
+                {"asked": tool.name, "refused": sorted(set(target.world.refused))}
+            )
         if not asked and not left_over:
             left_over = [{"tool": tool.name, "reason": "not_called"}]
         body["tools"].extend(asked)
@@ -503,6 +510,44 @@ async def request_uncovered_tools(
         _note_request(ledger, tool.name, asked, left_over, time.monotonic() - started)
     _write_routing(authoring, body)
     _save_ledger(authoring, ledger)
+
+
+class _OnlyAsked:
+    """The world as one tool request sees it: only the asked tool runs.
+
+    Any other call the agent returns is refused, not run, and named in ``refused``, so a
+    request for a read-only tool can never make the world run a tool with effects.
+    """
+
+    def __init__(self, world, asked: str):
+        self._world = world
+        self._asked = asked
+        self.refused: list[str] = []
+
+    def __getattr__(self, name):
+        return getattr(self._world, name)
+
+    def handle_tool_call(self, tool_call, **context):
+        from .environment import ToolExecutionResult
+        from .world.runtime import Call
+
+        name = str(tool_call.get("name") or (tool_call.get("function") or {}).get("name") or "")
+        if name == self._asked:
+            return self._world.handle_tool_call(tool_call, **context)
+        error = f"only {self._asked} may run during this readiness request"
+        self._world.calls.append(
+            Call(name=name, arguments={}, ok=False, refused=True, error=error, at=time.time())
+        )
+        self.refused.append(name)
+        return ToolExecutionResult(
+            tool_call_id=tool_call.get("id") or tool_call.get("tool_call_id"),
+            tool_name=name or "unknown",
+            content=error,
+            result=None,
+            success=False,
+            error=error,
+            state_updates={},
+        )
 
 
 TOOL_REQUESTS = "tool-requests.json"
