@@ -1,9 +1,6 @@
 name: Price check-by
 
-# The Gemini price table carries a re-check date (CHECK_BY in vertex_gemini.py). This goes red
-# from a month before it, on its own schedule, so the reminder never blocks a PR. GitHub runs
-# schedules on the default branch only, so this checks main's table. A red scheduled run opens or
-# updates one issue, so the notice reaches the team and not only whoever last edited the cron.
+# Schedules run on the default branch only, so this checks main's table.
 permissions:
   contents: read
 
@@ -35,8 +32,7 @@ jobs:
           python -m pytest -q -rs "tests/harness/test_spend.py::test_the_price_table_is_re_checked_before_its_check_by_date" | tee pytest.out
           grep -q "1 passed" pytest.out
 
-  # Separate from the check, so the token that can write issues never reaches a job that installs
-  # packages.
+  # Separate, so the issues token never reaches the job that installs packages.
   notify:
     needs: check-by
     if: failure() && github.event_name == 'schedule'

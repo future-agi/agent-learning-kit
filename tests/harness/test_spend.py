@@ -114,24 +114,43 @@ def _on(monkeypatch, day):
 
 
 def test_the_price_day_is_the_utc_day(monkeypatch):
-    """The platform's dated rows switch at midnight UTC, so the kit's do too (Dileep, #274)."""
+    """The platform's dated rows switch at midnight UTC, so the kit's do too."""
+    import os
+    import time
     from datetime import datetime, timezone
 
     from fi.alk.harness.backends import vertex_gemini
 
-    def at(moment):
-        class _Clock(datetime):
-            @classmethod
-            def now(cls, tz=None):
-                assert tz is timezone.utc
-                return moment
+    # In Kolkata 23:30 UTC is already the next day, so a local-time date can't pass for the UTC one.
+    # tzset() applies the zone to this process; the cleanup below restores it.
+    previous = os.environ.get("TZ")
+    monkeypatch.setenv("TZ", "Asia/Kolkata")
+    time.tzset()
 
-        monkeypatch.setattr(vertex_gemini, "datetime", _Clock)
+    def restore():
+        if previous is None:
+            os.environ.pop("TZ", None)
+        else:
+            os.environ["TZ"] = previous
+        time.tzset()
 
-    at(datetime(2026, 12, 31, 23, 30, tzinfo=timezone.utc))
-    assert vertex_gemini.current_rates("gemini-3.7-flash") == (0.75, 3.75)
-    at(datetime(2027, 1, 1, 0, 30, tzinfo=timezone.utc))
-    assert vertex_gemini.current_rates("gemini-3.7-flash") == (1.50, 7.50)
+    try:
+
+        def at(moment):
+            class _Clock(datetime):
+                @classmethod
+                def now(cls, tz=None):
+                    assert tz is timezone.utc
+                    return moment
+
+            monkeypatch.setattr(vertex_gemini, "datetime", _Clock)
+
+        at(datetime(2026, 12, 31, 23, 30, tzinfo=timezone.utc))
+        assert vertex_gemini.current_rates("gemini-3.7-flash") == (0.75, 3.75)
+        at(datetime(2027, 1, 1, 0, 30, tzinfo=timezone.utc))
+        assert vertex_gemini.current_rates("gemini-3.7-flash") == (1.50, 7.50)
+    finally:
+        restore()
 
 
 @pytest.mark.parametrize("model", ["gemini-3.6-flash", "gemini-3.7-flash", "gemini-3.8-flash"])
@@ -260,6 +279,11 @@ def test_the_weekly_workflow_runs_the_check_by_test():
     triggers = workflow.get("on", workflow.get(True))
     assert triggers["schedule"] == [{"cron": "0 6 * * 1"}]
     steps = workflow["jobs"]["check-by"]["steps"]
+    # The token is read-only, and the checkout leaves no copy of it in the repo's git config.
+    assert steps[0]["with"]["persist-credentials"] is False
+    # A condition anywhere here would switch the weekly check off with a green job.
+    assert "if" not in workflow["jobs"]["check-by"]
+    assert all("if" not in step for step in steps)
     check = next(step for step in steps if step.get("env", {}).get(CHECK_BY_ENV))
     node = "test_spend.py::" + test_the_price_table_is_re_checked_before_its_check_by_date.__name__
     assert node in check["run"]
@@ -274,7 +298,11 @@ def test_the_weekly_workflow_runs_the_check_by_test():
     assert notify["needs"] == "check-by"
     assert notify["if"] == "failure() && github.event_name == 'schedule'"
     assert notify["permissions"] == {"issues": "write"}
-    assert not any("uses" in step or "pip" in step.get("run", "") for step in notify["steps"])
+    assert not any(
+        step.get("uses", "").startswith("actions/setup-python")
+        or any(word in step.get("run", "") for word in ("pip install", "uv ", "npm "))
+        for step in notify["steps"]
+    )
 
     marks = test_the_price_table_is_re_checked_before_its_check_by_date.pytestmark
     skip = next(mark for mark in marks if mark.name == "skipif")
@@ -432,7 +460,7 @@ def test_every_harness_stage_feeds_the_one_ledger():
 
 def test_todays_prices_match_the_gateway_table_as_committed():
     """Runs in CI, unlike the live comparison below: the gateway's rows at 9ec5f9fb1, committed as
-    a fixture, so a mistyped price fails here (Dileep, #274)."""
+    a fixture, so a mistyped price fails here."""
     import json
     from datetime import date
     from pathlib import Path

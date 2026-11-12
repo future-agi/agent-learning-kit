@@ -136,7 +136,7 @@ def test_a_turn_with_input_and_no_output_is_still_a_report():
 
 def test_a_difference_below_the_querys_own_usage_takes_the_totals_whole():
     """Totals that restarted and came back above the baseline, or a CLI that reports each query on
-    its own, would otherwise record less than the query's own usage (Dileep, #274)."""
+    its own, would otherwise record less than the query's own usage."""
     session = _session()
     _done(
         session,
@@ -154,6 +154,47 @@ def test_a_difference_below_the_querys_own_usage_takes_the_totals_whole():
     )
 
     assert (second.tokens_in, second.tokens_out) == (120_000, 1_200)
+
+
+def test_the_totals_taken_whole_include_a_workers_tokens():
+    """`usage` leaves out a worker model's tokens; the totals taken whole don't, so a fallback to
+    the query's own usage would drop them."""
+    worker = "gemini-3.6-flash"
+    session = _session()
+    _done(session, _result({M: _usage(100_000, 1_000)}))
+    second = _done(
+        session,
+        _result(
+            {M: _usage(120_000, 1_200), worker: _usage(30_000, 300)},
+            usage={"input_tokens": 120_000, "output_tokens": 1_200},
+        ),
+    )
+
+    assert (second.tokens_in, second.tokens_out) == (150_000, 1_500)
+
+
+def test_cache_reads_below_the_querys_own_usage_take_the_totals_whole():
+    """Tokens in and out can both clear the query's own usage while the cache reads fall short; the
+    counts are then compared one by one, not on the output alone."""
+    session = _session()
+    _done(session, _result({M: _usage(100_000, 1_000, cached=50_000)}))
+    second = _done(
+        session,
+        _result(
+            {M: _usage(130_000, 1_200, cached=60_000)},
+            usage={
+                "input_tokens": 5_000,
+                "output_tokens": 100,
+                "cache_read_input_tokens": 20_000,
+            },
+        ),
+    )
+
+    assert (second.tokens_in, second.tokens_out, second.tokens_cached) == (
+        190_000,
+        1_200,
+        60_000,
+    )
 
 
 def test_a_lower_count_takes_all_three_counts_whole():
@@ -648,3 +689,35 @@ def test_ci_runs_these_tests():
     }
     assert "tests/harness/test_spend.py" in listed
     assert "tests/harness/test_claude_cost.py" in listed
+
+
+def test_ci_reruns_these_tests_on_the_locked_sdk():
+    """The hosted image installs from uv.lock, while the main pytest step gets pip's newest SDK. A
+    step after it must read the locked version, install exactly that, and then run these tests."""
+    import yaml
+
+    path = (
+        Path(__file__).resolve().parents[2] / ".github" / "workflows" / "sdk-smoke.yml"
+    )
+    steps = yaml.safe_load(path.read_text(encoding="utf-8"))["jobs"]["clean-install"][
+        "steps"
+    ]
+    main = next(
+        index
+        for index, step in enumerate(steps)
+        if "pytest" in step.get("run", "")
+        and "tests/harness/test_spend.py" in step["run"]
+    )
+    reruns = [
+        step["run"]
+        for step in steps[main + 1 :]
+        if "uv.lock" in step.get("run", "") and "claude-agent-sdk==" in step["run"]
+    ]
+    assert len(reruns) == 1
+    run = reruns[0]
+    read = run.index("uv.lock")
+    install = run.index("pip install")
+    assert run.index("claude-agent-sdk==") > install
+    test = run.index("pytest")
+    assert read < install < test
+    assert "tests/harness/test_claude_cost.py" in run[test:]
