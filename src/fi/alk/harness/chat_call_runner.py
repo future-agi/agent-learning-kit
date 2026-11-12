@@ -918,6 +918,9 @@ class HostedChatCallRunner:
             from .call_runner import _set_trial_faults, trial_worker_deadlines
 
             deadline, deadlines, deadline_notices = trial_worker_deadlines(document, self._context.bundle_dir)
+            if self._context.readiness_probe:
+                # The workers' deadline is a rule of the scenario's graded trials; the probe checks the tools' binding.
+                deadline, deadlines = None, {}
             # Every trial writes its own faults, none included, so nothing an earlier trial left can apply to this one.
             _set_trial_faults(runtime, list(document.get("faults") or []), deadline, deadlines)
         else:

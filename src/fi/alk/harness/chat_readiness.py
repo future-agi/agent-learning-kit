@@ -34,9 +34,17 @@ def _failure_code(trace):
     return "chat_ingress_failed"
 
 
+# A worker's call the world's door refused for that worker's own limits came through its channel to the door.
+_WORKER_LIMIT_REFUSALS = frozenset({"not_permitted", "deadline_passed"})
+
+
 def _reached_world(call):
-    """Whether a recorded call ran in the world: it succeeded, or the world's own rule refused it."""
-    return call.ok or (call.refused and getattr(call, "refusal_code", "") == "world_rule")
+    """Whether a recorded call reached the world: it succeeded, the world's own rule refused it, or the door refused a
+    worker's call for that worker's limits (its channel is bound; its permitted tools are the environment's design)."""
+    if call.ok:
+        return True
+    code = getattr(call, "refusal_code", "") if call.refused else ""
+    return code == "world_rule" or (code in _WORKER_LIMIT_REFUSALS and bool(getattr(call, "worker_id", "")))
 
 
 def _usable_tool_call(call):
@@ -315,6 +323,7 @@ async def probe_chat_workflow(
                 target_provider_secret_values=secret_values,
                 attempt_number=1,
                 source_directory=source,
+                readiness_probe=True,
             ),
         )
         async with asyncio.timeout(timeout):

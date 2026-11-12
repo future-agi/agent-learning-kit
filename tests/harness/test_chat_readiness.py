@@ -1270,6 +1270,11 @@ def test_native_http_200_failure_rule_unlocks_existing_setup_repair(tmp_path, pr
         ([dict(ok=False, refused=True, refusal_code="not_permitted")], False),
         # The world's own rule said no: the tool ran, so the binding works.
         ([dict(ok=False, refused=True, refusal_code="world_rule")], True),
+        # A worker's call refused at the door for that worker's limits came through its bound channel.
+        ([dict(ok=False, refused=True, refusal_code="not_permitted", worker_id="refund")], True),
+        ([dict(ok=False, refused=True, refusal_code="deadline_passed", worker_id="refund")], True),
+        # A channel no worker owns is a binding problem.
+        ([dict(ok=False, refused=True, refusal_code="identity_conflict", worker_id="refund")], False),
         # One call ran among failures.
         ([dict(ok=False, refused=True, refusal_code="unknown_tool"), dict(ok=True, result={"active": True})], True),
     ],

@@ -1581,6 +1581,49 @@ def test_a_chat_trial_s_faults_are_set_for_the_tool_proxy_and_cleared_after(tmp_
     assert written == []
 
 
+def test_a_readiness_probe_sets_no_worker_deadline_while_a_graded_trial_does(tmp_path: Path, monkeypatch: Any) -> None:
+    """A scenario's worker-action deadline is a rule of its graded trials. The readiness probe checks how the agent's
+    tools reach the world, so a short budget must not refuse every probe call and fail certification."""
+    import dataclasses
+
+    from fi.alk.harness import call_runner
+
+    context = _context(tmp_path)
+    path = context.bundle_dir / "scenarios" / "one" / "scenario.json"
+    document = json.loads(path.read_text(encoding="utf-8"))
+    document["worker_budget_seconds"] = 2
+    path.write_text(json.dumps(document), encoding="utf-8")
+    written: list[tuple] = []
+    monkeypatch.setattr(call_runner, "_write_trial_state", lambda _runtime, *rest: written.append(rest))
+    monkeypatch.setattr(chat, "_tool_world", lambda *_args: _ToolWorld())
+    monkeypatch.setattr(chat, "_drive_conversation", _single_exchange)
+
+    class Wrapper:
+        def __init__(self, **_kwargs: Any) -> None:
+            return
+
+        async def call(self, _request: Any) -> AgentResponse:
+            return AgentResponse(content="Done.")
+
+    monkeypatch.setattr(chat, "HTTPAgentWrapper", Wrapper)
+    endpoints = {
+        "target_http": RuntimeEndpoint(capability="target_http", protocol="http", address="http://localhost:18080"),
+        "tool_proxy": RuntimeEndpoint(capability="tool_proxy", protocol="http", address="http://localhost:18081"),
+    }
+    runtime = EnvironmentRuntime(
+        runtime_id="runtime-1", world_index=0, bundle_digest="sha256:" + "a" * 64, state=RuntimeState.READY,
+        endpoints=endpoints,
+    )
+    scenario = SimpleNamespace(scenario_key="one", scenario_id="scenario-1")
+    asyncio.run(chat.HostedChatCallRunner(_Adapter(), context).run(scenario, runtime))
+    # A graded trial holds its workers to the budget.
+    assert written[0][1] is not None
+    written.clear()
+    probe = dataclasses.replace(context, readiness_probe=True)
+    asyncio.run(chat.HostedChatCallRunner(_Adapter(), probe).run(scenario, runtime))
+    assert all(len(row) < 2 or (row[1] is None and not row[2]) for row in written)
+
+
 def test_a_proxied_chat_trial_without_actors_still_reads_the_world_s_table(tmp_path: Path, monkeypatch: Any) -> None:
     """The proxy logs the agent's own calls and the faults it applies in the world's table; a trial with no actors must
     read it too, or its fault notices and world changes see nothing."""
