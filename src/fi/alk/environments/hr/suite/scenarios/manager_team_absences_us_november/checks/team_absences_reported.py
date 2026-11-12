@@ -1,14 +1,32 @@
 def check(world, calls, reference=None):
-    mgr = None
+    mgr = start = end = None
     for step in reference or ():
-        if step.get("tool") == "get_team_absences" and step.get("arguments", {}).get("manager_id"):
-            mgr = step["arguments"]["manager_id"]
-    looks = [c for c in calls if c.name == "get_team_absences" and c.ok]
+        a = step.get("arguments", {})
+        if step.get("tool") == "get_team_absences":
+            mgr = a.get("manager_id") or mgr
+            start = a.get("start_date") or start
+            end = a.get("end_date") or end
+    import re
+
+    def day(value):
+        value = str(value or "")
+        return value if re.fullmatch(r"\d{4}-\d{2}-\d{2}", value) else None
+
+    looks = [c for c in calls if c.name == "get_team_absences" and c.ok and isinstance(c.result, dict) and "absences" in c.result]
     if not looks:
         return "not done: the team view was never read"
-    if mgr and not any(c.arguments.get("manager_id") == mgr for c in looks):
-        return f"done wrong: the team view of {mgr} was never read"
-    return None
+    # The view must be the manager's own team over the whole period asked about: a view of other
+    # dates returns absences that answer nothing.
+    for c in looks:
+        if mgr and c.arguments.get("manager_id") != mgr:
+            continue
+        got_start, got_end = day(c.arguments.get("start_date")), day(c.arguments.get("end_date"))
+        if start and (not got_start or not day(start) or got_start > start):
+            continue
+        if end and (not got_end or not day(end) or got_end < end):
+            continue
+        return None
+    return f"done wrong: the team view of {mgr} from {start} to {end} was never read"
 
 
 if __name__ == "__main__":

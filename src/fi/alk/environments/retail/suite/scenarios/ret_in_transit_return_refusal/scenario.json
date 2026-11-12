@@ -47,14 +47,6 @@
       }
     },
     {
-      "tool": "get_order",
-      "arguments": {
-        "order_id": "O406"
-      },
-      "environment_arguments": {},
-      "fixed": {}
-    },
-    {
       "tool": "get_shipment_tracking",
       "arguments": {
         "order_id": "O406",
@@ -76,7 +68,9 @@
         ]
       },
       "environment_arguments": {},
-      "fixed": {}
+      "fixed": {
+        "order_id": "record: orders.order_id of the order the request is about"
+      }
     }
   ],
   "alternatives": [],

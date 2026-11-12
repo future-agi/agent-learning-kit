@@ -1,4 +1,18 @@
-def handle(args, db):
+def _caller(db):
+    """The customer signed in to this conversation. The session sets it; an ID, email or name the
+    desk is told never changes who it is talking to."""
+    row = db.one("SELECT customer_id FROM session_caller WHERE id = 'default'")
+    return row["customer_id"] if row else None
+
+
+def _for_caller(db, customer_id, what):
+    """Act only for the signed-in customer: a customer_id argument is checked, never trusted."""
+    caller = _caller(db)
+    if not caller or str(customer_id or "").strip() != caller:
+        raise ToolError(f"Permission denied: {what} is not the signed-in customer's ({caller or 'nobody is signed in'}).", category="permission_denied")
+
+
+def _handle(args, db):
     order_id = args.get("order_id")
     customer_id = args.get("customer_id")
     new_address = args.get("new_address")
@@ -17,10 +31,15 @@ def handle(args, db):
         raise ToolError(f"Order {order_id} not found.", category="not_found")
     if order["customer_id"].strip() != str(customer_id).strip():
         raise ToolError(f"Customer {customer_id} does not match order owner.", category="permission_denied")
+    _for_caller(db, customer_id, f"order {order_id}")
     clock = db.one("SELECT now FROM clock")["now"]
     if request_key:
         existing = db.one("SELECT * FROM address_changes WHERE request_key = ?", [request_key])
         if existing:
+            # A replay is the same address for the same order and customer; anything else under the
+            # key would report a change that was never made.
+            if existing["order_id"] != order_id or existing["customer_id"] != customer_id or existing["new_address"] != new_address.strip():
+                raise ToolError(f"request_key {request_key!r} was already used for a different address change.", category="conflict")
             return {"change_id": existing["change_id"], "order_id": order_id, "old_address": existing["old_address"], "new_address": existing["new_address"], "idempotent": True}
     if order["status"] != "processing":
         raise ToolError(f"Policy: order {order_id} is {order['status']}; the address can only change while the order is processing.", category="policy_blocked")
@@ -30,3 +49,43 @@ def handle(args, db):
     db.execute("INSERT INTO address_changes (change_id, order_id, customer_id, old_address, new_address, request_key, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)", [change_id, order_id, customer_id, old, new_address.strip(), request_key, clock])
     db.execute("UPDATE orders SET shipping_address = ? WHERE order_id = ?", [new_address.strip(), order_id])
     return {"change_id": change_id, "order_id": order_id, "old_address": old, "new_address": new_address.strip(), "idempotent": False}
+
+
+_WRITES = ("address_changes", "orders")
+
+def _all_or_nothing(db, run):
+    """Run the call so that a failed call changes nothing. A handler gets no transaction of its own,
+    so every table this tool writes is held first and put back if the call raises, whether a write
+    failed partway or the call refused after writing. Only a fault the world simulates on purpose
+    (an error marked keep_writes: a rival booking, a commit whose reply was lost, a fault used up)
+    keeps what it wrote."""
+    held = {table: db.query(f"SELECT * FROM {table}") for table in _WRITES}
+    try:
+        return run()
+    except Exception as failed:
+        if not getattr(failed, "keep_writes", False):
+            for table, rows in held.items():
+                if _same(db.query(f"SELECT * FROM {table}"), rows):
+                    continue
+                db.execute(f"DELETE FROM {table}")
+                for row in rows:
+                    cols = list(row)
+                    db.execute(
+                        f"INSERT INTO {table} ({', '.join(chr(34) + c + chr(34) for c in cols)}) VALUES ({', '.join('?' * len(cols))})",
+                        [row[c] for c in cols],
+                    )
+        raise
+
+def _same(rows, held):
+    """Whether a table still holds exactly the rows it held, in any order: only a table the call
+    changed is rewritten."""
+    import json
+
+    def key(row):
+        return json.dumps(row, sort_keys=True, default=str)
+
+    return sorted(map(key, rows)) == sorted(map(key, held))
+
+
+def handle(args, db):
+    return _all_or_nothing(db, lambda: _handle(args, db))

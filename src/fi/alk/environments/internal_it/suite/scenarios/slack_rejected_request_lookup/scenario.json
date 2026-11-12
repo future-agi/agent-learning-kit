@@ -5,7 +5,7 @@
   "use_case": "Pick up an access request from Slack and reply in the thread after approval",
   "branch": "Oscar asked in Slack about request AR-107 status; IT desk reads the Slack thread and checks approval status of AR-107 in the access system",
   "tests": "reads Oscar's Slack thread in #it-access and checks the approval status of request AR-107 in the access system",
-  "instruction": "You are Gordon Wright, an IT operations lead. Oscar Martinez asked in #it-access (message IM11) why his request AR-107 for financial accountant access was not active. You want the IT assistant to read the Slack thread and check the approval status of AR-107 in the access system.\n\nYour details:\nTarget request ID: AR-107\nTarget employee: Oscar Martinez (E15)\nSlack channel: #it-access (CH_ITACCESS)\nMessage timestamp: 1792929600.000011",
+  "instruction": "You are Gordon Wright (employee ID E515), an IT operations lead. Oscar Martinez asked in #it-access (message IM11) why his request AR-107 for financial accountant access was not active. You want the IT assistant to read the Slack thread and check the approval status of AR-107 in the access system.\n\nYour details:\nTarget request ID: AR-107\nTarget employee: Oscar Martinez (E15)\nSlack channel: #it-access (CH_ITACCESS)\nMessage timestamp: 1792929600.000011",
   "keywords": [
     "access_request"
   ],

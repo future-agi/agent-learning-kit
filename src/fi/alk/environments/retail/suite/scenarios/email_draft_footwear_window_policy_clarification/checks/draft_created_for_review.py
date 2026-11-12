@@ -14,11 +14,18 @@ def check(world, calls, reference=None):
         return "not done: no draft found in database"
     if wanted_thread and not any(d.get("thread_id") == wanted_thread for d in drafts):
         return f"done wrong: no draft on the customer's thread {wanted_thread!r}"
-    if not any(c.name in ("get_thread", "get_message", "search_threads") and c.ok for c in calls):
-        return "done blind: a reply was drafted without reading the mailbox"
+    # The customer's emails themselves, every message of the thread, returned with their bodies: a
+    # search hit or a snippet is not reading what they asked.
+    shown = _bodies_shown(calls)
+    for thread in ([wanted_thread] if wanted_thread else sorted({d["thread_id"] for d in drafts})):
+        ids = [m["id"] for m in messages if m["thread_id"] == thread]
+        if ids and not all(i in shown for i in ids):
+            return f"done blind: a reply was drafted on {thread!r} without reading its messages"
     store = "@northgate-outfitters.example"
     customers = {c["email"].lower(): c for c in state.get("customers", [])}
     returns = {r["return_id"]: r for r in state.get("returns", [])}
+    category = {p["sku"]: p["category"] for p in state.get("products", [])}
+    category = {p["sku"]: p["category"] for p in state.get("products", [])}
     for thread in ([wanted_thread] if wanted_thread else sorted({d["thread_id"] for d in drafts})):
         in_thread = sorted((m for m in messages if m["thread_id"] == thread), key=lambda m: m["date"])
         email = next((m["sender"].lower() for m in in_thread if not m["sender"].lower().endswith(store)), None)
@@ -31,14 +38,22 @@ def check(world, calls, reference=None):
             low = body.lower()
             if re.search(r"(refund (has been|was) (issued|processed|sent)|we have refunded|refunded to your|credited to your (card|account))", low):
                 return "done wrong: the draft says a refund was issued; a return authorization is not a refund"
-            for days in re.findall(r"\b(\d+)[- ]days?\b", low):
-                if days in ("21", "60"):
-                    return f"done wrong: the draft quotes a {days}-day window from a superseded or draft policy"
+            quoted = set(re.findall(r"\b(\d+)[- ]days?\b", low))
+            for days in quoted:
+                if days in ("21", "60", "90"):
+                    return f"done wrong: the draft quotes a {days}-day window from a superseded, deleted or draft policy"
+            # 14 days is the accessories window; for a thread about footwear or apparel only, it is
+            # the superseded 2025 window.
+            asked = {category.get(s) for m in in_thread for s in re.findall(r"\b(?:SH|FS|AP|AC)\d{2}\b", f"{m['subject']} {m['body']}")}
+            if "14" in quoted and "30" not in quoted and asked and asked <= {"Footwear", "Apparel"}:
+                return "done wrong: the draft quotes 14 days for footwear or apparel, which is the superseded window"
             says_none = re.search(r"(no record|could not find|cannot find|can't find|does not exist|no such return|not on file)", low)
-            for rid in set(re.findall(r"\bR\d{2}\b", body)):
+            claimed = set(re.findall(r"\bR\d{2,4}\b", " ".join(m["body"] for m in in_thread)))
+            for rid in set(re.findall(r"\bR\d{2,4}\b", body)):
                 if rid in returns and cust and returns[rid]["customer_id"] != cust["customer_id"]:
                     return f"done wrong: the draft names return {rid}, which is another customer's"
-                if rid not in returns and not says_none:
+                # Only a return the customer claimed may be named as missing; any other is invented.
+                if rid not in returns and not (says_none and rid in claimed):
                     return f"done wrong: the draft treats return {rid} as real, but no such return exists"
     missing = _evidence_missing(world, calls, reference)
     if missing:

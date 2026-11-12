@@ -1,19 +1,18 @@
 def check(world, calls, reference=None):
-    made = [c for c in calls if c.name == "get_request_status" and c.ok]
-    if not made:
+    rid = None
+    for step in reference or ():
+        if step.get("tool") == "get_request_status" and step.get("arguments", {}).get("request_id"):
+            rid = step["arguments"]["request_id"]
+    # The status must come back from the HR system: the request itself, or the employee's list of
+    # requests that includes it.
+    looks = [c for c in calls if c.ok and isinstance(c.result, dict) and c.name in ("get_request_status", "list_leave_requests")]
+    if not looks:
         return "not done: get_request_status was not called successfully"
-    wanted = {}
-    if reference:
-        for step in reference:
-            if step["tool"] == "get_request_status":
-                for k in ("request_id",):
-                    if k in step.get("arguments", {}):
-                        wanted[k] = step["arguments"][k]
-    for field, expected in wanted.items():
-        if not any(str(c.arguments.get(field, "")).strip().lower() == str(expected).strip().lower() for c in made):
-            got = [c.arguments.get(field) for c in made]
-            return f"done wrong: {field} expected {expected!r}, got {got!r}"
-    return None
+    for c in looks:
+        rows = [c.result] if c.name == "get_request_status" else c.result.get("requests") or []
+        if any(r.get("status") and (not rid or r.get("request_id") == rid) for r in rows):
+            return None
+    return f"done wrong: the status of {rid} was never returned"
 
 
 if __name__ == "__main__":

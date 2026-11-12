@@ -5,7 +5,7 @@
   "use_case": "Pick up a billing request that arrived by email",
   "branch": "Agent reviews email thread th_b03_cancel_term_end, reads renewal terms, and drafts a reply with exact end date",
   "tests": "Drafts email reply for term-end cancellation request citing exact term end date from renewal records",
-  "instruction": "You are Kendra Price, an operations coordinator at CloudNest. You are reviewing the incoming billing queue.\n\nPlease ask the billing desk assistant to check email thread th_b03_cancel_term_end sent by Karen Kite (KiteWorks, T11), check their renewal terms, and prepare an email draft in reply confirming that their cancellation will be effective at the end of their current term on 2026-11-01 and that they will retain full access until then.\n\nYour details:\n- Customer Name: Karen Kite\n- Customer Email: karen@kiteworks.com\n- Tenant ID: T11 (KiteWorks)\n- Admin User ID: U11_ADMIN\n- Thread ID: th_b03_cancel_term_end\n- Initial Message ID: bmsg_005",
+  "instruction": "You are Kendra Price, a billing operations coordinator at Cloudnest (User ID: U_OPS1). You are reviewing the incoming billing queue.\n\nPlease ask the billing desk assistant to check email thread th_b03_cancel_term_end sent by Karen Kite (KiteWorks, T11), check their renewal terms, and prepare an email draft in reply confirming that their cancellation will be effective at the end of their current term on 2026-11-01 and that they will retain full access until then.\n\nYour details:\n- Customer Name: Karen Kite\n- Customer Email: karen@kiteworks.com\n- Tenant ID: T11 (KiteWorks)\n- Your User ID: U_OPS1\n- Thread ID: th_b03_cancel_term_end\n- Initial Message ID: bmsg_005",
   "keywords": [
     "draft"
   ],
@@ -30,7 +30,7 @@
   "fixture": {
     "tenant_id": "T11",
     "thread_id": "th_b03_cancel_term_end",
-    "actor_id": "U11_ADMIN",
+    "actor_id": "U_OPS1",
     "origin": "seed",
     "reply_to_id": "bmsg_005"
   },
@@ -46,18 +46,9 @@
       }
     },
     {
-      "tool": "verify_billing_admin",
-      "arguments": {
-        "actor_id": "U11_ADMIN",
-        "tenant_id": "T11"
-      },
-      "environment_arguments": {},
-      "fixed": {}
-    },
-    {
       "tool": "get_renewal_terms",
       "arguments": {
-        "actor_id": "U11_ADMIN",
+        "actor_id": "U_OPS1",
         "tenant_id": "T11"
       },
       "environment_arguments": {},

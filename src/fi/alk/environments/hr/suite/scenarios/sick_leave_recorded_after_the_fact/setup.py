@@ -11,17 +11,19 @@ def setup(world):
         "balance_id": "BAL-E456-ANN",
         "employee_id": "E456",
         "leave_type": "annual",
-        "allocated_days": 20,
+        "allocated_days": 18,
         "used_days": 0,
         "reserved_days": 0,
-        "available_days": 20,
+        "available_days": 18,
     })
     world.put("leave_balances", {
         "balance_id": "BAL-E456-SCK",
         "employee_id": "E456",
         "leave_type": "sick",
-        "allocated_days": 10,
+        "allocated_days": 12,
         "used_days": 0,
         "reserved_days": 0,
-        "available_days": 10,
+        "available_days": 12,
     })
+    # The person in this conversation, as the session (not the agent) knows them.
+    world.change("session_caller", "default", {"employee_id": "E456"}, by="id")

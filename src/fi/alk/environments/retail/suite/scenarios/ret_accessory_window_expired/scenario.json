@@ -47,14 +47,6 @@
       }
     },
     {
-      "tool": "get_order",
-      "arguments": {
-        "order_id": "O404"
-      },
-      "environment_arguments": {},
-      "fixed": {}
-    },
-    {
       "tool": "get_product",
       "arguments": {
         "sku": "AC07"
@@ -83,7 +75,9 @@
         ]
       },
       "environment_arguments": {},
-      "fixed": {}
+      "fixed": {
+        "order_id": "record: orders.order_id of the order the request is about"
+      }
     }
   ],
   "alternatives": [],

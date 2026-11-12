@@ -29,7 +29,7 @@
   "variables": {},
   "fixture": {
     "invoice_id": "inv_02_prev",
-    "actor_id": "U_AM2",
+    "actor_id": "U02_ADMIN",
     "tenant_id": "T02",
     "origin": "seed"
   },

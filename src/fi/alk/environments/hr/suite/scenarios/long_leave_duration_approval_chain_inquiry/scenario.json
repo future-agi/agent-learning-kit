@@ -54,7 +54,8 @@
       },
       "environment_arguments": {},
       "fixed": {
-        "employee_id": "caller: E420"
+        "employee_id": "caller: E420",
+        "working_days": "caller: 12"
       }
     }
   ],

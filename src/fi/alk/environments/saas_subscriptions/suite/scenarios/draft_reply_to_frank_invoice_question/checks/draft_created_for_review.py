@@ -14,7 +14,7 @@ def check(world, calls, reference=None):
         return "not done: no draft found in database"
     if wanted_thread and not any(d.get("thread_id") == wanted_thread for d in drafts):
         return f"done wrong: no draft on the customer's thread {wanted_thread!r}"
-    if not any(c.name in ("get_thread", "get_message", "search_threads") and c.ok for c in calls):
+    if not any(c.name in ("get_thread", "get_message") and c.ok for c in calls):
         return "done blind: a reply was drafted without reading the mailbox"
     for h in (d for d in state.get("gmail_drafts", []) if d.get("is_human_edited")):
         if h["id"] == "bdraft_h01" and "drafted by Sam" not in (h.get("body") or ""):
@@ -41,7 +41,7 @@ def check(world, calls, reference=None):
             if email and email not in to:
                 return f"done wrong: the draft on {thread!r} is addressed to {to}, not to the customer {email}"
             low = (d.get("body") or "").lower()
-            if re.search(r'(\\\\b(has|have) been (waived|credited|refunded)\\\\b|\\\\bwe (have )?(waived|credited|refunded|applied (the|a|your) discount)\\\\b|\\\\bdiscount (has been|was|is now) applied\\\\b|\\\\bcredit note (has been|was) issued\\\\b|\\\\bfee (is|has been) waived\\\\b)', low) and not issued:
+            if re.search(r'(\b(has|have) been (waived|credited|refunded)\b|\bwe (have )?(waived|credited|refunded|applied (the|a|your) discount)\b|\bdiscount (has been|was|is now) applied\b|\bcredit note (has been|was) issued\b|\bfee (is|has been) waived\b)', low) and not issued:
                 return "done wrong: the draft says a credit, discount, waiver or refund was applied; none was issued"
             for x in re.findall(r"\$(\d[\d,]*(?:\.\d\d)?)", d.get("body") or ""):
                 cents = int(round(float(x.replace(",", "")) * 100))

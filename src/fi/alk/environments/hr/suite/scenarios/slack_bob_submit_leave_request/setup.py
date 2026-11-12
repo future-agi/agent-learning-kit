@@ -8,3 +8,5 @@ def setup(world):
         "ts": "1792600000.000401",
         "user_id": "U_E02"
     })
+    # The person in this conversation, as the session (not the agent) knows them.
+    world.change("session_caller", "default", {"employee_id": "HR01"}, by="id")

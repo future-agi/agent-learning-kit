@@ -8,3 +8,5 @@ def setup(world):
         "ts": "1792000000.000402",
         "user_id": "U_AM2"
     })
+    world.put("account_assignments", {"tenant_id": "T08", "user_id": "U_AM2"})
+    world.change("session_caller", "default", {"actor_id": "U_AM2"}, by="id")

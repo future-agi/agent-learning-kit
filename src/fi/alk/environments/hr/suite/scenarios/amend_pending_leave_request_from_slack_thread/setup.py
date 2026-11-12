@@ -55,3 +55,5 @@ def setup(world):
         "thread_ts": "1792656000.000423",
         "permalink": "https://acme.slack.example.com/archives/CH_HRHELP/p1792658400000424"
     })
+    # The person in this conversation, as the session (not the agent) knows them.
+    world.change("session_caller", "default", {"employee_id": "E423"}, by="id")

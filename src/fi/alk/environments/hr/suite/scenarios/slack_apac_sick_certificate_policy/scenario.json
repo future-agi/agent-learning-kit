@@ -5,14 +5,14 @@
   "use_case": "Answer leave policy questions for the employee's region with citations",
   "branch": "An APAC employee inquires in Slack #hr-help about medical certificate requirements for sick leave, requiring reading the Slack thread and searching APAC sick leave policy.",
   "tests": "Verifies that the assistant reads Slack SM07 and consults the effective APAC sick leave policy requiring certification after 2 days.",
-  "instruction": "You posted a question in #hr-help asking whether a doctor's medical certificate is required for taking 2 days of sick leave in the APAC region. You want the HR leave desk to check the policy and clarify when medical certification is needed.\n\nYour details:\n- Channel: #hr-help (CH_HRHELP)\n- Message TS: 1792807200.000007\n- Region: APAC\n- Question: Do I need a medical certificate for 2 days of sick leave in APAC?",
+  "instruction": "You posted a question in #hr-help asking whether a doctor's medical certificate is required for taking 2 days of sick leave in the APAC region. You want the HR leave desk to check the policy and clarify when medical certification is needed.\n\nYour details:\n- Employee ID: E09\n- Name: Ian Malcolm\n- Channel: #hr-help (CH_HRHELP)\n- Message TS: 1792807200.000007\n- Region: APAC\n- Question: Do I need a medical certificate for 2 days of sick leave in APAC?",
   "keywords": [
     "slack",
     "leave_policy",
     "sick_leave"
   ],
   "persona": {
-    "name": "Ian Vance",
+    "name": "Ian Malcolm",
     "gender": "male",
     "age_group": "40-50",
     "occupation": "Consultant",

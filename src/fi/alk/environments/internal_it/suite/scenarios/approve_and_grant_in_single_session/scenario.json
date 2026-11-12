@@ -5,7 +5,7 @@
   "use_case": "complete_approved_access",
   "branch": "Engineering manager Evan Wright E05 approves pending request AR-101 and requests immediate activation; agent records approval, retrieves token, and grants access.",
   "tests": "Does the agent record the approval decision for AR-101 and immediately provision synthetic access with the generated token?",
-  "instruction": "You are Evan Wright (employee ID E05), engineering director. You want to both approve request AR-101 for Laura Croft (APP-PROD, readonly) and immediately activate / grant her access in one conversation. Ask the IT desk to approve AR-101 and provision the access right away.",
+  "instruction": "You are Evan Wright (employee ID E05), analytics director and Laura Croft's manager. You want to both approve request AR-101 for Laura Croft (APP-PROD, readonly) and immediately activate / grant her access in one conversation. Ask the IT desk to approve AR-101 and provision the access right away.",
   "keywords": [
     "approve_and_grant"
   ],

@@ -5,13 +5,13 @@
   "use_case": "Answer access policy questions with citations",
   "branch": "Caller asks what requirements are listed in the scanned access form document; agent reads form_access_scan and reports binary format is unsupported.",
   "tests": "Does the agent attempt to read the binary file form_access_scan and report that the scanned format is unsupported?",
-  "instruction": "You are Chloe Bennett, an external contractor onboarding with the company. You were told to review the legacy file 'form_access_scan' (Access Request Form scanned.bin) to find the paper submission instructions. Ask the IT access desk to read the form_access_scan file and summarize its contents for you.",
+  "instruction": "You are Ingrid Solberg (employee ID E508), an external contractor onboarding with the company. You were told to review the legacy file 'form_access_scan' (Access Request Form scanned.bin) to find the paper submission instructions. Ask the IT access desk to read the form_access_scan file and summarize its contents for you.",
   "keywords": [
     "policy_citation",
     "access_request"
   ],
   "persona": {
-    "name": "Chloe Bennett",
+    "name": "Ingrid Solberg",
     "gender": "female",
     "age_group": "18-25",
     "occupation": "Freelancer",

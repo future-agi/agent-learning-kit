@@ -48,14 +48,6 @@
       }
     },
     {
-      "tool": "get_order",
-      "arguments": {
-        "order_id": "O475"
-      },
-      "environment_arguments": {},
-      "fixed": {}
-    },
-    {
       "tool": "evaluate_return",
       "arguments": {
         "order_id": "O475",
@@ -68,7 +60,9 @@
         ]
       },
       "environment_arguments": {},
-      "fixed": {}
+      "fixed": {
+        "order_id": "record: orders.order_id of the order the request is about"
+      }
     }
   ],
   "alternatives": [],

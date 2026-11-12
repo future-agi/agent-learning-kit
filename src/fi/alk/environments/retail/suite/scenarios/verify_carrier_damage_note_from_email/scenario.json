@@ -5,12 +5,12 @@
   "use_case": "Track an order, report a damaged delivery",
   "branch": "Customer inquires whether the carrier shipment event recorded transit damage before initiating return action",
   "tests": "the agent retrieves shipment tracking for order O35 and reports the carrier's damage event note",
-  "instruction": "Following your email (thread th_r02_damaged_sweatshirt) about order O35, you want to know if the shipping carrier's tracking records specifically confirm that the package was noted as damaged in transit before you decide what action to take.\n\nYour details:\nName: Quinn Hughes\nEmail: quinn.fabray@example.com\nPostal code: 43215\nThread ID: th_r02_damaged_sweatshirt\nOrder ID: O35",
+  "instruction": "Following your email (thread th_r02_damaged_sweatshirt) about order O35, you want to know if the shipping carrier's tracking records specifically confirm that the package was noted as damaged in transit before you decide what action to take.\n\nYour details:\nName: Quinn Fabray\nEmail: quinn.fabray@example.com\nPostal code: 43215\nThread ID: th_r02_damaged_sweatshirt\nOrder ID: O35",
   "keywords": [
     "carrier_damage"
   ],
   "persona": {
-    "name": "Quinn Hughes",
+    "name": "Quinn Fabray",
     "gender": "female",
     "age_group": "25-32",
     "occupation": "Teacher",
@@ -43,6 +43,15 @@
       "fixed": {
         "threadId": "the email the request came in"
       }
+    },
+    {
+      "tool": "verify_order_owner",
+      "arguments": {
+        "order_id": "O35",
+        "postal_code": "43215"
+      },
+      "environment_arguments": {},
+      "fixed": {}
     },
     {
       "tool": "get_shipment_tracking",

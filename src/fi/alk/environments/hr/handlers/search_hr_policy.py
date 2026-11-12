@@ -8,6 +8,11 @@ def handle(args, db):
         raise ToolError("topic is required.")
     if not effective_date:
         raise ToolError("effective_date is required.")
+    # Compared as text against the policies' dates, so anything but YYYY-MM-DD would match the
+    # wrong versions.
+    import re
+    if not isinstance(effective_date, str) or not re.fullmatch(r"\d{4}-\d{2}-\d{2}", effective_date):
+        raise ToolError(f"effective_date must be YYYY-MM-DD, got {effective_date!r}.")
     
     rows = db.query(
         "SELECT policy_id, region, topic, version, effective_from, effective_to, title, content, carry_forward_days, max_consecutive_days, drive_file_id FROM hr_policies WHERE region IN (?, 'ALL') AND topic = ? AND effective_from <= ? AND effective_to >= ?",

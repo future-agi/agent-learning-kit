@@ -5,7 +5,7 @@
   "use_case": "Answer an account manager in #billing-escalations",
   "branch": "Billing lead provides approval APP-BL-402 to reply to BM03 that no discount is on record for BetaTech and a case can be opened",
   "tests": "Posts approved reply to BM03 stating no discount record exists and offering a finance case",
-  "instruction": "You are Rachel Adams, Billing Lead at Cloudnest. You want the billing desk to check BM03 (ts: '1791883800.000003') for BetaTech (T02, admin U02_ADMIN) and post our approved reply under approval ID 'APP-BL-402' stating no discount is on file.\n\nYour details:\n- Role: Billing Lead (acting for tenant's admin)\n- Tenant ID: T02 (BetaTech)\n- Admin Actor ID: U02_ADMIN\n- Slack Channel: CH_BILLESC (#billing-escalations)\n- Message Timestamp: 1791883800.000003\n- Approval ID: APP-BL-402\n- Approved Message: \"There is no record of a 20% discount for BetaTech. We can open a billing case for finance to review.\"",
+  "instruction": "You are Rachel Adams, Billing Lead at Cloudnest. You want the billing desk to check BM03 (ts: '1791883800.000003') for BetaTech (T02) and post our approved reply under approval ID 'APP-BL-402' stating no discount is on file.\n\nYour details:\n- Role: Billing Lead\n- Your User ID: U_BL8\n- Tenant ID: T02 (BetaTech)\n- Slack Channel: CH_BILLESC (#billing-escalations)\n- Message Timestamp: 1791883800.000003\n- Approval ID: APP-BL-402\n- Approved Message: \"There is no record of a 20% discount for BetaTech. We can open a billing case for finance to review.\"",
   "keywords": [
     "slack_escalation"
   ],
@@ -17,7 +17,7 @@
     "location": "Canada",
     "personality": "Professional and formal",
     "communication_style": "Direct and concise",
-    "initial_message": "Hello, please check BM03 in #billing-escalations for BetaTech (T02, admin U02_ADMIN) and post the reply with approval APP-BL-402.",
+    "initial_message": "Hello, please check BM03 in #billing-escalations for BetaTech (T02) and post the reply with approval APP-BL-402.",
     "languages": [
       "English"
     ],
@@ -30,11 +30,11 @@
   "fixture": {
     "origin": "generated",
     "records": {
-      "admin_id": "U02_ADMIN",
       "message_ts": "1791883800.000003",
       "tenant_id": "T02",
       "approval_id": "APP-BL-402",
-      "channel_id": "CH_BILLESC"
+      "channel_id": "CH_BILLESC",
+      "caller_id": "U_BL8"
     }
   },
   "solution": [
@@ -53,7 +53,7 @@
       "tool": "get_credit_notes",
       "arguments": {
         "tenant_id": "T02",
-        "actor_id": "U02_ADMIN"
+        "actor_id": "U_BL8"
       },
       "environment_arguments": {},
       "fixed": {}

@@ -5,7 +5,7 @@
   "use_case": "Answer access policy questions with citations",
   "branch": "Caller quotes an outdated 2022 access policy claiming automatic viewer access, but agent finds 2022 policy deleted, consults version 3.0, and cites current approval rules",
   "tests": "Does the agent attempt to verify the 2022 policy, consult the active Application Access Policy (version 3.0), and explain that all roles now require formal approval in the access system?",
-  "instruction": "You are Geoffrey Hawthorne, an engineering team lead. You recall reading in the 2022 Access Policy that contractors and team members get viewer roles automatically without manager approval. Inquire with the IT access desk whether that rule from the 2022 Access Policy still holds today for new members.\n\nYour details:\n- Name: Geoffrey Hawthorne\n- Query: Does the 2022 Access Policy rule giving automatic viewer access to contractors still apply?",
+  "instruction": "You are Geoffrey Hawthorne (employee ID E502), an engineering team lead. You recall reading in the 2022 Access Policy that contractors and team members get viewer roles automatically without manager approval. Inquire with the IT access desk whether that rule from the 2022 Access Policy still holds today for new members.\n\nYour details:\n- Name: Geoffrey Hawthorne\n- Query: Does the 2022 Access Policy rule giving automatic viewer access to contractors still apply?",
   "keywords": [
     "policy_citation"
   ],
@@ -34,17 +34,6 @@
     "origin": "seed"
   },
   "solution": [
-    {
-      "tool": "get_file_metadata",
-      "arguments": {
-        "fileId": "acc_pol_2022_deleted",
-        "excludeContentSnippets": false
-      },
-      "environment_arguments": {},
-      "fixed": {
-        "fileId": "caller: 2022 Access Policy (acc_pol_2022_deleted)"
-      }
-    },
     {
       "tool": "read_file_content",
       "arguments": {

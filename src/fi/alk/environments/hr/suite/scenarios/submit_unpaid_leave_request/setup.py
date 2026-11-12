@@ -25,3 +25,5 @@ def setup(world):
         "reserved_days": 0,
         "available_days": 10
     })
+    # The person in this conversation, as the session (not the agent) knows them.
+    world.change("session_caller", "default", {"employee_id": "E411"}, by="id")

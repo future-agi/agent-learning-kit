@@ -1,7 +1,21 @@
+def _caller(db):
+    """The customer signed in to this conversation. The session sets it; an ID, email or name the
+    desk is told never changes who it is talking to."""
+    row = db.one("SELECT customer_id FROM session_caller WHERE id = 'default'")
+    return row["customer_id"] if row else None
+
+
+def _for_caller(db, customer_id, what):
+    """Act only for the signed-in customer: a customer_id argument is checked, never trusted."""
+    caller = _caller(db)
+    if not caller or str(customer_id or "").strip() != caller:
+        raise ToolError(f"Permission denied: {what} is not the signed-in customer's ({caller or 'nobody is signed in'}).", category="permission_denied")
+
+
 import json
 from datetime import datetime
 
-def handle(args, db):
+def _handle(args, db):
     order_id = args.get("order_id")
     customer_id = args.get("customer_id")
     items = args.get("items")
@@ -20,7 +34,12 @@ def handle(args, db):
         
     if order["customer_id"].strip() != customer_id.strip():
         raise ToolError(f"Customer {customer_id} does not match order owner.", category="permission_denied")
-        
+    _for_caller(db, customer_id, f"order {order_id}")
+    skus = [req.get("sku") if isinstance(req, dict) else None for req in items]
+    if len(skus) != len(set(skus)):
+        # Each line is checked against what is still held, so one SKU named twice would pass twice.
+        raise ToolError("Each SKU may appear once in items; give one line per SKU with the total quantity.", category="invalid_input")
+
     if order["status"] != "delivered" or not order["delivery_date"]:
         raise ToolError(f"Cannot return items from order with status '{order['status']}'.", category="policy_blocked")
         
@@ -30,8 +49,13 @@ def handle(args, db):
     if request_key:
         existing = db.one("SELECT * FROM returns WHERE request_key = ?", [request_key])
         if existing:
-            lbl = db.one("SELECT * FROM return_labels WHERE return_id = ?", [existing["return_id"]])
+            # A replay is the same request by the same customer; a key reused for anything else is
+            # a conflict, never someone else's return.
             ex_items = db.query("SELECT sku, quantity, refunded_amount_cents FROM return_items WHERE return_id = ?", [existing["return_id"]])
+            asked = sorted((str(req.get("sku")), req.get("quantity")) for req in items)
+            if existing["customer_id"] != customer_id or existing["order_id"] != order_id or sorted((i["sku"], i["quantity"]) for i in ex_items) != asked:
+                raise ToolError(f"request_key {request_key!r} was already used for a different return request.", category="conflict")
+            lbl = db.one("SELECT * FROM return_labels WHERE return_id = ?", [existing["return_id"]])
             return {"return_id": existing["return_id"], "order_id": existing["order_id"], "customer_id": existing["customer_id"], "status": existing["status"], "estimated_refund_cents": existing["estimated_refund_cents"], "restocking_fee_cents": existing["restocking_fee_cents"], "label": ({"label_id": lbl["label_id"], "tracking_number": lbl["tracking_number"], "carrier": lbl["carrier"], "label_url": lbl["label_url"], "status": lbl["status"]} if lbl else None), "label_status": lbl["status"] if lbl else "unavailable", "items": [dict(i) for i in ex_items], "idempotent": True}
     
     policy_rows = db.query("SELECT name, value FROM environment_policy")
@@ -65,6 +89,8 @@ def handle(args, db):
         prod = db.one("SELECT * FROM products WHERE sku = ?", [sku])
         if prod and prod["is_final_sale"] and final_sale_enforced:
             raise ToolError(f"SKU {sku} is final sale and cannot be returned.", category="policy_blocked")
+        if prod and not prod["returnable"] and not (prod["is_final_sale"] and not final_sale_enforced):
+            raise ToolError(f"SKU {sku} is not returnable.", category="policy_blocked")
         if prod and prod["category"] == "Accessories" and age_days > accessories_window:
             raise ToolError(f"SKU {sku} is an accessory: its return window is {accessories_window} days from delivery, and order {order_id} was delivered {age_days} days ago.", category="policy_blocked")
             
@@ -170,3 +196,43 @@ def handle(args, db):
         "items": res_items,
         "idempotent": False
     }
+
+
+_WRITES = ("order_items", "return_items", "return_labels", "returns")
+
+def _all_or_nothing(db, run):
+    """Run the call so that a failed call changes nothing. A handler gets no transaction of its own,
+    so every table this tool writes is held first and put back if the call raises, whether a write
+    failed partway or the call refused after writing. Only a fault the world simulates on purpose
+    (an error marked keep_writes: a rival booking, a commit whose reply was lost, a fault used up)
+    keeps what it wrote."""
+    held = {table: db.query(f"SELECT * FROM {table}") for table in _WRITES}
+    try:
+        return run()
+    except Exception as failed:
+        if not getattr(failed, "keep_writes", False):
+            for table, rows in held.items():
+                if _same(db.query(f"SELECT * FROM {table}"), rows):
+                    continue
+                db.execute(f"DELETE FROM {table}")
+                for row in rows:
+                    cols = list(row)
+                    db.execute(
+                        f"INSERT INTO {table} ({', '.join(chr(34) + c + chr(34) for c in cols)}) VALUES ({', '.join('?' * len(cols))})",
+                        [row[c] for c in cols],
+                    )
+        raise
+
+def _same(rows, held):
+    """Whether a table still holds exactly the rows it held, in any order: only a table the call
+    changed is rewritten."""
+    import json
+
+    def key(row):
+        return json.dumps(row, sort_keys=True, default=str)
+
+    return sorted(map(key, rows)) == sorted(map(key, held))
+
+
+def handle(args, db):
+    return _all_or_nothing(db, lambda: _handle(args, db))

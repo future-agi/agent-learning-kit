@@ -52,7 +52,9 @@
         "postal_code": "700001"
       },
       "environment_arguments": {},
-      "fixed": {}
+      "fixed": {
+        "customer_id": "record: customers.customer_id of the caller"
+      }
     }
   ],
   "alternatives": [],

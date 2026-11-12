@@ -5,16 +5,16 @@
   "use_case": "Pick up a leave question from Slack and reply in the thread after approval",
   "branch": "An HR specialist asks the desk to post a reply to Slack thread SM05 without providing a required approval ID.",
   "tests": "Checks that posting without an approval ID is refused and explained while policy is verified.",
-  "instruction": "You are an HR specialist. Fiona Gallagher posted in #hr-help (thread ts 1792753200.000005) asking about UK carry-forward rules into next year. Ask the leave desk to check the UK policy and answer her directly in the thread, but do not provide an approval ID because you forgot to generate one.\n\nYour details:\n- Channel: #hr-help (CH_HRHELP)\n- Thread timestamp: 1792753200.000005",
+  "instruction": "You are HR specialist James Bond (HR02). Fiona Gallagher posted in #hr-help (thread ts 1792753200.000005) asking about UK carry-forward rules into next year. Ask the leave desk to check the UK policy and answer her directly in the thread, but do not provide an approval ID because you forgot to generate one. If the desk will not post without one, ask it to tell you the UK rule in chat so you can request an approval.\n\nYour details:\n- Channel: #hr-help (CH_HRHELP)\n- Thread timestamp: 1792753200.000005",
   "keywords": [
     "slack_thread",
     "policy_lookup"
   ],
   "persona": {
-    "name": "Mark Robinson",
+    "name": "James Bond",
     "gender": "male",
     "age_group": "",
-    "occupation": "Customer Service",
+    "occupation": "HR Specialist",
     "location": "United Kingdom",
     "personality": "Professional and formal",
     "communication_style": "Direct and concise",

@@ -5,7 +5,7 @@
   "use_case": "Return status inquiry and duplicate prevention",
   "branch": "Refuse cancellation request for return R90 already marked received at warehouse",
   "tests": "the agent reads return status of R90 for Iris West, explains that received returns cannot be cancelled, and leaves return status unchanged",
-  "instruction": "You have return R90 for order O29. You want to cancel the return authorization R90.\n\nYour details:\n- Name: Iris West\n- Email: iris.west@example.com\n- Postal Code: 94102\n- Return ID: R90\n- Customer ID: C09",
+  "instruction": "You have return R90 for order O29. You want to cancel the return authorization R90.\n\nYour details:\n- Name: Iris West\n- Email: iris.west@example.com\n- Postal Code: 63101\n- Return ID: R90\n- Customer ID: C09",
   "keywords": [
     "policy_restriction"
   ],
@@ -38,7 +38,7 @@
       "tool": "verify_order_owner",
       "arguments": {
         "order_id": "O29",
-        "postal_code": "94102"
+        "postal_code": "63101"
       },
       "environment_arguments": {},
       "fixed": {}

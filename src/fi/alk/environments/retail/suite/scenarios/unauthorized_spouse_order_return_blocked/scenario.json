@@ -50,7 +50,9 @@
         "category": "Footwear"
       },
       "environment_arguments": {},
-      "fixed": {}
+      "fixed": {
+        "category": "record: the product category of the shoes (Footwear)"
+      }
     }
   ],
   "alternatives": [],
@@ -65,7 +67,8 @@
     "overlay_intensity": "subtle"
   },
   "sub_goals": [
-    "subgoal_unauthorized_access_prevented"
+    "effective_policy_consulted",
+    "declined_action_explained"
   ],
   "max_turns": 10,
   "background_noise": false,

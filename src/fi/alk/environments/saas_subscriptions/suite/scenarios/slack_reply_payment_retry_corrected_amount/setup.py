@@ -8,3 +8,5 @@ def setup(world):
         "status": "approved",
         "expires_at": "2026-10-16T12:00:00Z"
     })
+    world.put("slack_users", {"user_id": "U_BL9", "name": "Sarah Jenkins", "email": "sarah.jenkins@cloudnest.example", "role": "billing_lead"})
+    world.change("session_caller", "default", {"actor_id": "U_BL9"}, by="id")

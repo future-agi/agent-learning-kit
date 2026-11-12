@@ -55,7 +55,9 @@
         "threadId": "th_r407_robert_return"
       },
       "environment_arguments": {},
-      "fixed": {}
+      "fixed": {
+        "threadId": "record: gmail_threads.id of the caller's own thread"
+      }
     }
   ],
   "alternatives": [],

@@ -11,8 +11,10 @@ def setup(world):
         "balance_id": "BAL-E454-ANN",
         "employee_id": "E454",
         "leave_type": "annual",
-        "allocated_days": 20,
-        "used_days": 3,
+        "allocated_days": 18,
+        "used_days": 1,
         "reserved_days": 0,
         "available_days": 17,
     })
+    # The person in this conversation, as the session (not the agent) knows them.
+    world.change("session_caller", "default", {"employee_id": "E454"}, by="id")

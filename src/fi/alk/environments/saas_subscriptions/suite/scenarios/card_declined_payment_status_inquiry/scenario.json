@@ -5,7 +5,7 @@
   "use_case": "Open a billing case or report a payment",
   "branch": "Account manager asks about payment status and failure reason for inv_09_addon",
   "tests": "checks payment status and reports card decline reason and retrying status",
-  "instruction": "You are Ananya Rao, account manager for InnoSoft (T09). Ask the billing desk to check why the payment failed for invoice inv_09_addon and what the recorded failure reason is.\n\nYour details:\n- Name: Ananya Rao\n- Role: Account Manager\n- Client: InnoSoft (Tenant ID: T09)\n- Invoice ID: inv_09_addon",
+  "instruction": "You are Ananya Rao, account manager for InnoSoft (T09). Ask the billing desk to check why the payment failed for invoice inv_09_addon and what the recorded failure reason is.\n\nYour details:\n- Name: Ananya Rao\n- Role: Account Manager\n- Your User ID: U_AM4\n- Client: InnoSoft (Tenant ID: T09)\n- Invoice ID: inv_09_addon",
   "keywords": [
     "payment_status"
   ],
@@ -34,19 +34,9 @@
   },
   "solution": [
     {
-      "tool": "get_user_role",
-      "arguments": {
-        "tenant_id": "T09",
-        "user_id": "U09_ADMIN",
-        "actor_id": "U09_ADMIN"
-      },
-      "environment_arguments": {},
-      "fixed": {}
-    },
-    {
       "tool": "get_payment_status",
       "arguments": {
-        "actor_id": "U09_ADMIN",
+        "actor_id": "U_AM4",
         "tenant_id": "T09",
         "invoice_id": "inv_09_addon"
       },

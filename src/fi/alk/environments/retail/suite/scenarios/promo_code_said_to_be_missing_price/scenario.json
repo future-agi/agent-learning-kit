@@ -5,7 +5,7 @@
   "use_case": "Refund calculation and partial order pricing inquiry",
   "branch": "Customer claims a 15% discount code was omitted and requests retroactive price adjustment; agent verifies invoice and declines unverified claim",
   "tests": "the agent verifies Fiona Gallagher's order O477, checks the invoice to confirm no promo code was applied, declines to adjust the price or issue a retroactive refund, and explains the return policy alternative",
-  "instruction": "You ordered a Pullover Fleece Hoodie in order O477 and paid the full price of $75.00. You believe your 15% promo code was not applied during checkout and want support to retroactively apply the discount and refund the difference. If the agent checks the invoice and explains that retroactive discounts cannot be applied post-purchase, accept the explanation.\n\nYour details:\n- Name: Fiona Gallagher\n- Email: fiona.gallagher@example.com.au\n- Postal Code: 3000\n- Order ID: O477",
+  "instruction": "You ordered a Pullover Fleece Hoodie in order O477 and paid the full price of $52.00. You believe your 15% promo code was not applied during checkout and want support to retroactively apply the discount and refund the difference. If the agent checks the invoice and explains that retroactive discounts cannot be applied post-purchase, accept the explanation.\n\nYour details:\n- Name: Fiona Gallagher\n- Email: fiona.gallagher@example.com.au\n- Postal Code: 3000\n- Order ID: O477",
   "keywords": [
     "price_inquiry",
     "invoice_lookup",

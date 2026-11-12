@@ -5,7 +5,7 @@
   "use_case": "Answer access policy questions with citations",
   "branch": "Caller asks how long an approval token remains valid before expiring; agent reads acc_pol_v3 to confirm 7 days validity.",
   "tests": "Does the agent check current policy acc_pol_v3 and explain that approval tokens expire after 7 days?",
-  "instruction": "You are David Kumar, a software engineer. Your manager approved your access request yesterday and you want to know how long the approval token remains valid before it expires. Ask the IT access desk for the policy token validity timeframe.",
+  "instruction": "You are David Kumar (employee ID E505), a software engineer. Your manager approved your access request yesterday and you want to know how long the approval token remains valid before it expires. Ask the IT access desk for the policy token validity timeframe.",
   "keywords": [
     "policy_citation",
     "token_validation"

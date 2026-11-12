@@ -5,7 +5,7 @@
   "use_case": "Preview and schedule a plan or seat change",
   "branch": "account manager in Slack asks for cost delta preview of adding 20 seats to Enterprise plan for tenant T08",
   "tests": "the agent reads the Slack escalation thread and previews the Enterprise seat addition without scheduling state changes",
-  "instruction": "You are Marco Diaz, an account manager at Cloudnest (user ID U_AM2). You posted a message in the #billing-escalations Slack channel asking the billing desk to preview the cost impact of adding 20 seats to HyperScale's (T08) Enterprise plan (taking them from 120 to 140 seats). You are waiting for the billing desk to review the thread and calculate the preview delta.\n\nYour details:\n- Channel: #billing-escalations\n- Message Timestamp: 1792000000.000402\n- Tenant ID: T08\n- Target Plan: Enterprise\n- Target Seats: 140\n- Effective Timing: end of period (2026-11-01)",
+  "instruction": "You are Marco Diaz, HyperScale's account manager at Cloudnest (user ID U_AM2). You posted a message in the #billing-escalations Slack channel asking the billing desk to preview the cost impact of adding 20 seats to HyperScale's (T08) Enterprise plan (taking them from 120 to 140 seats). You are waiting for the billing desk to review the thread and calculate the preview delta.\n\nYour details:\n- Channel: #billing-escalations\n- Message Timestamp: 1792000000.000402\n- Tenant ID: T08\n- Target Plan: Enterprise\n- Target Seats: 140\n- Effective Timing: end of period (2026-11-01)",
   "keywords": [
     "slack_integration"
   ],
@@ -44,21 +44,14 @@
         "channel_id": "CH_BILLESC"
       },
       "environment_arguments": {},
-      "fixed": {}
-    },
-    {
-      "tool": "verify_billing_admin",
-      "arguments": {
-        "actor_id": "U08_ADMIN",
-        "tenant_id": "T08"
-      },
-      "environment_arguments": {},
-      "fixed": {}
+      "fixed": {
+        "message_ts": "record: 1792000000.000402"
+      }
     },
     {
       "tool": "preview_plan_change",
       "arguments": {
-        "actor_id": "U08_ADMIN",
+        "actor_id": "U_AM2",
         "target_seats": 140,
         "target_plan_id": "enterprise",
         "tenant_id": "T08",
@@ -66,7 +59,9 @@
       },
       "environment_arguments": {},
       "fixed": {
-        "target_plan_id": "caller: enterprise plan"
+        "target_plan_id": "caller: enterprise",
+        "tenant_id": "caller: T08",
+        "target_seats": "caller: 140"
       }
     }
   ],

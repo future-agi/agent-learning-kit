@@ -36,6 +36,15 @@
   },
   "solution": [
     {
+      "tool": "verify_order_owner",
+      "arguments": {
+        "order_id": "O452",
+        "postal_code": "10012"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
       "tool": "get_return_status",
       "arguments": {
         "order_id": "",

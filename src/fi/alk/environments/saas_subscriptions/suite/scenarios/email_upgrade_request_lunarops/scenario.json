@@ -5,7 +5,7 @@
   "use_case": "Preview and schedule a plan or seat change",
   "branch": "billing admin requests plan upgrade to Enterprise with 25 seats via email thread th_s401_upgrade",
   "tests": "the agent reads the email upgrade request and schedules the Enterprise plan change for LunarOps",
-  "instruction": "You are Leo Lunar, the billing admin for LunarOps (tenant ID T12, actor ID U12_ADMIN). You sent an email requesting an upgrade to Enterprise with 25 seats starting at renewal. You want the billing desk to read the thread and schedule the change.\n\nYour details:\n- Tenant ID: T12\n- Actor ID: U12_ADMIN\n- Email Thread ID: th_s401_upgrade\n- Target Plan: Enterprise\n- Target Seats: 25\n- Timing: End of period (end_of_period)",
+  "instruction": "You are Leo Lunar, the billing admin for LunarOps (tenant ID T12, actor ID U12_ADMIN). You sent an email requesting an upgrade to Enterprise with 25 seats starting at the end of the current billing period (2026-11-01). You want the billing desk to read the thread and schedule the change.\n\nYour details:\n- Tenant ID: T12\n- Actor ID: U12_ADMIN\n- Email Thread ID: th_s401_upgrade\n- Target Plan: Enterprise\n- Target Seats: 25\n- Timing: End of period (end_of_period)",
   "keywords": [
     "gmail_integration"
   ],

@@ -5,13 +5,13 @@
   "use_case": "Answer access policy questions with citations",
   "branch": "Caller asks for the maximum permitted duration for temporary application access; agent consults temp_access_policy (30 days).",
   "tests": "Does the agent read temp_access_policy and cite the 30-day maximum duration limit for temporary access?",
-  "instruction": "You are Priya Sharma, an operations consultant. You need temporary access for a project and want to know the maximum number of days allowed under the Temporary Access Policy. Ask the IT access desk how long temporary access can be granted for.",
+  "instruction": "You are Anika Rao (employee ID E510), an operations consultant. You need temporary access for a project and want to know the maximum number of days allowed under the Temporary Access Policy. Ask the IT access desk how long temporary access can be granted for.",
   "keywords": [
     "policy_citation",
     "least_privilege"
   ],
   "persona": {
-    "name": "Priya Sharma",
+    "name": "Anika Rao",
     "gender": "female",
     "age_group": "25-32",
     "occupation": "Consultant",

@@ -5,7 +5,7 @@
   "use_case": "Explain an invoice or a bill increase",
   "branch": "The admin claims a $99 support fee was charged, but invoice lines show only standard base subscription",
   "tests": "checks invoice lines and clarifies that no unlisted $99 support fee exists",
-  "instruction": "You are Sam Taylor, team member for NovaTech. You believe NovaTech was charged an unlisted $99 support fee on October invoice inv_401_curr. Ask why this $99 support fee was charged.\n\nYour details:\n- Tenant ID: T401\n- Tenant Name: NovaTech\n- Your Name: Sam Taylor\n- Your User ID: U401_ADMIN\n- Your Role: billing_admin\n- Invoice ID: inv_401_curr",
+  "instruction": "You are Sam Taylor, billing admin for NovaTech. You believe NovaTech was charged an unlisted $99 support fee on October invoice inv_401_curr. Ask why this $99 support fee was charged.\n\nYour details:\n- Tenant ID: T401\n- Tenant Name: NovaTech\n- Your Name: Sam Taylor\n- Your User ID: U401_ADMIN\n- Your Role: billing_admin\n- Invoice ID: inv_401_curr",
   "keywords": [
     "invoice_explanation"
   ],
@@ -51,7 +51,9 @@
         "actor_id": "U401_ADMIN"
       },
       "environment_arguments": {},
-      "fixed": {}
+      "fixed": {
+        "invoice_id": "caller: inv_401_curr"
+      }
     }
   ],
   "alternatives": [],

@@ -43,7 +43,9 @@
         "threadId": "th_b13_other_tenant"
       },
       "environment_arguments": {},
-      "fixed": {}
+      "fixed": {
+        "threadId": "caller: th_b13_other_tenant"
+      }
     },
     {
       "tool": "verify_billing_admin",

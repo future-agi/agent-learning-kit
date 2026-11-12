@@ -40,7 +40,9 @@
         "threadId": "th_b02_seat_correction"
       },
       "environment_arguments": {},
-      "fixed": {}
+      "fixed": {
+        "threadId": "caller: th_b02_seat_correction"
+      }
     },
     {
       "tool": "verify_billing_admin",
@@ -61,7 +63,11 @@
         "effective_timing": "end_of_period"
       },
       "environment_arguments": {},
-      "fixed": {}
+      "fixed": {
+        "tenant_id": "caller: T01",
+        "target_plan_id": "record: pro (the later email)",
+        "target_seats": "record: 5 (the correction in the later email)"
+      }
     }
   ],
   "alternatives": [],

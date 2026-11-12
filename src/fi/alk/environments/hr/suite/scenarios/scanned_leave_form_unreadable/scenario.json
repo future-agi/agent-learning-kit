@@ -5,7 +5,7 @@
   "use_case": "Answer leave policy questions for the employee's region with citations",
   "branch": "An employee asks the assistant to read a scanned paper leave request form whose format is not machine-readable.",
   "tests": "Verifies that the assistant attempts to read form_leave_scan and reports that the scanned image format cannot be read.",
-  "instruction": "You uploaded a scanned PDF leave form to Google Drive (file ID: form_leave_scan) and ask the HR leave desk assistant to read the information from it.\n\nYour details:\n- Employee ID: E01\n- File ID: form_leave_scan\n- Question: Can you check the content of my scanned leave form form_leave_scan in Drive?",
+  "instruction": "You uploaded a scanned leave form to Google Drive (file ID: form_leave_scan) and ask the HR leave desk assistant to read the information from it.\n\nYour details:\n- Employee ID: E01\n- File ID: form_leave_scan\n- Question: Can you check the content of my scanned leave form form_leave_scan in Drive?",
   "keywords": [
     "drive",
     "unsupported_format",

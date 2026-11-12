@@ -5,16 +5,16 @@
   "use_case": "Pick up a leave question from Slack and reply in the thread after approval",
   "branch": "Reply to Fiona Gallagher's UK carry-forward inquiry in Slack thread SM05 using approval APP-HR-410.",
   "tests": "Picks up Fiona's leave policy question in Slack and posts the approved reply in her thread.",
-  "instruction": "You are an HR specialist coordinating leave desk responses. Fiona Gallagher asked in the #hr-help Slack channel (thread ts 1792753200.000005) about the carry-forward policy for UK staff into next year. Ask the leave desk to check the UK annual leave policy, check the thread, and post the approved response in the thread using approval ID APP-HR-410.\n\nYour details:\n- Channel: #hr-help (CH_HRHELP)\n- Thread timestamp: 1792753200.000005\n- Approval ID: APP-HR-410",
+  "instruction": "You are HR specialist James Bond (HR02), coordinating leave desk responses. Fiona Gallagher asked in the #hr-help Slack channel (thread ts 1792753200.000005) about the carry-forward policy for UK staff into next year. Ask the leave desk to check the UK annual leave policy, check the thread, and post the approved response in the thread using approval ID APP-HR-410.\n\nYour details:\n- Channel: #hr-help (CH_HRHELP)\n- Thread timestamp: 1792753200.000005\n- Approval ID: APP-HR-410",
   "keywords": [
     "slack_thread",
     "policy_lookup"
   ],
   "persona": {
-    "name": "Emma Watson",
-    "gender": "female",
+    "name": "James Bond",
+    "gender": "male",
     "age_group": "",
-    "occupation": "Customer Service",
+    "occupation": "HR Specialist",
     "location": "United Kingdom",
     "personality": "Professional and formal",
     "communication_style": "Direct and concise",

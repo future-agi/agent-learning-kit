@@ -5,13 +5,13 @@
   "use_case": "Refund calculation and partial order pricing inquiry",
   "branch": "Customer Rachel Green C18 inquires via email thread th_r04_return_request_rachel about refund amount for discounted item AP03 from order O18",
   "tests": "the agent reads email thread th_r04_return_request_rachel, evaluates the discounted line AP03 on order O18, and quotes the net refund of $50.00",
-  "instruction": "You sent an email to customer support asking how much you would receive if you return the Slim-Fit Oxford Button-Down (SKU AP03) from order O18, which was purchased with a discount.\n\nYour details:\n- Name: Rachel K. Green\n- Email: rachel.green@example.com\n- Postal Code: 10014\n- Thread: th_r04_return_request_rachel\n- Order ID: O18\n- Item: SKU AP03 (Quantity 1)",
+  "instruction": "You sent an email to customer support asking how much you would receive if you return the Slim-Fit Oxford Button-Down (SKU AP03) from order O18, which was purchased with a discount.\n\nYour details:\n- Name: Rachel Green\n- Email: rachel.green@example.com\n- Postal Code: 10014\n- Thread: th_r04_return_request_rachel\n- Order ID: O18\n- Item: SKU AP03 (Quantity 1)",
   "keywords": [
     "email_support",
     "net_refund_breakdown"
   ],
   "persona": {
-    "name": "Rachel K. Green",
+    "name": "Rachel Green",
     "gender": "female",
     "age_group": "25-32",
     "occupation": "Marketing Professional",

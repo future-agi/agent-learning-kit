@@ -31,7 +31,7 @@
     "invoice_id": "inv_10_curr",
     "tenant_id": "T10",
     "origin": "seed",
-    "actor_id": "U10_MEMBER"
+    "actor_id": "U10_ADMIN"
   },
   "solution": [
     {

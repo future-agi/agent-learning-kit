@@ -6,7 +6,7 @@ def setup(world):
         "phone": "+15550452",
         "postal_code": "10012",
         "address": "177A Bleecker Street",
-        "store_credit_cents": 0
+        "store_credit_cents": 0,
     })
     world.put("orders", {
         "order_id": "O452",
@@ -15,23 +15,23 @@ def setup(world):
         "delivery_date": "2026-10-18T10:00:00Z",
         "status": "delivered",
         "currency": "USD",
-        "total_gross_cents": 3500,
+        "total_gross_cents": 6800,
         "total_discount_cents": 0,
         "total_tax_cents": 0,
-        "total_net_cents": 3500,
+        "total_net_cents": 6800,
         "shipping_address": "177A Bleecker Street, 10012",
-        "cancelled_at": None
+        "cancelled_at": None,
     })
     world.put("order_items", {
         "item_id": "IT452",
         "order_id": "O452",
         "sku": "AP06",
         "quantity": 1,
-        "unit_price_cents": 3500,
+        "unit_price_cents": 6800,
         "line_discount_cents": 0,
         "line_tax_cents": 0,
-        "line_net_cents": 3500,
-        "returned_quantity": 1
+        "line_net_cents": 6800,
+        "returned_quantity": 1,
     })
     world.put("returns", {
         "return_id": "R451",
@@ -39,20 +39,13 @@ def setup(world):
         "customer_id": "C452",
         "status": "authorized",
         "return_reason": "AP06:changed_mind",
-        "estimated_refund_cents": 3500,
+        "estimated_refund_cents": 6800,
         "restocking_fee_cents": 0,
         "request_key": "REQ-C452-O452",
         "created_at": "2026-10-22T10:00:00Z",
-        "cancelled_at": None
+        "cancelled_at": None,
     })
-    world.put("return_items", {
-        "return_item_id": "RI451",
-        "return_id": "R451",
-        "item_id": "IT452",
-        "sku": "AP06",
-        "quantity": 1,
-        "refunded_amount_cents": 3500
-    })
+    world.put("return_items", {"return_item_id": "RI451", "return_id": "R451", "item_id": "IT452", "sku": "AP06", "quantity": 1, "refunded_amount_cents": 6800})
     world.put("return_labels", {
         "label_id": "L451",
         "return_id": "R451",
@@ -60,7 +53,26 @@ def setup(world):
         "carrier": "USPS",
         "label_url": "https://labels.example.com/L451.pdf",
         "status": "active",
-        "created_at": "2026-10-22T10:00:00Z"
+        "created_at": "2026-10-22T10:00:00Z",
     })
-    world.put("shipments", {"shipment_id": "SHP452", "order_id": "O452", "carrier": "UPS", "tracking_number": "1Z999AA10000000452", "status": "delivered", "shipped_at": "2026-10-14T18:00:00Z", "delivered_at": "2026-10-18T10:00:00Z", "last_event": "Delivered, left at front door", "last_event_at": "2026-10-18T10:00:00Z"})
-    world.put("invoices", {"invoice_id": "INV452", "order_id": "O452", "issued_at": "2026-10-14T10:00:00Z", "total_cents": 3500, "currency": "USD", "pdf_url": "https://invoices.example.com/INV452.pdf"})
+    world.put("shipments", {
+        "shipment_id": "SHP452",
+        "order_id": "O452",
+        "carrier": "UPS",
+        "tracking_number": "1Z999AA10000000452",
+        "status": "delivered",
+        "shipped_at": "2026-10-14T18:00:00Z",
+        "delivered_at": "2026-10-18T10:00:00Z",
+        "last_event": "Delivered, left at front door",
+        "last_event_at": "2026-10-18T10:00:00Z",
+    })
+    world.put("invoices", {
+        "invoice_id": "INV452",
+        "order_id": "O452",
+        "issued_at": "2026-10-14T10:00:00Z",
+        "total_cents": 6800,
+        "currency": "USD",
+        "pdf_url": "https://invoices.example.com/INV452.pdf",
+    })
+    # The person in this conversation, as the session signs them in.
+    world.change("session_caller", "default", {"customer_id": "C452"}, by="id")

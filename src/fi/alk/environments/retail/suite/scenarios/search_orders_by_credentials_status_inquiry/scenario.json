@@ -46,16 +46,6 @@
         "email": "caller: email elena.rostova@example.com",
         "postal_code": "caller: postal code 30301"
       }
-    },
-    {
-      "tool": "get_order",
-      "arguments": {
-        "order_id": "O423"
-      },
-      "environment_arguments": {},
-      "fixed": {
-        "order_id": "record: order O423 found from search"
-      }
     }
   ],
   "alternatives": [],
@@ -71,7 +61,7 @@
   },
   "sub_goals": [
     "subgoal_verify_ownership_first",
-    "subgoal_quote_net_breakdown"
+    "order_status_reported"
   ],
   "max_turns": 10,
   "background_noise": false,

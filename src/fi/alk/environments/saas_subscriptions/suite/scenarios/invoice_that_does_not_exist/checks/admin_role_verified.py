@@ -1,11 +1,18 @@
-def check(world, calls):
-    verify_calls = [c for c in calls if c.name == "verify_billing_admin" and c.ok]
-    if not verify_calls:
-        return "not done: verify_billing_admin was not called successfully"
-    admin_calls = [c for c in verify_calls if c.result.get("is_admin") is True]
-    if not admin_calls:
-        return "not done: caller was not verified as a billing admin"
+def check(world, calls, reference=None):
+    tenant = next((s.get("arguments", {}).get("tenant_id") for s in reference or () if s.get("tool") == "verify_billing_admin" and s.get("arguments", {}).get("tenant_id")), None)
+    caller = _caller(world)
+    looks = [c for c in calls if c.name == "verify_billing_admin" and c.ok and c.arguments.get("actor_id") == caller
+             and (not tenant or c.arguments.get("tenant_id") == tenant)]
+    if not looks:
+        return f"not done: the caller's billing-admin role{' for ' + tenant if tenant else ''} was never verified"
+    if not any(c.result.get("is_admin") is True for c in looks):
+        return "not done: the caller was not shown to be the tenant's billing admin"
     return None
+
+
+def _caller(world):
+    """The person signed in to the conversation."""
+    return (world.state().get("session_caller") or [{}])[0].get("actor_id")
 
 
 if __name__ == "__main__":

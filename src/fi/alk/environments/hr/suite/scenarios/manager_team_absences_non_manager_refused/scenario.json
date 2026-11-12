@@ -42,9 +42,7 @@
         "employee_id": "E01"
       },
       "environment_arguments": {},
-      "fixed": {
-        "employee_id": "caller: E01"
-      }
+      "fixed": {}
     },
     {
       "tool": "get_leave_balance",
@@ -54,7 +52,9 @@
         "actor_id": "E01"
       },
       "environment_arguments": {},
-      "fixed": {}
+      "fixed": {
+        "employee_id": "caller: E01"
+      }
     }
   ],
   "alternatives": [],

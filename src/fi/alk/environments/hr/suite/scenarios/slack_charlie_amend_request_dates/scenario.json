@@ -3,18 +3,18 @@
   "scenario_key": "slack-charlie-amend-request-dates",
   "scenario_id": "",
   "use_case": "Pick up a leave question from Slack and reply in the thread after approval",
-  "branch": "An HR specialist asks the desk to process Charlie Brown's date correction in Slack thread SM03/SM04 to amend REQ-1103.",
+  "branch": "The US HR business partner asks the desk to process Charlie Brown's date correction in Slack thread SM03/SM04 to amend REQ-1103.",
   "tests": "Reads the Slack correction thread and updates the leave request to the amended dates.",
-  "instruction": "You are an HR specialist. In Slack #hr-help (thread ts 1792656000.000003), Charlie Brown (E03) originally requested 21 to 23 December for REQ-1103, but followed up in the thread correcting the requested dates to 22 to 24 December 2026. Ask the leave desk to read the thread and amend REQ-1103 for Charlie with confirmed dates 2026-12-22 to 2026-12-24.\n\nYour details:\n- Employee ID: E03\n- Name: Charlie Brown\n- Request ID: REQ-1103\n- Corrected dates: 2026-12-22 to 2026-12-24\n- Slack thread ts: 1792656000.000003",
+  "instruction": "You are Rachel Green (HR01), the US HR business partner. In Slack #hr-help (thread ts 1792656000.000003), Charlie Brown (E03) originally requested 21 to 23 December for REQ-1103, but followed up in the thread correcting the requested dates to 22 to 24 December 2026. Ask the leave desk to read the thread and amend REQ-1103 for Charlie with confirmed dates 2026-12-22 to 2026-12-24.\n\nYour details:\n- Your ID: HR01\n- Name: Rachel Green\n- Employee: Charlie Brown (E03)\n- Request ID: REQ-1103\n- Corrected dates: 2026-12-22 to 2026-12-24\n- Slack thread ts: 1792656000.000003",
   "keywords": [
     "slack_thread",
     "leave_submission"
   ],
   "persona": {
-    "name": "Charlie Brown",
-    "gender": "male",
+    "name": "Rachel Green",
+    "gender": "female",
     "age_group": "",
-    "occupation": "Customer Service",
+    "occupation": "HR Business Partner",
     "location": "United States",
     "personality": "Professional and formal",
     "communication_style": "Direct and concise",

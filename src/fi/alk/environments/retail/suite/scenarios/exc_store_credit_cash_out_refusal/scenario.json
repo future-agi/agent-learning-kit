@@ -5,13 +5,13 @@
   "use_case": "Exchange an item or use store credit",
   "branch": "Customer Iris West C09 asks to cash out her store credit balance to her original credit card, which is refused",
   "tests": "the agent retrieves store credit for C09, refuses cash out request, and explains store credit non-refundable policy",
-  "instruction": "You have an active store credit balance on your account. You want to request that Northgate Outfitters refund this credit directly to your original payment card as cash.\n\nYour details:\n- Name: Iris A. West\n- Email: iris.west@example.com\n- Postal Code: 63101",
+  "instruction": "You have an active store credit balance on your account. First ask how much store credit you have and when it expires. Then you want to request that Northgate Outfitters refund this credit directly to your original payment card as cash.\n\nYour details:\n- Name: Iris West\n- Email: iris.west@example.com\n- Postal Code: 63101",
   "keywords": [
     "cash_out_refusal",
     "store_credit_balance"
   ],
   "persona": {
-    "name": "Iris A. West",
+    "name": "Iris West",
     "gender": "female",
     "age_group": "25-32",
     "occupation": "Sales Representative",

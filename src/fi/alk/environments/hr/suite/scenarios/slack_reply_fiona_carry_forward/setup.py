@@ -8,3 +8,5 @@ def setup(world):
         "status": "approved",
         "expires_at": "2026-12-31T23:59:59Z"
     })
+    # The person in this conversation, as the session (not the agent) knows them.
+    world.change("session_caller", "default", {"employee_id": "HR02"}, by="id")

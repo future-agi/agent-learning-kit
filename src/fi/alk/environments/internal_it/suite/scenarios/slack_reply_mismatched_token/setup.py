@@ -8,3 +8,5 @@ def setup(world):
         "status": "approved",
         "expires_at": "2026-11-26T09:00:00Z"
     })
+    world.put("employees", {"employee_id": "E517", "name": "Tomas Reyes", "email": "tomas.reyes@example.com", "department": "it_operations", "manager_id": "E21", "status": "active"})
+    world.change("session_caller", "default", {"employee_id": "E517"}, by="id")

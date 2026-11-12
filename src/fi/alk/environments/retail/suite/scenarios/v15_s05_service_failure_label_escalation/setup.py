@@ -7,13 +7,9 @@ def setup(world):
         "status": "authorized",
         "estimated_refund_cents": 7800,
         "restocking_fee_cents": 0,
-        "return_reason": "AP05:defective"
+        "return_reason": "AP05:defective",
     })
-    world.put("return_items", {
-        "return_item_id": "RI01",
-        "return_id": "R01",
-        "item_id": "IT05",
-        "sku": "AP05",
-        "quantity": 1,
-        "refunded_amount_cents": 7800
-    })
+    world.put("return_items", {"return_item_id": "RI01", "return_id": "R01", "item_id": "IT05", "sku": "AP05", "quantity": 1, "refunded_amount_cents": 7800})
+    world.change("order_items", "IT05", {"returned_quantity": 1}, by="item_id")
+    # The person in this conversation, as the session signs them in.
+    world.change("session_caller", "default", {"customer_id": "C05"}, by="id")

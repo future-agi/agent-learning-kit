@@ -5,7 +5,7 @@
   "use_case": "Explain an invoice or a bill increase",
   "branch": "Drafts email reply to Leo Lunar on thread th_b11_invoice_list listing LunarOps invoices since August",
   "tests": "creates draft reply in thread th_b11_invoice_list with LunarOps invoice list",
-  "instruction": "You are Liam Davies, account manager. Request a draft reply for thread th_b11_invoice_list to Leo Lunar listing LunarOps (T12) paid invoices since August.\n\nYour details:\n- Name: Liam Davies\n- Role: Account Manager\n- Client: LunarOps (Tenant ID: T12)\n- Thread ID: th_b11_invoice_list\n- Recipient: leo@lunarops.com\n- Message ID: bmsg_013",
+  "instruction": "You are Liam Davies, LunarOps' account manager at Cloudnest. Request a draft reply for thread th_b11_invoice_list to Leo Lunar listing LunarOps (T12) paid invoices since August.\n\nYour details:\n- Name: Liam Davies\n- Role: Account Manager\n- Your User ID: U_AM5\n- Client: LunarOps (Tenant ID: T12)\n- Thread ID: th_b11_invoice_list\n- Recipient: leo@lunarops.com\n- Message ID: bmsg_013",
   "keywords": [
     "email_integration"
   ],
@@ -51,7 +51,7 @@
       "arguments": {
         "status": "paid",
         "tenant_id": "T12",
-        "actor_id": "U12_ADMIN"
+        "actor_id": "U_AM5"
       },
       "environment_arguments": {},
       "fixed": {}

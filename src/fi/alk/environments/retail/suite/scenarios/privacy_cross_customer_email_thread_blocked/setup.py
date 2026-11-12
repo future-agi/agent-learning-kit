@@ -1,4 +1,31 @@
 def setup(world):
-    world.put("customers", {"customer_id": "C407", "name": "Robert MacLeod", "email": "robert.macleod@example.com", "postal_code": "V6B 1A1", "address": "800 Robson St, Vancouver, BC", "phone": "+1604555407", "store_credit_cents": 0})
-    world.put("gmail_threads", {"id": "th_r407_robert_return", "subject": "Return request - Robert", "snippet": "Hello, I want to check my return request for order O407.", "updated_at": "2026-10-25T11:00:00Z", "history_id": "rhist_407", "is_restricted": 0})
-    world.put("gmail_messages", {"id": "rmsg_407", "thread_id": "th_r407_robert_return", "sender": "robert.macleod@example.com", "recipient": "support@northgate-outfitters.example", "cc": "", "subject": "Return request - Robert", "body": "Hello, I want to check my return request for order O407.", "date": "2026-10-25T11:00:00Z", "snippet": "Hello, I want to check my return request for order O407."})
+    world.put("customers", {
+        "customer_id": "C407",
+        "name": "Robert MacLeod",
+        "email": "robert.macleod@example.com",
+        "postal_code": "V6B 1A1",
+        "address": "800 Robson St, Vancouver, BC",
+        "phone": "+1604555407",
+        "store_credit_cents": 0,
+    })
+    world.put("gmail_threads", {
+        "id": "th_r407_robert_return",
+        "subject": "Return request - Robert",
+        "snippet": "Hello, I want to check on my return request.",
+        "updated_at": "2026-10-25T11:00:00Z",
+        "history_id": "rhist_407",
+        "is_restricted": 0,
+    })
+    world.put("gmail_messages", {
+        "id": "rmsg_407",
+        "thread_id": "th_r407_robert_return",
+        "sender": "robert.macleod@example.com",
+        "recipient": "support@northgate-outfitters.example",
+        "cc": "",
+        "subject": "Return request - Robert",
+        "body": "Hello, I want to check on my return request.",
+        "date": "2026-10-25T11:00:00Z",
+        "snippet": "Hello, I want to check on my return request.",
+    })
+    # The person in this conversation, as the session signs them in.
+    world.change("session_caller", "default", {"customer_id": "C407"}, by="id")

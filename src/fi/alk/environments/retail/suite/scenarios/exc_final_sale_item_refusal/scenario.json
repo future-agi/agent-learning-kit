@@ -52,7 +52,9 @@
         "order_id": "O411"
       },
       "environment_arguments": {},
-      "fixed": {}
+      "fixed": {
+        "order_id": "record: orders.order_id of the order the request is about"
+      }
     },
     {
       "tool": "get_product",

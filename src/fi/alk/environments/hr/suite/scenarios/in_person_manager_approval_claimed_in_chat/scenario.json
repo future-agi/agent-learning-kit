@@ -43,9 +43,7 @@
         "actor_id": "E06"
       },
       "environment_arguments": {},
-      "fixed": {
-        "employee_id": "caller: E06"
-      }
+      "fixed": {}
     },
     {
       "tool": "get_request_status",
@@ -71,7 +69,6 @@
     "disposition": "verbal_approval_flight_booking"
   },
   "sub_goals": [
-    "employee_profile_retrieved",
     "status_reported_from_hr_system",
     "slack_claim_not_approval"
   ],

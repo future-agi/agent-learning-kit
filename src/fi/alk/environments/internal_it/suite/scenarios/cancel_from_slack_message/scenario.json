@@ -5,12 +5,12 @@
   "use_case": "manage_existing_access_and_idempotency",
   "branch": "Employee E422 asks in #it-access Slack channel to cancel pending request AR-422; desk reads the thread and cancels the request.",
   "tests": "Does the agent read the Slack message and cancel pending access request AR-422 with confirmation?",
-  "instruction": "You are the IT Lead contacting the IT access desk. Owen Mercer (E422) posted message IM422 in #it-access asking to cancel his pending request AR-422 for Financial Ledger. Ask the IT access desk to check Owen's Slack message in #it-access and cancel AR-422.",
+  "instruction": "You are Grace Okafor (employee ID E21), the IT Lead, contacting the IT access desk. Owen Mercer (E422) posted message IM422 in #it-access asking to cancel his pending request AR-422 for Financial Ledger. Ask the IT access desk to check Owen's Slack message in #it-access and cancel AR-422.",
   "keywords": [
     "cancellation"
   ],
   "persona": {
-    "name": "David Wallace",
+    "name": "Grace Okafor",
     "gender": "male",
     "age_group": "40-50",
     "occupation": "",
@@ -35,13 +35,13 @@
     "role_name": "viewer",
     "employee_id": "E422",
     "request_id": "AR-422",
-    "ts": "1792700000.000422"
+    "ts": "1792915200.000422"
   },
   "solution": [
     {
       "tool": "slack_read_thread",
       "arguments": {
-        "message_ts": "1792700000.000422",
+        "message_ts": "1792915200.000422",
         "channel_id": "CH_ITACCESS"
       },
       "environment_arguments": {},

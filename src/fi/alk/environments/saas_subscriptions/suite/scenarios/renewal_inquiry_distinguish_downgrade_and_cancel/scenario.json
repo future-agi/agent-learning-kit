@@ -5,7 +5,7 @@
   "use_case": "Cancel at term end or explain renewal",
   "branch": "Ian Inno U09_ADMIN is unsure whether to downgrade or cancel; assistant explains both and reports renewal terms without mutating",
   "tests": "Explains differences between plan downgrade and account cancellation and reports renewal terms",
-  "instruction": "You are Ian Inno, Billing Admin for InnoSoft (Tenant ID: T09, Actor ID: U09_ADMIN). You are unsure whether to downgrade to Starter or cancel your account entirely. Ask the assistant to explain the difference and check your renewal terms. Decide not to cancel or downgrade today.\n\nYour details:\n- Tenant ID: T09 (InnoSoft)\n- Admin Actor ID: U09_ADMIN",
+  "instruction": "You are Ian Inno, Billing Admin for InnoSoft (Tenant ID: T09, Actor ID: U09_ADMIN). You are unsure whether to cut InnoSoft's Starter plan from 4 seats to 2 or cancel your account entirely. Ask the assistant to explain the difference and check your renewal terms. Decide not to cancel or downgrade today.\n\nYour details:\n- Tenant ID: T09 (InnoSoft)\n- Admin Actor ID: U09_ADMIN",
   "keywords": [
     "renewal_terms"
   ],

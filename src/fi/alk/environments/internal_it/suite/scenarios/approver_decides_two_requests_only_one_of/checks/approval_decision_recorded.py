@@ -14,8 +14,12 @@ def check(world, calls, reference=None):
         valid_statuses = ("approved", "completed") if want.get("decision") == "approve" else ("rejected",)
         if not r or r.get("status") not in valid_statuses:
             return f"done wrong: request {rid} is {r.get('status') if r else 'missing'}, the approver decided {want.get('decision')}"
-        if want.get("decision") == "approve" and not any(a["request_id"] == rid and a["status"] in ("valid", "used") for a in state.get("approvals", [])):
-            return f"not done: no valid or used token for {rid}"
+        if want.get("decision") == "approve":
+            tokens = [a for a in state.get("approvals", []) if a["request_id"] == rid and a["status"] in ("valid", "used")]
+            if not tokens:
+                return f"not done: no valid or used token for {rid}"
+            if want.get("approver_id") and not any(a["approver_id"] == want["approver_id"] for a in tokens):
+                return f"done wrong: {rid}'s token was not issued by {want['approver_id']}"
     for c in made:
         if rid and c.arguments.get("request_id") != rid:
             return f"done wrong: a decision was recorded on {c.arguments.get('request_id')}, not {rid}"
@@ -23,6 +27,7 @@ def check(world, calls, reference=None):
     if missing:
         return f"done blind: the decision rests on {', '.join(missing)}, which was never read"
     return None
+
 
 def _evidence_missing(world, calls, reference):
     """The Slack thread or library document the reference fixes and whether its content reached this

@@ -5,12 +5,12 @@
   "use_case": "Change or cancel an order before it ships",
   "branch": "Address change request for a processing order received via customer email thread",
   "tests": "the agent reads the email thread and updates the shipping address for processing order O32 to the specified office address",
-  "instruction": "You sent an email (thread th_r07_ship_to_office) requesting to change the shipping address for processing order O32 to your office at 1700 Lincoln St, Suite 900, Denver, CO 80203. You want customer support to update the address on the order.\n\nYour details:\nName: Noah Jenkins\nEmail: noah.taylor@example.com\nPostal code: 80202\nThread ID: th_r07_ship_to_office\nOrder ID: O32\nNew Address: 1700 Lincoln St, Suite 900, Denver, CO 80203",
+  "instruction": "You sent an email (thread th_r07_ship_to_office) requesting to change the shipping address for processing order O32 to your office at 1700 Lincoln St, Suite 900, Denver, CO 80203. You want customer support to update the address on the order.\n\nYour details:\nName: Noah Taylor\nEmail: noah.taylor@example.com\nPostal code: 80202\nThread ID: th_r07_ship_to_office\nOrder ID: O32\nNew Address: 1700 Lincoln St, Suite 900, Denver, CO 80203",
   "keywords": [
     "update_shipping_address"
   ],
   "persona": {
-    "name": "Noah Jenkins",
+    "name": "Noah Taylor",
     "gender": "male",
     "age_group": "32-40",
     "occupation": "Manager",
@@ -44,6 +44,15 @@
       "fixed": {
         "threadId": "record: thread th_r07_ship_to_office"
       }
+    },
+    {
+      "tool": "verify_order_owner",
+      "arguments": {
+        "order_id": "O32",
+        "postal_code": "80202"
+      },
+      "environment_arguments": {},
+      "fixed": {}
     },
     {
       "tool": "get_order",

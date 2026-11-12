@@ -5,12 +5,12 @@
   "use_case": "Pick up an access request from Slack and reply in the thread after approval",
   "branch": "the IT lead asks in chat to process a request that has an approved token on file after seeing Quinn's Slack message",
   "tests": "provisions synthetic access using the valid approval token found in the access system after reading Quinn's Slack thread",
-  "instruction": "You are an IT operations lead. You saw Quinn Fabray's message in #it-access asking to enable write access for AR-102 following manager approval. You want the IT desk assistant to check the Slack thread, verify the approval status in the system, and grant the synthetic access entitlement for AR-102.\n\nYour details:\nTarget request ID: AR-102\nTarget employee: Quinn Fabray (E17)\nChannel: #it-access (CH_ITACCESS)\nMessage timestamp: 1792755000.000003",
+  "instruction": "You are Grace Okafor (employee ID E21), the IT operations lead. You saw Quinn Fabray's message in #it-access asking to enable write access for AR-102 following manager approval. You want the IT desk assistant to check the Slack thread, verify the approval status in the system, and grant the synthetic access entitlement for AR-102.\n\nYour details:\nTarget request ID: AR-102\nTarget employee: Quinn Fabray (E17)\nChannel: #it-access (CH_ITACCESS)\nMessage timestamp: 1792755000.000003",
   "keywords": [
     "synthetic_grant"
   ],
   "persona": {
-    "name": "Samuel Bennett",
+    "name": "Grace Okafor",
     "gender": "male",
     "age_group": "32-40",
     "occupation": "Engineer",

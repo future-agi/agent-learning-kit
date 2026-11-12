@@ -5,12 +5,12 @@
   "use_case": "Track an order, report a damaged delivery",
   "branch": "Customer requests order invoice and discount breakdown for expense claim submission",
   "tests": "the agent verifies order ownership and retrieves the order invoice with itemized line discounts",
-  "instruction": "You need the official invoice for order O18 showing the itemized prices and discount breakdown so you can submit an expense claim to your employer.\n\nYour details:\nName: Rachel Thorne\nEmail: rachel.green@example.com\nPostal code: 10014\nOrder ID: O18",
+  "instruction": "You need the official invoice for order O18 showing the itemized prices and discount breakdown so you can submit an expense claim to your employer.\n\nYour details:\nName: Rachel Green\nEmail: rachel.green@example.com\nPostal code: 10014\nOrder ID: O18",
   "keywords": [
     "track_order"
   ],
   "persona": {
-    "name": "Rachel Thorne",
+    "name": "Rachel Green",
     "gender": "female",
     "age_group": "32-40",
     "occupation": "Accountant",

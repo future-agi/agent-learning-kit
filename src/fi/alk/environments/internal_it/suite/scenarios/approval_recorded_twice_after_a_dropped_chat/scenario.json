@@ -5,7 +5,7 @@
   "use_case": "complete_approved_access",
   "branch": "Evan Wright E05 asks to record approval for AR-452 after a dropped chat, but the request is already approved with valid token TOK-452-OK, so the agent reports the existing approval rather than recording it again.",
   "tests": "Does the agent check approval status for AR-452, recognize it is already approved with a valid token, and report the existing approval without calling record_approval_decision again?",
-  "instruction": "You are Evan Wright (employee ID E05), an analytics manager. You were in the middle of approving access request AR-452 for Fiona Gallagher (viewer role on Reporting Application APP-RPT) when your chat connection dropped. Contact the IT access desk to approve AR-452 again and ask them to record your approval. If the assistant checks the system and informs you that your approval was already recorded and has a valid token, acknowledge the confirmation and wrap up.",
+  "instruction": "You are Evan Wright (employee ID E05), an analytics manager. You were in the middle of approving access request AR-452 for Fern Galloway (viewer role on Reporting Application APP-RPT) when your chat connection dropped. Contact the IT access desk to approve AR-452 again and ask them to record your approval. If the assistant checks the system and informs you that your approval was already recorded and has a valid token, acknowledge the confirmation and wrap up.",
   "keywords": [
     "approval_recording",
     "idempotency"

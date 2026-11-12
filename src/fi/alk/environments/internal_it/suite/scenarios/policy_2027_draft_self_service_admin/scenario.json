@@ -5,7 +5,7 @@
   "use_case": "Answer access policy questions with citations",
   "branch": "Caller asks about proposed 2027 self-service admin rules for team leads; agent checks draft metadata (acc_pol_v4_draft) and consults effective policy (acc_pol_v3) to confirm draft is not in effect.",
   "tests": "Does the agent inspect the 2027 draft metadata and cite the effective policy (acc_pol_v3) to confirm the draft is not in effect?",
-  "instruction": "You are Sarah Jenkins, an engineering manager. You heard about a 2027 policy proposal allowing team leads to self-service grant admin roles without manager approval. Ask the IT access desk whether team leads can currently use self-service admin access under the 2027 draft proposal.",
+  "instruction": "You are Sarah Jenkins (employee ID E504), an engineering manager. You heard about a 2027 policy proposal allowing team leads to self-service grant admin roles without manager approval. Ask the IT access desk whether team leads can currently use self-service admin access under the 2027 draft proposal.",
   "keywords": [
     "policy_citation",
     "least_privilege"

@@ -5,7 +5,7 @@
   "use_case": "Open a billing case or report a payment",
   "branch": "Account manager opens a discount billing case for BetaTech's claimed 20% verbal discount on inv_02_curr",
   "tests": "opens a billing case with category=discount for unverified verbal discount claim on inv_02_curr after reading thread",
-  "instruction": "You are Rohan Varma, account manager at CloudNest. You want the billing desk to read email thread th_b01_discount_claim regarding BetaTech's verbal discount claim and open a formal discount billing case for invoice inv_02_curr.\n\nYour details:\n- Name: Rohan Varma\n- Role: Account Manager\n- Thread ID: th_b01_discount_claim\n- Tenant: BetaTech\n- Tenant ID: T02\n- Invoice ID: inv_02_curr\n- Category: discount",
+  "instruction": "You are Rohan Varma, BetaTech's account manager at Cloudnest. You want the billing desk to read email thread th_b01_discount_claim regarding BetaTech's verbal discount claim and open a formal discount billing case for invoice inv_02_curr.\n\nYour details:\n- Name: Rohan Varma\n- Role: Account Manager\n- Your User ID: U_AM6\n- Thread ID: th_b01_discount_claim\n- Tenant: BetaTech\n- Tenant ID: T02\n- Invoice ID: inv_02_curr\n- Category: discount",
   "keywords": [
     "email_integration"
   ],
@@ -32,7 +32,7 @@
     "tenant_id": "T02",
     "origin": "seed",
     "invoice_id": "inv_02_curr",
-    "actor_id": "U02_ADMIN"
+    "actor_id": "U_AM6"
   },
   "solution": [
     {
@@ -53,7 +53,7 @@
         "summary": "Customer claims 20% verbal discount agreed last quarter",
         "invoice_id": "inv_02_curr",
         "request_key": "req-bc-disc-202",
-        "actor_id": "U02_ADMIN",
+        "actor_id": "U_AM6",
         "tenant_id": "T02"
       },
       "environment_arguments": {},

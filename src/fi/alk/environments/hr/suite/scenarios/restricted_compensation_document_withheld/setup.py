@@ -28,3 +28,5 @@ def setup(world):
         "modified_at": "2026-01-01T00:00:00Z",
         "is_deleted": 0
     })
+    # The person in this conversation, as the session (not the agent) knows them.
+    world.change("session_caller", "default", {"employee_id": "E421"}, by="id")

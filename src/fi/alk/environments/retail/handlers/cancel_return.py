@@ -1,4 +1,18 @@
-def handle(args, db):
+def _caller(db):
+    """The customer signed in to this conversation. The session sets it; an ID, email or name the
+    desk is told never changes who it is talking to."""
+    row = db.one("SELECT customer_id FROM session_caller WHERE id = 'default'")
+    return row["customer_id"] if row else None
+
+
+def _for_caller(db, customer_id, what):
+    """Act only for the signed-in customer: a customer_id argument is checked, never trusted."""
+    caller = _caller(db)
+    if not caller or str(customer_id or "").strip() != caller:
+        raise ToolError(f"Permission denied: {what} is not the signed-in customer's ({caller or 'nobody is signed in'}).", category="permission_denied")
+
+
+def _handle(args, db):
     return_id = args.get("return_id")
     customer_id = args.get("customer_id")
     confirmed = args.get("confirmed")
@@ -13,13 +27,56 @@ def handle(args, db):
         raise ToolError(f"Return {return_id} not found.", category="not_found")
     if ret["customer_id"].strip() != str(customer_id).strip():
         raise ToolError(f"Return {return_id} does not belong to customer {customer_id}.", category="permission_denied")
+    _for_caller(db, customer_id, f"return {return_id}")
     clock = db.one("SELECT now FROM clock")["now"]
     if ret["status"] == "cancelled":
         return {"return_id": return_id, "order_id": ret["order_id"], "status": "cancelled", "idempotent": True, "cancelled_at": ret["cancelled_at"]}
     if ret["status"] != "authorized":
         raise ToolError(f"Policy: return {return_id} is {ret['status']} and can no longer be cancelled.", category="policy_blocked")
     for item in db.query("SELECT * FROM return_items WHERE return_id = ?", [return_id]):
-        db.execute("UPDATE order_items SET returned_quantity = returned_quantity - ? WHERE item_id = ?", [item["quantity"], item["item_id"]])
+        # Never below zero: a counter that lagged behind the return must not go negative and make
+        # more units returnable than were bought.
+        db.execute("UPDATE order_items SET returned_quantity = CASE WHEN returned_quantity > ? THEN returned_quantity - ? ELSE 0 END WHERE item_id = ?", [item["quantity"], item["quantity"], item["item_id"]])
     db.execute("UPDATE returns SET status = 'cancelled', cancelled_at = ? WHERE return_id = ?", [clock, return_id])
     db.execute("UPDATE return_labels SET status = 'void' WHERE return_id = ?", [return_id])
     return {"return_id": return_id, "order_id": ret["order_id"], "status": "cancelled", "idempotent": False, "cancelled_at": clock, "label_status": "void"}
+
+
+_WRITES = ("order_items", "return_labels", "returns")
+
+def _all_or_nothing(db, run):
+    """Run the call so that a failed call changes nothing. A handler gets no transaction of its own,
+    so every table this tool writes is held first and put back if the call raises, whether a write
+    failed partway or the call refused after writing. Only a fault the world simulates on purpose
+    (an error marked keep_writes: a rival booking, a commit whose reply was lost, a fault used up)
+    keeps what it wrote."""
+    held = {table: db.query(f"SELECT * FROM {table}") for table in _WRITES}
+    try:
+        return run()
+    except Exception as failed:
+        if not getattr(failed, "keep_writes", False):
+            for table, rows in held.items():
+                if _same(db.query(f"SELECT * FROM {table}"), rows):
+                    continue
+                db.execute(f"DELETE FROM {table}")
+                for row in rows:
+                    cols = list(row)
+                    db.execute(
+                        f"INSERT INTO {table} ({', '.join(chr(34) + c + chr(34) for c in cols)}) VALUES ({', '.join('?' * len(cols))})",
+                        [row[c] for c in cols],
+                    )
+        raise
+
+def _same(rows, held):
+    """Whether a table still holds exactly the rows it held, in any order: only a table the call
+    changed is rewritten."""
+    import json
+
+    def key(row):
+        return json.dumps(row, sort_keys=True, default=str)
+
+    return sorted(map(key, rows)) == sorted(map(key, held))
+
+
+def handle(args, db):
+    return _all_or_nothing(db, lambda: _handle(args, db))

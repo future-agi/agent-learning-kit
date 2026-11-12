@@ -1,12 +1,23 @@
-def check(world, calls):
-    prev_calls = [c for c in calls if c.name == "preview_plan_change" and c.ok]
-    if not prev_calls:
-        return "not done: preview_plan_change was not called successfully"
-    incompat_calls = [c for c in prev_calls if c.result.get("seats_compatible") is False]
-    if not incompat_calls:
-        return "done wrong: preview_plan_change did not identify seat incompatibility"
-    mutations = [c for c in calls if c.name == "schedule_plan_change" and c.ok]
-    if mutations:
+def check(world, calls, reference=None):
+    want = {}
+    for step in reference or ():
+        if step.get("tool") == "preview_plan_change":
+            want.update({k: v for k, v in step.get("arguments", {}).items() if k in ("tenant_id", "target_plan_id")})
+    shown = any(
+        c.ok and c.name == "preview_plan_change" and c.result.get("seats_compatible") is False
+        and all(c.arguments.get(k) == v for k, v in want.items())
+        for c in calls
+    )
+    if not shown:
+        # The same answer read from its two parts: the active seats and the target plan's limit.
+        used = [c.result.get("current_value") for c in calls if c.ok and c.name == "get_usage" and c.arguments.get("metric") == "seats"
+                and (not want.get("tenant_id") or c.arguments.get("tenant_id") == want["tenant_id"])]
+        limits = [c.result.get("max_seats") for c in calls if c.ok and c.name == "get_entitlements"
+                  and (not want.get("target_plan_id") or c.arguments.get("plan_id") == want["target_plan_id"])]
+        shown = any(isinstance(u, int) and isinstance(m, int) and u > m for u in used for m in limits)
+    if not shown:
+        return "not done: the seat incompatibility was never shown by the records (a preview, or the active seats against the plan's limit)"
+    if any(c.name == "schedule_plan_change" and c.ok for c in calls):
         return "done wrong: schedule_plan_change succeeded despite seat incompatibility"
     return None
 

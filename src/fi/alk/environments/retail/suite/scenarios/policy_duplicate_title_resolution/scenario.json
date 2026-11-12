@@ -3,7 +3,7 @@
   "scenario_key": "policy-duplicate-title-resolution",
   "scenario_id": "",
   "use_case": "Answer return and exchange policy questions with citations",
-  "branch": "Two files share the title 'Returns Policy.md'; the agent checks metadata to distinguish the draft copy in drafts folder from the approved v3.0 policy in cx_policies.",
+  "branch": "Two files share the title 'Returns Policy.md'; the agent checks metadata to tell the superseded interim copy in the policy archive from the approved v3.0 policy in cx_policies.",
   "tests": "Verifies the agent inspects metadata of files sharing the title Returns Policy.md to identify the approved version in cx_policies and cite version 3.0.",
   "instruction": "Ask Northgate Outfitters customer support about the official return rules. You saw multiple documents called Returns Policy online and want to know which one is the active approved policy.",
   "keywords": [

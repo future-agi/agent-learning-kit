@@ -29,5 +29,7 @@ def setup(world):
         "status": "valid",
         "token": "TOK-451-LVR",
         "created_at": "2026-10-21T10:00:00Z",
-        "expires_at": "2026-11-21T10:00:00Z"
+        "expires_at": "2026-10-28T10:00:00Z"
     })
+    world.put("employees", {"employee_id": "E523", "name": "Nadia Braithwaite", "email": "nadia.braithwaite@example.com", "department": "it_operations", "manager_id": "E21", "status": "active"})
+    world.change("session_caller", "default", {"employee_id": "E523"}, by="id")

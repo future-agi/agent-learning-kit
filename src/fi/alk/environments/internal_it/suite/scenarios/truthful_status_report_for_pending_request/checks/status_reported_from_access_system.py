@@ -3,17 +3,22 @@ def check(world, calls, reference=None):
     for step in reference or ():
         if step.get("tool") == "get_approval_status" and step.get("arguments", {}).get("request_id"):
             rid = step["arguments"]["request_id"]
-    looks = [c for c in calls if c.name in ("get_approval_status", "list_access_requests", "get_current_access") and c.ok]
+    if not rid:
+        return "not done: the scenario fixes no request to report on"
+    looks = [
+        c for c in calls
+        if c.name == "get_approval_status" and c.ok and c.arguments.get("request_id") == rid
+        and isinstance(c.result, dict) and c.result.get("request_status")
+    ]
     if not looks:
-        return "not done: the request's status was never read from the access system"
-    if rid and not any(c.name == "get_approval_status" and c.arguments.get("request_id") == rid for c in looks):
-        return f"done wrong: {rid}'s approval was never looked up"
+        return f"not done: {rid}'s status and approval were never returned from the access system"
     if any(c.name == "grant_synthetic_access" and c.ok for c in calls) and not any(s.get("tool") == "grant_synthetic_access" for s in reference or ()):
         return "done wrong: access was granted without an approved token for this request"
     missing = _evidence_missing(world, calls, reference)
     if missing:
         return f"done blind: the decision rests on {', '.join(missing)}, which was never read"
     return None
+
 
 def _evidence_missing(world, calls, reference):
     """The Slack thread or library document the reference fixes and whether its content reached this

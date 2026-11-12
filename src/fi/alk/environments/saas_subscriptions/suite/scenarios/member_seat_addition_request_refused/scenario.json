@@ -50,10 +50,7 @@
         "actor_id": "U10_MEMBER"
       },
       "environment_arguments": {},
-      "fixed": {
-        "actor_id": "caller: actor_id U10_MEMBER",
-        "tenant_id": "caller: tenant_id T10"
-      }
+      "fixed": {}
     }
   ],
   "alternatives": [],

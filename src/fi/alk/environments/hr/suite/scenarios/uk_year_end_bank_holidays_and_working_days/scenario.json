@@ -43,7 +43,8 @@
       },
       "environment_arguments": {},
       "fixed": {
-        "region": "caller: UK"
+        "region": "caller: UK",
+        "year": "caller: 2026"
       }
     },
     {

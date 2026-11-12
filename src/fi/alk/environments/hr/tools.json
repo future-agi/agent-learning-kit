@@ -1,11 +1,11 @@
 [
   {
     "name": "get_employee_profile",
-    "description": "Retrieve employee profile, region, reporting manager, and role information.",
+    "description": "Retrieve an employee's directory profile: region, reporting manager and role",
     "parameters": {
       "properties": {
         "actor_id": {
-          "description": "The ID of the actor requesting the profile (defaults to the employee themselves)",
+          "description": "Optional: who is asking; must be the person signed in to this conversation; the session decides who that is, not this argument",
           "type": "string"
         },
         "employee_id": {
@@ -160,7 +160,7 @@
       "properties": {
         "actor_id": {
           "type": "string",
-          "description": "The actor requesting the balance information"
+          "description": "Optional: who is asking; must be the person signed in to this conversation; the session decides who that is, not this argument. Balances are shown only to the employee themselves or to HR"
         },
         "employee_id": {
           "type": "string",
@@ -319,7 +319,7 @@
         },
         "actor_id": {
           "type": "string",
-          "description": "The actor submitting the request (must match employee_id)"
+          "description": "Optional: who is submitting; must be the person signed in to this conversation; the session decides who that is, not this argument. The request is for the signed-in employee, or for an employee of the signed-in HR partner's region"
         },
         "end_date": {
           "description": "The end date (YYYY-MM-DD, inclusive)",
@@ -392,7 +392,7 @@
       "type": "object",
       "properties": {
         "actor_id": {
-          "description": "The actor requesting the request status",
+          "description": "Optional: who is asking; must be the person signed in to this conversation; the session decides who that is, not this argument. The employee and HR see the request in full; its approver and the managers above see dates and status only",
           "type": "string"
         },
         "request_id": {
@@ -461,7 +461,7 @@
       ],
       "properties": {
         "actor_id": {
-          "description": "The actor opening the case",
+          "description": "Optional: who is opening the case; must be the person signed in to this conversation; the session decides who that is, not this argument",
           "type": "string"
         },
         "subject": {
@@ -531,7 +531,7 @@
       "properties": {
         "employee_id": {
           "type": "string",
-          "description": "The employee asking, e.g. E01"
+          "description": "The employee asking, e.g. E01: the person signed in (HR may look up any employee)"
         }
       }
     },
@@ -617,7 +617,7 @@
         },
         "actor_id": {
           "type": "string",
-          "description": "Who is asking, when not the employee"
+          "description": "Optional: who is asking; must be the person signed in to this conversation; the session decides who that is, not this argument. Managers above the employee see dates and status, not leave types"
         },
         "status": {
           "type": "string",
@@ -671,7 +671,7 @@
         },
         "employee_id": {
           "type": "string",
-          "description": "The employee who owns it"
+          "description": "The employee who owns it: the person signed in, or an employee of the signed-in HR partner's region"
         },
         "start_date": {
           "type": "string",
@@ -683,7 +683,7 @@
         },
         "confirmed": {
           "type": "boolean",
-          "description": "True only after the employee confirmed the new dates"
+          "description": "true only after the employee confirmed the new dates (the boolean true)"
         }
       }
     },
@@ -745,11 +745,11 @@
         },
         "employee_id": {
           "type": "string",
-          "description": "The employee who owns it"
+          "description": "The employee who owns it: the person signed in, or an employee of the signed-in HR partner's region"
         },
         "confirmed": {
           "type": "boolean",
-          "description": "True only after the employee confirmed"
+          "description": "true only after the employee confirmed (the boolean true)"
         }
       }
     },
@@ -834,7 +834,7 @@
       "properties": {
         "manager_id": {
           "type": "string",
-          "description": "The manager asking"
+          "description": "The manager asking; must be the person signed in to this conversation; the session decides who that is, not this argument"
         },
         "start_date": {
           "type": "string",
@@ -888,7 +888,7 @@
         },
         "employee_id": {
           "type": "string",
-          "description": "The employee asking"
+          "description": "The employee asking; must be the person signed in to this conversation; the session decides who that is, not this argument. A case is shown to its owner and to HR"
         }
       }
     },
@@ -947,7 +947,7 @@
         },
         "employee_id": {
           "type": "string",
-          "description": "The employee who owns it"
+          "description": "The employee who owns the case: the person signed in, or an employee of the signed-in HR partner's region"
         },
         "note": {
           "type": "string",

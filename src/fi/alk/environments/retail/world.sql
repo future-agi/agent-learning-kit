@@ -300,7 +300,7 @@ INSERT INTO "invoices" VALUES('INV02','O02','2026-10-14T09:15:00Z',9500,'USD','h
 INSERT INTO "shipments" VALUES('SHP03','O03','UPS','1Z999AA10000000003','delivered','2026-10-17T18:00:00Z','2026-10-21T15:20:00Z','Delivered, left at front door','2026-10-21T15:20:00Z');
 INSERT INTO "invoices" VALUES('INV03','O03','2026-10-17T11:00:00Z',12000,'USD','https://invoices.example.com/INV03.pdf');
 INSERT INTO "shipments" VALUES('SHP04','O04','UPS','1Z999AA10000000004','delivered','2026-10-15T18:00:00Z','2026-10-19T14:00:00Z','Delivered, left at front door','2026-10-19T14:00:00Z');
-INSERT INTO "invoices" VALUES('INV04','O04','2026-10-15T16:45:00Z',4000,'USD','https://invoices.example.com/INV04.pdf');
+INSERT INTO "invoices" VALUES('INV04','O04','2026-10-15T16:45:00Z',3600,'USD','https://invoices.example.com/INV04.pdf');
 INSERT INTO "shipments" VALUES('SHP05','O05','UPS','1Z999AA10000000005','delivered','2026-10-10T18:00:00Z','2026-10-15T12:00:00Z','Delivered, left at front door','2026-10-15T12:00:00Z');
 INSERT INTO "invoices" VALUES('INV05','O05','2026-10-10T10:00:00Z',7800,'USD','https://invoices.example.com/INV05.pdf');
 INSERT INTO "shipments" VALUES('SHP06','O06','UPS','1Z999AA10000000006','delivered','2026-08-10T18:00:00Z','2026-08-15T10:00:00Z','Delivered, left at front door','2026-08-15T10:00:00Z');
@@ -308,11 +308,11 @@ INSERT INTO "invoices" VALUES('INV06','O06','2026-08-10T08:00:00Z',6800,'USD','h
 INSERT INTO "shipments" VALUES('SHP07','O07','UPS','1Z999AA10000000007','in_transit','2026-10-24T18:00:00Z',NULL,'Departed regional facility, Louisville KY','2026-10-25T22:10:00Z');
 INSERT INTO "invoices" VALUES('INV07','O07','2026-10-24T18:00:00Z',11000,'USD','https://invoices.example.com/INV07.pdf');
 INSERT INTO "shipments" VALUES('SHP08','O08','UPS','1Z999AA10000000008','delivered','2026-10-18T18:00:00Z','2026-10-22T09:30:00Z','Delivered, left at front door','2026-10-22T09:30:00Z');
-INSERT INTO "invoices" VALUES('INV08','O08','2026-10-18T13:20:00Z',8800,'USD','https://invoices.example.com/INV08.pdf');
+INSERT INTO "invoices" VALUES('INV08','O08','2026-10-18T13:20:00Z',8300,'USD','https://invoices.example.com/INV08.pdf');
 INSERT INTO "shipments" VALUES('SHP09','O09','UPS','1Z999AA10000000009','delivered','2026-10-19T18:00:00Z','2026-10-23T16:10:00Z','Delivered, left at front door','2026-10-23T16:10:00Z');
 INSERT INTO "invoices" VALUES('INV09','O09','2026-10-19T10:00:00Z',14500,'USD','https://invoices.example.com/INV09.pdf');
 INSERT INTO "shipments" VALUES('SHP10','O10','UPS','1Z999AA10000000010','delivered','2026-10-08T18:00:00Z','2026-10-12T11:45:00Z','Delivered, left at front door','2026-10-12T11:45:00Z');
-INSERT INTO "invoices" VALUES('INV10','O10','2026-10-08T15:30:00Z',9200,'USD','https://invoices.example.com/INV10.pdf');
+INSERT INTO "invoices" VALUES('INV10','O10','2026-10-08T15:30:00Z',8200,'USD','https://invoices.example.com/INV10.pdf');
 INSERT INTO "shipments" VALUES('SHP11','O11','UPS','1Z999AA10000000011','delivered','2026-10-17T18:00:00Z','2026-10-21T13:00:00Z','Delivered, left at front door','2026-10-21T13:00:00Z');
 INSERT INTO "invoices" VALUES('INV11','O11','2026-10-17T09:00:00Z',8500,'USD','https://invoices.example.com/INV11.pdf');
 INSERT INTO "shipments" VALUES('SHP12','O12','UPS','1Z999AA10000000012','delivered','2026-10-16T18:00:00Z','2026-10-20T17:00:00Z','Delivered, left at front door','2026-10-20T17:00:00Z');
@@ -328,7 +328,7 @@ INSERT INTO "invoices" VALUES('INV16','O16','2026-10-18T16:00:00Z',11000,'USD','
 INSERT INTO "shipments" VALUES('SHP17','O17','UPS','1Z999AA10000000017','delivered','2026-10-15T18:00:00Z','2026-10-19T10:30:00Z','Delivered, left at front door','2026-10-19T10:30:00Z');
 INSERT INTO "invoices" VALUES('INV17','O17','2026-10-15T11:20:00Z',4800,'USD','https://invoices.example.com/INV17.pdf');
 INSERT INTO "shipments" VALUES('SHP18','O18','UPS','1Z999AA10000000018','delivered','2026-10-10T18:00:00Z','2026-10-14T12:00:00Z','Delivered, left at front door','2026-10-14T12:00:00Z');
-INSERT INTO "invoices" VALUES('INV18','O18','2026-10-10T14:00:00Z',5800,'USD','https://invoices.example.com/INV18.pdf');
+INSERT INTO "invoices" VALUES('INV18','O18','2026-10-10T14:00:00Z',5000,'USD','https://invoices.example.com/INV18.pdf');
 INSERT INTO "shipments" VALUES('SHP19','O19','UPS','1Z999AA10000000019','delivered','2026-10-20T18:00:00Z','2026-10-24T16:00:00Z','Delivered, left at front door','2026-10-24T16:00:00Z');
 INSERT INTO "invoices" VALUES('INV19','O19','2026-10-20T10:15:00Z',4500,'USD','https://invoices.example.com/INV19.pdf');
 INSERT INTO "shipments" VALUES('SHP20','O20','UPS','1Z999AA10000000020','delivered','2026-10-12T18:00:00Z','2026-10-16T11:00:00Z','Delivered, left at front door','2026-10-16T11:00:00Z');
@@ -430,6 +430,10 @@ CREATE TABLE drive_audit_log (
     file_id TEXT,
     timestamp TEXT NOT NULL,
     details TEXT
+);
+CREATE TABLE session_caller (
+    id TEXT PRIMARY KEY,
+    customer_id TEXT
 );
 CREATE TABLE current_actor (
     id TEXT PRIMARY KEY,
@@ -573,8 +577,9 @@ INSERT INTO gmail_messages VALUES('rmsg_016','th_r14_where_is_order','grace.hopp
 INSERT INTO gmail_messages VALUES('rmsg_017','th_r15_quantity_corrected','tara.maclay@example.com','support@northgate-outfitters.example','','Return the polo shirts from O36','Hello, I want to return all three Classic Polo Shirts (SKU AP14) from order O36. The colour is not what I expected.','2026-10-25T12:00:00Z','Hello, I want to return all three Classic Polo Shirts (SKU AP14) from order');
 INSERT INTO gmail_messages VALUES('rmsg_018','th_r15_quantity_corrected','support@northgate-outfitters.example','tara.maclay@example.com','','Re: Return the polo shirts from O36','Dear Tara Maclay, we can return the three Classic Polo Shirts (SKU AP14) from order O36 for $120.00 once you confirm.','2026-10-25T13:00:00Z','Dear Tara Maclay, we can return the three Classic Polo Shirts (SKU AP14) from');
 INSERT INTO gmail_messages VALUES('rmsg_019','th_r15_quantity_corrected','tara.maclay@example.com','support@northgate-outfitters.example','','Re: Return the polo shirts from O36','Actually, keep it to two of the three Classic Polo Shirts (AP14) from order O36; I will keep one. So two units, please.','2026-10-25T18:00:00Z','Actually, keep it to two of the three Classic Polo Shirts (AP14) from order');
-INSERT INTO gmail_messages VALUES('rmsg_020','th_r16_damaged_bottle','leo.fitz@example.com','support@northgate-outfitters.example','','Clearance scarf arrived with a hole','Hello, the Stainless Steel Water Bottle (SKU AC15) from order O38 arrived dented and leaking. Can I return or exchange it?','2026-10-25T16:30:00Z','Hello, the Stainless Steel Water Bottle (SKU AC15) from order O38 arrived');
+INSERT INTO gmail_messages VALUES('rmsg_020','th_r16_damaged_bottle','leo.fitz@example.com','support@northgate-outfitters.example','','Water bottle from O38 arrived dented','Hello, the Stainless Steel Water Bottle (SKU AC15) from order O38 arrived dented and leaking. Can I return or exchange it?','2026-10-25T16:30:00Z','Hello, the Stainless Steel Water Bottle (SKU AC15) from order O38 arrived');
 INSERT INTO current_actor VALUES('default','u_returns_desk');
+INSERT INTO session_caller VALUES('default',NULL);
 INSERT INTO drive_users VALUES('u_returns_desk','returns-desk@northgate-outfitters.example','Returns Desk','support_agent');
 INSERT INTO drive_users VALUES('u_policy_owner','cx-policy@northgate-outfitters.example','Customer Experience Policy','policy_owner');
 INSERT INTO drive_users VALUES('u_trust_safety','trust-safety@northgate-outfitters.example','Trust and Safety Lead','trust_safety');
@@ -622,7 +627,7 @@ Status: Approved. Version 1.0. Effective: February 1, 2026.
 An exchange replaces a delivered item with another item of the same category within the return window of that category (30 days for Footwear and Apparel, 14 days for Accessories). One exchange per order line. A price difference in the customer''s favour is issued as store credit; a difference against them is charged before the replacement ships. An exchange is not a refund.');
 INSERT INTO drive_files VALUES('shipping_policy','Shipping Changes and Cancellations.md','f_cx_policies','shipping_policy','approved','2.0','2026-02-01','text/markdown',0,'2026-01-10T00:00:00Z','2026-02-01T00:00:00Z','u_policy_owner','# Shipping Changes and Cancellations
 Status: Approved. Version 2.0. Effective: February 1, 2026.
-An order can be cancelled or its shipping address changed only while its status is processing. Once a shipment has a tracking event the order cannot be cancelled or redirected; the customer returns it after delivery instead.');
+An order can be cancelled or its shipping address changed only while its status is processing. Once the carrier has the package (the order is in transit or delivered) it cannot be cancelled or redirected; the customer returns it after delivery instead.');
 INSERT INTO drive_files VALUES('damage_procedure','Damaged Delivery Procedure.md','f_cx_policies','damage_procedure','approved','1.1','2026-02-01','text/markdown',0,'2026-01-10T00:00:00Z','2026-02-01T00:00:00Z','u_policy_owner','# Damaged Delivery Procedure
 Status: Approved. Version 1.1. Effective: February 1, 2026.
 When a delivery arrives damaged, the desk opens a support case with the damage described and the carrier''s event, and authorizes a return of the damaged item with reason damaged; the customer is not asked to pay return shipping. Clearance items follow the Final Sale Exceptions document.');

@@ -62,7 +62,9 @@
         "actor_id": "U02_ADMIN"
       },
       "environment_arguments": {},
-      "fixed": {}
+      "fixed": {
+        "tenant_id": "caller: T02"
+      }
     },
     {
       "tool": "list_invoices",

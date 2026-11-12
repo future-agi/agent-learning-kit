@@ -5,7 +5,7 @@
   "use_case": "complete_approved_access",
   "branch": "Designated approver Evan Wright E05 approves pending request AR-101 for Laura Croft; decision is recorded and token generated.",
   "tests": "Does the agent verify approver E05 and record the approval decision for AR-101?",
-  "instruction": "You are Evan Wright (employee ID E05), engineering director and designated approver for request AR-101 (Laura Croft, APP-PROD, readonly). In chat, confirm you are approving request AR-101 and ask the IT desk to record your approval decision.",
+  "instruction": "You are Evan Wright (employee ID E05), analytics director, Laura Croft's manager and designated approver for request AR-101 (Laura Croft, APP-PROD, readonly). In chat, confirm you are approving request AR-101 and ask the IT desk to record your approval decision.",
   "keywords": [
     "approval_decision"
   ],

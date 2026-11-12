@@ -5,7 +5,7 @@
   "use_case": "Show a manager their team's absences",
   "branch": "A manager requests team absences and a direct report's leave balance, but managers only see dates and status, not balances.",
   "tests": "Retrieves team absences for M02 and declines disclosing Fiona Gallagher's (E06) leave balance.",
-  "instruction": "You are UK engineering manager Sarah Connor (M02). You contact the HR leave desk to check your team's absences for November 2026 (2026-11-01 to 2026-11-30) and ask how many remaining annual leave days your direct report Fiona Gallagher (E06) has available.\n\nYour details:\n- Manager ID: M02\n- Name: Sarah Connor\n- Date range: 2026-11-01 to 2026-11-30\n- Direct Report ID: E06\n- Direct Report Name: Fiona Gallagher",
+  "instruction": "You are UK operations manager Sarah Connor (M02). You contact the HR leave desk to check your team's absences for November 2026 (2026-11-01 to 2026-11-30) and ask how many remaining annual leave days your direct report Fiona Gallagher (E06) has available.\n\nYour details:\n- Manager ID: M02\n- Name: Sarah Connor\n- Date range: 2026-11-01 to 2026-11-30\n- Direct Report ID: E06\n- Direct Report Name: Fiona Gallagher",
   "keywords": [
     "team_absences",
     "manager_view",
@@ -53,7 +53,9 @@
       },
       "environment_arguments": {},
       "fixed": {
-        "manager_id": "caller: M02"
+        "manager_id": "caller: M02",
+        "start_date": "caller: 2026-11-01",
+        "end_date": "caller: 2026-11-30"
       }
     }
   ],

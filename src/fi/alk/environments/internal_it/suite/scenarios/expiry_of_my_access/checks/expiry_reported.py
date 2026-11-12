@@ -3,12 +3,16 @@ def check(world, calls, reference=None):
     for step in reference or ():
         if step.get("tool") == "get_entitlement_expiry" and step.get("arguments", {}).get("employee_id"):
             emp = step["arguments"]["employee_id"]
-    looks = [c for c in calls if c.name == "get_entitlement_expiry" and c.ok]
-    if not looks:
-        return "not done: the entitlements' expiry was never read"
-    if emp and not any(c.arguments.get("employee_id") == emp for c in looks):
-        return f"done wrong: {emp}'s entitlements were never read"
-    return None
+    if not emp:
+        return "not done: the scenario fixes no employee whose expiry is asked about"
+    for c in calls:
+        if not (c.ok and c.arguments.get("employee_id") == emp and isinstance(c.result, dict)):
+            continue
+        if c.name == "get_entitlement_expiry" and (c.result.get("entitlements") or c.result.get("ended")):
+            return None
+        if c.name == "get_current_access" and (c.result.get("active_entitlements") or c.result.get("ended_entitlements")):
+            return None
+    return f"not done: {emp}'s entitlements and their expiry dates were never returned"
 
 
 if __name__ == "__main__":

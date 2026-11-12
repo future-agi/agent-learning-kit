@@ -5,7 +5,7 @@
   "use_case": "Answer an account manager in #billing-escalations",
   "branch": "BM08 asks about refund for GrowthLabs T07 unused seats on inv_07_curr; assistant opens billing case for finance",
   "tests": "Opens refund billing case for finance review upon Slack escalation without direct credit",
-  "instruction": "You are Chloe Bennett, Billing Lead at Cloudnest. In BM08 (ts: '1791972000.000008') in #billing-escalations, an account manager asks if GrowthLabs (T07, admin U07_ADMIN) can get a refund on inv_07_curr for unused seats. Ask the assistant to read the thread and open a refund billing case for finance.\n\nYour details:\n- Role: Billing Lead (acting for tenant's admin)\n- Tenant ID: T07 (GrowthLabs)\n- Admin Actor ID: U07_ADMIN\n- Slack Channel: CH_BILLESC (#billing-escalations)\n- Message Timestamp: 1791972000.000008\n- Invoice ID: inv_07_curr\n- Category: refund",
+  "instruction": "You are Chloe Bennett, Billing Lead at Cloudnest. In BM08 (ts: '1791972000.000008') in #billing-escalations, an account manager asks if GrowthLabs (T07) can get a refund on inv_07_curr for unused seats. Ask the assistant to read the thread and open a refund billing case for finance.\n\nYour details:\n- Role: Billing Lead\n- Your User ID: U_BL6\n- Tenant ID: T07 (GrowthLabs)\n- Slack Channel: CH_BILLESC (#billing-escalations)\n- Message Timestamp: 1791972000.000008\n- Invoice ID: inv_07_curr\n- Category: refund",
   "keywords": [
     "slack_escalation"
   ],
@@ -17,7 +17,7 @@
     "location": "Canada",
     "personality": "Professional and formal",
     "communication_style": "Direct and concise",
-    "initial_message": "Hi, please check BM08 in #billing-escalations and open a refund billing case for GrowthLabs (T07, admin U07_ADMIN) regarding inv_07_curr.",
+    "initial_message": "Hi, please check BM08 in #billing-escalations and open a refund billing case for GrowthLabs (T07) regarding inv_07_curr.",
     "languages": [
       "English"
     ],
@@ -32,8 +32,8 @@
       "tenant_id": "T07",
       "message_ts": "1791972000.000008",
       "channel_id": "CH_BILLESC",
-      "admin_id": "U07_ADMIN",
-      "invoice_id": "inv_07_curr"
+      "invoice_id": "inv_07_curr",
+      "caller_id": "U_BL6"
     },
     "origin": "seed"
   },
@@ -55,7 +55,7 @@
         "invoice_id": "inv_07_curr",
         "summary": "Refund request for two unused seats in October",
         "request_key": "req_bc_401",
-        "actor_id": "U07_ADMIN",
+        "actor_id": "U_BL6",
         "tenant_id": "T07",
         "category": "refund"
       },
@@ -63,7 +63,6 @@
       "fixed": {
         "tenant_id": "caller: T07",
         "category": "caller: refund",
-        "actor_id": "caller: U07_ADMIN",
         "invoice_id": "caller: inv_07_curr"
       }
     }

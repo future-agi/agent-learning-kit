@@ -19,7 +19,7 @@
     "location": "United Kingdom",
     "personality": "Impatient and direct",
     "communication_style": "Assertive",
-    "initial_message": "We want to downgrade BetaTech from Pro to Basic immediately without removing any of our 12 team members.",
+    "initial_message": "We want to downgrade BetaTech from Pro to Basic at the end of this billing period without removing any of our 12 team members.",
     "languages": [
       "English"
     ],
@@ -48,27 +48,6 @@
         "actor_id": "caller: U02_ADMIN",
         "tenant_id": "caller: T02"
       }
-    },
-    {
-      "tool": "get_usage",
-      "arguments": {
-        "actor_id": "U02_ADMIN",
-        "metric": "seats",
-        "tenant_id": "T02"
-      },
-      "environment_arguments": {},
-      "fixed": {
-        "tenant_id": "caller: T02",
-        "actor_id": "caller: U02_ADMIN"
-      }
-    },
-    {
-      "tool": "get_entitlements",
-      "arguments": {
-        "plan_id": "basic"
-      },
-      "environment_arguments": {},
-      "fixed": {}
     },
     {
       "tool": "preview_plan_change",

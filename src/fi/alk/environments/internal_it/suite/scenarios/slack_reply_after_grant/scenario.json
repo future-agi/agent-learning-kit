@@ -5,12 +5,12 @@
   "use_case": "Pick up an access request from Slack and reply in the thread after approval",
   "branch": "after granting access for approved request AR-102, the IT desk posts an approved confirmation message in Quinn's Slack thread using approval APP-IT-403",
   "tests": "grants access with the valid token and posts the pre-approved confirmation message in Quinn's Slack thread",
-  "instruction": "You are an IT operations lead. Quinn Fabray posted in #it-access asking for write access to be switched on for AR-102. You have pre-authorized a Slack reply (approval ID APP-IT-403). You want the assistant to inspect Quinn's thread, verify and grant the access using the valid approval token in the system, and post the authorized confirmation message back into the Slack thread.\n\nYour details:\nTarget request ID: AR-102\nTarget employee: Quinn Fabray (E17)\nChannel: #it-access (CH_ITACCESS)\nMessage timestamp: 1792755000.000003\nSlack pre-approval ID: APP-IT-403\nApproved message text: Access for AR-102 has been granted and is now active.",
+  "instruction": "You are Grace Okafor (employee ID E21), the IT operations lead. Quinn Fabray posted in #it-access asking for write access to be switched on for AR-102. You have pre-authorized a Slack reply (approval ID APP-IT-403). You want the assistant to inspect Quinn's thread, verify and grant the access using the valid approval token in the system, and post the authorized confirmation message back into the Slack thread.\n\nYour details:\nTarget request ID: AR-102\nTarget employee: Quinn Fabray (E17)\nChannel: #it-access (CH_ITACCESS)\nMessage timestamp: 1792755000.000003\nSlack pre-approval ID: APP-IT-403\nApproved message text: Access for AR-102 has been granted and is now active.",
   "keywords": [
     "synthetic_grant"
   ],
   "persona": {
-    "name": "Claire Vance",
+    "name": "Grace Okafor",
     "gender": "female",
     "age_group": "32-40",
     "occupation": "Engineer",

@@ -69,7 +69,8 @@
       "environment_arguments": {},
       "fixed": {
         "app_id": "caller: APP-SEC",
-        "role_name": "caller: analyst"
+        "role_name": "caller: analyst",
+        "employee_id": "caller: Sarah Connor (E19)"
       }
     }
   ],

@@ -5,7 +5,7 @@
   "use_case": "Explain an invoice or a bill increase",
   "branch": "Drafts email reply to Frank Fin in thread th_b04_invoice_question explaining inv_06_curr charges and pending credit note CN-202",
   "tests": "creates draft reply in thread th_b04_invoice_question with accurate invoice and credit note data",
-  "instruction": "You are Marco Diaz, account manager. Ask the billing desk to review thread th_b04_invoice_question and draft a reply to Frank Fin explaining that the 20 seats billed on inv_06_curr reflect the active seats at invoice generation, and that credit note CN-202 for $50.00 is pending review with finance.\n\nYour details:\n- Name: Marco Diaz\n- Role: Account Manager\n- Client: FinTrack (Tenant ID: T06)\n- Thread ID: th_b04_invoice_question\n- Invoice ID: inv_06_curr",
+  "instruction": "You are Marco Diaz, FinTrack's account manager at Cloudnest. Ask the billing desk to review thread th_b04_invoice_question and draft a reply to Frank Fin explaining that the 20 seats billed on inv_06_curr reflect the active seats at invoice generation, and that credit note CN-202 for $50.00 is pending review with finance.\n\nYour details:\n- Name: Marco Diaz\n- Role: Account Manager\n- Your User ID: U_AM2\n- Client: FinTrack (Tenant ID: T06)\n- Thread ID: th_b04_invoice_question\n- Invoice ID: inv_06_curr",
   "keywords": [
     "email_integration"
   ],
@@ -49,7 +49,7 @@
     {
       "tool": "get_invoice_lines",
       "arguments": {
-        "actor_id": "U06_ADMIN",
+        "actor_id": "U_AM2",
         "invoice_id": "inv_06_curr",
         "tenant_id": "T06"
       },
@@ -60,7 +60,7 @@
       "tool": "get_credit_notes",
       "arguments": {
         "tenant_id": "T06",
-        "actor_id": "U06_ADMIN",
+        "actor_id": "U_AM2",
         "invoice_id": "inv_06_curr"
       },
       "environment_arguments": {},

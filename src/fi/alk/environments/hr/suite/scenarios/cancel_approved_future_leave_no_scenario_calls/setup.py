@@ -31,3 +31,5 @@ def setup(world):
         "decided_by": "M04",
         "updated_at": None,
     })
+    # The person in this conversation, as the session (not the agent) knows them.
+    world.change("session_caller", "default", {"employee_id": "E451"}, by="id")

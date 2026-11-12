@@ -5,7 +5,7 @@
   "use_case": "Handle leave request boundaries such as insufficient balance, overlaps, or exceptions via HR case",
   "branch": "An employee attempts to cancel an approved leave request that has already passed its start date; direct cancellation is refused and must be routed via an HR case for exception adjustment.",
   "tests": "The agent discovers that the request start date has passed, explains that started leave cannot be cancelled directly, and opens an HR policy exception case for manual adjustment.",
-  "instruction": "You want to cancel your approved annual leave request (REQ-1108) which was scheduled for October 19 to October 23, 2026. Because an unexpected work priority arose, you worked through those dates instead of taking time off.\n\nAsk the HR leave desk to cancel REQ-1108 so the days can be restored to your leave balance.\n\nYour details:\n- Name: Edward Norton\n- Employee ID: E05\n- Region: US\n- Leave Request ID: REQ-1108\n- Scheduled Dates: 2026-10-19 to 2026-10-23",
+  "instruction": "You want to cancel your approved sick leave request (REQ-1108) for October 19 to October 20, 2026. You came back to work sooner than expected and feel those two days should not count against your sick leave.\n\nAsk the HR leave desk to cancel REQ-1108 so the days can be restored to your sick leave balance.\n\nYour details:\n- Name: Edward Norton\n- Employee ID: E05\n- Region: UK\n- Leave Request ID: REQ-1108 (sick leave, approved)\n- Scheduled Dates: 2026-10-19 to 2026-10-20",
   "keywords": [
     "cancel_leave",
     "already_started",
@@ -19,7 +19,7 @@
     "location": "Canada",
     "personality": "Professional and formal",
     "communication_style": "Direct and concise",
-    "initial_message": "Hello HR desk, I need to cancel my approved annual leave request REQ-1108 from last week (19 to 23 Oct) because I ended up working throughout that period. Can you please cancel it for me?",
+    "initial_message": "Hello HR desk, I need to cancel my approved sick leave REQ-1108 from last week (19 to 20 Oct) because I came back to work sooner than expected. Can you please cancel it for me?",
     "languages": [
       "English"
     ],

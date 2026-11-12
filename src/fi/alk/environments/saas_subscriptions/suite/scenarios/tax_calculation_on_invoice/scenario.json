@@ -51,7 +51,9 @@
         "tenant_id": "T05"
       },
       "environment_arguments": {},
-      "fixed": {}
+      "fixed": {
+        "invoice_id": "caller: inv_05_curr"
+      }
     }
   ],
   "alternatives": [],

@@ -29,5 +29,6 @@ def setup(world):
         "status": "valid",
         "token": "TOK-442-VWR",
         "created_at": "2026-10-25T10:00:00Z",
-        "expires_at": "2026-11-25T10:00:00Z"
+        "expires_at": "2026-11-01T10:00:00Z"
     })
+    world.change("session_caller", "default", {"employee_id": "E442"}, by="id")

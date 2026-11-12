@@ -5,14 +5,14 @@
   "use_case": "Calculate working days for a requested date range accounting for regional holidays",
   "branch": "An employee asks in Slack #hr-help about remaining US holidays, requiring the assistant to read the Slack thread and query the US holiday calendar.",
   "tests": "Verifies that the assistant reads Slack SM08 and lists upcoming US holidays from the holiday calendar.",
-  "instruction": "You posted a message in #hr-help asking about the remaining public holidays this year for the US. You want the HR leave desk to check the thread and list the upcoming holidays.\n\nYour details:\n- Channel: #hr-help (CH_HRHELP)\n- Message TS: 1792818000.000008\n- Region: US\n- Question: Which public holidays remain this year for the US region?",
+  "instruction": "You posted a message in #hr-help asking about the remaining public holidays this year for the US. You want the HR leave desk to check the thread and list the upcoming holidays.\n\nYour details:\n- Employee ID: E04\n- Name: Diana Prince\n- Channel: #hr-help (CH_HRHELP)\n- Message TS: 1792854000.000008\n- Region: US\n- Question: Which public holidays remain this year for the US region?",
   "keywords": [
     "slack",
     "holidays",
     "holiday_calendar"
   ],
   "persona": {
-    "name": "Diana Tremblay",
+    "name": "Diana Prince",
     "gender": "female",
     "age_group": "25-32",
     "occupation": "Engineer",
@@ -30,7 +30,7 @@
   },
   "variables": {},
   "fixture": {
-    "message_ts": "1792818000.000008",
+    "message_ts": "1792854000.000008",
     "employee_id": "E04",
     "origin": "seed",
     "region": "US",
@@ -41,7 +41,7 @@
       "tool": "slack_read_thread",
       "arguments": {
         "channel_id": "CH_HRHELP",
-        "message_ts": "1792818000.000008"
+        "message_ts": "1792854000.000008"
       },
       "environment_arguments": {},
       "fixed": {}
@@ -54,7 +54,8 @@
       },
       "environment_arguments": {},
       "fixed": {
-        "region": "record: US"
+        "region": "record: US",
+        "year": "caller: 2026"
       }
     }
   ],

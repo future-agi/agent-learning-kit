@@ -51,3 +51,5 @@ def setup(world):
         "thread_ts": None,
         "permalink": "https://acme.slack.example.com/archives/CH_ITACCESS/p1792700000000441"
     })
+    world.put("employees", {"employee_id": "E521", "name": "Clive Farrington", "email": "clive.farrington@example.com", "department": "it_operations", "manager_id": "E21", "status": "active"})
+    world.change("session_caller", "default", {"employee_id": "E521"}, by="id")

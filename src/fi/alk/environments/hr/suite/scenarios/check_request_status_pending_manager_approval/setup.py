@@ -12,3 +12,5 @@ def setup(world):
         "created_at": "2026-10-20T10:00:00Z"
     })
     world.change("leave_balances", "BAL-M03-ANN", {"reserved_days": 3, "available_days": 12}, by="balance_id")
+    # The person in this conversation, as the session (not the agent) knows them.
+    world.change("session_caller", "default", {"employee_id": "M03"}, by="id")

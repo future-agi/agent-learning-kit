@@ -28,3 +28,5 @@ def setup(world):
         "thread_id": "th_s402_cancel_lookalike",
         "label_id": "INBOX"
     })
+    world.put("account_assignments", {"tenant_id": "T10", "user_id": "U_AM3"})
+    world.change("session_caller", "default", {"actor_id": "U_AM3"}, by="id")

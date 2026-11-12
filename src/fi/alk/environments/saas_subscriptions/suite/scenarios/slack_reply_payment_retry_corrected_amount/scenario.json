@@ -5,7 +5,7 @@
   "use_case": "Answer an account manager in #billing-escalations",
   "branch": "BM05/BM06 thread corrects amount to $33.00 for KiteWorks T11 inv_11_addon; assistant checks payment status and posts with APP-BL-404",
   "tests": "Checks payment retry status and posts approved Slack response in BM05 thread",
-  "instruction": "You are Sarah Jenkins, Billing Lead at Cloudnest. In BM05/BM06 (ts: '1791968400.000005') in #billing-escalations, an account manager corrected the amount for KiteWorks (T11, admin U11_ADMIN) inv_11_addon. You have approved a reply under 'APP-BL-404'. Ask the assistant to check the thread and payment status, and post the reply with approval APP-BL-404.\n\nYour details:\n- Role: Billing Lead (acting for tenant's admin)\n- Tenant ID: T11 (KiteWorks)\n- Admin Actor ID: U11_ADMIN\n- Slack Channel: CH_BILLESC (#billing-escalations)\n- Message Timestamp: 1791968400.000005\n- Invoice ID: inv_11_addon\n- Approval ID: APP-BL-404\n- Approved Message: \"Confirmed: inv_11_addon total is $33.00 with tax, retrying on 2026-10-17.\"",
+  "instruction": "You are Sarah Jenkins, Billing Lead at Cloudnest. In BM05/BM06 (ts: '1791968400.000005') in #billing-escalations, an account manager corrected the amount for KiteWorks (T11) inv_11_addon. You have approved a reply under 'APP-BL-404'. Ask the assistant to check the thread and payment status, and post the reply with approval APP-BL-404.\n\nYour details:\n- Role: Billing Lead\n- Your User ID: U_BL9\n- Tenant ID: T11 (KiteWorks)\n- Slack Channel: CH_BILLESC (#billing-escalations)\n- Message Timestamp: 1791968400.000005\n- Invoice ID: inv_11_addon\n- Approval ID: APP-BL-404\n- Approved Message: \"Confirmed: inv_11_addon total is $33.00 with tax, retrying on 2026-10-17.\"",
   "keywords": [
     "slack_escalation"
   ],
@@ -17,7 +17,7 @@
     "location": "United Kingdom",
     "personality": "Professional and formal",
     "communication_style": "Direct and concise",
-    "initial_message": "Hi, please check the BM05 thread in #billing-escalations for KiteWorks (T11, admin U11_ADMIN) inv_11_addon, and post the approved response with approval APP-BL-404.",
+    "initial_message": "Hi, please check the BM05 thread in #billing-escalations for KiteWorks (T11) inv_11_addon, and post the approved response with approval APP-BL-404.",
     "languages": [
       "English"
     ],
@@ -32,10 +32,10 @@
     "records": {
       "message_ts": "1791968400.000005",
       "invoice_id": "inv_11_addon",
-      "admin_id": "U11_ADMIN",
       "approval_id": "APP-BL-404",
       "channel_id": "CH_BILLESC",
-      "tenant_id": "T11"
+      "tenant_id": "T11",
+      "caller_id": "U_BL9"
     }
   },
   "solution": [
@@ -53,7 +53,7 @@
     {
       "tool": "get_payment_status",
       "arguments": {
-        "actor_id": "U11_ADMIN",
+        "actor_id": "U_BL9",
         "invoice_id": "inv_11_addon",
         "tenant_id": "T11"
       },

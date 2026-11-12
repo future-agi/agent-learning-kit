@@ -5,13 +5,13 @@
   "use_case": "Answer access policy questions with citations",
   "branch": "Caller asks what the 2025 access policy stated about approvals and whether it is still active; agent reads acc_pol_v2 and current acc_pol_v3.",
   "tests": "Does the agent read both the 2025 policy (acc_pol_v2) and the current approved policy (acc_pol_v3) to explain that the 2025 version is superseded?",
-  "instruction": "You are Liam O'Connor, a technical consultant. You found a reference to the 'Application Access Policy (2025)' and want to know what it said about approvals for viewer roles, and whether that 2025 policy is still in effect today. Ask the IT access desk about the 2025 access policy document and whether it remains valid.",
+  "instruction": "You are Rohan Mehta (employee ID E503), a technical consultant. You found a reference to the 'Application Access Policy (2025)' and want to know what it said about approvals for viewer roles, and whether that 2025 policy is still in effect today. Ask the IT access desk about the 2025 access policy document and whether it remains valid.",
   "keywords": [
     "policy_citation",
     "least_privilege"
   ],
   "persona": {
-    "name": "Liam O'Connor",
+    "name": "Rohan Mehta",
     "gender": "male",
     "age_group": "32-40",
     "occupation": "Consultant",

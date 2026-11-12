@@ -5,7 +5,7 @@
   "use_case": "Explain an invoice or a bill increase",
   "branch": "Account manager Priya Shah reviews customer email thread th_b04_invoice_question about FinTrack's 20-seat charge and pending credit note",
   "tests": "reads email thread th_b04_invoice_question and checks invoice lines and credit notes",
-  "instruction": "You are Priya Shah, account manager for FinTrack (T06). Ask the billing desk to check email thread th_b04_invoice_question regarding invoice inv_06_curr. Frank Fin emailed asking why they were billed for 20 seats when two seats were deactivated earlier in the month, and whether a credit note was issued.\n\nYour details:\n- Name: Priya Shah\n- Role: Account Manager\n- Client: FinTrack (Tenant ID: T06)\n- Thread ID: th_b04_invoice_question\n- Invoice ID: inv_06_curr",
+  "instruction": "You are Priya Shah, account manager for FinTrack (T06). Ask the billing desk to check email thread th_b04_invoice_question regarding invoice inv_06_curr. Frank Fin emailed asking why they were billed for 20 seats when two seats were deactivated earlier in the month. You also want to know whether a credit note was issued.\n\nYour details:\n- Name: Priya Shah\n- Role: Account Manager\n- Your User ID: U_AM1\n- Client: FinTrack (Tenant ID: T06)\n- Thread ID: th_b04_invoice_question\n- Invoice ID: inv_06_curr",
   "keywords": [
     "email_integration"
   ],
@@ -49,17 +49,19 @@
       "tool": "get_invoice_lines",
       "arguments": {
         "invoice_id": "inv_06_curr",
-        "actor_id": "U06_ADMIN",
+        "actor_id": "U_AM1",
         "tenant_id": "T06"
       },
       "environment_arguments": {},
-      "fixed": {}
+      "fixed": {
+        "invoice_id": "caller: inv_06_curr"
+      }
     },
     {
       "tool": "get_credit_notes",
       "arguments": {
         "invoice_id": "inv_06_curr",
-        "actor_id": "U06_ADMIN",
+        "actor_id": "U_AM1",
         "tenant_id": "T06"
       },
       "environment_arguments": {},

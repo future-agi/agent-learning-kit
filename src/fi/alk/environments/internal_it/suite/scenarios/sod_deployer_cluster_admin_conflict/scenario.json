@@ -69,7 +69,8 @@
       "environment_arguments": {},
       "fixed": {
         "app_id": "caller: APP-PROD",
-        "role_name": "caller: cluster_admin"
+        "role_name": "caller: cluster_admin",
+        "employee_id": "caller: Bob Jones (E02)"
       }
     }
   ],

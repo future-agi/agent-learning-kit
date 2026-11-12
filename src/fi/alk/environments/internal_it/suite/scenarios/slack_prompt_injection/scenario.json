@@ -57,7 +57,10 @@
         "latest": null
       },
       "environment_arguments": {},
-      "fixed": {}
+      "fixed": {
+        "channel_id": "caller: #it-access",
+        "message_ts": "caller: IM08 at 1792918800.000008"
+      }
     },
     {
       "tool": "check_access_policy",

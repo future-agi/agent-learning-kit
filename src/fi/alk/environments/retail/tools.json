@@ -1,11 +1,12 @@
 [
   {
     "name": "verify_order_owner",
-    "description": "Verify order ownership and customer credentials against the order record.",
+    "description": "Verify the customer against the order: the order number and the postal code on file, both required (an email or customer ID may be added and must match too). Only the signed-in customer's own order verifies.",
     "parameters": {
       "type": "object",
       "required": [
-        "order_id"
+        "order_id",
+        "postal_code"
       ],
       "properties": {
         "customer_id": {
@@ -13,7 +14,7 @@
           "description": "Customer identifier (e.g. C01)."
         },
         "postal_code": {
-          "description": "Customer postal/zip code to verify.",
+          "description": "The postal/zip code on file for the order's customer; required.",
           "type": "string"
         },
         "email": {
@@ -53,7 +54,7 @@
   },
   {
     "name": "get_order",
-    "description": "Retrieve complete order details including status, dates, line items, pricing, discounts, and return history.",
+    "description": "Retrieve complete order details including status, dates, line items, pricing, discounts, return history and earlier exchanges. Only for the customer signed in to this conversation.",
     "parameters": {
       "required": [
         "order_id"
@@ -142,6 +143,9 @@
               },
               "item_id": {
                 "type": "string"
+              },
+              "exchanged_quantity": {
+                "type": "integer"
               }
             }
           },
@@ -167,6 +171,32 @@
         },
         "customer_id": {
           "type": "string"
+        },
+        "exchanges": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "exchange_id": {
+                "type": "string"
+              },
+              "original_sku": {
+                "type": "string"
+              },
+              "replacement_sku": {
+                "type": "string"
+              },
+              "quantity": {
+                "type": "integer"
+              },
+              "status": {
+                "type": "string"
+              },
+              "created_at": {
+                "type": "string"
+              }
+            }
+          }
         }
       }
     }
@@ -283,7 +313,7 @@
   },
   {
     "name": "evaluate_return",
-    "description": "Dry-run evaluation of return eligibility and calculated net refund amounts for specified order items.",
+    "description": "Dry-run evaluation of return eligibility and calculated net refund amounts for specified order items. Each SKU appears once in items. Only for the customer signed in to this conversation.",
     "parameters": {
       "type": "object",
       "properties": {
@@ -400,7 +430,7 @@
   },
   {
     "name": "create_return",
-    "description": "Authorize a return for eligible order items, allocate refund estimation, and generate a synthetic return label. A repeated request_key returns the existing return instead of a second one.",
+    "description": "Authorize a return for eligible order items, allocate refund estimation, and generate a synthetic return label. A repeated request_key returns the existing return instead of a second one. Only for the customer signed in to this conversation. Each SKU appears once in items; a request_key replays only the same request.",
     "parameters": {
       "type": "object",
       "required": [
@@ -544,7 +574,7 @@
   },
   {
     "name": "get_return_status",
-    "description": "Check status of existing return authorizations, item details, and return shipping label by return_id or order_id.",
+    "description": "Check status of existing return authorizations, item details, and return shipping label by return_id or order_id. Only for the customer signed in to this conversation.",
     "parameters": {
       "properties": {
         "order_id": {
@@ -677,7 +707,7 @@
   },
   {
     "name": "create_support_case",
-    "description": "Create an escalated customer support case for exceptions, manual reviews, policy disputes, or service issues.",
+    "description": "Create an escalated customer support case for exceptions, manual reviews, policy disputes, or service issues. The customer is the signed-in customer, and the order, if given, is theirs.",
     "parameters": {
       "type": "object",
       "required": [
@@ -745,10 +775,12 @@
   },
   {
     "name": "search_orders",
-    "description": "The orders of a customer identified by email and postal code (or by customer_id), newest first, with each line's quantity and what was already returned. Use it when the customer does not have their order number.",
+    "description": "The orders of a customer identified by email or customer_id together with the postal code on file, newest first, with each line's quantity and what was already returned. Use it when the customer does not have their order number. Only for the customer signed in to this conversation.",
     "parameters": {
       "type": "object",
-      "required": [],
+      "required": [
+        "postal_code"
+      ],
       "properties": {
         "email": {
           "type": "string",
@@ -756,7 +788,7 @@
         },
         "postal_code": {
           "type": "string",
-          "description": "The postal code on file, required with the email"
+          "description": "The postal code on file, required with the email or the customer_id"
         },
         "customer_id": {
           "type": "string",
@@ -800,11 +832,12 @@
   },
   {
     "name": "get_customer_profile",
-    "description": "The verified customer's profile: name, email, phone, postal code, address on file, store credit balance and order count. Verified by email or postal code.",
+    "description": "The verified customer's profile: name, email, phone, postal code, address on file, store credit balance and order count. Verified by the postal code on file (an email may be added and must match). Only for the customer signed in to this conversation.",
     "parameters": {
       "type": "object",
       "required": [
-        "customer_id"
+        "customer_id",
+        "postal_code"
       ],
       "properties": {
         "customer_id": {
@@ -817,7 +850,7 @@
         },
         "postal_code": {
           "type": "string",
-          "description": "The postal code on file, to verify"
+          "description": "The postal code on file, to verify; required"
         }
       }
     },
@@ -860,7 +893,7 @@
   },
   {
     "name": "get_shipment_tracking",
-    "description": "Carrier, tracking number, status and last event of the verified customer's order shipment, with the shipping address on the order.",
+    "description": "Carrier, tracking number, status and last event of the verified customer's order shipment, with the shipping address on the order. Only for the customer signed in to this conversation.",
     "parameters": {
       "type": "object",
       "required": [
@@ -933,7 +966,7 @@
   },
   {
     "name": "get_order_invoice",
-    "description": "The invoice of the verified customer's order: lines with unit price, discount and net, totals and the PDF link.",
+    "description": "The invoice of the verified customer's order: lines with unit price, discount and net, totals and the PDF link. Only for the customer signed in to this conversation.",
     "parameters": {
       "type": "object",
       "required": [
@@ -993,7 +1026,7 @@
   },
   {
     "name": "cancel_order",
-    "description": "Cancel the verified customer's order after they confirmed. Only an order still processing can be cancelled; once it has shipped it is returned after delivery instead. A repeated request_key returns the existing cancellation.",
+    "description": "Cancel the verified customer's order after they confirmed. Only an order still processing can be cancelled; once it has shipped it is returned after delivery instead. A repeated request_key returns the existing cancellation. Only for the customer signed in to this conversation. A request_key replays only the same request.",
     "parameters": {
       "type": "object",
       "required": [
@@ -1062,7 +1095,7 @@
   },
   {
     "name": "update_shipping_address",
-    "description": "Change the shipping address of the verified customer's order after they confirmed it. Only while the order is processing; a shipped order cannot be redirected. A repeated request_key returns the existing change.",
+    "description": "Change the shipping address of the verified customer's order after they confirmed it. Only while the order is processing; a shipped order cannot be redirected. A repeated request_key returns the existing change. Only for the customer signed in to this conversation. A request_key replays only the same request.",
     "parameters": {
       "type": "object",
       "required": [
@@ -1123,7 +1156,7 @@
   },
   {
     "name": "create_exchange",
-    "description": "Exchange a delivered item for another item of the same category, within the category's return window, after the customer confirmed. One exchange per order line; the price difference is issued as store credit or charged before the replacement ships. An exchange is not a refund. A repeated request_key returns the existing exchange.",
+    "description": "Exchange a delivered item for another item of the same category, within the category's return window, after the customer confirmed. One exchange per order line; the price difference is issued as store credit or charged before the replacement ships. An exchange is not a refund. A repeated request_key returns the existing exchange. Only for the customer signed in to this conversation. A request_key replays only the same request.",
     "parameters": {
       "type": "object",
       "required": [
@@ -1209,7 +1242,7 @@
   },
   {
     "name": "cancel_return",
-    "description": "Cancel one of the verified customer's return authorizations that has not been received yet, after they confirmed; the label is voided and the units count as held again.",
+    "description": "Cancel one of the verified customer's return authorizations that has not been received yet, after they confirmed; the label is voided and the units count as held again. Only for the customer signed in to this conversation.",
     "parameters": {
       "type": "object",
       "required": [
@@ -1266,11 +1299,12 @@
   },
   {
     "name": "get_store_credit_balance",
-    "description": "The verified customer's store credit balance and the credits it is made of, with their expiry dates. Verified by email or postal code.",
+    "description": "The verified customer's store credit balance and the credits it is made of, with their expiry dates. Verified by the postal code on file (an email may be added and must match). Only for the customer signed in to this conversation.",
     "parameters": {
       "type": "object",
       "required": [
-        "customer_id"
+        "customer_id",
+        "postal_code"
       ],
       "properties": {
         "customer_id": {
@@ -1283,7 +1317,7 @@
         },
         "postal_code": {
           "type": "string",
-          "description": "The postal code on file, to verify"
+          "description": "The postal code on file, to verify; required"
         }
       }
     },
@@ -1313,7 +1347,7 @@
   },
   {
     "name": "search_threads",
-    "description": "Lists email threads matching a Gmail search query (label:ID, is:unread, in:inbox, from:, to:, subject:, newer_than:7d, free terms). Full message bodies are not returned; use get_thread for them. Drafts, spam and trash are excluded.",
+    "description": "Lists email threads matching a Gmail search query (label:ID, is:unread, in:inbox, from:, to:, subject:, newer_than:7d, free terms). Full message bodies are not returned; use get_thread for them. Drafts, spam and trash are excluded. The support mailbox is opened only on the signed-in customer's own threads.",
     "parameters": {
       "type": "object",
       "properties": {
@@ -1440,7 +1474,7 @@
   },
   {
     "name": "get_thread",
-    "description": "Retrieves an email thread by ID with its messages in date order (bodies under FULL_CONTENT).",
+    "description": "Retrieves an email thread by ID with its messages in date order (bodies under FULL_CONTENT). The support mailbox is opened only on the signed-in customer's own threads.",
     "parameters": {
       "type": "object",
       "properties": {
@@ -1541,7 +1575,7 @@
   },
   {
     "name": "get_message",
-    "description": "Retrieves one email message by its message ID.",
+    "description": "Retrieves one email message by its message ID. The support mailbox is opened only on the signed-in customer's own threads.",
     "parameters": {
       "type": "object",
       "properties": {
@@ -1678,7 +1712,7 @@
   },
   {
     "name": "label_thread",
-    "description": "Adds labels to an entire thread (every message in it). Takes label IDs, not names; use list_labels when unsure of a user label's ID.",
+    "description": "Adds labels to an entire thread (every message in it). Takes label IDs, not names; use list_labels when unsure of a user label's ID. The support mailbox is opened only on the signed-in customer's own threads.",
     "parameters": {
       "type": "object",
       "properties": {
@@ -1707,7 +1741,7 @@
   },
   {
     "name": "unlabel_thread",
-    "description": "Removes labels from an entire thread. Takes label IDs, not names.",
+    "description": "Removes labels from an entire thread. Takes label IDs, not names. The support mailbox is opened only on the signed-in customer's own threads.",
     "parameters": {
       "type": "object",
       "properties": {
@@ -1736,7 +1770,7 @@
   },
   {
     "name": "list_drafts",
-    "description": "Lists the mailbox's drafts, newest first. humanEdited marks a draft a person has edited.",
+    "description": "Lists the mailbox's drafts, newest first. humanEdited marks a draft a person has edited. The support mailbox is opened only on the signed-in customer's own threads.",
     "parameters": {
       "type": "object",
       "properties": {
@@ -1825,7 +1859,7 @@
   },
   {
     "name": "create_draft",
-    "description": "Creates a draft email for a person to review and send. To reply in an existing thread pass the original message's ID as replyToMessageId. Addresses are plain (no 'Name <email>'). Attachments are not supported yet. Nothing is sent.",
+    "description": "Creates a draft email for a person to review and send. To reply in an existing thread pass the original message's ID as replyToMessageId. Addresses are plain (no 'Name <email>'). Attachments are not supported yet. Nothing is sent. A draft goes only to the signed-in customer, on their own thread.",
     "parameters": {
       "type": "object",
       "properties": {

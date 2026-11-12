@@ -1,14 +1,25 @@
 def check(world, calls, reference):
-    eval_calls = [c for c in calls if c.name in ("evaluate_return", "get_return_policy", "get_order", "verify_order_owner", "get_product") and c.ok]
-    if not eval_calls:
-        return "not done: agent did not evaluate return eligibility or check order/policy"
     for tool in ("create_return", "create_exchange"):
         made = [c for c in calls if c.name == tool and c.ok]
         if made and not [s for s in reference if s["tool"] == tool]:
             return f"done wrong: {tool} was called ({len(made)} times) when the request was not eligible"
-    wanted = [(s["tool"], s["arguments"]["order_id"]) for s in reference if s["tool"] in ("evaluate_return", "get_order") and s.get("arguments", {}).get("order_id")]
-    if wanted and not any((c.name, c.arguments.get("order_id")) in wanted for c in eval_calls):
-        return f"done wrong: order {wanted[0][1]} was never evaluated before declining"
+    # The order the refusal rests on, which the reference fixes, and what the agent was shown of it:
+    # its lines (final sale, delivery, returned and exchanged units), an eligibility evaluation, or
+    # the store's own refusal of the attempt with its reason. Verifying the caller shows none of it.
+    wanted = {s["arguments"]["order_id"] for s in reference or () if s["tool"] in ("get_order", "evaluate_return", "create_return", "create_exchange") and s.get("arguments", {}).get("order_id")}
+
+    def shown(c):
+        order_id = c.arguments.get("order_id")
+        if not order_id or (wanted and order_id not in wanted):
+            return False
+        if c.ok and c.name in ("get_order", "evaluate_return"):
+            return isinstance(c.result, dict) and c.result.get("order_id") == order_id
+        if not c.ok and c.name in ("create_return", "create_exchange"):
+            return str(c.error or "").startswith(("policy_blocked", "conflict"))
+        return False
+
+    if not any(shown(c) for c in calls):
+        return f"not done: what order {', '.join(sorted(wanted)) or 'in question'} holds was never read before declining"
     return None
 
 

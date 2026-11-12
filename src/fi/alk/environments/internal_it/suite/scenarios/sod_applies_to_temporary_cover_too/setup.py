@@ -17,3 +17,4 @@ def setup(world):
         "expires_at": "2027-05-01T09:00:00Z",
         "granted_by": "E10"
     })
+    world.change("session_caller", "default", {"employee_id": "E450"}, by="id")

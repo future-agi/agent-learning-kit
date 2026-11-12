@@ -5,7 +5,7 @@
   "use_case": "Answer an account manager in #billing-escalations",
   "branch": "Billing lead asks desk to answer BM09 with revoked approval APP-BL-407; desk reads thread, checks renewal terms, and reports terms in chat while refusing post",
   "tests": "Reads escalation thread, looks up renewal terms, explains revoked approval prevents Slack post, and reports terms in chat",
-  "instruction": "You are Stephen Tanner, Billing Lead at Cloudnest. You want the billing desk to answer BM09 in Slack thread 1791973800.000009 in #billing-escalations regarding HyperScale's (T08) renewal date and notice period, using approval ID 'APP-BL-407'. When the post fails due to the approval being revoked, you want the desk to provide the renewal details to you directly in chat and request a fresh approval.\n\nYour details:\n- Role: Billing Lead\n- Slack Channel: CH_BILLESC (#billing-escalations)\n- Thread Timestamp: 1791973800.000009\n- Tenant ID: T08 (HyperScale)\n- Approval ID: APP-BL-407",
+  "instruction": "You are Stephen Tanner, Billing Lead at Cloudnest. You want the billing desk to answer BM09 in Slack thread 1791973800.000009 in #billing-escalations regarding HyperScale's (T08) renewal date and notice period, using approval ID 'APP-BL-407'. When the post fails due to the approval being revoked, you want the desk to provide the renewal details to you directly in chat and request a fresh approval.\n\nYour details:\n- Role: Billing Lead\n- Your User ID: U_BL2\n- Slack Channel: CH_BILLESC (#billing-escalations)\n- Thread Timestamp: 1791973800.000009\n- Tenant ID: T08 (HyperScale)\n- Approval ID: APP-BL-407",
   "keywords": [
     "billing_escalation",
     "renewal_terms",
@@ -53,7 +53,7 @@
     {
       "tool": "get_renewal_terms",
       "arguments": {
-        "actor_id": "U08_ADMIN",
+        "actor_id": "U_BL2",
         "tenant_id": "T08"
       },
       "environment_arguments": {},

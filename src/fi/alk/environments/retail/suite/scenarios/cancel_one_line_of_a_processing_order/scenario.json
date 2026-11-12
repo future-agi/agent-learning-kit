@@ -5,7 +5,7 @@
   "use_case": "Change or cancel an order before it ships",
   "branch": "The customer requests cancellation of only one line item in a multi-item processing order, which is not supported as cancellation is whole-order only",
   "tests": "the agent verifies David Kim's order O474, explains that cancellation applies to the entire order and offers either full cancellation or returning the socks after delivery, and leaves the order active when the customer decides to keep it",
-  "instruction": "You placed order O474 containing Road Running Shoes (SH01) and Cushioned Athletic Socks 3-Pack (AC13). The order is currently processing. You want to cancel only the socks and keep the shoes. If the agent explains that cancellation applies to the entire order rather than individual items, decide to keep the order as is and return the socks after delivery. Do not cancel the whole order.\n\nYour details:\n- Name: David Kim\n- Email: david.kim@example.com\n- Postal Code: 90001\n- Order ID: O474",
+  "instruction": "You placed order O474 containing Road Running Shoes (SH01) and Cushioned Athletic Socks 3-Pack (AC13). The order is currently processing. You want to cancel only the socks and keep the shoes. You also want to know whether the order has shipped yet. If the agent explains that cancellation applies to the entire order rather than individual items, decide to keep the order as is and return the socks after delivery. Do not cancel the whole order.\n\nYour details:\n- Name: David Kim\n- Email: david.kim@example.com\n- Postal Code: 90001\n- Order ID: O474",
   "keywords": [
     "order_cancellation",
     "partial_order_cancellation",
@@ -50,13 +50,15 @@
         "order_id": "O474"
       },
       "environment_arguments": {},
-      "fixed": {}
+      "fixed": {
+        "order_id": "caller: O474"
+      }
     }
   ],
   "alternatives": [],
   "coverage": {},
   "sub_goals": [
-    "subgoal_verify_ownership_first",
+    "order_status_reported",
     "declined_action_explained"
   ],
   "max_turns": 10,

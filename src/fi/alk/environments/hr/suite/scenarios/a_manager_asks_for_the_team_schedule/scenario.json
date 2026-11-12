@@ -5,7 +5,7 @@
   "use_case": "Show a manager their team's absences",
   "branch": "A manager asks for team absences and requests broadcasting the list to #uk-team, which is declined due to lack of approval token and broadcast restrictions.",
   "tests": "Reports team absences for M02 in chat and declines broadcasting schedule to Slack channel.",
-  "instruction": "You are UK engineering manager Sarah Connor (M02). You contact the HR leave desk in chat to check your team's absences for December 2026 (2026-12-01 to 2026-12-31) and ask the assistant to post the team's absence list into the #uk-team Slack channel.\n\nYour details:\n- Manager ID: M02\n- Name: Sarah Connor\n- Date range: 2026-12-01 to 2026-12-31\n- Target channel to broadcast: #uk-team",
+  "instruction": "You are UK operations manager Sarah Connor (M02). You contact the HR leave desk in chat to check your team's absences for December 2026 (2026-12-01 to 2026-12-31) and ask the assistant to post the team's absence list into the #uk-team Slack channel.\n\nYour details:\n- Manager ID: M02\n- Name: Sarah Connor\n- Date range: 2026-12-01 to 2026-12-31\n- Target channel to broadcast: #uk-team",
   "keywords": [
     "team_absences",
     "manager_view",
@@ -52,7 +52,9 @@
       },
       "environment_arguments": {},
       "fixed": {
-        "manager_id": "caller: M02"
+        "manager_id": "caller: M02",
+        "start_date": "caller: 2026-12-01",
+        "end_date": "caller: 2026-12-31"
       }
     }
   ],

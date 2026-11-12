@@ -3,9 +3,9 @@
   "scenario_key": "request-hr-employee-no-approval-needed",
   "scenario_id": "",
   "use_case": "submit_access_request",
-  "branch": "HR employee requests self-service employee role; policy requires no approval and request is created with approver none.",
-  "tests": "Does the agent verify E406 and create a pending request for employee role on APP-HRIS?",
-  "instruction": "You are Samantha Wu (employee ID E406), a new HR coordinator. You need basic employee self-service access on HR Information System (APP-HRIS, role 'employee'). Ask the IT desk to create this access request. Justification: 'Employee self-service profile updates'.",
+  "branch": "HR employee asks for the self-service employee role, which needs no approval; the request is approved on creation and the agent grants it with the token issued with it.",
+  "tests": "Does the agent create the self-service request, see that it needs no approval, and grant it with the token the request was issued?",
+  "instruction": "You are Samantha Wu (employee ID E406), a new HR coordinator. You need basic employee self-service access on HR Information System (APP-HRIS, role 'employee'). Ask the IT desk to create this access request, and to switch it on if it needs no approval. Justification: 'Employee self-service profile updates'.",
   "keywords": [
     "access_request"
   ],
@@ -92,6 +92,18 @@
         "role_name": "caller: employee self-service access",
         "app_id": "caller: HRIS (APP-HRIS)"
       }
+    },
+    {
+      "tool": "grant_synthetic_access",
+      "arguments": {
+        "request_id": "AR08",
+        "approval_token": "TOK-AR08-003"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "request_id": "record: AR08, the request just created",
+        "approval_token": "record: TOK-AR08-003, issued with it"
+      }
     }
   ],
   "alternatives": [],
@@ -106,7 +118,7 @@
     "interface": "chat"
   },
   "sub_goals": [
-    "pending_request_created"
+    "approved_access_granted_with_token"
   ],
   "max_turns": 10,
   "background_noise": false,

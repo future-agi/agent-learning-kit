@@ -33,3 +33,4 @@ def setup(world):
         "thread_id": "th_s403_seat_request",
         "label_id": "INBOX"
     })
+    world.change("session_caller", "default", {"actor_id": "U03_ADMIN"}, by="id")

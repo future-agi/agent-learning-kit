@@ -5,7 +5,7 @@
   "use_case": "Policy restriction and final-sale handling",
   "branch": "Change-of-mind return request for final-sale item FS01 in order O03 is refused per policy",
   "tests": "the agent checks policy/order eligibility and refuses return creation for final-sale item FS01",
-  "instruction": "You ordered a Final Sale Designer Jacket (SKU: FS01) in order O03. You changed your mind and want to return it for a refund.\n\nYour details:\n- Name: Carol Danvers\n- Email: carol.danvers@example.com\n- Postal Code: 60601\n- Order ID: O03\n- SKU: FS01 (Quantity: 1)\n- Reason: Changed mind",
+  "instruction": "You ordered a Clearance Leather Moto Jacket (SKU: FS01) in order O03. You changed your mind and want to return it for a refund.\n\nYour details:\n- Name: Carol Danvers\n- Email: carol.danvers@example.com\n- Postal Code: 60601\n- Order ID: O03\n- SKU: FS01 (Quantity: 1)\n- Reason: Changed mind",
   "keywords": [
     "final_sale"
   ],
@@ -49,14 +49,6 @@
       }
     },
     {
-      "tool": "get_order",
-      "arguments": {
-        "order_id": "O03"
-      },
-      "environment_arguments": {},
-      "fixed": {}
-    },
-    {
       "tool": "get_product",
       "arguments": {
         "sku": "FS01"
@@ -67,7 +59,7 @@
     {
       "tool": "get_return_policy",
       "arguments": {
-        "category": "Apparel"
+        "category": "Clearance"
       },
       "environment_arguments": {},
       "fixed": {}
@@ -85,7 +77,9 @@
         ]
       },
       "environment_arguments": {},
-      "fixed": {}
+      "fixed": {
+        "order_id": "record: orders.order_id of the order the request is about"
+      }
     }
   ],
   "alternatives": [],

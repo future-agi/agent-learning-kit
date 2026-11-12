@@ -1,6 +1,56 @@
 def setup(world):
-    world.put("customers", {"customer_id": "C406", "name": "Maya Lin", "email": "maya.lin@example.com", "phone": "+15550406", "postal_code": "80202", "address": "1600 17th St, Denver, CO 80202", "store_credit_cents": 0})
-    world.put("orders", {"order_id": "O406", "customer_id": "C406", "order_date": "2026-10-24T10:00:00Z", "delivery_date": None, "status": "in_transit", "currency": "USD", "total_gross_cents": 8000, "total_discount_cents": 0, "total_tax_cents": 0, "total_net_cents": 8000, "shipping_address": "1600 17th St, Denver, CO 80202", "cancelled_at": None})
-    world.put("order_items", {"item_id": "IT406", "order_id": "O406", "sku": "SH01", "quantity": 1, "unit_price_cents": 8000, "line_discount_cents": 0, "line_tax_cents": 0, "line_net_cents": 8000, "returned_quantity": 0})
-    world.put("shipments", {"shipment_id": "SHP406", "order_id": "O406", "tracking_number": "1Z999AA1000000406", "carrier": "UPS", "status": "in_transit", "shipped_at": "2026-10-25T10:00:00Z", "delivered_at": None, "last_event": "In transit", "last_event_at": "2026-10-25T10:00:00Z"})
-    world.put("invoices", {"invoice_id": "INV406", "order_id": "O406", "issued_at": "2026-10-24T10:00:00Z", "total_cents": 8000, "currency": "USD", "pdf_url": "https://invoices.example.com/INV406.pdf"})
+    world.put("customers", {
+        "customer_id": "C406",
+        "name": "Maya Lin",
+        "email": "maya.lin@example.com",
+        "phone": "+15550406",
+        "postal_code": "80202",
+        "address": "1600 17th St, Denver, CO 80202",
+        "store_credit_cents": 0,
+    })
+    world.put("orders", {
+        "order_id": "O406",
+        "customer_id": "C406",
+        "order_date": "2026-10-24T10:00:00Z",
+        "delivery_date": None,
+        "status": "in_transit",
+        "currency": "USD",
+        "total_gross_cents": 8000,
+        "total_discount_cents": 0,
+        "total_tax_cents": 0,
+        "total_net_cents": 8000,
+        "shipping_address": "1600 17th St, Denver, CO 80202",
+        "cancelled_at": None,
+    })
+    world.put("order_items", {
+        "item_id": "IT406",
+        "order_id": "O406",
+        "sku": "SH01",
+        "quantity": 1,
+        "unit_price_cents": 8000,
+        "line_discount_cents": 0,
+        "line_tax_cents": 0,
+        "line_net_cents": 8000,
+        "returned_quantity": 0,
+    })
+    world.put("shipments", {
+        "shipment_id": "SHP406",
+        "order_id": "O406",
+        "tracking_number": "1Z999AA1000000406",
+        "carrier": "UPS",
+        "status": "in_transit",
+        "shipped_at": "2026-10-25T10:00:00Z",
+        "delivered_at": None,
+        "last_event": "In transit",
+        "last_event_at": "2026-10-25T10:00:00Z",
+    })
+    world.put("invoices", {
+        "invoice_id": "INV406",
+        "order_id": "O406",
+        "issued_at": "2026-10-24T10:00:00Z",
+        "total_cents": 8000,
+        "currency": "USD",
+        "pdf_url": "https://invoices.example.com/INV406.pdf",
+    })
+    # The person in this conversation, as the session signs them in.
+    world.change("session_caller", "default", {"customer_id": "C406"}, by="id")

@@ -10,7 +10,7 @@
     "track_order"
   ],
   "persona": {
-    "name": "Grace Miller",
+    "name": "Grace Hopper",
     "gender": "female",
     "age_group": "40-50",
     "occupation": "Engineer",
@@ -43,6 +43,15 @@
       "fixed": {
         "threadId": "the customer's email thread asking where the order is"
       }
+    },
+    {
+      "tool": "verify_order_owner",
+      "arguments": {
+        "order_id": "O07",
+        "postal_code": "02138"
+      },
+      "environment_arguments": {},
+      "fixed": {}
     },
     {
       "tool": "get_shipment_tracking",

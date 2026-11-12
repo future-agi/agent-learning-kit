@@ -74,12 +74,15 @@ def setup(world):
         "body": "Never mind, please keep order O473 and ship it as planned. Do not cancel it.",
         "cc": "",
     })
-    world.put("gmail_thread_labels", {
-        "thread_id": "th_r470_cancel_then_keep",
-        "label_id": "INBOX",
+    world.put("gmail_thread_labels", {"thread_id": "th_r470_cancel_then_keep", "label_id": "INBOX"})
+    world.put("gmail_thread_labels", {"thread_id": "th_r470_cancel_then_keep", "label_id": "UNREAD"})
+    world.put("invoices", {
+        "invoice_id": "INV473",
+        "order_id": "O473",
+        "issued_at": "2026-10-26T08:00:00Z",
+        "total_cents": 8000,
+        "currency": "USD",
+        "pdf_url": "https://invoices.example.com/INV473.pdf",
     })
-    world.put("gmail_thread_labels", {
-        "thread_id": "th_r470_cancel_then_keep",
-        "label_id": "UNREAD",
-    })
-    world.put("invoices", {"invoice_id": "INV473", "order_id": "O473", "issued_at": "2026-10-26T08:00:00Z", "total_cents": 8000, "currency": "USD", "pdf_url": "https://invoices.example.com/INV473.pdf"})
+    # The person in this conversation, as the session signs them in.
+    world.change("session_caller", "default", {"customer_id": "C472"}, by="id")

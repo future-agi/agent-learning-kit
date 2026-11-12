@@ -5,13 +5,13 @@
   "use_case": "Eligible item return and label generation",
   "branch": "Customer Bob Smith C02 follows up on email thread th_r03_return_request_bob to confirm return authorization for AP04 on order O22",
   "tests": "the agent reads email thread th_r03_return_request_bob, confirms with the customer, and creates a return for AP04 on order O22",
-  "instruction": "You emailed customer support asking to return the Linen Long-Sleeve Shirt (SKU AP04) from order O22 because it is too large. You are ready to confirm the return creation.\n\nYour details:\n- Name: Bob S. Smith\n- Email: bob.smith@example.com\n- Postal Code: 10001\n- Thread: th_r03_return_request_bob\n- Order ID: O22\n- Item: SKU AP04 (Quantity 1)\n- Reason: Too large",
+  "instruction": "You emailed customer support asking to return the Linen Long-Sleeve Shirt (SKU AP04) from order O22 because it is too large. You are ready to confirm the return creation.\n\nYour details:\n- Name: Bob Smith\n- Email: bob.smith@example.com\n- Postal Code: 10001\n- Thread: th_r03_return_request_bob\n- Order ID: O22\n- Item: SKU AP04 (Quantity 1)\n- Reason: Too large",
   "keywords": [
     "email_support",
     "return_confirmation"
   ],
   "persona": {
-    "name": "Bob S. Smith",
+    "name": "Bob Smith",
     "gender": "male",
     "age_group": "40-50",
     "occupation": "Technician",

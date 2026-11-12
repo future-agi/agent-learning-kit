@@ -51,7 +51,9 @@
         "actor_id": "U403_ADMIN"
       },
       "environment_arguments": {},
-      "fixed": {}
+      "fixed": {
+        "invoice_id": "caller: inv_403_curr"
+      }
     }
   ],
   "alternatives": [],

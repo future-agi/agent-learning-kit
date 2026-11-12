@@ -56,7 +56,9 @@
         "actor_id": "U01_ADMIN"
       },
       "environment_arguments": {},
-      "fixed": {}
+      "fixed": {
+        "invoice_id": "caller: inv_01_curr"
+      }
     },
     {
       "tool": "get_invoice_lines",
@@ -66,7 +68,9 @@
         "tenant_id": "T01"
       },
       "environment_arguments": {},
-      "fixed": {}
+      "fixed": {
+        "invoice_id": "caller: inv_01_prev"
+      }
     }
   ],
   "alternatives": [],

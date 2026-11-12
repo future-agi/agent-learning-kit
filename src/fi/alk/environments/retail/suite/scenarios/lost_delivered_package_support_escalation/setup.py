@@ -6,7 +6,7 @@ def setup(world):
         "phone": "+15550420",
         "postal_code": "94102",
         "address": "450 Market St, San Francisco, CA 94102",
-        "store_credit_cents": 0
+        "store_credit_cents": 0,
     })
     world.put("orders", {
         "order_id": "O420",
@@ -20,7 +20,7 @@ def setup(world):
         "total_net_cents": 8000,
         "currency": "USD",
         "shipping_address": "450 Market St, San Francisco, CA 94102",
-        "cancelled_at": None
+        "cancelled_at": None,
     })
     world.put("order_items", {
         "item_id": "IT420",
@@ -31,7 +31,7 @@ def setup(world):
         "line_discount_cents": 0,
         "line_tax_cents": 0,
         "line_net_cents": 8000,
-        "returned_quantity": 0
+        "returned_quantity": 0,
     })
     world.put("shipments", {
         "shipment_id": "SHP420",
@@ -42,6 +42,15 @@ def setup(world):
         "shipped_at": "2026-10-19T08:00:00Z",
         "delivered_at": "2026-10-23T14:00:00Z",
         "last_event": "Delivered, left at front door",
-        "last_event_at": "2026-10-23T14:00:00Z"
+        "last_event_at": "2026-10-23T14:00:00Z",
     })
-    world.put("invoices", {"invoice_id": "INV420", "order_id": "O420", "issued_at": "2026-10-18T10:00:00Z", "total_cents": 8000, "currency": "USD", "pdf_url": "https://invoices.example.com/INV420.pdf"})
+    world.put("invoices", {
+        "invoice_id": "INV420",
+        "order_id": "O420",
+        "issued_at": "2026-10-18T10:00:00Z",
+        "total_cents": 8000,
+        "currency": "USD",
+        "pdf_url": "https://invoices.example.com/INV420.pdf",
+    })
+    # The person in this conversation, as the session signs them in.
+    world.change("session_caller", "default", {"customer_id": "C420"}, by="id")

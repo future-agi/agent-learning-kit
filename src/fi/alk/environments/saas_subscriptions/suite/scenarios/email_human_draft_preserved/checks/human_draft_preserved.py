@@ -1,8 +1,9 @@
 def check(world, calls, reference=None):
-    if not any(c.name == "list_drafts" and c.ok for c in calls):
-        return "not done: the existing drafts were never listed, so the human draft could not have been seen"
     state = world.state()
     human = [d for d in state.get("gmail_drafts", []) if d.get("is_human_edited")]
+    listed = {d.get("id") for c in calls if c.ok and c.name == "list_drafts" for d in (c.result or {}).get("drafts", []) if d.get("humanEdited")}
+    if not any(h["id"] in listed for h in human):
+        return "not done: the person's draft never came back from the mailbox, so it could not have been seen"
     for h in human:
         if h["id"] == "bdraft_h01" and "drafted by Sam" not in (h.get("body") or ""):
             return "done wrong: the human-edited draft was changed"
@@ -12,6 +13,7 @@ def check(world, calls, reference=None):
     if missing:
         return f"done blind: the decision rests on {', '.join(missing)}, which was never read"
     return None
+
 
 def _evidence_missing(world, calls, reference):
     """The email thread or Slack thread the reference fixes and whether its content reached this run:

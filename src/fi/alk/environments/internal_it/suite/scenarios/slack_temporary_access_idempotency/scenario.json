@@ -5,7 +5,7 @@
   "use_case": "Pick up an access request from Slack and reply in the thread after approval",
   "branch": "Sarah Connor posted in Slack asking for temporary security analyst access (AR-106); the assistant inspects her existing pending request and avoids submitting a duplicate",
   "tests": "identifies that Sarah Connor already has pending request AR-106 in the access system after reading her Slack message and avoids duplicate request creation",
-  "instruction": "You are Marcus Holloway, an IT operations lead. Sarah Connor (E19) posted message IM07 in #it-access asking for 2 weeks of analyst access on the security portal (AR-106). You want the assistant to inspect the Slack thread, look up Sarah's pending access requests, current entitlements on APP-SEC, and approval status for AR-106, confirming that AR-106 is already pending and no duplicate request should be created.\n\nYour details:\nTarget employee: Sarah Connor (E19)\nTarget application: APP-SEC\nTarget request ID: AR-106\nSlack channel: #it-access (CH_ITACCESS)\nSlack message timestamp: 1792857900.000007",
+  "instruction": "You are Marcus Holloway (employee ID E522), an IT operations lead. Sarah Connor (E19) posted message IM07 in #it-access asking for 2 weeks of analyst access on the security portal (AR-106). You want the assistant to inspect the Slack thread, look up Sarah's pending access requests, current entitlements on APP-SEC, and approval status for AR-106, confirming that AR-106 is already pending and no duplicate request should be created.\n\nYour details:\nTarget employee: Sarah Connor (E19)\nTarget application: APP-SEC\nTarget request ID: AR-106\nSlack channel: #it-access (CH_ITACCESS)\nSlack message timestamp: 1792857900.000007",
   "keywords": [
     "temporary_access"
   ],
@@ -66,9 +66,7 @@
         "employee_id": "E19"
       },
       "environment_arguments": {},
-      "fixed": {
-        "employee_id": "caller: Target employee: Sarah Connor (E19)"
-      }
+      "fixed": {}
     },
     {
       "tool": "get_approval_status",

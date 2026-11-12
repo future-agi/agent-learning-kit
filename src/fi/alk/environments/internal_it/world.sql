@@ -11,15 +11,16 @@ CREATE TABLE access_requests (
     approver_id TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
-    duration_days INTEGER
+    duration_days INTEGER,
+    approved_by TEXT
 );
-INSERT INTO "access_requests" VALUES('AR-101','E12','APP-PROD','readonly','On-call rotation needs log access','pending','E05','2026-10-22T10:00:00Z','2026-10-22T10:00:00Z',NULL);
-INSERT INTO "access_requests" VALUES('AR-102','E17','APP-CODE','write','Joining the payments squad','approved','E05','2026-10-21T09:00:00Z','2026-10-23T11:00:00Z',NULL);
-INSERT INTO "access_requests" VALUES('AR-103','E16','APP-RPT','viewer','Monthly operations dashboard','pending','E05','2026-10-23T14:00:00Z','2026-10-23T14:00:00Z',NULL);
-INSERT INTO "access_requests" VALUES('AR-104','E14','APP-FIN','viewer','Contract review needs ledger totals','approved','E06','2026-10-10T09:00:00Z','2026-10-12T09:00:00Z',NULL);
-INSERT INTO "access_requests" VALUES('AR-105','E18','APP-MKT','author','Launch campaign Q4','pending','E05','2026-10-24T08:00:00Z','2026-10-24T08:00:00Z',NULL);
-INSERT INTO "access_requests" VALUES('AR-106','E19','APP-SEC','analyst','Incident response cover for two weeks','pending','E04','2026-10-24T16:00:00Z','2026-10-24T16:00:00Z',14);
-INSERT INTO "access_requests" VALUES('AR-107','E15','APP-FIN','accountant','Quarter close','rejected','E06','2026-10-15T09:00:00Z','2026-10-16T09:00:00Z',NULL);
+INSERT INTO "access_requests" VALUES('AR-101','E12','APP-PROD','readonly','On-call rotation needs log access','pending','E05','2026-10-22T10:00:00Z','2026-10-22T10:00:00Z',NULL,NULL);
+INSERT INTO "access_requests" VALUES('AR-102','E17','APP-CODE','write','Joining the payments squad','approved','E05','2026-10-21T09:00:00Z','2026-10-23T11:00:00Z',NULL,NULL);
+INSERT INTO "access_requests" VALUES('AR-103','E16','APP-RPT','viewer','Monthly operations dashboard','pending','E05','2026-10-23T14:00:00Z','2026-10-23T14:00:00Z',NULL,NULL);
+INSERT INTO "access_requests" VALUES('AR-104','E14','APP-FIN','viewer','Contract review needs ledger totals','approved','E06','2026-10-10T09:00:00Z','2026-10-12T09:00:00Z',NULL,NULL);
+INSERT INTO "access_requests" VALUES('AR-105','E18','APP-MKT','author','Launch campaign Q4','pending','E05','2026-10-24T08:00:00Z','2026-10-24T08:00:00Z',NULL,NULL);
+INSERT INTO "access_requests" VALUES('AR-106','E19','APP-SEC','analyst','Incident response cover for two weeks','pending','E04','2026-10-24T16:00:00Z','2026-10-24T16:00:00Z',14,NULL);
+INSERT INTO "access_requests" VALUES('AR-107','E15','APP-FIN','accountant','Quarter close','rejected','E06','2026-10-15T09:00:00Z','2026-10-16T09:00:00Z',NULL,NULL);
 CREATE TABLE applications (
     app_id TEXT PRIMARY KEY NOT NULL,
     name TEXT NOT NULL,
@@ -47,7 +48,7 @@ CREATE TABLE approvals (
     expires_at TEXT NOT NULL,
     created_at TEXT NOT NULL
 );
-INSERT INTO "approvals" VALUES('APR-102','TOK-AR102-7Q4','AR-102','E05','E17','APP-CODE','write','valid','2026-11-23T11:00:00Z','2026-10-23T11:00:00Z');
+INSERT INTO "approvals" VALUES('APR-102','TOK-AR102-7Q4','AR-102','E05','E17','APP-CODE','write','valid','2026-10-30T11:00:00Z','2026-10-23T11:00:00Z');
 INSERT INTO "approvals" VALUES('APR-104','TOK-AR104-K2M','AR-104','E06','E14','APP-FIN','viewer','valid','2026-10-19T09:00:00Z','2026-10-12T09:00:00Z');
 CREATE TABLE audit_log (
     log_id TEXT PRIMARY KEY NOT NULL,
@@ -90,6 +91,7 @@ INSERT INTO "employees" VALUES('E17','Quinn Fabray','quinn.fabray@example.com','
 INSERT INTO "employees" VALUES('E18','Ryan Howard','ryan.howard@example.com','marketing','E05','active');
 INSERT INTO "employees" VALUES('E19','Sarah Connor','sarah.connor@example.com','security','E06','active');
 INSERT INTO "employees" VALUES('E20','Toby Flenderson','toby.flenderson@example.com','hr','E06','inactive');
+INSERT INTO "employees" VALUES('E21','Grace Okafor','grace.okafor@example.com','it_operations','E07','active');
 CREATE TABLE entitlements (
     entitlement_id TEXT PRIMARY KEY NOT NULL,
     employee_id TEXT NOT NULL,
@@ -309,6 +311,7 @@ INSERT INTO slack_users VALUES('U_E17','Quinn Fabray','quinn.fabray@example.com'
 INSERT INTO slack_users VALUES('U_E18','Ryan Howard','ryan.howard@example.com','marketing');
 INSERT INTO slack_users VALUES('U_E19','Sarah Connor','sarah.connor@example.com','security');
 INSERT INTO slack_users VALUES('U_E20','Toby Flenderson','toby.flenderson@example.com','hr');
+INSERT INTO slack_users VALUES('U_E21','Grace Okafor','grace.okafor@example.com','it_operations');
 INSERT INTO slack_channels VALUES('CH_ITACCESS','it-access','Ask for application access',0);
 INSERT INTO slack_channels VALUES('CH_SECTEAM','security-team','Security team incidents',1);
 INSERT INTO slack_channels VALUES('CH_ITOPS','it-ops','IT operations',0);
@@ -339,6 +342,8 @@ INSERT INTO slack_channel_members VALUES('ICM024','CH_ITOPS','U_ITDESK');
 INSERT INTO slack_channel_members VALUES('ICM025','CH_ITOPS','U_E02');
 INSERT INTO slack_channel_members VALUES('ICM026','CH_ITOPS','U_E12');
 INSERT INTO slack_channel_members VALUES('ICM027','CH_ITOPS','U_E05');
+INSERT INTO slack_channel_members VALUES('ICM028','CH_ITACCESS','U_E21');
+INSERT INTO slack_channel_members VALUES('ICM029','CH_ITOPS','U_E21');
 INSERT INTO slack_messages VALUES('IM01','CH_ITACCESS','U_E12','I need read-only access to the production cloud for on-call next week. Raised AR-101.','1792663500.000001',NULL,'https://acme.slack.example.com/archives/CH_ITACCESS/p1792663500000001');
 INSERT INTO slack_messages VALUES('IM02','CH_ITACCESS','U_E05','approved for Laura, go ahead','1792666800.000002','1792663500.000001','https://acme.slack.example.com/archives/CH_ITACCESS/p1792666800000002');
 INSERT INTO slack_messages VALUES('IM03','CH_ITACCESS','U_E17','Evan approved AR-102 for repo write access; can IT switch it on?','1792755000.000003',NULL,'https://acme.slack.example.com/archives/CH_ITACCESS/p1792755000000003');

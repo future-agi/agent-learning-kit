@@ -86,7 +86,8 @@
       "fixed": {
         "tenant_id": "caller: T07",
         "target_seats": "caller: 5",
-        "target_plan_id": "caller: pro"
+        "target_plan_id": "caller: pro",
+        "effective_timing": "caller: immediate"
       }
     }
   ],

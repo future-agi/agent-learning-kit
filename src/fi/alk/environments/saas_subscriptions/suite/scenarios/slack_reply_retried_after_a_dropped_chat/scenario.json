@@ -5,7 +5,7 @@
   "use_case": "Answer an account manager in #billing-escalations",
   "branch": "Billing lead retries posting approved Slack reply APP-BL-403 with request key rk-bl-406 after connection dropped",
   "tests": "Retries posting approved Slack message with idempotent request key rk-bl-406 returning existing message",
-  "instruction": "You are Simon Thorne, Billing Lead at Cloudnest. You previously instructed the billing desk to post an approved reply under approval ID 'APP-BL-403' in thread 1791885600.000004 using request key 'rk-bl-406', but you are not sure if the post went through due to a dropped connection. You want the desk to check the thread and retry sending the approved message with request key 'rk-bl-406' to ensure it was posted.\n\nYour details:\n- Role: Billing Lead\n- Slack Channel: CH_BILLESC (#billing-escalations)\n- Message Timestamp: 1791885600.000004\n- Approval ID: APP-BL-403\n- Request Key: rk-bl-406\n- Approved Message: 'BetaTech renewal terms confirm auto-renew is active with 0 notice days.'",
+  "instruction": "You are Simon Thorne, Billing Lead at Cloudnest. You previously instructed the billing desk to post an approved reply under approval ID 'APP-BL-403' in thread 1791885600.000004 using request key 'rk-bl-406', but you are not sure if the post went through due to a dropped connection. You want the desk to check the thread and retry sending the approved message with request key 'rk-bl-406' to ensure it was posted.\n\nYour details:\n- Role: Billing Lead\n- Your User ID: U_BL12\n- Slack Channel: CH_BILLESC (#billing-escalations)\n- Message Timestamp: 1791885600.000004\n- Approval ID: APP-BL-403\n- Request Key: rk-bl-406\n- Approved Message: 'LunarOps' annual term ends on 2027-09-01 and auto-renews; 30 days notice is required.'",
   "keywords": [
     "idempotency",
     "role_authorization",
@@ -51,7 +51,7 @@
     {
       "tool": "slack_send_message",
       "arguments": {
-        "message": "BetaTech renewal terms confirm auto-renew is active with 0 notice days.",
+        "message": "LunarOps' annual term ends on 2027-09-01 and auto-renews; 30 days notice is required.",
         "thread_ts": "1791885600.000004",
         "channel_id": "CH_BILLESC",
         "request_key": "rk-bl-406",

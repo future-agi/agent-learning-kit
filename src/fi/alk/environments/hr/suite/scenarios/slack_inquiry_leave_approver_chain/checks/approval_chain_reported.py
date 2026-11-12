@@ -1,14 +1,24 @@
 def check(world, calls, reference=None):
-    emp = None
+    emp = days = None
     for step in reference or ():
-        if step.get("tool") == "get_approval_chain" and step.get("arguments", {}).get("employee_id"):
-            emp = step["arguments"]["employee_id"]
-    looks = [c for c in calls if c.name == "get_approval_chain" and c.ok]
+        a = step.get("arguments", {})
+        if step.get("tool") == "get_approval_chain" and a.get("employee_id"):
+            emp = a["employee_id"]
+            days = a.get("working_days", days)
+    looks = [c for c in calls if c.name == "get_approval_chain" and c.ok and isinstance(c.result, dict)]
     if not looks:
         return "not done: the approval chain was never read"
-    if emp and not any(c.arguments.get("employee_id") == emp for c in looks):
-        return f"done wrong: {emp}'s approval chain was never read"
-    return None
+    # The chain must be asked for the length the employee named: above 10 working days the manager's
+    # manager approves too, and the chain says so only when asked for that length.
+    need = 2 if isinstance(days, (int, float)) and days > 10 else 1
+    for c in looks:
+        if emp and c.arguments.get("employee_id") != emp:
+            continue
+        if days is not None and c.arguments.get("working_days") != days:
+            continue
+        if len(c.result.get("approvers") or []) >= need:
+            return None
+    return f"done wrong: {emp}'s approval chain for {days or 'this'} working days was never returned"
 
 
 if __name__ == "__main__":

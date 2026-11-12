@@ -43,7 +43,6 @@
       },
       "environment_arguments": {},
       "fixed": {
-        "actor_id": "caller: E416",
         "employee_id": "caller: E416"
       }
     },

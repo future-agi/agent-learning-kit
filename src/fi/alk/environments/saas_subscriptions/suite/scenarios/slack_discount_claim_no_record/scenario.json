@@ -5,7 +5,7 @@
   "use_case": "Answer an account manager in #billing-escalations",
   "branch": "BM03 message asks about 20% discount for BetaTech T02; assistant checks invoices and credit notes, finding no record",
   "tests": "Checks billing records for verbal discount claim in Slack and confirms no discount is recorded",
-  "instruction": "You are Marcus Vance, Billing Lead at Cloudnest. In message BM03 (ts: '1791883800.000003') in #billing-escalations, an account manager asks if BetaTech (T02, admin U02_ADMIN) has a 20% discount on record. Ask the assistant to check the thread and BetaTech's credit notes and invoices, and report if any discount exists.\n\nYour details:\n- Role: Billing Lead (acting for tenant's admin)\n- Tenant ID: T02 (BetaTech)\n- Admin Actor ID: U02_ADMIN\n- Slack Channel: CH_BILLESC (#billing-escalations)\n- Message Timestamp: 1791883800.000003",
+  "instruction": "You are Marcus Vance, Billing Lead at Cloudnest. In message BM03 (ts: '1791883800.000003') in #billing-escalations, an account manager asks if BetaTech (T02) has a 20% discount on record. Ask the assistant to check the thread and BetaTech's credit notes and invoices, and report if any discount exists.\n\nYour details:\n- Role: Billing Lead\n- Your User ID: U_BL4\n- Tenant ID: T02 (BetaTech)\n- Slack Channel: CH_BILLESC (#billing-escalations)\n- Message Timestamp: 1791883800.000003",
   "keywords": [
     "slack_escalation"
   ],
@@ -17,7 +17,7 @@
     "location": "United Kingdom",
     "personality": "Analytical",
     "communication_style": "Simple and clear",
-    "initial_message": "Hi, can you check Slack message BM03 regarding BetaTech (T02, admin U02_ADMIN) and see if we have any record of a 20% discount?",
+    "initial_message": "Hi, can you check Slack message BM03 regarding BetaTech (T02) and see if we have any record of a 20% discount?",
     "languages": [
       "English"
     ],
@@ -29,10 +29,10 @@
   "variables": {},
   "fixture": {
     "records": {
-      "admin_id": "U02_ADMIN",
       "channel_id": "CH_BILLESC",
       "tenant_id": "T02",
-      "message_ts": "1791883800.000003"
+      "message_ts": "1791883800.000003",
+      "caller_id": "U_BL4"
     },
     "origin": "seed"
   },
@@ -52,16 +52,18 @@
       "tool": "get_credit_notes",
       "arguments": {
         "tenant_id": "T02",
-        "actor_id": "U02_ADMIN"
+        "actor_id": "U_BL4"
       },
       "environment_arguments": {},
-      "fixed": {}
+      "fixed": {
+        "tenant_id": "caller: T02"
+      }
     },
     {
       "tool": "list_invoices",
       "arguments": {
         "tenant_id": "T02",
-        "actor_id": "U02_ADMIN",
+        "actor_id": "U_BL4",
         "status": "paid"
       },
       "environment_arguments": {},

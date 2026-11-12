@@ -41,7 +41,7 @@
       "tool": "verify_billing_admin",
       "arguments": {
         "actor_id": "U11_ADMIN",
-        "tenant_id": "T10"
+        "tenant_id": "T11"
       },
       "environment_arguments": {},
       "fixed": {}

@@ -44,4 +44,13 @@ def setup(world):
         "last_event": "Label created",
         "last_event_at": "2026-10-26T07:05:00Z",
     })
-    world.put("invoices", {"invoice_id": "INV433", "order_id": "O433", "issued_at": "2026-10-26T07:00:00Z", "total_cents": 8000, "currency": "USD", "pdf_url": "https://invoices.example.com/INV433.pdf"})
+    world.put("invoices", {
+        "invoice_id": "INV433",
+        "order_id": "O433",
+        "issued_at": "2026-10-26T07:00:00Z",
+        "total_cents": 8000,
+        "currency": "USD",
+        "pdf_url": "https://invoices.example.com/INV433.pdf",
+    })
+    # The person in this conversation, as the session signs them in.
+    world.change("session_caller", "default", {"customer_id": "C433"}, by="id")

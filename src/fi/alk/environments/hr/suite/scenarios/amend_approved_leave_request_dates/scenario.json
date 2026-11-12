@@ -5,7 +5,7 @@
   "use_case": "Change or cancel a leave request",
   "branch": "the employee amends an approved leave request REQ-4102 to new dates (3 to 6 November 2026), moving its status back to pending",
   "tests": "the agent checks the status of REQ-4102, confirms the new dates with the employee, amends the request, and explains that it returns to pending for manager re-approval",
-  "instruction": "You have an approved leave request (REQ-4102) for 2 to 6 November 2026, but your travel plans changed and you need to move the start date one day later, from Tuesday 3 November to Friday 6 November 2026. You want HR to update your request to these new dates and understand that it will need re-approval.\n\nYour details:\n- Employee ID: E404\n- Name: Audrey Bennett\n- Request ID: REQ-4102\n- Original dates: 2026-11-02 to 2026-11-06 (Approved)\n- New start date: 2026-11-03\n- New end date: 2026-11-06",
+  "instruction": "You have an approved leave request (REQ-4102) for 2 to 6 November 2026, but your travel plans changed and you need to move the start date one day later, from Monday 2 November to Tuesday 3 November 2026, keeping Friday 6 November as the last day. You want HR to update your request to these new dates and understand that it will need re-approval.\n\nYour details:\n- Employee ID: E404\n- Name: Audrey Bennett\n- Request ID: REQ-4102\n- Original dates: 2026-11-02 to 2026-11-06 (Approved)\n- New start date: 2026-11-03\n- New end date: 2026-11-06",
   "keywords": [
     "amend",
     "approved",

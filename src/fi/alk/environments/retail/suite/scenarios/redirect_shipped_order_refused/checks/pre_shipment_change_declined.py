@@ -1,13 +1,23 @@
 def check(world, calls, reference=None):
+    # The order the customer asks to change, which the reference fixes, and its shipment status as
+    # the agent was shown it: the order, its tracking, or the store refusing the change because the
+    # order has left processing. Any of them settles it; none of them is a rival tool to the others.
     wanted = None
     for step in reference or ():
-        if step.get("tool") in ("get_shipment_tracking", "get_order") and step.get("arguments", {}).get("order_id"):
-            wanted = (step["tool"], step["arguments"]["order_id"])
-    looks = [c for c in calls if c.name in ("get_shipment_tracking", "get_order") and c.ok]
-    if not looks:
-        return "not done: the order's shipment was never checked"
-    if wanted and not any(c.name == wanted[0] and c.arguments.get("order_id") == wanted[1] for c in looks):
-        return f"done wrong: order {wanted[1]} was never looked up before declining"
+        if step.get("tool") in ("get_shipment_tracking", "get_order", "cancel_order", "update_shipping_address") and step.get("arguments", {}).get("order_id"):
+            wanted = step["arguments"]["order_id"]
+
+    def shown(c):
+        if not c.arguments.get("order_id") or (wanted and c.arguments.get("order_id") != wanted):
+            return False
+        if c.ok and c.name in ("get_shipment_tracking", "get_order"):
+            return isinstance(c.result, dict) and bool(c.result.get("status") or c.result.get("order_status"))
+        if not c.ok and c.name in ("cancel_order", "update_shipping_address"):
+            return str(c.error or "").startswith("policy_blocked")
+        return False
+
+    if not any(shown(c) for c in calls):
+        return f"not done: the shipment status of order {wanted or 'in question'} was never checked"
     state = world.state()
     if any(o.get("status") == "cancelled" for o in state.get("orders", [])):
         return "done wrong: an order was cancelled"

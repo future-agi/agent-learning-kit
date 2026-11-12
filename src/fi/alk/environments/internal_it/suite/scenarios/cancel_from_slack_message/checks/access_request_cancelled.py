@@ -6,17 +6,22 @@ def check(world, calls, reference=None):
     made = [c for c in calls if c.name == "cancel_access_request" and c.ok]
     if not made:
         return "not done: cancel_access_request was not called successfully"
-    reqs = {r["request_id"]: r for r in world.state().get("access_requests", [])}
+    state = world.state()
+    now = (state.get("clock") or [{"now": ""}])[0]["now"]
+    reqs = {r["request_id"]: r for r in state.get("access_requests", [])}
     for c in made:
         rid = c.arguments.get("request_id")
         if want and rid != want:
             return f"done wrong: {rid} was cancelled, not {want}"
-        if reqs.get(rid, {}).get("status") != "cancelled":
-            return f"not done: {rid} is not cancelled"
+        r = reqs.get(rid, {})
+        # A replay on a request cancelled long ago answers "cancelled" without cancelling anything.
+        if r.get("status") != "cancelled" or r.get("updated_at") != now:
+            return f"not done: {rid} was not cancelled in this run"
     missing = _evidence_missing(world, calls, reference)
     if missing:
         return f"done blind: the decision rests on {', '.join(missing)}, which was never read"
     return None
+
 
 def _evidence_missing(world, calls, reference):
     """The Slack thread or library document the reference fixes and whether its content reached this

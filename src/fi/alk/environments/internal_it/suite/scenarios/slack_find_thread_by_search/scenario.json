@@ -5,12 +5,12 @@
   "use_case": "Pick up an access request from Slack and reply in the thread after approval",
   "branch": "IT lead asks about Ian's question regarding access expiry without knowing where it was asked; desk searches Slack messages for 'expire', reads thread IM10, and looks up entitlement expiry.",
   "tests": "Does the agent search Slack for Ian's expiry question, read the thread, and report his entitlement expiry?",
-  "instruction": "You are the IT Lead contacting the IT access desk. Ian Malcolm asked somewhere in Slack about when his reporting editor access expires, but you don't know which channel or thread. Ask the IT access desk to find Ian's question in Slack and check when his reporting access expires.",
+  "instruction": "You are Grace Okafor (employee ID E21), the IT Lead, contacting the IT access desk. Ian Malcolm asked somewhere in Slack about when his reporting editor access expires, but you don't know which channel or thread. Ask the IT access desk to find Ian's question in Slack and check when his reporting access expires.",
   "keywords": [
     "expiry"
   ],
   "persona": {
-    "name": "Garrett Hayes",
+    "name": "Grace Okafor",
     "gender": "male",
     "age_group": "40-50",
     "occupation": "",

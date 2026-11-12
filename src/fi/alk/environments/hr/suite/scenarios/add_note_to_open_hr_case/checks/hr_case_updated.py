@@ -6,13 +6,22 @@ def check(world, calls, reference=None):
     made = [c for c in calls if c.name == "update_hr_case" and c.ok]
     if not made:
         return "not done: update_hr_case was not called successfully"
-    cases = {c["case_id"]: c for c in world.state().get("hr_cases", [])}
+    state = world.state()
+    cases = {c["case_id"]: c for c in state.get("hr_cases", [])}
     for c in made:
         got = c.arguments.get("case_id")
         if cid and got != cid:
             return f"done wrong: case {got} was updated, not {cid}"
-        if f"{c.arguments.get('employee_id')}:" not in (cases.get(got, {}).get("notes") or ""):
+        if not c.arguments.get("note") or str(c.arguments["note"]) not in (cases.get(got, {}).get("notes") or ""):
             return f"not done: the note is not on case {got}"
+    # The open case is the place for the new information: a second case for the same employee and
+    # category is the duplicate the update avoids.
+    now = (state.get("clock") or [{"now": ""}])[0]["now"]
+    target = cases.get(cid) if cid else None
+    if target:
+        dupes = [c["case_id"] for c in cases.values() if c.get("created_at") == now and c["employee_id"] == target["employee_id"] and c["category"] == target["category"]]
+        if dupes:
+            return f"done wrong: {', '.join(dupes)} duplicates the open case {cid}"
     missing = _evidence_missing(world, calls, reference)
     if missing:
         return f"done blind: the decision rests on {', '.join(missing)}, which was never read"

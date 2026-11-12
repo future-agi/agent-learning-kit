@@ -46,6 +46,15 @@
       }
     },
     {
+      "tool": "verify_order_owner",
+      "arguments": {
+        "order_id": "O35",
+        "postal_code": "43215"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
       "tool": "get_shipment_tracking",
       "arguments": {
         "customer_id": "C17",

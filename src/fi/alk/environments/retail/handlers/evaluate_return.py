@@ -1,3 +1,17 @@
+def _caller(db):
+    """The customer signed in to this conversation. The session sets it; an ID, email or name the
+    desk is told never changes who it is talking to."""
+    row = db.one("SELECT customer_id FROM session_caller WHERE id = 'default'")
+    return row["customer_id"] if row else None
+
+
+def _for_caller(db, customer_id, what):
+    """Act only for the signed-in customer: a customer_id argument is checked, never trusted."""
+    caller = _caller(db)
+    if not caller or str(customer_id or "").strip() != caller:
+        raise ToolError(f"Permission denied: {what} is not the signed-in customer's ({caller or 'nobody is signed in'}).", category="permission_denied")
+
+
 import json
 from datetime import datetime
 
@@ -12,6 +26,11 @@ def handle(args, db):
     order = db.one("SELECT * FROM orders WHERE order_id = ?", [order_id])
     if not order:
         raise ToolError(f"Order {order_id} not found.", category="not_found")
+    # A dry run still discloses what the customer paid: only for the signed-in customer's order.
+    _for_caller(db, order["customer_id"], f"order {order_id}")
+    skus = [req.get("sku") for req in items if isinstance(req, dict)]
+    if len(skus) != len(set(skus)):
+        raise ToolError("Each SKU may appear once in items; give one line per SKU with the total quantity.", category="invalid_input")
         
     clock_row = db.one("SELECT now FROM clock")
     now_dt = datetime.fromisoformat(clock_row["now"].replace("Z", "+00:00"))
@@ -63,6 +82,10 @@ def handle(args, db):
         elif prod and prod["is_final_sale"] and final_sale_enforced:
             eligible = False
             ineligibility_reason = f"SKU {sku} is marked as final sale and cannot be returned."
+            unit_net = int(round(ord_item["line_net_cents"] / ord_item["quantity"]))
+        elif prod and not prod["returnable"] and not (prod["is_final_sale"] and not final_sale_enforced):
+            eligible = False
+            ineligibility_reason = f"SKU {sku} is not returnable."
             unit_net = int(round(ord_item["line_net_cents"] / ord_item["quantity"]))
         elif prod and prod["category"] == "Accessories" and age_days > accessories_window:
             eligible = False

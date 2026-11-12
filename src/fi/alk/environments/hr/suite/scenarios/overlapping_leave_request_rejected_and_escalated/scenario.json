@@ -5,7 +5,7 @@
   "use_case": "Handle leave request boundaries such as insufficient balance, overlaps, or exceptions via HR case",
   "branch": "An employee attempts to request leave that overlaps with an already approved leave period, requiring overlap detection and opening an HR exception case.",
   "tests": "Detects schedule overlap with existing approved request and creates an HR exception case.",
-  "instruction": "You already have an approved leave request on file from November 20 to November 25, 2026. You want to request new dates from November 23 to November 27, 2026 for annual leave. Because these dates overlap with your existing booking, the standard submission will be blocked. You want the assistant to check your balance and open an HR exception case so your prior leave can be modified or replaced.\n\nYour details:\n- Employee ID: E08\n- Name: Hannah Abbott\n- Region: UK\n- Leave Type: annual\n- Requested Span: 2026-11-23 to 2026-11-27\n- Case Category: policy_exception\n- Subject: Leave schedule adjustment and overlap exception",
+  "instruction": "You already have an approved leave request on file from November 20 to November 25, 2026. You want to request new dates from November 23 to November 27, 2026 for annual leave. Because these dates overlap with your existing booking, the standard submission will be blocked. You want the assistant to check your balance and open an HR exception case so your prior leave can be modified or replaced.\n\nYour details:\n- Employee ID: E462\n- Name: Megan Price\n- Region: UK\n- Leave Type: annual\n- Requested Span: 2026-11-23 to 2026-11-27\n- Case Category: policy_exception\n- Subject: Leave schedule adjustment and overlap exception",
   "keywords": [
     "leave_submission",
     "leave_balance",
@@ -13,7 +13,7 @@
     "insufficient_balance"
   ],
   "persona": {
-    "name": "Hannah Abbott",
+    "name": "Megan Price",
     "gender": "female",
     "age_group": "25-32",
     "occupation": "Customer Service",
@@ -33,7 +33,7 @@
   "fixture": {
     "overlap_requested_span": "2026-11-23 to 2026-11-27",
     "origin": "generated",
-    "employee_id": "E08",
+    "employee_id": "E462",
     "region": "UK",
     "existing_request_span": "2026-11-20 to 2026-11-25"
   },
@@ -41,7 +41,7 @@
     {
       "tool": "get_employee_profile",
       "arguments": {
-        "employee_id": "E08"
+        "employee_id": "E462"
       },
       "environment_arguments": {},
       "fixed": {}
@@ -50,7 +50,7 @@
       "tool": "get_leave_balance",
       "arguments": {
         "leave_type": "annual",
-        "employee_id": "E08"
+        "employee_id": "E462"
       },
       "environment_arguments": {},
       "fixed": {}
@@ -58,16 +58,16 @@
     {
       "tool": "create_hr_case",
       "arguments": {
-        "actor_id": "E08",
+        "actor_id": "E462",
         "subject": "Leave schedule adjustment and overlap exception",
-        "employee_id": "E08",
+        "employee_id": "E462",
         "description": "Overlap with REQ-0801, requesting modification",
         "category": "policy_exception"
       },
       "environment_arguments": {},
       "fixed": {
         "category": "caller: policy_exception",
-        "employee_id": "caller: E08"
+        "employee_id": "caller: E462"
       }
     }
   ],

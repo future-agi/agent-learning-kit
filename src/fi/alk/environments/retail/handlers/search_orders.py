@@ -1,10 +1,28 @@
+def _caller(db):
+    """The customer signed in to this conversation. The session sets it; an ID, email or name the
+    desk is told never changes who it is talking to."""
+    row = db.one("SELECT customer_id FROM session_caller WHERE id = 'default'")
+    return row["customer_id"] if row else None
+
+
+def _for_caller(db, customer_id, what):
+    """Act only for the signed-in customer: a customer_id argument is checked, never trusted."""
+    caller = _caller(db)
+    if not caller or str(customer_id or "").strip() != caller:
+        raise ToolError(f"Permission denied: {what} is not the signed-in customer's ({caller or 'nobody is signed in'}).", category="permission_denied")
+
+
 def handle(args, db):
     email = args.get("email")
     postal_code = args.get("postal_code")
     customer_id = args.get("customer_id")
     status = args.get("status")
     if not email and not customer_id:
-        raise ToolError("Provide the customer's email (with postal_code) or customer_id.", category="invalid_input")
+        raise ToolError("Provide the customer's email or customer_id, with the postal_code on file.", category="invalid_input")
+    # The postal code on file is the secret on either path: an email or a customer ID alone is
+    # something anyone may know.
+    if not postal_code:
+        raise ToolError("The postal_code on file is required to identify the customer.", category="permission_denied")
     if customer_id:
         cust = db.one("SELECT * FROM customers WHERE customer_id = ?", [customer_id])
     else:
@@ -13,10 +31,9 @@ def handle(args, db):
         raise ToolError("No customer matches those details.", category="not_found")
     if email and str(email).strip().lower() != cust["email"].strip().lower():
         raise ToolError("Email does not match the customer record.", category="permission_denied")
-    if postal_code and str(postal_code).strip().lower() != cust["postal_code"].strip().lower():
+    if str(postal_code).strip().lower() != cust["postal_code"].strip().lower():
         raise ToolError("Postal code does not match the customer record.", category="permission_denied")
-    if not customer_id and not postal_code:
-        raise ToolError("An email alone does not identify the customer; add the postal_code on file.", category="permission_denied")
+    _for_caller(db, cust["customer_id"], f"the orders of {cust['customer_id']}")
     if status:
         rows = db.query("SELECT * FROM orders WHERE customer_id = ? AND status = ? ORDER BY order_date DESC", [cust["customer_id"], status])
     else:

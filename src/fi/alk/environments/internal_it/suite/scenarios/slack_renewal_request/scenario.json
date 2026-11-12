@@ -3,21 +3,21 @@
   "scenario_key": "slack-renewal-request",
   "scenario_id": "",
   "use_case": "Pick up an access request from Slack and reply in the thread after approval",
-  "branch": "Bob Jones posted in #it-ops asking to renew deployer access that is expiring; IT desk reads the thread and creates a renewal access request for APP-PROD deployer",
-  "tests": "reads Bob Jones's Slack thread in #it-ops and creates a new pending access request for his deployer role renewal",
-  "instruction": "You are Maya Lin, an IT operations lead. Bob Jones (E412) posted in #it-ops (message timestamp 1792933200.000412) stating his deployer access on APP-PROD is expiring and asking for renewal. You want the IT assistant to read his Slack thread, check access policy for the role, and submit a new pending access request for Bob Jones for the deployer role.\n\nYour details:\nTarget employee: Bob Jones (E412)\nTarget application: APP-PROD\nTarget role: deployer\nSlack channel: #it-ops (CH_ITOPS)\nSlack message timestamp: 1792933200.000412",
+  "branch": "Ravi Menon posted in #it-ops asking to renew deployer access that expired this morning; IT desk reads the thread and creates a renewal access request for APP-PROD deployer",
+  "tests": "reads Ravi Menon's Slack thread in #it-ops and creates a new pending access request for his deployer role renewal",
+  "instruction": "You are Rosa Delgado (employee ID E516), an IT operations lead. Ravi Menon (E412) posted in #it-ops (message timestamp 1792933200.000412) stating his deployer access on APP-PROD expired this morning and asking for renewal. You want the IT assistant to read his Slack thread, check access policy for the role, and submit a new pending access request for Ravi Menon for the deployer role.\n\nYour details:\nTarget employee: Ravi Menon (E412)\nTarget application: APP-PROD\nTarget role: deployer\nSlack channel: #it-ops (CH_ITOPS)\nSlack message timestamp: 1792933200.000412",
   "keywords": [
     "access_request"
   ],
   "persona": {
-    "name": "Maya Lin",
+    "name": "Rosa Delgado",
     "gender": "female",
     "age_group": "32-40",
     "occupation": "Engineer",
     "location": "United States",
     "personality": "Professional and formal",
     "communication_style": "Direct and concise",
-    "initial_message": "Bob Jones posted in #it-ops asking for renewal of his expiring deployer role. Could you check policy and create the renewal request for him?",
+    "initial_message": "Ravi Menon posted in #it-ops asking for renewal of his deployer role, which expired this morning. Could you check policy and create the renewal request for him?",
     "languages": [
       "English"
     ],
@@ -58,7 +58,7 @@
       },
       "environment_arguments": {},
       "fixed": {
-        "employee_id": "caller: Target employee: Bob Jones (E412)",
+        "employee_id": "caller: Target employee: Ravi Menon (E412)",
         "role_name": "caller: Target role: deployer",
         "app_id": "caller: Target application: APP-PROD"
       }
@@ -68,14 +68,14 @@
       "arguments": {
         "app_id": "APP-PROD",
         "role_name": "deployer",
-        "justification": "Renewal of deployer access expiring on the 31st",
+        "justification": "Renewal of deployer access that expired on 25 October",
         "employee_id": "E412"
       },
       "environment_arguments": {},
       "fixed": {
         "role_name": "caller: Target role: deployer",
         "app_id": "caller: Target application: APP-PROD",
-        "employee_id": "caller: Target employee: Bob Jones (E412)"
+        "employee_id": "caller: Target employee: Ravi Menon (E412)"
       }
     }
   ],

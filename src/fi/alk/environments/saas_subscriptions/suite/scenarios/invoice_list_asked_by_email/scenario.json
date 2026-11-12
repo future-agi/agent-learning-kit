@@ -5,7 +5,7 @@
   "use_case": "Explain an invoice or a bill increase",
   "branch": "Account manager asks to inspect email thread th_b11_invoice_list from Leo Lunar requesting LunarOps invoices",
   "tests": "reads email thread th_b11_invoice_list and retrieves invoice list for LunarOps",
-  "instruction": "You are Sophie Martin, account manager for LunarOps (T12). Ask the billing desk to read thread th_b11_invoice_list and list all paid invoices for LunarOps.\n\nYour details:\n- Name: Sophie Martin\n- Role: Account Manager\n- Client: LunarOps (Tenant ID: T12)\n- Thread ID: th_b11_invoice_list",
+  "instruction": "You are Sophie Martin, account manager for LunarOps (T12). Ask the billing desk to read thread th_b11_invoice_list and list all paid invoices for LunarOps.\n\nYour details:\n- Name: Sophie Martin\n- Role: Account Manager\n- Your User ID: U_AM7\n- Client: LunarOps (Tenant ID: T12)\n- Thread ID: th_b11_invoice_list",
   "keywords": [
     "email_integration"
   ],
@@ -48,7 +48,7 @@
       "tool": "list_invoices",
       "arguments": {
         "status": "paid",
-        "actor_id": "U12_ADMIN",
+        "actor_id": "U_AM7",
         "tenant_id": "T12"
       },
       "environment_arguments": {},

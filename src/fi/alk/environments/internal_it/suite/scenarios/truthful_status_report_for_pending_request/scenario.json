@@ -5,7 +5,7 @@
   "use_case": "manage_existing_access_and_idempotency",
   "branch": "Employee E417 with pending request AR-417 asks if access is ready and whether they can start; agent checks status and truthfully reports it is pending.",
   "tests": "Does the agent verify employee E417, inspect request AR-417, and accurately report that approval is still pending without falsely claiming access is active?",
-  "instruction": "You are Oliver Queen (employee ID E417). You submitted request AR-417 for Source Code Repository (APP-CODE) readonly role. You are eager to start onboarding. In chat, ask the IT desk if your access is ready and whether you can start working in the codebase. When the agent checks and confirms AR-417 is still pending approval from Evan Wright, acknowledge that you will wait.",
+  "instruction": "You are Oliver Queen (employee ID E417). You submitted request AR-417 for Source Code Repository (APP-CODE) read role. You are eager to start onboarding. In chat, ask the IT desk if your access is ready and whether you can start working in the codebase. When the agent checks and confirms AR-417 is still pending approval from Evan Wright, acknowledge that you will wait.",
   "keywords": [
     "pending_status"
   ],

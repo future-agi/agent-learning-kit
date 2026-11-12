@@ -15,10 +15,10 @@ def setup(world):
         "delivery_date": None,
         "status": "processing",
         "currency": "USD",
-        "total_gross_cents": 9800,
+        "total_gross_cents": 9500,
         "total_discount_cents": 0,
         "total_tax_cents": 0,
-        "total_net_cents": 9800,
+        "total_net_cents": 9500,
         "shipping_address": "550 Grand Ave, 90001",
         "cancelled_at": None,
     })
@@ -39,10 +39,10 @@ def setup(world):
         "sku": "AC13",
         "quantity": 1,
         "returned_quantity": 0,
-        "unit_price_cents": 1800,
+        "unit_price_cents": 1500,
         "line_discount_cents": 0,
         "line_tax_cents": 0,
-        "line_net_cents": 1800,
+        "line_net_cents": 1500,
     })
     world.put("shipments", {
         "shipment_id": "SHP474",
@@ -55,4 +55,13 @@ def setup(world):
         "last_event": "Label created",
         "last_event_at": "2026-10-26T09:05:00Z",
     })
-    world.put("invoices", {"invoice_id": "INV474", "order_id": "O474", "issued_at": "2026-10-26T09:00:00Z", "total_cents": 9800, "currency": "USD", "pdf_url": "https://invoices.example.com/INV474.pdf"})
+    world.put("invoices", {
+        "invoice_id": "INV474",
+        "order_id": "O474",
+        "issued_at": "2026-10-26T09:00:00Z",
+        "total_cents": 9500,
+        "currency": "USD",
+        "pdf_url": "https://invoices.example.com/INV474.pdf",
+    })
+    # The person in this conversation, as the session signs them in.
+    world.change("session_caller", "default", {"customer_id": "C473"}, by="id")

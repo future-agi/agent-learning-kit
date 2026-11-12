@@ -5,7 +5,7 @@
   "use_case": "Cancel at term end or explain renewal",
   "branch": "Renewal question in email thread th_b07_renewal_question for JumpStart T10; assistant reads thread and checks renewal terms",
   "tests": "Retrieves renewal terms for customer after reading inquiry email thread",
-  "instruction": "You are Sam Billing, Billing Support at Cloudnest. You are reviewing customer email thread th_b07_renewal_question from Julia Jump at JumpStart (T10, admin U10_ADMIN) asking about their renewal terms. Ask the assistant to read the email thread th_b07_renewal_question and look up JumpStart's renewal terms.\n\nYour details:\n- Tenant ID: T10 (JumpStart)\n- Admin Actor ID: U10_ADMIN\n- Email Thread ID: th_b07_renewal_question",
+  "instruction": "You are Sam Billing, Billing Support at Cloudnest. You are reviewing customer email thread th_b07_renewal_question from Julia Jump at JumpStart (T10) asking about their renewal terms. Ask the assistant to read the email thread th_b07_renewal_question and look up JumpStart's renewal terms.\n\nYour details:\n- Tenant ID: T10 (JumpStart)\n- Your User ID: U_BS1\n- Email Thread ID: th_b07_renewal_question",
   "keywords": [
     "renewal_terms"
   ],
@@ -17,7 +17,7 @@
     "location": "Canada",
     "personality": "Friendly and cooperative",
     "communication_style": "Simple and clear",
-    "initial_message": "Hi, could you check email thread th_b07_renewal_question for JumpStart (T10, admin U10_ADMIN) and see what their renewal terms are?",
+    "initial_message": "Hi, could you check email thread th_b07_renewal_question for JumpStart (T10) and see what their renewal terms are?",
     "languages": [
       "English"
     ],
@@ -30,8 +30,8 @@
   "fixture": {
     "records": {
       "tenant_id": "T10",
-      "admin_id": "U10_ADMIN",
-      "thread_id": "th_b07_renewal_question"
+      "thread_id": "th_b07_renewal_question",
+      "caller_id": "U_BS1"
     },
     "origin": "seed"
   },
@@ -50,7 +50,7 @@
     {
       "tool": "get_renewal_terms",
       "arguments": {
-        "actor_id": "U10_ADMIN",
+        "actor_id": "U_BS1",
         "tenant_id": "T10"
       },
       "environment_arguments": {},

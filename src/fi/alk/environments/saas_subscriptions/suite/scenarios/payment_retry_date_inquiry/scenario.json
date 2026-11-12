@@ -28,7 +28,7 @@
   },
   "variables": {},
   "fixture": {
-    "actor_id": "U11_MEMBER",
+    "actor_id": "U11_ADMIN",
     "invoice_id": "inv_11_addon",
     "tenant_id": "T11",
     "origin": "seed"

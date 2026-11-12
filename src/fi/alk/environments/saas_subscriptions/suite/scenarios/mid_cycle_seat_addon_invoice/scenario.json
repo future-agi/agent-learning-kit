@@ -51,7 +51,9 @@
         "actor_id": "U11_ADMIN"
       },
       "environment_arguments": {},
-      "fixed": {}
+      "fixed": {
+        "invoice_id": "caller: inv_11_addon"
+      }
     }
   ],
   "alternatives": [],

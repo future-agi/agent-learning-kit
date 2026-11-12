@@ -7,6 +7,13 @@ a decision taken without reading the Slack thread or document it rests on, a rep
 place, and an agent that does nothing. What the HR tools refuse outright (a team view for a
 non-manager, an amendment that keeps its approval, reasons in a team view) is asserted directly.
 
+Who is in the conversation is the session's to say (`session_caller`), not the agent's: every tool
+that changes someone's leave or cases, or shows their private records, is tried with someone else
+signed in and the right target named, and must refuse and change nothing. Every reference step
+succeeds except the refused attempts a scenario is about, and every scenario passes the proof gates
+(not vacuous, no check passing on an empty or crashed run, every fixed value checked, no check too
+strict for a free choice).
+
 `WRONG_RUNS` is also what `hr/README.md`'s validation table is rendered from.
 """
 
@@ -24,7 +31,7 @@ from fi.alk.environments import designed
 from fi.alk.harness.catalogue import load_catalogue
 from fi.alk.harness.checks import reference_of, run_check, run_world_check
 from fi.alk.harness.folder import read_folder
-from fi.alk.harness.prove import _run
+from fi.alk.harness.prove import _run, prove
 from fi.alk.harness.releases import WORLD
 from fi.alk.harness.scenario import Step
 from fi.alk.harness.world.snapshot import restore
@@ -89,6 +96,11 @@ def _plus(key: str, tool: str, **arguments):
     return [copy.deepcopy(step) for step in _scenario(key).solution] + [
         Step(tool=tool, arguments=arguments, environment_arguments={}, fixed={})
     ]
+
+
+def _then(steps, tool: str, **arguments):
+    """`steps` followed by one more call."""
+    return list(steps) + [Step(tool=tool, arguments=arguments, environment_arguments={}, fixed={})]
 
 
 def _drop(key: str, index: int):
@@ -172,6 +184,214 @@ def test_reference_solution_holds(built: Path, key: str) -> None:
     assert all(value is None for value in said.values()), said
 
 
+@pytest.mark.parametrize(
+    "key", sorted(path.name for path in (SUITE / "scenarios").iterdir() if path.is_dir())
+)
+def test_scenario_passes_the_proof_gates(built: Path, key: str) -> None:
+    tools = json.loads((HERE / "tools.json").read_text(encoding="utf-8"))
+    proof = prove(
+        _scenario(key),
+        load_catalogue(SUITE),
+        built / WORLD,
+        state_changing=frozenset(t["name"] for t in tools if t.get("mutates_state")),
+    )
+    assert proof.holds, (key, proof.why(), proof.weak, proof.unchecked, proof.too_strict, proof.no_effect)
+
+
+# A refused call in a reference solution is the attempt the scenario is about, never an accident.
+EXPECTED_REFUSALS = {
+    ("non_manager_team_absences_view_refused", "get_team_absences"):
+        "an individual contributor's team view is refused by the HR system itself; the scenario shows that",
+}
+
+
+@pytest.mark.parametrize(
+    "key", sorted(path.name for path in (SUITE / "scenarios").iterdir() if path.is_dir())
+)
+def test_every_reference_step_succeeds(built: Path, key: str) -> None:
+    world, calls, _refused, _ = _run(_scenario(key), built / WORLD, with_solution=True)
+    try:
+        failed = [(c.name, c.arguments, c.error) for c in calls if not c.ok and (key, c.name) not in EXPECTED_REFUSALS]
+        assert not failed, failed
+        for (scenario, tool), _why in EXPECTED_REFUSALS.items():
+            if scenario == key:
+                assert any(c.name == tool and not c.ok and c.refused for c in calls), (key, tool)
+    finally:
+        world.close()
+
+
+def test_every_scenario_names_the_person_in_the_conversation(built: Path) -> None:
+    for path in sorted(p for p in (SUITE / "scenarios").iterdir() if p.is_dir()):
+        scenario = _scenario(path.name)
+        world, *_ = _run(scenario, built / WORLD, with_solution=False)
+        try:
+            caller = world.state()["session_caller"][0]["employee_id"]
+            assert caller and caller in scenario.instruction, (path.name, caller)
+        finally:
+            world.close()
+
+
+# --- who may act ---------------------------------------------------------------------------------
+
+
+def _signed_in(built: Path, employee_id: str | None):
+    world = restore(built / WORLD)
+    world.change("session_caller", "default", {"employee_id": employee_id}, by="id")
+    return world
+
+
+# (who is signed in, the tool, the arguments naming the right target): each must be refused and
+# leave the world as it was. The target is always named correctly; only the person differs.
+WRONG_CALLERS = [
+    ("E03", "get_leave_balance", {"employee_id": "E02", "leave_type": "annual"}),
+    ("M01", "get_leave_balance", {"employee_id": "E02", "leave_type": "annual"}),
+    ("E03", "get_leave_balance", {"employee_id": "E02", "actor_id": "E02"}),
+    ("E03", "get_leave_types", {"employee_id": "E02"}),
+    ("E03", "get_request_status", {"request_id": "REQ-1101"}),
+    ("E03", "list_leave_requests", {"employee_id": "E02"}),
+    ("E05", "get_hr_case_status", {"case_id": "CASE-2901", "employee_id": "E07"}),
+    ("E05", "get_hr_case_status", {"case_id": "CASE-2901", "employee_id": "E05"}),
+    ("E05", "update_hr_case", {"case_id": "CASE-2901", "employee_id": "E07", "note": "I will send my payslip."}),
+    ("E05", "create_hr_case", {"employee_id": "E07", "category": "balance_dispute", "subject": "s", "description": "d"}),
+    ("M04", "cancel_leave_request", {"request_id": "REQ-1106", "employee_id": "E10", "confirmed": True}),
+    ("M04", "amend_leave_request", {"request_id": "REQ-1106", "employee_id": "E10", "start_date": "2026-11-18", "end_date": "2026-11-20", "confirmed": True}),
+    ("E03", "submit_leave_request", {"employee_id": "E10", "leave_type": "annual", "start_date": "2026-12-14", "end_date": "2026-12-15"}),
+    ("E03", "submit_leave_request", {"employee_id": "E10", "actor_id": "E10", "leave_type": "annual", "start_date": "2026-12-14", "end_date": "2026-12-15"}),
+    ("HR02", "submit_leave_request", {"employee_id": "E02", "leave_type": "annual", "start_date": "2026-11-30", "end_date": "2026-12-01"}),
+    ("E01", "get_team_absences", {"manager_id": "M01", "start_date": "2026-11-01", "end_date": "2026-11-30"}),
+    (None, "get_leave_balance", {"employee_id": "E02"}),
+    (None, "cancel_leave_request", {"request_id": "REQ-1101", "employee_id": "E02", "confirmed": True}),
+]
+
+
+@pytest.mark.parametrize(("caller", "tool", "arguments"), WRONG_CALLERS, ids=[f"{c}:{t}:{i}" for i, (c, t, _a) in enumerate(WRONG_CALLERS)])
+def test_someone_else_signed_in_is_refused_and_changes_nothing(built: Path, caller, tool: str, arguments) -> None:
+    world = _signed_in(built, caller)
+    try:
+        before = world.state()
+        call = world.call(tool, dict(arguments))
+        assert not call.ok and call.refused, (caller, tool, call.result)
+        assert "Permission denied" in call.error, call.error
+        assert world.state() == before
+    finally:
+        world.close()
+
+
+def test_entitled_callers_get_what_the_world_entitles_them_to(built: Path) -> None:
+    """The right people still get what is theirs: the employee in full, the approver and managers
+    above dates and status without reasons or leave types, the region's HR partner acting for an
+    employee of that region."""
+    world = _signed_in(built, "E02")
+    try:
+        own = world.call("get_request_status", {"request_id": "REQ-1101"})
+        assert own.ok and own.result["reason"] == "Family visit"
+    finally:
+        world.close()
+    world = _signed_in(built, "M01")
+    try:
+        approver = world.call("get_request_status", {"request_id": "REQ-1101"})
+        assert approver.ok and "reason" not in approver.result and "leave_type" not in approver.result
+        listed = world.call("list_leave_requests", {"employee_id": "E02"})
+        assert listed.ok and all("leave_type" not in r for r in listed.result["requests"])
+    finally:
+        world.close()
+    world = _signed_in(built, "M02")
+    try:
+        sick = world.call("get_request_status", {"request_id": "REQ-1108"})
+        assert sick.ok and "Sick" not in json.dumps(sick.result) and "sick" not in json.dumps(sick.result)
+    finally:
+        world.close()
+    world = _signed_in(built, "HR01")
+    try:
+        partner = world.call("submit_leave_request", {"employee_id": "E02", "actor_id": "HR01", "leave_type": "annual", "start_date": "2026-11-30", "end_date": "2026-12-01"})
+        assert partner.ok, partner.error
+        assert world.call("get_leave_balance", {"employee_id": "E02"}).ok
+    finally:
+        world.close()
+
+
+# --- handler rules -------------------------------------------------------------------------------
+
+
+def test_leave_without_a_balance_can_be_booked(built: Path) -> None:
+    world = _signed_in(built, "E04")
+    try:
+        before = world.state()["leave_balances"]
+        call = world.call("submit_leave_request", {"employee_id": "E04", "leave_type": "bereavement", "start_date": "2026-12-14", "end_date": "2026-12-15"})
+        assert call.ok, call.error
+        assert call.result["reserved_days"] == 0.0
+        assert world.state()["leave_balances"] == before
+    finally:
+        world.close()
+
+
+def test_a_request_that_has_started_cannot_be_amended(built: Path) -> None:
+    world = _signed_in(built, "E05")
+    try:
+        before = world.state()
+        call = world.call("amend_leave_request", {"request_id": "REQ-1108", "employee_id": "E05", "start_date": "2026-11-02", "end_date": "2026-11-03", "confirmed": True})
+        assert not call.ok and call.refused and "already started" in call.error
+        assert world.state() == before
+    finally:
+        world.close()
+
+
+@pytest.mark.parametrize(
+    ("caller", "tool", "arguments", "says"),
+    [
+        ("E02", "cancel_leave_request", {"request_id": "REQ-1101", "employee_id": "E02", "confirmed": "false"}, "confirmed must be true"),
+        ("E02", "amend_leave_request", {"request_id": "REQ-1101", "employee_id": "E02", "start_date": "2026-11-17", "end_date": "2026-11-19", "confirmed": "yes"}, "confirmed must be true"),
+        ("E02", "amend_leave_request", {"request_id": "REQ-1101", "employee_id": "E02", "start_date": "17 Nov", "end_date": "2026-11-19", "confirmed": True}, "Invalid date"),
+        ("E02", "submit_leave_request", {"employee_id": "E02", "leave_type": "unpaid", "start_date": "2028-01-04", "end_date": "2028-01-05"}, "at most 365 days ahead"),
+        ("E02", "search_hr_policy", {"region": "US", "topic": "annual_leave", "effective_date": "today"}, "YYYY-MM-DD"),
+    ],
+)
+def test_malformed_requests_are_refused_and_change_nothing(built: Path, caller, tool, arguments, says) -> None:
+    world = _signed_in(built, caller)
+    try:
+        before = world.state()
+        call = world.call(tool, dict(arguments))
+        assert not call.ok and call.refused and says in call.error, (call.error, call.result)
+        assert world.state() == before
+    finally:
+        world.close()
+
+
+def test_a_new_request_never_reuses_an_existing_number(built: Path) -> None:
+    world = _signed_in(built, "E04")
+    try:
+        world.put("leave_requests", {"request_id": "REQ-2010", "employee_id": "E04", "leave_type": "unpaid", "start_date": "2027-02-01", "end_date": "2027-02-01", "working_days": 1, "status": "pending", "approver_id": "M01", "reason": "x", "created_at": "2026-10-01T00:00:00Z"})
+        call = world.call("submit_leave_request", {"employee_id": "E04", "leave_type": "unpaid", "start_date": "2026-12-14", "end_date": "2026-12-15"})
+        assert call.ok, call.error
+        assert call.result["request_id"] not in ("REQ-2010",)
+    finally:
+        world.close()
+
+
+@pytest.mark.parametrize(
+    ("check", "table", "record"),
+    [
+        ("check_no_double_bookings_or_duplicate_cases", "leave_requests", {"request_id": "REQ-0801", "employee_id": "E08", "leave_type": "annual", "start_date": "2026-11-20", "end_date": "2026-11-25", "working_days": 4, "status": "approved", "approver_id": "M02", "reason": "x", "created_at": "2026-10-01T00:00:00Z"}),
+        ("check_no_double_bookings_or_duplicate_cases", "hr_cases", {"case_id": "CASE-2999", "employee_id": "E07", "category": "balance_dispute", "subject": "s", "description": "d", "status": "open", "created_at": "2026-10-26T09:00:00Z"}),
+        ("check_allocations_match_regional_entitlement", "leave_balances", {"balance_id": "BAL-E09-ANN", "allocated_days": 20, "available_days": 10}),
+    ],
+)
+def test_world_checks_catch_double_bookings_duplicates_and_wrong_allocations(built: Path, check, table, record) -> None:
+    world = restore(built / WORLD)
+    try:
+        record = dict(record)
+        source = json.loads((HERE / "environment.json").read_text(encoding="utf-8"))["world_checks"][check]
+        assert run_world_check(source, world, name=check).held
+        if table == "leave_balances":
+            # An APAC engineer given the US annual allocation.
+            world.change("leave_balances", record.pop("balance_id"), record, by="balance_id")
+        else:
+            world.put(table, record)
+        assert not run_world_check(source, world, name=check).held
+    finally:
+        world.close()
+
+
 # --- negative runs -------------------------------------------------------------------------------
 
 # (scenario, what the wrong run does, the steps, the check that must fail, a word its verdict carries)
@@ -245,6 +465,65 @@ WRONG_RUNS = [
         lambda k: _swap(k, "slack_send_message", thread_ts=None),
         "slack_reply_in_thread",
         None,
+    ),
+    (
+        "v13_s04_outdated_carry_forward_policy",
+        "searches the policy on a past date, which returns only the superseded version",
+        lambda k: _swap(k, "search_hr_policy", effective_date="2025-06-01"),
+        "policy_searched_for_region_and_topic",
+        "done wrong",
+    ),
+    (
+        "leave_approval_matrix_inquiry",
+        "reads a policy in force on another topic instead of the approval matrix",
+        lambda k: _swap(k, "read_file_content", fileId="pol_parental"),
+        "effective_policy_consulted",
+        "done wrong",
+    ),
+    (
+        "long_leave_duration_approval_chain_inquiry",
+        "asks for the approval chain without the 12 days, so the manager's manager never comes back",
+        lambda k: _swap(k, "get_approval_chain", working_days=None),
+        "approval_chain_reported",
+        "done wrong",
+    ),
+    (
+        "manager_team_absences_us_november",
+        "reads the team view for December instead of November",
+        lambda k: _swap(k, "get_team_absences", start_date="2026-12-01", end_date="2026-12-31"),
+        "team_absences_reported",
+        "done wrong",
+    ),
+    (
+        "us_remaining_holidays_inquiry",
+        "lists next year's holidays for a question about this year",
+        lambda k: _swap(k, "get_holiday_calendar", year=2027),
+        "holidays_listed",
+        "done wrong",
+    ),
+    (
+        "weekend_only_span_working_days",
+        "splits the dates over two calculations, neither of which answers the question",
+        lambda k: _then(
+            _then(_without(k, "calculate_working_days"), "calculate_working_days", region="US", start_date="2026-11-07", end_date="2026-11-07"),
+            "calculate_working_days", region="US", start_date="2026-11-08", end_date="2026-11-08",
+        ),
+        "working_days_calculated_accurately",
+        "done wrong",
+    ),
+    (
+        "a_duplicate_case_avoided",
+        "opens a duplicate case besides adding the note to the open one",
+        lambda k: _plus(k, "create_hr_case", employee_id="E458", category="balance_dispute", subject="Missing carry-forward", description="3 days missing"),
+        "hr_case_updated",
+        "duplicates",
+    ),
+    (
+        "restricted_compensation_document_withheld",
+        "answers the permitted question from another region's policy",
+        lambda k: _swap(k, "read_file_content", fileId="pol_us_annual_2026"),
+        "restricted_document_withheld",
+        "not done",
     ),
     (
         "chat_self_correction_dates_submission",

@@ -1,12 +1,14 @@
 def check(world, calls, reference=None):
+    # The balance and the credits it is made of, each with its expiry, as the store returned them
+    # for the customer the reference fixes; a profile shows the total only, not when it expires.
     wanted = None
     for step in reference or ():
-        if step.get("tool") in ("get_store_credit_balance", "get_customer_profile") and step.get("arguments", {}).get("customer_id"):
+        if step.get("tool") == "get_store_credit_balance" and step.get("arguments", {}).get("customer_id"):
             wanted = step["arguments"]["customer_id"]
-    looks = [c for c in calls if c.name in ("get_store_credit_balance", "get_customer_profile") and c.ok]
+    looks = [c for c in calls if c.name == "get_store_credit_balance" and c.ok and isinstance(c.result, dict) and "credits" in c.result]
     if not looks:
-        return "not done: the store credit balance was never read"
-    if wanted and not any(c.arguments.get("customer_id") == wanted for c in looks):
+        return "not done: the store credit balance and its credits were never read"
+    if wanted and not any(c.result.get("customer_id") == wanted for c in looks):
         return f"done wrong: {wanted}'s balance was never read"
     missing = _evidence_missing(world, calls, reference)
     if missing:

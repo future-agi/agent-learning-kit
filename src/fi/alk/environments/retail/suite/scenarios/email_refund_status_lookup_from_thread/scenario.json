@@ -5,12 +5,12 @@
   "use_case": "Return status inquiry and duplicate prevention",
   "branch": "Iris West references email thread th_r05_refund_status to check refund status of received return R90",
   "tests": "the agent reads thread th_r05_refund_status, verifies order O29, and retrieves return status for return R90",
-  "instruction": "You sent an email earlier (thread subject 'Refund status') regarding return R90 for order O29. You want to check the status of your refund in chat.\n\nYour details:\n- Name: Iris West\n- Email: iris.west@example.com\n- Postal Code: 94102\n- Return ID: R90\n- Order ID: O29",
+  "instruction": "You sent an email earlier (thread subject 'When will my refund for R90 arrive') regarding return R90 for order O29. You want to check the status of your refund in chat.\n\nYour details:\n- Name: Iris West\n- Email: iris.west@example.com\n- Postal Code: 63101\n- Return ID: R90\n- Order ID: O29",
   "keywords": [
     "email_pickup"
   ],
   "persona": {
-    "name": "Iris W.",
+    "name": "Iris West",
     "gender": "female",
     "age_group": "",
     "occupation": "",
@@ -49,7 +49,7 @@
     {
       "tool": "verify_order_owner",
       "arguments": {
-        "postal_code": "94102",
+        "postal_code": "63101",
         "order_id": "O29"
       },
       "environment_arguments": {},

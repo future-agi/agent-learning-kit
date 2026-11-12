@@ -5,7 +5,7 @@
   "use_case": "Pick up an access request from Slack and reply in the thread after approval",
   "branch": "Ian Malcolm asked in #it-access when his reporting access expires; IT desk reads the Slack thread and looks up his entitlement expiry dates",
   "tests": "reads Ian Malcolm's Slack thread in #it-access and looks up his entitlement expiry details",
-  "instruction": "You are Leila Thorne, an IT operations lead. Ian Malcolm (E09) asked in #it-access (message IM10) when his reporting editor access expires. You want the IT assistant to read the Slack thread and retrieve Ian's active entitlement expiry details to answer his question accurately.\n\nYour details:\nTarget employee: Ian Malcolm (E09)\nSlack channel: #it-access (CH_ITACCESS)\nMessage timestamp: 1792926000.000010",
+  "instruction": "You are Leila Thorne (employee ID E512), an IT operations lead. Ian Malcolm (E09) asked in #it-access (message IM10) when his reporting editor access expires. You want the IT assistant to read the Slack thread and retrieve Ian's active entitlement expiry details to answer his question accurately.\n\nYour details:\nTarget employee: Ian Malcolm (E09)\nSlack channel: #it-access (CH_ITACCESS)\nMessage timestamp: 1792926000.000010",
   "keywords": [
     "expiry_check"
   ],

@@ -56,7 +56,9 @@
       },
       "environment_arguments": {},
       "fixed": {
-        "manager_id": "caller: M03"
+        "manager_id": "caller: M03",
+        "start_date": "caller: 2026-11-23",
+        "end_date": "caller: 2026-11-27"
       }
     }
   ],

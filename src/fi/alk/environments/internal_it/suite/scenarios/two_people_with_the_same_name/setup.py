@@ -15,3 +15,4 @@ def setup(world):
         "manager_id": "E06",
         "status": "active"
     })
+    world.change("session_caller", "default", {"employee_id": "E445"}, by="id")

@@ -1,14 +1,25 @@
 def check(world, calls, reference=None):
-    region = None
+    region = year = None
     for step in reference or ():
-        if step.get("tool") == "get_holiday_calendar" and step.get("arguments", {}).get("region"):
-            region = step["arguments"]["region"]
-    looks = [c for c in calls if c.name == "get_holiday_calendar" and c.ok]
+        a = step.get("arguments", {})
+        if step.get("tool") == "get_holiday_calendar":
+            region = a.get("region") or region
+            year = a.get("year") or year
+    looks = [c for c in calls if c.name == "get_holiday_calendar" and c.ok and isinstance(c.result, dict)]
     if not looks:
         return "not done: the holiday calendar was never read"
-    if region and not any(c.arguments.get("region") == region for c in looks):
-        return f"done wrong: the {region} calendar was never read"
-    return None
+    # Every holiday of that region in the year asked about must be in what came back.
+    wanted = {
+        h["holiday_date"]
+        for h in world.state().get("holiday_calendars", [])
+        if (not region or h["region"] == region) and (not year or h["holiday_date"].startswith(str(year)))
+    }
+    for c in looks:
+        if region and c.arguments.get("region") != region:
+            continue
+        if wanted <= {h.get("date") for h in c.result.get("holidays") or []}:
+            return None
+    return f"done wrong: the {region or ''} {year or ''} calendar was never returned"
 
 
 if __name__ == "__main__":

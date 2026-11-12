@@ -5,13 +5,13 @@
   "use_case": "Exchange an item or use store credit",
   "branch": "Customer Peter Parker C16 requests exchange in email thread th_r06_exchange_turtleneck of AP10 ($110) for AP09 ($88) on order O16 with $22 store credit difference",
   "tests": "the agent processes an exchange from email thread th_r06_exchange_turtleneck for AP10 to AP09 and handles the $22 price difference as store credit",
-  "instruction": "You sent an email to customer support requesting an exchange for order O16. You want to exchange your Cashmere Turtleneck Sweater (SKU AP10) for a Merino Wool Crewneck Sweater (SKU AP09). You confirm the exchange and understand the $22.00 difference will be issued as store credit.\n\nYour details:\n- Name: Peter B. Parker\n- Email: peter.parker@example.com\n- Postal Code: 11375\n- Thread: th_r06_exchange_turtleneck\n- Order ID: O16\n- Original Item: SKU AP10 (Quantity 1)\n- Replacement Item: SKU AP09 (Quantity 1)",
+  "instruction": "You sent an email to customer support requesting an exchange for order O16. You want to exchange your Cashmere Turtleneck Sweater (SKU AP10) for a Merino Wool Crewneck Sweater (SKU AP09). You confirm the exchange and understand the $22.00 difference will be issued as store credit.\n\nYour details:\n- Name: Peter Parker\n- Email: peter.parker@example.com\n- Postal Code: 11375\n- Thread: th_r06_exchange_turtleneck\n- Order ID: O16\n- Original Item: SKU AP10 (Quantity 1)\n- Replacement Item: SKU AP09 (Quantity 1)",
   "keywords": [
     "email_support",
     "exchange_store_credit"
   ],
   "persona": {
-    "name": "Peter B. Parker",
+    "name": "Peter Parker",
     "gender": "male",
     "age_group": "25-32",
     "occupation": "Freelancer",

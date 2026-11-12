@@ -9,3 +9,4 @@ def setup(world):
         "request_key": "req-pc-t05",
         "created_at": "2026-10-10T10:00:00Z"
     })
+    world.change("session_caller", "default", {"actor_id": "U05_MEMBER"}, by="id")

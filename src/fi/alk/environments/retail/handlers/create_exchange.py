@@ -1,7 +1,21 @@
+def _caller(db):
+    """The customer signed in to this conversation. The session sets it; an ID, email or name the
+    desk is told never changes who it is talking to."""
+    row = db.one("SELECT customer_id FROM session_caller WHERE id = 'default'")
+    return row["customer_id"] if row else None
+
+
+def _for_caller(db, customer_id, what):
+    """Act only for the signed-in customer: a customer_id argument is checked, never trusted."""
+    caller = _caller(db)
+    if not caller or str(customer_id or "").strip() != caller:
+        raise ToolError(f"Permission denied: {what} is not the signed-in customer's ({caller or 'nobody is signed in'}).", category="permission_denied")
+
+
 import json
 from datetime import datetime
 
-def handle(args, db):
+def _handle(args, db):
     order_id = args.get("order_id")
     customer_id = args.get("customer_id")
     original_sku = args.get("original_sku")
@@ -22,12 +36,17 @@ def handle(args, db):
         raise ToolError(f"Order {order_id} not found.", category="not_found")
     if order["customer_id"].strip() != str(customer_id).strip():
         raise ToolError(f"Customer {customer_id} does not match order owner.", category="permission_denied")
+    _for_caller(db, customer_id, f"order {order_id}")
     if order["status"] != "delivered" or not order["delivery_date"]:
         raise ToolError(f"Cannot exchange items from an order with status '{order['status']}'.", category="policy_blocked")
     clock = db.one("SELECT now FROM clock")["now"]
     if request_key:
         existing = db.one("SELECT * FROM exchanges WHERE request_key = ?", [request_key])
         if existing:
+            # A replay is the same exchange by the same customer; anything else under the key is a
+            # conflict, never another exchange reported as this one.
+            if (existing["order_id"], existing["customer_id"], existing["original_sku"], existing["replacement_sku"], existing["quantity"]) != (order_id, customer_id, original_sku, replacement_sku, quantity):
+                raise ToolError(f"request_key {request_key!r} was already used for a different exchange.", category="conflict")
             return {"exchange_id": existing["exchange_id"], "order_id": order_id, "original_sku": existing["original_sku"], "replacement_sku": existing["replacement_sku"], "quantity": existing["quantity"], "price_difference_cents": existing["price_difference_cents"], "status": existing["status"], "idempotent": True}
     line = db.one("SELECT * FROM order_items WHERE order_id = ? AND sku = ?", [order_id, original_sku])
     if not line:
@@ -39,6 +58,8 @@ def handle(args, db):
     policy = {r["name"]: json.loads(r["value"]) for r in db.query("SELECT name, value FROM environment_policy")}
     if original and original["is_final_sale"] and bool(policy.get("final_sale_enforced", True)):
         raise ToolError(f"SKU {original_sku} is final sale and cannot be exchanged.", category="policy_blocked")
+    if original and not original["returnable"] and not (original["is_final_sale"] and not bool(policy.get("final_sale_enforced", True))):
+        raise ToolError(f"SKU {original_sku} is not returnable, so it cannot be exchanged.", category="policy_blocked")
     if original and replacement["category"] != original["category"]:
         raise ToolError(f"Policy: an exchange stays within the category; {replacement_sku} is {replacement['category']}, {original_sku} is {original['category']}.", category="policy_blocked")
     window = int(policy.get("exchange_window_days", 30))
@@ -48,7 +69,13 @@ def handle(args, db):
     now = datetime.fromisoformat(clock.replace("Z", "+00:00"))
     if (now - delivered).days > window:
         raise ToolError(f"Policy: order {order_id} was delivered on {order['delivery_date'][:10]}, outside the {window}-day exchange window.", category="policy_blocked")
-    available = line["quantity"] - line["returned_quantity"]
+    # Units on an active return are not held any more, even where the line's counter lags behind.
+    on_returns = db.one(
+        "SELECT COALESCE(SUM(ri.quantity), 0) AS q FROM return_items ri JOIN returns r ON r.return_id = ri.return_id "
+        "WHERE ri.item_id = ? AND r.status != 'cancelled'",
+        [line["item_id"]],
+    )
+    available = line["quantity"] - max(line["returned_quantity"], int(on_returns["q"] if on_returns else 0))
     if quantity > available:
         raise ToolError(f"Requested quantity {quantity} exceeds the {available} unit(s) still held for SKU {original_sku}.", category="conflict")
     if db.one("SELECT 1 FROM exchanges WHERE order_id = ? AND original_sku = ? AND status != 'cancelled'", [order_id, original_sku]):
@@ -64,3 +91,43 @@ def handle(args, db):
         db.execute("INSERT INTO store_credits (credit_id, customer_id, amount_cents, source, issued_at, expires_at) VALUES (?, ?, ?, ?, ?, ?)", [f"SCR{credit_count + 1:02d}", customer_id, -difference, f"price difference on exchange {exchange_id}", clock, clock[:4].replace(clock[:4], str(int(clock[:4]) + 1)) + clock[4:]])
         db.execute("UPDATE customers SET store_credit_cents = store_credit_cents + ? WHERE customer_id = ?", [-difference, customer_id])
     return {"exchange_id": exchange_id, "order_id": order_id, "original_sku": original_sku, "replacement_sku": replacement_sku, "quantity": quantity, "price_difference_cents": difference, "difference_note": ("charged before the replacement ships" if difference > 0 else "issued as store credit" if difference < 0 else "no difference"), "status": "authorized", "idempotent": False}
+
+
+_WRITES = ("customers", "exchanges", "order_items", "store_credits")
+
+def _all_or_nothing(db, run):
+    """Run the call so that a failed call changes nothing. A handler gets no transaction of its own,
+    so every table this tool writes is held first and put back if the call raises, whether a write
+    failed partway or the call refused after writing. Only a fault the world simulates on purpose
+    (an error marked keep_writes: a rival booking, a commit whose reply was lost, a fault used up)
+    keeps what it wrote."""
+    held = {table: db.query(f"SELECT * FROM {table}") for table in _WRITES}
+    try:
+        return run()
+    except Exception as failed:
+        if not getattr(failed, "keep_writes", False):
+            for table, rows in held.items():
+                if _same(db.query(f"SELECT * FROM {table}"), rows):
+                    continue
+                db.execute(f"DELETE FROM {table}")
+                for row in rows:
+                    cols = list(row)
+                    db.execute(
+                        f"INSERT INTO {table} ({', '.join(chr(34) + c + chr(34) for c in cols)}) VALUES ({', '.join('?' * len(cols))})",
+                        [row[c] for c in cols],
+                    )
+        raise
+
+def _same(rows, held):
+    """Whether a table still holds exactly the rows it held, in any order: only a table the call
+    changed is rewritten."""
+    import json
+
+    def key(row):
+        return json.dumps(row, sort_keys=True, default=str)
+
+    return sorted(map(key, rows)) == sorted(map(key, held))
+
+
+def handle(args, db):
+    return _all_or_nothing(db, lambda: _handle(args, db))

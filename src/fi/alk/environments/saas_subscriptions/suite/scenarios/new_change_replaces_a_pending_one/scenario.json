@@ -5,7 +5,7 @@
   "use_case": "Manage and cancel pending scheduled plan changes",
   "branch": "Admin replaces a pending downgrade (PC405) with a scheduled Enterprise upgrade (20 seats) at renewal",
   "tests": "Cancels pending change PC405 and schedules new Enterprise plan change for 20 seats at end of period",
-  "instruction": "You are Nancy Naughton, billing administrator for Tenant T405 (User ID: U405_ADMIN). Your company currently has a Pro subscription with 20 seats, and there is a pending scheduled downgrade to Basic (PC405). You now want to cancel that pending downgrade and instead schedule an upgrade to Enterprise with 20 seats at renewal (end of period). When the agent asks, confirm canceling PC405 and then confirm scheduling Enterprise with 20 seats.\n\nYour details:\n- Tenant ID: T405\n- User ID: U405_ADMIN\n- Pending Change to Cancel: PC405\n- Target Plan: Enterprise (enterprise)\n- Target Seats: 20\n- Effective Timing: end of period",
+  "instruction": "You are Nancy Naughton, billing administrator for Tenant T405 (User ID: U405_ADMIN). Your company currently has a Pro subscription with 20 seats, and there is a pending scheduled downgrade to 10 Pro seats (PC405). You now want to cancel that pending downgrade and instead schedule an upgrade to Enterprise with 20 seats at renewal (end of period). When the agent asks, confirm canceling PC405 and then confirm scheduling Enterprise with 20 seats.\n\nYour details:\n- Tenant ID: T405\n- User ID: U405_ADMIN\n- Pending Change to Cancel: PC405\n- Target Plan: Enterprise (enterprise)\n- Target Seats: 20\n- Effective Timing: end of period",
   "keywords": [
     "cancel_plan_change",
     "plan_upgrade",

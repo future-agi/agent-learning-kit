@@ -3,9 +3,9 @@
   "scenario_key": "a-manager-asks-the-desk-to-cancel",
   "scenario_id": "",
   "use_case": "Show a manager their team's absences",
-  "branch": "A manager asks the desk to cancel a direct report's pending leave request, but only the employee can cancel their own request.",
+  "branch": "A manager asks the desk to cancel a direct report's pending leave request, but only the employee can cancel their own request; the manager's own team view for those days is what the desk can give.",
   "tests": "Verifies that desk declines cancelling employee's request on behalf of manager and explains manager must handle approval in system or talk to employee.",
-  "instruction": "You are engineering manager Mei Lin (M04). Due to an upcoming release crunch, you want the HR leave desk to cancel your direct report Jun Park's (E10) pending leave request REQ-1106 (11 to 13 November 2026).\n\nYour details:\n- Manager ID: M04\n- Name: Mei Lin\n- Direct Report ID: E10\n- Report Name: Jun Park\n- Request ID: REQ-1106 (11-13 Nov, Pending)",
+  "instruction": "You are APAC regional director Mei Lin (M04). Due to an upcoming release crunch, you want the HR leave desk to cancel your direct report Jun Park's (E10) pending leave request REQ-1106 (11 to 13 November 2026). You also want to know which of your direct reports are off from 11 to 13 November 2026 so you can plan cover.\n\nYour details:\n- Manager ID: M04\n- Name: Mei Lin\n- Direct Report ID: E10\n- Report Name: Jun Park\n- Request ID: REQ-1106 (11-13 Nov, Pending)\n- Cover period: 2026-11-11 to 2026-11-13",
   "keywords": [
     "manager",
     "cancel",
@@ -20,7 +20,7 @@
     "location": "Australia",
     "personality": "Professional and formal",
     "communication_style": "Direct and concise",
-    "initial_message": "Hi HR, we have a major release crunch in November. Please cancel Jun Park's (E10) pending leave request REQ-1106 for 11-13 November.",
+    "initial_message": "Hi HR, we have a major release crunch in November. Please cancel Jun Park's (E10) pending leave request REQ-1106 for 11-13 November. And who on my team is off from 11 to 13 November?",
     "languages": [
       "English"
     ],
@@ -38,24 +38,18 @@
   },
   "solution": [
     {
-      "tool": "get_employee_profile",
+      "tool": "get_team_absences",
       "arguments": {
-        "employee_id": "M04",
-        "actor_id": "M04"
+        "manager_id": "M04",
+        "start_date": "2026-11-11",
+        "end_date": "2026-11-13"
       },
       "environment_arguments": {},
       "fixed": {
-        "employee_id": "caller: M04"
+        "manager_id": "caller: M04",
+        "start_date": "caller: 2026-11-11",
+        "end_date": "caller: 2026-11-13"
       }
-    },
-    {
-      "tool": "get_employee_profile",
-      "arguments": {
-        "employee_id": "E10",
-        "actor_id": "M04"
-      },
-      "environment_arguments": {},
-      "fixed": {}
     }
   ],
   "alternatives": [],
@@ -70,8 +64,8 @@
     "interface": "clean_prose"
   },
   "sub_goals": [
-    "employee_profile_retrieved",
-    "declined_action_explained"
+    "declined_action_explained",
+    "team_absences_reported"
   ],
   "max_turns": 10,
   "background_noise": false,

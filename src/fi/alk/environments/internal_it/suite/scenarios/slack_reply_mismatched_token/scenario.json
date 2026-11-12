@@ -5,12 +5,12 @@
   "use_case": "Pick up an access request from Slack and reply in the thread after approval",
   "branch": "the IT lead provides pre-approved ticket APP-IT-402 to reply to Ryan Howard that his offered token belongs to request AR-102 and cannot be reused",
   "tests": "the agent reads Ryan's Slack thread, inspects AR-105 status, and posts pre-approved reply APP-IT-402 explaining token mismatch without posting tokens in the channel",
-  "instruction": "You are Chloe Bennett from IT service desk support. You are handling a Slack thread from Ryan Howard (IM06, timestamp 1792830600.000006 in #it-access) where he asked to reuse a token from AR-102 for his request AR-105.\nCheck the approval status of AR-105 and reply to his thread using pre-approved Slack message ticket APP-IT-402 stating that the token from AR-102 cannot be reused for AR-105.\n\nYour details:\n- Channel: #it-access (CH_ITACCESS)\n- Message timestamp: 1792830600.000006\n- Requester: Ryan Howard (E18)\n- Request ID: AR-105\n- Slack Approval ID: APP-IT-402\n- Pre-approved text: \"The provided approval token was issued for request AR-102 and cannot be used for AR-105. A separate approval token for AR-105 is required.\"",
+  "instruction": "You are Tomas Reyes (employee ID E517) from IT service desk support. You are handling a Slack thread from Ryan Howard (IM06, timestamp 1792830600.000006 in #it-access) where he asked to reuse a token from AR-102 for his request AR-105.\nCheck the approval status of AR-105 and reply to his thread using pre-approved Slack message ticket APP-IT-402 stating that the token from AR-102 cannot be reused for AR-105.\n\nYour details:\n- Channel: #it-access (CH_ITACCESS)\n- Message timestamp: 1792830600.000006\n- Requester: Ryan Howard (E18)\n- Request ID: AR-105\n- Slack Approval ID: APP-IT-402\n- Pre-approved text: \"The provided approval token was issued for request AR-102 and cannot be used for AR-105. A separate approval token for AR-105 is required.\"",
   "keywords": [
     "slack_reply"
   ],
   "persona": {
-    "name": "Chloe Bennett",
+    "name": "Tomas Reyes",
     "gender": "female",
     "age_group": "25-32",
     "occupation": "Customer Service",

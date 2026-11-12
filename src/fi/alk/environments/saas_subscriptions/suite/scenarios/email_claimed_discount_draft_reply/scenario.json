@@ -5,12 +5,12 @@
   "use_case": "Pick up a billing request that arrived by email",
   "branch": "Agent reviews discount claim email thread th_b01_discount_claim, checks records, and drafts reply to customer without applying discount",
   "tests": "Drafts email reply to customer on discount claim stating no discount is on record and offering a billing case",
-  "instruction": "You are Brenda Boss, a billing desk supervisor. You want the billing assistant to check email thread th_b01_discount_claim from Brenda Boss (BetaTech, T02) regarding a 20% discount on invoice inv_02_curr ($548.90). You want the agent to verify billing records and prepare a draft email reply to Brenda explaining that there is no discount on record and offering to open a finance case.\n\nYour details:\n- Name: Brenda Boss\n- Customer Name: Brenda Boss\n- Customer Actor ID: U02_ADMIN\n- Customer Tenant ID: BetaTech (T02)\n- Customer Email: brenda@betatech.com\n- Email Thread: th_b01_discount_claim\n- Invoice ID: inv_02_curr",
+  "instruction": "You are Nadia Brooks, a billing desk supervisor at Cloudnest (User ID: U_BL3). You want the billing assistant to check email thread th_b01_discount_claim from Brenda Boss (BetaTech, T02) regarding a 20% discount on invoice inv_02_curr ($548.90). You want the agent to verify billing records and prepare a draft email reply to Brenda explaining that there is no discount on record and offering to open a finance case.\n\nYour details:\n- Name: Nadia Brooks\n- Your User ID: U_BL3\n- Customer Name: Brenda Boss\n- Customer Tenant ID: BetaTech (T02)\n- Customer Email: brenda@betatech.com\n- Email Thread: th_b01_discount_claim\n- Invoice ID: inv_02_curr",
   "keywords": [
     "billing_admin"
   ],
   "persona": {
-    "name": "Brenda Boss",
+    "name": "Nadia Brooks",
     "gender": "female",
     "age_group": "32-40",
     "occupation": "Manager",
@@ -30,7 +30,7 @@
   "fixture": {
     "thread_id": "th_b01_discount_claim",
     "tenant_id": "T02",
-    "actor_id": "U02_ADMIN",
+    "actor_id": "U_BL3",
     "invoice_id": "inv_02_curr",
     "origin": "seed"
   },
@@ -46,18 +46,9 @@
       }
     },
     {
-      "tool": "verify_billing_admin",
-      "arguments": {
-        "tenant_id": "T02",
-        "actor_id": "U02_ADMIN"
-      },
-      "environment_arguments": {},
-      "fixed": {}
-    },
-    {
       "tool": "get_credit_notes",
       "arguments": {
-        "actor_id": "U02_ADMIN",
+        "actor_id": "U_BL3",
         "invoice_id": "inv_02_curr",
         "tenant_id": "T02"
       },
@@ -69,7 +60,7 @@
       "arguments": {
         "tenant_id": "T02",
         "status": "open",
-        "actor_id": "U02_ADMIN"
+        "actor_id": "U_BL3"
       },
       "environment_arguments": {},
       "fixed": {}

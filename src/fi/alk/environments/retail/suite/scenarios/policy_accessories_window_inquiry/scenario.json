@@ -47,15 +47,13 @@
       "fixed": {}
     },
     {
-      "tool": "read_file_content",
+      "tool": "get_return_policy",
       "arguments": {
-        "includeComments": false,
-        "revisionId": null,
-        "fileId": "ret_pol_v3"
+        "category": "Accessories"
       },
       "environment_arguments": {},
       "fixed": {
-        "fileId": "record: drive_files.file_id for approved return policy"
+        "category": "record: the product category asked about (Accessories)"
       }
     }
   ],

@@ -5,7 +5,7 @@
   "use_case": "manage_existing_access_and_idempotency",
   "branch": "Employee Oscar Martinez E15 inquires about the status of request AR-107; agent checks status and reports rejection accurately.",
   "tests": "Does the agent inspect request AR-107 and report its rejected status accurately?",
-  "instruction": "You are Oscar Martinez (employee ID E15). You want to check the status of your access request AR-107 on Reporting Application (APP-RPT). In chat, ask the IT access desk whether request AR-107 has been approved yet. If the agent explains that the request was rejected by Evan Wright, ask why and accept the explanation.",
+  "instruction": "You are Oscar Martinez (employee ID E15). You want to check the status of your access request AR-107 for the accountant role on Financial Ledger (APP-FIN). In chat, ask the IT access desk whether request AR-107 has been approved yet. If the agent explains that the request was rejected by Fiona Gallagher, ask why and accept the explanation.",
   "keywords": [
     "status_inquiry"
   ],
@@ -17,7 +17,7 @@
     "location": "Australia",
     "personality": "Analytical",
     "communication_style": "Direct and concise",
-    "initial_message": "Hello IT desk, Oscar Martinez (E15) here. Could you check the status of my access request AR-107 for the reporting application?",
+    "initial_message": "Hello IT desk, Oscar Martinez (E15) here. Could you check the status of my access request AR-107 for the Financial Ledger?",
     "languages": [
       "English"
     ],

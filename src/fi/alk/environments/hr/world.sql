@@ -117,13 +117,13 @@ INSERT INTO "leave_balances" VALUES('BAL-E07-SCK','E07','sick',10,0,0,10);
 INSERT INTO "leave_balances" VALUES('BAL-E08-ANN','E08','annual',25,13,0,12);
 INSERT INTO "leave_balances" VALUES('BAL-E08-SCK','E08','sick',10,2,0,8);
 INSERT INTO "leave_balances" VALUES('BAL-E09-ANN','E09','annual',18,10,0,8);
-INSERT INTO "leave_balances" VALUES('BAL-E09-SCK','E09','sick',10,1,0,9);
+INSERT INTO "leave_balances" VALUES('BAL-E09-SCK','E09','sick',12,1,0,11);
 INSERT INTO "leave_balances" VALUES('BAL-E10-ANN','E10','annual',18,4,3,11);
-INSERT INTO "leave_balances" VALUES('BAL-E10-SCK','E10','sick',10,0,0,10);
+INSERT INTO "leave_balances" VALUES('BAL-E10-SCK','E10','sick',12,0,0,12);
 INSERT INTO "leave_balances" VALUES('BAL-E11-ANN','E11','annual',18,17,0,1);
-INSERT INTO "leave_balances" VALUES('BAL-E11-SCK','E11','sick',10,4,0,6);
+INSERT INTO "leave_balances" VALUES('BAL-E11-SCK','E11','sick',12,4,0,8);
 INSERT INTO "leave_balances" VALUES('BAL-E12-ANN','E12','annual',18,6,0,12);
-INSERT INTO "leave_balances" VALUES('BAL-E12-SCK','E12','sick',10,0,0,10);
+INSERT INTO "leave_balances" VALUES('BAL-E12-SCK','E12','sick',12,0,0,12);
 INSERT INTO "leave_balances" VALUES('BAL-M01-ANN','M01','annual',25,10,0,15);
 INSERT INTO "leave_balances" VALUES('BAL-M01-SCK','M01','sick',10,0,0,10);
 INSERT INTO "leave_balances" VALUES('BAL-M02-ANN','M02','annual',25,12,0,13);
@@ -131,13 +131,13 @@ INSERT INTO "leave_balances" VALUES('BAL-M02-SCK','M02','sick',10,1,0,9);
 INSERT INTO "leave_balances" VALUES('BAL-M03-ANN','M03','annual',30,15,0,15);
 INSERT INTO "leave_balances" VALUES('BAL-M03-SCK','M03','sick',10,0,0,10);
 INSERT INTO "leave_balances" VALUES('BAL-M04-ANN','M04','annual',25,8,0,17);
-INSERT INTO "leave_balances" VALUES('BAL-M04-SCK','M04','sick',10,0,0,10);
+INSERT INTO "leave_balances" VALUES('BAL-M04-SCK','M04','sick',12,0,0,12);
 INSERT INTO "leave_balances" VALUES('BAL-HR01-ANN','HR01','annual',20,5,0,15);
 INSERT INTO "leave_balances" VALUES('BAL-HR01-SCK','HR01','sick',10,0,0,10);
 INSERT INTO "leave_balances" VALUES('BAL-HR02-ANN','HR02','annual',25,10,0,15);
 INSERT INTO "leave_balances" VALUES('BAL-HR02-SCK','HR02','sick',10,0,0,10);
 INSERT INTO "leave_balances" VALUES('BAL-HR03-ANN','HR03','annual',18,6,0,12);
-INSERT INTO "leave_balances" VALUES('BAL-HR03-SCK','HR03','sick',10,0,0,10);
+INSERT INTO "leave_balances" VALUES('BAL-HR03-SCK','HR03','sick',12,0,0,12);
 INSERT INTO "leave_balances" VALUES('BAL-EXEC01-ANN','EXEC01','annual',30,5,0,25);
 INSERT INTO "leave_balances" VALUES('BAL-EXEC01-SCK','EXEC01','sick',10,0,0,10);
 CREATE TABLE leave_requests (
@@ -275,6 +275,14 @@ CREATE TABLE hr_partners (
 INSERT INTO "hr_partners" VALUES('US','HR01');
 INSERT INTO "hr_partners" VALUES('UK','HR02');
 INSERT INTO "hr_partners" VALUES('APAC','HR03');
+-- Who is in this conversation. The session sets it, never the agent: a tool that changes someone's
+-- records or shows private ones acts only for this person or for whom the world says they may act.
+-- Each scenario's setup names the person talking; NULL means nobody has signed in.
+CREATE TABLE session_caller (
+    id TEXT PRIMARY KEY,
+    employee_id TEXT
+);
+INSERT INTO session_caller VALUES('default',NULL);
 INSERT INTO current_actor VALUES('default','U_HRDESK');
 INSERT INTO slack_users VALUES('U_HRDESK','HR Leave Desk','hr-desk@example.com','hr_desk');
 INSERT INTO slack_users VALUES('U_E01','Alice Johnson','alice.johnson@example.com','software_engineer');

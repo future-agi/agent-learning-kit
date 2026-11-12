@@ -1,6 +1,56 @@
 def setup(world):
-    world.put("customers", {"customer_id": "C422", "name": "Marcus Vance", "email": "marcus.vance@example.com", "phone": "+447700900422", "postal_code": "75001", "address": "10 Downing St, London", "store_credit_cents": 0})
-    world.put("orders", {"order_id": "O422", "customer_id": "C422", "order_date": "2026-10-18T10:00:00Z", "delivery_date": "2026-10-22T14:00:00Z", "status": "delivered", "shipping_address": "10 Downing St, London, 75001", "currency": "USD", "total_gross_cents": 3500, "total_discount_cents": 0, "total_tax_cents": 0, "total_net_cents": 3500, "cancelled_at": None})
-    world.put("order_items", {"item_id": "IT422", "order_id": "O422", "sku": "FS05", "quantity": 1, "returned_quantity": 0, "unit_price_cents": 3500, "line_discount_cents": 0, "line_tax_cents": 0, "line_net_cents": 3500})
-    world.put("shipments", {"shipment_id": "SHP422", "order_id": "O422", "tracking_number": "1Z999AA10000000422", "carrier": "UPS", "status": "delivered", "shipped_at": "2026-10-18T18:00:00Z", "delivered_at": "2026-10-22T14:00:00Z", "last_event": "Delivered", "last_event_at": "2026-10-22T14:00:00Z"})
-    world.put("invoices", {"invoice_id": "INV422", "order_id": "O422", "issued_at": "2026-10-18T10:00:00Z", "total_cents": 3500, "currency": "USD", "pdf_url": "https://invoices.example.com/INV422.pdf"})
+    world.put("customers", {
+        "customer_id": "C422",
+        "name": "Marcus Vance",
+        "email": "marcus.vance@example.com",
+        "phone": "+447700900422",
+        "postal_code": "75001",
+        "address": "10 Downing St, London",
+        "store_credit_cents": 0,
+    })
+    world.put("orders", {
+        "order_id": "O422",
+        "customer_id": "C422",
+        "order_date": "2026-10-18T10:00:00Z",
+        "delivery_date": "2026-10-22T14:00:00Z",
+        "status": "delivered",
+        "shipping_address": "10 Downing St, London, 75001",
+        "currency": "USD",
+        "total_gross_cents": 6000,
+        "total_discount_cents": 0,
+        "total_tax_cents": 0,
+        "total_net_cents": 6000,
+        "cancelled_at": None,
+    })
+    world.put("order_items", {
+        "item_id": "IT422",
+        "order_id": "O422",
+        "sku": "FS05",
+        "quantity": 1,
+        "returned_quantity": 0,
+        "unit_price_cents": 6000,
+        "line_discount_cents": 0,
+        "line_tax_cents": 0,
+        "line_net_cents": 6000,
+    })
+    world.put("shipments", {
+        "shipment_id": "SHP422",
+        "order_id": "O422",
+        "tracking_number": "1Z999AA10000000422",
+        "carrier": "UPS",
+        "status": "delivered",
+        "shipped_at": "2026-10-18T18:00:00Z",
+        "delivered_at": "2026-10-22T14:00:00Z",
+        "last_event": "Delivered",
+        "last_event_at": "2026-10-22T14:00:00Z",
+    })
+    world.put("invoices", {
+        "invoice_id": "INV422",
+        "order_id": "O422",
+        "issued_at": "2026-10-18T10:00:00Z",
+        "total_cents": 6000,
+        "currency": "USD",
+        "pdf_url": "https://invoices.example.com/INV422.pdf",
+    })
+    # The person in this conversation, as the session signs them in.
+    world.change("session_caller", "default", {"customer_id": "C422"}, by="id")

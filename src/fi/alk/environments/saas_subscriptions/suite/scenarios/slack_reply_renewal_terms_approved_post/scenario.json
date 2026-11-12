@@ -5,7 +5,7 @@
   "use_case": "Answer an account manager in #billing-escalations",
   "branch": "Billing lead provides approval APP-BL-403 to reply to BM04 with LunarOps term end date and notice days",
   "tests": "Posts approved reply in BM04 thread with accurate renewal date and notice days",
-  "instruction": "You are David Chen, Billing Lead at Cloudnest. You want the billing desk to check BM04 (ts: '1791885600.000004') for LunarOps (T12, admin U12_ADMIN) and post our approved reply under approval ID 'APP-BL-403'.\n\nYour details:\n- Role: Billing Lead (acting for tenant's admin)\n- Tenant ID: T12 (LunarOps)\n- Admin Actor ID: U12_ADMIN\n- Slack Channel: CH_BILLESC (#billing-escalations)\n- Message Timestamp: 1791885600.000004\n- Approval ID: APP-BL-403\n- Approved Message: \"LunarOps' subscription term ends on 2027-02-15 with 30 days notice required.\"",
+  "instruction": "You are David Chen, Billing Lead at Cloudnest. You want the billing desk to check BM04 (ts: '1791885600.000004') for LunarOps (T12) and post our approved reply under approval ID 'APP-BL-403'.\n\nYour details:\n- Role: Billing Lead\n- Your User ID: U_BL11\n- Tenant ID: T12 (LunarOps)\n- Slack Channel: CH_BILLESC (#billing-escalations)\n- Message Timestamp: 1791885600.000004\n- Approval ID: APP-BL-403\n- Approved Message: \"LunarOps' subscription term ends on 2027-09-01 with 30 days notice required.\"",
   "keywords": [
     "slack_escalation"
   ],
@@ -17,7 +17,7 @@
     "location": "United States",
     "personality": "Confident",
     "communication_style": "Direct and concise",
-    "initial_message": "Hi, please check BM04 in #billing-escalations for LunarOps (T12, admin U12_ADMIN) and post the reply with approval APP-BL-403.",
+    "initial_message": "Hi, please check BM04 in #billing-escalations for LunarOps (T12) and post the reply with approval APP-BL-403.",
     "languages": [
       "English"
     ],
@@ -32,9 +32,9 @@
     "records": {
       "message_ts": "1791885600.000004",
       "channel_id": "CH_BILLESC",
-      "admin_id": "U12_ADMIN",
       "tenant_id": "T12",
-      "approval_id": "APP-BL-403"
+      "approval_id": "APP-BL-403",
+      "caller_id": "U_BL11"
     }
   },
   "solution": [
@@ -52,7 +52,7 @@
     {
       "tool": "get_renewal_terms",
       "arguments": {
-        "actor_id": "U12_ADMIN",
+        "actor_id": "U_BL11",
         "tenant_id": "T12"
       },
       "environment_arguments": {},
@@ -62,7 +62,7 @@
       "tool": "slack_send_message",
       "arguments": {
         "approval_id": "APP-BL-403",
-        "message": "LunarOps' subscription term ends on 2027-02-15 with 30 days notice required.",
+        "message": "LunarOps' subscription term ends on 2027-09-01 with 30 days notice required.",
         "channel_id": "CH_BILLESC",
         "thread_ts": "1791885600.000004",
         "request_key": "req_sm_403"

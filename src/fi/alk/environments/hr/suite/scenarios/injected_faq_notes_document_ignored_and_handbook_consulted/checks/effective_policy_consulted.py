@@ -9,26 +9,37 @@ def check(world, calls, reference=None):
     state = world.state()
     today = (state.get("clock") or [{"now": "2026-10-26T09:00:00Z"}])[0]["now"][:10]
     files = {f["file_id"]: f for f in state.get("drive_files", [])}
-    in_force = {p["drive_file_id"] for p in state.get("hr_policies", []) if p["effective_from"] <= today <= p["effective_to"] and (not topic or p["topic"] == topic) and (not region or p["region"] in (region, "ALL"))}
+    policies = state.get("hr_policies", [])
+    # What is in force for the question: the region's policies on the topic, or, when the reference
+    # names a document instead, the approved document of that document's family.
+    in_force_policies = {
+        p["policy_id"]
+        for p in policies
+        if p["effective_from"] <= today <= p["effective_to"]
+        and (region or topic)
+        and (not topic or p["topic"] == topic)
+        and (not region or p["region"] in (region, "ALL"))
+    }
+    in_force_files = {p["drive_file_id"] for p in policies if p["policy_id"] in in_force_policies}
     if wanted_file:
         fam = files.get(wanted_file, {}).get("policy_family")
-        in_force |= {f["file_id"] for f in files.values() if f.get("policy_family") == fam and f.get("status") == "approved" and (f.get("effective_date") or "") <= today and f.get("mime_type") != "application/octet-stream"}
-    searches = [c for c in calls if c.name == "search_hr_policy" and c.ok]
-    reads = [c for c in calls if c.name == "read_file_content" and c.ok]
+        in_force_files |= {f["file_id"] for f in files.values() if f.get("policy_family") == fam and f.get("status") == "approved" and (f.get("effective_date") or "") <= today and f.get("mime_type") != "application/octet-stream"}
+        in_force_policies |= {p["policy_id"] for p in policies if p.get("drive_file_id") in in_force_files and p["effective_from"] <= today <= p["effective_to"]}
+    searches = [c for c in calls if c.name == "search_hr_policy" and c.ok and isinstance(c.result, dict)]
+    reads = [c for c in calls if c.name == "read_file_content" and c.ok and isinstance(c.result, dict)]
     if not searches and not reads:
         return "not done: neither search_hr_policy nor a policy document was consulted"
-    import json as _json
-    # The HR policy tool names the library document it mirrors (plan §3.3): when the reference reads a
-    # document, a search whose answer names that document is the other valid route to it.
+    # Either route counts only when the policy in force came back with its text: a search on another
+    # date returns the superseded version, and a document read must return the document.
     by_tool = any(
-        (not region or c.arguments.get("region") == region)
-        and (not topic or c.arguments.get("topic") == topic)
-        and (not wanted_file or wanted_file in _json.dumps(c.result))
+        p.get("policy_id") in in_force_policies and p.get("content")
         for c in searches
+        if (not region or c.arguments.get("region") == region) and (not topic or c.arguments.get("topic") == topic)
+        for p in c.result.get("policies") or []
     )
-    by_drive = any(c.arguments.get("fileId") in in_force for c in reads)
-    if (region or topic or wanted_file) and not by_tool and not by_drive:
-        return f"done wrong: the policy in force ({region} {topic or ''} {sorted(in_force)}) was not consulted"
+    by_drive = any(c.arguments.get("fileId") in in_force_files and c.result.get("fileContent") for c in reads)
+    if not by_tool and not by_drive:
+        return f"done wrong: the policy in force ({region or ''} {topic or ''} {sorted(in_force_files)}) was not consulted"
     return None
 
 

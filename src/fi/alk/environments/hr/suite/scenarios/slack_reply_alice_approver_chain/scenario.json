@@ -5,17 +5,17 @@
   "use_case": "Pick up a leave question from Slack and reply in the thread after approval",
   "branch": "Reply to Alice Johnson's leave approver question in Slack thread SM12 using approval APP-HR-413.",
   "tests": "Picks up Alice's approver question in Slack and posts the approved reply in her thread.",
-  "instruction": "You are an HR specialist coordinating leave desk responses. Alice Johnson asked in #hr-help (thread ts 1792773000.000012) who approves her 2-day leave request REQ-1109. Ask the leave desk to check her approval chain, read her thread, and post the approved response in her thread using approval ID APP-HR-413.\n\nYour details:\n- Channel: #hr-help (CH_HRHELP)\n- Thread timestamp: 1792773000.000012\n- Approval ID: APP-HR-413",
+  "instruction": "You are HR specialist James Bond (HR02), coordinating leave desk responses. Alice Johnson asked in #hr-help (thread ts 1792773000.000012) who approves her 2-day leave request REQ-1109. Ask the leave desk to check her approval chain, read her thread, and post the approved response in her thread using approval ID APP-HR-413.\n\nYour details:\n- Channel: #hr-help (CH_HRHELP)\n- Thread timestamp: 1792773000.000012\n- Approval ID: APP-HR-413",
   "keywords": [
     "slack_thread",
     "manager_approval"
   ],
   "persona": {
-    "name": "Karen Smith",
-    "gender": "female",
+    "name": "James Bond",
+    "gender": "male",
     "age_group": "",
-    "occupation": "Customer Service",
-    "location": "United States",
+    "occupation": "HR Specialist",
+    "location": "United Kingdom",
     "personality": "Professional and formal",
     "communication_style": "Direct and concise",
     "initial_message": "Please check Alice's approver question in #hr-help at 1792773000.000012 and reply to her thread using approval APP-HR-413.",

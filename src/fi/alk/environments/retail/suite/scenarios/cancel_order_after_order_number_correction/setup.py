@@ -29,10 +29,10 @@ def setup(world):
         "delivery_date": None,
         "status": "processing",
         "currency": "USD",
-        "total_gross_cents": 5000,
+        "total_gross_cents": 4500,
         "total_discount_cents": 0,
         "total_tax_cents": 0,
-        "total_net_cents": 5000,
+        "total_net_cents": 4500,
         "shipping_address": "120 S State St, 60602",
         "cancelled_at": None,
     })
@@ -53,10 +53,10 @@ def setup(world):
         "sku": "AC01",
         "quantity": 1,
         "returned_quantity": 0,
-        "unit_price_cents": 5000,
+        "unit_price_cents": 4500,
         "line_discount_cents": 0,
         "line_tax_cents": 0,
-        "line_net_cents": 5000,
+        "line_net_cents": 4500,
     })
     world.put("shipments", {
         "shipment_id": "SHP431",
@@ -80,5 +80,21 @@ def setup(world):
         "last_event": "Label created",
         "last_event_at": "2026-10-26T09:35:00Z",
     })
-    world.put("invoices", {"invoice_id": "INV431", "order_id": "O431", "issued_at": "2026-10-26T09:00:00Z", "total_cents": 9500, "currency": "USD", "pdf_url": "https://invoices.example.com/INV431.pdf"})
-    world.put("invoices", {"invoice_id": "INV435", "order_id": "O435", "issued_at": "2026-10-26T09:30:00Z", "total_cents": 5000, "currency": "USD", "pdf_url": "https://invoices.example.com/INV435.pdf"})
+    world.put("invoices", {
+        "invoice_id": "INV431",
+        "order_id": "O431",
+        "issued_at": "2026-10-26T09:00:00Z",
+        "total_cents": 9500,
+        "currency": "USD",
+        "pdf_url": "https://invoices.example.com/INV431.pdf",
+    })
+    world.put("invoices", {
+        "invoice_id": "INV435",
+        "order_id": "O435",
+        "issued_at": "2026-10-26T09:30:00Z",
+        "total_cents": 4500,
+        "currency": "USD",
+        "pdf_url": "https://invoices.example.com/INV435.pdf",
+    })
+    # The person in this conversation, as the session signs them in.
+    world.change("session_caller", "default", {"customer_id": "C431"}, by="id")

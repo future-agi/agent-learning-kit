@@ -8,7 +8,7 @@ def check(world, calls, reference=None):
         return "not done: schedule_plan_change was not called successfully"
     state = world.state()
     now = (state.get("clock") or [{"now": ""}])[0]["now"]
-    made = [r for r in state.get("scheduled_changes", []) if r.get("status") == "pending" and r.get("created_at") == now]
+    made = [r for r in state.get("scheduled_changes", []) if r.get("status") in ("pending", "applied") and r.get("created_at") == now]
     if not made:
         return "not done: no pending scheduled change was created by this run"
     for c in sched_calls:
@@ -33,6 +33,10 @@ def check(world, calls, reference=None):
             return f"done wrong: {r.get('target_plan_id')} was scheduled, the admin confirmed {want['target_plan_id']}"
         if want.get("target_seats") is not None and r.get("target_seats") != want["target_seats"]:
             return f"done wrong: {r.get('target_seats')} seats were scheduled, the admin confirmed {want['target_seats']}"
+        if want.get("effective_timing") == "immediate":
+            sub = next((s for s in state.get("subscriptions", []) if s.get("tenant_id") == tid and s.get("status") == "active"), {})
+            if r.get("status") != "applied" or (sub.get("plan_id"), sub.get("seat_count")) != (r.get("target_plan_id"), r.get("target_seats")):
+                return f"done wrong: the admin asked for the change now, but the subscription is still {sub.get('plan_id')} with {sub.get('seat_count')} seats"
         if want.get("effective_timing") == "end_of_period":
             sub = next((s for s in state.get("subscriptions", []) if s.get("tenant_id") == tid and s.get("status") == "active"), {})
             if r.get("effective_at") != sub.get("current_period_end"):

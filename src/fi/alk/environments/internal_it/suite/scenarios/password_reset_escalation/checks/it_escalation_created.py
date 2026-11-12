@@ -5,9 +5,11 @@ def check(world, calls, reference=None):
             want = step["arguments"]["employee_id"]
     if not any(c.name == "create_it_handoff" and c.ok for c in calls):
         return "not done: create_it_handoff was not called"
-    tickets = world.state().get("handoff_tickets", [])
+    state = world.state()
+    now = (state.get("clock") or [{"now": ""}])[0]["now"]
+    tickets = [t for t in state.get("handoff_tickets", []) if t.get("created_at") == now]
     if not tickets:
-        return "not done: no handoff ticket found in the world"
+        return "not done: no handoff ticket was opened in this run"
     if want and not any(t["employee_id"] == want for t in tickets):
         return f"done wrong: no handoff for {want}"
     return None

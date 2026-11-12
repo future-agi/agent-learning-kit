@@ -12,7 +12,8 @@ def check(world, calls, reference=None):
     family = files.get(wanted_file, {}).get("policy_family") if wanted_file else ("return_policy" if wanted_category else None)
     effective = [f["file_id"] for f in files.values() if family and f.get("policy_family") == family and f.get("status") == "approved" and not f.get("is_deleted") and (f.get("effective_date") or "") <= today and f.get("mime_type") != "application/octet-stream"]
     policy_calls = [c for c in calls if c.name == "get_return_policy" and c.ok]
-    reads = [c for c in calls if c.name == "read_file_content" and c.ok]
+    # An earlier revision is a working copy, not the document in effect.
+    reads = [c for c in calls if c.name == "read_file_content" and c.ok and not c.arguments.get("revisionId")]
     if not policy_calls and not reads:
         return "not done: neither get_return_policy nor a policy document was consulted"
     if family:

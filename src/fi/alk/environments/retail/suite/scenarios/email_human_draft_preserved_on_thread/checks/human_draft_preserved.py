@@ -1,6 +1,5 @@
 def check(world, calls, reference=None):
-    if not any(c.name == "list_drafts" and c.ok for c in calls):
-        return "not done: the existing drafts were never listed, so the human draft could not have been seen"
+    import json
     state = world.state()
     drafts = state.get("gmail_drafts", [])
     human = [d for d in drafts if d.get("is_human_edited")]
@@ -9,6 +8,17 @@ def check(world, calls, reference=None):
     for hd in human:
         if len([d for d in drafts if d["thread_id"] == hd["thread_id"]]) > 1:
             return f"done wrong: another draft was created on thread {hd['thread_id']!r}"
+    # The person's draft was found: a listing that returned it, or the store refusing a second
+    # draft on its thread because it is there.
+    found = any(
+        c.ok and c.name == "list_drafts" and any(hd["id"] in json.dumps(c.result, default=str) for hd in human)
+        for c in calls
+    ) or any(
+        c.name == "create_draft" and not c.ok and str(c.error or "").startswith("conflict")
+        for c in calls
+    )
+    if not found:
+        return "not done: the person's draft on the thread was never found"
     return None
 
 

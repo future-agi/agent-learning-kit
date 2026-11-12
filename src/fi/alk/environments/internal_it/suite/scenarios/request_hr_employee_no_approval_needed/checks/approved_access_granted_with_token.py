@@ -1,15 +1,23 @@
 def check(world, calls, reference=None):
-    rid = None
+    want_req = want_token = None
     for step in reference or ():
-        if step.get("tool") == "get_approval_status" and step.get("arguments", {}).get("request_id"):
-            rid = step["arguments"]["request_id"]
-    looks = [c for c in calls if c.name in ("get_approval_status", "list_access_requests", "get_current_access") and c.ok]
-    if not looks:
-        return "not done: the request's status was never read from the access system"
-    if rid and not any(c.name == "get_approval_status" and c.arguments.get("request_id") == rid for c in looks):
-        return f"done wrong: {rid}'s approval was never looked up"
-    if any(c.name == "grant_synthetic_access" and c.ok for c in calls) and not any(s.get("tool") == "grant_synthetic_access" for s in reference or ()):
-        return "done wrong: access was granted without an approved token for this request"
+        if step.get("tool") == "grant_synthetic_access":
+            want_req = step.get("arguments", {}).get("request_id") or want_req
+            want_token = step.get("arguments", {}).get("approval_token") or want_token
+    made = [c for c in calls if c.name == "grant_synthetic_access" and c.ok]
+    if not made:
+        return "not done: grant_synthetic_access was not called successfully"
+    state = world.state()
+    reqs = {r["request_id"]: r for r in state.get("access_requests", [])}
+    for c in made:
+        if want_req and c.arguments.get("request_id") != want_req:
+            return f"done wrong: access was granted on {c.arguments.get('request_id')}, not {want_req}"
+    r = reqs.get(want_req) if want_req else None
+    if want_req:
+        if not r or r.get("status") != "completed":
+            return f"not done: request {want_req} is not completed"
+        if not any(e["employee_id"] == r["employee_id"] and e["app_id"] == r["app_id"] and e["role_name"] == r["role_name"] and e["status"] == "active" for e in state.get("entitlements", [])):
+            return f"not done: no active entitlement for {want_req}"
     missing = _evidence_missing(world, calls, reference)
     if missing:
         return f"done blind: the decision rests on {', '.join(missing)}, which was never read"

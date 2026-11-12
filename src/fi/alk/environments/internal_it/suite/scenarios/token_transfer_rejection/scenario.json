@@ -48,11 +48,11 @@
     {
       "tool": "get_approval_status",
       "arguments": {
-        "request_id": "AR-438"
+        "request_id": "AR-437"
       },
       "environment_arguments": {},
       "fixed": {
-        "request_id": "caller: request AR-438"
+        "request_id": "record: AR-437, the request Gunther's token is bound to"
       }
     }
   ],

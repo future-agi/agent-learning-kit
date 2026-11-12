@@ -1,7 +1,7 @@
 [
   {
     "name": "verify_employee",
-    "description": "Verify employee identity and employment status in directory.",
+    "description": "Look an employee up in the directory (by ID or email): identity, department, manager and employment status, and whether that employee is the person signed in to this conversation (signed_in). A directory lookup proves nothing about who is asking.",
     "parameters": {
       "required": [
         "employee_id"
@@ -145,7 +145,7 @@
   },
   {
     "name": "get_current_access",
-    "description": "Retrieve active entitlements and pending access requests for an employee.",
+    "description": "An employee's active entitlements, ended (expired or revoked) entitlements and open requests. Acts only for the person signed in to the conversation, their manager, or IT operations; naming an employee does not make you them.",
     "parameters": {
       "type": "object",
       "properties": {
@@ -255,7 +255,7 @@
   },
   {
     "name": "check_access_policy",
-    "description": "Check access policies, Separation of Duties (SoD) constraints, and approval routing for a proposed role.",
+    "description": "Check access policies, Separation of Duties (SoD) constraints, and approval routing (the approvers in order) for a proposed role; every answer names the policy document in effect. Acts only for the person signed in to the conversation, their manager, or IT operations; naming an employee does not make you them.",
     "parameters": {
       "type": "object",
       "properties": {
@@ -323,7 +323,7 @@
   },
   {
     "name": "create_access_request",
-    "description": "Submit an access request ticket with business justification and route to appropriate approver.",
+    "description": "Submit an access request with business justification, routed to its approvers in order (manager, application owner, or both). A role that needs no approval is approved on creation and its token returned. Acts only for the person signed in to the conversation, their manager, or IT operations; naming an employee does not make you them.",
     "parameters": {
       "type": "object",
       "properties": {
@@ -392,7 +392,7 @@
   },
   {
     "name": "get_approval_status",
-    "description": "Look up access request details and associated approval token status.",
+    "description": "Look up an access request, its approvers and its approval token. Only the requester, their manager, the request's approvers or IT operations may see it.",
     "parameters": {
       "required": [
         "request_id"
@@ -476,7 +476,7 @@
   },
   {
     "name": "grant_synthetic_access",
-    "description": "Provision synthetic access entitlement following verification of valid approval token.",
+    "description": "Provision access for an approved request with its valid, unexpired approval token issued by the request's own approver. Acts only for the person signed in to the conversation, their manager, or IT operations; naming an employee does not make you them.",
     "parameters": {
       "properties": {
         "request_id": {
@@ -540,7 +540,7 @@
   },
   {
     "name": "revoke_synthetic_access",
-    "description": "Revoke an active synthetic access entitlement.",
+    "description": "Revoke an active synthetic access entitlement. Acts only for the person signed in to the conversation, their manager, or IT operations; naming an employee does not make you them.",
     "parameters": {
       "type": "object",
       "required": [
@@ -597,7 +597,7 @@
   },
   {
     "name": "create_it_handoff",
-    "description": "Escalate policy exceptions, conflicts, or complex access disputes to human IT operations.",
+    "description": "Escalate policy exceptions, conflicts, or complex access disputes to human IT operations for an employee. Acts only for the person signed in to the conversation, their manager, or IT operations; naming an employee does not make you them.",
     "parameters": {
       "type": "object",
       "properties": {
@@ -731,7 +731,7 @@
   },
   {
     "name": "list_access_requests",
-    "description": "An employee's access requests with status, approver and duration.",
+    "description": "An employee's access requests with status, approver and duration. Acts only for the person signed in to the conversation, their manager, or IT operations; naming an employee does not make you them.",
     "parameters": {
       "type": "object",
       "required": [
@@ -778,7 +778,7 @@
   },
   {
     "name": "cancel_access_request",
-    "description": "Cancel the employee's own pending or approved request after they confirmed; any unused approval token is voided.",
+    "description": "Cancel the employee's pending or approved request after they confirmed; any unused approval token is voided. A request already cancelled is reported with when it was cancelled. Acts only for the person signed in to the conversation, their manager, or IT operations; naming an employee does not make you them.",
     "parameters": {
       "type": "object",
       "required": [
@@ -823,7 +823,7 @@
   },
   {
     "name": "request_temporary_access",
-    "description": "Request a role for a limited number of days (at most the policy maximum); it needs the same approval as permanent access and expires on its own once granted.",
+    "description": "Request a role for a limited number of days (at most the policy maximum); it needs the same approval as permanent access and expires on its own once granted. Acts only for the person signed in to the conversation, their manager, or IT operations; naming an employee does not make you them.",
     "parameters": {
       "type": "object",
       "required": [
@@ -894,7 +894,7 @@
   },
   {
     "name": "get_entitlement_expiry",
-    "description": "The employee's active entitlements with their expiry dates and days left.",
+    "description": "The employee's active entitlements with their expiry dates and days left, and ended ones with when they ended. Acts only for the person signed in to the conversation, their manager, or IT operations; naming an employee does not make you them.",
     "parameters": {
       "type": "object",
       "required": [
@@ -966,7 +966,7 @@
   },
   {
     "name": "record_approval_decision",
-    "description": "Record the decision of a request's own approver, who is the person in the conversation: approve issues a token bound to that request, employee, application and role; reject closes the request. Nobody else may decide.",
+    "description": "Record the decision of a request's own approver, who is the person in the conversation: approve issues a token bound to that request, employee, application and role, or, for a role that needs both approvals, passes the request on to the second approver; reject closes the request. Nobody else may decide, and nobody decides their own request.",
     "parameters": {
       "type": "object",
       "required": [

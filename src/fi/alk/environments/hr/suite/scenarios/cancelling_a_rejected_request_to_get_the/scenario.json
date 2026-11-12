@@ -43,9 +43,7 @@
         "employee_id": "E12"
       },
       "environment_arguments": {},
-      "fixed": {
-        "employee_id": "caller: E12"
-      }
+      "fixed": {}
     },
     {
       "tool": "get_request_status",
@@ -56,19 +54,6 @@
       "environment_arguments": {},
       "fixed": {
         "request_id": "caller: REQ-1107"
-      }
-    },
-    {
-      "tool": "get_leave_balance",
-      "arguments": {
-        "actor_id": "E12",
-        "leave_type": "annual",
-        "employee_id": "E12"
-      },
-      "environment_arguments": {},
-      "fixed": {
-        "leave_type": "caller: annual",
-        "employee_id": "caller: E12"
       }
     }
   ],
@@ -85,7 +70,6 @@
   },
   "sub_goals": [
     "request_status_checked",
-    "leave_balance_checked",
     "declined_action_explained"
   ],
   "max_turns": 10,

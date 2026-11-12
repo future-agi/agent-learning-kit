@@ -1,65 +1,58 @@
 def check(world, calls, reference=None):
-    if not any(c.name in ("get_credit_notes", "list_invoices", "get_invoice_lines", "get_billing_case_status", "get_subscription", "get_renewal_terms") and c.ok for c in calls):
-        return "not done: the billing records were never checked against the claim"
-    for c in calls:
-        if c.ok and c.name in ("schedule_plan_change", "cancel_scheduled_change", "schedule_cancellation", "update_billing_contact"):
-            return f"done wrong: {c.name} was done on the strength of a message"
+    want = {}
+    for step in reference or ():
+        if step.get("tool") == "record_approval_decision":
+            want = step.get("arguments", {})
+    made = [c for c in calls if c.name == "record_approval_decision" and c.ok]
+    if not made:
+        return "not done: record_approval_decision was not called successfully"
+    state = world.state()
+    reqs = {r["request_id"]: r for r in state.get("access_requests", [])}
+    rid = want.get("request_id")
+    if rid:
+        r = reqs.get(rid)
+        valid_statuses = ("approved", "completed") if want.get("decision") == "approve" else ("rejected",)
+        if not r or r.get("status") not in valid_statuses:
+            return f"done wrong: request {rid} is {r.get('status') if r else 'missing'}, the approver decided {want.get('decision')}"
+        if want.get("decision") == "approve":
+            tokens = [a for a in state.get("approvals", []) if a["request_id"] == rid and a["status"] in ("valid", "used")]
+            if not tokens:
+                return f"not done: no valid or used token for {rid}"
+            if want.get("approver_id") and not any(a["approver_id"] == want["approver_id"] for a in tokens):
+                return f"done wrong: {rid}'s token was not issued by {want['approver_id']}"
+    for c in made:
+        if rid and c.arguments.get("request_id") != rid:
+            return f"done wrong: a decision was recorded on {c.arguments.get('request_id')}, not {rid}"
     missing = _evidence_missing(world, calls, reference)
     if missing:
         return f"done blind: the decision rests on {', '.join(missing)}, which was never read"
     return None
 
+
 def _evidence_missing(world, calls, reference):
-    """The email thread or Slack thread the reference fixes and whether its content reached this run:
-    every message of the email thread (or the one email) with its body returned by a read, and the
-    text of every message in the Slack thread (the desk's own posts aside) returned by a thread read,
-    channel read or search. Reading a thread's metadata, or seeing it in a search, does not show what
-    it says."""
+    """The Slack thread or library document the reference fixes and whether its content reached this
+    run: the text of every message in the thread (the desk's own posts aside) returned by a thread
+    read, channel read or search, and the document read."""
     state = world.state()
     desk = (state.get("current_actor") or [{}])[0].get("user_id")
     wanted = []
     for step in reference or ():
         a = step.get("arguments", {})
-        if step.get("tool") == "get_thread" and a.get("threadId"):
-            wanted.append(("email thread", a["threadId"]))
-        elif step.get("tool") == "get_message" and a.get("messageId"):
-            wanted.append(("email", a["messageId"]))
-        elif step.get("tool") == "slack_read_thread" and a.get("message_ts"):
+        if step.get("tool") == "slack_read_thread" and a.get("message_ts"):
             wanted.append(("Slack thread", a["message_ts"]))
-    bodies = _bodies_shown(calls)
+        elif step.get("tool") == "read_file_content" and a.get("fileId"):
+            wanted.append(("file", a["fileId"]))
     texts = _texts_shown(calls)
     missing = []
     for kind, target in wanted:
-        if kind in ("email thread", "email"):
-            ids = [m["id"] for m in state.get("gmail_messages", []) if m["thread_id" if kind == "email thread" else "id"] == target]
-            seen = bool(ids) and all(i in bodies for i in ids)
-        elif kind == "Slack thread":
+        if kind == "Slack thread":
             needed = [m["ts"] for m in state.get("slack_messages", []) if (m["ts"] == target or m.get("thread_ts") == target) and m["user_id"] != desk]
             seen = bool(needed) and all(t in texts for t in needed)
+        else:
+            seen = any(c.ok and c.name == "read_file_content" and c.arguments.get("fileId") == target for c in calls)
         if not seen:
             missing.append(f"{kind} {target}")
     return missing
-
-
-def _bodies_shown(calls):
-    """The emails whose body a successful read returned: a full read of the message or of its
-    thread. A metadata-only or minimal read, or a search snippet, returns no body."""
-    shown = set()
-
-    def walk(value):
-        if isinstance(value, dict):
-            if value.get("id") and "plaintextBody" in value:
-                shown.add(value["id"])
-            for one in value.values():
-                walk(one)
-        elif isinstance(value, list):
-            for one in value:
-                walk(one)
-
-    for c in calls:
-        if c.ok and c.name in ("get_thread", "get_message"):
-            walk(c.result)
-    return shown
 
 
 def _texts_shown(calls):

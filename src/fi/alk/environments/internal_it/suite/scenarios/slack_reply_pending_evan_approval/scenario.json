@@ -5,12 +5,12 @@
   "use_case": "Pick up an access request from Slack and reply in the thread after approval",
   "branch": "the IT lead provides pre-approved ticket APP-IT-401 to reply in Laura's Slack thread that AR-101 is pending Evan's formal approval",
   "tests": "the agent reads the Slack thread, checks AR-101 approval status, and posts the approved reply in the thread using approval_id APP-IT-401",
-  "instruction": "You are Elena Rostova, IT operations coordinator. You need the access desk assistant to check thread IM01 in #it-access (timestamp 1792663500.000001) for Laura Croft's request AR-101.\nReview the approval status of AR-101 in the access system, and then post the authorized update in that thread using pre-approved Slack draft APP-IT-401 stating that AR-101 is pending formal approval from Evan in the access system.\n\nYour details:\n- Channel: #it-access (CH_ITACCESS)\n- Thread parent timestamp: 1792663500.000001\n- Request ID: AR-101\n- Employee: Laura Croft (E12)\n- Slack Approval ID: APP-IT-401\n- Pre-approved text: \"AR-101 is pending formal approval from Evan in the access system.\"",
+  "instruction": "You are Ines Varga (employee ID E518), IT operations coordinator. You need the access desk assistant to check thread IM01 in #it-access (timestamp 1792663500.000001) for Laura Croft's request AR-101.\nReview the approval status of AR-101 in the access system, and then post the authorized update in that thread using pre-approved Slack draft APP-IT-401 stating that AR-101 is pending formal approval from Evan in the access system.\n\nYour details:\n- Channel: #it-access (CH_ITACCESS)\n- Thread parent timestamp: 1792663500.000001\n- Request ID: AR-101\n- Employee: Laura Croft (E12)\n- Slack Approval ID: APP-IT-401\n- Pre-approved text: \"AR-101 is pending formal approval from Evan in the access system.\"",
   "keywords": [
     "slack_reply"
   ],
   "persona": {
-    "name": "Elena Rostova",
+    "name": "Ines Varga",
     "gender": "female",
     "age_group": "25-32",
     "occupation": "Technician",

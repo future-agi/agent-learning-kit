@@ -5,13 +5,13 @@
   "use_case": "Eligible item return and label generation",
   "branch": "Customer Tara Maclay C20 clarifies in email thread th_r15_quantity_corrected that she wants to return 2 units of AP14 from order O36 instead of 3 units",
   "tests": "the agent reads email thread th_r15_quantity_corrected and creates a return for 2 units of AP14 on order O36",
-  "instruction": "You sent an email to customer support requesting a return for items in order O36. You initially requested to return all 3 Classic Polo Shirts (SKU AP14), but then followed up asking to return only 2 of them.\n\nYour details:\n- Name: Tara M. Maclay\n- Email: tara.maclay@example.com\n- Postal Code: 94704\n- Thread: th_r15_quantity_corrected\n- Order ID: O36\n- Final Item and Quantity to return: SKU AP14 (Quantity 2)",
+  "instruction": "You sent an email to customer support requesting a return for items in order O36. You initially requested to return all 3 Classic Polo Shirts (SKU AP14), but then followed up asking to return only 2 of them.\n\nYour details:\n- Name: Tara Maclay\n- Email: tara.maclay@example.com\n- Postal Code: 94704\n- Thread: th_r15_quantity_corrected\n- Order ID: O36\n- Final Item and Quantity to return: SKU AP14 (Quantity 2)",
   "keywords": [
     "email_support",
     "quantity_correction"
   ],
   "persona": {
-    "name": "Tara M. Maclay",
+    "name": "Tara Maclay",
     "gender": "female",
     "age_group": "25-32",
     "occupation": "Accountant",

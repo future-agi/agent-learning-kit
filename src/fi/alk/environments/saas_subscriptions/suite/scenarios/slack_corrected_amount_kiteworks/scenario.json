@@ -5,7 +5,7 @@
   "use_case": "Explain an invoice or a bill increase",
   "branch": "Slack thread BM05 mentions $30.00 and BM06 corrects to $33.00 with tax for inv_11_addon payment",
   "tests": "reads Slack thread BM05, checks payment status of inv_11_addon and verifies $33.00 payment",
-  "instruction": "You are Noah Tremblay, account manager. Ask the billing desk to check Slack thread BM05 (ts: 1791968400.000005) in CH_BILLESC regarding KiteWorks (T11) inv_11_addon payment status.\n\nYour details:\n- Name: Noah Tremblay\n- Role: Account Manager\n- Channel ID: CH_BILLESC\n- Message TS: 1791968400.000005\n- Tenant ID: T11\n- Invoice ID: inv_11_addon",
+  "instruction": "You are Noah Tremblay, KiteWorks' account manager at Cloudnest. Ask the billing desk to check Slack thread BM05 (ts: 1791968400.000005) in CH_BILLESC regarding KiteWorks (T11) inv_11_addon payment status.\n\nYour details:\n- Name: Noah Tremblay\n- Role: Account Manager\n- Your User ID: U_AM9\n- Channel ID: CH_BILLESC\n- Message TS: 1791968400.000005\n- Tenant ID: T11\n- Invoice ID: inv_11_addon",
   "keywords": [
     "slack_integration"
   ],
@@ -51,7 +51,7 @@
       "tool": "get_payment_status",
       "arguments": {
         "tenant_id": "T11",
-        "actor_id": "U11_ADMIN",
+        "actor_id": "U_AM9",
         "invoice_id": "inv_11_addon"
       },
       "environment_arguments": {},

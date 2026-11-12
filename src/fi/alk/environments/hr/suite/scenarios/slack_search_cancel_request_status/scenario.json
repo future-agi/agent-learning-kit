@@ -5,17 +5,17 @@
   "use_case": "Pick up a leave question from Slack and reply in the thread after approval",
   "branch": "An HR specialist searches Slack for a cancellation inquiry, finds Kenji Sato's thread SM09, and checks request REQ-4001.",
   "tests": "Searches Slack to locate an employee cancellation inquiry and checks the leave request status in HR.",
-  "instruction": "You are an HR specialist. An employee named Kenji posted in Slack recently asking to cancel his leave for next week, but you do not know which channel or thread he asked in. Ask the leave desk to search Slack messages for 'cancel', locate Kenji's request thread, and verify the status of his upcoming leave request REQ-4001 in the HR system.\n\nYour details:\n- Search term: cancel\n- Target employee: Kenji Sato (E11)\n- Upcoming request ID: REQ-4001",
+  "instruction": "You are HR specialist James Bond (HR02). An employee named Kenji posted in Slack recently asking to cancel his leave for next week, but you do not know which channel or thread he asked in. Ask the leave desk to search Slack messages for 'cancel', locate Kenji's request thread, and verify the status of his upcoming leave request REQ-4001 in the HR system.\n\nYour details:\n- Search term: cancel\n- Target employee: Kenji Sato (E11)\n- Upcoming request ID: REQ-4001",
   "keywords": [
     "slack_thread",
     "request_status"
   ],
   "persona": {
-    "name": "Leo Vance",
+    "name": "James Bond",
     "gender": "male",
     "age_group": "",
-    "occupation": "Customer Service",
-    "location": "Australia",
+    "occupation": "HR Specialist",
+    "location": "United Kingdom",
     "personality": "Friendly and cooperative",
     "communication_style": "Casual and friendly",
     "initial_message": "Hi! Kenji mentioned in Slack that he wants to cancel next week's leave. Can you search Slack for 'cancel', find his thread, and check his request REQ-4001?",
@@ -39,7 +39,9 @@
     {
       "tool": "slack_search_public_and_private",
       "arguments": {
-        "keywords": "cancel"
+        "keywords": [
+          "cancel"
+        ]
       },
       "environment_arguments": {},
       "fixed": {}
@@ -57,7 +59,7 @@
       "tool": "get_request_status",
       "arguments": {
         "request_id": "REQ-4001",
-        "actor_id": "E11"
+        "actor_id": "HR02"
       },
       "environment_arguments": {},
       "fixed": {

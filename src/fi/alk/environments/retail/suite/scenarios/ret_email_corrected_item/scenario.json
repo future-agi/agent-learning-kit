@@ -5,13 +5,13 @@
   "use_case": "Eligible item return and label generation",
   "branch": "Customer Alice Morgan C01 clarifies in email thread th_r01_wrong_item_corrected that she wants to return 1 pair of SH01 from order O01 instead of AP02 from O21",
   "tests": "the agent reads email thread th_r01_wrong_item_corrected, notes the correction, and creates a return for 1 unit of SH01 on order O01",
-  "instruction": "You sent an email to customer support requesting a return. You initially mentioned the T-shirt (AP02) from order O21, but in your follow-up message you corrected that you actually want to return one pair of Road Running Shoes (SKU SH01) from order O01.\n\nYour details:\n- Name: Alice M. Morgan\n- Email: alice.morgan@example.com\n- Postal Code: 90210\n- Thread: th_r01_wrong_item_corrected\n- Order ID: O01\n- Correct Item to return: SKU SH01 (Quantity 1)",
+  "instruction": "You sent an email to customer support requesting a return. You initially mentioned the T-shirt (AP02) from order O21, but in your follow-up message you corrected that you actually want to return one pair of Road Running Shoes (SKU SH01) from order O01.\n\nYour details:\n- Name: Alice Morgan\n- Email: alice.morgan@example.com\n- Postal Code: 90210\n- Thread: th_r01_wrong_item_corrected\n- Order ID: O01\n- Correct Item to return: SKU SH01 (Quantity 1)",
   "keywords": [
     "email_support",
     "item_correction"
   ],
   "persona": {
-    "name": "Alice M. Morgan",
+    "name": "Alice Morgan",
     "gender": "female",
     "age_group": "25-32",
     "occupation": "Customer Service",

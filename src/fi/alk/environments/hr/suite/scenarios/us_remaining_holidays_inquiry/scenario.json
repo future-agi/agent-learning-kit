@@ -52,7 +52,8 @@
       },
       "environment_arguments": {},
       "fixed": {
-        "region": "record: US"
+        "region": "record: US",
+        "year": "caller: 2026"
       }
     }
   ],

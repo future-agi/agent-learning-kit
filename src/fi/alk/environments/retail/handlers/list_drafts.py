@@ -1,3 +1,35 @@
+_STORE = "@northgate-outfitters.example"
+
+
+def _caller_email(db):
+    """The email of the customer signed in to this conversation, set by the session."""
+    row = db.one("SELECT c.email FROM session_caller s JOIN customers c ON c.customer_id = s.customer_id WHERE s.id = 'default'")
+    return row["email"].strip().lower() if row else None
+
+
+def _people(*fields):
+    """The non-store addresses in comma-separated address fields."""
+    found = set()
+    for field in fields:
+        for address in (field or "").split(","):
+            address = address.strip().lower()
+            if address and not address.endswith(_STORE):
+                found.add(address)
+    return found
+
+
+def _yours(db, thread_id):
+    """The support mailbox holds every customer's email; the desk opens a customer's thread only
+    while that customer is the one in the conversation. A thread with no customer on it is the
+    store's own."""
+    people = set()
+    for m in db.query("SELECT sender, recipient, cc FROM gmail_messages WHERE thread_id = ?", (thread_id,)):
+        people |= _people(m["sender"], m["recipient"], m["cc"])
+    for d in db.query("SELECT recipient, cc, bcc FROM gmail_drafts WHERE thread_id = ?", (thread_id,)):
+        people |= _people(d["recipient"], d["cc"], d["bcc"])
+    return not people or people <= {_caller_email(db)}
+
+
 def handle(args, db):
     page_size = args.get("pageSize")
     if page_size is None:
@@ -25,6 +57,8 @@ def handle(args, db):
 
     drafts = []
     for d in db.query("SELECT * FROM gmail_drafts ORDER BY updated_at DESC"):
+        if not _yours(db, d["thread_id"]):
+            continue
         text = f"{d['subject']} {d['body']} {d['recipient']}".lower()
         if terms and not all(term in text for term in terms):
             continue

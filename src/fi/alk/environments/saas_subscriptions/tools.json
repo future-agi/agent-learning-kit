@@ -9,7 +9,8 @@
           "type": "string"
         },
         "actor_id": {
-          "type": "string"
+          "type": "string",
+          "description": "The user id of the person signed in to this conversation (a tenant user, e.g. U01_ADMIN, or a Cloudnest staff member). The desk acts only for that person; any other id is refused."
         }
       },
       "required": [
@@ -47,7 +48,8 @@
           "type": "string"
         },
         "actor_id": {
-          "type": "string"
+          "type": "string",
+          "description": "The user id of the person signed in to this conversation (a tenant user, e.g. U01_ADMIN, or a Cloudnest staff member). The desk acts only for that person; any other id is refused."
         }
       },
       "required": [
@@ -119,7 +121,8 @@
       "type": "object",
       "properties": {
         "actor_id": {
-          "type": "string"
+          "type": "string",
+          "description": "The user id of the person signed in to this conversation (a tenant user, e.g. U01_ADMIN, or a Cloudnest staff member). The desk acts only for that person; any other id is refused."
         },
         "invoice_id": {
           "type": "string"
@@ -194,7 +197,8 @@
           "type": "string"
         },
         "actor_id": {
-          "type": "string"
+          "type": "string",
+          "description": "The user id of the person signed in to this conversation (a tenant user, e.g. U01_ADMIN, or a Cloudnest staff member). The desk acts only for that person; any other id is refused."
         }
       },
       "type": "object"
@@ -288,7 +292,8 @@
     "parameters": {
       "properties": {
         "actor_id": {
-          "type": "string"
+          "type": "string",
+          "description": "The user id of the person signed in to this conversation (a tenant user, e.g. U01_ADMIN, or a Cloudnest staff member). The desk acts only for that person; any other id is refused."
         },
         "effective_timing": {
           "type": "string",
@@ -384,7 +389,7 @@
   },
   {
     "name": "schedule_plan_change",
-    "description": "Schedule a plan change for a tenant. Requires billing admin role and explicit confirmation. Idempotent via request_key.",
+    "description": "Schedule a plan change for a tenant. The tenant's billing admin only, signed in to this conversation, after explicit confirmation. 'end_of_period' takes effect at current_period_end; 'immediate' applies an upgrade now (a downgrade is refused immediately). One pending change at a time: cancel it first. Idempotent via request_key: the same request returns the same change, a different request with that key is a conflict.",
     "parameters": {
       "properties": {
         "target_plan_id": {
@@ -410,7 +415,8 @@
           "type": "string"
         },
         "actor_id": {
-          "type": "string"
+          "type": "string",
+          "description": "The user id of the person signed in to this conversation (a tenant user, e.g. U01_ADMIN, or a Cloudnest staff member). The desk acts only for that person; any other id is refused."
         }
       },
       "required": [
@@ -477,7 +483,8 @@
       ],
       "properties": {
         "actor_id": {
-          "type": "string"
+          "type": "string",
+          "description": "The user id of the person signed in to this conversation (a tenant user, e.g. U01_ADMIN, or a Cloudnest staff member). The desk acts only for that person; any other id is refused."
         },
         "tenant_id": {
           "type": "string"
@@ -528,7 +535,7 @@
         },
         "actor_id": {
           "type": "string",
-          "description": "The caller's user id, e.g. U01_ADMIN"
+          "description": "The user id of the person signed in to this conversation (a tenant user, e.g. U01_ADMIN, or a Cloudnest staff member). The desk acts only for that person; any other id is refused."
         },
         "user_id": {
           "type": "string",
@@ -573,7 +580,7 @@
         },
         "actor_id": {
           "type": "string",
-          "description": "The caller's user id, e.g. U01_ADMIN"
+          "description": "The user id of the person signed in to this conversation (a tenant user, e.g. U01_ADMIN, or a Cloudnest staff member). The desk acts only for that person; any other id is refused."
         }
       }
     },
@@ -610,7 +617,7 @@
         },
         "actor_id": {
           "type": "string",
-          "description": "The caller's user id, e.g. U01_ADMIN"
+          "description": "The user id of the person signed in to this conversation (a tenant user, e.g. U01_ADMIN, or a Cloudnest staff member). The desk acts only for that person; any other id is refused."
         },
         "status": {
           "type": "string",
@@ -656,7 +663,7 @@
         },
         "actor_id": {
           "type": "string",
-          "description": "The caller's user id, e.g. U01_ADMIN"
+          "description": "The user id of the person signed in to this conversation (a tenant user, e.g. U01_ADMIN, or a Cloudnest staff member). The desk acts only for that person; any other id is refused."
         },
         "invoice_id": {
           "type": "string",
@@ -701,7 +708,7 @@
         },
         "actor_id": {
           "type": "string",
-          "description": "The caller's user id, e.g. U01_ADMIN"
+          "description": "The user id of the person signed in to this conversation (a tenant user, e.g. U01_ADMIN, or a Cloudnest staff member). The desk acts only for that person; any other id is refused."
         },
         "invoice_id": {
           "type": "string",
@@ -742,7 +749,7 @@
         },
         "actor_id": {
           "type": "string",
-          "description": "The caller's user id, e.g. U01_ADMIN"
+          "description": "The user id of the person signed in to this conversation (a tenant user, e.g. U01_ADMIN, or a Cloudnest staff member). The desk acts only for that person; any other id is refused."
         }
       }
     },
@@ -786,7 +793,7 @@
         },
         "actor_id": {
           "type": "string",
-          "description": "The caller's user id, e.g. U01_ADMIN"
+          "description": "The user id of the person signed in to this conversation (a tenant user, e.g. U01_ADMIN, or a Cloudnest staff member). The desk acts only for that person; any other id is refused."
         },
         "effective_timing": {
           "type": "string",
@@ -846,7 +853,7 @@
         },
         "actor_id": {
           "type": "string",
-          "description": "The caller's user id, e.g. U01_ADMIN"
+          "description": "The user id of the person signed in to this conversation (a tenant user, e.g. U01_ADMIN, or a Cloudnest staff member). The desk acts only for that person; any other id is refused."
         },
         "name": {
           "type": "string",
@@ -902,7 +909,7 @@
         },
         "actor_id": {
           "type": "string",
-          "description": "The caller's user id, e.g. U01_ADMIN"
+          "description": "The user id of the person signed in to this conversation (a tenant user, e.g. U01_ADMIN, or a Cloudnest staff member). The desk acts only for that person; any other id is refused."
         },
         "category": {
           "type": "string",
@@ -964,7 +971,7 @@
         },
         "actor_id": {
           "type": "string",
-          "description": "The caller's user id, e.g. U01_ADMIN"
+          "description": "The user id of the person signed in to this conversation (a tenant user, e.g. U01_ADMIN, or a Cloudnest staff member). The desk acts only for that person; any other id is refused."
         },
         "case_id": {
           "type": "string",

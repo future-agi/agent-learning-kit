@@ -5,13 +5,13 @@
   "use_case": "Answer access policy questions with citations",
   "branch": "Caller asks whether viewer roles require manager approval under current policy; agent reads current policy (acc_pol_v3) and confirms approval is required.",
   "tests": "Does the agent consult the current approved access policy (acc_pol_v3) and confirm viewer roles require approval, rather than relying on superseded rules?",
-  "instruction": "You are Maya Lin, a marketing professional. You are preparing to request a read-only viewer role for an internal dashboard. Ask the IT access desk whether viewer roles require manager approval under the current company access policy, or if they can be provisioned without approval.",
+  "instruction": "You are Celia Moreau (employee ID E511), a marketing professional. You are preparing to request a read-only viewer role for an internal dashboard. Ask the IT access desk whether viewer roles require manager approval under the current company access policy, or if they can be provisioned without approval.",
   "keywords": [
     "policy_citation",
     "approval_routing"
   ],
   "persona": {
-    "name": "Maya Lin",
+    "name": "Celia Moreau",
     "gender": "female",
     "age_group": "25-32",
     "occupation": "Marketing Professional",

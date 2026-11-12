@@ -10,7 +10,7 @@
     "email_pickup"
   ],
   "persona": {
-    "name": "Henry J. Ford",
+    "name": "Henry Ford",
     "gender": "male",
     "age_group": "",
     "occupation": "",
@@ -60,7 +60,9 @@
         "order_id": "O08"
       },
       "environment_arguments": {},
-      "fixed": {}
+      "fixed": {
+        "order_id": "record: orders.order_id of the order the request is about"
+      }
     }
   ],
   "alternatives": [],

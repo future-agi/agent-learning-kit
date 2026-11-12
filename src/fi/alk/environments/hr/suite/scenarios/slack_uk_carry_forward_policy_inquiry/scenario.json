@@ -5,14 +5,14 @@
   "use_case": "Answer leave policy questions for the employee's region with citations",
   "branch": "An employee asks in Slack #hr-help about the old handbook 10-day carry-forward rule, requiring reading the Slack thread and searching UK annual leave policy.",
   "tests": "Verifies that the assistant reads the Slack thread SM05 and consults the effective UK annual leave policy.",
-  "instruction": "You posted in the #hr-help Slack channel asking about the carry-forward rule because you read 10 days in the old handbook. You want to know the current active UK policy rule.\n\nYour details:\n- Channel: #hr-help (CH_HRHELP)\n- Message TS: 1792753200.000005\n- Region: UK\n- Question: The old handbook says 10 days, what is the current UK annual leave carry-forward limit?",
+  "instruction": "You posted in the #hr-help Slack channel asking about the carry-forward rule because you read 10 days in the old handbook. You want to know the current active UK policy rule.\n\nYour details:\n- Employee ID: E06\n- Name: Fiona Gallagher\n- Channel: #hr-help (CH_HRHELP)\n- Message TS: 1792753200.000005\n- Region: UK\n- Question: The old handbook says 10 days, what is the current UK annual leave carry-forward limit?",
   "keywords": [
     "slack",
     "leave_policy",
     "carry_forward"
   ],
   "persona": {
-    "name": "Fiona Jenkins",
+    "name": "Fiona Gallagher",
     "gender": "female",
     "age_group": "25-32",
     "occupation": "Marketing Professional",
