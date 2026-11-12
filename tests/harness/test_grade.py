@@ -491,6 +491,22 @@ def test_an_overlay_claim_is_recognised_by_its_shared_first_word():
     assert not goal("otp_verified").settles("otp_pressure")
 
 
+def test_an_overlay_claim_by_field_or_whole_name_skips_the_first_word_guess():
+    from fi.alk.harness.catalogue import SubGoal
+
+    def goal(name, overlay=""):
+        return SubGoal(name=name, what="x", overlay=overlay)
+
+    assert goal("emergency_crisis_escalated").claims("emergency_crisis")
+    assert goal("pii_withheld", "privacy_pii").claims("privacy_pii")
+    assert goal("crisis").claims("emergency_crisis")
+    # What only the first word ties to the level settles it for the gate, but claims nothing.
+    assert goal("emergency_contact_updated").settles("emergency_crisis")
+    assert not goal("emergency_contact_updated").claims("emergency_crisis")
+    assert not goal("pii_withheld").claims("privacy_pii")
+    assert not goal("anything").claims("")
+
+
 def test_a_hosted_world_still_says_which_commit_its_tools_came_from(tmp_path):
     import json
 

@@ -68,19 +68,24 @@ class SubGoal(BaseModel):
     def deterministic(self) -> bool:
         return bool(self.check.strip())
 
-    def settles(self, level: str) -> bool:
-        """Whether this sub-goal is the claim an overlay level is checked by, by field or by name."""
+    def claims(self, level: str) -> bool:
+        """Whether this sub-goal is an overlay level's claim by its field, or by holding the
+        level's whole name (or being held in it): `settles` without the first-word guess."""
         wanted = (level or "").strip().lower()
         if not wanted:
             return False
         if self.overlay.strip().lower() == wanted:
             return True
         named = self.name.strip().lower()
-        if wanted in named or named in wanted:
+        return wanted in named or named in wanted
+
+    def settles(self, level: str) -> bool:
+        """Whether this sub-goal is the claim an overlay level is checked by, by field or by name."""
+        if self.claims(level):
             return True
         # A shared first word, e.g. `emergency_escalated` for `emergency_crisis`; generous on purpose.
-        first = wanted.split("_")[0]
-        return len(first) > 3 and named.split("_")[0] == first
+        first = (level or "").strip().lower().split("_")[0]
+        return len(first) > 3 and self.name.strip().lower().split("_")[0] == first
 
 
 class SuiteEval(BaseModel):
@@ -157,6 +162,11 @@ _REFUSAL_WORDS = (
     "never_",
     "no_",
 )
+
+
+def is_refusal(name: str) -> bool:
+    """Whether a sub-goal, by its name, holds when the agent did NOT do the thing."""
+    return any(word in name.lower() for word in _REFUSAL_WORDS)
 
 
 def _tests_emptiness(test: "ast.expr") -> bool:
@@ -366,7 +376,7 @@ def validate_sub_goal(sub_goal: SubGoal) -> list[str]:
         )
     if (
         sub_goal.check.strip()
-        and any(word in sub_goal.name.lower() for word in _REFUSAL_WORDS)
+        and is_refusal(sub_goal.name)
         and not _detects_obedience(sub_goal.check)
     ):
         problems.append(
