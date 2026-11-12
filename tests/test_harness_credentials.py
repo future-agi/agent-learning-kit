@@ -7,6 +7,11 @@ from fi.alk.harness.credentials import (
     RequirementStatus,
     discover_credentials,
 )
+from fi.alk.harness.secrets import (
+    CONTROLLER_CONNECTION_NAMES,
+    controller_name_reserved,
+    worker_environment,
+)
 from fi.simulate.runtime.spec import SecretRef
 
 
@@ -620,3 +625,111 @@ def test_explicit_scan_paths_exclude_unused_optional_integrations(
 
     assert set(_requirements(manifest)) == {"OPENAI_API_KEY"}
     assert "retell" not in manifest.detected_connectors
+
+
+# TH-9550: which names a job may put in the sandbox controller's environment.
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        # One case per prefix.
+        "ALK_SANDBOX_TOKEN",
+        "LD_AUDIT",
+        "DYLD_INSERT_LIBRARIES",
+        "PYTHONHOME",
+        "PYTHONWARNINGS",
+        "HARNESS_VOICE_RUNNER",
+        "HARNESS_PLATFORM_WORKSPACE_ID",
+        "FI_DEFAULT_MODEL",
+        "AGENTCC_CLAUDE_MODEL_ALIAS",
+        "DOCKER_CONFIG",
+        "COMPOSE_FILE",
+        "BUILDKIT_HOST",
+        "BUILDX_CONFIG",
+        "NODE_OPTIONS",
+        "SIMULATOR_X",
+        "ANTHROPIC_VERTEX_BASE_URL",
+        "GOOGLE_API_KEY",
+        "VERTEXAI_PROJECT",
+        "GIT_SSH_COMMAND",
+        "CLAUDE_CODE_ANYTHING",
+        # One case per exact name.
+        "LOCALDOMAIN",
+        "RES_OPTIONS",
+        "HOSTALIASES",
+        "REQUESTS_CA_BUNDLE",
+        "CURL_CA_BUNDLE",
+        "SSL_CERT_FILE",
+        "SSL_CERT_DIR",
+        "NO_PROXY",
+        "GCONV_PATH",
+        "BASH_ENV",
+        "ENV",
+        "SSLKEYLOGFILE",
+        "OPENSSL_CONF",
+        # Anything ending _proxy, in any case.
+        "HTTPS_PROXY",
+        "ALL_PROXY",
+        "wss_proxy",
+        "No_Proxy",
+        "http_proxy",
+        # Case and surrounding spaces do not bypass it.
+        "pythonpath",
+        " PYTHONPATH ",
+        "\tld_preload\n",
+        # The runner's own names, and a name only the worker allow-list holds.
+        "HARNESS_PLATFORM_URL",
+        "DOCKER_HOST",
+        "TMPDIR",
+        "CARTESIA_API_KEY",
+    ],
+)
+def test_controller_name_reserved(name):
+    assert controller_name_reserved(name)
+
+
+@pytest.mark.parametrize(
+    "name", ["LK_URL", "MY_SETTING", "OPENAI_API_KEY", "REMOTE_AGENT_ID", "VAPI_API_BASE_URL"]
+)
+def test_controller_name_not_reserved(name):
+    assert not controller_name_reserved(name)
+
+
+def test_no_controller_connection_name_is_reserved_or_inherited_from_the_host():
+    assert len(CONTROLLER_CONNECTION_NAMES) == 17
+    assert not [n for n in CONTROLLER_CONNECTION_NAMES if controller_name_reserved(n)]
+    child = worker_environment(
+        {},
+        host_environment={name: "host-value" for name in CONTROLLER_CONNECTION_NAMES},
+    )
+    assert not set(child) & CONTROLLER_CONNECTION_NAMES
+
+
+def test_worker_environment_never_lets_a_job_replace_or_add_a_host_name():
+    child = worker_environment(
+        {
+            "PYTHONPATH": "/job",
+            "HARNESS_PLATFORM_URL": "https://job.invalid",
+            "LD_PRELOAD": "/job.so",
+            "http_proxy": "http://job.invalid",
+            "NO_PROXY": "job.invalid",
+            "HOME": "/job-home",
+            "LIVEKIT_URL": "wss://job.invalid",
+        },
+        host_environment={
+            "PATH": "/bin",
+            "PYTHONPATH": "/host",
+            "HARNESS_PLATFORM_URL": "https://platform.invalid",
+            "NO_PROXY": "host.invalid",
+            "HOME": "/host-home",
+        },
+    )
+
+    assert child["PYTHONPATH"] == "/host"
+    assert child["HARNESS_PLATFORM_URL"] == "https://platform.invalid"
+    assert child["NO_PROXY"] == "host.invalid"
+    assert child["HOME"] == "/host-home"
+    assert "LD_PRELOAD" not in child
+    assert "http_proxy" not in child
+    assert child["LIVEKIT_URL"] == "wss://job.invalid"

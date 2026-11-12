@@ -17,6 +17,161 @@ class SecretResolutionError(RuntimeError):
 _RUNTIME_CONFIGURATION_PREFIX = "ALK_RUNTIME_VALUE_"
 
 
+WORKER_ENVIRONMENT_NAMES: frozenset[str] = frozenset(
+    {
+        "DOCKER_HOST",
+        "HOME",
+        "LANG",
+        "LC_ALL",
+        "NO_PROXY",
+        "PATH",
+        "PYTHONPATH",
+        "SSL_CERT_DIR",
+        "SSL_CERT_FILE",
+        "TMPDIR",
+        # Runner topology. Hosted workers need these to reach sibling services privately and to
+        # expose their per-call webhook, but submitted values must never control them.
+        "ALK_DOCKER_BIND_HOST",
+        "ALK_DOCKER_NETWORK",
+        "ALK_DOCKER_PUBLISHED_HOST",
+        "ALK_RUNNER_CONTAINER",
+        "HARNESS_WEBHOOK_HOST",
+        "HARNESS_WEBHOOK_PORT",
+        "HARNESS_WEBHOOK_URL",
+        "HARNESS_RUNTIME_WEBHOOK_URL",
+        "HARNESS_VOICE_INFRA_RETRIES",
+        # Runner-owned model configuration. Uploaded agent values with these names remain in the
+        # runtime namespace and cannot replace controller credentials.
+        "ALK_AGENT_MODEL",
+        # The backend choice travels with the model it names: without it the worker
+        # falls back to the default backend and hands it a model it cannot drive.
+        "ALK_HARNESS",
+        GOOGLE_ADK_APPROVAL_ENV,
+        "ALK_HARNESS_MODEL",
+        "ALK_HARNESS_THINKING",
+        "AGENTCC_API_KEY",
+        "AGENTCC_BASE_URL",
+        "ALK_JUDGE_MODEL",
+        "ALK_USER_MODEL",
+        # Backend-specific configuration. A hosted run pinned to a region falls back to
+        # global without this, which is a quiet change of provider endpoint.
+        "ALK_VERTEX_LOCATION",
+        # The simulated caller's voice. Without it every persona shares one voice and the run
+        # stops exercising voice variation, which it reports as a log line rather than a failure.
+        "CARTESIA_API_KEY",
+        "ANTHROPIC_MODEL",
+        "ANTHROPIC_VERTEX_PROJECT_ID",
+        "CLAUDE_CODE_USE_VERTEX",
+        "CLOUD_ML_REGION",
+        "GOOGLE_APPLICATION_CREDENTIALS",
+        "GOOGLE_CLOUD_PROJECT",
+        # Runner-owned result delivery credentials, mounted independently of customer source.
+        "HARNESS_PLATFORM_URL",
+        "HARNESS_PLATFORM_API_KEY",
+        "HARNESS_PLATFORM_SECRET_KEY",
+        "FI_BASE_URL",
+        "FI_API_KEY",
+        "FI_SECRET_KEY",
+    }
+)
+
+# Runner-owned names a job may never set, as a variable or as a secret-ref alias. Both the sandbox
+# server's submit-time checks and the controller's ``.env`` loader read this one set.
+RUNNER_RESERVED_ENVIRONMENT: frozenset[str] = frozenset(
+    {
+        "DOCKER_HOST",
+        "FI_API_KEY",
+        "FI_BASE_URL",
+        "FI_SECRET_KEY",
+        "HARNESS_PLATFORM_API_KEY",
+        "HARNESS_PLATFORM_SECRET_KEY",
+        "HARNESS_PLATFORM_URL",
+        "HARNESS_WEBHOOK_HOST",
+        "HARNESS_WEBHOOK_PORT",
+        "HOME",
+        "PATH",
+        "PYTHONPATH",
+    }
+)
+
+# The names the call stage and the endpoint originators read from the controller's own environment
+# (never a base URL, never a host-owned name). Each is read by the code named beside it.
+CONTROLLER_CONNECTION_NAMES: frozenset[str] = frozenset(
+    {
+        "LIVEKIT_URL",  # run/sdk_voice.py:60, harness/contract.py:1419
+        "LIVEKIT_API_KEY",  # simulate/voice.py:204
+        "LIVEKIT_API_SECRET",  # simulate/voice.py:205
+        "LIVEKIT_INBOUND_DID",  # simulate/endpoints/retell.py:191
+        "LIVEKIT_INBOUND_TRUNK_ID",  # simulate/simulation/engines/livekit.py:5557
+        "DEEPGRAM_API_KEY",  # simulate/simulation/livekit_models.py:120
+        "GEMINI_API_KEY",  # simulate/simulation/livekit_models.py:247
+        "OPENAI_API_KEY",  # simulate/endpoints/actor_sources.py:176
+        "VAPI_API_KEY",  # run/live.py:222
+        "VAPI_PUBLIC_API_KEY",  # simulate/endpoints/vapi.py:101
+        "VAPI_ASSISTANT_ID",  # run/live.py:221, simulate/endpoints/vapi.py
+        "VAPI_PHONE_NUMBER_ID",  # simulate/endpoints/vapi.py:87
+        "RETELL_API_KEY",  # simulate/endpoints/retell.py:190
+        "RETELL_AGENT_ID",  # simulate/endpoints/retell.py:185
+        "RETELL_FROM_NUMBER",  # simulate/endpoints/retell.py:189
+        "ELEVEN_API_KEY",  # simulate/simulation/livekit_models.py:98, :162
+        "ELEVENLABS_API_KEY",  # simulate/simulation/livekit_models.py:98, :162
+    }
+)
+
+_RESERVED_PREFIXES = (
+    "ALK_",
+    "LD_",
+    "DYLD_",
+    "PYTHON",
+    "HARNESS_",
+    "FI_",
+    "AGENTCC_",
+    "DOCKER_",
+    "COMPOSE_",
+    "BUILDKIT_",
+    "BUILDX_",
+    "NODE_",
+    "SIMULATOR_",
+    "ANTHROPIC_",
+    "GOOGLE_",
+    "VERTEX",
+    "GIT_",
+    "CLAUDE_CODE_",
+)
+_RESERVED_EXACT = frozenset(
+    {
+        "LOCALDOMAIN",
+        "RES_OPTIONS",
+        "HOSTALIASES",
+        "REQUESTS_CA_BUNDLE",
+        "CURL_CA_BUNDLE",
+        "SSL_CERT_FILE",
+        "SSL_CERT_DIR",
+        "NO_PROXY",
+        "GCONV_PATH",
+        "BASH_ENV",
+        "ENV",
+        "SSLKEYLOGFILE",
+        "OPENSSL_CONF",
+    }
+)
+
+
+def controller_name_reserved(name: str) -> bool:
+    """True when a job must not be able to set ``name`` in the sandbox controller's environment.
+
+    The name is compared upper-cased and stripped, so case and surrounding spaces cannot bypass it.
+    """
+    key = str(name).strip().upper()
+    return (
+        key in RUNNER_RESERVED_ENVIRONMENT
+        or key in WORKER_ENVIRONMENT_NAMES
+        or key in _RESERVED_EXACT
+        or key.startswith(_RESERVED_PREFIXES)
+        or key.endswith("_PROXY")
+    )
+
+
 PROCESS_SECRET_FILE_ENVIRONMENT = {
     "GOOGLE_APPLICATION_CREDENTIALS_JSON": "GOOGLE_APPLICATION_CREDENTIALS",
 }
@@ -98,61 +253,7 @@ def worker_environment(
 ) -> dict[str, str]:
     """Create a least-privilege child environment instead of inheriting every host secret."""
     host = host_environment if host_environment is not None else os.environ
-    allowed = {
-        "DOCKER_HOST",
-        "HOME",
-        "LANG",
-        "LC_ALL",
-        "NO_PROXY",
-        "PATH",
-        "PYTHONPATH",
-        "SSL_CERT_DIR",
-        "SSL_CERT_FILE",
-        "TMPDIR",
-        # Runner topology. Hosted workers need these to reach sibling services privately and to
-        # expose their per-call webhook, but submitted values must never control them.
-        "ALK_DOCKER_BIND_HOST",
-        "ALK_DOCKER_NETWORK",
-        "ALK_DOCKER_PUBLISHED_HOST",
-        "ALK_RUNNER_CONTAINER",
-        "HARNESS_WEBHOOK_HOST",
-        "HARNESS_WEBHOOK_PORT",
-        "HARNESS_WEBHOOK_URL",
-        "HARNESS_RUNTIME_WEBHOOK_URL",
-        "HARNESS_VOICE_INFRA_RETRIES",
-        # Runner-owned model configuration. Uploaded agent values with these names remain in the
-        # runtime namespace and cannot replace controller credentials.
-        "ALK_AGENT_MODEL",
-        # The backend choice travels with the model it names: without it the worker
-        # falls back to the default backend and hands it a model it cannot drive.
-        "ALK_HARNESS",
-        GOOGLE_ADK_APPROVAL_ENV,
-        "ALK_HARNESS_MODEL",
-        "ALK_HARNESS_THINKING",
-        "AGENTCC_API_KEY",
-        "AGENTCC_BASE_URL",
-        "ALK_JUDGE_MODEL",
-        "ALK_USER_MODEL",
-        # Backend-specific configuration. A hosted run pinned to a region falls back to
-        # global without this, which is a quiet change of provider endpoint.
-        "ALK_VERTEX_LOCATION",
-        # The simulated caller's voice. Without it every persona shares one voice and the run
-        # stops exercising voice variation, which it reports as a log line rather than a failure.
-        "CARTESIA_API_KEY",
-        "ANTHROPIC_MODEL",
-        "ANTHROPIC_VERTEX_PROJECT_ID",
-        "CLAUDE_CODE_USE_VERTEX",
-        "CLOUD_ML_REGION",
-        "GOOGLE_APPLICATION_CREDENTIALS",
-        "GOOGLE_CLOUD_PROJECT",
-        # Runner-owned result delivery credentials, mounted independently of customer source.
-        "HARNESS_PLATFORM_URL",
-        "HARNESS_PLATFORM_API_KEY",
-        "HARNESS_PLATFORM_SECRET_KEY",
-        "FI_BASE_URL",
-        "FI_API_KEY",
-        "FI_SECRET_KEY",
-    }
+    allowed = WORKER_ENVIRONMENT_NAMES
     child = {name: value for name, value in host.items() if name in allowed}
     reserved = {
         "ALK_HARNESS",
@@ -183,14 +284,22 @@ def worker_environment(
         "ALK_USER_MODEL",
     }
     child.update(
-        {name: value for name, value in resolved.items() if name not in reserved}
+        {
+            name: value
+            for name, value in resolved.items()
+            if name not in reserved and not controller_name_reserved(name)
+        }
     )
     child.update(runtime_configuration_environment(runtime_configuration or {}))
     return child
 
 
 __all__ = [
+    "CONTROLLER_CONNECTION_NAMES",
+    "RUNNER_RESERVED_ENVIRONMENT",
     "SecretResolutionError",
+    "WORKER_ENVIRONMENT_NAMES",
+    "controller_name_reserved",
     "resolve_worker_secrets",
     "runtime_configuration_environment",
     "runtime_configuration_value",
