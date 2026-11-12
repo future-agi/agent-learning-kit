@@ -91,6 +91,16 @@ def _plus(key: str, tool: str, **arguments):
     ]
 
 
+def _instead(key: str, tool: str, replacement: str, **arguments):
+    """The reference solution with every `tool` step replaced by one call to `replacement`."""
+    return [
+        Step(tool=replacement, arguments=arguments, environment_arguments={}, fixed={})
+        if step.tool == tool
+        else copy.deepcopy(step)
+        for step in _scenario(key).solution
+    ]
+
+
 def _drop(key: str, index: int):
     """The reference solution without its step at `index`."""
     steps = [copy.deepcopy(step) for step in _scenario(key).solution]
@@ -201,6 +211,20 @@ WRONG_RUNS = [
         "qualifies the lead without reading its email",
         lambda k: _without(k, "get_thread"),
         "lead_qualified_by_rubric",
+        "done blind",
+    ),
+    (
+        "qualify_corrected_email_lead_and_assign_canada_owner",
+        "reads only the first email's headers, never the correction to 60 seats",
+        lambda k: _instead(k, "get_thread", "get_message", messageId="smsg_014", messageFormat="MINIMAL"),
+        "lead_qualified_by_rubric",
+        "done blind",
+    ),
+    (
+        "qualify_corrected_email_lead_and_assign_canada_owner",
+        "reads the first email in full but never the correction to 60 seats",
+        lambda k: _instead(k, "get_thread", "get_message", messageId="smsg_014"),
+        "owner_assigned_by_territory",
         "done blind",
     ),
     (

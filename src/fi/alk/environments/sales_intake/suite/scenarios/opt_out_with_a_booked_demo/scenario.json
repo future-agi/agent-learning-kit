@@ -4,7 +4,7 @@
   "scenario_id": "",
   "use_case": "Record consent and stop outreach",
   "branch": "Prospect requests opt-out which also requires cancellation of their booked demo",
-  "tests": "the desk records opt-out for C421, stops outreach, and cancels booked demo D421 releasing slot DS17",
+  "tests": "the desk records opt-out for C421, stops outreach, and cancels booked demo D421 releasing slot DS421",
   "instruction": "You are Nigel Caldwell from Tasman Health (email nigel.caldwell@tasmanhealth.example, contact C421, lead L421). You currently have a booked demo D421 with Chloe Nguyen for Nov 13. Tell the sales desk to remove you from all BrightDesk communications and cancel your booked demo. Confirm both actions when read back.\n\nYour details:\n- Name: Nigel Caldwell\n- Company: Tasman Health\n- Email: nigel.caldwell@tasmanhealth.example\n- Lead ID: L421\n- Existing Demo: D421",
   "keywords": [
     "opt_out",
@@ -43,7 +43,7 @@
       {
         "lead_id": "L421",
         "demo_id": "D421",
-        "slot_id": "DS17"
+        "slot_id": "DS421"
       }
     ],
     "contacts": [

@@ -23,7 +23,7 @@ from fi.alk.environments import designed
 from fi.alk.harness.catalogue import load_catalogue
 from fi.alk.harness.checks import reference_of, run_check, run_world_check
 from fi.alk.harness.folder import read_folder
-from fi.alk.harness.prove import _run
+from fi.alk.harness.prove import _run, play_reference_step
 from fi.alk.harness.releases import WORLD
 from fi.alk.harness.scenario import Step
 from fi.alk.harness.world.snapshot import restore
@@ -259,3 +259,51 @@ def test_wrong_runs_cover_every_kind_the_plan_names() -> None:
     kinds = " ".join(wrong for _k, wrong, *_ in WRONG_RUNS)
     for kind in ("first named", "another provider", "another time", "urgent symptom", "without reading", "does nothing"):
         assert kind in kinds, kind
+
+
+def _rows(world, tables):
+    """The rows of `tables`, in no particular order: a restored row may come back last."""
+    state = world.state()
+    return {t: sorted(json.dumps(row, sort_keys=True, default=str) for row in state.get(t) or []) for t in tables}
+
+
+# (scenario, the paired write that fails, the statement that fails partway through it)
+PARTIAL_FAILURES = [
+    ("book_cardiology_active_referral_follow_up", "book_appointment", "INSERT INTO calendar_events"),
+    ("email_search_sender_reschedule", "reschedule_appointment", "UPDATE calendar_events"),
+    ("cancel_appointment_confirmed", "cancel_appointment", "UPDATE calendar_events"),
+]
+
+
+@pytest.mark.parametrize(("key", "tool", "failing"), PARTIAL_FAILURES, ids=[f"{t}" for _k, t, _f in PARTIAL_FAILURES])
+def test_a_write_that_fails_partway_leaves_nothing_behind(built: Path, key: str, tool: str, failing: str) -> None:
+    """Plan §3.3: an appointment and its calendar event are written together or not at all. The
+    store fails on `failing`, after the first of the paired writes has run: nothing the call wrote
+    may survive, and the same request retried afterwards succeeds with both records in place."""
+    scenario = _scenario(key)
+    world, _calls, _refused, _ = _run(scenario, built / WORLD, with_solution=False)
+    try:
+        steps = list(scenario.solution)
+        at = next(i for i, step in enumerate(steps) if step.tool == tool)
+        for step in steps[:at]:
+            play_reference_step(world, step)
+        before = _rows(world, ("appointments", "calendar_events", "slot_holds"))
+        real = world.store.execute
+
+        def broken(sql, params=()):
+            if sql.lstrip().upper().startswith(failing.upper()):
+                raise RuntimeError(f"injected failure: {failing}")
+            return real(sql, params)
+
+        world.store.execute = broken
+        failed = play_reference_step(world, steps[at])
+        world.store.execute = real
+        assert not failed.ok, failed.result
+        assert _rows(world, ("appointments", "calendar_events", "slot_holds")) == before
+        retried = play_reference_step(world, steps[at])
+        assert retried.ok and not (retried.result or {}).get("idempotent"), retried.result
+        checks = json.loads((HERE / "environment.json").read_text())["world_checks"]
+        broken_checks = {n: o.said for n, s in checks.items() if not (o := run_world_check(s, world, name=n)).held}
+        assert not broken_checks, broken_checks
+    finally:
+        world.close()

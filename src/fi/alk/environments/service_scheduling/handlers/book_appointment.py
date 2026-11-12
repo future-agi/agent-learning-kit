@@ -220,6 +220,23 @@ def _contention(db, staff, service, loc, utc, now):
     return appt_id
 
 
+
+def _together(db, touched, writes):
+    """Run `writes` so that every row lands or none does. A handler gets no transaction of its
+    own, so the rows in `touched` ((table, column, value) each) are held first and put back if a
+    write fails: an appointment never survives without its calendar event, or the reverse."""
+    held = [(t, c, v, db.query(f"SELECT * FROM {t} WHERE {c} = ?", [v])) for t, c, v in touched]
+    try:
+        return writes()
+    except Exception:
+        for t, c, v, rows in held:
+            db.execute(f"DELETE FROM {t} WHERE {c} = ?", [v])
+            for row in rows:
+                cols = list(row)
+                db.execute(f"INSERT INTO {t} ({', '.join(cols)}) VALUES ({', '.join('?' * len(cols))})", [row[k] for k in cols])
+        raise
+
+
 def handle(args, db):
     key = args.get("request_key")
     if not key:
@@ -245,7 +262,13 @@ def handle(args, db):
     if why:
         raise ToolError(f"Cannot book: {why}.", category="conflict")
     appt_id = _next_id(db, "appointments", "appointment_id", "A", 600)
-    row = _insert_appointment(db, appt_id, cust, service, staff, loc, utc, off, now, key, "desk")
-    if hold:
-        db.execute("UPDATE holds SET status = 'converted', updated_at = ? WHERE hold_id = ?", [iso(now), hold["hold_id"]])
+
+    def book():
+        row = _insert_appointment(db, appt_id, cust, service, staff, loc, utc, off, now, key, "desk")
+        if hold:
+            db.execute("UPDATE holds SET status = 'converted', updated_at = ? WHERE hold_id = ?", [iso(now), hold["hold_id"]])
+        return row
+
+    row = _together(db, [("appointments", "appointment_id", appt_id), ("calendar_events", "event_id", f"EV-{appt_id}"),
+                         ("calendar_event_attendees", "event_id", f"EV-{appt_id}")] + ([("holds", "hold_id", hold["hold_id"])] if hold else []), book)
     return {"booked": True, "status": "booked", "appointment": _view(row), "idempotent": False}

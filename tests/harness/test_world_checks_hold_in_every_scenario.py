@@ -23,13 +23,26 @@ from fi.alk.harness.folder import read_folder
 from fi.alk.harness.prove import _run
 from fi.alk.harness.releases import WORLD
 
-VERTICALS = ("retail", "hr", "internal_it", "saas_subscriptions")
+VERTICALS = (
+    "retail",
+    "hr",
+    "internal_it",
+    "saas_subscriptions",
+    "clinic_scheduling",
+    "service_scheduling",
+    "sales_intake",
+    "internal_knowledge",
+)
 
 INTENDED = {
     ("retail", "unverified_email_claim_exception_rejected", "check_mailbox_retail_consistency"):
         "the customer's email cites a return R77 that does not exist; the claim is what the desk must not act on",
     ("saas_subscriptions", "cancellation_from_a_look_alike_sender", "check_mailbox_billing_consistency"):
         "the cancellation comes from a look-alike domain that is no tenant's user; spotting that is the scenario",
+    ("internal_knowledge", "approved_but_not_yet_in_effect", "check_one_effective_version"):
+        "a second approved version takes effect later; answering from the one in effect today is the scenario",
+    ("internal_knowledge", "only_a_draft_exists", "check_one_effective_version"):
+        "the policy has only a draft; saying there is no approved policy yet is the scenario",
 }
 
 

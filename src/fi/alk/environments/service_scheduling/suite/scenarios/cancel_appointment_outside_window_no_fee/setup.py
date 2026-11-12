@@ -55,3 +55,6 @@ def setup(world):
         "is_organizer": 0,
         "is_optional": 0
     })
+    # The seed booking A018 held this time on the same calendar; it was cancelled before this scenario starts.
+    world.change("appointments", "A018", {"status": "cancelled", "cancelled_at": "2026-10-20T10:00:00Z", "updated_at": "2026-10-20T10:00:00Z"}, by="appointment_id")
+    world.change("calendar_events", "EV-A018", {"status": "cancelled", "updated_at": "2026-10-20T10:00:00Z"}, by="event_id")

@@ -78,3 +78,6 @@ def setup(world):
         "thread_id": "th_s402",
         "label_id": "INBOX"
     })
+    # The seed booking A002 held this time on the same calendar; it was cancelled before this scenario starts.
+    world.change("appointments", "A002", {"status": "cancelled", "cancelled_at": "2026-10-20T10:00:00Z", "updated_at": "2026-10-20T10:00:00Z"}, by="appointment_id")
+    world.change("calendar_events", "EV-A002", {"status": "cancelled", "updated_at": "2026-10-20T10:00:00Z"}, by="event_id")

@@ -5,7 +5,7 @@
   "use_case": "Waitlist and confirmations",
   "branch": "Customer asks to resend the confirmation for their existing appointment A415 via SMS.",
   "tests": "passes when an SMS confirmation is queued for Dylan Thomas's existing booked appointment A415.",
-  "instruction": "You have an upcoming appointment (A415) for Massage Therapy at Shoreditch Studio on Wednesday 28 October at 10:00 AM. You would like an SMS confirmation message to be resent to your mobile number.\n\nYour details:\n- Name: Dylan Thomas\n- Email: dylan.thomas@example.com\n- Phone: +44 20 7946 0415\n- Appointment ID: A415\n- Requested channel: SMS",
+  "instruction": "You have an upcoming appointment (A415) for Massage Therapy at Shoreditch Studio on Wednesday 28 October at 2:00 PM. You would like an SMS confirmation message to be resent to your mobile number.\n\nYour details:\n- Name: Dylan Thomas\n- Email: dylan.thomas@example.com\n- Phone: +44 20 7946 0415\n- Appointment ID: A415\n- Requested channel: SMS",
   "keywords": [
     "confirmation",
     "sms",

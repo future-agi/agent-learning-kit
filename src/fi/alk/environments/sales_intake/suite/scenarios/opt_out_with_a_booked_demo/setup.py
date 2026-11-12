@@ -34,8 +34,8 @@ def setup(world):
         "summary": "BrightDesk demo: Tasman Health",
         "description": "Demo for Nigel Caldwell",
         "location": "Video call",
-        "start_time": "2026-11-12T22:00:00Z",
-        "end_time": "2026-11-12T22:30:00Z",
+        "start_time": "2026-11-12T23:00:00Z",
+        "end_time": "2026-11-12T23:30:00Z",
         "time_zone": "Australia/Sydney",
         "status": "confirmed",
         "version": 1,
@@ -46,7 +46,7 @@ def setup(world):
         "demo_id": "D421",
         "lead_id": "L421",
         "rep_id": "A06",
-        "slot_id": "DS17",
+        "slot_id": "DS421",
         "status": "booked",
         "prospect_confirmed": 1,
         "request_key": "REQ-L421-DEMO",
@@ -54,3 +54,5 @@ def setup(world):
         "created_at": "2026-11-06T09:00:00Z",
         "updated_at": "2026-11-06T09:00:00Z",
     })
+    # Its own slot: DS17 belongs to the seed demo D01.
+    world.put("demo_slots", {"slot_id": "DS421", "rep_id": "A06", "start_time": "2026-11-12T23:00:00Z", "end_time": "2026-11-12T23:30:00Z", "status": "booked"})

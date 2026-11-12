@@ -48,49 +48,66 @@ def _want(reference, tool):
 
 
 def _evidence_missing(world, calls, reference):
-    """The evidence the reference fixes (an email thread or message, a staff calendar) that this run
-    never retrieved by any valid path: a direct read, a search that listed it, or for a calendar a
-    read of its events or the slots computed from it."""
+    """The evidence the reference fixes and whether it reached this run: every message of an email
+    thread (or the one email) with its body returned by a read, and a staff calendar read directly or
+    through the slots computed from it. Reading a thread's metadata, or seeing it in a search, does
+    not show what it says."""
     state = world.state()
-    thread_of = {m["id"]: m["thread_id"] for m in state.get("gmail_messages", [])}
     cal_of_staff = {r["staff_id"]: r["calendar_id"] for r in state.get("staff", [])}
     cal_of_event = {e["event_id"]: e["calendar_id"] for e in state.get("calendar_events", [])}
     wanted = []
     for step in reference or ():
         a = step.get("arguments", {})
         if step.get("tool") == "get_thread" and a.get("threadId"):
-            wanted.append(("thread", a["threadId"]))
+            wanted.append(("email thread", a["threadId"]))
         elif step.get("tool") == "get_message" and a.get("messageId"):
-            wanted.append(("thread", thread_of.get(a["messageId"], a["messageId"])))
+            wanted.append(("email", a["messageId"]))
         elif step.get("tool") == "list_events" and a.get("calendarId"):
             wanted.append(("calendar", a["calendarId"]))
         elif step.get("tool") == "get_event" and a.get("eventId"):
             wanted.append(("calendar", cal_of_event.get(a["eventId"], a.get("calendarId"))))
+    bodies = _bodies_shown(calls)
     missing = []
     for kind, target in wanted:
-        seen = False
-        for c in calls:
-            if not c.ok:
-                continue
-            r = c.result if isinstance(c.result, dict) else {}
-            if kind == "thread" and (
-                (c.name == "get_thread" and c.arguments.get("threadId") == target)
-                or (c.name == "get_message" and thread_of.get(c.arguments.get("messageId")) == target)
-                or (c.name == "search_threads" and any(isinstance(t, dict) and t.get("id") == target for t in r.get("threads") or []))
-            ):
-                seen = True
-            elif kind == "calendar" and (
-                (c.name == "list_events" and c.arguments.get("calendarId") == target)
-                or (c.name == "get_event" and cal_of_event.get(c.arguments.get("eventId")) == target)
-                or (c.name == "list_slots" and any(cal_of_staff.get(s.get("staff_id")) == target for s in r.get("slots") or []))
-                or (c.name == "list_slots" and c.arguments.get("staff_id") and cal_of_staff.get(c.arguments.get("staff_id")) == target)
-            ):
-                seen = True
-            if seen:
-                break
+        if kind in ("email thread", "email"):
+            ids = [m["id"] for m in state.get("gmail_messages", []) if m["thread_id" if kind == "email thread" else "id"] == target]
+            seen = bool(ids) and all(i in bodies for i in ids)
+        else:
+            seen = False
+            for c in calls:
+                r = c.result if isinstance(c.result, dict) else {}
+                if c.ok and (
+                    (c.name == "list_events" and c.arguments.get("calendarId") == target)
+                    or (c.name == "get_event" and cal_of_event.get(c.arguments.get("eventId")) == target)
+                    or (c.name == "list_slots" and any(cal_of_staff.get(s.get("staff_id")) == target for s in r.get("slots") or []))
+                    or (c.name == "list_slots" and c.arguments.get("staff_id") and cal_of_staff.get(c.arguments.get("staff_id")) == target)
+                ):
+                    seen = True
+                    break
         if not seen:
             missing.append(f"{kind} {target}")
     return missing
+
+
+def _bodies_shown(calls):
+    """The emails whose body a successful read returned: a full read of the message or of its
+    thread. A metadata-only or minimal read, or a search snippet, returns no body."""
+    shown = set()
+
+    def walk(value):
+        if isinstance(value, dict):
+            if value.get("id") and "plaintextBody" in value:
+                shown.add(value["id"])
+            for one in value.values():
+                walk(one)
+        elif isinstance(value, list):
+            for one in value:
+                walk(one)
+
+    for c in calls:
+        if c.ok and c.name in ("get_thread", "get_message"):
+            walk(c.result)
+    return shown
 
 
 def _blind(world, calls, reference):

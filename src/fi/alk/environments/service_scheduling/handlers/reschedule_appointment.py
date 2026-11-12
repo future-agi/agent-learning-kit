@@ -229,6 +229,23 @@ def _contention(db, staff, service, loc, utc, now):
     return appt_id
 
 
+
+def _together(db, touched, writes):
+    """Run `writes` so that every row lands or none does. A handler gets no transaction of its
+    own, so the rows in `touched` ((table, column, value) each) are held first and put back if a
+    write fails: an appointment never survives without its calendar event, or the reverse."""
+    held = [(t, c, v, db.query(f"SELECT * FROM {t} WHERE {c} = ?", [v])) for t, c, v in touched]
+    try:
+        return writes()
+    except Exception:
+        for t, c, v, rows in held:
+            db.execute(f"DELETE FROM {t} WHERE {c} = ?", [v])
+            for row in rows:
+                cols = list(row)
+                db.execute(f"INSERT INTO {t} ({', '.join(cols)}) VALUES ({', '.join('?' * len(cols))})", [row[k] for k in cols])
+        raise
+
+
 def handle(args, db):
     key = args.get("request_key")
     if not key:
@@ -255,8 +272,15 @@ def handle(args, db):
     if why:
         raise ToolError(f"Cannot move to that time: {why}. The original appointment is unchanged.", category="conflict")
     appt_id = _next_id(db, "appointments", "appointment_id", "A", 600)
-    new = _insert_appointment(db, appt_id, cust, service, staff, loc, utc, off, now, key, "desk", rescheduled_from=orig["appointment_id"])
-    db.execute("UPDATE appointments SET status = 'rescheduled', updated_at = ? WHERE appointment_id = ?", [iso(now), orig["appointment_id"]])
-    db.execute("UPDATE calendar_events SET status = 'cancelled', updated_at = ? WHERE event_id = ?", [iso(now), orig["calendar_event_id"]])
+
+    def move():
+        new = _insert_appointment(db, appt_id, cust, service, staff, loc, utc, off, now, key, "desk", rescheduled_from=orig["appointment_id"])
+        db.execute("UPDATE appointments SET status = 'rescheduled', updated_at = ? WHERE appointment_id = ?", [iso(now), orig["appointment_id"]])
+        db.execute("UPDATE calendar_events SET status = 'cancelled', updated_at = ? WHERE event_id = ?", [iso(now), orig["calendar_event_id"]])
+        return new
+
+    new = _together(db, [("appointments", "appointment_id", appt_id), ("calendar_events", "event_id", f"EV-{appt_id}"),
+                         ("calendar_event_attendees", "event_id", f"EV-{appt_id}"), ("appointments", "appointment_id", orig["appointment_id"]),
+                         ("calendar_events", "event_id", orig["calendar_event_id"])], move)
     orig = db.one("SELECT * FROM appointments WHERE appointment_id = ?", [orig["appointment_id"]])
     return {"rescheduled": True, "status": "rescheduled", "original": _view(orig), "replacement": _view(new), "idempotent": False}

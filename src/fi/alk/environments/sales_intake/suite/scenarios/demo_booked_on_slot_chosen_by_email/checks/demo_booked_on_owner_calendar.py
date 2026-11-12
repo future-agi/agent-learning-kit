@@ -32,41 +32,76 @@ def check(world, calls, reference=None):
     return None
 
 def _evidence_missing(world, calls, reference):
-    """The email thread or Slack thread the reference fixes, and whether the run retrieved it by any
-    valid path: a direct read, a message of the thread, or a search or channel read that listed it."""
+    """The email thread or Slack thread the reference fixes and whether its content reached this run:
+    every message of the email thread (or the one email) with its body returned by a read, and the
+    text of every message in the Slack thread (the desk's own posts aside) returned by a thread read,
+    channel read or search. Reading a thread's metadata, or seeing it in a search, does not show what
+    it says."""
     state = world.state()
-    thread_of = {m["id"]: m["thread_id"] for m in state.get("gmail_messages", [])}
+    desk = (state.get("current_actor") or [{}])[0].get("user_id")
     wanted = []
     for step in reference or ():
         a = step.get("arguments", {})
         if step.get("tool") == "get_thread" and a.get("threadId"):
-            wanted.append(("thread", a["threadId"]))
+            wanted.append(("email thread", a["threadId"]))
         elif step.get("tool") == "get_message" and a.get("messageId"):
-            wanted.append(("thread", thread_of.get(a["messageId"], a["messageId"])))
+            wanted.append(("email", a["messageId"]))
         elif step.get("tool") == "slack_read_thread" and a.get("message_ts"):
-            wanted.append(("slack", a["message_ts"]))
+            wanted.append(("Slack thread", a["message_ts"]))
+    bodies = _bodies_shown(calls)
+    texts = _texts_shown(calls)
     missing = []
     for kind, target in wanted:
-        seen = False
-        for c in calls:
-            if not c.ok:
-                continue
-            if kind == "thread" and (
-                (c.name == "get_thread" and c.arguments.get("threadId") == target)
-                or (c.name == "get_message" and thread_of.get(c.arguments.get("messageId")) == target)
-                or (c.name == "search_threads" and isinstance(c.result, dict) and any(isinstance(t, dict) and t.get("id") == target for t in c.result.get("threads") or []))
-            ):
-                seen = True
-            elif kind == "slack" and (
-                (c.name == "slack_read_thread" and c.arguments.get("message_ts") == target)
-                or (c.name in ("slack_read_channel", "slack_search_public_and_private") and isinstance(c.result, dict) and any(isinstance(m, dict) and (m.get("ts") == target or m.get("thread_ts") == target) for m in c.result.get("messages") or []))
-            ):
-                seen = True
-            if seen:
-                break
+        if kind in ("email thread", "email"):
+            ids = [m["id"] for m in state.get("gmail_messages", []) if m["thread_id" if kind == "email thread" else "id"] == target]
+            seen = bool(ids) and all(i in bodies for i in ids)
+        elif kind == "Slack thread":
+            needed = [m["ts"] for m in state.get("slack_messages", []) if (m["ts"] == target or m.get("thread_ts") == target) and m["user_id"] != desk]
+            seen = bool(needed) and all(t in texts for t in needed)
         if not seen:
-            missing.append(f"{'email thread' if kind == 'thread' else 'Slack thread'} {target}")
+            missing.append(f"{kind} {target}")
     return missing
+
+
+def _bodies_shown(calls):
+    """The emails whose body a successful read returned: a full read of the message or of its
+    thread. A metadata-only or minimal read, or a search snippet, returns no body."""
+    shown = set()
+
+    def walk(value):
+        if isinstance(value, dict):
+            if value.get("id") and "plaintextBody" in value:
+                shown.add(value["id"])
+            for one in value.values():
+                walk(one)
+        elif isinstance(value, list):
+            for one in value:
+                walk(one)
+
+    for c in calls:
+        if c.ok and c.name in ("get_thread", "get_message"):
+            walk(c.result)
+    return shown
+
+
+def _texts_shown(calls):
+    """The Slack messages whose text a successful thread read, channel read or search returned."""
+    shown = set()
+
+    def walk(value):
+        if isinstance(value, dict):
+            if value.get("ts") and "text" in value:
+                shown.add(value["ts"])
+            for one in value.values():
+                walk(one)
+        elif isinstance(value, list):
+            for one in value:
+                walk(one)
+
+    for c in calls:
+        if c.ok and c.name in ("slack_read_thread", "slack_read_channel", "slack_search_public_and_private"):
+            walk(c.result)
+    return shown
 
 
 if __name__ == "__main__":

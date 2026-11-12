@@ -296,6 +296,8 @@ Evidence-aware checks read their target from the scenario's fixed values and req
 | `demo_booked_on_slot_chosen_by_email` | books the demo without reading the prospect's email choice | `demo_booked_on_owner_calendar` | done blind |
 | `qualify_northwind_enquiry_from_email_thread` | qualifies another lead than the one that emailed | `lead_qualified_by_rubric` | any failure |
 | `qualify_northwind_enquiry_from_email_thread` | qualifies the lead without reading its email | `lead_qualified_by_rubric` | done blind |
+| `qualify_corrected_email_lead_and_assign_canada_owner` | reads only the first email's headers, never the correction to 60 seats | `lead_qualified_by_rubric` | done blind |
+| `qualify_corrected_email_lead_and_assign_canada_owner` | reads the first email in full but never the correction to 60 seats | `owner_assigned_by_territory` | done blind |
 | `v17_s05_opt_out_after_qualification` | records an opt-in when the prospect opted out | `consent_recorded_and_respected` | any failure |
 | `approved_handoff_summary_posted_in_thread` | posts the handoff in another rep's thread | `handoff_posted_in_thread` | any failure |
 | `cancel_booked_demo_on_request` | does nothing at all | `demo_cancelled_as_requested` | not done |

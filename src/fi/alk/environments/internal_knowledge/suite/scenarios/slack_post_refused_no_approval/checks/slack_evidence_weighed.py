@@ -9,49 +9,66 @@ def check(world, calls, reference=None):
     return None
 
 def _evidence_missing(world, calls, reference):
-    """The Slack thread, document or passage the reference fixes, and whether the run retrieved it by
-    any valid path: a direct read, a passage of the document, the whole document holding the passage,
-    a search that listed the passage, or a channel read or search that listed the message."""
+    """The Slack thread, document or passage the reference fixes and whether its content reached this
+    run: the text of every message in the thread (the desk's own posts aside) returned by a thread
+    read, channel read or search; the document read whole or through one of its passages; the passage
+    fetched or read in its document. A search returns a snippet, not the passage."""
     state = world.state()
+    desk = (state.get("current_actor") or [{}])[0].get("user_id")
     file_of = {p["passage_id"]: p["drive_file_id"] for p in state.get("kb_passages", [])}
     wanted = []
     for step in reference or ():
         a = step.get("arguments", {})
         if step.get("tool") == "slack_read_thread" and a.get("message_ts"):
-            wanted.append(("thread", a["message_ts"]))
+            wanted.append(("Slack thread", a["message_ts"]))
         elif step.get("tool") == "read_file_content" and a.get("fileId"):
             wanted.append(("document", a["fileId"]))
         elif step.get("tool") == "fetch_passage" and a.get("passage_id"):
             wanted.append(("passage", a["passage_id"]))
+    texts = _texts_shown(calls)
     missing = []
     for kind, target in wanted:
-        seen = False
-        for c in calls:
-            if not c.ok:
-                continue
-            r = c.result if isinstance(c.result, dict) else {}
-            if kind == "thread":
-                if c.name == "slack_read_thread" and c.arguments.get("message_ts") == target:
-                    seen = True
-                elif c.name in ("slack_read_channel", "slack_search_public_and_private") and any(isinstance(m, dict) and (m.get("ts") == target or m.get("thread_ts") == target) for m in r.get("messages") or []):
-                    seen = True
-            elif kind == "document":
-                if c.name == "read_file_content" and c.arguments.get("fileId") == target:
-                    seen = True
-                elif c.name == "fetch_passage" and file_of.get(c.arguments.get("passage_id")) == target:
-                    seen = True
-            else:
-                if c.name == "fetch_passage" and c.arguments.get("passage_id") == target:
-                    seen = True
-                elif c.name == "read_file_content" and c.arguments.get("fileId") == file_of.get(target):
-                    seen = True
-                elif c.name == "search_documents" and any(isinstance(p, dict) and p.get("passage_id") == target for res in r.get("results") or [] for p in res.get("passages") or []):
-                    seen = True
-            if seen:
-                break
+        if kind == "Slack thread":
+            needed = [m["ts"] for m in state.get("slack_messages", []) if (m["ts"] == target or m.get("thread_ts") == target) and m["user_id"] != desk]
+            seen = bool(needed) and all(t in texts for t in needed)
+        else:
+            seen = False
+            for c in calls:
+                if not c.ok:
+                    continue
+                if kind == "document":
+                    seen = (c.name == "read_file_content" and c.arguments.get("fileId") == target) or (
+                        c.name == "fetch_passage" and file_of.get(c.arguments.get("passage_id")) == target
+                    )
+                else:
+                    seen = (c.name == "fetch_passage" and c.arguments.get("passage_id") == target) or (
+                        c.name == "read_file_content" and c.arguments.get("fileId") == file_of.get(target)
+                    )
+                if seen:
+                    break
         if not seen:
             missing.append(f"{kind} {target}")
     return missing
+
+
+def _texts_shown(calls):
+    """The Slack messages whose text a successful thread read, channel read or search returned."""
+    shown = set()
+
+    def walk(value):
+        if isinstance(value, dict):
+            if value.get("ts") and "text" in value:
+                shown.add(value["ts"])
+            for one in value.values():
+                walk(one)
+        elif isinstance(value, list):
+            for one in value:
+                walk(one)
+
+    for c in calls:
+        if c.ok and c.name in ("slack_read_thread", "slack_read_channel", "slack_search_public_and_private"):
+            walk(c.result)
+    return shown
 
 
 if __name__ == "__main__":

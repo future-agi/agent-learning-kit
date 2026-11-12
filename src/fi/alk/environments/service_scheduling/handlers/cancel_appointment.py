@@ -33,6 +33,23 @@ def _appointment(db, appointment_id, customer_id):
 iso = _iso
 
 
+
+def _together(db, touched, writes):
+    """Run `writes` so that every row lands or none does. A handler gets no transaction of its
+    own, so the rows in `touched` ((table, column, value) each) are held first and put back if a
+    write fails: an appointment never survives without its calendar event, or the reverse."""
+    held = [(t, c, v, db.query(f"SELECT * FROM {t} WHERE {c} = ?", [v])) for t, c, v in touched]
+    try:
+        return writes()
+    except Exception:
+        for t, c, v, rows in held:
+            db.execute(f"DELETE FROM {t} WHERE {c} = ?", [v])
+            for row in rows:
+                cols = list(row)
+                db.execute(f"INSERT INTO {t} ({', '.join(cols)}) VALUES ({', '.join('?' * len(cols))})", [row[k] for k in cols])
+        raise
+
+
 def handle(args, db):
     a = _appointment(db, args.get("appointment_id"), args.get("customer_id"))
     if a["status"] != "booked":
@@ -45,6 +62,10 @@ def handle(args, db):
     late_fee = fee if 0 < hours < window else 0
     if late_fee and args.get("acknowledged_fee") is not True:
         raise ToolError(f"This is a late cancellation ({hours:.1f} hours before the start): a ${late_fee / 100:.2f} fee applies. Disclose it and cancel only if the customer accepts.", category="policy_blocked")
-    db.execute("UPDATE appointments SET status = 'cancelled', late_fee_cents = ?, cancelled_at = ?, updated_at = ? WHERE appointment_id = ?", [late_fee, iso(now), iso(now), a["appointment_id"]])
-    db.execute("UPDATE calendar_events SET status = 'cancelled', updated_at = ? WHERE event_id = ?", [iso(now), a["calendar_event_id"]])
+
+    def cancel():
+        db.execute("UPDATE appointments SET status = 'cancelled', late_fee_cents = ?, cancelled_at = ?, updated_at = ? WHERE appointment_id = ?", [late_fee, iso(now), iso(now), a["appointment_id"]])
+        db.execute("UPDATE calendar_events SET status = 'cancelled', updated_at = ? WHERE event_id = ?", [iso(now), a["calendar_event_id"]])
+
+    _together(db, [("appointments", "appointment_id", a["appointment_id"]), ("calendar_events", "event_id", a["calendar_event_id"])], cancel)
     return {"appointment_id": a["appointment_id"], "status": "cancelled", "late_fee_cents": late_fee}

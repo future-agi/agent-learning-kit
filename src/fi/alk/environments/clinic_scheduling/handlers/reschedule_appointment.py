@@ -124,6 +124,23 @@ def _fault(db, operation, target):
         db.execute("UPDATE clinic_fault_injections SET is_active = 0 WHERE fault_id = ?", [f["fault_id"]])
     return f
 
+
+def _together(db, touched, writes):
+    """Run `writes` so that every row lands or none does. A handler gets no transaction of its
+    own, so the rows in `touched` ((table, column, value) each) are held first and put back if a
+    write fails: an appointment never survives without its calendar event, or the reverse."""
+    held = [(t, c, v, db.query(f"SELECT * FROM {t} WHERE {c} = ?", [v])) for t, c, v in touched]
+    try:
+        return writes()
+    except Exception:
+        for t, c, v, rows in held:
+            db.execute(f"DELETE FROM {t} WHERE {c} = ?", [v])
+            for row in rows:
+                cols = list(row)
+                db.execute(f"INSERT INTO {t} ({', '.join(cols)}) VALUES ({', '.join('?' * len(cols))})", [row[k] for k in cols])
+        raise
+
+
 def handle(args, db):
     _need(args, "appointment_id", "new_slot_id", "request_key")
     a = _own_appointment(db, args["appointment_id"])
@@ -153,10 +170,16 @@ def handle(args, db):
         raise ToolError(f"Slot {slot['slot_id']} is not free: {why}. Appointment {a['appointment_id']} is unchanged.", category="conflict")
     # The replacement commits first; the original time is released only after it.
     new_event = f"EVT-{a['appointment_id']}-R{a['reschedule_count'] + 1}"
-    _insert_event(db, new_event, slot, a["appointment_id"], now)
-    db.execute("UPDATE appointments SET provider_id = ?, location_id = ?, start_time = ?, end_time = ?, calendar_event_id = ?, request_key = ?, reschedule_count = reschedule_count + 1, updated_at = ? WHERE appointment_id = ?",
-               [slot["provider_id"], slot["location_id"], slot["start_time"], slot["end_time"], new_event, args["request_key"], now, a["appointment_id"]])
-    db.execute("UPDATE calendar_events SET status = 'cancelled', updated_at = ? WHERE event_id = ?", [now, a["calendar_event_id"]])
-    db.execute("UPDATE slot_holds SET status = 'converted', updated_at = ? WHERE patient_id = ? AND slot_id = ? AND status = 'active'", [now, a["patient_id"], slot["slot_id"]])
+    holds = db.query("SELECT hold_id FROM slot_holds WHERE patient_id = ? AND slot_id = ? AND status = 'active'", [a["patient_id"], slot["slot_id"]])
+
+    def move():
+        _insert_event(db, new_event, slot, a["appointment_id"], now)
+        db.execute("UPDATE appointments SET provider_id = ?, location_id = ?, start_time = ?, end_time = ?, calendar_event_id = ?, request_key = ?, reschedule_count = reschedule_count + 1, updated_at = ? WHERE appointment_id = ?",
+                   [slot["provider_id"], slot["location_id"], slot["start_time"], slot["end_time"], new_event, args["request_key"], now, a["appointment_id"]])
+        db.execute("UPDATE calendar_events SET status = 'cancelled', updated_at = ? WHERE event_id = ?", [now, a["calendar_event_id"]])
+        db.execute("UPDATE slot_holds SET status = 'converted', updated_at = ? WHERE patient_id = ? AND slot_id = ? AND status = 'active'", [now, a["patient_id"], slot["slot_id"]])
+
+    _together(db, [("appointments", "appointment_id", a["appointment_id"]), ("calendar_events", "event_id", new_event),
+                   ("calendar_events", "event_id", a["calendar_event_id"])] + [("slot_holds", "hold_id", h["hold_id"]) for h in holds], move)
     b = db.one("SELECT * FROM appointments WHERE appointment_id = ?", [a["appointment_id"]])
     return dict(_appointment_view(b), previous_start_time=a["start_time"], previous_provider_id=a["provider_id"], idempotent=False)

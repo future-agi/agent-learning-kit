@@ -5,7 +5,7 @@
   "use_case": "Book a demo on the owner's calendar after the prospect picks",
   "branch": "Prospect reschedules existing demo to another open slot",
   "tests": "the desk cancels demo D419 on Chloe Nguyen's calendar and books new demo on slot DS18 upon prospect choice",
-  "instruction": "You are Declan Fraser from Tasman Health (lead L419, email declan.fraser@tasmanhealth.example). You have a demo D419 booked with Chloe Nguyen for Friday 13 November at 09:00 Sydney time (slot DS17). Ask the sales desk to reschedule your demo. When offered alternative slots on Chloe's calendar, choose Friday 13 November at 11:00 AM Sydney time (slot DS18) and confirm.\n\nYour details:\n- Name: Declan Fraser\n- Company: Tasman Health\n- Email: declan.fraser@tasmanhealth.example\n- Lead ID: L419\n- Existing demo ID: D419\n- Assigned Rep: Chloe Nguyen (A06)",
+  "instruction": "You are Declan Fraser from Tasman Health (lead L419, email declan.fraser@tasmanhealth.example). You have a demo D419 booked with Chloe Nguyen for Friday 13 November at 10:00 Sydney time (slot DS419). Ask the sales desk to reschedule your demo. When offered alternative slots on Chloe's calendar, choose Friday 13 November at 11:00 AM Sydney time (slot DS18) and confirm.\n\nYour details:\n- Name: Declan Fraser\n- Company: Tasman Health\n- Email: declan.fraser@tasmanhealth.example\n- Lead ID: L419\n- Existing demo ID: D419\n- Assigned Rep: Chloe Nguyen (A06)",
   "keywords": [
     "reschedule",
     "cancel_demo",
@@ -49,7 +49,7 @@
     ],
     "demos": [
       {
-        "slot_id": "DS17",
+        "slot_id": "DS419",
         "lead_id": "L419",
         "demo_id": "D419"
       }
