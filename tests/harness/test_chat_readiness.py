@@ -15,7 +15,7 @@ from urllib.request import urlopen
 import pytest
 
 from fi.alk.harness.authoring_runtime_validation import RuntimeValidationError
-from fi.alk.harness.chat_readiness import probe_chat_ingress
+from fi.alk.harness.chat_readiness import _failure_code, probe_chat_ingress
 from fi.alk.harness.contract import AgentContract, Runtime, RuntimeInterface
 from fi.alk.harness.runtime_repair import (
     RuntimePlanPatch,
@@ -774,6 +774,43 @@ def test_ingress_classifies_timeout_type_not_message(tmp_path, monkeypatch, kind
     receipt = receipts(tmp_path)[0]
     assert receipt["timeout_seconds"] == 1
     assert receipt["trace"]["timeout_error"] is (code == "chat_ingress_timeout")
+
+
+@pytest.mark.parametrize(
+    ("trace", "code"),
+    [
+        (
+            {
+                "failure_stage": "stream",
+                "stream_reason": "sse_disconnect",
+                "network_error": True,
+            },
+            "external_service_unavailable",
+        ),
+        (
+            {"failure_stage": "stream", "stream_reason": "sse_content_type"},
+            "chat_ingress_configuration_invalid",
+        ),
+        (
+            {
+                "failure_stage": "stream",
+                "stream_reason": "sse_incomplete",
+                "stream_completion_path_seen": False,
+            },
+            "chat_ingress_configuration_invalid",
+        ),
+        (
+            {
+                "failure_stage": "stream",
+                "stream_reason": "sse_incomplete",
+                "stream_completion_path_seen": True,
+            },
+            "chat_ingress_failed",
+        ),
+    ],
+)
+def test_ingress_classifies_stream_transport_failures(trace, code):
+    assert _failure_code(trace) == code
 
 
 @pytest.mark.parametrize("reset_mode", ["restore", "leave_mutated", "error"])

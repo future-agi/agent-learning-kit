@@ -532,13 +532,15 @@ class HostedChatCallRunner:
         )
         from .chat_transport import create_chat_wrapper
 
+        target_timeout = _chat_target_timeout_seconds()
         wrapper = create_chat_wrapper(
             interface,
             endpoint.address,
             wrapper_type=HTTPAgentWrapper,
             secret_values=self._context.target_provider_secret_values,
             local_auth_values=getattr(runtime, "_local_auth_values", None),
-            timeout=_chat_target_timeout_seconds(),
+            timeout=target_timeout,
+            total_timeout=target_timeout if interface.sse else None,
             metadata={
                 "target": "hosted_repository_runtime",
                 "scenario": scenario.scenario_key,

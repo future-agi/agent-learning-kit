@@ -23,6 +23,7 @@ from fi.simulate.agent.wrappers.http_events import (
     CompletedToolEvents,
     CompletedToolRows,
 )
+from fi.simulate.agent.wrappers.http_stream import HTTPStreamSpec
 
 from .observations import HttpObservation
 
@@ -483,6 +484,12 @@ class RuntimeInterface(BaseModel):
         "list-index segments selecting assistant text. Negative indexes are supported, "
         "e.g. output.-1.content.0.text. Bracket indexing and JSONPath expressions are not supported.",
     )
+    sse: HTTPStreamSpec | None = Field(
+        default=None,
+        description="Live JSON server-sent events for this source endpoint. Declare explicit "
+        "completion and optional failure predicates; EOF alone never completes a turn. Paths "
+        "select from {event, data, id}, and text rules assemble delta, cumulative, or final text.",
+    )
     headers_template: dict[str, str] = Field(
         default_factory=dict,
         description="Chat headers rendered after setup completes, using setup captures or local "
@@ -616,6 +623,8 @@ class RuntimeInterface(BaseModel):
                 )
             if self.protocol == "json_template" and self.request_template is None:
                 raise ValueError("runtime_json_template_requires_request_template")
+            if self.sse is not None and self.protocol != "json_template":
+                raise ValueError("runtime_sse_requires_json_template")
             available = set(_RUNTIME_TEMPLATE_INPUTS)
             if self.local_auth:
                 available.add(self.local_auth.template_variable)
@@ -658,6 +667,8 @@ class RuntimeInterface(BaseModel):
                 )
         if self.kind == "websocket" and self.protocol != "fi.alk":
             raise ValueError("runtime_websocket_protocol_unsupported: expected fi.alk")
+        if self.sse is not None and self.kind != "http":
+            raise ValueError("runtime_sse_requires_http")
         return self
 
 

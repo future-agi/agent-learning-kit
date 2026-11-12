@@ -684,6 +684,18 @@ def test_hosted_chat_target_timeout_is_configurable(
     tmp_path: Path, monkeypatch: Any
 ) -> None:
     context = _context(tmp_path)
+    contract_path = context.bundle_dir / "contract.json"
+    contract = json.loads(contract_path.read_text(encoding="utf-8"))
+    contract["runtime"]["interface"]["protocol"] = "json_template"
+    contract["runtime"]["interface"]["request_template"] = {
+        "message": "{{new_message_content}}"
+    }
+    contract["runtime"]["interface"]["response_path"] = "data.delta"
+    contract["runtime"]["interface"]["sse"] = {
+        "completion": {"path": "data.type", "values": ["RUN_FINISHED"]},
+        "text": [{"mode": "delta", "path": "data.delta"}],
+    }
+    contract_path.write_text(json.dumps(contract), encoding="utf-8")
     observed: dict[str, float] = {}
     monkeypatch.setenv("ALK_CHAT_TARGET_TIMEOUT_SECONDS", "90")
     monkeypatch.setattr(chat, "_tool_world", lambda *_args: _ToolWorld())
@@ -692,6 +704,7 @@ def test_hosted_chat_target_timeout_is_configurable(
     class Wrapper:
         def __init__(self, **kwargs: Any) -> None:
             observed["timeout"] = kwargs["timeout"]
+            observed["total_timeout"] = kwargs["total_timeout"]
 
         async def call(self, _request: Any) -> AgentResponse:
             return AgentResponse(content="Done")
@@ -719,6 +732,7 @@ def test_hosted_chat_target_timeout_is_configurable(
     )
 
     assert observed["timeout"] == 90.0
+    assert observed["total_timeout"] == 90.0
 
 
 def test_hosted_chat_target_timeout_rejects_invalid_values(monkeypatch: Any) -> None:
