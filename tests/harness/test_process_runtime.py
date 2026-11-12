@@ -2571,6 +2571,53 @@ def test_spawn_world_spawns_in_dependency_order_and_waits_between(
     )  # agent's run_command[0]
 
 
+def test_spawn_world_keeps_the_cause_of_a_source_process_that_crashes_at_import(
+    tmp_path: Path,
+) -> None:
+    manifest = _manifest(
+        lambda body: {
+            **body,
+            "readiness": [],
+            "processes": [
+                body["processes"][0],
+                {
+                    **body["processes"][1],
+                    "started_check": {"port": True, "timeout_seconds": 10},
+                },
+                body["processes"][2],
+            ],
+        }
+    )
+    plan = pr.plan_ports(manifest, instances=1)
+    credentials = pr.generate_engine_credentials(manifest, token=lambda: "PW")
+
+    def runner(argv, *, cwd, env, log_path, user=None, group=None):
+        if argv[0] != "node":
+            return FakeHandle()
+        return pr.default_process_runner(
+            [sys.executable, "-c", "raise RuntimeError('crashed at import')"],
+            cwd=tmp_path,
+            env={},
+            log_path=log_path,
+        )
+
+    context = pr.SpawnContext(
+        work_directory=tmp_path,
+        port_plan=plan,
+        credentials=credentials,
+        secret_values={},
+        secret_purposes={},
+        runner=runner,
+        sync_run=lambda argv, **kwargs: subprocess.CompletedProcess(argv, 0),
+    )
+
+    with pytest.raises(pr.ProcessRuntimeError) as excinfo:
+        pr.spawn_world(manifest, world_index=0, context=context)
+
+    assert excinfo.value.process == "tools-api"
+    assert excinfo.value.cause is FailureCause.AGENT_EXITED_BEFORE_READY
+
+
 def test_spawn_world_waits_for_terminal_source_started_check(tmp_path: Path) -> None:
     """A terminal control process has no dependent edge to wait on its started_check."""
     manifest = _manifest(
