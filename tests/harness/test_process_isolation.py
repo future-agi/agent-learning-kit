@@ -236,6 +236,73 @@ def test_a_declared_user_can_pass_through_to_its_own_trees_but_not_list_them(tmp
         assert mode == 0o711, relative
 
 
+def test_a_store_s_user_can_read_its_declared_seed_files_and_nothing_else(tmp_path):
+    bundle = tmp_path / "bundle"
+    previous = os.umask(0o077)
+    try:
+        for relative in (
+            "seed/source-schema.sql",
+            "seed/world.sql",
+            "db/v1/schema.sql",
+            "seed/notes.txt",
+            "scenarios/held-back/case.json",
+            "manifest.json",
+        ):
+            (bundle / relative).parent.mkdir(parents=True, exist_ok=True)
+            (bundle / relative).write_text("-- written by the harness\n")
+        store = SimpleNamespace(
+            migrations=["seed/source-schema.sql", "db/v1/schema.sql"],
+            seed_files=["seed/world.sql", "seed/missing.sql"],
+        )
+        pr._open_seed_files_for_declared_users(
+            SimpleNamespace(seed=SimpleNamespace(stores=[store])), bundle
+        )
+        pr._open_seed_files_for_declared_users(SimpleNamespace(seed=None), bundle)
+    finally:
+        os.umask(previous)
+
+    def mode(relative: str) -> int:
+        return (bundle / relative).stat().st_mode & 0o777
+
+    for declared in ("seed/source-schema.sql", "seed/world.sql", "db/v1/schema.sql"):
+        assert mode(declared) == 0o644, declared
+    for passage in ("", "seed", "db", "db/v1"):
+        assert mode(passage) == 0o711, passage
+    # The held-back cases, and every file the manifest does not name, stay the harness's own.
+    for private in ("scenarios", "scenarios/held-back"):
+        assert mode(private) == 0o700, private
+    for private in ("scenarios/held-back/case.json", "manifest.json", "seed/notes.txt"):
+        assert mode(private) == 0o600, private
+
+
+def test_per_user_provisioning_opens_the_seed_files_before_anything_runs(
+    per_user, tmp_path, monkeypatch
+):
+    class Stop(Exception):
+        pass
+
+    opened = []
+
+    def record(manifest, bundle_dir):
+        opened.append((manifest, bundle_dir))
+        raise Stop
+
+    monkeypatch.setattr(pr, "_open_seed_files_for_declared_users", record)
+    bundle = SimpleNamespace(digest="sha256:" + "0" * 64)
+    provider = object.__new__(pr.ProcessRuntimeProvider)
+
+    with pytest.raises(Stop):
+        provider._provision_sync(
+            bundle,
+            source=tmp_path / "source",
+            bundle_dir=tmp_path / "bundle",
+            work_directory=tmp_path / "work",
+            instances=1,
+            require_declared_user=True,
+        )
+    assert opened == [(bundle, tmp_path / "bundle")]
+
+
 def test_the_build_record_names_the_isolation_mode(per_user):
     output = pr.BuildOutput(bundle_digest="sha256:" + "0" * 64, stores=[])
 

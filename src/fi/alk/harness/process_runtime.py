@@ -2630,6 +2630,25 @@ def _open_for_declared_users(work_directory: Path, worlds: int) -> None:
         path.chmod(0o711)
 
 
+def _open_seed_files_for_declared_users(
+    manifest: EnvironmentBundleV2, bundle_dir: Path
+) -> None:
+    """Under per-user isolation a store's own user applies its migrations and seed files
+    (`psql -f` runs as it), so each declared file reads for it and the directories above the file
+    let it pass through, though not list them. The rest of the bundle, held-back cases among it,
+    stays the harness's own. A missing file is left for the seed step to report."""
+    if manifest.seed is None:
+        return
+    for store in manifest.seed.stores:
+        for relative_path in (*store.migrations, *store.seed_files):
+            path = bundle_dir / relative_path
+            if path.is_symlink() or not path.is_file():
+                continue
+            for directory in (bundle_dir / parent for parent in Path(relative_path).parents):
+                directory.chmod(directory.stat().st_mode | 0o011)
+            path.chmod(path.stat().st_mode | 0o044)
+
+
 def build_tree_dir(work_directory: Path, process_name: str) -> Path:
     return _ensure_within(
         work_directory / "build" / process_name,
@@ -6439,6 +6458,7 @@ class ProcessRuntimeProvider:
         requested = instances
         if isolation_mode() is IsolationMode.PER_USER:
             _open_for_declared_users(work_directory, instances)
+            _open_seed_files_for_declared_users(bundle, bundle_dir)
         # C2 §1 rule 4's crisp trichotomy, keyed on WHICH branch runs. FIRST BUILD and DIGEST
         # REBUILD both take the first-call branch (plan + scan run, stage-5 catches ARMED);
         # RECONCILE takes the else branch (carry the first plan forward, catches NOT armed).
