@@ -44,6 +44,7 @@ from .framework_detection import (
     _Work,
 )
 from .bundle_author_v2 import _IGNORED_ARTIFACT_PARTS as _BUILD_IGNORED
+from .credentials import _CONNECTOR_REQUIREMENTS, _LIVEKIT_PROVIDER_CREDENTIALS
 from .reading_entry import MaskSecrets
 from .source_folder import _FOLDER_FORM, _FOLDER_MAX
 
@@ -96,6 +97,78 @@ _WEAKEST = frozenset({"client", "model"})
 _PROJECT_FILES = ("pyproject.toml", "requirements.txt", "setup.py")
 _PACKAGE_FILE = "package.json"
 _TEMPLATES = (".env.example", ".env.sample", ".env.template")
+# The setting names an SDK reads for itself when the code passes no value, so the customer's
+# code never names them. These are the only names a template adds to a row (`_env_names`).
+# The LiveKit names and the per-provider keys of its plugins come from `credentials.py`, which
+# says what a LiveKit agent needs.
+# Left out on purpose:
+# - `GOOGLE_APPLICATION_CREDENTIALS`: a key file, which the platform takes through its
+#   credential-file control, not a text field;
+# - `OTEL_EXPORTER_OTLP_ENDPOINT` and `OTEL_EXPORTER_OTLP_HEADERS`: on hosted runs the platform
+#   owns trace export, and a filled headers value would be merged into exports sent to its
+#   collector;
+# - LiteLLM's provider names and the provider keys of LiveKit's OpenAI plugin (`with_cerebras`,
+#   `with_x_ai`, ...), too many to list;
+# - `FI_API_KEY`, `FI_SECRET_KEY` and `FI_BASE_URL`: the platform's own tracing account, which
+#   the runner and the connect form refuse as reserved names;
+# - the platform's own `ALK_*` names.
+_SDK_SETTINGS: frozenset[str] = frozenset(
+    {
+        # OpenAI and Azure OpenAI (`openai`): installed, its reading grepped.
+        "OPENAI_API_KEY",
+        "OPENAI_BASE_URL",
+        "OPENAI_ORG_ID",
+        "OPENAI_PROJECT_ID",
+        "OPENAI_API_VERSION",
+        "AZURE_OPENAI_API_KEY",
+        "AZURE_OPENAI_ENDPOINT",
+        "AZURE_OPENAI_AD_TOKEN",
+        # Google GenAI and Google auth: installed, grepped.
+        "GOOGLE_API_KEY",
+        "GEMINI_API_KEY",
+        "GOOGLE_GENAI_USE_VERTEXAI",
+        "GOOGLE_CLOUD_PROJECT",
+        "GOOGLE_CLOUD_LOCATION",
+        # LiveKit's ElevenLabs plugin reads `ELEVEN_API_KEY`, where `credentials.py` names
+        # `ELEVENLABS_API_KEY`, the name ElevenLabs' own SDK reads (below): installed, grepped.
+        "ELEVEN_API_KEY",
+        # Future AGI's tracing (`fi_instrumentation`): installed, grepped. The account names are
+        # left out (above).
+        "FI_PROJECT_NAME",
+        # OpenTelemetry's SDK (`opentelemetry.sdk.environment_variables`): installed, grepped.
+        "OTEL_SERVICE_NAME",
+        # Hugging Face Hub (`huggingface_hub.utils._auth`): installed, grepped.
+        "HF_TOKEN",
+        "HUGGING_FACE_HUB_TOKEN",
+        # Anthropic: from its SDK's documentation.
+        "ANTHROPIC_API_KEY",
+        "ANTHROPIC_AUTH_TOKEN",
+        "ANTHROPIC_BASE_URL",
+        # Mistral, Cohere and Groq: from each SDK's documentation.
+        "MISTRAL_API_KEY",
+        "CO_API_KEY",
+        "GROQ_API_KEY",
+        # ElevenLabs' own SDK: from its documentation.
+        "ELEVENLABS_API_KEY",
+        # LangSmith, and LangChain's older names for the same settings: from the documentation.
+        "LANGSMITH_API_KEY",
+        "LANGSMITH_TRACING",
+        "LANGSMITH_PROJECT",
+        "LANGSMITH_ENDPOINT",
+        "LANGCHAIN_API_KEY",
+        "LANGCHAIN_TRACING_V2",
+        "LANGCHAIN_PROJECT",
+        "LANGCHAIN_ENDPOINT",
+        # AWS, through boto3, which `strands` uses for Bedrock: from boto3's documentation.
+        "AWS_ACCESS_KEY_ID",
+        "AWS_SECRET_ACCESS_KEY",
+        "AWS_SESSION_TOKEN",
+        "AWS_REGION",
+        "AWS_DEFAULT_REGION",
+    }
+    | frozenset(_CONNECTOR_REQUIREMENTS["livekit"])
+    | frozenset(name for names in _LIVEKIT_PROVIDER_CREDENTIALS.values() for name in names)
+)
 _LANGGRAPH = "langgraph.json"
 _SCRIPT_SUFFIXES = (".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs")
 _SOURCE_SUFFIXES = (".py", ".ipynb", *_SCRIPT_SUFFIXES)
@@ -1425,12 +1498,16 @@ def _first_names(groups: Iterable[Iterable[str]]) -> list[str]:
 
 
 def _env_names(code: list[str], templates: set[str]) -> tuple[str, ...]:
-    """A row's setting names: the code's first, then a template's that the code doesn't read,
-    up to `ENV_NAMES_KEPT`, the most the answer file writes. ``code`` is the code's first
-    names (`_first_names`): when it is short, it is all of them."""
+    """A row's setting names: the code's first, then a template's that are in `_SDK_SETTINGS`
+    and that the code doesn't read, up to `ENV_NAMES_KEPT`, the most the answer file writes.
+    ``code`` is the code's first names (`_first_names`): when it is short, it is all of them.
+
+    A template adds only SDK names, because a template is free text that can hold pasted
+    values, and a name the code reads is listed from the code. Both the walk and
+    `describe_entry` build their rows' names here."""
     if len(code) >= ENV_NAMES_KEPT:
         return tuple(code[:ENV_NAMES_KEPT])
-    return (*code, *sorted(templates - set(code)))[:ENV_NAMES_KEPT]
+    return (*code, *sorted((templates & _SDK_SETTINGS) - set(code)))[:ENV_NAMES_KEPT]
 
 
 def _prompt_count(paths: list[str], subfolder: str) -> int:
