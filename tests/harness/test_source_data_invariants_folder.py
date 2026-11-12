@@ -94,3 +94,16 @@ def test_a_linked_folder_is_listed_by_what_it_points_at(repo):
 
 def test_a_folder_that_cannot_be_resolved_is_taken_as_written(repo):
     assert set(invariants.source_files(repo, "agents/gone")) == {"db.py", "agents/shared.py"}
+
+
+def test_a_link_named_like_code_to_a_credential_file_is_not_listed(tmp_path):
+    # TH-9042: the review session reads any listed file whole, so one is judged where it resolves.
+    (tmp_path / "app.py").write_text("x = 1\n")
+    (tmp_path / ".pgpass").write_text("db:5432:app:admin:fake-pass-123\n")
+    (tmp_path / "prod.tfvars").write_text('db_password = "fake-pass-123"\n')
+    (tmp_path / "settings_local.py").symlink_to(".pgpass")
+    (tmp_path / "vars.sql").symlink_to("prod.tfvars")
+
+    listed = invariants.source_files(tmp_path)
+
+    assert set(listed) == {"app.py"}

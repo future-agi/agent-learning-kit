@@ -140,6 +140,39 @@ def test_runtime_patch_rejects_missing_or_outside_evidence(tmp_path) -> None:
         )
 
 
+@pytest.mark.parametrize("form", ["present", "link", "missing"])
+@pytest.mark.parametrize("name", [".env", "service/.env.production", ".aws/credentials"])
+def test_runtime_patch_never_checks_a_command_against_a_listed_file(tmp_path, form, name) -> None:
+    # A listed file, a link to one and a missing one get one answer before anything is read, so
+    # the command check can't be used to grow a guess at a key letter by letter.
+    source = tmp_path / "source"
+    (source / "service").mkdir(parents=True)
+    cited = name
+    if form != "missing":
+        target = source / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("OPENAI_API_KEY=canaryfakeguess1\n", encoding="utf-8")
+    if form == "link":
+        cited = "service/settings_local.py"
+        (source / cited).symlink_to(source / name)
+    contract = AgentContract(agent="agent", runtime=Runtime(language="python"))
+    patch = RuntimePlanPatch(
+        base_contract_hash=_contract_hash(contract),
+        runtime=Runtime(language="python", workdir="service", start="canaryfakeguess1 run"),
+        evidence_paths=(cited,),
+        diagnostic_codes=("generated_runtime_plan_invalid",),
+        summary="Use service.",
+    )
+
+    with pytest.raises(ValueError, match="runtime_repair_evidence_holds_credentials"):
+        validate_runtime_plan_patch(
+            source,
+            contract,
+            patch,
+            allowed_diagnostic_codes={"generated_runtime_plan_invalid"},
+        )
+
+
 def test_runtime_patch_rejects_stale_contract(tmp_path) -> None:
     source = tmp_path / "source"
     service = source / "service"

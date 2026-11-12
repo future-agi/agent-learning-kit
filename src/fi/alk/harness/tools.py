@@ -32,6 +32,7 @@ from .agent_type_check import (
 )
 from .backends import qualified as qualified  # noqa: F401  (re-export; callers import it here)
 from .backends import tool, tool_server
+from .backends.files import secret_text
 
 from .contract import (
     prompt_quote,
@@ -474,6 +475,14 @@ def _copy_prompt(contract: AgentContract, source_root: Path) -> list[str]:
             # target; each is charged to the save's budget.
             found_at[where.path] = resolved_in_source(root, where.path)
         path = found_at[where.path]
+        if path is not None and secret_text(path.relative_to(root).as_posix()):
+            # Judged where it resolves, inside the source, before anything is opened: a file
+            # that exists, one that doesn't and a link to either get this same answer.
+            problems.append(
+                f"system_prompt_from[{index}]: {where.path} is kept out of this session because "
+                "it holds credentials; name the file the prompt is written in"
+            )
+            continue
         raw = None
         if path is not None and path not in lines_of and path not in too_large:
             raw = read_source(path, _LARGEST_PROMPT_FILE)

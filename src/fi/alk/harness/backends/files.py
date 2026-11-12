@@ -39,13 +39,150 @@ def _resolved(raw: str, cwd: Path) -> Path:
 
 # Where credentials live in a sandbox or a checkout, and what reads them. A session never needs
 # any of them: the platform hands secrets to processes as files and environment, not to a model.
-_SECRET_PATHS = re.compile(
-    r"(^|/)(\.env[^/]*|\.claude|\.ssh|\.aws|\.config/gcloud|\.netrc|\.npmrc|\.pypirc"
-    r"|\.authoring-credentials)(/|$)"
-    r"|^/proc(/|$)|^/run/futureagi(/|$)|^/run/secrets(/|$)"
-    r"|(credential|secret|token|service[-_]?account)[^/]*\.json$|\.(pem|key|p12)$",
-    re.IGNORECASE,
+#
+# One list of globs, read the way gitignore and ripgrep read them: a glob matches a path when it
+# matches the path or any folder above it, `*` stands for any run of characters within one name,
+# `**/` at the start means "in any folder", and case is ignored. The kit's own tools, the scan's
+# tools and the gate match paths against the regex built from it (`_SECRET_PATHS`); Claude Code
+# gets the same list as Read deny rules (`secret_read_rules`), which its Grep and Glob turn into
+# exclusions. A glob uses only letters, digits and `.-_*/`: the CLI skips a rule holding `[`, and
+# the SDK splits its rules on commas and spaces.
+SECRET_GLOBS: tuple[str, ...] = (
+    "**/.env*",
+    "**/*.env",
+    "**/*.env.*",
+    "**/.claude",
+    "**/.ssh",
+    "**/.aws",
+    "**/.config/gcloud",
+    "**/.authoring-credentials",
+    "**/.netrc",
+    "**/.npmrc",
+    "**/.pypirc",
+    "**/*credential*.json",
+    "**/*secret*.json",
+    "**/*token*.json",
+    "**/*service-account*.json",
+    "**/*service_account*.json",
+    "**/*serviceaccount*.json",
+    "**/*secret*.yaml",
+    "**/*secret*.yml",
+    "**/*secret*.toml",
+    "**/*credential*.yaml",
+    "**/*credential*.yml",
+    "**/*credential*.toml",
+    "**/*secret*.ini",
+    "**/*secret*.cfg",
+    "**/*secret*.conf",
+    "**/*secret*.properties",
+    "**/*secret*.xml",
+    "**/*credential*.ini",
+    "**/*credential*.cfg",
+    "**/*credential*.conf",
+    "**/*credential*.properties",
+    "**/*credential*.xml",
+    "**/*firebase-adminsdk*.json",
+    "**/*credential*.csv",
+    "**/*accesskeys*.csv",
+    "**/rootkey*.csv",
+    "**/*secret*.txt",
+    "**/*credential*.txt",
+    "**/secrets/*.txt",
+    "**/.secrets",
+    "**/.dev.vars",
+    "**/.dev.vars.*",
+    "**/local.settings.json",
+    "**/key.properties",
+    "**/keystore.properties",
+    "**/*.p8",
+    "**/*.pk8",
+    "**/*.ppk",
+    "**/.config/gh/hosts.yml",
+    "**/.databrickscfg",
+    "**/.terraformrc",
+    "**/.cargo/credentials",
+    "**/.gem/credentials",
+    "**/*.pem",
+    "**/*.key",
+    "**/*.p12",
+    "**/*.pfx",
+    "**/*.jks",
+    "**/*.keystore",
+    "**/.kube/config",
+    "**/.kube/config.*",
+    "**/kubeconfig",
+    "**/kubeconfig.yaml",
+    "**/kubeconfig.yml",
+    "**/*.kubeconfig",
+    "**/.docker/config.json",
+    "**/.docker/contexts",
+    "**/.dockercfg",
+    "**/.pgpass",
+    "**/.htpasswd",
+    "**/.git-credentials",
+    "**/.my.cnf",
+    "**/.s3cfg",
+    "**/.boto",
+    "**/.vault-token",
+    "**/id_rsa",
+    "**/id_dsa",
+    "**/id_ecdsa",
+    "**/id_ed25519",
+    "**/id_ecdsa_sk",
+    "**/id_ed25519_sk",
+    "**/*.tfstate",
+    "**/*.tfstate.backup",
+    "**/*.tfstate.*.backup",
+    "**/*.tfvars",
+    "**/*.tfvars.json",
+    "**/*-key.json",
+    "**/*_key.json",
+    "**/*-sa.json",
 )
+# Every glob with no `*` after its `**/` names one exact file or folder, and its `.bak` copy is a
+# credential too (`.netrc.bak`), so those forms are derived from the list rather than written
+# out: a name added to SECRET_GLOBS gets its backup form with it. `*.kubeconfig` has a `*` but is
+# kept as well. `.kube/config.*` already covers its own.
+_WITH_BACKUP: tuple[str, ...] = (
+    *(glob for glob in SECRET_GLOBS if "*" not in glob.removeprefix("**/")),
+    "**/*.kubeconfig",
+)
+ALL_SECRET_GLOBS: tuple[str, ...] = SECRET_GLOBS + tuple(
+    dict.fromkeys(f"{glob}.bak" for glob in _WITH_BACKUP)
+)
+# The settings files a model citation may name, under its own rule (`model_citation`).
+_ENV_GLOBS = ("**/.env*", "**/*.env", "**/*.env.*")
+# The platform's own roots, which are paths, not names.
+_ROOTS = r"^/proc(/|$)|^/run/futureagi(/|$)|^/run/secrets(/|$)"
+
+
+def _glob_pattern(glob: str) -> str:
+    """The regex for one `**/` glob: the name parts at any depth, as the path or a folder above it."""
+    body = glob.removeprefix("**/")
+    return "(^|/)" + "".join("[^/]*" if char == "*" else re.escape(char) for char in body) + "(/|$)"
+
+
+def _compiled(globs: tuple[str, ...]) -> re.Pattern[str]:
+    return re.compile("|".join([*(_glob_pattern(glob) for glob in globs), _ROOTS]), re.IGNORECASE)
+
+
+_SECRET_PATHS = _compiled(ALL_SECRET_GLOBS)
+# The same, less those settings files: what a model citation may not name.
+_SECRET_BUT_ENV = _compiled(tuple(glob for glob in ALL_SECRET_GLOBS if glob not in _ENV_GLOBS))
+
+
+def secret_text(text: str, *, env_allowed: bool = False) -> bool:
+    """Whether a path, as given and never resolved, names a place on the list. Callers pass a
+    path relative to the source, so the folders the source sits in don't count."""
+    return bool((_SECRET_BUT_ENV if env_allowed else _SECRET_PATHS).search(text))
+
+
+def secret_read_rules() -> list[str]:
+    """Claude Code's Read deny rules for the list, anchored at the file system's root (`//`), so
+    they hold wherever a search starts and whatever the session's folder is."""
+    return [f"Read(//{glob})" for glob in ALL_SECRET_GLOBS]
+
+
 # A search rooted here would reach into where credentials live.
 _SECRET_ROOTS = re.compile(r"^/(proc|run/futureagi|run/secrets)/")
 SECRET_REFUSAL = (

@@ -20,6 +20,7 @@ import string
 import unicodedata
 from pathlib import Path
 
+from .backends.files import secret_text
 from .contract import AgentContract
 from .runtime_selection import charged_path
 from .source_folder import is_within
@@ -570,6 +571,73 @@ def _reads_as_a_setting(name: str) -> bool:
     return "." in name and not has_digit
 
 
+_ENV_SETTING = re.compile(r"\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_.-]*)\s*[=:]")
+# A setting that names a model, by its words. ENGINE alone also names databases (DB_ENGINE), so it
+# counts only beside a provider's word (OPENAI_ENGINE, AZURE_OPENAI_ENGINE).
+_MODEL_WORDS = frozenset({"MODEL", "DEPLOYMENT", "LLM"})
+_ENGINE_PROVIDERS = frozenset({"OPENAI", "AZURE"})
+# What marks a setting that holds a secret, anywhere in its name, joined words included
+# (LLM_APIKEY). A URL can carry a password, and a model's name is never one.
+_SECRET_PARTS = ("KEY", "TOKEN", "SECRET", "PASS", "PWD", "AUTH", "CREDENTIAL", "URL", "URI", "DSN")
+
+
+def _names_a_model(line: str) -> bool:
+    """Whether a `.env` line sets a model: a setting with the word MODEL, DEPLOYMENT or LLM, or
+    ENGINE beside OPENAI or AZURE (OPENAI_MODEL, AZURE_OPENAI_DEPLOYMENT, LLM, OPENAI_ENGINE), and
+    nothing anywhere in its name that marks a secret (MODEL_API_KEY, LLM_APIKEY, DB_ENGINE_URL).
+    A line that sets nothing (no `=` or `:` after a name) doesn't."""
+    found = _ENV_SETTING.match(line)
+    if found is None:
+        return False
+    setting = found.group(1).upper()
+    if any(part in setting for part in _SECRET_PARTS):
+        return False
+    words = set(re.split(r"[_.-]+", setting))
+    return bool(words & _MODEL_WORDS) or ("ENGINE" in words and bool(words & _ENGINE_PROVIDERS))
+
+
+_ENV_DEFAULT = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*):?-([^{}$]*)\}")
+
+
+def _env_value(line: str) -> str | None:
+    """The value a `.env` line gives its setting: quoted, or up to the first space, `;` or `,`.
+    None when the line sets nothing."""
+    found = _ENV_SETTING.match(line)
+    if found is None:
+        return None
+    rest = line[found.end():].lstrip()
+    if rest[:1] in ("'", '"'):
+        end = rest.find(rest[0], 1)
+        if end < 0:
+            return None
+        value = rest[1:end]
+    else:
+        value = re.split(r"[\s;,]", rest, maxsplit=1)[0]
+    # Compose's default, ${MODEL:-gpt-4o}: the default is what the setting holds when unset. Only
+    # when the braced variable is the setting itself or another model setting
+    # (${DEFAULT_MODEL:-gpt-4o}): ${DB_PASSWORD:-guess} is a secret's.
+    default = _ENV_DEFAULT.fullmatch(value)
+    if default and (
+        default.group(1) == found.group(1) or _names_a_model(f"{default.group(1)}=")
+    ):
+        return default.group(2)
+    return value
+
+
+# A Vertex model name carries its version after an @ (claude-3-5-sonnet@20240620); any other @ in
+# a value is a login (user@host, user:password@host).
+_VERSIONED_NAME = re.compile(r"[^@:]+@(?:\d+|latest)", re.IGNORECASE)
+
+
+def _env_value_is_a_locator(value: str) -> bool:
+    """A .env value that is a URL, or holds a login: MODEL_SERVER=postgres://admin:pw@db/app is
+    where a model is served from, with its credentials, not which model. `:` alone is a model
+    name's (anthropic.claude-3-5-sonnet-20240620-v1:0), and so is a version after an @."""
+    if "://" in value or "\uff20" in value:
+        return True
+    return "@" in value and not _VERSIONED_NAME.fullmatch(value)
+
+
 def model_problems(contract: AgentContract, source_root: Path) -> list[str]:
     """Problems with contract.model, checked against the cited line. On success, strips name and
     provider and stores path as the resolved file relative to the root, in POSIX form. Resolves
@@ -616,6 +684,17 @@ def model_problems(contract: AgentContract, source_root: Path) -> list[str]:
     resolved = resolved_in_source(root, path)
     if resolved is None:
         return [f"model: {shown_path} is not a file in the source"]
+    # Judged where it resolves, inside the source, before anything is opened, so a file that
+    # exists and one that doesn't get the same answer. A `.env` file is the one listed place a
+    # model may be cited from (it is where OPENAI_MODEL and the like are set), but only on a
+    # line whose setting names a model, and never with its length told.
+    relative = resolved.relative_to(root).as_posix()
+    if secret_text(relative, env_allowed=True):
+        return [
+            f"model: {shown_path} is kept out of this session because it holds credentials; cite "
+            "the line in the agent's code or configuration the model is set on, or leave model out"
+        ]
+    env_file = secret_text(relative)
     if is_prose_file(resolved):
         # A README, a text file or a prompt template says which model is used; the code or its
         # configuration sets it.
@@ -632,7 +711,21 @@ def model_problems(contract: AgentContract, source_root: Path) -> list[str]:
         ]
     lines = source_lines(raw)
     if model.line > len(lines):
+        if env_file:
+            return [f"model: line {model.line} is outside {shown_path}"]
         return [f"model: line {model.line} is outside {shown_path}, which has {len(lines)} lines"]
+    # In a .env file the name must be the value of the one setting that names the model, so a
+    # guess is never checked against another setting on the same line.
+    if env_file and (
+        not _names_a_model(lines[model.line - 1])
+        or _env_value(lines[model.line - 1]) != name
+        or _env_value_is_a_locator(name)
+    ):
+        return [
+            f"model: in a .env file, cite the line whose setting names the model (such as "
+            f"OPENAI_MODEL), with the name as its value; {shown_path} line {model.line} sets "
+            "another setting or another value"
+        ]
     suffix = kind_suffix(resolved)
     dashes, ini = suffix in _DASH_COMMENT_SUFFIXES, suffix in _INI_SUFFIXES
     triple = suffix in _TRIPLE_SUFFIXES

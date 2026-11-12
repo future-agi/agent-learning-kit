@@ -44,6 +44,13 @@ jobs:
           'livekit-plugins-google==1.8.3'
           'livekit-plugins-openai==1.8.3'
           'livekit-plugins-silero==1.8.3'
+      - name: Pin the Claude Agent SDK to the lock's version
+        # The image installs the SDK at uv.lock's version, so the tests run the Claude Code CLI
+        # that ships (test_secret_paths.py drives it; TH-9042). Only the SDK is pinned here.
+        run: >-
+          python -m pip install "claude-agent-sdk==$(python -c "import tomllib;
+          print(next(p['version'] for p in tomllib.load(open('uv.lock', 'rb'))['package']
+          if p['name'] == 'claude-agent-sdk'))")"
       - name: Run engine + dispatch + acceptance tests
         # Scoped to the suites this PR adds/relies on. The broader tests/ tree has
         # pre-existing failures unrelated to the voice engine (CLI golden-path,
@@ -91,6 +98,8 @@ jobs:
           tests/harness/test_authoring_runtime_validation.py
           tests/harness/test_failure_file.py
           tests/harness/test_contract_tools_subfolder.py
+          tests/harness/test_contract_model.py
+          tests/harness/test_secret_paths.py
           tests/harness/test_import_roots.py
           tests/harness/test_source_data_invariants_folder.py
           tests/harness/test_hosted_authoring_entrypoint.py
