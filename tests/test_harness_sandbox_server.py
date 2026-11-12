@@ -2177,14 +2177,18 @@ def test_development_mode_reads_an_ordinary_server_variable(
         "GITHUB_INSTALLATION_1_TOKEN",
         "ALK_SANDBOX_TOKEN",
         "PYTHONPATH",
+        # Covered only by the client half of the predicate.
+        "CLAUDE_CODE_OAUTH_TOKEN",
+        "HTTPS_PROXY",
     ],
 )
+@pytest.mark.parametrize("manager", ["environment", "mounted", "futureagi"])
 def test_development_mode_still_refuses_a_reserved_key_under_a_neutral_alias(
-    local_sandbox, launched_workers, monkeypatch, key
+    local_sandbox, launched_workers, monkeypatch, key, manager
 ):
     monkeypatch.setenv(key, "runner-canary")
 
-    job = _run_local_job(local_sandbox, refs={"X": _ref("environment", key)})
+    job = _run_local_job(local_sandbox, refs={"X": _ref(manager, key)})
 
     _assert_failed_before_launch(
         local_sandbox, job.job_id, launched_workers, "secret_reference_reserved: X"
@@ -2203,7 +2207,7 @@ def test_a_jobs_own_value_resolves_in_both_modes(
     assert _only_worker_env(launched_workers)["ALK_RUNTIME_VALUE_MY_VALUE"] == "mine"
 
 
-def _local_rerun_refused(sandbox, key):
+def _local_rerun_refused(sandbox, key, manager="environment"):
     async def rerun():
         job = await _terminal_job(sandbox, source_path=str(sandbox.test_source))
         upload = await _upload_credential(sandbox, "GOOD")
@@ -2214,7 +2218,7 @@ def _local_rerun_refused(sandbox, key):
                 SandboxRerunRequest(
                     secret_refs={
                         "GOOD": _ref("mounted", upload),
-                        "X": _ref("environment", key),
+                        "X": _ref(manager, key),
                     }
                 ),
             )
@@ -2240,11 +2244,12 @@ def test_a_token_server_local_rerun_refuses_a_server_ref_and_stores_nothing(
     assert (sandbox.jobs_root / job.job_id / "state.json").read_text() == before
 
 
-def test_development_mode_local_rerun_refuses_a_runner_key(local_sandbox, monkeypatch):
+@pytest.mark.parametrize("manager", ["environment", "mounted", "futureagi"])
+def test_development_mode_local_rerun_refuses_a_runner_key(local_sandbox, monkeypatch, manager):
     sandbox = local_sandbox
     monkeypatch.setenv("HARNESS_PLATFORM_API_KEY", "runner-canary")
 
-    job, _before, refused = _local_rerun_refused(sandbox, "HARNESS_PLATFORM_API_KEY")
+    job, _before, refused = _local_rerun_refused(sandbox, "HARNESS_PLATFORM_API_KEY", manager)
 
     assert (refused.status_code, refused.detail) == (400, "secret_reference_reserved: X")
     assert job.job_id not in sandbox._ephemeral_secrets

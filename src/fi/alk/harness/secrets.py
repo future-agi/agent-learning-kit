@@ -155,6 +155,16 @@ _CLIENT_EXACT = frozenset(
         "ENV",
         "OPENSSL_CONF",
         "SSLKEYLOGFILE",
+        # Runtime and library hooks that load or run code, or pick a module to import.
+        "GODEBUG",
+        "GLIBC_TUNABLES",
+        "LOCPATH",
+        "NLSPATH",
+        "OPENSSL_MODULES",
+        "OPENSSL_ENGINES",
+        "BROWSER",
+        "PYTHONWARNINGS",
+        "PYTHONINSPECT",
         # Code-loading names.
         "PYTHONPATH",
         "PYTHONHOME",

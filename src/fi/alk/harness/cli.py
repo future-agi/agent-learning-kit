@@ -40,7 +40,8 @@ from .scenarios import opening as scenario_opening
 from .session import TEXT, Event
 from .secrets import (
     CONTROLLER_CONNECTION_NAMES,
-    controller_name_reserved,
+    RUNNER_RESERVED_ENVIRONMENT,
+    client_name_reserved,
     runtime_configuration_environment,
 )
 from .sessions import Session, new_id, save as save_session
@@ -890,7 +891,14 @@ def _load_connection_env(source: Path) -> list[str]:
                     os.environ[name] = value
                     loaded.append(name)
                     controller_names.append(name)
-            elif controller_name_reserved(name):
+            elif (
+                client_name_reserved(name)
+                or name in RUNNER_RESERVED_ENVIRONMENT
+                or name.startswith("ALK_")
+            ):
+                # A name that steers a client process, or the runner's own: never sent on. An owned
+                # name the agent may need (GOOGLE_CLOUD_PROJECT, NODE_ENV) goes to the runtime below;
+                # activation copies only allowlisted names back, so it can't reach the controller.
                 skipped_names.append(name)
             else:
                 (namespaced,) = runtime_configuration_environment({name: value})

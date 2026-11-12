@@ -57,9 +57,26 @@ def test_controller_env_never_makes_harness_or_loader_names_controller_variables
     for name in ("HARNESS_VOICE_RUNNER", "LD_PRELOAD", "SSL_CERT_DIR", "BASH_ENV", "http_proxy"):
         assert name not in os.environ
     assert os.environ["LIVEKIT_URL"] == "wss://canary.invalid"
-    # Reserved names are skipped outright, not renamed into the runtime namespace.
-    assert not [n for n in os.environ if n.startswith("ALK_RUNTIME_VALUE_")]
-    assert _manifest() == []
+    # Client names are skipped outright; an owned name reaches only the runtime namespace.
+    assert [n for n in os.environ if n.startswith("ALK_RUNTIME_VALUE_")] == [
+        "ALK_RUNTIME_VALUE_HARNESS_VOICE_RUNNER"
+    ]
+    assert _manifest() == ["HARNESS_VOICE_RUNNER"]
+
+
+def test_owned_names_the_agent_may_need_reach_the_runtime(clean_env, tmp_path):
+    clean_env.setenv(_MANIFEST, "")
+    names = ("NODE_ENV", "PYTHONUNBUFFERED", "GOOGLE_CLOUD_PROJECT", "ANTHROPIC_API_KEY", "CARTESIA_API_KEY")
+    for name in names:
+        clean_env.delenv(name, raising=False)
+    source = _env(tmp_path, "".join(f"{name}=job-{name}\n" for name in names))
+
+    _load_connection_env(source)
+
+    for name in names:
+        assert name not in os.environ
+        assert os.environ[f"ALK_RUNTIME_VALUE_{name}"] == f"job-{name}"
+    assert sorted(_manifest()) == sorted(names)
 
 
 def test_controller_env_sends_other_names_to_the_runtime_namespace(clean_env, tmp_path):
@@ -123,7 +140,8 @@ def test_names_are_judged_after_normalisation(clean_env, tmp_path):
 
     assert "LD_PRELOAD" not in os.environ
     assert "HARNESS_VOICE_RUNNER" not in os.environ
-    assert not [n for n in os.environ if "LD_PRELOAD" in n or "VOICE_RUNNER" in n]
+    assert not [n for n in os.environ if "LD_PRELOAD" in n]
+    assert [n for n in os.environ if "VOICE_RUNNER" in n] == ["ALK_RUNTIME_VALUE_HARNESS_VOICE_RUNNER"]
 
 
 def test_existing_values_win_inside_the_controller(clean_env, tmp_path):
