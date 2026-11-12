@@ -137,6 +137,15 @@ class ActionLog(Protocol):
 
     def committed(self, key: str, actor: str) -> tuple[Any, Any] | None: ...
 
+    def claim(self, key: str, actor: str) -> str | None:
+        """Claim an actor's key before its action runs: None when this call claimed it, else the state a door before
+        this one left it in (`pending`, `committed`, `unknown`). Raises when the claim cannot be kept."""
+        ...
+
+    def settle(self, key: str, actor: str, state: str | None) -> None:
+        """A claimed key's state once its action ran; None releases it (refused: nothing took effect)."""
+        ...
+
     def agent_calls(self, name: str) -> int: ...
 
 
@@ -371,21 +380,29 @@ class WorldDoor:
             if known is None:
                 try:
                     earlier = self.log.committed(key, call.actor)
+                    # Claimed before the action runs, so a door that never recorded its answer (a log write that
+                    # failed after the world applied it) leaves the key claimed for any door after it.
+                    claimed = self.log.claim(key, call.actor) if earlier is None else None
                 except Exception:  # noqa: BLE001 - the log cannot say: running again could apply the action twice
                     return self._key_unknown(call, key, on_behalf_of)
                 if earlier is not None:
                     known = ("committed", *earlier)
+                elif claimed is not None:
+                    return self._key_unknown(call, key, on_behalf_of)
             if known is None:
                 self._keyed[slot] = ("pending", call.arguments, None)
                 outcome = self._run(call, key, on_behalf_of)
                 if outcome.outcome == "committed":
                     self._keyed[slot] = ("committed", call.arguments, outcome.result)
+                    self._settle(key, call.actor, "committed")
                 elif outcome.outcome == "faulted":
                     # The world failed mid-action: whether it applied it is unknown, so the key is never run again.
                     self._keyed[slot] = ("unknown", call.arguments, None)
+                    self._settle(key, call.actor, "unknown")
                 else:
                     # Refused: nothing took effect, and a retry is a new attempt.
                     del self._keyed[slot]
+                    self._settle(key, call.actor, None)
                 return outcome
             state, arguments, result = known
             if state != "committed":
@@ -433,6 +450,12 @@ class WorldDoor:
             return list((self.workers() or {}).get("routes") or [])
         except Exception:  # noqa: BLE001 - unreadable routes leave only the template check
             return []
+
+    def _settle(self, key: str, actor: str, state: str | None) -> None:
+        try:
+            self.log.settle(key, actor, state)
+        except Exception:  # noqa: BLE001 - a key left pending is never run again: the safe side
+            pass
 
     def _key_unknown(self, call: ToolCall, key: str, on_behalf_of: str | None) -> Outcome:
         """A keyed action whose first attempt may have taken effect without a recorded answer: never run again."""
@@ -764,6 +787,12 @@ _EXTENDED = (
     "worker_id, agent_tool, parent_event_id, on_behalf_of"
 )
 _BASIC = "name, arguments, result, ok, error, at"
+# Each actor key a door claimed before its action ran, so no later door runs it again; beside the log, which a
+# failed write can leave without the row.
+_KEYS_DDL = (
+    "CREATE TABLE IF NOT EXISTS _alk_action_keys "
+    "(actor_id TEXT NOT NULL, idempotency_key TEXT NOT NULL, state TEXT NOT NULL, PRIMARY KEY (actor_id, idempotency_key))"
+)
 
 
 class PostgresLog:
@@ -830,6 +859,33 @@ class PostgresLog:
             ).fetchone()
         return (row[0], row[1]) if row else None
 
+    def claim(self, key: str, actor: str) -> str | None:
+        with self._connect() as connection:
+            connection.execute(_KEYS_DDL)
+            row = connection.execute(
+                "INSERT INTO _alk_action_keys (actor_id, idempotency_key, state) VALUES (%s, %s, 'pending') "
+                "ON CONFLICT DO NOTHING RETURNING state",
+                (actor, key),
+            ).fetchone()
+            if row is not None:
+                return None
+            found = connection.execute(
+                "SELECT state FROM _alk_action_keys WHERE actor_id = %s AND idempotency_key = %s", (actor, key)
+            ).fetchone()
+        return str(found[0]) if found else "pending"
+
+    def settle(self, key: str, actor: str, state: str | None) -> None:
+        with self._connect() as connection:
+            if state is None:
+                connection.execute(
+                    "DELETE FROM _alk_action_keys WHERE actor_id = %s AND idempotency_key = %s", (actor, key)
+                )
+            else:
+                connection.execute(
+                    "UPDATE _alk_action_keys SET state = %s WHERE actor_id = %s AND idempotency_key = %s",
+                    (state, actor, key),
+                )
+
     def agent_calls(self, name: str) -> int:
         clause = " AND actor_id = 'agent'" if self.records_actors() else ""
         with self._connect() as connection:
@@ -879,10 +935,25 @@ class MemoryLog:
 
     def __init__(self) -> None:
         self._rows: list[dict[str, Any]] = []
+        self._keys: dict[tuple[str, str], str] = {}
         self._lock = threading.Lock()
 
     def records_actors(self) -> bool:
         return True
+
+    def claim(self, key: str, actor: str) -> str | None:
+        with self._lock:
+            found = self._keys.get((actor, key))
+            if found is None:
+                self._keys[(actor, key)] = "pending"
+            return found
+
+    def settle(self, key: str, actor: str, state: str | None) -> None:
+        with self._lock:
+            if state is None:
+                self._keys.pop((actor, key), None)
+            else:
+                self._keys[(actor, key)] = state
 
     def write(self, row: dict[str, Any]) -> None:
         with self._lock:
@@ -937,6 +1008,12 @@ class TeeLog:
 
     def committed(self, key: str, actor: str) -> tuple[Any, Any] | None:
         return self.primary.committed(key, actor)
+
+    def claim(self, key: str, actor: str) -> str | None:
+        return self.primary.claim(key, actor)
+
+    def settle(self, key: str, actor: str, state: str | None) -> None:
+        self.primary.settle(key, actor, state)
 
     def agent_calls(self, name: str) -> int:
         return self.primary.agent_calls(name)

@@ -96,6 +96,7 @@ def proxy(store, monkeypatch, tmp_path):
     dsn = store.dsn()
     with psycopg.connect(dsn, autocommit=True) as connection:
         connection.execute("DROP TABLE IF EXISTS _alk_tool_trace")
+        connection.execute("DROP TABLE IF EXISTS _alk_action_keys")
         connection.execute("DROP TABLE IF EXISTS _alk_actors")
         connection.execute(_TOOL_TRACE_DDL)
         connection.execute(actors_seed(ACTORS))
