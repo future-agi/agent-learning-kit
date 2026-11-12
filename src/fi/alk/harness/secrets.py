@@ -118,58 +118,98 @@ CONTROLLER_CONNECTION_NAMES: frozenset[str] = frozenset(
     }
 )
 
-_RESERVED_PREFIXES = (
-    "ALK_",
+_CLIENT_PREFIXES = (
     "LD_",
     "DYLD_",
-    "PYTHON",
-    "HARNESS_",
-    "FI_",
-    "AGENTCC_",
     "DOCKER_",
     "COMPOSE_",
     "BUILDKIT_",
     "BUILDX_",
-    "NODE_",
+    "GIT_",
+    "CLAUDE_CODE_",
+)
+_CLIENT_EXACT = frozenset(
+    {
+        # The worker allow-list's client settings.
+        "PATH",
+        "HOME",
+        "TMPDIR",
+        "LANG",
+        "LC_ALL",
+        "DOCKER_HOST",
+        "SSL_CERT_FILE",
+        "SSL_CERT_DIR",
+        # Resolver, TLS and shell hooks.
+        "NO_PROXY",
+        "REQUESTS_CA_BUNDLE",
+        "CURL_CA_BUNDLE",
+        "LOCALDOMAIN",
+        "RES_OPTIONS",
+        "HOSTALIASES",
+        "GCONV_PATH",
+        "BASH_ENV",
+        "ENV",
+        "OPENSSL_CONF",
+        "SSLKEYLOGFILE",
+        # Code-loading names.
+        "PYTHONPATH",
+        "PYTHONHOME",
+        "PYTHONSTARTUP",
+        "PYTHONUSERBASE",
+        "PYTHONBREAKPOINT",
+        "PYTHONPLATLIBDIR",
+        "NODE_OPTIONS",
+        "NODE_PATH",
+        "NODE_REPL_EXTERNAL_MODULE",
+        "NODE_EXTRA_CA_CERTS",
+        "NODE_TLS_REJECT_UNAUTHORIZED",
+        "PERL5OPT",
+        "PERL5LIB",
+        "RUBYOPT",
+        "RUBYLIB",
+    }
+)
+_OWNED_PREFIXES = (
+    "ALK_",
+    "AGENTCC_",
+    "HARNESS_",
+    "FI_",
     "SIMULATOR_",
     "ANTHROPIC_",
     "GOOGLE_",
     "VERTEX",
-    "GIT_",
-    "CLAUDE_CODE_",
-)
-_RESERVED_EXACT = frozenset(
-    {
-        "LOCALDOMAIN",
-        "RES_OPTIONS",
-        "HOSTALIASES",
-        "REQUESTS_CA_BUNDLE",
-        "CURL_CA_BUNDLE",
-        "SSL_CERT_FILE",
-        "SSL_CERT_DIR",
-        "NO_PROXY",
-        "GCONV_PATH",
-        "BASH_ENV",
-        "ENV",
-        "SSLKEYLOGFILE",
-        "OPENSSL_CONF",
-    }
+    "PYTHON",
+    "NODE_",
 )
 
 
-def controller_name_reserved(name: str) -> bool:
-    """True when a job must not be able to set ``name`` in the sandbox controller's environment.
+def client_name_reserved(name: str) -> bool:
+    """True for a name that steers a client process (loader, resolver, proxy, TLS, shell).
 
-    The name is compared upper-cased and stripped, so case and surrounding spaces cannot bypass it.
+    Compared stripped; upper-cased for the lists and prefixes, lower-cased for ``_proxy``.
     """
+    stripped = str(name).strip()
+    key = stripped.upper()
+    return (
+        key in _CLIENT_EXACT
+        or key.startswith(_CLIENT_PREFIXES)
+        or stripped.lower().endswith("_proxy")
+    )
+
+
+def controller_owned_name(name: str) -> bool:
+    """True for a name the runner owns: its credentials, topology and model settings."""
     key = str(name).strip().upper()
     return (
         key in RUNNER_RESERVED_ENVIRONMENT
         or key in WORKER_ENVIRONMENT_NAMES
-        or key in _RESERVED_EXACT
-        or key.startswith(_RESERVED_PREFIXES)
-        or key.endswith("_PROXY")
+        or key.startswith(_OWNED_PREFIXES)
     )
+
+
+def controller_name_reserved(name: str) -> bool:
+    """True when a job must not be able to set ``name`` in the sandbox controller's environment."""
+    return client_name_reserved(name) or controller_owned_name(name)
 
 
 PROCESS_SECRET_FILE_ENVIRONMENT = {
@@ -299,7 +339,9 @@ __all__ = [
     "RUNNER_RESERVED_ENVIRONMENT",
     "SecretResolutionError",
     "WORKER_ENVIRONMENT_NAMES",
+    "client_name_reserved",
     "controller_name_reserved",
+    "controller_owned_name",
     "resolve_worker_secrets",
     "runtime_configuration_environment",
     "runtime_configuration_value",

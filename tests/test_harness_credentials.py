@@ -9,7 +9,9 @@ from fi.alk.harness.credentials import (
 )
 from fi.alk.harness.secrets import (
     CONTROLLER_CONNECTION_NAMES,
+    client_name_reserved,
     controller_name_reserved,
+    controller_owned_name,
     worker_environment,
 )
 from fi.simulate.runtime.spec import SecretRef
@@ -733,3 +735,49 @@ def test_worker_environment_never_lets_a_job_replace_or_add_a_host_name():
     assert "LD_PRELOAD" not in child
     assert "http_proxy" not in child
     assert child["LIVEKIT_URL"] == "wss://job.invalid"
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "LD_PRELOAD", "DYLD_INSERT_LIBRARIES", "DOCKER_CONFIG", "COMPOSE_FILE",
+        "BUILDKIT_HOST", "BUILDX_CONFIG", "GIT_SSH_COMMAND", "CLAUDE_CODE_X",
+        "PATH", "HOME", "TMPDIR", "LANG", "LC_ALL", "DOCKER_HOST", "SSL_CERT_FILE",
+        "SSL_CERT_DIR", "NO_PROXY", "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE",
+        "LOCALDOMAIN", "RES_OPTIONS", "HOSTALIASES", "GCONV_PATH", "BASH_ENV", "ENV",
+        "OPENSSL_CONF", "SSLKEYLOGFILE", "PYTHONPATH", "PYTHONHOME", "PYTHONSTARTUP",
+        "PYTHONUSERBASE", "PYTHONBREAKPOINT", "PYTHONPLATLIBDIR", "NODE_OPTIONS",
+        "NODE_PATH", "NODE_REPL_EXTERNAL_MODULE", "NODE_EXTRA_CA_CERTS",
+        "NODE_TLS_REJECT_UNAUTHORIZED", "PERL5OPT", "PERL5LIB", "RUBYOPT", "RUBYLIB",
+        "http_proxy", "HTTPS_PROXY", "wss_proxy", "No_Proxy",
+        # Case and whitespace variants.
+        " ld_preload ", "\tnode_options\n", "pythonpath", " Http_Proxy ", "bash_env",
+    ],
+)
+def test_client_name_reserved(name):
+    assert client_name_reserved(name)
+    assert controller_name_reserved(name)
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "HARNESS_VOICE_RUNNER", "ALK_SANDBOX_TOKEN", "AGENTCC_API_KEY", "FI_API_KEY",
+        "SIMULATOR_X", "ANTHROPIC_VERTEX_BASE_URL", "GOOGLE_API_KEY", "VERTEXAI_PROJECT",
+        "PYTHONUNBUFFERED", "NODE_ENV", "DOCKER_HOST", "HARNESS_PLATFORM_URL",
+        "CARTESIA_API_KEY", "GOOGLE_CLOUD_PROJECT", " harness_voice_runner ", "alk_x",
+    ],
+)
+def test_controller_owned_name(name):
+    assert controller_owned_name(name)
+    assert controller_name_reserved(name)
+
+
+@pytest.mark.parametrize("name", ["NODE_ENV", "PYTHONUNBUFFERED", " node_env ", "MY_SETTING", "LK_URL"])
+def test_client_name_reserved_passes_ordinary_runtime_settings(name):
+    assert not client_name_reserved(name)
+
+
+@pytest.mark.parametrize("name", ["LD_PRELOAD", "http_proxy", "GIT_SSH_COMMAND", "MY_SETTING", "LK_URL", "DEEPGRAM_API_KEY"])
+def test_controller_owned_name_leaves_client_and_neutral_names(name):
+    assert not controller_owned_name(name)
