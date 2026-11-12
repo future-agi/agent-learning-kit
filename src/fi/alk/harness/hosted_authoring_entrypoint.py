@@ -71,6 +71,27 @@ def _platform_simulator_values(values: dict[str, str]) -> dict[str, str]:
     }
 
 
+# In secrets.json only names a customer can't declare may be kept: SIMULATOR_* and FI_* are the
+# platform's. A customer may declare GOOGLE_CLOUD_PROJECT, so under that name it is masked there.
+_PLATFORM_ONLY_SETTINGS = frozenset(
+    name
+    for name in observability.NON_SECRET_SETTINGS
+    if name.startswith(("SIMULATOR_", "FI_"))
+)
+
+
+def _span_secret_values(
+    all_values: dict[str, str], gateway_values: dict[str, str]
+) -> tuple[str, ...]:
+    """The values spans replace whole: everything in both files, except the platform settings a
+    span keeps. Each file is read on its own and the tuples joined, so a name in both masks both
+    values."""
+    return (
+        *observability.declared_values(all_values, _PLATFORM_ONLY_SETTINGS),
+        *observability.declared_values(gateway_values),
+    )
+
+
 def _configure_generation_environment(values: dict[str, str]) -> None:
     for name in _PASSTHROUGH:
         if values.get(name):
@@ -194,7 +215,13 @@ def main(argv: list[str] | None = None) -> int:
         os.environ["ALK_FOREGROUND_COORDINATOR"] = "1"
     job_id, run_id, telemetry = _authoring_job_context(forwarded)
     if job_id:
-        observability.begin(job_id, run_id, telemetry)
+        # Spans carry tool output, and a tool can print a key.
+        observability.begin(
+            job_id,
+            run_id,
+            telemetry,
+            secret_values=_span_secret_values(all_values, gateway_values),
+        )
         observability.stage("authoring")
     try:
         from .authoring_runtime_validation import RuntimeValidationError
