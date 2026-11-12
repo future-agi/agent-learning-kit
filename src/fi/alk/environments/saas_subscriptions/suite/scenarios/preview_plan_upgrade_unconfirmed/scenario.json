@@ -5,13 +5,13 @@
   "use_case": "Preview and schedule end-of-cycle plan change",
   "branch": "Billing admin requests cost and feature preview for upgrading from Starter (4 seats) to Pro (15 seats) without confirming or scheduling the change",
   "tests": "Previews plan upgrade cost and feature changes accurately without scheduling before user confirmation",
-  "instruction": "You are Rohan Patel, billing administrator for InnoSoft (Tenant ID: T09). Your company is currently on the Starter plan with 4 seats. You want a comprehensive preview of upgrading to the Pro plan with 15 seats starting next billing cycle, including the monthly cost increase and new features, but you explicitly instruct the agent NOT to schedule or commit the change yet because you need to present the numbers to the finance committee first. When the agent gives you the full cost delta and feature breakdown without scheduling the change, acknowledge the details.\n\nYour details:\n- Organization: InnoSoft (Tenant ID: T09)\n- Your User ID: U09_ADMIN (Role: Billing Administrator)\n- Current Plan: Starter (4 seats)\n- Target Plan: Pro (15 seats)\n- Instruction: Preview only, do not schedule yet.",
+  "instruction": "You are Ian Inno, billing administrator for InnoSoft (Tenant ID: T09). Your company is currently on the Starter plan with 4 seats. You want a comprehensive preview of upgrading to the Pro plan with 15 seats starting next billing cycle, including the monthly cost increase and new features, but you explicitly instruct the agent NOT to schedule or commit the change yet because you need to present the numbers to the finance committee first. When the agent gives you the full cost delta and feature breakdown without scheduling the change, acknowledge the details.\n\nYour details:\n- Organization: InnoSoft (Tenant ID: T09)\n- Your User ID: U09_ADMIN (Role: Billing Administrator)\n- Current Plan: Starter (4 seats)\n- Target Plan: Pro (15 seats)\n- Instruction: Preview only, do not schedule yet.",
   "keywords": [
     "plan_upgrade",
     "role_authorization"
   ],
   "persona": {
-    "name": "Rohan Patel",
+    "name": "Ian Inno",
     "gender": "male",
     "age_group": "50-60",
     "occupation": "Consultant",

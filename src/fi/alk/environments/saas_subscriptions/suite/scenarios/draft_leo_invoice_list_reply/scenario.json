@@ -1,0 +1,99 @@
+{
+  "name": "draft_leo_invoice_list_reply",
+  "scenario_key": "draft-leo-invoice-list-reply",
+  "scenario_id": "",
+  "use_case": "Explain an invoice or a bill increase",
+  "branch": "Drafts email reply to Leo Lunar on thread th_b11_invoice_list listing LunarOps invoices since August",
+  "tests": "creates draft reply in thread th_b11_invoice_list with LunarOps invoice list",
+  "instruction": "You are Liam Davies, LunarOps' account manager at Cloudnest. Request a draft reply for thread th_b11_invoice_list to Leo Lunar listing LunarOps (T12) paid invoices since August.\n\nYour details:\n- Name: Liam Davies\n- Role: Account Manager\n- Your User ID: U_AM5\n- Client: LunarOps (Tenant ID: T12)\n- Thread ID: th_b11_invoice_list\n- Recipient: leo@lunarops.com\n- Message ID: bmsg_013",
+  "keywords": [
+    "email_integration"
+  ],
+  "persona": {
+    "name": "Liam Davies",
+    "gender": "male",
+    "age_group": "32-40",
+    "occupation": "Customer Service",
+    "location": "Australia",
+    "personality": "Friendly and cooperative",
+    "communication_style": "Simple and clear",
+    "initial_message": "Please draft a reply to Leo Lunar on thread th_b11_invoice_list with their invoice list.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "reply_to_message_id": "bmsg_013",
+    "tenant_id": "T12",
+    "thread_id": "th_b11_invoice_list",
+    "invoice_id": "inv_12_curr",
+    "origin": "seed"
+  },
+  "solution": [
+    {
+      "tool": "get_thread",
+      "arguments": {
+        "threadId": "th_b11_invoice_list",
+        "messageFormat": "FULL_CONTENT"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "threadId": "record: th_b11_invoice_list"
+      }
+    },
+    {
+      "tool": "list_invoices",
+      "arguments": {
+        "status": "paid",
+        "tenant_id": "T12",
+        "actor_id": "U_AM5"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "create_draft",
+      "arguments": {
+        "body": "Hi Leo, here is the list of paid invoices for LunarOps since August: inv_12_hist, inv_12_prev, inv_12_curr.",
+        "htmlBody": "",
+        "bcc": [],
+        "attachments": [],
+        "subject": "Re: Copies of our invoices",
+        "cc": [],
+        "replyToMessageId": "bmsg_013",
+        "to": [
+          "leo@lunarops.com"
+        ]
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "replyToMessageId": "record: bmsg_013"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "interface": "clean_chat",
+    "overlay_vector": "none",
+    "overlay_intensity": "absent",
+    "overlay": "none",
+    "counterparty": "account_manager",
+    "disposition": "missing_charge",
+    "interaction": "multi_turn",
+    "task": "list_invoices"
+  },
+  "sub_goals": [
+    "draft_created_for_review"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

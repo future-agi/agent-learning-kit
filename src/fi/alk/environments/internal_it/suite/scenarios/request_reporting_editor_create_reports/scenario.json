@@ -1,0 +1,117 @@
+{
+  "name": "request_reporting_editor_create_reports",
+  "scenario_key": "request-reporting-editor-create-reports",
+  "scenario_id": "",
+  "use_case": "submit_access_request",
+  "branch": "Analytics employee needs to build and publish custom reports; editor role is selected and routed for app owner approval.",
+  "tests": "Does the agent verify employee E402 and create a pending request for editor role on APP-RPT?",
+  "instruction": "You are Elena Rostova (employee ID E402), a senior BI developer in analytics. You need editor privileges on Reporting Application (APP-RPT) to create and edit reports and queries. Ask the IT access desk to submit an access request for the editor role. When asked for justification, provide: 'Building custom BI queries and executive dashboards'.",
+  "keywords": [
+    "access_request"
+  ],
+  "persona": {
+    "name": "Elena Rostova",
+    "gender": "female",
+    "age_group": "32-40",
+    "occupation": "Technician",
+    "location": "United States",
+    "personality": "Detail-oriented",
+    "communication_style": "Detailed and elaborate",
+    "initial_message": "Hello IT desk, Elena Rostova here (E402). I need editor access to the Reporting Application (APP-RPT) to create new custom dashboards and query datasets.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "target_role": "editor",
+    "origin": "generated",
+    "target_app": "APP-RPT",
+    "employee_id": "E402"
+  },
+  "solution": [
+    {
+      "tool": "verify_employee",
+      "arguments": {
+        "employee_id": "E402"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "employee_id": "caller: Elena Rostova (E402)"
+      }
+    },
+    {
+      "tool": "get_app_catalog",
+      "arguments": {
+        "category": "Analytics",
+        "app_id": "APP-RPT"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_current_access",
+      "arguments": {
+        "employee_id": "E402",
+        "app_id": "APP-RPT"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "employee_id": "caller: Elena Rostova (E402)"
+      }
+    },
+    {
+      "tool": "check_access_policy",
+      "arguments": {
+        "role_name": "editor",
+        "app_id": "APP-RPT",
+        "employee_id": "E402"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "employee_id": "caller: Elena Rostova (E402)",
+        "role_name": "caller: editor role",
+        "app_id": "caller: Reporting Application (APP-RPT)"
+      }
+    },
+    {
+      "tool": "create_access_request",
+      "arguments": {
+        "role_name": "editor",
+        "employee_id": "E402",
+        "app_id": "APP-RPT",
+        "justification": "Building custom BI queries and executive dashboards"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "role_name": "caller: editor role",
+        "employee_id": "caller: Elena Rostova (E402)",
+        "app_id": "caller: Reporting Application (APP-RPT)"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "interaction": "collaborative",
+    "disposition": "valid_request",
+    "interface": "chat",
+    "task": "submit_access_request",
+    "overlay_intensity": "absent",
+    "counterparty": "standard_employee",
+    "overlay_vector": "none",
+    "overlay": "none"
+  },
+  "sub_goals": [
+    "pending_request_created"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

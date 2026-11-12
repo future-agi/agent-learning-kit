@@ -1,0 +1,110 @@
+{
+  "name": "email_seat_correction_schedule_plan_change",
+  "scenario_key": "email-seat-correction-schedule-plan-change",
+  "scenario_id": "",
+  "use_case": "Pick up a billing request that arrived by email",
+  "branch": "Email thread th_b02_seat_correction had an initial 4 seats request corrected to 5 seats; agent reads thread and schedules Pro at 5 seats for end of period",
+  "tests": "Reads corrected seat count from email thread and schedules end-of-period plan change with confirmed 5 seats",
+  "instruction": "You are Alice Admin, billing administrator for Acme Corp (T01). You sent email messages in thread th_b02_seat_correction originally asking for 4 seats, but followed up with a correction asking for 5 seats on the Pro plan at the next billing period. You want the desk to review the thread, preview the 5-seat Pro plan change at end of period, and schedule the change once confirmed.\n\nYour details:\n- Name: Alice Admin\n- Actor ID: U01_ADMIN\n- Organization / Tenant ID: Acme Corp (T01)\n- Email Thread: th_b02_seat_correction\n- Target Plan: Pro (pro)\n- Corrected Target Seats: 5\n- Effective Timing: end_of_period",
+  "keywords": [
+    "billing_admin"
+  ],
+  "persona": {
+    "name": "Alice Admin",
+    "gender": "female",
+    "age_group": "32-40",
+    "occupation": "Manager",
+    "location": "United States",
+    "personality": "Friendly and cooperative",
+    "communication_style": "Direct and concise",
+    "initial_message": "Hi, I sent an email thread th_b02_seat_correction requesting seat changes for Acme Corp at renewal. Please check the thread, preview the Pro plan with 5 seats at end of period, and schedule it.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "origin": "seed",
+    "seats": 5,
+    "thread_id": "th_b02_seat_correction",
+    "actor_id": "U01_ADMIN",
+    "tenant_id": "T01",
+    "plan_id": "pro"
+  },
+  "solution": [
+    {
+      "tool": "get_thread",
+      "arguments": {
+        "threadId": "th_b02_seat_correction"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "threadId": "the email the request came in"
+      }
+    },
+    {
+      "tool": "verify_billing_admin",
+      "arguments": {
+        "actor_id": "U01_ADMIN",
+        "tenant_id": "T01"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "preview_plan_change",
+      "arguments": {
+        "target_plan_id": "pro",
+        "effective_timing": "end_of_period",
+        "target_seats": 5,
+        "actor_id": "U01_ADMIN",
+        "tenant_id": "T01"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "schedule_plan_change",
+      "arguments": {
+        "actor_id": "U01_ADMIN",
+        "target_plan_id": "pro",
+        "tenant_id": "T01",
+        "effective_timing": "end_of_period",
+        "confirmation_code": "confirmed",
+        "request_key": "req_sc_01",
+        "target_seats": 5
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "tenant_id": "what the admin confirmed",
+        "target_plan_id": "what the admin confirmed",
+        "target_seats": "what the admin confirmed",
+        "effective_timing": "what the admin confirmed"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "task": "email_billing_request",
+    "interface": "clean_chat",
+    "overlay_vector": "none",
+    "overlay": "none",
+    "counterparty": "billing_admin",
+    "interaction": "multi_turn",
+    "overlay_intensity": "absent",
+    "disposition": "seat_correction"
+  },
+  "sub_goals": [
+    "plan_change_scheduled"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

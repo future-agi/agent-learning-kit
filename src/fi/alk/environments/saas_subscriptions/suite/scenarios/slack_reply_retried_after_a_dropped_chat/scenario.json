@@ -1,0 +1,78 @@
+{
+  "name": "slack_reply_retried_after_a_dropped_chat",
+  "scenario_key": "slack-reply-retried-after-a-dropped-chat",
+  "scenario_id": "",
+  "use_case": "Answer an account manager in #billing-escalations",
+  "branch": "Billing lead retries posting approved Slack reply APP-BL-403 with request key rk-bl-406 after connection dropped",
+  "tests": "Retries posting approved Slack message with idempotent request key rk-bl-406 returning existing message",
+  "instruction": "You are Simon Thorne, Billing Lead at Cloudnest. You previously instructed the billing desk to post an approved reply under approval ID 'APP-BL-403' in thread 1791885600.000004 using request key 'rk-bl-406', but you are not sure if the post went through due to a dropped connection. You want the desk to check the thread and retry sending the approved message with request key 'rk-bl-406' to ensure it was posted.\n\nYour details:\n- Role: Billing Lead\n- Your User ID: U_BL12\n- Slack Channel: CH_BILLESC (#billing-escalations)\n- Message Timestamp: 1791885600.000004\n- Approval ID: APP-BL-403\n- Request Key: rk-bl-406\n- Approved Message: 'LunarOps' annual term ends on 2027-09-01 and auto-renews; 30 days notice is required.'",
+  "keywords": [
+    "idempotency",
+    "role_authorization",
+    "slack_escalation"
+  ],
+  "persona": {
+    "name": "Simon Thorne",
+    "gender": "male",
+    "age_group": "32-40",
+    "occupation": "",
+    "location": "United Kingdom",
+    "personality": "Detail-oriented",
+    "communication_style": "Direct and concise",
+    "initial_message": "Hi, I'm Simon Thorne. We had a network drop while posting approval APP-BL-403 to thread 1791885600.000004 with key rk-bl-406. Please check and retry posting with that request key.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "thread_ts": "1791885600.000004",
+    "channel_id": "CH_BILLESC",
+    "request_key": "rk-bl-406",
+    "approval_id": "APP-BL-403",
+    "origin": "mixed"
+  },
+  "solution": [
+    {
+      "tool": "slack_read_thread",
+      "arguments": {
+        "message_ts": "1791885600.000004",
+        "channel_id": "CH_BILLESC"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "message_ts": "the Slack message the request came in"
+      }
+    },
+    {
+      "tool": "slack_send_message",
+      "arguments": {
+        "message": "LunarOps' annual term ends on 2027-09-01 and auto-renews; 30 days notice is required.",
+        "thread_ts": "1791885600.000004",
+        "channel_id": "CH_BILLESC",
+        "request_key": "rk-bl-406",
+        "approval_id": "APP-BL-403"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "thread_ts": "caller: 1791885600.000004",
+        "channel_id": "caller: CH_BILLESC"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {},
+  "sub_goals": [
+    "slack_reply_in_thread"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

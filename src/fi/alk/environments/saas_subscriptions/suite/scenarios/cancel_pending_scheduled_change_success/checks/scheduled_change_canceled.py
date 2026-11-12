@@ -1,16 +1,23 @@
-def check(world, calls):
+def check(world, calls, reference=None):
+    want = {}
+    for step in reference or ():
+        if step.get("tool") == "cancel_scheduled_change":
+            want.update({k: v for k, v in step.get("arguments", {}).items() if k in ("tenant_id", "change_id")})
     cancel_calls = [c for c in calls if c.name == "cancel_scheduled_change" and c.ok]
     if not cancel_calls:
         return "not done: cancel_scheduled_change was not called successfully"
-    canceled_records = [r for r in world.state().get("scheduled_changes", []) if r.get("status") == "canceled"]
-    if not canceled_records:
-        return "not done: no scheduled change was marked canceled in world state"
+    rows = world.state().get("scheduled_changes", [])
+    canceled = [r for r in rows if r.get("status") == "canceled"]
     for c in cancel_calls:
-        cid = c.arguments.get("change_id")
-        tid = c.arguments.get("tenant_id")
-        match = [r for r in canceled_records if r.get("change_id") == cid and r.get("tenant_id") == tid]
-        if not match:
-            return f"done wrong: change {cid!r} for tenant {tid!r} is not marked canceled in world state"
+        if not any(r.get("change_id") == c.arguments.get("change_id") and r.get("tenant_id") == c.arguments.get("tenant_id") for r in canceled):
+            return f"done wrong: change {c.arguments.get('change_id')!r} is not marked canceled in world state"
+    if want.get("change_id") and not any(r.get("change_id") == want["change_id"] for r in canceled):
+        return f"not done: {want['change_id']} is still {next((r.get('status') for r in rows if r.get('change_id') == want['change_id']), 'missing')}"
+    if want.get("tenant_id") and not any(r.get("tenant_id") == want["tenant_id"] for r in canceled):
+        return f"not done: no change of {want['tenant_id']} was canceled"
+    wrong = [r["change_id"] for r in canceled if want.get("tenant_id") and r.get("tenant_id") != want["tenant_id"]]
+    if wrong:
+        return f"done wrong: {', '.join(wrong)} of another tenant was canceled"
     return None
 
 

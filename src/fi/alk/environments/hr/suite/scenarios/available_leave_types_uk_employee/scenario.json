@@ -1,0 +1,77 @@
+{
+  "name": "available_leave_types_uk_employee",
+  "scenario_key": "available-leave-types-uk-employee",
+  "scenario_id": "",
+  "use_case": "Calculate working days for a requested date range accounting for regional holidays",
+  "branch": "A UK employee asks which categories of leave are available for them to request under company policy.",
+  "tests": "Verifies that the assistant retrieves E405's profile and lists permitted leave types.",
+  "instruction": "You want to know the different categories and types of leave you are eligible to take as a UK employee.\n\nYour details:\n- Employee ID: E405\n- Name: Arthur Pendelton\n- Region: UK\n- Question: What leave types am I eligible to request in the UK?",
+  "keywords": [
+    "leave_types",
+    "eligible_leave",
+    "uk_leave"
+  ],
+  "persona": {
+    "name": "Arthur Pendelton",
+    "gender": "male",
+    "age_group": "40-50",
+    "occupation": "Customer Service",
+    "location": "United Kingdom",
+    "personality": "Professional and formal",
+    "communication_style": "Direct and concise",
+    "initial_message": "Hello, could you list the different leave types available for me to request in the UK?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "origin": "mixed",
+    "employee_id": "E405",
+    "region": "UK"
+  },
+  "solution": [
+    {
+      "tool": "get_employee_profile",
+      "arguments": {
+        "employee_id": "E405"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "employee_id": "caller: E405"
+      }
+    },
+    {
+      "tool": "get_leave_types",
+      "arguments": {
+        "employee_id": "E405"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "disposition": "standard",
+    "counterparty": "employee_uk",
+    "interface": "clean_prose",
+    "overlay_intensity": "absent",
+    "task": "calculate_working_days",
+    "interaction": "single_request",
+    "overlay": "none",
+    "overlay_vector": "none"
+  },
+  "sub_goals": [
+    "employee_profile_retrieved"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

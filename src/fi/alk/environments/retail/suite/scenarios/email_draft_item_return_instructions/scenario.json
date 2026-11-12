@@ -1,0 +1,102 @@
+{
+  "name": "email_draft_item_return_instructions",
+  "scenario_key": "email-draft-return-instructions-bob",
+  "scenario_id": "",
+  "use_case": "Draft a reply on a customer's email thread for a person to review",
+  "branch": "Customer asks support to draft a reply to their email thread with instructions on returning an eligible item",
+  "tests": "the agent reads Bob Smith's email thread th_r03_return_request_bob, verifies order O22, and drafts a reply with return instructions without creating a return authorization",
+  "instruction": "You emailed customer support earlier (subject 'Return request') about how to return the Linen Long-Sleeve Shirt (SKU AP04) from order O22 because it is too large. You are contacting support on chat asking them to send you the return instructions by drafting a reply on your email thread.\n\nYour details:\n- Name: Bob Smith\n- Email: bob.smith@example.com\n- Postal Code: 10001\n- Order ID: O22\n- Item: Linen Long-Sleeve Shirt (SKU: AP04)",
+  "keywords": [
+    "email_draft"
+  ],
+  "persona": {
+    "name": "Bob Smith",
+    "gender": "male",
+    "age_group": "",
+    "occupation": "",
+    "location": "United States",
+    "personality": "Friendly and cooperative",
+    "communication_style": "Casual and friendly",
+    "initial_message": "Hi! I sent an email earlier with subject 'Return request' about returning the shirt from order O22. Could you reply to my email thread with the return instructions?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "order_id": "O22",
+    "origin": "seed",
+    "customer_id": "C02",
+    "thread_id": "th_r03_return_request_bob",
+    "sku": "AP04"
+  },
+  "solution": [
+    {
+      "tool": "get_thread",
+      "arguments": {
+        "threadId": "th_r03_return_request_bob"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "threadId": "record: thread th_r03_return_request_bob"
+      }
+    },
+    {
+      "tool": "verify_order_owner",
+      "arguments": {
+        "order_id": "O22",
+        "postal_code": "10001"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_order",
+      "arguments": {
+        "order_id": "O22"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "create_draft",
+      "arguments": {
+        "replyToMessageId": "rmsg_005",
+        "to": [
+          "bob.smith@example.com"
+        ],
+        "subject": "Re: Return request",
+        "body": "Hello Bob, here are the instructions for returning SKU AP04 from order O22. Items in the Apparel category may be returned within 30 days of delivery."
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "to": "caller: bob.smith@example.com",
+        "replyToMessageId": "record: message rmsg_005 in thread th_r03_return_request_bob"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "interface": "clean_prose",
+    "overlay": "none",
+    "disposition": "cooperative",
+    "counterparty": "verified_owner",
+    "interaction": "multi_turn",
+    "overlay_intensity": "absent",
+    "overlay_vector": "none",
+    "task": "draft_email_reply"
+  },
+  "sub_goals": [
+    "draft_created_for_review"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

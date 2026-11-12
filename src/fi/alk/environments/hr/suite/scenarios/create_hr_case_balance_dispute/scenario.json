@@ -5,7 +5,7 @@
   "use_case": "Handle leave request boundaries such as insufficient balance, overlaps, or exceptions via HR case",
   "branch": "An employee discovers their available annual leave is zero due to an unrecorded carry-forward from last year and asks to open an HR dispute case.",
   "tests": "Checks balance and files an HR case with category balance_dispute for missing carried-forward leave.",
-  "instruction": "You believe you should have 5 days of annual leave carried forward from last year, but after checking your balance you see 0 available days. You want the assistant to open an official HR support case for a balance dispute so HR can audit and rectify your carryover allocation.\n\nYour details:\n- Employee ID: E07\n- Name: George Clark\n- Region: UK\n- Issue: Missing 5 days annual leave carryover from 2025\n- Case Category: balance_dispute\n- Subject: Annual leave carry-forward balance dispute",
+  "instruction": "You believe you should have 5 days of annual leave carried forward from last year, but after checking your balance you see 0 available days. You want the assistant to open an official HR support case for a balance dispute so HR can audit and rectify your carryover allocation.\n\nYour details:\n- Employee ID: E461\n- Name: Olivia Grant\n- Region: UK\n- Issue: Missing 5 days annual leave carryover from 2025\n- Case Category: balance_dispute\n- Subject: Annual leave carry-forward balance dispute",
   "keywords": [
     "leave_balance",
     "insufficient_balance",
@@ -13,10 +13,10 @@
     "leave_submission"
   ],
   "persona": {
-    "name": "George Clark",
-    "gender": "male",
+    "name": "Olivia Grant",
+    "gender": "female",
     "age_group": "32-40",
-    "occupation": "Accountant",
+    "occupation": "Recruiter",
     "location": "United Kingdom",
     "personality": "Detail-oriented",
     "communication_style": "Detailed and elaborate",
@@ -32,15 +32,15 @@
   "variables": {},
   "fixture": {
     "region": "UK",
-    "origin": "seed",
+    "origin": "generated",
     "available_balance": 0,
-    "employee_id": "E07"
+    "employee_id": "E461"
   },
   "solution": [
     {
       "tool": "get_employee_profile",
       "arguments": {
-        "employee_id": "E07"
+        "employee_id": "E461"
       },
       "environment_arguments": {},
       "fixed": {}
@@ -48,7 +48,7 @@
     {
       "tool": "get_leave_balance",
       "arguments": {
-        "employee_id": "E07",
+        "employee_id": "E461",
         "leave_type": "annual"
       },
       "environment_arguments": {},
@@ -58,14 +58,14 @@
       "tool": "create_hr_case",
       "arguments": {
         "subject": "Annual leave carry-forward balance dispute",
-        "employee_id": "E07",
+        "employee_id": "E461",
         "description": "Employee disputes missing 5 days carry-forward from 2025",
         "category": "balance_dispute",
-        "actor_id": "E07"
+        "actor_id": "E461"
       },
       "environment_arguments": {},
       "fixed": {
-        "employee_id": "caller: E07",
+        "employee_id": "caller: E461",
         "category": "caller: balance_dispute"
       }
     }

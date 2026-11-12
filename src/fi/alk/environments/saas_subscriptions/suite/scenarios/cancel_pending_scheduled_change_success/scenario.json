@@ -5,7 +5,7 @@
   "use_case": "Manage and cancel pending scheduled plan changes",
   "branch": "Pending downgrade PC04 exists for T04; billing admin requests and confirms cancellation of the scheduled change",
   "tests": "Cancels pending scheduled plan change upon billing admin request and preserves current plan",
-  "instruction": "You are David Data, billing admin for DataFlow. Your organization currently has a pending scheduled change (ID: PC04) to downgrade from Enterprise to Pro on November 1. You have decided to stay on Enterprise. Please ask the agent to cancel the pending change PC04. When the agent confirms that the pending change has been canceled and your Enterprise subscription will continue uninterrupted, thank them.\n\nYour details:\n- Organization: DataFlow (Tenant ID: T04)\n- Your User ID: U04_ADMIN (Role: Billing Administrator)\n- Pending Change ID: PC04",
+  "instruction": "You are David Data, billing admin for DataFlow. Your organization currently has a pending scheduled change (ID: PC04) to cut DataFlow's Enterprise plan from 80 to 60 seats on November 1. You have decided to keep all 80 Enterprise seats. Please ask the agent to cancel the pending change PC04. When the agent confirms that the pending change has been canceled and your Enterprise subscription will continue uninterrupted, thank them.\n\nYour details:\n- Organization: DataFlow (Tenant ID: T04)\n- Your User ID: U04_ADMIN (Role: Billing Administrator)\n- Pending Change ID: PC04",
   "keywords": [
     "plan_downgrade",
     "role_authorization"

@@ -1,7 +1,7 @@
 [
   {
     "name": "verify_employee",
-    "description": "Verify employee identity and employment status in directory.",
+    "description": "Look an employee up in the directory (by ID or email): identity, department, manager and employment status, and whether that employee is the person signed in to this conversation (signed_in). A directory lookup proves nothing about who is asking.",
     "parameters": {
       "required": [
         "employee_id"
@@ -145,7 +145,7 @@
   },
   {
     "name": "get_current_access",
-    "description": "Retrieve active entitlements and pending access requests for an employee.",
+    "description": "An employee's active entitlements, ended (expired or revoked) entitlements and open requests. Acts only for the person signed in to the conversation, their manager, or IT operations; naming an employee does not make you them.",
     "parameters": {
       "type": "object",
       "properties": {
@@ -255,7 +255,7 @@
   },
   {
     "name": "check_access_policy",
-    "description": "Check access policies, Separation of Duties (SoD) constraints, and approval routing for a proposed role.",
+    "description": "Check access policies, Separation of Duties (SoD) constraints, and approval routing (the approvers in order) for a proposed role; every answer names the policy document in effect. Acts only for the person signed in to the conversation, their manager, or IT operations; naming an employee does not make you them.",
     "parameters": {
       "type": "object",
       "properties": {
@@ -301,6 +301,13 @@
             "type": "string"
           },
           "type": "array"
+        },
+        "source": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "description": "The access policy document in effect: file_id, title, version"
         }
       },
       "type": "object",
@@ -316,7 +323,7 @@
   },
   {
     "name": "create_access_request",
-    "description": "Submit an access request ticket with business justification and route to appropriate approver.",
+    "description": "Submit an access request with business justification, routed to its approvers in order (manager, application owner, or both). A role that needs no approval is approved on creation and its token returned. Acts only for the person signed in to the conversation, their manager, or IT operations; naming an employee does not make you them.",
     "parameters": {
       "type": "object",
       "properties": {
@@ -385,7 +392,7 @@
   },
   {
     "name": "get_approval_status",
-    "description": "Look up access request details and associated approval token status.",
+    "description": "Look up an access request, its approvers and its approval token. Only the requester, their manager, the request's approvers or IT operations may see it.",
     "parameters": {
       "required": [
         "request_id"
@@ -469,7 +476,7 @@
   },
   {
     "name": "grant_synthetic_access",
-    "description": "Provision synthetic access entitlement following verification of valid approval token.",
+    "description": "Provision access for an approved request with its valid, unexpired approval token issued by the request's own approver. Acts only for the person signed in to the conversation, their manager, or IT operations; naming an employee does not make you them.",
     "parameters": {
       "properties": {
         "request_id": {
@@ -533,7 +540,7 @@
   },
   {
     "name": "revoke_synthetic_access",
-    "description": "Revoke an active synthetic access entitlement.",
+    "description": "Revoke an active synthetic access entitlement. Acts only for the person signed in to the conversation, their manager, or IT operations; naming an employee does not make you them.",
     "parameters": {
       "type": "object",
       "required": [
@@ -590,7 +597,7 @@
   },
   {
     "name": "create_it_handoff",
-    "description": "Escalate policy exceptions, conflicts, or complex access disputes to human IT operations.",
+    "description": "Escalate policy exceptions, conflicts, or complex access disputes to human IT operations for an employee. Acts only for the person signed in to the conversation, their manager, or IT operations; naming an employee does not make you them.",
     "parameters": {
       "type": "object",
       "properties": {
@@ -644,6 +651,1295 @@
         "message"
       ],
       "type": "object"
+    }
+  },
+  {
+    "name": "search_employees",
+    "description": "Find employees by name or email fragment, or by department: ids, names, departments, managers and status.",
+    "parameters": {
+      "type": "object",
+      "required": [],
+      "properties": {
+        "query": {
+          "type": "string",
+          "description": "Part of a name or email"
+        },
+        "department": {
+          "type": "string",
+          "description": "A department, e.g. finance"
+        }
+      }
+    },
+    "mutates_state": false,
+    "returns": {
+      "type": "object",
+      "required": [
+        "employees",
+        "count"
+      ],
+      "properties": {
+        "employees": {
+          "type": "array"
+        },
+        "count": {
+          "type": "integer"
+        }
+      }
+    }
+  },
+  {
+    "name": "get_role_details",
+    "description": "An application's roles from least to most privileged: tier, what each allows, the approval it needs, and the roles it is exclusive with under separation of duties.",
+    "parameters": {
+      "type": "object",
+      "required": [
+        "app_id"
+      ],
+      "properties": {
+        "app_id": {
+          "type": "string",
+          "description": "The application, e.g. APP-RPT"
+        },
+        "role_name": {
+          "type": "string",
+          "description": "One role only"
+        }
+      }
+    },
+    "mutates_state": false,
+    "returns": {
+      "type": "object",
+      "required": [
+        "app_id",
+        "roles"
+      ],
+      "properties": {
+        "app_id": {
+          "type": "string"
+        },
+        "app_name": {
+          "type": "string"
+        },
+        "owner_id": {
+          "type": "string"
+        },
+        "roles": {
+          "type": "array"
+        }
+      }
+    }
+  },
+  {
+    "name": "list_access_requests",
+    "description": "An employee's access requests with status, approver and duration. Acts only for the person signed in to the conversation, their manager, or IT operations; naming an employee does not make you them.",
+    "parameters": {
+      "type": "object",
+      "required": [
+        "employee_id"
+      ],
+      "properties": {
+        "employee_id": {
+          "type": "string",
+          "description": "The employee"
+        },
+        "status": {
+          "type": "string",
+          "description": "Only this status",
+          "enum": [
+            "pending",
+            "approved",
+            "completed",
+            "rejected",
+            "cancelled"
+          ]
+        }
+      }
+    },
+    "mutates_state": false,
+    "returns": {
+      "type": "object",
+      "required": [
+        "employee_id",
+        "requests",
+        "count"
+      ],
+      "properties": {
+        "employee_id": {
+          "type": "string"
+        },
+        "requests": {
+          "type": "array"
+        },
+        "count": {
+          "type": "integer"
+        }
+      }
+    }
+  },
+  {
+    "name": "cancel_access_request",
+    "description": "Cancel the employee's pending or approved request after they confirmed; any unused approval token is voided. A request already cancelled is reported with when it was cancelled. Acts only for the person signed in to the conversation, their manager, or IT operations; naming an employee does not make you them.",
+    "parameters": {
+      "type": "object",
+      "required": [
+        "request_id",
+        "employee_id",
+        "confirmed"
+      ],
+      "properties": {
+        "request_id": {
+          "type": "string",
+          "description": "The request"
+        },
+        "employee_id": {
+          "type": "string",
+          "description": "Its owner"
+        },
+        "confirmed": {
+          "type": "boolean",
+          "description": "True only after the employee confirmed"
+        }
+      }
+    },
+    "mutates_state": true,
+    "returns": {
+      "type": "object",
+      "required": [
+        "request_id",
+        "status"
+      ],
+      "properties": {
+        "request_id": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "idempotent": {
+          "type": "boolean"
+        }
+      }
+    }
+  },
+  {
+    "name": "request_temporary_access",
+    "description": "Request a role for a limited number of days (at most the policy maximum); it needs the same approval as permanent access and expires on its own once granted. Acts only for the person signed in to the conversation, their manager, or IT operations; naming an employee does not make you them.",
+    "parameters": {
+      "type": "object",
+      "required": [
+        "employee_id",
+        "app_id",
+        "role_name",
+        "duration_days",
+        "justification"
+      ],
+      "properties": {
+        "employee_id": {
+          "type": "string",
+          "description": "The employee"
+        },
+        "app_id": {
+          "type": "string",
+          "description": "The application"
+        },
+        "role_name": {
+          "type": "string",
+          "description": "The least privileged role that covers the need"
+        },
+        "duration_days": {
+          "type": "integer",
+          "description": "How many days, at most the policy maximum"
+        },
+        "justification": {
+          "type": "string",
+          "description": "Why, in the employee's words"
+        }
+      }
+    },
+    "mutates_state": true,
+    "returns": {
+      "type": "object",
+      "required": [
+        "request_id",
+        "duration_days",
+        "status"
+      ],
+      "properties": {
+        "request_id": {
+          "type": "string"
+        },
+        "employee_id": {
+          "type": "string"
+        },
+        "app_id": {
+          "type": "string"
+        },
+        "role_name": {
+          "type": "string"
+        },
+        "duration_days": {
+          "type": "integer"
+        },
+        "status": {
+          "type": "string"
+        },
+        "approver_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    }
+  },
+  {
+    "name": "get_entitlement_expiry",
+    "description": "The employee's active entitlements with their expiry dates and days left, and ended ones with when they ended. Acts only for the person signed in to the conversation, their manager, or IT operations; naming an employee does not make you them.",
+    "parameters": {
+      "type": "object",
+      "required": [
+        "employee_id"
+      ],
+      "properties": {
+        "employee_id": {
+          "type": "string",
+          "description": "The employee"
+        }
+      }
+    },
+    "mutates_state": false,
+    "returns": {
+      "type": "object",
+      "required": [
+        "employee_id",
+        "entitlements"
+      ],
+      "properties": {
+        "employee_id": {
+          "type": "string"
+        },
+        "entitlements": {
+          "type": "array"
+        }
+      }
+    }
+  },
+  {
+    "name": "get_license_availability",
+    "description": "Licence seats of an application: total, used by active entitlements, and available.",
+    "parameters": {
+      "type": "object",
+      "required": [
+        "app_id"
+      ],
+      "properties": {
+        "app_id": {
+          "type": "string",
+          "description": "The application"
+        }
+      }
+    },
+    "mutates_state": false,
+    "returns": {
+      "type": "object",
+      "required": [
+        "app_id",
+        "seats_total",
+        "seats_used",
+        "seats_available"
+      ],
+      "properties": {
+        "app_id": {
+          "type": "string"
+        },
+        "seats_total": {
+          "type": "integer"
+        },
+        "seats_used": {
+          "type": "integer"
+        },
+        "seats_available": {
+          "type": "integer"
+        }
+      }
+    }
+  },
+  {
+    "name": "record_approval_decision",
+    "description": "Record the decision of a request's own approver, who is the person in the conversation: approve issues a token bound to that request, employee, application and role, or, for a role that needs both approvals, passes the request on to the second approver; reject closes the request. Nobody else may decide, and nobody decides their own request.",
+    "parameters": {
+      "type": "object",
+      "required": [
+        "request_id",
+        "approver_id",
+        "decision"
+      ],
+      "properties": {
+        "request_id": {
+          "type": "string",
+          "description": "The pending request"
+        },
+        "approver_id": {
+          "type": "string",
+          "description": "The approver deciding, who must be the request's approver"
+        },
+        "decision": {
+          "type": "string",
+          "description": "approve or reject",
+          "enum": [
+            "approve",
+            "reject"
+          ]
+        }
+      }
+    },
+    "mutates_state": true,
+    "returns": {
+      "type": "object",
+      "required": [
+        "request_id",
+        "decision",
+        "request_status"
+      ],
+      "properties": {
+        "request_id": {
+          "type": "string"
+        },
+        "decision": {
+          "type": "string"
+        },
+        "request_status": {
+          "type": "string"
+        },
+        "token": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "expires_at": {
+          "type": "string"
+        }
+      }
+    }
+  },
+  {
+    "name": "slack_search_channels",
+    "description": "Search for Slack channels by name or topic. Returns channel IDs, names, topics, privacy and membership. Private channels appear only to their members.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "keywords": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Lexical terms that must appear in the channel's name or topic; single words or quoted phrases, all AND'd."
+        },
+        "natural_language_query": {
+          "type": "string",
+          "description": "The user's question in conversational tone."
+        },
+        "channel_types": {
+          "type": "string",
+          "description": "Comma-separated: public_channel, private_channel. Default public_channel."
+        },
+        "cursor": {
+          "type": "string"
+        },
+        "include_archived": {
+          "type": "boolean"
+        },
+        "limit": {
+          "type": "integer",
+          "description": "Up to 20; default 20."
+        },
+        "response_format": {
+          "type": "string"
+        }
+      }
+    },
+    "mutates_state": false,
+    "returns": {
+      "type": "object",
+      "properties": {
+        "channels": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "channel_id": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "topic": {
+                "type": "string"
+              },
+              "purpose": {
+                "type": "string"
+              },
+              "is_private": {
+                "type": "boolean"
+              },
+              "is_member": {
+                "type": "boolean"
+              },
+              "member_count": {
+                "type": "integer"
+              },
+              "is_archived": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "channel_id",
+              "name",
+              "is_private",
+              "is_member"
+            ]
+          }
+        },
+        "next_cursor": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "channels"
+      ]
+    }
+  },
+  {
+    "name": "slack_read_channel",
+    "description": "Reads messages from a channel, newest first. Read-only. Use slack_read_thread with a message's ts to read its replies; use slack_search_channels to find a channel ID.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "channel_id": {
+          "type": "string",
+          "description": "ID of the channel to fetch history for."
+        },
+        "cursor": {
+          "type": "string",
+          "description": "next_cursor from a previous response."
+        },
+        "latest": {
+          "type": "string",
+          "description": "End of the time range (ts)."
+        },
+        "limit": {
+          "type": "integer",
+          "description": "1 to 100; default 100."
+        },
+        "oldest": {
+          "type": "string",
+          "description": "Start of the time range (ts)."
+        },
+        "response_format": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "channel_id"
+      ]
+    },
+    "mutates_state": false,
+    "returns": {
+      "type": "object",
+      "properties": {
+        "channel_id": {
+          "type": "string"
+        },
+        "messages": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "message_id": {
+                "type": "string"
+              },
+              "user_id": {
+                "type": "string"
+              },
+              "text": {
+                "type": "string"
+              },
+              "ts": {
+                "type": "string"
+              },
+              "thread_ts": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "permalink": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "message_id",
+              "user_id",
+              "text",
+              "ts",
+              "permalink"
+            ]
+          }
+        },
+        "has_more": {
+          "type": "boolean"
+        },
+        "next_cursor": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "channel_id",
+        "messages",
+        "has_more"
+      ]
+    }
+  },
+  {
+    "name": "slack_read_thread",
+    "description": "Reads a thread: the parent message and its replies, oldest first. Read-only. message_ts is the parent message's ts.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "channel_id": {
+          "type": "string",
+          "description": "Channel the thread is in."
+        },
+        "message_ts": {
+          "type": "string",
+          "description": "Timestamp of the parent message, e.g. \"1234567890.123456\"."
+        },
+        "cursor": {
+          "type": "string"
+        },
+        "latest": {
+          "type": "string"
+        },
+        "limit": {
+          "type": "integer",
+          "description": "1 to 1000; default 100."
+        },
+        "oldest": {
+          "type": "string"
+        },
+        "response_format": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "channel_id",
+        "message_ts"
+      ]
+    },
+    "mutates_state": false,
+    "returns": {
+      "type": "object",
+      "properties": {
+        "channel_id": {
+          "type": "string"
+        },
+        "message_ts": {
+          "type": "string"
+        },
+        "messages": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "message_id": {
+                "type": "string"
+              },
+              "user_id": {
+                "type": "string"
+              },
+              "text": {
+                "type": "string"
+              },
+              "ts": {
+                "type": "string"
+              },
+              "thread_ts": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "permalink": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "message_id",
+              "user_id",
+              "text",
+              "ts",
+              "permalink"
+            ]
+          }
+        },
+        "has_more": {
+          "type": "boolean"
+        },
+        "next_cursor": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "channel_id",
+        "message_ts",
+        "messages",
+        "has_more"
+      ]
+    }
+  },
+  {
+    "name": "slack_search_public_and_private",
+    "description": "Searches messages in all channels the acting user can access. keywords are lexical terms (all AND'd); filters are Slack search modifiers: in:<#C123>, from:<@U123>, after:YYYY-MM-DD, before:YYYY-MM-DD. Give at least one of keywords or filters.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "keywords": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "filters": {
+          "type": "string"
+        },
+        "natural_language_query": {
+          "type": "string"
+        },
+        "after": {
+          "type": "string",
+          "description": "Only messages after this Unix timestamp."
+        },
+        "before": {
+          "type": "string",
+          "description": "Only messages before this Unix timestamp."
+        },
+        "channel_types": {
+          "type": "string"
+        },
+        "content_types": {
+          "type": "string"
+        },
+        "context_channel_id": {
+          "type": "string"
+        },
+        "cursor": {
+          "type": "string"
+        },
+        "include_bots": {
+          "type": "boolean"
+        },
+        "include_context": {
+          "type": "boolean"
+        },
+        "limit": {
+          "type": "integer",
+          "description": "Up to 20; default 20."
+        },
+        "max_context_length": {
+          "type": "integer"
+        },
+        "only_my_channels": {
+          "type": "boolean"
+        },
+        "response_format": {
+          "type": "string"
+        },
+        "sort": {
+          "type": "string",
+          "description": "score (default) or timestamp."
+        },
+        "sort_dir": {
+          "type": "string",
+          "description": "asc or desc (default)."
+        }
+      }
+    },
+    "mutates_state": false,
+    "returns": {
+      "type": "object",
+      "properties": {
+        "messages": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "message_id": {
+                "type": "string"
+              },
+              "user_id": {
+                "type": "string"
+              },
+              "text": {
+                "type": "string"
+              },
+              "ts": {
+                "type": "string"
+              },
+              "thread_ts": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "permalink": {
+                "type": "string"
+              },
+              "channel_id": {
+                "type": "string"
+              },
+              "channel_name": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "message_id",
+              "channel_id",
+              "user_id",
+              "text",
+              "ts",
+              "permalink"
+            ]
+          }
+        },
+        "has_more": {
+          "type": "boolean"
+        },
+        "next_cursor": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "messages",
+        "has_more"
+      ]
+    }
+  },
+  {
+    "name": "slack_send_message",
+    "description": "Sends a message to a channel, or a thread reply with thread_ts. Posting is approval-gated: approval_id must name an approval of this exact destination and text for the acting user. request_key makes a retry return the message already posted instead of a duplicate. No @channel, @here or @everyone.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "channel_id": {
+          "type": "string",
+          "description": "Destination channel ID."
+        },
+        "message": {
+          "type": "string",
+          "description": "The message text (markdown)."
+        },
+        "thread_ts": {
+          "type": "string",
+          "description": "Parent message ts to reply in its thread."
+        },
+        "reply_broadcast": {
+          "type": "boolean"
+        },
+        "unfurl_app_links": {
+          "type": "boolean"
+        },
+        "draft_id": {
+          "type": "string"
+        },
+        "approval_id": {
+          "type": "string",
+          "description": "The approval authorizing this post."
+        },
+        "request_key": {
+          "type": "string",
+          "description": "Idempotency key for this request."
+        }
+      },
+      "required": [
+        "channel_id",
+        "message"
+      ]
+    },
+    "mutates_state": true,
+    "returns": {
+      "type": "object",
+      "properties": {
+        "channel_id": {
+          "type": "string"
+        },
+        "ts": {
+          "type": "string"
+        },
+        "message_id": {
+          "type": "string"
+        },
+        "permalink": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "request_key": {
+          "type": "string"
+        },
+        "thread_ts": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "channel_id",
+        "ts",
+        "message_id",
+        "permalink",
+        "status"
+      ]
+    }
+  },
+  {
+    "name": "slack_check_message_status",
+    "description": "Check delivery status and idempotency ledger record for a given request_key.",
+    "parameters": {
+      "required": [
+        "request_key"
+      ],
+      "type": "object",
+      "properties": {
+        "request_key": {
+          "type": "string",
+          "description": "The idempotency request key to inspect."
+        }
+      }
+    },
+    "mutates_state": false,
+    "returns": {
+      "type": "object",
+      "properties": {
+        "channel_id": {
+          "type": "string"
+        },
+        "text": {
+          "type": "string"
+        },
+        "created_at": {
+          "type": "string"
+        },
+        "permalink": {
+          "type": "string"
+        },
+        "thread_ts": {
+          "type": "string"
+        },
+        "message_id": {
+          "type": "string"
+        },
+        "request_key": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "channel_id",
+        "created_at",
+        "message_id",
+        "permalink",
+        "request_key",
+        "status",
+        "text"
+      ]
+    }
+  },
+  {
+    "name": "search_files",
+    "description": "Search for Drive files using a structured query (syntax: `query_term operator values`). Clauses are joined with `and`; string values are single-quoted. Terms: title (contains, =, !=), fullText (contains), mimeType (contains, =, !=), parentId (=, !=), owner (=, !=; 'me' is the requesting user). Use nextPageToken to paginate.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "query": {
+          "type": "string",
+          "description": "The search query."
+        },
+        "pageToken": {
+          "type": "string",
+          "description": "The page token to use for pagination."
+        },
+        "pageSize": {
+          "type": "integer",
+          "description": "The maximum number of files to return in each page."
+        },
+        "excludeContentSnippets": {
+          "type": "boolean",
+          "description": "If true, the content snippet will be excluded from the response."
+        }
+      },
+      "required": [
+        "query"
+      ]
+    },
+    "mutates_state": false,
+    "returns": {
+      "type": "object",
+      "properties": {
+        "files": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "title": {
+                "type": "string"
+              },
+              "parentId": {
+                "type": "string"
+              },
+              "mimeType": {
+                "type": "string"
+              },
+              "fileSize": {
+                "type": "string"
+              },
+              "description": {
+                "type": "string"
+              },
+              "fileExtension": {
+                "type": "string"
+              },
+              "contentSnippet": {
+                "type": "string"
+              },
+              "viewUrl": {
+                "type": "string"
+              },
+              "createdTime": {
+                "type": "string"
+              },
+              "modifiedTime": {
+                "type": "string"
+              },
+              "owner": {
+                "type": "string"
+              },
+              "canAddChildren": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "id",
+              "title",
+              "parentId",
+              "mimeType",
+              "fileSize",
+              "description",
+              "viewUrl",
+              "createdTime",
+              "modifiedTime",
+              "owner",
+              "canAddChildren"
+            ]
+          }
+        },
+        "nextPageToken": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "files"
+      ]
+    }
+  },
+  {
+    "name": "list_recent_files",
+    "description": "Find recent files for the user in a sort order: recency (default), lastModified or lastModifiedByMe. The default page size is 10; use nextPageToken to paginate.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "orderBy": {
+          "type": "string",
+          "description": "The sort order for the files."
+        },
+        "pageToken": {
+          "type": "string",
+          "description": "The page token to use for pagination."
+        },
+        "pageSize": {
+          "type": "integer",
+          "description": "The maximum number of files to return in each page."
+        },
+        "excludeContentSnippets": {
+          "type": "boolean",
+          "description": "If true, the content snippet will be excluded from the response."
+        }
+      }
+    },
+    "mutates_state": false,
+    "returns": {
+      "type": "object",
+      "properties": {
+        "files": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "title": {
+                "type": "string"
+              },
+              "parentId": {
+                "type": "string"
+              },
+              "mimeType": {
+                "type": "string"
+              },
+              "fileSize": {
+                "type": "string"
+              },
+              "description": {
+                "type": "string"
+              },
+              "fileExtension": {
+                "type": "string"
+              },
+              "contentSnippet": {
+                "type": "string"
+              },
+              "viewUrl": {
+                "type": "string"
+              },
+              "createdTime": {
+                "type": "string"
+              },
+              "modifiedTime": {
+                "type": "string"
+              },
+              "owner": {
+                "type": "string"
+              },
+              "canAddChildren": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "id",
+              "title",
+              "parentId",
+              "mimeType",
+              "fileSize",
+              "description",
+              "viewUrl",
+              "createdTime",
+              "modifiedTime",
+              "owner",
+              "canAddChildren"
+            ]
+          }
+        },
+        "nextPageToken": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "files"
+      ]
+    }
+  },
+  {
+    "name": "get_file_metadata",
+    "description": "General metadata about a Drive file. The description carries the policy family, status, version and effective date.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "fileId": {
+          "type": "string",
+          "description": "The ID of the file to retrieve."
+        },
+        "excludeContentSnippets": {
+          "type": "boolean",
+          "description": "If true, the content snippet will be excluded from the response."
+        }
+      },
+      "required": [
+        "fileId"
+      ]
+    },
+    "mutates_state": false,
+    "returns": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "parentId": {
+          "type": "string"
+        },
+        "mimeType": {
+          "type": "string"
+        },
+        "fileSize": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "fileExtension": {
+          "type": "string"
+        },
+        "contentSnippet": {
+          "type": "string"
+        },
+        "viewUrl": {
+          "type": "string"
+        },
+        "createdTime": {
+          "type": "string"
+        },
+        "modifiedTime": {
+          "type": "string"
+        },
+        "owner": {
+          "type": "string"
+        },
+        "canAddChildren": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "id",
+        "title",
+        "parentId",
+        "mimeType",
+        "fileSize",
+        "description",
+        "viewUrl",
+        "createdTime",
+        "modifiedTime",
+        "owner",
+        "canAddChildren"
+      ]
+    }
+  },
+  {
+    "name": "get_file_permissions",
+    "description": "List the permissions of a Drive file (its own and its folder's).",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "fileId": {
+          "type": "string",
+          "description": "The ID of the file to get permissions for."
+        }
+      },
+      "required": [
+        "fileId"
+      ]
+    },
+    "mutates_state": false,
+    "returns": {
+      "type": "object",
+      "properties": {
+        "permissions": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "role": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string"
+              },
+              "emailAddress": {
+                "type": "string"
+              },
+              "displayName": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "role",
+              "type",
+              "emailAddress"
+            ]
+          }
+        }
+      },
+      "required": [
+        "permissions"
+      ]
+    }
+  },
+  {
+    "name": "read_file_content",
+    "description": "Fetch a natural language representation of a Drive file, and optionally its comments. fileId must come from search_files or list_recent_files. An unsupported format returns textFormattingNotSupported=true with empty fileContent. revisionId reads an earlier revision of the file.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "fileId": {
+          "type": "string",
+          "description": "The ID of the file to retrieve."
+        },
+        "includeComments": {
+          "type": "boolean",
+          "description": "Whether to include comments in the response."
+        },
+        "revisionId": {
+          "type": "string",
+          "description": "An earlier revision of the file to read instead of the current content."
+        }
+      },
+      "required": [
+        "fileId"
+      ]
+    },
+    "mutates_state": false,
+    "returns": {
+      "type": "object",
+      "properties": {
+        "fileContent": {
+          "type": "string"
+        },
+        "textFormattingNotSupported": {
+          "type": "boolean"
+        },
+        "contentAnchoredComments": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        },
+        "unanchoredComments": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        },
+        "commentsNotSupported": {
+          "type": "boolean"
+        },
+        "revisionId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "fileContent",
+        "textFormattingNotSupported"
+      ]
     }
   }
 ]

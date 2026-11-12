@@ -1,0 +1,86 @@
+{
+  "name": "refuse_grant_when_licence_seats_exhausted",
+  "scenario_key": "refuse-grant-when-licence-seats-exhausted",
+  "scenario_id": "",
+  "use_case": "complete_approved_access",
+  "branch": "Employee E416 holds approved request with valid token on CRM, but all CRM licence seats are occupied; agent checks licence availability and refuses grant.",
+  "tests": "Does the agent check licence availability for APP-CRM and refuse to grant access due to exhausted seat capacity?",
+  "instruction": "You are Maya Lin (employee ID E416). Your request AR-416 for CRM System (APP-CRM) viewer role was approved, and you received token TOK-416-CRM. Ask the IT access desk to grant your access using token TOK-416-CRM. If the assistant checks licences and explains that all 3 CRM seats are currently in use, ask what options are available.",
+  "keywords": [
+    "licence_check"
+  ],
+  "persona": {
+    "name": "Maya Lin",
+    "gender": "female",
+    "age_group": "32-40",
+    "occupation": "Sales Representative",
+    "location": "United Kingdom",
+    "personality": "Friendly and cooperative",
+    "communication_style": "Detailed and elaborate",
+    "initial_message": "Hello IT desk, Maya Lin here (E416). My CRM access request AR-416 was approved with token TOK-416-CRM. Could you grant my viewer access?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "target_app": "APP-CRM",
+    "origin": "generated",
+    "employee_id": "E416",
+    "token": "TOK-416-CRM",
+    "request_id": "AR-416"
+  },
+  "solution": [
+    {
+      "tool": "verify_employee",
+      "arguments": {
+        "employee_id": "E416"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_approval_status",
+      "arguments": {
+        "request_id": "AR-416"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_license_availability",
+      "arguments": {
+        "app_id": "APP-CRM"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "app_id": "caller: CRM System (APP-CRM)"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "counterparty": "standard_employee",
+    "interface": "chat",
+    "overlay": "none",
+    "overlay_vector": "none",
+    "task": "complete_approved_access",
+    "overlay_intensity": "absent",
+    "interaction": "collaborative",
+    "disposition": "seats_exhausted"
+  },
+  "sub_goals": [
+    "licence_checked",
+    "declined_action_explained"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

@@ -1,0 +1,81 @@
+{
+  "name": "payment_retry_date_inquiry",
+  "scenario_key": "payment-retry-date-inquiry",
+  "scenario_id": "",
+  "use_case": "Open a billing case or report a payment",
+  "branch": "KiteWorks's billing admin asks when the next payment retry is scheduled for invoice inv_11_addon; the answer comes from the invoice's payment record",
+  "tests": "retrieves payment status for inv_11_addon and reports exact next_retry_at timestamp",
+  "instruction": "You are Karen Kite, billing admin at KiteWorks. You want to know when the next payment retry is scheduled for invoice inv_11_addon.\n\nYour details:\n- Name: Karen Kite\n- Company: KiteWorks\n- Tenant ID: T11\n- Your User ID: U11_ADMIN\n- Invoice ID: inv_11_addon",
+  "keywords": [
+    "payment_status"
+  ],
+  "persona": {
+    "name": "Karen Kite",
+    "gender": "female",
+    "age_group": "25-32",
+    "occupation": "Technician",
+    "location": "India",
+    "personality": "Cautious and skeptical",
+    "communication_style": "Direct and concise",
+    "initial_message": "Hi, this is Karen from KiteWorks. Can you tell me when the next payment retry is scheduled for invoice inv_11_addon?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "actor_id": "U11_ADMIN",
+    "invoice_id": "inv_11_addon",
+    "tenant_id": "T11",
+    "origin": "seed"
+  },
+  "solution": [
+    {
+      "tool": "get_user_role",
+      "arguments": {
+        "user_id": "U11_ADMIN",
+        "tenant_id": "T11",
+        "actor_id": "U11_ADMIN"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_payment_status",
+      "arguments": {
+        "tenant_id": "T11",
+        "invoice_id": "inv_11_addon",
+        "actor_id": "U11_ADMIN"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "invoice_id": "record: inv_11_addon",
+        "tenant_id": "record: T11"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "task": "report_payment",
+    "overlay_vector": "none",
+    "interaction": "multi_turn",
+    "overlay_intensity": "absent",
+    "overlay": "none",
+    "counterparty": "member",
+    "interface": "clean_chat",
+    "disposition": "retry_pending"
+  },
+  "sub_goals": [
+    "payment_status_reported"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

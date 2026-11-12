@@ -1,0 +1,84 @@
+{
+  "name": "slack_uk_carry_forward_policy_inquiry",
+  "scenario_key": "slack-uk-carry-forward-policy-inquiry",
+  "scenario_id": "",
+  "use_case": "Answer leave policy questions for the employee's region with citations",
+  "branch": "An employee asks in Slack #hr-help about the old handbook 10-day carry-forward rule, requiring reading the Slack thread and searching UK annual leave policy.",
+  "tests": "Verifies that the assistant reads the Slack thread SM05 and consults the effective UK annual leave policy.",
+  "instruction": "You posted in the #hr-help Slack channel asking about the carry-forward rule because you read 10 days in the old handbook. You want to know the current active UK policy rule.\n\nYour details:\n- Employee ID: E06\n- Name: Fiona Gallagher\n- Channel: #hr-help (CH_HRHELP)\n- Message TS: 1792753200.000005\n- Region: UK\n- Question: The old handbook says 10 days, what is the current UK annual leave carry-forward limit?",
+  "keywords": [
+    "slack",
+    "leave_policy",
+    "carry_forward"
+  ],
+  "persona": {
+    "name": "Fiona Gallagher",
+    "gender": "female",
+    "age_group": "25-32",
+    "occupation": "Marketing Professional",
+    "location": "United Kingdom",
+    "personality": "Detail-oriented",
+    "communication_style": "Direct and concise",
+    "initial_message": "I posted a question in #hr-help about our UK carry-forward rules from the old handbook. Could you check it and clarify the current policy?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "origin": "seed",
+    "employee_id": "E06",
+    "region": "UK",
+    "message_ts": "1792753200.000005",
+    "channel_id": "CH_HRHELP"
+  },
+  "solution": [
+    {
+      "tool": "slack_read_thread",
+      "arguments": {
+        "channel_id": "CH_HRHELP",
+        "message_ts": "1792753200.000005"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "search_hr_policy",
+      "arguments": {
+        "region": "UK",
+        "effective_date": "2026-10-26",
+        "topic": "annual_leave"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "topic": "record: annual_leave",
+        "region": "record: UK"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "counterparty": "employee_uk",
+    "task": "check_policy",
+    "overlay": "none",
+    "interface": "clean_prose",
+    "disposition": "outdated_policy_belief",
+    "overlay_intensity": "absent",
+    "overlay_vector": "none",
+    "interaction": "multi_turn"
+  },
+  "sub_goals": [
+    "effective_policy_consulted",
+    "policy_source_cited"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

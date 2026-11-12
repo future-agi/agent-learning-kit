@@ -1,0 +1,122 @@
+{
+  "name": "ret_email_corrected_quantity",
+  "scenario_key": "ret-email-corrected-quantity",
+  "scenario_id": "",
+  "use_case": "Eligible item return and label generation",
+  "branch": "Customer Tara Maclay C20 clarifies in email thread th_r15_quantity_corrected that she wants to return 2 units of AP14 from order O36 instead of 3 units",
+  "tests": "the agent reads email thread th_r15_quantity_corrected and creates a return for 2 units of AP14 on order O36",
+  "instruction": "You sent an email to customer support requesting a return for items in order O36. You initially requested to return all 3 Classic Polo Shirts (SKU AP14), but then followed up asking to return only 2 of them.\n\nYour details:\n- Name: Tara Maclay\n- Email: tara.maclay@example.com\n- Postal Code: 94704\n- Thread: th_r15_quantity_corrected\n- Order ID: O36\n- Final Item and Quantity to return: SKU AP14 (Quantity 2)",
+  "keywords": [
+    "email_support",
+    "quantity_correction"
+  ],
+  "persona": {
+    "name": "Tara Maclay",
+    "gender": "female",
+    "age_group": "25-32",
+    "occupation": "Accountant",
+    "location": "Canada",
+    "personality": "Friendly and cooperative",
+    "communication_style": "Simple and clear",
+    "initial_message": "Hello, I am following up on email thread th_r15_quantity_corrected regarding order O36. Please create the return for 2 polo shirts (AP14).",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "order_id": "O36",
+    "customer_id": "C20",
+    "origin": "seed",
+    "thread_id": "th_r15_quantity_corrected",
+    "sku": "AP14"
+  },
+  "solution": [
+    {
+      "tool": "get_thread",
+      "arguments": {
+        "threadId": "th_r15_quantity_corrected"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "threadId": "caller: email thread th_r15_quantity_corrected"
+      }
+    },
+    {
+      "tool": "verify_order_owner",
+      "arguments": {
+        "order_id": "O36",
+        "postal_code": "94704"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_order",
+      "arguments": {
+        "order_id": "O36"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "evaluate_return",
+      "arguments": {
+        "order_id": "O36",
+        "items": [
+          {
+            "sku": "AP14",
+            "reason": "excess_quantity",
+            "quantity": 2
+          }
+        ]
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "create_return",
+      "arguments": {
+        "items": [
+          {
+            "reason": "excess_quantity",
+            "sku": "AP14",
+            "quantity": 2
+          }
+        ],
+        "order_id": "O36",
+        "customer_id": "C20"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "customer_id": "record: customer C20",
+        "order_id": "caller: order O36",
+        "items": "the items and quantities the customer settled on"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "interface": "clean_prose",
+    "overlay": "none",
+    "counterparty": "verified_owner",
+    "overlay_vector": "none",
+    "interaction": "correction_mid_turn",
+    "disposition": "quantity_correction",
+    "task": "return_eligible_item",
+    "overlay_intensity": "absent"
+  },
+  "sub_goals": [
+    "subgoal_return_created"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

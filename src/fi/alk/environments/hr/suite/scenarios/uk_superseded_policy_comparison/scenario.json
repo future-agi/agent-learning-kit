@@ -1,0 +1,88 @@
+{
+  "name": "uk_superseded_policy_comparison",
+  "scenario_key": "uk-superseded-policy-comparison",
+  "scenario_id": "",
+  "use_case": "Answer leave policy questions for the employee's region with citations",
+  "branch": "An employee explicitly asks to compare the superseded 2023 UK policy with the current 2026 policy version.",
+  "tests": "Verifies that the assistant reads both the 2023 and 2026 UK policies from Drive and explains the changes accurately.",
+  "instruction": "You want to know the differences between the superseded 2023 UK annual leave policy and the current 2026 UK annual leave policy in our document library.\n\nYour details:\n- Employee ID: E07\n- Name: George Clark\n- Region: UK\n- Question: What are the differences between the 2023 UK policy and our current 2026 UK annual leave policy?",
+  "keywords": [
+    "leave_policy",
+    "carry_forward",
+    "superseded_policy"
+  ],
+  "persona": {
+    "name": "George Clark",
+    "gender": "male",
+    "age_group": "32-40",
+    "occupation": "Accountant",
+    "location": "United Kingdom",
+    "personality": "Detail-oriented",
+    "communication_style": "Detailed and elaborate",
+    "initial_message": "Could you explain how our current UK annual leave policy compares to the older 2023 version in Drive?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "employee_id": "E07",
+    "origin": "seed",
+    "region": "UK"
+  },
+  "solution": [
+    {
+      "tool": "get_employee_profile",
+      "arguments": {
+        "employee_id": "E07"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "read_file_content",
+      "arguments": {
+        "fileId": "pol_uk_annual_2023"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "fileId": "record: pol_uk_annual_2023"
+      }
+    },
+    {
+      "tool": "read_file_content",
+      "arguments": {
+        "fileId": "pol_uk_annual_2026"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "fileId": "record: pol_uk_annual_2026"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "overlay_intensity": "absent",
+    "disposition": "outdated_policy_belief",
+    "overlay": "none",
+    "task": "check_policy",
+    "counterparty": "employee_uk",
+    "interface": "clean_prose",
+    "overlay_vector": "none",
+    "interaction": "multi_turn"
+  },
+  "sub_goals": [
+    "policy_document_read_from_drive",
+    "policy_source_cited"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

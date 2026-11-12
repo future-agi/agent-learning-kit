@@ -1,0 +1,95 @@
+{
+  "name": "slack_reply_laura_rejected_request",
+  "scenario_key": "slack-reply-laura-rejected-request",
+  "scenario_id": "",
+  "use_case": "Pick up a leave question from Slack and reply in the thread after approval",
+  "branch": "Reply to Laura Croft's rejected request inquiry in Slack thread SM17 using approval APP-HR-415.",
+  "tests": "Picks up Laura's rejected request inquiry in Slack and posts the approved reply in her thread.",
+  "instruction": "You are HR specialist James Bond (HR02), coordinating leave desk responses. Laura Croft posted in #hr-help (thread ts 1792818000.000017) asking why her year-end leave REQ-1107 was rejected. Ask the leave desk to check request status for REQ-1107, read the thread, and post the approved response in her thread using approval ID APP-HR-415 without disclosing private manager comments.\n\nYour details:\n- Channel: #hr-help (CH_HRHELP)\n- Thread timestamp: 1792818000.000017\n- Approval ID: APP-HR-415",
+  "keywords": [
+    "slack_thread",
+    "request_status"
+  ],
+  "persona": {
+    "name": "James Bond",
+    "gender": "male",
+    "age_group": "",
+    "occupation": "HR Specialist",
+    "location": "United Kingdom",
+    "personality": "Professional and formal",
+    "communication_style": "Direct and concise",
+    "initial_message": "Please check Laura's rejected request REQ-1107 in #hr-help at 1792818000.000017 and post the approved reply to her thread with approval APP-HR-415.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "channel_id": "CH_HRHELP",
+    "origin": "seed",
+    "approval_id": "APP-HR-415",
+    "request_id": "REQ-1107",
+    "message_ts": "1792818000.000017",
+    "employee_id": "E12"
+  },
+  "solution": [
+    {
+      "tool": "slack_read_thread",
+      "arguments": {
+        "message_ts": "1792818000.000017",
+        "channel_id": "CH_HRHELP"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "message_ts": "caller: 1792818000.000017"
+      }
+    },
+    {
+      "tool": "get_request_status",
+      "arguments": {
+        "request_id": "REQ-1107",
+        "actor_id": "HR02"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "slack_send_message",
+      "arguments": {
+        "approval_id": "APP-HR-415",
+        "thread_ts": "1792818000.000017",
+        "message": "Your leave request REQ-1107 has a status of rejected in the HR system.",
+        "channel_id": "CH_HRHELP"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "thread_ts": "caller: 1792818000.000017",
+        "channel_id": "caller: CH_HRHELP"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "interaction": "correction_after_reply",
+    "overlay_intensity": "absent",
+    "overlay_vector": "none",
+    "disposition": "standard",
+    "task": "pick_up_slack_request",
+    "overlay": "none",
+    "interface": "clean_prose",
+    "counterparty": "employee_uk"
+  },
+  "sub_goals": [
+    "slack_reply_in_thread"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

@@ -1,10 +1,11 @@
-def check(world, calls):
-    inv_calls = [c for c in calls if c.name == "get_invoice_lines" and c.ok]
-    if not inv_calls:
-        return "not done: get_invoice_lines was not called successfully"
-    for c in inv_calls:
-        if not c.arguments.get("invoice_id") or not c.arguments.get("tenant_id") or not c.arguments.get("actor_id"):
-            return "done wrong: get_invoice_lines called with missing required arguments"
+def check(world, calls, reference=None):
+    wanted = [s.get("arguments", {}) for s in reference or () if s.get("tool") == "get_invoice_lines" and s.get("arguments", {}).get("invoice_id")]
+    looks = [c for c in calls if c.name == "get_invoice_lines" and c.ok and isinstance(c.result.get("lines"), list)]
+    if not looks:
+        return "not done: no invoice's lines came back"
+    for want in wanted:
+        if not any(all(c.arguments.get(k) == v for k, v in want.items()) and c.result.get("invoice_id") == want["invoice_id"] for c in looks):
+            return f"not done: the lines of {want['invoice_id']} never came back"
     return None
 
 

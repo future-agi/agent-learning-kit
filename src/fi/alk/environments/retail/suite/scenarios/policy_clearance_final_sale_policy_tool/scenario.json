@@ -1,0 +1,76 @@
+{
+  "name": "policy_clearance_final_sale_policy_tool",
+  "scenario_key": "policy-clearance-final-sale-policy-tool",
+  "scenario_id": "",
+  "use_case": "Answer return and exchange policy questions with citations",
+  "branch": "Customer asks about returning a Clearance item (SKU FS01); the agent retrieves Clearance policy and explains the final-sale restriction and refusal.",
+  "tests": "Verifies the agent retrieves Clearance policy terms using get_return_policy and clearly explains why clearance returns are declined.",
+  "instruction": "Ask Northgate Outfitters customer support whether Clearance items like SKU FS01 can be returned or exchanged if you change your mind.",
+  "keywords": [
+    "policy_inquiry"
+  ],
+  "persona": {
+    "name": "Oliver Taylor",
+    "gender": "",
+    "age_group": "",
+    "occupation": "",
+    "location": "United Kingdom",
+    "personality": "Detail-oriented",
+    "communication_style": "Direct and concise",
+    "initial_message": "Hello, I want to check if clearance items like SKU FS01 can be returned if they don't work out.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "origin": "seed",
+    "category": "Clearance",
+    "sku": "FS01"
+  },
+  "solution": [
+    {
+      "tool": "get_product",
+      "arguments": {
+        "sku": "FS01"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_return_policy",
+      "arguments": {
+        "category": "Clearance"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "category": "caller: product category Clearance"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "overlay_intensity": "absent",
+    "overlay_vector": "none",
+    "interaction": "multi_turn",
+    "interface": "clean_prose",
+    "task": "answer_policy_questions",
+    "counterparty": "prospective_buyer",
+    "disposition": "disputing_policy",
+    "overlay": "none"
+  },
+  "sub_goals": [
+    "effective_policy_consulted",
+    "declined_action_explained"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

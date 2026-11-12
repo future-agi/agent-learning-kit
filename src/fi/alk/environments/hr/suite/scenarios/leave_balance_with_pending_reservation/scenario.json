@@ -1,0 +1,83 @@
+{
+  "name": "leave_balance_with_pending_reservation",
+  "scenario_key": "leave-balance-with-pending-reservation",
+  "scenario_id": "",
+  "use_case": "Calculate working days for a requested date range accounting for regional holidays",
+  "branch": "An employee asks why their available annual leave balance is reduced to 2 days, requiring the assistant to check the balance and explain reserved days for pending request REQ-1101.",
+  "tests": "Verifies that the assistant retrieves E02's annual leave balance and clarifies that 3 days are reserved by pending request REQ-1101.",
+  "instruction": "You checked your balance and noticed you have only 2 available annual leave days left out of your 20 allocated days, even though you have only used 15 days. You want the HR assistant to look up your balance and explain the breakdown.\n\nYour details:\n- Employee ID: E02\n- Name: Bob Smith\n- Leave Type: annual\n- Question: Why do I only have 2 days of available annual leave remaining?",
+  "keywords": [
+    "leave_balance",
+    "reserved_days",
+    "pending_request"
+  ],
+  "persona": {
+    "name": "Bob Smith",
+    "gender": "male",
+    "age_group": "32-40",
+    "occupation": "Manager",
+    "location": "Australia",
+    "personality": "Analytical",
+    "communication_style": "Questioning",
+    "initial_message": "Hi HR, I'm confused about my leave balance. I should have 5 days left, but it shows only 2 available. Can you check?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "available_days": 2,
+    "employee_id": "E02",
+    "allocated_days": 20,
+    "origin": "seed",
+    "reserved_days": 3,
+    "used_days": 15,
+    "leave_type": "annual"
+  },
+  "solution": [
+    {
+      "tool": "get_employee_profile",
+      "arguments": {
+        "employee_id": "E02"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_leave_balance",
+      "arguments": {
+        "leave_type": "annual",
+        "employee_id": "E02"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "employee_id": "caller: E02",
+        "leave_type": "caller: annual"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "counterparty": "employee_us",
+    "interaction": "multi_turn",
+    "task": "calculate_working_days",
+    "overlay_intensity": "absent",
+    "interface": "clean_prose",
+    "overlay_vector": "none",
+    "overlay": "none",
+    "disposition": "disputed_balance"
+  },
+  "sub_goals": [
+    "leave_balance_checked"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

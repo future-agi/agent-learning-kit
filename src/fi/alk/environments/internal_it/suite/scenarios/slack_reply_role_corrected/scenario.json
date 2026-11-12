@@ -1,0 +1,98 @@
+{
+  "name": "slack_reply_role_corrected",
+  "scenario_key": "slack-reply-role-corrected",
+  "scenario_id": "",
+  "use_case": "Pick up an access request from Slack and reply in the thread after approval",
+  "branch": "Pam corrected her request in Slack to viewer role for AR-103; IT desk verifies status and replies to her thread using approval APP-IT-404",
+  "tests": "reads Pam's thread in Slack, checks AR-103 status, and replies with the pre-authorized message confirming viewer role is pending",
+  "instruction": "You are Derek Foster (employee ID E520), an IT operations lead. Pam Beesly posted in #it-access (message IM04) asking for reporting access (AR-103) and followed up (IM05) clarifying she only needs the viewer role. You have prepared and authorized Slack reply APP-IT-404. You want the IT assistant to read Pam's Slack thread, check the status of AR-103, and send the approved response to her thread.\n\nYour details:\nTarget request ID: AR-103\nTarget employee: Pam Beesly (E16)\nSlack channel: #it-access (CH_ITACCESS)\nMessage timestamp: 1792764600.000004\nSlack pre-approval ID: APP-IT-404\nApproved reply message: Noted, AR-103 is pending approval for the viewer role.",
+  "keywords": [
+    "slack_reply"
+  ],
+  "persona": {
+    "name": "Derek Foster",
+    "gender": "male",
+    "age_group": "32-40",
+    "occupation": "Engineer",
+    "location": "Canada",
+    "personality": "Professional and formal",
+    "communication_style": "Direct and concise",
+    "initial_message": "Pam corrected her request in #it-access (IM04/IM05). Could you check AR-103 and post the approved response using APP-IT-404?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "slack_approval_id": "APP-IT-404",
+    "employee_id": "E16",
+    "channel_id": "CH_ITACCESS",
+    "origin": "mixed",
+    "request_id": "AR-103",
+    "message_ts": "1792764600.000004"
+  },
+  "solution": [
+    {
+      "tool": "slack_read_thread",
+      "arguments": {
+        "channel_id": "CH_ITACCESS",
+        "message_ts": "1792764600.000004"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "channel_id": "caller: Slack channel: #it-access (CH_ITACCESS)",
+        "message_ts": "caller: Message timestamp: 1792764600.000004"
+      }
+    },
+    {
+      "tool": "get_approval_status",
+      "arguments": {
+        "request_id": "AR-103"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "slack_send_message",
+      "arguments": {
+        "request_key": "",
+        "approval_id": "APP-IT-404",
+        "reply_broadcast": false,
+        "unfurl_app_links": false,
+        "thread_ts": "1792764600.000004",
+        "message": "Noted, AR-103 is pending approval for the viewer role.",
+        "channel_id": "CH_ITACCESS",
+        "draft_id": ""
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "thread_ts": "caller: Message timestamp: 1792764600.000004",
+        "channel_id": "caller: Slack channel: #it-access (CH_ITACCESS)"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "overlay_intensity": "absent",
+    "interface": "chat",
+    "counterparty": "it_lead",
+    "overlay_vector": "none",
+    "interaction": "collaborative",
+    "task": "pick_up_an_access_request_from_slack_and_reply_in_the_thread_after_approval",
+    "overlay": "none",
+    "disposition": "valid_request"
+  },
+  "sub_goals": [
+    "slack_reply_in_thread"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

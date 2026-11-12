@@ -1,0 +1,99 @@
+{
+  "name": "idempotent_schedule_request_after_connection_drop",
+  "scenario_key": "idempotent-schedule-request-after-connection-drop",
+  "scenario_id": "",
+  "use_case": "Preview and schedule a plan or seat change",
+  "branch": "billing admin re-sends plan change request with existing request key after network connection drop; handled idempotently",
+  "tests": "the agent handles the re-sent plan change request idempotently without creating a duplicate record",
+  "instruction": "You are Alice Admin, billing admin for Acme Corp (tenant ID T01, actor ID U01_ADMIN). Your connection dropped right after submitting a plan change to Basic with 6 seats (request key req_idem_01). You are re-submitting with request key req_idem_01 to ensure it went through without creating duplicate changes.\n\nYour details:\n- Tenant ID: T01\n- Actor ID: U01_ADMIN\n- Target Plan: Basic\n- Target Seats: 6\n- Request Key: req_idem_01\n- Effective Timing: End of period (end_of_period)",
+  "keywords": [
+    "idempotency"
+  ],
+  "persona": {
+    "name": "Alice Admin",
+    "gender": "female",
+    "age_group": "32-40",
+    "occupation": "Manager",
+    "location": "United Kingdom",
+    "personality": "Cautious and skeptical",
+    "communication_style": "Direct and concise",
+    "initial_message": "Hello, my session dropped earlier. I want to make sure my plan change to Basic with 6 seats was received. My request key is req_idem_01.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "request_key": "req_idem_01",
+    "actor_id": "U01_ADMIN",
+    "change_id": "PC401",
+    "origin": "mixed",
+    "tenant_id": "T01"
+  },
+  "solution": [
+    {
+      "tool": "verify_billing_admin",
+      "arguments": {
+        "tenant_id": "T01",
+        "actor_id": "U01_ADMIN"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "tenant_id": "caller: T01",
+        "actor_id": "caller: U01_ADMIN"
+      }
+    },
+    {
+      "tool": "schedule_plan_change",
+      "arguments": {
+        "confirmation_code": "confirmed",
+        "actor_id": "U01_ADMIN",
+        "target_plan_id": "basic",
+        "tenant_id": "T01",
+        "effective_timing": "end_of_period",
+        "request_key": "req_idem_01",
+        "target_seats": 6
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "schedule_plan_change",
+      "arguments": {
+        "effective_timing": "end_of_period",
+        "target_seats": 6,
+        "request_key": "req_idem_01",
+        "tenant_id": "T01",
+        "actor_id": "U01_ADMIN",
+        "target_plan_id": "basic",
+        "confirmation_code": "confirmed"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "overlay": "none",
+    "disposition": "connection_drop",
+    "interface": "clean_chat",
+    "counterparty": "member",
+    "interaction": "resumed",
+    "overlay_intensity": "absent",
+    "overlay_vector": "none",
+    "task": "schedule_plan_change"
+  },
+  "sub_goals": [
+    "idempotent_duplicate_handled"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

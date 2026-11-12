@@ -1,0 +1,86 @@
+{
+  "name": "slack_role_correction_status_check",
+  "scenario_key": "slack-role-correction-status-check",
+  "scenario_id": "",
+  "use_case": "manage_existing_access_and_idempotency",
+  "branch": "Employee corrected their request in Slack thread to viewer; agent reads thread and verifies AR-103 status in access system.",
+  "tests": "Does the agent read the Slack thread and check approval status of AR-103?",
+  "instruction": "You are Pam Beesly (employee ID E16). In the #it-access channel you posted message IM04 asking for reporting dashboards and then replied in its thread (parent ts: 1792764600.000004) correcting that you only need viewer access. In chat, ask the IT desk to check your Slack thread and verify that request AR-103 is logged as viewer.",
+  "keywords": [
+    "slack_thread",
+    "status_check"
+  ],
+  "persona": {
+    "name": "Pam Beesly",
+    "gender": "female",
+    "age_group": "25-32",
+    "occupation": "Customer Service",
+    "location": "United States",
+    "personality": "Friendly and cooperative",
+    "communication_style": "Simple and clear",
+    "initial_message": "Hi IT access desk, I am Pam Beesly (E16). In Slack thread IM04/IM05 at ts: 1792764600.000004 I clarified that AR-103 should only be for viewer access. Can you check my thread and verify that AR-103 is recorded for viewer?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "request_id": "AR-103",
+    "slack_thread": "1792764600.000004",
+    "origin": "seed",
+    "employee_id": "E16"
+  },
+  "solution": [
+    {
+      "tool": "slack_read_thread",
+      "arguments": {
+        "cursor": "",
+        "message_ts": "1792764600.000004",
+        "latest": "",
+        "oldest": "",
+        "response_format": "text",
+        "limit": 10,
+        "channel_id": "CH_ITACCESS"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "message_ts": "caller: ts: 1792764600.000004",
+        "channel_id": "record: slack_channels.channel_id where name='it-access'"
+      }
+    },
+    {
+      "tool": "get_approval_status",
+      "arguments": {
+        "request_id": "AR-103"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "request_id": "caller: AR-103"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "overlay": "none",
+    "counterparty": "standard_employee",
+    "overlay_vector": "none",
+    "interaction": "collaborative",
+    "task": "manage_existing_access_and_idempotency",
+    "disposition": "role_correction",
+    "interface": "chat",
+    "overlay_intensity": "absent"
+  },
+  "sub_goals": [
+    "status_reported_from_access_system"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

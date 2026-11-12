@@ -1,0 +1,82 @@
+{
+  "name": "policy_2027_draft_self_service_admin",
+  "scenario_key": "policy-2027-draft-self-service-admin",
+  "scenario_id": "",
+  "use_case": "Answer access policy questions with citations",
+  "branch": "Caller asks about proposed 2027 self-service admin rules for team leads; agent checks draft metadata (acc_pol_v4_draft) and consults effective policy (acc_pol_v3) to confirm draft is not in effect.",
+  "tests": "Does the agent inspect the 2027 draft metadata and cite the effective policy (acc_pol_v3) to confirm the draft is not in effect?",
+  "instruction": "You are Sarah Jenkins (employee ID E504), an engineering manager. You heard about a 2027 policy proposal allowing team leads to self-service grant admin roles without manager approval. Ask the IT access desk whether team leads can currently use self-service admin access under the 2027 draft proposal.",
+  "keywords": [
+    "policy_citation",
+    "least_privilege"
+  ],
+  "persona": {
+    "name": "Sarah Jenkins",
+    "gender": "female",
+    "age_group": "40-50",
+    "occupation": "Manager",
+    "location": "Australia",
+    "personality": "Professional and formal",
+    "communication_style": "Detailed and elaborate",
+    "initial_message": "Hi IT desk, I heard there is a 2027 draft policy proposal for self-service admin roles for team leads. Can team leads self-provision admin privileges now under that draft?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "target_file_draft": "acc_pol_v4_draft",
+    "origin": "seed",
+    "target_file_effective": "acc_pol_v3"
+  },
+  "solution": [
+    {
+      "tool": "get_file_metadata",
+      "arguments": {
+        "fileId": "acc_pol_v4_draft",
+        "excludeContentSnippets": false
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "fileId": "caller: 2027 draft proposal (acc_pol_v4_draft)"
+      }
+    },
+    {
+      "tool": "read_file_content",
+      "arguments": {
+        "revisionId": "",
+        "fileId": "acc_pol_v3",
+        "includeComments": false
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "fileId": "record: drive_files where policy_family='access_policy' and status='approved'"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "task": "answer_access_policy_questions_with_citations",
+    "disposition": "policy_inquiry",
+    "overlay_intensity": "absent",
+    "interaction": "inquisitive",
+    "interface": "chat",
+    "overlay": "none",
+    "counterparty": "manager_requester",
+    "overlay_vector": "none"
+  },
+  "sub_goals": [
+    "effective_policy_consulted",
+    "policy_source_cited"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "inbound",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

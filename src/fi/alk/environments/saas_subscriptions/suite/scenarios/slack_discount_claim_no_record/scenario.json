@@ -1,0 +1,93 @@
+{
+  "name": "slack_discount_claim_no_record",
+  "scenario_key": "slack-discount-claim-no-record",
+  "scenario_id": "",
+  "use_case": "Answer an account manager in #billing-escalations",
+  "branch": "BM03 message asks about 20% discount for BetaTech T02; assistant checks invoices and credit notes, finding no record",
+  "tests": "Checks billing records for verbal discount claim in Slack and confirms no discount is recorded",
+  "instruction": "You are Marcus Vance, Billing Lead at Cloudnest. In message BM03 (ts: '1791883800.000003') in #billing-escalations, an account manager asks if BetaTech (T02) has a 20% discount on record. Ask the assistant to check the thread and BetaTech's credit notes and invoices, and report if any discount exists.\n\nYour details:\n- Role: Billing Lead\n- Your User ID: U_BL4\n- Tenant ID: T02 (BetaTech)\n- Slack Channel: CH_BILLESC (#billing-escalations)\n- Message Timestamp: 1791883800.000003",
+  "keywords": [
+    "slack_escalation"
+  ],
+  "persona": {
+    "name": "Marcus Vance",
+    "gender": "male",
+    "age_group": "32-40",
+    "occupation": "Manager",
+    "location": "United Kingdom",
+    "personality": "Analytical",
+    "communication_style": "Simple and clear",
+    "initial_message": "Hi, can you check Slack message BM03 regarding BetaTech (T02) and see if we have any record of a 20% discount?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "records": {
+      "channel_id": "CH_BILLESC",
+      "tenant_id": "T02",
+      "message_ts": "1791883800.000003",
+      "caller_id": "U_BL4"
+    },
+    "origin": "seed"
+  },
+  "solution": [
+    {
+      "tool": "slack_read_thread",
+      "arguments": {
+        "message_ts": "1791883800.000003",
+        "channel_id": "CH_BILLESC"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "message_ts": "caller: 1791883800.000003"
+      }
+    },
+    {
+      "tool": "get_credit_notes",
+      "arguments": {
+        "tenant_id": "T02",
+        "actor_id": "U_BL4"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "tenant_id": "caller: T02"
+      }
+    },
+    {
+      "tool": "list_invoices",
+      "arguments": {
+        "tenant_id": "T02",
+        "actor_id": "U_BL4",
+        "status": "paid"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "overlay_intensity": "absent",
+    "task": "answer_slack_escalation",
+    "interface": "clean_chat",
+    "overlay_vector": "none",
+    "disposition": "discount_claimed",
+    "interaction": "single_turn",
+    "overlay": "none",
+    "counterparty": "billing_lead"
+  },
+  "sub_goals": [
+    "claimed_discount_not_applied"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

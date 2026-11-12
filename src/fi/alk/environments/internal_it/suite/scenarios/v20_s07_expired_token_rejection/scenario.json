@@ -5,7 +5,7 @@
   "use_case": "complete_approved_access",
   "branch": "Employee presents expired approval token for past approved request; agent inspects status, detects expiration, and refuses to provision access.",
   "tests": "Does the agent inspect approval status, identify that the approval token has expired, and prevent access provisioning?",
-  "instruction": "You are George Clark (employee ID E07), operations director. You had an approved access request AR-07 for Production Cloud Platform (APP-PROD) readonly access from two months ago with approval token TOK-EXP-07. Ask the IT service desk whether this approval token can still be used to provision your access.",
+  "instruction": "You are George Clark (employee ID E07), operations director. You had an approved access request AR-07 for Production Cloud Platform (APP-PROD) readonly access from nearly three months ago with approval token TOK-EXP-07. Ask the IT service desk whether this approval token can still be used to provision your access.",
   "keywords": [
     "expired_token",
     "approval_token",

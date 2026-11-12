@@ -1,0 +1,102 @@
+{
+  "name": "slack_renewal_request",
+  "scenario_key": "slack-renewal-request",
+  "scenario_id": "",
+  "use_case": "Pick up an access request from Slack and reply in the thread after approval",
+  "branch": "Ravi Menon posted in #it-ops asking to renew deployer access that expired this morning; IT desk reads the thread and creates a renewal access request for APP-PROD deployer",
+  "tests": "reads Ravi Menon's Slack thread in #it-ops and creates a new pending access request for his deployer role renewal",
+  "instruction": "You are Rosa Delgado (employee ID E516), an IT operations lead. Ravi Menon (E412) posted in #it-ops (message timestamp 1792933200.000412) stating his deployer access on APP-PROD expired this morning and asking for renewal. You want the IT assistant to read his Slack thread, check access policy for the role, and submit a new pending access request for Ravi Menon for the deployer role.\n\nYour details:\nTarget employee: Ravi Menon (E412)\nTarget application: APP-PROD\nTarget role: deployer\nSlack channel: #it-ops (CH_ITOPS)\nSlack message timestamp: 1792933200.000412",
+  "keywords": [
+    "access_request"
+  ],
+  "persona": {
+    "name": "Rosa Delgado",
+    "gender": "female",
+    "age_group": "32-40",
+    "occupation": "Engineer",
+    "location": "United States",
+    "personality": "Professional and formal",
+    "communication_style": "Direct and concise",
+    "initial_message": "Ravi Menon posted in #it-ops asking for renewal of his deployer role, which expired this morning. Could you check policy and create the renewal request for him?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "channel_id": "CH_ITOPS",
+    "origin": "generated",
+    "role_name": "deployer",
+    "entitlement_id": "ENT-412",
+    "app_id": "APP-PROD",
+    "employee_id": "E412",
+    "message_ts": "1792933200.000412"
+  },
+  "solution": [
+    {
+      "tool": "slack_read_thread",
+      "arguments": {
+        "message_ts": "1792933200.000412",
+        "channel_id": "CH_ITOPS"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "channel_id": "caller: Slack channel: #it-ops (CH_ITOPS)",
+        "message_ts": "caller: Slack message timestamp: 1792933200.000412"
+      }
+    },
+    {
+      "tool": "check_access_policy",
+      "arguments": {
+        "app_id": "APP-PROD",
+        "role_name": "deployer",
+        "employee_id": "E412"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "employee_id": "caller: Target employee: Ravi Menon (E412)",
+        "role_name": "caller: Target role: deployer",
+        "app_id": "caller: Target application: APP-PROD"
+      }
+    },
+    {
+      "tool": "create_access_request",
+      "arguments": {
+        "app_id": "APP-PROD",
+        "role_name": "deployer",
+        "justification": "Renewal of deployer access that expired on 25 October",
+        "employee_id": "E412"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "role_name": "caller: Target role: deployer",
+        "app_id": "caller: Target application: APP-PROD",
+        "employee_id": "caller: Target employee: Ravi Menon (E412)"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "overlay_vector": "none",
+    "interaction": "inquisitive",
+    "counterparty": "it_lead",
+    "disposition": "renewal_request",
+    "overlay_intensity": "absent",
+    "interface": "chat",
+    "task": "pick_up_an_access_request_from_slack_and_reply_in_the_thread_after_approval",
+    "overlay": "none"
+  },
+  "sub_goals": [
+    "pending_request_created"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

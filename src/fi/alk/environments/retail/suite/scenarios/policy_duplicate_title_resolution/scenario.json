@@ -1,0 +1,79 @@
+{
+  "name": "policy_duplicate_title_resolution",
+  "scenario_key": "policy-duplicate-title-resolution",
+  "scenario_id": "",
+  "use_case": "Answer return and exchange policy questions with citations",
+  "branch": "Two files share the title 'Returns Policy.md'; the agent checks metadata to tell the superseded interim copy in the policy archive from the approved v3.0 policy in cx_policies.",
+  "tests": "Verifies the agent inspects metadata of files sharing the title Returns Policy.md to identify the approved version in cx_policies and cite version 3.0.",
+  "instruction": "Ask Northgate Outfitters customer support about the official return rules. You saw multiple documents called Returns Policy online and want to know which one is the active approved policy.",
+  "keywords": [
+    "policy_inquiry"
+  ],
+  "persona": {
+    "name": "Chloe Bennett",
+    "gender": "",
+    "age_group": "",
+    "occupation": "",
+    "location": "United States",
+    "personality": "Cautious and skeptical",
+    "communication_style": "Casual and friendly",
+    "initial_message": "hey i noticed there are like two files named Returns Policy.md in your system, which one is actually active and what are its terms?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "document_approved": "ret_pol_v3",
+    "document_draft_dup": "ret_pol_dup_title",
+    "origin": "seed"
+  },
+  "solution": [
+    {
+      "tool": "get_file_metadata",
+      "arguments": {
+        "fileId": "ret_pol_dup_title",
+        "excludeContentSnippets": false
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "read_file_content",
+      "arguments": {
+        "fileId": "ret_pol_v3",
+        "includeComments": false,
+        "revisionId": null
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "fileId": "record: drive_files.file_id for approved return policy"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "interaction": "multi_turn",
+    "disposition": "confused",
+    "overlay_vector": "none",
+    "overlay_intensity": "absent",
+    "interface": "typos_and_slang",
+    "task": "answer_policy_questions",
+    "overlay": "none",
+    "counterparty": "prospective_buyer"
+  },
+  "sub_goals": [
+    "effective_policy_consulted",
+    "policy_source_cited"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

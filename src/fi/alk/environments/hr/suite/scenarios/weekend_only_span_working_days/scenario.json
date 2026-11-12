@@ -1,0 +1,84 @@
+{
+  "name": "weekend_only_span_working_days",
+  "scenario_key": "weekend-only-span-working-days",
+  "scenario_id": "",
+  "use_case": "Calculate working days for a requested date range accounting for regional holidays",
+  "branch": "An employee calculates working days for a weekend-only date span (Saturday November 7 to Sunday November 8, 2026), yielding 0 working days.",
+  "tests": "Verifies that calculate_working_days calculates 0 working days for a weekend-only date range.",
+  "instruction": "You want to know how many working days a weekend-only span from Saturday 7 November to Sunday 8 November 2026 counts for in the US region.\n\nYour details:\n- Employee ID: E406\n- Name: Lucas Montgomery\n- Region: US\n- Dates: 2026-11-07 to 2026-11-08\n- Question: How many working days is 7 to 8 November 2026?",
+  "keywords": [
+    "working_days",
+    "weekend_span",
+    "zero_working_days"
+  ],
+  "persona": {
+    "name": "Lucas Montgomery",
+    "gender": "male",
+    "age_group": "25-32",
+    "occupation": "Engineer",
+    "location": "Australia",
+    "personality": "Analytical",
+    "communication_style": "Direct and concise",
+    "initial_message": "Could you calculate how many working days 7 to 8 November 2026 would use for a US employee?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "net_working_days": 0,
+    "start_date": "2026-11-07",
+    "end_date": "2026-11-08",
+    "origin": "mixed",
+    "region": "US",
+    "employee_id": "E406"
+  },
+  "solution": [
+    {
+      "tool": "get_employee_profile",
+      "arguments": {
+        "employee_id": "E406"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "calculate_working_days",
+      "arguments": {
+        "region": "US",
+        "start_date": "2026-11-07",
+        "end_date": "2026-11-08"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "end_date": "caller: 2026-11-08",
+        "region": "record: US",
+        "start_date": "caller: 2026-11-07"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "overlay": "none",
+    "overlay_intensity": "absent",
+    "counterparty": "employee_us",
+    "overlay_vector": "none",
+    "disposition": "standard",
+    "task": "calculate_working_days",
+    "interaction": "single_request",
+    "interface": "wall_of_text"
+  },
+  "sub_goals": [
+    "working_days_calculated_accurately"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

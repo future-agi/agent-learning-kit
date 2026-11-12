@@ -1,0 +1,122 @@
+{
+  "name": "ret_email_corrected_item",
+  "scenario_key": "ret-email-corrected-item",
+  "scenario_id": "",
+  "use_case": "Eligible item return and label generation",
+  "branch": "Customer Alice Morgan C01 clarifies in email thread th_r01_wrong_item_corrected that she wants to return 1 pair of SH01 from order O01 instead of AP02 from O21",
+  "tests": "the agent reads email thread th_r01_wrong_item_corrected, notes the correction, and creates a return for 1 unit of SH01 on order O01",
+  "instruction": "You sent an email to customer support requesting a return. You initially mentioned the T-shirt (AP02) from order O21, but in your follow-up message you corrected that you actually want to return one pair of Road Running Shoes (SKU SH01) from order O01.\n\nYour details:\n- Name: Alice Morgan\n- Email: alice.morgan@example.com\n- Postal Code: 90210\n- Thread: th_r01_wrong_item_corrected\n- Order ID: O01\n- Correct Item to return: SKU SH01 (Quantity 1)",
+  "keywords": [
+    "email_support",
+    "item_correction"
+  ],
+  "persona": {
+    "name": "Alice Morgan",
+    "gender": "female",
+    "age_group": "25-32",
+    "occupation": "Customer Service",
+    "location": "United States",
+    "personality": "Friendly and cooperative",
+    "communication_style": "Direct and concise",
+    "initial_message": "Hi, I am following up on my email thread th_r01_wrong_item_corrected regarding my return request. Please proceed with returning the one pair of Road Running Shoes (SH01) from order O01.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "thread_id": "th_r01_wrong_item_corrected",
+    "order_id": "O01",
+    "origin": "seed",
+    "sku": "SH01",
+    "customer_id": "C01"
+  },
+  "solution": [
+    {
+      "tool": "get_thread",
+      "arguments": {
+        "threadId": "th_r01_wrong_item_corrected"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "threadId": "caller: email thread th_r01_wrong_item_corrected"
+      }
+    },
+    {
+      "tool": "verify_order_owner",
+      "arguments": {
+        "postal_code": "90210",
+        "order_id": "O01"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_order",
+      "arguments": {
+        "order_id": "O01"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "evaluate_return",
+      "arguments": {
+        "items": [
+          {
+            "reason": "wrong_item",
+            "quantity": 1,
+            "sku": "SH01"
+          }
+        ],
+        "order_id": "O01"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "create_return",
+      "arguments": {
+        "items": [
+          {
+            "quantity": 1,
+            "reason": "wrong_item",
+            "sku": "SH01"
+          }
+        ],
+        "order_id": "O01",
+        "customer_id": "C01"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "customer_id": "record: customer C01",
+        "order_id": "caller: order O01",
+        "items": "the items and quantities the customer settled on"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "interaction": "correction_mid_turn",
+    "disposition": "cooperative",
+    "counterparty": "verified_owner",
+    "overlay": "none",
+    "task": "return_eligible_item",
+    "overlay_vector": "none",
+    "interface": "clean_prose",
+    "overlay_intensity": "absent"
+  },
+  "sub_goals": [
+    "subgoal_return_created"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

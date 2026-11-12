@@ -1,0 +1,86 @@
+{
+  "name": "features_after_a_scheduled_downgrade",
+  "scenario_key": "features-after-a-scheduled-downgrade",
+  "scenario_id": "",
+  "use_case": "Preview and schedule a plan or seat change",
+  "branch": "Admin inquires whether SSO and audit logs stop today after a scheduled downgrade to Basic",
+  "tests": "Explains that Pro features remain active until period end when Basic downgrade takes effect",
+  "instruction": "You are Fiona MacLeod, billing administrator for Tenant T409 (User ID: U409_ADMIN). Your company currently has a Pro subscription with 6 seats, and there is a pending scheduled downgrade to Basic (PC409) set for the end of the billing period (1 November 2026). You want to know whether your Pro features like SSO and audit logs stop working today or if they remain active until the end of the period when Basic starts.\n\nYour details:\n- Tenant ID: T409\n- User ID: U409_ADMIN\n- Current Plan: Pro (pro)\n- Pending Scheduled Change: PC409 (downgrade to Basic on 2026-11-01)",
+  "keywords": [
+    "plan_downgrade",
+    "role_authorization"
+  ],
+  "persona": {
+    "name": "Fiona MacLeod",
+    "gender": "female",
+    "age_group": "32-40",
+    "occupation": "",
+    "location": "United Kingdom",
+    "personality": "Detail-oriented",
+    "communication_style": "Direct and concise",
+    "initial_message": "Hi, I'm Fiona MacLeod, billing admin for T409. We have a scheduled downgrade to Basic for next month. Do our Pro features like SSO and audit logs stop today or stay until renewal?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "current_plan": "pro",
+    "target_plan_id": "basic",
+    "actor_id": "U409_ADMIN",
+    "tenant_id": "T409",
+    "change_id": "PC409",
+    "origin": "generated"
+  },
+  "solution": [
+    {
+      "tool": "verify_billing_admin",
+      "arguments": {
+        "actor_id": "U409_ADMIN",
+        "tenant_id": "T409"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_subscription",
+      "arguments": {
+        "actor_id": "U409_ADMIN",
+        "tenant_id": "T409"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_entitlements",
+      "arguments": {
+        "plan_id": "pro"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_entitlements",
+      "arguments": {
+        "plan_id": "basic"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    }
+  ],
+  "alternatives": [],
+  "coverage": {},
+  "sub_goals": [
+    "admin_role_verified"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

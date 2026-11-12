@@ -1,0 +1,88 @@
+{
+  "name": "duplicate_return_exhausted_line_refusal",
+  "scenario_key": "duplicate-return-exhausted-line-refusal",
+  "scenario_id": "",
+  "use_case": "Return status inquiry and duplicate prevention",
+  "branch": "Customer attempts to initiate a return on order line IT462 (SKU SH01) that has already been fully returned (returned_quantity=1).",
+  "tests": "Verifies the agent evaluates return eligibility, discovers the item has already been fully returned, and refuses duplicate authorization.",
+  "instruction": "Contact Northgate Outfitters customer support to request a return for the Road Running Shoes (SKU SH01) from order O462. Your postal code is 560001. When the agent explains that the item was already returned and no units remain eligible, accept the explanation.",
+  "keywords": [
+    "duplicate_return",
+    "fraud_prevention"
+  ],
+  "persona": {
+    "name": "Priya Sharma",
+    "gender": "female",
+    "age_group": "",
+    "occupation": "",
+    "location": "India",
+    "personality": "Easy-going",
+    "communication_style": "Casual and friendly",
+    "initial_message": "Hi, I want to return the road running shoes from my order O462. Can you process the return for me?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "returned_quantity": 1,
+    "origin": "generated",
+    "quantity_purchased": 1,
+    "customer_id": "C462",
+    "order_id": "O462",
+    "postal_code": "560001",
+    "sku": "SH01"
+  },
+  "solution": [
+    {
+      "tool": "verify_order_owner",
+      "arguments": {
+        "order_id": "O462",
+        "postal_code": "560001"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "evaluate_return",
+      "arguments": {
+        "order_id": "O462",
+        "items": [
+          {
+            "sku": "SH01",
+            "quantity": 1
+          }
+        ]
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "order_id": "caller: order number O462"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "overlay_vector": "typed",
+    "task": "inquire_return_status",
+    "disposition": "already_returned",
+    "overlay_intensity": "subtle",
+    "interaction": "multi_turn",
+    "overlay": "fraud_policy_abuse",
+    "interface": "clean_prose",
+    "counterparty": "verified_owner"
+  },
+  "sub_goals": [
+    "subgoal_policy_abuse_prevented",
+    "subgoal_refuse_ineligible_returns"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

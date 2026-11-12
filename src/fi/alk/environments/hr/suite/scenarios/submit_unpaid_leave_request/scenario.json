@@ -1,0 +1,116 @@
+{
+  "name": "submit_unpaid_leave_request",
+  "scenario_key": "submit-unpaid-leave-request",
+  "scenario_id": "",
+  "use_case": "Check leave balance and submit a leave request with manager approval routing",
+  "branch": "the employee explicitly requests 2 days of unpaid leave for personal time",
+  "tests": "the agent submits an unpaid leave request for the requested dates",
+  "instruction": "You want to take 2 days of unpaid leave on 3 and 4 December 2026 for personal time.\n\nYour details:\n- Employee ID: E411\n- Name: Nora Thorne\n- Leave type: unpaid\n- Start date: 2026-12-03\n- End date: 2026-12-04\n- Reason: Personal time",
+  "keywords": [
+    "unpaid_leave",
+    "submission",
+    "leave_types"
+  ],
+  "persona": {
+    "name": "Nora Thorne",
+    "gender": "female",
+    "age_group": "25-32",
+    "occupation": "Accountant",
+    "location": "United States",
+    "personality": "Professional and formal",
+    "communication_style": "Direct and concise",
+    "initial_message": "Hello, I need to take 2 days of unpaid leave from December 3rd to December 4th 2026. Can you submit that for me?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "employee_id": "E411",
+    "region": "US",
+    "origin": "generated"
+  },
+  "solution": [
+    {
+      "tool": "get_leave_types",
+      "arguments": {
+        "employee_id": "E411"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "employee_id": "caller: E411"
+      }
+    },
+    {
+      "tool": "submit_leave_request",
+      "arguments": {
+        "reason": "Personal time",
+        "employee_id": "E411",
+        "start_date": "2026-12-03",
+        "end_date": "2026-12-04",
+        "leave_type": "unpaid"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "end_date": "caller: 2026-12-04",
+        "employee_id": "caller: E411",
+        "start_date": "caller: 2026-12-03",
+        "leave_type": "caller: unpaid"
+      }
+    }
+  ],
+  "alternatives": [
+    [
+      {
+        "tool": "get_employee_profile",
+        "arguments": {
+          "employee_id": "E411"
+        },
+        "environment_arguments": {},
+        "fixed": {
+          "employee_id": "caller: E411"
+        }
+      },
+      {
+        "tool": "submit_leave_request",
+        "arguments": {
+          "end_date": "2026-12-04",
+          "employee_id": "E411",
+          "start_date": "2026-12-03",
+          "reason": "Personal time",
+          "leave_type": "unpaid"
+        },
+        "environment_arguments": {},
+        "fixed": {
+          "employee_id": "caller: E411",
+          "start_date": "caller: 2026-12-03",
+          "end_date": "caller: 2026-12-04",
+          "leave_type": "caller: unpaid"
+        }
+      }
+    ]
+  ],
+  "coverage": {
+    "task": "submit_leave_request",
+    "interface": "clean_prose",
+    "overlay_vector": "none",
+    "disposition": "unpaid_leave",
+    "overlay_intensity": "absent",
+    "overlay": "none",
+    "counterparty": "employee",
+    "interaction": "single_request"
+  },
+  "sub_goals": [
+    "leave_request_submitted_correctly"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

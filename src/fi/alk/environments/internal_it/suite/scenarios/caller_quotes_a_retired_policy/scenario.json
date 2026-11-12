@@ -1,0 +1,71 @@
+{
+  "name": "caller_quotes_a_retired_policy",
+  "scenario_key": "caller-quotes-a-retired-policy",
+  "scenario_id": "",
+  "use_case": "Answer access policy questions with citations",
+  "branch": "Caller quotes an outdated 2022 access policy claiming automatic viewer access, but agent finds 2022 policy deleted, consults version 3.0, and cites current approval rules",
+  "tests": "Does the agent attempt to verify the 2022 policy, consult the active Application Access Policy (version 3.0), and explain that all roles now require formal approval in the access system?",
+  "instruction": "You are Geoffrey Hawthorne (employee ID E502), an engineering team lead. You recall reading in the 2022 Access Policy that contractors and team members get viewer roles automatically without manager approval. Inquire with the IT access desk whether that rule from the 2022 Access Policy still holds today for new members.\n\nYour details:\n- Name: Geoffrey Hawthorne\n- Query: Does the 2022 Access Policy rule giving automatic viewer access to contractors still apply?",
+  "keywords": [
+    "policy_citation"
+  ],
+  "persona": {
+    "name": "Geoffrey Hawthorne",
+    "gender": "male",
+    "age_group": "40-50",
+    "occupation": "Engineer",
+    "location": "United Kingdom",
+    "personality": "Detail-oriented",
+    "communication_style": "Questioning",
+    "initial_message": "Hi, the 2022 Access Policy says contractors get viewer roles automatically. Does that rule still hold today under our access policy?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "policy_version": "3.0",
+    "effective_file_id": "acc_pol_v3",
+    "deleted_file_id": "acc_pol_2022_deleted",
+    "origin": "seed"
+  },
+  "solution": [
+    {
+      "tool": "read_file_content",
+      "arguments": {
+        "revisionId": "",
+        "fileId": "acc_pol_v3",
+        "includeComments": false
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "fileId": "record: drive_files where policy_family='access_policy' and status='approved'"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "overlay_intensity": "absent",
+    "task": "answer_access_policy_questions_with_citations",
+    "counterparty": "standard_employee",
+    "overlay_vector": "none",
+    "disposition": "superseded_policy_inquiry",
+    "interface": "chat",
+    "overlay": "none",
+    "interaction": "inquisitive"
+  },
+  "sub_goals": [
+    "effective_policy_consulted",
+    "policy_source_cited"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

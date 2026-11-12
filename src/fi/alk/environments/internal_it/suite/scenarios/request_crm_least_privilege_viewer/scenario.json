@@ -1,0 +1,119 @@
+{
+  "name": "request_crm_least_privilege_viewer",
+  "scenario_key": "request-crm-least-privilege-viewer",
+  "scenario_id": "",
+  "use_case": "submit_access_request",
+  "branch": "Sales employee asks for admin access to see customer contacts; agent guides user to viewer role under least privilege and submits request.",
+  "tests": "Does the agent explain least privilege and submit a request for viewer role instead of sales_admin?",
+  "instruction": "You are Marcus Thorne (employee ID E403), a sales associate. You want to see customer contact records in the CRM System (APP-CRM). You initially ask for admin access because you thought that was what everyone gets. If the agent explains that viewer access is sufficient for reading contacts under least privilege, agree and proceed with viewer access. Justification: 'Checking customer phone numbers and emails'.",
+  "keywords": [
+    "access_request",
+    "least_privilege"
+  ],
+  "persona": {
+    "name": "Marcus Thorne",
+    "gender": "male",
+    "age_group": "25-32",
+    "occupation": "Sales Representative",
+    "location": "United States",
+    "personality": "Easy-going",
+    "communication_style": "Casual and friendly",
+    "initial_message": "Hey IT desk, Marcus Thorne here (E403). Can I get admin access on the CRM (APP-CRM) to look up customer contact numbers?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "target_app": "APP-CRM",
+    "origin": "generated",
+    "target_role": "viewer",
+    "employee_id": "E403"
+  },
+  "solution": [
+    {
+      "tool": "verify_employee",
+      "arguments": {
+        "employee_id": "E403"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "employee_id": "caller: Marcus Thorne (E403)"
+      }
+    },
+    {
+      "tool": "get_app_catalog",
+      "arguments": {
+        "category": "Sales",
+        "app_id": "APP-CRM"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_current_access",
+      "arguments": {
+        "employee_id": "E403",
+        "app_id": "APP-CRM"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "employee_id": "caller: Marcus Thorne (E403)"
+      }
+    },
+    {
+      "tool": "check_access_policy",
+      "arguments": {
+        "app_id": "APP-CRM",
+        "role_name": "viewer",
+        "employee_id": "E403"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "employee_id": "caller: Marcus Thorne (E403)",
+        "role_name": "rule: \"The agent must select and request the minimum necessary role matching the user's stated need (e.g. viewer rather than admin).\"",
+        "app_id": "caller: CRM System (APP-CRM)"
+      }
+    },
+    {
+      "tool": "create_access_request",
+      "arguments": {
+        "employee_id": "E403",
+        "role_name": "viewer",
+        "app_id": "APP-CRM",
+        "justification": "Checking customer phone numbers and emails"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "employee_id": "caller: Marcus Thorne (E403)",
+        "role_name": "rule: \"The agent must select and request the minimum necessary role matching the user's stated need (e.g. viewer rather than admin).\"",
+        "app_id": "caller: CRM System (APP-CRM)"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "disposition": "valid_request",
+    "task": "submit_access_request",
+    "interaction": "clarification",
+    "interface": "chat",
+    "overlay_intensity": "absent",
+    "overlay": "none",
+    "counterparty": "standard_employee",
+    "overlay_vector": "none"
+  },
+  "sub_goals": [
+    "pending_request_created",
+    "least_privilege_enforced"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

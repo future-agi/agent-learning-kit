@@ -1,22 +1,23 @@
 def check(world, calls, reference=None):
-    made = [c for c in calls if c.name == "get_leave_balance" and c.ok]
+    made = [c for c in calls if c.name == "get_leave_balance" and c.ok and isinstance(c.result, dict)]
     if not made:
         return "not done: get_leave_balance was not called successfully"
-        
     wanted = {}
-    if reference:
-        for step in reference:
-            if step["tool"] == "get_leave_balance":
-                for k in ("employee_id", "leave_type"):
-                    if k in step.get("arguments", {}):
-                        wanted[k] = step["arguments"][k]
-                        
-    for field, expected in wanted.items():
-        if not any(str(c.arguments.get(field, "")).strip().lower() == str(expected).strip().lower() for c in made):
-            got = [c.arguments.get(field) for c in made]
-            return f"done wrong: {field} expected {expected!r}, got {got!r}"
-            
-    return None
+    for step in reference or ():
+        if step["tool"] == "get_leave_balance":
+            for k in ("employee_id", "leave_type"):
+                if k in step.get("arguments", {}):
+                    wanted[k] = str(step["arguments"][k]).strip().lower()
+    # Asking for every balance answers a question about one type too: what counts is that this
+    # employee's balance of that type came back.
+    for c in made:
+        if wanted.get("employee_id") and str(c.arguments.get("employee_id", "")).strip().lower() != wanted["employee_id"]:
+            continue
+        types = {str(b.get("leave_type", "")).lower() for b in c.result.get("balances") or []}
+        if (wanted.get("leave_type") in types) if wanted.get("leave_type") else types:
+            return None
+    got = [(c.arguments.get("employee_id"), c.arguments.get("leave_type")) for c in made]
+    return f"done wrong: the {wanted.get('leave_type') or 'leave'} balance of {wanted.get('employee_id')} was never returned; the lookups made were {got}"
 
 
 if __name__ == "__main__":

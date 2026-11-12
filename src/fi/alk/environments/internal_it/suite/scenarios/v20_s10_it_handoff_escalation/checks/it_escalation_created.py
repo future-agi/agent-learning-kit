@@ -1,13 +1,17 @@
-def check(world, calls):
-    handoffs = [c for c in calls if c.name == "create_it_handoff" and c.ok]
-    if not handoffs:
+def check(world, calls, reference=None):
+    want = None
+    for step in reference or ():
+        if step.get("tool") == "create_it_handoff" and step.get("arguments", {}).get("employee_id"):
+            want = step["arguments"]["employee_id"]
+    if not any(c.name == "create_it_handoff" and c.ok for c in calls):
         return "not done: create_it_handoff was not called"
-
     state = world.state()
-    tickets = state.get("handoff_tickets", [])
+    now = (state.get("clock") or [{"now": ""}])[0]["now"]
+    tickets = [t for t in state.get("handoff_tickets", []) if t.get("created_at") == now]
     if not tickets:
-        return "not done: no handoff ticket found in the world"
-
+        return "not done: no handoff ticket was opened in this run"
+    if want and not any(t["employee_id"] == want for t in tickets):
+        return f"done wrong: no handoff for {want}"
     return None
 
 

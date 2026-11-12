@@ -1,5 +1,11 @@
 import json
 
+def _kept(error):
+    """A refusal whose writes stand: what the call wrote before it stays written."""
+    error.keep_writes = True
+    return error
+
+
 def handle(args, db):
     customer_id = args.get("customer_id")
     session_id = args.get("session_id")
@@ -50,7 +56,8 @@ def handle(args, db):
             "INSERT INTO action_log (log_id, session_id, customer_id, action_type, target_id, payload, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
             [log_id, session_id, customer_id, "verify_identity_failed", challenge_type, json.dumps({"challenge_type": challenge_type, "status": "failed"}), now_str]
         )
-        raise ToolError("Verification failed: challenge response does not match records.")
+        # The failed attempt is counted although the call refuses: enough of them lock the session.
+        raise _kept(ToolError("Verification failed: challenge response does not match records."))
         
     # A one-time passcode on an already verified session is the step-up a contact-details change
     # needs (Customer Contact Details Change Policy): passcode or KBA first, then the OTP.

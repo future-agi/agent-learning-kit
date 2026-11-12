@@ -1,0 +1,74 @@
+{
+  "name": "promo_code_said_to_be_missing_price",
+  "scenario_key": "promo-code-said-to-be-missing-price",
+  "scenario_id": "",
+  "use_case": "Refund calculation and partial order pricing inquiry",
+  "branch": "Customer claims a 15% discount code was omitted and requests retroactive price adjustment; agent verifies invoice and declines unverified claim",
+  "tests": "the agent verifies Fiona Gallagher's order O477, checks the invoice to confirm no promo code was applied, declines to adjust the price or issue a retroactive refund, and explains the return policy alternative",
+  "instruction": "You ordered a Pullover Fleece Hoodie in order O477 and paid the full price of $52.00. You believe your 15% promo code was not applied during checkout and want support to retroactively apply the discount and refund the difference. If the agent checks the invoice and explains that retroactive discounts cannot be applied post-purchase, accept the explanation.\n\nYour details:\n- Name: Fiona Gallagher\n- Email: fiona.gallagher@example.com.au\n- Postal Code: 3000\n- Order ID: O477",
+  "keywords": [
+    "price_inquiry",
+    "invoice_lookup",
+    "claim_verification"
+  ],
+  "persona": {
+    "name": "Fiona Gallagher",
+    "gender": "female",
+    "age_group": "",
+    "occupation": "",
+    "location": "Australia",
+    "personality": "Detail-oriented",
+    "communication_style": "Direct and concise",
+    "initial_message": "Hello, I placed order O477 for a Pullover Fleece Hoodie, but my 15% promo code wasn't applied. Can you apply the code now and refund me the 15% difference? Postal code is 3000.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "order_id": "O477",
+    "origin": "generated",
+    "invoice_id": "INV477",
+    "customer_id": "C476"
+  },
+  "solution": [
+    {
+      "tool": "verify_order_owner",
+      "arguments": {
+        "order_id": "O477",
+        "postal_code": "3000"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "order_id": "caller: order number O477",
+        "postal_code": "caller: postal code 3000"
+      }
+    },
+    {
+      "tool": "get_order_invoice",
+      "arguments": {
+        "order_id": "O477",
+        "customer_id": "C476"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    }
+  ],
+  "alternatives": [],
+  "coverage": {},
+  "sub_goals": [
+    "subgoal_verify_ownership_first",
+    "claim_checked_not_confirmed",
+    "declined_action_explained"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

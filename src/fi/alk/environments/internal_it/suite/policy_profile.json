@@ -18,6 +18,15 @@
     ],
     "agent_verify_before_request": [
       "employee_verified_before_action"
+    ],
+    "agent_slack_is_evidence": [
+      "status_reported_from_access_system",
+      "slack_claim_not_approval"
+    ],
+    "agent_cite_access_policy": [
+      "effective_policy_consulted",
+      "policy_document_read_from_drive",
+      "policy_source_cited"
     ]
   }
 }

@@ -1,0 +1,81 @@
+{
+  "name": "cancel_pending_request",
+  "scenario_key": "cancel-pending-request",
+  "scenario_id": "",
+  "use_case": "manage_existing_access_and_idempotency",
+  "branch": "Pam (E16) contacts the IT access desk to withdraw and cancel her pending access request AR-103.",
+  "tests": "Does the agent verify employee and cancel pending access request AR-103 upon confirmed request?",
+  "instruction": "You are Pam Beesly (employee ID E16). You submitted an access request AR-103 for Reporting Application viewer access, but you no longer need it. Ask the IT access desk to cancel and withdraw your request AR-103, and confirm the cancellation when asked.",
+  "keywords": [
+    "cancellation"
+  ],
+  "persona": {
+    "name": "Pam Beesly",
+    "gender": "female",
+    "age_group": "25-32",
+    "occupation": "",
+    "location": "United Kingdom",
+    "personality": "Friendly and cooperative",
+    "communication_style": "Casual and friendly",
+    "initial_message": "Hi, I'd like to cancel my pending access request AR-103 for the Reporting Application. My employee ID is E16, and I definitely want it cancelled.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "request_id": "AR-103",
+    "role_name": "viewer",
+    "origin": "seed",
+    "app_id": "APP-RPT",
+    "employee_id": "E16"
+  },
+  "solution": [
+    {
+      "tool": "verify_employee",
+      "arguments": {
+        "employee_id": "E16"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "cancel_access_request",
+      "arguments": {
+        "employee_id": "E16",
+        "confirmed": true,
+        "request_id": "AR-103"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "confirmed": "rule: \"Cancel the employee's own pending or approved request after they confirmed\"",
+        "employee_id": "caller: employee ID E16",
+        "request_id": "caller: request AR-103"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "overlay_intensity": "absent",
+    "disposition": "cancellation_request",
+    "task": "manage_existing_access_and_idempotency",
+    "overlay_vector": "none",
+    "counterparty": "standard_employee",
+    "interaction": "inquisitive",
+    "overlay": "none",
+    "interface": "chat"
+  },
+  "sub_goals": [
+    "access_request_cancelled"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

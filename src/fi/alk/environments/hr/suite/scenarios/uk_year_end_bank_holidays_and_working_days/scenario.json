@@ -1,0 +1,86 @@
+{
+  "name": "uk_year_end_bank_holidays_and_working_days",
+  "scenario_key": "uk-year-end-bank-holidays-and-working-days",
+  "scenario_id": "",
+  "use_case": "Calculate working days for a requested date range accounting for regional holidays",
+  "branch": "An employee asks for upcoming regional UK bank holidays in late 2026 and calculates the exact net working days required for leave over Christmas and Boxing Day.",
+  "tests": "The agent lists upcoming UK bank holidays and calculates the net 4 working days for the Dec 24 to Dec 31 range, deducting weekend days and bank holidays.",
+  "instruction": "You are planning year-end holidays in the UK region. You want to know which official bank holidays are coming up in late 2026 and how many net working days it would deduct from your leave balance if you take off from December 24 to December 31, 2026.\n\nAsk the HR assistant:\n1. What public holidays remain in the UK for the rest of 2026.\n2. How many working days Dec 24 to Dec 31, 2026 would require accounting for weekends and UK bank holidays (Christmas Day and Boxing Day observed).\n\nYour details:\n- Name: Sophie Martin\n- Employee ID: E419\n- Region: UK\n- Proposed Leave Dates: 2026-12-24 to 2026-12-31",
+  "keywords": [
+    "holiday_calendar",
+    "uk_bank_holidays",
+    "calculate_working_days"
+  ],
+  "persona": {
+    "name": "Sophie Martin",
+    "gender": "female",
+    "age_group": "25-32",
+    "occupation": "Engineer",
+    "location": "Canada",
+    "personality": "Professional and formal",
+    "communication_style": "Direct and concise",
+    "initial_message": "Hello, can you tell me what remaining UK bank holidays there are in 2026, and how many working days I would need for leave from 24 to 31 December?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "requester_id": "E419",
+    "origin": "generated",
+    "region": "UK"
+  },
+  "solution": [
+    {
+      "tool": "get_holiday_calendar",
+      "arguments": {
+        "region": "UK",
+        "year": 2026
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "region": "caller: UK",
+        "year": "caller: 2026"
+      }
+    },
+    {
+      "tool": "calculate_working_days",
+      "arguments": {
+        "region": "UK",
+        "end_date": "2026-12-31",
+        "start_date": "2026-12-24"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "region": "caller: UK",
+        "start_date": "caller: 2026-12-24",
+        "end_date": "caller: 2026-12-31"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "interface": "clean",
+    "overlay_vector": "none",
+    "overlay_intensity": "absent",
+    "overlay": "none",
+    "interaction": "fresh",
+    "task": "calculate_working_days",
+    "disposition": "holiday_planning",
+    "counterparty": "themselves"
+  },
+  "sub_goals": [
+    "holidays_listed",
+    "working_days_calculated_accurately"
+  ],
+  "max_turns": 5,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

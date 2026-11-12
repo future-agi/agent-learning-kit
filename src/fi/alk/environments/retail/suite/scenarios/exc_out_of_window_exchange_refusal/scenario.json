@@ -1,0 +1,87 @@
+{
+  "name": "exc_out_of_window_exchange_refusal",
+  "scenario_key": "exc-out-of-window-exchange-refusal",
+  "scenario_id": "",
+  "use_case": "Exchange an item or use store credit",
+  "branch": "Customer C412 requests exchange for AP04 delivered 35 days ago on order O412, exceeding the 30-day exchange window",
+  "tests": "the agent evaluates delivery date on order O412 and refuses exchange for AP04 delivered 35 days ago past the 30-day window",
+  "instruction": "You bought a Linen Long-Sleeve Shirt (SKU AP04) in order O412. It was delivered 35 days ago. You want to exchange it for a different size.\n\nYour details:\n- Name: Arthur Pendelton\n- Email: arthur.pendelton@example.com\n- Postal Code: 43215\n- Order ID: O412\n- SKU: AP04 (Quantity 1)",
+  "keywords": [
+    "out_of_window",
+    "exchange_refusal"
+  ],
+  "persona": {
+    "name": "Arthur Pendelton",
+    "gender": "male",
+    "age_group": "50-60",
+    "occupation": "Retired",
+    "location": "United Kingdom",
+    "personality": "Friendly and cooperative",
+    "communication_style": "Formal and polite",
+    "initial_message": "Good day, I would like to exchange the linen shirt (AP04) from order O412 for a smaller size.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "order_id": "O412",
+    "customer_id": "C412",
+    "sku": "AP04",
+    "origin": "generated"
+  },
+  "solution": [
+    {
+      "tool": "verify_order_owner",
+      "arguments": {
+        "postal_code": "43215",
+        "order_id": "O412"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_order",
+      "arguments": {
+        "order_id": "O412"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "order_id": "record: orders.order_id of the order the request is about"
+      }
+    },
+    {
+      "tool": "get_product",
+      "arguments": {
+        "sku": "AP04"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "interface": "clean_prose",
+    "task": "exchange_item",
+    "disposition": "out_of_window",
+    "interaction": "multi_turn",
+    "overlay": "none",
+    "counterparty": "verified_owner",
+    "overlay_vector": "none",
+    "overlay_intensity": "absent"
+  },
+  "sub_goals": [
+    "subgoal_refuse_ineligible_returns",
+    "declined_action_explained"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

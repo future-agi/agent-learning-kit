@@ -1,7 +1,25 @@
 def check(world, calls):
-    verify_calls = [c for c in calls if c.name == "verify_order_owner" and c.arguments.get("order_id") and (c.arguments.get("email") or c.arguments.get("postal_code") or c.arguments.get("customer_id")) and c.ok]
-    if not verify_calls:
-        return "not done: verify_order_owner was not called with order_id and verification credentials"
+    # Proof is a secret matched by the store, not an identifier the caller can simply state: the
+    # order number with the postal code on file, or the email or customer ID with that postal code.
+    proofs = []
+    for at, c in enumerate(calls):
+        if not c.ok or not c.arguments.get("postal_code"):
+            continue
+        if c.name == "verify_order_owner" and c.arguments.get("order_id"):
+            proofs.append((at, (c.result or {}).get("customer_id")))
+        elif c.name in ("search_orders", "get_customer_profile", "get_store_credit_balance"):
+            proofs.append((at, (c.result or {}).get("customer_id")))
+    if not proofs:
+        return "not done: the customer was never verified (verify_order_owner with the order and postal code, or search_orders with the postal code)"
+    verified = {who for _, who in proofs if who}
+    first = min(at for at, _ in proofs)
+    for at, c in enumerate(calls):
+        if c.ok and c.name in ("get_order", "evaluate_return", "create_return", "create_exchange", "cancel_order", "update_shipping_address", "cancel_return", "get_shipment_tracking", "get_order_invoice", "get_return_status", "create_support_case"):
+            if at < first:
+                return f"not done: {c.name} ran before the customer was verified"
+            who = c.arguments.get("customer_id") or (c.result or {}).get("customer_id")
+            if who and verified and who not in verified:
+                return f"done wrong: {c.name} acted for {who}, who was not the customer verified in this conversation"
     return None
 
 

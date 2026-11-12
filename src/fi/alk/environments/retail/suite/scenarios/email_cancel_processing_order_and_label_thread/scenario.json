@@ -1,0 +1,116 @@
+{
+  "name": "email_cancel_processing_order_and_label_thread",
+  "scenario_key": "email-cancel-processing-order-and-label-thread",
+  "scenario_id": "",
+  "use_case": "Pick up a case that started by email and continue it with the store's tools",
+  "branch": "Cancel processing order O31 requested via email and label the email thread handled",
+  "tests": "the agent reads Mia Wong's email thread th_r08_cancel_order, verifies and cancels processing order O31, and adds label 'handled' to thread th_r08_cancel_order",
+  "instruction": "You emailed support (subject 'Cancel order O31') requesting to cancel your order O31 because you ordered the wrong size. You are contacting support in chat to follow up on your email and ensure the order is cancelled.\n\nYour details:\n- Name: Mia Wong\n- Email: mia.wong@example.com\n- Postal Code: 97201\n- Order ID: O31",
+  "keywords": [
+    "email_pickup"
+  ],
+  "persona": {
+    "name": "Mia Wong",
+    "gender": "female",
+    "age_group": "",
+    "occupation": "",
+    "location": "Australia",
+    "personality": "Impatient and direct",
+    "communication_style": "Direct and concise",
+    "initial_message": "Hi, I sent an email to cancel order O31. Can you please cancel it for me now?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "order_id": "O31",
+    "origin": "seed",
+    "thread_id": "th_r08_cancel_order",
+    "customer_id": "C13"
+  },
+  "solution": [
+    {
+      "tool": "get_thread",
+      "arguments": {
+        "threadId": "th_r08_cancel_order"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "threadId": "record: thread th_r08_cancel_order"
+      }
+    },
+    {
+      "tool": "verify_order_owner",
+      "arguments": {
+        "postal_code": "97201",
+        "order_id": "O31"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_order",
+      "arguments": {
+        "order_id": "O31"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "cancel_order",
+      "arguments": {
+        "request_key": "REQ-CANCEL-O31",
+        "confirmed": true,
+        "order_id": "O31",
+        "reason": "wrong_size",
+        "customer_id": "C13"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "order_id": "caller: order number O31",
+        "confirmed": "caller: confirmed",
+        "customer_id": "record: customer C13"
+      }
+    },
+    {
+      "tool": "label_thread",
+      "arguments": {
+        "threadId": "th_r08_cancel_order",
+        "labelIds": [
+          "handled"
+        ]
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "labelIds": "rule: desk label handled",
+        "threadId": "record: thread th_r08_cancel_order"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "disposition": "processing_cancellation",
+    "overlay_intensity": "absent",
+    "interface": "clean_prose",
+    "overlay_vector": "none",
+    "task": "cancel_order",
+    "interaction": "multi_turn",
+    "overlay": "none",
+    "counterparty": "verified_owner"
+  },
+  "sub_goals": [
+    "order_cancelled_as_requested",
+    "thread_labelled_after_handling"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

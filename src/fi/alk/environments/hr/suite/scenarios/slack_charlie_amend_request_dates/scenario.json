@@ -1,0 +1,90 @@
+{
+  "name": "slack_charlie_amend_request_dates",
+  "scenario_key": "slack-charlie-amend-request-dates",
+  "scenario_id": "",
+  "use_case": "Pick up a leave question from Slack and reply in the thread after approval",
+  "branch": "The US HR business partner asks the desk to process Charlie Brown's date correction in Slack thread SM03/SM04 to amend REQ-1103.",
+  "tests": "Reads the Slack correction thread and updates the leave request to the amended dates.",
+  "instruction": "You are Rachel Green (HR01), the US HR business partner. In Slack #hr-help (thread ts 1792656000.000003), Charlie Brown (E03) originally requested 21 to 23 December for REQ-1103, but followed up in the thread correcting the requested dates to 22 to 24 December 2026. Ask the leave desk to read the thread and amend REQ-1103 for Charlie with confirmed dates 2026-12-22 to 2026-12-24.\n\nYour details:\n- Your ID: HR01\n- Name: Rachel Green\n- Employee: Charlie Brown (E03)\n- Request ID: REQ-1103\n- Corrected dates: 2026-12-22 to 2026-12-24\n- Slack thread ts: 1792656000.000003",
+  "keywords": [
+    "slack_thread",
+    "leave_submission"
+  ],
+  "persona": {
+    "name": "Rachel Green",
+    "gender": "female",
+    "age_group": "",
+    "occupation": "HR Business Partner",
+    "location": "United States",
+    "personality": "Professional and formal",
+    "communication_style": "Direct and concise",
+    "initial_message": "Hi! Charlie Brown posted a correction in Slack #hr-help at 1792656000.000003 for REQ-1103 to change dates to 22-24 December. Can you amend it?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "new_start_date": "2026-12-22",
+    "employee_id": "E03",
+    "origin": "seed",
+    "new_end_date": "2026-12-24",
+    "message_ts": "1792656000.000003",
+    "request_id": "REQ-1103"
+  },
+  "solution": [
+    {
+      "tool": "slack_read_thread",
+      "arguments": {
+        "message_ts": "1792656000.000003",
+        "channel_id": "CH_HRHELP"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "message_ts": "caller: 1792656000.000003"
+      }
+    },
+    {
+      "tool": "amend_leave_request",
+      "arguments": {
+        "confirmed": true,
+        "employee_id": "E03",
+        "request_id": "REQ-1103",
+        "end_date": "2026-12-24",
+        "start_date": "2026-12-22"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "request_id": "caller: REQ-1103",
+        "confirmed": "rule: confirm_before_change",
+        "end_date": "caller: 2026-12-24",
+        "start_date": "caller: 2026-12-22",
+        "employee_id": "caller: E03"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "overlay": "none",
+    "overlay_vector": "none",
+    "task": "pick_up_slack_request",
+    "disposition": "overlapping_schedule",
+    "overlay_intensity": "absent",
+    "interaction": "correction_after_reply",
+    "counterparty": "employee_us",
+    "interface": "self_correction"
+  },
+  "sub_goals": [
+    "leave_request_amended"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

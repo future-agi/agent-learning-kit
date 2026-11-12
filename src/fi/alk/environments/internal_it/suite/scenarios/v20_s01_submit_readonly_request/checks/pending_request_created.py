@@ -1,18 +1,71 @@
-def check(world, calls):
-    made = [c for c in calls if c.name == "create_access_request" and c.ok]
+def check(world, calls, reference=None):
+    made = [c for c in calls if c.name in ("create_access_request", "request_temporary_access") and c.ok]
     if not made:
         return "not done: create_access_request was not called successfully"
-
     state = world.state()
-    requests = state.get("access_requests", [])
-    if not requests:
-        return "not done: no access request record created in the world"
-
-    pending = [r for r in requests if r.get("status") == "pending"]
-    if not pending:
-        return "done wrong: access request status is not pending"
-
+    now = (state.get("clock") or [{"now": ""}])[0]["now"]
+    new = [r for r in state.get("access_requests", []) if r.get("created_at") == now and r.get("status") == "pending"]
+    if not new:
+        return "not done: no pending access request was created by this run"
+    want = {}
+    for step in reference or ():
+        if step.get("tool") in ("create_access_request", "request_temporary_access"):
+            for k in ("employee_id", "app_id", "role_name"):
+                if step.get("arguments", {}).get(k):
+                    want[k] = step["arguments"][k]
+    if want and not any(all(r.get(k) == v for k, v in want.items()) for r in new):
+        return f"done wrong: no new pending request for {want}; the run created {[(r['employee_id'], r['app_id'], r['role_name']) for r in new]}"
+    if len(new) != 1:
+        return f"done wrong: {len(new)} requests were created, one was asked for"
+    missing = _evidence_missing(world, calls, reference)
+    if missing:
+        return f"done blind: the decision rests on {', '.join(missing)}, which was never read"
     return None
+
+def _evidence_missing(world, calls, reference):
+    """The Slack thread or library document the reference fixes and whether its content reached this
+    run: the text of every message in the thread (the desk's own posts aside) returned by a thread
+    read, channel read or search, and the document read."""
+    state = world.state()
+    desk = (state.get("current_actor") or [{}])[0].get("user_id")
+    wanted = []
+    for step in reference or ():
+        a = step.get("arguments", {})
+        if step.get("tool") == "slack_read_thread" and a.get("message_ts"):
+            wanted.append(("Slack thread", a["message_ts"]))
+        elif step.get("tool") == "read_file_content" and a.get("fileId"):
+            wanted.append(("file", a["fileId"]))
+    texts = _texts_shown(calls)
+    missing = []
+    for kind, target in wanted:
+        if kind == "Slack thread":
+            needed = [m["ts"] for m in state.get("slack_messages", []) if (m["ts"] == target or m.get("thread_ts") == target) and m["user_id"] != desk]
+            seen = bool(needed) and all(t in texts for t in needed)
+        else:
+            seen = any(c.ok and c.name == "read_file_content" and c.arguments.get("fileId") == target for c in calls)
+        if not seen:
+            missing.append(f"{kind} {target}")
+    return missing
+
+
+def _texts_shown(calls):
+    """The Slack messages whose text a successful thread read, channel read or search returned."""
+    shown = set()
+
+    def walk(value):
+        if isinstance(value, dict):
+            if value.get("ts") and "text" in value:
+                shown.add(value["ts"])
+            for one in value.values():
+                walk(one)
+        elif isinstance(value, list):
+            for one in value:
+                walk(one)
+
+    for c in calls:
+        if c.ok and c.name in ("slack_read_thread", "slack_read_channel", "slack_search_public_and_private"):
+            walk(c.result)
+    return shown
 
 
 if __name__ == "__main__":

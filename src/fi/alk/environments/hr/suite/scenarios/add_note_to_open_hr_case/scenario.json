@@ -1,0 +1,79 @@
+{
+  "name": "add_note_to_open_hr_case",
+  "scenario_key": "add-note-to-open-hr-case",
+  "scenario_id": "",
+  "use_case": "Handle leave request boundaries such as insufficient balance, overlaps, or exceptions via HR case",
+  "branch": "An employee provides additional documentation notes for their active carry-forward dispute case CASE-2901, and the assistant updates the case record.",
+  "tests": "Appends the employee's note to open HR case CASE-2901.",
+  "instruction": "You have an open HR case CASE-2901 regarding your missing 2025 carry-forward days. You want to update this case with a note letting HR know that you will send over your January payslip to confirm the carryover balance.\n\nYour details:\n- Employee ID: E07\n- Name: George Clark\n- Case ID: CASE-2901\n- Note: I will provide my January payslip to verify the carry-forward balance.",
+  "keywords": [
+    "hr_case",
+    "leave_balance"
+  ],
+  "persona": {
+    "name": "George Clark",
+    "gender": "male",
+    "age_group": "32-40",
+    "occupation": "Accountant",
+    "location": "United Kingdom",
+    "personality": "Friendly and cooperative",
+    "communication_style": "Direct and concise",
+    "initial_message": "Hello, I would like to add a note to my open HR case CASE-2901.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "case_id": "CASE-2901",
+    "origin": "seed",
+    "employee_id": "E07"
+  },
+  "solution": [
+    {
+      "tool": "get_hr_case_status",
+      "arguments": {
+        "employee_id": "E07",
+        "case_id": "CASE-2901"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "update_hr_case",
+      "arguments": {
+        "case_id": "CASE-2901",
+        "employee_id": "E07",
+        "note": "I will provide my January payslip to verify the carry-forward balance."
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "case_id": "caller: CASE-2901"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "counterparty": "employee_uk",
+    "interface": "clean_prose",
+    "disposition": "disputed_balance",
+    "overlay_intensity": "absent",
+    "task": "handle_boundary_exception",
+    "interaction": "multi_turn",
+    "overlay_vector": "none",
+    "overlay": "none"
+  },
+  "sub_goals": [
+    "hr_case_updated"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

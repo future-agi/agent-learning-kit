@@ -1,0 +1,402 @@
+{
+  "a_member_s_reply_contradicts_the_admin": {
+    "job": "email",
+    "mcp": true
+  },
+  "account_manager_relays_a_customer_s_yes": {
+    "job": "idempotency_untrusted",
+    "mcp": true
+  },
+  "approval_revoked_before_posting": {
+    "job": "slack",
+    "mcp": true
+  },
+  "asked_to_charge_the_card_now": {
+    "job": "cases",
+    "mcp": false
+  },
+  "cancel_asked_again_after_a_dropped_chat": {
+    "job": "plans",
+    "mcp": false
+  },
+  "cancel_pending_scheduled_change_success": {
+    "job": "plans",
+    "mcp": false
+  },
+  "cancel_subscription_already_scheduled_reported": {
+    "job": "term_end",
+    "mcp": false
+  },
+  "cancel_subscription_annual_term_end": {
+    "job": "term_end",
+    "mcp": false
+  },
+  "cancel_subscription_immediate_refused_term_end_scheduled": {
+    "job": "term_end",
+    "mcp": false
+  },
+  "cancel_subscription_slack_escalation_request": {
+    "job": "term_end",
+    "mcp": true
+  },
+  "cancellation_from_a_look_alike_sender": {
+    "job": "roles",
+    "mcp": true
+  },
+  "cancelling_with_a_plan_change_still_pending": {
+    "job": "term_end",
+    "mcp": false
+  },
+  "card_declined_payment_status_inquiry": {
+    "job": "cases",
+    "mcp": false
+  },
+  "changes_their_mind_right_after_scheduling": {
+    "job": "plans",
+    "mcp": false
+  },
+  "charge_not_on_invoice": {
+    "job": "invoices",
+    "mcp": false
+  },
+  "charged_twice_this_month": {
+    "job": "invoices",
+    "mcp": false
+  },
+  "credit_note_issued_verification": {
+    "job": "cases",
+    "mcp": false
+  },
+  "cross_tenant_billing_access_blocked": {
+    "job": "roles",
+    "mcp": false
+  },
+  "declined_waiver_case_resolution_inquiry": {
+    "job": "cases",
+    "mcp": false
+  },
+  "dispute_billing_case_status_inquiry": {
+    "job": "cases",
+    "mcp": false
+  },
+  "downgrade_pro_to_basic_seat_incompatible": {
+    "job": "plans",
+    "mcp": false
+  },
+  "draft_leo_invoice_list_reply": {
+    "job": "invoices",
+    "mcp": true
+  },
+  "draft_reply_to_frank_invoice_question": {
+    "job": "invoices",
+    "mcp": true
+  },
+  "duplicate_billing_case_idempotent_creation": {
+    "job": "cases",
+    "mcp": false
+  },
+  "duplicate_cancellation_schedule_idempotent": {
+    "job": "idempotency_untrusted",
+    "mcp": false
+  },
+  "email_claimed_discount_checked_records_only": {
+    "job": "email",
+    "mcp": true
+  },
+  "email_claimed_discount_creates_case": {
+    "job": "email",
+    "mcp": true
+  },
+  "email_claimed_discount_draft_reply": {
+    "job": "email",
+    "mcp": true
+  },
+  "email_contact_change_updated": {
+    "job": "email",
+    "mcp": true
+  },
+  "email_human_draft_preserved": {
+    "job": "email",
+    "mcp": true
+  },
+  "email_injected_message_handled_safely": {
+    "job": "idempotency_untrusted",
+    "mcp": true
+  },
+  "email_invoice_question_fintrack": {
+    "job": "invoices",
+    "mcp": true
+  },
+  "email_label_handled_contact_change_thread": {
+    "job": "email",
+    "mcp": true
+  },
+  "email_member_downgrade_request_denied": {
+    "job": "email",
+    "mcp": true
+  },
+  "email_open_discount_billing_case": {
+    "job": "email",
+    "mcp": true
+  },
+  "email_payment_retry_draft_reply": {
+    "job": "email",
+    "mcp": true
+  },
+  "email_payment_retry_status_reported": {
+    "job": "email",
+    "mcp": true
+  },
+  "email_prompt_injection_discount_claim_rejected": {
+    "job": "idempotency_untrusted",
+    "mcp": true
+  },
+  "email_renewal_question_answered_in_chat": {
+    "job": "email",
+    "mcp": true
+  },
+  "email_seat_correction_preview_only": {
+    "job": "email",
+    "mcp": true
+  },
+  "email_seat_correction_schedule_plan_change": {
+    "job": "email",
+    "mcp": true
+  },
+  "email_term_end_cancellation_draft_reply": {
+    "job": "email",
+    "mcp": true
+  },
+  "email_term_end_cancellation_schedule": {
+    "job": "term_end",
+    "mcp": true
+  },
+  "email_upgrade_request_lunarops": {
+    "job": "plans",
+    "mcp": true
+  },
+  "features_after_a_scheduled_downgrade": {
+    "job": "plans",
+    "mcp": false
+  },
+  "idempotent_schedule_request_after_connection_drop": {
+    "job": "idempotency_untrusted",
+    "mcp": false
+  },
+  "immediate_downgrade_requested_scheduled_at_period_end": {
+    "job": "plans",
+    "mcp": false
+  },
+  "invoice_list_asked_by_email": {
+    "job": "invoices",
+    "mcp": true
+  },
+  "invoice_that_does_not_exist": {
+    "job": "invoices",
+    "mcp": false
+  },
+  "member_asks_for_invoice_lines": {
+    "job": "invoices",
+    "mcp": false
+  },
+  "member_cancel_scheduled_change_unauthorized": {
+    "job": "roles",
+    "mcp": false
+  },
+  "member_opens_invoice_dispute_case": {
+    "job": "cases",
+    "mcp": false
+  },
+  "member_seat_addition_request_refused": {
+    "job": "roles",
+    "mcp": false
+  },
+  "mid_cycle_seat_addon_invoice": {
+    "job": "invoices",
+    "mcp": false
+  },
+  "new_change_replaces_a_pending_one": {
+    "job": "plans",
+    "mcp": false
+  },
+  "open_invoices_only": {
+    "job": "invoices",
+    "mcp": false
+  },
+  "payment_retry_date_inquiry": {
+    "job": "cases",
+    "mcp": false
+  },
+  "plan_entitlements_and_features_inquiry": {
+    "job": "plans",
+    "mcp": false
+  },
+  "preview_plan_upgrade_unconfirmed": {
+    "job": "plans",
+    "mcp": false
+  },
+  "preview_pro_to_basic_features_lost_unconfirmed": {
+    "job": "plans",
+    "mcp": false
+  },
+  "prompt_injection_system_override_refused": {
+    "job": "idempotency_untrusted",
+    "mcp": false
+  },
+  "refund_request_unused_seats_creates_case": {
+    "job": "cases",
+    "mcp": false
+  },
+  "renewal_date_email_inquiry": {
+    "job": "term_end",
+    "mcp": true
+  },
+  "renewal_inquiry_distinguish_downgrade_and_cancel": {
+    "job": "term_end",
+    "mcp": false
+  },
+  "renewal_notice_period_inquiry": {
+    "job": "term_end",
+    "mcp": false
+  },
+  "renewal_price_with_a_pending_downgrade": {
+    "job": "term_end",
+    "mcp": false
+  },
+  "restricted_collections_thread_withheld": {
+    "job": "email",
+    "mcp": true
+  },
+  "roles_admin_lists_tenant_users_and_admins": {
+    "job": "roles",
+    "mcp": false
+  },
+  "roles_cross_tenant_renewal_inquiry_blocked": {
+    "job": "roles",
+    "mcp": false
+  },
+  "roles_member_checks_own_user_role": {
+    "job": "roles",
+    "mcp": false
+  },
+  "roles_member_update_billing_contact_refused": {
+    "job": "roles",
+    "mcp": false
+  },
+  "roles_other_tenant_bill_email_disclosure_blocked": {
+    "job": "roles",
+    "mcp": true
+  },
+  "slack_account_manager_fintrack_seats": {
+    "job": "invoices",
+    "mcp": true
+  },
+  "slack_corrected_amount_kiteworks": {
+    "job": "invoices",
+    "mcp": true
+  },
+  "slack_discount_claim_no_record": {
+    "job": "slack",
+    "mcp": true
+  },
+  "slack_injected_instruction_ignored": {
+    "job": "idempotency_untrusted",
+    "mcp": true
+  },
+  "slack_post_refused_without_approval_id": {
+    "job": "slack",
+    "mcp": true
+  },
+  "slack_private_finance_channel_access_blocked": {
+    "job": "slack",
+    "mcp": true
+  },
+  "slack_refund_inquiry_case_created": {
+    "job": "slack",
+    "mcp": true
+  },
+  "slack_renewal_terms_lookup": {
+    "job": "slack",
+    "mcp": true
+  },
+  "slack_reply_discount_unverified_approved_post": {
+    "job": "slack",
+    "mcp": true
+  },
+  "slack_reply_payment_retry_corrected_amount": {
+    "job": "slack",
+    "mcp": true
+  },
+  "slack_reply_refund_case_opened_approved_post": {
+    "job": "slack",
+    "mcp": true
+  },
+  "slack_reply_renewal_terms_approved_post": {
+    "job": "slack",
+    "mcp": true
+  },
+  "slack_reply_retried_after_a_dropped_chat": {
+    "job": "idempotency_untrusted",
+    "mcp": true
+  },
+  "slack_reply_waiver_status_approved_post": {
+    "job": "slack",
+    "mcp": true
+  },
+  "slack_seat_change_preview_hyperscale": {
+    "job": "plans",
+    "mcp": true
+  },
+  "slack_waiver_claim_converted_to_billing_case": {
+    "job": "slack",
+    "mcp": true
+  },
+  "slack_waiver_claim_reviewed_no_credit": {
+    "job": "slack",
+    "mcp": true
+  },
+  "social_engineering_executive_override_refused": {
+    "job": "idempotency_untrusted",
+    "mcp": false
+  },
+  "social_engineering_executive_pressure_resisted": {
+    "job": "idempotency_untrusted",
+    "mcp": false
+  },
+  "tax_calculation_on_invoice": {
+    "job": "invoices",
+    "mcp": false
+  },
+  "upgrade_taken_immediately": {
+    "job": "plans",
+    "mcp": false
+  },
+  "v16_s01_schedule_end_of_cycle_downgrade": {
+    "job": "plans",
+    "mcp": false
+  },
+  "v16_s02_unauthorized_member_mutation_denied": {
+    "job": "roles",
+    "mcp": false
+  },
+  "v16_s03_downgrade_blocked_seat_limit_exceeded": {
+    "job": "plans",
+    "mcp": false
+  },
+  "v16_s04_explain_invoice_seat_increase": {
+    "job": "invoices",
+    "mcp": false
+  },
+  "v16_s05_idempotent_duplicate_schedule_request": {
+    "job": "idempotency_untrusted",
+    "mcp": false
+  },
+  "verify_paid_invoice_payment_status": {
+    "job": "cases",
+    "mcp": false
+  },
+  "what_is_on_this_invoice": {
+    "job": "invoices",
+    "mcp": false
+  }
+}

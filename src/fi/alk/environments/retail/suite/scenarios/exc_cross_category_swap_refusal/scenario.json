@@ -1,0 +1,99 @@
+{
+  "name": "exc_cross_category_swap_refusal",
+  "scenario_key": "exc-cross-category-swap-refusal",
+  "scenario_id": "",
+  "use_case": "Exchange an item or use store credit",
+  "branch": "Customer C410 requests cross-category exchange of socks AC13 (Accessories) for shoes SH01 (Footwear) on order O410, which is refused",
+  "tests": "the agent inspects the categories of AC13 and SH01, refuses cross-category exchange, and explains the same-category policy rule",
+  "instruction": "You bought Cushioned Athletic Socks (SKU AC13) in order O410. You want to exchange them for Road Running Shoes (SKU SH01).\n\nYour details:\n- Name: Nathan Drake\n- Email: nathan.drake@example.com\n- Postal Code: 92101\n- Order ID: O410\n- Original SKU: AC13 (Quantity 1)\n- Replacement SKU: SH01 (Quantity 1)",
+  "keywords": [
+    "cross_category_exchange",
+    "exchange_refusal"
+  ],
+  "persona": {
+    "name": "Nathan Drake",
+    "gender": "male",
+    "age_group": "32-40",
+    "occupation": "Engineer",
+    "location": "India",
+    "personality": "Friendly and cooperative",
+    "communication_style": "Direct and concise",
+    "initial_message": "Hello, I want to exchange the athletic socks (AC13) from order O410 for a pair of running shoes (SH01).",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "replacement_sku": "SH01",
+    "customer_id": "C410",
+    "original_sku": "AC13",
+    "order_id": "O410",
+    "origin": "generated"
+  },
+  "solution": [
+    {
+      "tool": "verify_order_owner",
+      "arguments": {
+        "order_id": "O410",
+        "postal_code": "92101"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "order_id": "caller: order O410"
+      }
+    },
+    {
+      "tool": "get_order",
+      "arguments": {
+        "order_id": "O410"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "order_id": "record: orders.order_id of the order the request is about"
+      }
+    },
+    {
+      "tool": "get_product",
+      "arguments": {
+        "sku": "AC13"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_product",
+      "arguments": {
+        "sku": "SH01"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "task": "exchange_item",
+    "overlay": "none",
+    "disposition": "cross_category",
+    "overlay_vector": "none",
+    "overlay_intensity": "absent",
+    "interaction": "multi_turn",
+    "interface": "clean_prose",
+    "counterparty": "verified_owner"
+  },
+  "sub_goals": [
+    "subgoal_verify_ownership_first",
+    "subgoal_refuse_ineligible_returns",
+    "declined_action_explained"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

@@ -1,0 +1,81 @@
+{
+  "name": "slack_rejected_request_lookup",
+  "scenario_key": "slack-rejected-request-lookup",
+  "scenario_id": "",
+  "use_case": "Pick up an access request from Slack and reply in the thread after approval",
+  "branch": "Oscar asked in Slack about request AR-107 status; IT desk reads the Slack thread and checks approval status of AR-107 in the access system",
+  "tests": "reads Oscar's Slack thread in #it-access and checks the approval status of request AR-107 in the access system",
+  "instruction": "You are Gordon Wright (employee ID E515), an IT operations lead. Oscar Martinez asked in #it-access (message IM11) why his request AR-107 for financial accountant access was not active. You want the IT assistant to read the Slack thread and check the approval status of AR-107 in the access system.\n\nYour details:\nTarget request ID: AR-107\nTarget employee: Oscar Martinez (E15)\nSlack channel: #it-access (CH_ITACCESS)\nMessage timestamp: 1792929600.000011",
+  "keywords": [
+    "access_request"
+  ],
+  "persona": {
+    "name": "Gordon Wright",
+    "gender": "male",
+    "age_group": "40-50",
+    "occupation": "Engineer",
+    "location": "Australia",
+    "personality": "Detail-oriented",
+    "communication_style": "Direct and concise",
+    "initial_message": "Oscar asked in #it-access (IM11) why AR-107 isn't working. Can you check what the access system says for that ticket?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "request_id": "AR-107",
+    "employee_id": "E15",
+    "origin": "seed",
+    "message_ts": "1792929600.000011",
+    "channel_id": "CH_ITACCESS"
+  },
+  "solution": [
+    {
+      "tool": "slack_read_thread",
+      "arguments": {
+        "channel_id": "CH_ITACCESS",
+        "message_ts": "1792929600.000011"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "channel_id": "caller: Slack channel: #it-access (CH_ITACCESS)",
+        "message_ts": "caller: Message timestamp: 1792929600.000011"
+      }
+    },
+    {
+      "tool": "get_approval_status",
+      "arguments": {
+        "request_id": "AR-107"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "request_id": "caller: Target request ID: AR-107"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "overlay": "none",
+    "disposition": "rejected_request",
+    "overlay_intensity": "absent",
+    "interaction": "inquisitive",
+    "task": "pick_up_an_access_request_from_slack_and_reply_in_the_thread_after_approval",
+    "interface": "chat",
+    "counterparty": "it_lead",
+    "overlay_vector": "none"
+  },
+  "sub_goals": [
+    "status_reported_from_access_system"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

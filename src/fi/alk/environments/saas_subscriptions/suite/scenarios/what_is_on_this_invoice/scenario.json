@@ -1,0 +1,80 @@
+{
+  "name": "what_is_on_this_invoice",
+  "scenario_key": "what-is-on-this-invoice",
+  "scenario_id": "",
+  "use_case": "Explain an invoice or a bill increase",
+  "branch": "The caller requests a complete breakdown of charges on October invoice inv_403_curr",
+  "tests": "retrieves and explains all line items on the requested invoice accurately",
+  "instruction": "You are Clara Vance, billing admin for CloudScale Ops. In a single detailed message, you want to ask for a complete itemized breakdown of what charges make up your October invoice inv_403_curr, including base subscription and any extra seat charges or fees.\n\nYour details:\n- Tenant ID: T403\n- Tenant Name: CloudScale Ops\n- Your Name: Clara Vance\n- Your User ID: U403_ADMIN\n- Your Role: billing_admin\n- Invoice ID: inv_403_curr",
+  "keywords": [
+    "invoice_explanation"
+  ],
+  "persona": {
+    "name": "Clara Vance",
+    "gender": "female",
+    "age_group": "32-40",
+    "occupation": "Manager",
+    "location": "United States",
+    "personality": "Professional and formal",
+    "communication_style": "Simple and clear",
+    "initial_message": "Can you provide a full breakdown of what charges are on our October invoice inv_403_curr including base plan and seat addons?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "invoice_id": "inv_403_curr",
+    "tenant_id": "T403",
+    "origin": "generated",
+    "user_id": "U403_ADMIN"
+  },
+  "solution": [
+    {
+      "tool": "verify_billing_admin",
+      "arguments": {
+        "actor_id": "U403_ADMIN",
+        "tenant_id": "T403"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_invoice_lines",
+      "arguments": {
+        "invoice_id": "inv_403_curr",
+        "tenant_id": "T403",
+        "actor_id": "U403_ADMIN"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "invoice_id": "caller: inv_403_curr"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "task": "explain_invoice",
+    "overlay": "none",
+    "overlay_vector": "none",
+    "counterparty": "billing_admin",
+    "interface": "wall_of_text",
+    "overlay_intensity": "absent",
+    "interaction": "multi_turn",
+    "disposition": "standard"
+  },
+  "sub_goals": [
+    "admin_role_verified",
+    "invoice_breakdown_explained"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

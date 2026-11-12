@@ -9,7 +9,8 @@
           "type": "string"
         },
         "actor_id": {
-          "type": "string"
+          "type": "string",
+          "description": "The user id of the person signed in to this conversation (a tenant user, e.g. U01_ADMIN, or a Cloudnest staff member). The desk acts only for that person; any other id is refused."
         }
       },
       "required": [
@@ -47,7 +48,8 @@
           "type": "string"
         },
         "actor_id": {
-          "type": "string"
+          "type": "string",
+          "description": "The user id of the person signed in to this conversation (a tenant user, e.g. U01_ADMIN, or a Cloudnest staff member). The desk acts only for that person; any other id is refused."
         }
       },
       "required": [
@@ -119,7 +121,8 @@
       "type": "object",
       "properties": {
         "actor_id": {
-          "type": "string"
+          "type": "string",
+          "description": "The user id of the person signed in to this conversation (a tenant user, e.g. U01_ADMIN, or a Cloudnest staff member). The desk acts only for that person; any other id is refused."
         },
         "invoice_id": {
           "type": "string"
@@ -194,7 +197,8 @@
           "type": "string"
         },
         "actor_id": {
-          "type": "string"
+          "type": "string",
+          "description": "The user id of the person signed in to this conversation (a tenant user, e.g. U01_ADMIN, or a Cloudnest staff member). The desk acts only for that person; any other id is refused."
         }
       },
       "type": "object"
@@ -288,7 +292,8 @@
     "parameters": {
       "properties": {
         "actor_id": {
-          "type": "string"
+          "type": "string",
+          "description": "The user id of the person signed in to this conversation (a tenant user, e.g. U01_ADMIN, or a Cloudnest staff member). The desk acts only for that person; any other id is refused."
         },
         "effective_timing": {
           "type": "string",
@@ -384,7 +389,7 @@
   },
   {
     "name": "schedule_plan_change",
-    "description": "Schedule a plan change for a tenant. Requires billing admin role and explicit confirmation. Idempotent via request_key.",
+    "description": "Schedule a plan change for a tenant. The tenant's billing admin only, signed in to this conversation, after explicit confirmation. 'end_of_period' takes effect at current_period_end; 'immediate' applies an upgrade now (a downgrade is refused immediately). One pending change at a time: cancel it first. Idempotent via request_key: the same request returns the same change, a different request with that key is a conflict.",
     "parameters": {
       "properties": {
         "target_plan_id": {
@@ -410,7 +415,8 @@
           "type": "string"
         },
         "actor_id": {
-          "type": "string"
+          "type": "string",
+          "description": "The user id of the person signed in to this conversation (a tenant user, e.g. U01_ADMIN, or a Cloudnest staff member). The desk acts only for that person; any other id is refused."
         }
       },
       "required": [
@@ -477,7 +483,8 @@
       ],
       "properties": {
         "actor_id": {
-          "type": "string"
+          "type": "string",
+          "description": "The user id of the person signed in to this conversation (a tenant user, e.g. U01_ADMIN, or a Cloudnest staff member). The desk acts only for that person; any other id is refused."
         },
         "tenant_id": {
           "type": "string"
@@ -510,6 +517,1630 @@
           "type": "string"
         }
       }
+    }
+  },
+  {
+    "name": "get_user_role",
+    "description": "A user's name and role in the tenant (billing_admin or member). With no user_id, the caller's own role.",
+    "parameters": {
+      "type": "object",
+      "required": [
+        "tenant_id",
+        "actor_id"
+      ],
+      "properties": {
+        "tenant_id": {
+          "type": "string",
+          "description": "Tenant id, e.g. T01"
+        },
+        "actor_id": {
+          "type": "string",
+          "description": "The user id of the person signed in to this conversation (a tenant user, e.g. U01_ADMIN, or a Cloudnest staff member). The desk acts only for that person; any other id is refused."
+        },
+        "user_id": {
+          "type": "string",
+          "description": "The user to look up; defaults to the caller"
+        }
+      }
+    },
+    "mutates_state": false,
+    "returns": {
+      "type": "object",
+      "required": [
+        "user_id",
+        "name",
+        "role"
+      ],
+      "properties": {
+        "user_id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "role": {
+          "type": "string"
+        }
+      }
+    }
+  },
+  {
+    "name": "list_tenant_users",
+    "description": "The tenant's users with their roles and emails. Billing admins only.",
+    "parameters": {
+      "type": "object",
+      "required": [
+        "tenant_id",
+        "actor_id"
+      ],
+      "properties": {
+        "tenant_id": {
+          "type": "string",
+          "description": "Tenant id, e.g. T01"
+        },
+        "actor_id": {
+          "type": "string",
+          "description": "The user id of the person signed in to this conversation (a tenant user, e.g. U01_ADMIN, or a Cloudnest staff member). The desk acts only for that person; any other id is refused."
+        }
+      }
+    },
+    "mutates_state": false,
+    "returns": {
+      "type": "object",
+      "required": [
+        "users",
+        "count"
+      ],
+      "properties": {
+        "users": {
+          "type": "array"
+        },
+        "count": {
+          "type": "integer"
+        }
+      }
+    }
+  },
+  {
+    "name": "list_invoices",
+    "description": "The tenant's invoices, newest first: id, period, subtotal, tax, total and status. Billing admins only.",
+    "parameters": {
+      "type": "object",
+      "required": [
+        "tenant_id",
+        "actor_id"
+      ],
+      "properties": {
+        "tenant_id": {
+          "type": "string",
+          "description": "Tenant id, e.g. T01"
+        },
+        "actor_id": {
+          "type": "string",
+          "description": "The user id of the person signed in to this conversation (a tenant user, e.g. U01_ADMIN, or a Cloudnest staff member). The desk acts only for that person; any other id is refused."
+        },
+        "status": {
+          "type": "string",
+          "description": "Only invoices with this status",
+          "enum": [
+            "paid",
+            "open"
+          ]
+        }
+      }
+    },
+    "mutates_state": false,
+    "returns": {
+      "type": "object",
+      "required": [
+        "invoices",
+        "count"
+      ],
+      "properties": {
+        "invoices": {
+          "type": "array"
+        },
+        "count": {
+          "type": "integer"
+        }
+      }
+    }
+  },
+  {
+    "name": "get_payment_status",
+    "description": "The payment for one invoice: amount, status (succeeded, failed, retrying), card last four digits, failure reason and next retry. Billing admins only.",
+    "parameters": {
+      "type": "object",
+      "required": [
+        "tenant_id",
+        "actor_id",
+        "invoice_id"
+      ],
+      "properties": {
+        "tenant_id": {
+          "type": "string",
+          "description": "Tenant id, e.g. T01"
+        },
+        "actor_id": {
+          "type": "string",
+          "description": "The user id of the person signed in to this conversation (a tenant user, e.g. U01_ADMIN, or a Cloudnest staff member). The desk acts only for that person; any other id is refused."
+        },
+        "invoice_id": {
+          "type": "string",
+          "description": "Invoice id, e.g. inv_09_addon"
+        }
+      }
+    },
+    "mutates_state": false,
+    "returns": {
+      "type": "object",
+      "required": [
+        "invoice_id",
+        "status",
+        "amount_cents"
+      ],
+      "properties": {
+        "invoice_id": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "amount_cents": {
+          "type": "integer"
+        }
+      }
+    }
+  },
+  {
+    "name": "get_credit_notes",
+    "description": "Credit notes on the tenant's account (issued or pending review), optionally for one invoice. Billing admins only. The desk cannot issue credit notes.",
+    "parameters": {
+      "type": "object",
+      "required": [
+        "tenant_id",
+        "actor_id"
+      ],
+      "properties": {
+        "tenant_id": {
+          "type": "string",
+          "description": "Tenant id, e.g. T01"
+        },
+        "actor_id": {
+          "type": "string",
+          "description": "The user id of the person signed in to this conversation (a tenant user, e.g. U01_ADMIN, or a Cloudnest staff member). The desk acts only for that person; any other id is refused."
+        },
+        "invoice_id": {
+          "type": "string",
+          "description": "Only credit notes for this invoice"
+        }
+      }
+    },
+    "mutates_state": false,
+    "returns": {
+      "type": "object",
+      "required": [
+        "credit_notes",
+        "count"
+      ],
+      "properties": {
+        "credit_notes": {
+          "type": "array"
+        },
+        "count": {
+          "type": "integer"
+        }
+      }
+    }
+  },
+  {
+    "name": "get_renewal_terms",
+    "description": "The active subscription's term (monthly or annual), term end, auto-renewal, notice days, renewal price and whether a cancellation is scheduled. Billing admins only.",
+    "parameters": {
+      "type": "object",
+      "required": [
+        "tenant_id",
+        "actor_id"
+      ],
+      "properties": {
+        "tenant_id": {
+          "type": "string",
+          "description": "Tenant id, e.g. T01"
+        },
+        "actor_id": {
+          "type": "string",
+          "description": "The user id of the person signed in to this conversation (a tenant user, e.g. U01_ADMIN, or a Cloudnest staff member). The desk acts only for that person; any other id is refused."
+        }
+      }
+    },
+    "mutates_state": false,
+    "returns": {
+      "type": "object",
+      "required": [
+        "subscription_id",
+        "term",
+        "term_end"
+      ],
+      "properties": {
+        "subscription_id": {
+          "type": "string"
+        },
+        "term": {
+          "type": "string"
+        },
+        "term_end": {
+          "type": "string"
+        }
+      }
+    }
+  },
+  {
+    "name": "schedule_cancellation",
+    "description": "Schedule the active subscription to cancel at the end of its current term (cancel_at_period_end). The plan and entitlements stay until then. Immediate cancellation is refused. Billing admins only, after explicit confirmation; reuse the request_key on a retry.",
+    "parameters": {
+      "type": "object",
+      "required": [
+        "tenant_id",
+        "actor_id",
+        "effective_timing",
+        "confirmation_code",
+        "request_key"
+      ],
+      "properties": {
+        "tenant_id": {
+          "type": "string",
+          "description": "Tenant id, e.g. T01"
+        },
+        "actor_id": {
+          "type": "string",
+          "description": "The user id of the person signed in to this conversation (a tenant user, e.g. U01_ADMIN, or a Cloudnest staff member). The desk acts only for that person; any other id is refused."
+        },
+        "effective_timing": {
+          "type": "string",
+          "description": "When the cancellation takes effect",
+          "enum": [
+            "end_of_term",
+            "immediate"
+          ]
+        },
+        "confirmation_code": {
+          "type": "string",
+          "description": "'confirmed' once the admin has agreed"
+        },
+        "request_key": {
+          "type": "string",
+          "description": "Idempotency key"
+        }
+      }
+    },
+    "mutates_state": true,
+    "returns": {
+      "type": "object",
+      "required": [
+        "cancellation_id",
+        "effective_at",
+        "status"
+      ],
+      "properties": {
+        "cancellation_id": {
+          "type": "string"
+        },
+        "effective_at": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        }
+      }
+    }
+  },
+  {
+    "name": "update_billing_contact",
+    "description": "Change where the tenant's invoices go: the billing contact's name and email. Billing admins only, after reading the details back and getting confirmation.",
+    "parameters": {
+      "type": "object",
+      "required": [
+        "tenant_id",
+        "actor_id",
+        "name",
+        "email",
+        "confirmation_code"
+      ],
+      "properties": {
+        "tenant_id": {
+          "type": "string",
+          "description": "Tenant id, e.g. T01"
+        },
+        "actor_id": {
+          "type": "string",
+          "description": "The user id of the person signed in to this conversation (a tenant user, e.g. U01_ADMIN, or a Cloudnest staff member). The desk acts only for that person; any other id is refused."
+        },
+        "name": {
+          "type": "string",
+          "description": "Contact name"
+        },
+        "email": {
+          "type": "string",
+          "description": "Contact email"
+        },
+        "confirmation_code": {
+          "type": "string",
+          "description": "'confirmed' once the admin has agreed"
+        }
+      }
+    },
+    "mutates_state": true,
+    "returns": {
+      "type": "object",
+      "required": [
+        "tenant_id",
+        "name",
+        "email"
+      ],
+      "properties": {
+        "tenant_id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "email": {
+          "type": "string"
+        }
+      }
+    }
+  },
+  {
+    "name": "create_billing_case",
+    "description": "Open a billing case for finance to decide: a refund, waiver, discount, dispute, payment problem or anything else the desk may not do. Any user of the tenant. Reuse the request_key on a retry.",
+    "parameters": {
+      "type": "object",
+      "required": [
+        "tenant_id",
+        "actor_id",
+        "category",
+        "summary",
+        "request_key"
+      ],
+      "properties": {
+        "tenant_id": {
+          "type": "string",
+          "description": "Tenant id, e.g. T01"
+        },
+        "actor_id": {
+          "type": "string",
+          "description": "The user id of the person signed in to this conversation (a tenant user, e.g. U01_ADMIN, or a Cloudnest staff member). The desk acts only for that person; any other id is refused."
+        },
+        "category": {
+          "type": "string",
+          "description": "What finance must decide",
+          "enum": [
+            "refund",
+            "waiver",
+            "discount",
+            "dispute",
+            "payment",
+            "other"
+          ]
+        },
+        "summary": {
+          "type": "string",
+          "description": "What the customer asks and why"
+        },
+        "invoice_id": {
+          "type": "string",
+          "description": "The invoice concerned, when there is one"
+        },
+        "request_key": {
+          "type": "string",
+          "description": "Idempotency key"
+        }
+      }
+    },
+    "mutates_state": true,
+    "returns": {
+      "type": "object",
+      "required": [
+        "case_id",
+        "status"
+      ],
+      "properties": {
+        "case_id": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        }
+      }
+    }
+  },
+  {
+    "name": "get_billing_case_status",
+    "description": "A billing case's category, invoice, status and resolution. Any user of the tenant.",
+    "parameters": {
+      "type": "object",
+      "required": [
+        "tenant_id",
+        "actor_id",
+        "case_id"
+      ],
+      "properties": {
+        "tenant_id": {
+          "type": "string",
+          "description": "Tenant id, e.g. T01"
+        },
+        "actor_id": {
+          "type": "string",
+          "description": "The user id of the person signed in to this conversation (a tenant user, e.g. U01_ADMIN, or a Cloudnest staff member). The desk acts only for that person; any other id is refused."
+        },
+        "case_id": {
+          "type": "string",
+          "description": "Case id, e.g. BC-301"
+        }
+      }
+    },
+    "mutates_state": false,
+    "returns": {
+      "type": "object",
+      "required": [
+        "case_id",
+        "status"
+      ],
+      "properties": {
+        "case_id": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        }
+      }
+    }
+  },
+  {
+    "name": "search_threads",
+    "description": "Lists email threads matching a Gmail search query (label:ID, is:unread, in:inbox, from:, to:, subject:, newer_than:7d, free terms). Full message bodies are not returned; use get_thread for them. Drafts, spam and trash are excluded.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "pageSize": {
+          "type": "integer",
+          "description": "Threads per page; default 20, maximum 50."
+        },
+        "pageToken": {
+          "type": "string"
+        },
+        "query": {
+          "type": "string",
+          "description": "Gmail search syntax."
+        },
+        "includeTrash": {
+          "type": "boolean",
+          "description": "Include trashed threads (default false)."
+        },
+        "view": {
+          "type": "string",
+          "description": "THREAD_VIEW_UNSPECIFIED, THREAD_VIEW_METADATA_ONLY or THREAD_VIEW_MINIMAL (default)."
+        }
+      }
+    },
+    "mutates_state": false,
+    "returns": {
+      "type": "object",
+      "properties": {
+        "threads": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "messages": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "snippet": {
+                      "type": "string"
+                    },
+                    "subject": {
+                      "type": "string"
+                    },
+                    "sender": {
+                      "type": "string"
+                    },
+                    "toRecipients": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "ccRecipients": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "date": {
+                      "type": "string"
+                    },
+                    "plaintextBody": {
+                      "type": "string"
+                    },
+                    "htmlBody": {
+                      "type": "string"
+                    },
+                    "attachmentIds": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "attachments": {
+                      "type": "array",
+                      "items": {
+                        "type": "object"
+                      }
+                    },
+                    "labelIds": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "snippet",
+                    "subject",
+                    "sender",
+                    "toRecipients",
+                    "date",
+                    "labelIds"
+                  ]
+                }
+              }
+            },
+            "required": [
+              "id",
+              "messages"
+            ]
+          }
+        },
+        "nextPageToken": {
+          "type": "string"
+        },
+        "resultCountEstimate": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "threads",
+        "resultCountEstimate"
+      ]
+    }
+  },
+  {
+    "name": "get_thread",
+    "description": "Retrieves an email thread by ID with its messages in date order (bodies under FULL_CONTENT).",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "threadId": {
+          "type": "string",
+          "description": "The unique identifier of the thread."
+        },
+        "messageFormat": {
+          "type": "string",
+          "description": "MESSAGE_FORMAT_UNSPECIFIED, MINIMAL, FULL_CONTENT (default; bodies included) or METADATA_ONLY."
+        }
+      },
+      "required": [
+        "threadId"
+      ]
+    },
+    "mutates_state": false,
+    "returns": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "messages": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "snippet": {
+                "type": "string"
+              },
+              "subject": {
+                "type": "string"
+              },
+              "sender": {
+                "type": "string"
+              },
+              "toRecipients": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "ccRecipients": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "date": {
+                "type": "string"
+              },
+              "plaintextBody": {
+                "type": "string"
+              },
+              "htmlBody": {
+                "type": "string"
+              },
+              "attachmentIds": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "attachments": {
+                "type": "array",
+                "items": {
+                  "type": "object"
+                }
+              },
+              "labelIds": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            },
+            "required": [
+              "id",
+              "snippet",
+              "subject",
+              "sender",
+              "toRecipients",
+              "date",
+              "labelIds"
+            ]
+          }
+        }
+      },
+      "required": [
+        "id",
+        "messages"
+      ]
+    }
+  },
+  {
+    "name": "get_message",
+    "description": "Retrieves one email message by its message ID.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "messageId": {
+          "type": "string",
+          "description": "The unique identifier of the message."
+        },
+        "messageFormat": {
+          "type": "string",
+          "description": "MESSAGE_FORMAT_UNSPECIFIED, MINIMAL, FULL_CONTENT (default; bodies included) or METADATA_ONLY."
+        }
+      },
+      "required": [
+        "messageId"
+      ]
+    },
+    "mutates_state": false,
+    "returns": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "snippet": {
+          "type": "string"
+        },
+        "subject": {
+          "type": "string"
+        },
+        "sender": {
+          "type": "string"
+        },
+        "toRecipients": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "ccRecipients": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "date": {
+          "type": "string"
+        },
+        "plaintextBody": {
+          "type": "string"
+        },
+        "htmlBody": {
+          "type": "string"
+        },
+        "attachmentIds": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "attachments": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        },
+        "labelIds": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "id",
+        "snippet",
+        "subject",
+        "sender",
+        "toRecipients",
+        "date",
+        "labelIds"
+      ]
+    }
+  },
+  {
+    "name": "list_labels",
+    "description": "Lists the user-defined labels of the mailbox with their IDs. System label IDs (INBOX, UNREAD, STARRED, IMPORTANT, SENT, DRAFT, SPAM, TRASH) are usable without listing.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "pageSize": {
+          "type": "integer"
+        },
+        "pageToken": {
+          "type": "string"
+        }
+      }
+    },
+    "mutates_state": false,
+    "returns": {
+      "type": "object",
+      "properties": {
+        "labels": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "labelId": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "threadsTotal": {
+                "type": "integer"
+              },
+              "threadsUnread": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "labelId",
+              "name"
+            ]
+          }
+        },
+        "nextPageToken": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "labels"
+      ]
+    }
+  },
+  {
+    "name": "label_thread",
+    "description": "Adds labels to an entire thread (every message in it). Takes label IDs, not names; use list_labels when unsure of a user label's ID.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "threadId": {
+          "type": "string",
+          "description": "The unique identifier of the thread."
+        },
+        "labelIds": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Label IDs (system IDs such as INBOX, UNREAD, IMPORTANT, or user label IDs from list_labels), never names."
+        }
+      },
+      "required": [
+        "threadId",
+        "labelIds"
+      ]
+    },
+    "mutates_state": true,
+    "returns": {
+      "type": "object",
+      "properties": {}
+    }
+  },
+  {
+    "name": "unlabel_thread",
+    "description": "Removes labels from an entire thread. Takes label IDs, not names.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "threadId": {
+          "type": "string",
+          "description": "The unique identifier of the thread."
+        },
+        "labelIds": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Label IDs (system IDs such as INBOX, UNREAD, IMPORTANT, or user label IDs from list_labels), never names."
+        }
+      },
+      "required": [
+        "threadId",
+        "labelIds"
+      ]
+    },
+    "mutates_state": true,
+    "returns": {
+      "type": "object",
+      "properties": {}
+    }
+  },
+  {
+    "name": "list_drafts",
+    "description": "Lists the mailbox's drafts, newest first. humanEdited marks a draft a person has edited.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "pageSize": {
+          "type": "integer",
+          "description": "Drafts per page; default 20, maximum 50."
+        },
+        "pageToken": {
+          "type": "string"
+        },
+        "query": {
+          "type": "string",
+          "description": "Gmail search syntax."
+        },
+        "view": {
+          "type": "string",
+          "description": "DRAFT_VIEW_UNSPECIFIED, DRAFT_VIEW_METADATA_ONLY or DRAFT_VIEW_FULL (default)."
+        }
+      }
+    },
+    "mutates_state": false,
+    "returns": {
+      "type": "object",
+      "properties": {
+        "drafts": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "subject": {
+                "type": "string"
+              },
+              "threadId": {
+                "type": "string"
+              },
+              "toRecipients": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "ccRecipients": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "bccRecipients": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "plaintextBody": {
+                "type": "string"
+              },
+              "htmlBody": {
+                "type": "string"
+              },
+              "date": {
+                "type": "string"
+              },
+              "humanEdited": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "id",
+              "threadId",
+              "toRecipients",
+              "date"
+            ]
+          }
+        },
+        "nextPageToken": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "drafts"
+      ]
+    }
+  },
+  {
+    "name": "create_draft",
+    "description": "Creates a draft email for a person to review and send. To reply in an existing thread pass the original message's ID as replyToMessageId. Addresses are plain (no 'Name <email>'). Attachments are not supported yet. Nothing is sent.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "to": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Recipient email addresses."
+        },
+        "cc": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "bcc": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "subject": {
+          "type": "string"
+        },
+        "body": {
+          "type": "string",
+          "description": "Plain-text body."
+        },
+        "htmlBody": {
+          "type": "string"
+        },
+        "replyToMessageId": {
+          "type": "string",
+          "description": "The message this draft replies to; the draft joins its thread."
+        },
+        "attachments": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        }
+      }
+    },
+    "mutates_state": true,
+    "returns": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "subject": {
+          "type": "string"
+        },
+        "threadId": {
+          "type": "string"
+        },
+        "toRecipients": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "ccRecipients": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "bccRecipients": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "plaintextBody": {
+          "type": "string"
+        },
+        "htmlBody": {
+          "type": "string"
+        },
+        "date": {
+          "type": "string"
+        },
+        "humanEdited": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "id",
+        "threadId",
+        "toRecipients",
+        "date"
+      ]
+    }
+  },
+  {
+    "name": "slack_search_channels",
+    "description": "Search for Slack channels by name or topic. Returns channel IDs, names, topics, privacy and membership. Private channels appear only to their members.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "keywords": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Lexical terms that must appear in the channel's name or topic; single words or quoted phrases, all AND'd."
+        },
+        "natural_language_query": {
+          "type": "string",
+          "description": "The user's question in conversational tone."
+        },
+        "channel_types": {
+          "type": "string",
+          "description": "Comma-separated: public_channel, private_channel. Default public_channel."
+        },
+        "cursor": {
+          "type": "string"
+        },
+        "include_archived": {
+          "type": "boolean"
+        },
+        "limit": {
+          "type": "integer",
+          "description": "Up to 20; default 20."
+        },
+        "response_format": {
+          "type": "string"
+        }
+      }
+    },
+    "mutates_state": false,
+    "returns": {
+      "type": "object",
+      "properties": {
+        "channels": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "channel_id": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "topic": {
+                "type": "string"
+              },
+              "purpose": {
+                "type": "string"
+              },
+              "is_private": {
+                "type": "boolean"
+              },
+              "is_member": {
+                "type": "boolean"
+              },
+              "member_count": {
+                "type": "integer"
+              },
+              "is_archived": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "channel_id",
+              "name",
+              "is_private",
+              "is_member"
+            ]
+          }
+        },
+        "next_cursor": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "channels"
+      ]
+    }
+  },
+  {
+    "name": "slack_read_channel",
+    "description": "Reads messages from a channel, newest first. Read-only. Use slack_read_thread with a message's ts to read its replies; use slack_search_channels to find a channel ID.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "channel_id": {
+          "type": "string",
+          "description": "ID of the channel to fetch history for."
+        },
+        "cursor": {
+          "type": "string",
+          "description": "next_cursor from a previous response."
+        },
+        "latest": {
+          "type": "string",
+          "description": "End of the time range (ts)."
+        },
+        "limit": {
+          "type": "integer",
+          "description": "1 to 100; default 100."
+        },
+        "oldest": {
+          "type": "string",
+          "description": "Start of the time range (ts)."
+        },
+        "response_format": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "channel_id"
+      ]
+    },
+    "mutates_state": false,
+    "returns": {
+      "type": "object",
+      "properties": {
+        "channel_id": {
+          "type": "string"
+        },
+        "messages": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "message_id": {
+                "type": "string"
+              },
+              "user_id": {
+                "type": "string"
+              },
+              "text": {
+                "type": "string"
+              },
+              "ts": {
+                "type": "string"
+              },
+              "thread_ts": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "permalink": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "message_id",
+              "user_id",
+              "text",
+              "ts",
+              "permalink"
+            ]
+          }
+        },
+        "has_more": {
+          "type": "boolean"
+        },
+        "next_cursor": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "channel_id",
+        "messages",
+        "has_more"
+      ]
+    }
+  },
+  {
+    "name": "slack_read_thread",
+    "description": "Reads a thread: the parent message and its replies, oldest first. Read-only. message_ts is the parent message's ts.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "channel_id": {
+          "type": "string",
+          "description": "Channel the thread is in."
+        },
+        "message_ts": {
+          "type": "string",
+          "description": "Timestamp of the parent message, e.g. \"1234567890.123456\"."
+        },
+        "cursor": {
+          "type": "string"
+        },
+        "latest": {
+          "type": "string"
+        },
+        "limit": {
+          "type": "integer",
+          "description": "1 to 1000; default 100."
+        },
+        "oldest": {
+          "type": "string"
+        },
+        "response_format": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "channel_id",
+        "message_ts"
+      ]
+    },
+    "mutates_state": false,
+    "returns": {
+      "type": "object",
+      "properties": {
+        "channel_id": {
+          "type": "string"
+        },
+        "message_ts": {
+          "type": "string"
+        },
+        "messages": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "message_id": {
+                "type": "string"
+              },
+              "user_id": {
+                "type": "string"
+              },
+              "text": {
+                "type": "string"
+              },
+              "ts": {
+                "type": "string"
+              },
+              "thread_ts": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "permalink": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "message_id",
+              "user_id",
+              "text",
+              "ts",
+              "permalink"
+            ]
+          }
+        },
+        "has_more": {
+          "type": "boolean"
+        },
+        "next_cursor": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "channel_id",
+        "message_ts",
+        "messages",
+        "has_more"
+      ]
+    }
+  },
+  {
+    "name": "slack_search_public_and_private",
+    "description": "Searches messages in all channels the acting user can access. keywords are lexical terms (all AND'd); filters are Slack search modifiers: in:<#C123>, from:<@U123>, after:YYYY-MM-DD, before:YYYY-MM-DD. Give at least one of keywords or filters.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "keywords": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "filters": {
+          "type": "string"
+        },
+        "natural_language_query": {
+          "type": "string"
+        },
+        "after": {
+          "type": "string",
+          "description": "Only messages after this Unix timestamp."
+        },
+        "before": {
+          "type": "string",
+          "description": "Only messages before this Unix timestamp."
+        },
+        "channel_types": {
+          "type": "string"
+        },
+        "content_types": {
+          "type": "string"
+        },
+        "context_channel_id": {
+          "type": "string"
+        },
+        "cursor": {
+          "type": "string"
+        },
+        "include_bots": {
+          "type": "boolean"
+        },
+        "include_context": {
+          "type": "boolean"
+        },
+        "limit": {
+          "type": "integer",
+          "description": "Up to 20; default 20."
+        },
+        "max_context_length": {
+          "type": "integer"
+        },
+        "only_my_channels": {
+          "type": "boolean"
+        },
+        "response_format": {
+          "type": "string"
+        },
+        "sort": {
+          "type": "string",
+          "description": "score (default) or timestamp."
+        },
+        "sort_dir": {
+          "type": "string",
+          "description": "asc or desc (default)."
+        }
+      }
+    },
+    "mutates_state": false,
+    "returns": {
+      "type": "object",
+      "properties": {
+        "messages": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "message_id": {
+                "type": "string"
+              },
+              "user_id": {
+                "type": "string"
+              },
+              "text": {
+                "type": "string"
+              },
+              "ts": {
+                "type": "string"
+              },
+              "thread_ts": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "permalink": {
+                "type": "string"
+              },
+              "channel_id": {
+                "type": "string"
+              },
+              "channel_name": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "message_id",
+              "channel_id",
+              "user_id",
+              "text",
+              "ts",
+              "permalink"
+            ]
+          }
+        },
+        "has_more": {
+          "type": "boolean"
+        },
+        "next_cursor": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "messages",
+        "has_more"
+      ]
+    }
+  },
+  {
+    "name": "slack_send_message",
+    "description": "Sends a message to a channel, or a thread reply with thread_ts. Posting is approval-gated: approval_id must name an approval of this exact destination and text for the acting user. request_key makes a retry return the message already posted instead of a duplicate. No @channel, @here or @everyone.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "channel_id": {
+          "type": "string",
+          "description": "Destination channel ID."
+        },
+        "message": {
+          "type": "string",
+          "description": "The message text (markdown)."
+        },
+        "thread_ts": {
+          "type": "string",
+          "description": "Parent message ts to reply in its thread."
+        },
+        "reply_broadcast": {
+          "type": "boolean"
+        },
+        "unfurl_app_links": {
+          "type": "boolean"
+        },
+        "draft_id": {
+          "type": "string"
+        },
+        "approval_id": {
+          "type": "string",
+          "description": "The approval authorizing this post."
+        },
+        "request_key": {
+          "type": "string",
+          "description": "Idempotency key for this request."
+        }
+      },
+      "required": [
+        "channel_id",
+        "message"
+      ]
+    },
+    "mutates_state": true,
+    "returns": {
+      "type": "object",
+      "properties": {
+        "channel_id": {
+          "type": "string"
+        },
+        "ts": {
+          "type": "string"
+        },
+        "message_id": {
+          "type": "string"
+        },
+        "permalink": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "request_key": {
+          "type": "string"
+        },
+        "thread_ts": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "channel_id",
+        "ts",
+        "message_id",
+        "permalink",
+        "status"
+      ]
+    }
+  },
+  {
+    "name": "slack_check_message_status",
+    "description": "Check delivery status and idempotency ledger record for a given request_key.",
+    "parameters": {
+      "required": [
+        "request_key"
+      ],
+      "type": "object",
+      "properties": {
+        "request_key": {
+          "type": "string",
+          "description": "The idempotency request key to inspect."
+        }
+      }
+    },
+    "mutates_state": false,
+    "returns": {
+      "type": "object",
+      "properties": {
+        "channel_id": {
+          "type": "string"
+        },
+        "text": {
+          "type": "string"
+        },
+        "created_at": {
+          "type": "string"
+        },
+        "permalink": {
+          "type": "string"
+        },
+        "thread_ts": {
+          "type": "string"
+        },
+        "message_id": {
+          "type": "string"
+        },
+        "request_key": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "channel_id",
+        "created_at",
+        "message_id",
+        "permalink",
+        "request_key",
+        "status",
+        "text"
+      ]
     }
   }
 ]

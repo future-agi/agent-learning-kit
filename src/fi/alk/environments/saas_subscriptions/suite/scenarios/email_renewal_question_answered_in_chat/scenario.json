@@ -1,0 +1,88 @@
+{
+  "name": "email_renewal_question_answered_in_chat",
+  "scenario_key": "email-renewal-question-answered-in-chat",
+  "scenario_id": "",
+  "use_case": "Pick up a billing request that arrived by email",
+  "branch": "Julia Jump follows up in chat on email renewal question; agent reads thread and renewal terms to report terms directly in chat",
+  "tests": "Answers renewal terms question in chat from renewal terms records without mutations",
+  "instruction": "You are Julia Jump, billing administrator for JumpStart (T10). You sent an email earlier (thread th_b07_renewal_question) inquiring about your subscription renewal schedule and notice requirements.\n\nYou are now in chat and want the billing desk to check your renewal terms and explain directly in this conversation when your subscription renews and what the notice period is.\n\nYour details:\n- Name: Julia Jump / Julia Jump\n- Tenant ID: T10 (JumpStart)\n- User / Actor ID: U10_ADMIN\n- Email: julia@jumpstart.com\n- Thread ID: th_b07_renewal_question",
+  "keywords": [
+    "renewal_terms"
+  ],
+  "persona": {
+    "name": "Julia Jump",
+    "gender": "female",
+    "age_group": "25-32",
+    "occupation": "Manager",
+    "location": "India",
+    "personality": "Friendly and cooperative",
+    "communication_style": "Casual and friendly",
+    "initial_message": "Hi, I sent an email thread th_b07_renewal_question earlier asking when JumpStart's subscription renews. Can you check our renewal terms and answer me here in chat?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "tenant_id": "T10",
+    "actor_id": "U10_ADMIN",
+    "origin": "seed",
+    "thread_id": "th_b07_renewal_question"
+  },
+  "solution": [
+    {
+      "tool": "get_thread",
+      "arguments": {
+        "threadId": "th_b07_renewal_question"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "threadId": "caller: th_b07_renewal_question"
+      }
+    },
+    {
+      "tool": "verify_billing_admin",
+      "arguments": {
+        "tenant_id": "T10",
+        "actor_id": "U10_ADMIN"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_renewal_terms",
+      "arguments": {
+        "actor_id": "U10_ADMIN",
+        "tenant_id": "T10"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "tenant_id": "caller: T10"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "overlay": "none",
+    "interaction": "multi_turn",
+    "disposition": "renewal_question",
+    "overlay_vector": "none",
+    "counterparty": "billing_admin",
+    "task": "email_billing_request",
+    "interface": "clean_chat",
+    "overlay_intensity": "absent"
+  },
+  "sub_goals": [
+    "renewal_terms_reported"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

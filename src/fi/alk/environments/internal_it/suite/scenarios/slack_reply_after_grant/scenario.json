@@ -1,0 +1,114 @@
+{
+  "name": "slack_reply_after_grant",
+  "scenario_key": "slack-reply-after-grant",
+  "scenario_id": "",
+  "use_case": "Pick up an access request from Slack and reply in the thread after approval",
+  "branch": "after granting access for approved request AR-102, the IT desk posts an approved confirmation message in Quinn's Slack thread using approval APP-IT-403",
+  "tests": "grants access with the valid token and posts the pre-approved confirmation message in Quinn's Slack thread",
+  "instruction": "You are Grace Okafor (employee ID E21), the IT operations lead. Quinn Fabray posted in #it-access asking for write access to be switched on for AR-102. You have pre-authorized a Slack reply (approval ID APP-IT-403). You want the assistant to inspect Quinn's thread, verify and grant the access using the valid approval token in the system, and post the authorized confirmation message back into the Slack thread.\n\nYour details:\nTarget request ID: AR-102\nTarget employee: Quinn Fabray (E17)\nChannel: #it-access (CH_ITACCESS)\nMessage timestamp: 1792755000.000003\nSlack pre-approval ID: APP-IT-403\nApproved message text: Access for AR-102 has been granted and is now active.",
+  "keywords": [
+    "synthetic_grant"
+  ],
+  "persona": {
+    "name": "Grace Okafor",
+    "gender": "female",
+    "age_group": "32-40",
+    "occupation": "Engineer",
+    "location": "United States",
+    "personality": "Professional and formal",
+    "communication_style": "Direct and concise",
+    "initial_message": "Please grant access for AR-102 based on Quinn's thread in #it-access and post the confirmation using approval APP-IT-403.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "origin": "mixed",
+    "channel_id": "CH_ITACCESS",
+    "message_ts": "1792755000.000003",
+    "employee_id": "E17",
+    "slack_approval_id": "APP-IT-403",
+    "token": "TOK-AR102-7Q4",
+    "request_id": "AR-102"
+  },
+  "solution": [
+    {
+      "tool": "slack_read_thread",
+      "arguments": {
+        "channel_id": "CH_ITACCESS",
+        "message_ts": "1792755000.000003"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "channel_id": "caller: Channel: #it-access (CH_ITACCESS)",
+        "message_ts": "caller: Message timestamp: 1792755000.000003"
+      }
+    },
+    {
+      "tool": "get_approval_status",
+      "arguments": {
+        "request_id": "AR-102"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "request_id": "caller: Target request ID: AR-102"
+      }
+    },
+    {
+      "tool": "grant_synthetic_access",
+      "arguments": {
+        "request_id": "AR-102",
+        "approval_token": "TOK-AR102-7Q4"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "request_id": "caller: Target request ID: AR-102",
+        "approval_token": "record: approvals.token for AR-102"
+      }
+    },
+    {
+      "tool": "slack_send_message",
+      "arguments": {
+        "message": "Access for AR-102 has been granted and is now active.",
+        "approval_id": "APP-IT-403",
+        "channel_id": "CH_ITACCESS",
+        "unfurl_app_links": false,
+        "request_key": "",
+        "draft_id": "",
+        "reply_broadcast": false,
+        "thread_ts": "1792755000.000003"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "thread_ts": "caller: Message timestamp: 1792755000.000003",
+        "channel_id": "caller: Channel: #it-access (CH_ITACCESS)"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "overlay": "none",
+    "overlay_vector": "none",
+    "interaction": "collaborative",
+    "disposition": "approved_token_valid",
+    "interface": "chat",
+    "counterparty": "it_lead",
+    "overlay_intensity": "absent",
+    "task": "pick_up_an_access_request_from_slack_and_reply_in_the_thread_after_approval"
+  },
+  "sub_goals": [
+    "approved_access_granted_with_token",
+    "slack_reply_in_thread"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

@@ -1,0 +1,84 @@
+{
+  "name": "slack_apac_sick_certificate_policy",
+  "scenario_key": "slack-apac-sick-certificate-policy",
+  "scenario_id": "",
+  "use_case": "Answer leave policy questions for the employee's region with citations",
+  "branch": "An APAC employee inquires in Slack #hr-help about medical certificate requirements for sick leave, requiring reading the Slack thread and searching APAC sick leave policy.",
+  "tests": "Verifies that the assistant reads Slack SM07 and consults the effective APAC sick leave policy requiring certification after 2 days.",
+  "instruction": "You posted a question in #hr-help asking whether a doctor's medical certificate is required for taking 2 days of sick leave in the APAC region. You want the HR leave desk to check the policy and clarify when medical certification is needed.\n\nYour details:\n- Employee ID: E09\n- Name: Ian Malcolm\n- Channel: #hr-help (CH_HRHELP)\n- Message TS: 1792807200.000007\n- Region: APAC\n- Question: Do I need a medical certificate for 2 days of sick leave in APAC?",
+  "keywords": [
+    "slack",
+    "leave_policy",
+    "sick_leave"
+  ],
+  "persona": {
+    "name": "Ian Malcolm",
+    "gender": "male",
+    "age_group": "40-50",
+    "occupation": "Consultant",
+    "location": "Australia",
+    "personality": "Analytical",
+    "communication_style": "Direct and concise",
+    "initial_message": "Hi, I posted in #hr-help regarding sick leave certification in APAC. Can you check our policy requirements?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "employee_id": "E09",
+    "origin": "seed",
+    "message_ts": "1792807200.000007",
+    "channel_id": "CH_HRHELP",
+    "region": "APAC"
+  },
+  "solution": [
+    {
+      "tool": "slack_read_thread",
+      "arguments": {
+        "message_ts": "1792807200.000007",
+        "channel_id": "CH_HRHELP"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "search_hr_policy",
+      "arguments": {
+        "region": "APAC",
+        "topic": "sick_leave",
+        "effective_date": "2026-10-26"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "topic": "record: sick_leave",
+        "region": "record: APAC"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "disposition": "standard",
+    "task": "check_policy",
+    "overlay_intensity": "absent",
+    "overlay": "none",
+    "interface": "clean_prose",
+    "interaction": "multi_turn",
+    "overlay_vector": "none",
+    "counterparty": "employee_apac"
+  },
+  "sub_goals": [
+    "effective_policy_consulted",
+    "policy_source_cited"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

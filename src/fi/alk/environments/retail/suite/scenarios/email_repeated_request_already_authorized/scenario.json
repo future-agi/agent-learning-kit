@@ -1,0 +1,93 @@
+{
+  "name": "email_repeated_request_already_authorized",
+  "scenario_key": "email-repeated-request-already-authorized",
+  "scenario_id": "",
+  "use_case": "Return status inquiry and duplicate prevention",
+  "branch": "Bob Smith's return request in email th_r03 is already authorized on order O22; retrieve status and prevent duplicate return",
+  "tests": "the agent reads thread th_r03_return_request_bob, checks return status for order O22, and prevents duplicate return authorization",
+  "instruction": "You sent an email (thread subject 'Return request') asking to return the Linen Long-Sleeve Shirt (AP04) from order O22. You are checking in chat to ensure it's handled.\n\nYour details:\n- Name: Bob Smith\n- Email: bob.smith@example.com\n- Postal Code: 10001\n- Order ID: O22\n- Item: Linen Long-Sleeve Shirt (SKU: AP04)",
+  "keywords": [
+    "duplicate_prevention",
+    "email_pickup"
+  ],
+  "persona": {
+    "name": "Bob Smith",
+    "gender": "male",
+    "age_group": "",
+    "occupation": "",
+    "location": "Canada",
+    "personality": "Friendly and cooperative",
+    "communication_style": "Casual and friendly",
+    "initial_message": "Hi, I sent an email about returning AP04 from order O22 and wanted to make sure everything is set.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "customer_id": "C02",
+    "order_id": "O22",
+    "sku": "AP04",
+    "return_id": "R422",
+    "thread_id": "th_r03_return_request_bob",
+    "origin": "mixed"
+  },
+  "solution": [
+    {
+      "tool": "get_thread",
+      "arguments": {
+        "messageFormat": "FULL_CONTENT",
+        "threadId": "th_r03_return_request_bob"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "threadId": "the email the request came in"
+      }
+    },
+    {
+      "tool": "verify_order_owner",
+      "arguments": {
+        "order_id": "O22",
+        "postal_code": "10001"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_return_status",
+      "arguments": {
+        "return_id": "",
+        "order_id": "O22"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "order_id": "caller: order number O22"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "task": "inquire_return_status",
+    "interface": "clean_prose",
+    "overlay_intensity": "absent",
+    "overlay_vector": "none",
+    "interaction": "multi_turn",
+    "disposition": "already_returned",
+    "overlay": "none",
+    "counterparty": "verified_owner"
+  },
+  "sub_goals": [
+    "subgoal_return_status_retrieved",
+    "subgoal_policy_abuse_prevented"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

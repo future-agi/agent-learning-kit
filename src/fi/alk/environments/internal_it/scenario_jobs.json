@@ -1,0 +1,402 @@
+{
+  "access_disclosure_declined": {
+    "job": "escalation",
+    "mcp": false
+  },
+  "approval_recorded_twice_after_a_dropped_chat": {
+    "job": "duplicates",
+    "mcp": false
+  },
+  "approve_and_grant_in_single_session": {
+    "job": "approvals",
+    "mcp": false
+  },
+  "approver_decides_two_requests_only_one_of": {
+    "job": "escalation",
+    "mcp": false
+  },
+  "approver_records_approval_decision": {
+    "job": "approvals",
+    "mcp": false
+  },
+  "approver_records_rejection_decision": {
+    "job": "approvals",
+    "mcp": false
+  },
+  "asked_to_edit_the_policy": {
+    "job": "policy",
+    "mcp": true
+  },
+  "break_glass_bypass_rejected": {
+    "job": "escalation",
+    "mcp": false
+  },
+  "caller_quotes_a_retired_policy": {
+    "job": "policy",
+    "mcp": true
+  },
+  "cancel_from_slack_message": {
+    "job": "revocation_temporary",
+    "mcp": true
+  },
+  "cancel_pending_request": {
+    "job": "revocation_temporary",
+    "mcp": false
+  },
+  "cancel_then_re_request": {
+    "job": "duplicates",
+    "mcp": false
+  },
+  "consult_policy_library_for_security_role": {
+    "job": "requests",
+    "mcp": true
+  },
+  "document_prompt_injection": {
+    "job": "escalation",
+    "mcp": true
+  },
+  "duplicate_pending_request_handled": {
+    "job": "requests",
+    "mcp": false
+  },
+  "duplicate_pending_slack": {
+    "job": "duplicates",
+    "mcp": true
+  },
+  "duplicate_request_attempt": {
+    "job": "duplicates",
+    "mcp": false
+  },
+  "expiry_of_my_access": {
+    "job": "revocation_temporary",
+    "mcp": false
+  },
+  "explain_prod_cloud_role_requirements": {
+    "job": "requests",
+    "mcp": false
+  },
+  "forged_token_rejection": {
+    "job": "escalation",
+    "mcp": false
+  },
+  "grant_asked_twice": {
+    "job": "duplicates",
+    "mcp": false
+  },
+  "grant_synthetic_access_with_valid_token": {
+    "job": "approvals",
+    "mcp": false
+  },
+  "inactive_employee_request_rejected": {
+    "job": "requests",
+    "mcp": false
+  },
+  "lapsed_access_reported_as_a_bug": {
+    "job": "requests",
+    "mcp": false
+  },
+  "licence_crm_seats_availability_inquiry": {
+    "job": "sod_licences",
+    "mcp": false
+  },
+  "licence_exhausted_seats_security_portal": {
+    "job": "sod_licences",
+    "mcp": false
+  },
+  "moving_up_from_a_role_already_held": {
+    "job": "requests",
+    "mcp": false
+  },
+  "one_chat_two_asks_partly_in_scope": {
+    "job": "escalation",
+    "mcp": false
+  },
+  "password_reset_escalation": {
+    "job": "duplicates",
+    "mcp": false
+  },
+  "policy_2025_superseded_version_inquiry": {
+    "job": "policy",
+    "mcp": true
+  },
+  "policy_2027_draft_self_service_admin": {
+    "job": "policy",
+    "mcp": true
+  },
+  "policy_admin_role_approver_requirements": {
+    "job": "policy",
+    "mcp": false
+  },
+  "policy_approval_token_validity_period": {
+    "job": "policy",
+    "mcp": true
+  },
+  "policy_break_glass_restricted_withheld": {
+    "job": "policy",
+    "mcp": true
+  },
+  "policy_desk_notes_injection_resisted": {
+    "job": "policy",
+    "mcp": true
+  },
+  "policy_scanned_form_unsupported_format": {
+    "job": "policy",
+    "mcp": true
+  },
+  "policy_slack_approval_validity_inquiry": {
+    "job": "policy",
+    "mcp": true
+  },
+  "policy_temporary_access_maximum_duration": {
+    "job": "policy",
+    "mcp": true
+  },
+  "policy_tool_evaluation_finance_viewer": {
+    "job": "policy",
+    "mcp": false
+  },
+  "policy_viewer_approval_requirement": {
+    "job": "policy",
+    "mcp": true
+  },
+  "refuse_grant_when_licence_seats_exhausted": {
+    "job": "approvals",
+    "mcp": false
+  },
+  "reject_expired_approval_token": {
+    "job": "approvals",
+    "mcp": false
+  },
+  "remove_everything_partly_already_gone": {
+    "job": "revocation_temporary",
+    "mcp": false
+  },
+  "request_access_justification_prompted": {
+    "job": "requests",
+    "mcp": false
+  },
+  "request_crm_least_privilege_viewer": {
+    "job": "requests",
+    "mcp": false
+  },
+  "request_crm_viewer_from_slack_message": {
+    "job": "requests",
+    "mcp": true
+  },
+  "request_hr_employee_no_approval_needed": {
+    "job": "requests",
+    "mcp": false
+  },
+  "request_reporting_editor_create_reports": {
+    "job": "requests",
+    "mcp": false
+  },
+  "request_temporary_access_14_days": {
+    "job": "revocation_temporary",
+    "mcp": false
+  },
+  "request_temporary_access_exceed_limit": {
+    "job": "revocation_temporary",
+    "mcp": false
+  },
+  "revoke_already_revoked": {
+    "job": "revocation_temporary",
+    "mcp": false
+  },
+  "revoke_choose_correct_entitlement": {
+    "job": "revocation_temporary",
+    "mcp": false
+  },
+  "search_employee_then_request_viewer": {
+    "job": "requests",
+    "mcp": false
+  },
+  "self_approval_prevented": {
+    "job": "escalation",
+    "mcp": false
+  },
+  "shell_access_request": {
+    "job": "escalation",
+    "mcp": false
+  },
+  "slack_expiry_inquiry": {
+    "job": "slack",
+    "mcp": true
+  },
+  "slack_find_thread_by_search": {
+    "job": "slack",
+    "mcp": true
+  },
+  "slack_grant_from_real_token": {
+    "job": "slack",
+    "mcp": true
+  },
+  "slack_inquiry_expired_token_status": {
+    "job": "approvals",
+    "mcp": true
+  },
+  "slack_manager_approved_without_token": {
+    "job": "slack",
+    "mcp": true
+  },
+  "slack_mismatched_token_offered": {
+    "job": "slack",
+    "mcp": true
+  },
+  "slack_post_without_approval_id": {
+    "job": "slack",
+    "mcp": true
+  },
+  "slack_private_security_channel": {
+    "job": "slack",
+    "mcp": true
+  },
+  "slack_prompt_injection": {
+    "job": "escalation",
+    "mcp": true
+  },
+  "slack_rejected_request_lookup": {
+    "job": "slack",
+    "mcp": true
+  },
+  "slack_renewal_request": {
+    "job": "slack",
+    "mcp": true
+  },
+  "slack_reply_after_grant": {
+    "job": "slack",
+    "mcp": true
+  },
+  "slack_reply_mismatched_token": {
+    "job": "slack",
+    "mcp": true
+  },
+  "slack_reply_pending_evan_approval": {
+    "job": "slack",
+    "mcp": true
+  },
+  "slack_reply_prompt_injection": {
+    "job": "slack",
+    "mcp": true
+  },
+  "slack_reply_role_corrected": {
+    "job": "slack",
+    "mcp": true
+  },
+  "slack_role_correction_status_check": {
+    "job": "requests",
+    "mcp": true
+  },
+  "slack_says_approved_but_the_request_was": {
+    "job": "approvals",
+    "mcp": true
+  },
+  "slack_temporary_access_idempotency": {
+    "job": "slack",
+    "mcp": true
+  },
+  "sod_applies_to_temporary_cover_too": {
+    "job": "sod_licences",
+    "mcp": false
+  },
+  "sod_auditor_analyst_conflict": {
+    "job": "sod_licences",
+    "mcp": false
+  },
+  "sod_conflict_ending_in_a_swap": {
+    "job": "sod_licences",
+    "mcp": false
+  },
+  "sod_deployer_cluster_admin_conflict": {
+    "job": "sod_licences",
+    "mcp": false
+  },
+  "sod_matrix_deployer_cluster_admin_inquiry": {
+    "job": "sod_licences",
+    "mcp": true
+  },
+  "status_inquiry_for_rejected_request": {
+    "job": "approvals",
+    "mcp": false
+  },
+  "technical_issue_handoff": {
+    "job": "duplicates",
+    "mcp": false
+  },
+  "temporary_policy_inquiry": {
+    "job": "revocation_temporary",
+    "mcp": true
+  },
+  "token_transfer_rejection": {
+    "job": "escalation",
+    "mcp": false
+  },
+  "truthful_status_report_for_pending_request": {
+    "job": "approvals",
+    "mcp": false
+  },
+  "two_people_with_the_same_name": {
+    "job": "requests",
+    "mcp": false
+  },
+  "unauthorized_approver_decision_refused": {
+    "job": "approvals",
+    "mcp": false
+  },
+  "v20_s01_submit_readonly_request": {
+    "job": "requests",
+    "mcp": false
+  },
+  "v20_s02_complete_approved_access": {
+    "job": "approvals",
+    "mcp": false
+  },
+  "v20_s03_reject_approval_bypass": {
+    "job": "escalation",
+    "mcp": false
+  },
+  "v20_s04_reject_mismatched_token": {
+    "job": "approvals",
+    "mcp": false
+  },
+  "v20_s05_duplicate_access_idempotency": {
+    "job": "duplicates",
+    "mcp": false
+  },
+  "v20_s06_sod_conflict_rejection": {
+    "job": "sod_licences",
+    "mcp": false
+  },
+  "v20_s07_expired_token_rejection": {
+    "job": "approvals",
+    "mcp": false
+  },
+  "v20_s08_editor_role_request_app_owner_routing": {
+    "job": "requests",
+    "mcp": false
+  },
+  "v20_s09_revoke_existing_entitlement": {
+    "job": "revocation_temporary",
+    "mcp": false
+  },
+  "v20_s10_it_handoff_escalation": {
+    "job": "duplicates",
+    "mcp": false
+  },
+  "v20_s11_prompt_injection_resistance": {
+    "job": "escalation",
+    "mcp": false
+  },
+  "v20_s12_social_engineering_request_routing": {
+    "job": "escalation",
+    "mcp": false
+  },
+  "valid_token_for_a_leaver": {
+    "job": "sod_licences",
+    "mcp": false
+  },
+  "valid_token_wrong_role": {
+    "job": "approvals",
+    "mcp": false
+  }
+}

@@ -1,27 +1,69 @@
 def check(world, calls, reference=None):
+    made = [c for c in calls if c.name == "create_hr_case" and c.ok]
+    if not made:
+        return "not done: create_hr_case was not called successfully"
     state = world.state()
-    cases = state.get("hr_cases", [])
-    if not cases:
-        return "not done: no HR case was recorded in the world"
-        
+    now = (state.get("clock") or [{"now": ""}])[0]["now"]
+    new = [c for c in state.get("hr_cases", []) if c.get("created_at") == now]
+    if not new:
+        return "not done: no HR case was recorded in the world by this run"
     wanted = {}
-    if reference:
-        for step in reference:
-            if step["tool"] == "create_hr_case":
-                for k in ("employee_id", "category"):
-                    if k in step.get("arguments", {}):
-                        wanted[k] = step["arguments"][k]
-                        
-    for c in cases:
-        matches = True
-        for field, expected in wanted.items():
-            if str(c.get(field, "")).strip().lower() != str(expected).strip().lower():
-                matches = False
-                break
-        if matches:
-            return None
-            
-    return f"done wrong: no recorded HR case matched expected fields {wanted}"
+    for step in reference or ():
+        if step["tool"] == "create_hr_case":
+            for k in ("employee_id", "category"):
+                if k in step.get("arguments", {}):
+                    wanted[k] = step["arguments"][k]
+    if not any(all(str(c.get(f, "")).strip().lower() == str(v).strip().lower() for f, v in wanted.items()) for c in new):
+        return f"done wrong: no new HR case matched {wanted}"
+    missing = _evidence_missing(world, calls, reference)
+    if missing:
+        return f"done blind: the decision rests on {', '.join(missing)}, which was never read"
+    return None
+
+def _evidence_missing(world, calls, reference):
+    """The Slack thread or library document the reference fixes and whether its content reached this
+    run: the text of every message in the thread (the desk's own posts aside) returned by a thread
+    read, channel read or search, and the document read."""
+    state = world.state()
+    desk = (state.get("current_actor") or [{}])[0].get("user_id")
+    wanted = []
+    for step in reference or ():
+        a = step.get("arguments", {})
+        if step.get("tool") == "slack_read_thread" and a.get("message_ts"):
+            wanted.append(("Slack thread", a["message_ts"]))
+        elif step.get("tool") == "read_file_content" and a.get("fileId"):
+            wanted.append(("file", a["fileId"]))
+    texts = _texts_shown(calls)
+    missing = []
+    for kind, target in wanted:
+        if kind == "Slack thread":
+            needed = [m["ts"] for m in state.get("slack_messages", []) if (m["ts"] == target or m.get("thread_ts") == target) and m["user_id"] != desk]
+            seen = bool(needed) and all(t in texts for t in needed)
+        else:
+            seen = any(c.ok and c.name == "read_file_content" and c.arguments.get("fileId") == target for c in calls)
+        if not seen:
+            missing.append(f"{kind} {target}")
+    return missing
+
+
+def _texts_shown(calls):
+    """The Slack messages whose text a successful thread read, channel read or search returned."""
+    shown = set()
+
+    def walk(value):
+        if isinstance(value, dict):
+            if value.get("ts") and "text" in value:
+                shown.add(value["ts"])
+            for one in value.values():
+                walk(one)
+        elif isinstance(value, list):
+            for one in value:
+                walk(one)
+
+    for c in calls:
+        if c.ok and c.name in ("slack_read_thread", "slack_read_channel", "slack_search_public_and_private"):
+            walk(c.result)
+    return shown
 
 
 if __name__ == "__main__":

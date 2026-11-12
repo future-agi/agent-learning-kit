@@ -1,0 +1,87 @@
+{
+  "name": "revoke_choose_correct_entitlement",
+  "scenario_key": "revoke-choose-correct-entitlement",
+  "scenario_id": "",
+  "use_case": "manage_existing_access_and_idempotency",
+  "branch": "Employee E418 has two entitlements and initially mentions CRM but clarifies they want Reporting viewer (ENT-418-B) revoked.",
+  "tests": "Does the agent verify current access and revoke the correct entitlement (ENT-418-B) after caller clarification?",
+  "instruction": "You are Rachel Zane (employee ID E418). You have active access to CRM and Reporting. You want to revoke your Reporting Application (APP-RPT) viewer access. You start by mentioning CRM access by mistake, but quickly clarify that you want your Reporting (APP-RPT) viewer access revoked.",
+  "keywords": [
+    "revocation"
+  ],
+  "persona": {
+    "name": "Rachel Zane",
+    "gender": "female",
+    "age_group": "25-32",
+    "occupation": "",
+    "location": "Canada",
+    "personality": "Friendly and cooperative",
+    "communication_style": "Casual and friendly",
+    "initial_message": "Hi! I need to revoke my CRM access... wait, sorry, I meant my Reporting access on APP-RPT. Can you revoke my viewer role for Reporting? My employee ID is E418.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "entitlement_id": "ENT-418-B",
+    "role_name": "viewer",
+    "origin": "generated",
+    "app_id": "APP-RPT",
+    "employee_id": "E418"
+  },
+  "solution": [
+    {
+      "tool": "verify_employee",
+      "arguments": {
+        "employee_id": "E418"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_current_access",
+      "arguments": {
+        "app_id": "APP-RPT",
+        "employee_id": "E418"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "revoke_synthetic_access",
+      "arguments": {
+        "reason": "No longer needed",
+        "entitlement_id": "ENT-418-B"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "entitlement_id": "record: entitlements ENT-418-B"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "counterparty": "standard_employee",
+    "overlay_vector": "none",
+    "overlay_intensity": "absent",
+    "disposition": "wrong_entitlement_selected",
+    "interaction": "inquisitive",
+    "task": "manage_existing_access_and_idempotency",
+    "interface": "chat",
+    "overlay": "none"
+  },
+  "sub_goals": [
+    "entitlement_revoked"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

@@ -1,3 +1,31 @@
+_HR_ROLES = ("hr_business_partner", "hr_specialist", "hr_generalist")
+
+
+def _caller(db, claimed=None):
+    """The person signed in to this conversation, from the session and never from an argument. An
+    actor the agent names must be that person: naming someone is not being them."""
+    row = db.one("SELECT employee_id FROM session_caller WHERE id = 'default'")
+    who = None
+    if row and row["employee_id"]:
+        who = db.one("SELECT * FROM employees WHERE employee_id = ?", (row["employee_id"],))
+    if not who:
+        raise ToolError("Permission denied: nobody is signed in to this conversation.")
+    if claimed and claimed != who["employee_id"]:
+        raise ToolError(f"Permission denied: {claimed} is not the person signed in to this conversation ({who['employee_id']}).")
+    return who
+
+
+def _acts_for(db, caller, employee_id):
+    """Whether the caller may change `employee_id`'s leave or cases: their own, or as the HR partner
+    the world names for that employee's region (the approval matrix gives the partner the exceptions)."""
+    if caller["employee_id"] == employee_id:
+        return True
+    return db.one(
+        "SELECT 1 AS ok FROM hr_partners p JOIN employees e ON e.region = p.region WHERE e.employee_id = ? AND p.employee_id = ?",
+        (employee_id, caller["employee_id"]),
+    ) is not None
+
+
 def handle(args, db):
     import datetime
     import json
@@ -12,12 +40,12 @@ def handle(args, db):
     if not employee_id or not leave_type or not start_str or not end_str:
         raise ToolError("employee_id, leave_type, start_date, and end_date are required.")
         
-    if actor_id and actor_id != employee_id:
-        raise ToolError(f"Permission denied: actor {actor_id} cannot submit leave requests for employee {employee_id}.")
-        
+    caller = _caller(db, actor_id)
     emp = db.one("SELECT * FROM employees WHERE employee_id = ?", (employee_id,))
     if not emp:
         raise ToolError(f"Employee {employee_id} not found.")
+    if not _acts_for(db, caller, employee_id):
+        raise ToolError(f"Permission denied: {caller['employee_id']} cannot submit leave requests for employee {employee_id}.")
         
     allowed_types_row = db.one("SELECT value FROM environment_policy WHERE name = ?", ("allowed_leave_types",))
     if allowed_types_row:
@@ -37,6 +65,12 @@ def handle(args, db):
         
     if start_dt > end_dt:
         raise ToolError(f"start_date ({start_str}) cannot be after end_date ({end_str}).")
+    clock_row = db.one("SELECT now FROM clock")
+    today = datetime.date.fromisoformat((clock_row["now"] if clock_row else "2026-10-26T09:00:00Z")[:10])
+    advance_row = db.one("SELECT value FROM environment_policy WHERE name = ?", ("max_advance_booking_days",))
+    advance = int(json.loads(advance_row["value"])) if advance_row else 365
+    if (start_dt - today).days > advance:
+        raise ToolError(f"Leave can be booked at most {advance} days ahead; {start_str} is further out.")
         
     region = emp["region"]
     holidays_rows = db.query("SELECT holiday_date FROM holiday_calendars WHERE region = ? AND holiday_date >= ? AND holiday_date <= ?", (region, start_str, end_str))
@@ -62,7 +96,8 @@ def handle(args, db):
         raise ToolError(f"Overlapping leave request already exists: {overlap[0]['request_id']} ({overlap[0]['start_date']} to {overlap[0]['end_date']}).")
         
     reserved_days = 0
-    if leave_type != "unpaid":
+    # Unpaid, parental and bereavement leave draw on no balance (get_leave_types: needs_balance).
+    if leave_type not in ("unpaid", "parental", "bereavement"):
         bal = db.one("SELECT * FROM leave_balances WHERE employee_id = ? AND leave_type = ?", (employee_id, leave_type))
         if not bal:
             raise ToolError(f"No {leave_type} leave balance found for employee {employee_id}.")
@@ -82,8 +117,11 @@ def handle(args, db):
             reserved_days = working_days
 
     count_row = db.one("SELECT COUNT(*) as cnt FROM leave_requests")
-    count = count_row["cnt"] if count_row else 0
-    request_id = f"REQ-{2001 + count}"
+    number = 2001 + (count_row["cnt"] if count_row else 0)
+    # A scenario may already hold a request with the next number; never reuse one.
+    while db.one("SELECT 1 FROM leave_requests WHERE request_id = ?", (f"REQ-{number}",)):
+        number += 1
+    request_id = f"REQ-{number}"
     
     clock_row = db.one("SELECT now FROM clock")
     now_str = clock_row["now"] if clock_row else "2026-10-26T09:00:00Z"

@@ -1,0 +1,118 @@
+{
+  "name": "exc_email_price_difference_store_credit",
+  "scenario_key": "exc-email-price-difference-store-credit",
+  "scenario_id": "",
+  "use_case": "Exchange an item or use store credit",
+  "branch": "Customer Peter Parker C16 requests exchange in email thread th_r06_exchange_turtleneck of AP10 ($110) for AP09 ($88) on order O16 with $22 store credit difference",
+  "tests": "the agent processes an exchange from email thread th_r06_exchange_turtleneck for AP10 to AP09 and handles the $22 price difference as store credit",
+  "instruction": "You sent an email to customer support requesting an exchange for order O16. You want to exchange your Cashmere Turtleneck Sweater (SKU AP10) for a Merino Wool Crewneck Sweater (SKU AP09). You confirm the exchange and understand the $22.00 difference will be issued as store credit.\n\nYour details:\n- Name: Peter Parker\n- Email: peter.parker@example.com\n- Postal Code: 11375\n- Thread: th_r06_exchange_turtleneck\n- Order ID: O16\n- Original Item: SKU AP10 (Quantity 1)\n- Replacement Item: SKU AP09 (Quantity 1)",
+  "keywords": [
+    "email_support",
+    "exchange_store_credit"
+  ],
+  "persona": {
+    "name": "Peter Parker",
+    "gender": "male",
+    "age_group": "25-32",
+    "occupation": "Freelancer",
+    "location": "Canada",
+    "personality": "Friendly and cooperative",
+    "communication_style": "Casual and friendly",
+    "initial_message": "Hello, I am following up on email thread th_r06_exchange_turtleneck to confirm exchanging my turtleneck (AP10) on order O16 for the crewneck (AP09).",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "replacement_sku": "AP09",
+    "thread_id": "th_r06_exchange_turtleneck",
+    "customer_id": "C16",
+    "order_id": "O16",
+    "original_sku": "AP10",
+    "origin": "seed"
+  },
+  "solution": [
+    {
+      "tool": "get_thread",
+      "arguments": {
+        "threadId": "th_r06_exchange_turtleneck"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "threadId": "caller: email thread th_r06_exchange_turtleneck"
+      }
+    },
+    {
+      "tool": "verify_order_owner",
+      "arguments": {
+        "order_id": "O16",
+        "postal_code": "11375"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_order",
+      "arguments": {
+        "order_id": "O16"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_product",
+      "arguments": {
+        "sku": "AP09"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "create_exchange",
+      "arguments": {
+        "customer_id": "C16",
+        "quantity": 1,
+        "request_key": "REQ-EXC-O16-AP10",
+        "confirmed": true,
+        "original_sku": "AP10",
+        "order_id": "O16",
+        "replacement_sku": "AP09"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "original_sku": "record: item AP10",
+        "quantity": "caller: quantity 1",
+        "customer_id": "record: customer C16",
+        "order_id": "caller: order O16",
+        "replacement_sku": "caller: replacement AP09",
+        "confirmed": "caller: customer confirmation"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "overlay": "none",
+    "disposition": "store_credit_difference",
+    "overlay_intensity": "absent",
+    "overlay_vector": "none",
+    "counterparty": "verified_owner",
+    "interaction": "multi_turn",
+    "task": "exchange_item",
+    "interface": "clean_prose"
+  },
+  "sub_goals": [
+    "exchange_created_as_confirmed",
+    "exchange_not_called_refund"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

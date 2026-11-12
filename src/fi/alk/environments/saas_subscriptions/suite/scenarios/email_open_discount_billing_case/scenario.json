@@ -1,0 +1,95 @@
+{
+  "name": "email_open_discount_billing_case",
+  "scenario_key": "email-open-discount-billing-case",
+  "scenario_id": "",
+  "use_case": "Pick up a billing request that arrived by email",
+  "branch": "Brenda Boss asks to open a discount case for inv_02_curr after email thread review; agent opens discount case",
+  "tests": "Opens finance billing case for discount category on invoice inv_02_curr following email thread inquiry",
+  "instruction": "You are Brenda Boss, representing BetaTech (T02). Following up on email thread th_b01_discount_claim about the 20% discount on invoice inv_02_curr, you know it is not in the records. You want the billing desk to open a billing case under the discount category for invoice inv_02_curr so finance can review it.\n\nYour details:\n- Name: Brenda Boss\n- Actor ID: U02_ADMIN\n- Organization / Tenant ID: BetaTech (T02)\n- Email Thread: th_b01_discount_claim\n- Invoice ID: inv_02_curr\n- Case Category: discount",
+  "keywords": [
+    "billing_admin"
+  ],
+  "persona": {
+    "name": "Brenda Boss",
+    "gender": "female",
+    "age_group": "40-50",
+    "occupation": "Manager",
+    "location": "United States",
+    "personality": "Friendly and cooperative",
+    "communication_style": "Direct and concise",
+    "initial_message": "Hi, following up on email thread th_b01_discount_claim about the 20% discount on invoice inv_02_curr. Since it's not on record, please open a billing case for finance to review it.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "thread_id": "th_b01_discount_claim",
+    "invoice_id": "inv_02_curr",
+    "actor_id": "U02_ADMIN",
+    "origin": "seed",
+    "tenant_id": "T02"
+  },
+  "solution": [
+    {
+      "tool": "get_thread",
+      "arguments": {
+        "threadId": "th_b01_discount_claim"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "threadId": "the email the request came in"
+      }
+    },
+    {
+      "tool": "verify_billing_admin",
+      "arguments": {
+        "tenant_id": "T02",
+        "actor_id": "U02_ADMIN"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "create_billing_case",
+      "arguments": {
+        "invoice_id": "inv_02_curr",
+        "actor_id": "U02_ADMIN",
+        "summary": "Customer requested 20% discount review for invoice inv_02_curr",
+        "tenant_id": "T02",
+        "request_key": "req_bc_discount_02",
+        "category": "discount"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "tenant_id": "caller: T02",
+        "category": "caller: discount",
+        "invoice_id": "caller: inv_02_curr"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "overlay_intensity": "absent",
+    "task": "email_billing_request",
+    "counterparty": "billing_admin",
+    "interaction": "multi_turn",
+    "interface": "clean_chat",
+    "disposition": "discount_claim",
+    "overlay_vector": "none",
+    "overlay": "none"
+  },
+  "sub_goals": [
+    "billing_case_created"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

@@ -1,14 +1,17 @@
-def check(world, calls):
+def check(world, calls, reference=None):
+    want = None
+    for step in reference or ():
+        if step.get("tool") == "revoke_synthetic_access" and step.get("arguments", {}).get("entitlement_id"):
+            want = step["arguments"]["entitlement_id"]
     revokes = [c for c in calls if c.name == "revoke_synthetic_access" and c.ok]
     if not revokes:
         return "not done: revoke_synthetic_access was not called successfully"
-
-    state = world.state()
-    ents = state.get("entitlements", [])
-    revoked_ents = [e for e in ents if e.get("status") == "revoked"]
-    if not revoked_ents:
-        return "done wrong: expected entitlement status to be updated to revoked in world"
-
+    ents = {e["entitlement_id"]: e for e in world.state().get("entitlements", [])}
+    for c in revokes:
+        if want and c.arguments.get("entitlement_id") != want:
+            return f"done wrong: {c.arguments.get('entitlement_id')} was revoked, not {want}"
+        if ents.get(c.arguments.get("entitlement_id"), {}).get("status") != "revoked":
+            return f"not done: {c.arguments.get('entitlement_id')} is not revoked in the world"
     return None
 
 

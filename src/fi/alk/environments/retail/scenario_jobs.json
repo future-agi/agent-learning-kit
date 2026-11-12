@@ -1,0 +1,402 @@
+{
+  "a_deleted_policy_quoted_as_current": {
+    "job": "ownership",
+    "mcp": true
+  },
+  "an_email_that_reverses_itself": {
+    "job": "order_status",
+    "mcp": true
+  },
+  "cancel_authorized_return_before_shipment": {
+    "job": "pre_shipment",
+    "mcp": false
+  },
+  "cancel_delivered_order_refused": {
+    "job": "pre_shipment",
+    "mcp": false
+  },
+  "cancel_in_transit_order_refused": {
+    "job": "pre_shipment",
+    "mcp": false
+  },
+  "cancel_one_line_of_a_processing_order": {
+    "job": "policy",
+    "mcp": false
+  },
+  "cancel_order_after_order_number_correction": {
+    "job": "pre_shipment",
+    "mcp": false
+  },
+  "cancel_order_idempotent_duplicate_request": {
+    "job": "duplicates",
+    "mcp": false
+  },
+  "cancel_processing_order_before_shipment": {
+    "job": "pre_shipment",
+    "mcp": false
+  },
+  "cancel_received_return_policy_refusal": {
+    "job": "pre_shipment",
+    "mcp": false
+  },
+  "cancelling_a_return_twice": {
+    "job": "returns",
+    "mcp": false
+  },
+  "claimed_staff_privilege": {
+    "job": "ownership",
+    "mcp": false
+  },
+  "damaged_delivery_procedure_policy_inquiry": {
+    "job": "order_status",
+    "mcp": true
+  },
+  "damaged_delivery_return_and_case_from_email": {
+    "job": "order_status",
+    "mcp": true
+  },
+  "defective_clearance_item_support_escalation": {
+    "job": "order_status",
+    "mcp": false
+  },
+  "duplicate_address_change_idempotent_retry": {
+    "job": "duplicates",
+    "mcp": false
+  },
+  "duplicate_return_creation_idempotent_retry": {
+    "job": "duplicates",
+    "mcp": false
+  },
+  "duplicate_return_exhausted_line_refusal": {
+    "job": "duplicates",
+    "mcp": false
+  },
+  "email_cancel_order_idempotent_retry": {
+    "job": "duplicates",
+    "mcp": true
+  },
+  "email_cancel_processing_order_and_label_thread": {
+    "job": "email",
+    "mcp": true
+  },
+  "email_damaged_delivery_case_and_draft": {
+    "job": "email",
+    "mcp": true
+  },
+  "email_draft_disambiguate_thread_by_sender": {
+    "job": "email",
+    "mcp": true
+  },
+  "email_draft_footwear_window_policy_clarification": {
+    "job": "email",
+    "mcp": true
+  },
+  "email_draft_item_return_instructions": {
+    "job": "email",
+    "mcp": true
+  },
+  "email_draft_net_refundable_amount_calculation": {
+    "job": "email",
+    "mcp": true
+  },
+  "email_draft_received_return_inspection_status": {
+    "job": "email",
+    "mcp": true
+  },
+  "email_draft_tracking_inquiry_status": {
+    "job": "email",
+    "mcp": true
+  },
+  "email_draft_unverified_exception_claim_response": {
+    "job": "email",
+    "mcp": true
+  },
+  "email_embedded_injection_override_resisted": {
+    "job": "ownership",
+    "mcp": true
+  },
+  "email_human_draft_preserved_on_thread": {
+    "job": "email",
+    "mcp": true
+  },
+  "email_irrelevant_history_tracking_inquiry": {
+    "job": "email",
+    "mcp": false
+  },
+  "email_pickup_exchange_by_sender_search": {
+    "job": "email",
+    "mcp": true
+  },
+  "email_refund_status_lookup_from_thread": {
+    "job": "email",
+    "mcp": true
+  },
+  "email_repeated_request_already_authorized": {
+    "job": "duplicates",
+    "mcp": true
+  },
+  "email_restricted_thread_withheld_and_order_return_status": {
+    "job": "email",
+    "mcp": false
+  },
+  "exc_already_exchanged_line_refusal": {
+    "job": "exchanges",
+    "mcp": false
+  },
+  "exc_cross_category_swap_refusal": {
+    "job": "exchanges",
+    "mcp": false
+  },
+  "exc_duplicate_request_idempotency": {
+    "job": "exchanges",
+    "mcp": false
+  },
+  "exc_email_price_difference_store_credit": {
+    "job": "exchanges",
+    "mcp": true
+  },
+  "exc_final_sale_item_refusal": {
+    "job": "exchanges",
+    "mcp": false
+  },
+  "exc_higher_price_upgrade": {
+    "job": "exchanges",
+    "mcp": false
+  },
+  "exc_out_of_window_exchange_refusal": {
+    "job": "exchanges",
+    "mcp": false
+  },
+  "exc_policy_rules_inquiry_drive": {
+    "job": "exchanges",
+    "mcp": true
+  },
+  "exc_same_sku_size_exchange": {
+    "job": "exchanges",
+    "mcp": false
+  },
+  "exc_store_credit_balance_inquiry": {
+    "job": "exchanges",
+    "mcp": true
+  },
+  "exc_store_credit_cash_out_refusal": {
+    "job": "exchanges",
+    "mcp": false
+  },
+  "fraudulent_bulk_return_quantity_exceeded_refusal": {
+    "job": "ownership",
+    "mcp": false
+  },
+  "lost_delivered_package_support_escalation": {
+    "job": "order_status",
+    "mcp": false
+  },
+  "order_invoice_discount_breakdown_retrieval": {
+    "job": "order_status",
+    "mcp": false
+  },
+  "ownership_verification_wrong_postal_retry": {
+    "job": "ownership",
+    "mcp": false
+  },
+  "partial_completion_one_eligible_line_and_one": {
+    "job": "returns",
+    "mcp": false
+  },
+  "policy_abuse_thresholds_restricted_withheld": {
+    "job": "policy",
+    "mcp": true
+  },
+  "policy_accessories_window_inquiry": {
+    "job": "policy",
+    "mcp": true
+  },
+  "policy_changes_since_2025_comparison": {
+    "job": "policy",
+    "mcp": true
+  },
+  "policy_clearance_final_sale_policy_tool": {
+    "job": "policy",
+    "mcp": false
+  },
+  "policy_defective_clearance_exceptions": {
+    "job": "policy",
+    "mcp": true
+  },
+  "policy_draft_60_day_window_inquiry": {
+    "job": "policy",
+    "mcp": true
+  },
+  "policy_duplicate_title_resolution": {
+    "job": "policy",
+    "mcp": true
+  },
+  "policy_footwear_window_policy_tool": {
+    "job": "policy",
+    "mcp": false
+  },
+  "policy_holiday_window_scheduled_future": {
+    "job": "policy",
+    "mcp": true
+  },
+  "policy_scanned_declaration_unsupported_format": {
+    "job": "policy",
+    "mcp": true
+  },
+  "policy_store_credit_cash_conversion_inquiry": {
+    "job": "policy",
+    "mcp": true
+  },
+  "privacy_cross_customer_email_thread_blocked": {
+    "job": "ownership",
+    "mcp": true
+  },
+  "promo_code_said_to_be_missing_price": {
+    "job": "ownership",
+    "mcp": false
+  },
+  "prompt_injection_desk_notes_instruction_ignored": {
+    "job": "ownership",
+    "mcp": true
+  },
+  "redirect_shipped_order_refused": {
+    "job": "pre_shipment",
+    "mcp": false
+  },
+  "ret_accessory_window_expired": {
+    "job": "returns",
+    "mcp": false
+  },
+  "ret_apparel_near_window_end": {
+    "job": "returns",
+    "mcp": false
+  },
+  "ret_email_corrected_item": {
+    "job": "returns",
+    "mcp": true
+  },
+  "ret_email_corrected_quantity": {
+    "job": "returns",
+    "mcp": true
+  },
+  "ret_email_net_refund_inquiry": {
+    "job": "returns",
+    "mcp": true
+  },
+  "ret_email_standard_return": {
+    "job": "returns",
+    "mcp": true
+  },
+  "ret_in_transit_return_refusal": {
+    "job": "returns",
+    "mcp": false
+  },
+  "ret_multi_line_single_return": {
+    "job": "returns",
+    "mcp": false
+  },
+  "ret_policy_library_lookup_before_return": {
+    "job": "returns",
+    "mcp": true
+  },
+  "ret_quantity_exceeds_remaining": {
+    "job": "returns",
+    "mcp": false
+  },
+  "s06_out_of_window_return_refusal": {
+    "job": "returns",
+    "mcp": false
+  },
+  "s07_unauthorized_third_party_privacy_block": {
+    "job": "ownership",
+    "mcp": false
+  },
+  "s08_prompt_injection_jailbreak_refusal": {
+    "job": "ownership",
+    "mcp": false
+  },
+  "s09_multi_item_quantity_correction_flow": {
+    "job": "returns",
+    "mcp": false
+  },
+  "s10_restocking_fee_pricing_calculation": {
+    "job": "returns",
+    "mcp": false
+  },
+  "s11_fraudulent_duplicate_return_attempt": {
+    "job": "duplicates",
+    "mcp": false
+  },
+  "s12_damaged_delivery_support_escalation": {
+    "job": "order_status",
+    "mcp": false
+  },
+  "search_orders_by_credentials_status_inquiry": {
+    "job": "order_status",
+    "mcp": false
+  },
+  "shipping_change_rules_from_the_library": {
+    "job": "policy",
+    "mcp": true
+  },
+  "store_credit_transfer_to_friend_declined": {
+    "job": "ownership",
+    "mcp": false
+  },
+  "track_in_transit_order_status": {
+    "job": "order_status",
+    "mcp": false
+  },
+  "track_order_from_email_inquiry": {
+    "job": "order_status",
+    "mcp": true
+  },
+  "track_processing_order_label_created": {
+    "job": "order_status",
+    "mcp": false
+  },
+  "unauthorized_spouse_order_return_blocked": {
+    "job": "ownership",
+    "mcp": false
+  },
+  "unverified_email_claim_exception_rejected": {
+    "job": "ownership",
+    "mcp": true
+  },
+  "update_shipping_address_corrected_house_number": {
+    "job": "pre_shipment",
+    "mcp": false
+  },
+  "update_shipping_address_from_email": {
+    "job": "pre_shipment",
+    "mcp": true
+  },
+  "v15_s01_happy_path_single_item_return": {
+    "job": "returns",
+    "mcp": false
+  },
+  "v15_s02_final_sale_policy_boundary": {
+    "job": "returns",
+    "mcp": false
+  },
+  "v15_s03_quantity_already_returned_duplicate": {
+    "job": "duplicates",
+    "mcp": false
+  },
+  "v15_s04_discounted_partial_refund_arithmetic": {
+    "job": "returns",
+    "mcp": false
+  },
+  "v15_s05_service_failure_label_escalation": {
+    "job": "duplicates",
+    "mcp": false
+  },
+  "verify_carrier_damage_note_from_email": {
+    "job": "order_status",
+    "mcp": true
+  },
+  "which_order_to_cancel_is_unclear": {
+    "job": "pre_shipment",
+    "mcp": false
+  }
+}

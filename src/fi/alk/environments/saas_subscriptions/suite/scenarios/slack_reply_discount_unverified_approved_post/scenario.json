@@ -1,0 +1,97 @@
+{
+  "name": "slack_reply_discount_unverified_approved_post",
+  "scenario_key": "slack-reply-discount-unverified-approved-post",
+  "scenario_id": "",
+  "use_case": "Answer an account manager in #billing-escalations",
+  "branch": "Billing lead provides approval APP-BL-402 to reply to BM03 that no discount is on record for BetaTech and a case can be opened",
+  "tests": "Posts approved reply to BM03 stating no discount record exists and offering a finance case",
+  "instruction": "You are Rachel Adams, Billing Lead at Cloudnest. You want the billing desk to check BM03 (ts: '1791883800.000003') for BetaTech (T02) and post our approved reply under approval ID 'APP-BL-402' stating no discount is on file.\n\nYour details:\n- Role: Billing Lead\n- Your User ID: U_BL8\n- Tenant ID: T02 (BetaTech)\n- Slack Channel: CH_BILLESC (#billing-escalations)\n- Message Timestamp: 1791883800.000003\n- Approval ID: APP-BL-402\n- Approved Message: \"There is no record of a 20% discount for BetaTech. We can open a billing case for finance to review.\"",
+  "keywords": [
+    "slack_escalation"
+  ],
+  "persona": {
+    "name": "Rachel Adams",
+    "gender": "female",
+    "age_group": "32-40",
+    "occupation": "Manager",
+    "location": "Canada",
+    "personality": "Professional and formal",
+    "communication_style": "Direct and concise",
+    "initial_message": "Hello, please check BM03 in #billing-escalations for BetaTech (T02) and post the reply with approval APP-BL-402.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "origin": "generated",
+    "records": {
+      "message_ts": "1791883800.000003",
+      "tenant_id": "T02",
+      "approval_id": "APP-BL-402",
+      "channel_id": "CH_BILLESC",
+      "caller_id": "U_BL8"
+    }
+  },
+  "solution": [
+    {
+      "tool": "slack_read_thread",
+      "arguments": {
+        "channel_id": "CH_BILLESC",
+        "message_ts": "1791883800.000003"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "message_ts": "caller: 1791883800.000003"
+      }
+    },
+    {
+      "tool": "get_credit_notes",
+      "arguments": {
+        "tenant_id": "T02",
+        "actor_id": "U_BL8"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "slack_send_message",
+      "arguments": {
+        "approval_id": "APP-BL-402",
+        "message": "There is no record of a 20% discount for BetaTech. We can open a billing case for finance to review.",
+        "request_key": "req_sm_402",
+        "thread_ts": "1791883800.000003",
+        "channel_id": "CH_BILLESC"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "channel_id": "caller: CH_BILLESC",
+        "thread_ts": "caller: 1791883800.000003"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "disposition": "standard",
+    "task": "answer_slack_escalation",
+    "interaction": "resumed",
+    "overlay": "none",
+    "counterparty": "billing_lead",
+    "overlay_vector": "none",
+    "overlay_intensity": "absent",
+    "interface": "clean_chat"
+  },
+  "sub_goals": [
+    "slack_reply_in_thread"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

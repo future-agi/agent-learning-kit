@@ -1,13 +1,19 @@
-def check(world, calls):
+def check(world, calls, reference=None):
+    want = {}
+    for step in reference or ():
+        if step.get("tool") == "schedule_plan_change":
+            want.update(step.get("arguments", {}))
     sched_calls = [c for c in calls if c.name == "schedule_plan_change" and c.ok]
     if not sched_calls:
         return "not done: schedule_plan_change was not called successfully"
-    pending = [r for r in world.state().get("scheduled_changes", []) if r.get("status") == "pending"]
-    if not pending:
-        return "not done: no pending scheduled change found in world state"
+    state = world.state()
+    now = (state.get("clock") or [{"now": ""}])[0]["now"]
+    made = [r for r in state.get("scheduled_changes", []) if r.get("status") in ("pending", "applied") and r.get("created_at") == now]
+    if not made:
+        return "not done: no pending scheduled change was created by this run"
     for c in sched_calls:
         tid = c.arguments.get("tenant_id")
-        match = [r for r in pending if r.get("tenant_id") == tid]
+        match = [r for r in made if r.get("tenant_id") == tid]
         if not match:
             return f"done wrong: no pending change in world state for tenant {tid!r}"
         sc = match[-1]
@@ -15,7 +21,102 @@ def check(world, calls):
             return f"done wrong: target_plan_id in world ({sc.get('target_plan_id')!r}) does not match call ({c.arguments.get('target_plan_id')!r})"
         if c.arguments.get("target_seats") is not None and sc.get("target_seats") != c.arguments.get("target_seats"):
             return f"done wrong: target_seats in world ({sc.get('target_seats')}) does not match call ({c.arguments.get('target_seats')})"
+    tid = want.get("tenant_id")
+    if tid:
+        mine = [r for r in made if r.get("tenant_id") == tid]
+        if not mine:
+            return f"done wrong: no change was scheduled for tenant {tid}"
+        if len(mine) > 1:
+            return f"done wrong: {len(mine)} changes were scheduled for tenant {tid}, one was asked for"
+        r = mine[0]
+        if want.get("target_plan_id") and r.get("target_plan_id") != want["target_plan_id"]:
+            return f"done wrong: {r.get('target_plan_id')} was scheduled, the admin confirmed {want['target_plan_id']}"
+        if want.get("target_seats") is not None and r.get("target_seats") != want["target_seats"]:
+            return f"done wrong: {r.get('target_seats')} seats were scheduled, the admin confirmed {want['target_seats']}"
+        if want.get("effective_timing") == "immediate":
+            sub = next((s for s in state.get("subscriptions", []) if s.get("tenant_id") == tid and s.get("status") == "active"), {})
+            if r.get("status") != "applied" or (sub.get("plan_id"), sub.get("seat_count")) != (r.get("target_plan_id"), r.get("target_seats")):
+                return f"done wrong: the admin asked for the change now, but the subscription is still {sub.get('plan_id')} with {sub.get('seat_count')} seats"
+        if want.get("effective_timing") == "end_of_period":
+            sub = next((s for s in state.get("subscriptions", []) if s.get("tenant_id") == tid and s.get("status") == "active"), {})
+            if r.get("effective_at") != sub.get("current_period_end"):
+                return f"done wrong: the change takes effect {r.get('effective_at')}, the admin asked for the end of the period {sub.get('current_period_end')}"
+    missing = _evidence_missing(world, calls, reference)
+    if missing:
+        return f"done blind: the decision rests on {', '.join(missing)}, which was never read"
     return None
+
+def _evidence_missing(world, calls, reference):
+    """The email thread or Slack thread the reference fixes and whether its content reached this run:
+    every message of the email thread (or the one email) with its body returned by a read, and the
+    text of every message in the Slack thread (the desk's own posts aside) returned by a thread read,
+    channel read or search. Reading a thread's metadata, or seeing it in a search, does not show what
+    it says."""
+    state = world.state()
+    desk = (state.get("current_actor") or [{}])[0].get("user_id")
+    wanted = []
+    for step in reference or ():
+        a = step.get("arguments", {})
+        if step.get("tool") == "get_thread" and a.get("threadId"):
+            wanted.append(("email thread", a["threadId"]))
+        elif step.get("tool") == "get_message" and a.get("messageId"):
+            wanted.append(("email", a["messageId"]))
+        elif step.get("tool") == "slack_read_thread" and a.get("message_ts"):
+            wanted.append(("Slack thread", a["message_ts"]))
+    bodies = _bodies_shown(calls)
+    texts = _texts_shown(calls)
+    missing = []
+    for kind, target in wanted:
+        if kind in ("email thread", "email"):
+            ids = [m["id"] for m in state.get("gmail_messages", []) if m["thread_id" if kind == "email thread" else "id"] == target]
+            seen = bool(ids) and all(i in bodies for i in ids)
+        elif kind == "Slack thread":
+            needed = [m["ts"] for m in state.get("slack_messages", []) if (m["ts"] == target or m.get("thread_ts") == target) and m["user_id"] != desk]
+            seen = bool(needed) and all(t in texts for t in needed)
+        if not seen:
+            missing.append(f"{kind} {target}")
+    return missing
+
+
+def _bodies_shown(calls):
+    """The emails whose body a successful read returned: a full read of the message or of its
+    thread. A metadata-only or minimal read, or a search snippet, returns no body."""
+    shown = set()
+
+    def walk(value):
+        if isinstance(value, dict):
+            if value.get("id") and "plaintextBody" in value:
+                shown.add(value["id"])
+            for one in value.values():
+                walk(one)
+        elif isinstance(value, list):
+            for one in value:
+                walk(one)
+
+    for c in calls:
+        if c.ok and c.name in ("get_thread", "get_message"):
+            walk(c.result)
+    return shown
+
+
+def _texts_shown(calls):
+    """The Slack messages whose text a successful thread read, channel read or search returned."""
+    shown = set()
+
+    def walk(value):
+        if isinstance(value, dict):
+            if value.get("ts") and "text" in value:
+                shown.add(value["ts"])
+            for one in value.values():
+                walk(one)
+        elif isinstance(value, list):
+            for one in value:
+                walk(one)
+
+    for c in calls:
+        if c.ok and c.name in ("slack_read_thread", "slack_read_channel", "slack_search_public_and_private"):
+            walk(c.result)
+    return shown
 
 
 if __name__ == "__main__":
