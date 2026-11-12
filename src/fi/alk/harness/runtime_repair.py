@@ -1007,10 +1007,16 @@ def _tool_mapping_selectors_changed(before, after) -> bool:
     )
 
 
-def _runtime_names_listed_file(root: Path, runtime: Runtime) -> bool:
+def _runtime_names_listed_file(
+    root: Path, runtime: Runtime, existing: Runtime | None = None
+) -> bool:
     """Whether any command token or path the runtime names resolves, inside the source, to a listed
     file. Judged where it resolves and before anything is opened, so a listed file, a link to one
-    and a missing one get one answer."""
+    and a missing one get one answer.
+
+    With ``existing`` (the contract's own runtime), only names the runtime adds or changes are
+    judged: a name already in the same field there was set by the customer or the kit, not chosen
+    by the model, so carrying it over is not new."""
 
     workdir = (root / runtime.workdir).resolve() if runtime.workdir else root
 
@@ -1020,12 +1026,24 @@ def _runtime_names_listed_file(root: Path, runtime: Runtime) -> bool:
             return secret_text(resolved.relative_to(root).as_posix())
         return secret_text(resolved.as_posix())
 
-    paths = [runtime.workdir, runtime.compose_file, runtime.dockerfile]
-    paths += [*runtime.compose_overrides, *runtime.requirements_files]
+    def new_only(values: list[str], kept: list[str] | None) -> list[str]:
+        return [value for value in values if kept is None or value not in kept]
+
+    def old(field: str) -> list[str] | None:
+        if existing is None:
+            return None
+        value = getattr(existing, field)
+        return [value] if isinstance(value, str) else list(value)
+
+    paths = new_only([runtime.workdir], old("workdir"))
+    paths += new_only([runtime.compose_file], old("compose_file"))
+    paths += new_only([runtime.dockerfile], old("dockerfile"))
+    paths += new_only(list(runtime.compose_overrides), old("compose_overrides"))
+    paths += new_only(list(runtime.requirements_files), old("requirements_files"))
     if any(raw and (listed(raw, root) or listed(raw, workdir)) for raw in paths):
         return True
     tokens: list[str] = []
-    for token in runtime.command:
+    for token in new_only(list(runtime.command), old("command")):
         tokens.append(token)
         try:
             tokens.extend(shlex.split(token))
@@ -1096,7 +1114,7 @@ def validate_runtime_plan_patch(
         if evidence.is_file():
             evidence_files.append(evidence)
 
-    if check_secret_list and _runtime_names_listed_file(root, patch.runtime):
+    if check_secret_list and _runtime_names_listed_file(root, patch.runtime, contract.runtime):
         # The same answer as for evidence: a run of a listed file would put its first line in a
         # traceback or build error that goes back to the model.
         raise ValueError("runtime_repair_runtime_names_kept_out_file")

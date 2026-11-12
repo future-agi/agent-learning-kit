@@ -180,6 +180,12 @@ _CREDENTIAL_FIELDS = {
     "workdir": lambda ref: {"workdir": ref},
     "compose_file": lambda ref: {"compose_file": ref},
     "dockerfile": lambda ref: {"dockerfile": ref},
+    "compose_overrides": lambda ref: {
+        "compose_file": "docker-compose.yml",
+        "service": "app",
+        "compose_overrides": [ref],
+    },
+    "requirements_files": lambda ref: {"requirements_files": [ref]},
 }
 
 
@@ -1221,6 +1227,106 @@ def test_model_facing_validation_still_refuses_a_listed_compose_file_name(tmp_pa
                 patch,
                 allowed_diagnostic_codes={"generated_runtime_plan_invalid"},
             )
+
+
+def _listed_compose_contract() -> AgentContract:
+    return AgentContract(
+        agent="fixture",
+        runtime=Runtime(
+            language="python",
+            execution="compose",
+            compose_file="compose.env.yaml",
+            service="app",
+            workdir="service",
+            interface=RuntimeInterface(kind="http", port=8080, path="/chat"),
+        ),
+    )
+
+
+def _listed_compose_source(tmp_path):
+    (tmp_path / "compose.env.yaml").write_text(
+        "services:\n  app:\n    image: example/app\n", encoding="utf-8"
+    )
+    (tmp_path / "service").mkdir()
+    (tmp_path / "service" / "app.py").write_text("print('agent')\n", encoding="utf-8")
+
+
+def _listed_compose_patch(contract: AgentContract, **changes) -> RuntimePlanPatch:
+    runtime = contract.runtime.model_copy(update=changes)
+    return RuntimePlanPatch(
+        base_contract_hash=_contract_hash(contract),
+        runtime=runtime,
+        evidence_paths=("service/app.py",),
+        diagnostic_codes=("generated_runtime_plan_invalid",),
+        summary="Change the runtime.",
+    )
+
+
+def test_model_patch_keeping_the_contracts_listed_compose_file_passes(tmp_path) -> None:
+    # The customer's own compose file has a listed name; the model didn't choose it, so a patch
+    # that carries it over and changes something else is judged on what it changed.
+    _listed_compose_source(tmp_path)
+    contract = _listed_compose_contract()
+    patch = _listed_compose_patch(
+        contract, interface=RuntimeInterface(kind="http", port=9090, path="/chat")
+    )
+
+    repaired = validate_runtime_plan_patch(
+        tmp_path, contract, patch, allowed_diagnostic_codes={"generated_runtime_plan_invalid"}
+    )
+
+    assert repaired.runtime.compose_file == "compose.env.yaml"
+    assert repaired.runtime.interface.port == 9090
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"compose_file": "other.env.yaml"},
+        {"command": ["python", ".env"]},
+        {"dockerfile": ".alk-runtime.env"},
+    ],
+)
+def test_model_patch_newly_naming_a_listed_file_is_still_refused(tmp_path, changes) -> None:
+    _listed_compose_source(tmp_path)
+    contract = _listed_compose_contract()
+    patch = _listed_compose_patch(contract, **changes)
+
+    with pytest.raises(ValueError, match="runtime_repair_runtime_names_kept_out_file"):
+        validate_runtime_plan_patch(
+            tmp_path, contract, patch, allowed_diagnostic_codes={"generated_runtime_plan_invalid"}
+        )
+
+
+def test_kit_extras_repair_survives_a_listed_name_the_contract_already_carries(tmp_path) -> None:
+    # _explicit_dependency_candidate is still on the model-facing check. A compose runtime can't
+    # take an extras repair (it needs a native build root), so the carried-over listed name here
+    # is a command operand; it must not make the kit's repair return None.
+    from fi.alk.harness.runtime_repair import _explicit_dependency_candidate
+
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname="agent-sdk"\nversion="1"\n'
+        '[project.optional-dependencies]\nvertex=["google-cloud-aiplatform"]\n'
+    )
+    contract = AgentContract(
+        agent="test",
+        runtime=Runtime(
+            language="python",
+            execution="native",
+            command=["python", "-m", "server", "--config=prod.env.json"],
+            interface=RuntimeInterface(kind="http", port=8080, path="/chat"),
+        ),
+    )
+    guidance = (
+        "<untrusted_current_target_process_logs>\nInstall with: pip install "
+        '"agent-sdk[vertex]"\n</untrusted_current_target_process_logs>'
+    )
+
+    patch = _explicit_dependency_candidate(tmp_path, contract, guidance)
+
+    assert patch is not None
+    assert patch.runtime.extras == ["vertex"]
+    assert patch.runtime.command == contract.runtime.command
 
 
 def test_missing_compose_config_alias_uses_unique_supplied_file_alias(
