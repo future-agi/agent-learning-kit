@@ -1359,11 +1359,13 @@ _COMPOUND_START = re.compile(
 _MOST_COLONS_TRIED = 8
 
 
-def _statements(code: str) -> list[str]:
+def _statements(code: str, capped: list[bool] | None = None) -> list[str]:
     """The pieces of one source line (its comment already cut) a statement can start at: each
     ``;`` segment, and for a segment that opens a compound statement (``if True: import x``) the
     text after each of its first few ``:``. A piece that is no import is skipped by the caller.
-    A line search, so a ``;`` or ``:`` inside a string splits it too, which only adds a candidate."""
+    A line search, so a ``;`` or ``:`` inside a string splits it too, which only adds a candidate.
+    Given ``capped``, its one item is set when a segment has more colons than are tried and an
+    ``import`` after the last one tried: that import isn't searched, so the caller cuts."""
     pieces: list[str] = []
     for segment in code.split(";"):
         segment = segment.strip()
@@ -1375,10 +1377,14 @@ def _statements(code: str) -> list[str]:
                 if at < 0:
                     break
                 pieces.append(segment[at + 1 :].strip())
+            else:
+                rest = segment[at + 1 :]
+                if capped is not None and ":" in rest and "import" in rest:
+                    capped[0] = True
     return pieces
 
 
-def _import_lines(content: str) -> list[tuple[int, str]]:
+def _import_lines(content: str, capped: list[bool] | None = None) -> list[tuple[int, str]]:
     """The names a line search finds ``content`` importing, each with its level, in the shape
     ``_python_imports`` gives: ``import a.b, c`` and ``from .x import y`` / ``from a.b import c``
     at the start of a line (indented or not), a ``;`` segment, or the text after a compound
@@ -1387,12 +1393,13 @@ def _import_lines(content: str) -> list[tuple[int, str]]:
     bytes to the walk's search total.
 
     It misses an import built at run time (``importlib.import_module(name)``, ``__import__``), one
-    inside a multi-line string, and a name only a decoded codec spells.
+    inside a multi-line string, and a name only a decoded codec spells. Given ``capped``, its one
+    item is set when a line had an import past the colons tried (``_statements``).
     """
     names: list[tuple[int, str]] = []
     lines = iter(content.split("\n"))
     for line in lines:
-        for code in _statements(line.split("#", 1)[0]):
+        for code in _statements(line.split("#", 1)[0], capped):
             if code.startswith("import") and code[6:7] in (" ", "\t"):
                 for part in code[6:].split(","):
                     words = part.split()
@@ -1760,10 +1767,14 @@ def imported_by_agent(
                 # searched instead (in a walk that searches), which is a cut only when the
                 # search has no room.
                 if searches and search_room(len(raw)):
+                    capped = [False]
                     results = [
-                        _import_lines(reading) if skipped else result
+                        _import_lines(reading, capped) if skipped else result
                         for reading, result, skipped in zip(readings, results, refused)
                     ]
+                    # An import past the colons tried isn't followed: a cut, never silent.
+                    limited[0] |= capped[0]
+                    unread[0] |= capped[0]
                 else:
                     limited[0] = True
             names = list(dict.fromkeys(name for found in results if found for name in found))

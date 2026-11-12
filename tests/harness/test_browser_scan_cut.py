@@ -913,6 +913,23 @@ def test_an_import_after_a_semicolon_or_a_colon_is_line_searched_and_no_cut(tmp_
     assert browser_scan(repo, "agents/a") == (["playwright"], frozenset())
 
 
+def test_an_import_past_the_colon_cap_is_a_cut(tmp_path):
+    # The line search tries a compound statement's first 8 colons; one with more before its
+    # import isn't followed, so the walk left code unread and the reading is cut, not silent.
+    line = "if a[1:2:3:4:5:6:7:8:9]: import common.util"
+    repo = _padded(
+        tmp_path / "source",
+        **{"agents/a/z_main.py": f"{line}\n", "common/util.py": "import playwright\n"},
+    )
+    assert browser_scan(repo, "agents/a") == ([], frozenset({"import_walk"}))
+
+
+def test_a_line_past_the_colon_cap_with_no_import_after_is_no_cut(tmp_path):
+    line = "if a[1:2:3:4:5:6:7:8:9]: x = 1"
+    repo = _padded(tmp_path / "source", **{"agents/a/z_main.py": f"{line}\nimport os\n"})
+    assert browser_scan(repo, "agents/a") == ([], frozenset())
+
+
 def test_a_file_over_the_search_cap_is_not_opened_and_is_a_cut(tmp_path, monkeypatch):
     # Ten sparse 5 MiB files in the agent's folder: each is over the 4 MiB a file is searched at,
     # so none is opened (the bytes used to be read, then dropped uncharged).
