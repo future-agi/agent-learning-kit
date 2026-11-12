@@ -157,7 +157,7 @@ def test_isolation_refuses_a_customer_process_without_a_declared_user(
     with pytest.raises(pr.ProcessRuntimeError) as refused:
         launch(tmp_path)
 
-    assert refused.value.code == "undeclared_user_refused"
+    assert refused.value.code == "internal_undeclared_user"
     assert refused.value.domain is pr.FailureDomain.INFRASTRUCTURE
 
 

@@ -1307,9 +1307,10 @@ def _as_declared_user(kwargs: dict[str, Any]) -> dict[str, Any]:
     if isolation_mode() is not IsolationMode.PER_USER:
         return kwargs
     if kwargs.get("user") is None:
+        # `internal_`: every call site passes a declared user, so reaching here is a bug.
         raise ProcessRuntimeError(
             "spawn",
-            "undeclared_user_refused",
+            "internal_undeclared_user",
             "per-user isolation is on, and this process has no declared user",
             domain=FailureDomain.INFRASTRUCTURE,
         )
