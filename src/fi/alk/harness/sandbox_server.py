@@ -62,7 +62,16 @@ from .job import (
 )
 from .packaging import PackagingManifest, inspect_packaging
 from .provision import ProvisionError, source_fingerprint, stop
-from .secrets import SecretResolutionError, resolve_worker_secrets, worker_environment
+from .secrets import (
+    CONTROLLER_CONNECTION_NAMES,
+    RUNNER_RESERVED_ENVIRONMENT as _RUNNER_RESERVED_ENVIRONMENT,
+    SecretResolutionError,
+    TARGET_PROVIDER_ALIASES_ENV,
+    client_name_reserved,
+    controller_name_reserved,
+    resolve_worker_secrets,
+    worker_environment,
+)
 from .source_folder import SubfolderNotFound, agent_folder, subfolder_not_found
 
 
@@ -119,6 +128,7 @@ class LocalSandboxRequest(BaseModel):
                     "A subfolder needs the generic harness, which this job didn't ask for."
                 )
         _validate_environment_values(self.environment_values, self.secret_refs)
+        _validate_controller_names(self.connector_config, self.secret_refs)
         return self
 
 
@@ -144,6 +154,7 @@ class SandboxPreflightRequest(BaseModel):
         ):
             raise ValueError("exactly_one_source_required")
         _validate_environment_values(self.environment_values, self.secret_refs)
+        _validate_controller_names(self.connector_config, self.secret_refs)
         return self
 
 
@@ -162,6 +173,9 @@ class SandboxRerunRequest(BaseModel):
     @model_validator(mode="after")
     def _valid_environment(self) -> "SandboxRerunRequest":
         _validate_environment_values(self.environment_values, self.secret_refs)
+        # The same alias checks a submit runs: a rerun's refs reach docker compose's environment
+        # under their own names just as a submit's do.
+        _validate_controller_names({}, self.secret_refs)
         return self
 
 
@@ -260,6 +274,9 @@ class LocalSandbox:
         # job. Persisted job/state artifacts contain the opaque mounted references created below.
         self._ephemeral_secrets: dict[str, dict[str, str]] = {}
         self._ephemeral_secret_file_names: dict[str, set[str]] = {}
+        # The aliases the caller sent as target_provider refs for the latest run of each job (a
+        # rerun rebuilds them from its own refs). They never become controller variables.
+        self._ephemeral_target_aliases: dict[str, frozenset[str]] = {}
         self._recover_orphans()
 
     async def upload_secret_file(
@@ -726,16 +743,24 @@ class LocalSandbox:
                     request.secret_refs, claimed_files, secret_file_names
                 )
             else:
-                resolved = resolve_worker_secrets(
-                    request.secret_refs,
-                    environment={**os.environ, **claimed_files},
-                )
+                try:
+                    resolved = _resolve_local_references(
+                        request.secret_refs, claimed_files
+                    )
+                except SecretResolutionError as exc:
+                    if str(exc).startswith("secret_reference_reserved"):
+                        raise HTTPException(status_code=400, detail=str(exc)) from exc
+                    raise
         except Exception:
             self._delete_job_secret_files(job_id)
             raise
         runtime_configuration.update(resolved)
         self._ephemeral_secrets[job_id] = dict(runtime_configuration)
         self._ephemeral_secret_file_names[job_id] = secret_file_names
+        # Rebuilt from this request's own refs, not the submit's.
+        self._ephemeral_target_aliases[job_id] = _caller_target_aliases(
+            request.secret_refs, {*request.environment_values, *secret_file_names}
+        )
 
         state_path = self.jobs_root / job_id / "state.json"
         state = _read_json(state_path)
@@ -786,11 +811,23 @@ class LocalSandbox:
                 replay_root.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copytree(output / "environment-bundle", replay_root)
                 runtime_configuration = self._ephemeral_secrets.get(job.job_id, {})
+                file_names = self._ephemeral_secret_file_names.get(job.job_id, set())
+                target_aliases = self._rerun_target_aliases(job)
                 child_environment = worker_environment(
-                    {}, runtime_configuration=runtime_configuration
+                    {
+                        name: value
+                        for name, value in runtime_configuration.items()
+                        if name in CONTROLLER_CONNECTION_NAMES
+                        and name not in file_names
+                        and name not in target_aliases
+                    },
+                    runtime_configuration=runtime_configuration,
                 )
                 child_environment["ALK_RUNTIME_CONFIGURATION_NAMES"] = ",".join(
                     sorted(runtime_configuration)
+                )
+                child_environment[TARGET_PROVIDER_ALIASES_ENV] = ",".join(
+                    sorted(target_aliases)
                 )
                 child_environment["ALK_RUNTIME_SECRET_FILE_NAMES"] = ",".join(
                     sorted(self._ephemeral_secret_file_names.get(job.job_id, set()))
@@ -927,6 +964,7 @@ class LocalSandbox:
                 self._tasks.pop(job.job_id, None)
                 self._ephemeral_secrets.pop(job.job_id, None)
                 self._ephemeral_secret_file_names.pop(job.job_id, None)
+                self._ephemeral_target_aliases.pop(job.job_id, None)
                 self._delete_job_secret_files(job.job_id)
                 shutil.rmtree(replay_root, ignore_errors=True)
 
@@ -1016,6 +1054,11 @@ class LocalSandbox:
             ],
         )
 
+    def _rerun_target_aliases(self, job: HarnessJob) -> frozenset[str]:
+        """The aliases this rerun's own refs carried; the saved job's if none are held."""
+        held = self._ephemeral_target_aliases.get(job.job_id)
+        return held if held is not None else _job_target_aliases(job)
+
     def _resolve_job_secrets(self, job: HarnessJob) -> dict[str, str]:
         """Resolve a job's refs; vault refs only from this job's own map."""
         # Read here rather than passed in, so no caller can hand the resolver a wider store.
@@ -1042,9 +1085,7 @@ class LocalSandbox:
                 raise SecretResolutionError(f"secret_reference_unavailable: {alias}")
             resolved[str(alias)] = value
         if others:
-            resolved.update(
-                resolve_worker_secrets(others, environment={**os.environ, **values})
-            )
+            resolved.update(_resolve_local_references(others, values))
         return resolved
 
     async def _execute(self, job: HarnessJob, source: Path | None) -> None:
@@ -1143,17 +1184,43 @@ class LocalSandbox:
                         if archived.exists():
                             shutil.rmtree(archived)
                         output.replace(archived)
+                    target_aliases = _job_target_aliases(job)
                     runtime_names = {
                         str(name)
                         for name in job.metadata.get("environment_value_names", [])
+                    } | {
+                        # The customer agent's own credentials: the agent's, never the controller's.
+                        str(alias)
+                        for alias, reference in job.agent.secret_refs.items()
+                        if _target_alias(reference)
                     }
+                    config_controller, config_runtime = _configuration_environment(
+                        job.agent.config
+                    )
+                    # The job's own values win over its connector configuration.
                     runtime_configuration = {
-                        name: value
-                        for name, value in resolved_secrets.items()
-                        if name in runtime_names
+                        **config_runtime,
+                        **{
+                            name: value
+                            for name, value in resolved_secrets.items()
+                            if name in runtime_names
+                        },
+                    }
+                    file_names = {
+                        str(name)
+                        for name in job.metadata.get("secret_file_names", [])
                     }
                     controller_configuration = {
-                        **_configuration_environment(job.agent.config),
+                        **config_controller,
+                        # The job's own values for connection names are the controller's too.
+                        **{
+                            name: value
+                            for name, value in resolved_secrets.items()
+                            if name in runtime_names
+                            and name in CONTROLLER_CONNECTION_NAMES
+                            and name not in file_names
+                            and name not in target_aliases
+                        },
                         **{
                             name: value
                             for name, value in resolved_secrets.items()
@@ -1169,6 +1236,9 @@ class LocalSandbox:
                     # in this child process environment and never enter the job or bundle.
                     child_environment["ALK_RUNTIME_CONFIGURATION_NAMES"] = ",".join(
                         sorted(runtime_configuration)
+                    )
+                    child_environment[TARGET_PROVIDER_ALIASES_ENV] = ",".join(
+                        sorted(target_aliases)
                     )
                     child_environment["ALK_RUNTIME_SECRET_FILE_NAMES"] = ",".join(
                         sorted(self._ephemeral_secret_file_names.get(job.job_id, set()))
@@ -1293,6 +1363,7 @@ class LocalSandbox:
                 self._tasks.pop(job.job_id, None)
                 self._ephemeral_secrets.pop(job.job_id, None)
                 self._ephemeral_secret_file_names.pop(job.job_id, None)
+                self._ephemeral_target_aliases.pop(job.job_id, None)
                 self._delete_job_secret_files(job.job_id)
 
     def get(self, job_id: str) -> SandboxJobResponse:
@@ -1463,6 +1534,7 @@ class LocalSandbox:
             _write_json(state_path, state)
         self._ephemeral_secrets.pop(job_id, None)
         self._ephemeral_secret_file_names.pop(job_id, None)
+        self._ephemeral_target_aliases.pop(job_id, None)
         self._delete_job_secret_files(job_id)
         return self.get(job_id)
 
@@ -1499,34 +1571,96 @@ class LocalSandbox:
         return self.get(job_id)
 
 
-def _configuration_environment(config: dict[str, Any]) -> dict[str, str]:
-    """Convert explicit, non-secret connector configuration into child env vars."""
-    result: dict[str, str] = {}
+def _configuration_environment(
+    config: dict[str, Any],
+) -> tuple[dict[str, str], dict[str, str]]:
+    """Split explicit, non-secret connector configuration into (controller, runtime) values.
+
+    Only the originators' connection names become controller variables. Every other upper-case
+    key is the submitted agent's own configuration and travels in the runtime namespace.
+    """
+    controller: dict[str, str] = {}
+    runtime: dict[str, str] = {}
     for name, value in config.items():
         if not re.fullmatch(r"[A-Z][A-Z0-9_]{2,}", str(name)):
             continue
         if isinstance(value, bool):
-            result[str(name)] = "true" if value else "false"
+            text = "true" if value else "false"
         elif isinstance(value, (str, int, float)):
-            result[str(name)] = str(value)
-    return result
+            text = str(value)
+        else:
+            continue
+        target = controller if str(name) in CONTROLLER_CONNECTION_NAMES else runtime
+        target[str(name)] = text
+    return controller, runtime
 
 
 _ENVIRONMENT_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
-_RUNNER_RESERVED_ENVIRONMENT = {
-    "DOCKER_HOST",
-    "FI_API_KEY",
-    "FI_BASE_URL",
-    "FI_SECRET_KEY",
-    "HARNESS_PLATFORM_API_KEY",
-    "HARNESS_PLATFORM_SECRET_KEY",
-    "HARNESS_PLATFORM_URL",
-    "HARNESS_WEBHOOK_HOST",
-    "HARNESS_WEBHOOK_PORT",
-    "HOME",
-    "PATH",
-    "PYTHONPATH",
-}
+
+
+def _validate_secret_alias_shapes(references: dict[str, SecretRef]) -> None:
+    for alias in references:
+        if not _ENVIRONMENT_NAME.fullmatch(str(alias)):
+            raise ValueError(f"secret_reference_name_invalid: {alias}")
+
+
+def _validate_controller_names(
+    config: dict[str, Any], references: dict[str, SecretRef]
+) -> None:
+    """Refuse the names of a job that would reach the controller's own environment."""
+    for name in config:
+        if str(name) in _RUNNER_RESERVED_ENVIRONMENT or str(name).startswith("ALK_"):
+            raise ValueError(f"connector_config_name_reserved: {name}")
+    _validate_secret_alias_shapes(references)
+    for alias, reference in references.items():
+        # An upload alias becomes a runtime value; every other alias is a controller variable.
+        if reference.manager == "mounted" and reference.key.startswith(
+            _SANDBOX_FILE_PREFIX
+        ):
+            continue
+        if _target_alias(reference):
+            # The customer agent's own credential (ANTHROPIC_API_KEY, GOOGLE_API_KEY): it reaches
+            # only the agent's runtime namespace, so it takes the rule environment values take.
+            if (
+                alias in _RUNNER_RESERVED_ENVIRONMENT
+                or alias.startswith("ALK_")
+                or client_name_reserved(alias)
+            ):
+                raise ValueError(f"secret_alias_reserved: {alias}")
+            continue
+        # A job-set base URL in the controller would steer the simulator's OpenAI client. Refused
+        # here, for controller aliases only: controller_name_reserved also guards key reads.
+        if controller_name_reserved(alias) or str(alias).strip().upper() == "OPENAI_BASE_URL":
+            raise ValueError(f"secret_alias_reserved: {alias}")
+
+
+def _job_target_aliases(job: HarnessJob) -> frozenset[str]:
+    """A submitted job's caller-sent target aliases, from its saved refs and value names."""
+    return _caller_target_aliases(
+        job.agent.secret_refs,
+        {str(name) for name in job.metadata.get("environment_value_names", [])},
+    )
+
+
+def _caller_target_aliases(
+    references: dict[str, SecretRef], environment_value_names: set[str]
+) -> frozenset[str]:
+    """The aliases the caller sent as target_provider refs.
+
+    The server mints every environment value (and upload) as a target_provider ref too, so the
+    caller's own refs are told apart by name: an alias in ``environment_value_names`` is an
+    environment value, never one of these.
+    """
+    return frozenset(
+        str(alias)
+        for alias, reference in references.items()
+        if _target_alias(reference) and str(alias) not in environment_value_names
+    )
+
+
+def _target_alias(reference: SecretRef) -> bool:
+    """A ref the platform sends for the customer's agent, never for the controller."""
+    return reference.purpose == "target_provider"
 
 
 def _validate_environment_values(
@@ -2013,6 +2147,42 @@ def _is_loopback(host: str) -> bool:
         return ipaddress.ip_address(host).is_loopback
     except ValueError:
         return False
+
+
+def _dev_mode() -> bool:
+    """True only on a developer's own laptop: no token, the flag, and a loopback address."""
+    return (
+        _sandbox_token() is None
+        and _unauthenticated_allowed()
+        and _is_loopback(os.getenv("ALK_SANDBOX_HOST", "127.0.0.1"))
+    )
+
+
+def _resolve_local_references(
+    references: dict[str, SecretRef], own_values: dict[str, str]
+) -> dict[str, str]:
+    """Resolve environment, mounted and futureagi refs.
+
+    A key that is one of this job's own values (or a claimed upload) resolves from those values
+    only. Any other key would read the server's own environment, which holds the runner's
+    credentials, so that is allowed only in local development mode and never for a name the
+    controller reserves.
+    """
+    resolved: dict[str, str] = {}
+    own: dict[str, SecretRef] = {}
+    for alias, reference in references.items():
+        if reference.key in own_values:
+            own[alias] = reference
+            continue
+        if reference.manager in {"environment", "futureagi", "mounted"} and (
+            not _dev_mode()
+            or controller_name_reserved(reference.key)
+            or reference.key.upper().startswith("GITHUB_INSTALLATION_")
+        ):
+            raise SecretResolutionError(f"secret_reference_reserved: {alias}")
+        resolved.update(resolve_worker_secrets({alias: reference}, environment=os.environ))
+    resolved.update(resolve_worker_secrets(own, environment=own_values))
+    return resolved
 
 
 def _startup_refusal(host: str, token: str | None, allow: bool) -> str | None:

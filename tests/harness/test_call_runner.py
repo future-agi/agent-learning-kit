@@ -2064,3 +2064,106 @@ def test_a_tool_result_sent_as_text_is_read_back_into_its_shape():
     assert _structured("[INFO] booked") == "[INFO] booked"
     assert _structured({"id": 7}) == {"id": 7}
     assert len(_structured("x" * 5000)) == 2000
+
+
+# --- TH-9550, amendment 4.1 (1b): a local job's Google settings go with the job's own file ---
+
+_JOB_ADC = json.dumps({"type": "service_account", "project_id": "job-canary"})
+_JOB_GOOGLE = {
+    "GOOGLE_APPLICATION_CREDENTIALS_JSON": _JOB_ADC,
+    "GOOGLE_CLOUD_PROJECT": "job-project",
+    "GOOGLE_CLOUD_LOCATION": "job-location",
+    "GOOGLE_GENAI_USE_VERTEXAI": "true",
+    "GOOGLE_API_KEY": "job-google-key-canary",
+    "GEMINI_API_KEY": "job-gemini-key-canary",
+    "OPENAI_API_KEY": "job-openai-key-canary",
+}
+_GOOGLE_SETTINGS = ("GOOGLE_CLOUD_PROJECT", "GOOGLE_CLOUD_LOCATION", "GOOGLE_GENAI_USE_VERTEXAI")
+
+
+def _local_call_environment(tmp_path, *, secrets, environ, simulator_secrets=None):
+    _job_obj, context = _context(
+        tmp_path=tmp_path,
+        execution=ExecutionMode.LOCAL,
+        secrets=secrets,
+        simulator_secrets=simulator_secrets if simulator_secrets is not None else {},
+    )
+    return cr.CallRunnerImpl(FakeAdapter(), context, environ=environ)
+
+
+def _assert_customer_keys_kept(call_environment):
+    # The gate is about the Google settings only: the customer's keys stay (1b).
+    assert call_environment["GOOGLE_API_KEY"] == "job-google-key-canary"
+    assert call_environment["GEMINI_API_KEY"] == "job-gemini-key-canary"
+    assert call_environment["OPENAI_API_KEY"] == "job-openai-key-canary"
+
+
+def test_the_jobs_google_settings_replace_the_hosts_when_the_jobs_own_file_is_in_effect(tmp_path):
+    runner = _local_call_environment(
+        tmp_path,
+        secrets=dict(_JOB_GOOGLE),
+        environ={"GOOGLE_CLOUD_PROJECT": "host-project"},
+    )
+
+    call_environment = runner._environ
+
+    assert runner._adc_path is not None
+    assert call_environment["GOOGLE_APPLICATION_CREDENTIALS"] == str(runner._adc_path)
+    assert Path(call_environment["GOOGLE_APPLICATION_CREDENTIALS"]).read_text() == _JOB_ADC
+    assert call_environment["GOOGLE_CLOUD_PROJECT"] == "job-project"
+    assert call_environment["GOOGLE_CLOUD_LOCATION"] == "job-location"
+    assert call_environment["GOOGLE_GENAI_USE_VERTEXAI"] == "true"
+    assert "host-project" not in call_environment.values()
+    _assert_customer_keys_kept(call_environment)
+
+
+def test_the_jobs_google_settings_are_dropped_when_the_host_has_a_credentials_file(tmp_path):
+    runner = _local_call_environment(
+        tmp_path,
+        secrets=dict(_JOB_GOOGLE),
+        environ={
+            "GOOGLE_APPLICATION_CREDENTIALS": "/host/google.json",
+            "GOOGLE_CLOUD_PROJECT": "host-project",
+        },
+    )
+
+    call_environment = runner._environ
+
+    assert runner._adc_path is None
+    assert call_environment["GOOGLE_APPLICATION_CREDENTIALS"] == "/host/google.json"
+    assert call_environment["GOOGLE_CLOUD_PROJECT"] == "host-project"
+    assert "GOOGLE_CLOUD_LOCATION" not in call_environment
+    assert "GOOGLE_GENAI_USE_VERTEXAI" not in call_environment
+    assert "job-project" not in call_environment.values()
+    _assert_customer_keys_kept(call_environment)
+
+
+def test_the_jobs_google_settings_are_dropped_without_the_jobs_own_file(tmp_path):
+    secrets = {name: value for name, value in _JOB_GOOGLE.items() if "JSON" not in name}
+
+    runner = _local_call_environment(
+        tmp_path, secrets=secrets, environ={"GOOGLE_CLOUD_PROJECT": "host-project"}
+    )
+
+    call_environment = runner._environ
+    assert runner._adc_path is None
+    assert call_environment["GOOGLE_CLOUD_PROJECT"] == "host-project"
+    assert "GOOGLE_CLOUD_LOCATION" not in call_environment
+    assert "GOOGLE_GENAI_USE_VERTEXAI" not in call_environment
+    _assert_customer_keys_kept(call_environment)
+
+
+def test_the_jobs_google_settings_are_dropped_when_the_file_in_effect_is_the_platforms(tmp_path):
+    platform_adc = json.dumps({"type": "service_account", "project_id": "platform-canary"})
+    runner = _local_call_environment(
+        tmp_path,
+        secrets=dict(_JOB_GOOGLE),
+        environ={},
+        simulator_secrets={"SIMULATOR_GOOGLE_APPLICATION_CREDENTIALS_JSON": platform_adc},
+    )
+
+    call_environment = runner._environ
+
+    assert Path(call_environment["GOOGLE_APPLICATION_CREDENTIALS"]).read_text() == platform_adc
+    for name in _GOOGLE_SETTINGS:
+        assert name not in call_environment

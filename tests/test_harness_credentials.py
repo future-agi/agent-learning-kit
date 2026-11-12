@@ -8,6 +8,13 @@ from fi.alk.harness.credentials import (
     RequirementStatus,
     discover_credentials,
 )
+from fi.alk.harness.secrets import (
+    CONTROLLER_CONNECTION_NAMES,
+    client_name_reserved,
+    controller_name_reserved,
+    controller_owned_name,
+    worker_environment,
+)
 from fi.simulate.runtime.spec import SecretRef
 
 
@@ -623,6 +630,162 @@ def test_explicit_scan_paths_exclude_unused_optional_integrations(
     assert "retell" not in manifest.detected_connectors
 
 
+# TH-9550: which names a job may put in the sandbox controller's environment.
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        # One case per prefix.
+        "ALK_SANDBOX_TOKEN",
+        "LD_AUDIT",
+        "DYLD_INSERT_LIBRARIES",
+        "PYTHONHOME",
+        "PYTHONWARNINGS",
+        "HARNESS_VOICE_RUNNER",
+        "HARNESS_PLATFORM_WORKSPACE_ID",
+        "FI_DEFAULT_MODEL",
+        "AGENTCC_CLAUDE_MODEL_ALIAS",
+        "DOCKER_CONFIG",
+        "COMPOSE_FILE",
+        "BUILDKIT_HOST",
+        "BUILDX_CONFIG",
+        "NODE_OPTIONS",
+        "SIMULATOR_X",
+        "ANTHROPIC_VERTEX_BASE_URL",
+        "GOOGLE_API_KEY",
+        "VERTEXAI_PROJECT",
+        "GIT_SSH_COMMAND",
+        "CLAUDE_CODE_ANYTHING",
+        # One case per exact name.
+        "LOCALDOMAIN",
+        "RES_OPTIONS",
+        "HOSTALIASES",
+        "REQUESTS_CA_BUNDLE",
+        "CURL_CA_BUNDLE",
+        "SSL_CERT_FILE",
+        "SSL_CERT_DIR",
+        "NO_PROXY",
+        "GCONV_PATH",
+        "BASH_ENV",
+        "ENV",
+        "SSLKEYLOGFILE",
+        "OPENSSL_CONF",
+        # Anything ending _proxy, in any case.
+        "HTTPS_PROXY",
+        "ALL_PROXY",
+        "wss_proxy",
+        "No_Proxy",
+        "http_proxy",
+        # Case and surrounding spaces do not bypass it.
+        "pythonpath",
+        " PYTHONPATH ",
+        "\tld_preload\n",
+        # The runner's own names, and a name only the worker allow-list holds.
+        "HARNESS_PLATFORM_URL",
+        "DOCKER_HOST",
+        "TMPDIR",
+        "CARTESIA_API_KEY",
+    ],
+)
+def test_controller_name_reserved(name):
+    assert controller_name_reserved(name)
+
+
+@pytest.mark.parametrize(
+    "name", ["LK_URL", "MY_SETTING", "OPENAI_API_KEY", "REMOTE_AGENT_ID", "VAPI_API_BASE_URL"]
+)
+def test_controller_name_not_reserved(name):
+    assert not controller_name_reserved(name)
+
+
+def test_no_controller_connection_name_is_reserved_or_inherited_from_the_host():
+    assert len(CONTROLLER_CONNECTION_NAMES) == 17
+    assert not [n for n in CONTROLLER_CONNECTION_NAMES if controller_name_reserved(n)]
+    child = worker_environment(
+        {},
+        host_environment={name: "host-value" for name in CONTROLLER_CONNECTION_NAMES},
+    )
+    assert not set(child) & CONTROLLER_CONNECTION_NAMES
+
+
+def test_worker_environment_never_lets_a_job_replace_or_add_a_host_name():
+    child = worker_environment(
+        {
+            "PYTHONPATH": "/job",
+            "HARNESS_PLATFORM_URL": "https://job.invalid",
+            "LD_PRELOAD": "/job.so",
+            "http_proxy": "http://job.invalid",
+            "NO_PROXY": "job.invalid",
+            "HOME": "/job-home",
+            "LIVEKIT_URL": "wss://job.invalid",
+        },
+        host_environment={
+            "PATH": "/bin",
+            "PYTHONPATH": "/host",
+            "HARNESS_PLATFORM_URL": "https://platform.invalid",
+            "NO_PROXY": "host.invalid",
+            "HOME": "/host-home",
+        },
+    )
+
+    assert child["PYTHONPATH"] == "/host"
+    assert child["HARNESS_PLATFORM_URL"] == "https://platform.invalid"
+    assert child["NO_PROXY"] == "host.invalid"
+    assert child["HOME"] == "/host-home"
+    assert "LD_PRELOAD" not in child
+    assert "http_proxy" not in child
+    assert child["LIVEKIT_URL"] == "wss://job.invalid"
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "LD_PRELOAD", "DYLD_INSERT_LIBRARIES", "DOCKER_CONFIG", "COMPOSE_FILE",
+        "BUILDKIT_HOST", "BUILDX_CONFIG", "GIT_SSH_COMMAND", "CLAUDE_CODE_X",
+        "SSH_ASKPASS", "XDG_CONFIG_HOME", " ssh_askpass ", "xdg_config_home",
+        "SSH_ASKPASS_REQUIRE", "XDG_DATA_HOME",
+        "GODEBUG", "GLIBC_TUNABLES", "LOCPATH", "NLSPATH", "OPENSSL_MODULES", "OPENSSL_ENGINES",
+        "BROWSER", "PYTHONWARNINGS", "PYTHONINSPECT", "CLAUDE_CONFIG_DIR",
+        "PATH", "HOME", "TMPDIR", "LANG", "LC_ALL", "DOCKER_HOST", "SSL_CERT_FILE",
+        "SSL_CERT_DIR", "NO_PROXY", "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE",
+        "LOCALDOMAIN", "RES_OPTIONS", "HOSTALIASES", "GCONV_PATH", "BASH_ENV", "ENV",
+        "OPENSSL_CONF", "SSLKEYLOGFILE", "PYTHONPATH", "PYTHONHOME", "PYTHONSTARTUP",
+        "PYTHONUSERBASE", "PYTHONBREAKPOINT", "PYTHONPLATLIBDIR", "NODE_OPTIONS",
+        "NODE_PATH", "NODE_REPL_EXTERNAL_MODULE", "NODE_EXTRA_CA_CERTS",
+        "NODE_TLS_REJECT_UNAUTHORIZED", "PERL5OPT", "PERL5LIB", "RUBYOPT", "RUBYLIB",
+        "http_proxy", "HTTPS_PROXY", "wss_proxy", "No_Proxy",
+        # Case and whitespace variants.
+        " ld_preload ", "\tnode_options\n", "pythonpath", " Http_Proxy ", "bash_env",
+    ],
+)
+def test_client_name_reserved(name):
+    assert client_name_reserved(name)
+    assert controller_name_reserved(name)
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "HARNESS_VOICE_RUNNER", "ALK_SANDBOX_TOKEN", "AGENTCC_API_KEY", "FI_API_KEY",
+        "SIMULATOR_X", "ANTHROPIC_VERTEX_BASE_URL", "GOOGLE_API_KEY", "VERTEXAI_PROJECT",
+        "PYTHONUNBUFFERED", "NODE_ENV", "DOCKER_HOST", "HARNESS_PLATFORM_URL",
+        "CARTESIA_API_KEY", "GOOGLE_CLOUD_PROJECT", " harness_voice_runner ", "alk_x",
+    ],
+)
+def test_controller_owned_name(name):
+    assert controller_owned_name(name)
+    assert controller_name_reserved(name)
+
+
+@pytest.mark.parametrize("name", ["NODE_ENV", "PYTHONUNBUFFERED", " node_env ", "MY_SETTING", "LK_URL"])
+def test_client_name_reserved_passes_ordinary_runtime_settings(name):
+    assert not client_name_reserved(name)
+
+
+@pytest.mark.parametrize("name", ["LD_PRELOAD", "http_proxy", "GIT_SSH_COMMAND", "MY_SETTING", "LK_URL", "DEEPGRAM_API_KEY"])
+def test_controller_owned_name_leaves_client_and_neutral_names(name):
+    assert not controller_owned_name(name)
 def _agents_repo(root, files):
     for name, body in files.items():
         (root / name).parent.mkdir(parents=True, exist_ok=True)
