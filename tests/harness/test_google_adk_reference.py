@@ -356,9 +356,10 @@ def test_a_second_import_sees_its_own_environment(load_example) -> None:
 
 def test_requirements_and_python_version_are_pinned() -> None:
     lines = (EXAMPLE / "requirements.txt").read_text(encoding="utf-8").splitlines()
-    # `litellm` is what the `openai/` model name needs; this agent runs on ADK's server, so the
-    # kit's simulate package is not part of it.
-    assert lines == ["google-adk==2.13.0", "litellm==1.106.2"]
+    # `litellm` is what the `openai/` model name needs, and its first call imports `mcp`, which
+    # neither pin brings in; this agent runs on ADK's server, so the kit's simulate package is
+    # not part of it.
+    assert lines == ["google-adk==2.13.0", "litellm==1.106.2", "mcp==2.3.0"]
     assert (EXAMPLE / ".python-version").read_text(encoding="utf-8").strip() == "3.12"
 
 

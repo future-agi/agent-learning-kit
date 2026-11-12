@@ -27,3 +27,5 @@ tracer records each call made to the three tool functions in `support_agent/agen
 
 The endpoint must speak chat completions. Install with `pip install -r requirements.txt` on
 Python 3.12.
+`mcp` is listed because LiteLLM imports it on a model call that carries tools, which this
+agent's calls do, and neither other pin brings it in.
