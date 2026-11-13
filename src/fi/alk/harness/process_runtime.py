@@ -2375,6 +2375,10 @@ def spawn_source_process(
                 observer.chmod(0o444)
         if resolved_user is not None:
             chown(world_dir, resolved_user.pw_uid, resolved_user.pw_gid)
+            if isolation_mode() is IsolationMode.PER_USER:
+                # The harness's workers hold no capabilities, yet read what the process writes
+                # here (its tool-call trace) by name: they pass through, though not list it.
+                world_dir.chmod(0o711)
     except OSError as exc:
         # A hook that cannot be placed fails the spawn on purpose: a process that exports with
         # our key but without its mark is worse than a failed run.
