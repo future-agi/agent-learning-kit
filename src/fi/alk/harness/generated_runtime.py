@@ -683,6 +683,11 @@ FRAMEWORK_INSTRUMENTORS = (
     ("llama-index-core", "traceai-llamaindex==0.1.10"),
     ("pydantic-ai-slim", "traceai-pydantic-ai==0.1.0"),
     ("strands-agents", "traceai-strands==0.1.1"),
+    # A model SDK's instrumentor, which measures an untraced agent's calls (simulation_measure).
+    # One that does not fit the agent's pinned versions or its Python is skipped like the rest:
+    # that skip is the preflight, and the agent's calls then read unmeasured.
+    ("openai", "traceai-openai==0.1.15"),
+    ("anthropic", "traceai-anthropic==0.1.14"),
     # A framework that makes its own spans through the OpenTelemetry API alone, as AutoGen Core
     # does, has them recorded only once the SDK is there, at the API's own version.
     ("opentelemetry-api", "opentelemetry-sdk"),

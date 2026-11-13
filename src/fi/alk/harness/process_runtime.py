@@ -2320,6 +2320,7 @@ def spawn_source_process(
             for module_name in (
                 "simulation_mark_bootstrap.py",
                 "simulation_worker_events.py",
+                "simulation_measure.py",
             ):
                 mark_module = world_dir / module_name
                 if not mark_module.exists():

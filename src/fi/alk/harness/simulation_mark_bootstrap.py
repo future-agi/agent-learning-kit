@@ -27,7 +27,9 @@ agent that made the call, read from the agent and tool spans any framework instr
 so a multi-agent app is observed without changes to it; ``simulation_worker_events``, beside this file, turns the
 spans into trace lines. With the observe switch on, the traceAI
 instrumentor the build installed for each framework is turned on when that framework is imported,
-unless the process instruments it itself.
+unless the process instruments it itself. When the platform asks for measuring an agent that traces
+nothing itself, ``simulation_measure``, beside this file, turns on the model SDKs' instrumentors into
+a provider of its own; see that module.
 
 It never reads or writes the customer's files and never imports their modules on its own. It does
 run the next ``sitecustomize`` on the path, which is theirs, so a repository's own startup hook is
@@ -383,6 +385,15 @@ def _patch_autogen_tools(module, path) -> None:
     _events()._patch_autogen_tools(module, path)
 
 
+_MEASURE = "FI_SIMULATION_INSTRUMENT"
+
+
+def _measure():
+    """The module beside this one that measures an untraced agent's model calls."""
+    name = "simulation_measure"
+    return importlib.import_module(f"{__package__}.{name}" if __package__ else name)
+
+
 _OBSERVE = "ALK_OBSERVE_FRAMEWORKS"
 # A framework's top module, and the traceAI instrumentor that marks its agent and tool spans.
 # The build installs the instrumentors beside the frameworks it finds installed; one that is
@@ -609,7 +620,11 @@ def install() -> None:
             )
         ingest = None
         try:
-            ingest = _read_ingest()
+            # Measuring sends its spans through an exporter of its own that carries the key. The
+            # standard endpoint variable is then the customer's, so their exporters are left
+            # alone and the key never goes to their backend.
+            if not os.environ.get(_MEASURE):
+                ingest = _read_ingest()
         except ValueError:
             _write("failed")
         if ingest is not None:
@@ -624,6 +639,8 @@ def install() -> None:
             _PATCHES["autogen_core.tools"] = functools.partial(
                 _patch_autogen_tools, path=tool_trace
             )
+        if os.environ.get(_MEASURE):
+            _measure().register(_PATCHES, _write, pairs)
         if not _PATCHES:
             return
         # The finder goes in first so that a failed patch of an already imported module still

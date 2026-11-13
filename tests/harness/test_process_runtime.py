@@ -9373,12 +9373,16 @@ def test_mark_hook_written_with_its_module_first_on_pythonpath_for_every_exporti
         ]
         assert sorted(path.name for path in world.iterdir()) == [
             "simulation_mark_bootstrap.py",
+            "simulation_measure.py",
             "simulation_worker_events.py",
             "sitecustomize.py",
         ]
         assert (
             world / "simulation_mark_bootstrap.py"
         ).read_bytes() == _MARK_HOOK.read_bytes()
+        assert (world / "simulation_measure.py").read_bytes() == (
+            _MARK_HOOK.with_name("simulation_measure.py").read_bytes()
+        )
         for written in world.iterdir():
             assert stat.S_IMODE(written.stat().st_mode) == 0o444
 
@@ -9815,6 +9819,7 @@ def test_small_mark_hook_says_so_when_the_mark_module_is_broken(
     world = captured["world_dir"]
     assert sorted(path.name for path in world.iterdir()) == [
         "simulation_mark_bootstrap.py",
+        "simulation_measure.py",
         "simulation_worker_events.py",
         "sitecustomize.py",
     ]
