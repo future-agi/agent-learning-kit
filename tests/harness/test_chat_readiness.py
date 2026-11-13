@@ -846,7 +846,7 @@ def workflow_probe(tmp_path, url, **changes):
     }))
     args = dict(
         job=SimpleNamespace(metadata={}, require_tool_workflow=True), source=tmp_path,
-        bundle=bundle, authoring=tmp_path,
+        bundle=bundle, authoring=tmp_path, work_directory=tmp_path,
         runtime=SimpleNamespace(
             metadata={"observation_mode": "native"}, world_index=0,
             endpoints={"target_http": SimpleNamespace(address=url, protocol="http")},

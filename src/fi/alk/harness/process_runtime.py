@@ -26,6 +26,8 @@ logs it; a hosted caller that wants a missing user to be a typed failure instead
 from __future__ import annotations
 
 import base64
+import hashlib
+import hmac
 import json
 import logging
 import os
@@ -174,6 +176,9 @@ class RuntimeEndpoint(BaseModel):
     protocol: str
     address: str
     configuration_name: str | None = None
+    # Under per-user isolation, a postgres capability's address as the world's own role: what
+    # customer processes and the handler child get. `address` stays the harness's superuser.
+    tool_address: str | None = None
 
 
 class EnvironmentRuntime(BaseModel):
@@ -692,6 +697,31 @@ def _default_listener_probe(port: int) -> bool:
 class EngineCredentials:
     username: str
     password: str
+    # Postgres only: the per-job secret each world's own role password is derived from
+    # (`world_role`). Kept out of equality and repr, so it never reaches a log.
+    world_secret: str = field(default="", compare=False, repr=False)
+
+
+# Under per-user isolation the processes of a world reach its database through a role of their
+# own, never as the `harness` superuser: one group carries the table grants, sealed into the
+# baseline, and each world's login role is a member that may connect to its world's database only.
+WORLD_ROLE_GROUP = "alk_world_tools"
+
+
+def world_role(credentials: EngineCredentials, world_index: int) -> EngineCredentials:
+    """World N's own database role. Its password is derived from the job's secret, so each
+    world's differs and nothing stores it."""
+    if not credentials.world_secret:
+        raise ProcessRuntimeError(
+            "render",
+            "internal_missing_credentials",
+            "a world role needs the job's world secret, and the credentials carry none",
+        )
+    name = f"alk_w{world_index}"
+    password = hmac.new(
+        credentials.world_secret.encode(), name.encode(), hashlib.sha256
+    ).hexdigest()
+    return EngineCredentials(username=name, password=password)
 
 
 def generate_engine_credentials(
@@ -704,7 +734,13 @@ def generate_engine_credentials(
     """
     make_token = token or (lambda: secrets.token_urlsafe(24))
     return {
-        process.name: EngineCredentials(username="harness", password=make_token())
+        process.name: EngineCredentials(
+            username="harness",
+            password=make_token(),
+            world_secret=secrets.token_hex(32)
+            if process.engine is ManagedEngine.POSTGRES
+            else "",
+        )
         for process in manifest.processes
         if isinstance(process, ManagedProcess)
         and process.engine in (ManagedEngine.POSTGRES, ManagedEngine.RABBITMQ)
@@ -767,25 +803,43 @@ def build_endpoints(
     world_index: int,
     port_plan: PortPlan,
     credentials: dict[str, EngineCredentials],
+    world_roles: bool = False,
 ) -> dict[str, RuntimeEndpoint]:
     """§3's `endpoints` map, built fresh for one world — every declared capability gets an
     entry regardless of whether any process placeholder ever references its `configuration_name`
     (a null `configuration_name` is legal; the scheduler/simulator still read endpoints by
-    capability slug, per §3's own reader list)."""
+    capability slug, per §3's own reader list).
+
+    With `world_roles` (per-user isolation), each postgres capability also carries the world's
+    own role's address, for customer processes and the handler child."""
     endpoints: dict[str, RuntimeEndpoint] = {}
     for slug, capability in manifest.capabilities.items():
         port = port_plan.port_for(capability.service, world_index)
+        engine_credentials = credentials.get(capability.service)
         address = render_capability_address(
             capability,
             port=port,
             world_index=world_index,
-            credentials=credentials.get(capability.service),
+            credentials=engine_credentials,
         )
+        tool_address = None
+        if (
+            world_roles
+            and capability.protocol is CapabilityProtocol.POSTGRES
+            and engine_credentials is not None
+        ):
+            tool_address = render_capability_address(
+                capability,
+                port=port,
+                world_index=world_index,
+                credentials=world_role(engine_credentials, world_index),
+            )
         endpoints[slug] = RuntimeEndpoint(
             capability=slug,
             protocol=capability.protocol.value,
             address=address,
             configuration_name=capability.configuration_name,
+            tool_address=tool_address,
         )
     return endpoints
 
@@ -793,8 +847,9 @@ def build_endpoints(
 def configuration_addresses_from_endpoints(
     endpoints: dict[str, RuntimeEndpoint],
 ) -> dict[str, str]:
+    # Customer processes get the world's own role where there is one, never the superuser.
     return {
-        endpoint.configuration_name: endpoint.address
+        endpoint.configuration_name: endpoint.tool_address or endpoint.address
         for endpoint in endpoints.values()
         if endpoint.configuration_name
     }
@@ -2653,6 +2708,32 @@ def _open_seed_files_for_declared_users(
             path.chmod(path.stat().st_mode | 0o044)
 
 
+def _require_template_world_databases(manifest: EnvironmentBundleV2) -> None:
+    """Under per-user isolation a world's processes reach its database only through the world's
+    own role, which is granted on a sealed `template_database` baseline. A postgres engine
+    provisioned any other way would leave them the superuser, so it is refused."""
+    stores = _store_by_process_name(manifest)
+    for process in manifest.processes:
+        if (
+            not isinstance(process, ManagedProcess)
+            or process.engine is not ManagedEngine.POSTGRES
+        ):
+            continue
+        store = stores.get(process.name)
+        if (
+            store is None
+            or store.baseline.strategy is not BaselineStrategy.TEMPLATE_DATABASE
+        ):
+            # `internal_`: the hosted bundle generator only writes `template_database` stores.
+            raise ProcessRuntimeError(
+                "provision",
+                "internal_world_database_unscoped",
+                f"{process.name}: per-user isolation needs a template_database store",
+                process=process.name,
+                domain=FailureDomain.INFRASTRUCTURE,
+            )
+
+
 def build_tree_dir(work_directory: Path, process_name: str) -> Path:
     return _ensure_within(
         work_directory / "build" / process_name,
@@ -4263,6 +4344,7 @@ def spawn_world(
         world_index=world_index,
         port_plan=context.port_plan,
         credentials=context.credentials,
+        world_roles=context.require_declared_user,
     )
     configuration_addresses = configuration_addresses_from_endpoints(endpoints)
     processes_by_name = {process.name: process for process in manifest.processes}
@@ -4976,6 +5058,17 @@ def _freeze_one_store(
                     sql_runner=context.sql_runner,
                     process_name=process.name,
                 )
+            if (
+                process.engine is ManagedEngine.POSTGRES
+                and context.require_declared_user
+            ):
+                _grant_world_role_group(
+                    port=port,
+                    credentials=credentials,
+                    baseline_db=baseline_dbname,
+                    sql_runner=context.sql_runner,
+                    process_name=process.name,
+                )
             # Sealed: marked a TEMPLATE and closed to new connections, so nothing can write into
             # it after this — "the sealed post-migrate+seed datastore state" (glossary, "Baseline").
             _call_sql(
@@ -5121,6 +5214,10 @@ def _seal_world_store(
             template_db=record.baseline_reference,
             sql_runner=context.sql_runner,
             process_name=process.name,
+            isolate=context.require_declared_user,
+            role=world_role(credentials, world_index)
+            if context.require_declared_user
+            else None,
         )
         return None
 
@@ -5273,6 +5370,57 @@ def _seal_world_store(
     return handle
 
 
+def _grant_world_role_group(
+    *,
+    port: int,
+    credentials: EngineCredentials,
+    baseline_db: str,
+    sql_runner: SqlRunner,
+    process_name: str,
+) -> None:
+    """Before the baseline is sealed: the group every world's role belongs to may read and
+    change the rows of every customer schema and create nothing, and nobody but the harness
+    connects to the cluster's own databases. Template copies carry these grants into every world.
+    """
+
+    def run(dbname: str, statement: str) -> None:
+        _call_sql(
+            sql_runner,
+            stage="baseline",
+            process_name=process_name,
+            host="localhost",
+            port=port,
+            user=credentials.username,
+            password=credentials.password,
+            dbname=dbname,
+            statement=statement,
+        )
+
+    group = f'"{WORLD_ROLE_GROUP}"'
+    run(
+        "postgres",
+        "DO $$ BEGIN IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = "
+        f"'{WORLD_ROLE_GROUP}') THEN CREATE ROLE {group} NOLOGIN; "
+        "END IF; END $$",
+    )
+    run("postgres", "REVOKE CONNECT ON DATABASE postgres FROM PUBLIC")
+    run("postgres", "REVOKE CONNECT ON DATABASE template1 FROM PUBLIC")
+    # Not every server version defaults to it, and a role that can create in a schema the
+    # harness's own session searches could plant something that session then runs.
+    run(baseline_db, "REVOKE CREATE ON SCHEMA public FROM PUBLIC")
+    run(
+        baseline_db,
+        "DO $$ DECLARE s text; BEGIN FOR s IN SELECT nspname FROM pg_namespace "
+        "WHERE nspname NOT LIKE 'pg\\_%' AND nspname <> 'information_schema' LOOP "
+        f"EXECUTE format('GRANT USAGE ON SCHEMA %I TO {group}', s); "
+        "EXECUTE format('GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA %I "
+        f"TO {group}', s); "
+        "EXECUTE format('GRANT USAGE, SELECT, UPDATE ON ALL SEQUENCES IN SCHEMA %I "
+        f"TO {group}', s); "
+        "END LOOP; END $$",
+    )
+
+
 def _reset_template_database(
     *,
     host: str,
@@ -5282,12 +5430,18 @@ def _reset_template_database(
     template_db: str,
     sql_runner: SqlRunner,
     process_name: str,
+    isolate: bool = False,
+    role: EngineCredentials | None = None,
 ) -> None:
     """§4.2 `template_database`: "drop + recreate the world's logical DB from the template." The
     admin connection targets `postgres` (never `world_db` itself or the template — postgres
     forbids `DROP`/`CREATE DATABASE` from inside the database being touched). Terminates other
     backends on `world_db` first — a connection lingering from that world's own just-terminated
     `source` processes is exactly what would otherwise block the `DROP`.
+
+    Under per-user isolation (`isolate`) the copy is created closed to connections, and opens only
+    after PUBLIC has lost CONNECT on it and `role` (the world's own; an authoring lane has none)
+    has gained it, so no other world's role is ever able to connect to it.
     """
     admin = dict(
         host=host,
@@ -5313,13 +5467,37 @@ def _reset_template_database(
         **admin,
         statement=f'DROP DATABASE IF EXISTS "{world_db}"',
     )
-    _call_sql(
-        sql_runner,
-        stage="reset",
-        process_name=process_name,
-        **admin,
-        statement=f'CREATE DATABASE "{world_db}" TEMPLATE "{template_db}"',
-    )
+    if not isolate:
+        _call_sql(
+            sql_runner,
+            stage="reset",
+            process_name=process_name,
+            **admin,
+            statement=f'CREATE DATABASE "{world_db}" TEMPLATE "{template_db}"',
+        )
+        return
+    statements = [
+        f'CREATE DATABASE "{world_db}" TEMPLATE "{template_db}" ALLOW_CONNECTIONS false',
+        f'REVOKE ALL ON DATABASE "{world_db}" FROM PUBLIC',
+    ]
+    if role is not None:
+        statements += [
+            "DO $$ BEGIN IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = "
+            f"'{role.username}') THEN CREATE ROLE \"{role.username}\" LOGIN IN ROLE "
+            f'"{WORLD_ROLE_GROUP}"; END IF; END $$',
+            f'ALTER ROLE "{role.username}" WITH LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE '
+            f"PASSWORD '{role.password}'",
+            f'GRANT CONNECT ON DATABASE "{world_db}" TO "{role.username}"',
+        ]
+    statements.append(f'ALTER DATABASE "{world_db}" ALLOW_CONNECTIONS true')
+    for statement in statements:
+        _call_sql(
+            sql_runner,
+            stage="reset",
+            process_name=process_name,
+            **admin,
+            statement=statement,
+        )
 
 
 def _stores_reset_in_place(manifest: EnvironmentBundleV2) -> bool:
@@ -5419,6 +5597,7 @@ def _clone_or_reset_world(
                 world_index=world_index,
                 port_plan=context.port_plan,
                 credentials=context.credentials,
+                world_roles=context.require_declared_user,
             ),
         )
     return spawn_world(
@@ -6461,6 +6640,7 @@ class ProcessRuntimeProvider:
         bundle_digest = bundle.digest
         requested = instances
         if isolation_mode() is IsolationMode.PER_USER:
+            _require_template_world_databases(bundle)
             _open_for_declared_users(work_directory, instances)
             _open_seed_files_for_declared_users(bundle, bundle_dir)
         # C2 §1 rule 4's crisp trichotomy, keyed on WHICH branch runs. FIRST BUILD and DIGEST
@@ -7461,6 +7641,7 @@ class ProcessRuntimeProvider:
             or credentials is None
         ):
             return None
+        # A lane is the harness's alone: no world role may connect to it.
         _reset_template_database(
             host="localhost",
             port=context.port_plan.port_for(process_name, runtime.world_index),
@@ -7469,13 +7650,18 @@ class ProcessRuntimeProvider:
             template_db=record.baseline_reference,
             sql_runner=context.sql_runner,
             process_name=process_name,
+            isolate=context.require_declared_user,
         )
         address = urlsplit(endpoint.address)._replace(path=f"/{name}").geturl()
         return runtime.model_copy(
             update={
                 "endpoints": {
                     **runtime.endpoints,
-                    key: endpoint.model_copy(update={"address": address}),
+                    # The world role's address would still name the world's database: a handler
+                    # child on a lane has none, and fails closed.
+                    key: endpoint.model_copy(
+                        update={"address": address, "tool_address": None}
+                    ),
                 }
             }
         )
@@ -7684,6 +7870,10 @@ class ProcessRuntimeProvider:
                             template_db=record.baseline_reference,
                             sql_runner=context.sql_runner,
                             process_name=process_name,
+                            isolate=context.require_declared_user,
+                            role=world_role(live_credentials, world_index)
+                            if context.require_declared_user
+                            else None,
                         )
                     # Q7, p6-review-r3: the loop above just reset EVERY tracked world's database —
                     # demote every world other than the one the caller is already reconciling so

@@ -100,8 +100,12 @@ async def run_json_worker(
     environ: Mapping[str, str],
     work_directory: Path,
     suppress_output: bool = False,
+    pass_fds: tuple[int, ...] = (),
 ) -> dict[str, Any]:
-    """Run a fresh interpreter; cancellation waits for process-group termination."""
+    """Run a fresh interpreter; cancellation waits for process-group termination.
+
+    The worker inherits `pass_fds`; the caller keeps its own copies and closes them.
+    """
     if os.name != "posix":
         raise IsolatedWorkerError("isolated workers require POSIX process groups")
     work_directory.mkdir(parents=True, exist_ok=True)
@@ -134,6 +138,7 @@ async def run_json_worker(
                 env=child_env,
                 cwd=root,
                 start_new_session=True,
+                pass_fds=pass_fds,
             )
         )
         canceled = await _finish(creation)

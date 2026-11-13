@@ -288,7 +288,7 @@ def test_per_user_provisioning_opens_the_seed_files_before_anything_runs(
         raise Stop
 
     monkeypatch.setattr(pr, "_open_seed_files_for_declared_users", record)
-    bundle = SimpleNamespace(digest="sha256:" + "0" * 64)
+    bundle = SimpleNamespace(digest="sha256:" + "0" * 64, seed=None, processes=[])
     provider = object.__new__(pr.ProcessRuntimeProvider)
 
     with pytest.raises(Stop):

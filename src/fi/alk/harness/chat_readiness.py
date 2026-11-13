@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+from dataclasses import replace
 from pathlib import Path
 from uuid import uuid4
 
@@ -230,6 +231,7 @@ async def probe_chat_workflow(
     source: Path,
     bundle: Path,
     authoring: Path,
+    work_directory: Path,
     runtime,
     scenario,
     candidate_hash,
@@ -238,10 +240,14 @@ async def probe_chat_workflow(
     redaction_values,
     timeout=300.0,
 ):
-    """Exercise a private conversation and require observed tool execution evidence."""
+    """Exercise a private conversation and require observed tool execution evidence.
+
+    `work_directory` is the one the runtime was provisioned in, where its worlds live.
+    """
     from .authoring_runtime_validation import RuntimeValidationError
     from .call_runner import CallRunnerContext
-    from .chat_call_runner import HostedChatCallRunner
+    from .chat_call_runner import HostedChatCallRunner, handler_child_for
+    from .handler_child import HandlerChannel
     from .hosted_scheduler import CallAborted
 
     redactions = {
@@ -297,19 +303,27 @@ async def probe_chat_workflow(
             ).encode("utf-8")
             await artifacts.upload_artifact(trace, kind=ArtifactKind.TOOL_TRACE)
 
+    handlers = None
     try:
-        runner = HostedChatCallRunner(
-            artifacts,
-            CallRunnerContext(
-                job=job,
-                bundle_dir=bundle,
-                work_directory=folder,
-                evidence_seam=None,
-                target_provider_secret_values=secret_values,
-                attempt_number=1,
-                source_directory=source,
-            ),
+        context = CallRunnerContext(
+            job=job,
+            bundle_dir=bundle,
+            work_directory=folder,
+            evidence_seam=None,
+            target_provider_secret_values=secret_values,
+            attempt_number=1,
+            source_directory=source,
         )
+        # Under per-user isolation the tool handlers, and the agent code they import, run in a
+        # child of their own: this process holds the capabilities and never imports that code.
+        # The child's scratch belongs with the world's, which its user can reach; this
+        # attempt's folder is the harness's alone.
+        handlers = await asyncio.to_thread(
+            handler_child_for, replace(context, work_directory=work_directory), runtime
+        )
+        if handlers is not None:
+            context = replace(context, handler_channel=HandlerChannel(handlers.sock))
+        runner = HostedChatCallRunner(artifacts, context)
         async with asyncio.timeout(timeout):
             outcome = await runner.run(scenario, runtime)
         graded = graded_calls(outcome.calls)
@@ -349,6 +363,8 @@ async def probe_chat_workflow(
     except Exception as exc:
         raise failure("chat_ingress_failed", str(exc)) from exc
     finally:
+        if handlers is not None:
+            handlers.close()
         path = folder / "receipt.json"
         path.write_text(json.dumps(receipt, indent=2) + "\n", encoding="utf-8")
         path.chmod(0o600)

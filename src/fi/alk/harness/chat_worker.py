@@ -7,6 +7,7 @@ import base64
 import json
 import logging
 import os
+import socket
 import sys
 from dataclasses import asdict
 from datetime import datetime
@@ -16,10 +17,12 @@ from typing import Any
 
 from .backends import GOOGLE_ADK_APPROVAL_ENV
 from .call_runner import ArtifactUploader, CallRunnerContext
-from .chat_call_runner import _check_text_usage
+from .chat_call_runner import _check_text_usage, handler_child_for
+from .handler_child import HandlerChannel
 from .hosted_scheduler import CallAborted, CallOutcome, Scenario, World
 from .isolated_process import run_json_worker, run_worker
 from .outbound import ArtifactKind
+from .privilege import IsolationMode, isolation_mode
 from .process_runtime import EnvironmentRuntime, _allowlisted_ambient_env
 from .usage import simulator_funding
 from .world.runtime import Call
@@ -85,26 +88,41 @@ class IsolatedChatCallRunner:
         # worker's call used is recorded here.
         funding = simulator_funding()
         await _check_text_usage(context.usage_reporter, funding)
-        result = await run_json_worker(
-            "fi.alk.harness.chat_worker",
-            {
-                "job": context.job.model_dump(mode="json"),
-                "bundle_dir": str(context.bundle_dir),
-                "work_directory": str(context.work_directory),
-                "source_directory": str(context.source_directory)
-                if context.source_directory
-                else None,
-                "target_secrets": dict(context.target_provider_secret_values),
-                "local_auth_values": dict(runtime._local_auth_values),
-                "attempt_number": context.attempt_number,
-                "runtime": runtime.model_dump(mode="json"),
-                "scenario_key": scenario.scenario_key,
-                "source_scenario_key": getattr(scenario, "source_scenario_key", None),
-                "scenario_id": scenario.scenario_id,
-            },
-            environ=environ,
-            work_directory=context.work_directory / "chat-workers",
-        )
+        mode = isolation_mode()
+        # Under per-user isolation the tool handlers, and the agent code they import, run in a
+        # child of their own; the worker gets its socket and never the source.
+        handlers = await asyncio.to_thread(handler_child_for, context, runtime)
+        handler_fd = handlers.sock.fileno() if handlers is not None else None
+        try:
+            result = await run_json_worker(
+                "fi.alk.harness.chat_worker",
+                {
+                    "job": context.job.model_dump(mode="json"),
+                    "bundle_dir": str(context.bundle_dir),
+                    "work_directory": str(context.work_directory),
+                    "source_directory": str(context.source_directory)
+                    if context.source_directory and mode is not IsolationMode.PER_USER
+                    else None,
+                    "process_isolation": mode.value,
+                    "handler_fd": handler_fd,
+                    "target_secrets": dict(context.target_provider_secret_values),
+                    "local_auth_values": dict(runtime._local_auth_values),
+                    "attempt_number": context.attempt_number,
+                    "runtime": runtime.model_dump(mode="json"),
+                    "scenario_key": scenario.scenario_key,
+                    "source_scenario_key": getattr(
+                        scenario, "source_scenario_key", None
+                    ),
+                    "scenario_id": scenario.scenario_id,
+                },
+                environ=environ,
+                work_directory=context.work_directory / "chat-workers",
+                pass_fds=(handler_fd,) if handler_fd is not None else (),
+            )
+        finally:
+            # This side's copy of the socket goes with the child, once the worker is done.
+            if handlers is not None:
+                handlers.close()
         await _record_worker_usage(context.usage_reporter, result.get("usage") or [], funding)
         artifact_ids = {}
         for artifact in result.get("artifacts", []):
@@ -200,6 +218,21 @@ async def main() -> None:
     collector = _ArtifactCollector()
     usage = _UsageCollector()
     try:
+        isolated = payload.get("process_isolation") == IsolationMode.PER_USER.value
+        native = (
+            payload["runtime"].get("metadata", {}).get("observation_mode") == "native"
+        )
+        if isolated and (
+            payload.get("source_directory")
+            or (payload.get("handler_fd") is None and not native)
+        ):
+            # The tool handlers, and the agent's code they import, run only in their handler
+            # child; this process never runs them as the harness.
+            raise CallAborted(
+                "chat_worker_refused: per-user isolation runs tool handlers only in their child",
+                code="call_failed",
+            )
+        handler_fd = payload.get("handler_fd")
         job = HarnessJob.model_validate(payload["job"])
         context = CallRunnerContext(
             job=job,
@@ -212,6 +245,9 @@ async def main() -> None:
             if payload["source_directory"]
             else None,
             usage_reporter=usage,  # type: ignore[arg-type]
+            handler_channel=HandlerChannel(socket.socket(fileno=handler_fd))
+            if handler_fd is not None
+            else None,
         )
         runner_type = (
             RetellChatCallRunner
