@@ -647,6 +647,13 @@ class _ToolSpans:
             or (self._agent_name(agent) if agent is not None else None)
             # No agent span above it: the agent the span itself names, as a job running in its own run does.
             or _first(attributes, _AGENT_NAME_KEYS)
+            # Nothing names it, in a served conversation's run: the run's own name, which a graph server sets to the
+            # graph it runs and a launch from this run already takes as its agent.
+            or (
+                self._run_name(span_id)
+                if _first(attributes, _CONVERSATION_KEYS)
+                else None
+            )
         )
         if worker:
             record.update(agent_key=worker[:256], agent_role=worker[:256])
