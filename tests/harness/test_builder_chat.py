@@ -106,7 +106,7 @@ class EditingConversation(BuilderConversation):
 def _runtime(tmp_path: Path, client: BuilderClient, monkeypatch) -> HostedChatRuntime:
     monkeypatch.setenv("ALK_HARNESS", "vertex-gemini")
     monkeypatch.setenv("ALK_GOOGLE_ADK_EXPLICITLY_APPROVED_BY_USER", "1")
-    (tmp_path / "scenarios" / "one").mkdir(parents=True)
+    (tmp_path / "scenarios" / "one").mkdir(parents=True, exist_ok=True)
     (tmp_path / "scenarios" / "one" / "scenario.json").write_text("{}")
     policy = tmp_path / "policy.yaml"
     policy.write_text("schema_version: 1\nharness_chat:\n  enabled: true\n", encoding="utf-8")
@@ -1283,9 +1283,89 @@ def test_a_chat_turn_reports_what_it_spent_and_keeps_the_sandbox(tmp_path, monke
         "tokens_cached": 0,
         "usd": 0.02,
         "unpriced_turns": 0,
-        "models": ["m1", "m2"],
+        # Only the model this turn called, not the earlier turn's m1.
+        "models": ["m2"],
     }
     assert not runtime.stopping.is_set()
+
+
+class LosingClient(BuilderClient):
+    """A client whose turn_completed POST fails once, as a lost delivery would."""
+
+    def __init__(self, *, control_only: bool = False):
+        super().__init__()
+        self.lost = False
+        self.sessions: dict[str, list] = {}
+        if control_only:
+            self.turn_context = {**self.turn_context, "capabilities": {"control_only": True}}
+
+    async def emit(self, kind, **kwargs):
+        if kind == "turn_completed" and not self.lost:
+            self.lost = True
+            raise ConversationTransportError("delivery failed")
+        return await super().emit(kind, **kwargs)
+
+    async def append_session(self, key, entries):
+        self.sessions.setdefault(key["project_key"], []).extend(entries)
+
+    async def load_session(self, key):
+        return {"entries": self.sessions.get(key["project_key"], [])}
+
+
+def _lose_then_replay(tmp_path, monkeypatch, client, restart_path):
+    from fi.alk.harness import spend
+
+    monkeypatch.setattr(spend, "_stages", {})
+    runtime = _runtime(tmp_path, client, monkeypatch)
+    runtime.conversation = SpendingConversation(tmp_path, writes=False)
+    with pytest.raises(ConversationTransportError):
+        _turn(runtime, {"content": "hello"})
+    # The restart: a new process with an empty spend ledger, the same command redelivered.
+    monkeypatch.setattr(spend, "_stages", {})
+    client.events.clear()
+    restarted = _runtime(restart_path, client, monkeypatch)
+    restarted.conversation = SpendingConversation(restart_path, writes=False)
+    if restart_path != tmp_path:
+        asyncio.run(restarted._restore_coordinator_state())
+    _turn(restarted, {"content": "hello"})
+    return [event for event in client.events if event["kind"] == "turn_completed"]
+
+
+def test_a_turn_whose_ending_was_lost_replays_its_usage_after_a_restart(
+    tmp_path, monkeypatch
+):
+    completed = _lose_then_replay(tmp_path, monkeypatch, LosingClient(), tmp_path)
+
+    # The same ending, usage included, marked replayed; the platform dedupes by command id.
+    assert len(completed) == 1
+    assert completed[0]["payload"] == {
+        "command_message_id": "m-1",
+        "outcome": "success",
+        "usage": {
+            "tokens_in": 40,
+            "tokens_out": 6,
+            "tokens_cached": 0,
+            "usd": 0.02,
+            "unpriced_turns": 0,
+            "models": ["m2"],
+        },
+        "replayed": True,
+    }
+
+
+def test_a_chat_sandbox_of_its_own_keeps_the_lost_ending_across_a_restart(
+    tmp_path, monkeypatch
+):
+    # A control-only sandbox restarts empty: the ending comes back with its coordinator state.
+    fresh = tmp_path / "restarted"
+    fresh.mkdir()
+    completed = _lose_then_replay(
+        tmp_path, monkeypatch, LosingClient(control_only=True), fresh
+    )
+
+    assert len(completed) == 1
+    assert completed[0]["payload"]["replayed"] is True
+    assert completed[0]["payload"]["usage"]["tokens_in"] == 40
 
 
 def test_prove_scenarios_records_each_proof(tmp_path):
@@ -1801,7 +1881,7 @@ def test_a_replayed_rebuild_commits_the_workspace_holding_its_result(
 
 
 @pytest.mark.parametrize("ending", ["raised", "turn_failures", "interrupted"])
-def test_a_rebuild_turn_that_did_not_succeed_replays_as_failed(
+def test_a_rebuild_turn_that_did_not_succeed_replays_its_own_ending(
     tmp_path, monkeypatch, ending
 ):
     async def act(stage):
@@ -1835,7 +1915,15 @@ def test_a_rebuild_turn_that_did_not_succeed_replays_as_failed(
     assert client.results[-1] is None
     replay = client.events[client.redelivered_at :]
     assert [one["kind"] for one in replay] == ["turn_completed"]
-    assert replay[0]["payload"] == {"command_message_id": "m-3", "outcome": "failed"}
+    # The ending the turn first reported, usage included: never a success.
+    first = next(
+        one
+        for one in client.events[: client.redelivered_at]
+        if one["kind"] == "turn_completed"
+    )
+    assert replay[0]["payload"] == first["payload"]
+    assert replay[0]["payload"]["outcome"] in {"failed", "interrupted"}
+    assert "usage" in replay[0]["payload"]
 
 
 def test_a_cut_off_rebuild_turn_keeps_no_result(tmp_path, monkeypatch):

@@ -144,7 +144,9 @@ _TEXT_MAX = 500 + 65_536
 # before the cut too keeps padding from pushing a value past it.
 _ANSI_ESCAPE = re.compile(r"\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])")
 _CONTROL_CHARACTERS = {
-    code: None for code in range(128) if (code < 32 and code not in {9, 10, 13}) or code == 127
+    code: None
+    for code in range(128)
+    if (code < 32 and code not in {9, 10, 13}) or code == 127
 }
 # The same for notes: the platform's NOTES_MAX (4000) plus the longest credential.
 _NOTES_MAX = 4000 + 65_536
@@ -1108,13 +1110,14 @@ def usage_delta(before: dict, after: dict) -> dict:
         0,
         int(after.get("unpriced_turns") or 0) - int(before.get("unpriced_turns") or 0),
     )
-    # Models of the stages that took turns since ``before``.
+    # Only the models this turn called: each one whose count rose since ``before``.
     delta["models"] = sorted(
         {
             model
             for name, one in later.items()
-            if int(one.get("turns") or 0) > int(earlier.get(name, {}).get("turns") or 0)
-            for model in one.get("models") or []
+            for model, count in (one.get("model_turns") or {}).items()
+            if int(count or 0)
+            > int((earlier.get(name, {}).get("model_turns") or {}).get(model) or 0)
         }
     )
     return delta
