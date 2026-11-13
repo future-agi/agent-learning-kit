@@ -316,6 +316,7 @@ class RetellChatCallRunner:
             self._contract,
             runtime,
             self._context.source_directory,
+            self._context.handler_channel,
         )
         target = _HostedChatTarget(
             wrapper=wrapper,
