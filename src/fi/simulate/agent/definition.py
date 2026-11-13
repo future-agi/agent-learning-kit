@@ -235,23 +235,13 @@ class RetellTargetConfig(BaseModel):
     provider: Literal["retell"] = "retell"
     agent_id: str = Field(..., min_length=1)
     api_url: AnyHttpUrl = Field(
-        "https://api.retellai.com/v2/create-web-call",
-        validate_default=True,
-    )
-    livekit_url: AnyUrl = Field(
-        "wss://retell-ai-4ihahnq7.livekit.cloud",
+        "https://api.retellai.com/v3/create-web-call",
         validate_default=True,
     )
     api_key_env: str = Field(
         "RETELL_API_KEY",
         pattern=r"^[A-Za-z_][A-Za-z0-9_]*$",
     )
-
-    @model_validator(mode="after")
-    def _check_livekit_url(self) -> "RetellTargetConfig":
-        if self.livekit_url.scheme not in {"ws", "wss"}:
-            raise ValueError("retell_livekit_url_invalid: URL must use ws:// or wss://")
-        return self
 
 
 VoiceProviderTarget = Annotated[

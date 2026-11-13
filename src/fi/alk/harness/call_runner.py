@@ -103,6 +103,15 @@ OPENAI_API_KEY_ALIAS = "OPENAI_API_KEY"
 VAPI_API_KEY_ALIAS = "VAPI_API_KEY"
 VAPI_PUBLIC_API_KEY_ALIAS = "VAPI_PUBLIC_API_KEY"
 RETELL_API_KEY_ALIAS = "RETELL_API_KEY"
+RETELL_WEB_CALL_URL = "https://api.retellai.com/v3/create-web-call"
+RETELL_LEGACY_WEB_CALL_PATH = "/v2/create-web-call"
+
+
+def _retell_web_call_url(configured: object) -> str:
+    url = str(configured or "").strip()
+    if not url or url.rstrip("/").endswith(RETELL_LEGACY_WEB_CALL_PATH):
+        return RETELL_WEB_CALL_URL
+    return url
 SIP_OUTBOUND_TRUNK_ID_ALIAS = "SIP_OUTBOUND_TRUNK_ID"
 SIP_OUTBOUND_FROM_NUMBER_ALIAS = "SIP_OUTBOUND_FROM_NUMBER"
 SIMULATOR_LLM_PROVIDER_ALIAS = "SIMULATOR_LLM_PROVIDER"
@@ -598,14 +607,7 @@ def _build_spec(
             target={
                 "provider": "retell",
                 "agent_id": provider_target_id,
-                "api_url": str(
-                    simulator_config.get("retell_api_url")
-                    or "https://api.retellai.com/v2/create-web-call"
-                ),
-                "livekit_url": str(
-                    simulator_config.get("retell_livekit_url")
-                    or "wss://retell-ai-4ihahnq7.livekit.cloud"
-                ),
+                "api_url": _retell_web_call_url(simulator_config.get("retell_api_url")),
                 "api_key_env": RETELL_API_KEY_ALIAS,
             },
             transport={"kind": "retell_webcall"},
