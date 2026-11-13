@@ -171,6 +171,39 @@ socket.getaddrinfo = _stand_in
 RAW_URL = "http://api.openai.com:%s/v1/chat/completions" % os.environ["MODEL_URL"].rsplit(":", 1)[1]
 """
 
+# The model gateway a hosted agent's calls go to: a host only the platform names, resolved to the
+# stand-in model API on this machine.
+_STAND_IN_GATEWAY = """
+import os, socket
+_resolve = socket.getaddrinfo
+
+def _stand_in(host, *args, **kwargs):
+    return _resolve("127.0.0.1" if host == "gateway.internal" else host, *args, **kwargs)
+
+socket.getaddrinfo = _stand_in
+GATEWAY = "http://gateway.internal:%s" % os.environ["MODEL_URL"].rsplit(":", 1)[1]
+"""
+
+GATEWAY_OPENAI_CALL = (
+    _STAND_IN_GATEWAY
+    + f"""
+import openai
+
+client = openai.OpenAI(api_key="sk-test", base_url=GATEWAY + "/v1")
+
+def ask():
+    out = client.chat.completions.create(
+        model="gpt-4o-mini", messages=[{{"role": "user", "content": "{PROMPT}"}}],
+    )
+    return out.choices[0].message.content
+"""
+)
+
+RAW_GATEWAY_REQUEST = """
+import httpx
+httpx.post(GATEWAY + "/v1/chat/completions", json={}).raise_for_status()
+"""
+
 RAW_URLLIB_REQUEST = (
     _STAND_IN_MODEL_HOST
     + """
@@ -755,6 +788,48 @@ def test_a_raw_model_request_marks_its_call_partial(
     ]
 
 
+def test_a_raw_call_to_the_model_gateway_marks_its_call_partial(
+    tmp_path: Path, collector: Collector
+) -> None:
+    # In a hosted run every model call goes to the gateway the platform names. The SDK's own
+    # calls there are measured; a raw one beside them is not, so the call reads partial, never
+    # as a lower cost.
+    _needs("traceai_openai")
+    result = _run(
+        GATEWAY_OPENAI_CALL + "ask()\n" + RAW_GATEWAY_REQUEST + "ask()\n",
+        _environment(tmp_path, collector, FI_SIMULATION_MODEL_HOSTS="gateway.internal"),
+    )
+
+    assert result.returncode == 0, result.stderr
+    spans = _settled(collector, 3)
+    measured = [span for span in spans if span["scope"] == "traceai_openai"]
+    markers = [span for span in spans if span["scope"] == simulation_measure.SCOPE]
+    assert len(measured) == 2 and len(markers) == 1
+    assert markers[0]["attributes"][STATE] == "partial"
+    assert markers[0]["attributes"]["fi.simulator.call_execution_id"] == CALL
+    assert sorted(span["attributes"].get(STATE, "") for span in measured) == [
+        "",
+        "partial",
+    ]
+
+
+def test_a_call_whose_only_model_call_is_a_raw_gateway_request_reads_partial(
+    tmp_path: Path, collector: Collector
+) -> None:
+    # Without the mark the call would export nothing, which the engine reads as lost spans.
+    _needs("opentelemetry.exporter.otlp.proto.http.trace_exporter")
+    result = _run(
+        _STAND_IN_GATEWAY + RAW_GATEWAY_REQUEST,
+        _environment(tmp_path, collector, FI_SIMULATION_MODEL_HOSTS="gateway.internal"),
+    )
+
+    assert result.returncode == 0, result.stderr
+    [marker] = _settled(collector, 1)
+    assert marker["scope"] == simulation_measure.SCOPE
+    assert marker["attributes"][STATE] == "partial"
+    assert marker["attributes"]["fi.simulator.call_execution_id"] == CALL
+
+
 @pytest.mark.parametrize("sdk", ["vertexai", "google.genai"])
 def test_an_sdk_nothing_here_covers_marks_the_process_partial(
     tmp_path: Path, collector: Collector, sdk: str
@@ -857,6 +932,35 @@ def test_an_http_client_request_to_a_model_api_marks_partial(measuring) -> None:
 
 
 _MARK = {"project_name": "hidden-simulation", "fi.simulation.origin": "simulation"}
+
+
+def test_the_hosts_the_platform_names_are_model_hosts_and_our_export_is_not(
+    measuring, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module, marked = measuring
+    monkeypatch.setenv("FI_SIMULATION_MODEL_HOSTS", "gateway.internal, Shared.Internal")
+    monkeypatch.setenv(
+        "FI_SIMULATION_TRACES_ENDPOINT", "https://shared.internal/v1/traces"
+    )
+    assert module.register({}, lambda _line: None, _MARK) is True
+
+    class HTTPConnection:
+        def __init__(self, host):
+            self.host = host
+            self._tunnel_host = None
+
+        def putrequest(self, method, url, skip_host=False, skip_accept_encoding=False):
+            return "sent"
+
+    module._patch_http_client(types.SimpleNamespace(HTTPConnection=HTTPConnection))
+
+    # Our own export, even to a host the gateway shares, is never a model call.
+    assert HTTPConnection("shared.internal").putrequest("POST", "/v1/traces") == "sent"
+    assert HTTPConnection("tools.internal").putrequest("POST", "/v1/chat") == "sent"
+    assert marked == []
+    assert HTTPConnection("gateway.internal").putrequest("POST", "/v1/messages")
+    assert HTTPConnection("shared.internal").putrequest("POST", "/v1/chat/completions")
+    assert marked == ["partial"] * 2
 
 
 def test_register_needs_the_switch_the_destination_and_the_mark(

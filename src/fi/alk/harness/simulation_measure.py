@@ -14,7 +14,8 @@ and the resource holds the simulation's own attributes only. They go to the addr
 names under the agent's ingest key, and the mark hook stamps each with the call it belongs to.
 
 A model call this cannot see makes the process ``partial``: one through an SDK with no instrumentor
-here, through an SDK the agent instruments itself, or a raw HTTP request to a model API. A span
+here, through an SDK the agent instruments itself, or a raw HTTP request to a model API: a public
+one, or a host the platform names (``FI_SIMULATION_MODEL_HOSTS``, such as its model gateway). A span
 stamped ``fi.simulation.instrumentation=partial`` goes out with that call, and every span after it
 carries the stamp, so the platform reads the call's cost as unknown, never as too low.
 
@@ -38,6 +39,9 @@ _ENDPOINT = "FI_SIMULATION_TRACES_ENDPOINT"
 _INGEST_API_KEY = "FI_SIMULATION_INGEST_API_KEY"
 _INGEST_SECRET_KEY = "FI_SIMULATION_INGEST_SECRET_KEY"
 _CALL_FILE = "FI_SIMULATION_CALL_FILE"
+# The hosts the platform names as the agent's model endpoints: its model gateway, which every
+# hosted model call goes to, and any model base URL the agent declares.
+_MODEL_HOSTS_ENV = "FI_SIMULATION_MODEL_HOSTS"
 STATE_KEY = "fi.simulation.instrumentation"
 PARTIAL = "partial"
 # Each SDK's top module, and the traceAI instrumentor the build installs beside it.
@@ -86,7 +90,14 @@ _FLUSH_MS = 2000
 _PATCHED = "_alk_simulation_measure"
 
 _lock = threading.Lock()
-_state = {"partial": False, "provider": None, "resource": {}}
+_state = {
+    "partial": False,
+    "provider": None,
+    "resource": {},
+    "model_hosts": frozenset(),
+    # Our own export's host and path, which is never a model call even on a shared host.
+    "export": ("", ""),
+}
 _flagged_calls: set = set()
 _write = None
 
@@ -109,6 +120,15 @@ def register(patches: dict, write, mark) -> bool:
         return False
     _write = write
     _state["resource"] = dict(mark)
+    _state["model_hosts"] = frozenset(
+        host
+        for host in (
+            _normal_host(one) for one in os.environ.get(_MODEL_HOSTS_ENV, "").split(",")
+        )
+        if host
+    )
+    export = urllib.parse.urlsplit(os.environ[_ENDPOINT])
+    _state["export"] = (_normal_host(export.hostname), export.path or "/")
     for name, target in SDK_INSTRUMENTORS.items():
         patches.setdefault(name, functools.partial(_instrument_sdk, target=target))
     for name in _UNSEEN_SDKS:
@@ -350,9 +370,15 @@ def _mark_partial() -> None:
         _say("unmeasured model call, no exporter")
 
 
+def _normal_host(host) -> str:
+    return (host or "").strip().lower().rstrip(".")
+
+
 def _is_model_host(host) -> bool:
-    host = (host or "").lower().rstrip(".")
-    if host in _MODEL_HOSTS or host.endswith(_MODEL_HOST_SUFFIXES):
+    host = _normal_host(host)
+    if host in _MODEL_HOSTS or host in _state["model_hosts"]:
+        return True
+    if host.endswith(_MODEL_HOST_SUFFIXES):
         return True
     return host.startswith("bedrock-runtime.") and host.endswith(".amazonaws.com")
 
@@ -370,51 +396,62 @@ def _inside_sdk_span() -> bool:
         return False
 
 
-def _seen_request(host) -> None:
+def _seen_request(target_of, client, args, kwargs) -> None:
     try:
-        if _is_model_host(host) and not _inside_sdk_span():
+        host, path = target_of(client, args, kwargs)
+        if (
+            _is_model_host(host)
+            and (_normal_host(host), path) != _state["export"]
+            and not _inside_sdk_span()
+        ):
             _mark_partial()
     except Exception:
         _say("failed")
 
 
-def _wrap(cls, method: str, host_of) -> None:
+def _wrap(cls, method: str, target_of) -> None:
     original = getattr(cls, method)
     if getattr(original, _PATCHED, False):
         return
 
     @functools.wraps(original)
     def wrapper(self, *args, **kwargs):
-        _seen_request(host_of(self, args, kwargs))
+        _seen_request(target_of, self, args, kwargs)
         return original(self, *args, **kwargs)
 
     setattr(wrapper, _PATCHED, True)
     setattr(cls, method, wrapper)
 
 
-def _request_host(_client, args, kwargs):
+def _request_target(_client, args, kwargs):
+    """The host and path an httpx request goes to."""
     request = args[0] if args else kwargs.get("request")
-    return getattr(getattr(request, "url", None), "host", None)
+    url = getattr(request, "url", None)
+    return getattr(url, "host", None), getattr(url, "path", "")
 
 
 def _patch_httpx(module) -> None:
-    _wrap(module.Client, "send", _request_host)
-    _wrap(module.AsyncClient, "send", _request_host)
+    _wrap(module.Client, "send", _request_target)
+    _wrap(module.AsyncClient, "send", _request_target)
 
 
-def _connection_host(connection, args, kwargs):
-    """The host an http.client request goes to: the URL's when it is sent whole, as through an
-    HTTP proxy, else the tunnel's, as through an HTTPS proxy, else the connection's."""
+def _connection_target(connection, args, kwargs):
+    """The host and path an http.client request goes to. The host is the URL's when it is sent
+    whole, as through an HTTP proxy, else the tunnel's, as through an HTTPS proxy, else the
+    connection's."""
     url = args[1] if len(args) > 1 else kwargs.get("url")
-    if isinstance(url, str) and "://" in url:
-        return urllib.parse.urlsplit(url).hostname
-    return getattr(connection, "_tunnel_host", None) or connection.host
+    url = url if isinstance(url, str) else ""
+    if "://" in url:
+        parts = urllib.parse.urlsplit(url)
+        return parts.hostname, parts.path
+    host = getattr(connection, "_tunnel_host", None) or connection.host
+    return host, url.split("?", 1)[0]
 
 
 def _patch_http_client(module) -> None:
     # Every standard-library request starts here: urllib.request's, and urllib3's under
     # requests and botocore.
-    _wrap(module.HTTPConnection, "putrequest", _connection_host)
+    _wrap(module.HTTPConnection, "putrequest", _connection_target)
 
 
 def _flush() -> None:
