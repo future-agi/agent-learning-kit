@@ -16,15 +16,21 @@ DATABASE_URL = os.environ["DATABASE_URL"]
 
 
 def _record(
-    name: str, arguments: object, result: object, ok: bool, failure: str = ""
+    name: str,
+    endpoint: str,
+    arguments: object,
+    result: object,
+    ok: bool,
+    failure: str = "",
 ) -> None:
     try:
         with psycopg.connect(DATABASE_URL, autocommit=True) as connection:
             connection.execute(
-                "INSERT INTO _alk_tool_trace(name, arguments, result, ok, error, at) "
-                "VALUES (%s, %s, %s, %s, %s, %s)",
+                "INSERT INTO _alk_tool_trace(name, endpoint, arguments, result, ok, error, at) "
+                "VALUES (%s, %s, %s, %s, %s, %s, %s)",
                 (
                     name,
+                    endpoint,
                     json.dumps(arguments),
                     json.dumps(result),
                     ok,
@@ -66,7 +72,8 @@ class Handler(BaseHTTPRequestHandler):
                 "content-type": self.headers.get("content-type", "application/json")
             },
         )
-        name = self.path.split("?", 1)[0].rstrip("/").rsplit("/", 1)[-1] or "unknown"
+        endpoint = self.path.split("?", 1)[0]
+        name = endpoint.rstrip("/").rsplit("/", 1)[-1] or "unknown"
         try:
             with request.urlopen(outgoing, timeout=30) as response:
                 content = response.read()
@@ -76,7 +83,7 @@ class Handler(BaseHTTPRequestHandler):
                 result = json.loads(content) if content else None
             except ValueError:
                 result = content.decode("utf-8", errors="replace")
-            _record(name, arguments, result, status < 400)
+            _record(name, endpoint, arguments, result, status < 400)
             self.send_response(status)
             self.send_header("content-type", response_type)
             self.send_header("content-length", str(len(content)))
@@ -85,13 +92,20 @@ class Handler(BaseHTTPRequestHandler):
         except error.HTTPError as exc:
             content = exc.read()
             failure = content.decode("utf-8", errors="replace")[:2000]
-            _record(name, arguments, None, False, failure)
+            _record(name, endpoint, arguments, None, False, failure)
             self.send_response(exc.code)
             self.send_header("content-length", str(len(content)))
             self.end_headers()
             self.wfile.write(content)
         except Exception as exc:
-            _record(name, arguments, None, False, f"{type(exc).__name__}: unavailable")
+            _record(
+                name,
+                endpoint,
+                arguments,
+                None,
+                False,
+                f"{type(exc).__name__}: unavailable",
+            )
             content = json.dumps({"detail": "tool_upstream_unavailable"}).encode()
             self.send_response(502)
             self.send_header("content-type", "application/json")

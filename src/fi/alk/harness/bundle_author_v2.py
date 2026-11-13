@@ -3654,6 +3654,7 @@ def author_bundle_v2(
             "CREATE TABLE IF NOT EXISTS _alk_tool_trace ("
             "id bigserial PRIMARY KEY, name text NOT NULL, arguments jsonb NOT NULL, "
             "result jsonb, ok boolean NOT NULL, error text, at double precision NOT NULL);\n"
+            "ALTER TABLE _alk_tool_trace ADD COLUMN IF NOT EXISTS endpoint text;\n"
         )
         generic_pipeline = job.metadata.get("generic_harness_v1") is True
         if generic_pipeline:

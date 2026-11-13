@@ -69,6 +69,23 @@ def _execute(
         error = f"{type(exc).__name__}: {exc}"
         raise
     finally:
+        try:
+            # The world's own call log, as the tool proxy keeps it: what reached the world.
+            with psycopg.connect(database_url, autocommit=True) as log:
+                log.execute(
+                    "INSERT INTO _alk_tool_trace(name, arguments, result, ok, error, at) "
+                    "VALUES (%s, %s, %s, %s, %s, %s)",
+                    (
+                        tool_name,
+                        json.dumps(arguments, default=str),
+                        json.dumps(result, default=str),
+                        error is None,
+                        error or "",
+                        started,
+                    ),
+                )
+        except Exception:  # noqa: BLE001 - the log must never change the tool's response
+            pass
         trace_path.parent.mkdir(parents=True, exist_ok=True)
         with trace_path.open("a", encoding="utf-8") as trace:
             trace.write(
@@ -150,7 +167,20 @@ def _application(definitions: dict[str, Any], database_url: str, trace_path: Pat
         if scope.get("type") == "http" and str(scope.get("path") or "").startswith(
             "/mcp/"
         ):
-            scope = {**scope, "path": "/mcp/", "raw_path": b"/mcp/"}
+            # Toolbox clients send ``Accept: */*``; the JSON-response server requires the
+            # JSON type to be named, so a bare wildcard would refuse every client.
+            headers = [
+                (name, value)
+                for name, value in scope.get("headers") or []
+                if name.lower() != b"accept"
+            ]
+            accept = b", ".join(
+                value for name, value in scope.get("headers") or [] if name.lower() == b"accept"
+            )
+            if b"application/json" not in accept:
+                accept = b", ".join(filter(None, (b"application/json", accept)))
+            headers.append((b"accept", accept))
+            scope = {**scope, "path": "/mcp/", "raw_path": b"/mcp/", "headers": headers}
         await application(scope, receive, send)
 
     return toolset_compatible

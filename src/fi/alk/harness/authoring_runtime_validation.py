@@ -20,6 +20,8 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from . import failure_record
+
 if TYPE_CHECKING:
     from .source_model import SourceModel
     from .world_ir import WorldIR
@@ -1178,7 +1180,13 @@ async def validate_once(
                     _tools,
                     _chat_target_timeout_seconds,
                 )
-                from .chat_readiness import probe_chat_ingress, probe_chat_workflow
+                from .chat_readiness import (
+                    probe_chat_ingress,
+                    probe_chat_workflow,
+                    record_tool_routing,
+                    request_uncovered_tools,
+                    world_call_log,
+                )
 
                 chat_ingress = CheckStatus.NOT_APPLICABLE
                 interface = contract.runtime.interface if contract.runtime else None
@@ -1217,7 +1225,20 @@ async def validate_once(
                             secret_values=target_secret_values,
                             redaction_values=redaction_values,
                         )
+                        await request_uncovered_tools(
+                            interface=interface,
+                            endpoint=endpoint.address,
+                            runtime=runtime,
+                            contract=contract,
+                            authoring=authoring,
+                            bundle=bundle,
+                            source=source,
+                            secret_values=target_secret_values,
+                            candidate_hash=_generic_candidate_hash(source, authoring),
+                            local_auth_values=getattr(runtime, "_local_auth_values", None),
+                        )
                     else:
+                        since = time.time()
                         await probe_chat_ingress(
                             interface=interface,
                             endpoint=endpoint.address,
@@ -1232,6 +1253,34 @@ async def validate_once(
                             tools=_tools(contract) if interface.include_tools else (),
                             scenario_id=representative.scenario_id,
                             timeout=_chat_target_timeout_seconds(),
+                        )
+                        from .call_runner import _collect_file_tool_calls
+
+                        # A test message can call tools too; then ask for the rest.
+                        try:
+                            called = _collect_file_tool_calls(runtime)
+                        except Exception:  # noqa: BLE001 - no trace, nothing observed
+                            called = ()
+                        record_tool_routing(
+                            authoring,
+                            representative.scenario_key,
+                            contract,
+                            runtime,
+                            received=world_call_log(runtime, since),
+                            reported=called,
+                            bundle=bundle,
+                        )
+                        await request_uncovered_tools(
+                            interface=interface,
+                            endpoint=endpoint.address,
+                            runtime=runtime,
+                            contract=contract,
+                            authoring=authoring,
+                            bundle=bundle,
+                            source=source,
+                            secret_values=target_secret_values,
+                            candidate_hash=_generic_candidate_hash(source, authoring),
+                            local_auth_values=getattr(runtime, "_local_auth_values", None),
                         )
                     chat_ingress = CheckStatus.PASSED
             phase = "environment"
@@ -1626,6 +1675,8 @@ async def validate_and_repair(
         )
         candidate_hash = _generic_candidate_hash(source, authoring)
         for _attempt in range(decision_bound):
+            # A record left by an earlier attempt must never speak for this one.
+            failure_record.clear()
             try:
                 count = await validate(job, source, authoring)
             except RuntimeValidationError as exc:
@@ -1642,6 +1693,7 @@ async def validate_and_repair(
                     f"runtime validation: {exc.phase}: {exc}",
                     flush=True,
                 )
+                failure_record.record(exc.phase, exc)
                 phase = (
                     RepairPhase.SCENARIOS
                     if exc.phase == "scenarios"
@@ -1902,10 +1954,12 @@ async def validate_and_repair(
     repairs = {"environment": 0, "scenarios": 0}
     for attempt in range(5):
         print(f"runtime validation: attempt {attempt + 1}/5", flush=True)
+        failure_record.clear()
         try:
             count = await validate(job, source, authoring)
         except RuntimeValidationError as exc:
             print(f"runtime validation: {exc.phase}: {exc}", flush=True)
+            failure_record.record(exc.phase, exc)
             if exc.phase not in repairs or repairs[exc.phase] >= 2:
                 raise
             repairs[exc.phase] += 1

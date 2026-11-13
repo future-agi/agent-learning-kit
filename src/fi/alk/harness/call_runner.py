@@ -745,7 +745,8 @@ def _collect_tool_trace_calls(runtime: EnvironmentRuntime) -> tuple[Call, ...]:
             options="-c default_transaction_read_only=on",
         ) as connection:
             cursor = connection.execute(
-                f'SELECT name, arguments, result, ok, error, at FROM "{_TOOL_TRACE_TABLE}" '  # noqa: S608
+                # Every column: an older table has no endpoint column.
+                f'SELECT * FROM "{_TOOL_TRACE_TABLE}" '  # noqa: S608
                 "ORDER BY at ASC"
             )
             rows = cursor.fetchall()
@@ -781,6 +782,7 @@ def _collect_tool_trace_calls(runtime: EnvironmentRuntime) -> tuple[Call, ...]:
                 error=error,
                 refused=not ok,
                 at=at,
+                endpoint=str(record.get("endpoint") or ""),
             )
         )
     return tuple(calls)
