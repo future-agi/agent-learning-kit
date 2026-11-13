@@ -259,6 +259,8 @@ class CallOutcome:
     world_actions: tuple[dict[str, Any], ...] = ()
     # What each actor was told to play from, so a judge can tell an actor that strayed from it.
     actor_briefs: dict[str, str] = field(default_factory=dict)
+    # What the person is told about this trial (a fault that did not take effect, worker limits not enforced).
+    notices: tuple[dict[str, Any], ...] = ()
 
 
 class CallAborted(RuntimeError):
@@ -330,11 +332,18 @@ class SubGoalResult:
     judged: bool
     # What it was decided from (`world_state`, `transcript`, `recording`, `tool_calls`).
     evidence: tuple[str, ...] = field(default=(), compare=False)
+    # Whose result: the task, or `worker:<id>`; reported beside the task verdict, never folded into it.
+    subject: str = "task"
     # Derived from held and reason, so a result changed with `replace` never disagrees with it.
     verdict: str | None = field(default=None, init=False)
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "verdict", verdict_named(self.held, self.reason))
+
+
+def _worker_unmeasured(goal: Any, why: str) -> "SubGoalResult":
+    """A worker's own check that could not measure: unmeasured, with why, never a fault of the whole call."""
+    return SubGoalResult(name=goal.name, held=None, reason=f"{UNMEASURED}{why}", judged=goal.judged != "")
 
 
 @dataclass(frozen=True)
@@ -413,6 +422,8 @@ class OutboundPort(Protocol):
 # job-abort signal for spine v1.12 §5.4's closed job-level failure vocabulary for stage `running`
 # (domain infrastructure).
 
+WORKER_LIMITS_NOT_ENFORCED = "worker_limits_not_enforced"
+
 _CODE_DOMAIN: dict[str, FailureDomain] = {
     "setup_crashed": FailureDomain.SIMULATOR,
     "setup_timeout": FailureDomain.SIMULATOR,
@@ -425,6 +436,8 @@ _CODE_DOMAIN: dict[str, FailureDomain] = {
     "caller_off_script": FailureDomain.SIMULATOR,
     "evidence_missing": FailureDomain.SIMULATOR,
     "actor_missing": FailureDomain.SIMULATOR,
+    # The scenario relies on worker limits the environment's sealed world door cannot hold; rebuilding it fixes that.
+    "worker_limits_not_enforced": FailureDomain.SIMULATOR,
     "world_usage": FailureDomain.SIMULATOR,
     "world_unavailable": FailureDomain.ENVIRONMENT,
     "state_too_large": FailureDomain.SIMULATOR,
@@ -2369,6 +2382,33 @@ class HostedScheduler:
                 call=self._call_summary(call_outcome),
             )
 
+        unenforced = next(
+            (
+                str(one.get("message") or "")
+                for one in call_outcome.notices
+                if isinstance(one, dict) and one.get("code") == WORKER_LIMITS_NOT_ENFORCED
+            ),
+            None,
+        )
+        if unenforced is not None:
+            # The scenario relies on worker limits this trial could not hold: grading it would count a limit nobody
+            # enforced as the agent's doing, so it is held, every check unmeasured, until the environment is rebuilt.
+            return self._fault(
+                scenario,
+                world_index,
+                attempt,
+                _failure(
+                    WORKER_LIMITS_NOT_ENFORCED,
+                    "inconclusive: scenario problem, not the agent's: "
+                    + (unenforced or "worker limits were not enforced in this trial"),
+                ),
+                sub_goals=tuple(
+                    SubGoalResult(name=goal.name, held=None, reason=None, judged=goal.judged != "")
+                    for goal in scenario.sub_goals
+                ),
+                call=self._call_summary(call_outcome),
+                retry=False,
+            )
         sub_goal_results: list[SubGoalResult] = []
         judged_pending: list[tuple[int, Any]] = []
         off_script = ""
@@ -2383,10 +2423,30 @@ class HostedScheduler:
                     )
                 )
                 continue
+            worker = getattr(goal, "worker", "")
+            lane = [one for one in calls if getattr(one, "worker_id", "") == worker] if worker else calls
+            inconclusive = (
+                f"worker {worker} made no tool call the world recorded"
+                if not lane
+                else f"worker {worker} passed its deadline, so its result is partial"
+                if any(getattr(one, "refusal_code", "") == "deadline_passed" for one in lane)
+                else ""
+            ) if worker else ""
+            if inconclusive:
+                # A worker's own check with nothing, or only part, of its work recorded: never a pass, never a fail.
+                sub_goal_results.append(
+                    SubGoalResult(
+                        name=goal.name,
+                        held=None,
+                        reason=f"{INCONCLUSIVE}{inconclusive}",
+                        judged=goal.judged != "",
+                    )
+                )
+                continue
             outcome = await _run_phase(
                 goal.check,
                 check_handle,
-                calls,
+                lane,
                 *((reference_of(getattr(scenario, "solution", None) or ()),) if takes_reference(goal.check) else ()),
                 timeout=CHECK_TIMEOUT_SECONDS,
                 phase="check",
@@ -2404,6 +2464,10 @@ class HostedScheduler:
                         call=self._call_summary(call_outcome),
                         mark_unhealthy=True,
                     )
+                if worker:
+                    # A worker's own check that could not run says so on that worker; it never faults the call.
+                    sub_goal_results.append(_worker_unmeasured(goal, f"its check failed to run: {outcome.failure.message}"))
+                    continue
                 broken_failure = outcome.failure
                 sub_goal_results.append(
                     SubGoalResult(
@@ -2414,6 +2478,9 @@ class HostedScheduler:
             verdict = _classify_check(outcome.value)
             both = bool(goal.judged) and getattr(goal, "both", False)
             if verdict.broken and (both or not goal.judged):
+                if worker:
+                    sub_goal_results.append(_worker_unmeasured(goal, f"its check returned {outcome.value!r}"))
+                    continue
                 broken_failure = _failure(
                     "check_broken", f"{goal.name}: check() returned {outcome.value!r}"
                 )
@@ -2531,6 +2598,11 @@ class HostedScheduler:
                 )
                 sub_goal_results[slot] = replace(judged, held=False, reason=reason or None)
 
+        subjects = {goal.name: getattr(goal, "subject", "task") or "task" for goal in scenario.sub_goals}
+        sub_goal_results = [
+            replace(result, subject=subjects.get(result.name, "task")) for result in sub_goal_results
+        ]
+
         if broken_failure is not None:
             return self._fault(
                 scenario,
@@ -2578,10 +2650,11 @@ class HostedScheduler:
             replace(result, evidence=_evidence_of(goal, call_outcome))
             for goal, result in zip(scenario.sub_goals, sub_goal_results)
         ]
-        # A settled `False` fails the scenario; an unsettled sub-goal (unmeasured included) makes it not decided.
-        if any(result.held is False for result in sub_goal_results):
+        # A settled `False` fails the scenario; an unsettled sub-goal (unmeasured included) makes it not decided. A
+        # worker's own sub-goals are reported beside the task's verdict, never folded into it.
+        if any(result.held is False and result.subject == "task" for result in sub_goal_results):
             status = "failed"
-        elif any(result.held is None for result in sub_goal_results):
+        elif any(result.held is None and result.subject == "task" for result in sub_goal_results):
             return self._fault(
                 scenario,
                 world_index,

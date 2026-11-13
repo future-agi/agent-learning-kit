@@ -257,6 +257,12 @@ class _CompiledSubGoal:
     # The actor this sub-goal is about, if any.
     actor: str = ""
     compares: str = ""
+    # Whose result: the task, or `worker:<id>`, whose check is given only that worker's calls.
+    subject: str = "task"
+
+    @property
+    def worker(self) -> str:
+        return self.subject[len("worker:") :] if self.subject.startswith("worker:") else ""
 
 
 @dataclass(frozen=True)
@@ -451,6 +457,7 @@ def _load_catalogue_claims(bundle_dir: Path) -> dict[str, dict[str, str]]:
             "contract": goal.contract(),
             "both": "yes" if goal.both else "",
             "actor": goal.actor,
+            "subject": goal.subject,
         }
     return claims
 
@@ -624,6 +631,7 @@ def _with_claims(
             both=combined(goal),
             compares=claims[goal.name].get("contract", "") or goal.compares,
             actor=claims[goal.name].get("actor", "") or goal.actor,
+            subject=claims[goal.name].get("subject") or goal.subject,
         )
         if goal.name in claims
         else goal

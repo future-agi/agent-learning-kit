@@ -1270,6 +1270,11 @@ def test_native_http_200_failure_rule_unlocks_existing_setup_repair(tmp_path, pr
         ([dict(ok=False, refused=True, refusal_code="not_permitted")], False),
         # The world's own rule said no: the tool ran, so the binding works.
         ([dict(ok=False, refused=True, refusal_code="world_rule")], True),
+        # A worker's call refused at the door for that worker's limits came through its bound channel.
+        ([dict(ok=False, refused=True, refusal_code="not_permitted", worker_id="refund")], True),
+        ([dict(ok=False, refused=True, refusal_code="deadline_passed", worker_id="refund")], True),
+        # A channel no worker owns is a binding problem.
+        ([dict(ok=False, refused=True, refusal_code="identity_conflict", worker_id="refund")], False),
         # One call ran among failures.
         ([dict(ok=False, refused=True, refusal_code="unknown_tool"), dict(ok=True, result={"active": True})], True),
     ],
@@ -1344,3 +1349,27 @@ def test_an_aborted_readiness_call_counts_its_tool_calls_not_its_hand_offs(
         asyncio.run(workflow_probe(tmp_path, url))
     _, receipt = workflow_receipt(tmp_path)
     assert receipt["tool_call_count"] == 1
+
+
+def test_the_readiness_call_reads_calls_from_the_bundle_s_own_evidence_seam(tmp_path, monkeypatch):
+    from fi.alk.harness import chat_call_runner, chat_readiness
+    from fi.alk.harness.bundle_v2 import EvidenceSeam
+    from fi.alk.harness.world.runtime import Call
+
+    seen = {}
+
+    class Runner:
+        def __init__(self, _artifacts, context):
+            seen["seam"] = context.evidence_seam
+            self._contract = None
+            self.received = []
+
+        async def run(self, _scenario, _runtime):
+            return SimpleNamespace(calls=(Call(name="issue_refund", arguments={}),), turns=1)
+
+    monkeypatch.setattr(chat_call_runner, "HostedChatCallRunner", Runner)
+    # Tool routing is recorded elsewhere when present; this test is only about the seam.
+    monkeypatch.setattr(chat_readiness, "record_tool_routing", lambda *a, **k: None, raising=False)
+    asyncio.run(workflow_probe(tmp_path, "http://x", evidence_seam=EvidenceSeam.TOOL_TRACE))
+    assert seen["seam"] is EvidenceSeam.TOOL_TRACE
+    assert workflow_receipt(tmp_path)[1]["status"] == "passed"

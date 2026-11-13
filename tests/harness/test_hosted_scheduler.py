@@ -4867,3 +4867,136 @@ def test_an_actor_who_speaks_but_only_acted_in_the_world_reached_the_agent() -> 
     refused = replace(posted, world_actions=({"actor_id": "jordan", "outcome": "refused", "name": "post_message"},))
     # Its refused attempt is the reason it said nothing, so the reader looks at the world data, not the agent.
     assert hs._call_actors_missing(scenario, refused) == "Jordan (not_delivered: the world refused its post_message)"
+
+
+def _graded(goals, outcome):
+    async def scenario():
+        outbound = FakeOutbound()
+        pool, _ = _pool(1, outbound=outbound)
+        await pool.start()
+
+        class Runner:
+            async def run(self, scenario, runtime):
+                return outcome
+
+        scheduler = hs.HostedScheduler(
+            pool=pool, world_factory=FakeWorldFactory(), call_runner=Runner(), outbound=outbound, job_seed=1
+        )
+        result = await scheduler.run([FakeScenario("s1", "id-1", sub_goals=goals)])
+        await pool.close()
+        return result.receipts[0]
+
+    return asyncio.run(scenario())
+
+
+@dataclass
+class _WorkerGoal(FakeSubGoal):
+    worker: str = ""
+
+    @property
+    def subject(self) -> str:
+        return f"worker:{self.worker}" if self.worker else "task"
+
+
+def test_a_worker_s_check_reads_only_that_worker_s_calls_and_without_any_is_inconclusive() -> None:
+    calls = (
+        hs.Call(name="get_order", arguments={}, worker_id="order_lookup"),
+        hs.Call(name="issue_refund", arguments={}, worker_id="refund"),
+        hs.Call(name="send_reply", arguments={}),
+    )
+    seen: dict[str, list[str]] = {}
+
+    def lane(name):
+        def check(world, given):
+            seen[name] = [one.name for one in given]
+
+        return check
+
+    receipt = _graded(
+        [
+            _WorkerGoal("lookup_read_only", lane("lookup"), worker="order_lookup"),
+            _WorkerGoal("task_done", lane("task")),
+            _WorkerGoal("audit_logged", lambda w, c: None, worker="audit"),
+        ],
+        _call_outcome(turns=2, calls=calls),
+    )
+    assert seen == {"lookup": ["get_order"], "task": ["get_order", "issue_refund", "send_reply"]}
+    lookup, task, audit = receipt.sub_goals
+    assert (lookup.verdict, task.verdict) == ("pass", "pass")
+    assert (lookup.subject, task.subject, audit.subject) == ("worker:order_lookup", "task", "worker:audit")
+    # Absence is never a pass: a worker with nothing in the world's log cannot be graded.
+    assert (audit.verdict, audit.held) == ("inconclusive", None)
+    assert audit.reason == "Inconclusive: worker audit made no tool call the world recorded"
+
+
+def test_a_worker_s_failed_check_is_reported_beside_the_task_s_verdict_not_folded_into_it() -> None:
+    calls = (hs.Call(name="update_order_status", arguments={}, worker_id="order_lookup"),)
+    outcome = _call_outcome(turns=2, calls=calls)
+    receipt = _graded(
+        [
+            _WorkerGoal("lookup_read_only", lambda w, c: "the lookup worker wrote an order", worker="order_lookup"),
+            _WorkerGoal("audit_logged", lambda w, c: None, worker="audit"),
+            _WorkerGoal("reply_truthful", lambda w, c: None),
+        ],
+        outcome,
+    )
+    worker, audit, task = receipt.sub_goals
+    # Neither a worker's failure nor a worker that left nothing to grade decides the task.
+    assert (worker.verdict, audit.verdict, task.verdict, receipt.status) == ("fail", "inconclusive", "pass", "passed")
+    failed = _graded([_WorkerGoal("reply_truthful", lambda w, c: "claimed a refund")], outcome)
+    assert failed.status == "failed"
+
+
+def test_a_worker_s_broken_check_is_unmeasured_on_that_worker_and_never_faults_the_call() -> None:
+    calls = (hs.Call(name="get_order", arguments={}, worker_id="order_lookup"),)
+    receipt = _graded(
+        [
+            _WorkerGoal("lookup_read_only", lambda w, c: 42, worker="order_lookup"),
+            _WorkerGoal("reply_truthful", lambda w, c: None),
+        ],
+        _call_outcome(turns=2, calls=calls),
+    )
+    worker, task = receipt.sub_goals
+    # One worker's broken check must not stop the task's own sub-goals being graded.
+    assert (worker.verdict, task.verdict, receipt.status) == ("unmeasured", "pass", "passed")
+    assert "check returned 42" in worker.reason
+
+
+def test_a_worker_that_passed_its_deadline_has_its_own_checks_inconclusive_and_the_task_still_graded() -> None:
+    calls = (
+        hs.Call(name="get_order", arguments={}, worker_id="order_lookup"),
+        hs.Call(name="issue_refund", arguments={}, worker_id="refund", ok=False, refused=True,
+                refusal_code="deadline_passed"),
+    )
+    receipt = _graded(
+        [
+            _WorkerGoal("refund_done", lambda w, c: "no refund", worker="refund"),
+            _WorkerGoal("lookup_done", lambda w, c: None, worker="order_lookup"),
+            _WorkerGoal("reply_truthful", lambda w, c: None),
+        ],
+        _call_outcome(turns=2, calls=calls),
+    )
+    refund, lookup, task = receipt.sub_goals
+    assert (refund.verdict, lookup.verdict, task.verdict) == ("inconclusive", "pass", "pass")
+    assert refund.reason == "Inconclusive: worker refund passed its deadline, so its result is partial"
+
+
+def test_a_trial_that_could_not_hold_the_worker_limits_its_scenario_relies_on_is_held_not_graded() -> None:
+    outcome = replace(
+        _call_outcome(turns=2, calls=(hs.Call(name="issue_refund", arguments={}),)),
+        notices=({"code": "worker_limits_not_enforced", "message": "sealed before worker limits"},),
+    )
+    ran: list[str] = []
+    receipt = _graded(
+        [
+            _WorkerGoal("refund_refused", lambda w, c: ran.append("worker") or False, worker="refund"),
+            _WorkerGoal("task_done", lambda w, c: ran.append("task") or False),
+        ],
+        outcome,
+    )
+    # Nothing nobody enforced is counted against the agent: no check ran, none settled, the scenario is not failed.
+    assert ran == []
+    assert receipt.status != "failed"
+    assert receipt.failure is not None and receipt.failure.code == "worker_limits_not_enforced"
+    assert "not the agent's" in receipt.failure.message
+    assert [one.held for one in receipt.sub_goals] == [None, None]

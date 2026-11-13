@@ -22,8 +22,8 @@ from .call_runner import (
     ArtifactUploader,
     CallRunnerContext,
     _clear_file_tool_calls,
-    _with_span_calls,
     _with_scenario_edits,
+    collect_seam_calls,
 )
 from .contract import AgentContract
 from .hosted_scheduler import CallAborted, CallOutcome, Scenario, World
@@ -39,6 +39,7 @@ from .usage import (
 )
 from .world.runtime import Call, GeneratedWorld, trace_row
 from .world.stores.postgres import AttachedPostgresStore
+from .world_door import world_action
 
 logger = logging.getLogger(__name__)
 
@@ -105,6 +106,21 @@ async def _record_text_usage(
 
 
 DEFAULT_CHAT_TARGET_TIMEOUT_SECONDS = 300.0
+
+
+def _unproxied_worker_notices(document: Mapping[str, Any], bundle_dir: Any = None) -> list[dict[str, Any]]:
+    """A chat agent whose tool calls the harness runs itself has no tool proxy, so nothing holds a worker's deadline or
+    permitted actions: a scenario that relies on either says so, and is held rather than graded."""
+    from .call_runner import declares_worker_limits
+
+    budget = document.get("worker_budget_seconds")
+    if (not budget or isinstance(budget, bool)) and not declares_worker_limits(bundle_dir):
+        return []
+    return [{
+        "code": "worker_limits_not_enforced",
+        "message": "This agent's tools are not reached through the world's tool proxy, so no worker's deadline or "
+        "permitted actions were enforced in this trial, and its checks were not graded.",
+    }]
 
 
 def _chat_target_timeout_seconds() -> float:
@@ -186,7 +202,7 @@ def service_actions(contract: Any) -> set[str]:
     """The agent's tools its own tools service runs, as world actions: a service entry's route, `/` read as `.`.
     A route with a path parameter is left to the world's handler."""
     return {
-        route.replace("/", ".")
+        world_action(route)
         for entry in _entries(contract)
         if entry.get("mode") == "service"
         and (route := str(entry.get("endpoint") or "").strip("/"))
@@ -343,12 +359,15 @@ def _world_actors_record(
             if one.get("kind") == "timeout"
         ]
     acted = actor_rows(log, listed, decisions)
-    if not acted and not decisions:
+    changes = trial_state_changes(log, listed, decisions)
+    # A worker the world told apart is kept as an actor is, so its refused attempts are never lost.
+    workers_acted = any(str(entry.get("who") or "").startswith("worker:") for entry in changes)
+    if not acted and not decisions and not workers_acted:
         return None
     return {
         "actions": acted,
         "decisions": decisions,
-        "state_changes": trial_state_changes(log, listed, decisions),
+        "state_changes": changes,
         "approvals": approvals(log, decisions),
         "limits": dict(limits),
         "usage": meter.rows(),
@@ -531,7 +550,7 @@ class _HostedChatTarget:
         for entry in self._contract.tool_entrypoints or []:
             entry = entry if isinstance(entry, dict) else entry.model_dump()
             if entry.get("tool") == tool and str(entry.get("endpoint") or "").strip("/"):
-                return str(entry["endpoint"]).strip("/").replace("/", ".")
+                return world_action(str(entry["endpoint"]))
         return tool
 
     def _world_call(self, call_id: str, name: str, arguments: Any) -> str:
@@ -825,15 +844,16 @@ class HostedChatCallRunner:
         listing = load_actors(self._context.bundle_dir)
         world_db = runtime.endpoints.get("world_db")
         service = runtime.endpoints.get("tools_api")
-        # The tool proxy logs the agent's own calls (and the faults it applies) in the world's table: read that table
-        # whenever the trial is proxied, cast or not, so the trial record and the fault notices see those calls.
+        # The tool proxy logs the agent's own calls (and the faults it applies) in the world's table, and limited workers
+        # act through it: read that table whenever the trial is proxied or has limited workers, cast or not.
         proxied = runtime.endpoints.get("tool_proxy") is not None
+        limited_workers = (Path(self._context.bundle_dir) / "generated" / "tool-proxy" / "permissions.json").is_file()
         # The scenario's faults are a rule of its graded trials; a readiness probe checks the tools' binding without them.
         faults = [] if self._context.readiness_probe else list(document.get("faults") or [])
         door = chat_door(
             target_world,
             world_db.address
-            if (listing.actors or proxied) and world_db is not None and world_db.protocol == "postgres"
+            if (listing.actors or proxied or limited_workers) and world_db is not None and world_db.protocol == "postgres"
             else None,
             {
                 one.id: {"permitted_actions": list(one.permitted_actions), "on_behalf_of": one.on_behalf_of}
@@ -893,13 +913,20 @@ class HostedChatCallRunner:
         failure: CallAborted | None = None
         _clear_file_tool_calls(runtime)
         acting: asyncio.Task[None] | None = None
+        deadline_notices: list[dict[str, Any]] = []
         # An agent that runs its own tools reaches them through the tool proxy, which reads this trial's faults from
         # the world's database, as on a voice call.
         if proxied:
-            from .call_runner import _set_trial_faults
+            from .call_runner import _set_trial_faults, trial_worker_deadlines
 
+            deadline, deadlines, deadline_notices = trial_worker_deadlines(document, self._context.bundle_dir)
+            if self._context.readiness_probe:
+                # The workers' deadline is a rule of the scenario's graded trials; the probe checks the tools' binding.
+                deadline, deadlines = None, {}
             # Every trial writes its own faults, none included, so nothing an earlier trial left can apply to this one.
-            _set_trial_faults(runtime, faults)
+            _set_trial_faults(runtime, faults, deadline, deadlines)
+        else:
+            deadline_notices = _unproxied_worker_notices(document, self._context.bundle_dir)
         try:
             if dispatcher is not None:
                 # What the actors wrote before T0 is in the world before the conversation starts.
@@ -978,10 +1005,10 @@ class HostedChatCallRunner:
                 failure=failure,
             )
 
-        # The submitted agent may execute tools entirely inside its Python process instead
-        # of returning tool requests over HTTP. These observed calls belong to the same attempt;
-        # do not replay the tool through the generated world or fabricate evidence from text.
-        transcript.calls[:] = _with_span_calls(transcript.calls, runtime)
+        # The submitted agent may execute tools inside its own process or against the world's services instead of
+        # returning tool requests over HTTP. These observed calls belong to the same attempt; do not replay the tool
+        # through the generated world or fabricate evidence from text.
+        transcript.calls[:] = collect_seam_calls(runtime, self._context.evidence_seam, transcript.calls)
 
         world_record = _world_actors_record(door, listing, dispatcher, cast, meter, limits, since=trial_started)
         if world_record is not None:
@@ -994,11 +1021,14 @@ class HostedChatCallRunner:
                 "summary": summary,
                 "events": cast.events if cast is not None else [],
             }
+        said = list(deadline_notices)
         if faults:
             from .call_runner import fault_notices
 
             # A fault that did not take effect is said, never only logged: the trial ran without it.
-            transcript.notices = fault_notices(faults, _trial_log(door, trial_started), transcript.calls)
+            said += fault_notices(faults, _trial_log(door, trial_started), transcript.calls)
+        if said:
+            transcript.notices = said
         ended = datetime.now(timezone.utc)
         transcript_id = await self._adapter.upload_artifact(
             transcript.artifact(),
@@ -1019,6 +1049,7 @@ class HostedChatCallRunner:
         outcome = CallOutcome(
             calls=calls,
             turns=len(transcript.exchanges),
+            notices=tuple(said),
             started_at=format_rfc3339_millis(started),
             ended_at=format_rfc3339_millis(ended),
             duration_ms=_duration_ms(started, ended),

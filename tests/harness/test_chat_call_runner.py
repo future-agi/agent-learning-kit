@@ -1581,6 +1581,49 @@ def test_a_chat_trial_s_faults_are_set_for_the_tool_proxy_and_cleared_after(tmp_
     assert written == []
 
 
+def test_a_readiness_probe_sets_no_worker_deadline_while_a_graded_trial_does(tmp_path: Path, monkeypatch: Any) -> None:
+    """A scenario's worker-action deadline is a rule of its graded trials. The readiness probe checks how the agent's
+    tools reach the world, so a short budget must not refuse every probe call and fail certification."""
+    import dataclasses
+
+    from fi.alk.harness import call_runner
+
+    context = _context(tmp_path)
+    path = context.bundle_dir / "scenarios" / "one" / "scenario.json"
+    document = json.loads(path.read_text(encoding="utf-8"))
+    document["worker_budget_seconds"] = 2
+    path.write_text(json.dumps(document), encoding="utf-8")
+    written: list[tuple] = []
+    monkeypatch.setattr(call_runner, "_write_trial_state", lambda _runtime, *rest: written.append(rest))
+    monkeypatch.setattr(chat, "_tool_world", lambda *_args: _ToolWorld())
+    monkeypatch.setattr(chat, "_drive_conversation", _single_exchange)
+
+    class Wrapper:
+        def __init__(self, **_kwargs: Any) -> None:
+            return
+
+        async def call(self, _request: Any) -> AgentResponse:
+            return AgentResponse(content="Done.")
+
+    monkeypatch.setattr(chat, "HTTPAgentWrapper", Wrapper)
+    endpoints = {
+        "target_http": RuntimeEndpoint(capability="target_http", protocol="http", address="http://localhost:18080"),
+        "tool_proxy": RuntimeEndpoint(capability="tool_proxy", protocol="http", address="http://localhost:18081"),
+    }
+    runtime = EnvironmentRuntime(
+        runtime_id="runtime-1", world_index=0, bundle_digest="sha256:" + "a" * 64, state=RuntimeState.READY,
+        endpoints=endpoints,
+    )
+    scenario = SimpleNamespace(scenario_key="one", scenario_id="scenario-1")
+    asyncio.run(chat.HostedChatCallRunner(_Adapter(), context).run(scenario, runtime))
+    # A graded trial holds its workers to the budget.
+    assert written[0][1] is not None
+    written.clear()
+    probe = dataclasses.replace(context, readiness_probe=True)
+    asyncio.run(chat.HostedChatCallRunner(_Adapter(), probe).run(scenario, runtime))
+    assert all(len(row) < 2 or (row[1] is None and not row[2]) for row in written)
+
+
 def test_a_readiness_probe_applies_none_of_the_scenario_s_faults(tmp_path: Path, monkeypatch: Any) -> None:
     """The probe checks how the tools reach the world; a scenario's fault would fail it and block Validate and Save."""
     import dataclasses
@@ -1600,7 +1643,7 @@ def test_a_readiness_probe_applies_none_of_the_scenario_s_faults(tmp_path: Path,
         doors.append(list(faults))
         return real_door(world, None, permissions, faults, **kwargs)
 
-    monkeypatch.setattr(call_runner, "_write_trial_state", lambda _runtime, faults: written.append(list(faults)))
+    monkeypatch.setattr(call_runner, "_write_trial_state", lambda _runtime, faults, *_rest: written.append(list(faults)))
     monkeypatch.setattr(chat, "_tool_world", lambda *_args: _ToolWorld())
     monkeypatch.setattr(chat, "_drive_conversation", _single_exchange)
     monkeypatch.setattr(chat, "chat_door", _door)
@@ -1702,6 +1745,45 @@ def test_a_chat_trial_s_world_changes_read_the_world_s_table_where_the_proxy_log
     assert {one["who"]: one["committed"] for one in record["state_changes"]}["manager"] == 1
 
 
+@pytest.mark.parametrize("seam", [None, "tool_trace"])
+def test_a_chat_call_reads_the_world_s_action_log_when_its_bundle_says_evidence_lands_there(
+    tmp_path: Path, monkeypatch: Any, seam: str | None
+) -> None:
+    from dataclasses import replace
+
+    from fi.alk.harness import call_runner
+    from fi.alk.harness.bundle_v2 import EvidenceSeam
+
+    logged = Call(name="issue_refund", arguments={"order_id": "1043"}, worker_id="refund")
+    monkeypatch.setattr(call_runner, "_collect_tool_trace_calls", lambda _runtime: (logged,))
+    monkeypatch.setattr(chat, "_tool_world", lambda *_args: _ToolWorld())
+    monkeypatch.setattr(chat, "_drive_conversation", _single_exchange)
+
+    class Wrapper:
+        def __init__(self, **_kwargs: Any) -> None:
+            pass
+
+        async def call(self, _request: Any) -> AgentResponse:
+            return AgentResponse(content="Refund RF-8 is issued.")
+
+    monkeypatch.setattr(chat, "HTTPAgentWrapper", Wrapper)
+    context = replace(_context(tmp_path), evidence_seam=EvidenceSeam(seam) if seam else None)
+    runtime = EnvironmentRuntime(
+        runtime_id="runtime-1",
+        world_index=0,
+        bundle_digest="sha256:" + "a" * 64,
+        state=RuntimeState.READY,
+        endpoints={"target_http": RuntimeEndpoint(capability="target_http", protocol="http", address="http://x")},
+    )
+    outcome = asyncio.run(
+        chat.HostedChatCallRunner(_Adapter(), context).run(
+            SimpleNamespace(scenario_key="one", scenario_id="scenario-1"), runtime
+        )
+    )
+    # The agent's tools ran against the world's services, so only the world's own log saw them.
+    assert [(call.name, call.worker_id) for call in outcome.calls] == ([("issue_refund", "refund")] if seam else [])
+
+
 def test_a_chat_trial_s_actors_see_the_agent_s_calls_through_its_tool_proxy(tmp_path: Path) -> None:
     """The agent's own tools service is reached through the tool proxy, which writes to the world's table, never to
     this process's memory: what actors watch (an on_tool trigger) must read the world's table, from the trial's start."""
@@ -1725,6 +1807,30 @@ def test_a_chat_trial_s_actors_see_the_agent_s_calls_through_its_tool_proxy(tmp_
     alone = SimpleNamespace(log=TeeLog(MemoryLog(), None))
     alone.log.write({"actor_id": "manager", "name": "approve", "at": 11.0})
     assert [one["name"] for one in chat._trial_log(alone, since=10.0)] == ["approve"]
+
+
+def test_a_chat_trial_keeps_a_worker_s_refused_attempt_in_its_world_record_without_any_actor() -> None:
+    from fi.alk.harness.world_door import MemoryLog, TeeLog
+
+    class _Mirror:
+        def rows(self):
+            return [
+                {"actor_id": "agent", "worker_id": "refund", "name": "issue", "outcome": "refused",
+                 "refusal_code": "deadline_passed", "refusal": "the deadline for refund has passed", "at": 12.0},
+            ]
+
+        def write(self, row):
+            pass
+
+    door = SimpleNamespace(log=TeeLog(MemoryLog(), _Mirror()))
+    listing = SimpleNamespace(by_id=lambda: {})
+    meter = SimpleNamespace(rows=lambda: [])
+    record = chat._world_actors_record(door, listing, None, None, meter, {}, since=10.0)
+    assert record is not None
+    assert [(one["who"], [r["code"] for r in one["refused_actions"]]) for one in record["state_changes"]] == [
+        ("agent", []),
+        ("worker:refund", ["deadline_passed"]),
+    ]
 
 
 def test_an_actor_the_agent_s_last_call_wakes_still_acts_when_the_conversation_ends_at_once(
@@ -1804,3 +1910,17 @@ def test_a_chat_actor_s_wait_still_open_at_the_end_is_recorded_with_its_timeout(
     assert record["decisions"] == [
         {"actor": "manager", "play": "timeout", "fallback": None, "outcome": "unresolved_at_end", "timeout_seconds": 30}
     ]
+
+
+def test_a_chat_agent_without_a_tool_proxy_says_its_workers_budgets_were_not_held() -> None:
+    [notice] = chat._unproxied_worker_notices({"worker_budget_seconds": {"refund": 2}})
+    assert notice["code"] == "worker_limits_not_enforced"
+    assert chat._unproxied_worker_notices({"worker_budget_seconds": 30})
+    assert chat._unproxied_worker_notices({}) == []
+
+
+def test_a_chat_agent_without_a_tool_proxy_says_its_workers_permissions_were_not_held(tmp_path) -> None:
+    (tmp_path / "contract.json").write_text(json.dumps({"workers": [{"id": "refund", "allowed_tools": ["get"]}]}))
+    [notice] = chat._unproxied_worker_notices({}, tmp_path)
+    assert notice["code"] == "worker_limits_not_enforced"
+    assert "permitted actions" in notice["message"]

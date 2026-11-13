@@ -65,7 +65,7 @@ from .bundle_v2 import (
     load_bundle_v2,
     seal_bundle_v2,
 )
-from .contract import DataStore, Runtime, ToolEntry, runtime_public_environment
+from .contract import _CHANNEL_WORKER_ID, AgentContract, DataStore, Runtime, ToolEntry, runtime_public_environment
 from .generated_runtime import (
     GeneratedRuntimeError,
     framework_instrumentation_command,
@@ -88,6 +88,7 @@ from .provision import source_fingerprint
 from .provider_lifecycle import ProviderRepositoryManifest, load_provider_manifest
 from .provider_import import ProviderImportSpec
 from .world.tools import _binding
+from .world_door import DOOR_CAPABILITIES, DOOR_FILE, method_action, world_action
 
 
 class BundleAuthorError(RuntimeError):
@@ -173,13 +174,13 @@ def _sets_trial_state(authoring: Path) -> bool:
     return False
 
 
-def _action_log_seed(authoring: Path) -> str:
-    """The action log and who may do what in the world; a world without actors, pre-run sessions or faults is seeded exactly
-    as before."""
+def _action_log_seed(authoring: Path, *, workers: bool = False) -> str:
+    """The action log and who may do what in the world; a world without actors, pre-run sessions, faults or limited
+    workers is seeded exactly as before."""
     listing = load_actors(authoring)
     return (
         _TOOL_TRACE_DDL + actors_seed(listing)
-        if listing.actors or _sets_trial_state(authoring)
+        if listing.actors or workers or _sets_trial_state(authoring)
         else _AGENT_TRACE_DDL
     )
 
@@ -2018,11 +2019,84 @@ def _tool_proxy_process() -> SourceProcess:
             "PORT": "{{PORT_tool-proxy}}",
             "UPSTREAM_URL": "{{TOOLS_UPSTREAM_URL}}",
             "DATABASE_URL": "{{WORLD_DATABASE_URL}}",
+            # This trial's worker channels, {token: worker id}, written by the runner.
+            "WORKER_CHANNELS_FILE": "{{WORLD_DIR}}/worker-channels.json",
         },
         started_check=StartedCheck(port=True, timeout_seconds=180),
         user=ProcessUser.SVC_TOOLS,
         depends_on=["tools-api", "world-db"],
     )
+
+
+def _tool_actions(contract_body: dict[str, Any] | None) -> dict[str, str]:
+    """Each service-backed tool's world action, as the tool proxy names it (the route it calls, dotted), mapped to the
+    tool's own name: a route is often named otherwise (`get_order` -> `orders/get`)."""
+    contract = AgentContract.model_validate(contract_body or {})
+    return {
+        method_action(entry.method, world_action(entry.endpoint)): entry.tool
+        for entry in contract.tool_entrypoints
+        if entry.endpoint.strip()
+    }
+
+
+def _worker_permissions(contract_body: dict[str, Any] | None) -> dict[str, dict[str, list[str]]]:
+    """Each declared worker's allow-list, as the tool proxy names world actions: the method and the path its tool calls, dotted."""
+    contract = AgentContract.model_validate(contract_body or {})
+    routes = {
+        entry.tool: method_action(entry.method, world_action(entry.endpoint))
+        for entry in contract.tool_entrypoints
+        if entry.endpoint.strip()
+    }
+    return {
+        f"worker:{worker.id}": {"allow": sorted({routes.get(tool, tool) for tool in worker.allowed_tools or worker.tools})}
+        for worker in contract.workers
+    }
+
+
+def _seal_tool_proxy(generated: Path, contract_body: dict[str, Any] | None) -> None:
+    """The tool proxy as this bundle ships it: the proxy and the world's door it imports, the tool each route is, each
+    declared worker's allow-list, and what this door enforces, so a runner never assumes more than it sealed."""
+    generated.mkdir(parents=True)
+    shutil.copy2(Path(__file__).with_name("tool_trace_proxy.py"), generated / "proxy.py")
+    shutil.copy2(Path(__file__).with_name("world_door.py"), generated / "world_door.py")
+    # The tool each route is, so the log keeps the agent's own tool name beside the route.
+    actions = _tool_actions(contract_body)
+    if actions:
+        (generated / "actions.json").write_text(json.dumps(actions, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    # Only with declared workers, so a bundle without them seals exactly as before.
+    permissions = _worker_permissions(contract_body)
+    if permissions:
+        (generated / "permissions.json").write_text(
+            json.dumps(permissions, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+        )
+    (generated / DOOR_FILE).write_text(json.dumps(DOOR_CAPABILITIES, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def _with_worker_channels(plan: EnvironmentPlanV2, contract_body: dict[str, Any] | None) -> EnvironmentPlanV2:
+    """Point each separately wired worker's tool address at its own channel on the tool proxy, so the world attributes
+    each worker's calls to it and applies its allow-list and deadline. Cooperative attribution, not isolation: every
+    worker runs in the agent's one process, which can read every channel and the proxy's own address."""
+    if not any(process.name == "tool-proxy" for process in plan.processes):
+        return plan
+    workers = AgentContract.model_validate(contract_body or {}).workers
+    separate = [one for one in workers if one.binding == "separate" and one.address_env.strip()]
+    addresses = [one.address_env for one in separate]
+    # Only a worker the world can name and tell apart gets a channel: one address read by two workers, or an id no
+    # channel placeholder can carry, would hand one worker's calls to another (validation returns both to authoring).
+    channels = {
+        one.address_env: f"{{{{TOOLS_API_URL}}}}/w/{{{{WORKER_CHANNEL_{one.id}}}}}"
+        for one in separate
+        if addresses.count(one.address_env) == 1 and _CHANNEL_WORKER_ID.fullmatch(one.id)
+    }
+    if not channels:
+        return plan
+    processes = tuple(
+        process.model_copy(update={"environment": {**process.environment, **channels}})
+        if isinstance(process, SourceProcess) and process.name == plan.control_service
+        else process
+        for process in plan.processes
+    )
+    return replace(plan, processes=processes)
 
 
 def _mcp_toolbox_definition(root: Path) -> tuple[Path, dict[str, Any]] | None:
@@ -3656,6 +3730,7 @@ def author_bundle_v2(
         plan = _package_process_sources(
             source_root, temporary, plan, Runtime.model_validate(runtime or {}),
         )
+        plan = _with_worker_channels(plan, contract_body)
         (temporary / "credentials.json").write_text(
             credential_manifest.model_dump_json(indent=2) + "\n", encoding="utf-8"
         )
@@ -3680,17 +3755,7 @@ def author_bundle_v2(
             _compile_source_tool_handlers(contract_body, temporary)
         )
         if any(process.name == "tool-proxy" for process in plan.processes):
-            generated = temporary / "generated" / "tool-proxy"
-            generated.mkdir(parents=True)
-            shutil.copy2(
-                Path(__file__).with_name("tool_trace_proxy.py"),
-                generated / "proxy.py",
-            )
-            # The proxy is one surface of the world's door, which it imports from beside it.
-            shutil.copy2(
-                Path(__file__).with_name("world_door.py"),
-                generated / "world_door.py",
-            )
+            _seal_tool_proxy(temporary / "generated" / "tool-proxy", contract_body)
         if any(process.name == "mcp-toolbox" for process in plan.processes):
             toolbox = _mcp_toolbox_definition(source_root)
             if toolbox is None:
@@ -3711,7 +3776,10 @@ def author_bundle_v2(
         prefix = (
             "CREATE TABLE IF NOT EXISTS harness_seed_sentinel (id text PRIMARY KEY);\n"
             "INSERT INTO harness_seed_sentinel(id) VALUES ('ready') ON CONFLICT DO NOTHING;\n"
-            + _action_log_seed(authoring_root)
+            # A worker's refused attempt is kept in the same action log as an actor's.
+            + _action_log_seed(
+                authoring_root, workers=bool(_worker_permissions(contract_body))
+            )
         )
         generic_pipeline = job.metadata.get("generic_harness_v1") is True
         if generic_pipeline:

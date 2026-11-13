@@ -1602,6 +1602,7 @@ class OutboundAdapter:
                     "judged": g.judged,
                     **({"verdict": g.verdict} if g.verdict else {}),
                     **({"evidence": list(g.evidence)} if getattr(g, "evidence", ()) else {}),
+                    **({"subject": g.subject} if g.subject != "task" else {}),
                 }
                 for g in receipt.sub_goals
             ],

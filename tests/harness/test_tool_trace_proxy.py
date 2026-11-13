@@ -42,6 +42,7 @@ class _World(BaseHTTPRequestHandler):
             "/records/approve": (201, {"approval": "ap-1"}),
             "/no": (403, {"detail": "a change needs an approval first"}),
             "/records/hold": (403, {"detail": "nothing to hold"}),
+            "/w/export": (201, {"exported": True}),
         }.get(self.path, (500, {"detail": "boom"}))
         content = json.dumps(payload).encode()
         self.send_response(status)
@@ -414,3 +415,188 @@ def test_reading_the_trial_s_faults_keeps_one_connection_for_every_agent_call(pr
         assert _post(url, "/ok", {"item": "1"})[0] == 201
     # Once warm, an agent call opens one connection, its log row's, as on dev: reading faults opens none.
     assert len(opened) - warmed == 4
+
+
+CHANNELS = {"c-lookup": "order_lookup", "c-refund": "refund"}
+PERMISSIONS = {"worker:order_lookup": {"allow": ["ok"]}, "worker:refund": {"allow": ["records.approve"]}}
+
+
+@pytest.fixture()
+def worker_proxy(proxy, monkeypatch, tmp_path):
+    """The proxy as the bundle ships it, with its door and sealed permissions beside it, and this trial's channels."""
+    shipped = tmp_path / "shipped"
+    shipped.mkdir()
+    (shipped / "proxy.py").write_bytes(_PROXY.read_bytes())
+    (shipped / "world_door.py").write_bytes(_PROXY.with_name("world_door.py").read_bytes())
+    (shipped / "permissions.json").write_text(json.dumps(PERMISSIONS), encoding="utf-8")
+    # The tool each world action is, as the bundle seals it from the contract's routes.
+    (shipped / "actions.json").write_text(json.dumps({"POST records.approve": "approve_record"}), encoding="utf-8")
+    (tmp_path / "channels.json").write_text(json.dumps(CHANNELS), encoding="utf-8")
+    monkeypatch.setenv("WORKER_CHANNELS_FILE", str(tmp_path / "channels.json"))
+    url, rows = proxy
+    spec = importlib.util.spec_from_file_location("tool_trace_proxy_workers", shipped / "proxy.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    server = _serve(module.Handler)
+    try:
+        yield f"http://127.0.0.1:{server.server_port}", rows
+    finally:
+        server.shutdown()
+
+
+def test_a_worker_s_allowed_action_reaches_the_world_through_its_channel_and_names_the_worker(worker_proxy):
+    url, rows = worker_proxy
+    assert _post(url, "/w/c-refund/records/approve", {"deal": "1"})[0] == 201
+    # The world sees the action's own path; the channel token never leaves the proxy.
+    assert _World.seen == ["/records/approve"]
+    [row] = rows()
+    assert (row["actor_id"], row["worker_id"], row["outcome"]) == ("agent", "refund", "committed")
+    assert "c-refund" not in json.dumps(row, default=str)
+
+
+def test_a_worker_s_action_outside_its_allow_list_is_refused_before_the_world(worker_proxy):
+    url, rows = worker_proxy
+    status, payload = _post(url, "/w/c-lookup/records/approve", {"deal": "1"})
+    assert (status, payload) == (403, {"detail": "records.approve is not permitted for order_lookup"})
+    assert _World.seen == []
+    [row] = rows()
+    assert (row["worker_id"], row["outcome"], row["refusal_code"]) == ("order_lookup", "refused", "not_permitted")
+
+
+def test_a_worker_s_request_for_a_route_that_is_no_world_action_is_refused_before_the_world(worker_proxy):
+    url, rows = worker_proxy
+    # Nothing past the world's own actions is reachable from a limited worker's channel, whatever path it asks for.
+    assert _post(url, "/w/c-lookup/scenarios/answers", {})[0] == 403
+    assert _World.seen == []
+    [row] = rows()
+    assert (row["worker_id"], row["outcome"], row["refusal_code"]) == ("order_lookup", "refused", "not_permitted")
+
+
+def test_a_worker_s_call_is_refused_when_the_sealed_allow_lists_are_missing_while_channels_were_given(
+    proxy, monkeypatch, tmp_path
+):
+    """Channels come only from a bundle that sealed its workers' allow-lists: without them, no worker may act."""
+    shipped = tmp_path / "shipped"
+    shipped.mkdir()
+    (shipped / "proxy.py").write_bytes(_PROXY.read_bytes())
+    (shipped / "world_door.py").write_bytes(_PROXY.with_name("world_door.py").read_bytes())
+    (tmp_path / "channels.json").write_text(json.dumps(CHANNELS), encoding="utf-8")
+    monkeypatch.setenv("WORKER_CHANNELS_FILE", str(tmp_path / "channels.json"))
+    url, rows = proxy
+    spec = importlib.util.spec_from_file_location("tool_trace_proxy_no_permissions", shipped / "proxy.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    server = _serve(module.Handler)
+    try:
+        status, _payload = _post(f"http://127.0.0.1:{server.server_port}", "/w/c-refund/ok", {})
+    finally:
+        server.shutdown()
+    assert status == 403
+    assert _World.seen == []
+    assert [(one["worker_id"], one["outcome"], one["refusal_code"]) for one in rows()] == [
+        ("refund", "refused", "not_permitted")
+    ]
+
+
+def test_a_channel_no_worker_of_this_trial_owns_is_refused(worker_proxy):
+    url, rows = worker_proxy
+    assert _post(url, "/w/c-stolen/ok", {})[0] == 403
+    assert _World.seen == []
+    assert [(one["worker_id"], one["refusal_code"]) for one in rows()] == [(None, "identity_conflict")]
+
+
+def test_past_the_trial_s_worker_deadline_every_worker_call_is_refused_but_the_agent_s_own_is_not(worker_proxy, store):
+    from types import SimpleNamespace
+
+    from fi.alk.harness.call_runner import _write_trial_state
+
+    # As the runner sets it at the trial's start, over its own connection to the world's database.
+    runtime = SimpleNamespace(endpoints={"db": SimpleNamespace(protocol="postgres", address=store.dsn())}, metadata={})
+    _write_trial_state(runtime, [], 1.0)
+    url, rows = worker_proxy
+    assert _post(url, "/w/c-refund/records/approve", {"deal": "1"})[0] == 403
+    assert _post(url, "/ok", {})[0] == 201
+    assert [(one["worker_id"], one["outcome"], one["refusal_code"]) for one in rows()] == [
+        ("refund", "refused", "deadline_passed"),
+        (None, "committed", None),
+    ]
+
+
+def test_a_worker_past_its_own_deadline_is_refused_while_another_worker_keeps_acting(worker_proxy, store):
+    from types import SimpleNamespace
+
+    from fi.alk.harness.call_runner import _write_trial_state
+
+    runtime = SimpleNamespace(endpoints={"db": SimpleNamespace(protocol="postgres", address=store.dsn())}, metadata={})
+    _write_trial_state(runtime, [], worker_deadlines={"refund": 1.0})
+    url, rows = worker_proxy
+    assert _post(url, "/w/c-refund/records/approve", {"deal": "1"})[0] == 403
+    assert _post(url, "/w/c-lookup/ok", {})[0] == 201
+    assert [(one["worker_id"], one["outcome"], one["refusal_code"]) for one in rows()] == [
+        ("refund", "refused", "deadline_passed"),
+        ("order_lookup", "committed", None),
+    ]
+
+
+def test_a_call_is_logged_with_the_agent_s_own_tool_name_beside_its_route(worker_proxy):
+    url, rows = worker_proxy
+    assert _post(url, "/w/c-refund/records/approve", {"deal": "1"})[0] == 201
+    assert _post(url, "/ok", {})[0] == 201
+    # The route stays the row's name (what actors read); the tool the agent called is beside it, for grading.
+    assert [(one["name"], one["agent_tool"]) for one in rows()] == [("approve", "approve_record"), ("ok", None)]
+
+
+def test_a_worker_deadline_that_cannot_be_read_refuses_rather_than_reads_as_none(monkeypatch):
+    from fi.alk.harness import tool_trace_proxy as tp
+
+    class _Conn:
+        closed = False
+
+        def __init__(self, error):
+            self.error = error
+
+        def execute(self, *_args):
+            raise self.error
+
+    class UndefinedColumn(Exception):
+        pass
+
+    monkeypatch.setattr(tp, "DATABASE_URL", "postgresql://example")
+    # Nothing set this trial (no column yet): no deadline.
+    monkeypatch.setattr(tp, "_FAULTS_CONNECTION", _Conn(UndefinedColumn("worker_deadline_at")))
+    assert tp._worker_deadline() is None
+    # Any other failure: the read raises, and the door refuses every worker call.
+    monkeypatch.setattr(tp, "_FAULTS_CONNECTION", _Conn(OSError("connection lost")))
+    with pytest.raises(OSError):
+        tp._worker_deadline()
+    # Faults keep reading a broken table as none.
+    assert tp._trial_faults() == []
+
+
+def test_a_templated_route_s_real_call_is_logged_under_the_agent_s_tool_name(worker_proxy, tmp_path):
+    url, rows = worker_proxy
+    (tmp_path / "shipped" / "actions.json").write_text(
+        json.dumps({"records.{deal}.approve": "approve_record"}), encoding="utf-8"
+    )
+    _post(url, "/w/c-refund/records/7/approve", {})
+    [row] = rows()
+    assert row["agent_tool"] == "approve_record"
+
+
+def test_a_templated_route_s_path_values_are_logged_with_the_call_s_arguments(worker_proxy, tmp_path):
+    url, rows = worker_proxy
+    (tmp_path / "shipped" / "actions.json").write_text(
+        json.dumps({"records.{deal}.approve": "approve_record"}), encoding="utf-8"
+    )
+    _post(url, "/w/c-refund/records/7/approve", {"note": "ok"})
+    _post(url, "/w/c-refund/records/8/approve", {"deal": "body wins"})
+    first, second = rows()
+    assert (first["arguments"], second["arguments"]) == ({"deal": "7", "note": "ok"}, {"deal": "body wins"})
+
+
+def test_an_app_s_own_w_route_runs_as_before_in_a_trial_that_gave_no_worker_channels(proxy, monkeypatch):
+    url, rows = proxy
+    monkeypatch.delenv("WORKER_CHANNELS_FILE", raising=False)
+    # `/w/` is a worker's channel only when the trial gave its workers channels.
+    assert _post(url, "/w/export", {})[0] == 201
+    assert _World.seen == ["/w/export"]

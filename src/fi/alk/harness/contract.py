@@ -208,6 +208,10 @@ class ToolEntry(BaseModel):
     notes: str = ""
 
 
+# What a separate worker's id may hold: it names the worker's channel placeholder (`WORKER_CHANNEL_<id>`).
+_CHANNEL_WORKER_ID = re.compile(r"[A-Za-z0-9_.-]+")
+
+
 class DeclaredWorker(BaseModel):
     """An agent the app hands work to, as its source declares it.
 
@@ -219,6 +223,14 @@ class DeclaredWorker(BaseModel):
     name: str = ""
     # The contract tools this worker holds, by name.
     tools: list[str] = Field(default_factory=list)
+    # The ones it may use, when that is narrower than what its code holds; empty means all of `tools`.
+    allowed_tools: list[str] = Field(default_factory=list)
+    # separate: the worker's tool calls are attributed to it at the world through its own channel (cooperative: the
+    # workers share one process, so this attributes calls and does not isolate one worker from another); shared: its
+    # calls cannot be told apart from the others'.
+    binding: Literal["separate", "shared"] = "shared"
+    # For a separate worker, the environment variable its tool client reads as the base address of its tools.
+    address_env: str = ""
 
 
 class PromptSource(BaseModel):
@@ -1525,6 +1537,42 @@ def validate_contract(contract: AgentContract) -> list[str]:
                 f"worker[{index}]:no-id: give this worker the id the agent's source uses for it, "
                 "one that no other worker has."
             )
+        beyond = sorted(set(worker.allowed_tools) - set(worker.tools))
+        if beyond:
+            problems.append(
+                f"worker[{index}]:allowed-tools-it-does-not-hold:{','.join(beyond)}: a worker may be allowed "
+                "only tools it holds."
+            )
+        if worker.binding == "shared" and worker.allowed_tools:
+            # A shared worker's calls reach the world without its name, so nothing can hold it to fewer tools.
+            problems.append(
+                f"worker[{index}]:allowed-tools-on-a-shared-worker: the world cannot tell a shared worker's calls "
+                "apart, so its allowed tools cannot be held; record it as separate with its address variable, or "
+                "drop allowed_tools."
+            )
+        if worker.binding == "separate" and worker.id.strip():
+            # A separate worker reaches the world through its own channel, named from its id and its address variable.
+            if not _CHANNEL_WORKER_ID.fullmatch(worker.id):
+                problems.append(
+                    f"worker[{index}]:id-not-usable-for-a-channel:{worker.id}: a separate worker's id may hold only "
+                    "letters, digits, '_', '.' and '-'."
+                )
+            if not worker.address_env.strip():
+                problems.append(
+                    f"worker[{index}]:separate-without-address-env: name the environment variable its tool client "
+                    "reads as the base address of its tools, or record it as shared."
+                )
+    addresses = [
+        worker.address_env.strip()
+        for worker in contract.workers
+        if worker.binding == "separate" and worker.address_env.strip()
+    ]
+    shared_address = sorted({one for one in addresses if addresses.count(one) > 1})
+    if shared_address:
+        problems.append(
+            f"duplicate-worker-address-env:{','.join(shared_address)}: two separate workers cannot read one address "
+            "variable, or the world cannot tell them apart; record them as shared or give each its own variable."
+        )
     worker_ids = [worker.id for worker in contract.workers if worker.id.strip()]
     repeated = sorted({one for one in worker_ids if worker_ids.count(one) > 1})
     if repeated:

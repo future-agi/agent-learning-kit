@@ -36,6 +36,7 @@ import dataclasses
 import gc
 import json
 import random
+import time
 import logging
 import os
 import stat
@@ -940,7 +941,8 @@ def _collect_tool_trace_calls(runtime: EnvironmentRuntime) -> tuple[Call, ...]:
 
     calls: list[Call] = []
     for record in records:
-        name = record.get("name")
+        # The agent's own tool name when the world recorded it beside the route the call took.
+        name = record.get("agent_tool") or record.get("name")
         if not isinstance(name, str) or not name:
             continue
         arguments = record.get("arguments")
@@ -963,10 +965,31 @@ def _collect_tool_trace_calls(runtime: EnvironmentRuntime) -> tuple[Call, ...]:
                 error=error,
                 refused=refused,
                 at=at,
+                # The worker the world saw make it, by the channel it came through.
+                worker_id=str(record.get("worker_id") or ""),
                 refusal_code=str(record.get("refusal_code") or "") if refused else "",
             )
         )
     return tuple(calls)
+
+
+def collect_seam_calls(
+    runtime: EnvironmentRuntime,
+    seam: EvidenceSeam | None,
+    observed: Sequence[Call] = (),
+) -> tuple[Call, ...]:
+    """The calls a world observed for one attempt: calls another source saw, else the agent's own in-process trace,
+    else where its bundle says evidence lands, joined with the trace file's span lines. Every runner reads them here,
+    so a voice and a chat call agree."""
+    written, from_spans = _read_file_tool_calls(runtime)
+    calls = list(observed) or written
+    if not calls and seam is EvidenceSeam.HTTP_TOOL:
+        calls = list(_collect_http_tool_calls(runtime))
+    elif not calls and seam is EvidenceSeam.TOOL_TRACE:
+        calls = list(_collect_tool_trace_calls(runtime))
+    # Unrecognized/None (should not happen for a `kind: process` bundle past preflight) degrades to the span lines
+    # alone, keeping this on the scheduler's own evidence_missing path, never a raw exception.
+    return _merge_span_calls(calls, from_spans)
 
 
 def _read_action_log(
@@ -1037,11 +1060,12 @@ class _ChosenActions:
 def trial_state_changes(
     log: list[dict[str, Any]], listed: Mapping[str, Any], decisions: Sequence[dict[str, Any]] = ()
 ) -> list[dict[str, Any]]:
-    """What each participant attempted in this trial and what the world made of it: one entry for the agent and one
-    per actor that acted, with attempted, committed, refused, faulted and duplicate counts and the actions it
-    committed, in order. Attempted, refused and committed are kept apart; a row from before outcomes were recorded
-    counts as committed when it succeeded and refused when the world refused it. `answer_lost_actions` lists the
-    committed actions whose answer a `timeout_after_commit` fault replaced with a timeout."""
+    """What each participant attempted in this trial and what the world made of it: one entry for the agent, one per
+    actor that acted and one per agent worker the world told apart (`worker:<id>`, by the channel it came through),
+    with attempted, committed, refused, faulted and duplicate counts, the actions it committed and the ones the world
+    refused with why, in order. Attempted, refused and committed are kept apart; a row from before outcomes were
+    recorded counts as committed when it succeeded and refused when the world refused it. `answer_lost_actions` lists
+    the committed actions whose answer a `timeout_after_commit` fault replaced with a timeout."""
     entries: dict[str, dict[str, Any]] = {}
     chosen = _ChosenActions(decisions)
     for row in log:
@@ -1049,15 +1073,22 @@ def trial_state_changes(
             # Written before the run: the trial's starting point, not a change made during it.
             continue
         who = str(row.get("actor_id") or AGENT)
+        if who == AGENT and row.get("worker_id"):
+            who = f"worker:{row['worker_id']}"
         actor = listed.get(who)
         entry = entries.setdefault(
             who,
             {
                 "who": who,
-                "name": "the agent" if who == AGENT else (actor.name if actor is not None else who),
+                "name": "the agent"
+                if who == AGENT
+                else actor.name
+                if actor is not None
+                else str(row.get("worker_id") or who),
                 "attempted": 0,
                 **{outcome: 0 for outcome in _OUTCOMES},
                 "committed_actions": [],
+                "refused_actions": [],
             },
         )
         entry["attempted"] += 1
@@ -1066,18 +1097,32 @@ def trial_state_changes(
         )
         if outcome in _OUTCOMES:
             entry[outcome] += 1
+        # A call through the tool proxy is named by the agent's own tool, as its checks are graded, not by its route.
+        name = str(row.get("agent_tool") or row.get("name") or "")
         if outcome == "committed":
-            shown = str(row.get("name") or "") if who == AGENT else chosen.name(who, str(row.get("name") or ""), actor)
+            shown = name if who == AGENT else chosen.name(who, name, actor)
             entry["committed_actions"].append(shown)
             if row.get("error") == "response_lost":
                 # Committed, yet the one who acted was told it timed out: a retry after it commits twice.
                 entry.setdefault("answer_lost_actions", []).append(shown)
-    # The agent always has a line: "no change" is a result, since doing nothing can be correct.
+        elif outcome == "refused":
+            # An attempted violation stays visible: what was tried and why the world said no.
+            entry["refused_actions"].append(
+                {
+                    "action": name,
+                    "code": str(row.get("refusal_code") or ""),
+                    "reason": str(row.get("refusal") or row.get("error") or ""),
+                }
+            )
+    # The agent always has a line: "no change" is a result, since doing nothing can be correct. Its workers are the
+    # agent too, so a change one of them committed is not "no change".
     agent = entries.pop(AGENT, None) or {
         "who": AGENT, "name": "the agent", "attempted": 0, **{outcome: 0 for outcome in _OUTCOMES},
-        "committed_actions": [],
+        "committed_actions": [], "refused_actions": [],
     }
-    agent["no_change"] = not agent["committed_actions"]
+    agent["no_change"] = not agent["committed_actions"] and not any(
+        entry["committed_actions"] for who, entry in entries.items() if who.startswith("worker:")
+    )
     return [agent] + list(entries.values())
 
 
@@ -1207,24 +1252,40 @@ def _agent_marks(
 # The trial's faults on the agent's calls, kept in the world's own database where the tool proxy reads them: never in a
 # file the agent's process could read or rewrite.
 TRIAL_FAULTS_DDL = "CREATE TABLE IF NOT EXISTS _alk_trial_faults (id INT PRIMARY KEY, faults JSONB NOT NULL)"
+# When this trial's workers stop being allowed to act, beside its faults; null when the scenario sets no budget.
+TRIAL_DEADLINE_DDL = "ALTER TABLE _alk_trial_faults ADD COLUMN IF NOT EXISTS worker_deadline_at DOUBLE PRECISION"
+# Each named worker's own deadline, {worker id: epoch seconds}, when the scenario gives a budget per worker.
+TRIAL_WORKER_DEADLINES_DDL = "ALTER TABLE _alk_trial_faults ADD COLUMN IF NOT EXISTS worker_deadlines JSONB"
 
 
-def _write_trial_state(runtime: EnvironmentRuntime, faults: list[Any]) -> None:
-    """This trial's faults, in the world's database where the door in the tool proxy reads them; written by the runner
-    only, over its own connection."""
+def _write_trial_state(
+    runtime: EnvironmentRuntime,
+    faults: list[Any],
+    worker_deadline_at: float | None = None,
+    worker_deadlines: Mapping[str, float] | None = None,
+) -> None:
+    """This trial's faults and its workers' deadline, in the world's database where the door in the tool proxy reads
+    them; written by the runner only, over its own connection. Past the deadline the world refuses every worker's
+    call (`deadline_passed`)."""
     database = _find_postgres_endpoint(runtime)
     if database is None:
+        if worker_deadline_at or worker_deadlines:
+            # Workers would act with no deadline at all: the trial fails rather than grade them as if one held.
+            raise RuntimeError("the workers' deadline cannot be set: this world has no database the tool proxy reads")
         if faults:
-            logger.warning("faults cannot be set: this world has no database the tool proxy reads trial state from")
+            logger.warning("trial state cannot be set: this world has no database the tool proxy reads it from")
         return
     import psycopg
 
     with psycopg.connect(database.address, autocommit=True, connect_timeout=5) as connection:
         connection.execute(TRIAL_FAULTS_DDL)
+        connection.execute(TRIAL_DEADLINE_DDL)
+        connection.execute(TRIAL_WORKER_DEADLINES_DDL)
         connection.execute(
-            "INSERT INTO _alk_trial_faults (id, faults) VALUES (1, %s::jsonb) "
-            "ON CONFLICT (id) DO UPDATE SET faults = EXCLUDED.faults",
-            (json.dumps(list(faults)),),
+            "INSERT INTO _alk_trial_faults (id, faults, worker_deadline_at, worker_deadlines) "
+            "VALUES (1, %s::jsonb, %s, %s::jsonb) ON CONFLICT (id) DO UPDATE SET faults = EXCLUDED.faults, "
+            "worker_deadline_at = EXCLUDED.worker_deadline_at, worker_deadlines = EXCLUDED.worker_deadlines",
+            (json.dumps(list(faults)), worker_deadline_at, json.dumps(dict(worker_deadlines or {}))),
         )
 
 
@@ -1255,7 +1316,10 @@ def fault_notices(
             notices.append({**base, "code": "fault_not_applied",
                             "message": f"The {mode} fault on call {on_call} of {action} could not be applied: {unreachable}."})
             continue
-        rows = [row for row in log or [] if _same_action(action, str(row.get("name") or ""))]
+        rows = [
+            row for row in log or []
+            if _same_action(action, str(row.get("name") or "")) or _same_action(action, str(row.get("agent_tool") or ""))
+        ]
         if any(_fault_applied(row) for row in rows):
             continue
         made = sum(1 for call in calls if _same_action(action, call.name))
@@ -1285,9 +1349,114 @@ def _int_or(value: Any, default: int) -> int:
         return default
 
 
-def _set_trial_faults(runtime: EnvironmentRuntime, faults: list[Any]) -> None:
-    """This trial's faults at its start. A trial with faults to set fails when they cannot be set; one with none only
-    clears what an earlier trial may have left, so a world database out of reach never fails it."""
+def worker_deadline(document: Mapping[str, Any]) -> float | None:
+    """When all of this trial's workers stop being allowed to act: its start plus the scenario's worker budget, if it
+    gives one number for all of them."""
+    budget = document.get("worker_budget_seconds")
+    if isinstance(budget, bool) or not isinstance(budget, (int, float)) or budget <= 0:
+        return None
+    return time.time() + budget
+
+
+def worker_deadlines(document: Mapping[str, Any]) -> dict[str, float]:
+    """When each named worker stops being allowed to act, where the scenario gives a budget per worker."""
+    budgets = document.get("worker_budget_seconds")
+    if not isinstance(budgets, Mapping):
+        return {}
+    start = time.time()
+    return {
+        str(worker): start + budget
+        for worker, budget in budgets.items()
+        if str(worker).strip() and not isinstance(budget, bool) and isinstance(budget, (int, float)) and budget > 0
+    }
+
+
+def trial_worker_deadlines(
+    document: Mapping[str, Any], bundle_dir: Path | str | None
+) -> tuple[float | None, dict[str, float], list[dict[str, Any]]]:
+    """This trial's worker-action deadline for all workers, each named worker's own, and what the person should be
+    told. A tool proxy sealed before this release has no worker limits at all, so neither a budget nor a worker's
+    permitted actions are held there: a scenario that relies on either says so, and is held rather than graded."""
+    deadline, deadlines = worker_deadline(document), worker_deadlines(document)
+    relies = bool(deadline or deadlines) or declares_worker_limits(bundle_dir)
+    if not relies:
+        return deadline, deadlines, []
+    if _door_holds_worker_limits(bundle_dir):
+        unheld = _limits_on_shared_workers(document, bundle_dir)
+        if not unheld:
+            return deadline, deadlines, []
+        return deadline, deadlines, [{
+            "code": "worker_limits_not_enforced",
+            "message": f"{unheld} cannot be held for a worker wired as shared, because the world cannot tell its "
+            "calls apart, so this trial's checks were not graded. Record the worker as separate and rebuild the "
+            "environment.",
+        }]
+    notice = {
+        "code": "worker_limits_not_enforced",
+        "message": "This environment was sealed before worker limits, so no worker's deadline or permitted actions "
+        "were enforced in this trial, and its checks were not graded. Rebuild the environment to enforce them.",
+    }
+    return deadline, deadlines, [notice]
+
+
+def _limits_on_shared_workers(document: Mapping[str, Any], bundle_dir: Path | str | None) -> str:
+    """Which limit, if any, this trial puts on a worker the world cannot tell apart: a deadline naming a shared
+    worker, one deadline for all when no worker is separate, or permitted tools on a shared worker."""
+    if bundle_dir is None:
+        return ""
+    workers = [one for one in _bundle_contract(Path(bundle_dir)).get("workers") or [] if isinstance(one, dict)]
+    if not workers:
+        # A contract that declares no workers: the budget's worker names were checked at authoring.
+        return ""
+    separate = {str(one.get("id")) for one in workers if one.get("binding") == "separate"}
+    budgets = document.get("worker_budget_seconds")
+    if isinstance(budgets, Mapping) and any(str(one) not in separate for one in budgets):
+        return "A worker deadline"
+    if worker_deadline(document) is not None and not separate:
+        return "A worker deadline"
+    if any(one.get("binding") != "separate" and one.get("allowed_tools") for one in workers):
+        return "A worker's permitted tools"
+    return ""
+
+
+def declares_worker_limits(bundle_dir: Path | str | None) -> bool:
+    """Whether this environment's agent declares a worker held to its own permitted tools: a separately wired worker,
+    or one allowed fewer tools than it holds."""
+    if bundle_dir is None:
+        return False
+    workers = _bundle_contract(Path(bundle_dir)).get("workers")
+    return any(
+        isinstance(one, dict) and (one.get("binding") == "separate" or bool(one.get("allowed_tools")))
+        for one in workers or []
+    )
+
+
+def _door_holds_worker_limits(bundle_dir: Path | str | None) -> bool:
+    """Whether this bundle's tool proxy enforces workers' limits: only one sealed with its capabilities file does."""
+    from .world_door import DOOR_FILE
+
+    if bundle_dir is None:
+        # No sealed bundle: the proxy is this harness's own, which holds every limit.
+        return True
+    try:
+        sealed = json.loads((Path(bundle_dir) / "generated" / "tool-proxy" / DOOR_FILE).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    return isinstance(sealed, dict) and sealed.get("worker_deadlines") == "per_worker"
+
+
+def _set_trial_faults(
+    runtime: EnvironmentRuntime,
+    faults: list[Any],
+    worker_deadline_at: float | None = None,
+    worker_deadlines: Mapping[str, float] | None = None,
+) -> None:
+    """This trial's faults and worker deadline at its start. A trial with either to set fails when they cannot be
+    set; one with neither only clears what an earlier trial may have left, so a world database out of reach never
+    fails it."""
+    if worker_deadline_at or worker_deadlines:
+        _write_trial_state(runtime, faults, worker_deadline_at, worker_deadlines)
+        return
     if faults:
         try:
             _write_trial_state(runtime, faults)
@@ -2519,6 +2688,8 @@ class CallRunnerImpl:
         no_door = actor_problems(doc, self._context.bundle_dir, why, problem) if actors is None else []
         started_at = datetime.now(timezone.utc)
         outer_timeout = run_seconds + _OUTER_WAIT_FOR_PAD_SECONDS
+        # What the person is told about how this trial's worker deadlines were held, set when the trial starts.
+        deadline_notices: list[dict[str, Any]] = []
 
         async def place() -> SimulationReport:
             if self._place_call is not None:
@@ -2538,15 +2709,16 @@ class CallRunnerImpl:
 
         async def place_with_actors() -> SimulationReport:
             faults = list(doc.get("faults") or [])
+            deadline, deadlines, deadline_notices[:] = trial_worker_deadlines(doc, self._context.bundle_dir)
             proxied = runtime.endpoints.get("tool_proxy") is not None
-            if faults or proxied:
-                # Every trial behind a tool proxy writes its own faults, none included, so nothing an earlier trial
-                # left can apply to this one.
-                _set_trial_faults(runtime, faults)
+            if faults or deadline or deadlines or proxied:
+                # Every trial behind a tool proxy writes its own faults and deadline, none included, so nothing an
+                # earlier trial left can apply to this one.
+                _set_trial_faults(runtime, faults, deadline, deadlines)
             try:
                 return await place_with_world_actors()
             finally:
-                if faults:
+                if faults or deadline or deadlines:
                     with contextlib.suppress(Exception):
                         _write_trial_state(runtime, [])
 
@@ -2599,6 +2771,7 @@ class CallRunnerImpl:
                 limits=actor_limits(doc, self._context.bundle_dir, "voice"),
                 actor_briefs=actors.briefs if actors is not None else None,
                 faults=list(doc.get("faults") or []),
+                notices=deadline_notices,
             )
         except (CallAborted, WorldUnavailable):
             # `_translate_report`'s own typed control-flow (non-completed status, no test case,
@@ -2661,6 +2834,7 @@ class CallRunnerImpl:
         limits: Mapping[str, Any] | None = None,
         actor_briefs: Mapping[str, str] | None = None,
         faults: Sequence[Any] = (),
+        notices: Sequence[dict[str, Any]] = (),
     ) -> CallOutcome:
         case = report.test_cases[0] if report.test_cases else None
         took_part = (
@@ -2714,8 +2888,13 @@ class CallRunnerImpl:
         )
         changes = (
             _state_changes(runtime, self._context.bundle_dir, actor_decisions)
-            if acted or actor_decisions
+            if case is not None
+            and self._context.evidence_seam is EvidenceSeam.TOOL_TRACE
             else []
+        )
+        # A worker the world told apart is kept beside the actors, so its refused attempts are never lost.
+        workers_acted = any(
+            str(entry.get("who") or "").startswith("worker:") for entry in changes
         )
         # Hand-off records are not the world's actions: marks pair the graded calls with the action log.
         graded = graded_calls(calls)
@@ -2735,10 +2914,10 @@ class CallRunnerImpl:
             result = case.result
             combined = result.audio_combined_path
             recording = combined if combined and Path(combined).is_file() else None
-            notices = self._fault_notices(runtime, faults, calls)
-            # A call that ended with no words still says what did not take effect, and what actors did in the world,
-            # never only logging it.
-            if result.transcript or notices or acted or actor_decisions or took_part.get("call_actors"):
+            said = [*notices, *self._fault_notices(runtime, faults, calls)]
+            # A call that ended with no words still says what did not take effect, and what actors and workers did in
+            # the world, never only logging it.
+            if result.transcript or said or acted or actor_decisions or workers_acted or took_part.get("call_actors"):
                 transcript_document = {
                     "schema_version": "futureagi.call-transcript.v1",
                     "transcript": result.transcript,
@@ -2756,7 +2935,7 @@ class CallRunnerImpl:
                         "summary": summary,
                         "events": took_part.get("call_actor_events") or [],
                     }
-                if acted or actor_decisions:
+                if acted or actor_decisions or workers_acted:
                     # Kept out of the tool trace, whose every line is one of the agent's own calls. `decisions` is
                     # what each actor chose and why (live) or was scheduled to do (mocked); `actions` what the world
                     # made of it.
@@ -2768,9 +2947,9 @@ class CallRunnerImpl:
                         "limits": dict(limits or {}),
                         "usage": list(actor_usage),
                     }
-                if notices:
+                if said:
                     # A fault that did not take effect is said, never only logged: the trial ran without it.
-                    transcript_document["notices"] = notices
+                    transcript_document["notices"] = said
                 recording_offset_ms = result.metadata.get("recording_offset_ms")
                 if isinstance(recording_offset_ms, (int, float)):
                     transcript_document["recording_offset_ms"] = int(
@@ -2808,6 +2987,7 @@ class CallRunnerImpl:
         base = CallOutcome(
             calls=calls,
             turns=turns,
+            notices=tuple(notices),
             started_at=format_rfc3339_millis(case_started_at),
             ended_at=format_rfc3339_millis(ended_at),
             duration_ms=_duration_ms(case_started_at, ended_at),
@@ -2983,20 +3163,4 @@ class CallRunnerImpl:
         return replace(base, calls=calls)
 
     def _collect_calls(self, runtime: EnvironmentRuntime) -> tuple[Call, ...]:
-        seam = self._context.evidence_seam
-        written, from_spans = _read_file_tool_calls(runtime)
-        if written:
-            return _merge_span_calls(written, from_spans)
-        if seam is EvidenceSeam.HTTP_TOOL:
-            return _merge_span_calls(
-                list(_collect_http_tool_calls(runtime)), from_spans
-            )
-        if seam is EvidenceSeam.TOOL_TRACE:
-            return _merge_span_calls(
-                list(_collect_tool_trace_calls(runtime)), from_spans
-            )
-        # Unrecognized/None (should not happen for a `kind: process` bundle past preflight --
-        # bundle_v2.py requires `evidence_seam` whenever `kind is PROCESS` -- but degrading rather
-        # than crashing keeps this on the scheduler's own evidence_missing path, never a raw
-        # exception).
-        return _merge_span_calls([], from_spans)
+        return collect_seam_calls(runtime, self._context.evidence_seam)

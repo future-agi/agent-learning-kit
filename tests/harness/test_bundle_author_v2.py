@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+from dataclasses import replace
 import json
 import os
 import shutil
@@ -5878,3 +5879,187 @@ def test_python_selection_preserves_uv_alternatives_and_target_only_constraints(
         f"environments={json.dumps(environments)}\n"
     )
     assert _python_language_version(tmp_path, "3.11", interpreter_selector=True) == "==3.11.*,>=3.11"
+
+
+def test_each_declared_worker_is_sealed_with_the_world_actions_its_tools_call():
+    from fi.alk.harness.bundle_author_v2 import _worker_permissions
+
+    contract = {
+        "tools": [{"name": "get_order"}, {"name": "list_refunds"}, {"name": "issue_refund"}],
+        "tool_entrypoints": [
+            {"tool": "get_order", "mode": "service", "service": "returns-api", "endpoint": "/orders/get"},
+            {"tool": "issue_refund", "mode": "service", "service": "returns-api", "endpoint": "/refunds/issue/"},
+        ],
+        "workers": [
+            {"id": "order_lookup", "tools": ["get_order", "list_refunds", "issue_refund"], "allowed_tools": ["get_order", "list_refunds"]},
+            {"id": "refund", "tools": ["issue_refund", "list_refunds"]},
+        ],
+    }
+    # A worker holding more than it may use is sealed with what it may use.
+    assert _worker_permissions(contract) == {
+        "worker:order_lookup": {"allow": ["POST orders.get", "list_refunds"]},
+        "worker:refund": {"allow": ["POST refunds.issue", "list_refunds"]},
+    }
+    assert _worker_permissions({"tools": [{"name": "a"}]}) == {}
+
+
+def test_a_worker_allowed_a_templated_or_queried_route_is_permitted_its_real_calls():
+    from fi.alk.harness.bundle_author_v2 import _worker_permissions
+    from fi.alk.harness.world_door import method_action, permitted, world_action
+
+    contract = {
+        "tools": [{"name": "get_order"}, {"name": "create_refund"}],
+        "tool_entrypoints": [
+            {"tool": "get_order", "mode": "service", "service": "api", "endpoint": "/orders/{order_id}"},
+            {"tool": "create_refund", "mode": "service", "service": "api", "endpoint": "/refunds/create?x=1"},
+        ],
+        "workers": [{"id": "lookup", "tools": ["get_order", "create_refund"]}],
+    }
+    allow = _worker_permissions(contract)["worker:lookup"]["allow"]
+    # The proxy names the action from the real request: these are the calls the worker may make.
+    assert permitted(allow, method_action("POST", world_action("/orders/1043")))
+    assert permitted(allow, method_action("POST", world_action("/refunds/create?amount=5")))
+    # One segment per template value, nothing wider.
+    assert not permitted(allow, method_action("POST", world_action("/orders/1043/cancel")))
+    assert not permitted(allow, method_action("POST", world_action("/orders")))
+    assert not permitted(allow, method_action("POST", world_action("/refunds/delete")))
+
+
+def test_workers_and_routes_are_sealed_by_method_and_path_so_two_tools_on_one_path_stay_apart():
+    from fi.alk.harness.bundle_author_v2 import _tool_actions, _worker_permissions
+    from fi.alk.harness.world_door import permitted
+
+    contract = {
+        "tools": [{"name": "get_order"}, {"name": "update_order"}, {"name": "cancel_order"}],
+        "tool_entrypoints": [
+            {"tool": "get_order", "mode": "service", "service": "api", "endpoint": "/orders/{order_id}", "method": "GET"},
+            {"tool": "update_order", "mode": "service", "service": "api", "endpoint": "/orders/{order_id}", "method": "PUT"},
+            {"tool": "cancel_order", "mode": "service", "service": "api", "endpoint": "/orders/cancel"},
+        ],
+        "workers": [{"id": "lookup", "tools": ["get_order"]}],
+    }
+    actions = _tool_actions(contract)
+    assert actions == {
+        "GET orders.{order_id}": "get_order",
+        "PUT orders.{order_id}": "update_order",
+        "POST orders.cancel": "cancel_order",
+    }
+    allow = _worker_permissions(contract)["worker:lookup"]["allow"]
+    assert allow == ["GET orders.{order_id}"]
+    assert permitted(allow, "GET orders.1043", actions)
+    assert not permitted(allow, "PUT orders.1043", actions)
+    assert not permitted(allow, "GET orders.cancel", actions)
+
+
+def test_limited_workers_seed_the_action_log_that_keeps_whose_attempt_was_refused(tmp_path: Path) -> None:
+    from fi.alk.harness.bundle_author_v2 import _AGENT_TRACE_DDL, _TOOL_TRACE_DDL, _action_log_seed
+
+    assert _action_log_seed(tmp_path) == _AGENT_TRACE_DDL
+    assert _action_log_seed(tmp_path, workers=True).startswith(_TOOL_TRACE_DDL)
+
+
+def test_a_separately_wired_worker_s_tool_address_points_at_its_own_channel_on_the_tool_proxy(tmp_path):
+    from fi.alk.harness.bundle_author_v2 import EnvironmentPlanV2, _tool_proxy_process, _with_worker_channels
+
+    agent = _tool_proxy_process().model_copy(update={"name": "agent", "environment": {"A": "1"}, "depends_on": []})
+    plan = EnvironmentPlanV2(
+        packaging="process",
+        control_service="agent",
+        processes=(agent, _tool_proxy_process().model_copy(update={"depends_on": []})),
+        capabilities={},
+        readiness=(),
+    )
+    contract = {
+        "workers": [
+            {"id": "refund", "binding": "separate", "address_env": "REFUND_API_URL"},
+            {"id": "order_lookup", "binding": "shared", "address_env": "LOOKUP_API_URL"},
+        ]
+    }
+    wired = {p.name: p.environment for p in _with_worker_channels(plan, contract).processes}
+    assert wired["agent"] == {"A": "1", "REFUND_API_URL": "{{TOOLS_API_URL}}/w/{{WORKER_CHANNEL_refund}}"}
+    assert "REFUND_API_URL" not in wired["tool-proxy"]
+    without_proxy = replace(plan, processes=(agent,))
+    assert _with_worker_channels(without_proxy, contract) is without_proxy
+
+
+def test_workers_sharing_an_address_or_with_an_id_no_channel_can_carry_get_no_channel(tmp_path):
+    from fi.alk.harness.bundle_author_v2 import EnvironmentPlanV2, _tool_proxy_process, _with_worker_channels
+
+    agent = _tool_proxy_process().model_copy(update={"name": "agent", "environment": {}, "depends_on": []})
+    plan = EnvironmentPlanV2(
+        packaging="process",
+        control_service="agent",
+        processes=(agent, _tool_proxy_process().model_copy(update={"depends_on": []})),
+        capabilities={},
+        readiness=(),
+    )
+    contract = {
+        "workers": [
+            {"id": "refund", "binding": "separate", "address_env": "TOOLS_URL"},
+            {"id": "order_lookup", "binding": "separate", "address_env": "TOOLS_URL"},
+            {"id": "Order lookup", "binding": "separate", "address_env": "LOOKUP_URL"},
+            {"id": "audit", "binding": "separate", "address_env": "AUDIT_URL"},
+        ]
+    }
+    wired = {p.name: p.environment for p in _with_worker_channels(plan, contract).processes}
+    # One address read by two workers would hand one's calls to the other; an id with a space names no placeholder.
+    assert wired["agent"] == {"AUDIT_URL": "{{TOOLS_API_URL}}/w/{{WORKER_CHANNEL_audit}}"}
+
+
+def test_each_routed_tool_is_sealed_under_the_world_action_its_route_names():
+    from fi.alk.harness.bundle_author_v2 import _tool_actions
+
+    contract = {
+        "tools": [{"name": "get_order"}, {"name": "list_refunds"}, {"name": "lookup"}],
+        "tool_entrypoints": [
+            {"tool": "get_order", "mode": "service", "service": "returns-api", "endpoint": "/orders/get"},
+            {"tool": "list_refunds", "mode": "service", "service": "returns-api", "endpoint": "refunds/list?all=1"},
+            {"tool": "lookup", "mode": "service", "service": "returns-api", "endpoint": "/orders/{id}"},
+        ],
+    }
+    assert _tool_actions(contract) == {
+        "POST orders.get": "get_order",
+        "POST refunds.list": "list_refunds",
+        "POST orders.{id}": "lookup",
+    }
+
+
+def test_a_templated_route_s_real_call_is_logged_under_its_tool_s_own_name():
+    from fi.alk.harness.bundle_author_v2 import _tool_actions
+    from fi.alk.harness.world_door import action_tool, method_action, world_action
+
+    contract = {
+        "tools": [{"name": "get_order"}, {"name": "issue_refund"}],
+        "tool_entrypoints": [
+            {"tool": "get_order", "mode": "service", "service": "api", "endpoint": "/orders/get"},
+            {"tool": "issue_refund", "mode": "service", "service": "api", "endpoint": "/refunds/{order_id}/issue"},
+        ],
+    }
+    actions = _tool_actions(contract)
+    assert action_tool(actions, method_action("POST", world_action("/refunds/1043/issue?x=1"))) == "issue_refund"
+    assert action_tool(actions, method_action("POST", world_action("/orders/get"))) == "get_order"
+    # One segment per template value, nothing wider, and an unknown route names no tool.
+    assert action_tool(actions, method_action("POST", world_action("/refunds/1043/issue/now"))) == ""
+    assert action_tool(actions, method_action("POST", world_action("/refunds/issue"))) == ""
+    assert action_tool({}, "orders.get") == ""
+    assert action_tool(None, "orders.get") == ""
+
+
+def test_a_templated_route_names_the_values_its_path_carries():
+    from fi.alk.harness.world_door import route_values, world_action
+
+    actions = {"refunds.{order_id}.issue": "issue_refund", "orders.get": "get_order"}
+    assert route_values(actions, world_action("/refunds/1043/issue?x=1")) == {"order_id": "1043"}
+    assert route_values(actions, world_action("/orders/get")) == {}
+    assert route_values(actions, world_action("/refunds/1043/issue/now")) == {}
+    assert route_values(None, "refunds.1043.issue") == {}
+
+
+def test_a_sealed_tool_proxy_says_its_door_holds_each_worker_to_its_own_deadline(tmp_path: Path) -> None:
+    from fi.alk.harness.bundle_author_v2 import _seal_tool_proxy
+    from fi.alk.harness.call_runner import _door_holds_worker_limits
+
+    _seal_tool_proxy(tmp_path / "generated" / "tool-proxy", {"tools": [{"name": "a"}]})
+    sealed = tmp_path / "generated" / "tool-proxy"
+    assert {"proxy.py", "world_door.py", "door.json"} <= {one.name for one in sealed.iterdir()}
+    assert _door_holds_worker_limits(tmp_path)

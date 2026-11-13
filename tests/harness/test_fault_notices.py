@@ -37,6 +37,12 @@ def test_a_fault_the_real_door_applied_says_nothing_in_either_mode(mode):
     assert fault_notices([fault], log.rows(), [_call("apply_discount")]) == []
 
 
+def test_a_fault_the_proxy_applied_under_the_route_s_name_says_nothing():
+    fault = {"action": "get_order", "on_call": 1, "mode": "timeout_before_commit"}
+    log = [{"name": "get", "agent_tool": "get_order", "outcome": "faulted"}]
+    assert fault_notices([fault], log, [_call("get_order")]) == []
+
+
 def test_a_fault_on_a_call_made_outside_the_door_is_said_not_applied():
     (notice,) = fault_notices([FAULT], [], [_call("apply_discount")])
     assert notice["code"] == "fault_not_applied"

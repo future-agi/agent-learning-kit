@@ -1221,6 +1221,7 @@ async def validate_once(
                             bundle_digest=manifest.digest,
                             secret_values=target_secret_values,
                             redaction_values=redaction_values,
+                            evidence_seam=manifest.runtime.evidence_seam,
                         )
                     else:
                         await probe_chat_ingress(

@@ -34,9 +34,17 @@ def _failure_code(trace):
     return "chat_ingress_failed"
 
 
+# A worker's call the world's door refused for that worker's own limits came through its channel to the door.
+_WORKER_LIMIT_REFUSALS = frozenset({"not_permitted", "deadline_passed"})
+
+
 def _reached_world(call):
-    """Whether a recorded call ran in the world: it succeeded, or the world's own rule refused it."""
-    return call.ok or (call.refused and getattr(call, "refusal_code", "") == "world_rule")
+    """Whether a recorded call reached the world: it succeeded, the world's own rule refused it, or the door refused a
+    worker's call for that worker's limits (its channel is bound; its permitted tools are the environment's design)."""
+    if call.ok:
+        return True
+    code = getattr(call, "refusal_code", "") if call.refused else ""
+    return code == "world_rule" or (code in _WORKER_LIMIT_REFUSALS and bool(getattr(call, "worker_id", "")))
 
 
 def _usable_tool_call(call):
@@ -242,8 +250,10 @@ async def probe_chat_workflow(
     secret_values,
     redaction_values,
     timeout=300.0,
+    evidence_seam=None,
 ):
-    """Exercise a private conversation and require observed tool execution evidence."""
+    """Exercise a private conversation and require observed tool execution evidence, read from where the bundle's
+    own runs read it (`evidence_seam`), so readiness and a real run agree."""
     from .authoring_runtime_validation import RuntimeValidationError
     from .call_runner import CallRunnerContext
     from .chat_call_runner import HostedChatCallRunner
@@ -285,13 +295,13 @@ async def probe_chat_workflow(
         )
 
     async def retain_interrupted_conversation(exc):
-        from .call_runner import _with_span_calls
+        from .call_runner import collect_seam_calls
         from .outbound import ArtifactKind
 
         transcript = getattr(exc, "partial_transcript", None)
         if transcript is None:
             return
-        transcript.calls[:] = _with_span_calls(transcript.calls, runtime)
+        transcript.calls[:] = collect_seam_calls(runtime, evidence_seam, transcript.calls)
         receipt["tool_call_count"] = len(graded_calls(transcript.calls))
         receipt["turns"] = len(transcript.exchanges)
         await artifacts.upload_artifact(transcript.artifact(), kind=ArtifactKind.TRANSCRIPT)
@@ -309,7 +319,7 @@ async def probe_chat_workflow(
                 job=job,
                 bundle_dir=bundle,
                 work_directory=folder,
-                evidence_seam=None,
+                evidence_seam=evidence_seam,
                 target_provider_secret_values=secret_values,
                 attempt_number=1,
                 source_directory=source,

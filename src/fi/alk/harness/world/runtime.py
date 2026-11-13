@@ -193,8 +193,6 @@ class Call:
     worker_label: str = ""
     task_id: str = ""
     task_label: str = ""
-    # Why a refused call was refused: "world_rule" when the tool ran and said no, otherwise what stopped it first.
-    refusal_code: str = ""
     # The worker this call handed work to, when the call is a hand-off, and when that worker returned.
     delegated_to: str = ""
     ended_at: float = 0.0
@@ -211,6 +209,9 @@ class Call:
     # Part of the arguments or the result was left out to keep the record bounded.
     input_omitted: bool = False
     output_omitted: bool = False
+    # Why a refused call was refused: "world_rule" when the tool ran and said no, otherwise what stopped it first
+    # (`not_permitted`, `deadline_passed`, `unknown_tool`).
+    refusal_code: str = ""
 
 
 def tool_call_attribution(record: Mapping[str, Any]) -> dict[str, Any]:
@@ -308,6 +309,8 @@ def trace_row(call: Call) -> dict[str, Any]:
             if getattr(call, key)
         },
         **({"runtime_ids": call.runtime_ids} if call.runtime_ids else {}),
+        # Why the world refused it, as its action log coded it.
+        **({"refusal_code": call.refusal_code} if call.refusal_code else {}),
         **{
             key: True
             for key in ("input_omitted", "output_omitted")

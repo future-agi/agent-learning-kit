@@ -566,3 +566,41 @@ def test_a_scenario_with_one_sub_goal_is_kept():
     catalogue = Catalogue(sub_goals=[SubGoal(name="change_made_as_asked", what="the change", judged="j")])
     one = Scenario(name="makes_a_change", instruction="Ask for a change.", sub_goals=["change_made_as_asked"])
     assert not any("sub-goal" in line for line in validate_scenario(one, catalogue, {}))
+
+
+def test_a_sub_goal_can_check_one_declared_worker_and_never_an_undeclared_one(tmp_path):
+    import asyncio
+
+    import fi.alk.harness.scenario_tools as st
+    from fi.alk.harness.catalogue import load_catalogue
+    from fi.alk.harness.contract import AgentContract
+
+    contract = AgentContract(
+        agent="returns", real_use_cases=["refund"], tools=[{"name": "issue_refund"}],
+        workers=[{"id": "refund", "tools": ["issue_refund"]}],
+    )
+    server, _kept = st.scenario_tools(contract, tmp_path, tmp_path, wanted=1)
+    add = next(spec for spec in server.tools if spec.name == "add_sub_goal")
+    check = (
+        "def check(world, calls):\n"
+        "    ok = [c for c in calls if c.name == 'issue_refund' and c.ok and c.arguments.get('order_id') == '1043']\n"
+        "    return None if ok else 'order 1043 was not refunded'\n"
+    )
+    said = asyncio.run(add.handler({"name": "refund_issued", "what": "the refund worker refunds", "check": check,
+                                    "subject": "worker:refund"}))
+    assert not said.get("is_error"), said
+    assert load_catalogue(tmp_path).sub_goals[0].subject == "worker:refund"
+    refused = asyncio.run(add.handler({"name": "audit", "what": "audits", "check": check, "subject": "worker:audit"}))
+    assert refused.get("is_error") and "subject_unknown_worker: audit" in refused["content"][0]["text"]
+
+
+def test_a_scenario_writer_and_an_editor_can_set_a_worker_budget(tmp_path):
+    import fi.alk.harness.scenario_tools as st
+    from fi.alk.harness.contract import AgentContract
+
+    server, _kept = st.scenario_tools(AgentContract(agent="returns", real_use_cases=["refund"]), tmp_path, tmp_path, wanted=1)
+    tools = {spec.name: spec for spec in server.tools}
+    for name in ("submit_scenario", "edit_scenario"):
+        shapes = tools[name].input_schema["properties"]["worker_budget_seconds"]["anyOf"]
+        # One number for all workers, or a number per named worker.
+        assert [shape["type"] for shape in shapes] == ["integer", "object"]

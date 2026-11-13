@@ -473,12 +473,17 @@ def contract_tools(
                             "id": {"type": "string"},
                             "name": {"type": "string"},
                             "tools": {"type": "array", "items": {"type": "string"}},
+                            "allowed_tools": {"type": "array", "items": {"type": "string"}},
+                            "binding": {"type": "string", "enum": ["separate", "shared"]},
+                            "address_env": {"type": "string"},
                         },
                         "required": ["id"],
                     },
                     "description": "Agents this one hands work to, if any: an id no other worker has, the name the app "
-                    "gives the agent (its spans carry it), and the names of the tools above that it "
-                    "holds. Leave out for an agent that hands no work on.",
+                    "gives the agent (its spans carry it), the names of the tools above that it holds, "
+                    "separate when its tools run through code of their own, with address_env naming the "
+                    "environment variable that code reads for its tools' base address, and allowed_tools when it "
+                    "may use fewer tools than its code holds. Leave out for an agent that hands no work on.",
                 },
                 "data_schema": {
                     "type": "object",

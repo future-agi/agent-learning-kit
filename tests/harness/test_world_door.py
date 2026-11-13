@@ -141,6 +141,19 @@ def test_a_scenario_s_fault_applies_to_the_agent_s_named_call_only(mode, ran):
     assert door.enter(ToolCall(action="crm.update", name="update")).fault is None
 
 
+def test_a_fault_naming_the_tool_holds_its_call_through_the_proxy_and_a_worker_s_channel():
+    executor = _Executor()
+    door = _door(
+        executor,
+        faults=[{"action": "get_order", "mode": "timeout_before_commit", "on_call": 1, "delay_seconds": 0}],
+    )
+    # Over HTTP the call is named by its route; its sealed tool is `get_order`.
+    first = door.enter(ToolCall(action="orders.get", name="get", tool="get_order", worker="order_lookup"))
+    second = door.enter(ToolCall(action="orders.get", name="get", tool="get_order", worker="order_lookup"))
+    assert first.fault is not None and second.fault is None
+    assert len(executor.ran) == 1
+
+
 def test_a_fault_is_never_guessed_onto_every_call_when_the_log_cannot_count_the_calls():
     class _Uncountable(MemoryLog):
         def agent_calls(self, name):
@@ -682,3 +695,130 @@ def test_an_actor_never_acts_under_another_s_actor_id_on_any_channel(identity):
     )
     # The model wrote someone else's id; the world sees the acting actor's own.
     assert executor.ran[0].arguments == {"deal": 7, "actor_id": identity or "manager"}
+
+
+def _worker_door(executor, limits):
+    return WorldDoor(executor, MemoryLog(), DictRoster({}), workers=lambda: limits)
+
+
+@pytest.mark.parametrize(
+    ("limits", "action", "code"),
+    [
+        ({"permissions": {"refund": ["refunds.issue"]}}, "refunds.issue", None),
+        ({"permissions": {"refund": ["refunds.issue"]}}, "orders.cancel", "not_permitted"),
+        ({"permissions": {"lookup": ["orders.get"]}}, "refunds.issue", "not_permitted"),
+        ({"permissions": {"refund": None}}, "refunds.issue", "not_permitted"),
+        ({"deadline_at": 1.0}, "refunds.issue", "deadline_passed"),
+        ({"deadline_at": 4_102_444_800.0}, "refunds.issue", None),
+        ({}, "refunds.issue", None),
+    ],
+    ids=["allowed", "not-in-list", "other-worker-only", "unreadable-list", "past-deadline", "before-deadline", "no-limits"],
+)
+def test_a_worker_s_call_reaches_the_world_only_within_its_allow_list_and_deadline(limits, action, code):
+    executor = _Executor()
+    door = _worker_door(executor, limits)
+    outcome = door.enter(ToolCall(action=action, name=action.rsplit(".", 1)[-1], worker="refund"))
+    assert outcome.refusal_code == code
+    assert len(executor.ran) == (0 if code else 1)
+    [row] = door.events()
+    assert (row["actor_id"], row["worker_id"], row["outcome"]) == (
+        AGENT,
+        "refund",
+        "refused" if code else "committed",
+    )
+
+
+def test_a_channel_no_worker_owns_is_refused_and_the_agent_s_own_calls_are_not_limited():
+    executor = _Executor()
+    door = _worker_door(executor, {"permissions": {}, "deadline_at": 1.0})
+    assert door.enter(ToolCall(action="refunds.issue", name="issue", worker="")).refusal_code == "identity_conflict"
+    # No channel: the agent's own call, never held to a worker's limits.
+    assert door.enter(ToolCall(action="refunds.issue", name="issue")).outcome == "committed"
+    assert [row.get("worker_id") for row in door.events()] == [None, None]
+
+
+def test_worker_limits_that_cannot_be_read_refuse_and_never_widen():
+    def broken():
+        raise OSError("unreadable")
+
+    executor = _Executor()
+    door = WorldDoor(executor, MemoryLog(), DictRoster({}), workers=broken)
+    assert door.enter(ToolCall(action="refunds.issue", name="issue", worker="refund")).refusal_code == "not_permitted"
+    assert executor.ran == []
+
+
+def test_a_worker_naming_an_actor_never_borrows_that_actor_s_permissions():
+    executor = _Executor()
+    door = WorldDoor(
+        executor,
+        MemoryLog(),
+        DictRoster({"manager": {"permitted_actions": ["crm.approve"], "on_behalf_of": None}}),
+        workers=lambda: {"permissions": {"lookup": ["orders.get"]}},
+    )
+    # Over the proxy a request that names an actor is never proven; from a worker's channel it stays the worker's.
+    outcome = door.enter(ToolCall(action="crm.approve", name="approve", actor="manager", proven=False, worker="lookup"))
+    assert (outcome.outcome, outcome.refusal_code) == ("refused", "identity_conflict")
+    assert executor.ran == []
+    [row] = door.events()
+    assert (row["actor_id"], row["worker_id"]) == (AGENT, "lookup")
+
+
+def test_a_limited_worker_s_request_for_anything_that_is_not_a_world_action_never_reaches_the_world():
+    executor = _Executor()
+    door = _worker_door(executor, {"permissions": {"lookup": ["orders.get"]}})
+    # The proxy names a route that is no world action `unknown`: a limited worker reaches only its listed actions.
+    outcome = door.enter(ToolCall(action="unknown", name="scenarios", worker="lookup"))
+    assert (outcome.outcome, outcome.refusal_code) == ("refused", "not_permitted")
+    assert executor.ran == []
+
+
+def test_a_templated_allowance_never_reaches_another_tool_s_own_route_or_another_method():
+    executor = _Executor()
+    limits = {
+        "permissions": {"lookup": ["GET orders.{order_id}"]},
+        "routes": ["GET orders.{order_id}", "POST orders.update_status", "POST orders.cancel"],
+    }
+    door = _worker_door(executor, limits)
+
+    def enter(method, action):
+        return door.enter(ToolCall(action=action, name=action.rsplit(".", 1)[-1], method=method, worker="lookup"))
+
+    assert enter("GET", "orders.1043").outcome == "committed"
+    # A path that is another tool's own route is that tool, never a value of the template.
+    assert enter("POST", "orders.update_status").refusal_code == "not_permitted"
+    assert enter("GET", "orders.cancel").refusal_code == "not_permitted"
+    # The same path with another method is another action.
+    assert enter("DELETE", "orders.1043").refusal_code == "not_permitted"
+    assert len(executor.ran) == 1
+
+
+def test_a_templated_allowance_never_reaches_a_route_hidden_behind_an_encoded_separator_or_dots():
+    executor = _Executor()
+    limits = {"permissions": {"lookup": ["GET orders.{order_id}"]}, "routes": ["GET orders.{order_id}"]}
+    door = _worker_door(executor, limits)
+
+    def enter(action):
+        return door.enter(ToolCall(action=action, name="x", method="GET", worker="lookup"))
+
+    # The service behind the proxy decodes these into another route than the one the door checked.
+    for action in ("orders.1043%2Fpayment", "orders.1043%2fpayment", "orders.%2E%2E", "orders....admin"):
+        assert enter(action).refusal_code == "not_permitted", action
+    assert enter("orders.1043").outcome == "committed"
+    assert len(executor.ran) == 1
+
+
+def test_an_actor_s_templated_permission_never_reaches_another_tool_s_own_route():
+    executor = _Executor()
+    door = WorldDoor(
+        executor,
+        MemoryLog(),
+        DictRoster({"manager": {"permitted_actions": ["crm.{deal_id}"], "on_behalf_of": None}}),
+        workers=lambda: {"routes": ["GET crm.{deal_id}", "POST crm.delete_all"]},
+    )
+
+    def enter(action, method="GET"):
+        return door.enter(ToolCall(action=action, name="x", actor="manager", method=method, key=f"t:m:{action}"))
+
+    assert enter("crm.8").outcome == "committed"
+    # `crm.delete_all` is the world's own route, never a deal id.
+    assert enter("crm.delete_all", "POST").refusal_code == "not_permitted"

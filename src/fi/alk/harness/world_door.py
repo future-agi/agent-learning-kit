@@ -65,6 +65,12 @@ class ToolCall:
     content_type: str = "application/json"
     # Who the actor is in the service it acts in (its identity there), sent to the service beside the call.
     identity: str = ""
+    # The agent's worker that made the call, from the channel it came in on: None when it came in on no worker's
+    # channel, "" when the channel belongs to no worker of this trial.
+    worker: str | None = None
+    # The agent's own name for the tool this action is, when the surface knows it (a route is often named otherwise,
+    # `get_order` -> `orders.get`); kept beside `name` so grading reads the tool the agent called.
+    tool: str = ""
 
 
 @dataclass
@@ -143,9 +149,100 @@ class ActionLog(Protocol):
     def agent_calls(self, name: str) -> int: ...
 
 
-def permitted(permitted_actions: object, action: str) -> bool:
-    """Whether an actor with these permitted actions may take this world action."""
-    return isinstance(permitted_actions, list) and action in permitted_actions
+def world_action(route: str) -> str:
+    """A route or endpoint as the world names the action it takes: the path without its query, `/` read as `.`.
+    Every surface (the proxy, the sealed allow-lists, the service routes) names actions through this one rule."""
+    return str(route or "").split("?", 1)[0].strip("/").replace("/", ".")
+
+
+# What this door enforces, sealed beside it in a bundle: a runner reads it rather than assume a newer door than shipped.
+DOOR_FILE = "door.json"
+DOOR_CAPABILITIES = {"worker_deadlines": "per_worker"}
+
+_METHODS = frozenset({"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"})
+
+
+def method_action(method: str, action: str) -> str:
+    """A world action with the HTTP method that takes it (`GET orders.{order_id}`): two tools on one path are two
+    actions. Sealed routes and worker allow-lists are named this way."""
+    return f"{(method or 'POST').upper()} {action}"
+
+
+def _split(value: str) -> tuple[str, str]:
+    """The method and path of `GET orders.get`, or no method for a bare action (`orders.get`), which any method takes."""
+    method, _, path = str(value).partition(" ")
+    return (method, path) if path and method in _METHODS else ("", str(value))
+
+
+def _matches(allowed: str, action: str) -> bool:
+    """An allowed action matches the same action, and a templated route (`orders.{order_id}`) matches any value in
+    each of its `{...}` segments. When both name a method, the methods must agree."""
+    allowed_method, want = _split(allowed)
+    action_method, have = _split(action)
+    if allowed_method and action_method and allowed_method != action_method:
+        return False
+    if want == have:
+        return True
+    if "{" not in want:
+        return False
+    wants, haves = want.split("."), have.split(".")
+    return len(wants) == len(haves) and all(
+        (w.startswith("{") and w.endswith("}") and h) or w == h for w, h in zip(wants, haves)
+    )
+
+
+def plain_route(action: str) -> bool:
+    """Whether a world action names one route as written: no encoded separator, backslash or `..` segment that the
+    service behind the proxy would decode into a different route than the one checked."""
+    lowered = str(action or "").lower()
+    if any(mark in lowered for mark in ("%2f", "%5c", "\\", "%2e")):
+        return False
+    return ".." not in lowered.split("?", 1)[0]
+
+
+def permitted(permitted_actions: object, action: str, routes: object = ()) -> bool:
+    """Whether an actor or worker with these permitted actions may take this world action. A path that is one of the
+    world's own routes (`routes`, the sealed route map) is that route's action, never a value of a template."""
+    if not isinstance(permitted_actions, list):
+        return False
+    literal = {_split(str(route))[1] for route in routes or () if "{" not in str(route)}
+    path = _split(action)[1]
+    return any(
+        _matches(str(allowed), action) and ("{" not in str(allowed) or path not in literal or _split(str(allowed))[1] == path)
+        for allowed in permitted_actions
+    )
+
+
+def action_tool(actions: object, action: str) -> str:
+    """The agent's own tool a world action is, from the sealed map of routes to tools: the action itself first, then a
+    templated route (`refunds.{order_id}.issue`) whose `{...}` segments its values fill. Empty when no route names it."""
+    if not isinstance(actions, dict):
+        return ""
+    tool = actions.get(action)
+    if tool is None:
+        tool = next((name for route, name in actions.items() if _templated_match(actions, str(route), action)), "")
+    return tool if isinstance(tool, str) else ""
+
+
+def _templated_match(actions: Mapping[str, Any], route: str, action: str) -> bool:
+    """A templated route matches an action whose path is not one of the map's own literal routes."""
+    literal = {_split(str(one))[1] for one in actions if "{" not in str(one)}
+    return "{" in route and _split(action)[1] not in literal and _matches(route, action)
+
+
+def route_values(actions: object, action: str) -> dict[str, str]:
+    """The values a world action's path carries for the templated route it matches (`refunds.{order_id}.issue` and
+    `refunds.1043.issue` give `{"order_id": "1043"}`), so a check reads them as it reads the body. Empty otherwise."""
+    if not isinstance(actions, dict) or action in actions:
+        return {}
+    for route in actions:
+        if _templated_match(actions, str(route), action):
+            return {
+                want[1:-1]: have
+                for want, have in zip(_split(str(route))[1].split("."), _split(action)[1].split("."))
+                if want.startswith("{") and want.endswith("}")
+            }
+    return {}
 
 
 def record_action(action: str) -> tuple[str, str] | None:
@@ -168,12 +265,16 @@ class WorldDoor:
         faults: Callable[[], list[dict[str, Any]]] = list,
         write_seconds: float = LOG_WRITE_SECONDS,
         faults_by_tool: bool = False,
+        workers: Callable[[], Mapping[str, Any]] = dict,
         trial: Callable[[], Any] | None = None,
     ) -> None:
         self.executor = executor
         self.log = log
         self.roster = roster
         self.faults = faults
+        # This trial's limits on the agent's workers: `permissions`, {worker id: [world actions]} as sealed (absent:
+        # workers are not limited), and `deadline_at`, epoch seconds past which no worker's call reaches the world.
+        self.workers = workers
         self.write_seconds = write_seconds
         # A fault names the world action (`crm.update`); a surface whose calls are named by the tool (the chat runner)
         # also matches the tool's own name, as it always has. Over HTTP the action alone, as the proxy always did.
@@ -255,7 +356,7 @@ class WorldDoor:
                     call, "unknown_actor", f"{call.actor} is not an actor in this world"
                 )
             on_behalf_of = listed.get("on_behalf_of")
-            if not permitted(listed.get("permitted_actions"), call.action):
+            if not permitted(listed.get("permitted_actions"), method_action(call.method, call.action), self._routes()):
                 return self._refused(
                     call,
                     "not_permitted",
@@ -263,6 +364,10 @@ class WorldDoor:
                     on_behalf_of,
                 )
         else:
+            if call.worker is not None:
+                refused = self._worker_refusal(call)
+                if refused is not None:
+                    return self._refused(call, *refused)
             named = self._named_faults(call)
             if named:
                 # Which call of this action this is, and its row, are decided under one lock: two calls at once
@@ -326,6 +431,36 @@ class WorldDoor:
             self._write(call, outcome, key=key, on_behalf_of=on_behalf_of)
             return outcome
 
+    def _worker_refusal(self, call: ToolCall) -> tuple[str, str] | None:
+        """Why a worker's call never reaches the world, or None: a channel no worker of this trial owns, the trial's
+        worker deadline passed, or an action the worker's sealed allow-list does not hold. Limits that cannot be read
+        refuse: a broken seal never widens what a worker may do."""
+        if not call.worker:
+            return "identity_conflict", "this channel does not belong to a worker of this trial"
+        try:
+            limits = self.workers() or {}
+        except Exception:  # noqa: BLE001 - unreadable limits are no permission
+            return "not_permitted", f"{call.action} is not permitted for {call.worker}: its limits could not be read"
+        own = (limits.get("deadlines") or {}).get(call.worker)
+        for deadline in (own, limits.get("deadline_at")):
+            if isinstance(deadline, (int, float)) and not isinstance(deadline, bool) and time.time() > deadline:
+                return "deadline_passed", f"the deadline for {call.worker} has passed"
+        if "permissions" in limits:
+            allowed = (limits.get("permissions") or {}).get(call.worker)
+            if not plain_route(call.action):
+                # An encoded separator or `..` would be read as another route by the service behind the proxy.
+                return "not_permitted", f"{call.action} is not a plain route, so it is not permitted for {call.worker}"
+            if not permitted(allowed, method_action(call.method, call.action), limits.get("routes")):
+                return "not_permitted", f"{call.action} is not permitted for {call.worker}"
+        return None
+
+    def _routes(self) -> list[str]:
+        """The world's own sealed routes, so a templated permission never reaches another tool's route."""
+        try:
+            return list((self.workers() or {}).get("routes") or [])
+        except Exception:  # noqa: BLE001 - unreadable routes leave only the template check
+            return []
+
     def _settle(self, key: str, actor: str, state: str | None) -> None:
         try:
             self.log.settle(key, actor, state)
@@ -356,7 +491,11 @@ class WorldDoor:
             faults = [one for one in self.faults() or [] if isinstance(one, dict)]
         except Exception:  # noqa: BLE001 - unreadable faults are no faults
             return []
-        names = (call.action, call.name) if self.faults_by_tool else (call.action,)
+        names = {call.action, call.name} if self.faults_by_tool else {call.action}
+        if call.tool:
+            # A route's sealed tool is the agent's own name for it: a fault naming the tool holds its call on every
+            # surface, a worker's channel included.
+            names.add(call.tool)
         return [one for one in faults if one.get("action") in names]
 
     def _fault(self, call: ToolCall, named: list[dict[str, Any]]) -> dict[str, Any] | None:
@@ -464,6 +603,8 @@ class WorldDoor:
             "refusal_code": outcome.refusal_code,
             "idempotency_key": key,
             "actor_id": call.actor,
+            "worker_id": call.worker or None,
+            "agent_tool": call.tool or None,
             "parent_event_id": call.parent,
             "on_behalf_of": on_behalf_of,
         }
@@ -660,7 +801,7 @@ class Routed:
 
 _EXTENDED = (
     "name, arguments, result, ok, error, at, action_id, outcome, refusal, refusal_code, idempotency_key, actor_id, "
-    "parent_event_id, on_behalf_of"
+    "worker_id, agent_tool, parent_event_id, on_behalf_of"
 )
 _BASIC = "name, arguments, result, ok, error, at"
 # Each actor key a door claimed before its action ran, so no later door runs it again; beside the log, which a

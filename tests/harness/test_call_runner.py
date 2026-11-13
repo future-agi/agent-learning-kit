@@ -2890,3 +2890,230 @@ def test_a_voice_call_with_no_words_still_seals_the_notice_for_a_fault_it_never_
     sealed = {kind: data for kind, _key, data in adapter.uploads}
     # The trial ran without its fault; with no words, that is the only place the person learns it.
     assert json.loads(sealed[cr.ArtifactKind.TRANSCRIPT])["notices"][0]["code"] in ("fault_not_applied", "fault_not_triggered")
+
+
+def test_a_voice_call_hands_the_scheduler_the_notice_that_worker_limits_were_not_held(tmp_path, monkeypatch) -> None:
+    _job_obj, context = _context(tmp_path=tmp_path, evidence_seam=EvidenceSeam.TOOL_TRACE)
+    _write_scenario_doc(context.bundle_dir, scenario_key="k1")
+    document = context.bundle_dir / "scenarios" / "k1" / "scenario.json"
+    body = json.loads(document.read_text())
+    body["worker_budget_seconds"] = 30
+    document.write_text(json.dumps(body))
+    monkeypatch.setattr(cr, "_write_trial_state", lambda *args, **kwargs: None)
+
+    async def place_call(spec):
+        return _report(transcript="hello", messages=[])
+
+    runner = cr.CallRunnerImpl(FakeAdapter(), context, place_call=place_call)
+    outcome = _run(runner, _FakeScenario("k1"), _runtime(metadata={"livekit_agent_name": "agent-w0"}))
+    # The bundle was sealed without a door that holds worker limits: the scheduler must hear it to hold the grading.
+    assert [one["code"] for one in outcome.notices] == ["worker_limits_not_enforced"]
+
+
+def test_a_worker_s_refused_attempt_is_sealed_in_the_trial_s_state_changes_without_any_actor(
+    tmp_path, monkeypatch
+) -> None:
+    _job_obj, context = _context(
+        tmp_path=tmp_path, evidence_seam=EvidenceSeam.TOOL_TRACE
+    )
+    _write_scenario_doc(context.bundle_dir, scenario_key="k1")
+    columns = ["name", "arguments", "result", "ok", "error", "at", "action_id", "actor_id", "worker_id", "outcome",
+               "refusal_code", "refusal"]
+    rows = [
+        ("update_status", {}, None, False, "", 1.0, "a1", "agent", "order_lookup", "refused", "not_permitted",
+         "orders.update_status is not permitted for order_lookup"),
+    ]
+    monkeypatch.setitem(sys.modules, "psycopg", _FakePsycopg(rows, columns))
+
+    async def place_call(spec):
+        return _report(
+            transcript="user: hello", messages=[{"role": "user", "content": "hello"}]
+        )
+
+    adapter = FakeAdapter()
+    runner = cr.CallRunnerImpl(adapter, context, place_call=place_call)
+    _run(
+        runner,
+        _FakeScenario("k1"),
+        _runtime(
+            endpoints={"database": _postgres_endpoint()},
+            metadata={"livekit_agent_name": "agent-w0"},
+        ),
+    )
+    sealed = {kind: data for kind, _key, data in adapter.uploads}
+    changes = json.loads(sealed[cr.ArtifactKind.TRANSCRIPT])["world_actors"]["state_changes"]
+    # The agent keeps its own line ("no change"); the worker's refused attempt is its own entry.
+    assert [(one["who"], one["refused"], [r["code"] for r in one["refused_actions"]]) for one in changes] == [
+        ("agent", 0, []),
+        ("worker:order_lookup", 1, ["not_permitted"]),
+    ]
+
+
+@pytest.mark.parametrize(
+    ("budget", "expected"),
+    [(30, True), (0, False), (-5, False), (True, False), ("30", False), (None, False)],
+)
+def test_a_trial_s_worker_deadline_is_its_start_plus_the_scenario_s_worker_budget(budget, expected, monkeypatch):
+    monkeypatch.setattr(cr.time, "time", lambda: 1000.0)
+    assert cr.worker_deadline({"worker_budget_seconds": budget}) == (1030.0 if expected else None)
+
+
+def test_a_budget_per_worker_gives_each_named_worker_its_own_deadline_and_no_deadline_for_all(monkeypatch):
+    monkeypatch.setattr(cr.time, "time", lambda: 1000.0)
+    document = {"worker_budget_seconds": {"refund": 5, "lookup": 0, "": 3, "audit": True}}
+    assert cr.worker_deadlines(document) == {"refund": 1005.0}
+    assert cr.worker_deadline(document) is None
+    assert cr.worker_deadlines({"worker_budget_seconds": 30}) == {}
+
+
+def test_worker_budgets_on_a_door_sealed_before_worker_limits_are_said_not_enforced(monkeypatch, tmp_path):
+    monkeypatch.setattr(cr.time, "time", lambda: 1000.0)
+    document = {"worker_budget_seconds": {"refund": 5, "lookup": 9}}
+    # Sealed by a door that holds worker limits: each worker its own deadline, nothing said.
+    door = tmp_path / "generated" / "tool-proxy"
+    door.mkdir(parents=True)
+    (door / "door.json").write_text('{"worker_deadlines": "per_worker"}')
+    assert cr.trial_worker_deadlines(document, tmp_path) == (None, {"refund": 1005.0, "lookup": 1009.0}, [])
+    # Sealed before: that proxy has no worker limits at all, for either budget shape, and the trial says so.
+    (door / "door.json").unlink()
+    for budget in ({"refund": 5}, 30):
+        *_, notices = cr.trial_worker_deadlines({"worker_budget_seconds": budget}, tmp_path)
+        [notice] = notices
+        assert notice["code"] == "worker_limits_not_enforced"
+        assert "rebuild" in notice["message"].lower()
+    # No budget asked: nothing to say.
+    assert cr.trial_worker_deadlines({}, tmp_path) == (None, {}, [])
+    # No sealed bundle (the harness's own proxy): enforced, nothing said.
+    assert cr.trial_worker_deadlines({"worker_budget_seconds": 30}, None) == (1030.0, {}, [])
+
+
+def test_limits_on_a_shared_worker_are_said_not_enforced_on_a_new_door(monkeypatch, tmp_path):
+    monkeypatch.setattr(cr.time, "time", lambda: 1000.0)
+    door = tmp_path / "generated" / "tool-proxy"
+    door.mkdir(parents=True)
+    (door / "door.json").write_text('{"worker_deadlines": "per_worker"}')
+    contract = tmp_path / "contract.json"
+    separate = {"id": "lookup", "binding": "separate", "address_env": "LOOKUP_URL"}
+    shared = {"id": "refund", "binding": "shared", "tools": ["get_order"]}
+    contract.write_text(json.dumps({"workers": [separate, shared]}))
+    # A deadline naming a shared worker: the world cannot tell its calls apart, so it is held, not graded.
+    [notice] = cr.trial_worker_deadlines({"worker_budget_seconds": {"refund": 2}}, tmp_path)[2]
+    assert notice["code"] == "worker_limits_not_enforced"
+    # A deadline naming only the separate worker is held by the door: nothing said.
+    assert cr.trial_worker_deadlines({"worker_budget_seconds": {"lookup": 2}}, tmp_path)[2] == []
+    # One deadline for all with no separate worker cannot be held either.
+    contract.write_text(json.dumps({"workers": [shared]}))
+    assert cr.trial_worker_deadlines({"worker_budget_seconds": 30}, tmp_path)[2]
+    # Permitted tools on a shared worker cannot be held.
+    contract.write_text(json.dumps({"workers": [{**shared, "allowed_tools": ["get_order"]}]}))
+    assert cr.trial_worker_deadlines({}, tmp_path)[2]
+
+
+def test_a_permission_only_scenario_on_a_door_sealed_before_worker_limits_is_said_not_enforced(tmp_path):
+    # No budget, but the agent declares a worker held to its own tools: an old door holds none of it.
+    (tmp_path / "contract.json").write_text(
+        json.dumps({"workers": [{"id": "refund", "binding": "separate", "address_env": "REFUND_URL"}]})
+    )
+    [notice] = cr.trial_worker_deadlines({}, tmp_path)[2]
+    assert notice["code"] == "worker_limits_not_enforced"
+    (tmp_path / "contract.json").write_text(json.dumps({"workers": [{"id": "refund", "allowed_tools": ["get"]}]}))
+    assert cr.trial_worker_deadlines({}, tmp_path)[2]
+    # A worker with no limits of its own relies on nothing the door must hold.
+    (tmp_path / "contract.json").write_text(json.dumps({"workers": [{"id": "refund", "tools": ["get"]}]}))
+    assert cr.trial_worker_deadlines({}, tmp_path)[2] == []
+    # Sealed with worker limits: nothing to say.
+    door = tmp_path / "generated" / "tool-proxy"
+    door.mkdir(parents=True)
+    (door / "door.json").write_text('{"worker_deadlines": "per_worker"}')
+    (tmp_path / "contract.json").write_text(json.dumps({"workers": [{"id": "refund", "binding": "separate"}]}))
+    assert cr.trial_worker_deadlines({}, tmp_path)[2] == []
+
+
+def test_a_trial_with_a_worker_deadline_writes_it_beside_its_faults(monkeypatch):
+    written = []
+    monkeypatch.setattr(
+        cr,
+        "_write_trial_state",
+        lambda runtime, faults, deadline=None, deadlines=None: written.append((faults, deadline, deadlines)),
+    )
+    cr._set_trial_faults(None, [], 1030.0)
+    cr._set_trial_faults(None, [{"action": "approve"}])
+    cr._set_trial_faults(None, [], None, {"refund": 1030.0})
+    assert written == [([], 1030.0, None), ([{"action": "approve"}], None, None), ([], None, {"refund": 1030.0})]
+
+
+def test_a_worker_deadline_that_cannot_be_written_fails_the_trial_rather_than_run_without_one(monkeypatch):
+    monkeypatch.setattr(cr, "_find_postgres_endpoint", lambda runtime: None)
+    with pytest.raises(RuntimeError, match="deadline cannot be set"):
+        cr._write_trial_state(None, [], 1030.0)
+    # Faults alone on a world with no database keep the old behaviour: noted, the trial runs.
+    cr._write_trial_state(None, [{"action": "approve"}])
+
+
+def test_a_change_one_of_the_agent_s_workers_committed_is_not_no_change() -> None:
+    log = [
+        {"name": "issue_refund", "actor_id": "agent", "worker_id": "refund", "outcome": "committed", "ok": True},
+        {"name": "cancel_order", "actor_id": "agent", "worker_id": "lookup", "outcome": "refused",
+         "refusal_code": "not_permitted", "refusal": "orders.cancel is not permitted for lookup"},
+    ]
+    agent, *workers = cr.trial_state_changes(log, {})
+    assert (agent["who"], agent["no_change"]) == ("agent", False)
+    assert [(one["who"], one["committed_actions"], one["refused_actions"]) for one in workers] == [
+        ("worker:refund", ["issue_refund"], []),
+        ("worker:lookup", [], [{"action": "cancel_order", "code": "not_permitted",
+                                "reason": "orders.cancel is not permitted for lookup"}]),
+    ]
+    # Only refused attempts: nothing changed.
+    assert cr.trial_state_changes(log[1:], {})[0]["no_change"] is True
+
+
+def test_a_call_through_the_tool_proxy_is_shown_by_the_agent_s_tool_name_not_its_route() -> None:
+    log = [
+        {"name": "get", "agent_tool": "get_order", "actor_id": "agent", "worker_id": "lookup", "outcome": "committed"},
+        {"name": "update_status", "agent_tool": "update_order_status", "actor_id": "agent", "worker_id": "lookup",
+         "outcome": "refused", "refusal_code": "not_permitted", "refusal": "not permitted"},
+        {"name": "list", "agent_tool": "list_refunds", "actor_id": "agent", "outcome": "committed"},
+        {"name": "list", "actor_id": "agent", "outcome": "committed"},
+    ]
+    agent, worker = cr.trial_state_changes(log, {})
+    assert agent["committed_actions"] == ["list_refunds", "list"]
+    assert worker["committed_actions"] == ["get_order"]
+    assert [one["action"] for one in worker["refused_actions"]] == ["update_order_status"]
+
+
+def test_a_worker_s_call_carries_the_worker_and_why_the_world_refused_it(monkeypatch) -> None:
+    columns = ["name", "arguments", "result", "ok", "error", "at", "action_id", "actor_id", "worker_id", "outcome",
+               "refusal_code"]
+    rows = [
+        ("get_order", {"id": "1"}, {"status": "delivered"}, True, "", 100.5, "a1", "agent", "order_lookup", "committed", None),
+        ("issue_refund", {"id": "1"}, None, False, "late", 101.0, "a2", "agent", "refund", "refused", "deadline_passed"),
+    ]
+    monkeypatch.setitem(sys.modules, "psycopg", _FakePsycopg(rows, columns))
+    calls = cr._collect_tool_trace_calls(_runtime(endpoints={"database": _postgres_endpoint()}))
+    assert [(one.worker_id, one.refusal_code) for one in calls] == [("order_lookup", ""), ("refund", "deadline_passed")]
+
+
+def test_the_sealed_trace_row_keeps_why_the_world_refused_a_call() -> None:
+    from fi.alk.harness.world.runtime import Call, trace_row
+
+    refused = Call(
+        name="get_order",
+        arguments={},
+        ok=False,
+        refused=True,
+        worker_id="order_lookup",
+        refusal_code="deadline_passed",
+    )
+    assert trace_row(refused)["refusal_code"] == "deadline_passed"
+    assert "refusal_code" not in trace_row(Call(name="get_order", arguments={}))
+
+
+def test_a_logged_call_is_graded_under_the_agent_s_own_tool_name_when_the_world_recorded_it(monkeypatch) -> None:
+    columns = ["name", "arguments", "result", "ok", "error", "at", "actor_id", "agent_tool"]
+    rows = [
+        ("list", {"order_id": "1042"}, {"refunds": []}, True, "", 1.0, "agent", "list_refunds"),
+        ("get_deal", {"id": 8}, {}, True, "", 2.0, "agent", None),
+    ]
+    monkeypatch.setitem(sys.modules, "psycopg", _FakePsycopg(rows, columns))
+    calls = cr._collect_tool_trace_calls(_runtime(endpoints={"database": _postgres_endpoint()}))
+    assert [one.name for one in calls] == ["list_refunds", "get_deal"]

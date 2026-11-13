@@ -1224,3 +1224,33 @@ def test_a_speaking_actor_can_come_in_on_a_tool_the_agent_s_tools_service_runs()
     # A tool that truly runs only inside the agent is still refused.
     refused = _call_actors_that_cannot_run(scenario, listing, trial, False, tools, set())
     assert refused and "runs only inside the agent" in refused[0]
+
+
+def test_a_worker_s_attempts_are_its_own_participant_with_each_refusal_and_why():
+    from fi.alk.harness.call_runner import trial_state_changes
+
+    log = [
+        {"name": "orders.get", "outcome": "committed", "worker_id": "order_lookup"},
+        {
+            "name": "orders.update_status",
+            "outcome": "refused",
+            "worker_id": "order_lookup",
+            "refusal_code": "not_permitted",
+            "refusal": "orders.update_status is not permitted for order_lookup",
+        },
+        {"name": "refunds.issue", "outcome": "committed", "worker_id": "refund"},
+        {"name": "send_reply", "outcome": "committed"},
+    ]
+    changes = trial_state_changes(log, {})
+    assert [(c["who"], c["name"], c["attempted"], c["committed"], c["refused"]) for c in changes] == [
+        ("agent", "the agent", 1, 1, 0),
+        ("worker:order_lookup", "order_lookup", 2, 1, 1),
+        ("worker:refund", "refund", 1, 1, 0),
+    ]
+    assert changes[1]["refused_actions"] == [
+        {
+            "action": "orders.update_status",
+            "code": "not_permitted",
+            "reason": "orders.update_status is not permitted for order_lookup",
+        }
+    ]

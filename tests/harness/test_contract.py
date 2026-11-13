@@ -202,6 +202,29 @@ def test_declared_workers_name_contract_tools_and_reach_the_brief():
     assert "order_lookup (Order-lookup worker): get_order" in contract.brief()
 
 
+def test_separate_workers_sharing_an_address_or_with_an_id_no_channel_can_carry_are_returned_to_authoring():
+    contract = AgentContract.model_validate(
+        {
+            "agent": "returns",
+            "real_use_cases": ["refund an order"],
+            "tools": [{"name": "get_order"}],
+            "workers": [
+                {"id": "refund", "binding": "separate", "address_env": "TOOLS_URL"},
+                {"id": "order_lookup", "binding": "separate", "address_env": "TOOLS_URL"},
+                {"id": "Order lookup", "binding": "separate", "address_env": "LOOKUP_URL"},
+                {"id": "audit", "binding": "separate"},
+                {"id": "Shared one", "binding": "shared", "address_env": "TOOLS_URL"},
+            ],
+        }
+    )
+    problems = validate_contract(contract)
+    assert [one.split(":")[0] + ":" + one.split(":")[1] for one in problems] == [
+        "worker[2]:id-not-usable-for-a-channel",
+        "worker[3]:separate-without-address-env",
+        "duplicate-worker-address-env:TOOLS_URL",
+    ]
+
+
 def test_a_worker_without_an_id_of_its_own_is_returned_to_authoring_and_keeps_only_contract_tools():
     contract = AgentContract.model_validate(
         {
@@ -243,3 +266,114 @@ def test_contract_without_workers_is_unchanged():
     )
     assert contract.workers == []
     assert "WORKERS" not in contract.brief()
+
+
+def test_a_sub_goal_names_the_task_or_one_worker_and_a_task_subject_is_saved_as_before(tmp_path):
+    import json
+
+    from fi.alk.harness.catalogue import Catalogue, SubGoal, save_catalogue
+
+    assert SubGoal(name="a").subject == "task" and SubGoal(name="a").worker == ""
+    assert SubGoal(name="b", subject="worker:refund").worker == "refund"
+    for bad in ("refund", "worker:", "agent:x"):
+        with pytest.raises(ValidationError, match="subject is task or worker"):
+            SubGoal(name="c", subject=bad)
+    path = save_catalogue(Catalogue(sub_goals=[SubGoal(name="a"), SubGoal(name="b", subject="worker:refund")]), tmp_path)
+    saved = json.loads(path.read_text())["sub_goals"]
+    assert "subject" not in saved[0] and saved[1]["subject"] == "worker:refund"
+
+
+def test_permitted_tools_on_a_shared_worker_are_returned_to_authoring():
+    contract = AgentContract.model_validate(
+        {
+            "agent": "returns",
+            "real_use_cases": ["refund an order"],
+            "tools": [{"name": "get_order"}, {"name": "issue_refund"}],
+            "workers": [
+                {"id": "lookup", "tools": ["get_order"], "allowed_tools": ["get_order"], "binding": "shared"},
+                {
+                    "id": "refund",
+                    "tools": ["get_order", "issue_refund"],
+                    "allowed_tools": ["issue_refund"],
+                    "binding": "separate",
+                    "address_env": "REFUND_URL",
+                },
+            ],
+        }
+    )
+    assert [one.split(": ")[0] for one in validate_contract(contract)] == [
+        "worker[0]:allowed-tools-on-a-shared-worker"
+    ]
+
+
+def test_a_worker_allowed_a_tool_it_does_not_hold_is_returned_to_authoring():
+    contract = AgentContract.model_validate(
+        {
+            "agent": "returns",
+            "real_use_cases": ["refund an order"],
+            "tools": [{"name": "get_order"}, {"name": "issue_refund"}],
+            "workers": [
+                {
+                    "id": "order_lookup",
+                    "tools": ["get_order"],
+                    "allowed_tools": ["get_order"],
+                    "binding": "separate",
+                    "address_env": "LOOKUP_URL",
+                },
+                {
+                    "id": "refund",
+                    "tools": ["issue_refund"],
+                    "allowed_tools": ["get_order"],
+                    "binding": "separate",
+                    "address_env": "REFUND_URL",
+                },
+            ],
+        }
+    )
+    assert [one.split(": ")[0] for one in validate_contract(contract)] == [
+        "worker[1]:allowed-tools-it-does-not-hold:get_order"
+    ]
+
+
+def test_a_scenario_s_worker_budget_is_positive_and_absent_from_its_document_when_unset():
+    from fi.alk.harness.folder import document_for
+    from fi.alk.harness.scenario import Scenario
+
+    plain = Scenario(name="a", instruction="x")
+    assert "worker_budget_seconds" not in document_for(plain)
+    assert document_for(plain.model_copy(update={"worker_budget_seconds": 20}))["worker_budget_seconds"] == 20
+    with pytest.raises(ValidationError):
+        Scenario(name="a", instruction="x", worker_budget_seconds=0)
+    # One worker can be given its own budget, so one worker times out while the others finish.
+    per_worker = Scenario(name="a", instruction="x", worker_budget_seconds={"refund": 2})
+    assert document_for(per_worker)["worker_budget_seconds"] == {"refund": 2}
+    for bad in ({"refund": 0}, {"": 2}, {}):
+        with pytest.raises(ValidationError):
+            Scenario(name="a", instruction="x", worker_budget_seconds=bad)
+
+
+# The platform's result receipt validates a sub-goal's subject with this pattern
+# (future-agi simulate/serializers/hosted_harness.py). Every subject the harness accepts must match it, or the whole
+# receipt is refused and the call's result is lost.
+PLATFORM_SUBJECT = r"^(task|worker:.*\S.*)$"
+
+
+@pytest.mark.parametrize("subject", ["task", "worker:refund", "worker:Order lookup", "worker:order-lookup_2"])
+def test_every_subject_the_harness_accepts_matches_the_platform_s_receipt_rule(subject):
+    import re
+
+    from fi.alk.harness.catalogue import SubGoal
+
+    accepted = SubGoal.model_validate({"name": "g", "subject": subject}).subject
+    assert re.match(PLATFORM_SUBJECT, accepted)
+
+
+@pytest.mark.parametrize("subject", ["worker:", "worker:   ", "agent"])
+def test_a_subject_the_platform_would_refuse_is_refused_by_the_harness_too(subject):
+    import re
+
+    from fi.alk.harness.catalogue import SubGoal
+
+    assert not re.match(PLATFORM_SUBJECT, subject.strip())
+    with pytest.raises(ValueError):
+        SubGoal.model_validate({"name": "g", "subject": subject})
