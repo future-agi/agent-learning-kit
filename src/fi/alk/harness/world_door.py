@@ -268,6 +268,8 @@ class WorldDoor:
                 # Which call of this action this is, and its row, are decided under one lock: two calls at once
                 # never both take a one-shot fault set on the same call number. The lock is held across the world
                 # call, so calls of one faulted action run one at a time (each at most the executor's timeout).
+                # The lock and the call count belong to this door: a trial serves each action through one door, so
+                # the numbering holds per trial. Two doors serving the same action would number separately.
                 with self._key_lock(f"\x01calls\x00{call.name}"):
                     fault = self._fault(call, named)
                     if fault is not None:
