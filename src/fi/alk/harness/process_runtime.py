@@ -2809,6 +2809,9 @@ def wait_for_dependency(
     """
     processes_by_name = {process.name: process for process in manifest.processes}
     dependency = processes_by_name[dependency_name]
+    # Only the control service is the agent: a helper service (tools-api, a generated proxy)
+    # that crashes or stalls is no `agent_*` cause, so it reads unknown.
+    is_agent = dependency_name == manifest.runtime.control_service
     probes = _readiness_probes_for_process(manifest, dependency_name)
     if probes:
         port = port_plan.port_for(dependency_name, world_index)
@@ -2855,11 +2858,7 @@ def wait_for_dependency(
                         if isinstance(dependency, SourceProcess)
                         else FailureDomain.INFRASTRUCTURE
                     ),
-                    cause=(
-                        FailureCause.AGENT_EXITED_BEFORE_READY
-                        if isinstance(dependency, SourceProcess)
-                        else None
-                    ),
+                    cause=FailureCause.AGENT_EXITED_BEFORE_READY if is_agent else None,
                 )
             return False
 
@@ -2876,11 +2875,7 @@ def wait_for_dependency(
                 f"{dependency_name}: readiness probe did not pass within {combined_timeout}s",
                 process=dependency_name,
                 domain=FailureDomain.INFRASTRUCTURE,
-                cause=(
-                    FailureCause.AGENT_NOT_READY_IN_TIME
-                    if isinstance(dependency, SourceProcess)
-                    else None
-                ),
+                cause=FailureCause.AGENT_NOT_READY_IN_TIME if is_agent else None,
             ),
         )
         return
@@ -2920,7 +2915,7 @@ def wait_for_dependency(
                 f"{_output_tail(spawned.handle, spawned.local_auth_values)}",
                 process=dependency_name,
                 domain=FailureDomain.AGENT,
-                cause=FailureCause.AGENT_EXITED_BEFORE_READY,
+                cause=FailureCause.AGENT_EXITED_BEFORE_READY if is_agent else None,
             )
         return False
 
@@ -2938,7 +2933,7 @@ def wait_for_dependency(
             f"{_output_tail(spawned.handle, spawned.local_auth_values)}",
             process=dependency_name,
             domain=FailureDomain.INFRASTRUCTURE,
-            cause=FailureCause.AGENT_NOT_READY_IN_TIME,
+            cause=FailureCause.AGENT_NOT_READY_IN_TIME if is_agent else None,
         ),
     )
 
