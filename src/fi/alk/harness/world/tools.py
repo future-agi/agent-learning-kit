@@ -21,11 +21,24 @@ import json
 import logging
 import re
 import sqlite3
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+from fi.simulate.simulation.call_actors import CHANNELS, available_channels, described
+
 from ..backends import tool, tool_server
 
+from ..actors import (
+    Actor,
+    ActorList,
+    actor_input_schema,
+    load_actors,
+    save_actors,
+    environment_actions,
+    environment_collections,
+    record_changes,
+)
 from ..amend import add_rule, drop_rule, fix_tool, set_modality, widen
 from ..catalogue import (
     CONTRACT_FIELDS,
@@ -43,6 +56,12 @@ from ..catalogue import (
     judged_wording_advisory,
     weak_check_advisory,
     without_delivery_overlay,
+)
+from ..call_actor import (
+    CallActor,
+    entry_problems,
+    load_call_actors,
+    scenarios_using,
 )
 from ..checks import reference_of, run_check, run_world_check
 from ..contract import AgentContract, is_data_free_conversation
@@ -340,7 +359,7 @@ def _binding(
     """
     root = called.split(".")[0]
     reach = f"from {module} import {root}" if module else ""
-    state = "db.state, " if first_arg else ""
+    state = "True" if first_arg else "False"
     # Their code may be async, which is true of every framework-decorated tool. The result is
     # settled here rather than by the caller so that a handler stays synchronous, which is what
     # every other part of the world already assumes.
@@ -349,16 +368,16 @@ def _binding(
         attr = called.split(".", 1)[1] if "." in called else "__call__"
         return (
             f"{reach}\n"
-            "from fi.alk.harness.world.runtime import settled\n\n"
+            "from fi.alk.harness.world.runtime import call_agent_tool, settled\n\n"
             "def handle(args, db):\n"
             f"    instance = {built}\n"
-            f"    return settled(instance.{attr}({state}**args))\n"
+            f"    return settled(call_agent_tool(instance.{attr}, args, db, state={state}))\n"
         )
     return (
         f"{reach}\n"
-        "from fi.alk.harness.world.runtime import settled\n\n"
+        "from fi.alk.harness.world.runtime import call_agent_tool, settled\n\n"
         "def handle(args, db):\n"
-        f"    return settled({called}({state}**args))\n"
+        f"    return settled(call_agent_tool({called}, args, db, state={state}))\n"
     )
 
 
@@ -581,6 +600,227 @@ def _tables_the_source_lacks(
                     f"exist: {', '.join(dangling[:5])}"
                 )
     return problems
+
+
+def world_actor_tools(
+    destination: Path,
+    contract: AgentContract | None = None,
+    collections: Callable[[], list[str]] | None = None,
+) -> list[Any]:
+    """The tools that keep the environment's actors: for the build and the builder chat. `collections` reads the
+    world's collections while it is being built; without it they come from the saved source model."""
+
+    def world_actions() -> list[str]:
+        # Read when called, so actions adopted later in the build count.
+        return environment_actions(
+            destination, contract.model_dump() if contract is not None else None
+        )
+
+    def world_records() -> list[str]:
+        try:
+            held = collections() if collections is not None else []
+        except Exception:  # noqa: BLE001 - a world that cannot list its tables offers no record changes
+            held = []
+        return record_changes(held or environment_collections(destination))
+
+    modality = str(getattr(contract, "modality", "") or "")
+    speaking = available_channels(modality)
+
+    # Known before the call when the world is already built (the builder chat), so one request is one confirmation.
+    listed = world_actions()
+    records = world_records()
+
+    @tool(
+        "add_actor",
+        "Add an actor, or change one already listed: anyone the agent under test deals with who is not the agent, "
+        "such as the caller, someone with the caller, a manager, a coworker, a teammate on chat or a system. Only "
+        "the fields you send change, the rest stay as they are. An actor may speak on calls, act in the world, or "
+        "both. To speak on calls give `channel`"
+        + (
+            ": "
+            + described({name: CHANNELS[name]["about"] for name in speaking})
+            + ", with `persona` in the caller's fields (the voice is chosen from it)"
+            if speaking
+            else " (this agent's calls carry none)"
+        )
+        + ". To act in the world give `permitted_actions`, exactly what this person may do and nothing more: the "
+        "world's own actions, each named as the environment names it (the route one of its tools calls, with `/` as "
+        "`.`), and record changes on the world's collections, `<collection>.put` to add a record (its fields) and "
+        "`<collection>.change` to edit one (`where` and `set`). Give an actor `identities` in each service it acts "
+        "in, who they are in its records, so the world credits what they do to them; one whose action's tool names "
+        "who acts needs it. A decision someone makes (an approval, a rejection, a grant of access) is "
+        "a record change on the collection the world's rule reads, not one of the agent's own actions. Give an actor "
+        "an action the agent takes only when the person asked for that actor to take it. The reply lists what can "
+        "be given. Anything else they attempt is refused and recorded as their attempt. Who may take an action is "
+        "decided by this list, never by what anyone says. `role` is who they are to the people around them in a few "
+        "words, and what they bring that the agent has to handle: a fact that can differ from the person's, a "
+        "request of their own, a decision only they make. \"Chimes in with the pickup details\" gives the agent "
+        "nothing to handle; \"Sometimes remembers the pickup differently from the caller\" does. An actor is the "
+        "same in every scenario, so `role` names people by their part (the caller, the caller's spouse), never by "
+        "one scenario's names."
+        + (f" The world's actions: {', '.join(listed)}." if listed else "")
+        + (f" Record changes: {', '.join(records)}." if records else ""),
+        actor_input_schema(),
+    )
+    async def add_actor(args: dict[str, Any]) -> dict[str, Any]:
+        listing = load_actors(destination)
+        current = listing.by_id().get(str(args.get("id") or ""))
+        given = {name: value for name, value in args.items() if name not in ("provenance", "share_actions")}
+        confirmed = args.get("share_actions")
+        # One action or a list of them; anything else confirms nothing.
+        shared = (
+            {str(one) for one in confirmed if isinstance(one, str)}
+            if isinstance(confirmed, list)
+            else {confirmed} if isinstance(confirmed, str) else set()
+        )
+        if isinstance(given.get("surface"), str) and given["surface"] in CHANNELS:
+            # A way of speaking sent as the place it acts: said back, never saved as a surface no world has.
+            return _err(
+                f"Not added: {given['surface']!r} is how an actor speaks in the conversation; send it as `channel`. "
+                "`surface` is where it acts in the world."
+            )
+        try:
+            base = current.model_dump(exclude_none=True) if current is not None else {}
+            # A nested field merges the keys sent into what it has, as the top level does.
+            merged = {
+                name: {**base[name], **value}
+                if isinstance(value, dict) and isinstance(base.get(name), dict)
+                else value
+                for name, value in given.items()
+            }
+            actor = Actor.model_validate({**base, **merged})
+        except ValueError as exc:
+            return _err(f"Not added: {exc}")
+        from ..actors import ACTOR_MODELS
+
+        if actor.model and actor.model != (current.model if current is not None else None) and actor.model not in ACTOR_MODELS:
+            # A run plays the actor on this model, so an unknown one would fail each of its turns.
+            return _err(f"Not added: model is one of {', '.join(ACTOR_MODELS)}, or left out for the environment's model.")
+        if actor.channel:
+            problems = entry_problems(
+                CallActor(
+                    id=actor.id,
+                    name=actor.name,
+                    role=actor.role,
+                    channel=actor.channel,
+                    persona=actor.persona,
+                ),
+                modality=modality,
+            )
+            if problems:
+                return _err("Not added:\n  - " + "\n  - ".join(problems))
+        from ..actor_dispatch import actions_naming_actor
+
+        # Only where the action's own tool declares who acts does the world need the actor's identity there.
+        naming = actions_naming_actor(contract.model_dump()) if contract is not None else set()
+        unnamed = sorted(
+            {
+                one.split(".", 1)[0]
+                for one in actor.permitted_actions
+                if one in naming and not actor.identities.get(one.split(".", 1)[0])
+            }
+        )
+        if unnamed:
+            # Without it the world cannot tell who acted, and credits the actor's post or change to the agent.
+            return _err(
+                f"Not added: {actor.id} acts in {', '.join(unnamed)} but has no identity there. Give `identities` "
+                f"with who they are in each one's records (the member, user or handle the world seeds for them), "
+                f"for example {{{', '.join(repr(one) + ': ...' for one in unnamed)}}}."
+            )
+        services = sorted({one.split(".", 1)[0] for one in world_actions()})
+        # Only the keys sent now: an actor saved before this check keeps its other edits open.
+        stray = sorted(set(given.get("identities") or {}) - set(services)) if services else []
+        if stray:
+            # An identity is looked up by the service an action goes to; under any other key no action finds it.
+            return _err(
+                f"Not added: identities are keyed by the service the person is known in, one of {', '.join(services)}; "
+                f"{', '.join(repr(one) for one in stray)} {'is not one' if len(stray) == 1 else 'are not'}. Send {{'<service>': '<who they are there>'}}."
+            )
+        from ..actors import permission_conflicts
+
+        unconfirmed = [(action, holder) for action, holder in permission_conflicts(listing, actor) if action not in shared]
+        if unconfirmed:
+            # One actor's own action given to a second lets both take it: the person decides, never the builder.
+            return _err(
+                "Not added: "
+                + " ".join(
+                    f"{action} is held only by {holder.name or holder.id} today; giving it to {actor.id} lets both "
+                    "take it."
+                    for action, holder in unconfirmed
+                )
+                + " Ask the person whether both should have it; if they confirm, send it again with `share_actions`."
+            )
+        if current is not None and current.channel != actor.channel:
+            using = scenarios_using(destination, actor.id)
+            if using:
+                # A scenario's trigger and level were written for the way the actor joins the call.
+                return _err(
+                    f"Not changed. These scenarios include {actor.id} as it joins now: "
+                    + ", ".join(using)
+                )
+        try:
+            kept = [one for one in listing.actors if one.id != actor.id]
+            save_actors(destination, ActorList(actors=[*kept, actor]))
+        except ValueError as exc:
+            return _err(f"Not added: {exc}")
+        known = world_actions()
+        changes = world_records()
+        unknown = [one for one in actor.permitted_actions if one not in known and one not in changes]
+        reply = f"{actor.id} may {', '.join(actor.permitted_actions) or 'do nothing in the world'}. "
+        reply += (
+            f"The world's actions: {', '.join(known)}."
+            if known
+            else "The world has no actions an actor can take yet."
+        )
+        if changes:
+            reply += f" Record changes: {', '.join(changes)}."
+        if unknown:
+            reply += (
+                f" {', '.join(unknown)} {'is' if len(unknown) == 1 else 'are'} not among them, so the world "
+                "refuses it; send `permitted_actions` again with actions from that list."
+            )
+        return _ok(reply)
+
+    @tool(
+        "drop_actor",
+        "Remove an actor by id, when the person you work with asks for it or this agent's users would never "
+        "have them around. Refused while any scenario includes it.",
+        {"id": str},
+    )
+    async def drop_actor(args: dict[str, Any]) -> dict[str, Any]:
+        listing = load_actors(destination)
+        gone = str(args.get("id") or "")
+        kept = [one for one in listing.actors if one.id != gone]
+        if len(kept) == len(listing.actors):
+            return _err(
+                f"no actor {gone!r}. Listed: {', '.join(one.id for one in kept) or 'none'}"
+            )
+        using = scenarios_using(destination, gone)
+        if using:
+            return _err(
+                f"Not dropped. These scenarios include {gone}: " + ", ".join(using)
+            )
+        try:
+            remaining = ActorList(actors=kept)
+        except ValueError as exc:
+            # Another actor still names this one as its parent, principal or fallback.
+            return _err(f"Not dropped: {exc}")
+        save_actors(destination, remaining)
+        return _ok(f"{gone} dropped")
+
+    return [add_actor, drop_actor]
+
+
+ACTOR_SERVER = "actors"
+
+
+def actor_tools_server(contract: AgentContract, destination: Path) -> Any | None:
+    """The cast alone, for a builder chat on a built environment: who is in the world and who is with the caller can
+    still change after the world's tools and data are fixed. None when there are no actor tools."""
+    tools = world_actor_tools(destination, contract)
+    if not tools:
+        return None
+    return tool_server(name=ACTOR_SERVER, version="0.1.0", tools=tools)
 
 
 def world_tools(
@@ -1327,7 +1567,8 @@ def world_tools(
     @tool(
         "fix_tool",
         "Correct a tool that was read wrong, or remove one the agent does not have. `args` "
-        "replaces its argument names in order; `arg_types` and `description` update those. Set "
+        "replaces its argument names in order; `arg_types`, `arg_units` (the unit or format of a field, cents or "
+        "dollars, seconds or milliseconds) and `description` update those. Set "
         "`remove` to take the tool away entirely. Everything downstream is built from these, so "
         "a wrong argument name produces a world that refuses everything. Say why.",
         schema(
@@ -1335,6 +1576,7 @@ def world_tools(
                 "tool_name": str,
                 "args": list,
                 "arg_types": dict,
+                "arg_units": dict,
                 "description": str,
                 "refuses": str,
                 "effects": str,
@@ -1355,6 +1597,7 @@ def world_tools(
             arg_types={
                 str(k): str(v) for k, v in (args.get("arg_types") or {}).items()
             },
+            arg_units={str(k): str(v) for k, v in (args.get("arg_units") or {}).items()},
             description=str(args.get("description") or ""),
             refuses=str(args.get("refuses") or ""),
             effects=str(args.get("effects") or ""),
@@ -1671,7 +1914,16 @@ def world_tools(
                 and not world.handlers
                 else "\nNo world checks of your own yet. Add them with add_world_check."
             )
-        return _ok(f"{report.summary()}\nscore {report.score:.2f}{own}{stuck}")
+        listed = ""
+        if (
+            available_channels(str(contract.modality or ""))
+            and not load_call_actors(destination).call_actors
+        ):
+            listed = (
+                "\nNo actor speaks on calls yet. Add who this agent's users could have around "
+                "them with add_actor and a `channel`."
+            )
+        return _ok(f"{report.summary()}\nscore {report.score:.2f}{own}{listed}{stuck}")
 
     @tool(
         "save_world",
@@ -1679,6 +1931,10 @@ def world_tools(
         schema({"notes": str}, []),
     )
     async def save_world(args: dict[str, Any]) -> dict[str, Any]:
+        # The caller is an actor like any other, listed from the first build so the editor always shows it.
+        from ..actors import ensure_caller
+
+        ensure_caller(destination)
         runtime_tools = _runtime_owned()
         runtime_only = bool(contract.tools) and set(contract.tool_names()).issubset(
             runtime_tools
@@ -1886,6 +2142,11 @@ def world_tools(
             run_env_command,
             check_world,
             save_world,
+            *world_actor_tools(
+                destination,
+                contract,
+                collections=lambda: list(getattr(getattr(world, "store", None), "collections", list)()),
+            ),
         ],
     )
     return server, world
@@ -1909,6 +2170,8 @@ TOOL_NAMES = (
     "set_modality",
     "inspect_world",
     "write_simulator_prompt",
+    "add_actor",
+    "drop_actor",
     "add_sub_goal",
     "write_store_ops",
     "add_world_check",

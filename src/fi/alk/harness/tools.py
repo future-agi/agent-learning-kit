@@ -418,6 +418,14 @@ def contract_tools(
                                 "constrained to a set, an enum or a lookup: "
                                 '{"priority": ["low", "normal", "urgent"]}.',
                             },
+                            "arg_units": {
+                                "type": "object",
+                                "description": "The unit or format of every amount, duration, date or "
+                                "time argument whose name does not say it, from the code that reads it, the "
+                                "data it holds or what the person you work with said; when the code and "
+                                "their words disagree, the code's: "
+                                '{"refund_amount": "cents, USD", "timeout": "milliseconds"}.',
+                            },
                             "description": {"type": "string"},
                             "requires": {
                                 "type": "array",
@@ -728,6 +736,13 @@ def contract_tools(
                             "type": "string",
                             "description": "The module that loader is imported from, so it can "
                             "be called rather than reimplemented.",
+                        },
+                        "loads": {
+                            "type": "string",
+                            "enum": ["", "start", "each_call"],
+                            "description": "When that loader runs, read from the code: `start` when "
+                            "the agent loads its data once as it starts, `each_call` when it reads "
+                            "it again on every request. Empty when the code does not show it.",
                         },
                         "version": {
                             "type": "string",

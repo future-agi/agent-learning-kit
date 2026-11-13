@@ -1479,3 +1479,328 @@ def test_generated_command_bridge_handles_readiness_and_hosted_chat(tmp_path, mo
         server.shutdown()
         thread.join()
         server.server_close()
+
+
+def test_a_chat_trial_plays_its_actors_through_the_same_door_as_the_agent(tmp_path: Path, monkeypatch: Any) -> None:
+    from fi.alk.harness.actors import Actor, ActorList, save_actors
+
+    context = _context(tmp_path)
+    save_actors(context.bundle_dir, ActorList(actors=[
+        Actor(id="manager", name="Mia", play="mocked", permitted_actions=["lookup_account"]),
+    ]))
+    path = context.bundle_dir / "scenarios" / "one" / "scenario.json"
+    document = json.loads(path.read_text(encoding="utf-8"))
+    document["actors"] = [{"id": "manager", "actions": [{"action": "lookup_account",
+                                                          "arguments": {"account_id": "ACC-1"}}]}]
+    path.write_text(json.dumps(document), encoding="utf-8")
+    tool_world = _ToolWorld()
+    monkeypatch.setattr(chat, "_tool_world", lambda *_args: tool_world)
+    monkeypatch.setattr(chat, "_drive_conversation", _single_exchange)
+
+    class Wrapper:
+        def __init__(self, **_kwargs: Any) -> None:
+            self.calls = 0
+
+        async def call(self, _request: Any) -> AgentResponse:
+            self.calls += 1
+            # The actors play while the agent works.
+            await asyncio.sleep(0.05)
+            if self.calls == 1:
+                return AgentResponse(content="", tool_calls=[{"id": "tool-1", "function": {
+                    "name": "lookup_account", "arguments": '{"account_id":"ACC-2048"}'}}])
+            return AgentResponse(content="The account is active.")
+
+    monkeypatch.setattr(chat, "HTTPAgentWrapper", Wrapper)
+    adapter = _Adapter()
+    runner = chat.HostedChatCallRunner(adapter, context)
+    runtime = EnvironmentRuntime(
+        runtime_id="runtime-1", world_index=0, bundle_digest="sha256:" + "a" * 64, state=RuntimeState.READY,
+        endpoints={"target_http": RuntimeEndpoint(capability="target_http", protocol="http",
+                                                  address="http://localhost:18080")},
+    )
+    outcome = asyncio.run(runner.run(SimpleNamespace(scenario_key="one", scenario_id="scenario-1"), runtime))
+
+    # The call's own record lists the actor too, so the run's actor filter finds a call where only it took part.
+    [sealed] = [json.loads(data) for data in adapter.uploads if b'"world_actors"' in data]
+    assert {"actor": "manager", "name": "Mia", "triggered": True, "delivered": 1, "dropped": [],
+            "acts_in_world": True} in sealed["call_actors"]["summary"]
+    # The agent's own calls are what grading reads; the actor's action is never among them.
+    assert [(call.name, call.arguments) for call in outcome.calls] == [("lookup_account", {"account_id": "ACC-2048"})]
+    assert [(one["actor_id"], one["outcome"]) for one in outcome.world_actions] == [("manager", "committed")]
+    assert {"actor": "manager", "name": "Mia", "triggered": True, "delivered": 1, "dropped": [],
+            "acts_in_world": True} in outcome.call_actors
+
+
+def test_a_chat_trial_s_faults_are_set_for_the_tool_proxy_and_cleared_after(tmp_path: Path, monkeypatch: Any) -> None:
+    from fi.alk.harness import call_runner
+
+    context = _context(tmp_path)
+    path = context.bundle_dir / "scenarios" / "one" / "scenario.json"
+    document = json.loads(path.read_text(encoding="utf-8"))
+    fault = {"action": "crm.apply_discount", "mode": "timeout_after_commit", "on_call": 1}
+    document["faults"] = [fault]
+    path.write_text(json.dumps(document), encoding="utf-8")
+    written: list[list] = []
+    during: list[list] = []
+    monkeypatch.setattr(call_runner, "_write_trial_state", lambda _runtime, faults: written.append(list(faults)))
+    monkeypatch.setattr(chat, "_tool_world", lambda *_args: _ToolWorld())
+    monkeypatch.setattr(chat, "_drive_conversation", _single_exchange)
+
+    class Wrapper:
+        def __init__(self, **_kwargs: Any) -> None:
+            return
+
+        async def call(self, _request: Any) -> AgentResponse:
+            # The agent's own calls go through its tool proxy while the faults are set.
+            during.append(list(written))
+            return AgentResponse(content="Done.")
+
+    monkeypatch.setattr(chat, "HTTPAgentWrapper", Wrapper)
+    endpoints = {
+        "target_http": RuntimeEndpoint(capability="target_http", protocol="http", address="http://localhost:18080"),
+        "tool_proxy": RuntimeEndpoint(capability="tool_proxy", protocol="http", address="http://localhost:18081"),
+    }
+    runtime = EnvironmentRuntime(
+        runtime_id="runtime-1", world_index=0, bundle_digest="sha256:" + "a" * 64, state=RuntimeState.READY,
+        endpoints=endpoints,
+    )
+    asyncio.run(chat.HostedChatCallRunner(_Adapter(), context).run(SimpleNamespace(scenario_key="one", scenario_id="scenario-1"), runtime))
+    assert written == [[fault], []] and during[0] == [[fault]]
+    # A trial with no faults behind the proxy still writes its own (none), so an earlier trial's never applies.
+    written.clear()
+    document.pop("faults")
+    path.write_text(json.dumps(document), encoding="utf-8")
+    asyncio.run(chat.HostedChatCallRunner(_Adapter(), context).run(SimpleNamespace(scenario_key="one", scenario_id="scenario-1"), runtime))
+    assert written == [[], []]
+    document["faults"] = [fault]
+    path.write_text(json.dumps(document), encoding="utf-8")
+    # Without a tool proxy no one reads them, so nothing is written.
+    written.clear()
+    runtime.endpoints.pop("tool_proxy")
+    asyncio.run(chat.HostedChatCallRunner(_Adapter(), context).run(SimpleNamespace(scenario_key="one", scenario_id="scenario-1"), runtime))
+    assert written == []
+
+
+def test_a_readiness_probe_applies_none_of_the_scenario_s_faults(tmp_path: Path, monkeypatch: Any) -> None:
+    """The probe checks how the tools reach the world; a scenario's fault would fail it and block Validate and Save."""
+    import dataclasses
+
+    from fi.alk.harness import call_runner
+
+    context = dataclasses.replace(_context(tmp_path), readiness_probe=True)
+    path = context.bundle_dir / "scenarios" / "one" / "scenario.json"
+    document = json.loads(path.read_text(encoding="utf-8"))
+    document["faults"] = [{"action": "crm.apply_discount", "mode": "timeout_after_commit", "on_call": 1}]
+    path.write_text(json.dumps(document), encoding="utf-8")
+    written: list[list] = []
+    doors: list[list] = []
+    real_door = chat.chat_door
+
+    def _door(world, mirror_dsn, permissions, faults, **kwargs):
+        doors.append(list(faults))
+        return real_door(world, None, permissions, faults, **kwargs)
+
+    monkeypatch.setattr(call_runner, "_write_trial_state", lambda _runtime, faults: written.append(list(faults)))
+    monkeypatch.setattr(chat, "_tool_world", lambda *_args: _ToolWorld())
+    monkeypatch.setattr(chat, "_drive_conversation", _single_exchange)
+    monkeypatch.setattr(chat, "chat_door", _door)
+
+    class Wrapper:
+        def __init__(self, **_kwargs: Any) -> None:
+            return
+
+        async def call(self, _request: Any) -> AgentResponse:
+            return AgentResponse(content="Done.")
+
+    monkeypatch.setattr(chat, "HTTPAgentWrapper", Wrapper)
+    endpoints = {
+        "target_http": RuntimeEndpoint(capability="target_http", protocol="http", address="http://localhost:18080"),
+        "tool_proxy": RuntimeEndpoint(capability="tool_proxy", protocol="http", address="http://localhost:18081"),
+    }
+    runtime = EnvironmentRuntime(
+        runtime_id="runtime-1", world_index=0, bundle_digest="sha256:" + "a" * 64, state=RuntimeState.READY,
+        endpoints=endpoints,
+    )
+    asyncio.run(chat.HostedChatCallRunner(_Adapter(), context).run(SimpleNamespace(scenario_key="one", scenario_id="scenario-1"), runtime))
+    # Neither the in-process door nor the tool proxy gets the fault.
+    assert doors == [[]]
+    assert written == [[], []]
+
+
+def test_a_proxied_chat_trial_without_actors_still_reads_the_world_s_table(tmp_path: Path, monkeypatch: Any) -> None:
+    """The proxy logs the agent's own calls and the faults it applies in the world's table; a trial with no actors must
+    read it too, or its fault notices and world changes see nothing."""
+    from fi.alk.harness import call_runner
+
+    context = _context(tmp_path)
+    monkeypatch.setattr(call_runner, "_write_trial_state", lambda _runtime, _faults: None)
+    monkeypatch.setattr(chat, "_tool_world", lambda *_args: _ToolWorld())
+    monkeypatch.setattr(chat, "_drive_conversation", _single_exchange)
+    mirrors: list = []
+    real_door = chat.chat_door
+
+    def _door(world, mirror_dsn, *args, **kwargs):
+        mirrors.append(mirror_dsn)
+        return real_door(world, None, *args, **kwargs)
+
+    monkeypatch.setattr(chat, "chat_door", _door)
+
+    class Wrapper:
+        def __init__(self, **_kwargs: Any) -> None:
+            return
+
+        async def call(self, _request: Any) -> AgentResponse:
+            return AgentResponse(content="Done.")
+
+    monkeypatch.setattr(chat, "HTTPAgentWrapper", Wrapper)
+    endpoints = {
+        "target_http": RuntimeEndpoint(capability="target_http", protocol="http", address="http://localhost:18080"),
+        "tool_proxy": RuntimeEndpoint(capability="tool_proxy", protocol="http", address="http://localhost:18081"),
+        "world_db": RuntimeEndpoint(capability="world_db", protocol="postgres", address="postgresql://world"),
+    }
+    runtime = EnvironmentRuntime(
+        runtime_id="runtime-1", world_index=0, bundle_digest="sha256:" + "a" * 64, state=RuntimeState.READY,
+        endpoints=endpoints,
+    )
+    scenario = SimpleNamespace(scenario_key="one", scenario_id="scenario-1")
+    asyncio.run(chat.HostedChatCallRunner(_Adapter(), context).run(scenario, runtime))
+    assert mirrors == ["postgresql://world"]
+    # Without the proxy and without actors, nothing writes there: the trial keeps its own log.
+    runtime.endpoints.pop("tool_proxy")
+    asyncio.run(chat.HostedChatCallRunner(_Adapter(), context).run(scenario, runtime))
+    assert mirrors[-1] is None
+
+
+def test_a_chat_trial_s_world_changes_read_the_world_s_table_where_the_proxy_logs_the_agent() -> None:
+    from fi.alk.harness.actors import Actor, ActorList
+    from fi.alk.harness.world_door import AGENT, MemoryLog, TeeLog
+
+    class _Table(MemoryLog):
+        """The world's table: the tool proxy wrote the agent's own call there, beside the actor's mirrored row."""
+
+    table = _Table()
+    listing = ActorList(actors=[Actor(id="manager", name="Mia", permitted_actions=["approvals.put"])])
+    meter = SimpleNamespace(rows=list)
+    # Trial one on this world: the agent applied twice.
+    for at in (1.0, 2.0):
+        table.write({"name": "apply_discount", "actor_id": AGENT, "outcome": "committed", "ok": True, "at": at})
+    # Trial two on the same world: the agent's own call through the proxy, and the manager's through this door.
+    table.write({"name": "apply_discount", "actor_id": AGENT, "outcome": "committed", "ok": True, "at": 10.0})
+    door = SimpleNamespace(log=TeeLog(MemoryLog(), table))
+    door.log.write({"name": "put", "actor_id": "manager", "outcome": "committed", "ok": True, "at": 11.0})
+    record = chat._world_actors_record(door, listing, None, None, meter, {}, since=9.0)
+    assert {one["who"]: one["committed"] for one in record["state_changes"]} == {AGENT: 1, "manager": 1}
+
+    class _Broken(MemoryLog):
+        def rows(self):
+            raise RuntimeError("no table")
+
+    # The world's table unreadable: this process's own rows still say what the actors did.
+    door = SimpleNamespace(log=TeeLog(MemoryLog(), _Broken()))
+    door.log.write({"name": "put", "actor_id": "manager", "outcome": "committed", "ok": True, "at": 11.0})
+    record = chat._world_actors_record(door, listing, None, None, meter, {}, since=9.0)
+    assert {one["who"]: one["committed"] for one in record["state_changes"]}["manager"] == 1
+
+
+def test_a_chat_trial_s_actors_see_the_agent_s_calls_through_its_tool_proxy(tmp_path: Path) -> None:
+    """The agent's own tools service is reached through the tool proxy, which writes to the world's table, never to
+    this process's memory: what actors watch (an on_tool trigger) must read the world's table, from the trial's start."""
+    from fi.alk.harness.world_door import MemoryLog, TeeLog
+
+    class _Mirror:
+        def __init__(self, rows):
+            self._rows = rows
+
+        def rows(self):
+            return list(self._rows)
+
+        def write(self, row):
+            self._rows.append(row)
+
+    earlier = {"actor_id": "agent", "name": "apply_discount", "at": 5.0}
+    proxied = {"actor_id": "agent", "name": "apply_discount", "at": 12.0}
+    door = SimpleNamespace(log=TeeLog(MemoryLog(), _Mirror([earlier, proxied])))
+    assert chat._trial_log(door, since=10.0) == [proxied]
+    # A world without a mirrored table: this process's own rows.
+    alone = SimpleNamespace(log=TeeLog(MemoryLog(), None))
+    alone.log.write({"actor_id": "manager", "name": "approve", "at": 11.0})
+    assert [one["name"] for one in chat._trial_log(alone, since=10.0)] == ["approve"]
+
+
+def test_an_actor_the_agent_s_last_call_wakes_still_acts_when_the_conversation_ends_at_once(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    from fi.alk.harness.actors import Actor, ActorList, save_actors
+
+    context = _context(tmp_path)
+    save_actors(context.bundle_dir, ActorList(actors=[
+        Actor(id="manager", name="Mia", play="mocked", permitted_actions=["lookup_account"]),
+    ]))
+    path = context.bundle_dir / "scenarios" / "one" / "scenario.json"
+    document = json.loads(path.read_text(encoding="utf-8"))
+    document["actors"] = [{"id": "manager", "actions": [{
+        "action": "lookup_account", "arguments": {"account_id": "ACC-1"},
+        "trigger": {"kind": "on_tool", "tool": "lookup_account"},
+    }]}]
+    path.write_text(json.dumps(document), encoding="utf-8")
+    monkeypatch.setattr(chat, "_tool_world", lambda *_args: _ToolWorld())
+    monkeypatch.setattr(chat, "_drive_conversation", _single_exchange)
+
+    class Wrapper:
+        def __init__(self, **_kwargs: Any) -> None:
+            self.calls = 0
+
+        async def call(self, _request: Any) -> AgentResponse:
+            # No pause: the conversation is over before the actors' next look at the log.
+            self.calls += 1
+            if self.calls == 1:
+                return AgentResponse(content="", tool_calls=[{"id": "tool-1", "function": {
+                    "name": "lookup_account", "arguments": '{"account_id":"ACC-2048"}'}}])
+            return AgentResponse(content="The account is active.")
+
+    monkeypatch.setattr(chat, "HTTPAgentWrapper", Wrapper)
+    runtime = EnvironmentRuntime(
+        runtime_id="runtime-1", world_index=0, bundle_digest="sha256:" + "a" * 64, state=RuntimeState.READY,
+        endpoints={"target_http": RuntimeEndpoint(capability="target_http", protocol="http",
+                                                  address="http://localhost:18080")},
+    )
+    outcome = asyncio.run(
+        chat.HostedChatCallRunner(_Adapter(), context).run(SimpleNamespace(scenario_key="one", scenario_id="scenario-1"), runtime)
+    )
+    assert [(one["actor_id"], one["outcome"]) for one in outcome.world_actions] == [("manager", "committed")]
+
+
+def test_a_chat_actor_s_timeout_and_the_fallback_taken_for_it_are_among_what_the_actors_chose() -> None:
+    from fi.alk.harness.actors import Actor, ActorList
+    from fi.alk.harness.world_door import MemoryLog
+
+    listing = ActorList(actors=[Actor(id="manager", name="Mia", permitted_actions=["approvals.change"])])
+    door = SimpleNamespace(log=MemoryLog())
+    door.log.write({"name": "approvals.change", "actor_id": "manager", "outcome": "committed", "ok": True, "at": 11.0})
+    cast = SimpleNamespace(events=[
+        {"actor": "manager", "kind": "waited", "why": "waiting"},
+        {"actor": "manager", "kind": "timeout", "fallback": "approvals.change", "outcome": "fallback_action",
+         "reason": "no answer in time: fallback_action", "status": 200, "action_outcome": "committed"},
+    ])
+    record = chat._world_actors_record(door, listing, None, cast, SimpleNamespace(rows=list), {}, since=9.0)
+    assert record["decisions"] == [
+        {"actor": "manager", "play": "timeout", "action": "approvals.change", "fallback": "approvals.change",
+         "outcome": "fallback_action", "status": 200, "action_outcome": "committed"}
+    ]
+
+
+def test_a_chat_actor_s_wait_still_open_at_the_end_is_recorded_with_its_timeout() -> None:
+    from fi.alk.harness.actors import Actor, ActorList
+    from fi.alk.harness.world_door import MemoryLog
+
+    listing = ActorList(actors=[Actor(id="manager", name="Mia", permitted_actions=["approvals.change"])])
+    door = SimpleNamespace(log=MemoryLog())
+    cast = SimpleNamespace(events=[
+        {"actor": "manager", "kind": "timeout", "outcome": "unresolved_at_end",
+         "reason": "no answer in time: unresolved_at_end", "timeout_seconds": 30},
+    ])
+    record = chat._world_actors_record(door, listing, None, cast, SimpleNamespace(rows=list), {}, since=9.0)
+    # Voice records a wait the call ended on; chat must too, with the wait it was given.
+    assert record["decisions"] == [
+        {"actor": "manager", "play": "timeout", "fallback": None, "outcome": "unresolved_at_end", "timeout_seconds": 30}
+    ]

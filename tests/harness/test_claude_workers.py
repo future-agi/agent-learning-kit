@@ -193,3 +193,10 @@ def test_an_interactive_builder_can_reply_after_saving() -> None:
         if hasattr(part, "text")
     )
     assert isinstance(events[-1], StageDone)
+
+
+def test_a_session_given_no_tools_is_offered_none_of_the_cli_s_own():
+    bare = ClaudeBackend()._options(SessionSpec(system_prompt="Decide.", max_turns=1, gated=False))
+    assert bare.tools == []
+    reading = ClaudeBackend()._options(SessionSpec(system_prompt="Read.", builtins=("Read",)))
+    assert reading.tools != []

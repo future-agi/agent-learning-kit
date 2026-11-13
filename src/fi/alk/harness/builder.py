@@ -269,6 +269,11 @@ def suite_server(
                 "args": {"type": "array", "items": {"type": "string"}},
                 "arg_types": {"type": "object"},
                 "arg_values": {"type": "object"},
+                "arg_units": {
+                    "type": "object",
+                    "description": "The unit or format of a field whose name does not say it: "
+                    "refund_amount -> cents, USD; timeout -> milliseconds; due -> ISO 8601 date.",
+                },
                 "evidence_file": str,
                 "evidence_quote": str,
                 "why": str,
@@ -301,6 +306,7 @@ def suite_server(
                 "args": list(args.get("args") or []),
                 "arg_types": dict(args.get("arg_types") or {}),
                 "arg_values": dict(args.get("arg_values") or {}),
+                "arg_units": {str(k): str(v) for k, v in dict(args.get("arg_units") or {}).items()},
             }
         )
         contract.tools.append(spec)

@@ -2795,3 +2795,23 @@ def test_a_coded_sub_goal_marked_both_carries_its_criteria_and_a_legacy_one_stay
     saved, legacy = _with_claims(scenario, claims).sub_goals
     assert saved.both and saved.judged == "Pass when: it says what was reported" and saved.compares == "Reference: c"
     assert not legacy.both and legacy.judged == ""
+
+
+def test_a_caller_acting_on_someone_elses_record_is_told_whose_it_is(monkeypatch) -> None:
+    from pathlib import Path as _P
+
+    from fi.alk.harness import scenario_tools
+    from fi.alk.harness.scenario import Persona, Scenario, Step
+
+    rows = {"orders": [{"order_id": "1043", "customer": "Ravi Patel", "item_name": "Rain jacket", "amount": 89}]}
+    monkeypatch.setattr(scenario_tools, "restore", lambda _root: type("W", (), {"state": lambda _s: rows})())
+
+    def caller(name: str, fixed: dict) -> Scenario:
+        step = Step(tool="issue_refund", arguments={"order_id": "1043", "amount": 89}, fixed=fixed)
+        return Scenario(name="s", instruction="Return it.", persona=Persona(name=name), solution=[step])
+
+    said = scenario_tools.records_of_someone_else(caller("Maya Chen", {"order_id": "caller says"}), _P("/tmp"))
+    assert "belongs to Ravi Patel, not Maya Chen" in said
+    assert scenario_tools.records_of_someone_else(caller("Ravi Patel", {"order_id": "caller says"}), _P("/tmp")) == ""
+    # Only identifiers something fixes for the caller say whose record it is.
+    assert scenario_tools.records_of_someone_else(caller("Maya Chen", {}), _P("/tmp")) == ""

@@ -730,6 +730,28 @@ fixed value wrong at a time. A check that fails a correct agent is refused as to
 value that no check notices when wrong is refused as unchecked. The five steps above are how you pass
 these the first time.
 
+## Actors
+
+Only when `add_actor` is offered. An actor is someone on the person's side who is not the
+person, whom the agent has to cope with: someone with them who speaks up, or takes over from them for a
+while. Never anyone on the agent's side: the agent, its staff and its systems are what is being
+tested, so the run never plays them. Read the contract and add one for each channel `add_actor` offers
+that this agent's users could have around them.
+
+The list says who each one is: an ordinary, invented name that is never the person's and never a known public
+figure, a `role` (their relationship to the
+person in a few words; never someone there to help with the person's request), and a
+`persona` in the person's fields, true to who they are in this world, from which their
+voice is chosen. What they do is written by each scenario that includes them, so the list carries no
+script. Never add one for a situation the agent's users would not be in.
+
+Someone who acts through the world (a manager who approves, a lead who can reject, someone who grants access) gets
+`permitted_actions` and no channel unless they also speak. Give each exactly what the request says they may do, and
+nothing more: a decision is a record change on the collection the world's rule reads (`<collection>.put` or
+`.change`, listed in `add_actor`'s reply), never one of the agent's own actions unless the request has that actor take
+it. Write the rule that reads the record into the world, so the agent's dependent action is refused until it exists.
+Before you save, read each actor's list against the request: every permission asked for is on someone's list.
+
 ## If the contract is wrong
 
 You will sometimes find the contract does not match the source: a tool recorded with the wrong

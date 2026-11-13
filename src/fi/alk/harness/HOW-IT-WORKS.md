@@ -65,7 +65,7 @@ calls `submit_contract`.
 
 | Field | Why it matters |
 |---|---|
-| `tools[]` — name, `args`, `arg_types`, `arg_values`, description | The agent's action space. `arg_values` are the real permitted values — the menu, the enum, the lookup |
+| `tools[]` — name, `args`, `arg_types`, `arg_values`, `arg_units`, description | The agent's action space. `arg_values` are the real permitted values — the menu, the enum, the lookup |
 | `hard_constraints[]` | Rules the agent must follow. Told to the agent under test, and graded by the judge |
 | `base_environment` | Its real starting data, reproduced row for row |
 | `real_use_cases[]` | What it is actually for |

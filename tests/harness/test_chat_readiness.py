@@ -1260,6 +1260,61 @@ def test_native_http_200_failure_rule_unlocks_existing_setup_repair(tmp_path, pr
     assert sorted(item["status"] for item in receipts(tmp_path)) == ["failed", "passed"]
 
 
+@pytest.mark.parametrize(
+    "calls, passed",
+    [
+        # Every call stopped before the world: an unknown tool, and a tool that broke on our side.
+        ([dict(ok=False, refused=True, refusal_code="unknown_tool"),
+          dict(ok=False, error="TypeError: handle() missing 1 required positional argument")], False),
+        # Refused by the door because the agent may not take that action: nothing ran either.
+        ([dict(ok=False, refused=True, refusal_code="not_permitted")], False),
+        # The world's own rule said no: the tool ran, so the binding works.
+        ([dict(ok=False, refused=True, refusal_code="world_rule")], True),
+        # One call ran among failures.
+        ([dict(ok=False, refused=True, refusal_code="unknown_tool"), dict(ok=True, result={"active": True})], True),
+    ],
+)
+def test_private_workflow_fails_when_no_tool_call_reached_the_world(
+    tmp_path, profile_app, monkeypatch, calls, passed
+):
+    from fi.alk.harness import chat_call_runner
+    from fi.alk.harness.contract import ToolEntry, ToolSpec
+    from fi.alk.harness.run.conversation import Exchange, Transcript
+    from fi.alk.harness.world.runtime import Call
+
+    url, state = profile_app
+    state.update(profile=True, body={"content": "The account is active"})
+
+    async def conversation(target, *_args):
+        answer = await target.say("Look up account A-1")
+        return Transcript(
+            exchanges=[Exchange("customer", "Look up account A-1"), Exchange("agent", answer)],
+            calls=[Call(name="lookup_account", arguments={"account_id": "A-1"}, **one) for one in calls],
+            ended="finished",
+        )
+
+    monkeypatch.setattr(chat_call_runner, "_drive_conversation", conversation)
+    contract = AgentContract(
+        tools=[ToolSpec(name="lookup_account")],
+        tool_entrypoints=[ToolEntry(
+            tool="lookup_account", mode="import", module="agent.tools", callable="lookup_account",
+        )],
+        runtime=Runtime(language="python", command=["python", "app.py"], interface=interface()),
+    )
+    probe = workflow_probe(
+        tmp_path, url, contract=contract, job=SimpleNamespace(metadata={}, require_tool_workflow=False),
+    )
+    if passed:
+        asyncio.run(probe)
+    else:
+        with pytest.raises(RuntimeValidationError) as failure:
+            asyncio.run(probe)
+        assert failure.value.diagnostics[0].code == "chat_tool_evidence_unverified"
+        assert "stopped before the world ran it" in str(failure.value)
+    _, receipt = workflow_receipt(tmp_path)
+    assert receipt["status"] == ("passed" if passed else "failed")
+
+
 def test_an_aborted_readiness_call_counts_its_tool_calls_not_its_hand_offs(
     tmp_path, profile_app, monkeypatch
 ):

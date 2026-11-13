@@ -29,10 +29,12 @@ from __future__ import annotations
 import ast
 import json
 import logging
+import re
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Sequence
 
+from .actors import load_actors
 from .catalogue import Catalogue
 from .checks import Outcome, reference_of, run_check
 from .folder import apply_setup, check_ready
@@ -65,6 +67,8 @@ class Proof:
     # nowhere, so a scenario whose entire solution was assumed saved as "proved". Carried here so
     # whoever keeps the scenario is told what the proof did not cover.
     assumed: list[str] = field(default_factory=list)
+    # World actors' actions on a clock or a chance: a proof has neither, so it never plays them.
+    unplayed: list[str] = field(default_factory=list)
     # Graded by judgement alone, because the world holds nothing a check could read. True only for
     # a target we cannot see into, never a way around writing a check for a world that has one.
     judged_only: bool = False
@@ -154,8 +158,8 @@ class Proof:
         if self.too_strict:
             return (
                 "these checks fail an agent that does every fixed thing right but makes its own "
-                "choice, for an argument this scenario does not mark fixed or a way its "
-                "instructions allow:\n  - "
+                "choice, for an argument this scenario does not mark fixed, a way its "
+                "instructions allow, or a fixed value written the way the person said it:\n  - "
                 + "\n  - ".join(self.too_strict)
                 + "\n\nA check may hold the agent only to what the caller, their record or a "
                 "rule of the agent fixes. Check the outcome instead, or mark the argument fixed "
@@ -306,11 +310,20 @@ def _run(
     world, _applied, _ready = prepared(scenario, world_root)
     refused: list[str] = []
     assumed: list[str] = []
+    by_actors: dict[int, str] = {}
+    acting = _WorldActors(scenario, world_root, world, by_actors)
+    # A check reads the trial's action log the way the run gives it: `world.events(actor_id, outcome)`.
+    world.events = acting.events
+    # The conversations before the run are in the world when the agent starts, in the proof as in the run, and
+    # they are the actors' own: a check never credits the agent with a message an actor wrote.
+    acting.replay_pre_run()
     if with_solution:
+        acting.act_on(None)
         for step in scenario.solution if steps is None else steps:
             call = play_reference_step(world, step)
             if not call.ok:
                 refused.append(f"{call.name}({step.arguments}): {call.error}")
+            acting.act_on(step)
         assumed = [
             str(getattr(step, "tool", ""))
             for step in (scenario.solution if steps is None else steps)
@@ -331,7 +344,143 @@ def _run(
                 scenario.name,
                 len(scenario.solution),
             )
-    return world, list(world.calls), refused, sorted(set(assumed))
+    calls = [call for index, call in enumerate(world.calls) if index not in by_actors]
+    return world, calls, refused, sorted(set(assumed))
+
+
+# The triggers a reference solution can meet; the rest are reported in `Proof.unplayed`.
+_PLAYED_TRIGGERS = ("always", "on_tool", "contacted")
+
+
+def _unplayed(scenario: Scenario) -> list[str]:
+    return [
+        f"{entry.id} {action.action} ({action.trigger.kind})"
+        for entry in getattr(scenario, "actors", None) or ()
+        for action in entry.actions
+        if action.trigger.kind not in _PLAYED_TRIGGERS
+    ]
+
+
+class _WorldActors:
+    """A scenario's world actors during a proof: each permitted action on a trigger the reference solution meets,
+    played the way the run plays it at the world's door. None of their calls is the agent's."""
+
+    def __init__(
+        self,
+        scenario: Scenario,
+        world_root: Path,
+        world: GeneratedWorld,
+        by_actors: dict[int, str],
+    ) -> None:
+        listed = load_actors(world_root).by_id()
+        self.scenario = scenario
+        self.pending = [
+            (listed[entry.id], action)
+            for entry in getattr(scenario, "actors", None) or ()
+            if entry.id in listed
+            for action in entry.actions
+        ]
+        self.world = world
+        self.by_actors = by_actors
+        self.counts: dict[str, int] = {}
+        # Actions refused before the world, each with how many world calls came before it.
+        self.refusals: list[tuple[int, dict[str, Any]]] = []
+
+    def events(
+        self, actor_id: str | None = None, outcome: str | None = None
+    ) -> list[dict[str, Any]]:
+        """Every attempted action so far, whose it was and what came of it, as `HostedWorld.events` gives them."""
+        rows: list[dict[str, Any]] = []
+        pending = list(self.refusals)
+        for index, call in enumerate(self.world.calls):
+            while pending and pending[0][0] <= index:
+                rows.append(pending.pop(0)[1])
+            rows.append(
+                {
+                    "name": call.name,
+                    "arguments": call.arguments,
+                    "result": call.result,
+                    "ok": call.ok,
+                    "actor_id": self.by_actors.get(index, "agent"),
+                    "outcome": "committed" if call.ok else "refused",
+                    "refusal_code": None if call.ok else "world_rule",
+                }
+            )
+        rows += [row for _, row in pending]
+        return [
+            row
+            for row in rows
+            if (actor_id is None or row["actor_id"] == actor_id)
+            and (outcome is None or row["outcome"] == outcome)
+        ]
+
+    def _due(self, actor: Any, action: Any, step: Any) -> bool:
+        trigger = action.trigger
+        if step is None:
+            return trigger.kind == "always"
+        if trigger.kind == "on_tool":
+            return (
+                trigger.tool == step.tool
+                and self.counts.get(step.tool) == trigger.on_call
+            )
+        if trigger.kind == "contacted":
+            from .actor_dispatch import contacts
+
+            return contacts(step.arguments, actor)
+        return False
+
+    def replay_pre_run(self) -> None:
+        """Play each stored pre-run thread into the world, message by message, as its actor; a reply takes the id
+        the world gave the message it answers. A session not yet written has nothing to replay."""
+        from .actor_dispatch import result_field
+
+        for session in getattr(self.scenario, "pre_run", None) or ():
+            results: list[Any] = []
+            for message in session.thread:
+                arguments = dict(message.arguments)
+                for name, ref in message.refers.items():
+                    earlier = results[ref.message - 1] if ref.message <= len(results) else None
+                    value = result_field(earlier, ref.field)
+                    if value is not None:
+                        arguments[name] = value
+                before = len(self.world.calls)
+                route = message.action.replace(".", "/")
+                known = route in getattr(self.world, "endpoints", ())
+                self.world.call(route if known else message.action.rsplit(".", 1)[-1], arguments)
+                made = self.world.calls[before:]
+                results.append(made[-1].result if made else None)
+                self.by_actors.update(dict.fromkeys(range(before, len(self.world.calls)), message.actor))
+
+    def act_on(self, step: Any) -> None:
+        if step is not None:
+            self.counts[step.tool] = self.counts.get(step.tool, 0) + 1
+        for actor, action in list(self.pending):
+            if not self._due(actor, action, step):
+                continue
+            self.pending.remove((actor, action))
+            if action.action not in actor.permitted_actions:
+                refusal = {
+                    "name": action.action.rsplit(".", 1)[-1],
+                    "arguments": dict(action.arguments),
+                    "result": None,
+                    "ok": False,
+                    "actor_id": actor.id,
+                    "outcome": "refused",
+                    "refusal_code": "not_permitted",
+                }
+                self.refusals.append((len(self.world.calls), refusal))
+                continue
+            before = len(self.world.calls)
+            # A source-hosted world knows the action by its route; a generated one by its name.
+            route = action.action.replace(".", "/")
+            known = route in getattr(self.world, "endpoints", ())
+            self.world.call(
+                route if known else action.action.rsplit(".", 1)[-1],
+                dict(action.arguments),
+            )
+            self.by_actors.update(
+                dict.fromkeys(range(before, len(self.world.calls)), actor.id)
+            )
 
 
 def native_runtime(world_root: Path) -> bool:
@@ -504,6 +653,76 @@ def _other_choices(scenario: Scenario, declared: set[str] = frozenset()) -> tupl
     return varied, changed
 
 
+_ISO_DATE = re.compile(r"^(\d{4})-(\d{2})-(\d{2})$")
+# Languages whose spoken date form this proof writes ("" = not stated, the platform's default language).
+_SPOKEN_DATE_LANGUAGES = frozenset({"", "english", "en"})
+_MONTHS = ("January", "February", "March", "April", "May", "June", "July", "August", "September", "October",
+           "November", "December")
+
+
+def _conversation_language(scenario: Scenario) -> str:
+    persona = getattr(scenario, "persona", None)
+    languages = (
+        persona.get("languages") if isinstance(persona, dict) else getattr(persona, "languages", None)
+    ) or []
+    return str(languages[0]).strip().casefold() if languages else ""
+
+
+def _said_another_way(scenario: Scenario) -> tuple[list[Any], set[str]]:
+    """The solution with every fixed date written the way a person says it in the conversation's language: the same
+    value, in the form it reaches an agent that heard it. Only the spoken form of languages this proof knows is
+    replayed; for any other language this replay is skipped (no date is said another way), never guessed."""
+    if _conversation_language(scenario) not in _SPOKEN_DATE_LANGUAGES:
+        return list(getattr(scenario, "solution", None) or ()), set()
+    steps = list(getattr(scenario, "solution", None) or ())
+    said, changed = [], set()
+    for step in steps:
+        for name in step.fixed or ():
+            value = step.arguments.get(name)
+            found = _ISO_DATE.match(value) if isinstance(value, str) else None
+            if found and 1 <= int(found.group(2)) <= 12:
+                spoken = f"{int(found.group(3))} {_MONTHS[int(found.group(2)) - 1]} {found.group(1)}"
+                other = _with_value(step, name, spoken)
+                if other is not None:
+                    step = other
+                    changed.add(f"{step.tool}.{name}")
+        said.append(step)
+    return said, changed
+
+
+def _bare_ids(scenario: Scenario) -> list[tuple[str, list[Any]]]:
+    """For each fixed id written with a kind prefix (`saved_card:pm_1`), the solution with that id alone (`pm_1`)."""
+    steps = list(getattr(scenario, "solution", None) or ())
+    out = []
+    for at, step in enumerate(steps):
+        for name in step.fixed or ():
+            value = step.arguments.get(name)
+            if isinstance(value, str) and not value.startswith("$") and ":" in value:
+                bare = value.rsplit(":", 1)[1].strip()
+                changed = _with_value(step, name, bare) if bare else None
+                if changed is not None:
+                    out.append((f"{step.tool}.{name}", [*steps[:at], changed, *steps[at + 1 :]]))
+    return out
+
+
+_SEPARATED_ID = re.compile(r"^(?=.*[A-Za-z])(?=.*\d)[A-Za-z0-9]+(?:[-_. ][A-Za-z0-9]+)+$")
+
+
+def _unseparated_ids(scenario: Scenario) -> list[tuple[str, list[Any]]]:
+    """For each fixed id written with separators (`<PREFIX>-<digits>`), the solution with it typed without them
+    (`<PREFIX><digits>`), as an agent often says it."""
+    steps = list(getattr(scenario, "solution", None) or ())
+    out = []
+    for at, step in enumerate(steps):
+        for name in step.fixed or ():
+            value = step.arguments.get(name)
+            if isinstance(value, str) and not value.startswith("$") and _SEPARATED_ID.match(value):
+                changed = _with_value(step, name, re.sub(r"[-_. ]", "", value))
+                if changed is not None:
+                    out.append((f"{step.tool}.{name}", [*steps[:at], changed, *steps[at + 1 :]]))
+    return out
+
+
 def _with_one_wrong(scenario: Scenario) -> list[tuple[str, list[Any], bool]]:
     """For each fixed value, the solution with only that value changed, and whether a later step
     sets that argument again (a draft the solution itself corrects)."""
@@ -591,6 +810,7 @@ def prove(
     # What the proof below could not cover. Detected here since forever and logged into a void; a
     # scenario whose whole solution was assumed used to save as proved.
     proof.assumed = assumed
+    proof.unplayed = _unplayed(scenario)
     try:
         proof.with_solution = [
             run_check(source, world, calls, name=name, reference=reference)
@@ -615,6 +835,44 @@ def prove(
             ]
         finally:
             other_world.close()
+    for label, steps in _bare_ids(scenario) if held else ():
+        bare_world, bare_calls, bare_refused, _ = _run(scenario, world_root, with_solution=True, steps=steps)
+        try:
+            # The world took the bare id and ended exactly where the reference does: the same choice.
+            if not bare_refused and right_state is not None and _end_state(bare_world) == right_state:
+                proof.too_strict += [
+                    f"{name} (the same record named without its prefix: {label})"
+                    for name, source in held
+                    if not run_check(source, bare_world, bare_calls, name=name, reference=reference).held
+                ]
+        finally:
+            bare_world.close()
+    for label, steps in _unseparated_ids(scenario) if held else ():
+        typed_world, typed_calls, typed_refused, _ = _run(scenario, world_root, with_solution=True, steps=steps)
+        try:
+            # The world took the id typed without separators and ended where the reference does: the same record.
+            if not typed_refused and right_state is not None and _end_state(typed_world) == right_state:
+                proof.too_strict += [
+                    f"{name} (the same id typed without separators: {label}; compare ids with same_id)"
+                    for name, source in held
+                    if not run_check(source, typed_world, typed_calls, name=name, reference=reference).held
+                ]
+        finally:
+            typed_world.close()
+    said, spoken = _said_another_way(scenario)
+    if spoken and held:
+        said_world, said_calls, said_refused, _ = _run(scenario, world_root, with_solution=True, steps=said)
+        try:
+            # Only a world that took the spoken form and ended exactly where the reference does treats it as the
+            # same date; one that refuses it or stores it as given leaves a check free to want the reference form.
+            if not said_refused and right_state is not None and _end_state(said_world) == right_state:
+                proof.too_strict += [
+                    f"{name} (the same date said another way: {', '.join(sorted(spoken))})"
+                    for name, source in held
+                    if not run_check(source, said_world, said_calls, name=name, reference=reference).held
+                ]
+        finally:
+            said_world.close()
     for number, other in enumerate(getattr(scenario, "alternatives", None) or (), start=1):
         alt_world, alt_calls, _, _ = _run(scenario, world_root, with_solution=True, steps=other)
         try:

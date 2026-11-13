@@ -7,6 +7,60 @@ All notable release changes for Agent Learning Kit are tracked here.
 Post-rc.1 increments on the release branch. Each one adds gates on top of the
 66 proved at rc.1; the rc.1 entry below is historical and unchanged.
 
+- Actors: one list, `actors.json`, of everyone the agent deals with
+  who is not the agent: the caller, someone with the caller, a manager, a coworker, a system. Every actor has
+  the same record (parent, goal, constraints, behaviour, knowledge, permitted actions, activation), and one
+  with a `channel` also speaks in the conversation: beside the person (`audio_mix`), taking the phone and
+  handing it back (`audio_handoff`), the person's own phone menu (`ivr`), or writing in a chat
+  (`chat_message`). A scenario includes actors in its `actors`, each with what it says and when (its
+  trigger) and the world actions it takes. An actor record with the id `caller` shapes the simulated person
+  under every scenario's own persona.
+- Each actor plays from one brief (`actor_brief`), built from the sealed `brief_inputs`: its own fields, the
+  scenario's part for it, and the person's situation up to the person's details. Evaluator-only fields and
+  files never reach it. The platform shows the same brief as what the actor sees.
+- Spoken lines come in a voice of their own, a background line set as a ratio of the person's measured level
+  with a limiter; per-actor and call-wide limits keep the person in charge. Every call records whether each
+  actor was triggered, delivered or dropped, and why, on voice and chat alike.
+- A build gives a speaking actor to between 15% and 25% of its scenarios by default; `aim_for` takes the
+  share the person asks for (`call_actor_share`, 0 for none) in its place.
+- A sub-goal may name the actor it is about (`actor`): it reads not applicable on a call that actor never
+  came into and inconclusive when the actor came in and never reached the agent. A call one of its speaking
+  actors never reached, with no sub-goal about that actor, is errored as inconclusive (`actor_missing`,
+  naming the actor and why) instead of passing. The judge reads an actor's turns as someone other than the
+  customer. Sub-goal results carry their `verdict` (pass, fail, not applicable, inconclusive) alongside
+  `held`.
+- Actors act in the world only through its own actions: the tool proxy lets an actor take only its
+  `permitted_actions`, under a per-trial token that is never widened (without a private token the actors are
+  left unplayed), and logs every attempt with whose it was and what came of it (committed, refused, faulted,
+  duplicate). An actor's actions are sealed with the call's transcript under `world_actors`, never in the
+  agent's tool trace. A bundle with actors also seals `actor_rules.json`, the rules its release checks actors
+  by; a world without actors is seeded and sealed exactly as before.
+- One door into the world (`world_door.WorldDoor`) for every surface: the tool proxy, the chat runner's
+  in-process handlers and the actors' dispatcher all build one call and get one outcome; it never raises into its
+  caller, and the agent's own calls behave as before. Chat agents now have actors acting in the world, a full
+  action log and World changes. One conformance suite runs the same cases over every surface.
+- An actor comes in one of five ways, with one meaning on every runtime: present from the start, on an event, when
+  the agent contacts it, at a set time, or once a record exists (`conditional`). A kind its runtime cannot evaluate,
+  or two actors that bring each other in, is refused when the scenario is written. Timeout and fallback (`silent`,
+  `decline`, one of its own actions, or another actor) apply on calls, in chats and in the world.
+- Live actors act on whatever they can see, with no per-actor cap; every limit is a setting on the environment
+  (`limits` in `actors.json`, per scenario too), each actor may name its `model`, and actors' model calls count as
+  simulator usage. A speaking actor decides its line and its world action in one turn.
+- Conversations before the run (`pre_run`) are sessions in any place of the world, written by the actors in them
+  when the scenario is kept, written again before sealing when an actor's record changes, and replayed into the
+  world before every trial; `per_trial` writes a fresh one inside each trial. Typed `history` reads as one session.
+- Every actor that acts through the world is in the call's actor summary; one that cannot act is recorded as the
+  scenario's problem with the reason, and the judge is given the actors' actions and briefs. World changes add
+  approvals, a "no change" line, and a judged sub-goal whose evidence never arrived reads `unmeasured`.
+- The action log records each call's world action in full (`action`, beside `name`), and the door numbers a fault's
+  calls, holds its lock, answers an actor's repeated key and says a fault did not take effect by that action, so
+  `ticket.update` is never taken for `crm.update`; a key reused for another action is an `idempotency_conflict`. An
+  `on_tool` trigger waits for the action in full. An actor waiting for a record only it may write is refused when the
+  scenario is written. A timeout another actor answers reads `answered_by` only once that actor has acted or spoken,
+  else `limit_blocked` or `unresolved`.
+- The builder chat of a built environment can change its actors (`add_actor`, `drop_actor`) and nothing else
+  of the world; adding or dropping one, or changing which scenarios include one, waits for the person's yes,
+  and an automatic repair cannot change a scenario's actors.
 - Multi-agent compatibility references preserve native Google ADK, LangGraph,
   and CrewAI orchestration, while Python command agents capture bounded tool
   evidence with explicit worker and task attribution.
