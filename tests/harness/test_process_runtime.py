@@ -54,6 +54,7 @@ from fi.alk.harness.bundle_v2 import (
     SecretPurpose,
     SourceProcess,
 )
+from fi.alk.harness import privilege
 from fi.alk.harness import process_runtime as pr
 from fi.alk.harness.job import (
     AgentConnection,
@@ -1963,6 +1964,42 @@ def test_spawn_source_process_creates_the_per_world_scratch_directory(
         runner=fake_runner,
     )
     assert world_dir.is_dir()
+
+
+@pytest.mark.parametrize(("mode", "expected"), [("per_user", 0o711), ("fixed_user", 0o700)])
+def test_the_harness_s_workers_can_pass_through_a_world_dir_only_under_isolation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mode: str, expected: int
+) -> None:
+    """The harness's workers hold no capabilities, yet open what the process writes into its own
+    world directory (its tool-call trace) by name. Under per-user isolation that directory is the
+    process's, so it lets them pass through; with one fixed user it stays as it was."""
+    monkeypatch.setattr(privilege, "_mode", privilege.IsolationMode(mode))
+    build_dir = tmp_path / "build" / "svc"
+    build_dir.mkdir(parents=True)
+    world_dir = tmp_path / "worlds" / "w0" / "svc"
+
+    def fake_runner(argv, *, cwd, env, log_path, user=None, group=None):
+        return FakeHandle()
+
+    previous = os.umask(0o077)
+    try:
+        pr.spawn_source_process(
+            _source_process(),
+            build_dir=build_dir,
+            world_dir=world_dir,
+            world_index=0,
+            port_plan=_solo_port_plan("svc"),
+            configuration_addresses={},
+            secret_values={},
+            secret_purposes={},
+            runner=fake_runner,
+            user_resolver=_fake_user_resolver({"svc-tools": (4444, 5555)}),
+            chown=lambda path, uid, gid: None,
+        )
+    finally:
+        os.umask(previous)
+
+    assert world_dir.stat().st_mode & 0o777 == expected
 
 
 def test_spawn_source_process_cwd_is_the_build_tree_not_the_world_scratch_dir(

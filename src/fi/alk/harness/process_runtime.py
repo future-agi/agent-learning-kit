@@ -69,6 +69,7 @@ from .job import FailureDomain
 from .job import HarnessJobMetadata
 from .job import HarnessStage
 from .livekit_source import infer_livekit_agent_name_from_source
+from .privilege import IsolationMode, isolation_mode
 from .secrets import PROCESS_SECRET_FILE_ENVIRONMENT, target_provider_environment
 from .provider_import import (
     ProviderImportError,
@@ -1107,6 +1108,14 @@ def fixed_sandbox_user_resolver(_username: str) -> "pwd.struct_passwd":
     return pwd.getpwuid(os.getuid())
 
 
+def hosted_user_resolution() -> dict[str, Any]:
+    """`ProcessRuntimeProvider`'s user settings in a hosted sandbox: each process's declared
+    user under per-user isolation, which must then resolve, else the sandbox's one fixed user."""
+    if isolation_mode() is IsolationMode.PER_USER:
+        return {"user_resolver": default_user_resolver, "require_declared_user": True}
+    return {"user_resolver": fixed_sandbox_user_resolver, "require_declared_user": False}
+
+
 def _resolve_process_user(
     user: ProcessUser,
     *,
@@ -1287,9 +1296,38 @@ _TRANSIENT_BUILD_NETWORK_MARKERS = (
 )
 
 
+def _as_declared_user(kwargs: dict[str, Any]) -> dict[str, Any]:
+    """The Popen arguments for a process ALK runs on a customer's behalf.
+
+    Under per-user isolation the process gets no supplementary groups, so it inherits no group
+    access to the harness's files, and the usual umask back. One without a declared user is
+    refused, so a missed call site fails closed instead of running customer code as the harness.
+    Without isolation every process is the harness's own user, and nothing changes.
+    """
+    if isolation_mode() is not IsolationMode.PER_USER:
+        return kwargs
+    if kwargs.get("user") is None:
+        # `internal_`: every call site passes a declared user, so reaching here is a bug.
+        raise ProcessRuntimeError(
+            "spawn",
+            "internal_undeclared_user",
+            "per-user isolation is on, and this process has no declared user",
+            domain=FailureDomain.INFRASTRUCTURE,
+        )
+    return {"extra_groups": [], "umask": 0o022, **kwargs}
+
+
+def declared_user_run(
+    args: Sequence[str], **kwargs: Any
+) -> subprocess.CompletedProcess:
+    """``subprocess.run`` for a process ALK runs on a customer's behalf (see `_as_declared_user`)."""
+    return subprocess.run(args, **_as_declared_user(kwargs))
+
+
 def _run_build_step(
     args: Sequence[str], **kwargs: Any
 ) -> subprocess.CompletedProcess:
+    kwargs = _as_declared_user(kwargs)
     capture_output = kwargs.pop("capture_output", False)
     timeout = kwargs.pop("timeout", None)
     if capture_output:
@@ -1817,12 +1855,11 @@ def default_process_runner(
             env=env,
             stdout=subprocess.PIPE if output_redactions else log_file,
             stderr=subprocess.STDOUT,
-            user=user,
-            group=group,
             # Each declared runtime process owns a process group. This is necessary for
             # deterministic reset/cleanup when the command is a launcher which forks the
             # real long-lived server (for example ``uv run`` or ``npm start``).
             start_new_session=True,
+            **_as_declared_user({"user": user, "group": group}),
         )
     except BaseException:
         log_file.close()
@@ -2043,7 +2080,7 @@ def spawn_managed_process(
     data_dir: Path,
     credentials: EngineCredentials | None,
     runner: ProcessRunner = default_process_runner,
-    sync_run: Callable[..., subprocess.CompletedProcess] = subprocess.run,
+    sync_run: Callable[..., subprocess.CompletedProcess] = declared_user_run,
     user_resolver: Callable[[str], "pwd.struct_passwd | None"] = default_user_resolver,
     require_declared_user: bool = False,
     chown: Callable[[Path, int, int], None] = _default_chown,
@@ -2338,6 +2375,10 @@ def spawn_source_process(
                 observer.chmod(0o444)
         if resolved_user is not None:
             chown(world_dir, resolved_user.pw_uid, resolved_user.pw_gid)
+            if isolation_mode() is IsolationMode.PER_USER:
+                # The harness's workers hold no capabilities, yet read what the process writes
+                # here (its tool-call trace) by name: they pass through, though not list it.
+                world_dir.chmod(0o711)
     except OSError as exc:
         # A hook that cannot be placed fails the spawn on purpose: a process that exports with
         # our key but without its mark is worse than a failed run.
@@ -2575,6 +2616,41 @@ def spawn_source_process(
 
 
 # --- filesystem layout (§0's guaranteed paths, plus one this module must invent) --------------
+
+
+def _open_for_declared_users(work_directory: Path, worlds: int) -> None:
+    """Under per-user isolation the harness's umask keeps what it creates to itself. A declared
+    user still has to reach its own build tree and world directory, so the directories above
+    them let it pass through, though not list them."""
+    for path in (
+        work_directory,
+        work_directory / "build",
+        work_directory / "worlds",
+        work_directory / "managed",
+        work_directory / "provider",  # above each world's lifecycle directory
+        *(work_directory / "worlds" / f"w{index}" for index in range(worlds)),
+    ):
+        path.mkdir(parents=True, exist_ok=True)
+        path.chmod(0o711)
+
+
+def _open_seed_files_for_declared_users(
+    manifest: EnvironmentBundleV2, bundle_dir: Path
+) -> None:
+    """Under per-user isolation a store's own user applies its migrations and seed files
+    (`psql -f` runs as it), so each declared file reads for it and the directories above the file
+    let it pass through, though not list them. The rest of the bundle, held-back cases among it,
+    stays the harness's own. A missing file is left for the seed step to report."""
+    if manifest.seed is None:
+        return
+    for store in manifest.seed.stores:
+        for relative_path in (*store.migrations, *store.seed_files):
+            path = bundle_dir / relative_path
+            if path.is_symlink() or not path.is_file():
+                continue
+            for directory in (bundle_dir / parent for parent in Path(relative_path).parents):
+                directory.chmod(directory.stat().st_mode | 0o011)
+            path.chmod(path.stat().st_mode | 0o044)
 
 
 def build_tree_dir(work_directory: Path, process_name: str) -> Path:
@@ -4117,7 +4193,7 @@ class SpawnContext:
     runner: ProcessRunner = default_process_runner
     # Shared by `build_process_trees`' `build_commands` steps and `spawn_managed_process`'s
     # postgres `initdb` bootstrap — both are "run one synchronous step, check its exit code."
-    sync_run: Callable[..., subprocess.CompletedProcess] = subprocess.run
+    sync_run: Callable[..., subprocess.CompletedProcess] = declared_user_run
     prober: CapabilityProber = default_capability_prober
     copy: Callable[[Path, Path], None] | None = None
     # F1, p5-round1-review: threaded to every build/spawn call this context drives.
@@ -4692,6 +4768,8 @@ class BuildOutput:
             "effective_parallelism": self.effective_parallelism,
             "degrade_reason": self.degrade_reason,
             "degrade_events": [dict(event) for event in self.degrade_events],
+            # Whether customer processes ran as their own OS users (`privilege.py`).
+            "process_isolation": isolation_mode().value,
         }
 
 
@@ -5930,7 +6008,7 @@ class ProcessRuntimeProvider:
         self,
         *,
         runner: ProcessRunner = default_process_runner,
-        sync_run: Callable[..., subprocess.CompletedProcess] = subprocess.run,
+        sync_run: Callable[..., subprocess.CompletedProcess] = declared_user_run,
         prober: CapabilityProber = default_capability_prober,
         sql_runner: SqlRunner = default_sql_runner,
         redis_runner: RedisCommandRunner = default_redis_command_runner,
@@ -6382,6 +6460,9 @@ class ProcessRuntimeProvider:
     ) -> list[EnvironmentRuntime]:
         bundle_digest = bundle.digest
         requested = instances
+        if isolation_mode() is IsolationMode.PER_USER:
+            _open_for_declared_users(work_directory, instances)
+            _open_seed_files_for_declared_users(bundle, bundle_dir)
         # C2 §1 rule 4's crisp trichotomy, keyed on WHICH branch runs. FIRST BUILD and DIGEST
         # REBUILD both take the first-call branch (plan + scan run, stage-5 catches ARMED);
         # RECONCILE takes the else branch (carry the first plan forward, catches NOT armed).
@@ -6793,12 +6874,15 @@ class ProcessRuntimeProvider:
             required_secret_values=secret_values,
             output_relative_path=spec.output,
         )
+        uid, gid = self._lifecycle_user(process, lifecycle_directory)
         try:
             provision_log_path = lifecycle_directory / "provision.log"
             returncode = run_lifecycle_invocation(
                 invocation,
                 log_path=provision_log_path,
                 run=self._sync_run,
+                user=uid,
+                group=gid,
             )
             if returncode != 0:
                 diagnostic = ""
@@ -6887,6 +6971,27 @@ class ProcessRuntimeProvider:
         runtime.metadata["provider_target_kind"] = receipt.target.kind
         runtime.metadata["provider_import_source_target_id"] = spec.source_target_id
 
+    def _lifecycle_user(
+        self, process: SourceProcess, lifecycle_directory: Path
+    ) -> tuple[int | None, int | None]:
+        """A lifecycle command is the repository's code: it runs as the process's declared user,
+        as its build and its run do. It writes its receipt into ``lifecycle_directory``, so that
+        user owns the directory and what it holds."""
+        assert self._context is not None
+        resolved = _resolve_process_user(
+            process.user,
+            resolver=self._context.user_resolver,
+            require=self._context.require_declared_user,
+            process_name=process.name,
+            stage="provider_lifecycle",
+            domain=FailureDomain.ENVIRONMENT,
+        )
+        if resolved is None:
+            return None, None
+        for path in (lifecycle_directory, *lifecycle_directory.iterdir()):
+            self._context.chown(path, resolved.pw_uid, resolved.pw_gid)
+        return resolved.pw_uid, resolved.pw_gid
+
     def _destroy_provider_target(self, world_index: int) -> None:
         receipt = self._provider_receipts.pop(world_index, None)
         context = self._provider_contexts.pop(world_index, None)
@@ -6928,11 +7033,17 @@ class ProcessRuntimeProvider:
             output_relative_path=spec.output,
             receipt_path=lifecycle_directory / spec.output,
         )
+        process = next(
+            entry for entry in self._manifest.processes if entry.name == process_name
+        )
+        uid, gid = self._lifecycle_user(process, lifecycle_directory)
         try:
             returncode = run_lifecycle_invocation(
                 invocation,
                 log_path=lifecycle_directory / "destroy.log",
                 run=self._sync_run,
+                user=uid,
+                group=gid,
             )
             if returncode != 0:
                 logger.error(

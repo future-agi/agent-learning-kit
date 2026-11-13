@@ -17,6 +17,7 @@ from . import observability
 from .authoring_entrypoint import main as authoring_main
 from .backends import GOOGLE_ADK_APPROVAL_ENV
 from .poc_guest_booking import PIN_ENV, TARGET_PHONE_ENV
+from .privilege import IsolationUnavailable, establish_isolation
 
 _SECRETS_PATH = Path("/run/futureagi/secrets.json")
 _ADC_PATH = Path("/work/.authoring-credentials/google.json")
@@ -147,6 +148,12 @@ def _authoring_job_context(forwarded: list[str]) -> tuple[str, str, dict]:
 
 
 def main(argv: list[str] | None = None) -> int:
+    try:
+        establish_isolation()
+    except IsolationUnavailable as exc:
+        # Infrastructure, not the environment (not 78): the platform retries within its budget.
+        print(f"IsolationUnavailable: {exc}", file=sys.stderr, flush=True)
+        return 2
     # This process authors the environment but never runs the submitted target. Do not let a
     # launcher-provided parent environment accidentally bypass the target-secrets file boundary.
     for name in _TARGET_CREDENTIAL_NAMES:
