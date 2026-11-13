@@ -20,6 +20,7 @@ import uuid
 import yaml
 
 from .bundle_v2 import EnvironmentBundleV2, RuntimeKindV2
+from . import user_files
 from .process_runtime import (
     EnvironmentRuntime,
     RuntimeEndpoint,
@@ -527,23 +528,15 @@ def validate_source_tree(source: Path) -> None:
 
 
 def _own_directory(path: Path, uid: int, gid: int) -> None:
-    descriptor = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
-    try:
-        for _, directories, files, current in os.fwalk(
-            ".", dir_fd=descriptor, follow_symlinks=False
-        ):
-            os.fchown(current, uid, gid)
-            for name in [*directories, *files]:
-                info = os.stat(name, dir_fd=current, follow_symlinks=False)
-                if stat.S_ISLNK(info.st_mode):
-                    continue
-                if not (stat.S_ISDIR(info.st_mode) or stat.S_ISREG(info.st_mode)):
-                    raise ComposeRuntimeError("compose_directory_special_file")
-                if stat.S_ISREG(info.st_mode) and info.st_nlink != 1:
-                    raise ComposeRuntimeError("compose_directory_hardlink_forbidden")
-                os.chown(name, uid, gid, dir_fd=current, follow_symlinks=False)
-    finally:
-        os.close(descriptor)
+    user_files.own_tree(path, uid=uid, gid=gid, check=_compose_directory_entry)
+
+
+def _compose_directory_entry(info: os.stat_result) -> bool:
+    if not (stat.S_ISDIR(info.st_mode) or stat.S_ISREG(info.st_mode)):
+        raise ComposeRuntimeError("compose_directory_special_file")
+    if stat.S_ISREG(info.st_mode) and info.st_nlink != 1:
+        raise ComposeRuntimeError("compose_directory_hardlink_forbidden")
+    return True
 
 
 class CertifiedComposeRuntimeProvider:

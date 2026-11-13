@@ -31,6 +31,8 @@ from pydantic import (
     model_validator,
 )
 
+from . import user_files
+
 
 class ProviderLifecycleError(RuntimeError):
     """A repository lifecycle declaration or receipt is missing, unsafe, or inconsistent."""
@@ -248,7 +250,7 @@ def validate_provision_receipt(
 ) -> ProviderProvisionReceipt:
     receipt_path = Path(path)
     try:
-        raw = receipt_path.read_text(encoding="utf-8")
+        raw = user_files.read_text(receipt_path)
         body = json.loads(raw)
         receipt = ProviderProvisionReceipt.model_validate(body)
     except (OSError, ValueError) as exc:
@@ -392,8 +394,6 @@ def run_lifecycle_invocation(
         reverse=True,
     ):
         combined = combined.replace(sensitive, "[REDACTED]")
-    log_path.write_text(
-        combined[-16000:],
-        encoding="utf-8",
-    )
+    with user_files.open_log(log_path) as handle:
+        handle.write(combined[-16000:].encode("utf-8"))
     return int(getattr(result, "returncode", 1))

@@ -1392,6 +1392,7 @@ def test_legitimate_process_names_are_unaffected_by_the_containment_check(
 
 def test_build_process_tree_chowns_the_copied_tree_to_the_resolved_user(
     tmp_path: Path,
+    chown_path,
 ) -> None:
     """F1, p5-round1-review — BLOCKER. The build tree (root AND every copied file, not just the
     directory) is chowned to the process's declared `user` after copy. `os.chown` to a foreign uid
@@ -1407,11 +1408,49 @@ def test_build_process_tree_chowns_the_copied_tree_to_the_resolved_user(
         source_root=tmp_path / "source",
         build_root=tmp_path / "build",
         user_resolver=_fake_user_resolver({"svc-tools": (1234, 5678)}),
-        chown=lambda path, uid, gid: chowned.append((str(path), uid, gid)),
+        chown=lambda path, uid, gid, dir_fd=None: chowned.append(
+            (str(chown_path(path, dir_fd)), uid, gid)
+        ),
     )
     build_dir = tmp_path / "build" / "svc"
     assert (str(build_dir), 1234, 5678) in chowned
     assert (str(build_dir / "main.py"), 1234, 5678) in chowned
+
+
+def test_build_process_tree_never_reaches_through_a_folder_swapped_mid_walk(
+    tmp_path: Path,
+    chown_path,
+) -> None:
+    """A process of the declared user may already write in the tree while it is given away: it
+    swaps a folder for a symlink to the harness's files between two of the folder's entries. A
+    walk that re-owns each entry by its full path then re-owns the harness's files."""
+    package = tmp_path / "source" / "svc" / "pkg"
+    package.mkdir(parents=True)
+    held_back = tmp_path / "bundle" / "scenarios"
+    held_back.mkdir(parents=True)
+    for name in ("a.py", "b.py"):
+        (package / name).write_text("")
+        (held_back / name).write_text("held-back case\n")
+    built_package = tmp_path / "build" / "svc" / "pkg"
+    reached: list[Path] = []
+
+    def chown(path, uid, gid, dir_fd=None):
+        target = Path(os.path.realpath(chown_path(path, dir_fd)))
+        reached.append(target)
+        if target.parent == built_package.resolve() and not built_package.is_symlink():
+            built_package.rename(built_package.with_name("pkg.old"))
+            built_package.symlink_to(held_back, target_is_directory=True)
+
+    pr.build_process_tree(
+        _source_process(working_directory="svc", build_commands=[]),
+        source_root=tmp_path / "source",
+        build_root=tmp_path / "build",
+        user_resolver=_fake_user_resolver({"svc-tools": (1234, 5678)}),
+        chown=chown,
+    )
+
+    assert built_package.is_symlink()  # the swap happened mid-walk
+    assert [path for path in reached if path.parent == held_back.resolve()] == []
 
 
 def test_build_commands_run_under_the_resolved_user(tmp_path: Path) -> None:
@@ -1432,7 +1471,7 @@ def test_build_commands_run_under_the_resolved_user(tmp_path: Path) -> None:
         user_resolver=_fake_user_resolver({"svc-tools": (1234, 5678)}),
         # `chown` faked too — real `os.chown` to a fake uid needs root, which this lane does not
         # have; the chown call itself is asserted separately (`test_build_process_tree_chowns_...`).
-        chown=lambda path, uid, gid: None,
+        chown=lambda *_, **__: None,
     )
     assert captured["user"] == 1234
     assert captured["group"] == 5678
@@ -1472,6 +1511,7 @@ def test_build_process_tree_raises_when_user_is_required_but_not_resolvable(
 
 def test_spawn_source_process_applies_the_resolved_user_to_the_runner(
     tmp_path: Path,
+    chown_path,
 ) -> None:
     """Tests: assert the resolved user IS applied — the fake runner records `user=`."""
     build_dir = tmp_path / "build" / "svc"
@@ -1498,7 +1538,9 @@ def test_spawn_source_process_applies_the_resolved_user_to_the_runner(
         secret_purposes={},
         runner=fake_runner,
         user_resolver=_fake_user_resolver({"svc-tools": (1234, 5678)}),
-        chown=lambda path, uid, gid: chowned.append((str(path), uid, gid)),
+        chown=lambda path, uid, gid, dir_fd=None: chowned.append(
+            (str(chown_path(path, dir_fd)), uid, gid)
+        ),
     )
     assert captured["user"] == 1234
     assert captured["group"] == 5678
@@ -1567,6 +1609,7 @@ def test_spawn_source_process_raises_when_user_is_required_but_not_resolvable(
 
 def test_spawn_managed_process_chowns_data_dir_to_the_resolved_user(
     tmp_path: Path,
+    chown_path,
 ) -> None:
     manifest = _manifest()
     postgres = manifest.processes[0]
@@ -1587,7 +1630,9 @@ def test_spawn_managed_process_chowns_data_dir_to_the_resolved_user(
         runner=lambda *a, **k: FakeHandle(),
         sync_run=fake_sync_run,
         user_resolver=_fake_user_resolver({"svc-data": (2222, 3333)}),
-        chown=lambda path, uid, gid: chowned.append((str(path), uid, gid)),
+        chown=lambda path, uid, gid, dir_fd=None: chowned.append(
+            (str(chown_path(path, dir_fd)), uid, gid)
+        ),
     )
     assert (str(data_dir), 2222, 3333) in chowned
     # The pwfile is chowned to the same user too — `initdb` runs as that user (below) and must be
@@ -1600,6 +1645,7 @@ def test_spawn_managed_process_chowns_data_dir_to_the_resolved_user(
 
 def test_spawn_managed_process_chowns_a_pre_populated_data_dir_recursively(
     tmp_path: Path,
+    chown_path,
 ) -> None:
     """B6, p6-review-r1: `data_dir` is empty on the very FIRST spawn (`initdb` itself creates
     everything under it as the already-correct user), but `freeze_baseline`'s `datadir_copy`
@@ -1628,7 +1674,9 @@ def test_spawn_managed_process_chowns_a_pre_populated_data_dir_recursively(
         runner=lambda *a, **k: FakeHandle(),
         sync_run=_fake_sync_run,
         user_resolver=_fake_user_resolver({"svc-data": (2222, 3333)}),
-        chown=lambda path, uid, gid: chowned.append((str(path), uid, gid)),
+        chown=lambda path, uid, gid, dir_fd=None: chowned.append(
+            (str(chown_path(path, dir_fd)), uid, gid)
+        ),
     )
     chowned_paths = {path for path, _, _ in chowned}
     assert str(data_dir) in chowned_paths
@@ -1715,7 +1763,7 @@ def test_default_process_runner_does_not_chown_the_log_when_no_user_is_given(
         cwd=tmp_path,
         env={"PATH": "/usr/bin:/bin"},
         log_path=tmp_path / "logs" / "proc.log",
-        chown=lambda *args: chowned.append(args),
+        chown=lambda *args, **kwargs: chowned.append(args),
     )
     _reap(handle)
     assert chowned == []
@@ -1994,7 +2042,7 @@ def test_the_harness_s_workers_can_pass_through_a_world_dir_only_under_isolation
             secret_purposes={},
             runner=fake_runner,
             user_resolver=_fake_user_resolver({"svc-tools": (4444, 5555)}),
-            chown=lambda path, uid, gid: None,
+            chown=lambda *_, **__: None,
         )
     finally:
         os.umask(previous)
@@ -4258,7 +4306,7 @@ def test_freeze_baseline_seed_commands_run_under_the_stores_declared_user(
     ctx = dc_replace(
         ctx,
         user_resolver=_fake_user_resolver({"svc-data": (4444, 5555)}),
-        chown=lambda path, uid, gid: (
+        chown=lambda *_, **__: (
             None
         ),  # a fake uid needs no real os.chown to prove the point.
     )
@@ -4749,7 +4797,7 @@ def test_world_clone_empty_strategy_reseed_runs_under_the_stores_declared_user(
     ctx = dc_replace(
         ctx,
         user_resolver=_fake_user_resolver({"svc-data": (6666, 7777)}),
-        chown=lambda path, uid, gid: (
+        chown=lambda *_, **__: (
             None
         ),  # a fake uid needs no real os.chown to prove the point.
     )
@@ -6816,7 +6864,7 @@ def test_spawn_managed_process_data_dir_setup_failure_is_typed_spawn_failed(
     postgres = manifest.processes[0]
     creds = pr.EngineCredentials(username="harness", password="pw")
 
-    def failing_chown(path: Path, uid: int, gid: int) -> None:
+    def failing_chown(path: Path, uid: int, gid: int, *, dir_fd: int | None = None) -> None:
         raise PermissionError("simulated: svc-control cannot chown this path")
 
     with pytest.raises(pr.ProcessRuntimeError) as excinfo:
@@ -6904,6 +6952,32 @@ def _rabbitmq_process() -> Any:
             "depends_on": [],
         }
     )
+
+
+def test_a_managed_engine_runs_with_its_declared_user_s_home(tmp_path: Path, monkeypatch) -> None:
+    """Under per-user isolation the harness's HOME is not the engine's to write. RabbitMQ's Erlang
+    keeps its cookie there, and a broker given the harness's HOME crashes at boot."""
+    monkeypatch.setenv("HOME", "/home/svc-control")
+    captured_env: dict[str, str] = {}
+
+    def recording_runner(argv, *, cwd, env, log_path, user=None, group=None):
+        captured_env.update(env)
+        return FakeHandle()
+
+    pr.spawn_managed_process(
+        _rabbitmq_process(),
+        port=15003,
+        data_dir=tmp_path / "queue",
+        credentials=pr.EngineCredentials(username="harness", password="pw"),
+        runner=recording_runner,
+        sync_run=_fake_sync_run,
+        user_resolver=lambda name: types.SimpleNamespace(
+            pw_uid=2003, pw_gid=2003, pw_dir=f"/home/{name}"
+        ),
+        chown=lambda *_, **__: None,
+    )
+
+    assert captured_env["HOME"] == "/home/svc-data"
 
 
 def test_spawn_managed_process_rabbitmq_conf_carries_credentials(
@@ -7327,6 +7401,7 @@ def test_terminate_and_wait_logs_when_the_process_survives_even_kill(
 
 def test_spawn_managed_process_chmods_before_chowning_the_data_dir(
     tmp_path: Path,
+    chown_path,
 ) -> None:
     """N14, p6-review-r2: `chmod` after `chown` cannot succeed once ownership has moved — `svc-
     control` still owns `data_dir` at chmod time and it is free; after chown, a non-root `svc-
@@ -7338,8 +7413,8 @@ def test_spawn_managed_process_chmods_before_chowning_the_data_dir(
     data_dir = tmp_path / "pg"
     mode_at_chown_time: list[int] = []
 
-    def recording_chown(path: Path, uid: int, gid: int) -> None:
-        if path == data_dir:
+    def recording_chown(path: Path, uid: int, gid: int, *, dir_fd: int | None = None) -> None:
+        if chown_path(path, dir_fd) == data_dir:
             mode_at_chown_time.append(data_dir.stat().st_mode & 0o777)
 
     pr.spawn_managed_process(

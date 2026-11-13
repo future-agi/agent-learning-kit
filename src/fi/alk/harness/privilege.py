@@ -6,18 +6,27 @@ ambient capability set, so nothing it executes inherits a capability, and every 
 and build step runs as its declared user. A process that only holds the harness's files then
 cannot read them, held-back cases included.
 
-Without that grant, every process runs as the harness's own user, as before. When the platform
-asked for isolation and the capabilities did not arrive, the harness refuses to start rather
-than run customer code next to the cases it must not see.
+Per-user isolation also needs containment: every customer execution in a cgroup of its own, so
+stopping it stops whatever it started (`containment.py`). A host where that cannot work gets no
+per-user isolation.
+
+Without the grant, every process runs as the harness's own user, as before. When the platform
+asked for isolation and the capabilities or the containment did not arrive, the harness refuses
+to start rather than run customer code next to the cases it must not see.
 """
 
 from __future__ import annotations
 
 import ctypes
+import logging
 import os
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from enum import Enum
 from pathlib import Path
+
+from . import containment
+
+logger = logging.getLogger(__name__)
 
 ISOLATION_ENV = "ALK_PROCESS_ISOLATION"
 
@@ -49,22 +58,40 @@ def establish_isolation(
     environ: Mapping[str, str] | None = None,
     *,
     status_path: Path = Path("/proc/self/status"),
+    contain: Callable[[], containment.Containment | None] = containment.probe,
 ) -> IsolationMode:
     """Choose this process's mode. Call once, before the harness starts any child."""
     global _mode
     values: Mapping[str, str] = os.environ if environ is None else environ
-    if _effective_capabilities(status_path) & _CAPABILITIES == _CAPABILITIES:
-        _clear_ambient_capabilities()
-        # The harness's own files stay its own; a declared-user child gets the usual umask back.
-        os.umask(0o077)
-        _mode = IsolationMode.PER_USER
-    elif values.get(ISOLATION_ENV) == "required":
-        raise IsolationUnavailable(
-            "process_isolation_unavailable: the platform asked for per-user isolation, but "
-            "this process does not hold the capabilities it needs"
-        )
-    else:
+    required = values.get(ISOLATION_ENV) == "required"
+    if _effective_capabilities(status_path) & _CAPABILITIES != _CAPABILITIES:
+        if required:
+            raise IsolationUnavailable(
+                "process_isolation_unavailable: the platform asked for per-user isolation, but "
+                "this process does not hold the capabilities it needs"
+            )
         _mode = IsolationMode.FIXED_USER
+        return _mode
+    subtree = contain()
+    if subtree is None:
+        if required:
+            raise IsolationUnavailable(
+                "process_isolation_unavailable: the platform asked for per-user isolation, but "
+                "this host gives the harness no cgroup to contain each process in"
+            )
+        # A container that holds the capabilities but a read-only cgroupfs (a local Docker
+        # harness): run as before, and say so, rather than isolate what it cannot stop.
+        logger.warning(
+            "per-user isolation is off: no writable cgroup to contain customer processes; "
+            "every process runs as the harness's own user"
+        )
+        _mode = IsolationMode.FIXED_USER
+        return _mode
+    _clear_ambient_capabilities()
+    # The harness's own files stay its own; a declared-user child gets the usual umask back.
+    os.umask(0o077)
+    containment.enable(subtree)
+    _mode = IsolationMode.PER_USER
     return _mode
 
 
