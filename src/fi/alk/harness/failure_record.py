@@ -1,11 +1,11 @@
 """The structured record of why a hosted check or build failed, written beside its work.
 
-The platform used to tell a failure of ours from the agent's by reading the guest log's first
-``runtime validation:`` line. This file says it instead, from the error itself: ``domain`` is
+It records, from the error itself, whose failure the harness believes it was: ``domain`` is
 ``harness`` (a bug or capacity limit of ours), ``world`` (a process the harness adds to the
 generated world failed for a reason of ours) or ``agent`` (anything else, the agent's code and
 services included). ``message`` is one redacted line of the harness's own text; the agent's
-output, which follows it in the error, is never copied.
+output, which follows it in the error, is never copied. It adds detail for a reader; the
+platform still decides whose failure it was from the guest log's phase line.
 
 The file is diagnostic only. The tested agent runs under the same OS user and can write
 ``/work``, so nothing may treat ``domain`` as authoritative (for gating a run or deciding who

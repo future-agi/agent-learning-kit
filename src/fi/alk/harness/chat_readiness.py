@@ -412,7 +412,9 @@ async def request_uncovered_tools(
     copy) is not asked either (``reaches_outside``). Each request is a fresh one-message
     conversation driven like a scenario's; at the world only the asked tool runs, and any
     other call the agent returns is refused and listed under ``refused_during_requests``. A
-    tool whose contract leaves ``effects`` empty is treated as read-only. A callback agent
+    tool whose contract leaves ``effects`` empty is asked: the asked tool runs only in the test
+world, which is reset after the check, so an effect the contract did not name changes only
+that world, never a real system (tools that leave the world are never asked). A callback agent
     runs its own tools before answering, which the harness cannot stop; the world is reset
     after the check. Routing is read from the world's side as in the conversation. Never
     raises.
