@@ -8,14 +8,15 @@ missing instrumentor here therefore means its calls go unmeasured, never a faile
 
 When the agent first imports one of the SDKs, its instrumentor is turned on into a provider of our
 own, never the global one, so any tracing the agent sets up itself is left as it is. Only those
-instrumentors' spans leave the process, with no prompt, reply or error text (the instrumentors
-hide it) and with the model, tokens and timing kept. They go to the address the sandbox names
-under the agent's ingest key, and the mark hook stamps each with the call it belongs to.
+instrumentors' spans leave the process, with the model, tokens and timing kept. The instrumentors
+hide prompts and replies; our exporter also drops tool definitions, span events and error text,
+and the resource holds the simulation's own attributes only. They go to the address the sandbox
+names under the agent's ingest key, and the mark hook stamps each with the call it belongs to.
 
-A model call this cannot see, through an SDK with no instrumentor here or as a raw HTTP request to
-a model API, makes the process ``partial``. A span stamped ``fi.simulation.instrumentation=partial``
-goes out with that call, and every span after it carries the stamp, so the platform reads the
-call's cost as unknown, never as too low.
+A model call this cannot see makes the process ``partial``: one through an SDK with no instrumentor
+here, through an SDK the agent instruments itself, or a raw HTTP request to a model API. A span
+stamped ``fi.simulation.instrumentation=partial`` goes out with that call, and every span after it
+carries the stamp, so the platform reads the call's cost as unknown, never as too low.
 
 Like the mark hook beside it, it runs in the customer's interpreter: standard library only until
 the agent imports an SDK, and Python 3.9 syntax.
@@ -30,6 +31,7 @@ import os
 import signal
 import sys
 import threading
+import urllib.parse
 
 INSTRUMENT = "FI_SIMULATION_INSTRUMENT"
 _ENDPOINT = "FI_SIMULATION_TRACES_ENDPOINT"
@@ -77,31 +79,35 @@ _FLUSH_MS = 2000
 _PATCHED = "_alk_simulation_measure"
 
 _lock = threading.Lock()
-_state = {"partial": False, "provider": None}
+_state = {"partial": False, "provider": None, "resource": {}}
 _flagged_calls: set = set()
 _write = None
 
 
-def register(patches: dict, write) -> bool:
-    """Add this module's patches to the mark hook's, when the sandbox asks for measuring and
-    names where its spans go. Returns whether it did."""
+def register(patches: dict, write, mark) -> bool:
+    """Add this module's patches to the mark hook's, when the sandbox asks for measuring, names
+    where its spans go, and gives the simulation's mark: the resource pairs (the mark and the
+    hidden project) that are the only ones a measured span carries. Returns whether it did."""
     global _write
     if os.environ.get(INSTRUMENT) != "traceai":
         return False
     if not (
-        os.environ.get(_ENDPOINT)
+        mark
+        and os.environ.get(_ENDPOINT)
         and os.environ.get(_INGEST_API_KEY)
         and os.environ.get(_INGEST_SECRET_KEY)
     ):
+        # Without the mark its spans would read as production traces, so nothing is measured.
         write("failed")
         return False
     _write = write
+    _state["resource"] = dict(mark)
     for name, target in SDK_INSTRUMENTORS.items():
         patches.setdefault(name, functools.partial(_instrument_sdk, target=target))
     for name in _UNSEEN_SDKS:
         patches.setdefault(name, _unseen_sdk)
     patches.setdefault("httpx", _patch_httpx)
-    patches.setdefault("urllib3.connectionpool", _patch_urllib3)
+    patches.setdefault("http.client", _patch_http_client)
     atexit.register(_flush)
     _flush_on_sigterm()
     return True
@@ -127,6 +133,7 @@ def _provider():
         from opentelemetry.sdk.resources import Resource
         from opentelemetry.sdk.trace import ReadableSpan, SpanProcessor, TracerProvider
         from opentelemetry.sdk.trace.export import BatchSpanProcessor, SpanExporter
+        from opentelemetry.trace import Status
 
         class _Stamp(SpanProcessor):
             """Stamps a span started after an unmeasured call was seen."""
@@ -135,37 +142,39 @@ def _provider():
                 if _state["partial"]:
                     span.set_attribute(STATE_KEY, PARTIAL)
 
-        def _without_tool_definitions(span):
+        def _measured_only(span):
             kept = _kept_attributes(span.attributes)
-            if kept is None:
+            if kept is None and not span.events and not span.status.description:
                 return span
             return ReadableSpan(
                 name=span.name,
                 context=span.context,
                 parent=span.parent,
                 resource=span.resource,
-                attributes=kept,
-                events=span.events,
+                attributes=span.attributes if kept is None else kept,
+                # An exception event holds the error's message and stack trace.
+                events=(),
                 links=span.links,
                 kind=span.kind,
-                status=span.status,
+                # The call still reads as failed, without the error's text.
+                status=Status(span.status.status_code),
                 start_time=span.start_time,
                 end_time=span.end_time,
                 instrumentation_scope=span.instrumentation_scope,
             )
 
-        class _WithoutToolDefinitions(SpanExporter):
-            """Sends each span without the agent's tool definitions (names, descriptions,
-            argument schemas), which no TraceConfig flag hides: what leaves is the model, the
-            tokens and the timing. Only our exporter is wrapped; the agent's own are not."""
+        class _MeasuredOnly(SpanExporter):
+            """Sends each span with the model, the tokens and the timing only. It drops what
+            the instrumentors may keep: the agent's tool definitions (names, descriptions,
+            argument schemas), which no TraceConfig flag hides, and error text, which an older
+            fi-instrumentation does not hide. Only our exporter is wrapped; the agent's own
+            are not."""
 
             def __init__(self, exporter):
                 self._exporter = exporter
 
             def export(self, spans):
-                return self._exporter.export(
-                    [_without_tool_definitions(span) for span in spans]
-                )
+                return self._exporter.export([_measured_only(span) for span in spans])
 
             def shutdown(self):
                 self._exporter.shutdown()
@@ -180,33 +189,40 @@ def _provider():
                 "x-secret-key": os.environ[_INGEST_SECRET_KEY],
             },
         )
-        # Resource.create reads OTEL_RESOURCE_ATTRIBUTES: the mark and the hidden project.
-        provider = TracerProvider(resource=Resource.create())
+        # The simulation's pairs only. Resource.create would also read the agent's own
+        # OTEL_RESOURCE_ATTRIBUTES and OTEL_SERVICE_NAME, and the collector stores every
+        # resource attribute with the span.
+        provider = TracerProvider(resource=Resource(_state["resource"]))
         provider.add_span_processor(_Stamp())
         provider.add_span_processor(
             BatchSpanProcessor(
-                _WithoutToolDefinitions(exporter), schedule_delay_millis=_BATCH_DELAY_MS
+                _MeasuredOnly(exporter), schedule_delay_millis=_BATCH_DELAY_MS
             )
         )
         _state["provider"] = provider
         return provider
 
 
-# The attributes the SDK instrumentors write the request's tool definitions under: the list
-# and each tool's JSON schema (traceAI), and OpenInference's older form.
-_TOOL_DEFINITION_KEYS = ("gen_ai.tool.definitions", "llm.tools")
+# The attributes a measured span never carries: the request's tool definitions, as the list and
+# each tool's JSON schema (traceAI) and OpenInference's older form, and the error text an older
+# fi-instrumentation keeps.
+_DROPPED_KEYS = (
+    "gen_ai.tool.definitions",
+    "llm.tools",
+    "exception.message",
+    "exception.stacktrace",
+    "error.message",
+)
 
 
 def _kept_attributes(attributes):
-    """The span's attributes without its tool definitions, or None when it carries none."""
+    """The span's attributes without the dropped ones, or None when it carries none of them."""
     if not attributes:
         return None
     dropped = {
         name
         for name in attributes
-        if any(
-            name == key or name.startswith(f"{key}.") for key in _TOOL_DEFINITION_KEYS
-        )
+        if any(name == key or name.startswith(f"{key}.") for key in _DROPPED_KEYS)
     }
     if not dropped:
         return None
@@ -231,7 +247,8 @@ def _hidden_content():
     try:
         return TraceConfig(hide_error_details=True, **flags)
     except TypeError:
-        # An older fi-instrumentation has no such setting; it hides error text with the rest.
+        # An older fi-instrumentation has no such setting and keeps error text; our exporter
+        # drops it.
         return TraceConfig(**flags)
 
 
@@ -259,18 +276,26 @@ def _instrument_sdk(module, target) -> None:
         _say("unmeasured " + module.__name__ + ", its instrumentor did not turn on")
         _mark_partial()
         return
-    _yield_to_process(type(instrumentor))
+    _yield_to_process(type(instrumentor), module.__name__)
 
 
-def _yield_to_process(cls) -> None:
-    """Let the process instrument the SDK itself, with its own provider, in place of ours."""
+def _yield_to_process(cls, sdk: str) -> None:
+    """Let the process instrument the SDK itself in place of ours. Its first instrument() call
+    takes ours off, with or without arguments: with none, the instrumentor would stay on our
+    provider and the process's own tracing would get nothing. The SDK's calls are then the
+    process's to trace, not ours to measure, so the process reads partial."""
     original = cls.instrument
     if getattr(original, _PATCHED, False):
         return
+    ours = [True]
 
     def instrument(self, *args, __original=original, **kwargs):
-        if kwargs and getattr(self, "is_instrumented_by_opentelemetry", False):
-            self.uninstrument()
+        if ours[0]:
+            ours[0] = False
+            if getattr(self, "is_instrumented_by_opentelemetry", False):
+                self.uninstrument()
+            _say("unmeasured " + sdk + ", the agent instruments it itself")
+            _mark_partial()
         return __original(self, *args, **kwargs)
 
     functools.update_wrapper(instrument, original)
@@ -370,9 +395,19 @@ def _patch_httpx(module) -> None:
     _wrap(module.AsyncClient, "send", _request_host)
 
 
-def _patch_urllib3(module) -> None:
-    # requests and botocore both send through a urllib3 pool, which knows its host.
-    _wrap(module.HTTPConnectionPool, "urlopen", lambda pool, _a, _k: pool.host)
+def _connection_host(connection, args, kwargs):
+    """The host an http.client request goes to: the URL's when it is sent whole, as through an
+    HTTP proxy, else the tunnel's, as through an HTTPS proxy, else the connection's."""
+    url = args[1] if len(args) > 1 else kwargs.get("url")
+    if isinstance(url, str) and "://" in url:
+        return urllib.parse.urlsplit(url).hostname
+    return getattr(connection, "_tunnel_host", None) or connection.host
+
+
+def _patch_http_client(module) -> None:
+    # Every standard-library request starts here: urllib.request's, and urllib3's under
+    # requests and botocore.
+    _wrap(module.HTTPConnection, "putrequest", _connection_host)
 
 
 def _flush() -> None:

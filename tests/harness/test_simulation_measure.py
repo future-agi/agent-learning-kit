@@ -39,6 +39,7 @@ pytest.importorskip("opentelemetry.proto.collector.trace.v1.trace_service_pb2")
 from opentelemetry.proto.collector.trace.v1.trace_service_pb2 import (  # noqa: E402
     ExportTraceServiceRequest,
 )
+from opentelemetry.proto.trace.v1.trace_pb2 import Status as ProtoStatus  # noqa: E402
 
 CALL = "call-7f3a"
 PROMPT = "PROMPT-TEXT-1c9e"
@@ -47,6 +48,9 @@ REPLY = "REPLY-TEXT-8e41"
 TOOL_NAME = "lookup_tool_4d7a"
 TOOL_TEXT = "TOOL-DESCRIPTION-9b31"
 TOOL_FIELD = "tool_field_2e6c"
+ERROR_TEXT = "GUEST-ERROR-TEXT-6f0d"
+CUSTOMER_VALUE = "RESOURCE-LEAK-991"
+CUSTOMER_SERVICE = "guest-service-3a7e"
 INGEST = ("ingest-api-key", "ingest-secret-key")
 STATE = simulation_measure.STATE_KEY
 HOOK_MODULES = (
@@ -115,6 +119,34 @@ def ask():
     return out.content[0].text
 """
 
+FAILING_OPENAI_CALL = f"""
+import os, openai
+
+client = openai.OpenAI(api_key="sk-test", base_url=os.environ["MODEL_URL"] + "/fail/v1", max_retries=0)
+try:
+    client.chat.completions.create(
+        model="gpt-4o-mini", messages=[{{"role": "user", "content": "{PROMPT}"}}],
+    )
+except openai.BadRequestError:
+    print("refused")
+"""
+
+# fi-instrumentation 1.0, which the build keeps when the agent already has a traceAI
+# instrumentor: its TraceConfig has no error setting, so the instrumentors keep error text.
+OLDER_TRACE_CONFIG = """
+import fi_instrumentation
+
+class _Older(fi_instrumentation.TraceConfig):
+    def __init__(self, **flags):
+        if "hide_error_details" in flags:
+            raise TypeError("hide_error_details")
+        super().__init__(**flags)
+
+    hide_error_details = property(lambda self: False)
+
+fi_instrumentation.TraceConfig = _Older
+"""
+
 RAW_MODEL_REQUEST = """
 import httpx
 
@@ -125,6 +157,37 @@ httpx.Client(transport=httpx.MockTransport(raw_answer)).post(
     "https://api.anthropic.com/v1/messages", json={"messages": []}
 )
 """
+
+# A model API's name resolves to the stand-in on this machine, so a standard-library client
+# really sends to it and nothing leaves the machine.
+_STAND_IN_MODEL_HOST = """
+import socket
+_resolve = socket.getaddrinfo
+
+def _stand_in(host, *args, **kwargs):
+    return _resolve("127.0.0.1" if host == "api.openai.com" else host, *args, **kwargs)
+
+socket.getaddrinfo = _stand_in
+RAW_URL = "http://api.openai.com:%s/v1/chat/completions" % os.environ["MODEL_URL"].rsplit(":", 1)[1]
+"""
+
+RAW_URLLIB_REQUEST = (
+    _STAND_IN_MODEL_HOST
+    + """
+import urllib.request
+urllib.request.urlopen(
+    urllib.request.Request(RAW_URL, data=b"{}", headers={"Content-Type": "application/json"})
+).read()
+"""
+)
+
+RAW_REQUESTS_REQUEST = (
+    _STAND_IN_MODEL_HOST
+    + """
+import requests
+requests.post(RAW_URL, json={}).raise_for_status()
+"""
+)
 
 
 # What the stand-in model API answers, by the path the SDK posts to.
@@ -159,7 +222,19 @@ _ANSWERS = {
 class _ModelHandler(BaseHTTPRequestHandler):
     def do_POST(self):  # noqa: N802 - the http.server hook
         self.rfile.read(int(self.headers.get("Content-Length", 0)))
-        answer = _ANSWERS.get(self.path.split("?", 1)[0])
+        path = self.path.split("?", 1)[0]
+        if path.startswith("/fail/"):
+            # A model API that refuses the request, with the guest's text in its error.
+            body = json.dumps(
+                {"error": {"message": ERROR_TEXT, "type": "invalid_request_error"}}
+            ).encode()
+            self.send_response(400)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+        answer = _ANSWERS.get(path)
         body = json.dumps(answer or {}).encode()
         self.send_response(200 if answer else 404)
         self.send_header("Content-Type", "application/json")
@@ -226,6 +301,8 @@ class Collector:
                                 "scope": scope_spans.scope.name,
                                 "attributes": _attributes(span.attributes),
                                 "resource": resource,
+                                "status": (span.status.code, span.status.message),
+                                "events": [event.name for event in span.events],
                             }
                         )
         return found
@@ -366,6 +443,58 @@ def test_an_untraced_agents_model_call_is_measured_without_its_text(
     assert (headers["x-api-key"], headers["x-secret-key"]) == INGEST
 
 
+def test_a_measured_span_carries_only_the_simulations_resource_attributes(
+    tmp_path: Path, collector: Collector
+) -> None:
+    # The collector stores every resource attribute with the span: the agent's own, from
+    # OTEL_RESOURCE_ATTRIBUTES or OTEL_SERVICE_NAME, never ride along.
+    _needs("openai", "traceai_openai")
+    result = _run(
+        OPENAI_CALL + "ask()",
+        _environment(
+            tmp_path,
+            collector,
+            OTEL_RESOURCE_ATTRIBUTES=(
+                f"guest.secret={CUSTOMER_VALUE},project_name=hidden-simulation,"
+                "fi.simulation.origin=simulation,fi.simulation.job_id=job-1"
+            ),
+            OTEL_SERVICE_NAME=CUSTOMER_SERVICE,
+        ),
+    )
+
+    assert result.returncode == 0, result.stderr
+    [span] = _settled(collector, 1)
+    assert span["resource"] == {
+        "project_name": "hidden-simulation",
+        "fi.simulation.origin": "simulation",
+        "fi.simulation.job_id": "job-1",
+    }
+    for text in (CUSTOMER_VALUE, CUSTOMER_SERVICE):
+        assert text.encode() not in collector.raw()
+
+
+@pytest.mark.parametrize(
+    "older", [False, True], ids=["fi-instrumentation-now", "fi-instrumentation-1.0"]
+)
+def test_a_refused_model_call_is_measured_without_its_error_text(
+    tmp_path: Path, collector: Collector, older: bool
+) -> None:
+    # The span still says the call failed, and for which call; the model API's error text,
+    # which can quote the guest, never leaves, whatever the installed fi-instrumentation hides.
+    _needs("openai", "traceai_openai")
+    script = (OLDER_TRACE_CONFIG if older else "") + FAILING_OPENAI_CALL
+    result = _run(script, _environment(tmp_path, collector))
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "refused"
+    [span] = _settled(collector, 1)
+    assert span["scope"] == "traceai_openai"
+    assert span["attributes"]["fi.simulator.call_execution_id"] == CALL
+    assert span["status"] == (ProtoStatus.STATUS_CODE_ERROR, "")
+    assert span["events"] == []
+    assert ERROR_TEXT.encode() not in collector.raw()
+
+
 @pytest.mark.parametrize(
     "sdk, call, model",
     [
@@ -447,13 +576,22 @@ print(chat.invoke([("system", "%s"), ("user", "%s")]).content)
     assert spans[0]["attributes"]["fi.simulator.call_execution_id"] == CALL
 
 
+@pytest.mark.parametrize(
+    "instrument",
+    [
+        "OpenAIInstrumentor().instrument(tracer_provider=provider)",
+        "trace.set_tracer_provider(provider)\nOpenAIInstrumentor().instrument()",
+    ],
+    ids=["with-its-provider", "with-no-arguments"],
+)
 def test_an_agent_that_instruments_the_sdk_itself_keeps_its_own_tracing(
-    tmp_path: Path, collector: Collector
+    tmp_path: Path, collector: Collector, instrument: str
 ) -> None:
     _needs("traceai_openai")
     script = (
         OPENAI_CALL
         + """
+from opentelemetry import trace
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
@@ -461,7 +599,9 @@ from traceai_openai import OpenAIInstrumentor
 own = InMemorySpanExporter()
 provider = TracerProvider()
 provider.add_span_processor(SimpleSpanProcessor(own))
-OpenAIInstrumentor().instrument(tracer_provider=provider)
+"""
+        + instrument
+        + """
 ask()
 print(len(own.get_finished_spans()))
 """
@@ -470,8 +610,14 @@ print(len(own.get_finished_spans()))
 
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == "1"
+    # Its calls are then the agent's to trace, not ours to measure: the process reads partial,
+    # and the span that says so is all that reaches the sandbox.
+    assert "unmeasured openai, the agent instruments it itself" in result.stderr
+    [marker] = _settled(collector, 1)
+    assert marker["scope"] == simulation_measure.SCOPE
+    assert marker["attributes"][STATE] == "partial"
     time.sleep(0.5)
-    assert collector.spans() == []
+    assert len(collector.spans()) == 1
 
 
 def test_an_agent_with_its_own_tracer_provider_keeps_it_and_ours_stays_out(
@@ -579,12 +725,17 @@ def test_a_sigterm_right_after_a_reply_keeps_its_span(
     assert [span["scope"] for span in collector.spans()] == ["traceai_openai"]
 
 
+@pytest.mark.parametrize(
+    "raw",
+    [RAW_MODEL_REQUEST, RAW_URLLIB_REQUEST, RAW_REQUESTS_REQUEST],
+    ids=["httpx", "urllib.request", "requests"],
+)
 def test_a_raw_model_request_marks_its_call_partial(
-    tmp_path: Path, collector: Collector
+    tmp_path: Path, collector: Collector, raw: str
 ) -> None:
     _needs("traceai_openai")
     result = _run(
-        OPENAI_CALL + "ask()\n" + RAW_MODEL_REQUEST + "ask()\n",
+        OPENAI_CALL + "ask()\n" + raw + "ask()\n",
         _environment(tmp_path, collector),
     )
 
@@ -668,53 +819,61 @@ def measuring(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     importlib.reload(simulation_measure)
 
 
-def test_a_urllib3_request_to_a_model_api_marks_partial(measuring) -> None:
+def test_an_http_client_request_to_a_model_api_marks_partial(measuring) -> None:
     module, marked = measuring
 
-    class HTTPConnectionPool:
-        def __init__(self, host):
+    class HTTPConnection:
+        def __init__(self, host, tunnel=None):
             self.host = host
+            self._tunnel_host = tunnel
 
-        def urlopen(self, method, url, **_kwargs):
+        def putrequest(self, method, url, skip_host=False, skip_accept_encoding=False):
             return "sent"
 
-    fake = types.SimpleNamespace(HTTPConnectionPool=HTTPConnectionPool)
-    module._patch_urllib3(fake)
+    module._patch_http_client(types.SimpleNamespace(HTTPConnection=HTTPConnection))
 
     assert (
-        HTTPConnectionPool("collector.internal").urlopen("POST", "/v1/traces") == "sent"
+        HTTPConnection("collector.internal").putrequest("POST", "/v1/traces") == "sent"
+    )
+    assert (
+        HTTPConnection("proxy.internal").putrequest("GET", "http://example.com/")
+        == "sent"
     )
     assert marked == []
-    for host in (
-        "api.openai.com",
-        "my-resource.openai.azure.com",
-        "bedrock-runtime.us-east-1.amazonaws.com",
+    for connection, url in (
+        (HTTPConnection("api.openai.com"), "/v1/chat/completions"),
+        (HTTPConnection("my-resource.openai.azure.com"), "/openai/deployments"),
+        (HTTPConnection("bedrock-runtime.us-east-1.amazonaws.com"), "/model/invoke"),
+        # Through an HTTP proxy the URL names the host; through an HTTPS proxy, the tunnel.
+        (HTTPConnection("proxy.internal"), "http://api.openai.com/v1/chat/completions"),
+        (HTTPConnection("proxy.internal", tunnel="api.anthropic.com"), "/v1/messages"),
     ):
-        assert HTTPConnectionPool(host).urlopen("POST", "/v1") == "sent"
-    assert marked == ["partial"] * 3
+        assert connection.putrequest("POST", url) == "sent"
+    assert marked == ["partial"] * 5
 
 
-def test_register_needs_the_switch_and_the_destination(
+_MARK = {"project_name": "hidden-simulation", "fi.simulation.origin": "simulation"}
+
+
+def test_register_needs_the_switch_the_destination_and_the_mark(
     measuring, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     module, _marked = measuring
     lines: list[str] = []
     patches: dict = {}
 
-    assert module.register(patches, lines.append) is True
-    assert {
-        "openai",
-        "anthropic",
-        "httpx",
-        "urllib3.connectionpool",
-        "vertexai",
-    } <= set(patches)
+    assert module.register(patches, lines.append, _MARK) is True
+    assert {"openai", "anthropic", "httpx", "http.client", "vertexai"} <= set(patches)
 
-    monkeypatch.delenv("FI_SIMULATION_TRACES_ENDPOINT")
+    # Without the mark its spans would read as production traces: nothing is measured.
     patches = {}
-    assert module.register(patches, lines.append) is False
+    assert module.register(patches, lines.append, None) is False
     assert patches == {} and lines == ["failed"]
 
+    monkeypatch.delenv("FI_SIMULATION_TRACES_ENDPOINT")
+    assert module.register(patches, lines.append, _MARK) is False
+    assert patches == {} and lines == ["failed", "failed"]
+
     monkeypatch.setenv("FI_SIMULATION_INSTRUMENT", "other")
-    assert module.register({}, lines.append) is False
-    assert lines == ["failed"]
+    assert module.register({}, lines.append, _MARK) is False
+    assert lines == ["failed", "failed"]

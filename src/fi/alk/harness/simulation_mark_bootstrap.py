@@ -640,7 +640,7 @@ def install() -> None:
                 _patch_autogen_tools, path=tool_trace
             )
         if os.environ.get(_MEASURE):
-            _measure().register(_PATCHES, _write)
+            _measure().register(_PATCHES, _write, pairs)
         if not _PATCHES:
             return
         # The finder goes in first so that a failed patch of an already imported module still
