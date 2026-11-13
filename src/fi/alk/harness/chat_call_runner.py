@@ -210,9 +210,10 @@ def _tool_world(
     tools = [tool.model_dump(mode="json") for tool in contract.tools]
     if handler_channel is not None:
         # Under per-user isolation the handlers, and the agent code they import, run in the
-        # handler child; nothing of the agent's code is imported into this process.
+        # handler child; nothing of the agent's code is imported into this process. State is
+        # read as the harness, as with one fixed user, so checks grade the same rows.
         return ChildWorld(
-            store=_HostedToolStore(endpoint.tool_address or endpoint.address),
+            store=_HostedToolStore(endpoint.address),
             channel=handler_channel,
             tools=tools,
             refusal_signature=contract.refusal_signature,

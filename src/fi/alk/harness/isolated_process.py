@@ -104,12 +104,9 @@ async def run_json_worker(
 ) -> dict[str, Any]:
     """Run a fresh interpreter; cancellation waits for process-group termination.
 
-    `pass_fds` are handed to the worker: this process closes its copies once the worker exists,
-    so the worker alone holds them.
+    The worker inherits `pass_fds`; the caller keeps its own copies and closes them.
     """
     if os.name != "posix":
-        for fd in pass_fds:
-            os.close(fd)
         raise IsolatedWorkerError("isolated workers require POSIX process groups")
     work_directory.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="worker-", dir=work_directory) as directory:
@@ -144,11 +141,7 @@ async def run_json_worker(
                 pass_fds=pass_fds,
             )
         )
-        try:
-            canceled = await _finish(creation)
-        finally:
-            for fd in pass_fds:
-                os.close(fd)
+        canceled = await _finish(creation)
         process = creation.result()
         try:
             if canceled:

@@ -1210,7 +1210,7 @@ async def validate_once(
                     if getattr(representative, "requires_tool_evidence", False):
                         await probe_chat_workflow(
                             job=job, source=source, bundle=bundle, authoring=authoring,
-                            runtime=runtime, scenario=representative,
+                            work_directory=work, runtime=runtime, scenario=representative,
                             candidate_hash=_generic_candidate_hash(source, authoring),
                             bundle_digest=manifest.digest,
                             secret_values=target_secret_values,

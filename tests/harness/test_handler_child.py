@@ -200,6 +200,12 @@ def test_under_isolation_the_handlers_run_as_their_user_and_the_worker_never_get
     assert payload["process_isolation"] == "per_user"
     assert payload["source_directory"] is None
     assert seen["kwargs"]["pass_fds"] == (payload["handler_fd"],)
+    # What the child prints goes to a log beside its scratch, where only the harness writes;
+    # never into the harness's own stream.
+    scratch = Path(kwargs["cwd"])
+    assert scratch.name == "_handlers"
+    assert isinstance(kwargs["stderr"], int) and kwargs["stdout"] == kwargs["stderr"]
+    assert (scratch.parent / "_handlers.log").is_file()
 
 
 def test_with_one_fixed_user_the_worker_runs_the_handlers_as_before(
@@ -212,19 +218,56 @@ def test_with_one_fixed_user_the_worker_runs_the_handlers_as_before(
     assert spawned == []
     assert seen["payload"]["source_directory"] == str(source)
     assert seen["payload"]["handler_fd"] is None
-    assert "pass_fds" not in seen["kwargs"]
+    assert seen["kwargs"]["pass_fds"] == ()
 
 
-def test_a_worker_under_isolation_refuses_the_source(tmp_path, monkeypatch):
+@pytest.mark.parametrize(
+    ("given", "refused"),
+    [
+        ({"source_directory": "/work/source", "handler_fd": 7}, True),
+        ({"source_directory": None, "handler_fd": None}, True),
+        (
+            {
+                "source_directory": None,
+                "handler_fd": None,
+                "runtime": {"metadata": {"observation_mode": "native"}},
+            },
+            False,
+        ),
+    ],
+    ids=["a source", "no handler child", "a native world runs no handlers"],
+)
+def test_a_worker_under_isolation_never_runs_the_handlers_itself(
+    tmp_path, monkeypatch, given, refused
+):
     result_path = tmp_path / "result.json"
-    payload = {"process_isolation": "per_user", "source_directory": str(tmp_path)}
+    payload = {"process_isolation": "per_user", "runtime": {"metadata": {}}, **given}
     monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(payload)))
     monkeypatch.setattr(sys, "argv", ["chat_worker", str(result_path)])
 
     asyncio.run(chat_worker.main())
 
     result = json.loads(result_path.read_text())
-    assert result["error"].startswith("chat_worker_refused:")
+    assert result["error"].startswith("chat_worker_refused:") is refused
+
+
+def test_arguments_too_large_to_send_fail_the_call_and_not_the_world():
+    parent_end, child_end = socket.socketpair()
+    try:
+        call = HandlerChannel(parent_end).call(
+            "lookup_account", {"blob": "x" * handler_child.MAX_MESSAGE_BYTES}
+        )
+
+        assert (call.ok, call.error) == (
+            False,
+            "tool arguments exceed the handler message limit",
+        )
+        child_end.setblocking(False)
+        with pytest.raises(BlockingIOError):
+            child_end.recv(1)  # nothing was sent
+    finally:
+        parent_end.close()
+        child_end.close()
 
 
 def test_a_sandbox_without_the_handlers_user_fails_closed(
@@ -261,9 +304,10 @@ def test_a_world_without_its_own_role_starts_no_handler_child(
 
 class _Store:
     key = "fake"
+    dsns: list[str] = []
 
-    def __init__(self, _dsn: str) -> None:
-        pass
+    def __init__(self, dsn: str) -> None:
+        _Store.dsns.append(dsn)
 
     def start(self) -> None:
         return None
@@ -292,6 +336,8 @@ def test_a_world_with_a_handler_channel_never_imports_the_agent_code(
 
     assert isinstance(world, ChildWorld)
     assert call.result == {"from": "child"} and world.calls == [call]
+    # Checks grade the rows the harness reads, as with one fixed user.
+    assert _Store.dsns[-1] == _DSN
     assert _AGENT_MODULE not in sys.modules
     assert str(source) not in sys.path
     with pytest.raises(RuntimeError):
@@ -308,8 +354,13 @@ def test_the_authoring_probe_runs_the_handlers_in_the_child_under_isolation(
     closed: list[bool] = []
     child = HandlerChild(process=SimpleNamespace(pid=1), sock=parent_end)
     child.close = lambda: closed.append(True)  # type: ignore[method-assign]
-    monkeypatch.setattr(chat, "handler_child_for", lambda ctx, runtime: child)
     seen: dict[str, Any] = {}
+
+    def handler_child_for(ctx, runtime):
+        seen["child_work"] = ctx.work_directory
+        return child
+
+    monkeypatch.setattr(chat, "handler_child_for", handler_child_for)
 
     class Runner:
         def __init__(self, artifacts, ctx):
@@ -330,6 +381,7 @@ def test_the_authoring_probe_runs_the_handlers_in_the_child_under_isolation(
                     source=source,
                     bundle=context.bundle_dir,
                     authoring=tmp_path,
+                    work_directory=tmp_path / "work",
                     runtime=_runtime(),
                     scenario=SimpleNamespace(scenario_key="one", scenario_id="s-1"),
                     candidate_hash="candidate",
@@ -344,6 +396,9 @@ def test_the_authoring_probe_runs_the_handlers_in_the_child_under_isolation(
         parent_end.close()
 
     assert isinstance(seen["context"].handler_channel, HandlerChannel)
+    # The child's scratch goes with the provisioned worlds, which its user can reach; the
+    # probe's own folder is the harness's alone.
+    assert seen["child_work"] == tmp_path / "work"
     assert closed == [True]
     assert _AGENT_MODULE not in sys.modules
 

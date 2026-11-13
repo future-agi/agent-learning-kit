@@ -231,6 +231,7 @@ async def probe_chat_workflow(
     source: Path,
     bundle: Path,
     authoring: Path,
+    work_directory: Path,
     runtime,
     scenario,
     candidate_hash,
@@ -239,7 +240,10 @@ async def probe_chat_workflow(
     redaction_values,
     timeout=300.0,
 ):
-    """Exercise a private conversation and require observed tool execution evidence."""
+    """Exercise a private conversation and require observed tool execution evidence.
+
+    `work_directory` is the one the runtime was provisioned in, where its worlds live.
+    """
     from .authoring_runtime_validation import RuntimeValidationError
     from .call_runner import CallRunnerContext
     from .chat_call_runner import HostedChatCallRunner, handler_child_for
@@ -312,7 +316,11 @@ async def probe_chat_workflow(
         )
         # Under per-user isolation the tool handlers, and the agent code they import, run in a
         # child of their own: this process holds the capabilities and never imports that code.
-        handlers = await asyncio.to_thread(handler_child_for, context, runtime)
+        # The child's scratch belongs with the world's, which its user can reach; this
+        # attempt's folder is the harness's alone.
+        handlers = await asyncio.to_thread(
+            handler_child_for, replace(context, work_directory=work_directory), runtime
+        )
         if handlers is not None:
             context = replace(context, handler_channel=HandlerChannel(handlers.sock))
         runner = HostedChatCallRunner(artifacts, context)

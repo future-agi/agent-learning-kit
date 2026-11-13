@@ -92,7 +92,7 @@ class IsolatedChatCallRunner:
         # Under per-user isolation the tool handlers, and the agent code they import, run in a
         # child of their own; the worker gets its socket and never the source.
         handlers = await asyncio.to_thread(handler_child_for, context, runtime)
-        handler_fd = handlers.sock.detach() if handlers is not None else None
+        handler_fd = handlers.sock.fileno() if handlers is not None else None
         try:
             result = await run_json_worker(
                 "fi.alk.harness.chat_worker",
@@ -117,10 +117,10 @@ class IsolatedChatCallRunner:
                 },
                 environ=environ,
                 work_directory=context.work_directory / "chat-workers",
-                # With one fixed user the call is exactly as before: no fds to hand over.
-                **({"pass_fds": (handler_fd,)} if handler_fd is not None else {}),
+                pass_fds=(handler_fd,) if handler_fd is not None else (),
             )
         finally:
+            # This side's copy of the socket goes with the child, once the worker is done.
             if handlers is not None:
                 handlers.close()
         await _record_worker_usage(context.usage_reporter, result.get("usage") or [], funding)
@@ -219,10 +219,17 @@ async def main() -> None:
     usage = _UsageCollector()
     try:
         isolated = payload.get("process_isolation") == IsolationMode.PER_USER.value
-        if isolated and payload.get("source_directory"):
-            # The agent's code runs in the handler child; never import it as the harness.
+        native = (
+            payload["runtime"].get("metadata", {}).get("observation_mode") == "native"
+        )
+        if isolated and (
+            payload.get("source_directory")
+            or (payload.get("handler_fd") is None and not native)
+        ):
+            # The tool handlers, and the agent's code they import, run only in their handler
+            # child; this process never runs them as the harness.
             raise CallAborted(
-                "chat_worker_refused: per-user isolation and a source directory",
+                "chat_worker_refused: per-user isolation runs tool handlers only in their child",
                 code="call_failed",
             )
         handler_fd = payload.get("handler_fd")

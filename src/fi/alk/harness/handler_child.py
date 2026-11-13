@@ -40,12 +40,11 @@ CALL_TIMEOUT_SECONDS = 300.0
 _LENGTH = struct.Struct(">I")
 
 
-def _send(sock: socket.socket, message: Mapping[str, Any]) -> None:
-    body = json.dumps(message, default=str).encode("utf-8")
-    if len(body) > MAX_MESSAGE_BYTES:
-        body = json.dumps(
-            {"ok": False, "error": "tool result exceeds the handler message limit"}
-        ).encode("utf-8")
+def _encode(message: Mapping[str, Any]) -> bytes:
+    return json.dumps(message, default=str).encode("utf-8")
+
+
+def _send(sock: socket.socket, body: bytes) -> None:
     sock.sendall(_LENGTH.pack(len(body)) + body)
 
 
@@ -78,8 +77,17 @@ class HandlerChannel:
 
     def call(self, name: str, arguments: Mapping[str, Any]) -> Call:
         args = dict(arguments)
+        request = _encode({"name": name, "arguments": args})
+        if len(request) > MAX_MESSAGE_BYTES:
+            # Arguments that large are the agent's own doing; the world did not fail.
+            return Call(
+                name=name,
+                arguments=args,
+                ok=False,
+                error="tool arguments exceed the handler message limit",
+            )
         try:
-            _send(self._sock, {"name": name, "arguments": args})
+            _send(self._sock, request)
             outcome = _receive(self._sock)
         except (OSError, EOFError, ValueError) as exc:
             # The handlers' process is gone or misbehaving: the world fell over, not the agent.
@@ -104,7 +112,7 @@ class ChildWorld(GeneratedWorld):
     """A conversation's world whose tool calls run in the handler child.
 
     Nothing of the agent's code is imported here: `reach` is never called. State is read
-    through this side's own store connection.
+    through this side's own store connection, as the harness.
     """
 
     def __init__(
@@ -144,17 +152,16 @@ class HandlerChild:
 
 
 def _stop(process: subprocess.Popen) -> None:
-    for sent in (signal.SIGTERM, signal.SIGKILL):
-        try:
-            os.killpg(process.pid, sent)
-        except ProcessLookupError:
-            break
-        try:
-            process.wait(timeout=10)
-            break
-        except subprocess.TimeoutExpired:
-            continue
-    process.poll()
+    # The handlers keep nothing worth a graceful exit, and a child that ignored SIGTERM would
+    # hold up the conversation's event loop.
+    try:
+        os.killpg(process.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+    try:
+        process.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        pass
 
 
 def _open_source_to(source: Path, gid: int) -> None:
@@ -168,7 +175,7 @@ def _open_source_to(source: Path, gid: int) -> None:
     for path in (*source.rglob("*"), source):
         if path.is_symlink():
             continue
-        os.chown(path, -1, gid)
+        os.chown(path, -1, gid, follow_symlinks=False)
         path.chmod(path.stat().st_mode | (0o050 if path.is_dir() else 0o040))
 
 
@@ -190,13 +197,25 @@ def start_handler_child(
             f"handler_user_unavailable: {HANDLER_USER.value} does not resolve in this sandbox",
             code="call_failed",
         )
-    scratch = world_scratch_dir(work_directory, world_index, "handlers")
+    # No bundle process can be named `_handlers`, so this never meets a process's own directory.
+    scratch = world_scratch_dir(work_directory, world_index, "_handlers")
     scratch.mkdir(parents=True, exist_ok=True)
     os.chown(scratch, resolved.pw_uid, resolved.pw_gid)
     scratch.chmod(0o700)
     if source is not None:
         _open_source_to(source, resolved.pw_gid)
-    parent_end, child_end = socket.socketpair()
+    # What the agent's code prints stays out of the harness's own log. The file sits beside the
+    # scratch directory, where only the harness writes: inside it the agent could plant a link.
+    log = os.open(
+        scratch.parent / "_handlers.log",
+        os.O_WRONLY | os.O_CREAT | os.O_APPEND | os.O_NOFOLLOW | os.O_CLOEXEC,
+        0o600,
+    )
+    try:
+        parent_end, child_end = socket.socketpair()
+    except BaseException:
+        os.close(log)
+        raise
     try:
         environment = {
             "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
@@ -210,7 +229,8 @@ def start_handler_child(
         process = subprocess.Popen(
             [sys.executable, "-m", __name__, str(child_end.fileno())],
             stdin=subprocess.PIPE,
-            stdout=subprocess.DEVNULL,
+            stdout=log,
+            stderr=log,
             env=environment,
             cwd=scratch,
             pass_fds=(child_end.fileno(),),
@@ -222,6 +242,7 @@ def start_handler_child(
         raise
     finally:
         child_end.close()
+        os.close(log)
     try:
         assert process.stdin is not None
         process.stdin.write(
@@ -252,15 +273,19 @@ def serve(sock: socket.socket, world: GeneratedWorld) -> None:
         call = world.call(
             str(request.get("name") or ""), request.get("arguments") or {}
         )
-        _send(
-            sock,
+        body = _encode(
             {
                 "result": call.result,
                 "ok": call.ok,
                 "refused": call.refused,
                 "error": call.error,
-            },
+            }
         )
+        if len(body) > MAX_MESSAGE_BYTES:
+            body = _encode(
+                {"ok": False, "error": "tool result exceeds the handler message limit"}
+            )
+        _send(sock, body)
 
 
 def main() -> None:
