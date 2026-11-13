@@ -7,6 +7,9 @@ All notable release changes for Agent Learning Kit are tracked here.
 Post-rc.1 increments on the release branch. Each one adds gates on top of the
 66 proved at rc.1; the rc.1 entry below is historical and unchanged.
 
+- Builder chat: every turn's ending reports what that turn spent: tokens, USD, unpriced
+  turns and only the models it called. The ending is kept before the turn's final
+  checkpoint, so a restart after a failed delivery replays the same ending, usage included.
 - Multi-agent compatibility references preserve native Google ADK, LangGraph,
   and CrewAI orchestration, while Python command agents capture bounded tool
   evidence with explicit worker and task attribution.
