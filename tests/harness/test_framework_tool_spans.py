@@ -209,6 +209,55 @@ def test_a_background_job_is_a_hand_off_from_the_tool_call_that_launched_it(
         assert 0 < hand_off["at"] <= hand_off["ended_at"]
 
 
+def test_a_served_coordinator_s_own_calls_and_its_jobs_hand_offs_name_the_same_agent(
+    tmp_path: Path,
+) -> None:
+    # As a graph server traces a deep agent: the coordinator's run and its tools node carry no span kind and no agent
+    # name, only the conversation; its jobs name their own agent. The launch is the coordinator's call, the same
+    # agent its job's hand-off names, and a job's tools stay the job's.
+    records = _run(
+        tmp_path,
+        """
+        sup = {"gen_ai.conversation.id": "thread-sup"}
+        with span("agent", **sup):
+            with span("tools", **{"langgraph_node": "tools", **sup}):
+                with span("start_async_task", **{"gen_ai.span.kind": "TOOL", "gen_ai.tool.name": "start_async_task",
+                                                 "langgraph_node": "tools", "langgraph_checkpoint_ns": "tools:1",
+                                                 "input.value": "researcher", **sup,
+                                                 "output.value": "Launched async subagent. task_id: job-r"}):
+                    pass
+        own = {"lc_agent_name": "researcher", "gen_ai.conversation.id": "job-r"}
+        with span("researcher", **{"output.value": "done", **own}):
+            with span("tools", **{"langgraph_node": "tools", **own}):
+                with span("analyze_topic", **{"gen_ai.span.kind": "TOOL", "gen_ai.tool.name": "analyze_topic",
+                                              "langgraph_node": "tools", "langgraph_checkpoint_ns": "tools:2", **own}):
+                    pass
+    """,
+    )
+    launch = next(
+        r for r in records if r["name"] == "start_async_task" and not r.get("delegated_to")
+    )
+    hand_off = next(r for r in records if r.get("delegated_to") == "researcher" and "ended_at" in r)
+    assert launch.get("agent_key") == hand_off["agent_key"] == "agent"
+    assert hand_off["parent_event_id"] == launch["event_id"]
+    assert next(r for r in records if r["name"] == "analyze_topic")["agent_key"] == "researcher"
+
+
+def test_a_call_in_a_run_with_no_conversation_and_no_agent_stays_unnamed(
+    tmp_path: Path,
+) -> None:
+    # Outside a served conversation the run's name is only a span name (a request handler, a chain), not an agent.
+    records = _run(
+        tmp_path,
+        """
+        with span("POST /chat"):
+            with span("lookup", **{"gen_ai.span.kind": "TOOL", "gen_ai.tool.name": "lookup"}):
+                pass
+    """,
+    )
+    assert [r.get("agent_key") for r in records if r["name"] == "lookup"] == [None]
+
+
 def test_a_job_s_answer_is_what_its_model_last_said_not_its_whole_conversation(
     tmp_path: Path,
 ) -> None:
