@@ -32,8 +32,9 @@ from .process_runtime import (
 )
 from .world.runtime import Call, GeneratedWorld
 
-# The declared user a handler child runs as.
-HANDLER_USER = ProcessUser.SVC_TOOLS
+# The declared user a handler child runs as: the agent's own, since the agent's code is what it
+# runs. It gets no secret through its environment, so the agent's processes find nothing there.
+HANDLER_USER = ProcessUser.SVC_AGENT
 MAX_MESSAGE_BYTES = 4 * 1024 * 1024
 CALL_TIMEOUT_SECONDS = 300.0
 _LENGTH = struct.Struct(">I")

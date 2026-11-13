@@ -10249,6 +10249,7 @@ def _clone_provider(strategies, *, shared=True):
         credentials={"postgres0": store(username="harness", password="pw")},
         port_plan=store(port_for=lambda name, world_index: 14000),
         sql_runner=lambda **kwargs: statements.append(kwargs["statement"]) or [],
+        require_declared_user=False,
     )
     provider._build_output = store(
         stores=[store(process_name="postgres0", baseline_reference="baseline_t")]

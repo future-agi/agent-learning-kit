@@ -13,6 +13,7 @@ import os
 import pwd
 import socket
 import sys
+import tempfile
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -41,6 +42,7 @@ from fi.alk.harness.world.runtime import Call
 from fi.simulate.runtime.spec import RuntimeIsolation
 
 _DSN = "postgresql://harness:secret@localhost:15432/w0"
+_WORLD_DSN = "postgresql://alk_w0:derived@localhost:15432/w0"
 _AGENT_MODULE = "agent_tools_th_handler_child"
 
 
@@ -100,7 +102,7 @@ def _bundle(tmp_path: Path) -> tuple[CallRunnerContext, Path]:
     return context, source
 
 
-def _runtime() -> EnvironmentRuntime:
+def _runtime(tool_address: str | None = _WORLD_DSN) -> EnvironmentRuntime:
     return EnvironmentRuntime(
         runtime_id="runtime-1",
         world_index=0,
@@ -108,7 +110,10 @@ def _runtime() -> EnvironmentRuntime:
         state=RuntimeState.READY,
         endpoints={
             "world_db": RuntimeEndpoint(
-                capability="world_db", protocol="postgres", address=_DSN
+                capability="world_db",
+                protocol="postgres",
+                address=_DSN,
+                tool_address=tool_address,
             )
         },
     )
@@ -138,7 +143,7 @@ def spawned(monkeypatch) -> list[dict[str, Any]]:
     monkeypatch.setattr(
         handler_child,
         "default_user_resolver",
-        lambda name: SimpleNamespace(pw_uid=4444, pw_gid=5555) if name == "svc-tools" else None,
+        lambda name: SimpleNamespace(pw_uid=4444, pw_gid=5555) if name == "svc-agent" else None,
     )
     return calls
 
@@ -183,7 +188,9 @@ def test_under_isolation_the_handlers_run_as_their_user_and_the_worker_never_get
     # No model credentials and no target secrets reach the child; the DSN arrives on stdin.
     assert set(kwargs["env"]) <= {"PATH", "HOME", "TMPDIR", "LANG", "PYTHONPATH"}
     init = json.loads(child["process"].stdin.getvalue())
-    assert init["dsn"] == _DSN and _DSN not in json.dumps(kwargs["env"]) + str(child["argv"])
+    # The world's own role, never the superuser, and only on stdin.
+    assert init["dsn"] == _WORLD_DSN
+    assert _WORLD_DSN not in json.dumps(kwargs["env"]) + str(child["argv"])
     assert set(init) == {"handlers", "tools", "refusal_signature", "dsn", "import_root"}
     assert "lookup_account" in init["handlers"] and init["import_root"] == str(source)
     # The worker gets the child's socket and the mode, and never the source.
@@ -234,6 +241,17 @@ def test_a_sandbox_without_the_handlers_user_fails_closed(per_user, tmp_path, mo
         )
 
     assert raised.value.code == "call_failed"
+    assert spawned == []
+
+
+def test_a_world_without_its_own_role_starts_no_handler_child(
+    per_user, tmp_path, monkeypatch, spawned
+):
+    context, _source = _bundle(tmp_path)
+
+    with pytest.raises(CallAborted, match="handler_world_unscoped"):
+        chat.handler_child_for(context, _runtime(tool_address=None))
+
     assert spawned == []
 
 
@@ -331,11 +349,13 @@ def test_the_authoring_probe_runs_the_handlers_in_the_child_under_isolation(
     or not os.environ.get("ALK_TEST_POSTGRES_DSN"),
     reason="needs Linux, the capabilities to change users and a Postgres",
 )
-def test_the_handler_child_runs_as_its_user_with_nothing_of_the_harness(per_user, tmp_path):
+def test_the_handler_child_runs_as_its_user_with_nothing_of_the_harness(per_user):
     try:
         user = pwd.getpwnam(handler_child.HANDLER_USER.value)
     except KeyError:
         pytest.skip("the image's handler user is not present")
+    # Not pytest's tmp_path: its parents are root's own, so the child could not reach its scratch.
+    tmp_path = Path(tempfile.mkdtemp(dir="/tmp"))
     held = tmp_path / "held"
     held.mkdir(mode=0o700)
     (held / "case.json").write_text("CANARY")
