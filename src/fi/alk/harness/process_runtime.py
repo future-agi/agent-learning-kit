@@ -2714,10 +2714,16 @@ def _require_template_world_databases(manifest: EnvironmentBundleV2) -> None:
     provisioned any other way would leave them the superuser, so it is refused."""
     stores = _store_by_process_name(manifest)
     for process in manifest.processes:
-        if not isinstance(process, ManagedProcess) or process.engine is not ManagedEngine.POSTGRES:
+        if (
+            not isinstance(process, ManagedProcess)
+            or process.engine is not ManagedEngine.POSTGRES
+        ):
             continue
         store = stores.get(process.name)
-        if store is None or store.baseline.strategy is not BaselineStrategy.TEMPLATE_DATABASE:
+        if (
+            store is None
+            or store.baseline.strategy is not BaselineStrategy.TEMPLATE_DATABASE
+        ):
             # `internal_`: the hosted bundle generator only writes `template_database` stores.
             raise ProcessRuntimeError(
                 "provision",
@@ -5052,7 +5058,10 @@ def _freeze_one_store(
                     sql_runner=context.sql_runner,
                     process_name=process.name,
                 )
-            if process.engine is ManagedEngine.POSTGRES and context.require_declared_user:
+            if (
+                process.engine is ManagedEngine.POSTGRES
+                and context.require_declared_user
+            ):
                 _grant_world_role_group(
                     port=port,
                     credentials=credentials,
@@ -5387,10 +5396,11 @@ def _grant_world_role_group(
             statement=statement,
         )
 
+    group = f'"{WORLD_ROLE_GROUP}"'
     run(
         "postgres",
         "DO $$ BEGIN IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = "
-        f"'{WORLD_ROLE_GROUP}') THEN CREATE ROLE \"{WORLD_ROLE_GROUP}\" NOLOGIN; "
+        f"'{WORLD_ROLE_GROUP}') THEN CREATE ROLE {group} NOLOGIN; "
         "END IF; END $$",
     )
     run("postgres", "REVOKE CONNECT ON DATABASE postgres FROM PUBLIC")
@@ -5402,11 +5412,11 @@ def _grant_world_role_group(
         baseline_db,
         "DO $$ DECLARE s text; BEGIN FOR s IN SELECT nspname FROM pg_namespace "
         "WHERE nspname NOT LIKE 'pg\\_%' AND nspname <> 'information_schema' LOOP "
-        f"EXECUTE format('GRANT USAGE ON SCHEMA %I TO \"{WORLD_ROLE_GROUP}\"', s); "
+        f"EXECUTE format('GRANT USAGE ON SCHEMA %I TO {group}', s); "
         "EXECUTE format('GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA %I "
-        f"TO \"{WORLD_ROLE_GROUP}\"', s); "
+        f"TO {group}', s); "
         "EXECUTE format('GRANT USAGE, SELECT, UPDATE ON ALL SEQUENCES IN SCHEMA %I "
-        f"TO \"{WORLD_ROLE_GROUP}\"', s); "
+        f"TO {group}', s); "
         "END LOOP; END $$",
     )
 

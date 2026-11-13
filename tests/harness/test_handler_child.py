@@ -143,7 +143,9 @@ def spawned(monkeypatch) -> list[dict[str, Any]]:
     monkeypatch.setattr(
         handler_child,
         "default_user_resolver",
-        lambda name: SimpleNamespace(pw_uid=4444, pw_gid=5555) if name == "svc-agent" else None,
+        lambda name: (
+            SimpleNamespace(pw_uid=4444, pw_gid=5555) if name == "svc-agent" else None
+        ),
     )
     return calls
 
@@ -225,7 +227,9 @@ def test_a_worker_under_isolation_refuses_the_source(tmp_path, monkeypatch):
     assert result["error"].startswith("chat_worker_refused:")
 
 
-def test_a_sandbox_without_the_handlers_user_fails_closed(per_user, tmp_path, monkeypatch, spawned):
+def test_a_sandbox_without_the_handlers_user_fails_closed(
+    per_user, tmp_path, monkeypatch, spawned
+):
     monkeypatch.setattr(handler_child, "default_user_resolver", lambda name: None)
     context, source = _bundle(tmp_path)
 
@@ -268,7 +272,9 @@ class _Store:
         return {}
 
 
-def test_a_world_with_a_handler_channel_never_imports_the_agent_code(tmp_path, monkeypatch):
+def test_a_world_with_a_handler_channel_never_imports_the_agent_code(
+    tmp_path, monkeypatch
+):
     monkeypatch.setattr(chat, "_HostedToolStore", _Store)
     context, source = _bundle(tmp_path)
     contract = AgentContract.model_validate_json(
@@ -279,7 +285,9 @@ def test_a_world_with_a_handler_channel_never_imports_the_agent_code(tmp_path, m
         def call(self, name, arguments):
             return Call(name=name, arguments=dict(arguments), result={"from": "child"})
 
-    world = chat._tool_world(context.bundle_dir, contract, _runtime(), source, Channel())
+    world = chat._tool_world(
+        context.bundle_dir, contract, _runtime(), source, Channel()
+    )
     call = world.call("lookup_account", {"account_id": "A-1"})
 
     assert isinstance(world, ChildWorld)

@@ -126,7 +126,11 @@ def test_customer_processes_get_the_world_s_role_only_under_isolation():
     plan = pr.plan_ports(manifest, instances=2)
 
     isolated = pr.build_endpoints(
-        manifest, world_index=1, port_plan=plan, credentials=credentials, world_roles=True
+        manifest,
+        world_index=1,
+        port_plan=plan,
+        credentials=credentials,
+        world_roles=True,
     )
     fixed = pr.build_endpoints(
         manifest, world_index=1, port_plan=plan, credentials=credentials
@@ -217,7 +221,9 @@ def test_isolation_refuses_a_postgres_engine_its_worlds_cannot_be_scoped_on():
 # --- against a real Postgres (set ALK_TEST_POSTGRES_DSN to a superuser connection) ------------
 
 _REAL = os.environ.get("ALK_TEST_POSTGRES_DSN")
-real_postgres = pytest.mark.skipif(not _REAL, reason="set ALK_TEST_POSTGRES_DSN to a superuser DSN")
+real_postgres = pytest.mark.skipif(
+    not _REAL, reason="set ALK_TEST_POSTGRES_DSN to a superuser DSN"
+)
 
 
 @pytest.fixture
@@ -254,7 +260,10 @@ def worlds():
         sql_runner=pr.default_sql_runner,
         process_name="db",
     )
-    run("postgres", f'ALTER DATABASE "{baseline}" WITH IS_TEMPLATE true ALLOW_CONNECTIONS false')
+    run(
+        "postgres",
+        f'ALTER DATABASE "{baseline}" WITH IS_TEMPLATE true ALLOW_CONNECTIONS false',
+    )
 
     def reset(index: int) -> None:
         pr._reset_template_database(

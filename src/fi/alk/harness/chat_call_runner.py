@@ -246,15 +246,22 @@ def handler_child_for(
         return None
     endpoint = runtime.endpoints.get("world_db")
     contract_path = context.bundle_dir / "contract.json"
-    if endpoint is None or endpoint.protocol != "postgres" or not contract_path.is_file():
+    if (
+        endpoint is None
+        or endpoint.protocol != "postgres"
+        or not contract_path.is_file()
+    ):
         return None
     if endpoint.tool_address is None:
         # The world's own role is what the agent's code may use; without one (an authoring lane)
         # there is no safe address to hand it, so the conversation does not start.
         raise CallAborted(
-            "handler_world_unscoped: this world has no role of its own", code="call_failed"
+            "handler_world_unscoped: this world has no role of its own",
+            code="call_failed",
         )
-    contract = AgentContract.model_validate_json(contract_path.read_text(encoding="utf-8"))
+    contract = AgentContract.model_validate_json(
+        contract_path.read_text(encoding="utf-8")
+    )
     return start_handler_child(
         handlers=handler_sources(context.bundle_dir, contract),
         tools=[tool.model_dump(mode="json") for tool in contract.tools],

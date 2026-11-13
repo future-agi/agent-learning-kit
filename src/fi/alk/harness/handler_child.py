@@ -121,7 +121,9 @@ class ChildWorld(GeneratedWorld):
         self.refusal_signature = refusal_signature
 
     def reach(self, source_root: str) -> None:
-        raise RuntimeError("a handler child's world never imports the agent's code here")
+        raise RuntimeError(
+            "a handler child's world never imports the agent's code here"
+        )
 
     def call(self, name: str, arguments: Mapping[str, Any] | None = None) -> Call:
         return self._record(self._channel.call(name, dict(arguments or {})))
@@ -247,7 +249,9 @@ def serve(sock: socket.socket, world: GeneratedWorld) -> None:
             request = _receive(sock)
         except EOFError:
             return
-        call = world.call(str(request.get("name") or ""), request.get("arguments") or {})
+        call = world.call(
+            str(request.get("name") or ""), request.get("arguments") or {}
+        )
         _send(
             sock,
             {

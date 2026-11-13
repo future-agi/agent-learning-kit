@@ -110,7 +110,9 @@ class IsolatedChatCallRunner:
                     "attempt_number": context.attempt_number,
                     "runtime": runtime.model_dump(mode="json"),
                     "scenario_key": scenario.scenario_key,
-                    "source_scenario_key": getattr(scenario, "source_scenario_key", None),
+                    "source_scenario_key": getattr(
+                        scenario, "source_scenario_key", None
+                    ),
                     "scenario_id": scenario.scenario_id,
                 },
                 environ=environ,
@@ -216,9 +218,8 @@ async def main() -> None:
     collector = _ArtifactCollector()
     usage = _UsageCollector()
     try:
-        if payload.get("process_isolation") == IsolationMode.PER_USER.value and payload.get(
-            "source_directory"
-        ):
+        isolated = payload.get("process_isolation") == IsolationMode.PER_USER.value
+        if isolated and payload.get("source_directory"):
             # The agent's code runs in the handler child; never import it as the harness.
             raise CallAborted(
                 "chat_worker_refused: per-user isolation and a source directory",
