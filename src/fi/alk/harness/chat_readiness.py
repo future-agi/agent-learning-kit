@@ -10,8 +10,20 @@ from fi.simulate.agent.wrapper import AgentInput
 
 from .chat_transport import create_chat_wrapper
 from .diagnostics import HarnessDiagnostic
-from .job import HarnessStage
+from .job import FailureCause, HarnessStage
 from .world.runtime import graded_calls, trace_row
+
+
+def _chat_target_cause(trace):
+    """The closed cause of a failed request to the agent, from the transport's own flags.
+
+    An HTTP error status is the agent answering, not a refusal: it has no cause here.
+    """
+    if trace.get("timeout_error") is True:
+        return FailureCause.CHAT_TARGET_TIMEOUT
+    if trace.get("network_error") is True and not trace.get("status_code"):
+        return FailureCause.CHAT_TARGET_REFUSED
+    return None
 
 
 def _failure_code(trace):
@@ -147,7 +159,10 @@ async def probe_chat_ingress(
             )
             receipt["diagnostic"] = diagnostic.model_dump(mode="json")
             raise RuntimeValidationError(
-                "environment", diagnostic.redacted_message, diagnostics=(diagnostic,)
+                "environment",
+                diagnostic.redacted_message,
+                diagnostics=(diagnostic,),
+                cause=None if trace.get("success") else _chat_target_cause(trace),
             )
         receipt["status"] = "passed"
     except RuntimeValidationError:
@@ -264,7 +279,7 @@ async def probe_chat_workflow(
         "artifacts": artifacts.paths,
     }
 
-    def failure(code, message):
+    def failure(code, message, cause=None):
         detail = sanitize_diagnostic(str(message), redactions)[:4000]
         if artifacts.transcript:
             detail += "\n<untrusted_transcript>\n" + artifacts.transcript[:6000] + "\n</untrusted_transcript>"
@@ -276,7 +291,10 @@ async def probe_chat_workflow(
         )
         receipt["diagnostic"] = diagnostic.model_dump(mode="json")
         return RuntimeValidationError(
-            "environment", diagnostic.redacted_message, diagnostics=(diagnostic,)
+            "environment",
+            diagnostic.redacted_message,
+            diagnostics=(diagnostic,),
+            cause=cause,
         )
 
     async def retain_interrupted_conversation(exc):
@@ -341,7 +359,11 @@ async def probe_chat_workflow(
         if exc.partial is not None:
             receipt["tool_call_count"] = len(graded_calls(exc.partial.calls))
             receipt["turns"] = exc.partial.turns
-        raise failure(_failure_code(artifacts.trace), str(exc)) from exc
+        raise failure(
+            _failure_code(artifacts.trace),
+            str(exc),
+            cause=_chat_target_cause(artifacts.trace),
+        ) from exc
     except asyncio.CancelledError as exc:
         receipt["status"] = "cancelled"
         await retain_interrupted_conversation(exc)

@@ -58,6 +58,7 @@ from fi.alk.harness import process_runtime as pr
 from fi.alk.harness.job import (
     AgentConnection,
     ExecutionMode,
+    FailureCause,
     FailureDomain,
     HarnessJob,
     HarnessJobMetadata,
@@ -2226,8 +2227,37 @@ def test_wait_for_dependency_requires_every_readiness_probe_backing_the_process(
     assert ready["/health"] and ready["/admin/health"]
 
 
-def test_depends_on_readiness_probe_timeout_is_a_typed_error() -> None:
-    manifest = _manifest()
+def _control(name: str) -> Callable[[dict[str, Any]], dict[str, Any]]:
+    """A `_body` mutation making `name` the control service, with the users each role carries."""
+
+    def mutate(body: dict[str, Any]) -> dict[str, Any]:
+        body["runtime"] = {**body["runtime"], "control_service": name}
+        body["processes"] = [
+            {**process, "user": "svc-agent" if process["name"] == name else "svc-tools"}
+            if process["kind"] == "source"
+            else process
+            for process in body["processes"]
+        ]
+        return body
+
+    return mutate
+
+
+# Only the control service is the agent. The crashing process here is `tools-api`: as the control
+# service its failure is the agent's named cause; as a helper beside the agent it names none.
+_EXITED = [
+    pytest.param("tools-api", FailureCause.AGENT_EXITED_BEFORE_READY, id="the agent"),
+    pytest.param("agent", None, id="a helper service"),
+]
+_STALLED = [
+    pytest.param("tools-api", FailureCause.AGENT_NOT_READY_IN_TIME, id="the agent"),
+    pytest.param("agent", None, id="a helper service"),
+]
+
+
+@pytest.mark.parametrize(("control", "cause"), _STALLED)
+def test_depends_on_readiness_probe_timeout_is_a_typed_error(control, cause) -> None:
+    manifest = _manifest(_control(control))
     plan = pr.plan_ports(manifest, instances=1)
     spawned = pr.SpawnedWorldProcess("tools-api", FakeHandle(), 15001, 0)
     ticks = {"t": 0.0}
@@ -2244,10 +2274,14 @@ def test_depends_on_readiness_probe_timeout_is_a_typed_error() -> None:
         )
     assert excinfo.value.stage == "depends_on"
     assert excinfo.value.code == "depends_on_timeout"
+    assert excinfo.value.cause is cause
 
 
-def test_depends_on_readiness_fails_immediately_when_source_process_exits() -> None:
-    manifest = _manifest()
+@pytest.mark.parametrize(("control", "cause"), _EXITED)
+def test_depends_on_readiness_fails_immediately_when_source_process_exits(
+    control, cause
+) -> None:
+    manifest = _manifest(_control(control))
     plan = pr.plan_ports(manifest, instances=1)
     handle = FakeHandle("RuntimeError: prompt service rejected credentials\n")
     handle.terminated = True
@@ -2267,8 +2301,84 @@ def test_depends_on_readiness_fails_immediately_when_source_process_exits() -> N
 
     assert excinfo.value.code == "spawn_failed"
     assert excinfo.value.domain is pr.FailureDomain.AGENT
+    assert excinfo.value.cause is cause
     assert "prompt service rejected credentials" in str(excinfo.value)
     assert sleeps == []
+
+
+@pytest.mark.parametrize(("control", "cause"), _EXITED)
+def test_an_agent_that_crashes_at_import_reads_exited_before_ready(
+    tmp_path: Path, control, cause
+) -> None:
+    """A real process that raises while importing: the cause is closed, the text stays local."""
+    manifest = _manifest(
+        lambda body: _control(control)(
+            {
+                **body,
+                "readiness": [],
+                "processes": [
+                    body["processes"][0],
+                    {
+                        **body["processes"][1],
+                        "started_check": {"port": True, "timeout_seconds": 10},
+                    },
+                    body["processes"][2],
+                ],
+            }
+        )
+    )
+    plan = pr.plan_ports(manifest, instances=1)
+    handle = pr.default_process_runner(
+        [sys.executable, "-c", "raise RuntimeError('crashed at import')"],
+        cwd=tmp_path,
+        env={},
+        log_path=tmp_path / "tools-api.log",
+    )
+    spawned = pr.SpawnedWorldProcess(
+        "tools-api", handle, plan.port_for("tools-api", 0), 0
+    )
+
+    with pytest.raises(pr.ProcessRuntimeError) as excinfo:
+        pr.wait_for_dependency(
+            manifest, "tools-api", world_index=0, port_plan=plan, spawned=spawned
+        )
+
+    assert excinfo.value.code == "spawn_failed"
+    assert excinfo.value.cause is cause
+    assert "crashed at import" in str(excinfo.value)
+
+
+def test_a_managed_engine_that_exits_before_ready_has_no_agent_cause() -> None:
+    manifest = _manifest(
+        lambda body: {
+            **body,
+            "readiness": [
+                {
+                    "capability": "database",
+                    "timeout_seconds": 5,
+                    "interval_seconds": 0.1,
+                }
+            ],
+        }
+    )
+    plan = pr.plan_ports(manifest, instances=1)
+    handle = FakeHandle()
+    handle.terminated = True
+    spawned = pr.SpawnedWorldProcess("postgres", handle, 15000, 0)
+
+    with pytest.raises(pr.ProcessRuntimeError) as excinfo:
+        pr.wait_for_dependency(
+            manifest,
+            "postgres",
+            world_index=0,
+            port_plan=plan,
+            spawned=spawned,
+            prober=lambda **kwargs: False,
+            sleep=lambda s: None,
+        )
+
+    assert excinfo.value.domain is pr.FailureDomain.INFRASTRUCTURE
+    assert excinfo.value.cause is None
 
 
 def test_started_check_log_marker_variant_waits_for_the_marker() -> None:
@@ -2424,21 +2534,24 @@ def test_started_check_port_variant_dials_the_world_specific_formula_port(
     assert dialed == [("localhost", expected_port)]
 
 
-def test_started_check_port_variant_timeout_when_nothing_listens() -> None:
+@pytest.mark.parametrize(("control", "cause"), _STALLED)
+def test_started_check_port_variant_timeout_when_nothing_listens(control, cause) -> None:
     manifest = _manifest(
-        lambda body: {
-            **body,
-            "readiness": [],
-            "processes": [
-                body["processes"][0],
-                {
-                    **body["processes"][1],
-                    "fixed_port": 1,
-                    "started_check": {"port": True, "timeout_seconds": 1},
-                },
-                body["processes"][2],
-            ],
-        }
+        lambda body: _control(control)(
+            {
+                **body,
+                "readiness": [],
+                "processes": [
+                    body["processes"][0],
+                    {
+                        **body["processes"][1],
+                        "fixed_port": 1,
+                        "started_check": {"port": True, "timeout_seconds": 1},
+                    },
+                    body["processes"][2],
+                ],
+            }
+        )
     )
     plan = pr.plan_ports(manifest, instances=1)
     spawned = pr.SpawnedWorldProcess("tools-api", FakeHandle(), 1, 0)
@@ -2454,6 +2567,7 @@ def test_started_check_port_variant_timeout_when_nothing_listens() -> None:
             sleep=lambda s: ticks.__setitem__("t", ticks["t"] + s),
         )
     assert excinfo.value.code == "depends_on_timeout"
+    assert excinfo.value.cause is cause
 
 
 def test_spawn_world_spawns_in_dependency_order_and_waits_between(
@@ -2493,6 +2607,56 @@ def test_spawn_world_spawns_in_dependency_order_and_waits_between(
     assert spawn_order.index("node") < spawn_order.index(
         "python3"
     )  # agent's run_command[0]
+
+
+@pytest.mark.parametrize(("control", "cause"), _EXITED)
+def test_spawn_world_keeps_the_cause_of_a_source_process_that_crashes_at_import(
+    tmp_path: Path, control, cause
+) -> None:
+    manifest = _manifest(
+        lambda body: _control(control)(
+            {
+                **body,
+                "readiness": [],
+                "processes": [
+                    body["processes"][0],
+                    {
+                        **body["processes"][1],
+                        "started_check": {"port": True, "timeout_seconds": 10},
+                    },
+                    body["processes"][2],
+                ],
+            }
+        )
+    )
+    plan = pr.plan_ports(manifest, instances=1)
+    credentials = pr.generate_engine_credentials(manifest, token=lambda: "PW")
+
+    def runner(argv, *, cwd, env, log_path, user=None, group=None):
+        if argv[0] != "node":
+            return FakeHandle()
+        return pr.default_process_runner(
+            [sys.executable, "-c", "raise RuntimeError('crashed at import')"],
+            cwd=tmp_path,
+            env={},
+            log_path=log_path,
+        )
+
+    context = pr.SpawnContext(
+        work_directory=tmp_path,
+        port_plan=plan,
+        credentials=credentials,
+        secret_values={},
+        secret_purposes={},
+        runner=runner,
+        sync_run=lambda argv, **kwargs: subprocess.CompletedProcess(argv, 0),
+    )
+
+    with pytest.raises(pr.ProcessRuntimeError) as excinfo:
+        pr.spawn_world(manifest, world_index=0, context=context)
+
+    assert excinfo.value.process == "tools-api"
+    assert excinfo.value.cause is cause
 
 
 def test_spawn_world_waits_for_terminal_source_started_check(tmp_path: Path) -> None:

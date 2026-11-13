@@ -65,7 +65,7 @@ from .bundle_v2 import (
     StoreEntry,
 )
 from .diagnostics import DiagnosticLocation, HarnessDiagnostic
-from .job import FailureDomain
+from .job import FailureCause, FailureDomain
 from .job import HarnessJobMetadata
 from .job import HarnessStage
 from .livekit_source import infer_livekit_agent_name_from_source
@@ -112,6 +112,9 @@ class ProcessRuntimeError(RuntimeError):
     `code` alone (which cannot recover the managed/source split). `domain` is `None` only where
     the raise site genuinely cannot tell which process kind failed (a mixed-kind catch-all); such
     sites are rare and `SECTION_2F_DOMAIN` below exists as their fallback.
+
+    `cause`, when the raise site knows it, is the closed `FailureCause` a reader without access
+    to guest text gets instead of the message.
     """
 
     def __init__(
@@ -123,12 +126,14 @@ class ProcessRuntimeError(RuntimeError):
         process: str | None = None,
         domain: FailureDomain | None = None,
         diagnostics: tuple[HarnessDiagnostic, ...] = (),
+        cause: FailureCause | None = None,
     ) -> None:
         self.stage = stage
         self.code = code
         self.process = process
         self.domain = domain
         self.diagnostics = diagnostics
+        self.cause = cause
         located = f" ({process})" if process else ""
         super().__init__(f"{stage}/{code}{located}: {message}")
 
@@ -2804,6 +2809,9 @@ def wait_for_dependency(
     """
     processes_by_name = {process.name: process for process in manifest.processes}
     dependency = processes_by_name[dependency_name]
+    # Only the control service is the agent: a helper service (tools-api, a generated proxy)
+    # that crashes or stalls is no `agent_*` cause, so it reads unknown.
+    is_agent = dependency_name == manifest.runtime.control_service
     probes = _readiness_probes_for_process(manifest, dependency_name)
     if probes:
         port = port_plan.port_for(dependency_name, world_index)
@@ -2850,6 +2858,7 @@ def wait_for_dependency(
                         if isinstance(dependency, SourceProcess)
                         else FailureDomain.INFRASTRUCTURE
                     ),
+                    cause=FailureCause.AGENT_EXITED_BEFORE_READY if is_agent else None,
                 )
             return False
 
@@ -2866,6 +2875,7 @@ def wait_for_dependency(
                 f"{dependency_name}: readiness probe did not pass within {combined_timeout}s",
                 process=dependency_name,
                 domain=FailureDomain.INFRASTRUCTURE,
+                cause=FailureCause.AGENT_NOT_READY_IN_TIME if is_agent else None,
             ),
         )
         return
@@ -2905,6 +2915,7 @@ def wait_for_dependency(
                 f"{_output_tail(spawned.handle, spawned.local_auth_values)}",
                 process=dependency_name,
                 domain=FailureDomain.AGENT,
+                cause=FailureCause.AGENT_EXITED_BEFORE_READY if is_agent else None,
             )
         return False
 
@@ -2922,6 +2933,7 @@ def wait_for_dependency(
             f"{_output_tail(spawned.handle, spawned.local_auth_values)}",
             process=dependency_name,
             domain=FailureDomain.INFRASTRUCTURE,
+            cause=FailureCause.AGENT_NOT_READY_IN_TIME if is_agent else None,
         ),
     )
 

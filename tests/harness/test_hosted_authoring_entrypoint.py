@@ -129,7 +129,56 @@ def test_exhausted_runtime_repair_returns_nonretryable_exit(tmp_path, monkeypatc
         raise RuntimeValidationError("environment", "seed_dependency_unresolved")
 
     monkeypatch.setattr(entrypoint, "authoring_main", failed)
+    monkeypatch.setattr(entrypoint, "_FAILURE_CAUSE_PATH", tmp_path / "cause.json")
     assert entrypoint.main([]) == 78
+    assert json.loads((tmp_path / "cause.json").read_text()) == {"cause": None}
+
+
+def test_runtime_validation_exit_records_only_the_closed_cause(tmp_path, monkeypatch):
+    from fi.alk.harness.authoring_runtime_validation import RuntimeValidationError
+    from fi.alk.harness.job import FailureCause
+
+    monkeypatch.setattr(entrypoint, "_load_values", lambda path: {})
+    monkeypatch.setattr(entrypoint, "_ADC_PATH", tmp_path / "adc.json")
+    cause_path = tmp_path / "cause.json"
+    monkeypatch.setattr(entrypoint, "_FAILURE_CAUSE_PATH", cause_path)
+
+    def failed(argv, *, validate_runtime):
+        raise RuntimeValidationError(
+            "environment",
+            "agent: exited before started_check passed: RuntimeError: HELD-BACK CASE",
+            cause=FailureCause.AGENT_EXITED_BEFORE_READY,
+        )
+
+    monkeypatch.setattr(entrypoint, "authoring_main", failed)
+    assert entrypoint.main([]) == 78
+    assert json.loads(cause_path.read_text()) == {
+        "cause": "agent_exited_before_ready"
+    }
+
+
+def test_runtime_validation_exit_replaces_what_the_agent_left_at_the_cause_path(
+    tmp_path, monkeypatch
+):
+    from fi.alk.harness.authoring_runtime_validation import RuntimeValidationError
+
+    monkeypatch.setattr(entrypoint, "_load_values", lambda path: {})
+    monkeypatch.setattr(entrypoint, "_ADC_PATH", tmp_path / "adc.json")
+    elsewhere = tmp_path / "elsewhere.json"
+    elsewhere.write_text("untouched")
+    cause_path = tmp_path / "cause.json"
+    # A process of the agent planted a link, hoping for a write through it.
+    cause_path.symlink_to(elsewhere)
+    monkeypatch.setattr(entrypoint, "_FAILURE_CAUSE_PATH", cause_path)
+
+    def failed(argv, *, validate_runtime):
+        raise RuntimeValidationError("environment", "invalid")
+
+    monkeypatch.setattr(entrypoint, "authoring_main", failed)
+    assert entrypoint.main([]) == 78
+    assert not cause_path.is_symlink()
+    assert json.loads(cause_path.read_text()) == {"cause": None}
+    assert elsewhere.read_text() == "untouched"
 
 
 def test_hosted_entrypoint_passes_one_shot_provider_secret_to_authoring(

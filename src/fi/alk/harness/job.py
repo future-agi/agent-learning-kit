@@ -471,6 +471,19 @@ class FailureDomain(str, Enum):
     PLATFORM_SYNC = "platform_sync"
 
 
+class FailureCause(str, Enum):
+    """Why a candidate failed real-runtime validation, from a closed set.
+
+    The platform passes only this value to a reader that must not see guest text, such as a
+    coding agent's key: free text from the guest can quote any case of the suite.
+    """
+
+    AGENT_EXITED_BEFORE_READY = "agent_exited_before_ready"
+    AGENT_NOT_READY_IN_TIME = "agent_not_ready_in_time"
+    CHAT_TARGET_TIMEOUT = "chat_target_timeout"
+    CHAT_TARGET_REFUSED = "chat_target_refused"
+
+
 class FailureOwner(str, Enum):
     CUSTOMER_AGENT = "customer_agent"
     FUTUREAGI = "futureagi"
