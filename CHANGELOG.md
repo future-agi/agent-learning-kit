@@ -52,6 +52,12 @@ Post-rc.1 increments on the release branch. Each one adds gates on top of the
 - Every actor that acts through the world is in the call's actor summary; one that cannot act is recorded as the
   scenario's problem with the reason, and the judge is given the actors' actions and briefs. World changes add
   approvals, a "no change" line, and a judged sub-goal whose evidence never arrived reads `unmeasured`.
+- The action log records each call's world action in full (`action`, beside `name`), and the door numbers a fault's
+  calls, holds its lock, answers an actor's repeated key and says a fault did not take effect by that action, so
+  `ticket.update` is never taken for `crm.update`; a key reused for another action is an `idempotency_conflict`. An
+  `on_tool` trigger waits for the action in full. An actor waiting for a record only it may write is refused when the
+  scenario is written. A timeout another actor answers reads `answered_by` only once that actor has acted or spoken,
+  else `limit_blocked` or `unresolved`.
 - The builder chat of a built environment can change its actors (`add_actor`, `drop_actor`) and nothing else
   of the world; adding or dropping one, or changing which scenarios include one, waits for the person's yes,
   and an automatic repair cannot change a scenario's actors.
