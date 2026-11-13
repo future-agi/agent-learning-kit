@@ -222,6 +222,13 @@ def _tool_world(
     world.handlers = handler_sources(bundle_dir, contract)
     world.refusal_signature = contract.refusal_signature
     if source_directory is not None:
+        if isolation_mode() is IsolationMode.PER_USER:
+            # This process holds the harness's capabilities; the agent's code runs only in its
+            # handler child.
+            raise CallAborted(
+                "handler_child_required: per-user isolation never imports the agent's code here",
+                code="call_failed",
+            )
         world.reach(str(source_directory))
     return world
 
