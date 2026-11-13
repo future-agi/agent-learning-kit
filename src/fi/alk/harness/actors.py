@@ -367,8 +367,9 @@ class ScenarioActor(BaseModel):
 
 
 def cycles(actors: dict[str, "Actor"], entries: list["ScenarioActor"]) -> list[list[str]]:
-    """Actors that bring each other in: each one comes in once a record exists that only the next may write. A cycle
-    is a scenario problem refused when the scenario is written, never a loop discovered during a run."""
+    """Actors that bring each other in: each one comes in once a record exists that only the next may write. One actor
+    waiting for a record only it may write is a cycle of one. A cycle is a scenario problem refused when the scenario
+    is written, never a loop discovered during a run."""
     triggered_by: dict[str, set[str]] = {}
     # Only the scenario's own actors act in its runs.
     in_scene = {entry.id for entry in entries if entry.id in actors}
@@ -382,12 +383,11 @@ def cycles(actors: dict[str, "Actor"], entries: list["ScenarioActor"]) -> list[l
         if trigger is None or trigger.kind != "conditional" or not trigger.collection:
             continue
         names = {f"{trigger.collection}.change", f"{trigger.collection}.put"}
+        # The actor itself among them: it cannot write the record it waits for before it has come in.
         triggered_by[entry.id] = {
             other.id
             for other in actors.values()
-            if other.id != entry.id
-            and other.id in in_scene
-            and any(name in (one, one.rsplit(".", 1)[-1]) for one in other.permitted_actions for name in names)
+            if other.id in in_scene and names & set(other.permitted_actions)
         }
     # Over the whole graph: an actor comes in once any one of the scenario's actors who may write its record has come
     # in. Those with no record to wait for come in on their own, and so does one whose record none of them writes (the
@@ -417,7 +417,7 @@ def cycles(actors: dict[str, "Actor"], entries: list["ScenarioActor"]) -> list[l
                     reach.add(nxt)
                     frontier.append(nxt)
         group = sorted(one for one in reach if start in _reaches(stuck, one))
-        if len(group) > 1:
+        if len(group) > 1 or start in stuck.get(start, ()):
             found.append(group)
             placed |= set(group)
     return found

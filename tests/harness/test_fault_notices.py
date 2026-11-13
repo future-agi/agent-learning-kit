@@ -67,3 +67,26 @@ def test_the_transcript_carries_its_notices_and_omits_them_when_none():
     assert "notices" not in json.loads(transcript.artifact())
     transcript.notices = fault_notices([FAULT], [], [_call("apply_discount")])
     assert json.loads(transcript.artifact())["notices"][0]["code"] == "fault_not_applied"
+
+
+def test_a_call_of_another_action_with_the_same_last_part_is_not_taken_for_the_fault_s_action():
+    fault = {"action": "crm.update", "on_call": 1, "mode": "timeout_before_commit"}
+    log = [{"name": "update", "action": "ticket.update", "actor_id": "agent", "outcome": "committed"}]
+    (notice,) = fault_notices([fault], log, [_call("update")])
+    assert notice["code"] == "fault_not_triggered"
+    assert "made 0 calls of it" in notice["message"]
+
+
+def test_a_fault_the_door_applied_after_another_action_with_the_same_last_part_says_nothing():
+    from fi.alk.harness.world_door import DictRoster, Executed, MemoryLog, ToolCall, WorldDoor
+
+    class _Ok:
+        def run(self, call):
+            return Executed(200, {"applied": True})
+
+    fault = {"action": "crm.update", "on_call": 1, "mode": "timeout_before_commit", "delay_seconds": 0}
+    log = MemoryLog()
+    door = WorldDoor(_Ok(), log, DictRoster({}), faults=lambda: [fault])
+    door.enter(ToolCall(action="ticket.update", name="update"))
+    door.enter(ToolCall(action="crm.update", name="update"))
+    assert fault_notices([fault], log.rows(), [_call("update"), _call("update")]) == []

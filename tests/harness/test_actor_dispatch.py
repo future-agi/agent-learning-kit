@@ -471,9 +471,41 @@ def test_an_actor_answering_for_another_is_held_to_the_live_turn_limits(cap):
     # The limit is already reached: answering instead would be one turn past it.
     setattr(dispatcher, cap, 0)
     asyncio.run(_wait_out(dispatcher, clock, 30))
-    assert ("manager", "timeout", "answered_by") in _timeline(dispatcher)
+    # No turn was taken, so no one answered: the timeout says the limit blocked the stand-in.
+    timeout = next(one for one in dispatcher.fired if one["play"] == "timeout")
+    assert (timeout["outcome"], timeout["fallback"], timeout["why"]) == ("limit_blocked", "deputy", "turn_limit")
     assert sent == []
     assert dispatcher.live_turns.get("deputy", 0) == 0
+
+
+@pytest.mark.parametrize("play", ["mocked", "live"])
+def test_answered_by_is_recorded_only_once_the_stand_in_s_turn_or_action_has_happened(play):
+    dispatcher, clock, sent = _approver("deputy", instead_play=play)
+    asyncio.run(_wait_out(dispatcher, clock, 30))
+    plays = [(one["actor"], one["play"]) for one in dispatcher.fired]
+    timeout = plays.index(("manager", "timeout"))
+    # The stand-in's own action comes right after the timeout that names it.
+    assert plays[timeout + 1] == ("deputy", play)
+    assert dispatcher.fired[timeout]["outcome"] == "answered_by" and len(sent) == 1
+
+
+def test_a_stand_in_with_nothing_left_to_do_leaves_the_wait_unresolved():
+    dispatcher, clock, sent = _approver("deputy", instead_play="mocked")
+    # Its only action already went.
+    dispatcher.pending = [one for one in dispatcher.pending if one[0].id != "deputy"]
+    asyncio.run(_wait_out(dispatcher, clock, 30))
+    timeout = next(one for one in dispatcher.fired if one["play"] == "timeout")
+    assert (timeout["outcome"], timeout["why"]) == ("unresolved", "nothing_left_to_do")
+    assert sent == []
+
+
+def test_a_stand_in_that_already_fell_back_itself_leaves_the_wait_unresolved():
+    dispatcher, clock, sent = _approver("deputy", instead_play="live")
+    dispatcher.fell_back.add("deputy")
+    asyncio.run(_wait_out(dispatcher, clock, 30))
+    timeout = next(one for one in dispatcher.fired if one["play"] == "timeout")
+    assert (timeout["outcome"], timeout["why"]) == ("unresolved", "stand_in_unavailable")
+    assert sent == []
 
 
 def _channel(names, decide):
@@ -659,3 +691,14 @@ def test_one_live_actor_stops_at_its_own_turn_cap():
     log.append({"name": "post_message", "actor_id": "agent", "action_id": "a1", "arguments": {"text": "Thoughts?"}})
     asyncio.run(_ticks(dispatcher, count=60))
     assert dispatcher.live_turns == {"manager": LIMIT_DEFAULTS["live_turns_per_actor"], "colleague": LIMIT_DEFAULTS["live_turns_per_actor"]}
+
+
+def test_a_live_actor_sees_a_call_where_it_can_act_by_the_full_action_never_its_last_part():
+    dispatcher, _ = _dispatcher([], [])
+    actor = Actor(id="clerk", name="Cal", permitted_actions=["crm.update"])
+    ticket = {"actor_id": "agent", "name": "update", "action": "ticket.update", "arguments": {}}
+    deal = {"actor_id": "agent", "name": "update", "action": "crm.update", "arguments": {}}
+    assert not dispatcher._sees(actor, ticket)
+    assert dispatcher._sees(actor, deal)
+    # A row from before actions were logged in full is read by its name.
+    assert dispatcher._sees(actor, {"actor_id": "agent", "name": "update", "arguments": {}})

@@ -65,6 +65,7 @@ from fi.simulate.simulation.call_actors import (
 
 from .actor_dispatch import ActorDispatcher, DoorActs, build_dispatcher, world_summary
 from .actor_meter import ActorMeter
+from .world_door import logged_as, same_action
 from .actors import (
     AGENT,
     ScenarioActor,
@@ -81,7 +82,7 @@ from .bundle_v2 import EvidenceSeam
 from .call_actor import (
     load_call_actors,
     speaking_entries,
-    logged_tool_name,
+    logged_action,
 )
 from .hosted_scheduler import CallAborted, CallOutcome
 from .hosted_scheduler import Scenario as HostedScenario
@@ -800,8 +801,8 @@ def _resolved_call_actors(
             continue
         taken.add(voice)
         if trigger.get("kind") == "on_tool":
-            # The engine counts the calls the trace logs, which name the route a tool calls.
-            trigger["tool"] = logged_tool_name(contract, str(trigger.get("tool") or ""))
+            # The engine counts the calls the trace logs, each by the world action (the route) a tool calls.
+            trigger["tool"] = logged_action(contract, str(trigger.get("tool") or ""))
         resolved.append(
             {
                 **here,
@@ -1005,9 +1006,9 @@ _OUTCOMES = ("committed", "refused", "faulted", "duplicate")
 
 
 def _shown_action(name: str, actor: Any) -> str:
-    """How a person reads an actor's logged action: the door logs it by its last part (`change`, `post_message`), as
-    the proof does, so the actor's one permitted action ending that way (`approvals.change`) names it. More than one,
-    or none, keeps the logged name."""
+    """How a person reads an actor's logged action: a row from before the door logged actions in full has only the
+    last part (`change`, `post_message`), as the proof does, so the actor's one permitted action ending that way
+    (`approvals.change`) names it. More than one, or none, keeps the logged name."""
     if actor is None or "." in name:
         return name
     full = [one for one in getattr(actor, "permitted_actions", None) or () if one.rsplit(".", 1)[-1] == name]
@@ -1067,7 +1068,7 @@ def trial_state_changes(
         if outcome in _OUTCOMES:
             entry[outcome] += 1
         if outcome == "committed":
-            shown = str(row.get("name") or "") if who == AGENT else chosen.name(who, str(row.get("name") or ""), actor)
+            shown = str(row.get("name") or "") if who == AGENT else chosen.name(who, logged_as(row), actor)
             entry["committed_actions"].append(shown)
             if row.get("error") == "response_lost":
                 # Committed, yet the one who acted was told it timed out: a retry after it commits twice.
@@ -1093,7 +1094,7 @@ def approvals(log: list[dict[str, Any]], decisions: Sequence[dict[str, Any]] = (
         parent = by_id.get(str(row.get("parent_event_id") or ""))
         if (row.get("actor_id") or AGENT) == AGENT or parent is None or (parent.get("actor_id") or AGENT) != AGENT:
             continue
-        found.append((parent, {"by": row.get("actor_id"), "action": row.get("name"), "outcome": row.get("outcome"),
+        found.append((parent, {"by": row.get("actor_id"), "action": logged_as(row), "outcome": row.get("outcome"),
                                "at": row.get("at")}))
     for one in decisions:
         if one.get("play") == "timeout" and one.get("parent") in by_id:
@@ -1161,7 +1162,7 @@ def actor_rows(
             continue
         rows.append(
             {
-                "name": chosen.name(who, str(row.get("name") or ""), actor),
+                "name": chosen.name(who, logged_as(row), actor),
                 "arguments": row.get("arguments") or {},
                 "result": _structured(row.get("result")),
                 "ok": bool(row.get("ok")),
@@ -1255,10 +1256,18 @@ def fault_notices(
             notices.append({**base, "code": "fault_not_applied",
                             "message": f"The {mode} fault on call {on_call} of {action} could not be applied: {unreachable}."})
             continue
-        rows = [row for row in log or [] if _same_action(action, str(row.get("name") or ""))]
+        agent_rows = [row for row in log or [] if (row.get("actor_id") or AGENT) == AGENT]
+        rows = [row for row in agent_rows if same_action(row, action)]
         if any(_fault_applied(row) for row in rows):
             continue
-        made = sum(1 for call in calls if _same_action(action, call.name))
+        # A call names only its tool, so a call the door logged as another action with the same last part
+        # (`ticket.update` beside `crm.update`) is that action's, never this one's.
+        others = sum(
+            1
+            for row in agent_rows
+            if row.get("action") and row.get("action") != action and _same_action(action, str(row.get("name") or ""))
+        )
+        made = max(len(rows), sum(1 for call in calls if _same_action(action, call.name)) - others)
         if made >= on_call:
             notices.append({**base, "code": "fault_not_applied",
                             "message": f"The {mode} fault on call {on_call} of {action} could not be applied: the agent "

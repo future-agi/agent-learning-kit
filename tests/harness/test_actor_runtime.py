@@ -1224,3 +1224,48 @@ def test_a_speaking_actor_can_come_in_on_a_tool_the_agent_s_tools_service_runs()
     # A tool that truly runs only inside the agent is still refused.
     refused = _call_actors_that_cannot_run(scenario, listing, trial, False, tools, set())
     assert refused and "runs only inside the agent" in refused[0]
+
+
+@pytest.mark.parametrize("deputy_lines, outcome", [(None, "answered_by"), (0, "limit_blocked")])
+def test_a_chat_timeout_reads_answered_by_only_once_the_stand_in_has_written(monkeypatch, deputy_lines, outcome):
+    clock = SimpleNamespace(now=0.0)
+    deputy = {**_MANAGER, "id": "deputy", "name": "Dev", "trigger": {"kind": "on_keyword", "words": ["never"]},
+              **({"max_lines": deputy_lines} if deputy_lines is not None else {})}
+    cast = conv.ChatActors(
+        [{**_MANAGER, "trigger": {"kind": "always"}, "timeout_seconds": 30, "fallback": "deputy"}, deputy],
+        seed="run", model=None, clock=lambda: clock.now,
+    )
+
+    async def write(actor, brief):
+        clock.now += 20
+        return '{"line": "I can approve that."}' if actor["id"] == "deputy" else ""
+
+    monkeypatch.setattr(cast, "_write", write)
+
+    async def turns():
+        for turn in range(1, 4):
+            await cast.due_lines(agent_turns=turn, last_text="", tools_called=[], conversation=[])
+            if turn == 2:
+                timeout = next(one for one in cast.events if one.get("kind") == "timeout")
+                # Dev has not written yet: nobody has answered for Mia.
+                assert timeout["outcome"] == ("unresolved" if deputy_lines is None else "limit_blocked")
+
+    asyncio.run(turns())
+    timeout = next(one for one in cast.events if one.get("kind") == "timeout")
+    assert (timeout["actor"], timeout["fallback"], timeout["outcome"]) == ("manager", "deputy", outcome)
+
+
+def test_a_free_form_knowledge_item_is_kept_as_written_and_reaches_the_actor(tmp_path):
+    from fi.alk.harness.actors import Actor, ScenarioActor, read_knowledge
+
+    items = [
+        {"text": "Deliveries stop at noon on Fridays."},
+        {"kind": "facts", "text": "You manage the north store.", "source": "handbook"},
+    ]
+    assert Actor(id="manager", name="Mia", knowledge=items).knowledge == items
+    assert ScenarioActor(id="manager", knowledge=items).knowledge == items
+    read = read_knowledge(items, tmp_path)
+    # No `kind`, and a field the harness does not know, are kept exactly as written.
+    assert read == items
+    text = brief_text(actor_brief({"id": "manager", "name": "Mia", "knowledge": read}))
+    assert "Deliveries stop at noon on Fridays." in text and "You manage the north store." in text

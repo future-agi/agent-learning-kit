@@ -283,6 +283,8 @@ class ChatActors:
         # Turns each actor took answering the agent again within one of the person's turns, held to the live limits.
         self.follow_ups: dict[str, int] = {}
         self.events: list[dict[str, Any]] = []
+        # Each timeout another actor answers for, by that actor: `answered_by` once it writes or acts, never before.
+        self._standing_in: dict[str, list[dict[str, Any]]] = {}
         # How long the conversation waits for an actor once due, and its fallback when it does not answer.
         self.waits = Waits(clock)
 
@@ -377,6 +379,7 @@ class ChatActors:
             if actor.get("max_lines") is not None and len(self.written[key]) >= int(actor["max_lines"]):
                 self.done.add(key)
                 self.events.append({"actor": key, "kind": "finished", "reason": "its own line limit reached"})
+                self._stood_in(key, "limit_blocked")
                 continue
             try:
                 decision = read_decision(await self._write(actor, self._brief(actor, key, conversation)))
@@ -414,6 +417,7 @@ class ChatActors:
             self.written[key].append(decision.line)
             self.events.append({"actor": key, "kind": "delivered", "name": actor.get("name"), "text": decision.line})
             self.waits.answered(actor)
+            self._stood_in(key, "answered_by")
             out.append((actor, decision.line))
         out += await self._fall_back()
         if out:
@@ -474,11 +478,19 @@ class ChatActors:
             {"action": decision.action, "arguments": decision.arguments, "outcome": said}
         )
         self.waits.answered(actor)
+        self._stood_in(key, "answered_by")
         return str(said or "")
+
+    def _stood_in(self, key: str, outcome: str) -> None:
+        """What came of each timeout this actor was named to answer for."""
+        for event in self._standing_in.pop(key, []):
+            event["outcome"] = outcome
+            event["reason"] = f"no answer in time: {outcome}"
 
     async def _fall_back(self) -> list[tuple[dict[str, Any], str]]:
         """Each actor whose wait ran out: its fallback applied and recorded. A declined request is a labelled line,
-        never written in the actor's own words."""
+        never written in the actor's own words. Another actor answering instead reads `answered_by` only once it has
+        written or acted; until then `unresolved`, and `limit_blocked` when its own line limit stops it."""
         out = []
         for actor, fallback, outcome in self.waits.expired(self.actors):
             key = str(actor["id"])
@@ -511,9 +523,22 @@ class ChatActors:
                 if isinstance(sent, dict):
                     event["status"] = sent.get("status")
                     event["action_outcome"] = sent.get("outcome")
+            elif outcome == "fallback_action":
+                # No door to take it through: nothing was taken for the actor.
+                event["outcome"] = "unresolved"
+                event["reason"] = "no answer in time: unresolved"
             elif outcome == "answered_by":
                 instead = next((one for one in self.actors if str(one["id"]) == fallback), None)
-                if instead is not None and fallback not in self.triggered:
+                event["outcome"] = "unresolved"
+                event["reason"] = "no answer in time: unresolved"
+                if instead is None or fallback in self.done:
+                    continue
+                if instead.get("max_lines") is not None and len(self.written[fallback]) >= int(instead["max_lines"]):
+                    event["outcome"] = "limit_blocked"
+                    event["reason"] = "no answer in time: limit_blocked"
+                    continue
+                self._standing_in.setdefault(fallback, []).append(event)
+                if fallback not in self.triggered:
                     self.triggered.add(fallback)
                     self.events.append({"actor": fallback, "kind": "triggered", "instead_of": key})
         return out

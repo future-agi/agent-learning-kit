@@ -141,6 +141,8 @@ TAKES_PHONE_FROM_TURN = 2
 # Lines asked for and not yet ready; one more is dropped rather than queued behind them.
 MAX_WAITING_LINES = 2
 TIME_UP = "actor time used up"
+# Why an actor leaves the call because a limit stopped it.
+_LIMITS = (TIME_UP, "limit reached", "its own line limit reached")
 # A background voice's level as an amplitude ratio to the person's voice (its RMS over theirs, on
 # each line), drawn per call from the run seed: 1/3 to 1/1.5 of the person, about -9.5 to -3.5 dB.
 LOUDNESS_RANGE = (1 / 3, 1 / 1.5)
@@ -205,6 +207,7 @@ class Moment:
 
     agent_turns: int | None
     last_text: str = ""
+    # Each world action the agent called, in full (`crm.update`), as the world's door logs it.
     tools_called: list[str] = field(default_factory=list)
     elapsed: float = 0.0
     contacted: bool = False
@@ -275,8 +278,10 @@ def due(
     if kind == "mid_journey":
         return turns is not None and turns >= int(trigger.get("turn") or 0) >= 1
     if kind == "on_tool":
+        from fi.alk.harness.world_door import calls_tool
+
         tool = str(trigger.get("tool") or "")
-        return bool(tool) and moment.tools_called.count(tool) >= int(
+        return bool(tool) and sum(1 for one in moment.tools_called if calls_tool(one, tool)) >= int(
             trigger.get("on_call") or 1
         )
     if kind == "on_keyword":
@@ -517,6 +522,8 @@ class Cast:
         }
         self._waiting: list[str] = []
         self._held: set[str] = set()
+        # Each timeout another actor answers for, by that actor: `answered_by` once it speaks, never before.
+        self._standing_in: dict[str, list[dict[str, Any]]] = {}
         self._activity = 0
         self.holder = ""
         self.events: list[dict[str, Any]] = []
@@ -548,6 +555,8 @@ class Cast:
             for key in self._waiting:
                 self._record(key, "dropped", reason=TIME_UP)
             self._waiting.clear()
+            for key in list(self._standing_in):
+                self._stood_in(key, "limit_blocked")
         return self._time_up
 
     def waits_on_tools(self) -> bool:
@@ -653,6 +662,7 @@ class Cast:
         state["lines"] += 1
         state["last_turn"] = agent_turns
         self.waits.answered(actor)
+        self._stood_in(str(actor["id"]), "answered_by")
         self._record(
             str(actor["id"]),
             "delivered",
@@ -664,18 +674,47 @@ class Cast:
 
     def fallbacks(self) -> list[tuple[dict[str, Any], str, str]]:
         """Each actor whose wait ran out unanswered: recorded with its fallback, and out of the call. Another actor
-        named as the fallback comes in next. A declined request is recorded as a labelled line, never voiced."""
+        named as the fallback comes in next; its timeout reads `answered_by` only once that actor speaks, else
+        `limit_blocked` (a call or line limit stopped it) or `unresolved`. A declined request is recorded as a labelled
+        line, never voiced."""
         expired = self.waits.expired(self.actors)
         for actor, fallback, outcome in expired:
             key = str(actor["id"])
+            blocked = self._stand_in_blocked(fallback) if outcome == "answered_by" else ""
+            # Until the other actor speaks, nobody has answered.
+            recorded = (blocked or "unresolved") if outcome == "answered_by" else outcome
             self._record(
-                key, "timeout", fallback=fallback, outcome=outcome, reason=f"no answer in time: {outcome}",
+                key, "timeout", fallback=fallback, outcome=recorded, reason=f"no answer in time: {recorded}",
                 **({"text": declined_line(actor), "at": self.clock()} if outcome == "declined" else {}),
             )
+            timeout = self.events[-1]
             self.finish(actor, "timed out")
-            if outcome == "answered_by" and fallback in self._state and not self._state[fallback]["entered"]:
-                self._held.add(fallback)
+            if outcome == "answered_by" and not blocked:
+                self._standing_in.setdefault(fallback, []).append(timeout)
+                if not self._state[fallback]["entered"]:
+                    self._held.add(fallback)
         return expired
+
+    def _stand_in_blocked(self, fallback: str) -> str:
+        """Why an actor named to answer for another cannot: `unresolved` when it is not on this call or already left
+        it, `limit_blocked` when a limit keeps it from speaking; "" when it still may."""
+        state = self._state.get(fallback)
+        if state is None or state["done"]:
+            return "unresolved"
+        actor = next(one for one in self.actors if str(one["id"]) == fallback)
+        if (
+            self.out_of_time()
+            or (self.takes_back_after is not None and self._activity >= self.takes_back_after)
+            or (actor.get("max_lines") is not None and state["lines"] >= int(actor["max_lines"]))
+        ):
+            return "limit_blocked"
+        return ""
+
+    def _stood_in(self, key: str, outcome: str) -> None:
+        """What came of each timeout this actor was named to answer for."""
+        for event in self._standing_in.pop(key, []):
+            event["outcome"] = outcome
+            event["reason"] = f"no answer in time: {outcome}"
 
     def not_entered(self, actor: dict[str, Any], reason: str) -> None:
         """An actor that cannot enter this call at all, with the reason."""
@@ -684,12 +723,16 @@ class Cast:
 
     def dropped(self, actor: dict[str, Any], reason: str) -> None:
         self._record(str(actor["id"]), "dropped", reason=reason)
+        if reason == TIME_UP:
+            self._stood_in(str(actor["id"]), "limit_blocked")
 
     def finish(self, actor: dict[str, Any], reason: str = "") -> None:
         state = self._state[str(actor["id"])]
         if not state["done"]:
             state["done"] = True
             self._record(str(actor["id"]), "finished", reason=reason)
+            if reason in _LIMITS:
+                self._stood_in(str(actor["id"]), "limit_blocked")
         if self.holder == actor["id"]:
             self.holder = ""
 

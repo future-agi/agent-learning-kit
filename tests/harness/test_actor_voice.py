@@ -760,10 +760,18 @@ def test_a_call_actor_on_a_tool_waits_for_the_name_the_trace_logs_that_tool_unde
     )
     doc = _one_call_actor(tmp_path, {"kind": "on_tool", "tool": "check_status"})
     [near] = _resolved_call_actors(doc, tmp_path, "deepgram", "", "run")
-    assert near["trigger"]["tool"] == "get_status"
+    # The world action in full, never the route's last part another route can share.
+    assert near["trigger"]["tool"] == "orders.get_status"
     assert registry.due(
         near["trigger"],
-        Moment(1, tools_called=["get_status"]),
+        Moment(1, tools_called=["orders.get_status"]),
+        seed="run",
+        actor_id="near",
+    )
+    # Another route ending the same way is not that tool.
+    assert not registry.due(
+        near["trigger"],
+        Moment(1, tools_called=["tickets.get_status"]),
         seed="run",
         actor_id="near",
     )

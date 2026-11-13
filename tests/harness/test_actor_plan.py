@@ -340,7 +340,35 @@ def test_a_cycle_of_actors_triggering_each_other_is_found():
         ),
     ]
     assert cycles(actors, entries) == [["a", "b"]]
-    assert cycles(actors, entries[:1]) == []
+    # Alone, `a` waits for a record only it may write.
+    assert cycles(actors, entries[:1]) == [["a"]]
+
+
+def test_an_actor_waiting_for_a_record_only_it_may_write_is_a_cycle_of_one():
+    waits = ScenarioActor(id="approver", trigger=Trigger(kind="conditional", collection="approvals"))
+    alone = {"approver": Actor(id="approver", name="Ana", permitted_actions=["approvals.put"])}
+    assert cycles(alone, [waits]) == [["approver"]]
+    # Another actor who may write it, and comes in on its own, brings it in.
+    shared = {**alone, "clerk": Actor(id="clerk", name="Cal", permitted_actions=["approvals.put"])}
+    assert cycles(shared, [waits, ScenarioActor(id="clerk")]) == []
+    # One that may not write it waits for the agent or the seed, which this check does not count.
+    assert cycles({"approver": Actor(id="approver", name="Ana")}, [waits]) == []
+
+
+def test_a_scenario_whose_actor_waits_for_a_record_only_it_may_write_is_refused_with_why(tmp_path):
+    from fi.alk.harness.actors import save_actors
+    from fi.alk.harness.scenario import Scenario
+    from fi.alk.harness.scenario_tools import _unlisted_actors
+
+    save_actors(tmp_path, ActorList(actors=[Actor(id="approver", name="Ana", permitted_actions=["approvals.put"])]))
+    scenario = Scenario(
+        name="s",
+        instruction="x",
+        actors=[{"id": "approver", "trigger": {"kind": "conditional", "collection": "approvals"}}],
+    )
+    assert any(
+        "approver waits for a record only it can write" in one for one in _unlisted_actors(scenario, tmp_path)
+    )
 
 
 def test_every_actor_acting_through_the_world_is_in_the_call_s_actor_summary():
@@ -752,7 +780,8 @@ def test_a_voice_actor_s_own_on_tool_activation_waits_on_the_call_the_log_record
         for one in _resolved_call_actors(doc, tmp_path, "deepgram", "", "run")
         if one.get("entered", True)
     ]
-    assert voice["trigger"]["tool"] == "apply_discount"
+    # The engine counts the world action in full, never the route's last part another route can share.
+    assert voice["trigger"]["tool"] == "crm.apply_discount"
 
 
 def test_a_speaking_live_actor_is_decided_by_its_channel_only_never_also_by_the_dispatcher(
@@ -797,20 +826,18 @@ def test_a_speaking_live_actor_is_decided_by_its_channel_only_never_also_by_the_
 
 
 @pytest.mark.parametrize(
-    ("trigger_tool", "tool", "endpoint", "logged"),
+    ("trigger_tool", "tool", "endpoint", "logged", "comes_in"),
     [
-        (
-            "crm.apply_discount",
-            "apply_discount",
-            "/crm/apply_discount",
-            "apply_discount",
-        ),
-        ("issue_refund", "issue_refund", "/refunds/create", "create"),
+        ("crm.apply_discount", "apply_discount", "/crm/apply_discount", "crm.apply_discount", True),
+        ("issue_refund", "issue_refund", "/refunds/create", "refunds.create", True),
+        ("cancel_order", "cancel_order", "/orders/{id}/cancel", "orders.81.cancel", True),
+        # Another route with the same last part is not the tool the actor waits on.
+        ("crm.update", "update_deal", "/crm/update", "ticket.update", False),
     ],
-    ids=["action-id", "tool-name"],
+    ids=["action-id", "tool-name", "templated-route", "same-last-part"],
 )
 def test_an_actor_s_own_on_tool_activation_comes_in_on_the_call_the_log_records(
-    tmp_path, trigger_tool, tool, endpoint, logged
+    tmp_path, trigger_tool, tool, endpoint, logged, comes_in
 ):
     from fi.alk.harness.actor_dispatch import build_dispatcher
     from fi.alk.harness.actors import save_actors
@@ -827,7 +854,9 @@ def test_an_actor_s_own_on_tool_activation_comes_in_on_the_call_the_log_records(
     (tmp_path / "contract.json").write_text(
         json.dumps({"tool_entrypoints": [{"tool": tool, "endpoint": endpoint}]})
     )
-    log = [{"actor_id": "agent", "name": logged, "action_id": "a1", "arguments": {}}]
+    log = [
+        {"actor_id": "agent", "name": logged.rsplit(".", 1)[-1], "action": logged, "action_id": "a1", "arguments": {}}
+    ]
     dispatcher = build_dispatcher(
         {"actors": [{"id": "reviewer"}]},
         tmp_path,
@@ -838,7 +867,7 @@ def test_an_actor_s_own_on_tool_activation_comes_in_on_the_call_the_log_records(
     )
     dispatcher.decide = lambda situation, actor: decided.append(actor.id) or "{}"
     asyncio.run(dispatcher.tick())
-    assert decided == ["reviewer"]
+    assert decided == (["reviewer"] if comes_in else [])
 
 
 def test_one_decider_serves_every_runtime_on_the_actor_s_model_and_meters_each_call(
@@ -1103,6 +1132,62 @@ def test_a_voice_actor_that_does_not_answer_in_time_is_recorded_with_its_fallbac
     assert declined["text"] == "Mia did not answer: declined"
     # The actor named as the fallback comes in next, whatever its own trigger.
     assert [one["id"] for one in cast.entering(Moment(agent_turns=2))] == ["dev"]
+    timeout = next(one for one in cast.events if one.get("actor") == "ana" and one.get("kind") == "timeout")
+    # Ana's timeout reads answered only once Dev has spoken.
+    assert timeout["outcome"] == "unresolved"
+    cast.delivered(actors[1], "I can approve that.", 2, 3.0, 4.0)
+    assert (timeout["outcome"], timeout["reason"]) == ("answered_by", "no answer in time: answered_by")
+
+
+@pytest.mark.parametrize("blocked", ["line_limit", "call_limit", "already_left", "not_on_the_call"])
+def test_a_voice_stand_in_that_cannot_speak_never_reads_as_having_answered(blocked):
+    from fi.simulate.simulation.call_actors import Cast
+
+    clock = _Clock()
+    actors = [
+        {"id": "ana", "name": "Ana", "trigger": {"kind": "always"}, "timeout_seconds": 30, "fallback": "dev"},
+        {"id": "dev", "name": "Dev", "trigger": {"kind": "on_keyword", "words": ["never"]},
+         **({"max_lines": 0} if blocked == "line_limit" else {})},
+    ]
+    cast = Cast(
+        actors,
+        "s",
+        clock,
+        limits={
+            "max_active": None,
+            "caller_takes_back_after_turns": 0 if blocked == "call_limit" else None,
+            "actor_seconds_per_call": None,
+        },
+    )
+    cast.entering(Moment(agent_turns=1))
+    if blocked == "already_left":
+        cast._state["dev"]["done"] = True
+    if blocked == "not_on_the_call":
+        actors[0]["fallback"] = "ghost"
+    clock.now = 31
+    cast.fallbacks()
+    timeout = next(one for one in cast.events if one.get("actor") == "ana" and one.get("kind") == "timeout")
+    assert timeout["outcome"] == ("unresolved" if blocked in ("already_left", "not_on_the_call") else "limit_blocked")
+
+
+def test_a_voice_stand_in_stopped_by_its_line_limit_after_it_came_in_reads_limit_blocked():
+    from fi.simulate.simulation.call_actors import Cast
+
+    clock = _Clock()
+    actors = [
+        {"id": "ana", "name": "Ana", "trigger": {"kind": "always"}, "timeout_seconds": 30, "fallback": "dev"},
+        {"id": "dev", "name": "Dev", "trigger": {"kind": "on_keyword", "words": ["never"]}, "max_lines": 1},
+    ]
+    limits = {"max_active": None, "caller_takes_back_after_turns": None, "actor_seconds_per_call": None}
+    cast = Cast(actors, "s", clock, limits=limits)
+    cast.entering(Moment(agent_turns=1))
+    clock.now = 31
+    cast.fallbacks()
+    [dev] = cast.entering(Moment(agent_turns=2))
+    cast._state["dev"]["lines"] = 1
+    assert not cast.may_speak(dev, 3)
+    timeout = next(one for one in cast.events if one.get("actor") == "ana" and one.get("kind") == "timeout")
+    assert timeout["outcome"] == "limit_blocked"
 
 
 def test_a_voice_actor_that_answered_in_time_has_no_fallback():

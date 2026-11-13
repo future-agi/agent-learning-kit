@@ -153,9 +153,10 @@ _TOOL_TRACE_DDL = (
     "action_id text NOT NULL DEFAULT md5(random()::text || clock_timestamp()::text), "
     "actor_id text NOT NULL DEFAULT 'agent', worker_id text, parent_event_id text, "
     "outcome text NOT NULL DEFAULT 'committed', refusal text, refusal_code text, "
-    "on_behalf_of text, idempotency_key text);\n"
-    # The columns a prebuilt world's own tool server writes, so one row carries both sets.
-    "ALTER TABLE _alk_tool_trace ADD COLUMN IF NOT EXISTS agent_tool text, "
+    "on_behalf_of text, idempotency_key text, action text);\n"
+    # The columns a prebuilt world's own tool server writes, so one row carries both sets; `action` (the world action in
+    # full) for a table made before it was recorded.
+    "ALTER TABLE _alk_tool_trace ADD COLUMN IF NOT EXISTS action text, ADD COLUMN IF NOT EXISTS agent_tool text, "
     "ADD COLUMN IF NOT EXISTS provider_call_id text, ADD COLUMN IF NOT EXISTS tool_call_id text, "
     "ADD COLUMN IF NOT EXISTS status text;\n"
 )
