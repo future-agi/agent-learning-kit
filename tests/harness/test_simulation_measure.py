@@ -755,15 +755,19 @@ def test_a_raw_model_request_marks_its_call_partial(
     ]
 
 
+@pytest.mark.parametrize("sdk", ["vertexai", "google.genai"])
 def test_an_sdk_nothing_here_covers_marks_the_process_partial(
-    tmp_path: Path, collector: Collector
+    tmp_path: Path, collector: Collector, sdk: str
 ) -> None:
+    # google-genai pointed at the model gateway sends to a host the wire check does not know,
+    # so only its import can say its calls go unmeasured.
     _needs("traceai_openai")
     stand_in = tmp_path / "packages"
-    (stand_in / "vertexai").mkdir(parents=True)
-    (stand_in / "vertexai" / "__init__.py").write_text("", encoding="utf-8")
+    package = stand_in.joinpath(*sdk.split("."))
+    package.mkdir(parents=True)
+    (package / "__init__.py").write_text("", encoding="utf-8")
     result = _run(
-        "import vertexai\n" + OPENAI_CALL + "ask()\n",
+        f"import {sdk}\n" + OPENAI_CALL + "ask()\n",
         _environment(tmp_path, collector, extra_path=(stand_in,)),
     )
 
@@ -771,7 +775,7 @@ def test_an_sdk_nothing_here_covers_marks_the_process_partial(
     spans = _settled(collector, 2)
     measured = [span for span in spans if span["scope"] == "traceai_openai"]
     assert [span["attributes"][STATE] for span in measured] == ["partial"]
-    assert "unmeasured vertexai" in result.stderr
+    assert f"unmeasured {sdk}" in result.stderr
 
 
 def test_a_missing_instrumentor_never_stops_the_agent_and_marks_it_partial(

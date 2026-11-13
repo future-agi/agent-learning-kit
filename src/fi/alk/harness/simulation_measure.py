@@ -49,8 +49,15 @@ SDK_INSTRUMENTORS = {
 SCOPE = "alk_simulation_measure"
 # The SDK instrumentors' scopes: a model API request inside one of their spans is the SDK's own.
 _SDK_SCOPES = frozenset(name for name, _attribute in SDK_INSTRUMENTORS.values())
-# Model SDKs this cannot measure whose calls reach no HTTP client the wire check sees.
-_UNSEEN_SDKS = ("google.generativeai", "vertexai", "google.cloud.aiplatform")
+# Model SDKs this cannot measure whose calls the wire check may not see: some reach no HTTP
+# client it watches, and google-genai pointed at the model gateway sends to a host it does not
+# know.
+_UNSEEN_SDKS = (
+    "google.generativeai",
+    "google.genai",
+    "vertexai",
+    "google.cloud.aiplatform",
+)
 # Model API hosts: a request to one outside an SDK span is a model call nothing here measured.
 _MODEL_HOSTS = frozenset(
     {
