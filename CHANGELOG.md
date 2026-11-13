@@ -25,6 +25,11 @@ Post-rc.1 increments on the release branch. Each one adds gates on top of the
   and the person's own session records what the agent actually heard.
 - Runtime validation checks scenarios on one database lane per CPU by default, capped by the
   sandbox's cgroup CPU quota, instead of a fixed 16; `ALK_VALIDATION_DB_LANES` still overrides it.
+- Chat readiness tool routing: the tool proxy logs each call's full path, so two service tools
+  whose paths share a last segment are told apart and an older record naming only that segment
+  credits neither; a tool request's handler is bounded by the request deadline and a handler that
+  outlasts it leaves the tool unobserved; an earlier answer is reused only for the same candidate
+  and tool definition, within the one request and time budget for the check.
 - Docs corpus: the full `docs/` tree (quickstarts, per-track guides, framework
   pages, reference material, and the `docs/llms.txt` machine index) with
   machine-checkable page metadata, enforced by the new `docs_executability`
