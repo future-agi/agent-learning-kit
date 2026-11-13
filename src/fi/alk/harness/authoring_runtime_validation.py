@@ -1234,6 +1234,7 @@ async def validate_once(
                             bundle=bundle,
                             source=source,
                             secret_values=target_secret_values,
+                            candidate_hash=_generic_candidate_hash(source, authoring),
                             local_auth_values=getattr(runtime, "_local_auth_values", None),
                         )
                     else:
@@ -1278,6 +1279,7 @@ async def validate_once(
                             bundle=bundle,
                             source=source,
                             secret_values=target_secret_values,
+                            candidate_hash=_generic_candidate_hash(source, authoring),
                             local_auth_values=getattr(runtime, "_local_auth_values", None),
                         )
                     chat_ingress = CheckStatus.PASSED

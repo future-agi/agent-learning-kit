@@ -1,9 +1,12 @@
 """Private chat ingress and workflow readiness checks."""
 
 import asyncio
+import hashlib
 import json
+import threading
 import time
 from pathlib import Path
+from urllib.parse import urlsplit
 from uuid import uuid4
 
 from fi._diagnostics import _SECRET_FIELD, sanitize_diagnostic
@@ -259,15 +262,31 @@ def _logged_tools(contract, runtime, bundle: Path | None = None) -> set[str]:
     return logged
 
 
-def _tool_names(contract) -> dict[str, str]:
-    """Each tool by the name its calls carry: its own, or for a service tool the last
-    segment of its path, which is what the proxy logs."""
-    names = {tool.name: tool.name for tool in contract.tools}
+def _route(endpoint: str) -> str:
+    return "/" + urlsplit(endpoint).path.strip("/")
+
+
+def _tool_names(contract):
+    """Which tools a call can be: by the full path the proxy logs with it, else by its name.
+    A name is a tool's own, or for a service tool the last segment of its path, which is all an
+    older proxy logged; a segment two tools' paths share names both, so neither is credited."""
+    names = {tool.name: {tool.name} for tool in contract.tools}
+    paths: dict[str, set[str]] = {}
+    segments: dict[str, set[str]] = {}
     for entry in contract.tool_entrypoints:
-        segment = entry.endpoint.split("?", 1)[0].rstrip("/").rsplit("/", 1)[-1]
-        if entry.mode == "service" and segment:
-            names.setdefault(segment, entry.tool)
-    return names
+        if entry.mode == "service" and entry.endpoint.strip():
+            route = _route(entry.endpoint)
+            paths.setdefault(route, set()).add(entry.tool)
+            segments.setdefault(route.rsplit("/", 1)[-1], set()).add(entry.tool)
+
+    def tools(call) -> set[str]:
+        endpoint = getattr(call, "endpoint", "")
+        if endpoint and _route(endpoint) in paths:
+            return paths[_route(endpoint)]
+        name = str(getattr(call, "name", "") or "")
+        return names.get(name) or segments.get(name, set())
+
+    return tools
 
 
 def _outcome(call) -> str:
@@ -278,14 +297,18 @@ def _outcome(call) -> str:
 
 def _routing(contract, runtime, *, received, reported, bundle=None):
     """Routing read from the world's side only. A tool the world received is routed. A tool
-    the agent reports calling that the world logs but never received is not routed. Any
-    other reported tool runs inside the agent, so its routing cannot be observed."""
+    the agent reports calling that the world logs but never received is not routed, unless a
+    received call could have been it or another tool. Any other reported tool runs inside the
+    agent, so its routing cannot be observed."""
     names = _tool_names(contract)
     arrived: dict[str, list] = {}
+    ambiguous: set[str] = set()
     for call in received:
-        tool = names.get(str(getattr(call, "name", "") or ""))
-        if tool:
-            arrived.setdefault(tool, []).append(call)
+        candidates = names(call)
+        if len(candidates) == 1:
+            arrived.setdefault(next(iter(candidates)), []).append(call)
+        else:
+            ambiguous |= candidates
     tools = [
         {
             "tool": tool,
@@ -297,9 +320,13 @@ def _routing(contract, runtime, *, received, reported, bundle=None):
     ]
     unobserved = []
     logged = _logged_tools(contract, runtime, bundle)
-    claimed = {names.get(str(getattr(call, "name", "") or "")) for call in reported}
-    for tool in sorted(claimed - set(arrived) - {None}):
-        if tool in logged:
+    claimed = {
+        tool for call in reported for tool in names(call) if len(names(call)) == 1
+    }
+    for tool in sorted(claimed - set(arrived)):
+        if tool in ambiguous:
+            unobserved.append({"tool": tool, "reason": "ambiguous_world_record"})
+        elif tool in logged:
             tools.append({"tool": tool, "routed": False, "reason": "not_received"})
         else:
             unobserved.append({"tool": tool, "reason": "no_world_record"})
@@ -396,6 +423,7 @@ async def request_uncovered_tools(
     bundle: Path,
     source: Path | None,
     secret_values,
+    candidate_hash: str,
     local_auth_values=None,
     timeout=120.0,
     budget=TOOL_REQUEST_SECONDS,
@@ -430,11 +458,11 @@ that world, never a real system (tools that leave the world are never asked). A 
     body.setdefault("unobserved", [])
     shown = {one["tool"] for one in [*body["tools"], *body["unobserved"]]}
     outside = _outside_world(contract)
-    # Requests already sent by an earlier attempt of this check: their answers are reused
-    # and their count and time spent stay within one bound for the whole check.
+    # Requests already sent by an earlier attempt of this check: their count and time spent
+    # stay within one bound for the whole check, and an answer is reused only for the same
+    # candidate and tool definition.
     ledger = _request_ledger(authoring)
     deadline = time.monotonic() + max(0.0, budget - ledger["seconds"])
-    asked_count = len(ledger["asked"])
     for tool in getattr(contract, "tools", None) or []:
         if tool.name in shown:
             continue
@@ -446,16 +474,17 @@ that world, never a real system (tools that leave the world are never asked). A 
             # Asking could change something; a synthetic request must only read.
             body["unobserved"].append({"tool": tool.name, "reason": "has_effects"})
             continue
-        if tool.name in ledger["asked"]:
-            earlier = ledger["asked"][tool.name]
+        fingerprint = _tool_fingerprint(candidate_hash, contract, tool)
+        earlier = ledger["asked"].get(tool.name)
+        if isinstance(earlier, dict) and earlier.get("fingerprint") == fingerprint:
             body["tools"].extend(earlier["tools"])
             body["unobserved"].extend(earlier["unobserved"])
             continue
         left = deadline - time.monotonic()
-        if asked_count >= limit or left <= 0:
+        if ledger["requests"] >= limit or left <= 0:
             body["unobserved"].append({"tool": tool.name, "reason": "not_asked"})
             continue
-        asked_count += 1
+        ledger["requests"] += 1
         request_timeout = min(timeout, left)
         since = time.time()
         started = time.monotonic()
@@ -472,7 +501,11 @@ that world, never a real system (tools that leave the world are never asked). A 
                     local_auth_values=local_auth_values,
                 ),
                 contract=contract,
-                world=_OnlyAsked(_tool_world(bundle, contract, runtime, source), tool.name),
+                world=_OnlyAsked(
+                    _tool_world(bundle, contract, runtime, source),
+                    tool.name,
+                    deadline=time.monotonic() + request_timeout,
+                ),
                 scenario_key=key,
                 scenario_id=key,
             )
@@ -486,7 +519,9 @@ that world, never a real system (tools that leave the world are never asked). A 
         except Exception:  # noqa: BLE001 - an unanswered request leaves the tool unobserved
             failed = [{"tool": tool.name, "reason": "request_failed"}]
             body["unobserved"].extend(failed)
-            _note_request(ledger, tool.name, [], failed, time.monotonic() - started)
+            _note_request(
+                ledger, tool.name, fingerprint, [], failed, time.monotonic() - started
+            )
             continue
         tools, unobserved = _routing(
             contract,
@@ -509,7 +544,9 @@ that world, never a real system (tools that leave the world are never asked). A 
             left_over = [{"tool": tool.name, "reason": "not_called"}]
         body["tools"].extend(asked)
         body["unobserved"].extend(left_over)
-        _note_request(ledger, tool.name, asked, left_over, time.monotonic() - started)
+        _note_request(
+            ledger, tool.name, fingerprint, asked, left_over, time.monotonic() - started
+        )
     _write_routing(authoring, body)
     _save_ledger(authoring, ledger)
 
@@ -518,12 +555,15 @@ class _OnlyAsked:
     """The world as one tool request sees it: only the asked tool runs.
 
     Any other call the agent returns is refused, not run, and named in ``refused``, so a
-    request for a read-only tool can never make the world run a tool with effects.
+    request for a read-only tool can never make the world run a tool with effects. The asked
+    tool runs in a worker thread bounded by the request's ``deadline``: the world runs a call
+    synchronously, so a handler that blocks would otherwise hold the request past it.
     """
 
-    def __init__(self, world, asked: str):
+    def __init__(self, world, asked: str, *, deadline: float):
         self._world = world
         self._asked = asked
+        self._deadline = deadline
         self.refused: list[str] = []
 
     def __getattr__(self, name):
@@ -533,12 +573,41 @@ class _OnlyAsked:
         from .environment import ToolExecutionResult
         from .world.runtime import Call
 
-        name = str(tool_call.get("name") or (tool_call.get("function") or {}).get("name") or "")
+        name = str(
+            tool_call.get("name") or (tool_call.get("function") or {}).get("name") or ""
+        )
         if name == self._asked:
-            return self._world.handle_tool_call(tool_call, **context)
+            outcome: dict = {}
+
+            def run():
+                try:
+                    outcome["result"] = self._world.handle_tool_call(
+                        tool_call, **context
+                    )
+                except BaseException as exc:  # noqa: BLE001 - re-raised on the caller's side
+                    outcome["error"] = exc
+
+            worker = threading.Thread(target=run, daemon=True)
+            worker.start()
+            worker.join(max(0.0, self._deadline - time.monotonic()))
+            if worker.is_alive():
+                # The thread cannot be stopped; its late result is discarded with this world.
+                raise TimeoutError(
+                    f"{self._asked} outlasted the readiness request deadline"
+                )
+            if "error" in outcome:
+                raise outcome["error"]
+            return outcome["result"]
         error = f"only {self._asked} may run during this readiness request"
         self._world.calls.append(
-            Call(name=name, arguments={}, ok=False, refused=True, error=error, at=time.time())
+            Call(
+                name=name,
+                arguments={},
+                ok=False,
+                refused=True,
+                error=error,
+                at=time.time(),
+            )
         )
         self.refused.append(name)
         return ToolExecutionResult(
@@ -555,6 +624,20 @@ class _OnlyAsked:
 TOOL_REQUESTS = "tool-requests.json"
 
 
+def _tool_fingerprint(candidate_hash: str, contract, tool) -> str:
+    """What an earlier answer about ``tool`` holds for: the candidate and the tool's definition."""
+    definition = {
+        "tool": tool.model_dump(mode="json"),
+        "entrypoints": [
+            entry.model_dump(mode="json")
+            for entry in contract.tool_entrypoints
+            if entry.tool == tool.name
+        ],
+    }
+    text = json.dumps([candidate_hash, definition], sort_keys=True, default=str)
+    return "sha256:" + hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
 def _request_ledger(authoring: Path) -> dict:
     """The tool requests earlier attempts of this check sent, and the time they took."""
     path = authoring / "generic-harness" / TOOL_REQUESTS
@@ -564,16 +647,27 @@ def _request_ledger(authoring: Path) -> dict:
         stored = {}
     asked = stored.get("asked") if isinstance(stored, dict) else None
     seconds = stored.get("seconds") if isinstance(stored, dict) else None
+    requests = stored.get("requests") if isinstance(stored, dict) else None
     return {
         "asked": asked if isinstance(asked, dict) else {},
+        "requests": requests if isinstance(requests, int) else 0,
         "seconds": float(seconds) if isinstance(seconds, (int, float)) else 0.0,
     }
 
 
 def _note_request(
-    ledger: dict, tool: str, tools: list, unobserved: list, spent: float
+    ledger: dict,
+    tool: str,
+    fingerprint: str,
+    tools: list,
+    unobserved: list,
+    spent: float,
 ) -> None:
-    ledger["asked"][tool] = {"tools": tools, "unobserved": unobserved}
+    ledger["asked"][tool] = {
+        "fingerprint": fingerprint,
+        "tools": tools,
+        "unobserved": unobserved,
+    }
     ledger["seconds"] += max(0.0, spent)
 
 

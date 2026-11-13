@@ -156,7 +156,15 @@ class _World:
         return SimpleNamespace(content="{}")
 
 
-def _requests(tmp_path, monkeypatch, *, runtime=PROXIED, bounds=None, **behaviour):
+def _requests(
+    tmp_path,
+    monkeypatch,
+    *,
+    runtime=PROXIED,
+    bounds=None,
+    candidate="sha256:one",
+    **behaviour,
+):
     """Each request is answered as ``behaviour`` says, per tool: ``world`` (the call goes
     through the proxy), ``reported`` (the agent says it ran it; nothing reached the world),
     ``returned`` (the agent returns the call for the harness to run), ``fail``."""
@@ -219,6 +227,7 @@ def _requests(tmp_path, monkeypatch, *, runtime=PROXIED, bounds=None, **behaviou
             bundle=tmp_path,
             source=None,
             secret_values={},
+            candidate_hash=candidate,
             **(bounds or {}),
         )
     )
@@ -391,6 +400,7 @@ def test_one_request_stays_within_the_budget_however_many_times_the_agent_is_cal
             bundle=tmp_path,
             source=None,
             secret_values={},
+            candidate_hash="sha256:one",
             budget=0.5,
             timeout=0.5,
         )
@@ -440,6 +450,7 @@ def test_a_request_runs_only_the_asked_tool_at_the_world(tmp_path, monkeypatch):
             bundle=tmp_path,
             source=None,
             secret_values={},
+            candidate_hash="sha256:one",
             limit=1,
         )
     )
@@ -448,3 +459,242 @@ def test_a_request_runs_only_the_asked_tool_at_the_world(tmp_path, monkeypatch):
     assert "issue_refund" not in ran
     body = json.loads((tmp_path / "generic-harness" / TOOL_ROUTING).read_text())
     assert body["refused_during_requests"][0]["refused"] == ["issue_refund"]
+
+
+def _shared_segment_contract():
+    return AgentContract.model_validate(
+        {
+            "agent": "directory",
+            "tools": [
+                {"name": "find_users", "args": ["q"]},
+                {"name": "find_orders", "args": ["q"]},
+            ],
+            "tool_entrypoints": [
+                {
+                    "tool": "find_users",
+                    "mode": "service",
+                    "service": "api",
+                    "endpoint": "/users/search",
+                },
+                {
+                    "tool": "find_orders",
+                    "mode": "service",
+                    "service": "api",
+                    "endpoint": "/orders/search",
+                },
+            ],
+        }
+    )
+
+
+def test_a_proxied_call_is_credited_by_its_full_path_when_two_paths_share_a_last_segment(
+    tmp_path,
+):
+    record_tool_routing(
+        tmp_path,
+        "s-1",
+        _shared_segment_contract(),
+        PROXIED,
+        received=[
+            Call(name="search", arguments={}, at=10.0, endpoint="/orders/search?page=1")
+        ],
+        reported=[_call("find_orders")],
+    )
+
+    body = _body(tmp_path)
+    assert body["tools"] == [
+        {"tool": "find_orders", "routed": True, "calls": 1, "outcomes": ["ok"]}
+    ]
+    assert body["unobserved"] == []
+
+
+def test_a_record_naming_only_a_shared_last_segment_credits_no_tool(tmp_path):
+    # An older proxy logged the last path segment alone; either tool could have received it.
+    record_tool_routing(
+        tmp_path,
+        "s-1",
+        _shared_segment_contract(),
+        PROXIED,
+        received=[_call("search")],
+        reported=[_call("find_orders")],
+    )
+
+    body = _body(tmp_path)
+    assert body["tools"] == []
+    assert body["unobserved"] == [
+        {"tool": "find_orders", "reason": "ambiguous_world_record"}
+    ]
+
+
+def test_the_tool_proxy_logs_the_full_path_of_each_call(monkeypatch):
+    import importlib.util
+    import sys
+    import threading
+    import urllib.request
+    from contextlib import contextmanager
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+    from pathlib import Path
+
+    class Upstream(BaseHTTPRequestHandler):
+        def log_message(self, *_args):
+            return
+
+        def do_POST(self):  # noqa: N802
+            self.rfile.read(int(self.headers.get("content-length") or 0))
+            self.send_response(200)
+            self.send_header("content-length", "2")
+            self.end_headers()
+            self.wfile.write(b"{}")
+
+    logged = []
+
+    @contextmanager
+    def connect(*_args, **_kwargs):
+        yield SimpleNamespace(
+            execute=lambda statement, values: logged.append((statement, values))
+        )
+
+    upstream = ThreadingHTTPServer(("127.0.0.1", 0), Upstream)
+    threading.Thread(target=upstream.serve_forever, daemon=True).start()
+    monkeypatch.setitem(sys.modules, "psycopg", SimpleNamespace(connect=connect))
+    monkeypatch.setenv("PORT", "0")
+    monkeypatch.setenv("UPSTREAM_URL", f"http://127.0.0.1:{upstream.server_port}")
+    monkeypatch.setenv("DATABASE_URL", "unused")
+    path = Path(chat_readiness.__file__).with_name("tool_trace_proxy.py")
+    spec = importlib.util.spec_from_file_location("tool_trace_proxy_under_test", path)
+    proxy_module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(proxy_module)
+    proxy = ThreadingHTTPServer(("127.0.0.1", 0), proxy_module.Handler)
+    threading.Thread(target=proxy.serve_forever, daemon=True).start()
+    try:
+        urllib.request.urlopen(
+            urllib.request.Request(
+                f"http://127.0.0.1:{proxy.server_port}/orders/search?page=1",
+                data=b"{}",
+                method="POST",
+            ),
+            timeout=5,
+        ).read()
+    finally:
+        proxy.shutdown()
+        upstream.shutdown()
+
+    statement, values = logged[0]
+    assert "endpoint" in statement
+    assert values[0] == "search"
+    assert "/orders/search" in values
+
+
+def test_a_blocking_tool_handler_cannot_outlast_the_request_deadline(
+    tmp_path, monkeypatch
+):
+    """The world runs a returned call synchronously; a handler that blocks past the deadline
+    must end the request as unanswered, not let the handler finish and count as routed."""
+
+    class Blocking(_World):
+        def handle_tool_call(self, call, **context):
+            time.sleep(1.0)
+            return super().handle_tool_call(call)
+
+    class Agent:
+        def __init__(self):
+            self.turn = 0
+
+        async def call(self, agent_input):
+            self.turn += 1
+            calls = (
+                [{"id": "c1", "name": "track_parcel", "arguments": {}}]
+                if self.turn == 1
+                else []
+            )
+            return SimpleNamespace(
+                content="done", tool_calls=calls, tool_responses=[], metadata={}
+            )
+
+    monkeypatch.setattr(chat_readiness, "create_chat_wrapper", lambda *a, **k: Agent())
+    monkeypatch.setattr(chat_call_runner, "_tool_world", lambda *a, **k: Blocking())
+    monkeypatch.setattr(call_runner, "_collect_file_tool_calls", lambda runtime: ())
+    monkeypatch.setattr(call_runner, "_collect_tool_trace_calls", lambda runtime: ())
+    record_tool_routing(
+        tmp_path,
+        "s-1",
+        _contract(),
+        PROXIED,
+        received=[_call("lookup")],
+        reported=[_call("lookup_order")],
+    )
+    started = time.monotonic()
+    asyncio.run(
+        chat_readiness.request_uncovered_tools(
+            interface=None,
+            endpoint="http://agent",
+            runtime=PROXIED,
+            contract=_contract(),
+            authoring=tmp_path,
+            bundle=tmp_path,
+            source=None,
+            secret_values={},
+            candidate_hash="sha256:one",
+            timeout=0.1,
+            limit=1,
+        )
+    )
+
+    assert time.monotonic() - started < 0.8
+    body = _body(tmp_path)
+    assert all(one["tool"] != "track_parcel" for one in body["tools"])
+    assert {"tool": "track_parcel", "reason": "request_failed"} in body["unobserved"]
+
+
+def test_a_repaired_candidate_never_reuses_the_routing_proof_of_the_one_before(
+    tmp_path, monkeypatch
+):
+    first, _ = _requests(tmp_path, monkeypatch, names=NAMES, track_parcel="world")
+    # The repair changed the candidate; the agent now never reaches the world for the tool.
+    again, sent = _requests(
+        tmp_path,
+        monkeypatch,
+        candidate="sha256:repaired",
+        names=NAMES,
+        track_parcel="reported",
+    )
+
+    assert {
+        "tool": "track_parcel",
+        "routed": True,
+        "calls": 1,
+        "outcomes": ["ok"],
+        "source": "tool_request",
+    } in (first["tools"])
+    assert any("track_parcel" in text for text in sent)
+    assert {
+        "tool": "track_parcel",
+        "routed": False,
+        "reason": "not_received",
+        "source": "tool_request",
+    } in again["tools"]
+
+
+def test_a_repaired_candidate_past_the_shared_budget_leaves_the_tool_unobserved(
+    tmp_path, monkeypatch
+):
+    _requests(
+        tmp_path, monkeypatch, bounds={"limit": 2}, names=NAMES, track_parcel="world"
+    )
+    again, sent = _requests(
+        tmp_path,
+        monkeypatch,
+        candidate="sha256:repaired",
+        bounds={"limit": 2},
+        names=NAMES,
+        track_parcel="world",
+    )
+
+    assert sent == []
+    assert all(one.get("source") != "tool_request" for one in again["tools"])
+    assert sorted(
+        one["tool"] for one in again["unobserved"] if one["reason"] == "not_asked"
+    ) == [
+        "get_hours",
+        "track_parcel",
+    ]
