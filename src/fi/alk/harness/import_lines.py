@@ -61,6 +61,31 @@ def _code(content: str, capped: list[bool] | None) -> str:
     return code.replace("\x01\n", " ")
 
 
+def _joined(lines: list[str], capped: list[bool] | None) -> list[str]:
+    """``lines`` with each run that goes on inside an open bracket joined into one line, so a
+    header that spans lines (``with open(\\n 'f') as g: import x``) is read as the one it is.
+
+    One pass: a line adds to the run while the brackets opened so far are unclosed. A run that
+    never closes is a file Python would refuse; its lines are kept apart, as they were, and
+    ``capped`` says the search can't be sure."""
+    out: list[str] = []
+    held: list[str] = []
+    depth = 0
+    for line in lines:
+        held.append(line)
+        depth += line.count("(") + line.count("[") + line.count("{")
+        depth -= line.count(")") + line.count("]") + line.count("}")
+        if depth <= 0:
+            depth = 0
+            out.append(" ".join(held) if len(held) > 1 else line)
+            held = []
+    if held:
+        out.extend(held)
+        if capped is not None:
+            capped[0] = True
+    return out
+
+
 def _statements(code: str, capped: list[bool] | None, most_colons: int) -> list[str]:
     """The pieces of one line of code a statement can start at: each ``;`` segment, and for a
     segment that opens a compound statement (``if True: import x``) the text after each of its
@@ -134,6 +159,7 @@ def import_lines(
     content: str,
     capped: list[bool] | None = None,
     most_colons: int = MOST_COLONS_TRIED,
+    limit: int | None = None,
 ) -> list[tuple[int, str]]:
     """The names a line search finds ``content`` importing, each with its level, in the shape a
     parse gives: ``import a.b, c as d`` and ``from .x import y`` / ``from a.b import c`` at the
@@ -146,9 +172,13 @@ def import_lines(
     search can't be sure what it read, and the caller cuts rather than trust the result: a
     string never closed, a parenthesised list that isn't one or never ends, or an import past the
     colons tried (``_statements``).
+
+    Given ``limit``, it stops at the first name past that many, with ``capped`` set: the caller
+    keeps no more than ``limit`` names and cuts on the rest, so a name past it is work and memory
+    for nothing. The list then holds ``limit + 1`` names, which the caller reads as "more".
     """
     names: list[tuple[int, str]] = []
-    lines = _code(content, capped).split("\n")
+    lines = _joined(_code(content, capped).split("\n"), capped)
     at = 0
     while at < len(lines):
         line = lines[at]
@@ -160,6 +190,8 @@ def import_lines(
                 for item in piece[6:].split(","):
                     if name := _name(item):
                         names.append((0, name))
+                        if limit is not None and len(names) > limit:
+                            return _stopped(names, capped)
             elif piece.startswith("from") and (piece[4:5].isspace() or piece[4:5] == "."):
                 rest = piece[4:]
                 where = _import_keyword(rest)
@@ -171,6 +203,8 @@ def import_lines(
                 tail = rest[where + 6 :]
                 if module:
                     names.append((level, module))
+                    if limit is not None and len(names) > limit:
+                        return _stopped(names, capped)
                 if "(" in tail:
                     tail = tail.split("(", 1)[1]
                     if ")" in tail:
@@ -183,6 +217,14 @@ def import_lines(
                 for item in tail.split(","):
                     if name := _name(item):
                         names.append((level, f"{module}.{name}".lstrip(".")))
+                        if limit is not None and len(names) > limit:
+                            return _stopped(names, capped)
+    return names
+
+
+def _stopped(names: list[tuple[int, str]], capped: list[bool] | None) -> list[tuple[int, str]]:
+    if capped is not None:
+        capped[0] = True
     return names
 
 

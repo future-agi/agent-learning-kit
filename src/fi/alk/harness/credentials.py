@@ -1719,10 +1719,13 @@ def imported_by_agent(
                 if searches and search_room(len(raw)):
                     capped = [False]
                     results = [
-                        import_lines(reading, capped) if skipped else result
+                        import_lines(reading, capped, limit=max(import_limit - imports_tried, 0))
+                        if skipped
+                        else result
                         for reading, result, skipped in zip(readings, results, refused)
                     ]
-                    # An import past the colons tried isn't followed: a cut, never silent.
+                    # An import the search can't be sure of, or past the names the walk may try,
+                    # isn't followed: a cut, never silent.
                     limited[0] |= capped[0]
                     unread[0] |= capped[0]
                 else:

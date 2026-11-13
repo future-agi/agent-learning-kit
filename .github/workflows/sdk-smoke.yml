@@ -102,6 +102,7 @@ jobs:
           tests/harness/test_scan_walk.py
           tests/harness/test_browser_scan_cut.py
           tests/harness/test_import_lines.py
+          tests/harness/test_import_lines_diff.py
           tests/harness/test_scan_folders.py
           tests/harness/test_scan_document.py
           tests/harness/test_scan_ai.py

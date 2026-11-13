@@ -914,6 +914,19 @@ def test_an_import_after_a_semicolon_or_a_colon_is_line_searched_and_no_cut(tmp_
     assert browser_scan(repo, "agents/a") == (["playwright"], frozenset())
 
 
+def test_an_import_after_a_header_that_spans_lines_is_line_searched_and_no_cut(tmp_path):
+    # The line that closes the header's brackets doesn't start with `if`, so its colon was
+    # never tried as the start of a body.
+    repo = _padded(
+        tmp_path / "source",
+        **{
+            "agents/a/z_main.py": "if (True and\n        True): import common.util\n",
+            "common/util.py": "import playwright\n",
+        },
+    )
+    assert browser_scan(repo, "agents/a") == (["playwright"], frozenset())
+
+
 def test_an_import_past_the_colon_cap_is_a_cut(tmp_path):
     # The line search tries a compound statement's first 8 colons; one with more before its
     # import isn't followed, so the walk left code unread and the reading is cut, not silent.
@@ -1073,7 +1086,7 @@ def test_a_line_search_that_cant_be_sure_is_a_cut(tmp_path, text):
 
 @pytest.mark.parametrize(
     "line",
-    ["from" + " " * 100_000 + "x", " " * 100_000, "from ." + " " * 100_000 + "x", "(" * 100_000],
+    ["from" + " " * 100_000 + "x", " " * 100_000, "from ." + " " * 100_000 + "x", "()" * 50_000],
     ids=["from-spaces", "spaces", "from-dot-spaces", "parens"],
 )
 def test_a_100_kb_line_in_an_unparsed_file_doesnt_hold_the_search_up(tmp_path, line):
