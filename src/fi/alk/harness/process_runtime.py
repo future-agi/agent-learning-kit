@@ -7036,7 +7036,9 @@ class ProcessRuntimeProvider:
                     world_index,
                     returncode,
                 )
-        except ProviderLifecycleError as exc:
+        except (ProviderLifecycleError, OSError) as exc:
+            # OSError: what the lifecycle user left where the harness writes its log or hands
+            # the folder over (a folder named destroy.log, say).
             logger.error("provider cleanup failed for world %s: %s", world_index, exc)
 
     def _ensure_world(self, world_index: int) -> None:

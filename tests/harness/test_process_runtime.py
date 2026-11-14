@@ -5674,6 +5674,26 @@ def test_teardown_stops_a_world_whatever_its_lifecycle_user_left_in_its_folder(
     assert list((tmp_path / "elsewhere").iterdir()) == []
 
 
+def test_teardown_stops_a_world_with_a_folder_where_its_destroy_log_goes(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    provider, manifest, source, bundle_dir = _lifecycle_provider(
+        tmp_path, _nested_receipt_run, "provider-target.json"
+    )
+    _provision_one(provider, manifest, source, bundle_dir, tmp_path)
+    handles = [
+        spawned.handle
+        for name, spawned in provider._world_handles[0].items()
+        if name not in provider._job_shared_handles
+    ]
+    (tmp_path / "provider" / "w0" / "destroy.log").mkdir()
+
+    provider._teardown_world(0)
+
+    assert handles and all(handle.terminated for handle in handles)
+    assert "provider cleanup failed for world 0" in caplog.text
+
+
 def test_a_re_provision_through_a_linked_output_folder_fails_as_the_environment(
     tmp_path: Path,
 ) -> None:
