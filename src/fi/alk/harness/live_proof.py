@@ -131,16 +131,26 @@ async def prove_live(
             untouched = await asyncio.to_thread(_digest, world)
             controls = []
             for control in scenario.negative_controls:
-                world = await fresh()
-                control_calls, control_assumed, _ = await asyncio.to_thread(_play, scenario, world, list(control.steps))
-                outcomes = await asyncio.to_thread(_outcomes, scenario, catalogue, world, control_calls)
+                try:
+                    world = await fresh()
+                    control_calls, control_assumed, _ = await asyncio.to_thread(_play, scenario, world, list(control.steps))
+                    outcomes = await asyncio.to_thread(_outcomes, scenario, catalogue, world, control_calls)
+                except Exception as exc:  # noqa: BLE001 - a control that cannot be played is no evidence, the case still is
+                    controls.append(
+                        {"name": control.name, "why": control.why, "failed": None, "held": [], "assumed": [],
+                         "error": f"{type(exc).__name__}: {exc}"[:300]}
+                    )
+                    continue
                 named = set(control.must_fail) or {one.name for one in outcomes}
                 controls.append(
                     {
                         "name": control.name,
                         "why": control.why,
-                        "failed": any(not one.held for one in outcomes if one.name in named) if outcomes else None,
+                        "failed": any(not one.held and not one.broken for one in outcomes if one.name in named)
+                        if outcomes
+                        else None,
                         "held": [one.name for one in outcomes if one.held],
+                        "broken": [one.name for one in outcomes if one.broken and one.name in named],
                         "assumed": control_assumed,
                     }
                 )
@@ -188,6 +198,7 @@ def apply_live(proof: Any, live: dict[str, Any]) -> Any:
     Leaks, sources and rule checks stay the offline proof's; readiness, the reference, the empty run
     and the controls come from the live run, which is the stronger evidence."""
     from .checks import Outcome
+    from .prove import control_broken
 
     def outcomes(rows: list[dict[str, Any]]) -> list[Any]:
         return [Outcome(row["name"], bool(row["held"]), str(row.get("said") or ""), broken=bool(row.get("broken"))) for row in rows]
@@ -201,10 +212,11 @@ def apply_live(proof: Any, live: dict[str, Any]) -> Any:
     proof.refused = list(live.get("refused") or [])
     proof.broken = [one.name for one in proof.with_solution if one.broken]
     proof.solvable = all(one.held for one in proof.with_solution) and not proof.broken
+    proof.controls = [dict(one) for one in live.get("controls") or []]
+    proof.broken += control_broken(proof.controls)
     proof.weak = [one.name for one in proof.with_nothing if one.held]
     proof.outcome = str(live.get("outcome") or "change")
     proof.vacuous = bool(proof.with_nothing) and len(proof.weak) == len(proof.with_nothing)
-    proof.controls = [dict(one) for one in live.get("controls") or []]
     if proof.outcome == "no_change" and any(one.get("failed") for one in proof.ran_controls):
         proof.vacuous = False
     return proof
