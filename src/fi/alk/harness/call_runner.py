@@ -968,6 +968,7 @@ def _collect_tool_trace_calls(runtime: EnvironmentRuntime) -> tuple[Call, ...]:
                 # The worker the world saw make it, by the channel it came through.
                 worker_id=str(record.get("worker_id") or ""),
                 refusal_code=str(record.get("refusal_code") or "") if refused else "",
+                channel=str(record["worker_id"] or "") if "worker_id" in record else None,
             )
         )
     return tuple(calls)
@@ -1545,6 +1546,54 @@ def _bundle_contract(bundle_dir: Path) -> dict[str, Any]:
     except (OSError, ValueError):
         return {}
     return body if isinstance(body, dict) else {}
+
+
+WORKER_CHANNEL_BYPASSED = "worker_channel_bypassed"
+
+
+def channel_bypasses(calls: Sequence[Call], contract_workers: Sequence[Any]) -> list[dict[str, Any]]:
+    """The calls a separately wired worker made on the shared address: the door row says the call came in on no
+    channel, and the app's own spans name that worker. Matched by the contract id exactly, or by its name as the
+    framework spells it (spans carry the framework's agent name, not the contract id)."""
+    separate = [
+        one
+        for one in contract_workers
+        if isinstance(one, Mapping) and one.get("binding") == "separate" and str(one.get("id") or "")
+    ]
+    found: list[dict[str, Any]] = []
+    for call in calls:
+        if call.channel != "":
+            continue
+        for worker in separate:
+            worker_id = str(worker["id"])
+            name = _tool_key(str(worker.get("name") or ""))
+            spelled = {_tool_key(one) for one in (call.worker_id, call.worker_label) if one}
+            if call.worker_id == worker_id or (name and name in spelled):
+                found.append({"worker": worker_id, "tool": call.name, "at": call.at})
+                break
+    return found
+
+
+def channel_bypass_notices(calls: Sequence[Call], bundle_dir: Any) -> list[dict[str, Any]]:
+    """One notice naming every separate worker that reached the world without its own channel, or none."""
+    if bundle_dir is None:
+        return []
+    workers = [one for one in _bundle_contract(Path(bundle_dir)).get("workers") or [] if isinstance(one, Mapping)]
+    found = channel_bypasses(calls, workers)
+    if not found:
+        return []
+    ids = list(dict.fromkeys(one["worker"] for one in found))
+    names = {str(one.get("id")): str(one.get("name") or one.get("id")) for one in workers}
+    return [
+        {
+            "code": WORKER_CHANNEL_BYPASSED,
+            "message": (
+                f"{', '.join(names.get(one, one) for one in ids)} reached the world without their own channel, so "
+                "their limits were not held for those calls; their own checks were not graded."
+            ),
+            "workers": ids,
+        }
+    ]
 
 
 def _private_actions_file(path: Path) -> Path:
@@ -2900,6 +2949,8 @@ class CallRunnerImpl:
         graded = graded_calls(calls)
         marks = _agent_marks(runtime, self._context.bundle_dir, graded) if acted else []
         mark_of = {id(call): mark for call, mark in zip(graded, marks)}
+        # A separate worker that reached the world on the shared address: said, and held from its own checks.
+        bypassed = channel_bypass_notices(calls, self._context.bundle_dir)
         if calls:
             tool_trace = "\n".join(
                 json.dumps({**trace_row(call), **mark_of.get(id(call), {})}, sort_keys=True, default=str)
@@ -2914,7 +2965,7 @@ class CallRunnerImpl:
             result = case.result
             combined = result.audio_combined_path
             recording = combined if combined and Path(combined).is_file() else None
-            said = [*notices, *self._fault_notices(runtime, faults, calls)]
+            said = [*notices, *self._fault_notices(runtime, faults, calls), *bypassed]
             # A call that ended with no words still says what did not take effect, and what actors and workers did in
             # the world, never only logging it.
             if result.transcript or said or acted or actor_decisions or workers_acted or took_part.get("call_actors"):
@@ -2987,7 +3038,7 @@ class CallRunnerImpl:
         base = CallOutcome(
             calls=calls,
             turns=turns,
-            notices=tuple(notices),
+            notices=(*notices, *bypassed),
             started_at=format_rfc3339_millis(case_started_at),
             ended_at=format_rfc3339_millis(ended_at),
             duration_ms=_duration_ms(case_started_at, ended_at),

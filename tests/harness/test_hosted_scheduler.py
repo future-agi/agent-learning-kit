@@ -5000,3 +5000,28 @@ def test_a_trial_that_could_not_hold_the_worker_limits_its_scenario_relies_on_is
     assert receipt.failure is not None and receipt.failure.code == "worker_limits_not_enforced"
     assert "not the agent's" in receipt.failure.message
     assert [one.held for one in receipt.sub_goals] == [None, None]
+
+
+def test_a_bypass_leaves_that_worker_s_checks_unmeasured_and_grades_the_task() -> None:
+    calls = (
+        hs.Call(name="issue_refund", arguments={}, worker_id="refund", channel=""),
+        hs.Call(name="issue_refund", arguments={}, worker_id="refund", channel=""),
+    )
+    outcome = replace(
+        _call_outcome(turns=2, calls=calls),
+        notices=({"code": "worker_channel_bypassed", "message": "Refund worker reached the world", "workers": ["refund"]},),
+    )
+    ran: list[str] = []
+    receipt = _graded(
+        [
+            _WorkerGoal("refund_once", lambda w, c: ran.append("worker") or None, worker="refund"),
+            _WorkerGoal("no_second_refund", lambda w, c: ran.append("task") or "a second refund exists"),
+        ],
+        outcome,
+    )
+    worker, task = receipt.sub_goals
+    # The worker's own check is not graded; the task reads the world whichever address was used.
+    assert ran == ["task"]
+    assert (worker.held, worker.verdict) == (None, "unmeasured")
+    assert "reached the world without its own channel" in worker.reason
+    assert (task.held, task.verdict, receipt.status) == (False, "fail", "failed")

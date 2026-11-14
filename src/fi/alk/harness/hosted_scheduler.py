@@ -423,6 +423,7 @@ class OutboundPort(Protocol):
 # (domain infrastructure).
 
 WORKER_LIMITS_NOT_ENFORCED = "worker_limits_not_enforced"
+WORKER_CHANNEL_BYPASSED = "worker_channel_bypassed"
 
 _CODE_DOMAIN: dict[str, FailureDomain] = {
     "setup_crashed": FailureDomain.SIMULATOR,
@@ -2409,6 +2410,14 @@ class HostedScheduler:
                 call=self._call_summary(call_outcome),
                 retry=False,
             )
+        # A separate worker that reached the world without its own channel: its limits were not held for those calls,
+        # so its own checks are not graded; the task's checks read the world and are graded as usual.
+        bypassed = {
+            str(worker)
+            for one in call_outcome.notices
+            if isinstance(one, dict) and one.get("code") == WORKER_CHANNEL_BYPASSED
+            for worker in one.get("workers") or ()
+        }
         sub_goal_results: list[SubGoalResult] = []
         judged_pending: list[tuple[int, Any]] = []
         off_script = ""
@@ -2424,6 +2433,11 @@ class HostedScheduler:
                 )
                 continue
             worker = getattr(goal, "worker", "")
+            if worker and worker in bypassed:
+                sub_goal_results.append(
+                    _worker_unmeasured(goal, f"not graded: {worker} reached the world without its own channel")
+                )
+                continue
             lane = [one for one in calls if getattr(one, "worker_id", "") == worker] if worker else calls
             inconclusive = (
                 f"worker {worker} made no tool call the world recorded"

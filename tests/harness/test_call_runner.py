@@ -3117,3 +3117,63 @@ def test_a_logged_call_is_graded_under_the_agent_s_own_tool_name_when_the_world_
     monkeypatch.setitem(sys.modules, "psycopg", _FakePsycopg(rows, columns))
     calls = cr._collect_tool_trace_calls(_runtime(endpoints={"database": _postgres_endpoint()}))
     assert [one.name for one in calls] == ["list_refunds", "get_deal"]
+
+
+_RETURNS_WORKERS = [
+    {"id": "order_lookup", "name": "Order-lookup worker", "binding": "separate", "address_env": "ORDER_LOOKUP_API_URL"},
+    {"id": "refund", "name": "Refund worker", "binding": "separate", "address_env": "REFUND_API_URL"},
+]
+
+
+def _door_call(name: str, channel: str | None, at: float, **arguments: Any) -> Call:
+    return Call(
+        name=name, arguments=dict(arguments), at=at, worker_id=channel or "", channel=channel
+    )
+
+
+def _span_call(name: str, worker: str, at: float, **arguments: Any) -> Call:
+    return Call(name=name, arguments=dict(arguments), at=at, worker_id=worker, worker_label=worker)
+
+
+def test_a_separate_worker_call_on_the_shared_address_is_a_bypass() -> None:
+    door = [_door_call("issue_refund", "", 10.0, order_id="1043", amount=89.0)]
+    spans = [_span_call("issue_refund", "Refund worker", 10.0, order_id="1043", amount=89.0)]
+    merged = cr._merge_span_calls(door, spans)
+    # The span lends its worker to the door call, never its channel: the call still came in on the shared address.
+    assert [(one.worker_id, one.channel) for one in merged if one.name == "issue_refund"] == [("Refund worker", "")]
+    found = cr.channel_bypasses(merged, _RETURNS_WORKERS)
+    assert [(one["worker"], one["tool"]) for one in found] == [("refund", "issue_refund")]
+
+
+def test_a_shared_tool_call_on_the_shared_address_gives_no_false_bypass() -> None:
+    door = [
+        _door_call("list_refunds", "", 10.0, order_id="1042"),
+        _door_call("list_refunds", "order_lookup", 10.0, order_id="1042"),
+    ]
+    spans = [
+        _span_call("list_refunds", "Order-lookup worker", 10.0, order_id="1042"),
+        _span_call("list_refunds", "Refund worker", 10.0, order_id="1042"),
+    ]
+    merged = cr._merge_span_calls(door, spans)
+    found = cr.channel_bypasses(merged, _RETURNS_WORKERS)
+    # The worker that used its own channel is never reported; a competing group is never lent to one worker.
+    assert all(one["worker"] != "order_lookup" for one in found)
+
+
+def test_a_shared_worker_never_bypasses() -> None:
+    shared = [{**one, "binding": "shared"} for one in _RETURNS_WORKERS]
+    calls = [replace(_door_call("issue_refund", "", 10.0), worker_id="Refund worker")]
+    assert cr.channel_bypasses(calls, shared) == []
+
+
+def test_a_door_row_from_before_channels_is_not_a_bypass(monkeypatch) -> None:
+    rows = [{"name": "issue_refund", "arguments": {}, "ok": True, "at": 1.0}]
+    monkeypatch.setattr(cr, "read_tool_trace", lambda _address: rows)
+    monkeypatch.setattr(cr, "_find_postgres_endpoint", lambda _runtime: type("E", (), {"address": "x"})())
+    (call,) = cr._collect_tool_trace_calls(object())
+    assert call.channel is None
+    assert cr.channel_bypasses([replace(call, worker_id="refund")], _RETURNS_WORKERS) == []
+    # A row from a door that records channels: the shared address reads "".
+    monkeypatch.setattr(cr, "read_tool_trace", lambda _address: [{**rows[0], "worker_id": None}])
+    (shared,) = cr._collect_tool_trace_calls(object())
+    assert shared.channel == ""

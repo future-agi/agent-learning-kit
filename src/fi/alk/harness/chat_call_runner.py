@@ -1027,6 +1027,10 @@ class HostedChatCallRunner:
 
             # A fault that did not take effect is said, never only logged: the trial ran without it.
             said += fault_notices(faults, _trial_log(door, trial_started), transcript.calls)
+        from .call_runner import channel_bypass_notices
+
+        # A separate worker that reached the world on the shared address: said, and held from its own checks.
+        said += channel_bypass_notices(transcript.calls, self._context.bundle_dir)
         if said:
             transcript.notices = said
         ended = datetime.now(timezone.utc)

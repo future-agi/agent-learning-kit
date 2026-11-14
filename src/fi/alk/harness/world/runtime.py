@@ -212,6 +212,9 @@ class Call:
     # Why a refused call was refused: "world_rule" when the tool ran and said no, otherwise what stopped it first
     # (`not_permitted`, `deadline_passed`, `unknown_tool`).
     refusal_code: str = ""
+    # The channel the world saw the call come in on, from its door row: "" for the shared address, a worker's id for
+    # that worker's own channel, None when there was no door row or the row is from before channels. Never lent.
+    channel: str | None = None
 
 
 def tool_call_attribution(record: Mapping[str, Any]) -> dict[str, Any]:
