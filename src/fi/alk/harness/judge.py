@@ -557,7 +557,7 @@ def _transcript(messages: Sequence[Any]) -> str:
 
 
 def _complete(
-    conversation: list[dict[str, Any]], tools: Sequence[Any], forced: bool
+    conversation: list[dict[str, Any]], tools: Sequence[Any], forced: bool, *, temperature: float | None = None
 ) -> dict[str, Any]:
     """One turn of the judge on the gateway's OpenAI-compatible chat completions."""
     env = provider_env(judge_model())
@@ -578,6 +578,8 @@ def _complete(
         ]
     if forced:
         body["tool_choice"] = {"type": "function", "function": {"name": "decide"}}
+    if temperature is not None:
+        body["temperature"] = temperature
     response = requests.post(
         f"{base}/v1/chat/completions",
         headers={"Authorization": f"Bearer {key}"},

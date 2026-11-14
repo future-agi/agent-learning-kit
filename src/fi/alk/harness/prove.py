@@ -87,6 +87,13 @@ class Proof:
     leaks: list[dict[str, str]] = field(default_factory=list)
     # Each cited source and whether it resolved: {kind, ref, resolved, problem, ...}.
     sources: list[dict[str, Any]] = field(default_factory=list)
+    # Each cited rule checked against the expected outcome: {rule, ref, conflict, why}.
+    policy_checks: list[dict[str, Any]] = field(default_factory=list)
+
+    @property
+    def conflicts(self) -> list[dict[str, Any]]:
+        """Cited rules the judge found the expected outcome contradicts."""
+        return [one for one in self.policy_checks if one.get("conflict") is True]
 
     @property
     def ran_controls(self) -> list[dict[str, Any]]:
@@ -132,6 +139,7 @@ class Proof:
             and self.controls_failed
             and not self.leaks
             and not self.unresolved_sources
+            and not self.conflicts
         )
 
     @property
@@ -168,6 +176,8 @@ class Proof:
                     return "negative_control_passed"
             elif any(one.get("failed") is False for one in self.judged_controls):
                 return "negative_control_passed"
+        if self.conflicts:
+            return "policy_conflict"
         if self.leaks:
             return "answer_leaked"
         if self.unresolved_sources:
@@ -192,7 +202,7 @@ class Proof:
 
     def why(self) -> str:
         """What to fix, in the order worth fixing it."""
-        if self.deferred and not self.broken and not self.leaks and not self.unresolved_sources:
+        if self.deferred and not self.broken and not self.leaks and not self.unresolved_sources and not self.conflicts:
             return "DEFERRED: setup, readiness and outcome checks require the live runtime; file access declarations do not verify fixture contents."
         if self.broken and not self.why_not_ready:
             return "these checks are broken, not failing:\n  - " + "\n  - ".join(self.broken)
@@ -289,6 +299,10 @@ class Proof:
             return (
                 "no negative control: add a wrong behaviour written for this task (for example the "
                 "wrong record, the action done twice, or the forbidden change) that its checks must fail."
+            )
+        if self.conflicts:
+            return "its expected outcome contradicts a cited rule:\n  - " + "\n  - ".join(
+                f"{one['ref'] or 'rule'} \"{one['rule']}\": {one['why'] or 'contradicted'}" for one in self.conflicts
             )
         if self.leaks:
             return "what the caller or the agent sees gives the answer away:\n  - " + "\n  - ".join(
@@ -811,12 +825,14 @@ def prove(
     contract: Any = None,
     actors: list | None = None,
     judge: Any = None,
+    conflict_judge: Any = None,
 ) -> Proof:
     """Run all three gates and say whether this scenario is worth keeping.
 
     `judge(goal, world, calls, messages, scenario) -> (held, explanation)` decides a judged-only
-    case's controls; None uses the harness judge."""
-    from .grounding import resolve_sources
+    case's controls; None uses the harness judge. `conflict_judge(expected, rule) -> (conflict, why)`
+    decides whether a cited rule contradicts the expected outcome; None uses the harness judge."""
+    from .grounding import policy_conflicts, resolve_sources
     from .leaks import leaks
 
     proof = Proof()
@@ -831,6 +847,8 @@ def prove(
         for one in leaks(scenario, catalogue, contract, world_state, actors, world_root=world_root)
     ]
     proof.sources = resolve_sources(scenario, contract, world_root)
+    rules = [str(one) for one in (getattr(contract, "hard_constraints", None) or [])] if contract is not None else []
+    proof.policy_checks = policy_conflicts(scenario, catalogue, rules, world_root, judge=conflict_judge) if rules else []
     checks = _checks_for(scenario, catalogue)
     if workspace_fixture(scenario, catalogue) and not native_runtime(world_root):
         proof.deferred = True
