@@ -38,12 +38,12 @@ _CGROUP_ROOT = Path("/sys/fs/cgroup")
 _PROC_SELF_CGROUP = Path("/proc/self/cgroup")
 _EMPTY_WAIT_SECONDS = 5.0
 # The gate reads the command's environment from one inherited pipe, up to EOF, and executes the
-# command with it; a message without the go mark (the harness gone before it moved the process)
-# ends it unrun. The second pipe closes on exec: EOF tells the harness the command started, and
-# an errno written there tells it why not, so the exec is judged as the declared user, not the
-# harness. Not a shell: dash cannot redirect from a descriptor above 9, and the pipes are never
-# that low in a harness with open files.
-_GO = b"go\0"
+# command with it. The message is ``go <length>\0`` and the environment: one that is not whole
+# (the harness gone before it moved the process, or while it wrote) ends the gate unrun. The
+# second pipe closes on exec: EOF tells the harness the command started, and an errno written
+# there tells it why not, so the exec is judged as the declared user, not the harness. Not a
+# shell: dash cannot redirect from a descriptor above 9, and the pipes are never that low in a
+# harness with open files.
 _GATE = (
     "import os, sys\n"
     "go, done = int(sys.argv[1]), int(sys.argv[2])\n"
@@ -52,10 +52,10 @@ _GATE = (
     "while chunk := os.read(go, 65536):\n"
     "    chunks.append(chunk)\n"
     "os.close(go)\n"
-    "message = b''.join(chunks)\n"
-    f"if not message.startswith({_GO!r}):\n"
+    "head, _, body = b''.join(chunks).partition(b'\\0')\n"
+    "if head != b'go ' + str(len(body)).encode():\n"
     "    os._exit(125)\n"
-    f"env = dict(e.split(b'=', 1) for e in message[{len(_GO)}:].split(b'\\0') if e)\n"
+    "env = dict(e.split(b'=', 1) for e in body.split(b'\\0') if e)\n"
     "try:\n"
     "    os.execvpe(sys.argv[3], sys.argv[3:], env)\n"
     "except OSError as exc:\n"
@@ -193,7 +193,8 @@ def _go_message(env: Mapping[Any, Any] | None) -> bytes:
         if not name or b"=" in name or b"\0" in name or b"\0" in text:
             raise ValueError(f"illegal environment variable name or value: {key!r}")
         entries.append(name + b"=" + text)
-    return _GO + b"\0".join(entries)
+    body = b"\0".join(entries)
+    return b"go " + str(len(body)).encode() + b"\0" + body
 
 
 def _write_all(fd: int, data: bytes) -> None:
@@ -258,8 +259,10 @@ def popen(args: Sequence[str], **kwargs: Any) -> tuple[subprocess.Popen, Leaf | 
         raise
     _close(done_read)
     if failure:
-        process.wait()
+        # The leaf first: a same-user process can reach the gate's done pipe through /proc and
+        # forge a failure; the command it hides must not keep the harness waiting.
         leaf.close()
+        process.wait()
         code = int(failure) or errno.ENOEXEC
         raise OSError(code, os.strerror(code), argv[0])
     return process, leaf

@@ -6838,21 +6838,23 @@ class ProcessRuntimeProvider:
         secret_values = {
             name: self._secret_values.get(name, "") for name in spec.required_secrets
         }
-        invocation = build_lifecycle_invocation(
-            command=spec.provision,
-            # Lifecycle code and its per-process dependency installation live in the immutable
-            # build tree. The world scratch directory contains only writable runtime state, so
-            # using it as cwd makes a repository command such as `python provider_target.py`
-            # fail before it can contact the provider.
-            source_directory=build_tree_dir(self._context.work_directory, process_name),
-            lifecycle_directory=lifecycle_directory,
-            context_path=context_path,
-            context=context,
-            required_secret_values=secret_values,
-            output_relative_path=spec.output,
-        )
-        uid, gid = self._lifecycle_user(process, lifecycle_directory)
         try:
+            # Inside the try: the lifecycle user owns the output folders from the first
+            # provision on, and one swapped for a link is the environment's failure.
+            invocation = build_lifecycle_invocation(
+                command=spec.provision,
+                # Lifecycle code and its per-process dependency installation live in the
+                # immutable build tree. The world scratch directory contains only writable
+                # runtime state, so using it as cwd makes a repository command such as
+                # `python provider_target.py` fail before it can contact the provider.
+                source_directory=build_tree_dir(self._context.work_directory, process_name),
+                lifecycle_directory=lifecycle_directory,
+                context_path=context_path,
+                context=context,
+                required_secret_values=secret_values,
+                output_relative_path=spec.output,
+            )
+            uid, gid = self._lifecycle_user(process, lifecycle_directory)
             provision_log_path = lifecycle_directory / "provision.log"
             returncode = run_lifecycle_invocation(
                 invocation,
@@ -7001,24 +7003,26 @@ class ProcessRuntimeProvider:
         lifecycle_directory = (
             self._context.work_directory / "provider" / f"w{world_index}"
         )
-        invocation = build_lifecycle_invocation(
-            command=spec.destroy,
-            source_directory=build_tree_dir(self._context.work_directory, process_name),
-            lifecycle_directory=lifecycle_directory,
-            context_path=lifecycle_directory / "context.json",
-            context=context,
-            required_secret_values={
-                name: self._secret_values.get(name, "")
-                for name in spec.required_secrets
-            },
-            output_relative_path=spec.output,
-            receipt_path=lifecycle_directory / spec.output,
-        )
         process = next(
             entry for entry in self._manifest.processes if entry.name == process_name
         )
-        uid, gid = self._lifecycle_user(process, lifecycle_directory)
         try:
+            # Inside the try: teardown goes on to stop the world's processes whatever the
+            # lifecycle user left in its folder.
+            invocation = build_lifecycle_invocation(
+                command=spec.destroy,
+                source_directory=build_tree_dir(self._context.work_directory, process_name),
+                lifecycle_directory=lifecycle_directory,
+                context_path=lifecycle_directory / "context.json",
+                context=context,
+                required_secret_values={
+                    name: self._secret_values.get(name, "")
+                    for name in spec.required_secrets
+                },
+                output_relative_path=spec.output,
+                receipt_path=lifecycle_directory / spec.output,
+            )
+            uid, gid = self._lifecycle_user(process, lifecycle_directory)
             returncode = run_lifecycle_invocation(
                 invocation,
                 log_path=lifecycle_directory / "destroy.log",

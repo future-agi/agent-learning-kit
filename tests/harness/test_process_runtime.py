@@ -5638,6 +5638,59 @@ def test_a_re_provision_never_writes_its_context_through_a_link(tmp_path: Path) 
     asyncio.run(provider.close(work_directory=tmp_path))
 
 
+def _nested_receipt_run(argv: list[str], **kwargs: Any) -> subprocess.CompletedProcess:
+    if argv[-1] == "provision":
+        context = json.loads(Path(kwargs["env"]["ALK_PROVIDER_CONTEXT"]).read_text())
+        Path(kwargs["env"]["ALK_PROVIDER_OUTPUT"]).write_text(_vapi_receipt(context))
+    return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+
+
+def _link_the_receipt_folder(tmp_path: Path) -> None:
+    """What a process of the lifecycle user can do to the folders it owns."""
+    receipts = tmp_path / "provider" / "w0" / "receipts"
+    receipts.rename(tmp_path / "receipts-moved")
+    (tmp_path / "elsewhere").mkdir()
+    receipts.symlink_to(tmp_path / "elsewhere", target_is_directory=True)
+
+
+def test_teardown_stops_a_world_whatever_its_lifecycle_user_left_in_its_folder(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    provider, manifest, source, bundle_dir = _lifecycle_provider(
+        tmp_path, _nested_receipt_run, "receipts/deep/provider-target.json"
+    )
+    _provision_one(provider, manifest, source, bundle_dir, tmp_path)
+    handles = [
+        spawned.handle
+        for name, spawned in provider._world_handles[0].items()
+        if name not in provider._job_shared_handles  # a job's shared engine outlives a world
+    ]
+    _link_the_receipt_folder(tmp_path)
+
+    provider._teardown_world(0)
+
+    assert handles and all(handle.terminated for handle in handles)
+    assert "provider_lifecycle_output_unsafe" in caplog.text
+    assert list((tmp_path / "elsewhere").iterdir()) == []
+
+
+def test_a_re_provision_through_a_linked_output_folder_fails_as_the_environment(
+    tmp_path: Path,
+) -> None:
+    provider, manifest, source, bundle_dir = _lifecycle_provider(
+        tmp_path, _nested_receipt_run, "receipts/deep/provider-target.json"
+    )
+    runtimes = _provision_one(provider, manifest, source, bundle_dir, tmp_path)
+    provider._destroy_provider_target(0)
+    _link_the_receipt_folder(tmp_path)
+
+    with pytest.raises(pr.ProcessRuntimeError, match="provider_lifecycle_output_unsafe") as info:
+        provider._ensure_provider_target(0, runtimes[0])
+
+    assert info.value.domain is FailureDomain.ENVIRONMENT
+    assert list((tmp_path / "elsewhere").iterdir()) == []
+
+
 def test_provider_provision_failure_surfaces_redacted_provider_output(
     tmp_path: Path,
 ) -> None:

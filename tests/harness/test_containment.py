@@ -11,8 +11,10 @@ import errno
 import json
 import os
 import shutil
+import signal
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -204,6 +206,82 @@ def test_the_harness_never_judges_a_command_by_its_own_access(contained, monkeyp
     result = containment.run(["sh", "-c", "echo ran"], capture_output=True, text=True)
 
     assert result.stdout == "ran\n"
+
+
+def _gate(command: list[str]) -> tuple[subprocess.Popen, int]:
+    """The gate on its own, holding ``command``, and the write end of its go pipe."""
+    go_read, go_write = os.pipe()
+    done_read, done_write = os.pipe()
+    gate = subprocess.Popen(
+        [sys.executable, "-I", "-S", "-c", containment._GATE, str(go_read), str(done_write), *command],
+        env={},
+        pass_fds=(go_read, done_write),
+    )
+    os.close(go_read)
+    os.close(done_write)
+    os.close(done_read)
+    return gate, go_write
+
+
+@pytest.mark.parametrize(
+    "cut", [lambda m: m[:-1], lambda m: m.replace(b"go ", b"go 9", 1)], ids=["cut off", "forged"]
+)
+def test_a_go_message_that_is_not_whole_ends_the_gate_unrun(tmp_path, cut):
+    ran = tmp_path / "ran"
+    message = containment._go_message({"PATH": os.environ["PATH"], "A": "1"})
+    gate, go = _gate(["touch", str(ran)])
+
+    os.write(go, cut(message))
+    os.close(go)
+
+    assert gate.wait(5) == 125
+    assert not ran.exists()
+
+
+def test_a_whole_go_message_runs_the_command(tmp_path):
+    ran = tmp_path / "ran"
+    gate, go = _gate(["touch", str(ran)])
+
+    os.write(go, containment._go_message({"PATH": os.environ["PATH"]}))
+    os.close(go)
+
+    assert gate.wait(5) == 0
+    assert ran.exists()
+
+
+class _KillingLeaf(_Leaf):
+    """A leaf whose close kills what it holds, as ``cgroup.kill`` does."""
+
+    def close(self, timeout: float = 5.0) -> None:
+        super().close(timeout)
+        for pid in self.pids:
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+
+
+def test_a_forged_exec_failure_never_keeps_the_harness_waiting_on_a_live_command(
+    contained, monkeypatch
+):
+    # A process of the same user can reach the held gate's done pipe through /proc/<pid>/fd and
+    # write an errno there while the real command runs.
+    contained(_KillingLeaf())
+    monkeypatch.setattr(containment, "_read_all", lambda fd: b"2")
+    outcome = {}
+
+    def start() -> None:
+        try:
+            containment.popen(["sleep", "30"])
+        except BaseException as exc:  # noqa: BLE001 - handed back to the test
+            outcome["error"] = exc
+
+    thread = threading.Thread(target=start, daemon=True)
+    thread.start()
+    thread.join(10)
+
+    assert not thread.is_alive(), "the harness waited on a live command"
+    assert isinstance(outcome.get("error"), FileNotFoundError)
 
 
 def test_a_leaf_that_cannot_be_made_leaves_no_descriptor_open(monkeypatch):
