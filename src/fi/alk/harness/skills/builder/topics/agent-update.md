@@ -51,6 +51,13 @@ decided in the notes.
 - Every sub-goal the environment added must be named by at least one scenario; one scenario may
   cover several.
 - Drop a sub-goal from scenarios with `retire_sub_goal` only after the environment retired it.
+- A scenario that needs a tool or sub-goal the environment no longer has is dropped, not rewritten
+  to do without it. `report_update` records why (the capability, the agent version) and keeps its
+  key and last content, so it comes back on its own when the agent has the capability again.
+- Scenarios the message lists as restored are already back in the suite under their own key. Keep
+  each as it was and change a step only where its tool or arguments changed, then prove it. One
+  that cannot be proved goes back to dropped and is reported; never drop, rename or rewrite one to
+  pass, and never write a new scenario under a dropped key.
 - Prove everything with `prove_scenarios`. Scenarios the person is still editing are listed at the
   end of the message. Only this message's list counts: a scenario an earlier message listed is
   no longer being edited and is repaired like any other. In a listed scenario keep what the
