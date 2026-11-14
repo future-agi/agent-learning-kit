@@ -4292,6 +4292,13 @@ def test_langgraph_dev_is_served_through_its_threads_and_runs_api(
         item for item in manifest.readiness if item.capability == "target_http"
     )
     assert readiness.path == "/ok"
+    # The framework instrumentors land in the project ``uv run`` starts, though the command
+    # now runs under ``sh -c`` for the world's port (hosted run 7ccc3710 had no hand-offs).
+    assert "ALK_OBSERVE_FRAMEWORKS" in agent.environment
+    assert any(
+        "uv sync --project graphs/python" in " ".join(command)
+        for command in agent.build_commands
+    )
 
 
 def test_langgraph_dev_serves_the_graph_the_written_interface_names(
