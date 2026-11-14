@@ -77,6 +77,25 @@ class Proof:
     too_strict: list[str] = field(default_factory=list)
     # Values the scenario marks fixed that no code check notices when they are wrong.
     unchecked: list[str] = field(default_factory=list)
+    # Each negative control played: {name, why, failed, held, assumed}. A control with assumed
+    # steps did not run: its tools have no endpoint, so the world never changed.
+    controls: list[dict[str, Any]] = field(default_factory=list)
+    # "no_change" when the reference leaves the world as doing nothing does: a refusal case.
+    outcome: str = "change"
+    # Visible text repeating grader-only material: {who, field, grader_field, excerpt}.
+    leaks: list[dict[str, str]] = field(default_factory=list)
+    # Each cited source and whether it resolved: {kind, ref, resolved, problem, ...}.
+    sources: list[dict[str, Any]] = field(default_factory=list)
+
+    @property
+    def ran_controls(self) -> list[dict[str, Any]]:
+        return [one for one in self.controls if not one.get("assumed")]
+
+    @property
+    def unresolved_sources(self) -> list[dict[str, Any]]:
+        from .grounding import unresolved
+
+        return unresolved(self.sources)
 
     @property
     def holds(self) -> bool:
@@ -84,7 +103,7 @@ class Proof:
             self.ready
             and self.solvable
             and not self.vacuous
-            and not self.weak
+            and (self.outcome == "no_change" or not self.weak)
             and not self.failed_attempts
             and not self.broken
             and not self.too_strict
@@ -94,7 +113,15 @@ class Proof:
     @property
     def proved(self) -> bool:
         """Holds, and the reference solution really ran: nothing assumed, nothing deferred."""
-        return self.holds and not self.assumed and not self.deferred
+        ran = self.ran_controls
+        return (
+            self.holds
+            and not self.assumed
+            and not self.deferred
+            and (self.judged_only or (bool(ran) and all(one.get("failed") for one in ran)))
+            and not self.leaks
+            and not self.unresolved_sources
+        )
 
     @property
     def kept_as_written(self) -> bool:
@@ -115,7 +142,7 @@ class Proof:
                 return "not_solvable"
             if self.vacuous:
                 return "vacuous"
-            if self.weak:
+            if self.weak and self.outcome == "change":
                 return "weak_check"
             if self.failed_attempts:
                 return "credits_failed_attempt"
@@ -123,10 +150,21 @@ class Proof:
                 return "too_strict"
             if self.unchecked:
                 return "unchecked"
+            if not self.judged_only:
+                if not self.controls:
+                    return "no_negative_control"
+                if any(one.get("failed") is False for one in self.ran_controls):
+                    return "negative_control_passed"
+        if self.leaks:
+            return "answer_leaked"
+        if self.unresolved_sources:
+            return "source_unresolved"
         if self.deferred:
             return "proof_deferred"
         if self.assumed:
             return "solution_assumed"
+        if self.controls and not self.ran_controls and not self.judged_only:
+            return "control_not_run"
         return None
 
     def gates(self) -> dict[str, bool]:
@@ -139,7 +177,7 @@ class Proof:
 
     def why(self) -> str:
         """What to fix, in the order worth fixing it."""
-        if self.deferred and not self.broken:
+        if self.deferred and not self.broken and not self.leaks and not self.unresolved_sources:
             return "DEFERRED: setup, readiness and outcome checks require the live runtime; file access declarations do not verify fixture contents."
         if self.broken and not self.why_not_ready:
             return "these checks are broken, not failing:\n  - " + "\n  - ".join(self.broken)
@@ -212,7 +250,7 @@ class Proof:
                 "successful outcome or the corresponding world effect. For a refusal, require "
                 "evidence of the intended refusal, not an arbitrary execution error."
             )
-        if self.weak:
+        if self.weak and self.outcome == "change":
             return (
                 "these individual checks pass without the agent doing anything, so keeping them "
                 "would display credit unsupported by evidence:\n  - "
@@ -220,6 +258,31 @@ class Proof:
                 + "\n\nMake each check assert the relevant attempt or observation as well as the "
                 "final state. For a refusal, require that the call was attempted and refused; "
                 "an untouched world is not evidence that the agent refused correctly."
+            )
+        if self.controls and not self.judged_only:
+            passed = [one for one in self.ran_controls if one.get("failed") is False]
+            if passed:
+                return "the checks pass a wrong behaviour, so they cannot tell it from the right one:\n  - " + "\n  - ".join(
+                    f"{one['name']} ({one['why']}): held {', '.join(one.get('held') or []) or 'every check'}"
+                    for one in passed
+                ) + "\n\nTighten the named checks so this wrong behaviour fails them."
+        if not self.controls and not self.judged_only and not self.deferred:
+            return (
+                "no negative control: add a wrong behaviour written for this task (for example the "
+                "wrong record, the action done twice, or the forbidden change) that its checks must fail."
+            )
+        if self.leaks:
+            return "what the caller or the agent sees gives the answer away:\n  - " + "\n  - ".join(
+                f"{one['who']}: {one['field']} repeats \"{one['excerpt']}\" from {one['grader_field']}"
+                for one in self.leaks
+            )
+        if self.unresolved_sources:
+            return "a cited source does not resolve:\n  - " + "\n  - ".join(
+                f"{one['kind']} {one['ref']}: {one['problem']}" for one in self.unresolved_sources
+            )
+        if self.controls and not self.ran_controls:
+            return "no negative control could run here: " + ", ".join(
+                f"{one['name']} ({', '.join(one.get('assumed') or [])})" for one in self.controls
             )
         return "holds"
 
@@ -569,13 +632,109 @@ def _with_one_wrong(scenario: Scenario) -> list[tuple[str, list[Any], bool]]:
     return wrong
 
 
+def _controls(
+    scenario: Scenario,
+    world_root: Path,
+    checks: list[tuple[str, str]],
+    reference: Any,
+) -> list[dict[str, Any]]:
+    """Play each negative control like a solution; a control fails when a check it names fails."""
+    played: list[dict[str, Any]] = []
+    for control in getattr(scenario, "negative_controls", None) or []:
+        if not checks:
+            played.append({"name": control.name, "why": control.why, "failed": None, "held": [], "assumed": []})
+            continue
+        world, calls, _refused, assumed = _run(scenario, world_root, with_solution=True, steps=control.steps)
+        try:
+            outcomes = [run_check(source, world, calls, name=name, reference=reference) for name, source in checks]
+        finally:
+            world.close()
+        named = set(control.must_fail) or {name for name, _ in checks}
+        held = [one.name for one in outcomes if one.held]
+        played.append(
+            {
+                "name": control.name,
+                "why": control.why,
+                "failed": any(not one.held for one in outcomes if one.name in named),
+                "held": held,
+                "assumed": assumed,
+            }
+        )
+    return played
+
+
+def _outcome(scenario: Scenario, world_root: Path) -> str:
+    """"no_change" when the reference leaves the world as doing nothing does; unreadable reads "change"."""
+    done, _, _, _ = _run(scenario, world_root, with_solution=True)
+    try:
+        after = _end_state(done)
+    finally:
+        done.close()
+    nothing, _, _, _ = _run(scenario, world_root, with_solution=False)
+    try:
+        untouched = _end_state(nothing)
+    finally:
+        nothing.close()
+    return "no_change" if after is not None and untouched is not None and after == untouched else "change"
+
+
+def _base_state(world_root: Path) -> Any:
+    """The world before any setup, or None when it cannot be restored here."""
+    try:
+        world = restore(world_root)
+    except Exception:  # noqa: BLE001 - a world only the live runtime holds has no base state here
+        return None
+    try:
+        return _end_state(world)
+    finally:
+        world.close()
+
+
+def _load_contract(world_root: Path) -> Any:
+    try:
+        from .understand import load
+
+        return load(world_root)
+    except Exception:  # noqa: BLE001 - no contract means the defaults: conversational, no rules
+        return None
+
+
+def _load_actors(world_root: Path) -> list[dict[str, Any]]:
+    try:
+        from .actors import load_actors  # type: ignore[import-not-found]
+    except ImportError:
+        return []
+    try:
+        loaded = load_actors(world_root)
+    except Exception:  # noqa: BLE001 - an unreadable cast skips the actor audience
+        return []
+    return [one if isinstance(one, dict) else getattr(one, "model_dump", lambda: {})() for one in loaded or []]
+
+
 def prove(
     scenario: Scenario,
     catalogue: Catalogue,
     world_root: Path,
+    *,
+    contract: Any = None,
+    actors: list | None = None,
 ) -> Proof:
     """Run all three gates and say whether this scenario is worth keeping."""
+    from .grounding import resolve_sources
+    from .leaks import leaks
+
     proof = Proof()
+    if contract is None:
+        contract = _load_contract(world_root)
+    if actors is None:
+        actors = _load_actors(world_root)
+    # Before any gate or early return, so a leak or a false citation is reported whatever the gates say.
+    world_state = None if native_runtime(world_root) else _base_state(world_root)
+    proof.leaks = [
+        one.as_dict()
+        for one in leaks(scenario, catalogue, contract, world_state, actors, world_root=world_root)
+    ]
+    proof.sources = resolve_sources(scenario, contract, world_root)
     checks = _checks_for(scenario, catalogue)
     if workspace_fixture(scenario, catalogue) and not native_runtime(world_root):
         proof.deferred = True
@@ -611,6 +770,9 @@ def prove(
         proof.solvable = proof.ready
         proof.vacuous = False
         proof.judged_only = True
+        if proof.ready:
+            proof.outcome = _outcome(scenario, world_root)
+            proof.controls = _controls(scenario, world_root, checks, reference)
         return proof
 
     # Gate 1: is the world ready for this scenario at all?
@@ -688,6 +850,7 @@ def prove(
     # Gate 3: do those same checks fail when nothing is done?
     untouched, nothing, _, _ = _run(scenario, world_root, with_solution=False)
     try:
+        untouched_state = _end_state(untouched)
         proof.with_nothing = [
             run_check(source, untouched, nothing, name=name, reference=reference)
             for name, source in checks
@@ -727,4 +890,14 @@ def prove(
         and len(proof.weak) == len(proof.with_nothing)
         and not judged
     )
+    # A refusal case: the reference leaves the world as doing nothing does. Its checks should hold on
+    # an untouched world; what proves they can fail is a control performing the forbidden change.
+    proof.outcome = (
+        "no_change"
+        if right_state is not None and untouched_state is not None and right_state == untouched_state
+        else "change"
+    )
+    proof.controls = _controls(scenario, world_root, checks, reference)
+    if proof.outcome == "no_change" and any(one.get("failed") for one in proof.ran_controls):
+        proof.vacuous = False
     return proof

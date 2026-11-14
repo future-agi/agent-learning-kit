@@ -428,6 +428,8 @@ def _certify_only(args: argparse.Namespace) -> int:
         raise RuntimeValidationError(
             "environment", f"Certify-only validation failed: {_one_line(exc)}"
         ) from exc
+    if getattr(args, "prove_scenarios", False):
+        _prove_scenarios(output, getattr(args, "deadline_at", None))
     try:
         # Written before sealing: the platform's fill gate keys on the sealed certificate.
         report_path.write_text(
@@ -456,6 +458,19 @@ def _certify_only(args: argparse.Namespace) -> int:
             "bundle", "Certify-only: validation left no certified bundle to seal"
         )
     return 0
+
+
+SCENARIO_PROOFS = "scenario-proofs.json"
+
+
+def _prove_scenarios(output: Path, deadline_at: float | None) -> None:
+    """Prove every scenario on this certification's authoring tree; never fails the certify."""
+    from .prove_suite import prove_suite
+
+    try:
+        prove_suite(output, output / SCENARIO_PROOFS, deadline_at=deadline_at)
+    except Exception as exc:  # noqa: BLE001 - a missing proofs file reads as "no new proofs"
+        print(f"certify-only: scenario proofs not written: {_one_line(exc)}", file=sys.stderr, flush=True)
 
 
 def _load_provider_import_profile(
@@ -673,6 +688,17 @@ def main(argv: list[str] | None = None, *, validate_runtime: bool = False) -> in
         "--bundle-output",
         type=Path,
         help="Directory the sealed bundle is written to in --certify-only mode",
+    )
+    parser.add_argument(
+        "--prove-scenarios",
+        action="store_true",
+        help="With --certify-only: prove every scenario after validation and before sealing",
+    )
+    parser.add_argument(
+        "--deadline-at",
+        type=float,
+        default=None,
+        help="Epoch seconds the validation job is stopped at; scenario proving keeps a margin before it",
     )
     args = parser.parse_args(argv)
     if args.certify_only:

@@ -2043,7 +2043,10 @@ def test_finished_message_reports_counts(tmp_path, monkeypatch):
     # Every solution uses only the two in-process tools, which have no endpoint: each step is assumed.
     kept = [SimpleNamespace(name=f"case-{n}", scenario_key=f"case-{n}") for n in range(10)]
     for one in kept:
-        proof = Proof(ready=True, solvable=True, vacuous=False, assumed=["place_order", "search_books"])
+        not_run = [{"name": "wrong", "why": "orders twice", "failed": True, "held": [], "assumed": ["place_order"]}]
+        proof = Proof(
+            ready=True, solvable=True, vacuous=False, assumed=["place_order", "search_books"], controls=not_run
+        )
         record_proof(workspace, one.scenario_key, proof, solution_steps=2)
     monkeypatch.setattr(runtime, "_what_exists", lambda: (True, True))
     monkeypatch.setattr(runtime, "_after_saved", lambda **kwargs: None)

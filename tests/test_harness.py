@@ -2673,6 +2673,17 @@ def _delta(**overrides):
             {"tool": "add", "arguments": {"item_id": "big_mac"}},
         ],
         "sub_goals": ["item-added", "right-item"],
+        "negative_controls": [
+            {
+                "name": "adds_twice",
+                "why": "adds the item twice",
+                "steps": [
+                    {"tool": "lst", "arguments": {}},
+                    {"tool": "add", "arguments": {"item_id": "big_mac"}},
+                    {"tool": "add", "arguments": {"item_id": "big_mac"}},
+                ],
+            }
+        ],
     }
     payload.update(overrides)
     return payload

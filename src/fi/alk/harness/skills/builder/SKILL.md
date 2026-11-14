@@ -101,6 +101,8 @@ is what enforces it (the world's behaviour, the check that fails without it), ne
 to follow it. Tell the person concretely what you will
 redo and what stays, then redo it, prove again what it affects, and keep everything that still holds.
 
+A case a person describes is cited as a requirement in their words.
+
 ## What you know, and how to answer
 
 Everything about how this system works is written down for you, listed under "What you know" at the

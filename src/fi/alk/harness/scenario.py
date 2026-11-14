@@ -21,7 +21,7 @@ from collections import Counter, defaultdict
 from itertools import combinations
 from math import ceil, log
 from pathlib import Path
-from typing import Any, ClassVar
+from typing import Any, ClassVar, Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -74,6 +74,46 @@ class Step(BaseModel):
     environment_arguments: dict[str, Any] = Field(default_factory=dict)
     # Each argument the caller, their record or a rule fixes, and where it comes from; checks see only these.
     fixed: dict[str, str] | None = None
+
+
+_CONTROL_NAME = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
+
+
+class NegativeControl(BaseModel):
+    """A wrong behaviour written for this task, played like a solution; the checks must fail it."""
+
+    name: str  # slug, unique within the scenario
+    why: str  # one sentence: the wrong behaviour, e.g. "refunds the order twice"
+    steps: list[Step]  # the wrong trajectory
+    must_fail: list[str] = Field(default_factory=list)  # sub-goals that must fail; empty = any check
+
+    @model_validator(mode="after")
+    def _shape(self) -> "NegativeControl":
+        if not _CONTROL_NAME.match(self.name or ""):
+            raise ValueError(f"negative control name {self.name!r} must be a lowercase slug")
+        if not self.steps:
+            raise ValueError(f"negative control {self.name} has no steps")
+        return self
+
+
+SOURCE_KINDS = ("rule", "file", "chat_message", "evidence_case", "requirement", "assumption")
+
+
+class ScenarioSource(BaseModel):
+    """Where one requirement of a case comes from, so it is shown on the case and checked."""
+
+    kind: Literal["rule", "file", "chat_message", "evidence_case", "requirement", "assumption"]
+    # rule:<index into contract.hard_constraints> | file:<path> | chat:<message id> |
+    # evidence:<EvidenceImportCase id> | "" for requirement and assumption
+    ref: str = ""
+    quote: str = Field(default="", max_length=500)  # the cited words; required for rule and file
+    supports: str = ""  # which part of the case it justifies, e.g. "the 14-day limit"
+
+    @model_validator(mode="after")
+    def _quoted(self) -> "ScenarioSource":
+        if self.kind in ("rule", "file") and not self.quote.strip():
+            raise ValueError(f"a {self.kind} source needs the exact quote it cites")
+        return self
 
 
 # The language every accent in the platform's accent vocabulary is a way of speaking.
@@ -299,6 +339,11 @@ class Scenario(BaseModel):
     solution: list[Step] = Field(default_factory=list)
     # Other ways the agent's instructions allow to the same outcome; every check must pass on each.
     alternatives: list[list[Step]] = Field(default_factory=list)
+    # Wrong behaviours written for this task; each must fail the checks. Never shown to the agent.
+    negative_controls: list[NegativeControl] = Field(default_factory=list)
+    # Where each requirement comes from: a rule, a file, a chat message, an evidence case, the
+    # person's own words, or an assumption labelled as such.
+    sources: list[ScenarioSource] = Field(default_factory=list)
 
     # Level per plan axis, e.g. {"task": "book_ride", "overlay": "interruption"}. Optional.
     coverage: dict[str, str] = Field(default_factory=dict)
@@ -350,6 +395,17 @@ class Scenario(BaseModel):
         if isinstance(persona, dict) and persona.get("keywords"):
             data = {**data, "keywords": list(persona["keywords"])}
         return data
+
+    @model_validator(mode="after")
+    def _controls_fit(self) -> "Scenario":
+        names = [one.name for one in self.negative_controls]
+        if len(names) != len(set(names)):
+            raise ValueError("negative control names must be unique within a scenario")
+        for one in self.negative_controls:
+            unknown = sorted(set(one.must_fail) - set(self.sub_goals))
+            if unknown:
+                raise ValueError(f"negative control {one.name} names sub-goals the scenario lacks: {', '.join(unknown)}")
+        return self
 
     @model_validator(mode="after")
     def _identify(self) -> "Scenario":

@@ -75,6 +75,10 @@ def _entry(proof: Proof, solution_steps: int) -> dict[str, Any]:
         "solution_steps": solution_steps,
         "deferred": proof.deferred,
         "judged_only": proof.judged_only,
+        "outcome": proof.outcome,
+        "controls": [dict(one) for one in proof.controls],
+        "leaks": [dict(one) for one in proof.leaks],
+        "sources": [dict(one) for one in proof.sources],
         "blocked_reason": blocked,
     }
 
@@ -101,6 +105,10 @@ def unprovable_entry(why: str, blocked_reason: str = "broken_check") -> dict[str
         "solution_steps": 0,
         "deferred": False,
         "judged_only": False,
+        "outcome": "change",
+        "controls": [],
+        "leaks": [],
+        "sources": [],
         "blocked_reason": blocked_reason,
     }
 

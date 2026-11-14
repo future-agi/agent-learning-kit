@@ -16,7 +16,7 @@ import re
 import logging
 from collections import Counter
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Sequence
 
 from .backends import tool, tool_server
 
@@ -804,8 +804,10 @@ def _identifiers_the_instruction_invents(scenario: Scenario, trial: Any) -> list
     ]
 
 
-def _steps_the_contract_refuses(scenario: Scenario, world_root: Path) -> list[str]:
-    """Solution steps that call a tool, argument or declared value the agent's contract does not have."""
+def _steps_the_contract_refuses(
+    scenario: Scenario, world_root: Path, *, steps: Sequence[Step] | None = None
+) -> list[str]:
+    """Solution steps (or `steps`) that call a tool, argument or declared value the agent's contract lacks."""
     try:
         contract = json.loads((Path(world_root) / "contract.json").read_text(encoding="utf-8"))
     except (OSError, ValueError):
@@ -814,7 +816,7 @@ def _steps_the_contract_refuses(scenario: Scenario, world_root: Path) -> list[st
     if not tools:
         return []
     wrong = []
-    for step in scenario.solution:
+    for step in scenario.solution if steps is None else steps:
         spec = tools.get(step.tool)
         if spec is None:
             wrong.append(f"{step.tool} is not one of the agent's tools")
@@ -834,6 +836,19 @@ def _steps_the_contract_refuses(scenario: Scenario, world_root: Path) -> list[st
         "these solution steps do not match the agent's contract (its tools, their arguments and "
         "declared values): " + "; ".join(wrong)
     ]
+
+
+def _controls_the_contract_refuses(scenario: Scenario, world_root: Path) -> list[str]:
+    """The same contract check over each negative control's steps, each problem naming its control."""
+    return [
+        f"negative control {control.name}: {problem}"
+        for control in scenario.negative_controls
+        for problem in _steps_the_contract_refuses(scenario, world_root, steps=control.steps)
+    ]
+
+
+# A writer's fault: the scenario is not kept. The lane codes (an unbound tool) are kept and labelled.
+_REFUSED_CODES = frozenset({"negative_control_passed", "no_negative_control", "answer_leaked", "source_unresolved"})
 
 
 def _fixed_sources_that_do_not_hold(scenario: Scenario, trial: Any, instructions: str) -> list[str]:
@@ -995,6 +1010,7 @@ def accept_scenario(
             )
             problems.extend(contract_sequence_problems(scenario, hard_constraints or []))
             problems.extend(_steps_the_contract_refuses(scenario, world_root))
+            problems.extend(_controls_the_contract_refuses(scenario, world_root))
             problems.extend(_overlay_asserts_nothing(scenario, catalogue))
             problems.extend(_shared_check_bound_to_one_task(scenario, catalogue, kept))
         else:
@@ -1015,6 +1031,7 @@ def accept_scenario(
                 problems.extend(_identifiers_the_instruction_invents(scenario, trial))
                 problems.extend(_fixed_sources_that_do_not_hold(scenario, trial, instructions))
                 problems.extend(_steps_the_contract_refuses(scenario, world_root))
+                problems.extend(_controls_the_contract_refuses(scenario, world_root))
                 problems.extend(_overlay_asserts_nothing(scenario, catalogue))
                 problems.extend(_shared_check_bound_to_one_task(scenario, catalogue, kept))
             finally:
@@ -1026,7 +1043,9 @@ def accept_scenario(
             )
 
         proof = prove(scenario, catalogue, world_root)
-        if not proof.holds and not (proof.deferred and not proof.broken):
+        if (not proof.holds and not (proof.deferred and not proof.broken)) or (
+            proof.blocked_reason() in _REFUSED_CODES
+        ):
             said = f"Not kept. {proof.why()}"
             # Code written against the wrong collection shape is the commonest way setup, ready and a
             # check fail here, and the exception alone does not say which collections are mappings and
@@ -1130,6 +1149,14 @@ def accept_scenario(
         if proof.assumed
         else ""
     )
+    if proof is not None and proof.blocked_reason() == "control_not_run":
+        unproved += (
+            "\nNOT PROVED: no negative control could run here, because these tools have no endpoint: "
+            + ", ".join(sorted({tool for one in proof.controls for tool in one.get("assumed") or []}))
+            + ". It is kept as written; the checks were never shown to fail a wrong behaviour."
+        )
+    if proof is not None and proof.outcome == "no_change" and proof.proved:
+        unproved += "\nA refusal case: nothing should change, and each negative control's forbidden change fails its checks."
     if proof is None:
         proof_summary = "Nothing it tests changed, so it was not proved again."
     elif proof.deferred:
@@ -1804,6 +1831,22 @@ def scenario_tools(
                     "or a tool that does a step itself). The proof plays each one and every check "
                     "must still pass. Empty when the instructions allow only one way.",
                     "items": {"type": "array", "items": {"type": "object"}},
+                },
+                "negative_controls": {
+                    "type": "array",
+                    "description": "Wrong behaviours written for this task that its checks must fail, at "
+                    "least one: the action done twice, the wrong record, or the forbidden change on a "
+                    "refusal case. Never 'do nothing'. Each is {name, why, steps (like solution), "
+                    "must_fail (sub-goal names; empty means any check)}.",
+                    "items": {"type": "object"},
+                },
+                "sources": {
+                    "type": "array",
+                    "description": "Where each requirement comes from: {kind (rule, file, chat_message, "
+                    "evidence_case, requirement, assumption), ref (rule:<n>, file:<path>, chat:<id>, "
+                    "evidence:<id>), quote (the exact words; required for rule and file), supports}. A "
+                    "requirement the person stated is cited in their words; a guess is an assumption.",
+                    "items": {"type": "object"},
                 },
                 "sub_goals": {
                     "type": "array",

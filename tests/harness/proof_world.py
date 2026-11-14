@@ -94,3 +94,31 @@ def scenario(solution, *, sub_goals, name="refund_case", instruction="", **extra
 
 
 ONE_REFUND = check("n = world.data['refunds'].count('O-10')\nreturn None if n == 1 else f'{n} refunds'")
+
+
+LOOKED_UP_O10 = check(
+    "return None if any(c.name == 'lookup_order' and c.ok and c.arguments.get('order_id') == 'O-10' for c in calls) "
+    "else 'O-10 never looked up'"
+)
+LOOKUP_O10 = {"tool": "lookup_order", "arguments": {"order_id": "O-10"}, "fixed": {"order_id": "the caller"}}
+REFUND_O10 = {"tool": "refund_order", "arguments": {"order_id": "O-10"}, "fixed": {"order_id": "the caller"}}
+
+
+def control(name, why, steps, must_fail=()):
+    from fi.alk.harness.scenario import NegativeControl
+
+    return NegativeControl(name=name, why=why, steps=steps, must_fail=list(must_fail))
+
+
+def refund_case(**extra):
+    """A 10-day order refunded once; its control refunds twice."""
+    values = dict(
+        sub_goals=["refund_once", "looked_up"],
+        instruction="I want my money back for order O-10.",
+        negative_controls=[control("two_refunds", "refunds the order twice", [LOOKUP_O10, REFUND_O10, REFUND_O10])],
+    )
+    values.update(extra)
+    return scenario([LOOKUP_O10, REFUND_O10], **values)
+
+
+REFUND_CATALOGUE = dict(refund_once=ONE_REFUND, looked_up=LOOKED_UP_O10)
