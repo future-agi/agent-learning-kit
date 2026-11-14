@@ -137,3 +137,20 @@ def test_customer_fact_in_both_is_not_a_leak():
         solution=[_step("refund_order", receipt="RX-4417", note="the customer asked nicely today")],
     )
     assert leaks(case, catalogue, None, WORLD) == []
+
+
+def test_solution_amount_written_either_way_or_nested_is_a_leak():
+    catalogue = _catalogue(refund_once={"what": "The agent refunds the order."})
+    short = _case(
+        "Ask for your money back.",
+        persona={"name": "Asha", "initial_message": "Please refund 37.5 to my card."},
+        solution=[_step("refund_order", order_id="O-123", amount=37.5)],
+    )
+    nested = _case(
+        "Ask for your money back.",
+        persona={"name": "Asha", "initial_message": "Swap it for item SKU-889 please."},
+        solution=[_step("exchange_order", order_id="O-123", items=[{"sku": "SKU-889", "qty": 1}])],
+    )
+
+    assert [one.excerpt for one in leaks(short, catalogue, None, WORLD)] == ["37.5", "37.5"]
+    assert [one.excerpt for one in leaks(nested, catalogue, None, WORLD)] == ["sku 889", "sku 889"]
