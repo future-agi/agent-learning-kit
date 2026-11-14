@@ -853,6 +853,67 @@ def test_an_sdk_nothing_here_covers_marks_the_process_partial(
     assert f"unmeasured {sdk}" in result.stderr
 
 
+def _unseen_sdk_stand_in(root: Path) -> Path:
+    """An importable vertexai: an SDK nothing here covers, whose calls may go over gRPC."""
+    packages = root / "packages"
+    (packages / "vertexai").mkdir(parents=True)
+    (packages / "vertexai" / "__init__.py").write_text("", encoding="utf-8")
+    return packages
+
+
+def test_each_call_after_an_unseen_sdk_was_imported_says_it_went_unmeasured(
+    tmp_path: Path, collector: Collector
+) -> None:
+    """The agent imports an SDK nothing covers before its first call, and its calls go where
+    the wire check does not look. Each call still gets its partial marker, never no span."""
+    env = _environment(
+        tmp_path, collector, extra_path=(_unseen_sdk_stand_in(tmp_path),)
+    )
+    (tmp_path / "call").unlink()  # The scheduler has not written a call yet.
+    result = _run(
+        """
+        import os, time
+        import vertexai
+        for call in ("call-a", "call-b"):
+            with open(os.environ["FI_SIMULATION_CALL_FILE"], "w") as handle:
+                handle.write(call)
+            time.sleep(1)
+        """,
+        env,
+    )
+
+    assert result.returncode == 0, result.stderr
+    markers = _settled(collector, 2)
+    assert sorted(
+        marker["attributes"]["fi.simulator.call_execution_id"] for marker in markers
+    ) == ["call-a", "call-b"]
+    assert {marker["attributes"][STATE] for marker in markers} == {"partial"}
+
+
+@pytest.mark.parametrize(
+    "agent_setting",
+    [{"OTEL_TRACES_SAMPLER": "always_off"}, {"OTEL_SDK_DISABLED": "true"}],
+    ids=["sampler-off", "sdk-disabled"],
+)
+def test_the_agents_own_otel_settings_never_turn_measuring_off(
+    tmp_path: Path, collector: Collector, agent_setting: dict[str, str]
+) -> None:
+    result = _run(
+        "import vertexai\n",
+        _environment(
+            tmp_path,
+            collector,
+            extra_path=(_unseen_sdk_stand_in(tmp_path),),
+            **agent_setting,
+        ),
+    )
+
+    assert result.returncode == 0, result.stderr
+    [marker] = _settled(collector, 1)
+    assert marker["attributes"]["fi.simulator.call_execution_id"] == CALL
+    assert marker["attributes"][STATE] == "partial"
+
+
 def test_a_missing_instrumentor_never_stops_the_agent_and_marks_it_partial(
     tmp_path: Path, collector: Collector
 ) -> None:
@@ -896,6 +957,28 @@ def measuring(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     monkeypatch.setattr(module, "_flush_on_sigterm", lambda: None)
     yield module, marked
     importlib.reload(simulation_measure)
+
+
+def test_the_exit_flush_sends_the_span_a_reply_left_in_the_batch(
+    measuring, monkeypatch: pytest.MonkeyPatch, collector: Collector
+) -> None:
+    """The SIGTERM handler and the exit hook both flush the provider. On opentelemetry-sdk
+    1.41 and older a span processor whose force_flush returns None stops that flush before
+    the batch is sent, so this runs on whatever version the environment locks."""
+    module, _marked = measuring
+    monkeypatch.setenv("FI_SIMULATION_TRACES_ENDPOINT", collector.url)
+    # Nothing leaves on the batch's own timer: only the flush can send the span.
+    monkeypatch.setattr(module, "_BATCH_DELAY_MS", 60_000)
+    provider = module._provider()
+    try:
+        provider.get_tracer(module.SCOPE).start_span("model call").end()
+        assert collector.spans() == []
+
+        module._flush()
+
+        assert [span["name"] for span in collector.spans()] == ["model call"]
+    finally:
+        provider.shutdown()
 
 
 def test_an_http_client_request_to_a_model_api_marks_partial(measuring) -> None:

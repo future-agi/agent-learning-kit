@@ -32,6 +32,7 @@ import os
 import signal
 import sys
 import threading
+import time
 import urllib.parse
 
 INSTRUMENT = "FI_SIMULATION_INSTRUMENT"
@@ -87,6 +88,9 @@ _MODEL_HOST_SUFFIXES = (".openai.azure.com", "aiplatform.googleapis.com")
 _BATCH_DELAY_MS = 200
 # How long a flush may hold the process at SIGTERM or exit; the sandbox kills it after 5 s.
 _FLUSH_MS = 2000
+# How often a process that reads partial looks for a new call to mark. A call nothing here sees
+# (an SDK over gRPC, say, or one imported before the first call) would otherwise send no span.
+_WATCH_S = 0.25
 _PATCHED = "_alk_simulation_measure"
 
 _lock = threading.Lock()
@@ -97,6 +101,8 @@ _state = {
     "model_hosts": frozenset(),
     # Our own export's host and path, which is never a model call even on a shared host.
     "export": ("", ""),
+    # The process whose watcher runs: a forked child has none, though it copies this.
+    "watching": None,
 }
 _flagged_calls: set = set()
 _write = None
@@ -160,6 +166,7 @@ def _provider():
         from opentelemetry.sdk.resources import Resource
         from opentelemetry.sdk.trace import ReadableSpan, SpanProcessor, TracerProvider
         from opentelemetry.sdk.trace.export import BatchSpanProcessor, SpanExporter
+        from opentelemetry.sdk.trace.sampling import ALWAYS_ON
         from opentelemetry.trace import Status
 
         class _Stamp(SpanProcessor):
@@ -168,6 +175,12 @@ def _provider():
             def on_start(self, span, parent_context=None):
                 if _state["partial"]:
                     span.set_attribute(STATE_KEY, PARTIAL)
+
+            # It holds nothing to flush. The base returns None up to opentelemetry-sdk 1.41,
+            # and the provider's flush stops at the first processor that does not return
+            # True, so the batch after it would never be sent.
+            def force_flush(self, timeout_millis=30000):
+                return True
 
         def _measured_only(span):
             kept = _kept_attributes(span.attributes)
@@ -219,7 +232,12 @@ def _provider():
         # The simulation's pairs only. Resource.create would also read the agent's own
         # OTEL_RESOURCE_ATTRIBUTES and OTEL_SERVICE_NAME, and the collector stores every
         # resource attribute with the span.
-        provider = TracerProvider(resource=Resource(_state["resource"]))
+        # The agent's OTEL_TRACES_SAMPLER and OTEL_SDK_DISABLED are for its own tracing. Read
+        # here, they would turn measuring off, and its calls would read as costing nothing.
+        provider = TracerProvider(
+            resource=Resource(_state["resource"]), sampler=ALWAYS_ON
+        )
+        provider._disabled = False
         provider.add_span_processor(_Stamp())
         provider.add_span_processor(
             BatchSpanProcessor(
@@ -347,8 +365,28 @@ def _current_call():
 
 
 def _mark_partial() -> None:
-    """Every span from now on is stamped, and the call running now gets a span that says so."""
+    """Every span from now on is stamped, and every call from now on gets a span that says so:
+    the one running now, and each later one as it starts."""
     _state["partial"] = True
+    _mark_current_call()
+    _watch_calls()
+
+
+def _watch_calls() -> None:
+    with _lock:
+        if _state["watching"] == os.getpid():
+            return
+        _state["watching"] = os.getpid()
+
+    def watch():
+        while True:
+            time.sleep(_WATCH_S)
+            _mark_current_call()
+
+    threading.Thread(target=watch, name="alk-simulation-measure", daemon=True).start()
+
+
+def _mark_current_call() -> None:
     call = _current_call()
     if call is None:
         return
