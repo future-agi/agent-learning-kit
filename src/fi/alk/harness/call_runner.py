@@ -1127,6 +1127,81 @@ def trial_state_changes(
     return [agent] + list(entries.values())
 
 
+_SHARED_RECORD_KEYS = 20
+_SHARED_RECORD_ACTIONS = 50
+
+
+def _tool_effects(contract: Any) -> dict[str, str]:
+    tools = contract.get("tools") if isinstance(contract, Mapping) else getattr(contract, "tools", None)
+    effects: dict[str, str] = {}
+    for tool in tools or ():
+        name = tool.get("name") if isinstance(tool, Mapping) else getattr(tool, "name", None)
+        written = tool.get("effects") if isinstance(tool, Mapping) else getattr(tool, "effects", "")
+        if isinstance(name, str) and name:
+            effects[name] = written if isinstance(written, str) else ""
+    return effects
+
+
+def trial_shared_records(log: list[dict[str, Any]], contract: Any) -> list[dict[str, Any]]:
+    """Which participants named the same record in this trial, and what the world made of each of their calls.
+
+    A record key is `<argument>=<value>` for each argument named `id` or ending in `_id` whose value is a string or an
+    integer: it states what the calls named, never a database identity. A key is kept only when two or more distinct
+    participants named it. `write` is true when the contract tool records effects, else null: an empty `effects` means
+    "not written down", never read-only."""
+    effects = _tool_effects(contract)
+    keys: dict[str, dict[str, Any]] = {}
+    for row in log:
+        if is_pre_run(row.get("idempotency_key")):
+            continue
+        who = str(row.get("actor_id") or "") or (f"worker:{row['worker_id']}" if row.get("worker_id") else AGENT)
+        arguments = row.get("arguments")
+        if not isinstance(arguments, Mapping):
+            continue
+        tool = str(row.get("agent_tool") or row.get("name") or "")
+        outcome = row.get("outcome") or (
+            "refused" if row.get("refused") else "committed" if row.get("ok", True) else "faulted"
+        )
+        for argument, value in arguments.items():
+            if not (argument == "id" or str(argument).endswith("_id")):
+                continue
+            if isinstance(value, bool) or not isinstance(value, (str, int)):
+                continue
+            key = f"{argument}={value}"
+            entry = keys.setdefault(key, {"key": key, "argument": str(argument), "value": str(value), "actions": []})
+            entry["actions"].append(
+                {"who": who, "tool": tool, "outcome": str(outcome), "write": True if effects.get(tool) else None}
+            )
+    shared = [entry for entry in keys.values() if len({one["who"] for one in entry["actions"]}) >= 2]
+    truncated = len(shared) > _SHARED_RECORD_KEYS
+    records = []
+    for entry in shared[:_SHARED_RECORD_KEYS]:
+        actions = entry["actions"]
+        records.append(
+            {
+                **entry,
+                "actions": actions[:_SHARED_RECORD_ACTIONS],
+                "committed_writes": sum(
+                    1 for one in actions if one["write"] is True and one["outcome"] == "committed"
+                ),
+                "truncated": truncated or len(actions) > _SHARED_RECORD_ACTIONS,
+            }
+        )
+    return records
+
+
+def _shared_records(runtime: EnvironmentRuntime, bundle_dir: Path) -> list[dict[str, Any]]:
+    database = _find_postgres_endpoint(runtime)
+    if database is None:
+        return []
+    try:
+        log = _read_action_log(database.address)
+    except Exception as exc:  # noqa: BLE001 - no shared records, never a failed call
+        logger.debug("shared records unreadable: %s", type(exc).__name__)
+        return []
+    return trial_shared_records(log, _bundle_contract(Path(bundle_dir)))
+
+
 def approvals(log: list[dict[str, Any]], decisions: Sequence[dict[str, Any]] = ()) -> list[dict[str, Any]]:
     """One line per approval, read from the action log only: the agent's request (the agent row an actor's row or a
     timeout points at through its parent), the decision (that actor row, or the timeout's fallback), and the agent's
@@ -2998,6 +3073,9 @@ class CallRunnerImpl:
                         "limits": dict(limits or {}),
                         "usage": list(actor_usage),
                     }
+                    shared = _shared_records(runtime, self._context.bundle_dir)
+                    if shared:
+                        transcript_document["world_actors"]["shared_records"] = shared
                 if said:
                     # A fault that did not take effect is said, never only logged: the trial ran without it.
                     transcript_document["notices"] = said

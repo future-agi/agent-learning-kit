@@ -3177,3 +3177,47 @@ def test_a_door_row_from_before_channels_is_not_a_bypass(monkeypatch) -> None:
     monkeypatch.setattr(cr, "read_tool_trace", lambda _address: [{**rows[0], "worker_id": None}])
     (shared,) = cr._collect_tool_trace_calls(object())
     assert shared.channel == ""
+
+
+_RETURNS_TOOLS = {
+    "tools": [
+        {"name": "list_refunds", "effects": ""},
+        {"name": "issue_refund", "effects": "creates a refund"},
+    ]
+}
+
+
+def _row(tool: str, worker: str = "", outcome: str = "committed", **arguments: Any) -> dict[str, Any]:
+    return {"name": tool, "agent_tool": tool, "worker_id": worker, "arguments": arguments, "outcome": outcome}
+
+
+def test_shared_records_list_two_participants_on_one_order() -> None:
+    log = [
+        _row("list_refunds", "order_lookup", order_id="1042"),
+        _row("list_refunds", "refund", order_id="1042"),
+        _row("issue_refund", "refund", order_id="1042", amount=120),
+    ]
+    (record,) = cr.trial_shared_records(log, _RETURNS_TOOLS)
+    assert record["key"] == "order_id=1042"
+    assert [(one["who"], one["tool"]) for one in record["actions"]] == [
+        ("worker:order_lookup", "list_refunds"),
+        ("worker:refund", "list_refunds"),
+        ("worker:refund", "issue_refund"),
+    ]
+    assert record["committed_writes"] == 1
+
+
+def test_a_record_one_participant_touched_is_not_shared() -> None:
+    log = [_row("list_refunds", "refund", order_id="1043"), _row("issue_refund", "refund", order_id="1043")]
+    assert cr.trial_shared_records(log, _RETURNS_TOOLS) == []
+
+
+def test_write_comes_from_contract_effects_and_unknown_is_null() -> None:
+    log = [
+        {**_row("issue_refund", "order_lookup", order_id="1"), "idempotency_key": "seed:h0"},
+        _row("issue_refund", "order_lookup", order_id="1"),
+        _row("list_refunds", "refund", order_id="1"),
+        _row("unknown_tool", "refund", order_id="1"),
+    ]
+    (record,) = cr.trial_shared_records(log, _RETURNS_TOOLS)
+    assert [one["write"] for one in record["actions"]] == [True, None, None]

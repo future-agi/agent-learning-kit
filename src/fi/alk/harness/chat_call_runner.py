@@ -331,11 +331,18 @@ def _trial_log(door: Any, since: float = 0.0) -> list[dict[str, Any]]:
 
 
 def _world_actors_record(
-    door: Any, listing: Any, dispatcher: Any, cast: Any, meter: Any, limits: dict[str, Any], since: float = 0.0
+    door: Any,
+    listing: Any,
+    dispatcher: Any,
+    cast: Any,
+    meter: Any,
+    limits: dict[str, Any],
+    since: float = 0.0,
+    contract: Any = None,
 ) -> dict[str, Any] | None:
     """What actors did in the world this trial and what it changed, sealed beside the transcript as a call seals it;
     None when no actor took part."""
-    from .call_runner import actor_rows, approvals, trial_state_changes
+    from .call_runner import actor_rows, approvals, trial_shared_records, trial_state_changes
 
     listed = listing.by_id()
     log = _trial_log(door, since)
@@ -364,7 +371,7 @@ def _world_actors_record(
     workers_acted = any(str(entry.get("who") or "").startswith("worker:") for entry in changes)
     if not acted and not decisions and not workers_acted:
         return None
-    return {
+    record = {
         "actions": acted,
         "decisions": decisions,
         "state_changes": changes,
@@ -372,6 +379,11 @@ def _world_actors_record(
         "limits": dict(limits),
         "usage": meter.rows(),
     }
+    shared = trial_shared_records(log, contract)
+    if shared:
+        # Which participants named the same record and what the world made of each call.
+        record["shared_records"] = shared
+    return record
 
 
 def _chat_actor_summary(cast: Any, world_record: dict[str, Any] | None, listing: Any) -> tuple[dict[str, Any], ...]:
@@ -1010,7 +1022,9 @@ class HostedChatCallRunner:
         # through the generated world or fabricate evidence from text.
         transcript.calls[:] = collect_seam_calls(runtime, self._context.evidence_seam, transcript.calls)
 
-        world_record = _world_actors_record(door, listing, dispatcher, cast, meter, limits, since=trial_started)
+        world_record = _world_actors_record(
+            door, listing, dispatcher, cast, meter, limits, since=trial_started, contract=self._contract
+        )
         if world_record is not None:
             transcript.world_actors = world_record
         # Every actor that took part, the ones acting only through the world too, so the call is found by each.
