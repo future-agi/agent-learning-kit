@@ -1175,15 +1175,31 @@ _SHARED_RECORD_KEYS = 20
 _SHARED_RECORD_ACTIONS = 50
 
 
-def _tool_effects(contract: Any) -> dict[str, str]:
-    tools = contract.get("tools") if isinstance(contract, Mapping) else getattr(contract, "tools", None)
-    effects: dict[str, str] = {}
-    for tool in tools or ():
-        name = tool.get("name") if isinstance(tool, Mapping) else getattr(tool, "name", None)
-        written = tool.get("effects") if isinstance(tool, Mapping) else getattr(tool, "effects", "")
+def _tool_effects(contract: Any) -> dict[str, bool | None]:
+    """Whether each contract tool writes: its entrypoint's declared `effect` (`read` / `write`) first, then a written
+    `effects` description, which only a tool that changes something carries. None when the contract says neither."""
+    def field(item: Any, key: str) -> Any:
+        return item.get(key) if isinstance(item, Mapping) else getattr(item, key, None)
+
+    writes: dict[str, bool | None] = {}
+    for tool in field(contract, "tools") or ():
+        name = field(tool, "name")
+        written = field(tool, "effects")
         if isinstance(name, str) and name:
-            effects[name] = written if isinstance(written, str) else ""
-    return effects
+            writes[name] = True if isinstance(written, str) and written.strip() else None
+    for entry in field(contract, "tool_entrypoints") or ():
+        name, effect = field(entry, "tool"), field(entry, "effect")
+        if isinstance(name, str) and name and effect in ("read", "write"):
+            writes[name] = effect == "write"
+    return writes
+
+
+def _row_writes(row: Mapping[str, Any], declared: bool | None) -> bool | None:
+    """Whether a logged call was a write: the effect the door logged for it first (a read changed nothing, whatever
+    the tool's description says), then the contract's word for its tool; None when neither says."""
+    if row.get("effect") in ("read", "write"):
+        return row["effect"] == "write"
+    return declared
 
 
 def trial_shared_records(log: list[dict[str, Any]], contract: Any) -> list[dict[str, Any]]:
@@ -1191,8 +1207,9 @@ def trial_shared_records(log: list[dict[str, Any]], contract: Any) -> list[dict[
 
     A record key is `<argument>=<value>` for each argument named `id` or ending in `_id` whose value is a string or an
     integer: it states what the calls named, never a database identity. A key is kept only when two or more distinct
-    participants named it. `write` is true when the contract tool records effects, else null: an empty `effects` means
-    "not written down", never read-only."""
+    participants named it. `write` is what the door logged for the call (`read` is false: a lookup is never a committed
+    write), else the contract's declared effect for the tool, else true when the tool describes effects; null when
+    nothing says, never read-only."""
     effects = _tool_effects(contract)
     keys: dict[str, dict[str, Any]] = {}
     for row in log:
@@ -1217,7 +1234,7 @@ def trial_shared_records(log: list[dict[str, Any]], contract: Any) -> list[dict[
             key = f"{argument}={value}"
             entry = keys.setdefault(key, {"key": key, "argument": str(argument), "value": str(value), "actions": []})
             entry["actions"].append(
-                {"who": who, "tool": tool, "outcome": str(outcome), "write": True if effects.get(tool) else None}
+                {"who": who, "tool": tool, "outcome": str(outcome), "write": _row_writes(row, effects.get(tool))}
             )
     shared = [entry for entry in keys.values() if len({one["who"] for one in entry["actions"]}) >= 2]
     truncated = len(shared) > _SHARED_RECORD_KEYS

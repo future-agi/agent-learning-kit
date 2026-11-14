@@ -3236,6 +3236,38 @@ def test_write_comes_from_contract_effects_and_unknown_is_null() -> None:
     assert [one["write"] for one in record["actions"]] == [True, None, None]
 
 
+def test_a_read_the_door_logged_is_never_a_committed_write_whatever_the_tool_describes() -> None:
+    # The lookup tool describes what it returns, which once read as "records effects" and counted as a write.
+    contract = {
+        "tools": [
+            {"name": "list_refunds", "effects": "returns the refunds already issued"},
+            {"name": "issue_refund", "effects": "creates a refund"},
+        ]
+    }
+    log = [
+        {**_row("list_refunds", "order_lookup", order_id="1042"), "effect": "read"},
+        {**_row("issue_refund", "refund", order_id="1042"), "effect": "write"},
+        {**_row("issue_refund", "refund", order_id="1042"), "effect": "write"},
+    ]
+    (record,) = cr.trial_shared_records(log, contract)
+    assert [one["write"] for one in record["actions"]] == [False, True, True]
+    assert record["committed_writes"] == 2
+
+
+def test_a_row_without_a_logged_effect_takes_the_contract_s_declared_effect() -> None:
+    contract = {
+        "tools": [{"name": "list_refunds", "effects": "returns refunds"}, {"name": "issue_refund"}],
+        "tool_entrypoints": [
+            {"tool": "list_refunds", "endpoint": "/refunds", "method": "POST", "effect": "read"},
+            {"tool": "issue_refund", "endpoint": "/refunds/issue", "method": "POST", "effect": "write"},
+        ],
+    }
+    log = [_row("list_refunds", "order_lookup", order_id="7"), _row("issue_refund", "refund", order_id="7")]
+    (record,) = cr.trial_shared_records(log, contract)
+    assert [one["write"] for one in record["actions"]] == [False, True]
+    assert record["committed_writes"] == 1
+
+
 def _cut_voice_call(runner: cr.CallRunnerImpl, entered: asyncio.Event) -> Any:
     async def scenario():
         task = asyncio.create_task(
