@@ -53,7 +53,7 @@ from .folder import (
     write_index,
 )
 from .checks import reference_of, run_check
-from .proofs import record_proof, record_unprovable
+from .proofs import proof_key, record_proof, record_unprovable
 from .prove import (
     executes,
     native_runtime,
@@ -173,10 +173,10 @@ def _no_longer_hold(
         try:
             proof = prove(scenario, catalogue, world_root)
         except Exception as exc:  # noqa: BLE001 - a scenario that cannot be proved is the finding
-            record_unprovable(destination, scenario.scenario_key, type(exc).__name__)
+            record_unprovable(destination, proof_key(scenario), type(exc).__name__)
             failed.append((scenario.name, type(exc).__name__))
             continue
-        record_proof(destination, scenario.scenario_key, proof)
+        record_proof(destination, proof_key(scenario), proof, solution_steps=len(scenario.solution))
         if not proof.holds and not (proof.deferred and not proof.broken):
             why = "not ready" if not proof.ready else (
                 "the reference solution no longer passes it"
@@ -1106,7 +1106,7 @@ def accept_scenario(
     # Saved on both paths: parallel writers share this process, so the proof file is safe to
     # write even where the folders are not. A rename is not proved again: its key keeps its proof.
     if proof is not None:
-        record_proof(world_root, scenario.scenario_key or _slug(scenario.name), proof)
+        record_proof(world_root, proof_key(scenario), proof, solution_steps=len(scenario.solution))
     if persist:
         write_scenarios(kept, world_root, catalogue)
     else:

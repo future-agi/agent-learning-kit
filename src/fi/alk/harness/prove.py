@@ -41,6 +41,10 @@ from .world.runtime import Call, GeneratedWorld
 from .world.snapshot import read_manifest, restore
 
 
+# The lane could not execute something; the case runs labelled "kept as written", never as proved.
+LANE_CODES = frozenset({"proof_deferred", "solution_assumed", "control_not_run"})
+
+
 @dataclass
 class Proof:
     """Whether a scenario holds up, and what happened when it was tried."""
@@ -86,6 +90,44 @@ class Proof:
             and not self.too_strict
             and not self.unchecked
         )
+
+    @property
+    def proved(self) -> bool:
+        """Holds, and the reference solution really ran: nothing assumed, nothing deferred."""
+        return self.holds and not self.assumed and not self.deferred
+
+    @property
+    def kept_as_written(self) -> bool:
+        """Not proved only because this lane could not execute something; nothing that ran failed."""
+        return not self.proved and self.blocked_reason() in LANE_CODES
+
+    def blocked_reason(self) -> str | None:
+        """The first reason this proof is not proved, faults before the lane's own limits."""
+        if self.proved:
+            return None
+        if self.broken:
+            return "broken_check"
+        if not self.deferred:
+            # A deferred proof returns before any gate runs, so its gates read unset, not failed.
+            if not self.ready:
+                return "not_ready"
+            if not self.solvable:
+                return "not_solvable"
+            if self.vacuous:
+                return "vacuous"
+            if self.weak:
+                return "weak_check"
+            if self.failed_attempts:
+                return "credits_failed_attempt"
+            if self.too_strict:
+                return "too_strict"
+            if self.unchecked:
+                return "unchecked"
+        if self.deferred:
+            return "proof_deferred"
+        if self.assumed:
+            return "solution_assumed"
+        return None
 
     def gates(self) -> dict[str, bool]:
         """The three answers, for anything that wants to show them."""

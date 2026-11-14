@@ -415,7 +415,7 @@ def suite_gate(
             record_unprovable(workspace, key, type(exc).__name__)
             holds, why = False, type(exc).__name__
         else:
-            record_proof(workspace, key, proof)
+            record_proof(workspace, key, proof, solution_steps=len(scenario.solution))
             if proof.deferred and not proof.broken:
                 # Only the live runtime can prove it; that is not a failure.
                 not_checked.append(key)

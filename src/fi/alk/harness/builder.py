@@ -162,7 +162,7 @@ def suite_server(
 ) -> ToolServer:
     """Whole-suite operations the single-scenario tools would take one call per scenario to do."""
     from .catalogue import load_catalogue
-    from .proofs import record_proof
+    from .proofs import proof_key, record_proof
     from .prove import prove
     from .scenario_tools import write_scenarios
 
@@ -205,7 +205,7 @@ def suite_server(
                 lines.append(f"{name}: not in the suite")
                 continue
             proof = prove(scenario, catalogue, out)
-            record_proof(out, scenario.scenario_key, proof)
+            record_proof(out, proof_key(scenario), proof, solution_steps=len(scenario.solution))
             gates = ", ".join(f"{gate} {'yes' if held else 'no'}" for gate, held in proof.gates().items())
             lines.append(
                 f"{name}: {'holds' if proof.holds else 'does not hold'} ({gates})"

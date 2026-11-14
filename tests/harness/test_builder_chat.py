@@ -2005,3 +2005,57 @@ def test_the_build_and_its_check_change_without_asking_and_a_question_gets_no_on
     answer = asyncio.run(runtime._ask("AskUserQuestion", {"question": "Which?"}, None))
     assert "Nobody answers" in answer["content"][0]["text"]
     assert calls == [corrected]
+
+
+def test_finished_message_reports_counts(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    from fi.alk.harness import scenario_tools
+    from fi.alk.harness.proofs import record_proof
+    from fi.alk.harness.prove import Proof
+
+    monkeypatch.setenv("ALK_HARNESS", "claude")
+    policy = tmp_path / "policy.yaml"
+    policy.write_text(
+        "schema_version: 1\nharness_chat:\n  enabled: true\n  stages:\n    builder:\n      enabled: true\n",
+        encoding="utf-8",
+    )
+    workspace = tmp_path / "authoring"
+    workspace.mkdir()
+
+    class LiveBuildClient(BuilderClient):
+        def __init__(self):
+            super().__init__()
+            self.turn_context = {**self.capabilities.turn_context, "capabilities": {"control_only": True}}
+
+        async def overview(self):
+            return {}
+
+    runtime = HostedChatRuntime(
+        client=LiveBuildClient(),  # type: ignore[arg-type]
+        policy=load_chat_policy(policy),
+        workspace=workspace,
+        source=tmp_path,
+        job={"metadata": {"agent_name": "demo"}, "scenario_count": 10},
+    )
+    stage = asyncio.run(runtime._open_builder())
+    finish = next(one for one in stage.spec.servers["platform"].tools if one.name == "finish_build")
+    # Every solution uses only the two in-process tools, which have no endpoint: each step is assumed.
+    kept = [SimpleNamespace(name=f"case-{n}", scenario_key=f"case-{n}") for n in range(10)]
+    for one in kept:
+        proof = Proof(ready=True, solvable=True, vacuous=False, assumed=["place_order", "search_books"])
+        record_proof(workspace, one.scenario_key, proof, solution_steps=2)
+    monkeypatch.setattr(runtime, "_what_exists", lambda: (True, True))
+    monkeypatch.setattr(runtime, "_after_saved", lambda **kwargs: None)
+    monkeypatch.setattr(scenario_tools, "load_scenarios", lambda path: kept)
+    monkeypatch.setattr(builder, "suite_health", lambda *args, **kwargs: [])
+
+    said = asyncio.run(finish.handler({}))["content"][0]["text"]
+
+    assert "0 proved, 10 kept as written (place_order, search_books), 0 not proved" in said
+    assert said.endswith(
+        "It is now being validated against the running agent and sealed; the environment opens when that "
+        "is done, and this conversation carries on there."
+    )
+    finished = json.loads((workspace / ".futureagi-build-finished.json").read_text(encoding="utf-8"))
+    assert finished["proofs"] == {"proved": 0, "kept_as_written": 10, "not_proved": 0}

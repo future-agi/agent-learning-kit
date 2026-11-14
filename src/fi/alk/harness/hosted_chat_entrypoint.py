@@ -50,6 +50,32 @@ _RANGES = {
 _NOT_MESSAGES = {"interrupt", "cancel_operation", "user_response", "approval"}
 _PENDING_QUESTION = ".futureagi-pending-question.json"
 _BUILD_FINISHED = ".futureagi-build-finished.json"
+
+
+def _proof_summary(proofs: dict[str, dict[str, Any]], keys: list[str], counts: dict[str, int]) -> str:
+    """The proof counts the closing summary must repeat, with the tools and reasons behind them."""
+    tools = sorted(
+        {
+            tool
+            for key in keys
+            if (proofs.get(key) or {}).get("kept_as_written") is True
+            for tool in (proofs.get(key) or {}).get("assumed") or []
+        }
+    )
+    reasons = sorted(
+        {
+            str((proofs.get(key) or {}).get("blocked_reason") or "not_validated")
+            for key in keys
+            if (proofs.get(key) or {}).get("proved") is not True
+            and (proofs.get(key) or {}).get("kept_as_written") is not True
+        }
+    )
+    kept = f"{counts['kept_as_written']} kept as written" + (f" ({', '.join(tools)})" if tools else "")
+    unproved = f"{counts['not_proved']} not proved" + (f" ({', '.join(reasons)})" if reasons else "")
+    return (
+        f"{counts['proved']} proved, {kept}, {unproved}. Report exactly these counts; call only the "
+        f"{counts['proved']} proved scenarios proved."
+    )
 _PROVIDER_PROFILE = "provider-import-profile.json"
 _JOURNAL = ".futureagi-conversation.json"
 _PROVIDER_SESSIONS = ".futureagi-provider-sessions.json"
@@ -849,6 +875,7 @@ class HostedChatRuntime:
         )
         async def finish_build(args: dict[str, Any]) -> dict[str, Any]:
             from .builder import suite_health
+            from .proofs import load_proofs, proof_counts, proof_key
             from .scenario_tools import load_scenarios
             from .understand import load as load_contract
 
@@ -876,12 +903,19 @@ class HostedChatRuntime:
                 return text("Not finished:\n- " + "\n- ".join(missing[:60]), error=True)
             # The bundle is sealed from the world as it is now, after every change made during the build.
             await asyncio.to_thread(self._after_saved, world_changed=True)
+            proofs = load_proofs(self.workspace)
+            keys = [proof_key(one) for one in kept]
+            counts = proof_counts(proofs, keys)
             (self.workspace / _BUILD_FINISHED).write_text(
-                json.dumps({"scenarios": len(kept), "asked": asked, "note": str(args.get("note") or "")}),
+                json.dumps(
+                    {"scenarios": len(kept), "asked": asked, "note": str(args.get("note") or ""), "proofs": counts}
+                ),
                 encoding="utf-8",
             )
             return text(
-                f"Finished: {len(kept)} scenarios (the build asked for {asked}). It is now being "
+                f"Finished: {len(kept)} scenarios (the build asked for {asked}): "
+                + _proof_summary(proofs, keys, counts)
+                + " It is now being "
                 "validated against the running agent and sealed; the environment opens when that "
                 "is done, and this conversation carries on there."
             )

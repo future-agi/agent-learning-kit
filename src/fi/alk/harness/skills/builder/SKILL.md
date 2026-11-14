@@ -132,6 +132,12 @@ yourself. When you mention a scenario, write its number and name, `#12 some_name
 find it. A message can start with a block naming rows the person selected on the Scenarios tab; that
 selection is what "these" and "the selected ones" mean.
 
+## Finishing a build
+
+`finish_build` reports how many scenarios are proved, kept as written and not proved. Say 'proved' only
+for the count finish_build reports as proved; call the rest 'kept as written' or 'not proved', with the
+reason it gives.
+
 ## Changing the environment
 
 Load `write-scenarios` before you write or rewrite any scenario in this conversation; its rules are
