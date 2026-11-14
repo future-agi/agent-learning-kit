@@ -8,7 +8,7 @@ from typing import Any
 
 from fi.alk.harness import prove as module
 from fi.alk.harness.catalogue import Catalogue, SubGoal
-from fi.alk.harness.checks import Outcome
+from fi.alk.harness.folder import Outcome
 from fi.alk.harness.scenario import Step
 from fi.alk.harness.world.runtime import Call
 
@@ -56,8 +56,7 @@ def install(monkeypatch, *, data=BASE, runtime_tools=(), unreadable=False, ready
 
     def prepared(scenario, world_root):
         world = FakeWorld(data, runtime_tools, unreadable=unreadable)
-        ok = Outcome("setup", True)
-        return world, ok, (Outcome("ready", True) if ready else Outcome("ready", False, ready_said))
+        return world, Outcome(True), (Outcome(True) if ready else Outcome(False, ready_said))
 
     monkeypatch.setattr(module, "prepared", prepared)
     monkeypatch.setattr(module, "native_runtime", lambda world_root: False)

@@ -77,6 +77,15 @@ def _excerpt(tokens: list[str]) -> str:
     return " ".join(tokens)[:EXCERPT]
 
 
+def _returned(value: ast.expr) -> list[ast.expr]:
+    """The expressions a return can hand back, looking through conditional expressions."""
+    if isinstance(value, ast.IfExp):
+        return _returned(value.body) + _returned(value.orelse)
+    if isinstance(value, ast.BoolOp):
+        return [leaf for one in value.values for leaf in _returned(one)]
+    return [value]
+
+
 def _check_literals(source: str) -> set[str]:
     """String literals with a digit or 3+ tokens, and decimal numbers, from comparison and argument
     positions of a check. Never from a return, a raise or an f-string: a check returns a sentence
@@ -87,8 +96,13 @@ def _check_literals(source: str) -> set[str]:
         return set()
     excluded: set[int] = set()
     for node in ast.walk(tree):
-        if isinstance(node, (ast.Return, ast.Raise, ast.JoinedStr)):
-            excluded.update(id(inner) for inner in ast.walk(node) if inner is not node or isinstance(node, ast.JoinedStr))
+        if isinstance(node, (ast.Raise, ast.JoinedStr)):
+            excluded.update(id(inner) for inner in ast.walk(node))
+        elif isinstance(node, ast.Return) and node.value is not None:
+            # `return None if world... == 42.5 else "wrong"`: the condition is a comparison and
+            # its literals count; only what the check can hand back is a sentence.
+            for value in _returned(node.value):
+                excluded.update(id(inner) for inner in ast.walk(value))
     positions: list[ast.AST] = []
     for node in ast.walk(tree):
         if isinstance(node, ast.Compare):
