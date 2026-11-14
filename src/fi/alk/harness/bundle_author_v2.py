@@ -2044,6 +2044,106 @@ def _tool_proxy_process(read_actions: list[str] | None = None) -> SourceProcess:
     )
 
 
+# The world's door for tools the agent runs in its own process (`in_process_door.py`).
+WORLD_DOOR_PROCESS = "world-door"
+
+
+def in_process_door_bindings(
+    tool_entrypoints: list[dict[str, Any]] | None, language: str = "python"
+) -> list[dict[str, str]]:
+    """The contract tools a Python agent runs in its own process that the world's door can stand in front of: a
+    module-level callable (`import`) or a method on an object the agent builds (`construct`). A tool in a tools
+    service already has the proxy; one with no runnable seam has nothing to wrap."""
+    if str(language or "python").strip().lower() not in {"", "python", "py"}:
+        return []
+    bound = []
+    for raw in tool_entrypoints or []:
+        if not isinstance(raw, dict):
+            continue
+        try:
+            entry = ToolEntry.model_validate(raw)
+        except ValueError:
+            continue
+        if entry.mode in {"import", "construct"} and entry.module and entry.callable:
+            bound.append({"name": entry.tool, "module": entry.module, "callable": entry.callable})
+    return bound
+
+
+def declared_read_tools(tool_entrypoints: list[dict[str, Any]] | None) -> list[str]:
+    """The tools the contract declares read-only, by name: what the in-process door logs as reads."""
+    return sorted(
+        {
+            str(entry.get("tool"))
+            for entry in tool_entrypoints or []
+            if isinstance(entry, dict) and entry.get("effect") == "read" and entry.get("tool")
+        }
+    )
+
+
+def _world_door_process(read_tools: list[str]) -> SourceProcess:
+    environment = {
+        "PORT": "{{PORT_world-door}}",
+        "DATABASE_URL": "{{WORLD_DATABASE_URL}}",
+    }
+    if read_tools:
+        environment["READ_ACTIONS"] = ",".join(read_tools)
+    return SourceProcess(
+        name=WORLD_DOOR_PROCESS,
+        working_directory="generated/world-door",
+        source_origin="bundle",
+        run_command=[sys.executable, "server.py"],
+        environment=environment,
+        started_check=StartedCheck(port=True, timeout_seconds=180),
+        user=ProcessUser.SVC_TOOLS,
+        depends_on=["world-db"],
+    )
+
+
+def with_in_process_door(
+    plan: EnvironmentPlanV2, tool_entrypoints: list[dict[str, Any]] | None, language: str = "python"
+) -> EnvironmentPlanV2:
+    """The plan with the world's door in front of the tools the agent runs in its own process: a door process on the
+    world's database, its address and the bound tools in the agent's environment, and the agent started after it. A
+    plan whose tools sit behind the tool proxy, with no world database or nothing to bind, is returned as it is."""
+    names = {process.name for process in plan.processes}
+    bound = in_process_door_bindings(tool_entrypoints, language)
+    if (
+        not bound
+        or not plan.control_service
+        or "tool-proxy" in names
+        or WORLD_DOOR_PROCESS in names
+        or "world-db" not in names
+    ):
+        return plan
+    processes: list[ManagedProcess | SourceProcess] = []
+    for process in plan.processes:
+        if isinstance(process, SourceProcess) and process.name == plan.control_service:
+            environment = {**process.environment, "ALK_WORLD_DOOR_URL": "{{ALK_WORLD_DOOR_URL}}"}
+            # The door wraps the bindings the tool trace already reads; a plan without them gets them here.
+            environment.setdefault("ALK_TOOL_TRACE_BINDINGS", json.dumps(bound, sort_keys=True))
+            depends = [*process.depends_on, *([] if WORLD_DOOR_PROCESS in process.depends_on else [WORLD_DOOR_PROCESS])]
+            process = process.model_copy(update={"environment": environment, "depends_on": depends})
+        processes.append(process)
+    processes.append(_world_door_process(declared_read_tools(tool_entrypoints)))
+    return replace(
+        plan,
+        processes=tuple(processes),
+        capabilities={
+            **plan.capabilities,
+            "world_door": CapabilityV2(
+                protocol=CapabilityProtocol.HTTP,
+                service=WORLD_DOOR_PROCESS,
+                container_port=8080,
+                configuration_name="ALK_WORLD_DOOR_URL",
+            ),
+        },
+        readiness=(
+            *plan.readiness,
+            ReadinessProbeV2(capability="world_door", path="/health", timeout_seconds=180),
+        ),
+    )
+
+
 def _mcp_toolbox_definition(root: Path) -> tuple[Path, dict[str, Any]] | None:
     """Find one source-owned MCP Toolbox SQL configuration.
 
@@ -3645,6 +3745,11 @@ def author_bundle_v2(
                 bindings=trace_bindings,
             ),
         )
+    plan = with_in_process_door(
+        plan,
+        contract_body.get("tool_entrypoints"),
+        str((runtime if isinstance(runtime, dict) else {}).get("language") or "python"),
+    )
     provided_environment = {
         str(name).upper()
         for name in (job.metadata.get("environment_value_names", []) or [])
@@ -3710,6 +3815,13 @@ def author_bundle_v2(
                 Path(__file__).with_name("world_door.py"),
                 generated / "world_door.py",
             )
+        if any(process.name == WORLD_DOOR_PROCESS for process in plan.processes):
+            generated = temporary / "generated" / WORLD_DOOR_PROCESS
+            generated.mkdir(parents=True)
+            shutil.copy2(Path(__file__).with_name("in_process_door.py"), generated / "server.py")
+            # The door's rules, and the trial faults the tool proxy reads, beside it.
+            shutil.copy2(Path(__file__).with_name("world_door.py"), generated / "world_door.py")
+            shutil.copy2(Path(__file__).with_name("tool_trace_proxy.py"), generated / "tool_trace_proxy.py")
         if any(process.name == "mcp-toolbox" for process in plan.processes):
             toolbox = _mcp_toolbox_definition(source_root)
             if toolbox is None:

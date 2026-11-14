@@ -1398,6 +1398,20 @@ def runner_door(tools_url: str, dsn: str, timeout: float) -> Any:
     )
 
 
+def record_door(dsn: str) -> Any:
+    """The world's door in the runner's process for an agent whose tools run in its own process: an actor's record
+    change runs on the world's database; an action on one of the agent's own tools is refused, since only the agent's
+    process can run it."""
+    from .in_process_door import _NotHere
+    from .world_door import PostgresLog, PostgresRecords, PostgresRoster, RecordExecutor, Routed, WorldDoor
+
+    return WorldDoor(
+        Routed(_NotHere(), RecordExecutor(PostgresRecords(dsn))),
+        PostgresLog(dsn),
+        PostgresRoster(dsn),
+    )
+
+
 def actor_limits(doc: Mapping[str, Any], bundle_dir: Path, modality: str) -> dict[str, Any]:
     """The actor limits in force for this scenario on this channel: the environment's setting, the scenario's own on
     top, and each unset value the channel's default. Stored with the trial."""
@@ -1429,6 +1443,19 @@ def _actor_dispatcher(
         return None
     tools = runtime.endpoints.get("tools_api")
     database = _find_postgres_endpoint(runtime)
+    if database is not None and runtime.endpoints.get("world_door") is not None and tools is None:
+        # The agent's tools run in its own process behind the world's door there; an actor acts in the world through
+        # record changes, and one of the agent's own tools is refused with why.
+        return build_dispatcher(
+            dict(doc),
+            bundle_dir,
+            act=DoorActs(record_door(database.address), _bundle_contract(bundle_dir)),
+            read_log=_ActionLog(database.address),
+            records=_world_records(runtime),
+            trial_id=trial_id,
+            meter=meter,
+            reported=reported,
+        )
     if tools is None or database is None or runtime.endpoints.get("tool_proxy") is None:
         logger.warning("actors cannot act: this world has no tools service and action log behind a door")
         if why_not is not None:
@@ -2615,7 +2642,7 @@ class CallRunnerImpl:
 
         async def place_with_actors() -> SimulationReport:
             faults = list(doc.get("faults") or [])
-            proxied = runtime.endpoints.get("tool_proxy") is not None
+            proxied = runtime.endpoints.get("tool_proxy") is not None or runtime.endpoints.get("world_door") is not None
             if faults or proxied:
                 # Every trial behind a tool proxy writes its own faults, none included, so nothing an earlier trial
                 # left can apply to this one.

@@ -367,3 +367,12 @@ except Exception:  # noqa: BLE001 - optional observation must not affect custome
 
 if not _crewai_observer_installed:
     _install_declared_python_tools()
+
+# The world's door for tools the agent runs in its own process: beside this hook only when the bundle has one.
+if os.environ.get("ALK_WORLD_DOOR_URL", "").strip():
+    try:
+        import in_process_door_bootstrap
+
+        in_process_door_bootstrap.install()
+    except Exception:  # noqa: BLE001 - the door must never cost the agent its tools
+        sys.stderr.write("world door hook: failed\n")

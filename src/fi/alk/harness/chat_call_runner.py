@@ -835,7 +835,8 @@ class HostedChatCallRunner:
         service = runtime.endpoints.get("tools_api")
         # The tool proxy logs the agent's own calls (and the faults it applies) in the world's table: read that table
         # whenever the trial is proxied, cast or not, so the trial record and the fault notices see those calls.
-        proxied = runtime.endpoints.get("tool_proxy") is not None
+        # The world's door for tools the agent runs in its own process logs to the same table and reads the same faults.
+        proxied = runtime.endpoints.get("tool_proxy") is not None or runtime.endpoints.get("world_door") is not None
         # The scenario's faults are a rule of its graded trials; a readiness probe checks the tools' binding without them.
         faults = [] if self._context.readiness_probe else list(document.get("faults") or [])
         door = chat_door(
