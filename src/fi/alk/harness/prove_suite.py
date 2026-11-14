@@ -3,11 +3,13 @@
 Run at every certification so a case's proof always matches the environment it will run on:
 
     python -m fi.alk.harness.prove_suite --authoring DIR --output FILE [--budget-seconds N] [--deadline-at EPOCH]
+        [--keys KEY,KEY]
 
 The output is `{scenario_key: format-2 proof entry}`, rewritten atomically after every scenario, so a
 killed process leaves the keys proved so far. When the time budget runs out, every remaining key is
 recorded `validation_incomplete`: nothing is wrong with it, it was not reached. Exit 0 whenever it
-ran; exit 3 when the authoring tree cannot be read.
+ran; exit 3 when the authoring tree cannot be read. `--keys` proves only the named cases; the output
+then holds only their keys, and the platform merges it over the proofs it already has.
 """
 
 from __future__ import annotations
@@ -53,7 +55,12 @@ def budget_seconds(budget: float, deadline_at: float | None, now: float) -> floa
 
 
 def prove_suite(
-    authoring: Path, output: Path, *, budget: float = 1200, deadline_at: float | None = None
+    authoring: Path,
+    output: Path,
+    *,
+    budget: float = 1200,
+    deadline_at: float | None = None,
+    keys: set[str] | None = None,
 ) -> dict[str, dict[str, Any]]:
     from .catalogue import load_catalogue
     from .proofs import _entry, proof_key, unprovable_entry
@@ -69,6 +76,8 @@ def prove_suite(
     proofs: dict[str, dict[str, Any]] = {}
     for scenario in scenarios:
         key = proof_key(scenario)
+        if keys is not None and key not in keys:
+            continue
         if time.monotonic() - started >= allowed:
             proofs[key] = _incomplete()
             continue
@@ -90,12 +99,16 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--budget-seconds", type=float, default=1200)
     parser.add_argument("--deadline-at", type=float, default=None)
+    parser.add_argument("--keys", default=None, help="comma-separated scenario keys to prove; default every one")
     args = parser.parse_args(argv)
+    keys = {one.strip() for one in args.keys.split(",") if one.strip()} if args.keys is not None else None
     if not args.authoring.is_dir():
         print(f"prove_suite: authoring tree not readable: {args.authoring}", file=sys.stderr)
         return EXIT_UNREADABLE
     try:
-        prove_suite(args.authoring, args.output, budget=args.budget_seconds, deadline_at=args.deadline_at)
+        prove_suite(
+            args.authoring, args.output, budget=args.budget_seconds, deadline_at=args.deadline_at, keys=keys
+        )
     except OSError as exc:
         print(f"prove_suite: authoring tree not readable: {exc}", file=sys.stderr)
         return EXIT_UNREADABLE

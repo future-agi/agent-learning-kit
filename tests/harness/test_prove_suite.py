@@ -60,3 +60,20 @@ def test_budget_writes_remaining_as_incomplete(monkeypatch, tmp_path):
     past = str(time.time() - 10)
     assert main(["--authoring", str(tmp_path), "--output", str(output), "--deadline-at", past]) == 0
     assert all(one["blocked_reason"] == "validation_incomplete" for one in json.loads(output.read_text()).values())
+
+
+def test_keys_prove_only_the_named_cases(monkeypatch, tmp_path):
+    install(monkeypatch)
+    _suite(monkeypatch, [refund_case(name=key, scenario_key=key) for key in ("a", "b", "c")])
+    proved: list[str] = []
+    real = module.prove
+
+    def counting(scenario, *args, **kwargs):
+        proved.append(scenario.scenario_key)
+        return real(scenario, *args, **kwargs)
+
+    monkeypatch.setattr(module, "prove", counting)
+    output = tmp_path / "proofs.json"
+    assert main(["--authoring", str(tmp_path), "--output", str(output), "--keys", "b, c"]) == 0
+    assert proved == ["b", "c"]
+    assert set(json.loads(output.read_text(encoding="utf-8"))) == {"b", "c"}
