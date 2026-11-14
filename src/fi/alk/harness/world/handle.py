@@ -90,8 +90,21 @@ class HostedWorld(HttpObservationHandle):
         # re-measured: a live count would make the cap depend on what a scenario already wrote,
         # and the whole point is that it is decided before any scenario runs.
         self._baseline_row_counts = dict(baseline_row_counts)
+        # Tools a live proof may play: bound by `bind_tools` to a route behind the bundle's tool
+        # proxy. Unbound, `call` refuses as before; `runtime_tools` marks every contract tool so a
+        # step for an unbound one reads assumed, never executed.
+        self.runtime_tools: set[str] = set()
+        self.endpoint_for: dict[str, str] = {}
+        self.calls: list[Call] = []
+        self._tool_proxy = ""
         if _validate_baseline:
             self._require_baseline_coverage(self._visible_tables())
+
+    def bind_tools(self, tool_proxy: str, endpoint_for: Mapping[str, str], runtime_tools: Sequence[str]) -> None:
+        """Let `call` play the service-backed tools in `endpoint_for` through the tool proxy."""
+        self._tool_proxy = str(tool_proxy or "").rstrip("/")
+        self.endpoint_for = {name: str(path).strip("/") for name, path in endpoint_for.items() if path}
+        self.runtime_tools = set(runtime_tools) | set(self.endpoint_for)
 
     # -- reading ------------------------------------------------------------------------------
 
@@ -284,19 +297,56 @@ class HostedWorld(HttpObservationHandle):
                 )
         return self._store.remove(collection, key, by=by)
 
+    def forward(
+        self,
+        endpoint: str,
+        arguments: Mapping[str, Any] | None = None,
+        *,
+        record_as: str = "",
+        record: bool = True,
+    ) -> Call:
+        """POST `arguments` as JSON to `endpoint` behind the bundle's tool proxy, which forwards it to
+        the agent's own tools service and records the call. The same wire format a provisioned
+        world uses for a submitted service."""
+        import json
+        import time
+
+        import requests
+
+        if not self._tool_proxy:
+            raise WorldUnavailable("no tool proxy is bound to this world, so no tool can be played")
+        args = dict(arguments or {})
+        name = record_as or endpoint.strip("/")
+        at = time.time()
+        try:
+            response = requests.post(f"{self._tool_proxy}/{endpoint.strip('/')}", json=args, timeout=30)
+            try:
+                body: Any = response.json()
+            except ValueError:
+                body = response.text
+            refused = response.status_code >= 400
+            error = (json.dumps(body, default=str) if not isinstance(body, str) else body) if refused else ""
+            call = Call(name=name, arguments=args, result=body, ok=not refused, refused=refused, error=error, at=at)
+        except requests.RequestException as exc:
+            call = Call(name=name, arguments=args, ok=False, error=f"{type(exc).__name__}: {exc}", at=at)
+        if record:
+            self.calls.append(call)
+        return call
+
     def call(self, name: str, arguments: Mapping[str, Any] | None = None) -> Call:
         """Play one of the agent's own tools against this world.
 
-        Not implemented: the `http_tool` evidence seam's wire format is not pinned anywhere in
-        the contracts yet, and guessing at a shape here would ship one nobody agreed to and
-        scenario code would end up depending on. Raising unconditionally is the honest answer
-        until the evidence layer pins it — run-time scenario code should not need this anyway,
-        since `setup` already runs at proof time and the data verbs cover the rest.
+        Only a service-backed tool bound by `bind_tools` can be played: its route behind the tool
+        proxy is the one wire format pinned here. A tool the agent runs in its own process has no
+        endpoint, and any other is not guessed at, so both refuse.
         """
-        raise WorldUnavailable(
-            "the http_tool shim wire format is not yet pinned by the contracts — report, "
-            "don't guess."
-        )
+        endpoint = self.endpoint_for.get(name)
+        if not endpoint:
+            raise WorldUnavailable(
+                f"{name} has no bound service endpoint; only service-backed tools behind the tool "
+                "proxy can be played — report, don't guess."
+            )
+        return self.forward(endpoint, arguments, record_as=name)
 
     def read_only(self) -> "ReadOnlyWorld":
         """The view `ready` and `check` run against: every write verb refuses outright.

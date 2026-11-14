@@ -1333,6 +1333,27 @@ async def validate_once(
                 f"invariants, complete in {time.monotonic() - started:.0f}s",
                 flush=True,
             )
+            if not readiness_only:
+                # While the stack is up, play each case's reference and controls through the
+                # service-backed tools for real; never fails validation.
+                from .live_proof import prove_live
+
+                try:
+                    live = await prove_live(
+                        authoring=authoring,
+                        contract=AgentContract.model_validate_json(
+                            (bundle / "contract.json").read_text(encoding="utf-8")
+                        ),
+                        runtime=runtime,
+                        provider=provider,
+                        factory=factory,
+                        work=work,
+                        seed=job.seed or 0,
+                    )
+                    if live:
+                        print(f"runtime validation: proved {len(live)} cases on the live runtime", flush=True)
+                except Exception as exc:  # noqa: BLE001 - live proofs only add evidence
+                    print(f"runtime validation: live proofs not run: {type(exc).__name__}: {exc}", flush=True)
             if generic:
                 await provider.reset(runtime, work_directory=work)
                 reset_world = await factory.create(

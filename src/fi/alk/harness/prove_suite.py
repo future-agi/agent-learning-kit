@@ -64,6 +64,7 @@ def prove_suite(
 ) -> dict[str, dict[str, Any]]:
     from .catalogue import load_catalogue
     from .proofs import _entry, proof_key, unprovable_entry
+    from .live_proof import apply_live, load_live
     from .prove import _load_actors, _load_contract, prove
     from .scenario_tools import load_scenarios
 
@@ -71,6 +72,7 @@ def prove_suite(
     catalogue = load_catalogue(authoring)
     contract = _load_contract(authoring)
     actors = _load_actors(authoring)
+    live = load_live(authoring)
     started = time.monotonic()
     allowed = budget_seconds(budget, deadline_at, time.time())
     proofs: dict[str, dict[str, Any]] = {}
@@ -83,6 +85,9 @@ def prove_suite(
             continue
         try:
             proof = prove(scenario, catalogue, authoring, contract=contract, actors=actors)
+            if key in live:
+                # The certification just played this case on the live runtime: its gates win.
+                proof = apply_live(proof, live[key])
         except Exception as exc:  # noqa: BLE001 - a case that cannot be proved is recorded, never fatal
             first = (str(exc).splitlines() or [""])[0][:200]
             proofs[key] = unprovable_entry(f"{type(exc).__name__}: {first}".rstrip(": "))

@@ -663,7 +663,7 @@ def test_read_only_dunder_lookups_stay_plain_attribute_errors() -> None:
         view.__wrapped__
 
 
-# --- call(): not implemented, the http_tool shim's wire format is unpinned ------------------
+# --- call(): a tool with no bound service endpoint is unavailable ------------------------
 
 
 def test_call_is_unavailable() -> None:
