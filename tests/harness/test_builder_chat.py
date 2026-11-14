@@ -2059,3 +2059,86 @@ def test_finished_message_reports_counts(tmp_path, monkeypatch):
     )
     finished = json.loads((workspace / ".futureagi-build-finished.json").read_text(encoding="utf-8"))
     assert finished["proofs"] == {"proved": 0, "kept_as_written": 10, "not_proved": 0}
+
+
+def _finished_runtime(tmp_path):
+    policy = tmp_path / "policy.yaml"
+    policy.write_text(
+        "schema_version: 1\nharness_chat:\n  enabled: true\n  stages:\n    builder:\n      enabled: true\n",
+        encoding="utf-8",
+    )
+    workspace = tmp_path / "authoring"
+    workspace.mkdir()
+    runtime = HostedChatRuntime(
+        client=BuilderClient(),  # type: ignore[arg-type]
+        policy=load_chat_policy(policy),
+        workspace=workspace,
+        source=tmp_path,
+        job={"metadata": {"agent_name": "demo"}},
+    )
+    return runtime, workspace
+
+
+def test_finished_turn_appends_code_counts(tmp_path):
+    runtime, workspace = _finished_runtime(tmp_path)
+    before = runtime._build_finished_stamp()
+    counts = {"proved": 3, "kept_as_written": 8, "not_proved": 1}
+    (workspace / ".futureagi-build-finished.json").write_text(
+        json.dumps({"proofs": counts}), encoding="utf-8"
+    )
+
+    text = runtime._close_with_proof_counts("The suite is built.", before)
+
+    assert (
+        text
+        == "The suite is built.\n\nProof counts: 3 proved, 8 kept as written, 1 not proved."
+    )
+    # A turn that did not write the finished file leaves the reply as the model wrote it.
+    assert (
+        runtime._close_with_proof_counts(
+            "Edited one case.", runtime._build_finished_stamp()
+        )
+        == "Edited one case."
+    )
+
+
+def test_overclaim_gets_a_correction(tmp_path):
+    runtime, workspace = _finished_runtime(tmp_path)
+    counts = {"proved": 3, "kept_as_written": 9, "not_proved": 0}
+    (workspace / ".futureagi-build-finished.json").write_text(
+        json.dumps({"proofs": counts}), encoding="utf-8"
+    )
+
+    text = runtime._close_with_proof_counts("All 12 scenarios proved.", None)
+
+    assert text.endswith("Correction: only 3 of 12 scenarios are proved.")
+    assert "Proof counts: 3 proved, 9 kept as written, 0 not proved." in text
+    from fi.alk.harness.hosted_chat_entrypoint import _proof_claim_mismatch
+
+    assert (
+        _proof_claim_mismatch("12 scenarios are proved.", counts)
+        == "Correction: only 3 of 12 scenarios are proved."
+    )
+    assert (
+        _proof_claim_mismatch("Every case is proved against the agent.", counts)
+        is not None
+    )
+
+
+def test_exact_claim_gets_no_correction():
+    from fi.alk.harness.hosted_chat_entrypoint import _proof_claim_mismatch
+
+    counts = {"proved": 3, "kept_as_written": 8, "not_proved": 1}
+    assert (
+        _proof_claim_mismatch(
+            "3 scenarios proved, 8 kept as written, 1 not proved.", counts
+        )
+        is None
+    )
+    assert _proof_claim_mismatch("Not all of them are proved yet.", counts) is None
+    assert (
+        _proof_claim_mismatch(
+            "All 4 proved.", {"proved": 4, "kept_as_written": 0, "not_proved": 0}
+        )
+        is None
+    )

@@ -6,6 +6,7 @@ import hashlib
 import traceback
 import json
 import os
+import re
 import signal
 import time
 import uuid
@@ -76,6 +77,53 @@ def _proof_summary(proofs: dict[str, dict[str, Any]], keys: list[str], counts: d
         f"{counts['proved']} proved, {kept}, {unproved}. Report exactly these counts; call only the "
         f"{counts['proved']} proved scenarios proved."
     )
+_NUMBER_PROVED = re.compile(
+    r"\b(\d+)\s+((?:[A-Za-z-]+\s+){0,2})proved\b", re.IGNORECASE
+)
+_ALL_PROVED = re.compile(r"\b(?:all|every)\b[^.]{0,40}\bproved\b", re.IGNORECASE)
+
+
+def _proof_claim_mismatch(text: str, counts: dict[str, int]) -> str | None:
+    """A correction when the reply claims more scenarios proved than the proofs hold, else None."""
+    proved = int(counts.get("proved") or 0)
+    total = (
+        proved
+        + int(counts.get("kept_as_written") or 0)
+        + int(counts.get("not_proved") or 0)
+    )
+    claims = [
+        int(match.group(1))
+        for match in _NUMBER_PROVED.finditer(text)
+        if not re.search(r"\b(?:not|un)", match.group(2), re.IGNORECASE)
+    ]
+    overclaimed = any(claim != proved for claim in claims) or (
+        proved < total
+        and any(
+            not re.search(
+                r"\bnot\b",
+                text[max(0, match.start() - 12) : match.start()],
+                re.IGNORECASE,
+            )
+            for match in _ALL_PROVED.finditer(text)
+        )
+    )
+    return (
+        f"Correction: only {proved} of {total} scenarios are proved."
+        if overclaimed
+        else None
+    )
+
+
+def _with_proof_counts(text: str, counts: dict[str, int]) -> str:
+    """The closing reply with the proof counts written by code, and a correction if the reply overclaims."""
+    correction = _proof_claim_mismatch(text, counts)
+    line = (
+        f"Proof counts: {int(counts.get('proved') or 0)} proved, {int(counts.get('kept_as_written') or 0)} kept as "
+        f"written, {int(counts.get('not_proved') or 0)} not proved."
+    )
+    return "\n\n".join(part for part in (text, line, correction) if part)
+
+
 _PROVIDER_PROFILE = "provider-import-profile.json"
 _JOURNAL = ".futureagi-conversation.json"
 _PROVIDER_SESSIONS = ".futureagi-provider-sessions.json"
@@ -1510,6 +1558,7 @@ class HostedChatRuntime:
         )
         emitted_text: list[str] = []
         turn_failures: list[str] = []
+        finished_before = self._build_finished_stamp()
         queue: asyncio.Queue[Event | None] = asyncio.Queue()
 
         def receive(event: Event) -> None:
@@ -1649,6 +1698,7 @@ class HostedChatRuntime:
             ).strip()
         self._last_health = ""
         self._report_again_if_written()
+        final_text = self._close_with_proof_counts(final_text, finished_before)
         if final_text:
             await self.client.emit(
                 "assistant_message",
@@ -1679,6 +1729,26 @@ class HostedChatRuntime:
         )
         if self._restart_after_turn:
             self.stopping.set()
+
+    def _build_finished_stamp(self) -> int | None:
+        """When the build-finished file was last written, or None when there is none."""
+        try:
+            return (self.workspace / _BUILD_FINISHED).stat().st_mtime_ns
+        except OSError:
+            return None
+
+    def _close_with_proof_counts(self, text: str, finished_before: int | None) -> str:
+        """Append code-written proof counts when this turn finished the build, so the reply cannot overclaim."""
+        stamp = self._build_finished_stamp()
+        if stamp is None or stamp == finished_before:
+            return text
+        try:
+            counts = json.loads(
+                (self.workspace / _BUILD_FINISHED).read_text(encoding="utf-8")
+            ).get("proofs")
+        except (OSError, ValueError, AttributeError):
+            return text
+        return _with_proof_counts(text, counts) if isinstance(counts, dict) else text
 
     async def _fail_turn(
         self,
