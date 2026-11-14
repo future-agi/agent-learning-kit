@@ -71,6 +71,7 @@ from .job import FailureDomain
 from .job import HarnessJobMetadata
 from .job import HarnessStage
 from .livekit_source import infer_livekit_agent_name_from_source
+from . import containment, user_files
 from .privilege import IsolationMode, isolation_mode
 from .secrets import PROCESS_SECRET_FILE_ENVIRONMENT, target_provider_environment
 from .provider_import import (
@@ -1020,7 +1021,7 @@ def _materialize_process_secret_files(
     injected: dict[str, str],
     world_dir: Path,
     resolved_user: "pwd.struct_passwd | None",
-    chown: Callable[[Path, int, int], None],
+    chown: user_files.Chown,
 ) -> dict[str, str]:
     """Turn file-shaped target credentials into process-local files.
 
@@ -1096,6 +1097,13 @@ def _materialize_process_secret_files(
     result.pop(_GOOGLE_ADC_JSON_ALIAS, None)
     result[_GOOGLE_ADC_PATH_ALIAS] = str(credential_path)
     return result
+
+
+def _declared_home(resolved_user: Any, process: SourceProcess | ManagedProcess) -> str:
+    """The home a process running as its declared user gets: that user's own, never the
+    harness's. The harness's is not its to write: uv, pip and npm keep caches there, and
+    RabbitMQ's Erlang keeps its cookie there and will not boot without it."""
+    return getattr(resolved_user, "pw_dir", f"/tmp/{process.user.value}")
 
 
 def _base_process_env(
@@ -1210,21 +1218,6 @@ def _resolve_process_user(
             user.value,
         )
     return resolved
-
-
-def _default_chown(path: Path, uid: int, gid: int) -> None:
-    # `follow_symlinks=False`: F2 copies a within-tree symlink as a link, never dereferenced —
-    # chowning through it would touch whatever it points at instead of the link itself.
-    os.chown(path, uid, gid, follow_symlinks=False)
-
-
-def _chown_tree(
-    root: Path, *, uid: int, gid: int, chown: Callable[[Path, int, int], None]
-) -> None:
-    chown(root, uid, gid)
-    for dirpath, dirnames, filenames in os.walk(root):
-        for name in (*dirnames, *filenames):
-            chown(Path(dirpath) / name, uid, gid)
 
 
 def _ensure_within(path: Path, root: Path, *, process_name: str, stage: str) -> Path:
@@ -1375,30 +1368,9 @@ def _as_declared_user(kwargs: dict[str, Any]) -> dict[str, Any]:
 def declared_user_run(
     args: Sequence[str], **kwargs: Any
 ) -> subprocess.CompletedProcess:
-    """``subprocess.run`` for a process ALK runs on a customer's behalf (see `_as_declared_user`)."""
-    return subprocess.run(args, **_as_declared_user(kwargs))
-
-
-def _run_build_step(
-    args: Sequence[str], **kwargs: Any
-) -> subprocess.CompletedProcess:
-    kwargs = _as_declared_user(kwargs)
-    capture_output = kwargs.pop("capture_output", False)
-    timeout = kwargs.pop("timeout", None)
-    if capture_output:
-        kwargs["stdout"] = subprocess.PIPE
-        kwargs["stderr"] = subprocess.PIPE
-    process = subprocess.Popen(args, start_new_session=True, **kwargs)
-    try:
-        stdout, stderr = process.communicate(timeout=timeout)
-    except subprocess.TimeoutExpired:
-        try:
-            os.killpg(process.pid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
-        process.wait()
-        raise
-    return subprocess.CompletedProcess(args, process.returncode, stdout, stderr)
+    """``subprocess.run`` for a process ALK runs on a customer's behalf: build steps, lifecycle
+    commands, initdb and seeds (see `_as_declared_user`). Whatever it starts stops with it."""
+    return containment.run(args, **_as_declared_user(kwargs))
 
 
 def _is_transient_build_network_failure(result: subprocess.CompletedProcess) -> bool:
@@ -1452,11 +1424,11 @@ def build_process_tree(
     *,
     source_root: Path,
     build_root: Path,
-    run: Callable[..., subprocess.CompletedProcess] = _run_build_step,
+    run: Callable[..., subprocess.CompletedProcess] = declared_user_run,
     copy: Callable[[Path, Path], None] | None = None,
     user_resolver: Callable[[str], "pwd.struct_passwd | None"] = default_user_resolver,
     require_declared_user: bool = False,
-    chown: Callable[[Path, int, int], None] = _default_chown,
+    chown: user_files.Chown = user_files.chown_no_follow,
     build_step_timeout_seconds: float = _DEFAULT_BUILD_STEP_TIMEOUT_SECONDS,
     build_step_network_retries: int = _DEFAULT_BUILD_STEP_NETWORK_RETRIES,
     sleep: Callable[[float], None] = time.sleep,
@@ -1555,7 +1527,7 @@ def build_process_tree(
             process=process.name,
         ) from exc
     if resolved_user is not None:
-        _chown_tree(
+        user_files.own_tree(
             build_dir, uid=resolved_user.pw_uid, gid=resolved_user.pw_gid, chown=chown
         )
     spawn_uid = resolved_user.pw_uid if resolved_user is not None else None
@@ -1564,9 +1536,7 @@ def build_process_tree(
     env = _base_process_env(build_dir, process.build_environment)
     env.update(runtime_environment)
     if resolved_user is not None:
-        # The controller commonly runs as root, but build steps run as the declared svc user.
-        # Keeping root's HOME makes uv/pip/npm probe unreadable root-owned caches.
-        env["HOME"] = getattr(resolved_user, "pw_dir", f"/tmp/{process.user.value}")
+        env["HOME"] = _declared_home(resolved_user, process)
     for step in process.build_commands:
         result = None
         for network_attempt in range(max(0, build_step_network_retries) + 1):
@@ -1733,6 +1703,9 @@ class PopenProcess:
     popen: subprocess.Popen
     log_path: Path
     log_thread: threading.Thread | None = field(default=None, repr=False)
+    # Under per-user isolation, the cgroup holding this process and all it started: a process
+    # that left the group through setsid() is still in it.
+    leaf: containment.Leaf | None = field(default=None, repr=False)
 
     def is_running(self) -> bool:
         return self.popen.poll() is None
@@ -1741,7 +1714,7 @@ class PopenProcess:
         if self.log_thread and self.popen.poll() is not None:
             self.log_thread.join(timeout=1)
         try:
-            return self.log_path.read_text(encoding="utf-8", errors="replace")
+            return user_files.read_text(self.log_path)
         except OSError:
             return ""
 
@@ -1757,6 +1730,10 @@ class PopenProcess:
         try:
             started = time.monotonic()
             self.popen.wait(timeout=timeout)
+            # The process is gone; nothing it started may outlive it, however it left.
+            if self.leaf is not None:
+                self.leaf.close()
+                self.leaf = None
             if self.log_thread:
                 self.log_thread.join(
                     timeout=max(0, timeout - (time.monotonic() - started))
@@ -1768,6 +1745,8 @@ class PopenProcess:
 
     def kill(self) -> None:
         self._signal_process_group(signal.SIGKILL, self.popen.kill)
+        if self.leaf is not None:
+            self.leaf.kill()
 
     def _signal_process_group(self, signum: int, fallback: Callable[[], None]) -> None:
         """Stop the complete runtime process, including launcher descendants.
@@ -1847,10 +1826,6 @@ def _prefers_interrupt(manifest: EnvironmentBundleV2, process_name: str) -> bool
     )
 
 
-def _default_log_chown(path: Path, uid: int, gid: int) -> None:
-    os.chown(path, uid, gid)
-
-
 def _copy_redacted_output(source, destination, values: dict[str, str]) -> None:
     patterns = tuple(value.encode() for value in values.values() if value)
     pending = b""
@@ -1888,11 +1863,11 @@ def default_process_runner(
     log_path: Path,
     user: int | None = None,
     group: int | None = None,
-    chown: Callable[[Path, int, int], None] = _default_log_chown,
+    chown: user_files.Chown = user_files.chown_no_follow,
     output_redactions: dict[str, str] | None = None,
 ) -> PopenProcess:
     log_path.parent.mkdir(parents=True, exist_ok=True)
-    log_file = log_path.open("wb")
+    log_file = user_files.open_log(log_path)
     if user is not None:
         # F1, p5-round1-review: the log file is created by the harness (svc-control) before the
         # child's privilege drop — the child can still WRITE through the inherited fd regardless
@@ -1904,7 +1879,7 @@ def default_process_runner(
         # hosted deployment has both or neither; a dev-box test fakes it structurally).
         chown(log_path, user, group if group is not None else -1)
     try:
-        popen = subprocess.Popen(
+        popen, leaf = containment.popen(
             list(argv),
             cwd=cwd,
             env=env,
@@ -1929,7 +1904,7 @@ def default_process_runner(
         log_thread.start()
     else:
         log_file.close()
-    return PopenProcess(popen=popen, log_path=log_path, log_thread=log_thread)
+    return PopenProcess(popen=popen, log_path=log_path, log_thread=log_thread, leaf=leaf)
 
 
 @dataclass
@@ -2138,7 +2113,7 @@ def spawn_managed_process(
     sync_run: Callable[..., subprocess.CompletedProcess] = declared_user_run,
     user_resolver: Callable[[str], "pwd.struct_passwd | None"] = default_user_resolver,
     require_declared_user: bool = False,
-    chown: Callable[[Path, int, int], None] = _default_chown,
+    chown: user_files.Chown = user_files.chown_no_follow,
 ) -> SpawnedWorldProcess:
     """Spawns one managed-engine daemon. Postgres alone needs a one-time synchronous bootstrap
     (`initdb`) before the daemon can start at all — run through `sync_run`, not `runner`, since
@@ -2174,7 +2149,7 @@ def spawn_managed_process(
             # reseal) — the copy runs as the provisioner, so every file underneath stayed
             # provisioner-owned and postgres refuses to start against a data directory it does not
             # fully own.
-            _chown_tree(
+            user_files.own_tree(
                 data_dir,
                 uid=resolved_user.pw_uid,
                 gid=resolved_user.pw_gid,
@@ -2197,6 +2172,8 @@ def spawn_managed_process(
     spawn_gid = resolved_user.pw_gid if resolved_user is not None else None
 
     env = _allowlisted_ambient_env(os.environ)
+    if resolved_user is not None:
+        env["HOME"] = _declared_home(resolved_user, process)
     if process.engine is ManagedEngine.POSTGRES:
         if credentials is None:
             raise ProcessRuntimeError(
@@ -2351,7 +2328,7 @@ def spawn_source_process(
     runner: ProcessRunner = default_process_runner,
     user_resolver: Callable[[str], "pwd.struct_passwd | None"] = default_user_resolver,
     require_declared_user: bool = False,
-    chown: Callable[[Path, int, int], None] = _default_chown,
+    chown: user_files.Chown = user_files.chown_no_follow,
     customer_code_environment: dict[str, str] | None = None,
 ) -> SpawnedWorldProcess:
     """§2b: `run_command` "exec'd once per world with cwd `/work/build/<name>/`" — the build tree
@@ -2519,7 +2496,7 @@ def spawn_source_process(
 
             relocate_runtime_files(build_dir, runtime_dir)
             if resolved_user is not None:
-                _chown_tree(
+                user_files.own_tree(
                     runtime_dir,
                     uid=resolved_user.pw_uid,
                     gid=resolved_user.pw_gid,
@@ -2538,7 +2515,7 @@ def spawn_source_process(
     try:
         runtime_environment = prepare_runtime_environment(runtime_dir)
         if resolved_user is not None:
-            _chown_tree(
+            user_files.own_tree(
                 runtime_dir / ".alk-runtime",
                 uid=resolved_user.pw_uid,
                 gid=resolved_user.pw_gid,
@@ -2558,7 +2535,7 @@ def spawn_source_process(
             runtime_dir, process.config_files, process.directories, injected
         )
         if resolved_user is not None and (process.config_files or process.directories):
-            _chown_tree(
+            user_files.own_tree(
                 runtime_dir,
                 uid=resolved_user.pw_uid,
                 gid=resolved_user.pw_gid,
@@ -2606,7 +2583,7 @@ def spawn_source_process(
         env[process.local_auth.server_environment] = token
     env = target_provider_environment(env)
     if resolved_user is not None:
-        env["HOME"] = getattr(resolved_user, "pw_dir", f"/tmp/{process.user.value}")
+        env["HOME"] = _declared_home(resolved_user, process)
     command = list(process.run_command)
     if (
         port_plan.effective_instances > 1
@@ -4283,7 +4260,7 @@ class SpawnContext:
     # instead of silently running unprivileged.
     user_resolver: Callable[[str], "pwd.struct_passwd | None"] = default_user_resolver
     require_declared_user: bool = False
-    chown: Callable[[Path, int, int], None] = _default_chown
+    chown: user_files.Chown = user_files.chown_no_follow
     build_step_timeout_seconds: float = _DEFAULT_BUILD_STEP_TIMEOUT_SECONDS
     # §2c/§5 store command seams (below) — defaulted so every existing `SpawnContext(...)` call
     # in P5's own tests keeps working unchanged; Phase 6 callers override them with spies.
@@ -6199,7 +6176,7 @@ class ProcessRuntimeProvider:
         user_resolver: Callable[
             [str], "pwd.struct_passwd | None"
         ] = default_user_resolver,
-        chown: Callable[[Path, int, int], None] = _default_chown,
+        chown: user_files.Chown = user_files.chown_no_follow,
         build_step_timeout_seconds: float = _DEFAULT_BUILD_STEP_TIMEOUT_SECONDS,
         token: Callable[[], str] | None = None,
         secrets_path: Path = Path("/run/futureagi/secrets.json"),
@@ -6516,9 +6493,7 @@ class ProcessRuntimeProvider:
                 / "process.log"
             )
             try:
-                return process_name, log_path.read_text(
-                    encoding="utf-8", errors="replace"
-                )
+                return process_name, user_files.read_text(log_path)
             except OSError:
                 pass
         return process_name, ""
@@ -7036,26 +7011,30 @@ class ProcessRuntimeProvider:
             or datetime.fromtimestamp(time.time() + 7200, tz=timezone.utc),
         )
         context_path = lifecycle_directory / "context.json"
-        context_path.write_text(context.model_dump_json(indent=2), encoding="utf-8")
-        context_path.chmod(0o600)
+        # After the first provision the folder is the lifecycle user's, and so is what it holds.
+        with user_files.open_log(context_path) as handle:
+            os.fchmod(handle.fileno(), 0o600)
+            handle.write(context.model_dump_json(indent=2).encode("utf-8"))
         secret_values = {
             name: self._secret_values.get(name, "") for name in spec.required_secrets
         }
-        invocation = build_lifecycle_invocation(
-            command=spec.provision,
-            # Lifecycle code and its per-process dependency installation live in the immutable
-            # build tree. The world scratch directory contains only writable runtime state, so
-            # using it as cwd makes a repository command such as `python provider_target.py`
-            # fail before it can contact the provider.
-            source_directory=build_tree_dir(self._context.work_directory, process_name),
-            lifecycle_directory=lifecycle_directory,
-            context_path=context_path,
-            context=context,
-            required_secret_values=secret_values,
-            output_relative_path=spec.output,
-        )
-        uid, gid = self._lifecycle_user(process, lifecycle_directory)
         try:
+            # Inside the try: the lifecycle user owns the output folders from the first
+            # provision on, and one swapped for a link is the environment's failure.
+            invocation = build_lifecycle_invocation(
+                command=spec.provision,
+                # Lifecycle code and its per-process dependency installation live in the
+                # immutable build tree. The world scratch directory contains only writable
+                # runtime state, so using it as cwd makes a repository command such as
+                # `python provider_target.py` fail before it can contact the provider.
+                source_directory=build_tree_dir(self._context.work_directory, process_name),
+                lifecycle_directory=lifecycle_directory,
+                context_path=context_path,
+                context=context,
+                required_secret_values=secret_values,
+                output_relative_path=spec.output,
+            )
+            uid, gid = self._lifecycle_user(process, lifecycle_directory)
             provision_log_path = lifecycle_directory / "provision.log"
             returncode = run_lifecycle_invocation(
                 invocation,
@@ -7067,9 +7046,7 @@ class ProcessRuntimeProvider:
             if returncode != 0:
                 diagnostic = ""
                 try:
-                    diagnostic = provision_log_path.read_text(encoding="utf-8")[
-                        -4000:
-                    ].strip()
+                    diagnostic = user_files.read_text(provision_log_path)[-4000:].strip()
                 except OSError:
                     pass
                 raise ProviderLifecycleError(
@@ -7080,6 +7057,7 @@ class ProcessRuntimeProvider:
                 invocation.output_path,
                 context=context,
                 secret_values=secret_values,
+                beneath=lifecycle_directory,
             )
         except ProviderLifecycleError as exc:
             raise ProcessRuntimeError(
@@ -7156,7 +7134,8 @@ class ProcessRuntimeProvider:
     ) -> tuple[int | None, int | None]:
         """A lifecycle command is the repository's code: it runs as the process's declared user,
         as its build and its run do. It writes its receipt into ``lifecycle_directory``, so that
-        user owns the directory and what it holds."""
+        user owns the directory and everything in it, at any depth: an output may sit under
+        nested folders the harness made with its own private umask."""
         assert self._context is not None
         resolved = _resolve_process_user(
             process.user,
@@ -7168,8 +7147,12 @@ class ProcessRuntimeProvider:
         )
         if resolved is None:
             return None, None
-        for path in (lifecycle_directory, *lifecycle_directory.iterdir()):
-            self._context.chown(path, resolved.pw_uid, resolved.pw_gid)
+        user_files.own_tree(
+            lifecycle_directory,
+            uid=resolved.pw_uid,
+            gid=resolved.pw_gid,
+            chown=self._context.chown,
+        )
         return resolved.pw_uid, resolved.pw_gid
 
     def _destroy_provider_target(self, world_index: int) -> None:
@@ -7200,24 +7183,26 @@ class ProcessRuntimeProvider:
         lifecycle_directory = (
             self._context.work_directory / "provider" / f"w{world_index}"
         )
-        invocation = build_lifecycle_invocation(
-            command=spec.destroy,
-            source_directory=build_tree_dir(self._context.work_directory, process_name),
-            lifecycle_directory=lifecycle_directory,
-            context_path=lifecycle_directory / "context.json",
-            context=context,
-            required_secret_values={
-                name: self._secret_values.get(name, "")
-                for name in spec.required_secrets
-            },
-            output_relative_path=spec.output,
-            receipt_path=lifecycle_directory / spec.output,
-        )
         process = next(
             entry for entry in self._manifest.processes if entry.name == process_name
         )
-        uid, gid = self._lifecycle_user(process, lifecycle_directory)
         try:
+            # Inside the try: teardown goes on to stop the world's processes whatever the
+            # lifecycle user left in its folder.
+            invocation = build_lifecycle_invocation(
+                command=spec.destroy,
+                source_directory=build_tree_dir(self._context.work_directory, process_name),
+                lifecycle_directory=lifecycle_directory,
+                context_path=lifecycle_directory / "context.json",
+                context=context,
+                required_secret_values={
+                    name: self._secret_values.get(name, "")
+                    for name in spec.required_secrets
+                },
+                output_relative_path=spec.output,
+                receipt_path=lifecycle_directory / spec.output,
+            )
+            uid, gid = self._lifecycle_user(process, lifecycle_directory)
             returncode = run_lifecycle_invocation(
                 invocation,
                 log_path=lifecycle_directory / "destroy.log",
@@ -7231,7 +7216,9 @@ class ProcessRuntimeProvider:
                     world_index,
                     returncode,
                 )
-        except ProviderLifecycleError as exc:
+        except (ProviderLifecycleError, OSError) as exc:
+            # OSError: what the lifecycle user left where the harness writes its log or hands
+            # the folder over (a folder named destroy.log, say).
             logger.error("provider cleanup failed for world %s: %s", world_index, exc)
 
     def _ensure_world(self, world_index: int) -> None:
@@ -7839,6 +7826,11 @@ class ProcessRuntimeProvider:
             context.work_directory, process_name, world_index=None
         )
         credentials = context.credentials.get(process_name)
+        dead = self._job_shared_handles.get(process_name)
+        if dead is not None:
+            # The engine's leader is gone, its own backends may not be: stop all it started
+            # before a new one takes the same data directory and port.
+            _terminate_and_wait(dead.handle)
         try:
             new_handle = spawn_managed_process(
                 process,

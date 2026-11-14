@@ -31,6 +31,8 @@ from pydantic import (
     model_validator,
 )
 
+from . import user_files
+
 
 class ProviderLifecycleError(RuntimeError):
     """A repository lifecycle declaration or receipt is missing, unsafe, or inconsistent."""
@@ -240,15 +242,23 @@ def load_provider_manifest(
         ) from exc
 
 
+_RECEIPT_LIMIT_BYTES = 64 * 1024
+
+
 def validate_provision_receipt(
     path: str | Path,
     *,
     context: ProviderContext,
     secret_values: Mapping[str, str] | None = None,
+    beneath: Path | None = None,
 ) -> ProviderProvisionReceipt:
+    """``beneath`` is the lifecycle folder: the receipt's own folders below it are the lifecycle
+    user's, so the read never passes through a link there."""
     receipt_path = Path(path)
     try:
-        raw = receipt_path.read_text(encoding="utf-8")
+        raw = user_files.read_text(
+            receipt_path, beneath=beneath, limit=_RECEIPT_LIMIT_BYTES
+        )
         body = json.loads(raw)
         receipt = ProviderProvisionReceipt.model_validate(body)
     except (OSError, ValueError) as exc:
@@ -306,7 +316,14 @@ def build_lifecycle_invocation(
             "provider_required_secrets_missing: " + ", ".join(missing)
         )
     output_path = lifecycle_directory / output_relative_path
-    output_path.parent.mkdir(parents=True, exist_ok=True)
+    lifecycle_directory.mkdir(parents=True, exist_ok=True)
+    try:
+        # From the first provision on, the lifecycle user owns the folders below it.
+        user_files.make_folders(output_path.parent, beneath=lifecycle_directory)
+    except OSError as exc:
+        raise ProviderLifecycleError(
+            f"provider_lifecycle_output_unsafe: {output_relative_path}"
+        ) from exc
     executable_path = os.pathsep.join(
         filter(
             None,
@@ -392,8 +409,6 @@ def run_lifecycle_invocation(
         reverse=True,
     ):
         combined = combined.replace(sensitive, "[REDACTED]")
-    log_path.write_text(
-        combined[-16000:],
-        encoding="utf-8",
-    )
+    with user_files.open_log(log_path) as handle:
+        handle.write(combined[-16000:].encode("utf-8"))
     return int(getattr(result, "returncode", 1))

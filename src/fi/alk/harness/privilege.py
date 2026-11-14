@@ -6,18 +6,29 @@ ambient capability set, so nothing it executes inherits a capability, and every 
 and build step runs as its declared user. A process that only holds the harness's files then
 cannot read them, held-back cases included.
 
-Without that grant, every process runs as the harness's own user, as before. When the platform
-asked for isolation and the capabilities did not arrive, the harness refuses to start rather
-than run customer code next to the cases it must not see.
+Per-user isolation also needs containment: every customer execution in a cgroup of its own, so
+stopping it stops whatever it started (`containment.py`). It also needs a kernel that stops a
+user from hard-linking a file it does not own (``fs.protected_hardlinks``), which the link-count
+checks in `user_files.py` rely on. A host without both gets no per-user isolation.
+
+Without the grant, every process runs as the harness's own user, as before. When the platform
+asked for isolation and the capabilities, the containment or the hard-link protection did not
+arrive, the harness refuses to start rather than run customer code next to the cases it must not
+see.
 """
 
 from __future__ import annotations
 
 import ctypes
+import logging
 import os
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from enum import Enum
 from pathlib import Path
+
+from . import containment
+
+logger = logging.getLogger(__name__)
 
 ISOLATION_ENV = "ALK_PROCESS_ISOLATION"
 
@@ -49,23 +60,63 @@ def establish_isolation(
     environ: Mapping[str, str] | None = None,
     *,
     status_path: Path = Path("/proc/self/status"),
+    protected_hardlinks: Path = Path("/proc/sys/fs/protected_hardlinks"),
+    contain: Callable[[], containment.Containment | None] = containment.probe,
 ) -> IsolationMode:
     """Choose this process's mode. Call once, before the harness starts any child."""
     global _mode
     values: Mapping[str, str] = os.environ if environ is None else environ
-    if _effective_capabilities(status_path) & _CAPABILITIES == _CAPABILITIES:
-        _clear_ambient_capabilities()
-        # The harness's own files stay its own; a declared-user child gets the usual umask back.
-        os.umask(0o077)
-        _mode = IsolationMode.PER_USER
-    elif values.get(ISOLATION_ENV) == "required":
+    required = values.get(ISOLATION_ENV) == "required"
+    if _effective_capabilities(status_path) & _CAPABILITIES != _CAPABILITIES:
+        return _unavailable(required, "this process does not hold the capabilities it needs")
+    if not _hardlinks_protected(protected_hardlinks):
+        # The harness checks a file's link count before it acts on a file in a user's folder.
+        # That check holds only while a user cannot link a file it does not own.
+        return _unavailable(
+            required,
+            "this kernel lets a user hard-link a file it does not own "
+            "(fs.protected_hardlinks is not 1)",
+            fallback="per-user isolation is off: fs.protected_hardlinks is not 1; "
+            "every process runs as the harness's own user",
+        )
+    subtree = contain()
+    if subtree is None:
+        # A container that holds the capabilities but a read-only cgroupfs (a local Docker
+        # harness): run as before, and say so, rather than isolate what it cannot stop.
+        return _unavailable(
+            required,
+            "this host gives the harness no cgroup to contain each process in",
+            fallback="per-user isolation is off: no writable cgroup to contain customer "
+            "processes; every process runs as the harness's own user",
+        )
+    _clear_ambient_capabilities()
+    # The harness's own files stay its own; a declared-user child gets the usual umask back.
+    os.umask(0o077)
+    containment.enable(subtree)
+    _mode = IsolationMode.PER_USER
+    return _mode
+
+
+def _unavailable(required: bool, reason: str, *, fallback: str | None = None) -> IsolationMode:
+    """Refuse to start when the platform asked for isolation; else run as before, and log
+    ``fallback`` when there is one."""
+    global _mode
+    if required:
         raise IsolationUnavailable(
             "process_isolation_unavailable: the platform asked for per-user isolation, but "
-            "this process does not hold the capabilities it needs"
+            + reason
         )
-    else:
-        _mode = IsolationMode.FIXED_USER
+    if fallback is not None:
+        logger.warning(fallback)
+    _mode = IsolationMode.FIXED_USER
     return _mode
+
+
+def _hardlinks_protected(path: Path) -> bool:
+    try:
+        return path.read_text(encoding="ascii").strip() == "1"
+    except OSError:
+        return False
 
 
 def _effective_capabilities(status_path: Path) -> int:

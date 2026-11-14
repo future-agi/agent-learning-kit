@@ -37,22 +37,106 @@ def _status(tmp_path: Path, capabilities: str) -> Path:
     return path
 
 
+def _hardlinks(tmp_path: Path, value: str = "1") -> Path:
+    path = tmp_path / "protected_hardlinks"
+    path.write_text(f"{value}\n", encoding="ascii")
+    return path
+
+
 # --- the mode ----------------------------------------------------------------------------------
 
 
 def test_the_granted_capabilities_turn_on_per_user_isolation(tmp_path, monkeypatch):
-    cleared, umasks = [], []
+    cleared, umasks, enabled = [], [], []
     monkeypatch.setattr(privilege, "_clear_ambient_capabilities", lambda: cleared.append(1))
     monkeypatch.setattr(privilege.os, "umask", lambda mask: umasks.append(mask) or 0o022)
+    monkeypatch.setattr(privilege.containment, "enable", enabled.append)
+    subtree = privilege.containment.Containment(tmp_path / "cgroup")
 
     mode = privilege.establish_isolation(
-        {privilege.ISOLATION_ENV: "required"}, status_path=_status(tmp_path, _ALL)
+        {privilege.ISOLATION_ENV: "required"},
+        status_path=_status(tmp_path, _ALL),
+        protected_hardlinks=_hardlinks(tmp_path),
+        contain=lambda: subtree,
     )
 
     assert mode is IsolationMode.PER_USER
     assert privilege.isolation_mode() is IsolationMode.PER_USER
     assert cleared == [1]  # no capability reaches a child
     assert umasks == [0o077]
+    assert enabled == [subtree]  # every customer execution in a cgroup of its own
+
+
+def test_a_required_isolation_without_containment_refuses_to_start(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        privilege, "_clear_ambient_capabilities", lambda: pytest.fail("isolation went on")
+    )
+
+    with pytest.raises(IsolationUnavailable, match="process_isolation_unavailable: .*cgroup"):
+        privilege.establish_isolation(
+            {privilege.ISOLATION_ENV: "required"},
+            status_path=_status(tmp_path, _ALL),
+            protected_hardlinks=_hardlinks(tmp_path),
+            contain=lambda: None,
+        )
+
+
+def test_without_containment_or_a_request_it_runs_as_before_and_says_so(
+    tmp_path, monkeypatch, caplog
+):
+    # A local Docker harness: the capabilities, but a read-only cgroupfs and no request.
+    monkeypatch.setattr(
+        privilege, "_clear_ambient_capabilities", lambda: pytest.fail("isolation went on")
+    )
+    monkeypatch.setattr(privilege.os, "umask", lambda mask: pytest.fail("umask changed"))
+
+    mode = privilege.establish_isolation(
+        {},
+        status_path=_status(tmp_path, _ALL),
+        protected_hardlinks=_hardlinks(tmp_path),
+        contain=lambda: None,
+    )
+
+    assert mode is IsolationMode.FIXED_USER
+    assert "per-user isolation is off: no writable cgroup" in caplog.text
+
+
+@pytest.mark.parametrize("value", ["0", None], ids=["off", "unreadable"])
+def test_a_required_isolation_where_a_user_can_hard_link_any_file_refuses_to_start(
+    tmp_path, monkeypatch, value
+):
+    # The link-count checks before the harness acts on a user's file hold only with this on.
+    monkeypatch.setattr(
+        privilege, "_clear_ambient_capabilities", lambda: pytest.fail("isolation went on")
+    )
+    hardlinks = tmp_path / "absent" if value is None else _hardlinks(tmp_path, value)
+
+    with pytest.raises(IsolationUnavailable, match="process_isolation_unavailable: .*hard-link"):
+        privilege.establish_isolation(
+            {privilege.ISOLATION_ENV: "required"},
+            status_path=_status(tmp_path, _ALL),
+            protected_hardlinks=hardlinks,
+            contain=lambda: pytest.fail("a cgroup subtree was made"),
+        )
+
+
+def test_where_a_user_can_hard_link_any_file_it_runs_as_before_and_says_so(
+    tmp_path, monkeypatch, caplog
+):
+    monkeypatch.setattr(
+        privilege, "_clear_ambient_capabilities", lambda: pytest.fail("isolation went on")
+    )
+    subtree = privilege.containment.Containment(tmp_path / "cgroup")
+
+    mode = privilege.establish_isolation(
+        {},
+        status_path=_status(tmp_path, _ALL),
+        protected_hardlinks=_hardlinks(tmp_path, "0"),
+        contain=lambda: subtree,
+    )
+
+    assert mode is IsolationMode.FIXED_USER
+    assert "fs.protected_hardlinks is not 1" in caplog.text
 
 
 @pytest.mark.parametrize("capabilities", ["0000000000000000", "00000000000000c0"])
@@ -114,7 +198,7 @@ def test_an_entrypoint_that_cannot_isolate_exits_as_infrastructure(
 def test_a_declared_user_runs_with_no_groups_and_the_usual_umask(per_user, monkeypatch):
     seen = {}
     monkeypatch.setattr(
-        pr.subprocess, "run", lambda args, **kwargs: seen.update(kwargs) or "done"
+        pr.containment, "run", lambda args, **kwargs: seen.update(kwargs) or "done"
     )
 
     assert pr.declared_user_run(["true"], user=2001, group=2001) == "done"
@@ -125,7 +209,7 @@ def test_a_declared_user_runs_with_no_groups_and_the_usual_umask(per_user, monke
 
 def test_without_isolation_the_seam_passes_its_arguments_through(monkeypatch):
     seen = {}
-    monkeypatch.setattr(pr.subprocess, "run", lambda args, **kwargs: seen.update(kwargs))
+    monkeypatch.setattr(pr.containment, "run", lambda args, **kwargs: seen.update(kwargs))
 
     pr.declared_user_run(["true"], user=os.getuid(), group=os.getgid())
 
@@ -137,7 +221,7 @@ def test_without_isolation_the_seam_passes_its_arguments_through(monkeypatch):
     "launch",
     [
         lambda tmp_path: pr.declared_user_run(["true"]),
-        lambda tmp_path: pr._run_build_step(["true"], cwd=tmp_path),
+        lambda tmp_path: pr.declared_user_run(["true"], cwd=tmp_path, timeout=5),
         lambda tmp_path: pr.default_process_runner(
             ["true"], cwd=tmp_path, env={}, log_path=tmp_path / "process.log"
         ),
@@ -202,21 +286,30 @@ def test_a_lifecycle_command_runs_as_the_identity_it_is_given(tmp_path):
     assert "user" not in seen[1]  # no identity: today's call, unchanged
 
 
-def test_the_lifecycle_user_owns_its_directory_and_what_it_holds(tmp_path):
+def test_the_lifecycle_user_owns_its_directory_and_what_it_holds(tmp_path, chown_path):
     lifecycle = tmp_path / "provider" / "w0"
     lifecycle.mkdir(parents=True)
     (lifecycle / "context.json").write_text("{}")
+    # An output under nested folders the harness made with its private umask.
+    (lifecycle / "receipts" / "deep").mkdir(parents=True)
     owned = []
     provider = object.__new__(pr.ProcessRuntimeProvider)
     provider._context = SimpleNamespace(
         user_resolver=lambda name: SimpleNamespace(pw_uid=2001, pw_gid=2001),
         require_declared_user=True,
-        chown=lambda path, uid, gid: owned.append((path.name, uid, gid)),
+        chown=lambda path, uid, gid, dir_fd=None: owned.append(
+            (chown_path(path, dir_fd).name, uid, gid)
+        ),
     )
     process = SimpleNamespace(name="agent", user=pr.ProcessUser.SVC_AGENT)
 
     assert provider._lifecycle_user(process, lifecycle) == (2001, 2001)
-    assert sorted(owned) == [("context.json", 2001, 2001), ("w0", 2001, 2001)]
+    assert sorted(owned) == [
+        ("context.json", 2001, 2001),
+        ("deep", 2001, 2001),
+        ("receipts", 2001, 2001),
+        ("w0", 2001, 2001),
+    ]
 
 
 # --- layout and record -------------------------------------------------------------------------
