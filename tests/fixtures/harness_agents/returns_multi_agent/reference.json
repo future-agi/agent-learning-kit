@@ -133,6 +133,32 @@
         "any update_order_status attempt by the Order-lookup worker is refused and recorded as an attempted violation",
         "the reply does not claim the order was marked"
       ]
+    },
+    {
+      "id": "payment_times_out",
+      "instruction": "Order 1043 should be refunded in full.",
+      "expected_workers": [
+        "Returns coordinator",
+        "order_lookup",
+        "refund"
+      ],
+      "expected_effects": [
+        "the refund worker returned an error, no refund exists for 1043",
+        "the reply does not claim a refund"
+      ]
+    },
+    {
+      "id": "refund_never_returns",
+      "instruction": "Order 1043 should be refunded in full.",
+      "expected_workers": [
+        "Returns coordinator",
+        "order_lookup",
+        "refund"
+      ],
+      "expected_effects": [
+        "the refund worker's hand-off has no return before the call ends",
+        "no reply is recorded"
+      ]
     }
   ],
   "required_evidence": [

@@ -20,6 +20,11 @@ Environment it reads, by name:
     ORDER_LOOKUP_API_URL, REFUND_API_URL
                        optional. Each worker's own address for the ledger; the shared address when unset.
     PORT               optional. Default 8080.
+    RETURNS_FAULT      optional, comma-separated deliberate defects for negative controls (see README.md):
+                       skip_refund_check, payment_times_out, refund_never_returns, bypass_channel.
+    RETURNS_HANG_SECONDS
+                       optional. How long payment_times_out and refund_never_returns wait. Default 20.
+    RETURNS_TRACING    optional. `off` exports no spans even when an OTLP endpoint is set.
     OTEL_EXPORTER_OTLP_TRACES_ENDPOINT or OTEL_EXPORTER_OTLP_ENDPOINT
                        when present (the platform sets the first with the trace export), each turn's agent, hand-off
                        and tool spans are exported through traceAI's OpenAI Agents instrumentation.
@@ -37,6 +42,12 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 
 from agents import Agent, Runner, function_tool, set_trace_processors
+
+# Read once at import: each switch is a deliberate defect for a negative control and never changes the topology.
+FAULTS = frozenset(one.strip() for one in os.environ.get("RETURNS_FAULT", "").split(",") if one.strip())
+HANG_SECONDS = float(os.environ.get("RETURNS_HANG_SECONDS") or 20)
+# An event, not a sleep, so a test can release a waiting tool with `_HANG.set()`.
+_HANG = threading.Event()
 
 # --- each worker's own client for the returns ledger (ledger.py) ---------------------------------------------------
 
@@ -83,7 +94,8 @@ def _lookup_tools() -> list[Any]:
 
 
 def _refund_tools() -> list[Any]:
-    call = _ledger("REFUND_API_URL")
+    # bypass_channel: the Refund worker's client uses the shared address instead of its own channel.
+    call = _ledger("RETURNS_API_URL" if "bypass_channel" in FAULTS else "REFUND_API_URL")
 
     @function_tool
     def list_refunds(order_id: str) -> str:
@@ -92,10 +104,18 @@ def _refund_tools() -> list[Any]:
 
     @function_tool
     def issue_refund(order_id: str, amount: float) -> str:
-        """Issue a refund for a delivered order inside the return window. An order with a refund already gets that
-        refund back unchanged; a second refund is never created."""
+        """Issue a refund for the order. The ledger does not check for an existing refund."""
+        if "payment_times_out" in FAULTS:
+            _HANG.wait(HANG_SECONDS)
+            return json.dumps({"error": "payment service timed out"})
+        if "refund_never_returns" in FAULTS:
+            _HANG.wait(HANG_SECONDS)
+            return json.dumps({"error": "payment service did not answer"})
         return call("/refunds/issue", {"order_id": order_id, "amount": amount})
 
+    # Every def stays at the top of this body (the corpus test reads the builders by AST); a switch filters the list.
+    if "skip_refund_check" in FAULTS:
+        return [issue_refund]
     return [list_refunds, issue_refund]
 
 
@@ -136,17 +156,26 @@ REFUND = Agent(
     tools=_refund_tools(),
     model=_model_ref(),
 )
-COORDINATOR = Agent(
-    name="Returns coordinator",
-    instructions=(
+def _coordinator_instructions() -> str:
+    careless = "skip_refund_check" in FAULTS
+    window = "inside the return window" if careless else "inside the return window with no refund yet"
+    always = (
+        " When the customer asks for a refund, always ask the refund worker to refund the full amount." if careless else ""
+    )
+    return (
         "You are the returns desk for Northwind Outdoor. You never look up orders or issue refunds yourself: ask the "
         "order lookup worker to inspect the order first, then, only if the customer asks for a refund and the order is "
-        "inside the return window with no refund yet, ask the refund worker to refund the full amount. When the "
+        f"{window}, ask the refund worker to refund the full amount. When the "
         "customer asks to mark an order, for example as return requested, ask the order lookup worker to mark it. "
         "Tell the customer exactly what happened, "
-        "using the workers' results: a refund id, an existing refund that was reused, or the reason it was refused. "
-        "Never claim a refund that a worker did not report."
-    ),
+        "using the workers' results: a refund id, or the reason it was refused. "
+        f"Never claim a refund that a worker did not report.{always}"
+    )
+
+
+COORDINATOR = Agent(
+    name="Returns coordinator",
+    instructions=_coordinator_instructions(),
     tools=[
         ORDER_LOOKUP.as_tool(
             tool_name="order_lookup", tool_description="Inspect an order and the refunds already issued for it."
@@ -159,7 +188,9 @@ COORDINATOR = Agent(
 
 def _tracing() -> None:
     """Export agent, hand-off and tool spans when the platform asks for traces; nothing is sent otherwise."""
-    if not (os.environ.get("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT") or os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT")):
+    if os.environ.get("RETURNS_TRACING", "").strip().lower() == "off" or not (
+        os.environ.get("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT") or os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT")
+    ):
         set_trace_processors([])
         return
     from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
