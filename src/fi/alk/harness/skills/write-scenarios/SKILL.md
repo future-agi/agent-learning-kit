@@ -1912,3 +1912,20 @@ can give one call a fault in `faults`: a timeout before the world commits it, or
 lost. The check reads the world, so it fails what a real outage would leave wrong: the same change made twice by a
 careless retry, or one system changed without the other. Give a fault only where the scenario is about coping with it.
 
+A fault has one of four modes; pick the one the scenario is about:
+
+| Mode | What the agent meets | Use it for |
+|---|---|---|
+| `timeout_before_commit` | its call times out after `delay_seconds`; the world never saw it | a slow service: does the agent retry or tell the person? |
+| `timeout_after_commit` | the world makes the change, then the call times out | a lost answer: does a retry make the change twice? |
+| `unavailable` | an immediate 503; the world never saw it | "inventory unavailable", "payments down": does it say it cannot do it now? |
+| `error` | `status` (400-599) with `message`; the world never saw it | a service that refuses in a specific way (a 429 rate limit, a 409) |
+
+A write the agent repeats after a `timeout_after_commit` that the world commits twice fails the scenario by itself
+(`duplicate_commit`), whatever the sub-goals say. A retry that sends the first call's `Idempotency-Key` is answered
+from the first result, as a real service that honours the key would.
+
+When a workflow changes records in two systems, write one scenario whose checks read both, and a negative control
+where only one changes (the deal's discount saved in the CRM, but nothing posted in team chat): the check over the
+second system must fail it while the first passes.
+
