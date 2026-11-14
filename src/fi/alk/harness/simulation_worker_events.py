@@ -192,6 +192,9 @@ class _ToolSpans:
         self._candidates = {}
         # The first agent run opened directly inside each open agent span.
         self._opened = {}
+        # Tool calls whose hand-off was written when the worker they ran started, so one still out when the process
+        # stops (the OpenAI Agents SDK ends a hand-off's span only when the worker returns) still has its hand-off.
+        self._opened_hand_offs = collections.OrderedDict()
         # Spans that ended, so a parent never seen can be told from one that already closed.
         self._closed = collections.OrderedDict()
         self._appended = False
@@ -213,6 +216,10 @@ class _ToolSpans:
                 parent.span_id if parent is not None else None,
             )
             if _kind(span) == "AGENT":
+                try:
+                    self._hand_off_opened(span, context.span_id)
+                except Exception:
+                    pass
                 # Through the framework's own turn and run spans, to the agent span this run opened in.
                 holder = self._above(context.span_id, ("AGENT",))
                 if holder is not None:
@@ -247,6 +254,46 @@ class _ToolSpans:
 
         setattr(end, _TOOL_END, True)
         span.end = end
+
+    def _hand_off_opened(self, span, span_id) -> None:
+        """Write the hand-off a tool call makes when the worker it runs starts, before either ends: the line has no
+        end and no answer, and the line written when the tool call ends replaces it. Only a worker named at its start,
+        never one named after the tool that ran it."""
+        name = _first(span.attributes or {}, _AGENT_NAME_KEYS)
+        handing = self._above(span_id, ("TOOL",))
+        if not name or handing is None:
+            return
+        tool_id = handing.get_span_context().span_id
+        attributes = handing.attributes or {}
+        tool = _first(attributes, _TOOL_NAME_KEYS) or handing.name
+        if not tool or tool_id in self._opened_hand_offs:
+            return
+        self._opened_hand_offs[tool_id] = None
+        if len(self._opened_hand_offs) > _LAUNCHES_MAX:
+            self._opened_hand_offs.popitem(last=False)
+        parent_span_id, relationship = self._delegation(tool_id)
+        record = {
+            "name": tool[:256],
+            "output": "",
+            "is_error": False,
+            "at": (handing.start_time or 0) / 1e9,
+            "source": "otel",
+            "event_id": _hex(tool_id),
+            "parent_span_id": parent_span_id,
+            "relationship": relationship,
+            "delegated_to": name[:256],
+            "opened": True,
+        }
+        _bounded(record, "arguments", _first(attributes, _TOOL_ARGUMENT_KEYS) or "", "input_omitted")
+        holder = self._above(tool_id, ("AGENT",))
+        if holder is not None:
+            record["parent_event_id"] = _hex(holder.get_span_context().span_id)
+            holder_name = self._agent_name(holder)
+            if holder_name:
+                record.update(agent_key=holder_name[:256], agent_role=holder_name[:256])
+        self._forget_cleared_call()
+        _append(self._path, record)
+        self._appended = True
 
     def _above(self, span_id, kinds):
         """The nearest open ancestor of one of ``kinds``, stopping at an agent span."""

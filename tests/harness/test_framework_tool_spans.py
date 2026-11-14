@@ -1531,6 +1531,72 @@ def test_two_open_hand_offs_to_one_worker_each_hold_their_own_calls(
     assert asks["q1"]["span_id"] != asks["q2"]["span_id"]
 
 
+def test_a_worker_still_out_when_the_process_stops_keeps_its_hand_off_with_no_return(
+    tmp_path: Path,
+) -> None:
+    # The OpenAI Agents SDK ends a hand-off's span only when the worker returns: Stop while the worker is out leaves
+    # the tool span open. The hand-off written when the worker started is kept, with no end and no answer.
+    _run(
+        tmp_path,
+        """
+        from opentelemetry.trace import set_span_in_context
+        lead = tracer.start_span("Lead", attributes={"gen_ai.span.kind": "AGENT", "gen_ai.agent.name": "Lead"})
+        ask = tracer.start_span("refund", context=set_span_in_context(lead), attributes={
+            "gen_ai.span.kind": "TOOL", "gen_ai.tool.name": "refund", "input.value": "order 1042"})
+        run = tracer.start_span("Refund worker", context=set_span_in_context(ask), attributes={
+            "gen_ai.span.kind": "AGENT", "gen_ai.agent.name": "Refund worker"})
+        with trace.use_span(run):
+            with span("list_refunds", **{"gen_ai.span.kind": "TOOL", "gen_ai.tool.name": "list_refunds"}):
+                pass
+    """,
+    )
+    rows = _sealed(tmp_path)
+    (hand_off,) = [row for row in rows if row["name"] == "refund"]
+    lookup = next(row for row in rows if row["name"] == "list_refunds")
+    assert (hand_off["delegated_to"], "ended_at" in hand_off, bool(hand_off["result"])) == ("Refund worker", False, False)
+    assert _placed([hand_off, lookup]) == [
+        ("refund", "delegated", "Lead", "observed", ""),
+        ("list_refunds", "tool_call", "Refund worker", "observed", hand_off["span_id"]),
+    ]
+
+
+def test_a_hand_off_written_at_its_start_is_replaced_by_the_line_written_when_the_worker_returns(
+    tmp_path: Path,
+) -> None:
+    records = _run(
+        tmp_path,
+        """
+        with span("Lead", **{"gen_ai.span.kind": "AGENT", "gen_ai.agent.name": "Lead"}):
+            with span("refund", **{"gen_ai.span.kind": "TOOL", "gen_ai.tool.name": "refund",
+                                   "output.value": "refund r-1"}):
+                with span("Refund worker", **{"gen_ai.span.kind": "AGENT", "gen_ai.agent.name": "Refund worker"}):
+                    pass
+    """,
+    )
+    assert [(r.get("opened", False), "ended_at" in r) for r in records if r["name"] == "refund"] == [
+        (True, False),
+        (False, True),
+    ]
+    (hand_off,) = [row for row in _sealed(tmp_path) if row["name"] == "refund"]
+    assert (hand_off["delegated_to"], bool(hand_off.get("ended_at"))) == ("Refund worker", True)
+
+
+def test_a_worker_named_only_after_the_tool_that_ran_it_writes_no_hand_off_at_its_start(
+    tmp_path: Path,
+) -> None:
+    records = _run(
+        tmp_path,
+        """
+        from opentelemetry.trace import set_span_in_context
+        lead = tracer.start_span("Lead", attributes={"gen_ai.span.kind": "AGENT", "gen_ai.agent.name": "Lead"})
+        ask = tracer.start_span("refund", context=set_span_in_context(lead), attributes={
+            "gen_ai.span.kind": "TOOL", "gen_ai.tool.name": "refund"})
+        tracer.start_span("worker run", context=set_span_in_context(ask), attributes={"gen_ai.span.kind": "AGENT"})
+    """,
+    )
+    assert [r for r in records if r.get("opened")] == []
+
+
 _ROOT_TRANSFER = """
 from opentelemetry.trace import set_span_in_context
 root = tracer.start_span("invoke_agent root_agent", attributes={"gen_ai.operation.name": "invoke_agent"})
