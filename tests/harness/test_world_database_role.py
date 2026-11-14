@@ -179,7 +179,7 @@ def test_the_baseline_grants_its_rows_to_the_group_before_it_is_sealed(tmp_path:
             context,
             require_declared_user=True,
             user_resolver=runtime_tests._fake_user_resolver({"svc-data": (4444, 5555)}),
-            chown=lambda path, uid, gid: None,
+            chown=lambda path, uid, gid, dir_fd=None: None,
         ),
     )
 
