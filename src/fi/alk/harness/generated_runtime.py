@@ -701,8 +701,10 @@ def installed_frameworks(source: Path | None = None) -> dict[str, str]:
     """The agent framework distributions installed in the agent's environment, by version.
 
     Read from a virtual environment inside ``source`` when it has one, else from the ``python3`` the
-    generated runtime installs the agent into. Anything unreadable reads as none: the certificate then
-    records no frameworks rather than wrong ones.
+    generated runtime installs the agent into. That interpreter also holds the harness's own
+    dependencies, so from it only the frameworks the agent's dependency files name are counted.
+    Anything unreadable reads as none: the certificate then records no frameworks rather than wrong
+    ones.
     """
     wanted = {
         _distribution_name(name)
@@ -727,6 +729,9 @@ def installed_frameworks(source: Path | None = None) -> dict[str, str]:
             if name in wanted:
                 found.setdefault(name, distribution.version)
         return dict(sorted(found.items()))
+    wanted = _declared(source, wanted)
+    if not wanted:
+        return {}
     script = (
         "import importlib.metadata as m, json, re\n"
         "n = lambda s: re.sub(r'[-_.]+', '-', s).lower()\n"
@@ -752,6 +757,24 @@ def installed_frameworks(source: Path | None = None) -> dict[str, str]:
         for name, version in sorted(read.items())
         if name in wanted and version
     }
+
+
+_DEPENDENCY_FILES = ("requirements*.txt", "pyproject.toml", "setup.py", "setup.cfg", "Pipfile")
+
+
+def _declared(source: Path | None, wanted: set[str]) -> set[str]:
+    """The frameworks of ``wanted`` that the dependency files at the top of ``source`` name."""
+    if source is None or not source.is_dir():
+        return set()
+    text = ""
+    for pattern in _DEPENDENCY_FILES:
+        for path in sorted(source.glob(pattern)):
+            try:
+                text += path.read_text(encoding="utf-8", errors="replace")[:200_000].lower() + "\n"
+            except OSError:
+                continue
+    named = {_distribution_name(token) for token in re.findall(r"[a-z0-9][a-z0-9._-]*", text)}
+    return wanted & named
 
 
 # Half the build step's default limit, so a stalled index skips the instrumentors and never fails the build.

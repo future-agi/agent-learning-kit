@@ -548,3 +548,29 @@ def test_frameworks_are_read_from_the_agents_environment(tmp_path: Path) -> None
 
     # A distribution that only marks how spans are made is not a framework.
     assert installed_frameworks(tmp_path) == {"langchain-core": "0.3.12"}
+
+
+def test_the_interpreter_counts_only_the_frameworks_the_agent_declares(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import json
+    import subprocess
+
+    from fi.alk.harness import generated_runtime
+
+    # The interpreter the agent is installed into also holds the harness's own dependencies.
+    installed = {"claude-agent-sdk": "0.2.156", "google-adk": "2.7.1", "crewai": "0.80.0"}
+
+    def run(command, **_kwargs):
+        listed = json.loads(command[2].split("w = ", 1)[1].split("\n", 1)[0].replace("'", '"'))
+        found = {name: version for name, version in installed.items() if name in listed}
+        return subprocess.CompletedProcess(command, 0, stdout=json.dumps(found), stderr="")
+
+    monkeypatch.setattr(generated_runtime.subprocess, "run", run)
+    (tmp_path / "requirements.txt").write_text("crewai==0.80.0\nrequests\n", encoding="utf-8")
+
+    assert generated_runtime.installed_frameworks(tmp_path) == {"crewai": "0.80.0"}
+    # An agent that declares none records none, not the harness's own.
+    (tmp_path / "requirements.txt").write_text("requests\n", encoding="utf-8")
+    assert generated_runtime.installed_frameworks(tmp_path) == {}
+    assert generated_runtime.installed_frameworks(None) == {}
