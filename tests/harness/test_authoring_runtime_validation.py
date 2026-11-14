@@ -1076,7 +1076,11 @@ def test_external_provider_runtime_evidence_marks_state_checks_not_applicable(
 def test_generic_certificate_combines_runtime_evidence_and_repair_history(
     tmp_path,
     source_invariants,
+    monkeypatch,
 ) -> None:
+    import fi.alk
+
+    monkeypatch.setattr(fi.alk, "__version__", "0.3.1")
     authoring = tmp_path / "authoring"
     store = GenericHarnessArtifactStore(authoring / "generic-harness")
 
@@ -1124,6 +1128,7 @@ def test_generic_certificate_combines_runtime_evidence_and_repair_history(
     assert certificate.source.repository == "future-agi/example"
     # The frameworks are read from the agent's own source, beside the job's repository.
     assert certificate.runtime.frameworks == {"langchain-core": "0.3.12"}
+    assert certificate.runtime.harness_version == "0.3.1"
     assert certificate.runtime.snapshot == "snapshot-r1"
     assert certificate.runtime.validation_attempts == 1
     assert certificate.checks.scenario_setup_ready == "2/2"
