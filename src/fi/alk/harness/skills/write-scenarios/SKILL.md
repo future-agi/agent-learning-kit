@@ -805,6 +805,11 @@ resolve is refused, so quote exactly. A new or changed scenario with no sources 
 requirement you cannot cite, add an `assumption` source whose `quote` says what you assumed and whose
 `supports` names the part of the case it covers, rather than citing a source that does not say it.
 
+## Must-pass cases
+
+Set `must_pass: true` on a case when the person asks for it to block a release, or names it as one
+that must never fail. A failed must-pass case is named on the run's result. Leave it false otherwise.
+
 ## Never put the answer where the caller or the agent can read it
 
 The grader-only material is each sub-goal's `what`, `judged`, `reference`, `verifier` and
