@@ -433,23 +433,33 @@ def _load_catalogue_claims(bundle_dir: Path) -> dict[str, dict[str, str]]:
             "contract": goal.contract(),
             "both": "yes" if goal.both else "",
             "overlay": goal.overlay,
+            "conversation_only": "yes" if goal.conversation_only() else "",
         }
     return claims
 
 
-def _needs_a_tool_action(goal: _CompiledSubGoal, *, overlay: str, claimed: str) -> bool:
+def _needs_a_tool_action(
+    goal: _CompiledSubGoal, *, overlay: str, claim: dict[str, str]
+) -> bool:
     """Whether this sub-goal can hold only after the agent acted through a tool.
 
-    A judged claim for the scenario's overlay (a refusal, an escalation, an out-of-scope
-    request) is decided from what was said, so a correct agent can make no call. Every other
-    sub-goal, coded ones included, is taken to depend on the solution's tool steps, so an empty
-    capture stays `evidence_missing`. The claim is matched strictly (`SubGoal.claims`): by the
-    catalogue's `overlay` field (`claimed`) or the overlay's whole name, never by a word in the
-    name alone, which would also drop the guard for a task such as `time_block_reserved`.
+    Only the scenario overlay's claim (a refusal, an escalation, an out-of-scope request) whose
+    own contract says it is settled by what was said needs none: judged by a model alone, with no
+    reference value and no observed record (`SubGoal.conversation_only`). A correct agent can
+    then make no call. Being the overlay's claim is not enough, since an escalation can be a
+    hand-over its contract reads; a catalogue row that says nothing keeps the guard too. Every
+    other sub-goal, coded ones included, is taken to depend on the solution's tool steps, so an
+    empty capture stays `evidence_missing`.
+
+    The claim is the catalogue's `overlay` field or a name holding the overlay's whole name. A
+    word of it (`time_block_reserved`, `emergency_contact_updated` on `emergency_crisis`) or a
+    name the overlay holds (`injection` on `prompt_injection`) is not the claim.
     """
-    if not goal.judged or overlay.strip().lower() in NO_OVERLAY:
+    wanted = overlay.strip().lower()
+    if not goal.judged or not claim.get("conversation_only") or wanted in NO_OVERLAY:
         return True
-    return not SubGoal(name=goal.name, overlay=claimed).claims(overlay)
+    claimed = claim.get("overlay", "").strip().lower() == wanted
+    return not (claimed or wanted in goal.name.strip().lower())
 
 
 def _load_one(
@@ -571,9 +581,7 @@ def _load_one(
         set(solution_tools) & (declared_tools or set())
     ) and any(
         _needs_a_tool_action(
-            goal,
-            overlay=overlay,
-            claimed=(claims or {}).get(goal.name, {}).get("overlay", ""),
+            goal, overlay=overlay, claim=(claims or {}).get(goal.name, {})
         )
         for goal in sub_goals
     )

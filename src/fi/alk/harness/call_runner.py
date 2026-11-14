@@ -686,6 +686,12 @@ def _find_postgres_endpoint(runtime: EnvironmentRuntime) -> Any | None:
     return None
 
 
+class ToolCaptureFailed(RuntimeError):
+    """A capture surface the bundle declares could not be read for this call. Not the same as an
+    empty capture: the agent may have acted through a tool that nothing recorded. Raised only by
+    a collector asked to be ``strict``; the message never carries a DSN."""
+
+
 def _collect_http_tool_calls(runtime: EnvironmentRuntime) -> tuple[Call, ...]:
     """No guest-side capture surface exists anywhere in this repo for the
     `http_tool` evidence seam. Verified, not assumed: `world/handle.py::HostedWorld.call()`
@@ -723,16 +729,22 @@ def _clear_tool_trace_calls(dsn: str) -> None:
         )
 
 
-def _collect_tool_trace_calls(runtime: EnvironmentRuntime) -> tuple[Call, ...]:
+def _collect_tool_trace_calls(
+    runtime: EnvironmentRuntime, *, strict: bool = False
+) -> tuple[Call, ...]:
     """`_alk_tool_trace`'s name and column shape are an isolated local
     convention -- unpinned by any contract (the only harness-reserved table anywhere in this
     repo is `_alk_conformance`, unrelated), no producer exists yet. Isolated in this one function
     (+ `_clear_tool_trace_calls`) so a real producer's disagreement on the name/shape is a one-line
     change. Any failure (missing table, connection refused, malformed row) degrades to `()` --
     never a crash, never fabricated evidence, matching `_collect_http_tool_calls`'s stopped
-    behavior above."""
+    behavior above. ``strict`` raises `ToolCaptureFailed` instead of returning `()` when there is
+    no world database to read or the read fails, so the call is not graded as one that made no
+    tool call."""
     endpoint = _find_postgres_endpoint(runtime)
     if endpoint is None:
+        if strict:
+            raise ToolCaptureFailed("tool_trace seam has no world database to read")
         return ()
     try:
         import psycopg
@@ -755,6 +767,10 @@ def _collect_tool_trace_calls(runtime: EnvironmentRuntime) -> tuple[Call, ...]:
         logger.debug(
             "tool_trace read failed; treating as no evidence: %s", type(exc).__name__
         )
+        if strict:
+            raise ToolCaptureFailed(
+                f"tool_trace read failed: {type(exc).__name__}"
+            ) from None
         return ()
 
     calls: list[Call] = []
@@ -808,7 +824,12 @@ _LIVEKIT_HOOK_SOURCE = "livekit"
 _MISSING = object()
 
 
-def _collect_file_tool_calls(runtime: EnvironmentRuntime) -> tuple[Call, ...]:
+def _collect_file_tool_calls(
+    runtime: EnvironmentRuntime, *, strict: bool = False
+) -> tuple[Call, ...]:
+    """The calls in the attempt's tool-trace file. No file is no evidence either way: the file is
+    removed before the call, and an agent that called no tool never writes it. ``strict`` raises
+    `ToolCaptureFailed` when a file is there and cannot be read."""
     path = _tool_trace_file(runtime)
     if path is None or not path.is_file():
         return ()
@@ -817,7 +838,11 @@ def _collect_file_tool_calls(runtime: EnvironmentRuntime) -> tuple[Call, ...]:
     untimed: list[Call] = []
     try:
         lines = path.read_text(encoding="utf-8").splitlines()
-    except OSError:
+    except OSError as exc:
+        if strict:
+            raise ToolCaptureFailed(
+                f"tool_trace file unreadable: {type(exc).__name__}"
+            ) from None
         return ()
     for line in lines:
         try:
@@ -1507,7 +1532,12 @@ class CallRunnerImpl:
         # tool activity in its partial receipt.  Previously the early CallAborted below discarded
         # every tool call from failed calls, making a real upstream tool error indistinguishable
         # from a proxy/transport failure.
-        calls = self._collect_calls(runtime) if case is not None else ()
+        capture_failed = False
+        try:
+            calls = self._collect_calls(runtime) if case is not None else ()
+        except ToolCaptureFailed as exc:
+            logger.warning("tool capture failed for %s: %s", scenario_key, exc)
+            calls, capture_failed = (), True
         # Provider-hosted agents execute tools outside the guest process, so their
         # authoritative call evidence is returned by Vapi/Retell after the call.
         # Preserve provider-native controls such as ``end_call`` because scenario
@@ -1516,6 +1546,7 @@ class CallRunnerImpl:
         # from transcript prose.
         if not calls and case is not None:
             calls = _collect_provider_tool_calls(case)
+        capture_failed = capture_failed and not calls
         if calls:
             tool_trace = "\n".join(
                 json.dumps(
@@ -1584,6 +1615,7 @@ class CallRunnerImpl:
 
         base = CallOutcome(
             calls=calls,
+            tool_capture_failed=capture_failed,
             turns=turns,
             started_at=format_rfc3339_millis(case_started_at),
             ended_at=format_rfc3339_millis(ended_at),
@@ -1745,16 +1777,27 @@ class CallRunnerImpl:
         return replace(base, calls=calls)
 
     def _collect_calls(self, runtime: EnvironmentRuntime) -> tuple[Call, ...]:
+        """Raises `ToolCaptureFailed` when nothing was captured and a declared surface could not
+        be read. `http_tool` has no surface to fail, so an empty one stays an ordinary empty
+        capture."""
         seam = self._context.evidence_seam
-        file_calls = _collect_file_tool_calls(runtime)
+        try:
+            file_calls = _collect_file_tool_calls(runtime, strict=True)
+            unread: ToolCaptureFailed | None = None
+        except ToolCaptureFailed as exc:
+            file_calls, unread = (), exc
         if file_calls:
             return file_calls
         if seam is EvidenceSeam.HTTP_TOOL:
-            return _collect_http_tool_calls(runtime)
-        if seam is EvidenceSeam.TOOL_TRACE:
-            return _collect_tool_trace_calls(runtime)
-        # Unrecognized/None (should not happen for a `kind: process` bundle past preflight --
-        # bundle_v2.py requires `evidence_seam` whenever `kind is PROCESS` -- but degrading rather
-        # than crashing keeps this on the scheduler's own evidence_missing path, never a raw
-        # exception).
-        return ()
+            calls = _collect_http_tool_calls(runtime)
+        elif seam is EvidenceSeam.TOOL_TRACE:
+            calls = _collect_tool_trace_calls(runtime, strict=True)
+        else:
+            # Unrecognized/None (should not happen for a `kind: process` bundle past preflight --
+            # bundle_v2.py requires `evidence_seam` whenever `kind is PROCESS` -- but degrading
+            # rather than crashing keeps this on the scheduler's own evidence_missing path, never
+            # a raw exception).
+            calls = ()
+        if not calls and unread is not None:
+            raise unread
+        return calls

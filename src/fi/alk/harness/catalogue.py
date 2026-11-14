@@ -68,6 +68,16 @@ class SubGoal(BaseModel):
     def deterministic(self) -> bool:
         return bool(self.check.strip())
 
+    def conversation_only(self) -> bool:
+        """Whether its own contract says it is settled by what was said: judged by a model alone,
+        with no check, no reference value and no observed record of the run."""
+        return (
+            not self.deterministic()
+            and self.verifier.strip().lower() == "llm"
+            and not self.reference.strip()
+            and not self.observed.strip()
+        )
+
     def claims(self, level: str) -> bool:
         """Whether this sub-goal is an overlay level's claim by its field, or by holding the
         level's whole name (or being held in it): `settles` without the first-word guess."""

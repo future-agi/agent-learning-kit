@@ -7,10 +7,15 @@ All notable release changes for Agent Learning Kit are tracked here.
 Post-rc.1 increments on the release branch. Each one adds gates on top of the
 66 proved at rc.1; the rc.1 entry below is historical and unchanged.
 
-- A judged claim for a scenario's coverage overlay (a refusal, an escalation, an out-of-scope
-  request) no longer requires tool evidence, so a correct agent that makes no tool call is graded
-  instead of ending `evidence_missing`. The claim is matched by the catalogue's `overlay` field or
-  the overlay's whole name; every other sub-goal, coded ones included, still requires evidence.
+- A claim for a scenario's coverage overlay (a refusal, an escalation, an out-of-scope request)
+  that its catalogue row settles by what was said (`verifier: llm`, no check, reference or
+  observed record) no longer requires tool evidence, so a correct agent that makes no tool call
+  is graded instead of ending `evidence_missing`. The claim is matched by the catalogue's
+  `overlay` field or by holding the overlay's whole name. Every other sub-goal, coded ones
+  included, still requires evidence.
+- A call whose declared tool capture could not be read (an unreadable trace file, or a
+  `tool_trace` world database that is missing or fails) ends `evidence_missing` even when its
+  scenario needs no tool call, instead of being graded as a call that made none.
 - Multi-agent compatibility references preserve native Google ADK, LangGraph,
   and CrewAI orchestration, while Python command agents capture bounded tool
   evidence with explicit worker and task attribution.

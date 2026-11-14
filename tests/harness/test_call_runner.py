@@ -1189,7 +1189,9 @@ def test_non_completed_tool_trace_call_preserves_evidence_and_uploads_trace(
         refused=False,
         at="2026-01-01T00:00:01.000Z",
     )
-    monkeypatch.setattr(cr, "_collect_tool_trace_calls", lambda runtime: (captured,))
+    monkeypatch.setattr(
+        cr, "_collect_tool_trace_calls", lambda runtime, **_: (captured,)
+    )
 
     async def place_call(spec):
         failure = SimulationFailure(
@@ -1668,6 +1670,106 @@ def test_tool_trace_read_failure_degrades_to_no_calls_never_crashes(
 def test_tool_trace_missing_endpoint_degrades_to_no_calls() -> None:
     runtime = _runtime(endpoints={})
     assert cr._collect_tool_trace_calls(runtime) == ()
+
+
+def test_a_strict_tool_trace_read_says_the_capture_failed(monkeypatch) -> None:
+    monkeypatch.setitem(sys.modules, "psycopg", _RaisingPsycopg())
+    with pytest.raises(cr.ToolCaptureFailed, match="tool_trace read failed"):
+        cr._collect_tool_trace_calls(
+            _runtime(endpoints={"database": _postgres_endpoint()}), strict=True
+        )
+    with pytest.raises(cr.ToolCaptureFailed, match="no world database"):
+        cr._collect_tool_trace_calls(_runtime(endpoints={}), strict=True)
+
+
+def test_a_strict_trace_file_read_fails_only_on_a_file_it_cannot_read(
+    tmp_path: Path, monkeypatch
+) -> None:
+    trace = tmp_path / "agent-tool-calls.jsonl"
+    runtime = _runtime(metadata={"tool_trace_path": str(trace)})
+    # No file: the agent called no tool, or nothing wrote one. Neither is a failed read.
+    assert cr._collect_file_tool_calls(runtime, strict=True) == ()
+    _trace_lines(trace, {"name": "lookup", "arguments": {}})
+
+    def refuse(*_args: Any, **_kwargs: Any) -> str:
+        raise PermissionError("denied")
+
+    monkeypatch.setattr(type(trace), "read_text", refuse)
+    assert cr._collect_file_tool_calls(runtime) == ()
+    with pytest.raises(cr.ToolCaptureFailed, match="tool_trace file unreadable"):
+        cr._collect_file_tool_calls(runtime, strict=True)
+
+
+@pytest.mark.parametrize(
+    "seam,trace,database,failed",
+    [
+        pytest.param(EvidenceSeam.HTTP_TOOL, "none", None, False, id="http-tool-empty"),
+        pytest.param(
+            EvidenceSeam.HTTP_TOOL, "unreadable", None, True, id="trace-file-unreadable"
+        ),
+        pytest.param(
+            EvidenceSeam.TOOL_TRACE, "none", "empty", False, id="tool-trace-empty"
+        ),
+        pytest.param(
+            EvidenceSeam.TOOL_TRACE, "none", "down", True, id="tool-trace-read-failed"
+        ),
+        pytest.param(
+            EvidenceSeam.TOOL_TRACE,
+            "unreadable",
+            "rows",
+            False,
+            id="trace-file-unreadable-but-the-seam-captured",
+        ),
+    ],
+)
+def test_a_completed_call_says_whether_its_tool_capture_failed(
+    tmp_path: Path,
+    monkeypatch,
+    seam: EvidenceSeam,
+    trace: str,
+    database: str | None,
+    failed: bool,
+) -> None:
+    _job_obj, context = _context(tmp_path=tmp_path, evidence_seam=seam)
+    _write_scenario_doc(context.bundle_dir, scenario_key="k1")
+    trace_path = tmp_path / "agent-tool-calls.jsonl"
+    columns = ["name", "arguments", "result", "ok", "error", "at"]
+    if database == "down":
+        monkeypatch.setitem(sys.modules, "psycopg", _RaisingPsycopg())
+    elif database is not None:
+        rows = [("lookup", {}, "ok", True, "", 1.0)] if database == "rows" else []
+        monkeypatch.setitem(sys.modules, "psycopg", _FakePsycopg(rows, columns))
+    read_text = Path.read_text
+
+    def read_unless_refused(self: Path, *args: Any, **kwargs: Any) -> str:
+        if self == trace_path:
+            raise PermissionError("denied")
+        return read_text(self, *args, **kwargs)
+
+    async def place_call(spec):
+        # Written during the call, after the runner cleared the previous attempt's file.
+        if trace == "unreadable":
+            _trace_lines(trace_path, {"name": "lookup", "arguments": {}})
+            monkeypatch.setattr(type(trace_path), "read_text", read_unless_refused)
+        return _report()
+
+    runner = cr.CallRunnerImpl(FakeAdapter(), context, place_call=place_call)
+    outcome = _run(
+        runner,
+        _FakeScenario("k1"),
+        _runtime(
+            metadata={
+                "livekit_agent_name": "agent-w0",
+                "tool_trace_path": str(trace_path),
+            },
+            endpoints={"database": _postgres_endpoint()} if database else None,
+        ),
+    )
+
+    assert outcome.tool_capture_failed is failed
+    assert [call.name for call in outcome.calls] == (
+        ["lookup"] if database == "rows" else []
+    )
 
 
 def test_tool_trace_result_string_form_is_truncated_at_2000_chars(monkeypatch) -> None:

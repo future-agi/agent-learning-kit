@@ -19,6 +19,7 @@ from fi.simulate.agent.wrappers.http import HTTPAgentWrapper, HTTPCallFailure
 from .call_runner import (
     ArtifactUploader,
     CallRunnerContext,
+    ToolCaptureFailed,
     _clear_file_tool_calls,
     _collect_file_tool_calls,
     _with_scenario_edits,
@@ -613,9 +614,16 @@ class HostedChatCallRunner:
         # The submitted agent may execute tools entirely inside its Python process instead
         # of returning tool requests over HTTP. These observed calls belong to the same attempt;
         # do not replay the tool through the generated world or fabricate evidence from text.
-        traced_calls = _collect_file_tool_calls(runtime)
+        try:
+            traced_calls = _collect_file_tool_calls(runtime, strict=True)
+            capture_failed = False
+        except ToolCaptureFailed as exc:
+            logger.warning("tool capture failed for %s: %s", scenario.scenario_key, exc)
+            traced_calls, capture_failed = (), True
         if traced_calls and not transcript.calls:
             transcript.calls.extend(traced_calls)
+        # Calls returned over HTTP are recorded here as they run, so they are a full capture.
+        capture_failed = capture_failed and not transcript.calls
 
         ended = datetime.now(timezone.utc)
         transcript_id = await self._adapter.upload_artifact(
@@ -648,6 +656,7 @@ class HostedChatCallRunner:
             )
         outcome = CallOutcome(
             calls=calls,
+            tool_capture_failed=capture_failed,
             turns=len(transcript.exchanges),
             started_at=format_rfc3339_millis(started),
             ended_at=format_rfc3339_millis(ended),
