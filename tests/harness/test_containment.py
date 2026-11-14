@@ -438,19 +438,34 @@ def _pid_from(path: Path, seconds: float = 5.0) -> int:
     raise AssertionError(f"{path} never got a pid")
 
 
-def test_an_interrupted_run_stops_its_whole_session(tmp_path, monkeypatch):
-    pidfile = tmp_path / "child.pid"
+def _members(leaf: containment.Leaf) -> list[str]:
+    try:
+        return (leaf.path / "cgroup.procs").read_text().split()
+    except FileNotFoundError:
+        return []
 
-    def interrupted(self, *args, **kwargs):
-        _pid_from(pidfile)
-        raise KeyboardInterrupt  # the harness stopped while the step ran
 
-    monkeypatch.setattr(subprocess.Popen, "communicate", interrupted)
+def test_an_interrupted_run_leaves_no_process_behind(real_subtree, monkeypatch):
+    # The command starts a child that would outlive it, then waits. A SIGINT reaches the harness
+    # while it waits on the run, as Ctrl-C does.
+    leaves: list[containment.Leaf] = []
+    make = real_subtree.leaf
+    monkeypatch.setattr(real_subtree, "leaf", lambda: leaves.append(make()) or leaves[-1])
+
+    def interrupt_once_both_are_in_the_leaf() -> None:
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:
+            if leaves and len(_members(leaves[0])) >= 2:
+                os.kill(os.getpid(), signal.SIGINT)
+                return
+            time.sleep(0.02)
+
+    threading.Thread(target=interrupt_once_both_are_in_the_leaf, daemon=True).start()
 
     with pytest.raises(KeyboardInterrupt):
-        containment.run(["sh", "-c", f"sleep 30 & echo $! > {pidfile}; wait"])
+        containment.run(["sh", "-c", "sleep 300 & sleep 10"])
 
-    assert _gone(_pid_from(pidfile))
+    assert not leaves[0].path.exists()  # emptied, so the harness could remove it
 
 
 # A process that leaves its session and its process group, as a daemon does.
