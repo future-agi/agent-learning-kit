@@ -352,6 +352,25 @@ def _pool(
     return pool, fake
 
 
+def _spy_world_outcomes(pool: hs.WorldPool) -> list[tuple[str, int]]:
+    """Records each `release` and `mark_unhealthy` the scheduler makes, so a test reads how a world was handed back
+    rather than the pool's state after the background reconcile may already have recovered it."""
+    seen: list[tuple[str, int]] = []
+    release, mark_unhealthy = pool.release, pool.mark_unhealthy
+
+    async def spy_release(world_index: int, *args: Any, **kwargs: Any) -> None:
+        seen.append(("release", world_index))
+        await release(world_index, *args, **kwargs)
+
+    async def spy_mark_unhealthy(world_index: int, *args: Any, **kwargs: Any) -> None:
+        seen.append(("mark_unhealthy", world_index))
+        await mark_unhealthy(world_index, *args, **kwargs)
+
+    pool.release = spy_release  # type: ignore[method-assign]
+    pool.mark_unhealthy = spy_mark_unhealthy  # type: ignore[method-assign]
+    return seen
+
+
 # --- WorldPool -------------------------------------------------------------------------------
 
 
@@ -1788,6 +1807,7 @@ def test_setup_crash_errors_without_retrying() -> None:
         outbound = FakeOutbound()
         pool, _ = _pool(1, outbound=outbound)
         await pool.start()
+        handed_back = _spy_world_outcomes(pool)
 
         def boom(world: Any) -> None:
             raise ValueError("scenario code bug")
@@ -1814,7 +1834,7 @@ def test_setup_crash_errors_without_retrying() -> None:
         assert receipt.scenario_attempt == 1
         # M13: an exception outcome discards the world (mark_unhealthy), never release() -- it is
         # down, not immediately available, until the background reconcile recovers it.
-        assert 0 in pool._down
+        assert handed_back == [("mark_unhealthy", 0)]
         await pool.close()
 
     asyncio.run(scenario())
@@ -1825,6 +1845,7 @@ def test_world_usage_misuse_in_ready_maps_to_world_usage() -> None:
         outbound = FakeOutbound()
         pool, _ = _pool(1, outbound=outbound)
         await pool.start()
+        handed_back = _spy_world_outcomes(pool)
 
         def misuse(world: Any) -> None:
             raise WorldUsageError("cannot invent a table")
@@ -1848,7 +1869,7 @@ def test_world_usage_misuse_in_ready_maps_to_world_usage() -> None:
         receipt = result.receipts[0]
         assert receipt.failure.code == "world_usage"
         assert receipt.failure.domain == "simulator"
-        assert 0 in pool._down  # M13: discarded, not released
+        assert handed_back == [("mark_unhealthy", 0)]
         await pool.close()
 
     asyncio.run(scenario())

@@ -1880,7 +1880,10 @@ def test_tool_trace_reads_only_the_agent_s_own_actions_as_its_calls(
         (*agent_rows[1], "a3", "agent", None, "refused"),
     ]
     monkeypatch.setitem(sys.modules, "psycopg", _FakePsycopg(rows, columns))
-    assert cr._collect_tool_trace_calls(runtime) == before
+    after = cr._collect_tool_trace_calls(runtime)
+    # The new rows also say which channel each call came in on (a null worker_id is the shared address).
+    assert [one.channel for one in after] == ["", ""]
+    assert [replace(one, channel=None) for one in after] == list(before)
     assert [one.name for one in before] == ["lookup_order", "cancel_order"]
 
 
