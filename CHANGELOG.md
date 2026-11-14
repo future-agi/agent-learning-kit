@@ -58,6 +58,8 @@ Post-rc.1 increments on the release branch. Each one adds gates on top of the
   `on_tool` trigger waits for the action in full. An actor waiting for a record only it may write is refused when the
   scenario is written. A timeout another actor answers reads `answered_by` only once that actor has acted or spoken,
   else `limit_blocked` or `unresolved`.
+- Each trial's end-of-run world state is kept: its compared tables and its action log, uploaded as a `world_state`
+  artifact (`futureagi.world-state.v1`), so a fixed check can grade the trial again without calling the agent.
 - World changes on every trial with a door, actors or not: every new world is seeded with the full action log, and
   a trial whose tools run where no door stands seals `{"recorded": false, "why": "in_process_tools"}`. The runner
   snapshots the world's tables at a trial's start and end (read-only, by primary key, `_alk_*` never compared,
