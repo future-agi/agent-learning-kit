@@ -11,12 +11,14 @@ touch a real `SimulationRunner`, `rtc.Room`, or `AgentSession`.
 from __future__ import annotations
 
 import asyncio
+import io
 import json
 import os
 import sys
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -3302,6 +3304,44 @@ def test_voice_stop_when_ends_at_the_next_turn(tmp_path: Path) -> None:
     assert turns == [0, 1]
     assert caught.value.partial is not None
     assert caught.value.partial.stop_reason == "user_canceled"
+
+
+def test_the_voice_call_worker_gets_the_stop_and_hangs_up_at_the_next_turn(tmp_path: Path, monkeypatch) -> None:
+    """The hosted voice call runs in a worker process: the stop reaches it, and the engine there gets `stop_when`."""
+    from fi.alk.harness import call_worker, isolated_process
+
+    _job_obj, context = _context(tmp_path=tmp_path)
+    stop = lambda: True  # noqa: E731
+    runner = cr.CallRunnerImpl(FakeAdapter(), replace(context, stop_requested=stop))
+    # The scheduler gives the worker path the seal bound, as it does an engine that takes `stop_when`.
+    assert runner.stops_at_turn_boundary is True
+
+    seen: dict = {}
+
+    async def place_call(spec, stop_when=None):
+        seen["stop_when"] = stop_when
+        return "report"
+
+    monkeypatch.setattr(cr, "_default_place_call", place_call)
+    monkeypatch.setattr(isolated_process, "_stop_requested", False)
+
+    class _Spec:
+        @staticmethod
+        def model_validate_json(_raw):
+            return SimpleNamespace(run_id="r1")
+
+    import fi.simulate.runtime as runtime_module
+
+    monkeypatch.setattr(runtime_module, "SimulationSpec", _Spec)
+    output = tmp_path / "report.json"
+    monkeypatch.setattr(call_worker.sys, "argv", ["call_worker", str(output)])
+    monkeypatch.setattr(call_worker.sys, "stdin", SimpleNamespace(buffer=io.BytesIO(b"{}")))
+    with pytest.raises(AttributeError):
+        # The stand-in report is no model; only the hand-off of `stop_when` matters here.
+        asyncio.run(call_worker.main())
+    assert seen["stop_when"]([], None) is False
+    isolated_process._stop_requested = True
+    assert seen["stop_when"]([], None) is True
 
 
 def test_a_worker_s_door_row_and_its_span_are_one_call(monkeypatch) -> None:

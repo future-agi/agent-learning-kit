@@ -60,7 +60,7 @@ def test_isolated_chat_worker_preserves_private_runtime_auth(tmp_path, monkeypat
             "role": "assistant", "content": f"Account active. {token}",
         }}]}
 
-    async def worker(_module, payload, *, environ, work_directory):
+    async def worker(_module, payload, *, environ, work_directory, stop_requested=None):
         assert token not in json.dumps(payload["runtime"])
         assert token not in json.dumps(environ)
         result_path = tmp_path / "worker-result.json"
@@ -168,7 +168,7 @@ def test_parallel_chat_workers_keep_routing_private_and_upload_in_parent(
     async def run():
         both = asyncio.Event()
 
-        async def worker(module, payload, *, environ, work_directory):
+        async def worker(module, payload, *, environ, work_directory, stop_requested=None):
             assert "HARNESS_PLATFORM_API_KEY" not in environ
             assert environ["AGENTCC_API_KEY"] == "simulator-model-key"
             assert environ["AGENTCC_BASE_URL"] == "https://gateway.example"
@@ -455,7 +455,7 @@ def test_a_text_call_run_in_the_worker_is_checked_and_recorded_with_its_tokens(
         transcript.simulator_input_tokens, transcript.simulator_output_tokens = 11, 7
         return transcript
 
-    async def worker(_module, payload, *, environ, work_directory):
+    async def worker(_module, payload, *, environ, work_directory, stop_requested=None):
         result_path = tmp_path / "worker-result.json"
         monkeypatch.setattr(chat_worker.sys, "stdin", io.StringIO(json.dumps(payload)))
         monkeypatch.setattr(chat_worker.sys, "argv", ["chat_worker", str(result_path)])
@@ -531,7 +531,7 @@ def test_an_isolated_chat_call_keeps_the_bundle_s_evidence_seam(tmp_path, monkey
             seen["worker"] = context.evidence_seam
             raise Stop
 
-    async def worker(_module, payload, *, environ, work_directory):
+    async def worker(_module, payload, *, environ, work_directory, stop_requested=None):
         seen["payload"] = payload["evidence_seam"]
         monkeypatch.setattr(chat_worker.sys, "stdin", io.StringIO(json.dumps(payload)))
         monkeypatch.setattr(chat_worker.sys, "argv", ["chat_worker", str(tmp_path / "result.json")])
@@ -554,3 +554,112 @@ def test_an_isolated_chat_call_keeps_the_bundle_s_evidence_seam(tmp_path, monkey
             )
         )
     assert seen == {"payload": "tool_trace", "worker": EvidenceSeam.TOOL_TRACE}
+
+
+def _stop_payload(context) -> dict:
+    runtime = EnvironmentRuntime(
+        runtime_id="runtime-1", world_index=0, bundle_digest="sha256:" + "a" * 64, state=RuntimeState.READY
+    )
+    return {
+        "job": context.job.model_dump(mode="json"),
+        "bundle_dir": str(context.bundle_dir),
+        "work_directory": str(context.work_directory),
+        "source_directory": None,
+        "target_secrets": {},
+        "attempt_number": 1,
+        "runtime": runtime.model_dump(mode="json"),
+        "scenario_key": "trial-key",
+        "source_scenario_key": "one",
+        "scenario_id": "trial-id",
+    }
+
+
+def test_a_stopped_chat_worker_hands_back_the_call_it_sealed(tmp_path, monkeypatch):
+    """Inside the worker the person's stop reads true, so the chat runner seals its partial call as a stop."""
+    from fi.alk.harness import isolated_process
+    from fi.alk.harness.hosted_scheduler import CallCancelled, CallOutcome
+    from fi.alk.harness.outbound import ArtifactKind
+
+    context = _context(tmp_path)
+    result_path = tmp_path / "stopped.json"
+
+    async def run(runner, *_args, **_kwargs):
+        try:
+            await asyncio.sleep(30)
+        except asyncio.CancelledError:
+            if not runner._context.stop_requested():
+                raise
+            identifier = await runner._adapter.upload_artifact(b"first two turns", kind=ArtifactKind.TRANSCRIPT)
+            partial = CallOutcome(
+                calls=(), turns=2, started_at="s", ended_at="e", duration_ms=1, transcript_artifact=identifier,
+                stop_reason="user_canceled",
+            )
+            raise CallCancelled(partial=partial) from None
+
+    monkeypatch.setattr(chat_call_runner.HostedChatCallRunner, "run", run)
+    monkeypatch.setattr(chat_worker.sys, "stdin", io.StringIO(json.dumps(_stop_payload(context))))
+    monkeypatch.setattr(chat_worker.sys, "argv", ["chat_worker", str(result_path)])
+    monkeypatch.setattr(isolated_process, "_stop_requested", False)
+
+    async def stopped_mid_call():
+        task = asyncio.create_task(chat_worker.main())
+        await asyncio.sleep(0.2)
+        isolated_process._stop_requested = True
+        task.cancel()
+        await task
+
+    asyncio.run(stopped_mid_call())
+    result = json.loads(result_path.read_text())
+    assert result["error_code"] == "user_canceled"
+    assert result["partial"]["stop_reason"] == "user_canceled"
+    assert base64.b64decode(result["artifacts"][0]["data"]) == b"first two turns"
+
+
+def test_the_parent_raises_the_stop_with_the_worker_s_sealed_call(tmp_path, monkeypatch):
+    from fi.alk.harness.hosted_scheduler import CallCancelled
+
+    context = _context(tmp_path)
+    adapter = _Adapter()
+    seen = {}
+
+    async def worker(*_args, stop_requested=None, **_kwargs):
+        seen["stop_requested"] = stop_requested
+        return {
+            "error": "user_canceled",
+            "error_code": "user_canceled",
+            "partial": {
+                "calls": [], "turns": 2, "started_at": "s", "ended_at": "e", "duration_ms": 1,
+                "transcript_artifact": "0", "recording_artifacts": [], "stop_reason": "user_canceled",
+            },
+            "artifacts": [{"id": "0", "kind": "transcript", "data": base64.b64encode(b"two turns").decode()}],
+        }
+
+    monkeypatch.setattr(chat_worker, "run_json_worker", worker)
+    runner = chat_worker.IsolatedChatCallRunner(adapter, context)
+    # The scheduler gives this runner the seal bound before it cuts the call.
+    assert runner.stops_at_turn_boundary is True
+    with pytest.raises(CallCancelled) as stopped:
+        asyncio.run(runner.run(SimpleNamespace(scenario_key="trial", scenario_id="id"), _ready_runtime()))
+    assert seen["stop_requested"] is context.stop_requested
+    assert adapter.uploads == [b"two turns"]
+    assert stopped.value.partial.transcript_artifact == "transcript-1"
+    assert stopped.value.partial.stop_reason == "user_canceled"
+
+
+@pytest.mark.parametrize("stop", [True, False])
+def test_a_worker_lost_on_the_stop_is_the_stop(tmp_path, monkeypatch, stop):
+    from dataclasses import replace
+
+    from fi.alk.harness.hosted_scheduler import CallCancelled
+    from fi.alk.harness.isolated_process import IsolatedWorkerError
+
+    context = replace(_context(tmp_path), stop_requested=lambda: stop)
+
+    async def worker(*_args, **_kwargs):
+        raise IsolatedWorkerError("isolated worker exited with status 1")
+
+    monkeypatch.setattr(chat_worker, "run_json_worker", worker)
+    runner = chat_worker.IsolatedChatCallRunner(_Adapter(), context)
+    expected = CallCancelled if stop else IsolatedWorkerError
+    with pytest.raises(expected):
+        asyncio.run(runner.run(SimpleNamespace(scenario_key="trial", scenario_id="id"), _ready_runtime()))

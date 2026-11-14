@@ -2441,9 +2441,9 @@ class CallRunnerImpl:
         self._adapter = adapter
         self._context = context
         self._place_call = place_call
-        # A place-call that takes `stop_when` hangs up at the next turn boundary on a user stop; the scheduler gives it
-        # the seal bound to do so before it cuts the task. The subprocess worker path takes no callback.
-        self.stops_at_turn_boundary = place_call is not None and _takes_stop_when(place_call)
+        # A place-call that takes `stop_when`, and the call worker, which gets the stop as a signal, hang up at the
+        # next turn boundary on a user stop; the scheduler gives them the seal bound to do so before it cuts the task.
+        self.stops_at_turn_boundary = place_call is None or _takes_stop_when(place_call)
         simulator_secret_values = _canonical_simulator_secrets(
             context.simulator_provider_secret_values
         )
@@ -2885,6 +2885,7 @@ class CallRunnerImpl:
                 spec.model_dump(mode="json"),
                 environ=call_environ,
                 work_directory=self._context.work_directory / "call-workers",
+                stop_requested=self._context.stop_requested,
             )
             return SimulationReport.model_validate(result)
 

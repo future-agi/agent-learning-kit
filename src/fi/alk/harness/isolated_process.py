@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 import os
@@ -15,6 +16,15 @@ from typing import Any
 
 MAX_RESULT_BYTES = 16 * 1024 * 1024
 GRACEFUL_SHUTDOWN_SECONDS = 90.0
+# The person stopped the run: the worker seals what its call kept and writes its result, unlike SIGTERM.
+STOP_SIGNAL = signal.SIGUSR1
+_STOP_POLL_SECONDS = 0.5
+_stop_requested = False
+
+
+def stop_requested() -> bool:
+    """Inside a worker: whether its parent passed on the person's stop."""
+    return _stop_requested
 
 
 class IsolatedWorkerError(RuntimeError):
@@ -32,8 +42,11 @@ async def _finish(task: asyncio.Task) -> bool:
     return canceled
 
 
-def run_worker(main: Callable[[], Awaitable[None]]) -> None:
-    """Translate termination into one cancellation so async cleanup can finish."""
+def run_worker(main: Callable[[], Awaitable[None]], *, cancel_on_stop: bool = False) -> None:
+    """Translate termination into one cancellation so async cleanup can finish.
+
+    The stop signal sets `stop_requested()`; with `cancel_on_stop` it also cancels `main` once, for a call that seals
+    its partial evidence when cancelled on a stop."""
 
     logging.basicConfig(
         level=logging.WARNING,
@@ -54,11 +67,21 @@ def run_worker(main: Callable[[], Awaitable[None]]) -> None:
             if not getattr(task, "cancelling", lambda: 0)():
                 task.cancel()
 
+        def stop() -> None:
+            global _stop_requested
+            if _stop_requested:
+                return
+            _stop_requested = True
+            if cancel_on_stop and not termination_requested and not task.done():
+                task.cancel()
+
         loop.add_signal_handler(signal.SIGTERM, cancel_once)
+        loop.add_signal_handler(STOP_SIGNAL, stop)
         try:
             await task
         finally:
             loop.remove_signal_handler(signal.SIGTERM)
+            loop.remove_signal_handler(STOP_SIGNAL)
 
     asyncio.run(supervised())
 
@@ -93,6 +116,28 @@ async def _reap(
         await process.wait()
 
 
+async def _communicate(
+    process: asyncio.subprocess.Process, payload: bytes, stop_requested: Callable[[], bool] | None
+) -> None:
+    exchange = asyncio.ensure_future(process.communicate(payload))
+    try:
+        stopped = stop_requested is None
+        while not exchange.done():
+            await asyncio.wait({exchange}, timeout=_STOP_POLL_SECONDS)
+            if not stopped and not exchange.done() and stop_requested():
+                stopped = True
+                try:
+                    process.send_signal(STOP_SIGNAL)
+                except ProcessLookupError:
+                    pass
+        exchange.result()
+    finally:
+        if not exchange.done():
+            exchange.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await exchange
+
+
 async def run_json_worker(
     module: str,
     payload: Mapping[str, Any],
@@ -100,8 +145,11 @@ async def run_json_worker(
     environ: Mapping[str, str],
     work_directory: Path,
     suppress_output: bool = False,
+    stop_requested: Callable[[], bool] | None = None,
 ) -> dict[str, Any]:
-    """Run a fresh interpreter; cancellation waits for process-group termination."""
+    """Run a fresh interpreter; cancellation waits for process-group termination.
+
+    Once `stop_requested()` reads true the worker gets the stop signal once and still returns its result."""
     if os.name != "posix":
         raise IsolatedWorkerError("isolated workers require POSIX process groups")
     work_directory.mkdir(parents=True, exist_ok=True)
@@ -141,7 +189,7 @@ async def run_json_worker(
         try:
             if canceled:
                 raise asyncio.CancelledError
-            await process.communicate(json.dumps(payload).encode())
+            await _communicate(process, json.dumps(payload).encode(), stop_requested)
             if process.returncode != 0:
                 logging.getLogger(__name__).error(
                     "isolated_worker_failed module=%s exit_status=%s result_present=%s",

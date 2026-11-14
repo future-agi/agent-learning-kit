@@ -1457,6 +1457,9 @@ class OutboundAdapter:
                 "scenario_attempt": scenario_attempt,
             },
         )
+        # Sent as the call starts, not with its receipt: the platform shows the call under way, and a stop's seal
+        # wait knows it is in flight.
+        await self.aflush_events()
 
     async def scenario_retried(
         self, *, scenario_key: str, from_world: int, to_world: int, cause: str = ""

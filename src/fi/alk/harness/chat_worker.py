@@ -18,8 +18,8 @@ from .backends import GOOGLE_ADK_APPROVAL_ENV
 from .bundle_v2 import EvidenceSeam
 from .call_runner import ArtifactUploader, CallRunnerContext
 from .chat_call_runner import _check_text_usage
-from .hosted_scheduler import CallAborted, CallOutcome, Scenario, World
-from .isolated_process import run_json_worker, run_worker
+from .hosted_scheduler import USER_CANCELED, CallAborted, CallCancelled, CallOutcome, Scenario, World
+from .isolated_process import IsolatedWorkerError, run_json_worker, run_worker, stop_requested
 from .outbound import ArtifactKind
 from .process_runtime import EnvironmentRuntime, _allowlisted_ambient_env
 from .usage import simulator_funding
@@ -59,6 +59,9 @@ _CHAT_ENV = frozenset(
 
 
 class IsolatedChatCallRunner:
+    # A stop reaches the worker, which seals the call it cut; the scheduler gives it the seal bound to do so.
+    stops_at_turn_boundary = True
+
     def __init__(self, adapter: ArtifactUploader, context: CallRunnerContext) -> None:
         self._adapter = adapter
         self._context = context
@@ -86,27 +89,34 @@ class IsolatedChatCallRunner:
         # worker's call used is recorded here.
         funding = simulator_funding()
         await _check_text_usage(context.usage_reporter, funding)
-        result = await run_json_worker(
-            "fi.alk.harness.chat_worker",
-            {
-                "job": context.job.model_dump(mode="json"),
-                "bundle_dir": str(context.bundle_dir),
-                "work_directory": str(context.work_directory),
-                "source_directory": str(context.source_directory)
-                if context.source_directory
-                else None,
-                "target_secrets": dict(context.target_provider_secret_values),
-                "local_auth_values": dict(runtime._local_auth_values),
-                "attempt_number": context.attempt_number,
-                "evidence_seam": context.evidence_seam.value if context.evidence_seam else None,
-                "runtime": runtime.model_dump(mode="json"),
-                "scenario_key": scenario.scenario_key,
-                "source_scenario_key": getattr(scenario, "source_scenario_key", None),
-                "scenario_id": scenario.scenario_id,
-            },
-            environ=environ,
-            work_directory=context.work_directory / "chat-workers",
-        )
+        try:
+            result = await run_json_worker(
+                "fi.alk.harness.chat_worker",
+                {
+                    "job": context.job.model_dump(mode="json"),
+                    "bundle_dir": str(context.bundle_dir),
+                    "work_directory": str(context.work_directory),
+                    "source_directory": str(context.source_directory)
+                    if context.source_directory
+                    else None,
+                    "target_secrets": dict(context.target_provider_secret_values),
+                    "local_auth_values": dict(runtime._local_auth_values),
+                    "attempt_number": context.attempt_number,
+                    "evidence_seam": context.evidence_seam.value if context.evidence_seam else None,
+                    "runtime": runtime.model_dump(mode="json"),
+                    "scenario_key": scenario.scenario_key,
+                    "source_scenario_key": getattr(scenario, "source_scenario_key", None),
+                    "scenario_id": scenario.scenario_id,
+                },
+                environ=environ,
+                work_directory=context.work_directory / "chat-workers",
+                stop_requested=context.stop_requested,
+            )
+        except IsolatedWorkerError:
+            if not context.stop_requested():
+                raise
+            # Stopped before the worker could seal anything: it was still starting, or failed on the way out.
+            raise CallCancelled() from None
         await _record_worker_usage(context.usage_reporter, result.get("usage") or [], funding)
         artifact_ids = {}
         for artifact in result.get("artifacts", []):
@@ -127,6 +137,9 @@ class IsolatedChatCallRunner:
                 raw_outcome["transcript_artifact"]
             )
             outcome = CallOutcome(**raw_outcome)
+        if result.get("error_code") == USER_CANCELED:
+            # The worker sealed the call the person stopped: what it kept goes with the stop.
+            raise CallCancelled(partial=outcome)
         if "error" in result:
             raise CallAborted(
                 f"chat_worker_failed: {result['error']}",
@@ -214,6 +227,7 @@ async def main() -> None:
             if payload["source_directory"]
             else None,
             usage_reporter=usage,  # type: ignore[arg-type]
+            stop_requested=stop_requested,
         )
         runner_type = (
             RetellChatCallRunner
@@ -245,6 +259,11 @@ async def main() -> None:
             result["partial"] = asdict(exc.partial)
         if collector.artifacts:
             result["artifacts"] = collector.artifacts
+    except asyncio.CancelledError:
+        if not stop_requested():
+            raise
+        # Stopped outside the conversation (before it began, or while sealing): nothing sealed to return.
+        result = {"error": USER_CANCELED, "error_code": USER_CANCELED}
     except Exception as exc:  # noqa: BLE001 - return a secret-safe worker failure
         result = {"error": type(exc).__name__}
     if usage.records:
@@ -255,4 +274,4 @@ async def main() -> None:
 
 
 if __name__ == "__main__":
-    run_worker(main)
+    run_worker(main, cancel_on_stop=True)

@@ -5190,3 +5190,26 @@ def test_a_runner_that_fails_while_being_stopped_is_sealed_as_the_stop() -> None
     # The person's stop, never infrastructure and never retried, whatever the runner raised on the way out.
     assert (receipt.failure.code, receipt.failure.domain) == ("user_canceled", hs.FailureDomain.PLATFORM_SYNC)
     assert receipt.call is None
+
+
+def test_a_call_that_fails_under_the_stop_keeps_what_it_kept_as_the_stop() -> None:
+    class HungUpUnderIt:
+        """A runner given the seal bound whose call fails on the stop itself (the platform hung the call up)."""
+
+        stops_at_turn_boundary = True
+        stop_requested = staticmethod(lambda: False)
+
+        async def run(self, scenario, runtime):
+            for _ in range(60):
+                if self.stop_requested():
+                    partial = replace(_call_outcome(turns=1), transcript_artifact="t-partial")
+                    raise hs.CallAborted("voice call ended: participant left", partial=partial)
+                await asyncio.sleep(0.05)
+            return _call_outcome()
+
+    runner = HungUpUnderIt()
+    result, _ = _stop_run(runner, [FakeScenario("s1", "id-1", sub_goals=[FakeSubGoal("g", lambda w, c: None)])])
+    (receipt,) = result.receipts
+    assert (receipt.failure.code, receipt.failure.domain) == ("user_canceled", hs.FailureDomain.PLATFORM_SYNC)
+    assert receipt.call.transcript_artifact == "t-partial"
+    assert receipt.call.stop_reason == "user_canceled"

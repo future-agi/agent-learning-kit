@@ -1807,6 +1807,10 @@ class HostedScheduler:
             if not task.done():
                 task.cancel()
 
+    def _stopping(self) -> bool:
+        # Set before the watcher cuts anything: a runner given the seal bound may fail on the stop within it.
+        return self._stopped_at is not None or self._cancel_requested()
+
     async def _await_call(self, task: "asyncio.Task[CallOutcome]") -> CallOutcome:
         """The call's outcome; after a stop, at most the seal bound more, then `CallCancelled` with nothing kept."""
         try:
@@ -1820,15 +1824,22 @@ class HostedScheduler:
             if done:
                 try:
                     return task.result()
-                except CallAborted:
+                except CallCancelled:
                     raise
+                except CallAborted as exc:
+                    if not self._stopping():
+                        raise
+                    # A call that failed once the person stopped it (a voice call hung up under it): their stop, with
+                    # what it kept.
+                    partial = exc.partial and replace(exc.partial, stop_reason=USER_CANCELED)
+                    raise CallCancelled(partial=partial) from exc
                 except asyncio.CancelledError:
                     if self._stopped_at is None:
                         raise
                     # A runner that let the stop through sealed nothing.
                     raise CallCancelled() from None
                 except Exception:
-                    if self._stopped_at is None:
+                    if not self._stopping():
                         raise
                     # A runner that failed while it was being stopped: still the person's stop, never infrastructure.
                     logger.warning("call runner failed while stopping", exc_info=True)
