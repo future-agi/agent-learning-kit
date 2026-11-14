@@ -291,6 +291,36 @@ def test_a_sandbox_without_the_handlers_user_fails_closed(
     assert spawned == []
 
 
+def test_the_handler_child_starts_in_a_leaf_of_its_own_and_the_leaf_goes_with_it(
+    per_user, tmp_path, monkeypatch, spawned
+):
+    # The child imports the agent's code: what that code starts must stop with the child.
+    leaf = SimpleNamespace(closed=0)
+    leaf.close = lambda: setattr(leaf, "closed", leaf.closed + 1)
+    contained = []
+
+    def contained_popen(argv, **kwargs):
+        contained.append(kwargs)
+        return _FakeProcess(), leaf
+
+    monkeypatch.setattr(handler_child.containment, "popen", contained_popen)
+    context, source = _bundle(tmp_path)
+
+    child = start_handler_child(
+        handlers={},
+        tools=[],
+        refusal_signature="",
+        dsn=_DSN,
+        source=source,
+        work_directory=context.work_directory,
+        world_index=0,
+    )
+    child.close()
+
+    assert len(contained) == 1 and spawned == []  # no spawn around the containment
+    assert child.leaf is leaf and leaf.closed == 1
+
+
 def test_a_world_without_its_own_role_starts_no_handler_child(
     per_user, tmp_path, monkeypatch, spawned
 ):

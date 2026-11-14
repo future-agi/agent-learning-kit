@@ -23,6 +23,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from . import containment
 from .bundle_v2 import ProcessUser
 from .hosted_scheduler import CallAborted
 from .process_runtime import (
@@ -143,12 +144,16 @@ class HandlerChild:
 
     process: subprocess.Popen
     sock: socket.socket
+    # The child's cgroup leaf under per-user isolation: what the agent's code starts dies with it.
+    leaf: containment.Leaf | None = None
 
     def close(self) -> None:
         try:
             self.sock.close()
         finally:
             _stop(self.process)
+            if self.leaf is not None:
+                self.leaf.close()
 
 
 def _stop(process: subprocess.Popen) -> None:
@@ -226,7 +231,7 @@ def start_handler_child(
         # The child runs the same harness code as this process, wherever that was loaded from.
         if os.environ.get("PYTHONPATH"):
             environment["PYTHONPATH"] = os.environ["PYTHONPATH"]
-        process = subprocess.Popen(
+        process, leaf = containment.popen(
             [sys.executable, "-m", __name__, str(child_end.fileno())],
             stdin=subprocess.PIPE,
             stdout=log,
@@ -258,9 +263,9 @@ def start_handler_child(
         )
         process.stdin.close()
     except BaseException:
-        HandlerChild(process, parent_end).close()
+        HandlerChild(process, parent_end, leaf).close()
         raise
-    return HandlerChild(process, parent_end)
+    return HandlerChild(process, parent_end, leaf)
 
 
 def serve(sock: socket.socket, world: GeneratedWorld) -> None:
