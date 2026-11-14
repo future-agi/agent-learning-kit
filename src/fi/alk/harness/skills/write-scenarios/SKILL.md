@@ -790,6 +790,10 @@ played exactly like `solution`.
   "O-20" for c in calls)`), or leaves that argument out of `fixed`. A read-only lookup with a wrong id
   ends in the same state, so nothing else notices it.
 - A control whose checks still all pass is refused with the checks to tighten.
+- A case only a judge can grade (no code check reads its world) is kept as written, never proved,
+  until a control shows the judge fails a wrong behaviour. Give each of its controls a `transcript`:
+  the wrong exchange as said, `[{role: "user" | "assistant", content}]`, with any `steps` it takes.
+  The judge reads it like a real call and must fail a sub-goal the control names.
 
 ## Cite where each requirement comes from
 

@@ -84,15 +84,23 @@ class NegativeControl(BaseModel):
 
     name: str  # slug, unique within the scenario
     why: str  # one sentence: the wrong behaviour, e.g. "refunds the order twice"
-    steps: list[Step]  # the wrong trajectory
+    steps: list[Step] = Field(default_factory=list)  # the wrong trajectory
     must_fail: list[str] = Field(default_factory=list)  # sub-goals that must fail; empty = any check
+    # What the wrong agent says, as [{role: "user" | "assistant", content}]: the judge reads it with
+    # the steps for a case only a judge can grade, and must fail it.
+    transcript: list[dict[str, str]] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def _shape(self) -> "NegativeControl":
         if not _CONTROL_NAME.match(self.name or ""):
             raise ValueError(f"negative control name {self.name!r} must be a lowercase slug")
-        if not self.steps:
-            raise ValueError(f"negative control {self.name} has no steps")
+        if not self.steps and not self.transcript:
+            raise ValueError(f"negative control {self.name} has no steps and no transcript")
+        for turn in self.transcript:
+            if str(turn.get("role") or "") not in ("user", "assistant") or not str(turn.get("content") or "").strip():
+                raise ValueError(
+                    f"negative control {self.name}: each transcript turn needs a role (user or assistant) and content"
+                )
         return self
 
 

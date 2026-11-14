@@ -42,7 +42,8 @@ from .world.snapshot import read_manifest, restore
 
 
 # The lane could not execute something; the case runs labelled "kept as written", never as proved.
-LANE_CODES = frozenset({"proof_deferred", "solution_assumed", "control_not_run"})
+# "judged_only": only a judge grades the case and no control has shown the judge fails a wrong behaviour.
+LANE_CODES = frozenset({"proof_deferred", "solution_assumed", "control_not_run", "judged_only"})
 
 
 @dataclass
@@ -89,7 +90,18 @@ class Proof:
 
     @property
     def ran_controls(self) -> list[dict[str, Any]]:
-        return [one for one in self.controls if not one.get("assumed")]
+        return [one for one in self.controls if not one.get("assumed") and not one.get("judged")]
+
+    @property
+    def judged_controls(self) -> list[dict[str, Any]]:
+        """Controls the judge decided: played through the judge, which said fail or pass."""
+        return [one for one in self.controls if one.get("judged") and one.get("failed") is not None]
+
+    @property
+    def controls_failed(self) -> bool:
+        """Every control that ran failed, and at least one ran: by code, or by the judge for a judged-only case."""
+        ran = self.judged_controls if self.judged_only else self.ran_controls
+        return bool(ran) and all(one.get("failed") for one in ran)
 
     @property
     def unresolved_sources(self) -> list[dict[str, Any]]:
@@ -113,12 +125,11 @@ class Proof:
     @property
     def proved(self) -> bool:
         """Holds, and the reference solution really ran: nothing assumed, nothing deferred."""
-        ran = self.ran_controls
         return (
             self.holds
             and not self.assumed
             and not self.deferred
-            and (self.judged_only or (bool(ran) and all(one.get("failed") for one in ran)))
+            and self.controls_failed
             and not self.leaks
             and not self.unresolved_sources
         )
@@ -155,6 +166,8 @@ class Proof:
                     return "no_negative_control"
                 if any(one.get("failed") is False for one in self.ran_controls):
                     return "negative_control_passed"
+            elif any(one.get("failed") is False for one in self.judged_controls):
+                return "negative_control_passed"
         if self.leaks:
             return "answer_leaked"
         if self.unresolved_sources:
@@ -165,6 +178,8 @@ class Proof:
             return "solution_assumed"
         if self.controls and not self.ran_controls and not self.judged_only:
             return "control_not_run"
+        if self.judged_only and not self.controls_failed:
+            return "judged_only"
         return None
 
     def gates(self) -> dict[str, bool]:
@@ -259,8 +274,12 @@ class Proof:
                 "final state. For a refusal, require that the call was attempted and refused; "
                 "an untouched world is not evidence that the agent refused correctly."
             )
-        if self.controls and not self.judged_only:
-            passed = [one for one in self.ran_controls if one.get("failed") is False]
+        if self.controls:
+            passed = [
+                one
+                for one in (self.judged_controls if self.judged_only else self.ran_controls)
+                if one.get("failed") is False
+            ]
             if passed:
                 return "the checks pass a wrong behaviour, so they cannot tell it from the right one:\n  - " + "\n  - ".join(
                     f"{one['name']} ({one['why']}): held {', '.join(one.get('held') or []) or 'every check'}"
@@ -280,6 +299,8 @@ class Proof:
             return "a cited source does not resolve:\n  - " + "\n  - ".join(
                 f"{one['kind']} {one['ref']}: {one['problem']}" for one in self.unresolved_sources
             )
+        if self.judged_only and not self.controls_failed:
+            return JUDGED_ONLY_TEXT
         if self.controls and not self.ran_controls:
             return "no negative control could run here: " + ", ".join(
                 f"{one['name']} ({', '.join(one.get('assumed') or [])})" for one in self.controls
@@ -663,6 +684,75 @@ def _controls(
     return played
 
 
+JUDGED_ONLY_TEXT = (
+    "Kept as written: only a judge grades this case, and nothing has shown the judge fails a wrong behaviour."
+)
+
+
+def _harness_judge(goal: Any, world: Any, calls: list[Call], messages: list[dict[str, str]], scenario: Any) -> Any:
+    """The harness judge on one sub-goal, run on its own loop so it works from sync and async callers."""
+    import asyncio
+    from concurrent.futures import ThreadPoolExecutor
+
+    from .judge import judge_sub_goal
+
+    def decide() -> Any:
+        return asyncio.run(judge_sub_goal(goal, world, calls, messages=messages, scenario=scenario))
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        return pool.submit(decide).result()
+
+
+def _judged_controls(
+    scenario: Scenario, catalogue: Catalogue, world_root: Path, *, judge: Any = None
+) -> list[dict[str, Any]]:
+    """Play each control of a judged-only case through the judge: its steps on a set-up world and its
+    transcript as what was said. It fails when the judge fails a sub-goal it names. A control with no
+    transcript gives the judge nothing the wrong agent said, so it is not played and reads not run."""
+    decide = judge or _harness_judge
+    judged = {
+        name: goal
+        for name in scenario.sub_goals
+        if (goal := catalogue.named(name)) is not None and not goal.deterministic()
+    }
+    played: list[dict[str, Any]] = []
+    for control in getattr(scenario, "negative_controls", None) or []:
+        entry: dict[str, Any] = {
+            "name": control.name,
+            "why": control.why,
+            "failed": None,
+            "held": [],
+            "assumed": [],
+            "judged": True,
+            "verdicts": {},
+        }
+        named = [name for name in (control.must_fail or judged) if name in judged]
+        if not control.transcript or not named:
+            played.append(entry)
+            continue
+        world, calls, _refused, _assumed = _run(scenario, world_root, with_solution=True, steps=control.steps)
+        try:
+            for name in named:
+                try:
+                    held, explanation = decide(judged[name], world, calls, list(control.transcript), scenario)
+                except Exception as exc:  # noqa: BLE001 - a judge that could not run decides nothing
+                    held, explanation = None, f"the judge could not run: {type(exc).__name__}"
+                entry["verdicts"][name] = {
+                    "verdict": "pass" if held is True else "fail" if held is False else "inconclusive",
+                    "explanation": str(explanation or "")[:500],
+                }
+        finally:
+            world.close()
+        verdicts = [one["verdict"] for one in entry["verdicts"].values()]
+        entry["held"] = [name for name, one in entry["verdicts"].items() if one["verdict"] == "pass"]
+        if "fail" in verdicts:
+            entry["failed"] = True
+        elif verdicts and all(one == "pass" for one in verdicts):
+            entry["failed"] = False
+        played.append(entry)
+    return played
+
+
 def _outcome(scenario: Scenario, world_root: Path) -> str:
     """"no_change" when the reference leaves the world as doing nothing does; unreadable reads "change"."""
     done, _, _, assumed = _run(scenario, world_root, with_solution=True)
@@ -720,8 +810,12 @@ def prove(
     *,
     contract: Any = None,
     actors: list | None = None,
+    judge: Any = None,
 ) -> Proof:
-    """Run all three gates and say whether this scenario is worth keeping."""
+    """Run all three gates and say whether this scenario is worth keeping.
+
+    `judge(goal, world, calls, messages, scenario) -> (held, explanation)` decides a judged-only
+    case's controls; None uses the harness judge."""
     from .grounding import resolve_sources
     from .leaks import leaks
 
@@ -774,7 +868,7 @@ def prove(
         proof.judged_only = True
         if proof.ready:
             proof.outcome = _outcome(scenario, world_root)
-            proof.controls = _controls(scenario, world_root, checks, reference)
+            proof.controls = _judged_controls(scenario, catalogue, world_root, judge=judge)
         return proof
 
     # Gate 1: is the world ready for this scenario at all?

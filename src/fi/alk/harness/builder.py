@@ -210,7 +210,12 @@ def suite_server(
             lines.append(
                 f"{name}: {'holds' if proof.holds else 'does not hold'} ({gates})"
                 + ("" if proof.holds else f". {proof.why()}")
-                + (" Judged-only: nothing observable to check." if proof.judged_only else "")
+                + (
+                    " Judged-only: nothing observable to check."
+                    + ("" if proof.controls_failed else f" {proof.why()}")
+                    if proof.judged_only
+                    else ""
+                )
             )
         return _ok("\n".join(lines) or "name at least one scenario")
 

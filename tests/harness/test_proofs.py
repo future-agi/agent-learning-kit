@@ -104,3 +104,90 @@ def test_why_names_the_block_not_the_lane(tmp_path):
     saved = load_proofs(tmp_path)["k"]
     assert saved["blocked_reason"] == "no_negative_control"
     assert saved["why"].startswith("no negative control")
+
+
+def _judged_case(**extra):
+    from fi.alk.harness.catalogue import Catalogue, SubGoal
+
+    goals = Catalogue(sub_goals=[SubGoal(name="explains_the_limit", what="The agent explains the limit.", judged="read it")])
+    return scenario([], sub_goals=["explains_the_limit"], **extra), goals
+
+
+def _said_control(name="promises_a_refund"):
+    from fi.alk.harness.scenario import NegativeControl
+
+    return NegativeControl(
+        name=name,
+        why="promises a refund outside the window",
+        transcript=[
+            {"role": "user", "content": "Can I get my money back for the 20-day order?"},
+            {"role": "assistant", "content": "Of course, I have refunded it."},
+        ],
+    )
+
+
+def test_judged_only_is_kept_as_written_not_proved(monkeypatch, tmp_path):
+    install(monkeypatch)
+    case, goals = _judged_case()
+    asked: list[str] = []
+
+    proof = module.prove(case, goals, tmp_path, contract=None, actors=[], judge=lambda *a: asked.append("x"))
+    record_proof(tmp_path, "judged", proof)
+    saved = load_proofs(tmp_path)["judged"]
+
+    assert proof.judged_only is True and proof.holds is True
+    assert proof.proved is False
+    assert proof.blocked_reason() == "judged_only" and proof.kept_as_written is True
+    assert saved["why"] == module.JUDGED_ONLY_TEXT
+    assert asked == []
+
+
+def test_judged_only_control_with_no_transcript_is_not_played(monkeypatch, tmp_path):
+    install(monkeypatch)
+    from proof_world import LOOKUP_O10
+
+    case, goals = _judged_case(negative_controls=[control("looks_up", "looks the order up", [LOOKUP_O10])])
+    asked: list[str] = []
+
+    proof = module.prove(case, goals, tmp_path, contract=None, actors=[], judge=lambda *a: asked.append("x"))
+
+    assert asked == []
+    assert proof.controls[0]["failed"] is None and proof.controls[0]["judged"] is True
+    assert proof.blocked_reason() == "judged_only"
+
+
+def test_judged_control_the_judge_fails_proves_the_case(monkeypatch, tmp_path):
+    install(monkeypatch)
+    case, goals = _judged_case(negative_controls=[_said_control()])
+    seen: list[list[dict]] = []
+
+    def judge(goal, world, calls, messages, scenario):
+        seen.append(messages)
+        return False, "it promised a refund the rule forbids"
+
+    proof = module.prove(case, goals, tmp_path, contract=None, actors=[], judge=judge)
+
+    assert seen and seen[0][1]["content"] == "Of course, I have refunded it."
+    assert proof.controls[0]["failed"] is True
+    assert proof.controls[0]["verdicts"]["explains_the_limit"]["verdict"] == "fail"
+    assert proof.proved is True and proof.blocked_reason() is None
+
+
+def test_judged_control_the_judge_passes_is_a_passed_control(monkeypatch, tmp_path):
+    install(monkeypatch)
+    case, goals = _judged_case(negative_controls=[_said_control()])
+
+    proof = module.prove(case, goals, tmp_path, contract=None, actors=[], judge=lambda *a: (True, "looks fine"))
+
+    assert proof.proved is False
+    assert proof.blocked_reason() == "negative_control_passed" and proof.kept_as_written is False
+
+
+def test_inconclusive_judge_keeps_the_case_as_written(monkeypatch, tmp_path):
+    install(monkeypatch)
+    case, goals = _judged_case(negative_controls=[_said_control()])
+
+    proof = module.prove(case, goals, tmp_path, contract=None, actors=[], judge=lambda *a: (None, ""))
+
+    assert proof.controls[0]["failed"] is None
+    assert proof.blocked_reason() == "judged_only" and proof.kept_as_written is True

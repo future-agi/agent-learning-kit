@@ -1155,6 +1155,11 @@ def accept_scenario(
             + ", ".join(sorted({tool for one in proof.controls for tool in one.get("assumed") or []}))
             + ". It is kept as written; the checks were never shown to fail a wrong behaviour."
         )
+    if proof is not None and proof.blocked_reason() == "judged_only":
+        unproved += (
+            f"\nNOT PROVED: {proof.why()} Give each negative control a `transcript` of the wrong behaviour as said; "
+            "the judge must fail it."
+        )
     if proof is not None and proof.outcome == "no_change" and proof.proved:
         unproved += "\nA refusal case: nothing should change, and each negative control's forbidden change fails its checks."
     if proof is None:
