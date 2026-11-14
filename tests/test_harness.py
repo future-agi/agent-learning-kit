@@ -9361,3 +9361,16 @@ def test_unchanged_legacy_case_without_sources_saves(tmp_path):
         require_sources=True,
     )
     assert edited.get("is_error") and NO_SOURCES in edited["content"][0]["text"]
+
+
+def test_must_pass_round_trips(tmp_path):
+    from fi.alk.harness.folder import document_for
+    from fi.alk.harness.scenario_tools import accept_scenario, load_scenarios
+
+    assert Scenario(name="plain").must_pass is False
+    root, _contract, catalogue = _built_environment(tmp_path)
+    kept = []
+    said = accept_scenario(_delta(must_pass=True), world_root=root, catalogue=catalogue, kept=kept)
+    assert not said.get("is_error"), said
+    assert document_for(kept[0])["must_pass"] is True
+    assert [one.must_pass for one in load_scenarios(root)] == [True]

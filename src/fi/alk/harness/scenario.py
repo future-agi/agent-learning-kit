@@ -310,6 +310,9 @@ class Scenario(BaseModel):
     # on the pair, so a use case can carry many scenarios without any reading as a duplicate.
     branch: str = ""
     tests: str = ""
+    # A failure here blocks the release: the platform marks the case must-pass and names it on a run
+    # whose result it failed. Set by the person or the builder; versioned with the case.
+    must_pass: bool = False
 
     # What this scenario changes about the world after it is reset, as code: a file defining
     # ``setup(world)``. Rows in a table were enough while every world was a database, and they
