@@ -58,6 +58,16 @@ Post-rc.1 increments on the release branch. Each one adds gates on top of the
   `on_tool` trigger waits for the action in full. An actor waiting for a record only it may write is refused when the
   scenario is written. A timeout another actor answers reads `answered_by` only once that actor has acted or spoken,
   else `limit_blocked` or `unresolved`.
+- Two more fault modes: `unavailable` (the world never sees the call; the agent hears 503 at once) and `error`
+  (the scenario's `status` 400-599 and `message`). The door answers the agent's keyed retry (`Idempotency-Key`)
+  from its first result, as it does an actor's; a fault before commit releases the key. A write the world commits
+  twice after a lost answer fails the scenario as `duplicate_commit`, sealed in `world_actors.duplicates`.
+- A Python agent's in-process tools (`import`, `construct`) get a world door of their own: a `world-door` process on
+  the world's database, and a `sitecustomize` hook that compiles the door in as each tool's innermost decorator.
+  Faults, the action log and actors' record changes then reach them; an actor's action on an in-process tool is
+  refused with why.
+- The builder records policy points it could not model (`note_unresolved`), kept in `actors.json` as `unresolved`
+  for the person to decide above the cast.
 - The door logs each call as a read or a write (`effect`): a tool entry's declared `effect` (`read` or `write`), else
   a GET, HEAD or OPTIONS call reads and anything else writes, as before. A trial's state changes count reads apart
   (`read`, `read_actions`), never as committed, and an approval's writes around the decision leave reads out.
