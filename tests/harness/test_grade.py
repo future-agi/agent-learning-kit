@@ -230,6 +230,15 @@ def test_the_cap_holds_for_the_session_that_saves_too(tmp_path):
         said = asyncio.run(submit.handler({"name": "one_more", "instruction": "three"}))
         assert said.get("is_error"), can_save
         assert "2 of 2 written" in said["content"][0]["text"]
+
+
+def test_a_second_fan_out_pass_only_writes_what_is_missing(tmp_path, monkeypatch):
+    """Called again with the original number, it wrote a second full suite: 377 against a target of 200."""
+    import asyncio
+
+    from fi.alk.harness import scenario_tools as st
+    from fi.alk.harness.contract import AgentContract
+
     contract = AgentContract(
         agent="cart", real_use_cases=["add an item", "remove an item"]
     )
