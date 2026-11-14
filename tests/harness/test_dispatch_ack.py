@@ -125,19 +125,30 @@ def _runner() -> cr.CallRunnerImpl:
     runner = cr.CallRunnerImpl.__new__(cr.CallRunnerImpl)
     runner._adapter = None  # never touched: no calls, no result
     runner._collect_calls = lambda runtime: ()  # instance override
+    runner._context = SimpleNamespace(usage_reporter=None, evidence_seam=None)
     return runner
 
 
 def _report(*, status: TestCaseStatus, code: str | None) -> SimpleNamespace:
-    failure = SimpleNamespace(code=code, message="dispatch not acked") if code else None
+    failure = (
+        SimpleNamespace(
+            code=code,
+            message="dispatch not acked",
+            details=None,
+            stage=SimpleNamespace(value="call"),
+        )
+        if code
+        else None
+    )
     case = SimpleNamespace(
+        test_case_id="case-1",
         status=status,
         started_at=None,
         ended_at=None,
         result=None,
         failure=failure,
     )
-    return SimpleNamespace(test_cases=[case])
+    return SimpleNamespace(run_id="run-1", test_cases=[case])
 
 
 def _translate(report: SimpleNamespace) -> CallAborted:
