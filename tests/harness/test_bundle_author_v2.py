@@ -28,6 +28,7 @@ from fi.alk.harness.bundle_author_v2 import (
     resolve_environment_plan,
     sealed_from,
 )
+from fi.alk.harness import bundle_author_v2
 from fi.alk.harness.generated_runtime import framework_instrumentation_command
 from fi.alk.harness.authoring_runtime_validation import _artifact_digest
 from fi.alk.harness.bundle_v2 import load_bundle_v2
@@ -4206,6 +4207,112 @@ def test_adk_web_command_without_interface_uses_source_http_api(tmp_path: Path) 
     assert interface["request_template"]["app_name"] == "software_bug_assistant"
     assert interface["setup_requests"][0]["path"] == (
         "/apps/software_bug_assistant/users/{{thread_id}}/sessions"
+    )
+
+
+def _langgraph_source(tmp_path: Path) -> Path:
+    """The async deep agents layout: a root langgraph.json declaring three graphs in a subproject."""
+    source = tmp_path / "source"
+    graphs = source / "graphs" / "python" / "src"
+    graphs.mkdir(parents=True)
+    (source / "graphs" / "python" / "pyproject.toml").write_text(
+        "[project]\nname='async-subagents'\nversion='1'\n", encoding="utf-8"
+    )
+    for name in ("agent", "researcher", "coder"):
+        (graphs / f"{name}.py").write_text("graph = object()\n", encoding="utf-8")
+    (source / "langgraph.json").write_text(
+        json.dumps(
+            {
+                "dependencies": ["./graphs/python"],
+                "graphs": {
+                    name: f"./graphs/python/src/{name}.py:graph"
+                    for name in ("agent", "researcher", "coder")
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    return source
+
+
+@pytest.mark.parametrize("model", ["agent", "", "gpt-4o"])
+def test_langgraph_dev_is_served_through_its_threads_and_runs_api(
+    tmp_path: Path, model: str
+) -> None:
+    """Build 5f83aede sealed the model-written OpenAI chat route for ``langgraph dev`` (404)."""
+    source = _langgraph_source(tmp_path)
+    authoring = _authoring(tmp_path)
+    command = [
+        "uv", "run", "--project", "graphs/python", "--with", "langgraph-cli[inmem]",
+        "langgraph", "dev", "--config", "langgraph.json", "--no-browser",
+    ]  # fmt: skip
+    _write_chat_contract(
+        authoring,
+        command=command,
+        workdir="",
+        interface={
+            "kind": "http",
+            "path": "/chat/completions",
+            "port": 2024,
+            "model": model,
+            "protocol": "openai_chat",
+            "health_path": "/ok",
+        },
+    )
+    with sqlite3.connect(authoring / "world.sqlite") as database:
+        database.execute("CREATE TABLE fixture (id TEXT PRIMARY KEY)")
+
+    output = tmp_path / "bundle"
+    manifest = author_bundle_v2(
+        source=source,
+        job=_job(connector="auto", metadata={"generic_harness_v1": True}),
+        authoring=authoring,
+        output=output,
+    )
+
+    runtime = json.loads((output / "contract.json").read_text())["runtime"]
+    interface = runtime["interface"]
+    assert interface["protocol"] == "json_template"
+    assert interface["path"] == "/threads/{{langgraph_thread_id}}/runs/wait"
+    assert interface["setup_requests"][0]["path"] == "/threads"
+    assert interface["setup_requests"][0]["capture"] == {
+        "langgraph_thread_id": "thread_id"
+    }
+    # The supervisor graph: named by the written model, else the first one declared.
+    assert interface["request_template"]["assistant_id"] == "agent"
+    assert interface["response_path"] == "messages.-1.content"
+    assert runtime["command"][-2:] == ["--port", "2024"]
+    agent = next(process for process in manifest.processes if process.name == "agent")
+    assert agent.fixed_port == 2024
+    assert agent.fixed_port_consumable is True
+    assert "langgraph dev" in agent.run_command[-1]
+    assert "$PORT" in agent.run_command[-1]
+    assert "ALK_SUBPROCESS_COMMAND" not in agent.environment
+    readiness = next(
+        item for item in manifest.readiness if item.capability == "target_http"
+    )
+    assert readiness.path == "/ok"
+
+
+def test_langgraph_dev_serves_the_graph_the_written_interface_names(
+    tmp_path: Path,
+) -> None:
+    source = _langgraph_source(tmp_path)
+    interface = bundle_author_v2._langgraph_server_interface(
+        source,
+        {
+            "command": ["langgraph", "dev", "--port=9000"],
+            "interface": {"model": "coder"},
+        },
+    )
+    assert interface is not None
+    assert interface["request_template"]["assistant_id"] == "coder"
+    assert interface["port"] == 9000
+    assert (
+        bundle_author_v2._langgraph_server_interface(
+            source, {"command": ["python", "server.py"]}
+        )
+        is None
     )
 
 
