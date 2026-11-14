@@ -6,7 +6,7 @@
     "version": "0.24.0"
   },
   "source": {
-    "path": "examples/harness/returns_reference",
+    "path": "tests/fixtures/harness_agents/returns_multi_agent",
     "license": "Apache-2.0"
   },
   "runtime": {
