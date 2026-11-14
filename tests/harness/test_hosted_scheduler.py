@@ -4890,7 +4890,7 @@ def test_an_actor_who_speaks_but_only_acted_in_the_world_reached_the_agent() -> 
     assert hs._call_actors_missing(scenario, refused) == "Jordan (not_delivered: the world refused its post_message)"
 
 
-def _graded(goals, outcome):
+def _graded(goals, outcome, delay: float = 0.0):
     async def scenario():
         outbound = FakeOutbound()
         pool, _ = _pool(1, outbound=outbound)
@@ -4898,6 +4898,8 @@ def _graded(goals, outcome):
 
         class Runner:
             async def run(self, scenario, runtime):
+                if delay:
+                    await asyncio.sleep(delay)
                 return outcome
 
         scheduler = hs.HostedScheduler(
@@ -5124,18 +5126,27 @@ def test_user_canceled_is_never_retried() -> None:
 def test_a_runner_that_ignores_the_cancel_is_cut_at_the_bound(monkeypatch) -> None:
     monkeypatch.setenv(hs.CANCEL_SEAL_ENV, "0.2")
 
-    class Shielded:
+    class IgnoresTheStop:
         stop_requested = staticmethod(lambda: False)
 
         async def run(self, scenario, runtime):
-            # Shields its work from the cancel and never returns.
-            await asyncio.shield(asyncio.sleep(3))
+            # Swallows the stop's cancel and keeps working well past the bound, then returns as if nothing happened.
+            try:
+                await asyncio.sleep(3)
+            except asyncio.CancelledError:
+                pass
+            await asyncio.sleep(3)
             return _call_outcome()
 
-    result, _ = _stop_run(Shielded(), [FakeScenario("s1", "id-1", sub_goals=[FakeSubGoal("g", lambda w, c: None)])])
+    started = time.monotonic()
+    result, _ = _stop_run(
+        IgnoresTheStop(), [FakeScenario("s1", "id-1", sub_goals=[FakeSubGoal("g", lambda w, c: None)])]
+    )
     (receipt,) = result.receipts
     assert receipt.failure.code == "user_canceled"
     assert receipt.call is None
+    # Cut at the bound (0.2 s plus a poll), not when the runner finally returned.
+    assert time.monotonic() - started < 2.5
 
 
 def test_one_stop_seals_every_call_in_flight_each_with_its_own_transcript() -> None:
@@ -5156,7 +5167,8 @@ def test_one_stop_seals_every_call_in_flight_each_with_its_own_transcript() -> N
 def test_no_cancel_leaves_receipts_unchanged() -> None:
     goals = [FakeSubGoal("g", lambda w, c: None)]
     outcome = _call_outcome(turns=2, calls=(hs.Call(name="get_order", arguments={}),))
-    plain = _graded(goals, outcome)
+    # The call outlasts the stop watcher's poll, so a watcher that cut calls without a stop would cut this one.
+    plain = _graded(goals, outcome, delay=1.2)
     assert plain.status == "passed"
     assert plain.failure is None
     assert plain.call.stop_reason is None
