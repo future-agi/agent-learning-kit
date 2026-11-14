@@ -2950,3 +2950,41 @@ def test_arguments_read_back_as_json_text_still_match():
         _logged("issue_refund", {"order": 7}),
     ]
     assert len(duplicate_commits(log)) == 1
+
+
+def test_voice_trial_without_actors_seals_world_changes(tmp_path, monkeypatch) -> None:
+    _job_obj, context = _context(tmp_path=tmp_path, evidence_seam=EvidenceSeam.TOOL_TRACE)
+    _write_scenario_doc(context.bundle_dir, scenario_key="k1")
+    columns = ["name", "arguments", "result", "ok", "error", "at", "action_id", "actor_id", "outcome"]
+    rows = [("issue_refund", {"order": 7}, None, True, "", 2.0, "a1", "agent", "committed")]
+    monkeypatch.setitem(sys.modules, "psycopg", _FakePsycopg(rows, columns))
+
+    async def place_call(spec):
+        return _report()
+
+    adapter = FakeAdapter()
+    runner = cr.CallRunnerImpl(adapter, context, place_call=place_call)
+    _run(
+        runner,
+        _FakeScenario("k1"),
+        _runtime(endpoints={"database": _postgres_endpoint()}, metadata={"livekit_agent_name": "agent-w0"}),
+    )
+    sealed = {kind: data for kind, _key, data in adapter.uploads}
+    world = json.loads(sealed[cr.ArtifactKind.TRANSCRIPT])["world_actors"]
+    assert world["actions"] == [] and world["state_changes"][0]["committed_actions"] == ["issue_refund"]
+    assert "records" in world and "start" in world
+
+
+def test_a_voice_trial_whose_tools_the_door_cannot_see_says_world_changes_were_not_recorded(tmp_path) -> None:
+    _job_obj, context = _context(tmp_path=tmp_path, evidence_seam=None)
+    _write_scenario_doc(context.bundle_dir, scenario_key="k1")
+
+    async def place_call(spec):
+        return _report()
+
+    adapter = FakeAdapter()
+    runner = cr.CallRunnerImpl(adapter, context, place_call=place_call)
+    _run(runner, _FakeScenario("k1"), _runtime(metadata={"livekit_agent_name": "agent-w0"}))
+    sealed = {kind: data for kind, _key, data in adapter.uploads}
+    world = json.loads(sealed[cr.ArtifactKind.TRANSCRIPT])["world_actors"]
+    assert world == {"recorded": False, "why": "in_process_tools"}

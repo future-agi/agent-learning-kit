@@ -40,6 +40,7 @@ import logging
 import os
 import stat
 import tempfile
+import threading
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
@@ -1189,15 +1190,17 @@ def approvals(log: list[dict[str, Any]], decisions: Sequence[dict[str, Any]] = (
 
 def _state_changes(
     runtime: EnvironmentRuntime, bundle_dir: Path, decisions: Sequence[dict[str, Any]] = ()
-) -> list[dict[str, Any]]:
+) -> list[dict[str, Any]] | None:
+    """What each participant attempted and what came of it; None when the action log could not be read, which the
+    trial seals as unreadable rather than as no change."""
     database = _find_postgres_endpoint(runtime)
     if database is None:
-        return []
+        return None
     try:
         log = _read_action_log(database.address)
     except Exception as exc:  # noqa: BLE001 - no state changes, never a failed call
         logger.debug("state changes unreadable: %s", type(exc).__name__)
-        return []
+        return None
     return trial_state_changes(log, load_actors(bundle_dir).by_id(), decisions)
 
 
@@ -2187,6 +2190,54 @@ def _materialize_vertex_adc(
 # --- the runner ----------------------------------------------------------------------------
 
 
+class TrialRecords:
+    """The world's records at each trial's start, and the run's seeded start: what World changes compares a trial's
+    end against, and whether it started clean. Snapshots are read on a connection that cannot write; one that cannot
+    be read is sealed as unreadable, never a failed trial."""
+
+    def __init__(self) -> None:
+        self.seeded: dict[str, str] | None = None
+        self._seeded_taken = False
+        self._starts: dict[Any, tuple[Any, dict[str, Any]]] = {}
+        self._lock = threading.Lock()
+
+    def start(self, key: Any, dsn: str | None) -> None:
+        """Read the world's records at a trial's start (after its reset and pre-run sessions). The first trial's start
+        is the run's seed."""
+        from .world_snapshot import digest, snapshot, start_state
+
+        try:
+            taken = snapshot(dsn) if dsn else None
+        except Exception as exc:  # noqa: BLE001 - only the type: a database error can carry the world's password
+            logger.debug("trial start records unreadable: %s", type(exc).__name__)
+            taken = None
+        start = digest(taken) if taken is not None else None
+        with self._lock:
+            if not self._seeded_taken:
+                self._seeded_taken = True
+                self.seeded = start
+            self._starts[key] = (taken, start_state(self.seeded, start))
+
+    def end(self, key: Any, dsn: str | None) -> dict[str, Any]:
+        """The trial's records before and after (`records`) and whether it started from the seed (`start`)."""
+        from .world_snapshot import diff, snapshot
+
+        with self._lock:
+            before, start = self._starts.pop(key, (None, {"state": "unknown", "tables": []}))
+        if before is None or not dsn:
+            return {"records": {"unreadable": True}, "start": start}
+        try:
+            after = snapshot(dsn)
+        except Exception as exc:  # noqa: BLE001 - only the type: a database error can carry the world's password
+            logger.debug("trial end records unreadable: %s", type(exc).__name__)
+            return {"records": {"unreadable": True}, "start": start}
+        return {"records": diff(before, after), "start": start}
+
+
+# Sealed instead of World changes when the agent's tools run where the world's door cannot see them.
+NOT_RECORDED = {"recorded": False, "why": "in_process_tools"}
+
+
 class CallRunnerImpl:
     """Satisfies `hosted_scheduler.CallRunner`. See the module docstring for the three
     sub-systems this class implements."""
@@ -2202,6 +2253,7 @@ class CallRunnerImpl:
         self._adapter = adapter
         self._context = context
         self._place_call = place_call
+        self._records = TrialRecords()
         simulator_secret_values = _canonical_simulator_secrets(
             context.simulator_provider_secret_values
         )
@@ -2654,11 +2706,17 @@ class CallRunnerImpl:
                     with contextlib.suppress(Exception):
                         _write_trial_state(runtime, [])
 
+        world_database = _find_postgres_endpoint(runtime)
+        records_dsn = world_database.address if world_database is not None else None
+
         async def place_with_world_actors() -> SimulationReport:
             if actors is None:
+                # The trial's starting records, after its reset: what World changes compares its end against.
+                await asyncio.to_thread(self._records.start, id(runtime), records_dsn)
                 return await place()
             # What the actors wrote before T0 is in the world before the call starts.
             await actors.replay()
+            await asyncio.to_thread(self._records.start, id(runtime), records_dsn)
             acting = asyncio.create_task(actors.run())
             try:
                 return await place()
@@ -2810,22 +2868,26 @@ class CallRunnerImpl:
         # from transcript prose.
         if not calls and case is not None:
             calls = _collect_provider_tool_calls(case)
+        # The world's door saw the agent's tools: a tool proxy in front of its tools service, or the door in its own
+        # process. Only then can the trial say what changed in the world.
+        door_seen = (
+            self._context.evidence_seam is EvidenceSeam.TOOL_TRACE or runtime.endpoints.get("world_door") is not None
+        )
         acted = (
             _actor_rows(runtime, self._context.bundle_dir, actor_decisions)
-            if case is not None
-            and self._context.evidence_seam is EvidenceSeam.TOOL_TRACE
+            if case is not None and door_seen
             else []
         )
-        changes = (
-            _state_changes(runtime, self._context.bundle_dir, actor_decisions)
-            if acted or actor_decisions
-            else []
+        changes = _state_changes(runtime, self._context.bundle_dir, actor_decisions) if case is not None and door_seen else []
+        world_database = _find_postgres_endpoint(runtime)
+        records = (
+            await asyncio.to_thread(
+                self._records.end, id(runtime), world_database.address if world_database is not None else None
+            )
+            if case is not None and door_seen
+            else {}
         )
-        duplicates = (
-            _duplicates(runtime)
-            if case is not None and self._context.evidence_seam is EvidenceSeam.TOOL_TRACE
-            else []
-        )
+        duplicates = _duplicates(runtime) if case is not None and door_seen else []
         # Hand-off records are not the world's actions: marks pair the graded calls with the action log.
         graded = graded_calls(calls)
         marks = _agent_marks(runtime, self._context.bundle_dir, graded) if acted else []
@@ -2846,7 +2908,7 @@ class CallRunnerImpl:
             recording = combined if combined and Path(combined).is_file() else None
             notices = self._fault_notices(runtime, faults, calls)
             # A call that ended with no words still says what did not take effect, and what actors did in the world,
-            # never only logging it.
+            # never only logging it; a call with words carries World changes, or why they were not recorded.
             if result.transcript or notices or acted or actor_decisions or duplicates or took_part.get("call_actors"):
                 transcript_document = {
                     "schema_version": "futureagi.call-transcript.v1",
@@ -2865,18 +2927,23 @@ class CallRunnerImpl:
                         "summary": summary,
                         "events": took_part.get("call_actor_events") or [],
                     }
-                if acted or actor_decisions:
-                    # Kept out of the tool trace, whose every line is one of the agent's own calls. `decisions` is
-                    # what each actor chose and why (live) or was scheduled to do (mocked); `actions` what the world
-                    # made of it.
+                if door_seen:
+                    # Every trial the door saw, actors or not: World changes is shown on each. Kept out of the tool
+                    # trace, whose every line is one of the agent's own calls. `decisions` is what each actor chose
+                    # and why (live) or was scheduled to do (mocked); `actions` what the world made of it.
                     transcript_document["world_actors"] = {
                         "actions": acted,
                         "decisions": list(actor_decisions),
-                        "state_changes": changes,
+                        "state_changes": changes or [],
                         "approvals": self._approvals(runtime, actor_decisions),
                         "limits": dict(limits or {}),
                         "usage": list(actor_usage),
+                        **records,
+                        **({"unreadable": True} if changes is None else {}),
                     }
+                else:
+                    # The agent's tools run where the world's door cannot see them: said, never shown as no change.
+                    transcript_document["world_actors"] = dict(NOT_RECORDED)
                 if duplicates:
                     # The world applied one of the agent's writes twice after its answer was lost: the scenario fails.
                     transcript_document.setdefault("world_actors", {})["duplicates"] = duplicates

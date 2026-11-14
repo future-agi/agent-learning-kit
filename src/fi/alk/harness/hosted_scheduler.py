@@ -49,6 +49,7 @@ from .job import FailureDomain, HarnessStage
 from .checks import reference_of, takes_reference
 from .joint_judge import OFF_SCRIPT
 from .judge import INCONCLUSIVE, NOT_APPLICABLE, UNMEASURED, verdict_named
+from .world_door import EvidenceUnavailable
 from .judge import judge_sub_goal as _judge
 from .outbound import (
     HostedAttemptSupersededError,
@@ -427,6 +428,7 @@ _CODE_DOMAIN: dict[str, FailureDomain] = {
     "judge_undecided": FailureDomain.SIMULATOR,
     "caller_off_script": FailureDomain.SIMULATOR,
     "duplicate_commit": FailureDomain.AGENT,
+    "evidence_unmeasured": FailureDomain.SIMULATOR,
     "evidence_missing": FailureDomain.SIMULATOR,
     "actor_missing": FailureDomain.SIMULATOR,
     "world_usage": FailureDomain.SIMULATOR,
@@ -682,6 +684,14 @@ class _PhaseStateTooLarge(Exception):
         self.cause = cause
 
 
+class _PhaseEvidenceUnavailable(Exception):
+    """A check read evidence that could not be read (the world's action log): unmeasured, never passed or failed."""
+
+    def __init__(self, phase: str, cause: BaseException) -> None:
+        super().__init__(f"{phase}: {cause}")
+        self.cause = cause
+
+
 class _PhaseCrashed(Exception):
     def __init__(self, phase: str, cause: BaseException) -> None:
         super().__init__(f"{phase}: {cause}")
@@ -806,6 +816,8 @@ async def _invoke(
         # the fixer report). The thread is abandoned, bounded by scenario count per the contract's
         # own accepted tradeoff; its world is discarded rather than reused (M13).
         raise _PhaseTimeout(phase) from exc
+    except EvidenceUnavailable as exc:
+        raise _PhaseEvidenceUnavailable(phase, exc) from exc
     except WorldUnavailable as exc:
         raise _PhaseWorldGone(phase, exc) from exc
     except WorldStateTooLarge as exc:
@@ -843,6 +855,8 @@ _TIMEOUT_CODE_BY_PHASE = {
 class _PhaseResult:
     value: object
     failure: ReceiptFailure | None
+    # Why the phase could not be measured: the evidence it read could not be read.
+    unmeasured: str | None = None
 
 
 async def _run_phase(
@@ -877,6 +891,8 @@ async def _run_phase(
             None,
             _failure(_TIMEOUT_CODE_BY_PHASE[phase], f"{phase} exceeded its budget"),
         )
+    except _PhaseEvidenceUnavailable as exc:
+        return _PhaseResult(None, None, unmeasured=str(exc.cause))
     except _PhaseWorldGone as exc:
         return _PhaseResult(None, _failure("world_unavailable", str(exc.cause)))
     except _PhaseMisuse as exc:
@@ -2423,6 +2439,14 @@ class HostedScheduler:
                     )
                 )
                 continue
+            if outcome.unmeasured is not None and (not goal.judged or getattr(goal, "both", False)):
+                # The check read the world's action log and the log could not be read: no verdict on missing evidence.
+                sub_goal_results.append(
+                    SubGoalResult(
+                        name=goal.name, held=None, reason=f"{UNMEASURED}{outcome.unmeasured}", judged=goal.judged != ""
+                    )
+                )
+                continue
             verdict = _classify_check(outcome.value)
             both = bool(goal.judged) and getattr(goal, "both", False)
             if verdict.broken and (both or not goal.judged):
@@ -2594,11 +2618,16 @@ class HostedScheduler:
         if any(result.held is False for result in sub_goal_results):
             status = "failed"
         elif any(result.held is None for result in sub_goal_results):
+            undecided = [result for result in sub_goal_results if result.held is None]
+            unmeasured = all(not result.judged and (result.reason or "").startswith(UNMEASURED) for result in undecided)
             return self._fault(
                 scenario,
                 world_index,
                 attempt,
-                _failure("judge_undecided", "a judged sub-goal was not decided"),
+                _failure("evidence_unmeasured", "a sub-goal's evidence could not be read: "
+                         + ", ".join(result.name for result in undecided))
+                if unmeasured
+                else _failure("judge_undecided", "a judged sub-goal was not decided"),
                 sub_goals=tuple(sub_goal_results),
                 call=self._call_summary(call_outcome),
                 retry=False,

@@ -214,11 +214,21 @@ class HostedWorld(HttpObservationHandle):
         self, actor_id: str | None = None, outcome: str | None = None
     ) -> list[dict[str, Any]]:
         """This trial's action log: every action attempted in the world, whose it was (`agent` for the
-        agent under test) and what came of it (`committed`, `refused`, `faulted`, `duplicate`)."""
+        agent under test) and what came of it (`committed`, `refused`, `faulted`, `duplicate`). A world with no log
+        has no events; a log that exists but cannot be read raises `EvidenceUnavailable`, so a check that needs it is
+        unmeasured, never settled on an empty log."""
+        from ..world_door import EvidenceUnavailable
+
         try:
             rows = self.query('SELECT * FROM "_alk_tool_trace" ORDER BY at, id')
-        except Exception:  # noqa: BLE001 - a world without the log has no events
-            return []
+        except Exception as exc:  # noqa: BLE001 - told apart below: no log, or a log out of reach
+            try:
+                present = self.query("SELECT to_regclass('_alk_tool_trace') IS NOT NULL AS present")
+            except Exception:  # noqa: BLE001 - the database itself is out of reach
+                raise EvidenceUnavailable("the world's action log could not be read") from exc
+            if present and not present[0].get("present"):
+                return []
+            raise EvidenceUnavailable("the world's action log could not be read") from exc
         return [
             row
             for row in rows

@@ -45,6 +45,10 @@ READ_METHODS = ("GET", "HEAD", "OPTIONS")
 _IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,62}$")
 
 
+class EvidenceUnavailable(Exception):
+    """The trial's action log could not be read: a check that needs it is unmeasured, never passed on an empty log."""
+
+
 @dataclass(frozen=True)
 class ToolCall:
     """One attempt to act in the world, as every surface describes it."""
@@ -279,12 +283,13 @@ class WorldDoor:
     def events(
         self, actor: str | None = None, outcome: str | None = None
     ) -> list[dict[str, Any]]:
-        """Every attempt in this trial's log, oldest first, optionally one participant's or one outcome's; nothing
-        when the log cannot be read."""
+        """Every attempt in this trial's log, oldest first, optionally one participant's or one outcome's. Raises
+        `EvidenceUnavailable` when the log cannot be read: an empty answer would pass a check like "no refund was
+        committed" on missing evidence."""
         try:
             rows = self.log.rows()
-        except Exception:  # noqa: BLE001 - an unreadable log reads as empty this time
-            return []
+        except Exception as exc:  # noqa: BLE001 - whatever broke, the evidence is missing
+            raise EvidenceUnavailable("the world's action log could not be read") from exc
         return [
             row
             for row in rows

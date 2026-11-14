@@ -5174,16 +5174,12 @@ def test_a_bundle_with_actors_seals_the_rules_its_release_checks_them_by(
     assert set(rules["records"]) == {"actors.json"}
 
 
-def test_a_world_without_actors_is_seeded_with_the_tool_trace_it_always_had(
-    tmp_path: Path,
-) -> None:
+def test_a_world_without_actors_gets_the_full_action_log(tmp_path: Path) -> None:
     from fi.alk.harness.bundle_author_v2 import _action_log_seed
 
-    assert _action_log_seed(tmp_path) == (
-        "CREATE TABLE IF NOT EXISTS _alk_tool_trace ("
-        "id bigserial PRIMARY KEY, name text NOT NULL, arguments jsonb NOT NULL, "
-        "result jsonb, ok boolean NOT NULL, error text, at double precision NOT NULL);\n"
-    )
+    without = _action_log_seed(tmp_path)
+    assert "actor_id text" in without and "outcome text" in without and "effect text" in without
+    assert "INSERT INTO _alk_actors" not in without
     (tmp_path / "actors.json").write_text(
         '{"actors": [{"id": "reviewer", "name": "Robin"}]}\n', encoding="utf-8"
     )

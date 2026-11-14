@@ -317,9 +317,13 @@ def _trial_log(door: Any, since: float = 0.0) -> list[dict[str, Any]]:
 def _world_actors_record(
     door: Any, listing: Any, dispatcher: Any, cast: Any, meter: Any, limits: dict[str, Any], since: float = 0.0
 ) -> dict[str, Any] | None:
-    """What actors did in the world this trial and what it changed, sealed beside the transcript as a call seals it;
-    None when no actor took part."""
+    """What actors did in the world this trial and what each participant changed, sealed beside the transcript as a
+    call seals it, on every trial with a door, actors or not (`actions` and `decisions` then empty); None only when
+    there is no door."""
     from .call_runner import actor_rows, approvals, trial_state_changes
+
+    if door is None:
+        return None
 
     listed = listing.by_id()
     log = _trial_log(door, since)
@@ -343,8 +347,6 @@ def _world_actors_record(
             if one.get("kind") == "timeout"
         ]
     acted = actor_rows(log, listed, decisions)
-    if not acted and not decisions:
-        return None
     return {
         "actions": acted,
         "decisions": decisions,
@@ -757,8 +759,11 @@ class HostedChatCallRunner:
     """Drive a repository chat ingress inside its leased world."""
 
     def __init__(self, adapter: ArtifactUploader, context: CallRunnerContext) -> None:
+        from .call_runner import TrialRecords
+
         self._adapter = adapter
         self._context = context
+        self._records = TrialRecords()
         contract_path = context.bundle_dir / "contract.json"
         if not contract_path.is_file():
             self._contract: AgentContract | None = None
@@ -860,6 +865,10 @@ class HostedChatCallRunner:
         job_id = getattr(self._context.job, "job_id", None) or "probe"
         trial = f"{job_id}:{scenario.scenario_key}"
         trial_started = time.time()
+        records_dsn = world_db.address if world_db is not None and world_db.protocol == "postgres" else None
+        # The door sees the agent's tools when it runs them itself (tools the agent asks for over its interface), or
+        # when a tool proxy or the in-process door stands in front of the agent's own.
+        door_sees_tools = proxied or bool(interface is not None and getattr(interface, "include_tools", False))
         dispatcher = build_dispatcher(
             # What actors watch (an on_tool trigger) includes the agent's calls through its tool proxy.
             document, self._context.bundle_dir, act=acts, read_log=lambda: _trial_log(door, trial_started),
@@ -913,6 +922,9 @@ class HostedChatCallRunner:
             if dispatcher is not None:
                 # What the actors wrote before T0 is in the world before the conversation starts.
                 await dispatcher.replay()
+            # The trial's starting records, after its reset and pre-run sessions: what World changes compares against.
+            await asyncio.to_thread(self._records.start, id(runtime), records_dsn)
+            if dispatcher is not None:
                 acting = asyncio.create_task(dispatcher.run())
             transcript = await _drive_conversation(
                 _HostedChatTarget(
@@ -993,7 +1005,13 @@ class HostedChatCallRunner:
         transcript.calls[:] = _with_span_calls(transcript.calls, runtime)
 
         world_record = _world_actors_record(door, listing, dispatcher, cast, meter, limits, since=trial_started)
-        from .call_runner import duplicate_commits
+        from .call_runner import NOT_RECORDED, duplicate_commits
+
+        if door_sees_tools:
+            world_record = {**(world_record or {}), **await asyncio.to_thread(self._records.end, id(runtime), records_dsn)}
+        else:
+            # The agent runs its own tools where no door stands: World changes says so, never "no change".
+            world_record = dict(NOT_RECORDED)
 
         # The world applied one of the agent's writes twice after its answer was lost: the scenario fails.
         duplicates = duplicate_commits(_trial_log(door, trial_started))

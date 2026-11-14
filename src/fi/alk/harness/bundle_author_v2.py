@@ -139,13 +139,7 @@ class EnvironmentPlanV2:
 
 _IGNORED_ARTIFACT_PARTS = {".git", ".venv", "__pycache__", "node_modules"}
 _CERTIFIED_BUNDLE_DIRECTORY = "certified-bundle"
-# The agent's tool trace, as every world without actors is seeded.
-_AGENT_TRACE_DDL = (
-    "CREATE TABLE IF NOT EXISTS _alk_tool_trace ("
-    "id bigserial PRIMARY KEY, name text NOT NULL, arguments jsonb NOT NULL, "
-    "result jsonb, ok boolean NOT NULL, error text, at double precision NOT NULL);\n"
-)
-# With actors, the world's action log: every action the tool proxy saw, who took it and what came of it.
+# The world's action log: every action the door saw, who took it and what came of it.
 _TOOL_TRACE_DDL = (
     "CREATE TABLE IF NOT EXISTS _alk_tool_trace ("
     "id bigserial PRIMARY KEY, name text NOT NULL, arguments jsonb NOT NULL, "
@@ -162,27 +156,11 @@ _TOOL_TRACE_DDL = (
 )
 
 
-def _sets_trial_state(authoring: Path) -> bool:
-    """Whether any scenario has a pre-run session or sets faults: both need the full action log."""
-    for document in Path(authoring).glob("scenarios/*/scenario.json"):
-        try:
-            body = json.loads(document.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            continue
-        if isinstance(body, dict) and (body.get("faults") or body.get("pre_run") or body.get("history")):
-            return True
-    return False
-
-
 def _action_log_seed(authoring: Path) -> str:
-    """The action log and who may do what in the world; a world without actors, pre-run sessions or faults is seeded exactly
-    as before."""
-    listing = load_actors(authoring)
-    return (
-        _TOOL_TRACE_DDL + actors_seed(listing)
-        if listing.actors or _sets_trial_state(authoring)
-        else _AGENT_TRACE_DDL
-    )
+    """The world's full action log, and who may do what in it: every world records who did what and what came of it,
+    so World changes can be shown on every trial, actors or not. A world with no actors seeds no actor rows. A bundle
+    certified before this keeps the table it was seeded with; the door writes either shape."""
+    return _TOOL_TRACE_DDL + actors_seed(load_actors(authoring))
 
 
 def _catalog_image(image: str) -> tuple[str, str]:

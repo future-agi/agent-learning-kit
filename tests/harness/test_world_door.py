@@ -870,3 +870,15 @@ def test_each_call_is_logged_as_a_read_or_a_write_from_its_declared_effect_else_
     assert door.enter(call).outcome == "committed"
     [row] = door.events()
     assert row["effect"] == effect
+
+
+def test_events_raise_when_the_log_cannot_be_read():
+    from fi.alk.harness.world_door import EvidenceUnavailable
+
+    class _Unreadable(MemoryLog):
+        def rows(self):
+            raise RuntimeError("no read grant")
+
+    door = _door(log=_Unreadable())
+    with pytest.raises(EvidenceUnavailable):
+        door.events()
