@@ -80,6 +80,7 @@ def _entry(proof: Proof, solution_steps: int) -> dict[str, Any]:
         "leaks": [dict(one) for one in proof.leaks],
         "sources": [dict(one) for one in proof.sources],
         "policy_checks": [dict(one) for one in proof.policy_checks],
+        "evidence": {name: list(kinds) for name, kinds in proof.evidence.items()},
         "blocked_reason": blocked,
     }
 
@@ -111,6 +112,7 @@ def unprovable_entry(why: str, blocked_reason: str = "broken_check") -> dict[str
         "leaks": [],
         "sources": [],
         "policy_checks": [],
+        "evidence": {},
         "blocked_reason": blocked_reason,
     }
 

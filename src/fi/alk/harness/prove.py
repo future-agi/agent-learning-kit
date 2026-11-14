@@ -89,6 +89,9 @@ class Proof:
     sources: list[dict[str, Any]] = field(default_factory=list)
     # Each cited rule checked against the expected outcome: {rule, ref, conflict, why}.
     policy_checks: list[dict[str, Any]] = field(default_factory=list)
+    # What each deterministic check reads: "tool_calls" when it uses `calls`, "world_state" when it
+    # uses `world`. The platform compares it with what the agent gives the harness.
+    evidence: dict[str, list[str]] = field(default_factory=dict)
 
     @property
     def conflicts(self) -> list[dict[str, Any]]:
@@ -320,6 +323,29 @@ class Proof:
                 f"{one['name']} ({', '.join(one.get('assumed') or [])})" for one in self.controls
             )
         return "holds"
+
+
+def check_evidence(source: str) -> list[str]:
+    """What a check's source reads: "tool_calls" if it uses its `calls` argument, "world_state" if it
+    uses `world`. An unparsable check reads nothing."""
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return []
+    function = next(
+        (node for node in tree.body if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == "check"),
+        None,
+    )
+    if function is None:
+        return []
+    params = [arg.arg for arg in function.args.args]
+    names = {node.id for node in ast.walk(function) if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load)}
+    found = []
+    if len(params) > 1 and params[1] in names:
+        found.append("tool_calls")
+    if params and params[0] in names:
+        found.append("world_state")
+    return found
 
 
 def _checks_for(scenario: Scenario, catalogue: Catalogue) -> list[tuple[str, str]]:
@@ -850,6 +876,7 @@ def prove(
     rules = [str(one) for one in (getattr(contract, "hard_constraints", None) or [])] if contract is not None else []
     proof.policy_checks = policy_conflicts(scenario, catalogue, rules, world_root, judge=conflict_judge) if rules else []
     checks = _checks_for(scenario, catalogue)
+    proof.evidence = {name: check_evidence(source) for name, source in checks}
     if workspace_fixture(scenario, catalogue) and not native_runtime(world_root):
         proof.deferred = True
         proof.broken = workspace_fixture_problems(

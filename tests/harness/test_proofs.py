@@ -191,3 +191,21 @@ def test_inconclusive_judge_keeps_the_case_as_written(monkeypatch, tmp_path):
 
     assert proof.controls[0]["failed"] is None
     assert proof.blocked_reason() == "judged_only" and proof.kept_as_written is True
+
+
+def test_check_reading_calls_records_tool_calls_evidence(monkeypatch, tmp_path):
+    from proof_world import LOOKED_UP_O10
+
+    assert module.check_evidence(LOOKED_UP_O10) == ["tool_calls"]
+    assert module.check_evidence(ONE_REFUND) == ["world_state"]
+    both = check("return None if calls and world.data['refunds'] else 'no'")
+    assert module.check_evidence(both) == ["tool_calls", "world_state"]
+    assert module.check_evidence("def check(:\n") == []
+
+    install(monkeypatch)
+    proof = module.prove(refund_case(), catalogue(**REFUND_CATALOGUE), tmp_path, contract=None, actors=[])
+    record_proof(tmp_path, "refund_case", proof)
+    assert load_proofs(tmp_path)["refund_case"]["evidence"] == {
+        "refund_once": ["world_state"],
+        "looked_up": ["tool_calls"],
+    }
