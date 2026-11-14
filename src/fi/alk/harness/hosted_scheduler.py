@@ -1820,10 +1820,18 @@ class HostedScheduler:
             if done:
                 try:
                     return task.result()
+                except CallAborted:
+                    raise
                 except asyncio.CancelledError:
                     if self._stopped_at is None:
                         raise
                     # A runner that let the stop through sealed nothing.
+                    raise CallCancelled() from None
+                except Exception:
+                    if self._stopped_at is None:
+                        raise
+                    # A runner that failed while it was being stopped: still the person's stop, never infrastructure.
+                    logger.warning("call runner failed while stopping", exc_info=True)
                     raise CallCancelled() from None
             if self._stopped_at is not None and time.monotonic() - self._stopped_at > _cancel_seal_seconds():
                 logger.warning("call runner did not seal within %ss of the stop", _cancel_seal_seconds())

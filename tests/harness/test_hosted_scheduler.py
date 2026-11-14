@@ -5172,3 +5172,21 @@ def test_no_cancel_leaves_receipts_unchanged() -> None:
     assert plain.status == "passed"
     assert plain.failure is None
     assert plain.call.stop_reason is None
+
+
+def test_a_runner_that_fails_while_being_stopped_is_sealed_as_the_stop() -> None:
+    class FailsOnStop:
+        stop_requested = staticmethod(lambda: False)
+
+        async def run(self, scenario, runtime):
+            try:
+                await asyncio.sleep(3)
+            except asyncio.CancelledError:
+                raise RuntimeError("cleanup failed while stopping") from None
+            return _call_outcome()
+
+    result, _ = _stop_run(FailsOnStop(), [FakeScenario("s1", "id-1", sub_goals=[FakeSubGoal("g", lambda w, c: None)])])
+    (receipt,) = result.receipts
+    # The person's stop, never infrastructure and never retried, whatever the runner raised on the way out.
+    assert (receipt.failure.code, receipt.failure.domain) == ("user_canceled", hs.FailureDomain.PLATFORM_SYNC)
+    assert receipt.call is None
