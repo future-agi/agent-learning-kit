@@ -2006,3 +2006,46 @@ def test_a_cancel_that_is_not_a_stop_still_propagates(tmp_path, monkeypatch) -> 
     with pytest.raises(asyncio.CancelledError):
         asyncio.run(scenario(False))
     assert adapter.uploads == []
+
+
+def test_a_stopped_call_abandons_the_agent_reply_it_was_waiting_on(tmp_path, monkeypatch) -> None:
+    """The agent's in-flight reply is drained on a cancel so a reused world is not changed under the next trial; a
+    stopped run's world is never reused, so its call must not wait out that reply (a worker blocked on a slow
+    upstream held the seal past its bound)."""
+    import time
+
+    from fi.simulate.agent.wrappers.http import HTTPAgentWrapper
+
+    seen: dict[str, Any] = {}
+    stopped = {"value": False}
+
+    async def drive(target, *_args, **_kwargs):
+        wrapper = target._wrapper
+        seen["blocked"].set()
+        try:
+            await wrapper._run_request(time.sleep, 5)
+        except asyncio.CancelledError as exc:
+            exc.partial_transcript = Transcript(exchanges=[Exchange("customer", "Refund order 1043")])
+            raise
+
+    from dataclasses import replace as replaced
+
+    monkeypatch.setattr(chat, "_tool_world", lambda *_args: _ToolWorld())
+    monkeypatch.setattr(chat, "_drive_conversation", drive)
+    runner = chat.HostedChatCallRunner(_Adapter(), replaced(_context(tmp_path), stop_requested=lambda: stopped["value"]))
+
+    async def scenario():
+        seen["blocked"] = asyncio.Event()
+        task = asyncio.create_task(
+            runner.run(SimpleNamespace(scenario_key="one", scenario_id="scenario-1"), _stop_runtime())
+        )
+        await seen["blocked"].wait()
+        stopped["value"] = True
+        started = time.monotonic()
+        task.cancel()
+        with pytest.raises(chat.CallCancelled):
+            await task
+        return time.monotonic() - started
+
+    assert asyncio.run(scenario()) < 2
+    assert HTTPAgentWrapper(endpoint="http://x").abandon_on_cancel() is False

@@ -920,6 +920,9 @@ class HostedChatCallRunner:
                 "scenario": scenario.scenario_key,
             },
         )
+        if hasattr(wrapper, "abandon_on_cancel"):
+            # A stopped run's world is never reused: its call seals what it kept without waiting out the agent's reply.
+            wrapper.abandon_on_cancel = self._context.stop_requested
         funding = simulator_funding()
         await _check_text_usage(self._context.usage_reporter, funding)
         started = datetime.now(timezone.utc)

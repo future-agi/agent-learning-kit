@@ -9,7 +9,7 @@ import re
 import time
 import urllib.error
 import urllib.request
-from typing import Any, Mapping, Optional, Sequence
+from typing import Any, Callable, Mapping, Optional, Sequence
 from urllib.parse import quote, urlparse, urlsplit, urlunsplit, urlencode
 
 from .http_events import CompletedToolEvents, CompletedToolRows
@@ -186,6 +186,9 @@ class HTTPAgentWrapper(AgentWrapper):
         self.failure_rule = dict(failure_rule) if failure_rule else None
         self.secret_values = dict(secret_values) if secret_values is not None else None
         self._private_response_values = dict(private_response_values or {})
+        # Whether a cancelled request may be left running instead of drained: true once nothing reuses this world,
+        # as after the person stopped the run, where draining would wait out the agent's own reply.
+        self.abandon_on_cancel: Callable[[], bool] = lambda: False
         self.completed_tool_events = (
             CompletedToolEvents.model_validate(completed_tool_events)
             if completed_tool_events is not None
@@ -446,6 +449,8 @@ class HTTPAgentWrapper(AgentWrapper):
         try:
             return await asyncio.shield(task)
         except asyncio.CancelledError:
+            if self.abandon_on_cancel():
+                raise
             # A cancelled thread can still mutate the target. Drain before world reset.
             while not task.done():
                 try:
