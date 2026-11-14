@@ -1,0 +1,350 @@
+# @future-agi/agent-learning-kit
+
+TypeScript SDK for Future AGI's agent evaluation surface. Use it to evaluate
+LLM and agent outputs with cloud metrics, local heuristics, hybrid routing, and
+pipeline-level checks.
+
+For simulation, red-team, and optimization workflows, use the Python
+`agent-learning-kit` package and `agent-learn` CLI in this repository. The
+TypeScript package is the v1 evaluation package.
+
+## Installation
+
+```bash
+npm install @future-agi/agent-learning-kit
+# or
+pnpm add @future-agi/agent-learning-kit
+# or
+yarn add @future-agi/agent-learning-kit
+```
+
+### Runtime and imports
+
+Version 0.4.0 targets Node.js 18 or later and is **ESM-only**. Use `.mjs` files
+or set `"type": "module"` in your application's `package.json`; CommonJS
+`require()` is not supported. For TypeScript consumers, use TypeScript 5.9.3
+or later with `"module": "NodeNext"` and `"moduleResolution": "NodeNext"`.
+
+```typescript
+import { evaluate, type BatchRunResult } from '@future-agi/agent-learning-kit';
+import { LocalEvaluator } from '@future-agi/agent-learning-kit/local';
+
+// With API credentials configured, the optional third argument accepts modelName.
+const result: BatchRunResult = await evaluate(
+  'Factual Accuracy',
+  { response: ['Paris'], context: ['Paris is the capital of France.'] },
+  { modelName: 'gpt-4o' }
+);
+```
+
+`@future-agi/agent-learning-kit/evals` aliases the root entry point, and
+`@future-agi/agent-learning-kit/evals/local` aliases `/local`. Use `/local` for
+`AutoEvalPipeline`, `Scanner`, and `StreamingEvaluator`; the deeper paths
+`/local/autoeval`, `/local/scanner`, and `/local/streaming` are not public exports.
+There is no TypeScript CLI entry point.
+
+## Quick Start
+
+```typescript
+import { evaluate } from '@future-agi/agent-learning-kit';
+
+// Set your API key
+process.env.FI_API_KEY = 'your-api-key';
+process.env.FI_SECRET_KEY = 'your-secret-key';
+
+// Run an evaluation
+const result = await evaluate(
+  'Factual Accuracy',
+  {
+    response: ['The capital of France is Paris.'],
+    context: ['Paris is the capital and largest city of France.']
+  }
+);
+
+console.log(result.status);                  // 'completed' | 'failed' | 'incomplete'
+console.log(result.eval_results[0]?.output); // Score: 0-1
+// Fixed code, not explanation text: 'EVALUATION_COMPLETED' | 'EVALUATION_FAILED'
+// | 'EVALUATION_RESULT_INVALID' | 'EVALUATION_REQUEST_FAILED'
+console.log(result.eval_results[0]?.reason);
+```
+
+On cloud results, `reason` is always one of those four codes.
+`EVALUATION_FAILED` means the backend marked the row failed,
+`EVALUATION_RESULT_INVALID` means the row was missing, malformed or not
+finished, and `EVALUATION_REQUEST_FAILED` means the request did not complete.
+The backend's explanation text is not returned (`metadata.explanation`, when
+present, is an empty object), so code migrated from `@future-agi/ai-evaluation`
+should not read explanations from `reason`.
+
+## Features
+
+- **Cloud Evaluations**: 50+ evaluation metrics via Future AGI API
+- **Local Evaluations**: Run heuristic metrics offline without API calls
+- **Hybrid Mode**: Automatically route between local and cloud execution
+- **Local LLM Support**: Use Ollama for LLM-as-judge evaluations locally
+- **Platform Integration**: Langfuse integration for observability
+- **Pipeline Evaluation**: Evaluate entire ML pipelines
+
+## Usage
+
+### Cloud Evaluation (Default)
+
+```typescript
+import { Evaluator } from '@future-agi/agent-learning-kit';
+
+const evaluator = new Evaluator({
+  fiApiKey: 'your-api-key',
+  fiSecretKey: 'your-secret-key'
+});
+
+// Single evaluation
+const result = await evaluator.evaluate(
+  'Groundedness',
+  {
+    query: ['What is machine learning?'],
+    response: ['Machine learning is a subset of AI...'],
+    context: ['Machine learning (ML) is a field of AI...']
+  },
+  { modelName: 'gpt-4o' }
+);
+
+// Async evaluation: submit() returns an Execution handle immediately
+const execution = await evaluator.submit(
+  'Factual Accuracy',
+  { response: ['...'], context: ['...'] }
+);
+
+// Poll until the run finishes (throws ExecutionError if it fails)
+const finished = await execution.wait({ timeout: 300, pollInterval: 2 });
+console.log(finished.status, finished.result);
+
+// Or look the run up later, from any process, by its id
+const later = await evaluator.getExecution(execution.id);
+```
+
+`submit()` takes one template. `evaluate()` with `isAsync: true` still resolves
+to a `BatchRunResult`, never to a pollable handle: a row that is still pending
+comes back as `EVALUATION_RESULT_INVALID` with no `eval_id`, and the batch
+`status` is `'incomplete'`. Use `submit()` for async runs.
+
+### Local Evaluation (Offline)
+
+Run evaluations locally without API calls using heuristic metrics:
+
+```typescript
+import { LocalEvaluator } from '@future-agi/agent-learning-kit/local';
+
+const evaluator = new LocalEvaluator();
+
+// String metrics
+const containsResult = evaluator.evaluate(
+  'contains',
+  [{ response: 'Hello world' }],
+  { keyword: 'world' }
+);
+// Score: 1.0 (contains the keyword)
+
+// JSON validation
+const jsonResult = evaluator.evaluate(
+  'json_schema',
+  [{ response: '{"name": "John", "age": 30}' }],
+  {
+    schema: {
+      type: 'object',
+      properties: { name: { type: 'string' }, age: { type: 'number' } },
+      required: ['name']
+    }
+  }
+);
+
+// Similarity metrics
+const bleuResult = evaluator.evaluate(
+  'bleu_score',
+  [{ response: 'The cat sat on the mat' }],
+  { reference: 'The cat is on the mat' }
+);
+```
+
+### Available Local Metrics
+
+| Category | Metrics |
+|----------|---------|
+| **String** | `regex`, `contains`, `contains_all`, `contains_any`, `contains_none`, `one_line`, `equals`, `starts_with`, `ends_with`, `length_less_than`, `length_greater_than`, `length_between` |
+| **JSON** | `contains_json`, `is_json`, `json_schema` |
+| **Similarity** | `bleu_score`, `rouge_score`, `recall_score`, `levenshtein_similarity`, `numeric_similarity`, `semantic_list_contains` |
+
+### Hybrid Evaluation
+
+Automatically route between local and cloud execution:
+
+```typescript
+import { HybridEvaluator, OllamaLLM } from '@future-agi/agent-learning-kit/local';
+import { Evaluator } from '@future-agi/agent-learning-kit';
+
+// Setup hybrid evaluator with local LLM
+const localLLM = new OllamaLLM({ model: 'llama3.2' });
+const cloudEvaluator = new Evaluator();
+
+const hybrid = new HybridEvaluator({
+  localLLM,
+  cloudEvaluator,
+  preferLocal: true,      // Prefer local when possible
+  fallbackToCloud: true,  // Fall back to cloud if local fails
+  offlineMode: false      // Set true to disable cloud entirely
+});
+
+// Heuristic metrics run locally
+const localResult = await hybrid.evaluate(
+  'contains',
+  [{ response: 'Hello world' }],
+  { keyword: 'world' }
+);
+
+// LLM-based metrics use local Ollama if available
+const llmResult = await hybrid.evaluate(
+  'groundedness',
+  [{
+    query: 'What is AI?',
+    response: 'AI is artificial intelligence.',
+    context: 'Artificial intelligence (AI) is...'
+  }]
+);
+```
+
+### Local LLM with Ollama
+
+Use Ollama for local LLM-as-judge evaluations:
+
+```typescript
+import { OllamaLLM } from '@future-agi/agent-learning-kit/local';
+
+// Ensure Ollama is running: ollama serve
+const llm = new OllamaLLM({
+  model: 'llama3.2',           // Model name
+  baseUrl: 'http://localhost:11434',  // Ollama URL
+  temperature: 0.0,            // Deterministic output
+  maxTokens: 1024,
+  timeout: 120                 // Seconds
+});
+
+// Check availability
+const isAvailable = await llm.isAvailable();
+
+// Direct generation
+const response = await llm.generate('Explain quantum computing');
+
+// Chat completion
+const chatResponse = await llm.chat([
+  { role: 'system', content: 'You are a helpful assistant.' },
+  { role: 'user', content: 'What is machine learning?' }
+]);
+
+// LLM-as-judge
+const judgment = await llm.judge(
+  'What is the capital of France?',      // Query
+  'The capital of France is Paris.',     // Response to evaluate
+  'Evaluate factual accuracy. Score 0-1.', // Criteria
+  'Paris is the capital of France.'      // Optional context
+);
+// Returns: { score: 1.0, passed: true, reason: '...' }
+```
+
+### Pipeline Evaluation
+
+Evaluate entire ML pipelines:
+
+```typescript
+import { Evaluator } from '@future-agi/agent-learning-kit';
+
+const evaluator = new Evaluator();
+
+// Submit pipeline evaluation
+await evaluator.evaluatePipeline(
+  'my-project',
+  'v1.0.0',
+  [
+    { input: 'query1', output: 'response1', context: 'ctx1' },
+    { input: 'query2', output: 'response2', context: 'ctx2' }
+  ]
+);
+
+// Get results for multiple versions
+const results = await evaluator.getPipelineResults(
+  'my-project',
+  ['v1.0.0', 'v1.1.0', 'v2.0.0']
+);
+```
+
+### Langfuse Integration
+
+Enable observability with Langfuse:
+
+```typescript
+import { Evaluator } from '@future-agi/agent-learning-kit';
+
+const evaluator = new Evaluator({
+  fiApiKey: process.env.FI_API_KEY,
+  fiSecretKey: process.env.FI_SECRET_KEY,
+  langfuseSecretKey: process.env.LANGFUSE_SECRET_KEY,
+  langfusePublicKey: process.env.LANGFUSE_PUBLIC_KEY,
+  langfuseHost: process.env.LANGFUSE_HOST
+});
+
+// Evaluations will be logged to Langfuse
+const result = await evaluator.evaluate(
+  'Groundedness',
+  { response: ['...'], context: ['...'] },
+  { platform: 'langfuse', customEvalName: 'my-eval' }
+);
+```
+
+## API Reference
+
+### Main Exports (`@future-agi/agent-learning-kit`)
+
+| Export | Description |
+|--------|-------------|
+| `Evaluator` | Main class for cloud evaluations |
+| `evaluate()` | Convenience function for single evaluation |
+| `list_evaluations()` | List available evaluation templates |
+| `get_eval_result()` | Get async evaluation result |
+| `evaluate_pipeline()` | Evaluate a pipeline |
+| `get_pipeline_results()` | Get pipeline results |
+
+### Local Exports (`@future-agi/agent-learning-kit/local`)
+
+| Export | Description |
+|--------|-------------|
+| `LocalEvaluator` | Run heuristic metrics locally |
+| `HybridEvaluator` | Route between local and cloud |
+| `OllamaLLM` | Local LLM client via Ollama |
+| `LocalLLMFactory` | Factory for creating LLM instances |
+| `canRunLocally()` | Check if metric runs locally |
+| `requiresLLM()` | Check if metric needs LLM |
+| Individual metrics | `contains`, `regex`, `bleuScore`, etc. |
+
+## Environment Variables
+
+| Variable | Description |
+|----------|-------------|
+| `FI_API_KEY` | Future AGI API key |
+| `FI_SECRET_KEY` | Future AGI secret key |
+| `FI_BASE_URL` | API base URL (optional) |
+| `LANGFUSE_SECRET_KEY` | Langfuse secret key (optional) |
+| `LANGFUSE_PUBLIC_KEY` | Langfuse public key (optional) |
+| `LANGFUSE_HOST` | Langfuse host URL (optional) |
+
+## Requirements
+
+- Node.js >= 18.0.0
+- For local LLM: [Ollama](https://ollama.ai/) installed and running
+
+## License
+
+Apache-2.0
+
+## Links
+
+- [Documentation](https://docs.futureagi.com)
+- [GitHub](https://github.com/future-agi/agent-learning-kit)
+- [Issues](https://github.com/future-agi/agent-learning-kit/issues)

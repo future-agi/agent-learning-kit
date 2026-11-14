@@ -1,0 +1,459 @@
+"""One conversation, from pointing at an agent to a world you can test against.
+
+You say what you want, it does it, you say the next thing. Stages are not commands you invoke;
+they are what the harness moves through while you keep talking. When one produces its artifact
+the next opens on the same agent, and anything already built stays correctable by saying so.
+
+Underneath, each stage is still its own session with its own instructions and its own tools, so
+context stays small and a stage can be re-entered later without redoing the ones before it. That
+is an implementation detail, not something to make somebody manage.
+"""
+
+from __future__ import annotations
+
+import asyncio
+from collections.abc import Callable
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any
+
+from . import build as build_stage
+from . import reception as reception_stage
+from . import scenarios as scenario_stage
+from . import understand as understand_stage
+from .backends import SessionSpec
+from .config import artifact_dir
+from .contract import AgentContract
+from .job import HarnessJob
+from .run import stage as run_stage
+from .session import Stage
+from .sources import AgentSource, resolve
+from .world.snapshot import saved as world_saved
+
+RECEPTION = "reception"
+UNDERSTAND = "understand"
+BUILD = "build"
+SCENARIOS = "scenarios"
+RUN = "run"
+DONE = "done"
+
+_NEXT = {
+    RECEPTION: UNDERSTAND,
+    UNDERSTAND: BUILD,
+    BUILD: SCENARIOS,
+    SCENARIOS: RUN,
+    RUN: DONE,
+}
+
+
+@dataclass
+class Conversation:
+    """The whole thing, held open."""
+
+    # Both unknown until somebody says which agent this is about, which is itself a stage.
+    source: AgentSource | None = None
+    out: Path | None = None
+    ask: Callable[..., Any] | None = None
+    wanted: int = 10
+    # Where to look for an agent. Almost never inside this repo: the harness lives in one place
+    # and the agent being tested lives in another, so looking only at our own root means the
+    # first thing anybody types cannot be found.
+    workspace: Path | None = None
+    stage_name: str = ""
+    stage: Stage | None = None
+    # Set by the flow tool when the open stage hands a request to the stage that owns it.
+    _handoff: dict = field(default_factory=dict)
+    _found: dict[str, Any] = field(default_factory=dict)
+    configure_stage: Callable[[str, SessionSpec], SessionSpec] | None = None
+    control_only: bool = False
+    job: HarnessJob | None = None
+    spent_usd: float = 0.0
+
+    def __post_init__(self) -> None:
+        # Read off the artifacts rather than defaulting to the first stage. An agent whose world
+        # is already built is at the scenarios, and saying otherwise before anything has been
+        # opened makes every question about where this conversation is answer wrongly.
+        self.stage_name = self.stage_name or self._resume_at()
+
+    # -- what exists so far ----------------------------------------------------------
+
+    @property
+    def contract(self) -> AgentContract | None:
+        return understand_stage.load(self.out) if self.out else None
+
+    @property
+    def world_built(self) -> bool:
+        # The manifest, not a database file. Every saved world writes one; only some of them have
+        # a SQLite file beside it, and an agent whose state lives in services and files has none.
+        # Keyed on the database, such a world stays "not built" forever and the conversation can
+        # never leave this stage, however well the build actually went.
+        return world_saved(self.out)
+
+    @property
+    def scenarios_written(self) -> bool:
+        return bool(self.out) and bool(scenario_stage.load(self.out))
+
+    @property
+    def anything_run(self) -> bool:
+        return bool(self.out) and bool(run_stage.load(self.out))
+
+    def _artifact_for(self, stage_name: str) -> bool:
+        return {
+            # A contract already on disk settles which agent this is just as well as being told,
+            # so coming back to an agent does not mean pointing at its repository again.
+            #
+            # ``_found`` is checked too, because within the turn that points at an agent the
+            # source is not on the conversation yet — it is read off afterwards. Without it, the
+            # stage that has just succeeded is told it has produced nothing.
+            RECEPTION: self.source is not None
+            or self.contract is not None
+            or self._found.get("source") is not None,
+            UNDERSTAND: self.contract is not None,
+            BUILD: self.world_built,
+            SCENARIOS: self.scenarios_written,
+            RUN: self.anything_run,
+            DONE: True,
+        }[stage_name]
+
+    # -- moving between stages -------------------------------------------------------
+
+    async def _close(self) -> None:
+        if self.stage is not None:
+            self.spent_usd += self.stage.spent_usd
+            await self.stage.__aexit__(None, None, None)
+            self.stage = None
+
+    async def _open(self, stage_name: str) -> str:
+        """Open a stage and return the message that starts it."""
+        await self._close()
+        self.stage_name = stage_name
+        if stage_name == RECEPTION:
+            self.stage, self._found = reception_stage.open_stage(
+                cwd=self.workspace,
+                ask=self.ask,
+                # The UI allocates a session before the agent has a name. Put a GitHub clone in
+                # that existing session rather than creating a second artifact directory.
+                source_dir=(self.out / "source") if self.out else None,
+            )
+            self._prepare_stage(stage_name)
+            await self.stage.__aenter__()
+            return reception_stage.opening()
+
+        # Deliberately not "is there a source": a contract on disk settles which agent this is,
+        # and every stage after the first works from the contract rather than from the source.
+        # Only re-reading the agent needs to know where it lives.
+        if self.source is None and self.contract is None:
+            raise RuntimeError("nobody has said which agent this is about yet")
+        if stage_name == UNDERSTAND and self.source is None:
+            # This guard has to come before the stage opens: with a contract on disk but no
+            # source, reopening understand would otherwise die on source.briefing() instead of
+            # saying what is actually missing.
+            raise RuntimeError(
+                "cannot re-read the agent without knowing where it lives"
+            )
+        if stage_name == UNDERSTAND:
+            self.stage, _ = understand_stage.open_stage(
+                self.source, out=self.out, ask=self.ask
+            )
+            opening = understand_stage.opening(self.source)
+            self._prepare_stage(stage_name)
+            await self.stage.__aenter__()
+            return opening
+
+        contract = self.contract
+        if contract is None:
+            raise RuntimeError("cannot go further before there is a contract")
+        if stage_name == BUILD:
+            source_root = str(getattr(self.source, "root", "") or "")
+            native_runtime = build_stage.uses_native_runtime(contract, source_root)
+            if not self.control_only and not native_runtime:
+                build_stage.require_buildable(contract, source_root)
+                from .provision import provision_if_present
+
+                await asyncio.to_thread(
+                    provision_if_present, source_root, self.out, contract
+                )
+            self.stage, _ = build_stage.open_stage(
+                contract,
+                out=self.out,
+                ask=self.ask,
+                # Where the agent's own code lives, so its tools can be bound to rather than rewritten.
+                source_root=source_root,
+            )
+            opening = build_stage.opening(contract, native_runtime=native_runtime)
+        elif stage_name == RUN:
+            if not self.scenarios_written:
+                raise RuntimeError("cannot run anything before there are scenarios")
+            self.stage, _ = run_stage.open_stage(contract, out=self.out, ask=self.ask)
+            opening = run_stage.opening(contract, self.out)
+        else:
+            if not self.world_built:
+                raise RuntimeError("cannot write scenarios before there is a world")
+            written = len(scenario_stage.load(self.out))
+            wanted = written or self.wanted
+            # Chat is where "add five" comes from, so only here may aim_for raise the cap.
+            self.stage, _ = scenario_stage.open_stage(
+                contract, out=self.out, wanted=wanted, ask=self.ask, can_grow=True,
+                job=self.job,
+            )
+            opening = scenario_stage.opening(contract, wanted, written)
+        self._prepare_stage(stage_name)
+        await self.stage.__aenter__()
+        return opening
+
+    def next_stage(self) -> str | None:
+        """The stage that follows the current one, once this one has produced its artifact."""
+        if not self._artifact_for(self.stage_name):
+            return None
+        following = _NEXT.get(self.stage_name)
+        return None if following in (None, DONE) else following
+
+    def _flow_server(self):
+        """Route a request to any currently reachable harness stage."""
+        from .backends import tool, tool_server
+        from .tools import schema
+
+        wanted = self._handoff
+
+        @tool(
+            "route_to_stage",
+            "Route the person's request to the harness stage that owns it. Use reception to "
+            "select source, understand to inspect the agent contract, build for environment "
+            "work, scenarios for scenario generation/editing, and run for execution/results. "
+            "The destination must be reachable. Forward the request word for word.",
+            schema({"stage": str, "request": str}, ["stage", "request"]),
+        )
+        async def route_to_stage(args: dict[str, Any]) -> dict[str, Any]:
+            destination = str(args.get("stage") or "").strip()
+            request = str(args.get("request") or "").strip()
+            if destination == self.stage_name:
+                return {
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "This request already belongs to the current stage. Handle it here.",
+                        }
+                    ],
+                    "is_error": True,
+                }
+            blocked = self.reachable().get(destination)
+            if blocked is None:
+                return {
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": f"There is no harness stage called {destination!r}.",
+                        }
+                    ],
+                    "is_error": True,
+                }
+            if blocked:
+                return {
+                    "content": [{"type": "text", "text": blocked}],
+                    "is_error": True,
+                }
+            wanted["stage"] = destination
+            wanted["request"] = request
+            return {
+                "content": [
+                    {
+                        "type": "text",
+                        "text": f"Routed to {destination}. Say one short line that you are moving on, and stop.",
+                    }
+                ]
+            }
+
+        return tool_server(name="flow", version="0.1.0", tools=[route_to_stage])
+
+    # -- talking ---------------------------------------------------------------------
+
+    async def start(self, on_event: Callable[..., Any] | None = None) -> None:
+        """Open the stage this agent is up to, and set it going."""
+        opening = await self._open(self._resume_at())
+        await self.stage.say(opening, on_event=on_event)  # type: ignore[union-attr]
+
+    async def open_quietly(self) -> None:
+        """Open the stage without telling it to start.
+
+        A stage's opening message is an instruction to do the stage's work. Sending it because
+        somebody said hello means a greeting kicks off a build, so it is only sent when the work
+        is actually what was asked for.
+        """
+        await self._open(self._resume_at())
+
+    def _resume_at(self) -> str:
+        """Pick up where the artifacts say this agent got to."""
+        if self.source is None and self.contract is None:
+            return RECEPTION
+        if self.contract is None:
+            return UNDERSTAND
+        if not self.world_built:
+            return BUILD
+        if not self.scenarios_written:
+            return SCENARIOS
+        return RUN
+
+    def _prepare_stage(self, stage_name: str) -> None:
+        if self.stage is None:
+            return
+        self.stage.grant("flow", self._flow_server(), ["route_to_stage"], ask=self.ask)
+        if self.configure_stage is not None:
+            self.stage.configure(self.configure_stage(stage_name, self.stage.spec))
+
+    async def say(
+        self, message: str, on_event: Callable[..., Any] | None = None
+    ) -> None:
+        """Send a message to whichever stage is open."""
+        if self.stage is None:
+            await self.open_quietly()
+        await self.stage.say(message, on_event=on_event)  # type: ignore[union-attr]
+
+        # Before anything acts on this turn, take up what it established. A handoff in the same
+        # turn opens the next stage, and every stage is built from ``self.source``; read it off
+        # afterwards instead and that hop dies on an agent nobody has named, taking the turn with
+        # it and leaving the conversation in reception with no way forward.
+        established = self._take_up()
+        moved = False
+        # A handoff moves the request, not just the conversation: the next stage opens and is
+        # given the person's own words. Bounded, because each hop is a model turn.
+        for _hop in range(3):
+            request = self._handoff.pop("request", None)
+            destination = self._handoff.pop("stage", None)
+            if not request:
+                break
+            following = destination or self.next_stage()
+            if following is None:
+                break
+            await self._open(following)
+            moved = True
+            await self.stage.say(request, on_event=on_event)  # type: ignore[union-attr]
+        if established and not moved:
+            # Nothing is left to decide once the agent is known, so it goes on rather than making
+            # somebody confirm what they already said. Unless a handoff already moved us, which
+            # would make this a second hop over the same request.
+            await self.advance(on_event=on_event)
+
+    async def resume(
+        self,
+        invocation_id: str,
+        on_event: Callable[..., Any] | None = None,
+    ) -> None:
+        """Resume one interrupted stage invocation from durable backend state."""
+        if self.stage is None:
+            await self.open_quietly()
+        await self.stage.resume_turn(  # type: ignore[union-attr]
+            invocation_id,
+            on_event=on_event,
+        )
+
+    async def interrupt_response(self) -> bool:
+        """Interrupt only the active assistant turn, never the domain operation."""
+        if self.stage is None:
+            return False
+        return await self.stage.interrupt_response()
+
+    def _take_up(self) -> bool:
+        """Take up whatever the turn just established. True if this turn named the agent.
+
+        Reception is the only stage whose result is not a file, so it is the only one the
+        conversation has to read back.
+        """
+        settled = self._found.pop("source", None)
+        if settled is None:
+            return False
+        self.source = settled
+        self.out = self.out or artifact_dir(settled.name)
+        return True
+
+    def reachable(self) -> dict[str, str]:
+        """Every stage, and why it can or cannot be opened right now.
+
+        Stages are not a wizard. Coming back to correct a contract after the world is built is
+        the ordinary case, not an exception, so any stage whose input exists can be opened at
+        any time. What cannot be skipped is the input itself: there is nothing to build a world
+        from without a contract, and nothing to write scenarios against without a world.
+        """
+        contract = self.contract is not None
+        # Every stage after the first works from the contract, so that is the first thing each
+        # of them needs; its own input is the second.
+        needs_contract = "needs a contract first"
+        why = {
+            RECEPTION: "",
+            UNDERSTAND: ""
+            if self.source is not None
+            else "cannot re-read the agent without knowing where its source lives",
+            BUILD: "" if contract else needs_contract,
+            SCENARIOS: ""
+            if contract and self.world_built
+            else (
+                needs_contract if not contract else "needs a built environment first"
+            ),
+            RUN: ""
+            if contract and self.scenarios_written
+            else (needs_contract if not contract else "needs scenarios first"),
+        }
+        return why
+
+    async def go_to(
+        self, stage_name: str, on_event: Callable[..., Any] | None = None
+    ) -> str:
+        """Open one stage by name, whether or not it is the next one.
+
+        The stage is opened but not set going: its opening message is an instruction to do that
+        stage's work, and somebody choosing to look at a stage has not thereby asked for it to
+        start spending.
+        """
+        if stage_name not in _NEXT and stage_name != DONE:
+            raise RuntimeError(f"no stage called {stage_name!r}")
+        blocked = self.reachable().get(stage_name, "")
+        if blocked:
+            raise RuntimeError(f"cannot open the {stage_name} stage: {blocked}")
+        return await self._open(stage_name)
+
+    async def advance(self, on_event: Callable[..., Any] | None = None) -> str | None:
+        """Move to the next stage and start it. Returns the stage entered, or None."""
+        following = self.next_stage()
+        if following is None:
+            return None
+        opening = await self._open(following)
+        await self.stage.say(opening, on_event=on_event)  # type: ignore[union-attr]
+        return following
+
+    async def close(self) -> None:
+        await self._close()
+
+
+def open_conversation(
+    *,
+    name: str = "",
+    path: str = "",
+    kind: str = "repo",
+    out: Path | None = None,
+    ask: Callable[..., Any] | None = None,
+    wanted: int = 10,
+    workspace: Path | None = None,
+    configure_stage: Callable[[str, SessionSpec], SessionSpec] | None = None,
+    control_only: bool = False,
+    job: HarnessJob | None = None,
+) -> Conversation:
+    source = resolve(kind, name=name, root=path) if name and path else None
+    return Conversation(
+        source=source,
+        out=out or (artifact_dir(name) if name else None),
+        ask=ask,
+        wanted=wanted,
+        workspace=workspace,
+        configure_stage=configure_stage,
+        control_only=control_only,
+        job=job,
+    )
+
+
+async def _demo() -> None:  # pragma: no cover - convenience for manual runs
+    conversation = open_conversation(name="demo", path=".")
+    await conversation.start()
+    await conversation.close()
+
+
+if __name__ == "__main__":  # pragma: no cover
+    asyncio.run(_demo())

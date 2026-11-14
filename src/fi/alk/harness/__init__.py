@@ -1,0 +1,119 @@
+"""The harness: an agent that builds test environments for other agents.
+
+It reads an agent, works out what it verifiably is, builds a world its tools can run against,
+generates scenarios, runs them, and reads the results back. Each of those is a stage, each stage
+is its own session, and stages hand work to each other as artifacts on disk.
+
+The split that matters: the model does judgement, and code decides outcomes. Reading unfamiliar
+source, designing a schema, and choosing what is worth testing are judgement. Executing a tool
+call and grading a run are not, and are never delegated to a model.
+
+Stages are described in files under ``skills/``, so the method is editable without touching
+code, and where an agent comes from is a registered source, so a new kind of agent is a class
+rather than a new code path.
+"""
+
+from .chat import Conversation, open_conversation
+from .action_certification import (
+    ActionCertificationReport,
+    ActionProbeMode,
+    ActionProbePolicy,
+    ActionProbeStatus,
+    certify_actions,
+)
+from .bundle import EnvironmentBundle, load_bundle, seal_bundle
+from .environment_plan import EnvironmentPlan, load_environment_plan
+from .config import (
+    DEFAULT_MODEL,
+    artifact_dir,
+    load_skill,
+    provider_env,
+    read_only_session,
+)
+from .contract import (
+    AgentContract,
+    Runtime,
+    RuntimeInterface,
+    ToolSpec,
+    validate_contract,
+)
+from .diagnostics import DiagnosticLocation, HarnessDiagnostic, RepairOwner
+from .job import ExecutionMode, HarnessJob, HarnessStage
+from .scenario import Scenario, validate_scenario
+from .session import Stage, Turn
+from .source_model import (
+    LogicalType,
+    SourceAction,
+    SourceInterface,
+    SourceModel,
+    SourceProcess,
+)
+from .source_discovery import compose_source_models, discover_code_source_model
+from .sources import (
+    AgentSource,
+    GitHubSource,
+    ProviderSource,
+    RepoSource,
+    SpecSource,
+    register_source,
+    resolve,
+    supported,
+)
+from .understand import open_stage, understand
+from .world_ir import ValueState, WorldIR, WorldValue, validate_world_ir
+
+__all__ = [
+    "AgentContract",
+    "AgentSource",
+    "ActionCertificationReport",
+    "ActionProbeMode",
+    "ActionProbePolicy",
+    "ActionProbeStatus",
+    "Conversation",
+    "DEFAULT_MODEL",
+    "DiagnosticLocation",
+    "EnvironmentBundle",
+    "EnvironmentPlan",
+    "ExecutionMode",
+    "GitHubSource",
+    "HarnessJob",
+    "HarnessDiagnostic",
+    "HarnessStage",
+    "LogicalType",
+    "ProviderSource",
+    "RepoSource",
+    "RepairOwner",
+    "Runtime",
+    "RuntimeInterface",
+    "Scenario",
+    "SpecSource",
+    "SourceModel",
+    "SourceAction",
+    "SourceInterface",
+    "SourceProcess",
+    "Stage",
+    "ToolSpec",
+    "Turn",
+    "ValueState",
+    "WorldIR",
+    "WorldValue",
+    "artifact_dir",
+    "compose_source_models",
+    "certify_actions",
+    "discover_code_source_model",
+    "load_skill",
+    "load_bundle",
+    "load_environment_plan",
+    "open_conversation",
+    "open_stage",
+    "provider_env",
+    "read_only_session",
+    "register_source",
+    "resolve",
+    "seal_bundle",
+    "supported",
+    "understand",
+    "validate_contract",
+    "validate_scenario",
+    "validate_world_ir",
+]

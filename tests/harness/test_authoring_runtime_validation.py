@@ -1,0 +1,2922 @@
+import asyncio
+import json
+import sqlite3
+from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
+
+from fi.alk.harness.bundle_author_v2 import world_ir_is_imported
+from fi.alk.harness.compile.postgres import compile_postgres
+from fi.alk.harness.world_import.sqlite import import_sqlite_world
+from fi.alk.harness.authoring_runtime_validation import (
+    _database_lanes,
+    _fallback_diagnostic,
+    _make_local_seed_files_readable,
+    _provider_owns_tool_execution,
+    RuntimeValidationError,
+    _setup_check_keys,
+    _generic_candidate_hash,
+    _stored_in_world,
+    _world_isolation_status,
+    _write_generic_certificate,
+    _write_runtime_evidence,
+    validate_and_repair,
+    validate_once,
+)
+from fi.alk.harness.certification import (
+    CertificationChecks,
+    CheckStatus,
+    GenericHarnessArtifactStore,
+    RuntimeValidationEvidence,
+)
+from fi.alk.harness.job import HarnessJob, ProviderExecutionMode
+from fi.alk.harness.bundle_v2 import BundleRuntimeV2, EvidenceSeam, RuntimeKindV2
+from fi.alk.harness.diagnostics import HarnessDiagnostic
+from fi.alk.harness.job import HarnessStage
+from fi.alk.harness.repair_controller import (
+    CandidateObservation,
+    RepairAction,
+    RepairBudgets,
+    RepairController,
+    RepairPhase,
+)
+from fi.alk.harness.repair_patch import (
+    RepairPatchOp,
+    RepairPatchOperation,
+    RepairPatchRejected,
+    WorldIRRepairPatch,
+)
+from fi.alk.harness.runtime_repair import RuntimePlanPatch, _contract_hash
+from fi.alk.harness.contract import AgentContract, Runtime
+from fi.alk.harness.source_model import (
+    LogicalType,
+    SourceColumn,
+    SourceModel,
+    SourceTable,
+)
+from fi.alk.harness.world_ir import (
+    WorldIR,
+    WorldRow,
+    WorldTable,
+    WorldValue,
+    validate_world_ir,
+)
+
+
+@pytest.mark.parametrize(
+    ("connector", "mode"),
+    [
+        ("retell", ProviderExecutionMode.CONNECT_ONLY),
+        ("retell", ProviderExecutionMode.ENVIRONMENT_BACKED),
+        ("retell", ProviderExecutionMode.PROVIDER_IMPORT),
+        ("retell_chat", ProviderExecutionMode.PROVIDER_IMPORT),
+        ("vapi", ProviderExecutionMode.CONNECT_ONLY),
+        ("vapi", ProviderExecutionMode.ENVIRONMENT_BACKED),
+        ("vapi", ProviderExecutionMode.PROVIDER_IMPORT),
+    ],
+)
+def test_provider_connector_owns_tool_execution(connector, mode) -> None:
+    job = SimpleNamespace(agent=SimpleNamespace(connector=connector, mode=mode))
+
+    assert _provider_owns_tool_execution(job)
+
+
+def test_database_lanes_default_to_one_per_cpu(monkeypatch):
+    from fi.alk.harness import process_runtime
+
+    monkeypatch.delenv("ALK_VALIDATION_DB_LANES", raising=False)
+    monkeypatch.setattr("os.sched_getaffinity", lambda _pid: {0, 1, 2}, raising=False)
+    monkeypatch.setattr("os.cpu_count", lambda: 64)
+    monkeypatch.setattr(process_runtime, "_cgroup_cpu_quota", lambda: None)
+    assert _database_lanes() == 3
+    monkeypatch.setenv("ALK_VALIDATION_DB_LANES", "")
+    assert _database_lanes() == 3
+    monkeypatch.setattr(process_runtime, "_cgroup_cpu_quota", lambda: 2.0)
+    assert _database_lanes() == 2
+    monkeypatch.setenv("ALK_VALIDATION_DB_LANES", "16")
+    assert _database_lanes() == 16
+    monkeypatch.setenv("ALK_VALIDATION_DB_LANES", "abc")
+    with pytest.raises(ValueError, match="ALK_VALIDATION_DB_LANES"):
+        _database_lanes()
+
+
+def test_local_seed_handoff_opens_only_generated_seed_files(tmp_path):
+    bundle = tmp_path / "bundle"
+    seed = bundle / "seed"
+    seed.mkdir(parents=True)
+    sql = seed / "source-schema.sql"
+    sql.write_text("select 1;\n")
+    secret = bundle / "private.txt"
+    secret.write_text("private")
+    bundle.chmod(0o700)
+    seed.chmod(0o700)
+    sql.chmod(0o600)
+    secret.chmod(0o600)
+
+    _make_local_seed_files_readable(bundle)
+
+    assert bundle.stat().st_mode & 0o055 == 0o055
+    assert seed.stat().st_mode & 0o055 == 0o055
+    assert sql.stat().st_mode & 0o044 == 0o044
+    assert secret.stat().st_mode & 0o077 == 0
+
+
+def test_validation_repairs_then_revalidates_and_records_scope(tmp_path):
+    calls = []
+
+    async def validate(*args):
+        calls.append("validate")
+        if len(calls) == 1:
+            raise RuntimeValidationError("environment", "foreign key mismatch")
+        return 10
+
+    async def repair(phase, guidance):
+        assert phase == "environment"
+        assert "foreign key mismatch" in guidance
+        assert "disable database constraints" in guidance
+        calls.append("repair")
+        return 0
+
+    asyncio.run(
+        validate_and_repair(None, tmp_path, tmp_path, validate=validate, repair=repair)
+    )
+    assert calls == ["validate", "repair", "validate"]
+    proof = json.loads((tmp_path / "runtime-validation.json").read_text())
+    assert proof["setup_ready_scenarios"] == 10
+    assert proof["reference_tools_proven"] is False
+
+
+def test_validation_stops_after_two_repairs_without_false_certificate(tmp_path):
+    repairs = []
+
+    async def validate(*args):
+        raise RuntimeValidationError("scenarios", "bad setup")
+
+    async def repair(*args):
+        repairs.append(args)
+        return 0
+
+    with pytest.raises(RuntimeValidationError, match="bad setup"):
+        asyncio.run(
+            validate_and_repair(
+                None, tmp_path, tmp_path, validate=validate, repair=repair
+            )
+        )
+    assert len(repairs) == 2
+    assert not (tmp_path / "runtime-validation.json").exists()
+
+
+def test_environment_repairs_do_not_exhaust_scenario_repair_budget(tmp_path):
+    failures = iter(["environment", "scenarios", "environment", "scenarios", None])
+    repairs = []
+
+    async def validate(*args):
+        phase = next(failures)
+        if phase:
+            raise RuntimeValidationError(phase, "invalid generated data")
+        return 10
+
+    async def repair(phase, guidance):
+        repairs.append(phase)
+        return 0
+
+    asyncio.run(
+        validate_and_repair(None, tmp_path, tmp_path, validate=validate, repair=repair)
+    )
+    assert repairs == ["environment", "scenarios", "environment", "scenarios"]
+    assert (
+        json.loads((tmp_path / "runtime-validation.json").read_text())["attempts"] == 5
+    )
+
+
+def test_infrastructure_failure_does_not_trigger_data_repair(tmp_path):
+    async def validate(*args):
+        raise RuntimeValidationError("infrastructure", "CERTIFICATE_VERIFY_FAILED")
+
+    async def repair(*args):
+        pytest.fail("Infrastructure trust errors must not rewrite generated data")
+
+    with pytest.raises(RuntimeValidationError, match="CERTIFICATE_VERIFY_FAILED"):
+        asyncio.run(
+            validate_and_repair(
+                None, tmp_path, tmp_path, validate=validate, repair=repair
+            )
+        )
+
+
+def test_runtime_validation_error_carries_structured_diagnostics() -> None:
+    diagnostic = HarnessDiagnostic.create(
+        stage=HarnessStage.VALIDATING_ENVIRONMENT,
+        component="world_ir",
+        code="required_value_missing",
+        message="required value missing",
+    )
+
+    error = RuntimeValidationError(
+        "environment", "safe summary", diagnostics=(diagnostic,)
+    )
+
+    assert error.diagnostics == (diagnostic,)
+
+
+@pytest.mark.parametrize("readiness_only", [False, True])
+def test_generic_validation_uses_typed_patch_policy_and_persists_history(
+    tmp_path,
+    readiness_only,
+) -> None:
+    source = tmp_path / "source"
+    authoring = tmp_path / "authoring"
+    source.mkdir()
+    authoring.mkdir()
+    (source / "agent.py").write_text("agent", encoding="utf-8")
+    calls = []
+    diagnostic = HarnessDiagnostic.create(
+        stage=HarnessStage.VALIDATING_ENVIRONMENT,
+        component="world_ir",
+        code="required_value_missing",
+        message="missing value",
+    )
+
+    async def validate(*args):
+        calls.append("validate")
+        if len(calls) == 1:
+            raise RuntimeValidationError(
+                "environment", "invalid", diagnostics=(diagnostic,)
+            )
+        return 5
+
+    async def repair(phase, guidance):
+        assert phase == "environment"
+        assert "required_value_missing@world_ir" in guidance
+        assert "strategy=request_targeted_data_patch" in guidance
+        assert "evidence=missing value" in guidance
+        (authoring / "world.sqlite").write_text("changed", encoding="utf-8")
+        calls.append("repair")
+        return 0
+
+    job = SimpleNamespace(metadata={"generic_harness_v1": True})
+    asyncio.run(
+        validate_and_repair(
+            job,
+            source,
+            authoring,
+            validate=validate,
+            repair=repair,
+            readiness_only=readiness_only,
+        )
+    )
+
+    assert calls == ["validate", "repair", "validate"]
+    history = json.loads(
+        (
+            authoring
+            / "generic-harness"
+            / (
+                "readiness-repair-history.json"
+                if readiness_only
+                else "repair-history.json"
+            )
+        ).read_text()
+    )
+    assert [item["action"] for item in history["decisions"]] == [
+        RepairAction.PATCH_ENVIRONMENT.value,
+        RepairAction.CERTIFY.value,
+    ]
+    if readiness_only:
+        assert not (authoring / "runtime-validation.json").exists()
+        assert not (authoring / "generic-harness/certification.json").exists()
+        return
+    proof = json.loads((authoring / "runtime-validation.json").read_text())
+    assert proof["generic_harness"] == "v1"
+    assert proof["setup_ready_scenarios"] == 5
+
+
+def test_generic_repair_without_typed_patch_keeps_validation_failure(
+    tmp_path, monkeypatch
+) -> None:
+    from fi.alk.harness import repair_authoring
+
+    source = tmp_path / "source"
+    authoring = tmp_path / "authoring"
+    artifacts = authoring / "generic-harness"
+    source.mkdir()
+    artifacts.mkdir(parents=True)
+    (source / "agent.py").write_text("agent", encoding="utf-8")
+    (artifacts / "source-model.json").write_text("source", encoding="utf-8")
+    (artifacts / "world-ir.json").write_text("world", encoding="utf-8")
+    monkeypatch.setattr(
+        GenericHarnessArtifactStore, "read_source_model", lambda self: object()
+    )
+    monkeypatch.setattr(
+        GenericHarnessArtifactStore, "read_world_ir", lambda self: object()
+    )
+
+    async def no_patch(*args, **kwargs):
+        raise repair_authoring.RepairPatchNotSubmittedError("no patch submitted")
+
+    monkeypatch.setattr(repair_authoring, "request_world_ir_patch", no_patch)
+    calls = []
+
+    async def validate(*args):
+        calls.append("validate")
+        raise RuntimeValidationError(
+            "environment", "Source data invariant review did not finish; not certified"
+        )
+
+    job = SimpleNamespace(metadata={"generic_harness_v1": True})
+    with pytest.raises(RuntimeValidationError, match="Source data invariant review"):
+        asyncio.run(validate_and_repair(job, source, authoring, validate=validate))
+    assert calls == ["validate"]
+    history = json.loads((artifacts / "repair-history.json").read_text())
+    assert history["results"][0]["outcome"] == "failed"
+
+
+@pytest.mark.parametrize("saved_world", [False, True])
+def test_generic_validation_applies_typed_world_patch_transactionally(
+    tmp_path, saved_world
+) -> None:
+    source_root = tmp_path / "source"
+    authoring = tmp_path / "authoring"
+    source_root.mkdir()
+    authoring.mkdir()
+    (source_root / "agent.py").write_text("agent", encoding="utf-8")
+    source_model = SourceModel.create(
+        source_digest="sha256:" + "a" * 64,
+        engine="postgres",
+        tables=(
+            SourceTable(
+                name="accounts",
+                columns=(
+                    SourceColumn(
+                        name="id",
+                        logical_type=LogicalType.INTEGER,
+                        native_type="integer",
+                        nullable=False,
+                        has_default=False,
+                    ),
+                ),
+            ),
+        ),
+    )
+    world = WorldIR.create(
+        source_model_fingerprint=source_model.fingerprint,
+        tables=(
+            WorldTable(
+                source_name="accounts",
+                rows=(WorldRow(identity="account-1", values={}),),
+            ),
+        ),
+    )
+    if saved_world:
+        # The world.sqlite the IR was imported from: the hashed world.
+        with sqlite3.connect(authoring / "world.sqlite") as database:
+            database.execute("CREATE TABLE accounts (id INTEGER)")
+            database.execute("INSERT INTO accounts VALUES (NULL)")
+            world = import_sqlite_world(database, source_model, validate=False).world
+    store = GenericHarnessArtifactStore(authoring / "generic-harness")
+    store.write_source_model(source_model)
+    store.write_world_ir(world)
+    identity = world.tables[0].rows[0].identity
+    diagnostic = HarnessDiagnostic.create(
+        stage=HarnessStage.VALIDATING_ENVIRONMENT,
+        component="world_ir",
+        code="required_value_missing",
+        message="accounts.id is missing",
+    )
+
+    async def validate(*args):
+        candidate = store.read_world_ir()
+        try:
+            validate_world_ir(candidate, source_model)
+        except Exception:
+            raise RuntimeValidationError(
+                "environment", "invalid", diagnostics=(diagnostic,)
+            ) from None
+        return 1
+
+    async def repair(*args):
+        return WorldIRRepairPatch.create(
+            base_world_ir_hash=world.fingerprint,
+            operations=(
+                RepairPatchOperation(
+                    op=RepairPatchOp.SET_VALUE,
+                    table="accounts",
+                    row_identity=identity,
+                    column="id",
+                    value=WorldValue.present(LogicalType.INTEGER, 1),
+                    reason="required_value_missing",
+                    evidence_refs=("source-model:accounts.id",),
+                ),
+            ),
+        )
+
+    job = SimpleNamespace(metadata={"generic_harness_v1": True})
+    asyncio.run(
+        validate_and_repair(
+            job, source_root, authoring, validate=validate, repair=repair
+        )
+    )
+
+    validate_world_ir(store.read_world_ir(), source_model)
+    assert (authoring / "generic-harness" / "repair-patch-0001.json").is_file()
+    if saved_world:
+        # The repair is in the hashed world too, and the IR is what it imports to.
+        with sqlite3.connect(authoring / "world.sqlite") as database:
+            assert database.execute("SELECT id FROM accounts").fetchall() == [(1,)]
+        assert world_ir_is_imported(authoring)
+    history = store.read_repair_history()
+    assert (
+        history.results[0].after_candidate_hash
+        != history.results[0].before_candidate_hash
+    )
+
+
+def test_a_repair_world_sqlite_cannot_hold_fails_with_the_validation_error(
+    tmp_path,
+) -> None:
+    source_root = tmp_path / "source"
+    authoring = tmp_path / "authoring"
+    source_root.mkdir()
+    authoring.mkdir()
+    (source_root / "agent.py").write_text("agent", encoding="utf-8")
+    source_model = SourceModel.create(
+        source_digest="sha256:" + "a" * 64,
+        engine="postgres",
+        tables=(
+            SourceTable(
+                name="accounts",
+                columns=(
+                    SourceColumn(
+                        name="id",
+                        logical_type=LogicalType.INTEGER,
+                        native_type="integer",
+                        nullable=False,
+                        has_default=False,
+                    ),
+                ),
+            ),
+        ),
+    )
+    path = authoring / "world.sqlite"
+    with sqlite3.connect(path) as database:
+        database.execute("CREATE TABLE accounts (id INTEGER CHECK (id IS NULL))")
+        database.execute("INSERT INTO accounts VALUES (NULL)")
+        world = import_sqlite_world(database, source_model, validate=False).world
+    before = path.read_bytes()
+    store = GenericHarnessArtifactStore(authoring / "generic-harness")
+    store.write_source_model(source_model)
+    store.write_world_ir(world)
+    diagnostic = HarnessDiagnostic.create(
+        stage=HarnessStage.VALIDATING_ENVIRONMENT,
+        component="world_ir",
+        code="required_value_missing",
+        message="accounts.id is missing",
+    )
+
+    async def validate(*args):
+        raise RuntimeValidationError("environment", "invalid", diagnostics=(diagnostic,))
+
+    async def repair(*args):
+        return WorldIRRepairPatch.create(
+            base_world_ir_hash=world.fingerprint,
+            operations=(
+                RepairPatchOperation(
+                    op=RepairPatchOp.SET_VALUE,
+                    table="accounts",
+                    row_identity=world.tables[0].rows[0].identity,
+                    column="id",
+                    value=WorldValue.present(LogicalType.INTEGER, 1),
+                    reason="required_value_missing",
+                    evidence_refs=("source-model:accounts.id",),
+                ),
+            ),
+        )
+
+    job = SimpleNamespace(metadata={"generic_harness_v1": True})
+    with pytest.raises(RuntimeValidationError, match="invalid"):
+        asyncio.run(
+            validate_and_repair(
+                job, source_root, authoring, validate=validate, repair=repair
+            )
+        )
+
+    assert path.read_bytes() == before
+    assert store.read_world_ir() == world
+    assert store.read_repair_history().results[0].outcome.value == "failed"
+
+
+@pytest.mark.parametrize("repair", ["a_value_sqlite_changes", "a_null_over_a_default"])
+def test_a_repair_world_sqlite_cannot_hold_is_rejected_and_writes_nothing(
+    tmp_path, repair
+) -> None:
+    source_model = SourceModel.create(
+        source_digest="sha256:" + "a" * 64,
+        engine="postgres",
+        tables=(
+            SourceTable(
+                name="accounts",
+                columns=(
+                    SourceColumn(
+                        name="zip",
+                        logical_type=LogicalType.STRING,
+                        native_type="text",
+                        nullable=True,
+                        has_default=True,
+                        default_expression="'00000'",
+                    ),
+                    SourceColumn(
+                        name="note",
+                        logical_type=LogicalType.STRING,
+                        native_type="text",
+                        nullable=True,
+                        has_default=False,
+                    ),
+                ),
+            ),
+        ),
+    )
+    path = tmp_path / "world.sqlite"
+    with sqlite3.connect(path) as database:
+        database.execute("CREATE TABLE accounts (zip INTEGER)")
+        database.execute("INSERT INTO accounts VALUES (NULL)")
+        world = import_sqlite_world(database, source_model, validate=False).world
+    before = path.read_bytes()
+    [row] = world.tables[0].rows
+    zip_code = (
+        WorldValue.present(LogicalType.STRING, "02134")
+        if repair == "a_value_sqlite_changes"
+        else WorldValue.null(LogicalType.STRING)
+    )
+    repaired = world.model_copy(
+        update={
+            "tables": (
+                WorldTable(
+                    source_name="accounts",
+                    rows=(
+                        WorldRow(
+                            identity=row.identity,
+                            values={
+                                "zip": zip_code,
+                                # A column world.sqlite lacks: added, then undone.
+                                "note": WorldValue.present(LogicalType.STRING, "x"),
+                            },
+                        ),
+                    ),
+                ),
+            )
+        }
+    )
+
+    with pytest.raises(RepairPatchRejected, match="repair_patch_not_storable"):
+        _stored_in_world(tmp_path, repaired, source_model)
+
+    assert path.read_bytes() == before
+
+
+def _users_with_a_role_default(
+    id_default: str | None, role_default: str
+) -> SourceModel:
+    return SourceModel.create(
+        source_digest="sha256:" + "a" * 64,
+        engine="postgres",
+        tables=(
+            SourceTable(
+                name="users",
+                columns=(
+                    SourceColumn(
+                        name="id",
+                        logical_type=LogicalType.INTEGER
+                        if id_default
+                        else LogicalType.STRING,
+                        native_type="integer" if id_default else "text",
+                        nullable=False,
+                        has_default=id_default is not None,
+                        default_expression=id_default,
+                    ),
+                    SourceColumn(
+                        name="role",
+                        logical_type=LogicalType.STRING,
+                        native_type="text",
+                        nullable=False,
+                        has_default=True,
+                        default_expression=role_default,
+                    ),
+                ),
+                primary_key=("id",),
+            ),
+        ),
+    )
+
+
+def _with_a_row_added(world: WorldIR, values: dict[str, WorldValue]) -> WorldIR:
+    [table] = world.tables
+    return WorldIR.create(
+        source_model_fingerprint=world.source_model_fingerprint,
+        tables=(
+            WorldTable(
+                source_name=table.source_name,
+                rows=tuple(
+                    sorted(
+                        (*table.rows, WorldRow(identity="added", values=values)),
+                        key=lambda row: row.identity,
+                    )
+                ),
+            ),
+        ),
+    )
+
+
+def _seeded_columns(source_model: SourceModel, world: WorldIR) -> list[tuple]:
+    return sorted(
+        operation.columns
+        for operation in compile_postgres(source_model, world).operations
+        if operation.table == "users"
+    )
+
+
+@pytest.mark.parametrize(
+    ("source_default", "sqlite_default"),
+    [("'user'::text", "'admin'"), ("now()", "CURRENT_TIMESTAMP")],
+)
+@pytest.mark.parametrize("left_out", [False, True])
+def test_a_repaired_row_keeps_the_source_default_for_a_value_left_absent(
+    tmp_path, source_default, sqlite_default, left_out
+) -> None:
+    source_model = _users_with_a_role_default(None, source_default)
+    path = tmp_path / "world.sqlite"
+    with sqlite3.connect(path) as database:
+        database.execute(
+            "CREATE TABLE users (id TEXT PRIMARY KEY, "
+            f"role TEXT DEFAULT {sqlite_default})"
+        )
+        database.execute("INSERT INTO users VALUES ('u1', 'staff')")
+        world = import_sqlite_world(database, source_model).world
+    values = {"id": WorldValue.present(LogicalType.STRING, "u2")}
+    if not left_out:
+        values["role"] = WorldValue.absent()
+    repaired = _with_a_row_added(world, values)
+
+    stored = _stored_in_world(tmp_path, repaired, source_model)
+
+    # The seed still leaves role to the source's default, not SQLite's.
+    assert _seeded_columns(source_model, stored) == [("id",), ("id", "role")]
+    assert _seeded_columns(source_model, stored) == _seeded_columns(
+        source_model, repaired
+    )
+    with sqlite3.connect(path) as database:
+        assert database.execute(
+            "SELECT role FROM users WHERE id = 'u2'"
+        ).fetchall() == [(None,)]
+
+
+def test_a_repaired_row_sqlite_must_fill_with_its_own_default_is_rejected(
+    tmp_path,
+) -> None:
+    source_model = _users_with_a_role_default(None, "'user'::text")
+    path = tmp_path / "world.sqlite"
+    with sqlite3.connect(path) as database:
+        database.execute(
+            "CREATE TABLE users (id TEXT PRIMARY KEY, "
+            "role TEXT NOT NULL DEFAULT 'admin')"
+        )
+        database.execute("INSERT INTO users VALUES ('u1', 'staff')")
+        world = import_sqlite_world(database, source_model).world
+    before = path.read_bytes()
+    repaired = _with_a_row_added(
+        world,
+        {
+            "id": WorldValue.present(LogicalType.STRING, "u2"),
+            "role": WorldValue.absent(),
+        },
+    )
+
+    with pytest.raises(RepairPatchRejected, match="repair_patch_not_storable"):
+        _stored_in_world(tmp_path, repaired, source_model)
+
+    assert path.read_bytes() == before
+
+
+@pytest.mark.parametrize("autoincrement", ["", " AUTOINCREMENT"])
+def test_a_repaired_row_left_without_its_serial_key_takes_the_next_rowid(
+    tmp_path, autoincrement
+) -> None:
+    source_model = _users_with_a_role_default(
+        "nextval('users_id_seq'::regclass)", "'user'::text"
+    )
+    path = tmp_path / "world.sqlite"
+    with sqlite3.connect(path) as database:
+        database.execute(
+            f"CREATE TABLE users (id INTEGER PRIMARY KEY{autoincrement}, role TEXT)"
+        )
+        database.execute("INSERT INTO users VALUES (1, 'staff')")
+        world = import_sqlite_world(database, source_model).world
+    repaired = _with_a_row_added(
+        world, {"role": WorldValue.present(LogicalType.STRING, "admin")}
+    )
+
+    stored = _stored_in_world(tmp_path, repaired, source_model)
+
+    assert sorted(
+        (row.values["id"].value, row.values["role"].value)
+        for row in stored.tables[0].rows
+    ) == [(1, "staff"), (2, "admin")]
+
+
+@pytest.mark.parametrize("id_default", ["100", "'100'::integer"])
+def test_a_repaired_row_left_without_a_plain_integer_default_is_rejected(
+    tmp_path, id_default
+) -> None:
+    """Only a sequence numbers an omitted key; SQLite's rowid would override 100."""
+    source_model = _users_with_a_role_default(id_default, "'user'::text")
+    path = tmp_path / "world.sqlite"
+    with sqlite3.connect(path) as database:
+        database.execute("CREATE TABLE users (id INTEGER PRIMARY KEY, role TEXT)")
+        database.execute("INSERT INTO users VALUES (1, 'staff')")
+        world = import_sqlite_world(database, source_model).world
+    before = path.read_bytes()
+    repaired = _with_a_row_added(
+        world, {"role": WorldValue.present(LogicalType.STRING, "admin")}
+    )
+
+    with pytest.raises(RepairPatchRejected, match="repair_patch_not_storable"):
+        _stored_in_world(tmp_path, repaired, source_model)
+
+    assert path.read_bytes() == before
+
+
+def test_generic_validation_rejects_unchanged_compiler_failure(tmp_path) -> None:
+    source = tmp_path / "source"
+    authoring = tmp_path / "authoring"
+    source.mkdir()
+    authoring.mkdir()
+    (source / "agent.py").write_text("agent", encoding="utf-8")
+    diagnostic = HarnessDiagnostic.create(
+        stage=HarnessStage.VALIDATING_ENVIRONMENT,
+        component="world_import",
+        code="array_shape_mismatch",
+        message="malformed array",
+    )
+    calls = []
+
+    async def validate(*args):
+        calls.append("validate")
+        raise RuntimeValidationError(
+            "environment", "invalid", diagnostics=(diagnostic,)
+        )
+
+    async def repair(*args):
+        pytest.fail("compiler failures must not invoke model repair")
+
+    job = SimpleNamespace(metadata={"generic_harness_v1": True})
+    with pytest.raises(RuntimeValidationError):
+        asyncio.run(
+            validate_and_repair(
+                job, source, authoring, validate=validate, repair=repair
+            )
+        )
+
+    assert calls == ["validate", "validate"]
+    history = json.loads(
+        (authoring / "generic-harness" / "repair-history.json").read_text()
+    )
+    assert [item["action"] for item in history["decisions"]] == [
+        RepairAction.RECOMPILE.value,
+        RepairAction.REJECT.value,
+    ]
+
+
+def test_generic_validation_retries_infrastructure_without_reauthoring(
+    tmp_path,
+) -> None:
+    source = tmp_path / "source"
+    authoring = tmp_path / "authoring"
+    source.mkdir()
+    authoring.mkdir()
+    (source / "agent.py").write_text("agent", encoding="utf-8")
+    calls = []
+    waits = []
+
+    async def validate(*args):
+        calls.append("validate")
+        if len(calls) == 1:
+            raise RuntimeValidationError("infrastructure", "temporary outage")
+        return 1
+
+    async def repair(*args):
+        pytest.fail("infrastructure failures must not invoke model repair")
+
+    async def sleeper(seconds):
+        waits.append(seconds)
+
+    controller = RepairController(
+        RepairBudgets(
+            infrastructure_retries_per_candidate=1,
+            infrastructure_initial_backoff_seconds=0,
+            infrastructure_jitter_ratio=0,
+        )
+    )
+    job = SimpleNamespace(metadata={"generic_harness_v1": True})
+    asyncio.run(
+        validate_and_repair(
+            job,
+            source,
+            authoring,
+            validate=validate,
+            repair=repair,
+            controller=controller,
+            sleeper=sleeper,
+        )
+    )
+
+    assert calls == ["validate", "validate"]
+    assert waits == [0]
+    assert [item.action for item in controller.history.decisions] == [
+        RepairAction.RETRY_INFRASTRUCTURE,
+        RepairAction.CERTIFY,
+    ]
+
+
+@pytest.mark.parametrize("changing_evidence", [False, True])
+@pytest.mark.parametrize(
+    "code", ["external_service_unavailable", "chat_ingress_timeout"]
+)
+def test_initial_materialization_does_not_grant_extra_infrastructure_retries(
+    tmp_path,
+    changing_evidence,
+    code,
+):
+    source, authoring = tmp_path / "source", tmp_path / "authoring"
+    source.mkdir()
+    authoring.mkdir()
+    calls = []
+
+    async def validate(*args):
+        calls.append("validate")
+        generated = authoring / "generic-harness"
+        generated.mkdir(exist_ok=True)
+        for name in ("source-model.json", "world-ir.json"):
+            (generated / name).write_text(
+                json.dumps(
+                    {
+                        "fingerprint": len(calls) if changing_evidence else "stable",
+                    }
+                )
+            )
+        raise RuntimeValidationError(
+            "environment",
+            "temporary outage",
+            diagnostics=[
+                HarnessDiagnostic.create(
+                    stage=HarnessStage.CONNECTING_AGENT,
+                    component="chat_ingress",
+                    code=code,
+                    message="temporary outage",
+                ),
+            ],
+        )
+
+    async def repair(*args):
+        pytest.fail("Infrastructure retries must not rewrite the candidate")
+
+    async def sleeper(seconds):
+        pass
+
+    controller = RepairController(
+        RepairBudgets(
+            environment_patches=0,
+            infrastructure_retries_per_candidate=2,
+            infrastructure_initial_backoff_seconds=0,
+            infrastructure_jitter_ratio=0,
+        )
+    )
+    with pytest.raises(RuntimeValidationError, match="temporary outage"):
+        asyncio.run(
+            validate_and_repair(
+                SimpleNamespace(metadata={"generic_harness_v1": True}),
+                source,
+                authoring,
+                validate=validate,
+                repair=repair,
+                controller=controller,
+                sleeper=sleeper,
+            )
+        )
+    assert len(calls) == 3
+    assert [item.action for item in controller.history.decisions] == [
+        RepairAction.RETRY_INFRASTRUCTURE,
+        RepairAction.RETRY_INFRASTRUCTURE,
+        RepairAction.REJECT,
+    ]
+
+
+def test_generic_candidate_hash_ignores_repository_metadata_and_own_artifacts(
+    tmp_path,
+) -> None:
+    source = tmp_path / "source"
+    authoring = tmp_path / "authoring"
+    (source / ".git").mkdir(parents=True)
+    authoring.mkdir()
+    (source / "agent.py").write_text("agent", encoding="utf-8")
+    (authoring / "world.sqlite").write_text("world", encoding="utf-8")
+    before = _generic_candidate_hash(source, authoring)
+
+    (source / ".git" / "index").write_text("moving metadata", encoding="utf-8")
+    (authoring / "generic-harness").mkdir()
+    (authoring / "generic-harness" / "repair-history.json").write_text(
+        "changing history", encoding="utf-8"
+    )
+
+    assert _generic_candidate_hash(source, authoring) == before
+
+
+@pytest.mark.parametrize("invariants_status", ["passed", "not_applicable"])
+def test_runtime_evidence_reads_generic_models_when_world_isolation_not_run(
+    tmp_path, monkeypatch, invariants_status
+) -> None:
+    from fi.alk.harness import certification
+
+    captured = {}
+
+    class Store:
+        def __init__(self, _root):
+            pass
+
+        def read_source_model(self):
+            return SimpleNamespace(fingerprint="sha256:" + "b" * 64, engine="none")
+
+        def read_world_ir(self):
+            return SimpleNamespace(fingerprint="sha256:" + "c" * 64)
+
+        def write_runtime_evidence(self, evidence):
+            captured["evidence"] = evidence
+
+        def write_tool_certification(self, report):
+            captured["report"] = report
+
+        def write_action_certification(self, report):
+            captured["action_report"] = report
+
+    monkeypatch.setattr(certification, "GenericHarnessArtifactStore", Store)
+    authoring = tmp_path / "authoring"
+    authoring.mkdir()
+    (authoring / "contract.json").write_text("{}", encoding="utf-8")
+    from fi.alk.harness.source_data_invariants import ARTIFACT
+
+    (authoring / ARTIFACT).write_text(json.dumps({"status": invariants_status}))
+    report = SimpleNamespace(certified_or_runtime_only=1, total=1)
+    action_report = SimpleNamespace(passed=1, certified=1, executable=1, total=1)
+    manifest = SimpleNamespace(
+        provenance=SimpleNamespace(source_digest="a" * 64),
+        digest="sha256:" + "d" * 64,
+    )
+
+    _write_runtime_evidence(
+        job=SimpleNamespace(),
+        authoring=authoring,
+        manifest=manifest,
+        count=1,
+        external_provider=False,
+        tool_report=report,
+        action_report=action_report,
+        reset_equivalence=CheckStatus.PASSED,
+        world_isolation=CheckStatus.NOT_RUN,
+        chat_ingress=CheckStatus.PASSED,
+    )
+
+    evidence = captured["evidence"]
+    assert evidence.source_schema_hash == "sha256:" + "b" * 64
+    assert evidence.world_ir_hash == "sha256:" + "c" * 64
+    assert evidence.compiler_version == "futureagi.no-state-compiler.v1"
+    assert evidence.checks.schema_and_seed is CheckStatus.PASSED
+    assert evidence.checks.world_isolation is CheckStatus.NOT_RUN
+    assert evidence.checks.source_invariants.value == invariants_status
+    if invariants_status == "not_applicable":
+        assert any("private application state" in item for item in evidence.limitations)
+
+
+def test_fixed_port_single_world_marks_concurrent_isolation_not_applicable() -> None:
+    assert (
+        _world_isolation_status(
+            {
+                "conformance": None,
+                "degrade_reason": "fixed_port",
+                "effective_parallelism": 1,
+            }
+        )
+        is CheckStatus.NOT_APPLICABLE
+    )
+    assert (
+        _world_isolation_status(
+            {
+                "conformance": None,
+                "degrade_reason": "fixed_port",
+                "effective_parallelism": 2,
+            }
+        )
+        is CheckStatus.NOT_RUN
+    )
+    assert _world_isolation_status({"conformance": True}) is CheckStatus.PASSED
+
+
+def test_external_provider_runtime_evidence_marks_state_checks_not_applicable(
+    tmp_path, monkeypatch
+) -> None:
+    from fi.alk.harness import certification
+
+    captured = {}
+
+    class Store:
+        def __init__(self, _root):
+            pass
+
+        def write_runtime_evidence(self, evidence):
+            captured["evidence"] = evidence
+
+        def write_tool_certification(self, _report):
+            pass
+
+        def write_action_certification(self, _report):
+            pass
+
+    monkeypatch.setattr(certification, "GenericHarnessArtifactStore", Store)
+    authoring = tmp_path / "authoring"
+    authoring.mkdir()
+    (authoring / "contract.json").write_text("{}", encoding="utf-8")
+    report = SimpleNamespace(certified_or_runtime_only=0, total=0)
+    action_report = SimpleNamespace(certified=0, executable=0, total=0)
+    manifest = SimpleNamespace(
+        provenance=SimpleNamespace(source_digest="a" * 64),
+        digest="sha256:" + "d" * 64,
+    )
+
+    _write_runtime_evidence(
+        job=SimpleNamespace(),
+        authoring=authoring,
+        manifest=manifest,
+        count=1,
+        external_provider=True,
+        tool_report=report,
+        action_report=action_report,
+        reset_equivalence=CheckStatus.NOT_APPLICABLE,
+        world_isolation=CheckStatus.NOT_APPLICABLE,
+        chat_ingress=CheckStatus.NOT_APPLICABLE,
+    )
+
+    checks = captured["evidence"].checks
+    assert checks.schema_and_seed is CheckStatus.NOT_APPLICABLE
+    assert checks.source_invariants is CheckStatus.NOT_APPLICABLE
+    assert checks.reset_equivalence is CheckStatus.NOT_APPLICABLE
+    assert checks.world_isolation is CheckStatus.NOT_APPLICABLE
+
+
+@pytest.mark.parametrize(
+    "source_invariants", [CheckStatus.PASSED, CheckStatus.NOT_APPLICABLE]
+)
+def test_generic_certificate_combines_runtime_evidence_and_repair_history(
+    tmp_path,
+    source_invariants,
+) -> None:
+    authoring = tmp_path / "authoring"
+    store = GenericHarnessArtifactStore(authoring / "generic-harness")
+
+    def digest(character):
+        return "sha256:" + character * 64
+
+    store.write_runtime_evidence(
+        RuntimeValidationEvidence(
+            source_digest=digest("a"),
+            source_schema_hash=digest("b"),
+            world_ir_hash=digest("c"),
+            compiler_version="compiler-v1",
+            bundle_digest=digest("d"),
+            contract_hash=digest("e"),
+            scenario_set_hash=digest("f"),
+            checks=CertificationChecks(
+                static=CheckStatus.PASSED,
+                schema_and_seed=CheckStatus.PASSED,
+                scenario_setup_ready="2/2",
+                source_invariants=source_invariants,
+            ),
+            limitations=("tool trajectories not run",),
+        )
+    )
+    controller = RepairController()
+    controller.decide(
+        CandidateObservation(candidate_hash=digest("0"), phase=RepairPhase.ENVIRONMENT)
+    )
+    job = SimpleNamespace(
+        source=SimpleNamespace(repository="future-agi/example", commit_sha="1" * 40),
+        metadata={"daytona_snapshot": "snapshot-r1"},
+    )
+
+    _write_generic_certificate(job, authoring, controller.history)
+
+    certificate = store.read_certification()
+    assert certificate.status.value == "certified"
+    assert certificate.source.repository == "future-agi/example"
+    assert certificate.runtime.snapshot == "snapshot-r1"
+    assert certificate.runtime.validation_attempts == 1
+    assert certificate.checks.scenario_setup_ready == "2/2"
+    assert certificate.checks.source_invariants is source_invariants
+    assert (
+        json.loads((authoring / "runtime-validation.json").read_text())["fingerprint"]
+        == certificate.fingerprint
+    )
+
+
+@pytest.mark.parametrize("bad_setup", [False, True])
+def test_runtime_gate_resets_each_scenario_and_preserves_execution_secrets(
+    tmp_path, monkeypatch, bad_setup
+):
+    from fi.alk.harness import (
+        bundle_author_v2,
+        hosted_entrypoint,
+        outbound,
+        process_preflight,
+        process_runtime,
+        scenario_source,
+        source_data_invariants,
+    )
+
+    original = tmp_path / "execution-secrets.json"
+    original.write_text('{"TEST_SECRET":"target-secret-value"}')
+    authoring = tmp_path / "authoring"
+    authoring.mkdir()
+    calls = []
+
+    async def invariants(*args, **kwargs):
+        return []
+
+    monkeypatch.setattr(source_data_invariants, "author_invariants", invariants)
+
+    class Provider:
+        def __init__(self, **kwargs):
+            assert kwargs["secrets_path"] != original
+            assert kwargs["secrets_path"].read_bytes() == original.read_bytes()
+
+        async def provision(self, *args, **kwargs):
+            actual_provider = provider_type(
+                cpu_observer=lambda: None, mem_observer=lambda: None
+            )
+            assert actual_provider._run_admission(1, kwargs["work_directory"]) == 1
+            calls.append("provision")
+            return [SimpleNamespace(endpoints={}, world_index=0)]
+
+        async def reset(self, *args, **kwargs):
+            calls.append("reset")
+
+        async def close(self, **kwargs):
+            calls.append("close")
+
+    class World:
+        def read_only(self):
+            return self
+
+    class Factory:
+        def __init__(self, work, bundle):
+            pass
+
+        async def create(self, *args, **kwargs):
+            return World()
+
+    def setup(world):
+        calls.append("setup")
+        if bad_setup:
+            raise ValueError("bad target-secret-value")
+
+    provider_type = process_runtime.ProcessRuntimeProvider
+    monkeypatch.setattr(process_runtime, "ProcessRuntimeProvider", Provider)
+    monkeypatch.setattr(hosted_entrypoint, "ProcessWorldFactory", Factory)
+    monkeypatch.setattr(
+        bundle_author_v2,
+        "author_bundle_v2",
+        lambda **kwargs: SimpleNamespace(
+            runtime=BundleRuntimeV2(
+                kind=RuntimeKindV2.PROCESS,
+                evidence_seam=EvidenceSeam.HTTP_TOOL,
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        process_preflight, "preflight_bundle", lambda *args, **kwargs: None
+    )
+    monkeypatch.setattr(
+        outbound,
+        "load_capabilities",
+        lambda *, unlink: (
+            SimpleNamespace(attempt_id="test", expires_at=None)
+            if unlink is False
+            else pytest.fail("validation consumed execution capabilities")
+        ),
+    )
+    monkeypatch.setattr(
+        scenario_source,
+        "load_scenarios",
+        lambda bundle: [
+            SimpleNamespace(scenario_key=str(i), setup=setup, ready=lambda world: True)
+            for i in range(2)
+        ],
+    )
+    job = SimpleNamespace(
+        agent=SimpleNamespace(secret_refs={}),
+        scenario_count=2,
+        seed=0,
+        runtime=SimpleNamespace(cpu_units=4, memory_mb=8192),
+    )
+    if bad_setup:
+        with pytest.raises(RuntimeValidationError) as error:
+            asyncio.run(validate_once(job, tmp_path, authoring, secrets_path=original))
+        assert "target-secret-value" not in str(error.value)
+        assert "0: setup:" in str(error.value)
+        assert "1: setup:" in str(error.value)
+        assert calls == [
+            "provision",
+            "reset",
+            "reset",
+            "reset",
+            "setup",
+            "reset",
+            "setup",
+            "reset",
+            "setup",
+            "reset",
+            "setup",
+            "close",
+        ]
+    else:
+        assert (
+            asyncio.run(validate_once(job, tmp_path, authoring, secrets_path=original))
+            == 2
+        )
+        assert calls == [
+            "provision",
+            "reset",
+            "reset",
+            "reset",
+            "setup",
+            "reset",
+            "setup",
+            "close",
+        ]
+    assert original.exists()
+
+
+def test_connect_only_provider_validation_does_not_invent_source_data_review(
+    tmp_path, monkeypatch
+):
+    from fi.alk.harness import (
+        bundle_author_v2,
+        hosted_entrypoint,
+        outbound,
+        process_preflight,
+        process_runtime,
+        scenario_source,
+        source_data_invariants,
+    )
+
+    original = tmp_path / "execution-secrets.json"
+    original.write_text('{"RETELL_API_KEY":"secret"}')
+    authoring = tmp_path / "authoring"
+    authoring.mkdir()
+    calls = []
+
+    async def forbidden_review(*_args, **_kwargs):
+        pytest.fail(
+            "connect-only provider state cannot be reviewed as local source data"
+        )
+
+    monkeypatch.setattr(source_data_invariants, "author_invariants", forbidden_review)
+
+    class Provider:
+        def __init__(self, **_kwargs):
+            pass
+
+        async def provision(self, *_args, **_kwargs):
+            calls.append("provision")
+            return [SimpleNamespace(endpoints={}, world_index=0)]
+
+        async def reset(self, *_args, **_kwargs):
+            calls.append("reset")
+
+        async def close(self, **_kwargs):
+            calls.append("close")
+
+    class World:
+        def read_only(self):
+            return self
+
+    class Factory:
+        def __init__(self, _work, _bundle):
+            pass
+
+        async def create(self, *_args, **_kwargs):
+            return World()
+
+    monkeypatch.setattr(process_runtime, "ProcessRuntimeProvider", Provider)
+    monkeypatch.setattr(hosted_entrypoint, "ProcessWorldFactory", Factory)
+    monkeypatch.setattr(
+        bundle_author_v2,
+        "author_bundle_v2",
+        lambda **_kwargs: SimpleNamespace(
+            runtime=BundleRuntimeV2(
+                kind=RuntimeKindV2.PROCESS,
+                evidence_seam=EvidenceSeam.HTTP_TOOL,
+            )
+        ),
+    )
+    monkeypatch.setattr(process_preflight, "preflight_bundle", lambda *_a, **_k: None)
+    monkeypatch.setattr(
+        outbound,
+        "load_capabilities",
+        lambda *, unlink: SimpleNamespace(attempt_id="test", expires_at=None),
+    )
+    monkeypatch.setattr(
+        scenario_source,
+        "load_scenarios",
+        lambda _bundle: [
+            SimpleNamespace(
+                scenario_key="one",
+                setup=lambda _world: None,
+                ready=lambda _world: True,
+            )
+        ],
+    )
+    job = HarnessJob(
+        job_id="job-provider",
+        run_id="run-provider",
+        execution="hosted",
+        source={"kind": "provider"},
+        agent={
+            "connector": "retell",
+            "mode": "connect_only",
+            "config": {"agent_id": "agent_test"},
+            "secret_refs": {
+                "api_key": {
+                    "manager": "platform-vault",
+                    "key": "retell-key",
+                    "purpose": "target_provider",
+                }
+            },
+        },
+        scenario_count=1,
+        runtime={"isolation": "dedicated_vm"},
+    )
+
+    assert (
+        asyncio.run(validate_once(job, tmp_path, authoring, secrets_path=original)) == 1
+    )
+    assert calls == ["provision", "reset", "close"]
+
+
+def _sourced(entry, source):
+    def function(*_args):
+        return None
+
+    function._alk_source = source
+    function._alk_entry = entry
+    return function
+
+
+def _noop(entry):
+    return _sourced(
+        entry, f'def {entry}(world):\n    """Nothing beyond the base world."""\n'
+    )
+
+
+def test_does_nothing_reads_only_a_bare_function_as_a_no_op():
+    from fi.alk.harness.scenario_source import does_nothing
+
+    assert does_nothing(_noop("setup"))
+    assert does_nothing(_sourced("ready", "def ready(world):\n    return None\n"))
+    assert does_nothing(_sourced("setup", "def setup(world):\n    pass\n"))
+    for source in (
+        "def setup(world):\n    world.insert('t', {})\n",
+        "import os\ndef setup(world):\n    pass\n",
+        "def setup(world, seed=print('x')):\n    pass\n",
+        "def setup(world):\n    return True\n",
+        "def other(world):\n    pass\n",
+    ):
+        assert not does_nothing(_sourced("setup", source)), source
+    assert not does_nothing(lambda _world: None)
+
+
+def test_connect_only_validation_walks_only_scenarios_whose_setup_does_something(
+    tmp_path, monkeypatch
+):
+    from fi.alk.harness import (
+        bundle_author_v2,
+        hosted_entrypoint,
+        outbound,
+        process_preflight,
+        process_runtime,
+        scenario_source,
+        source_data_invariants,
+    )
+
+    original = tmp_path / "execution-secrets.json"
+    original.write_text('{"RETELL_API_KEY":"secret"}')
+    authoring = tmp_path / "authoring"
+    authoring.mkdir()
+    calls = []
+
+    async def forbidden_review(*_args, **_kwargs):
+        pytest.fail(
+            "connect-only provider state cannot be reviewed as local source data"
+        )
+
+    monkeypatch.setattr(source_data_invariants, "author_invariants", forbidden_review)
+
+    class Provider:
+        def __init__(self, **_kwargs):
+            pass
+
+        async def provision(self, *_args, **_kwargs):
+            calls.append("provision")
+            return [SimpleNamespace(endpoints={}, world_index=0)]
+
+        async def reset(self, *_args, **_kwargs):
+            calls.append("reset")
+
+        async def close(self, **_kwargs):
+            calls.append("close")
+
+    class World:
+        def read_only(self):
+            return self
+
+    class Factory:
+        def __init__(self, _work, _bundle):
+            pass
+
+        async def create(self, *_args, **_kwargs):
+            return World()
+
+    monkeypatch.setattr(process_runtime, "ProcessRuntimeProvider", Provider)
+    monkeypatch.setattr(hosted_entrypoint, "ProcessWorldFactory", Factory)
+    monkeypatch.setattr(
+        bundle_author_v2,
+        "author_bundle_v2",
+        lambda **_kwargs: SimpleNamespace(
+            runtime=BundleRuntimeV2(
+                kind=RuntimeKindV2.PROCESS,
+                evidence_seam=EvidenceSeam.HTTP_TOOL,
+            )
+        ),
+    )
+    monkeypatch.setattr(process_preflight, "preflight_bundle", lambda *_a, **_k: None)
+    monkeypatch.setattr(
+        outbound,
+        "load_capabilities",
+        lambda *, unlink: SimpleNamespace(attempt_id="test", expires_at=None),
+    )
+    monkeypatch.setattr(
+        scenario_source,
+        "load_scenarios",
+        lambda _bundle: (
+            [
+                SimpleNamespace(
+                    scenario_key=f"quiet-{index}",
+                    setup=_noop("setup"),
+                    ready=_noop("ready"),
+                )
+                for index in range(3)
+            ]
+            + [
+                SimpleNamespace(
+                    scenario_key="seeds",
+                    setup=_sourced(
+                        "setup", "def setup(world):\n    world.insert('t', {})\n"
+                    ),
+                    ready=_noop("ready"),
+                )
+            ]
+        ),
+    )
+    job = HarnessJob(
+        job_id="job-provider",
+        run_id="run-provider",
+        execution="hosted",
+        source={"kind": "provider"},
+        agent={
+            "connector": "retell",
+            "mode": "connect_only",
+            "config": {"agent_id": "agent_test"},
+            "secret_refs": {
+                "api_key": {
+                    "manager": "platform-vault",
+                    "key": "retell-key",
+                    "purpose": "target_provider",
+                }
+            },
+        },
+        scenario_count=4,
+        runtime={"isolation": "dedicated_vm"},
+    )
+
+    assert (
+        asyncio.run(validate_once(job, tmp_path, authoring, secrets_path=original)) == 4
+    )
+    assert calls == ["provision", "reset", "close"]
+
+
+def test_database_clone_checks_use_the_lane_count(tmp_path, monkeypatch):
+    from fi.alk.harness import (
+        action_certification,
+        authoring_runtime_validation,
+        bundle_author_v2,
+        certification,
+        contract,
+        hosted_entrypoint,
+        outbound,
+        process_preflight,
+        process_runtime,
+        scenario_source,
+        source_data_invariants,
+        tool_certification,
+    )
+
+    original = tmp_path / "execution-secrets.json"
+    original.write_text("{}")
+    authoring = tmp_path / "authoring"
+    (authoring / "generic-harness").mkdir(parents=True)
+    (authoring / "contract.json").write_text("{}")
+    clones = []
+
+    class Provider:
+        def __init__(self, **kwargs):
+            pass
+
+        async def provision(self, *args, work_directory, **kwargs):
+            (work_directory / "artifacts").mkdir()
+            (work_directory / "artifacts" / "build.json").write_text("{}")
+            return [SimpleNamespace(endpoints={}, world_index=0)]
+
+        async def clone_world_database(self, runtime, name):
+            clones.append(name)
+            return runtime
+
+        async def reset(self, *args, **kwargs):
+            pass
+
+        async def close(self, **kwargs):
+            pass
+
+    class World:
+        def read_only(self):
+            return self
+
+    class Factory:
+        def __init__(self, work, bundle=None):
+            pass
+
+        async def create(self, *args, **kwargs):
+            return World()
+
+    class Store:
+        RUNTIME_EVIDENCE = CERTIFICATION = "unused"
+
+        def __init__(self, root):
+            pass
+
+        def read_source_model(self):
+            return SimpleNamespace(actions=[])
+
+        def write_action_certification(self, report):
+            pass
+
+    async def no_invariants(*args, **kwargs):
+        return []
+
+    def author_bundle(**kwargs):
+        kwargs["output"].mkdir()
+        (kwargs["output"] / "contract.json").write_text("{}")
+        return SimpleNamespace(
+            runtime=BundleRuntimeV2(
+                kind=RuntimeKindV2.PROCESS,
+                evidence_seam=EvidenceSeam.HTTP_TOOL,
+            )
+        )
+
+    for module, name, value in (
+        (authoring_runtime_validation, "_database_lanes", lambda: 3),
+        (authoring_runtime_validation, "_world_isolation_status", lambda output: None),
+        (authoring_runtime_validation, "_world_state_digest", lambda world: "baseline"),
+        (
+            authoring_runtime_validation,
+            "_GeneratedWorldActionAdapter",
+            lambda world: None,
+        ),
+        (
+            authoring_runtime_validation,
+            "_setup_check_keys",
+            lambda *args: [str(i) for i in range(10)],
+        ),
+        (
+            authoring_runtime_validation,
+            "_write_runtime_evidence",
+            lambda **kwargs: None,
+        ),
+        (authoring_runtime_validation, "_freeze_certified_bundle", lambda *args: None),
+        (process_runtime, "ProcessRuntimeProvider", Provider),
+        (hosted_entrypoint, "ProcessWorldFactory", Factory),
+        (certification, "GenericHarnessArtifactStore", Store),
+        (
+            contract,
+            "AgentContract",
+            SimpleNamespace(
+                model_validate_json=lambda text: SimpleNamespace(
+                    modality="voice", runtime=None
+                )
+            ),
+        ),
+        (
+            tool_certification,
+            "certify_tool_inventory",
+            lambda *args, **kwargs: SimpleNamespace(tools=[]),
+        ),
+        (
+            action_certification,
+            "certify_actions",
+            lambda *args, **kwargs: SimpleNamespace(actions=[]),
+        ),
+        (bundle_author_v2, "author_bundle_v2", author_bundle),
+        (process_preflight, "preflight_bundle", lambda *args, **kwargs: None),
+        (
+            outbound,
+            "load_capabilities",
+            lambda *, unlink: SimpleNamespace(attempt_id="test", expires_at=None),
+        ),
+        (source_data_invariants, "author_invariants", no_invariants),
+        (source_data_invariants, "check_invariants", no_invariants),
+        (
+            scenario_source,
+            "load_scenarios",
+            lambda bundle: [
+                SimpleNamespace(
+                    scenario_key=str(i),
+                    setup=lambda world: None,
+                    ready=lambda world: True,
+                )
+                for i in range(10)
+            ],
+        ),
+    ):
+        monkeypatch.setattr(module, name, value)
+    job = SimpleNamespace(
+        agent=SimpleNamespace(secret_refs={}),
+        scenario_count=10,
+        seed=0,
+        runtime=SimpleNamespace(cpu_units=4, memory_mb=8192),
+        metadata={"generic_harness_v1": True},
+    )
+
+    assert (
+        asyncio.run(validate_once(job, tmp_path, authoring, secrets_path=original))
+        == 10
+    )
+    assert sorted(set(clones)) == ["lane0", "lane1", "lane2"]
+
+
+def _stub_local_validation(tmp_path, monkeypatch, check_invariants, fixed_user=False):
+    """validate_once's collaborators for a local run of one scenario; returns its arguments."""
+    from fi.alk.harness import (
+        bundle_author_v2,
+        hosted_entrypoint,
+        outbound,
+        process_preflight,
+        process_runtime,
+        scenario_source,
+        source_data_invariants,
+    )
+
+    monkeypatch.setenv("ALK_FIXED_SANDBOX_USER", "1" if fixed_user else "0")
+    secrets = tmp_path / "secrets.json"
+    secrets.write_text("{}", encoding="utf-8")
+    authoring = tmp_path / "authoring"
+    authoring.mkdir()
+
+    monkeypatch.setattr(
+        outbound,
+        "load_capabilities",
+        lambda **_kwargs: pytest.fail(
+            "local validation must not load hosted capabilities"
+        ),
+    )
+
+    class Provider:
+        def __init__(self, **kwargs):
+            expected = (
+                process_runtime.fixed_sandbox_user_resolver
+                if fixed_user
+                else process_runtime.default_user_resolver
+            )
+            assert kwargs["user_resolver"] is expected
+            assert kwargs["public_url_resolver"] is None
+            assert kwargs["provider_attempt_id"] is None
+            assert kwargs["provider_expires_at"] is None
+
+        async def provision(self, *_args, **_kwargs):
+            return [SimpleNamespace(endpoints={}, world_index=0)]
+
+        async def reset(self, *_args, **_kwargs):
+            return None
+
+        async def close(self, **_kwargs):
+            return None
+
+    class World:
+        def read_only(self):
+            return self
+
+    class Factory:
+        def __init__(self, _work, _bundle):
+            pass
+
+        async def create(self, *_args, **_kwargs):
+            return World()
+
+    monkeypatch.setattr(process_runtime, "ProcessRuntimeProvider", Provider)
+    monkeypatch.setattr(hosted_entrypoint, "ProcessWorldFactory", Factory)
+    monkeypatch.setattr(
+        bundle_author_v2,
+        "author_bundle_v2",
+        lambda **_kwargs: SimpleNamespace(
+            runtime=BundleRuntimeV2(
+                kind=RuntimeKindV2.PROCESS,
+                evidence_seam=EvidenceSeam.HTTP_TOOL,
+            )
+        ),
+    )
+    monkeypatch.setattr(process_preflight, "preflight_bundle", lambda *_a, **_k: None)
+    monkeypatch.setattr(
+        scenario_source,
+        "load_scenarios",
+        lambda _bundle: [
+            SimpleNamespace(
+                scenario_key="one",
+                setup=lambda _world: None,
+                ready=lambda _world: True,
+            )
+        ],
+    )
+
+    async def author_invariants(*_args, **_kwargs):
+        return []
+
+    monkeypatch.setattr(source_data_invariants, "author_invariants", author_invariants)
+    monkeypatch.setattr(source_data_invariants, "check_invariants", check_invariants)
+    job = SimpleNamespace(
+        source=SimpleNamespace(kind=None),
+        agent=SimpleNamespace(secret_refs={}),
+        metadata={},
+        scenario_count=1,
+        seed=0,
+    )
+    return job, authoring, secrets
+
+
+@pytest.mark.parametrize("fixed_user", [False, True])
+def test_local_runtime_validation_does_not_require_hosted_capabilities(
+    tmp_path, monkeypatch, fixed_user
+):
+    async def check_invariants(*_args, **_kwargs):
+        return None
+
+    job, authoring, secrets = _stub_local_validation(
+        tmp_path, monkeypatch, check_invariants, fixed_user
+    )
+
+    assert (
+        asyncio.run(
+            validate_once(
+                job,
+                tmp_path,
+                authoring,
+                secrets_path=secrets,
+                local_runtime=True,
+            )
+        )
+        == 1
+    )
+
+
+@pytest.mark.parametrize("certify_only", [True, False])
+@pytest.mark.parametrize(
+    ("violated_at", "phase"), [(None, "environment"), ("one", "scenarios")]
+)
+def test_certify_only_rejects_a_violated_invariant_with_a_typed_diagnostic(
+    tmp_path, monkeypatch, certify_only, violated_at, phase
+):
+    async def check_invariants(*_args, scenario_key=None, **_kwargs):
+        if scenario_key == violated_at:
+            raise ValueError("Source data invariants failed:\n- 'wallets' failed")
+
+    job, authoring, secrets = _stub_local_validation(
+        tmp_path, monkeypatch, check_invariants
+    )
+
+    with pytest.raises(RuntimeValidationError) as raised:
+        asyncio.run(
+            validate_once(
+                job,
+                tmp_path,
+                authoring,
+                secrets_path=secrets,
+                local_runtime=True,
+                reuse_invariants_only=certify_only,
+            )
+        )
+
+    assert raised.value.phase == phase
+    assert "Source data invariants failed" in str(raised.value)
+    assert [item.code for item in raised.value.diagnostics] == (
+        ["source_data_invariant_violated"] if certify_only else []
+    )
+
+
+def test_connect_only_provider_repair_preserves_external_runtime_mode(
+    tmp_path, monkeypatch
+):
+    from fi.alk.harness import cli
+
+    attempts = 0
+    observed = []
+
+    async def validate(*_args):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise RuntimeValidationError("environment", "repair me")
+        return 1
+
+    async def build(args):
+        observed.append(args.external_runtime)
+        return 0
+
+    async def scenarios(_args):
+        pytest.fail("an environment repair must not rewrite scenarios")
+
+    monkeypatch.setattr(cli, "_build", build)
+    monkeypatch.setattr(cli, "_scenarios", scenarios)
+    job = HarnessJob(
+        job_id="job-provider",
+        run_id="run-provider",
+        execution="hosted",
+        source={"kind": "provider"},
+        agent={
+            "connector": "retell",
+            "mode": "connect_only",
+            "config": {"agent_id": "agent_test"},
+        },
+        scenario_count=1,
+        runtime={"isolation": "dedicated_vm"},
+    )
+
+    asyncio.run(validate_and_repair(job, tmp_path, tmp_path, validate=validate))
+    assert observed == [True]
+
+
+@pytest.mark.parametrize("status", (400, 401, 403, 404))
+def test_provider_lifecycle_definitive_rejection_is_source_owned(status):
+    diagnostic = _fallback_diagnostic(
+        RuntimeValidationError(
+            "environment",
+            "ProcessRuntimeError: provider_lifecycle/spawn_failed (agent): "
+            f"provider_provision_failed: HTTP Error {status}: rejected",
+        )
+    )
+
+    assert diagnostic.code == "external_service_request_rejected"
+    assert diagnostic.owner.value == "source"
+    assert diagnostic.retryable is False
+    assert diagnostic.stage is HarnessStage.CONNECTING_AGENT
+
+
+@pytest.mark.parametrize(
+    "detail",
+    (
+        "HTTP Error 429: rate limited",
+        "HTTP Error 503: unavailable",
+        "ClientConnectorDNSError: name resolution failed",
+    ),
+)
+def test_provider_lifecycle_transient_failure_is_retryable_infrastructure(detail):
+    diagnostic = _fallback_diagnostic(
+        RuntimeValidationError(
+            "environment",
+            "ProcessRuntimeError: provider_lifecycle/spawn_failed (agent): " + detail,
+        )
+    )
+
+    assert diagnostic.code == "external_service_unavailable"
+    assert diagnostic.owner.value == "infrastructure"
+    assert diagnostic.retryable is True
+    assert diagnostic.stage is HarnessStage.CONNECTING_AGENT
+
+
+@pytest.mark.parametrize(
+    "detail",
+    (
+        "GeneratedRuntimeError: generated_runtime_component_ambiguous",
+        "BundleAuthorError: generated_runtime_extra_omitted: sdk/pyproject.toml requires cloud",
+        "ProcessRuntimeError: no runnable shipped entrypoint was identified",
+        "docker build failed while installing dependencies",
+        "agent process exited before readiness probe passed",
+    ),
+)
+def test_runtime_construction_failure_routes_to_runtime_plan_repair(detail):
+    diagnostic = _fallback_diagnostic(RuntimeValidationError("environment", detail))
+
+    assert diagnostic.code == "generated_runtime_plan_invalid"
+    assert diagnostic.owner.value == "authoring"
+    assert diagnostic.repair_strategy == "inspect_repository_and_revise_runtime_plan"
+
+
+def test_unknown_pre_provision_failure_routes_to_generic_runtime_inspection():
+    diagnostic = _fallback_diagnostic(
+        RuntimeValidationError("runtime", "an unfamiliar framework launcher failed")
+    )
+
+    assert diagnostic.code == "generated_runtime_plan_invalid"
+    assert diagnostic.owner.value == "authoring"
+
+
+def test_generic_validation_applies_runtime_plan_patch_and_revalidates(tmp_path):
+    source = tmp_path / "source"
+    authoring = tmp_path / "authoring"
+    source.mkdir()
+    authoring.mkdir()
+    (source / "pyproject.toml").write_text("[project]\nname='agent'\nversion='1'\n")
+    (source / "server.py").write_text("print('server')\n")
+    contract = AgentContract(agent="example", runtime=Runtime(language="python"))
+    (authoring / "contract.json").write_text(
+        contract.model_dump_json(indent=2) + "\n", encoding="utf-8"
+    )
+    diagnostic = HarnessDiagnostic.create(
+        stage=HarnessStage.BUILDING_ENVIRONMENT,
+        component="runtime_validation",
+        code="generated_runtime_plan_invalid",
+        message="no runnable shipped entrypoint was identified",
+    )
+    calls = []
+
+    async def validate(*_args):
+        calls.append("validate")
+        current = AgentContract.model_validate_json(
+            (authoring / "contract.json").read_text(encoding="utf-8")
+        )
+        if not current.runtime or not current.runtime.command:
+            raise RuntimeValidationError(
+                "environment", "entrypoint missing", diagnostics=(diagnostic,)
+            )
+        return 1
+
+    async def repair(phase, _guidance):
+        assert phase == "environment"
+        calls.append("repair")
+        return RuntimePlanPatch(
+            base_contract_hash=_contract_hash(contract),
+            runtime=Runtime(
+                language="python",
+                command=["python", "server.py"],
+                interface={"kind": "http", "port": 8080, "path": "/chat"},
+            ),
+            evidence_paths=("pyproject.toml", "server.py"),
+            diagnostic_codes=("generated_runtime_plan_invalid",),
+            summary="Use the repository's server entrypoint.",
+        )
+
+    job = SimpleNamespace(metadata={"generic_harness_v1": True})
+    asyncio.run(
+        validate_and_repair(job, source, authoring, validate=validate, repair=repair)
+    )
+
+    repaired = AgentContract.model_validate_json(
+        (authoring / "contract.json").read_text(encoding="utf-8")
+    )
+    assert repaired.runtime.command == ["python", "server.py"]
+    assert calls == ["validate", "repair", "validate"]
+    assert (authoring / "generic-harness" / "runtime-plan-repair-1.json").is_file()
+
+
+def test_default_generic_repair_dispatches_unknown_runtime_to_repository_inspection(
+    tmp_path, monkeypatch
+):
+    from fi.alk.harness import runtime_repair
+
+    source = tmp_path / "source"
+    authoring = tmp_path / "authoring"
+    source.mkdir()
+    authoring.mkdir()
+    (source / "pyproject.toml").write_text("[project]\nname='agent'\nversion='1'\n")
+    (source / "worker.py").write_text("print('worker')\n")
+    contract = AgentContract(agent="unknown-framework", runtime=Runtime())
+    (authoring / "contract.json").write_text(
+        contract.model_dump_json(indent=2) + "\n", encoding="utf-8"
+    )
+    diagnostic = HarnessDiagnostic.create(
+        stage=HarnessStage.BUILDING_ENVIRONMENT,
+        component="runtime_validation",
+        code="generated_runtime_plan_invalid",
+        message="unfamiliar launcher",
+    )
+    inspected = []
+
+    async def inspect(
+        source_root,
+        current_contract,
+        diagnostics,
+        *,
+        guidance="",
+        available_secret_aliases=frozenset(),
+        allow_ingress_repair=False,
+    ):
+        assert "Preserve the submitted identifiers." in guidance
+        assert "require_tool_workflow" in guidance
+        inspected.append((source_root, current_contract.agent, diagnostics[0].code))
+        return RuntimePlanPatch(
+            base_contract_hash=_contract_hash(current_contract),
+            runtime=Runtime(
+                language="python",
+                command=["python", "worker.py"],
+                interface={"kind": "command", "protocol": "fi.alk"},
+            ),
+            evidence_paths=("pyproject.toml", "worker.py"),
+            diagnostic_codes=("generated_runtime_plan_invalid",),
+            summary="Use the discovered worker entrypoint.",
+        )
+
+    monkeypatch.setattr(runtime_repair, "request_runtime_plan_patch", inspect)
+
+    async def validate(*_args):
+        current = AgentContract.model_validate_json(
+            (authoring / "contract.json").read_text(encoding="utf-8")
+        )
+        if not current.runtime or not current.runtime.command:
+            raise RuntimeValidationError(
+                "runtime", "unfamiliar launcher", diagnostics=(diagnostic,)
+            )
+        return 1
+
+    job = HarnessJob(
+        job_id="repair",
+        run_id="repair",
+        execution="local",
+        source={"kind": "local_repository", "local_path": str(source)},
+        agent={"connector": "auto"},
+        metadata={"generic_harness_v1": True},
+        guidance=["Preserve the submitted identifiers."],
+        require_tool_workflow=True,
+    )
+    asyncio.run(validate_and_repair(job, source, authoring, validate=validate))
+
+    assert inspected == [
+        (source, "unknown-framework", "generated_runtime_plan_invalid")
+    ]
+
+
+def test_a_store_only_reset_is_offered_only_where_nothing_needs_respawning() -> None:
+    from fi.alk.harness.process_runtime import _stores_reset_in_place
+
+    class _Store:
+        def __init__(self, strategy):
+            self.baseline = type("B", (), {"strategy": strategy})()
+
+    class _Manifest:
+        def __init__(self, strategies):
+            self.seed = (
+                type("S", (), {"stores": [_Store(one) for one in strategies]})()
+                if strategies is not None
+                else None
+            )
+
+    from fi.alk.harness.process_runtime import BaselineStrategy
+
+    assert _stores_reset_in_place(_Manifest([BaselineStrategy.TEMPLATE_DATABASE]))
+    mixed = [BaselineStrategy.TEMPLATE_DATABASE, BaselineStrategy.DATADIR_COPY]
+    assert not _stores_reset_in_place(_Manifest(mixed))
+    assert not _stores_reset_in_place(_Manifest([]))
+    assert not _stores_reset_in_place(_Manifest(None))
+
+
+def test_declared_invariants_survive_a_review_that_forgot_to_finish(
+    tmp_path, monkeypatch
+) -> None:
+    import sqlite3
+
+    import fi.alk.harness.source_data_invariants as invariants
+
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "lookup.py").write_text("return records[alias.target]\n")
+    authoring = tmp_path / "authoring"
+    authoring.mkdir()
+    database = sqlite3.connect(":memory:", check_same_thread=False)
+    database.execute("CREATE TABLE aliases (target TEXT)")
+
+    class World:
+        def query(self, sql):
+            return database.execute(sql).fetchall()
+
+    class Stage:
+        def __init__(self, spec, **kwargs):
+            self.tools = {
+                tool.name: tool.handler for tool in spec.servers["source_data"].tools
+            }
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            pass
+
+        async def say(self, *args):
+            await self.tools["declare_invariant"](
+                {
+                    "name": "aliases resolve",
+                    "violations_sql": "SELECT target FROM aliases",
+                    "evidence": [
+                        {"path": "lookup.py", "quote": "return records[alias.target]"}
+                    ],
+                }
+            )
+
+    monkeypatch.setattr(invariants, "Stage", Stage)
+    checks = asyncio.run(invariants.author_invariants(source, authoring, World()))
+    assert [check["name"] for check in checks] == ["aliases resolve"]
+
+
+def test_setup_check_keys_change_only_with_what_a_check_depends_on(tmp_path):
+    bundle = tmp_path / "bundle"
+    for name in ("a", "b"):
+        (bundle / "scenarios" / name).mkdir(parents=True)
+        (bundle / "scenarios" / name / "setup.py").write_text(f"# {name}\n")
+    (bundle / "seed").mkdir()
+    (bundle / "seed" / "rows.sql").write_text("insert 1;\n")
+    (bundle / "manifest.json").write_text("{}")
+
+    def keys(invariants=(), baseline="sha256:0"):
+        return _setup_check_keys(bundle, list(invariants), baseline)
+
+    first = keys()
+    assert len(set(first)) == 2
+    (bundle / "manifest.json").write_text('{"digest": "new"}')
+    assert keys() == first
+    (bundle / "scenarios" / "b" / "setup.py").write_text("# b changed\n")
+    changed = keys()
+    assert changed[0] == first[0] and changed[1] != first[1]
+    assert not set(keys([{"name": "x"}])) & set(changed)
+    assert not set(keys(baseline="sha256:1")) & set(changed)
+    (bundle / "seed" / "rows.sql").write_text("insert 2;\n")
+    assert not set(keys()) & set(changed)
+
+
+def test_rejected_scenario_repair_is_undone_and_repaired_again(
+    tmp_path, monkeypatch
+) -> None:
+    from fi.alk.harness import scenario_repair, scenario_tools
+
+    source = tmp_path / "source"
+    authoring = tmp_path / "authoring"
+    source.mkdir()
+    authoring.mkdir()
+    (source / "agent.py").write_text("agent", encoding="utf-8")
+    suite = {"value": "original"}
+    restored = []
+    monkeypatch.setattr(scenario_tools, "load_scenarios", lambda path: suite["value"])
+    monkeypatch.setattr(
+        scenario_tools,
+        "write_scenarios",
+        lambda scenarios, path: (
+            restored.append(scenarios) or suite.update(value=scenarios)
+        ),
+    )
+
+    def certify(before, after, **kwargs):
+        if after == "weakened":
+            raise ValueError("scenario_repair_weakened_checks: s1: check")
+        return scenario_repair.ScenarioRepairReceipt.model_construct()
+
+    monkeypatch.setattr(scenario_repair, "certify_scenario_repair", certify)
+    monkeypatch.setattr(
+        GenericHarnessArtifactStore, "write_scenario_repair", lambda *a, **k: None
+    )
+    attempts = iter(["weakened", "fixed"])
+    guidance_seen = []
+
+    async def repair(phase, guidance):
+        assert phase == "scenarios"
+        guidance_seen.append(guidance)
+        suite["value"] = next(attempts)
+        (authoring / "scenarios.txt").write_text(suite["value"], encoding="utf-8")
+        return 0
+
+    validations = []
+
+    async def validate(*args):
+        validations.append(suite["value"])
+        if len(validations) == 1:
+            raise RuntimeValidationError("scenarios", "bad setup")
+        return 3
+
+    job = SimpleNamespace(metadata={"generic_harness_v1": True}, scenario_count=3)
+    asyncio.run(
+        validate_and_repair(job, source, authoring, validate=validate, repair=repair)
+    )
+
+    assert restored == ["original"]
+    assert len(guidance_seen) == 2
+    assert "scenario_repair_weakened_checks" in guidance_seen[1]
+    assert validations == ["original", "fixed"]
+
+
+def test_scenario_repair_rejected_every_time_keeps_the_original_failure(
+    tmp_path, monkeypatch
+) -> None:
+    from fi.alk.harness import scenario_repair, scenario_tools
+
+    source = tmp_path / "source"
+    authoring = tmp_path / "authoring"
+    source.mkdir()
+    authoring.mkdir()
+    (source / "agent.py").write_text("agent", encoding="utf-8")
+    suite = {"value": "original"}
+    monkeypatch.setattr(scenario_tools, "load_scenarios", lambda path: suite["value"])
+    monkeypatch.setattr(
+        scenario_tools,
+        "write_scenarios",
+        lambda scenarios, path: suite.update(value=scenarios),
+    )
+
+    def certify(before, after, **kwargs):
+        raise ValueError("scenario_repair_weakened_checks: s1: check")
+
+    monkeypatch.setattr(scenario_repair, "certify_scenario_repair", certify)
+    repairs = []
+
+    async def repair(phase, guidance):
+        repairs.append(guidance)
+        suite["value"] = "weakened"
+        return 0
+
+    async def validate(*args):
+        raise RuntimeValidationError("scenarios", "bad setup")
+
+    job = SimpleNamespace(metadata={"generic_harness_v1": True}, scenario_count=3)
+    with pytest.raises(ValueError, match="scenario_repair_weakened_checks"):
+        asyncio.run(
+            validate_and_repair(
+                job, source, authoring, validate=validate, repair=repair
+            )
+        )
+    assert len(repairs) == RepairBudgets().scenario_patches + 1
+    assert suite["value"] == "original"
+
+
+@pytest.mark.parametrize(
+    "declared_kind,legacy_world,expected_storage_repair",
+    [
+        (None, True, True),
+        ("postgres", True, False),
+        (None, False, False),
+        ("filesystem", False, False),
+    ],
+)
+@pytest.mark.parametrize("candidate_kind", ["filesystem", None, ""])
+def test_missing_storage_routes_to_understanding_only_when_metadata_can_help(
+    tmp_path,
+    monkeypatch,
+    declared_kind,
+    legacy_world,
+    expected_storage_repair,
+    candidate_kind,
+):
+    from fi.alk.harness import cli, runtime_repair
+    from fi.alk.harness.bundle_author_v2 import (
+        BundleAuthorError,
+        _generic_postgres_seed_artifacts,
+    )
+
+    source = tmp_path / "source"
+    authoring = tmp_path / "authoring"
+    staging = tmp_path / "staging"
+    source.mkdir()
+    authoring.mkdir()
+    (staging / "seed").mkdir(parents=True)
+    (source / "notes.py").write_text(
+        "from pathlib import Path\ndef read_note(name):\n"
+        '    return (Path("workspace") / name).read_text()\n'
+    )
+    contract = AgentContract(
+        agent="note-reader",
+        tools=[{"name": "read_note", "args": ["name"]}],
+        runtime=Runtime(execution="native", command=["python", "notes.py"]),
+        data_store={"kind": declared_kind} if declared_kind else None,
+    )
+    contract_path = authoring / "contract.json"
+    contract_path.write_text(contract.model_dump_json())
+    if legacy_world:
+        with sqlite3.connect(authoring / "world.sqlite") as connection:
+            connection.execute("CREATE TABLE task_state (id TEXT PRIMARY KEY)")
+    else:
+        (authoring / "generic-harness").mkdir()
+        (authoring / "generic-harness" / "world-ir.json").write_text("{}")
+    calls = []
+
+    async def understand(args):
+        calls.append(Path(args.out))
+        assert args.path == str(source)
+        assert "Keep the note identifiers." in "\n".join(args.guidance)
+        candidate = contract.model_dump()
+        candidate["data_store"] = (
+            {"kind": candidate_kind} if candidate_kind is not None else None
+        )
+        candidate["agent"] = "must-not-be-promoted"
+        Path(args.out, "contract.json").write_text(json.dumps(candidate))
+        return 0
+
+    async def unexpected_runtime_repair(*args, **kwargs):
+        pytest.fail("storage failure incorrectly dispatched to runtime repair")
+
+    monkeypatch.setattr(
+        runtime_repair, "request_runtime_plan_patch", unexpected_runtime_repair
+    )
+    monkeypatch.setattr(cli, "_understand", understand)
+
+    async def validate(*_args):
+        try:
+            _generic_postgres_seed_artifacts(
+                authoring,
+                staging,
+                source=source,
+                contract=json.loads(contract_path.read_text()),
+                prefix="",
+            )
+        except BundleAuthorError as exc:
+            raise RuntimeValidationError(
+                "runtime", f"{type(exc).__name__}: {exc}"
+            ) from exc
+        return 1
+
+    job = HarnessJob(
+        job_id="storage-repair",
+        run_id="storage-repair",
+        execution="local",
+        source={"kind": "local_repository", "local_path": str(source)},
+        agent={"connector": "auto"},
+        metadata={"generic_harness_v1": True},
+        guidance=["Keep the note identifiers."],
+    )
+    if expected_storage_repair and not candidate_kind:
+        with pytest.raises(RuntimeValidationError):
+            asyncio.run(validate_and_repair(job, source, authoring, validate=validate))
+        assert AgentContract.model_validate_json(contract_path.read_text()) == contract
+        assert len(calls) == 1 and not calls[0].exists()
+    elif expected_storage_repair:
+        asyncio.run(validate_and_repair(job, source, authoring, validate=validate))
+        expected = contract.model_dump()
+        expected["data_store"] = AgentContract(
+            agent="note-reader", data_store={"kind": "filesystem"}
+        ).data_store.model_dump()
+        assert json.loads(contract_path.read_text()) == expected
+        assert len(calls) == 1 and not calls[0].exists()
+    else:
+        error = None
+        try:
+            asyncio.run(validate(job, source, authoring))
+        except RuntimeValidationError as exc:
+            error = exc
+        assert error is not None
+        diagnostic = _fallback_diagnostic(error, authoring=authoring)
+        assert diagnostic.code != "generated_storage_declaration_missing"
+        assert not calls
+        assert AgentContract.model_validate_json(contract_path.read_text()) == contract
+
+
+@pytest.mark.parametrize(
+    "prefix,storage_repair",
+    [
+        ("", True),
+        ("BundleAuthorError: ", True),
+        ("OtherError: ", False),
+        ("BundleAuthorError: BundleAuthorError: ", False),
+    ],
+)
+def test_storage_diagnostic_accepts_only_known_exception_wrapper(
+    tmp_path, prefix, storage_repair
+):
+    (tmp_path / "world.sqlite").touch()
+    (tmp_path / "contract.json").write_text('{"data_store": null}')
+    diagnostic = _fallback_diagnostic(
+        RuntimeValidationError(
+            "runtime",
+            prefix
+            + "generic_pipeline_source_schema_required: no source-owned PostgreSQL schema found",
+        ),
+        authoring=tmp_path,
+    )
+    assert (
+        diagnostic.code == "generated_storage_declaration_missing"
+    ) is storage_repair
+
+
+@pytest.mark.parametrize("repair_result", [None, 0, 1])
+def test_dependency_investigation_rejects_untyped_repair_results(
+    tmp_path, repair_result
+):
+    source = tmp_path / "source"
+    authoring = tmp_path / "authoring"
+    source.mkdir()
+    authoring.mkdir()
+    diagnostic = HarnessDiagnostic.create(
+        stage=HarnessStage.CONNECTING_AGENT,
+        component="chat_ingress",
+        code="chat_ingress_failed",
+        message="application failed",
+    )
+    calls = []
+
+    async def validate(*_args):
+        calls.append("validate")
+        raise RuntimeValidationError(
+            "environment", "application failed", diagnostics=(diagnostic,)
+        )
+
+    async def repair(*_args):
+        calls.append("repair")
+        return repair_result
+
+    with pytest.raises(RuntimeValidationError, match="application failed"):
+        asyncio.run(
+            validate_and_repair(
+                SimpleNamespace(metadata={"generic_harness_v1": True}),
+                source,
+                authoring,
+                validate=validate,
+                repair=repair,
+            )
+        )
+    assert calls == ["validate", "repair"]
+
+
+def test_runtime_repairs_leave_budget_for_real_chat_setup(tmp_path):
+    source, authoring = tmp_path / "source", tmp_path / "authoring"
+    source.mkdir()
+    authoring.mkdir()
+    controller = RepairController(
+        RepairBudgets(
+            compiler_candidates=0,
+            environment_patches=1,
+            scenario_patches=0,
+            infrastructure_retries_per_candidate=0,
+        )
+    )
+    attempts = []
+
+    async def validate(*args):
+        attempts.append(len(attempts))
+        if len(attempts) <= 5:
+            phase = "runtime" if len(attempts) <= 4 else "environment"
+            raise RuntimeValidationError(
+                phase,
+                "setup incomplete",
+                diagnostics=[
+                    HarnessDiagnostic.create(
+                        stage=HarnessStage.VALIDATING_ENVIRONMENT,
+                        component="test",
+                        code="ready_condition_invalid",
+                        message="setup incomplete",
+                    ),
+                ],
+            )
+        return 1
+
+    async def repair(*args):
+        (authoring / "contract.json").write_text(json.dumps({"attempt": len(attempts)}))
+        return 0
+
+    asyncio.run(
+        validate_and_repair(
+            SimpleNamespace(metadata={"generic_harness_v1": True}),
+            source,
+            authoring,
+            validate=validate,
+            repair=repair,
+            controller=controller,
+        )
+    )
+    assert len(attempts) == 6
+    assert controller.history.runtime_patches_used == 4
+    assert controller.history.environment_patches_used == 1
+    assert controller.history.decisions[-1].action is RepairAction.CERTIFY
+
+
+@pytest.mark.parametrize("readiness_only", [False, True])
+def test_repair_exception_preserves_runtime_failure_without_secret_text(
+    tmp_path, capsys, readiness_only
+):
+    source = tmp_path / "source"
+    authoring = tmp_path / "authoring"
+    source.mkdir()
+    authoring.mkdir()
+    diagnostic = HarnessDiagnostic.create(
+        stage=HarnessStage.VALIDATING_ENVIRONMENT,
+        component="world_ir",
+        code="required_value_missing",
+        message="missing value",
+    )
+    original = RuntimeValidationError(
+        "environment", "invalid runtime", diagnostics=(diagnostic,)
+    )
+
+    class LlmCallsLimitExceededError(Exception):
+        pass
+
+    async def validate(*args):
+        raise original
+
+    async def repair(*args):
+        raise LlmCallsLimitExceededError("private-secret-token")
+
+    with pytest.raises(RuntimeValidationError) as caught:
+        asyncio.run(
+            validate_and_repair(
+                SimpleNamespace(metadata={"generic_harness_v1": True}),
+                source,
+                authoring,
+                validate=validate,
+                repair=repair,
+                readiness_only=readiness_only,
+            )
+        )
+    assert caught.value is original
+    history_path = (
+        authoring
+        / "generic-harness"
+        / ("readiness-repair-history.json" if readiness_only else "repair-history.json")
+    )
+    history = json.loads(history_path.read_text())
+    assert len(history["results"]) == 1
+    result = history["results"][0]
+    assert result["outcome"] == "failed"
+    assert result["after_candidate_hash"] == result["before_candidate_hash"]
+    output = capsys.readouterr().out
+    assert "LlmCallsLimitExceededError" in output
+    assert "private-secret-token" not in output + history_path.read_text() + str(
+        caught.value
+    )
+    assert caught.value.__suppress_context__
+
+
+def test_repair_cancellation_is_not_reclassified(tmp_path):
+    source = tmp_path / "source"
+    authoring = tmp_path / "authoring"
+    source.mkdir()
+    authoring.mkdir()
+    diagnostic = HarnessDiagnostic.create(
+        stage=HarnessStage.VALIDATING_ENVIRONMENT,
+        component="world_ir",
+        code="required_value_missing",
+        message="missing value",
+    )
+
+    async def validate(*args):
+        raise RuntimeValidationError(
+            "environment", "invalid", diagnostics=(diagnostic,)
+        )
+
+    async def repair(*args):
+        raise asyncio.CancelledError()
+
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(
+            validate_and_repair(
+                SimpleNamespace(metadata={"generic_harness_v1": True}),
+                source,
+                authoring,
+                validate=validate,
+                repair=repair,
+            )
+        )
+    history = json.loads(
+        (authoring / "generic-harness/repair-history.json").read_text()
+    )
+    assert history["results"] == []
+
+
+@pytest.mark.parametrize("readiness_only", [False, True])
+def test_default_validator_is_resolved_at_call_time(
+    tmp_path, monkeypatch, readiness_only
+):
+    from fi.alk.harness import authoring_runtime_validation as validation
+
+    source = tmp_path / "source"
+    authoring = tmp_path / "authoring"
+    source.mkdir()
+    authoring.mkdir()
+    calls = []
+
+    async def replacement(job, source, authoring, **kwargs):
+        calls.append(kwargs)
+        return 0
+
+    monkeypatch.setattr(validation, "validate_once", replacement)
+    asyncio.run(
+        validation.validate_and_repair(
+            SimpleNamespace(metadata={"generic_harness_v1": True}),
+            source,
+            authoring,
+            readiness_only=readiness_only,
+        )
+    )
+    assert calls == ([{"readiness_only": True}] if readiness_only else [{}])
+
+
+@pytest.mark.parametrize("compile_failure", [False, True])
+def test_startup_failure_preserves_redacted_process_logs_for_repair(
+    tmp_path, monkeypatch, compile_failure
+):
+    from fi.alk.harness import bundle_author_v2, process_preflight, process_runtime
+
+    authoring = tmp_path / "authoring"
+    authoring.mkdir()
+    secrets = tmp_path / "secrets.json"
+    secrets.write_text('{"KEY":"private-startup-token"}')
+    logs = authoring / "generic-harness" / "process-logs"
+    logs.mkdir(parents=True)
+    (logs / "previous.log").write_text("stale failure must not be reused")
+    started = []
+
+    class Provider:
+        def __init__(self, **kwargs):
+            pass
+
+        async def provision(self, *args, **kwargs):
+            started.append(True)
+            raise process_runtime.ProcessRuntimeError(
+                "depends_on", "depends_on_timeout", "readiness probe timed out"
+            )
+
+        async def close(self, **kwargs):
+            if started:
+                (logs / ("worlds-w0-agent-" + "a" * 32 + ".log")).write_text(
+                    "API Server: aiohttp not installed\nprivate-startup-token\n"
+                )
+
+    def compile_bundle(**kwargs):
+        if compile_failure:
+            raise ValueError("compiler rejected candidate")
+        return SimpleNamespace(
+            runtime=BundleRuntimeV2(
+                kind=RuntimeKindV2.PROCESS,
+                evidence_seam=EvidenceSeam.HTTP_TOOL,
+                control_service="agent",
+            )
+        )
+
+    monkeypatch.setattr(process_runtime, "ProcessRuntimeProvider", Provider)
+    monkeypatch.setattr(bundle_author_v2, "author_bundle_v2", compile_bundle)
+    monkeypatch.setattr(process_preflight, "preflight_bundle", lambda *a, **k: None)
+    job = SimpleNamespace(agent=SimpleNamespace(secret_refs={}))
+    with pytest.raises(RuntimeValidationError) as caught:
+        asyncio.run(
+            validate_once(
+                job,
+                tmp_path,
+                authoring,
+                secrets_path=secrets,
+                local_runtime=True,
+            )
+        )
+    failure = caught.value
+    assert failure.phase == "runtime"
+    if compile_failure:
+        assert "compiler rejected candidate" in str(failure)
+        assert not failure.process_evidence
+        assert not failure.target_process_evidence
+    else:
+        assert "readiness probe timed out" in str(failure)
+        for evidence in (failure.process_evidence, failure.target_process_evidence):
+            assert "aiohttp not installed" in evidence
+            assert "private-startup-token" not in evidence
+            assert "stale failure" not in evidence
+
+
+@pytest.mark.parametrize("readiness_only", [False, True])
+def test_ingress_repair_capability_is_private_and_revalidates_candidate(
+    tmp_path, monkeypatch, readiness_only
+):
+    from fi.alk.harness import runtime_repair
+    from fi.alk.harness.contract import RuntimeInterface
+
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "cli.py").write_text("from agent import interactive\ninteractive()\n")
+    (source / "server.py").write_text("from agent import chat\nROUTE = '/chat'\n")
+    authoring = tmp_path / "authoring"
+    authoring.mkdir()
+    contract = AgentContract(
+        agent="same-agent",
+        runtime=Runtime(
+            language="python",
+            execution="native",
+            command=["python", "cli.py"],
+            interface=RuntimeInterface(kind="command", protocol="fi.alk"),
+        ),
+    )
+    path = authoring / "contract.json"
+    path.write_text(contract.model_dump_json())
+    calls = []
+    diagnostic = HarnessDiagnostic.create(
+        stage=HarnessStage.CONNECTING_AGENT,
+        component="chat_ingress",
+        code="chat_ingress_failed",
+        message="selected CLI did not return a chat response",
+    )
+
+    async def validate(*args):
+        current = AgentContract.model_validate_json(path.read_text())
+        calls.append(("validate", current.runtime.command))
+        if current.runtime.interface.kind == "command":
+            raise RuntimeValidationError(
+                "environment", "wrong ingress", diagnostics=(diagnostic,)
+            )
+        return 1
+
+    async def inspect(
+        root, current, diagnostics, *, allow_ingress_repair=False, **kwargs
+    ):
+        calls.append(("capability", allow_ingress_repair))
+        return RuntimePlanPatch(
+            mode="chat_ingress",
+            base_contract_hash=_contract_hash(current),
+            runtime=current.runtime.model_copy(
+                update={
+                    "command": ["python", "server.py"],
+                    "interface": RuntimeInterface(
+                        kind="http", protocol="fi.alk", port=8080, path="/chat"
+                    ),
+                }
+            ),
+            evidence_paths=("cli.py", "server.py"),
+            diagnostic_codes=("chat_ingress_failed",),
+            summary="Correct the source-backed ingress declaration",
+        )
+
+    monkeypatch.setattr(runtime_repair, "request_runtime_plan_patch", inspect)
+    job = SimpleNamespace(metadata={"generic_harness_v1": True})
+    run = validate_and_repair(
+        job, source, authoring, validate=validate, readiness_only=readiness_only
+    )
+    if readiness_only:
+        asyncio.run(run)
+        assert calls == [
+            ("validate", ["python", "cli.py"]),
+            ("capability", True),
+            ("validate", ["python", "server.py"]),
+        ]
+        patch = json.loads(
+            (authoring / "generic-harness/runtime-plan-repair-1.json").read_text()
+        )
+        assert patch["mode"] == "chat_ingress"
+    else:
+        with pytest.raises(ValueError, match="ingress_repair_not_allowed"):
+            asyncio.run(run)
+        assert calls == [("validate", ["python", "cli.py"]), ("capability", False)]
+        assert AgentContract.model_validate_json(path.read_text()) == contract
+
+
+def test_ingress_repair_replays_same_private_chat_over_http(tmp_path, monkeypatch):
+    import threading
+    from http.server import ThreadingHTTPServer
+    from fi.alk.harness import runtime_repair
+    from fi.alk.harness.chat_readiness import probe_chat_ingress
+    from fi.alk.harness.contract import RuntimeInterface
+
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "cli.py").write_text("def interactive():\n    return ''\n")
+    server_source = source / "server.py"
+    server_source.write_text("""import json
+from http.server import BaseHTTPRequestHandler
+requests = []
+def chat(message):
+    return str(sum(int(value) for value in message.split()))
+class Handler(BaseHTTPRequestHandler):
+    def log_message(self, *args):
+        pass
+    def do_POST(self):
+        request = json.loads(self.rfile.read(int(self.headers['Content-Length'])))
+        requests.append((self.path, request))
+        content = chat(request['new_message']['content']) if self.path == '/chat' else ''
+        body = json.dumps({'content': content}).encode()
+        self.send_response(200)
+        self.send_header('Content-Type', 'application/json')
+        self.send_header('Content-Length', str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+""")
+    namespace = {}
+    exec(compile(server_source.read_text(), str(server_source), "exec"), namespace)
+    try:
+        server = ThreadingHTTPServer(("127.0.0.1", 0), namespace["Handler"])
+    except PermissionError:
+        pytest.skip("loopback listener unavailable in this sandbox")
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        authoring = tmp_path / "authoring"
+        authoring.mkdir()
+        contract = AgentContract(
+            agent="fixture-agent",
+            runtime=Runtime(
+                language="python",
+                execution="native",
+                command=["python", "cli.py"],
+                interface=RuntimeInterface(kind="command", protocol="fi.alk"),
+            ),
+        )
+        path = authoring / "contract.json"
+        path.write_text(contract.model_dump_json())
+        source_before = {entry.name: entry.read_bytes() for entry in source.iterdir()}
+        tools = [
+            {
+                "name": "calculate",
+                "description": "Add numbers",
+                "parameters": {"type": "object"},
+            }
+        ]
+        endpoint = f"http://127.0.0.1:{server.server_port}"
+
+        async def validate(*args):
+            current = AgentContract.model_validate_json(path.read_text())
+            await probe_chat_ingress(
+                interface=current.runtime.interface,
+                endpoint=endpoint,
+                opening_message="2 3",
+                authoring=authoring,
+                candidate_hash=_contract_hash(current),
+                bundle_digest="sha256:" + "0" * 64,
+                secret_values={},
+                redaction_values={},
+                tools=tools,
+                scenario_key="private-same-request",
+                timeout=5,
+            )
+            return 1
+
+        async def inspect(
+            root, current, diagnostics, *, allow_ingress_repair=False, **kwargs
+        ):
+            assert allow_ingress_repair
+            assert {item.code for item in diagnostics} == {"chat_ingress_failed"}
+            return RuntimePlanPatch(
+                mode="chat_ingress",
+                base_contract_hash=_contract_hash(current),
+                runtime=current.runtime.model_copy(
+                    update={
+                        "command": ["python", "server.py"],
+                        "interface": RuntimeInterface(
+                            kind="http",
+                            protocol="fi.alk",
+                            port=server.server_port,
+                            path="/chat",
+                        ),
+                    }
+                ),
+                evidence_paths=("cli.py", "server.py"),
+                diagnostic_codes=("chat_ingress_failed",),
+                summary="Use the source HTTP handler for the same private conversation",
+            )
+
+        monkeypatch.setattr(runtime_repair, "request_runtime_plan_patch", inspect)
+        asyncio.run(
+            validate_and_repair(
+                SimpleNamespace(metadata={"generic_harness_v1": True}),
+                source,
+                authoring,
+                validate=validate,
+                readiness_only=True,
+            )
+        )
+        requests = namespace["requests"]
+        assert [route for route, _ in requests] == ["/invoke", "/chat"]
+        assert (
+            requests[0][1]["messages"]
+            == requests[1][1]["messages"]
+            == [{"role": "user", "content": "2 3"}]
+        )
+        assert requests[0][1]["tools"] == requests[1][1]["tools"] == tools
+        assert {
+            entry.name: entry.read_bytes() for entry in source.iterdir()
+        } == source_before
+        receipts = [
+            json.loads(item.read_text())
+            for item in (authoring / "generic-harness/chat-readiness").glob("*.json")
+        ]
+        assert sorted(item["status"] for item in receipts) == ["failed", "passed"]
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
