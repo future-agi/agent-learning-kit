@@ -2825,6 +2825,7 @@ async def run_job(
             attempt_number=capabilities.attempt_number,
             source_directory=source,
             usage_reporter=usage_reporter,
+            stop_requested=cancel_requested,
         )
         call_runner = deps.build_call_runner(adapter, call_runner_context)
         scheduler = HostedScheduler(

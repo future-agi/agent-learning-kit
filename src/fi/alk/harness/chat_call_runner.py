@@ -9,6 +9,7 @@ import logging
 import os
 import re
 import time
+from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping, Sequence
@@ -26,7 +27,7 @@ from .call_runner import (
     collect_seam_calls,
 )
 from .contract import AgentContract
-from .hosted_scheduler import CallAborted, CallOutcome, Scenario, World
+from .hosted_scheduler import CallAborted, CallCancelled, CallOutcome, Scenario, World
 from .outbound import ArtifactKind, format_rfc3339_millis
 from .process_runtime import EnvironmentRuntime
 from .run.conversation import ChatActors, TargetConversationEnded, Transcript, converse
@@ -961,6 +962,19 @@ class HostedChatCallRunner:
         except CallAborted as exc:
             failure = exc
             transcript = getattr(exc, "partial_transcript", None) or Transcript()
+        except asyncio.CancelledError as exc:
+            if not self._context.stop_requested():
+                raise
+            # The person stopped the run: seal what the call kept through the abort path below, then raise.
+            failure = CallCancelled()
+            partial = getattr(exc, "partial_transcript", None)
+            setattr(failure, "partial_transcript", partial)
+            transcript = partial or Transcript()
+            task = asyncio.current_task()
+            if task is not None and hasattr(task, "uncancel"):
+                # Python 3.11+: the uploads that follow run as an uncancelled task. On 3.10 the caught cancel leaves
+                # nothing pending.
+                task.uncancel()
         except Exception as exc:  # noqa: BLE001 - convert target transport failures to call faults
             status = (
                 exc.trace.get("status_code")
@@ -1080,6 +1094,8 @@ class HostedChatCallRunner:
                 **(dispatcher.briefs if dispatcher is not None else {}),
             },
         )
+        if failure is not None and failure.code == "user_canceled":
+            outcome = replace(outcome, stop_reason="user_canceled")
         if failure is not None:
             failure.partial = outcome
             raise failure

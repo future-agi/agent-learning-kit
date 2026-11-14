@@ -31,6 +31,7 @@ Decoupling, deliberate:
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import inspect
 import logging
@@ -39,6 +40,7 @@ import random
 import re
 import threading
 import tempfile
+import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
@@ -286,6 +288,30 @@ class CallAborted(RuntimeError):
         self.code = code
 
 
+USER_CANCELED = "user_canceled"
+USER_CANCELED_MESSAGE = "Stopped by the user during the call"
+CANCEL_SEAL_ENV = "ALK_CANCEL_SEAL_SECONDS"
+_CANCEL_SEAL_DEFAULT_SECONDS = 15.0
+_CANCEL_POLL_SECONDS = 0.5
+
+
+def _cancel_seal_seconds() -> float:
+    """How long the scheduler waits for a cut call's runner to seal its evidence after a stop."""
+    try:
+        value = float(os.environ.get(CANCEL_SEAL_ENV) or _CANCEL_SEAL_DEFAULT_SECONDS)
+    except ValueError:
+        return _CANCEL_SEAL_DEFAULT_SECONDS
+    return value if value >= 0 else _CANCEL_SEAL_DEFAULT_SECONDS
+
+
+class CallCancelled(CallAborted):
+    """The person stopped the run during this call. `partial` carries what the runner sealed and uploaded before it
+    raised (transcript and tool-trace artifacts, calls, `stop_reason`); None when nothing was kept."""
+
+    def __init__(self, message: str = USER_CANCELED_MESSAGE, *, partial: CallOutcome | None = None) -> None:
+        super().__init__(message, partial=partial, code=USER_CANCELED)
+
+
 class CallRunner(Protocol):
     async def run(
         self,
@@ -453,6 +479,8 @@ _CODE_DOMAIN: dict[str, FailureDomain] = {
     "target_agent_tool_failed": FailureDomain.AGENT,
     "simulator_stalled": FailureDomain.SIMULATOR,
     "driver_crashed": FailureDomain.SIMULATOR,
+    # The person stopped the run: never retried, never scored, never infrastructure.
+    "user_canceled": FailureDomain.PLATFORM_SYNC,
     "usage_exhausted": FailureDomain.PLATFORM_SYNC,
     "usage_check_failed": FailureDomain.PLATFORM_SYNC,
     "world_pool_exhausted": FailureDomain.INFRASTRUCTURE,
@@ -1762,6 +1790,44 @@ class HostedScheduler:
         # Keep each scenario's batch together so concurrent worlds cannot invalidate both verdicts.
         self._judge_batch_lock = asyncio.Lock()
         self._executor: ThreadPoolExecutor | None = None
+        # Each scenario's in-flight call task, cancelled once by the job's one stop watcher; never runner state.
+        self._in_flight: dict[int, asyncio.Task[CallOutcome]] = {}
+        self._stopped_at: float | None = None
+
+    async def _watch_for_stop(self) -> None:
+        """One watcher per job: on the first stop, cut every call in flight once, so each runner seals its own."""
+        while not self._cancel_requested():
+            await asyncio.sleep(_CANCEL_POLL_SECONDS)
+        in_flight = list(self._in_flight.values())
+        if in_flight and getattr(self._call_runner, "stops_at_turn_boundary", False):
+            # A runner that hangs up at the next turn boundary gets the seal bound to end its calls on its own.
+            await asyncio.wait(in_flight, timeout=_cancel_seal_seconds())
+        self._stopped_at = time.monotonic()
+        for task in list(self._in_flight.values()):
+            if not task.done():
+                task.cancel()
+
+    async def _await_call(self, task: "asyncio.Task[CallOutcome]") -> CallOutcome:
+        """The call's outcome; after a stop, at most the seal bound more, then `CallCancelled` with nothing kept."""
+        try:
+            return await self._await_call_once(task)
+        finally:
+            self._in_flight.pop(id(task), None)
+
+    async def _await_call_once(self, task: "asyncio.Task[CallOutcome]") -> CallOutcome:
+        while True:
+            done, _ = await asyncio.wait({task}, timeout=_CANCEL_POLL_SECONDS)
+            if done:
+                try:
+                    return task.result()
+                except asyncio.CancelledError:
+                    if self._stopped_at is None:
+                        raise
+                    # A runner that let the stop through sealed nothing.
+                    raise CallCancelled() from None
+            if self._stopped_at is not None and time.monotonic() - self._stopped_at > _cancel_seal_seconds():
+                logger.warning("call runner did not seal within %ss of the stop", _cancel_seal_seconds())
+                raise CallCancelled()
 
     async def _judge_jointly(
         self,
@@ -1857,8 +1923,14 @@ class HostedScheduler:
                     )
 
             tasks = [asyncio.create_task(worker(i, s)) for i, s in enumerate(scenarios)]
-            if tasks:
-                await asyncio.gather(*tasks, return_exceptions=True)
+            watcher = asyncio.create_task(self._watch_for_stop())
+            try:
+                if tasks:
+                    await asyncio.gather(*tasks, return_exceptions=True)
+            finally:
+                watcher.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await watcher
 
             receipts: list[ResultReceipt] = []
             for index, scenario in enumerate(scenarios):
@@ -2292,8 +2364,33 @@ class HostedScheduler:
                 sub_goals=_unjudged(scenario.sub_goals),
             )
 
+        if self._cancel_requested():
+            # Stopped before this call started: nothing ran, nothing to seal.
+            return self._fault(
+                scenario,
+                world_index,
+                attempt,
+                _failure(USER_CANCELED, USER_CANCELED_MESSAGE),
+                sub_goals=_unjudged(scenario.sub_goals),
+                call=None,
+                retry=False,
+            )
+        # Its own task, so a stop cuts the call and not the scenario's sealing below.
+        call_task = asyncio.create_task(_run_call(self._call_runner, scenario, runtime, world))
+        self._in_flight[id(call_task)] = call_task
         try:
-            call_outcome = await _run_call(self._call_runner, scenario, runtime, world)
+            call_outcome = await self._await_call(call_task)
+        except CallCancelled as exc:
+            # Checks never run on a cancelled call: every sub-goal unmeasured, the receipt points at what was kept.
+            return self._fault(
+                scenario,
+                world_index,
+                attempt,
+                _failure(USER_CANCELED, USER_CANCELED_MESSAGE),
+                sub_goals=_unjudged(scenario.sub_goals),
+                call=self._call_summary(exc.partial),
+                retry=False,
+            )
         except WorldUnavailable as exc:
             return _Retry(
                 _failure("world_unavailable", str(exc)),

@@ -34,6 +34,7 @@ import asyncio
 import contextlib
 import dataclasses
 import gc
+import inspect
 import json
 import random
 import time
@@ -84,7 +85,7 @@ from .call_actor import (
     speaking_entries,
     logged_tool_name,
 )
-from .hosted_scheduler import CallAborted, CallOutcome
+from .hosted_scheduler import CallAborted, CallCancelled, CallOutcome
 from .hosted_scheduler import Scenario as HostedScenario
 from .job import ExecutionMode, FailureDomain, HarnessJob, ProviderExecutionMode
 from .isolated_process import run_json_worker
@@ -268,8 +269,23 @@ class ArtifactUploader(Protocol):
 PlaceCall = Callable[[SimulationSpec], Awaitable[SimulationReport]]
 
 
-async def _default_place_call(spec: SimulationSpec) -> SimulationReport:
-    return await SimulationRunner().run(spec)
+async def _default_place_call(
+    spec: SimulationSpec, stop_when: Callable[[list[dict[str, Any]], Any], bool] | None = None
+) -> SimulationReport:
+    if stop_when is None:
+        return await SimulationRunner().run(spec)
+    # Checked by the engine between turns: a user stop hangs up at the next turn boundary with the engine's own report.
+    return await SimulationRunner().run(spec, stop_when=stop_when)
+
+
+def _takes_stop_when(place_call: Any) -> bool:
+    try:
+        parameters = inspect.signature(place_call).parameters.values()
+    except (TypeError, ValueError):
+        return False
+    return any(
+        parameter.name == "stop_when" or parameter.kind is inspect.Parameter.VAR_KEYWORD for parameter in parameters
+    )
 
 
 @dataclass(frozen=True)
@@ -290,6 +306,9 @@ class CallRunnerContext:
     usage_reporter: UsageReporter | None = None
     # A readiness probe checks how the agent's tools reach the world, not the scenario's own trial rules.
     readiness_probe: bool = False
+    # Whether the person stopped the run: a cancel of a call's task is a user stop only while this reads true. Read
+    # per call, never kept on the runner, which serves every concurrent call.
+    stop_requested: Callable[[], bool] = lambda: False
 
 
 # --- pre-dial validation -----------------------------------------------------------------------
@@ -2391,6 +2410,9 @@ class CallRunnerImpl:
         self._adapter = adapter
         self._context = context
         self._place_call = place_call
+        # A place-call that takes `stop_when` hangs up at the next turn boundary on a user stop; the scheduler gives it
+        # the seal bound to do so before it cuts the task. The subprocess worker path takes no callback.
+        self.stops_at_turn_boundary = place_call is not None and _takes_stop_when(place_call)
         simulator_secret_values = _canonical_simulator_secrets(
             context.simulator_provider_secret_values
         )
@@ -2817,6 +2839,10 @@ class CallRunnerImpl:
 
         async def place() -> SimulationReport:
             if self._place_call is not None:
+                if self.stops_at_turn_boundary:
+                    return await self._place_call(
+                        spec, stop_when=lambda _messages, _persona: self._context.stop_requested()
+                    )
                 return await self._place_call(spec)
             logger.info(
                 "voice worker dispatch scenario=%s voice_run=%s",
@@ -2870,7 +2896,15 @@ class CallRunnerImpl:
         try:
             report = await asyncio.wait_for(place_with_actors(), timeout=outer_timeout)
         except asyncio.CancelledError:
-            raise
+            if not self._context.stop_requested():
+                raise
+            # The person stopped the run: the in-flight audio turn is cut; the call keeps the timing it measured.
+            task = asyncio.current_task()
+            if task is not None and hasattr(task, "uncancel"):
+                task.uncancel()
+            raise CallCancelled(
+                partial=replace(self._timing_only_outcome(started_at), stop_reason="user_canceled")
+            ) from None
         except asyncio.TimeoutError as exc:
             raise CallAborted(
                 "voice_call_runner_timeout: place_call exceeded its outer budget "
@@ -2884,7 +2918,7 @@ class CallRunnerImpl:
             ) from exc
 
         try:
-            return await self._translate_report(
+            outcome = await self._translate_report(
                 report,
                 runtime=runtime,
                 scenario_key=scenario.scenario_key,
@@ -2908,6 +2942,10 @@ class CallRunnerImpl:
                 f"voice_call_translate_crashed: {type(exc).__name__}: {exc}",
                 partial=self._timing_only_outcome(started_at),
             ) from exc
+        if self.stops_at_turn_boundary and self._context.stop_requested():
+            # The engine hung up at the turn boundary on the person's stop: sealed like any call, then said as a stop.
+            raise CallCancelled(partial=replace(outcome, stop_reason="user_canceled"))
+        return outcome
 
     def _fault_notices(
         self, runtime: EnvironmentRuntime, faults: Sequence[Any], calls: Sequence[Call]
