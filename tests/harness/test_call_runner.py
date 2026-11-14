@@ -3221,3 +3221,73 @@ def test_write_comes_from_contract_effects_and_unknown_is_null() -> None:
     ]
     (record,) = cr.trial_shared_records(log, _RETURNS_TOOLS)
     assert [one["write"] for one in record["actions"]] == [True, None, None]
+
+
+def _cut_voice_call(runner: cr.CallRunnerImpl, entered: asyncio.Event) -> Any:
+    async def scenario():
+        task = asyncio.create_task(
+            runner.run(_FakeScenario("k1"), _runtime(metadata={"livekit_agent_name": "agent-w0"}))
+        )
+        await entered.wait()
+        task.cancel()
+        return await task
+
+    return scenario
+
+
+@pytest.mark.parametrize("stop", [True, False])
+def test_voice_cancel_with_stop_requested_raises_call_cancelled(tmp_path: Path, stop: bool) -> None:
+    from fi.alk.harness.hosted_scheduler import CallCancelled
+
+    _job_obj, context = _context(tmp_path=tmp_path)
+    _write_scenario_doc(context.bundle_dir, scenario_key="k1")
+    holder: dict[str, asyncio.Event] = {}
+
+    async def place_call(spec):
+        holder["entered"].set()
+        await asyncio.sleep(30)
+
+    runner = cr.CallRunnerImpl(FakeAdapter(), replace(context, stop_requested=lambda: stop), place_call=place_call)
+
+    async def scenario():
+        holder["entered"] = asyncio.Event()
+        return await _cut_voice_call(runner, holder["entered"])()
+
+    if stop:
+        with pytest.raises(CallCancelled) as caught:
+            asyncio.run(scenario())
+        partial = caught.value.partial
+        assert partial is not None and partial.started_at and partial.ended_at
+        assert partial.stop_reason == "user_canceled"
+    else:
+        with pytest.raises(asyncio.CancelledError):
+            asyncio.run(scenario())
+
+
+def test_voice_stop_when_ends_at_the_next_turn(tmp_path: Path) -> None:
+    from fi.alk.harness.hosted_scheduler import CallCancelled
+
+    _job_obj, context = _context(tmp_path=tmp_path)
+    _write_scenario_doc(context.bundle_dir, scenario_key="k1")
+    stopped = {"value": False}
+    turns: list[int] = []
+
+    async def place_call(spec, stop_when=None):
+        # A stand-in engine that checks `stop_when` after each turn and hangs up with its own report.
+        for turn in range(5):
+            turns.append(turn)
+            if turn == 1:
+                stopped["value"] = True
+            if stop_when is not None and stop_when([], None):
+                break
+        return _report(messages=[{"role": "user", "content": "hi"}, {"role": "assistant", "content": "hello"}])
+
+    runner = cr.CallRunnerImpl(
+        FakeAdapter(), replace(context, stop_requested=lambda: stopped["value"]), place_call=place_call
+    )
+    assert runner.stops_at_turn_boundary is True
+    with pytest.raises(CallCancelled) as caught:
+        asyncio.run(runner.run(_FakeScenario("k1"), _runtime(metadata={"livekit_agent_name": "agent-w0"})))
+    assert turns == [0, 1]
+    assert caught.value.partial is not None
+    assert caught.value.partial.stop_reason == "user_canceled"

@@ -5025,3 +5025,117 @@ def test_a_bypass_leaves_that_worker_s_checks_unmeasured_and_grades_the_task() -
     assert (worker.held, worker.verdict) == (None, "unmeasured")
     assert "reached the world without its own channel" in worker.reason
     assert (task.held, task.verdict, receipt.status) == (False, "fail", "failed")
+
+
+def _stop_run(runner, scenarios, *, stop_after: float = 0.05, instances: int = 1):
+    """Run the scheduler with a stop that flips `stop_after` seconds in; the runner reads it through its context."""
+
+    async def scenario():
+        outbound = FakeOutbound()
+        pool, _ = _pool(instances, outbound=outbound)
+        await pool.start()
+        started = time.monotonic()
+        stopped = lambda: time.monotonic() - started >= stop_after  # noqa: E731
+        runner.stop_requested = stopped
+        judged: list[str] = []
+
+        async def judge(*_args, **_kwargs):
+            judged.append("judge")
+            return True, ""
+
+        scheduler = hs.HostedScheduler(
+            pool=pool,
+            world_factory=FakeWorldFactory(),
+            call_runner=runner,
+            outbound=outbound,
+            job_seed=1,
+            cancel_requested=stopped,
+            judge=judge,
+        )
+        result = await scheduler.run(scenarios)
+        await pool.close()
+        return result, judged
+
+    return asyncio.run(scenario())
+
+
+class _SealingRunner:
+    """A runner that waits on its call until cut, then seals what it kept as the real runners do on a user stop."""
+
+    def __init__(self) -> None:
+        self.stop_requested = lambda: False
+        self.cancels: dict[str, int] = {}
+
+    async def run(self, scenario, runtime):
+        try:
+            await asyncio.sleep(30)
+        except asyncio.CancelledError:
+            self.cancels[scenario.scenario_key] = self.cancels.get(scenario.scenario_key, 0) + 1
+            if not self.stop_requested():
+                raise
+            partial = replace(
+                _call_outcome(turns=1, calls=(hs.Call(name="get_order", arguments={}), hs.Call(name="list_refunds", arguments={}))),
+                transcript_artifact=f"t-{scenario.scenario_key}",
+                stop_reason="user_canceled",
+            )
+            raise hs.CallCancelled(partial=partial) from None
+        return _call_outcome()
+
+
+def test_cancel_mid_call_seals_a_user_canceled_receipt_pointing_at_the_partial_transcript() -> None:
+    runner = _SealingRunner()
+    goals = [FakeSubGoal("refund_once", lambda w, c: None, judged="the reply is truthful")]
+    result, judged = _stop_run(runner, [FakeScenario("s1", "id-1", sub_goals=goals)])
+    (receipt,) = result.receipts
+    assert receipt.status == "errored"
+    assert (receipt.failure.code, receipt.failure.domain) == ("user_canceled", "platform_sync")
+    assert receipt.call.transcript_artifact == "t-s1"
+    assert receipt.call.stop_reason == "user_canceled"
+    assert [one.held for one in receipt.sub_goals] == [None]
+    assert judged == []
+
+
+def test_user_canceled_is_never_retried() -> None:
+    assert hs._is_retryable("user_canceled") is False
+    assert hs._domain_for("user_canceled") is hs.FailureDomain.PLATFORM_SYNC
+
+
+def test_a_runner_that_ignores_the_cancel_is_cut_at_the_bound(monkeypatch) -> None:
+    monkeypatch.setenv(hs.CANCEL_SEAL_ENV, "0.2")
+
+    class Shielded:
+        stop_requested = staticmethod(lambda: False)
+
+        async def run(self, scenario, runtime):
+            # Shields its work from the cancel and never returns.
+            await asyncio.shield(asyncio.sleep(3))
+            return _call_outcome()
+
+    result, _ = _stop_run(Shielded(), [FakeScenario("s1", "id-1", sub_goals=[FakeSubGoal("g", lambda w, c: None)])])
+    (receipt,) = result.receipts
+    assert receipt.failure.code == "user_canceled"
+    assert receipt.call is None
+
+
+def test_one_stop_seals_every_call_in_flight_each_with_its_own_transcript() -> None:
+    runner = _SealingRunner()
+    scenarios = [
+        FakeScenario("s1", "id-1", sub_goals=[FakeSubGoal("g", lambda w, c: None)]),
+        FakeScenario("s2", "id-2", sub_goals=[FakeSubGoal("g", lambda w, c: None)]),
+    ]
+    result, _ = _stop_run(runner, scenarios, instances=2)
+    assert sorted((one.failure.code, one.call.transcript_artifact) for one in result.receipts) == [
+        ("user_canceled", "t-s1"),
+        ("user_canceled", "t-s2"),
+    ]
+    # The one watcher cuts each call once; no stop state lives on the shared runner.
+    assert runner.cancels == {"s1": 1, "s2": 1}
+
+
+def test_no_cancel_leaves_receipts_unchanged() -> None:
+    goals = [FakeSubGoal("g", lambda w, c: None)]
+    outcome = _call_outcome(turns=2, calls=(hs.Call(name="get_order", arguments={}),))
+    plain = _graded(goals, outcome)
+    assert plain.status == "passed"
+    assert plain.failure is None
+    assert plain.call.stop_reason is None

@@ -1924,3 +1924,85 @@ def test_a_chat_agent_without_a_tool_proxy_says_its_workers_permissions_were_not
     [notice] = chat._unproxied_worker_notices({}, tmp_path)
     assert notice["code"] == "worker_limits_not_enforced"
     assert "permitted actions" in notice["message"]
+
+
+def _stop_runtime() -> EnvironmentRuntime:
+    return EnvironmentRuntime(
+        runtime_id="runtime",
+        world_index=0,
+        bundle_digest="sha256:" + "a" * 64,
+        state=RuntimeState.READY,
+        endpoints={
+            "target_http": RuntimeEndpoint(capability="target_http", protocol="http", address="http://localhost:18080")
+        },
+    )
+
+
+def _blocked_on_the_second_turn(seen: dict[str, Any]):
+    """Like `converse`: the second agent turn never returns, and a cancel attaches the transcript so far."""
+
+    async def drive(*_args, **_kwargs):
+        partial = Transcript(
+            exchanges=[
+                Exchange("customer", "Refund order 1043"),
+                Exchange("agent", "Looking it up"),
+                Exchange("customer", "Is it done?"),
+            ]
+        )
+        try:
+            seen["blocked"].set()
+            await asyncio.sleep(30)
+        except asyncio.CancelledError as exc:
+            exc.partial_transcript = partial
+            raise
+        return partial
+
+    return drive
+
+
+def _run_and_stop(context, adapter, monkeypatch):
+    from dataclasses import replace as replaced
+
+    seen: dict[str, Any] = {}
+    stopped = {"value": False}
+    monkeypatch.setattr(chat, "_tool_world", lambda *_args: _ToolWorld())
+    monkeypatch.setattr(chat, "_drive_conversation", _blocked_on_the_second_turn(seen))
+    runner = chat.HostedChatCallRunner(adapter, replaced(context, stop_requested=lambda: stopped["value"]))
+
+    async def scenario(stop: bool):
+        seen["blocked"] = asyncio.Event()
+        task = asyncio.create_task(
+            runner.run(SimpleNamespace(scenario_key="one", scenario_id="scenario-1"), _stop_runtime())
+        )
+        await seen["blocked"].wait()
+        stopped["value"] = stop
+        task.cancel()
+        return await task
+
+    return scenario
+
+
+def test_a_stop_during_a_blocked_agent_turn_uploads_the_partial_transcript(tmp_path, monkeypatch) -> None:
+    from fi.alk.harness.hosted_scheduler import CallCancelled
+
+    adapter = _Adapter()
+    scenario = _run_and_stop(_context(tmp_path), adapter, monkeypatch)
+    with pytest.raises(CallCancelled) as caught:
+        asyncio.run(scenario(True))
+    partial = caught.value.partial
+    assert caught.value.code == "user_canceled"
+    assert partial is not None
+    assert partial.transcript_artifact == "transcript-1"
+    assert partial.stop_reason == "user_canceled"
+    (transcript,) = [json.loads(data) for data in adapter.uploads]
+    contents = [one["content"] for one in transcript["messages"]]
+    # Turn 1's reply and the second customer line are kept; the second reply never arrived.
+    assert contents == ["Refund order 1043", "Looking it up", "Is it done?"]
+
+
+def test_a_cancel_that_is_not_a_stop_still_propagates(tmp_path, monkeypatch) -> None:
+    adapter = _Adapter()
+    scenario = _run_and_stop(_context(tmp_path), adapter, monkeypatch)
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(scenario(False))
+    assert adapter.uploads == []
