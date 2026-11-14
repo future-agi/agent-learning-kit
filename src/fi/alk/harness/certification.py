@@ -65,6 +65,21 @@ class CertificationRuntime(BaseModel):
 
     snapshot: str | None = None
     validation_attempts: int = Field(ge=1)
+    # The harness that made the certificate, and the agent framework distributions installed in the
+    # agent's environment, by version. Recorded only when known.
+    harness_version: str | None = None
+    frameworks: dict[str, str] = Field(default_factory=dict)
+
+    @model_serializer(mode="wrap")
+    def _without_unrecorded_versions(self, handler: Any) -> Any:
+        # A certificate made before these were recorded keeps its fingerprint and format.
+        data = handler(self)
+        if isinstance(data, dict):
+            if self.harness_version is None:
+                data.pop("harness_version", None)
+            if not self.frameworks:
+                data.pop("frameworks", None)
+        return data
 
 
 class CertificationChecks(BaseModel):
@@ -80,6 +95,9 @@ class CertificationChecks(BaseModel):
     action_behavior: str = "0/0"
     reset_equivalence: CheckStatus = CheckStatus.NOT_RUN
     world_isolation: CheckStatus = CheckStatus.NOT_RUN
+    # Whether the judge answered one short request during the check; recorded only when the
+    # environment has a judged sub-goal.
+    judge_reachable: CheckStatus | None = None
 
     @property
     def records_chat_ingress(self) -> bool:
@@ -92,6 +110,8 @@ class CertificationChecks(BaseModel):
         data = handler(self)
         if not self.records_chat_ingress and isinstance(data, dict):
             data.pop("chat_ingress", None)
+        if self.judge_reachable is None and isinstance(data, dict):
+            data.pop("judge_reachable", None)
         return data
 
 

@@ -332,7 +332,39 @@ def _make_local_seed_files_readable(bundle: Path) -> None:
         path.chmod(path.stat().st_mode | (0o055 if path.is_dir() else 0o044))
 
 
-def _write_generic_certificate(job, authoring: Path, repairs) -> None:
+def _has_judged_sub_goals(authoring: Path) -> bool:
+    from .catalogue import load_catalogue
+
+    for root in (authoring, authoring / "environment-bundle"):
+        try:
+            catalogue = load_catalogue(root)
+        except (OSError, ValueError):
+            continue
+        if any(goal.judged.strip() for goal in catalogue.sub_goals):
+            return True
+    return False
+
+
+def _with_judge_check(checks, authoring: Path):
+    """``checks`` with whether the judge answered, only when a judged sub-goal needs it."""
+    from .certification import CheckStatus
+    from .judge import judge_reachable
+
+    if not _has_judged_sub_goals(authoring):
+        return checks
+    return checks.model_copy(update={"judge_reachable": CheckStatus(judge_reachable())})
+
+
+def _harness_version() -> str | None:
+    from fi.alk import __version__
+
+    return None if __version__.startswith("0.0.0+") else __version__
+
+
+def _write_generic_certificate(
+    job, authoring: Path, repairs, source: Path | None = None
+) -> None:
+    from .generated_runtime import installed_frameworks
     from .certification import (
         CertificationAuthoring,
         CertificationCompiler,
@@ -366,8 +398,10 @@ def _write_generic_certificate(job, authoring: Path, repairs) -> None:
         runtime=CertificationRuntime(
             snapshot=_runtime_snapshot(job),
             validation_attempts=len(repairs.decisions),
+            harness_version=_harness_version(),
+            frameworks=installed_frameworks(source),
         ),
-        checks=evidence.checks,
+        checks=_with_judge_check(evidence.checks, authoring),
         repairs=repairs,
         limitations=evidence.limitations,
     )
@@ -1927,7 +1961,7 @@ async def validate_and_repair(
                 )
                 if evidence_path.is_file():
                     _write_generic_certificate(
-                        job, authoring, repair_controller.history
+                        job, authoring, repair_controller.history, source
                     )
                 else:
                     # Injected validators in unit/integration consumers may not implement the

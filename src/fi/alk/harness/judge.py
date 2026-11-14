@@ -148,6 +148,35 @@ def judge_model() -> str:
     return os.environ.get(JUDGE_MODEL_ALIAS, "").strip() or chosen_model()
 
 
+_REACHABLE_TIMEOUT_SECONDS = 20
+
+
+def judge_reachable(timeout: float = _REACHABLE_TIMEOUT_SECONDS) -> str:
+    """``passed`` when the judge's model answers one tiny request in ``timeout`` seconds, else
+    ``failed``: a judged sub-goal cannot be graded without it."""
+    try:
+        env = provider_env(judge_model())
+        base, key = env.get("ANTHROPIC_BASE_URL"), env.get("ANTHROPIC_AUTH_TOKEN")
+        if not base or not key:
+            raise NoGateway("no gateway configured for the judge")
+        response = requests.post(
+            f"{base}/v1/chat/completions",
+            headers={"Authorization": f"Bearer {key}"},
+            json={
+                "model": env["ANTHROPIC_MODEL"],
+                "messages": [{"role": "user", "content": "Reply with the single word: ready"}],
+                "max_tokens": 5,
+            },
+            timeout=timeout,
+        )
+        response.raise_for_status()
+        answered = bool((response.json().get("choices") or [None])[0])
+    except Exception as exc:  # noqa: BLE001 - any failure means the judge cannot grade
+        logger.warning("judge not reachable in the check: %s", type(exc).__name__)
+        return "failed"
+    return "passed" if answered else "failed"
+
+
 def _short(value: object) -> object:
     if isinstance(value, str) and len(value) > _LIMIT:
         return value[:_LIMIT] + f"... [{len(value)} chars]"

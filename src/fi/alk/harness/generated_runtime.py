@@ -14,6 +14,7 @@ import re
 import shlex
 import shutil
 import stat
+import subprocess
 from collections.abc import Sequence
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -687,6 +688,72 @@ FRAMEWORK_INSTRUMENTORS = (
     # does, has them recorded only once the SDK is there, at the API's own version.
     ("opentelemetry-api", "opentelemetry-sdk"),
 )
+# Distributions that only mark how spans are made, not an agent framework of their own.
+_NOT_FRAMEWORKS = frozenset({"opentelemetry-api"})
+_FRAMEWORKS_READ_SECONDS = 20
+
+
+def _distribution_name(name: str) -> str:
+    return re.sub(r"[-_.]+", "-", name).lower()
+
+
+def installed_frameworks(source: Path | None = None) -> dict[str, str]:
+    """The agent framework distributions installed in the agent's environment, by version.
+
+    Read from a virtual environment inside ``source`` when it has one, else from the ``python3`` the
+    generated runtime installs the agent into. Anything unreadable reads as none: the certificate then
+    records no frameworks rather than wrong ones.
+    """
+    wanted = {
+        _distribution_name(name)
+        for name, _ in FRAMEWORK_INSTRUMENTORS
+        if name not in _NOT_FRAMEWORKS
+    }
+    found: dict[str, str] = {}
+    paths = (
+        [
+            str(path)
+            for pattern in (".venv/lib/python*/site-packages", "*/.venv/lib/python*/site-packages")
+            for path in sorted(source.glob(pattern))
+        ]
+        if source is not None and source.is_dir()
+        else []
+    )
+    if paths:
+        import importlib.metadata
+
+        for distribution in importlib.metadata.distributions(path=paths):
+            name = _distribution_name(distribution.metadata["Name"] or "")
+            if name in wanted:
+                found.setdefault(name, distribution.version)
+        return dict(sorted(found.items()))
+    script = (
+        "import importlib.metadata as m, json, re\n"
+        "n = lambda s: re.sub(r'[-_.]+', '-', s).lower()\n"
+        f"w = {sorted(wanted)!r}\n"
+        "print(json.dumps({n(d.metadata['Name']): d.version for d in m.distributions()"
+        " if d.metadata['Name'] and n(d.metadata['Name']) in w}))\n"
+    )
+    try:
+        completed = subprocess.run(
+            ["python3", "-c", script],
+            capture_output=True,
+            text=True,
+            timeout=_FRAMEWORKS_READ_SECONDS,
+            check=False,
+        )
+        read = json.loads(completed.stdout or "{}") if completed.returncode == 0 else {}
+    except (OSError, ValueError, subprocess.TimeoutExpired):
+        return {}
+    if not isinstance(read, dict):
+        return {}
+    return {
+        str(name): str(version)
+        for name, version in sorted(read.items())
+        if name in wanted and version
+    }
+
+
 # Half the build step's default limit, so a stalled index skips the instrumentors and never fails the build.
 INSTRUMENTOR_INSTALL_SECONDS = 300
 
