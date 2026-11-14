@@ -954,6 +954,20 @@ def edited(held: Scenario, change: dict[str, Any]) -> dict[str, Any]:
     return result
 
 
+NO_SOURCES = "Cite where this case comes from, or add an assumption source that says what you assumed."
+
+
+def _unchanged(scenario: Scenario, payload: dict[str, Any], kept: list[Scenario]) -> bool:
+    """Whether a saved scenario with this key (else this name) already holds exactly this content."""
+    named = str(payload.get("scenario_key") or "").strip()
+    previous = next((one for one in kept if named and one.scenario_key == named), None) or next(
+        (one for one in kept if one.name == scenario.name), None
+    )
+    if previous is None:
+        return False
+    return previous.model_dump(exclude={"scenario_key"}) == scenario.model_dump(exclude={"scenario_key"})
+
+
 def accept_scenario(
     payload: dict[str, Any],
     *,
@@ -970,8 +984,14 @@ def accept_scenario(
     instructions: str = "",
     used: set[str] | None = None,
     renaming: bool = False,
+    require_sources: bool = False,
 ) -> dict[str, Any]:
     """Validate one scenario, then prove it. A plain function so both halves are testable.
+
+    ``require_sources`` refuses a new or changed scenario that cites nothing: a requirement the
+    writer cannot cite is written as an ``assumption`` source, never left as a silent default. A
+    resubmission identical to the saved scenario (a case written before sources were required) is
+    exempt.
 
     ``renaming`` keeps a proved scenario under a new name without proving it again: what it tests
     is unchanged. ``used`` is every key the environment has given a scenario, so a new one never
@@ -1037,6 +1057,8 @@ def accept_scenario(
             finally:
                 trial.close()
 
+        if require_sources and not scenario.sources and not _unchanged(scenario, payload, kept):
+            problems.append(NO_SOURCES)
         if problems:
             return _err(
                 "Not kept. Fix these and submit again:\n  - " + "\n  - ".join(problems)
@@ -1971,6 +1993,7 @@ def scenario_tools(
                 [contract.system_prompt_excerpt, *contract.hard_constraints]
             ),
             used=used,
+            require_sources=True,
         )
         if not result.get("is_error"):
             exploration["since_submit"] = 0

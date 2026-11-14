@@ -1,7 +1,7 @@
 """Whether each source a scenario cites says what the scenario claims it says.
 
-A case with no sources is not blocked: it reads as assumed by the builder. A source that does not
-resolve is blocking, because a false citation is worse than none. Chat messages and evidence cases
+A proof does not block a case with no sources (the save path refuses a new or changed one, so a
+guess is written as an `assumption` source). A source that does not resolve is blocking, because a false citation is worse than none. Chat messages and evidence cases
 live on the platform and are resolved there.
 """
 
