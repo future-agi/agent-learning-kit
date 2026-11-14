@@ -1058,6 +1058,17 @@ class HostedChatCallRunner:
         world_record = _world_actors_record(
             door, listing, dispatcher, cast, meter, limits, since=trial_started, contract=self._contract
         )
+        if proxied:
+            from .call_runner import read_worker_stops
+
+            stopped = read_worker_stops(runtime)
+            if stopped:
+                # Workers whose own process the harness ended past their deadline.
+                world_record = world_record or {
+                    "actions": [], "decisions": [], "state_changes": [], "approvals": [], "limits": dict(limits),
+                    "usage": [],
+                }
+                world_record["stopped_workers"] = stopped
         if world_record is not None:
             transcript.world_actors = world_record
         # Every actor that took part, the ones acting only through the world too, so the call is found by each.

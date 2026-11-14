@@ -1399,6 +1399,82 @@ TRIAL_DEADLINE_DDL = "ALTER TABLE _alk_trial_faults ADD COLUMN IF NOT EXISTS wor
 TRIAL_WORKER_DEADLINES_DDL = "ALTER TABLE _alk_trial_faults ADD COLUMN IF NOT EXISTS worker_deadlines JSONB"
 
 
+# The workers the harness stopped in this trial, written by the scheduler when it ends a worker's own process past
+# its deadline; cleared at each trial's start.
+WORKER_STOPS_DDL = (
+    "CREATE TABLE IF NOT EXISTS _alk_worker_stops "
+    "(worker TEXT PRIMARY KEY, process TEXT NOT NULL, at DOUBLE PRECISION NOT NULL, reason TEXT NOT NULL)"
+)
+
+
+def read_trial_deadlines(address: str) -> tuple[float | None, dict[str, float]]:
+    """This trial's deadline for all workers and each named worker's own, as the runner wrote them; nothing when the
+    trial set none or has not started."""
+    import psycopg
+
+    try:
+        with psycopg.connect(address, autocommit=True, connect_timeout=5) as connection:
+            row = connection.execute(
+                "SELECT worker_deadline_at, worker_deadlines FROM _alk_trial_faults WHERE id = 1"
+            ).fetchone()
+    except psycopg.Error:
+        return None, {}
+    if row is None:
+        return None, {}
+    deadline_at, deadlines = row
+    named = deadlines if isinstance(deadlines, dict) else {}
+    return (
+        float(deadline_at) if isinstance(deadline_at, (int, float)) else None,
+        {str(key): float(value) for key, value in named.items() if isinstance(value, (int, float))},
+    )
+
+
+def record_worker_stop(address: str, worker: str, process: str, at: float, reason: str = "deadline_passed") -> None:
+    """Keep that the harness ended this worker's own process, so the call seals it beside the world's changes."""
+    import psycopg
+
+    with psycopg.connect(address, autocommit=True, connect_timeout=5) as connection:
+        connection.execute(WORKER_STOPS_DDL)
+        connection.execute(
+            "INSERT INTO _alk_worker_stops (worker, process, at, reason) VALUES (%s, %s, %s, %s) "
+            "ON CONFLICT (worker) DO NOTHING",
+            (worker, process, at, reason),
+        )
+
+
+def read_worker_stops(runtime: EnvironmentRuntime) -> list[dict[str, Any]]:
+    """The workers the harness stopped in this trial, in the order it stopped them; empty when it stopped none."""
+    database = _find_postgres_endpoint(runtime)
+    if database is None:
+        return []
+    import psycopg
+
+    try:
+        with psycopg.connect(database.address, autocommit=True, connect_timeout=5) as connection:
+            rows = connection.execute(
+                "SELECT worker, process, at, reason FROM _alk_worker_stops ORDER BY at ASC"
+            ).fetchall()
+    except Exception:  # noqa: BLE001 - no stops read is no stops sealed, never a failed call
+        return []
+    return [{"worker": worker, "process": process, "at": at, "reason": reason} for worker, process, at, reason in rows]
+
+
+def _clear_worker_stops(runtime: EnvironmentRuntime) -> None:
+    """A new trial: no worker of it has been stopped yet, whatever an earlier trial on this world left."""
+    database = _find_postgres_endpoint(runtime)
+    if database is None:
+        return
+    import psycopg
+
+    try:
+        with psycopg.connect(database.address, autocommit=True, connect_timeout=5) as connection:
+            connection.execute(WORKER_STOPS_DDL)
+            connection.execute("DELETE FROM _alk_worker_stops")
+    except Exception as exc:  # noqa: BLE001 - a world database out of reach never fails a trial that stops no one
+        # Only the type: the text of a database error can carry the world's password.
+        logger.warning("worker stops could not be cleared before a trial: %s", type(exc).__name__)
+
+
 def _write_trial_state(
     runtime: EnvironmentRuntime,
     faults: list[Any],
@@ -1604,6 +1680,7 @@ def _set_trial_faults(
     """This trial's faults and worker deadline at its start. A trial with either to set fails when they cannot be
     set; one with neither only clears what an earlier trial may have left, so a world database out of reach never
     fails it."""
+    _clear_worker_stops(runtime)
     if worker_deadline_at or worker_deadlines:
         _write_trial_state(runtime, faults, worker_deadline_at, worker_deadlines)
         return
@@ -3175,7 +3252,8 @@ class CallRunnerImpl:
                         "summary": summary,
                         "events": took_part.get("call_actor_events") or [],
                     }
-                if acted or actor_decisions or workers_acted:
+                stopped = read_worker_stops(runtime)
+                if acted or actor_decisions or workers_acted or stopped:
                     # Kept out of the tool trace, whose every line is one of the agent's own calls. `decisions` is
                     # what each actor chose and why (live) or was scheduled to do (mocked); `actions` what the world
                     # made of it.
@@ -3190,6 +3268,9 @@ class CallRunnerImpl:
                     shared = _shared_records(runtime, self._context.bundle_dir)
                     if shared:
                         transcript_document["world_actors"]["shared_records"] = shared
+                    if stopped:
+                        # Workers whose own process the harness ended past their deadline.
+                        transcript_document["world_actors"]["stopped_workers"] = stopped
                 if said:
                     # A fault that did not take effect is said, never only logged: the trial ran without it.
                     transcript_document["notices"] = said

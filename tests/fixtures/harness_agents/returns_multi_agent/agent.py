@@ -26,6 +26,9 @@ Environment it reads, by name:
                        optional. How long payment_times_out and refund_never_returns wait. Default 20. Both wait
                        only on a scenario call (the harness's X-ALK-Scenario-Call header), never on a readiness or
                        certification probe, so a version with either fault still certifies.
+    REFUND_WORKER_URL  optional. When set, the Refund worker runs as a service of its own (worker_service.py, its own
+                       process) at this address and the coordinator reaches it over HTTP, so a harness can stop that
+                       worker alone; unset, both workers run in this process.
     RETURNS_TRACING    optional. `off` exports no spans even when an OTLP endpoint is set.
     OTEL_EXPORTER_OTLP_TRACES_ENDPOINT or OTEL_EXPORTER_OTLP_ENDPOINT
                        when present (the platform sets the first with the trace export), each turn's agent, hand-off
@@ -185,6 +188,39 @@ def _coordinator_instructions() -> str:
     )
 
 
+def _refund_service() -> Any:
+    """The Refund worker reached as its own service: one tool call, carrying the trace it was made in."""
+
+    @function_tool
+    def refund(request: str) -> str:
+        """Refund an order the coordinator has approved."""
+        headers = {"Content-Type": "application/json"}
+        try:
+            from opentelemetry.propagate import inject
+
+            inject(headers)
+        except ImportError:
+            pass
+        address = os.environ["REFUND_WORKER_URL"].rstrip("/") + "/run"
+        outgoing = urllib.request.Request(
+            address, data=json.dumps({"input": request}).encode(), method="POST", headers=headers
+        )
+        try:
+            with urllib.request.urlopen(outgoing, timeout=HANG_SECONDS + 60) as response:
+                return str(json.loads(response.read().decode()).get("output") or "")
+        except (urllib.error.URLError, OSError) as error:
+            # A worker that is gone (stopped past its deadline) is an answer the coordinator reports, never a crash.
+            return json.dumps({"error": f"refund worker unavailable: {type(error).__name__}"})
+
+    return refund
+
+
+def run_worker(worker: Any, text: str) -> str:
+    """Run one worker on its own, as worker_service.py does for a coordinator in another process."""
+    result = asyncio.run_coroutine_threadsafe(Runner.run(worker, text), _loop()).result()
+    return str(result.final_output or "")
+
+
 COORDINATOR = Agent(
     name="Returns coordinator",
     instructions=_coordinator_instructions(),
@@ -192,7 +228,9 @@ COORDINATOR = Agent(
         ORDER_LOOKUP.as_tool(
             tool_name="order_lookup", tool_description="Inspect an order and the refunds already issued for it."
         ),
-        REFUND.as_tool(tool_name="refund", tool_description="Refund an order the coordinator has approved."),
+        _refund_service()
+        if os.environ.get("REFUND_WORKER_URL")
+        else REFUND.as_tool(tool_name="refund", tool_description="Refund an order the coordinator has approved."),
     ],
     model=_model_ref(),
 )

@@ -15,3 +15,7 @@ Fault switches (`RETURNS_FAULT`, comma-separated, read once at import; unset mea
 `refund_never_returns` (`issue_refund` waits `RETURNS_HANG_SECONDS`; set it above the chat target timeout),
 `bypass_channel` (the Refund worker's client uses the shared address). The two waiting faults wait only on a
 scenario call (the harness's `X-ALK-Scenario-Call` header), never on a readiness or certification probe. `RETURNS_TRACING=off` exports no spans.
+
+With `REFUND_WORKER_URL` set (`docker-compose.worker-service.yml`), the Refund worker runs as a service of its own
+(`worker_service.py`) and the coordinator reaches it over HTTP; the contract then declares that worker with
+`process: refund-worker`, and a harness ends that process alone when the worker's deadline passes.

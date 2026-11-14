@@ -271,3 +271,32 @@ def test_voice_entry_routes_to_the_same_coordinator(monkeypatch) -> None:
             {"role": "user", "content": "Thanks"},
         ]
     ]
+
+
+def test_a_refund_worker_served_on_its_own_is_reached_over_http_and_a_gone_one_is_an_answer(monkeypatch) -> None:
+    monkeypatch.setenv("REFUND_WORKER_URL", "http://refund-worker:8081")
+    module = _agent_module(monkeypatch)
+    lookup, refund = module.COORDINATOR.tools
+    # The order-lookup worker stays in this process; the refund worker is a plain tool that calls its service.
+    assert lookup is module.ORDER_LOOKUP
+    assert refund is not module.REFUND and refund.__name__ == "refund"
+    sent = []
+
+    def _urlopen(request, timeout):
+        sent.append((request.full_url, json.loads(request.data)))
+        return _Answer(b'{"output": "Refund RF-9 issued."}')
+
+    monkeypatch.setattr(module.urllib.request, "urlopen", _urlopen)
+    assert refund("order 1043, 89.00") == "Refund RF-9 issued."
+    assert sent == [("http://refund-worker:8081/run", {"input": "order 1043, 89.00"})]
+
+    def _gone(_request, timeout):
+        raise module.urllib.error.URLError("connection refused")
+
+    monkeypatch.setattr(module.urllib.request, "urlopen", _gone)
+    assert json.loads(refund("order 1043")) == {"error": "refund worker unavailable: URLError"}
+
+
+def test_the_refund_worker_is_in_the_coordinator_s_process_unless_served_on_its_own(monkeypatch) -> None:
+    module = _agent_module(monkeypatch)
+    assert module.COORDINATOR.tools == [module.ORDER_LOOKUP, module.REFUND]

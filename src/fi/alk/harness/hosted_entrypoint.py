@@ -760,6 +760,20 @@ def _agent_instructions(job: Any, bundle_dir: Path) -> str:
     return "\n\n".join(parts)
 
 
+def _worker_processes(bundle_dir: Path) -> dict[str, str]:
+    """Each declared worker the app serves as its own process, {worker id: process name}, from the sealed contract."""
+    try:
+        body = json.loads((bundle_dir / "contract.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    workers = body.get("workers") if isinstance(body, dict) else None
+    return {
+        str(one["id"]): str(one["process"]).strip()
+        for one in workers or []
+        if isinstance(one, dict) and one.get("id") and str(one.get("process") or "").strip()
+    }
+
+
 def _bundle_contract_value(bundle_dir: Path, key: str) -> str | None:
     path = bundle_dir / "contract.json"
     if not path.is_file():
@@ -2845,6 +2859,7 @@ async def run_job(
             joint_judge=functools.partial(
                 _judge_sub_goals_jointly, agent_instructions=_agent_instructions(job, bundle_dir)
             ),
+            worker_processes=_worker_processes(bundle_dir),
         )
         result: RunResult = await scheduler.run(scenarios)
 

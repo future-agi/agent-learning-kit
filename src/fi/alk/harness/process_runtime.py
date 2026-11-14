@@ -5336,6 +5336,12 @@ def _clone_or_reset_world(
     in_place = (
         keep_processes
         and bool(existing_handles)
+        # A process the harness stopped mid-trial (a worker past its deadline) comes back with a full respawn.
+        and all(
+            handle.handle.is_running()
+            for name, handle in existing_handles.items()
+            if name not in job_shared_handles
+        )
         and _stores_reset_in_place(manifest)
         and not any(
             isinstance(p, SourceProcess) and p.workspaces for p in manifest.processes
@@ -7288,6 +7294,21 @@ class ProcessRuntimeProvider:
         import asyncio
 
         await asyncio.to_thread(self._reset_sync, runtime, keep_processes)
+
+    async def stop_process(self, runtime: EnvironmentRuntime, process_name: str) -> bool:
+        """End one of this world's own processes mid-trial (a worker the app serves alone, past its deadline). The
+        world's next reset starts it again. False when the world has no such process of its own: a job-shared engine
+        is never stopped for one world."""
+        import asyncio
+
+        return await asyncio.to_thread(self._stop_process_sync, runtime, process_name)
+
+    def _stop_process_sync(self, runtime: EnvironmentRuntime, process_name: str) -> bool:
+        handle = (self._world_handles.get(runtime.world_index) or {}).get(process_name)
+        if handle is None or process_name in self._job_shared_handles:
+            return False
+        _terminate_and_wait(handle.handle)
+        return True
 
     def _reset_sync(
         self, runtime: EnvironmentRuntime, keep_processes: bool = False

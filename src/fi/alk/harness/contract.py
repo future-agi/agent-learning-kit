@@ -234,6 +234,10 @@ class DeclaredWorker(BaseModel):
     binding: Literal["separate", "shared"] = "shared"
     # For a separate worker, the environment variable its tool client reads as the base address of its tools.
     address_env: str = ""
+    # The environment process that runs this worker alone, when the app serves it as its own service. Only such a
+    # worker can be stopped by itself: past its deadline the harness ends that process for the rest of the trial. Empty
+    # for a worker inside the app's one process, which only has its later world calls refused.
+    process: str = ""
 
 
 class PromptSource(BaseModel):

@@ -66,7 +66,10 @@ Find, in roughly this order:
    than code the agents share, with `address_env` naming the environment variable that code reads
    for its tools' base address. When the repository says a separate worker may use fewer tools than
    its code holds, list those in `allowed_tools`; a shared worker gets none, because the world cannot
-   tell its calls apart. Every worker tool is also in `tools`.
+   tell its calls apart. Every worker tool is also in `tools`. When the app runs a worker as a
+   service of its own (its own process, which the coordinator reaches over the network), set
+   `process` to the name of that process in the environment; leave it empty for a worker that runs
+   inside the app's one process.
 
 2. **Argument names and types.** Read the signature. An argument declared as a list is a
    different tool from one declared as a single value, and an environment built on the wrong one

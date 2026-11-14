@@ -1,0 +1,166 @@
+"""A worker the app serves as its own process is stopped, not only refused, once its deadline in the trial passes."""
+
+from __future__ import annotations
+
+import asyncio
+import contextlib
+import json
+import time
+from pathlib import Path
+from types import SimpleNamespace
+
+from fi.alk.harness import call_runner, hosted_scheduler
+from fi.alk.harness.hosted_entrypoint import _worker_processes
+from fi.alk.harness.hosted_scheduler import HostedScheduler, WorldPool
+from fi.alk.harness.process_runtime import EnvironmentRuntime, ProcessRuntimeProvider, RuntimeState
+
+
+def _runtime(world_index: int = 0) -> EnvironmentRuntime:
+    return EnvironmentRuntime(
+        runtime_id=f"rt-{world_index}",
+        world_index=world_index,
+        bundle_digest="sha256:" + "0" * 64,
+        state=RuntimeState.READY,
+    )
+
+
+class _Pool:
+    def __init__(self, ends: bool = True) -> None:
+        self.ends = ends
+        self.stopped: list[str] = []
+
+    async def stop_process(self, runtime, process_name: str) -> bool:
+        self.stopped.append(process_name)
+        return self.ends
+
+
+def _scheduler(pool, processes) -> HostedScheduler:
+    scheduler = object.__new__(HostedScheduler)
+    scheduler._pool = pool
+    scheduler._worker_processes = dict(processes)
+    return scheduler
+
+
+def _watch(monkeypatch, scheduler, deadlines, *, rounds: int = 5) -> list[tuple]:
+    recorded: list[tuple] = []
+    monkeypatch.setattr(hosted_scheduler, "_WORKER_STOP_POLL_SECONDS", 0)
+    monkeypatch.setattr(call_runner, "_find_postgres_endpoint", lambda _runtime: SimpleNamespace(address="db"))
+    monkeypatch.setattr(call_runner, "read_trial_deadlines", lambda _address: deadlines)
+    monkeypatch.setattr(
+        call_runner,
+        "record_worker_stop",
+        lambda _address, worker, process, at: recorded.append((worker, process)),
+    )
+
+    async def run() -> None:
+        task = asyncio.create_task(scheduler._stop_workers_past_deadline(_runtime()))
+        for _ in range(rounds):
+            await asyncio.sleep(0.01)
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+
+    asyncio.run(run())
+    return recorded
+
+
+def test_a_worker_past_its_own_deadline_has_its_process_ended_once_and_kept(monkeypatch) -> None:
+    pool = _Pool()
+    scheduler = _scheduler(pool, {"refund": "refund-worker", "order_lookup": "lookup-worker"})
+    past, future = time.time() - 1, time.time() + 3600
+    recorded = _watch(monkeypatch, scheduler, (None, {"refund": past, "order_lookup": future}))
+    assert pool.stopped == ["refund-worker"]
+    assert recorded == [("refund", "refund-worker")]
+
+
+def test_one_deadline_for_all_workers_stops_each_served_worker(monkeypatch) -> None:
+    pool = _Pool()
+    scheduler = _scheduler(pool, {"refund": "refund-worker", "order_lookup": "lookup-worker"})
+    recorded = _watch(monkeypatch, scheduler, (time.time() - 1, {}))
+    assert sorted(pool.stopped) == ["lookup-worker", "refund-worker"]
+    assert sorted(recorded) == [("order_lookup", "lookup-worker"), ("refund", "refund-worker")]
+
+
+def test_no_deadline_stops_no_one_and_a_stop_the_provider_cannot_make_is_not_kept(monkeypatch) -> None:
+    pool = _Pool()
+    assert _watch(monkeypatch, _scheduler(pool, {"refund": "refund-worker"}), (None, {})) == []
+    assert pool.stopped == []
+    unable = _Pool(ends=False)
+    assert _watch(monkeypatch, _scheduler(unable, {"refund": "refund-worker"}), (time.time() - 1, {})) == []
+    assert unable.stopped == ["refund-worker"]
+
+
+def test_the_pool_asks_the_provider_and_a_provider_that_cannot_stop_one_process_says_no() -> None:
+    class _Provider:
+        def __init__(self) -> None:
+            self.asked: list[str] = []
+
+        async def stop_process(self, runtime, process_name):
+            self.asked.append(process_name)
+            return True
+
+    pool = object.__new__(WorldPool)
+    pool._provisioner = _Provider()
+    assert asyncio.run(pool.stop_process(_runtime(), "refund-worker")) is True
+    assert pool._provisioner.asked == ["refund-worker"]
+    pool._provisioner = object()
+    assert asyncio.run(pool.stop_process(_runtime(), "refund-worker")) is False
+
+
+class _Handle:
+    def __init__(self) -> None:
+        self.terminated = False
+
+    def terminate(self) -> None:
+        self.terminated = True
+
+    def interrupt(self) -> None:
+        self.terminated = True
+
+    def wait(self, timeout: float) -> bool:
+        return True
+
+    def kill(self) -> None:
+        self.terminated = True
+
+    def is_running(self) -> bool:
+        return not self.terminated
+
+
+def test_the_provider_ends_only_that_world_s_own_process_never_a_job_shared_engine() -> None:
+    provider = object.__new__(ProcessRuntimeProvider)
+    own, other_world, shared = _Handle(), _Handle(), _Handle()
+    provider._job_shared_handles = {"world-db": SimpleNamespace(handle=shared)}
+    provider._world_handles = {
+        0: {"refund-worker": SimpleNamespace(handle=own), "world-db": SimpleNamespace(handle=shared)},
+        1: {"refund-worker": SimpleNamespace(handle=other_world)},
+    }
+    assert asyncio.run(provider.stop_process(_runtime(0), "refund-worker")) is True
+    assert (own.terminated, other_world.terminated) == (True, False)
+    assert asyncio.run(provider.stop_process(_runtime(0), "world-db")) is False
+    assert asyncio.run(provider.stop_process(_runtime(0), "no-such-process")) is False
+    assert shared.terminated is False
+
+
+def test_the_sealed_contract_names_each_worker_served_as_its_own_process(tmp_path: Path) -> None:
+    (tmp_path / "contract.json").write_text(
+        json.dumps(
+            {
+                "workers": [
+                    {"id": "refund", "process": "refund-worker"},
+                    {"id": "order_lookup", "process": ""},
+                    {"id": "", "process": "nameless"},
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    assert _worker_processes(tmp_path) == {"refund": "refund-worker"}
+    assert _worker_processes(tmp_path / "missing") == {}
+
+
+def test_a_contract_worker_may_name_the_process_that_runs_it_alone() -> None:
+    from fi.alk.harness.contract import DeclaredWorker
+
+    assert DeclaredWorker(id="refund").process == ""
+    assert DeclaredWorker(id="refund", process="refund-worker").process == "refund-worker"

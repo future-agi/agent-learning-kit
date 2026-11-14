@@ -293,6 +293,8 @@ USER_CANCELED_MESSAGE = "Stopped by the user during the call"
 CANCEL_SEAL_ENV = "ALK_CANCEL_SEAL_SECONDS"
 _CANCEL_SEAL_DEFAULT_SECONDS = 15.0
 _CANCEL_POLL_SECONDS = 0.5
+# How often a call's watcher reads the trial's worker deadlines, for a worker the app serves as its own process.
+_WORKER_STOP_POLL_SECONDS = 0.5
 
 
 def _cancel_seal_seconds() -> float:
@@ -1069,6 +1071,15 @@ class WorldPool:
     def size(self) -> int:
         return len(self._runtimes)
 
+
+    async def stop_process(self, runtime: EnvironmentRuntime, process_name: str) -> bool:
+        """End one of a leased world's own processes mid-trial, when the provider can; its next reset starts it
+        again. Not serialized with the provider's lifecycle calls: it touches one process of a world already leased."""
+        stop = getattr(self._provisioner, "stop_process", None)
+        if stop is None:
+            return False
+        return bool(await stop(runtime, process_name))
+
     async def start(self) -> list[EnvironmentRuntime]:
         if self._started:
             # m10: a second call would re-provision behind every already-leased world's back.
@@ -1773,8 +1784,12 @@ class HostedScheduler:
         judge: JudgeFn | None = None,
         require_tool_workflow: bool = False,
         joint_judge: JointJudgeFn | None = None,
+        worker_processes: dict[str, str] | None = None,
     ) -> None:
         self._pool = pool
+        # Each declared worker the app serves as its own process, {worker id: process name}: past its deadline the
+        # call's watcher ends that process, so the worker is stopped, not only refused.
+        self._worker_processes = dict(worker_processes or {})
         self._world_factory = world_factory
         self._call_runner = call_runner
         self._outbound = outbound
@@ -1793,6 +1808,31 @@ class HostedScheduler:
         # Each scenario's in-flight call task, cancelled once by the job's one stop watcher; never runner state.
         self._in_flight: dict[int, asyncio.Task[CallOutcome]] = {}
         self._stopped_at: float | None = None
+
+    async def _stop_workers_past_deadline(self, runtime: EnvironmentRuntime) -> None:
+        """While one call runs: end the own process of each worker whose deadline in this trial has passed, once, and
+        keep that it was stopped so the call seals it. A worker inside the app's one process is only refused."""
+        from .call_runner import _find_postgres_endpoint, read_trial_deadlines, record_worker_stop
+
+        database = _find_postgres_endpoint(runtime)
+        if database is None:
+            return
+        stopped: set[str] = set()
+        while len(stopped) < len(self._worker_processes):
+            await asyncio.sleep(_WORKER_STOP_POLL_SECONDS)
+            deadline_at, deadlines = await asyncio.to_thread(read_trial_deadlines, database.address)
+            now = time.time()
+            for worker, process in self._worker_processes.items():
+                due = deadlines.get(worker, deadline_at)
+                if worker in stopped or due is None or now <= due:
+                    continue
+                stopped.add(worker)
+                try:
+                    ended = await self._pool.stop_process(runtime, process)
+                    if ended:
+                        await asyncio.to_thread(record_worker_stop, database.address, worker, process, time.time())
+                except Exception as exc:  # noqa: BLE001 - a stop that failed leaves the refusal, never fails the call
+                    logger.warning("worker %s could not be stopped: %s", worker, type(exc).__name__)
 
     async def _watch_for_stop(self) -> None:
         """One watcher per job: on the first stop, cut every call in flight once, so each runner seals its own."""
@@ -2397,6 +2437,12 @@ class HostedScheduler:
         # Its own task, so a stop cuts the call and not the scenario's sealing below.
         call_task = asyncio.create_task(_run_call(self._call_runner, scenario, runtime, world))
         self._in_flight[id(call_task)] = call_task
+        stopping = (
+            asyncio.create_task(self._stop_workers_past_deadline(runtime)) if self._worker_processes else None
+        )
+        if stopping is not None:
+            # The watcher lives exactly as long as the call.
+            call_task.add_done_callback(lambda _done: stopping.cancel())
         try:
             call_outcome = await self._await_call(call_task)
         except CallCancelled as exc:
