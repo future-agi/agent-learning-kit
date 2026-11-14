@@ -259,8 +259,13 @@ class ConversationClient:
     async def scenarios(self, query: dict[str, Any]) -> dict[str, Any]:
         return await self._platform("scenarios", query)
 
-    async def publish(self, digest: str) -> dict[str, Any]:
-        return await self._platform("publish", {"digest": digest})
+    async def publish(self, digest: str, *, failed_scenarios: list[dict[str, str]] | None = None) -> dict[str, Any]:
+        """Publish a checkpoint. `failed_scenarios` ({scenario_key, reason}) names cases left out of the
+        seal because a run could not load them; sent only when there are any."""
+        body: dict[str, Any] = {"digest": digest}
+        if failed_scenarios:
+            body["failed_scenarios"] = list(failed_scenarios)
+        return await self._platform("publish", body)
 
     async def runs(self, run_id: str = "", limit: int = 10) -> dict[str, Any]:
         return await self._platform(

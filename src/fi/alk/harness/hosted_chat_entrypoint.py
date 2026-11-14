@@ -1054,10 +1054,20 @@ class HostedChatRuntime:
         fingerprint = self._environment_fingerprint()
         if fingerprint == self._published_fingerprint() and not force:
             return {"applied": True, "unchanged": True, "message": "nothing is waiting to be saved"}
-        from .bundle_author_v2 import reseal_scenarios
+        from .bundle_author_v2 import reseal_scenarios, scenario_seal_problems
 
+        # A scenario a run could not load is left out of the seal (it keeps its last sealed
+        # version) and named to the platform, so one broken case never blocks the rest.
         try:
-            await asyncio.to_thread(reseal_scenarios, self.workspace)
+            problems = await asyncio.to_thread(scenario_seal_problems, self.workspace)
+        except Exception:  # noqa: BLE001 - an unreadable tree is the reseal's to report
+            problems = {}
+        failed = [{"scenario_key": key, "reason": reason} for key, reason in sorted(problems.items())]
+        try:
+            if problems:
+                await asyncio.to_thread(reseal_scenarios, self.workspace, skip=set(problems))
+            else:
+                await asyncio.to_thread(reseal_scenarios, self.workspace)
         except Exception as exc:  # noqa: BLE001 - reported to the model, never swallowed
             traceback.print_exc()
             return {
@@ -1070,7 +1080,12 @@ class HostedChatRuntime:
             try:
                 async with self._checkpoint_lock:
                     stored = await self.client.checkpoint(self.workspace)
-                    result = await self.client.publish(str(stored.get("digest") or ""))
+                    digest = str(stored.get("digest") or "")
+                    result = (
+                        await self.client.publish(digest, failed_scenarios=failed)
+                        if failed
+                        else await self.client.publish(digest)
+                    )
             except ConversationTransportError as exc:
                 return {"applied": False, "code": "publish_unreachable", "message": str(exc)}
             if result.get("code") != "conversation_checkpoint_not_latest":
@@ -1083,6 +1098,8 @@ class HostedChatRuntime:
                 "loaded, so these changes were not saved. The chat reloads the current "
                 "environment after this reply; the change has to be made again on it."
             )
+        if result.get("applied") and failed:
+            result["failed"] = failed
         if result.get("applied"):
             await self._record_touched(result)
             if result.get("revision"):
@@ -1100,10 +1117,16 @@ class HostedChatRuntime:
             return "", False
         result = await self._save_changes()
         if not result.get("applied"):
+            if result.get("code") == "reseal_failed":
+                # Not a fault of one case: the change stays in this chat's working copy as a draft.
+                return (
+                    "These changes are kept as an unsaved draft and were NOT saved to the environment: "
+                    f"{result.get('message') or 'they could not be sealed for runs'}."
+                ), True
             return (
                 "These changes were NOT saved to the environment: "
                 f"{result.get('message') or result.get('code') or 'unknown reason'}."
-            ), result.get("code") == "reseal_failed"
+            ), False
 
         def named(rows: list[dict[str, Any]]) -> str:
             return ", ".join(f"#{one.get('number')} {one.get('name')}" for one in rows)
@@ -1113,10 +1136,19 @@ class HostedChatRuntime:
             for label, key in (("added", "added"), ("removed", "removed"), ("changed", "changed"))
             if result.get(key)
         ]
+        failed = result.get("failed") or []
+        except_line = (
+            f" Saved, except {len(failed)} scenarios that could not be applied: "
+            + "; ".join(f"{one['scenario_key']}: {one['reason']}" for one in failed)
+            + "."
+            if failed
+            else ""
+        )
         return (
             "Saved to the environment: "
             + ("; ".join(parts) or "no scenario changed")
             + f". It now has {result.get('scenario_count')} scenarios."
+            + except_line
         ), False
 
     async def _selection_note(self, payload: dict[str, Any]) -> str:
@@ -1673,22 +1705,11 @@ class HostedChatRuntime:
             )
             return
         final_text = "".join(emitted_text).strip()
-        saved, unsealed = await self._publish_if_changed()
+        # Changes no run could replay (a contract or seed fault, not one case) are kept: the turn
+        # completes and its checkpoint is promoted as the chat's draft, unsaved to the environment.
+        saved, _unsealed = await self._publish_if_changed()
         if saved:
             final_text = f"{final_text}\n\n{saved}".strip()
-        if unsealed:
-            # Changes no run could replay are not promoted with this turn.
-            await self._fail_turn(
-                journal,
-                message_id,
-                assistant_message_id,
-                invocation_id,
-                final_text,
-                "reseal_failed",
-            )
-            if self._restart_after_turn:
-                self.stopping.set()
-            return
         if self._last_health and not self._last_health.startswith("Healthy") and not self._control_only():
             problems = [line for line in self._last_health.splitlines() if line.strip()]
             final_text = (

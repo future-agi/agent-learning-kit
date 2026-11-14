@@ -108,6 +108,8 @@ def _runtime(tmp_path: Path, client: BuilderClient, monkeypatch) -> HostedChatRu
     monkeypatch.setenv("ALK_GOOGLE_ADK_EXPLICITLY_APPROVED_BY_USER", "1")
     (tmp_path / "scenarios" / "one").mkdir(parents=True)
     (tmp_path / "scenarios" / "one" / "scenario.json").write_text("{}")
+    # These stub folders are not real scenarios; a test about one a run cannot load says so itself.
+    monkeypatch.setattr("fi.alk.harness.bundle_author_v2.scenario_seal_problems", lambda root: {})
     policy = tmp_path / "policy.yaml"
     policy.write_text("schema_version: 1\nharness_chat:\n  enabled: true\n", encoding="utf-8")
     runtime = HostedChatRuntime(
@@ -189,9 +191,7 @@ def test_a_rejected_publish_is_never_reported_as_done(tmp_path, monkeypatch):
     assert not (tmp_path / ".futureagi-authoring-basis.json").exists()
 
 
-def test_a_failed_reseal_ends_the_turn_failed_with_nothing_to_land(
-    tmp_path, monkeypatch
-):
+def test_a_failed_reseal_keeps_the_change_as_a_draft(tmp_path, monkeypatch):
     client = BuilderClient()
     runtime = _runtime(tmp_path, client, monkeypatch)
     runtime.conversation = EditingConversation(tmp_path, writes=True)
@@ -206,12 +206,13 @@ def test_a_failed_reseal_ends_the_turn_failed_with_nothing_to_land(
 
     assert client.published == []
     reply = next(e for e in client.events if e["kind"] == "assistant_message")
-    assert "These changes were NOT saved" in reply["payload"]["text"]
-    assert reply["payload"]["error"] == "reseal_failed"
+    assert "kept as an unsaved draft and were NOT saved" in reply["payload"]["text"]
+    assert "seed import failed" in reply["payload"]["text"]
     kinds = [event["kind"] for event in client.events]
-    assert "checkpoint_committed" not in kinds
+    # The turn completes and its checkpoint is promoted as the chat's draft.
+    assert "checkpoint_committed" in kinds
     assert client.events[-1]["kind"] == "turn_completed"
-    assert client.events[-1]["payload"]["outcome"] == "failed"
+    assert client.events[-1]["payload"]["outcome"] != "failed"
 
 
 def test_read_only_tools_skip_the_workspace_checkpoint(tmp_path, monkeypatch):
@@ -2145,3 +2146,55 @@ def test_exact_claim_gets_no_correction():
         )
         is None
     )
+
+
+def test_one_broken_scenario_does_not_block_the_save(tmp_path, monkeypatch):
+    class FailedAwareClient(BuilderClient):
+        def __init__(self):
+            super().__init__()
+            self.failed: list = []
+
+        async def publish(self, digest, failed_scenarios=None):
+            self.failed.append(failed_scenarios)
+            return await super().publish(digest)
+
+    client = FailedAwareClient()
+    runtime = _runtime(tmp_path, client, monkeypatch)
+    runtime.conversation = EditingConversation(tmp_path, writes=True)
+    runtime._published_fingerprint()
+    sealed: list = []
+    monkeypatch.setattr(
+        "fi.alk.harness.bundle_author_v2.scenario_seal_problems",
+        lambda root: {"broken_case": "checks/refunded.py would not compile"},
+    )
+    monkeypatch.setattr(
+        "fi.alk.harness.bundle_author_v2.reseal_scenarios", lambda root, skip=(): sealed.append(set(skip))
+    )
+
+    _turn(runtime, {"content": "edit three cases"})
+
+    assert sealed == [{"broken_case"}]
+    assert client.failed == [[{"scenario_key": "broken_case", "reason": "checks/refunded.py would not compile"}]]
+    text = _reply(client)
+    assert "Saved to the environment: added #41 late_driver" in text
+    assert "Saved, except 1 scenarios that could not be applied: broken_case: checks/refunded.py would not compile." in text
+
+
+def test_a_folder_a_run_cannot_load_keeps_its_sealed_version(tmp_path):
+    from fi.alk.harness.bundle_author_v2 import _copy_scenarios, scenario_seal_problems
+
+    authoring = tmp_path / "authoring"
+    for name, body in (("good", '{"scenario_key": "good"}'), ("broken", "{not json")):
+        (authoring / "scenarios" / name).mkdir(parents=True)
+        (authoring / "scenarios" / name / "scenario.json").write_text(body, encoding="utf-8")
+    sealed = tmp_path / "bundle"
+    (sealed / "scenarios" / "broken").mkdir(parents=True)
+    (sealed / "scenarios" / "broken" / "scenario.json").write_text('{"scenario_key": "broken", "v": 1}', encoding="utf-8")
+
+    assert "broken" in scenario_seal_problems(authoring)
+    staging = tmp_path / "staging"
+    staging.mkdir()
+    _copy_scenarios(authoring, staging, count=2, skip=frozenset({"broken"}), sealed=sealed)
+
+    assert json.loads((staging / "scenarios" / "broken" / "scenario.json").read_text())["v"] == 1
+    assert (staging / "scenarios" / "good").is_dir()

@@ -23,7 +23,7 @@ import tempfile
 import tomllib
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any, Iterable, Sequence
 from urllib.parse import urlsplit
 
 import yaml
@@ -3226,7 +3226,24 @@ def _package_process_sources(
     return replace(plan, processes=tuple(processes))
 
 
-def _copy_scenarios(authoring: Path, staging: Path, *, count: int) -> None:
+def _folder_key(folder: Path) -> str:
+    try:
+        body = json.loads((folder / "scenario.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return folder.name
+    return str(body.get("scenario_key") or body.get("name") or folder.name) if isinstance(body, dict) else folder.name
+
+
+def _copy_scenarios(
+    authoring: Path,
+    staging: Path,
+    *,
+    count: int,
+    skip: frozenset[str] = frozenset(),
+    sealed: Path | None = None,
+) -> None:
+    """Copy the authoring scenarios into `staging`. A folder whose key is in `skip` keeps the copy
+    already sealed in `sealed` (its last good version), or is left out when it was never sealed."""
     source = authoring / "scenarios"
     if not source.is_dir():
         raise BundleAuthorError(f"scenario_artifacts_missing: {source}")
@@ -3237,7 +3254,17 @@ def _copy_scenarios(authoring: Path, staging: Path, *, count: int) -> None:
         raise BundleAuthorError(
             f"scenario_artifacts_insufficient: requested {count}, found {len(folders)}"
         )
+    held = (
+        {_folder_key(path): path for path in (sealed / "scenarios").iterdir() if path.is_dir()}
+        if skip and sealed is not None and (sealed / "scenarios").is_dir()
+        else {}
+    )
     for source_folder in folders[:count]:
+        key = _folder_key(source_folder)
+        if key in skip:
+            if key in held:
+                shutil.copytree(held[key], target / held[key].name)
+            continue
         shutil.copytree(source_folder, target / source_folder.name)
     for folder in sorted(path for path in target.iterdir() if path.is_dir()):
         document = folder / "scenario.json"
@@ -3887,7 +3914,27 @@ def author_bundle_v2(
         raise
 
 
-def reseal_scenarios(authoring: str | Path) -> str | None:
+def scenario_seal_problems(authoring: str | Path) -> dict[str, str]:
+    """Each scenario folder a run could not load, by key, with the first line of why. Loaded one
+    folder at a time, the way a run loads them, so one broken case does not hide the rest."""
+    from .scenario_source import _declared_tool_names, _deterministic_names, _load_one
+
+    root = Path(authoring)
+    folders = sorted(path for path in (root / "scenarios").iterdir() if path.is_dir()) if (root / "scenarios").is_dir() else []
+    if not folders:
+        return {}
+    settled_in_code = _deterministic_names(root)
+    declared_tools = _declared_tool_names(root)
+    problems: dict[str, str] = {}
+    for folder in folders:
+        try:
+            _load_one(folder, settled_in_code=settled_in_code, declared_tools=declared_tools, defer_execution=False)
+        except Exception as exc:  # noqa: BLE001 - every reason a run would refuse this folder
+            problems[_folder_key(folder)] = (str(exc).strip().splitlines() or [type(exc).__name__])[0][:300]
+    return problems
+
+
+def reseal_scenarios(authoring: str | Path, *, skip: Iterable[str] = ()) -> str | None:
     """Carry an edited scenario set into the sealed bundle and seal it again.
 
     Runs replay the bundle, never the authoring folders, so a scenario added or rewritten after
@@ -3895,8 +3942,10 @@ def reseal_scenarios(authoring: str | Path) -> str | None:
     runtime, seed and processes stay exactly what was built and validated. A generic harness's
     certificate binds the bundle digest, so it is reissued for the new set with the edit recorded
     as a limitation: those scenarios were proved against the authoring world, not the runtime.
-    Returns the new digest, or None when there is no sealed bundle to update.
+    Returns the new digest, or None when there is no sealed bundle to update. A scenario whose key
+    is in `skip` keeps its last sealed version (or stays out if it was never sealed).
     """
+    skip = frozenset(skip)
     authoring_root = Path(authoring)
     bundle = authoring_root / "environment-bundle"
     if not (bundle / BUNDLE_V2_MANIFEST).is_file():
@@ -3909,7 +3958,7 @@ def reseal_scenarios(authoring: str | Path) -> str | None:
         shutil.copytree(bundle, staging)
         (staging / BUNDLE_V2_MANIFEST).unlink()
         shutil.rmtree(staging / "scenarios", ignore_errors=True)
-        _copy_scenarios(authoring_root, staging, count=count)
+        _copy_scenarios(authoring_root, staging, count=count, skip=skip, sealed=bundle)
         if (authoring_root / CATALOGUE).is_file():
             shutil.copy2(authoring_root / CATALOGUE, staging / CATALOGUE)
         compiled, processes, metadata = _carry_contract(authoring_root, staging, manifest)
