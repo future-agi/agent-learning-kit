@@ -72,16 +72,26 @@ def run_worker(main: Callable[[], Awaitable[None]], *, cancel_on_stop: bool = Fa
             if _stop_requested:
                 return
             _stop_requested = True
+            logging.getLogger(__name__).info("isolated_worker_stop_received")
             if cancel_on_stop and not termination_requested and not task.done():
                 task.cancel()
 
         loop.add_signal_handler(signal.SIGTERM, cancel_once)
         loop.add_signal_handler(STOP_SIGNAL, stop)
+        finished = False
         try:
             await task
+            finished = True
         finally:
             loop.remove_signal_handler(signal.SIGTERM)
             loop.remove_signal_handler(STOP_SIGNAL)
+            if _stop_requested:
+                # A stopped call can leave a thread blocked on the agent, and the loop's shutdown would wait for it
+                # while the parent waits for this process: exit now with what was written; the parent reaps the rest.
+                logging.shutdown()
+                sys.stdout.flush()
+                sys.stderr.flush()
+                os._exit(0 if finished else 1)
 
     asyncio.run(supervised())
 
@@ -126,6 +136,7 @@ async def _communicate(
             await asyncio.wait({exchange}, timeout=_STOP_POLL_SECONDS)
             if not stopped and not exchange.done() and stop_requested():
                 stopped = True
+                logging.getLogger(__name__).info("isolated_worker_stop_sent pid=%s", process.pid)
                 try:
                     process.send_signal(STOP_SIGNAL)
                 except ProcessLookupError:

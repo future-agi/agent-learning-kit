@@ -260,3 +260,38 @@ def test_a_stopped_worker_seals_and_still_returns_its_result(tmp_path):
     result, elapsed = asyncio.run(run())
     assert result == {"sealed": "stopped"}
     assert elapsed < 15
+
+
+def test_a_stopped_worker_exits_without_waiting_on_a_call_stuck_in_a_thread(tmp_path):
+    """A stopped call can leave a thread blocked on the agent (a tool waiting on its upstream); the worker hands back
+    its sealed result and exits instead of waiting for that thread."""
+    import fi.alk.harness.isolated_process as isolated
+
+    (tmp_path / "stuck_worker.py").write_text(
+        "import asyncio, json, sys, time\n"
+        "from pathlib import Path\n"
+        "from fi.alk.harness import isolated_process\n"
+        "async def main():\n"
+        " json.load(sys.stdin)\n"
+        " try:\n"
+        "  await asyncio.to_thread(time.sleep, 60)\n"
+        " except asyncio.CancelledError:\n"
+        "  if not isolated_process.stop_requested():\n"
+        "   raise\n"
+        " Path(sys.argv[1]).write_text(json.dumps({'sealed': 'stopped'}))\n"
+        "isolated_process.run_worker(main, cancel_on_stop=True)\n"
+    )
+    src = str(Path(isolated.__file__).resolve().parents[3])
+    environ = {**os.environ, "PYTHONPATH": os.pathsep.join([str(tmp_path), src])}
+
+    async def run():
+        started = asyncio.get_running_loop().time()
+        stop = lambda: asyncio.get_running_loop().time() - started > 2  # noqa: E731
+        result = await run_json_worker(
+            "stuck_worker", {}, environ=environ, work_directory=tmp_path / "w", stop_requested=stop
+        )
+        return result, asyncio.get_running_loop().time() - started
+
+    result, elapsed = asyncio.run(run())
+    assert result == {"sealed": "stopped"}
+    assert elapsed < 20
