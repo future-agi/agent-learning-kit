@@ -331,6 +331,9 @@ class HostedChatRuntime:
         # One confirmation open at a time: the platform takes an answer to the latest only.
         self._confirming = asyncio.Lock()
         self._restart_after_turn = False
+        # Endings the coordinator state already holds, as stored: each control-only checkpoint
+        # adds only new or changed ones, so its entries do not grow with the number of turns.
+        self._stored_endings: dict[str, str] = {}
         # The rebuild command this sandbox runs.
         self._nudge: dict[str, Any] | None = None
         # The spend when the running turn began: every turn reports what it spent with its
@@ -1330,6 +1333,8 @@ class HostedChatRuntime:
             body = json.loads((self.workspace / _TURN_ENDINGS).read_text(encoding="utf-8"))
         except (OSError, ValueError):
             return {}
+        if not isinstance(body, dict):
+            return {}
         return {str(key): value for key, value in body.items() if isinstance(value, dict)}
 
     def _nudge_note(self) -> str:
@@ -2028,10 +2033,17 @@ class HostedChatRuntime:
                 pass
         if self._control_only():
             files = {}
-            for name in (_JOURNAL, _PENDING_QUESTION, _TURN_ENDINGS):
+            for name in (_JOURNAL, _PENDING_QUESTION):
                 path = self.workspace / name
                 if path.is_file():
                     files[name] = json.loads(path.read_text(encoding="utf-8"))
+            new_endings = {
+                key: value
+                for key, value in self._read_turn_endings().items()
+                if self._stored_endings.get(key) != json.dumps(value, sort_keys=True)
+            }
+            if new_endings:
+                files[_TURN_ENDINGS] = new_endings
             await self.client.append_session(
                 self._coordinator_state_key(),
                 [
@@ -2041,6 +2053,9 @@ class HostedChatRuntime:
                         "files": files,
                     }
                 ],
+            )
+            self._stored_endings.update(
+                {key: json.dumps(value, sort_keys=True) for key, value in new_endings.items()}
             )
             return {"control_only": True, "stored": True}
         async with self._checkpoint_lock:
@@ -2059,7 +2074,7 @@ class HostedChatRuntime:
         if not entries:
             return
         files = entries[-1]["files"]
-        for name in (_JOURNAL, _PENDING_QUESTION, _TURN_ENDINGS):
+        for name in (_JOURNAL, _PENDING_QUESTION):
             path = self.workspace / name
             if name in files:
                 temporary = path.with_suffix(".tmp")
@@ -2067,6 +2082,22 @@ class HostedChatRuntime:
                 temporary.replace(path)
             else:
                 path.unlink(missing_ok=True)
+        # Each entry holds only the endings added since the one before it.
+        endings: dict[str, Any] = {}
+        for entry in entries:
+            added = (entry.get("files") or {}).get(_TURN_ENDINGS)
+            if isinstance(added, dict):
+                endings.update(added)
+        path = self.workspace / _TURN_ENDINGS
+        if endings:
+            temporary = path.with_suffix(".tmp")
+            temporary.write_text(json.dumps(endings), encoding="utf-8")
+            temporary.replace(path)
+        else:
+            path.unlink(missing_ok=True)
+        self._stored_endings = {
+            key: json.dumps(value, sort_keys=True) for key, value in endings.items()
+        }
         self.conversation = self._conversation()
 
     def _provider_sessions(self) -> dict[str, str]:

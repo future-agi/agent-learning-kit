@@ -1312,12 +1312,16 @@ class LosingClient(BuilderClient):
         return {"entries": self.sessions.get(key["project_key"], [])}
 
 
-def _lose_then_replay(tmp_path, monkeypatch, client, restart_path):
+def _lose_then_replay(
+    tmp_path, monkeypatch, client, restart_path, conversation=None
+):
     from fi.alk.harness import spend
 
     monkeypatch.setattr(spend, "_stages", {})
     runtime = _runtime(tmp_path, client, monkeypatch)
-    runtime.conversation = SpendingConversation(tmp_path, writes=False)
+    runtime.conversation = (conversation or SpendingConversation)(
+        tmp_path, writes=False
+    )
     with pytest.raises(ConversationTransportError):
         _turn(runtime, {"content": "hello"})
     # The restart: a new process with an empty spend ledger, the same command redelivered.
@@ -1366,6 +1370,102 @@ def test_a_chat_sandbox_of_its_own_keeps_the_lost_ending_across_a_restart(
     assert len(completed) == 1
     assert completed[0]["payload"]["replayed"] is True
     assert completed[0]["payload"]["usage"]["tokens_in"] == 40
+
+
+class FailingConversation(SpendingConversation):
+    """A builder whose turn spends, then fails."""
+
+    async def say(self, message, on_event=None):
+        from fi.alk.harness import spend
+
+        spend.record("builder", 0.02, turns=1, models={"m2"}, tokens_in=40, tokens_out=6)
+        raise RuntimeError("model unavailable")
+
+
+@pytest.mark.parametrize("outcome", ["failed", "interrupted"])
+def test_a_lost_failed_or_interrupted_ending_comes_back_in_a_fresh_sandbox(
+    tmp_path, monkeypatch, outcome
+):
+    """What a turn that did not succeed spent is billed too, so its ending must survive."""
+    conversation = FailingConversation if outcome == "failed" else None
+    if outcome == "interrupted":
+
+        async def interrupted(self, turn, *, command_sequence):
+            await turn
+            return {"kind": "interrupt", "message_id": "m-9", "sequence": 9}
+
+        monkeypatch.setattr(HostedChatRuntime, "_turn_until_interrupted", interrupted)
+    fresh = tmp_path / "restarted"
+    fresh.mkdir()
+
+    completed = _lose_then_replay(
+        tmp_path,
+        monkeypatch,
+        LosingClient(control_only=True),
+        fresh,
+        conversation=conversation,
+    )
+
+    assert len(completed) == 1
+    payload = completed[0]["payload"]
+    assert payload["replayed"] is True
+    assert payload["outcome"] == outcome
+    assert payload["usage"]["tokens_in"] == 40
+    assert payload["usage"]["usd"] == 0.02
+
+
+def test_a_control_only_checkpoint_stores_each_ending_once(tmp_path, monkeypatch):
+    """The coordinator state is appended every turn: it must not carry the whole history."""
+    from fi.alk.harness import spend
+
+    monkeypatch.setattr(spend, "_stages", {})
+    client = LosingClient(control_only=True)
+    client.lost = True  # every delivery succeeds
+    runtime = _runtime(tmp_path, client, monkeypatch)
+    runtime.conversation = SpendingConversation(tmp_path, writes=False)
+    turns = [f"m-{n}" for n in range(1, 6)]
+    for sequence, message_id in enumerate(turns, start=1):
+        command = {
+            "sequence": sequence,
+            "message_id": message_id,
+            "kind": "user_message",
+            "payload": {"content": f"turn {sequence}"},
+        }
+        asyncio.run(runtime._handle(command))
+
+    entries = client.sessions["futureagi-coordinator-state"]
+    stored = [
+        list((entry["files"].get(".futureagi-turn-endings.json") or {}))
+        for entry in entries
+    ]
+    assert sorted(key for keys in stored for key in keys) == turns
+    assert max(len(keys) for keys in stored) == 1
+
+    # A fresh sandbox still gets every ending back.
+    fresh = tmp_path / "restarted"
+    fresh.mkdir()
+    asyncio.run(_runtime(fresh, client, monkeypatch)._restore_coordinator_state())
+    endings = json.loads((fresh / ".futureagi-turn-endings.json").read_text())
+    assert sorted(endings) == turns
+
+
+def test_an_endings_file_that_is_not_an_object_is_ignored(tmp_path, monkeypatch):
+    from fi.alk.harness import spend
+
+    monkeypatch.setattr(spend, "_stages", {})
+    client = BuilderClient()
+    runtime = _runtime(tmp_path, client, monkeypatch)
+    runtime.conversation = SpendingConversation(tmp_path, writes=False)
+    (runtime.workspace / ".futureagi-turn-endings.json").write_text("[]")
+
+    _turn(runtime, {"content": "hello"})
+
+    completed = client.events[-1]
+    assert completed["kind"] == "turn_completed"
+    assert completed["payload"]["outcome"] == "success"
+    assert completed["payload"]["usage"]["tokens_in"] == 40
+    endings = json.loads((runtime.workspace / ".futureagi-turn-endings.json").read_text())
+    assert list(endings) == ["m-1"]
 
 
 def test_prove_scenarios_records_each_proof(tmp_path):
