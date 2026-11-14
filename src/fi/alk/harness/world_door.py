@@ -32,6 +32,9 @@ AGENT = "agent"
 OUTCOMES = ("committed", "refused", "faulted", "duplicate")
 # Longest a scenario's fault holds a call, and how long a log write may hold the answer before the row is given up.
 MAX_FAULT_SECONDS = 30.0
+# Every fault a scenario can set on one of the agent's calls, and the two that hold the call before answering.
+FAULT_MODES = ("timeout_before_commit", "timeout_after_commit", "unavailable", "error")
+TIMEOUT_MODES = ("timeout_before_commit", "timeout_after_commit")
 LOG_WRITE_SECONDS = 2.0
 # A record change an actor may be permitted beside the world's tools: `<collection>.change` or `<collection>.put`.
 RECORD_VERBS = ("change", "put")
@@ -52,7 +55,7 @@ class ToolCall:
     name: str
     arguments: Any = field(default_factory=dict)
     actor: str = AGENT
-    # Only an actor's retries are answered from the first result; the agent's key is ignored.
+    # A retry with the same key is answered from the first result, the agent's (its `Idempotency-Key`) and an actor's.
     key: str | None = None
     # The action that caused this one (an actor answering the agent).
     parent: str | None = None
@@ -99,7 +102,7 @@ class Outcome:
 
     @property
     def delay_seconds(self) -> float:
-        if not self.fault:
+        if not self.fault or not is_timeout(self.fault):
             return 0.0
         try:
             return min(
@@ -201,6 +204,18 @@ def is_read(row: Mapping[str, Any]) -> bool:
     return row.get("effect") == "read"
 
 
+def is_timeout(fault: Mapping[str, Any]) -> bool:
+    """Whether a fault holds the call for its delay and then says it timed out (the two timeouts); an unavailable or
+    error fault answers at once."""
+    return fault.get("mode") in TIMEOUT_MODES
+
+
+def fault_status(fault: Mapping[str, Any]) -> int:
+    """The status an `error` fault answers with: the scenario's own, 500 when it set none or one outside 400-599."""
+    status = _int(fault.get("status"), 500)
+    return status if 400 <= status <= 599 else 500
+
+
 def permitted(permitted_actions: object, action: str) -> bool:
     """Whether an actor with these permitted actions may take this world action."""
     return isinstance(permitted_actions, list) and action in permitted_actions
@@ -248,6 +263,7 @@ class WorldDoor:
         # Which trial the numbers belong to, for a door that outlives a trial (the tool proxy); None for one door a trial.
         self.trial = trial
         self._numbered_trial: Any = None
+        self._keyed_trial: Any = None
 
     def enter(self, call: ToolCall) -> Outcome:
         """The outcome of one call. Never raises: whatever goes wrong comes back as an outcome."""
@@ -320,27 +336,17 @@ class WorldDoor:
                     f"{call.action} is not permitted for {call.actor}",
                     on_behalf_of,
                 )
-        else:
-            named = self._named_faults(call)
-            if named:
-                # Which call of this action this is, and its row, are decided under one lock: two calls at once
-                # never both take a one-shot fault set on the same call number. The lock is held across the world
-                # call, so calls of one faulted action run one at a time (each at most the executor's timeout).
-                # The lock and the call count belong to this door: a trial serves each action through one door, so
-                # the numbering holds per trial. Two doors serving the same action would number separately.
-                with self._key_lock(f"\x01calls\x00{call.action}"):
-                    fault = self._fault(call, named)
-                    if fault is not None:
-                        return self._faulted(call, fault)
-                    return self._run(call, None, None, wait=True)
-        key = (call.key or "").strip() if acting else ""
+        key = (call.key or "").strip()
         if not key:
-            return self._run(call, None, on_behalf_of)
-        # A key is one actor's own: another actor's identical key is a different action.
+            return self._attempt(call, None, on_behalf_of)
+        # A key is one participant's own: another's identical key is a different action.
         slot = f"{call.actor}\x00{key}"
+        # A log written before actors were recorded cannot find a key by who used it; this door's own memory still can.
+        logged = acting or self.log.records_actors()
+        self._forget_past_trials()
         with self._key_lock(slot):
             known = self._keyed.get(slot)
-            if known is None:
+            if known is None and logged:
                 try:
                     earlier = self.log.committed(key, call.actor)
                     # Claimed before the action runs, so a door that never recorded its answer (a log write that
@@ -354,18 +360,20 @@ class WorldDoor:
                     return self._key_unknown(call, key, on_behalf_of)
             if known is None:
                 self._keyed[slot] = ("pending", call.action, call.arguments, None)
-                outcome = self._run(call, key, on_behalf_of)
+                outcome = self._attempt(call, key, on_behalf_of)
                 if outcome.outcome == "committed":
+                    # Committed, even when a fault then lost the answer: a retry with this key is answered from it.
                     self._keyed[slot] = ("committed", call.action, call.arguments, outcome.result)
-                    self._settle(key, call.actor, "committed")
-                elif outcome.outcome == "faulted":
+                    self._settle(key, call.actor, "committed", logged)
+                elif outcome.outcome == "faulted" and outcome.fault is None:
                     # The world failed mid-action: whether it applied it is unknown, so the key is never run again.
                     self._keyed[slot] = ("unknown", call.action, call.arguments, None)
-                    self._settle(key, call.actor, "unknown")
+                    self._settle(key, call.actor, "unknown", logged)
                 else:
-                    # Refused: nothing took effect, and a retry is a new attempt.
+                    # Refused, or held by the scenario's fault before the world saw it: nothing took effect, and a
+                    # retry is a new attempt.
                     del self._keyed[slot]
-                    self._settle(key, call.actor, None)
+                    self._settle(key, call.actor, None, logged)
                 return outcome
             state, action, arguments, result = known
             if state != "committed":
@@ -384,7 +392,41 @@ class WorldDoor:
             self._write(call, outcome, key=key, on_behalf_of=on_behalf_of)
             return outcome
 
-    def _settle(self, key: str, actor: str, state: str | None) -> None:
+    def _forget_past_trials(self) -> None:
+        """A door that outlives a trial (the tool proxy) forgets the keys an earlier trial used: the world was reset
+        under them, so a key reused in the next trial is a new action."""
+        if self.trial is None:
+            return
+        try:
+            self.faults()  # reading the trial's faults is what tells the proxy which trial this is
+        except Exception:  # noqa: BLE001 - unknown this time; the trial marker stays as it was
+            pass
+        current = self.trial()
+        with self._keys_lock:
+            if current != self._keyed_trial:
+                self._keyed.clear()
+                self._keyed_trial = current
+
+    def _attempt(self, call: ToolCall, key: str | None, on_behalf_of: str | None) -> Outcome:
+        """Run a call the rules let through: the agent's call takes the scenario's fault when one is set on it."""
+        if call.actor == AGENT:
+            named = self._named_faults(call)
+            if named:
+                # Which call of this action this is, and its row, are decided under one lock: two calls at once
+                # never both take a one-shot fault set on the same call number. The lock is held across the world
+                # call, so calls of one faulted action run one at a time (each at most the executor's timeout).
+                # The lock and the call count belong to this door: a trial serves each action through one door, so
+                # the numbering holds per trial. Two doors serving the same action would number separately.
+                with self._key_lock(f"\x01calls\x00{call.action}"):
+                    fault = self._fault(call, named)
+                    if fault is not None:
+                        return self._faulted(call, fault, key)
+                    return self._run(call, key, None, wait=True)
+        return self._run(call, key, on_behalf_of)
+
+    def _settle(self, key: str, actor: str, state: str | None, logged: bool = True) -> None:
+        if not logged:
+            return
         try:
             self.log.settle(key, actor, state)
         except Exception:  # noqa: BLE001 - a key left pending is never run again: the safe side
@@ -434,10 +476,14 @@ class WorldDoor:
             (one for one in named if _int(one.get("on_call"), 1) == made + 1), None
         )
 
-    def _faulted(self, call: ToolCall, fault: dict[str, Any]) -> Outcome:
-        """A timeout the scenario sets: before commit the world never sees the call; after commit it does and the
-        caller never hears back. A retry is not deduplicated, so a second commit is what a check can catch."""
-        if fault.get("mode") == "timeout_after_commit":
+    def _faulted(self, call: ToolCall, fault: dict[str, Any], key: str | None = None) -> Outcome:
+        """The fault the scenario sets on this call. A timeout before commit: the world never sees the call. After
+        commit: it does and the caller never hears back. Unavailable: the world never sees it and the caller hears the
+        service is down (503). Error: the world never sees it and the caller gets the scenario's status and message.
+        A retry without a key is not deduplicated, so a second commit is what a check can catch; a retry with the
+        first call's key is answered from the first result."""
+        mode = fault.get("mode")
+        if mode == "timeout_after_commit":
             ran = self._execute(call)
             logged = replace(
                 ran,
@@ -447,10 +493,23 @@ class WorldDoor:
                 body=None,
                 refusal_code=None,
             )
-            self._write(call, logged, wait=True)
+            self._write(call, logged, key=key, wait=True)
             return logged
-        outcome = Outcome("faulted", 504, reason="timeout_before_commit", fault=fault)
-        self._write(call, outcome, wait=True)
+        if mode == "unavailable":
+            outcome = Outcome("faulted", 503, reason="unavailable", fault=fault)
+        elif mode == "error":
+            status = fault_status(fault)
+            message = str(fault.get("message") or "").strip() or "error"
+            outcome = Outcome(
+                "faulted",
+                status,
+                body=json.dumps({"detail": message}).encode(),
+                reason=message[:2000],
+                fault=fault,
+            )
+        else:
+            outcome = Outcome("faulted", 504, reason="timeout_before_commit", fault=fault)
+        self._write(call, outcome, key=key, wait=True)
         return outcome
 
     def _execute(self, call: ToolCall) -> Outcome:

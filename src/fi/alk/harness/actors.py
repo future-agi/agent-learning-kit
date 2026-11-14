@@ -332,16 +332,22 @@ def session_fingerprint(session: PreRunSession, actors: dict[str, "Actor"]) -> s
 
 
 class Fault(BaseModel):
-    """A timeout the world gives the agent on one call of one action: before commit the world never sees it; after
-    commit it does and the agent never hears back. Graders read it and no actor is ever told it; an agent whose own
-    tools service holds the world's database URL could read the table it is kept in (a known limit)."""
+    """What the world does to the agent on one call of one action. `timeout_before_commit`: the world never sees it
+    and the agent hears a timeout after `delay_seconds`. `timeout_after_commit`: the world makes the change and the
+    agent never hears back. `unavailable`: the world never sees it and the agent hears at once that the service is
+    down (503). `error`: the world never sees it and the agent gets `status` (400-599, default 500) with `message`.
+    `delay_seconds` is read for the two timeouts only; `status` and `message` for `error` only. Graders read it and no
+    actor is ever told it; an agent whose own tools service holds the world's database URL could read the table it
+    is kept in (a known limit)."""
 
     model_config = ConfigDict(extra="forbid")
 
     action: str = Field(min_length=1)
-    mode: Literal["timeout_before_commit", "timeout_after_commit"]
+    mode: Literal["timeout_before_commit", "timeout_after_commit", "unavailable", "error"]
     on_call: int = Field(default=1, ge=1)
     delay_seconds: float = Field(default=30.0, ge=0, le=30)
+    status: int = Field(default=500, ge=400, le=599)
+    message: str = Field(default="", max_length=500)
 
 
 class StartsWith(BaseModel):

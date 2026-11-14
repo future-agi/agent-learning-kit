@@ -338,18 +338,27 @@ def _actor_fields() -> dict[str, Any]:
         },
         "faults": {
             "type": "array",
-            "description": "Timeouts the world gives the agent's own calls in this scenario, to test how it copes: "
-            "`timeout_before_commit` (the world never sees the call) or `timeout_after_commit` (the world makes the "
-            "change and the agent never hears back, so a careless retry makes it twice), on the agent's `on_call`th "
-            "call of `action`, the world action as the environment names it. A check reading the world then fails a "
-            "duplicate, or one system changed without the other. Never shown to any actor or the person.",
+            "description": "Failures the world gives the agent's own calls in this scenario, to test how it copes: "
+            "`timeout_before_commit` (the world never sees the call; the agent hears a timeout), "
+            "`timeout_after_commit` (the world makes the change and the agent never hears back, so a careless retry "
+            "makes it twice), `unavailable` (the service is down: the world never sees the call and the agent hears "
+            "503 at once; use it for 'inventory unavailable', 'payments down'), or `error` (the world never sees the "
+            "call and the agent gets `status` with `message`; use it when the service refuses in a specific way, a "
+            "429 rate limit or a 500 with a message), on the agent's `on_call`th call of `action`, the world action "
+            "as the environment names it. A check reading the world then fails a duplicate, or one system changed "
+            "without the other. Never shown to any actor or the person.",
             "items": {
                 "type": "object",
                 "properties": {
                     "action": {"type": "string"},
-                    "mode": {"type": "string", "enum": ["timeout_before_commit", "timeout_after_commit"]},
+                    "mode": {
+                        "type": "string",
+                        "enum": ["timeout_before_commit", "timeout_after_commit", "unavailable", "error"],
+                    },
                     "on_call": {"type": "integer", "minimum": 1},
                     "delay_seconds": {"type": "number", "minimum": 0, "maximum": 30},
+                    "status": {"type": "integer", "minimum": 400, "maximum": 599},
+                    "message": {"type": "string", "maxLength": 500},
                 },
                 "required": ["action", "mode"],
                 "additionalProperties": False,
