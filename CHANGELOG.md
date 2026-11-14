@@ -58,6 +58,9 @@ Post-rc.1 increments on the release branch. Each one adds gates on top of the
   `on_tool` trigger waits for the action in full. An actor waiting for a record only it may write is refused when the
   scenario is written. A timeout another actor answers reads `answered_by` only once that actor has acted or spoken,
   else `limit_blocked` or `unresolved`.
+- The door logs each call as a read or a write (`effect`): a tool entry's declared `effect` (`read` or `write`), else
+  a GET, HEAD or OPTIONS call reads and anything else writes, as before. A trial's state changes count reads apart
+  (`read`, `read_actions`), never as committed, and an approval's writes around the decision leave reads out.
 - The builder chat of a built environment can change its actors (`add_actor`, `drop_actor`) and nothing else
   of the world; adding or dropping one, or changing which scenarios include one, waits for the person's yes,
   and an automatic repair cannot change a scenario's actors.
