@@ -25,6 +25,7 @@ from .call_runner import (
     _clear_file_tool_calls,
     _with_scenario_edits,
     collect_seam_calls,
+    contract_worker_names,
 )
 from .contract import AgentContract
 from .hosted_scheduler import CallAborted, CallCancelled, CallOutcome, Scenario, World
@@ -1034,7 +1035,12 @@ class HostedChatCallRunner:
         # The submitted agent may execute tools inside its own process or against the world's services instead of
         # returning tool requests over HTTP. These observed calls belong to the same attempt; do not replay the tool
         # through the generated world or fabricate evidence from text.
-        transcript.calls[:] = collect_seam_calls(runtime, self._context.evidence_seam, transcript.calls)
+        transcript.calls[:] = collect_seam_calls(
+            runtime,
+            self._context.evidence_seam,
+            transcript.calls,
+            worker_names=contract_worker_names(self._context.bundle_dir),
+        )
 
         world_record = _world_actors_record(
             door, listing, dispatcher, cast, meter, limits, since=trial_started, contract=self._contract

@@ -993,10 +993,22 @@ def _collect_tool_trace_calls(runtime: EnvironmentRuntime) -> tuple[Call, ...]:
     return tuple(calls)
 
 
+def contract_worker_names(bundle_dir: Any) -> dict[str, str]:
+    """Each contract worker's id and the name its framework gives it, from the sealed contract."""
+    if bundle_dir is None:
+        return {}
+    return {
+        str(one["id"]): str(one.get("name") or "")
+        for one in _bundle_contract(Path(bundle_dir)).get("workers") or []
+        if isinstance(one, Mapping) and one.get("id") and one.get("name")
+    }
+
+
 def collect_seam_calls(
     runtime: EnvironmentRuntime,
     seam: EvidenceSeam | None,
     observed: Sequence[Call] = (),
+    worker_names: Mapping[str, str] | None = None,
 ) -> tuple[Call, ...]:
     """The calls a world observed for one attempt: calls another source saw, else the agent's own in-process trace,
     else where its bundle says evidence lands, joined with the trace file's span lines. Every runner reads them here,
@@ -1007,6 +1019,11 @@ def collect_seam_calls(
         calls = list(_collect_http_tool_calls(runtime))
     elif not calls and seam is EvidenceSeam.TOOL_TRACE:
         calls = list(_collect_tool_trace_calls(runtime))
+    for call in calls:
+        # The door names a worker by its contract id, its spans by the framework's name: give the call both, so the
+        # span and the door row of one call are read as one worker's call, not two calls.
+        if call.worker_id and not call.worker_label and (worker_names or {}).get(call.worker_id):
+            call.worker_label = (worker_names or {})[call.worker_id]
     # Unrecognized/None (should not happen for a `kind: process` bundle past preflight) degrades to the span lines
     # alone, keeping this on the scheduler's own evidence_missing path, never a raw exception.
     return _merge_span_calls(calls, from_spans)
@@ -2087,6 +2104,17 @@ def _compatible(span: Call, call: Call, fit: Callable[[Call, Call], Any]) -> boo
     return strength is not None and (
         strength[1]
         or (_kept_result(span) and _kept_result(call) and _same_result(span, call))
+        or _span_kept_the_refusal(span, call)
+    )
+
+
+def _span_kept_the_refusal(span: Call, call: Call) -> bool:
+    """The world refused the call and the framework's span recorded the refusal's own words as the tool's output."""
+    return bool(
+        call.refused
+        and call.error
+        and _kept_result(span)
+        and call.error in json.dumps(span.result, ensure_ascii=False)
     )
 
 
@@ -3333,4 +3361,6 @@ class CallRunnerImpl:
         return replace(base, calls=calls)
 
     def _collect_calls(self, runtime: EnvironmentRuntime) -> tuple[Call, ...]:
-        return collect_seam_calls(runtime, self._context.evidence_seam)
+        return collect_seam_calls(
+            runtime, self._context.evidence_seam, worker_names=contract_worker_names(self._context.bundle_dir)
+        )

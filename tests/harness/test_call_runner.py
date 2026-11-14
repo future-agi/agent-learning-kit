@@ -3302,3 +3302,33 @@ def test_voice_stop_when_ends_at_the_next_turn(tmp_path: Path) -> None:
     assert turns == [0, 1]
     assert caught.value.partial is not None
     assert caught.value.partial.stop_reason == "user_canceled"
+
+
+def test_a_worker_s_door_row_and_its_span_are_one_call(monkeypatch) -> None:
+    """The door names the worker by its contract id, the framework's span by its name: one call, never two."""
+    from fi.alk.harness.world.runtime import Call as WorldCall
+
+    door = [
+        WorldCall(name="list_refunds", arguments={"order_id": "1043"}, result={"refunds": []}, ok=True, at=10.0,
+                  worker_id="refund", channel="refund"),
+        WorldCall(name="issue_refund", arguments={"order_id": "1043", "amount": 100.0}, ok=False, refused=True,
+                  error="the deadline for refund has passed", at=11.0, worker_id="refund",
+                  refusal_code="deadline_passed", channel="refund"),
+    ]
+    spans = [
+        WorldCall(name="list_refunds", arguments={"order_id": "1043"}, result={"refunds": []}, ok=True, at=9.9,
+                  ended_at=10.1, worker_id="Refund worker", worker_label="Refund worker",
+                  runtime_ids={"event_id": "s1"}),
+        WorldCall(name="issue_refund", arguments={"order_id": "1043", "amount": 100}, ok=True, at=10.9, ended_at=11.1,
+                  result={"detail": "the deadline for refund has passed"}, worker_id="Refund worker",
+                  worker_label="Refund worker", runtime_ids={"event_id": "s2"}),
+    ]
+    monkeypatch.setattr(cr, "_read_file_tool_calls", lambda _runtime: ([], spans))
+    monkeypatch.setattr(cr, "_collect_tool_trace_calls", lambda _runtime: tuple(door))
+    calls = cr.collect_seam_calls(
+        _runtime(), cr.EvidenceSeam.TOOL_TRACE, worker_names={"refund": "Refund worker", "order_lookup": "Lookup"}
+    )
+    assert [(one.name, one.worker_id, one.refusal_code) for one in calls] == [
+        ("list_refunds", "refund", ""),
+        ("issue_refund", "refund", "deadline_passed"),
+    ]
