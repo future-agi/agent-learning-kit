@@ -41,6 +41,8 @@ except ImportError:  # pragma: no cover - imported as part of the package
 
 UPSTREAM = os.environ.get("UPSTREAM_URL", "").rstrip("/")
 DATABASE_URL = os.environ.get("DATABASE_URL", "")
+# The world actions the agent's contract declares read-only, whatever method they are called with.
+READ_ACTIONS = frozenset(one for one in os.environ.get("READ_ACTIONS", "").split(",") if one)
 
 __all__ = ["Handler", "door", "permitted"]
 
@@ -122,8 +124,9 @@ class Handler(BaseHTTPRequestHandler):
         # attempt to act as someone else, refused and logged as the agent's.
         actor = (self.headers.get("x-alk-actor") or "").strip()
         proven = not actor
+        action = route.strip("/").replace("/", ".") or "unknown"
         return ToolCall(
-            action=route.strip("/").replace("/", ".") or "unknown",
+            action=action,
             name=route.rstrip("/").rsplit("/", 1)[-1] or "unknown",
             arguments=arguments,
             actor=actor or AGENT,
@@ -135,6 +138,7 @@ class Handler(BaseHTTPRequestHandler):
             path=self.path,
             body=body,
             content_type=self.headers.get("content-type", "application/json"),
+            effect="read" if action in READ_ACTIONS else "",
         )
 
     def _enter(self) -> None:

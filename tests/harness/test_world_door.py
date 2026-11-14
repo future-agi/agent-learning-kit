@@ -781,3 +781,21 @@ def test_a_new_door_on_the_same_log_counts_only_the_fault_s_own_action():
         faults=[{"action": "crm.update", "mode": "timeout_before_commit", "on_call": 1, "delay_seconds": 0}], log=log
     )
     assert door.enter(ToolCall(action="crm.update", name="update")).fault is not None
+
+
+@pytest.mark.parametrize(
+    ("call", "effect"),
+    [
+        (ToolCall(action="orders.get", name="get", method="GET"), "read"),
+        (ToolCall(action="orders.get", name="get", method="head"), "read"),
+        (ToolCall(action="orders.search", name="search", method="POST", effect="read"), "read"),
+        (ToolCall(action="orders.refund", name="refund", method="POST"), "write"),
+        (ToolCall(action="orders.refund", name="refund", method="GET", effect="write"), "write"),
+        (ToolCall(action="approvals.change", name="change", actor="manager", form="record", method="GET"), "write"),
+    ],
+)
+def test_each_call_is_logged_as_a_read_or_a_write_from_its_declared_effect_else_its_method(call, effect):
+    door = _door(roster={"manager": {"permitted_actions": ["approvals.change"], "on_behalf_of": None}})
+    assert door.enter(call).outcome == "committed"
+    [row] = door.events()
+    assert row["effect"] == effect

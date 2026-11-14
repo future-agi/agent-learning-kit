@@ -5878,3 +5878,17 @@ def test_python_selection_preserves_uv_alternatives_and_target_only_constraints(
         f"environments={json.dumps(environments)}\n"
     )
     assert _python_language_version(tmp_path, "3.11", interpreter_selector=True) == "==3.11.*,>=3.11"
+
+
+def test_the_tool_proxy_learns_the_declared_read_actions_and_a_plan_without_any_is_unchanged():
+    from fi.alk.harness.bundle_author_v2 import _tool_proxy_process, declared_read_actions
+
+    entries = [
+        {"tool": "get_order", "endpoint": "/orders/get", "method": "POST", "effect": "read"},
+        {"tool": "issue_refund", "endpoint": "/orders/refund", "method": "POST", "effect": "write"},
+        {"tool": "lookup", "endpoint": "", "effect": "read"},
+        {"tool": "list_refunds", "endpoint": "/refunds/list", "method": "POST"},
+    ]
+    assert declared_read_actions(entries) == ["orders.get"]
+    assert _tool_proxy_process(["orders.get"]).environment["READ_ACTIONS"] == "orders.get"
+    assert "READ_ACTIONS" not in _tool_proxy_process(declared_read_actions(entries[1:])).environment

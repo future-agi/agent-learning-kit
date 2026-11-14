@@ -1269,3 +1269,37 @@ def test_a_free_form_knowledge_item_is_kept_as_written_and_reaches_the_actor(tmp
     assert read == items
     text = brief_text(actor_brief({"id": "manager", "name": "Mia", "knowledge": read}))
     assert "Deliveries stop at noon on Fridays." in text and "You manage the north store." in text
+
+
+def test_a_read_counts_apart_from_committed_writes_and_a_participant_that_only_read_changed_nothing():
+    from fi.alk.harness.call_runner import trial_state_changes
+
+    log = [
+        {"name": "get_order", "outcome": "committed", "effect": "read"},
+        {"name": "list_refunds", "outcome": "committed", "effect": "read"},
+        {"name": "issue_refund", "outcome": "committed", "effect": "write"},
+        # Logged before effects were recorded: a write, as it always was.
+        {"name": "issue_refund", "outcome": "committed"},
+        {"actor_id": "manager", "action": "orders.lookup", "name": "lookup", "outcome": "committed", "effect": "read"},
+    ]
+    agent, manager = trial_state_changes(log, {"manager": Actor(id="manager", name="Mia")})
+    assert (agent["attempted"], agent["committed"], agent["read"]) == (4, 2, 2)
+    assert agent["committed_actions"] == ["issue_refund", "issue_refund"]
+    assert agent["read_actions"] == ["get_order", "list_refunds"]
+    assert (manager["committed"], manager["read"], manager["read_actions"]) == (0, 1, ["orders.lookup"])
+    only_read = trial_state_changes(log[:2], {})[0]
+    assert only_read["no_change"] is True and only_read["committed"] == 0
+
+
+def test_an_agent_read_before_the_decision_is_not_a_write_before_it():
+    from fi.alk.harness.call_runner import approvals
+
+    log = [
+        {"actor_id": "agent", "name": "request_refund", "action_id": "a1", "at": 1.0, "outcome": "committed"},
+        {"actor_id": "agent", "name": "get_order", "action_id": "a2", "at": 2.0, "outcome": "committed",
+         "effect": "read"},
+        {"actor_id": "manager", "name": "approve", "action_id": "m1", "at": 3.0, "outcome": "committed",
+         "parent_event_id": "a1"},
+    ]
+    [line] = approvals(log)
+    assert line["before_decision"] == [] and line["acted_before_decision"] is False

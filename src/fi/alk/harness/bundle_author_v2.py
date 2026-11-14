@@ -158,7 +158,7 @@ _TOOL_TRACE_DDL = (
     # full) for a table made before it was recorded.
     "ALTER TABLE _alk_tool_trace ADD COLUMN IF NOT EXISTS action text, ADD COLUMN IF NOT EXISTS agent_tool text, "
     "ADD COLUMN IF NOT EXISTS provider_call_id text, ADD COLUMN IF NOT EXISTS tool_call_id text, "
-    "ADD COLUMN IF NOT EXISTS status text;\n"
+    "ADD COLUMN IF NOT EXISTS status text, ADD COLUMN IF NOT EXISTS effect text;\n"
 )
 
 
@@ -2007,7 +2007,29 @@ def _managed_world_db() -> ManagedProcess:
     )
 
 
-def _tool_proxy_process() -> SourceProcess:
+def declared_read_actions(tool_entrypoints: list[dict[str, Any]] | None) -> list[str]:
+    """The world actions the contract declares read-only, by route: what the tool proxy logs as reads whatever the
+    method the agent calls them with."""
+    return sorted(
+        {
+            route.replace("/", ".")
+            for entry in tool_entrypoints or []
+            if isinstance(entry, dict)
+            and entry.get("effect") == "read"
+            and (route := str(entry.get("endpoint") or "").strip("/"))
+        }
+    )
+
+
+def _tool_proxy_process(read_actions: list[str] | None = None) -> SourceProcess:
+    environment = {
+        "PORT": "{{PORT_tool-proxy}}",
+        "UPSTREAM_URL": "{{TOOLS_UPSTREAM_URL}}",
+        "DATABASE_URL": "{{WORLD_DATABASE_URL}}",
+    }
+    if read_actions:
+        # Only when declared, so a plan without declarations is the plan it always was.
+        environment["READ_ACTIONS"] = ",".join(read_actions)
     return SourceProcess(
         name="tool-proxy",
         working_directory="generated/tool-proxy",
@@ -2015,11 +2037,7 @@ def _tool_proxy_process() -> SourceProcess:
         # The ALK interpreter carries the proxy's dependencies in both local and
         # hosted runtimes; its path is not necessarily /opt/alk-venv.
         run_command=[sys.executable, "proxy.py"],
-        environment={
-            "PORT": "{{PORT_tool-proxy}}",
-            "UPSTREAM_URL": "{{TOOLS_UPSTREAM_URL}}",
-            "DATABASE_URL": "{{WORLD_DATABASE_URL}}",
-        },
+        environment=environment,
         started_check=StartedCheck(port=True, timeout_seconds=180),
         user=ProcessUser.SVC_TOOLS,
         depends_on=["tools-api", "world-db"],
@@ -2687,7 +2705,7 @@ def resolve_environment_plan(
                     )
                 )
         if "tools-api" in source_services:
-            processes.append(_tool_proxy_process())
+            processes.append(_tool_proxy_process(declared_read_actions(tool_entrypoints)))
             # The target must not become eligible to start until the evidence proxy is ready.
             # Depending only on the upstream tools process leaves a race where the agent starts
             # with TOOLS_API_URL pointing at a port that has not been bound yet.

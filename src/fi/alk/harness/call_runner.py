@@ -65,7 +65,7 @@ from fi.simulate.simulation.call_actors import (
 
 from .actor_dispatch import ActorDispatcher, DoorActs, build_dispatcher, world_summary
 from .actor_meter import ActorMeter
-from .world_door import logged_as, same_action
+from .world_door import is_read, logged_as, same_action
 from .actors import (
     AGENT,
     ScenarioActor,
@@ -1041,8 +1041,9 @@ def trial_state_changes(
     """What each participant attempted in this trial and what the world made of it: one entry for the agent and one
     per actor that acted, with attempted, committed, refused, faulted and duplicate counts and the actions it
     committed, in order. Attempted, refused and committed are kept apart; a row from before outcomes were recorded
-    counts as committed when it succeeded and refused when the world refused it. `answer_lost_actions` lists the
-    committed actions whose answer a `timeout_after_commit` fault replaced with a timeout."""
+    counts as committed when it succeeded and refused when the world refused it. A read changed nothing: it counts in
+    `read` and `read_actions`, never in `committed`. `answer_lost_actions` lists the committed actions whose answer a
+    `timeout_after_commit` fault replaced with a timeout."""
     entries: dict[str, dict[str, Any]] = {}
     chosen = _ChosenActions(decisions)
     for row in log:
@@ -1059,12 +1060,18 @@ def trial_state_changes(
                 "attempted": 0,
                 **{outcome: 0 for outcome in _OUTCOMES},
                 "committed_actions": [],
+                "read": 0,
+                "read_actions": [],
             },
         )
         entry["attempted"] += 1
         outcome = row.get("outcome") or (
             "refused" if row.get("refused") else "committed" if row.get("ok", True) else "faulted"
         )
+        if outcome == "committed" and is_read(row):
+            entry["read"] += 1
+            entry["read_actions"].append(str(row.get("name") or "") if who == AGENT else logged_as(row))
+            continue
         if outcome in _OUTCOMES:
             entry[outcome] += 1
         if outcome == "committed":
@@ -1076,7 +1083,7 @@ def trial_state_changes(
     # The agent always has a line: "no change" is a result, since doing nothing can be correct.
     agent = entries.pop(AGENT, None) or {
         "who": AGENT, "name": "the agent", "attempted": 0, **{outcome: 0 for outcome in _OUTCOMES},
-        "committed_actions": [],
+        "committed_actions": [], "read": 0, "read_actions": [],
     }
     agent["no_change"] = not agent["committed_actions"]
     return [agent] + list(entries.values())
@@ -1088,7 +1095,8 @@ def approvals(log: list[dict[str, Any]], decisions: Sequence[dict[str, Any]] = (
     writes before the decision and after it, in log order. No record matching, no inference."""
     rows = [row for row in log if not is_pre_run(row.get("idempotency_key"))]
     by_id = {str(row.get("action_id")): row for row in rows if row.get("action_id")}
-    agent_writes = [row for row in rows if (row.get("actor_id") or AGENT) == AGENT]
+    # A read changed nothing, so it is never a write before or after the decision; it can still be the request.
+    agent_writes = [row for row in rows if (row.get("actor_id") or AGENT) == AGENT and not is_read(row)]
     found = []
     for row in rows:
         parent = by_id.get(str(row.get("parent_event_id") or ""))

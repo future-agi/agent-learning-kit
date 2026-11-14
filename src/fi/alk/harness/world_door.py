@@ -37,6 +37,8 @@ LOG_WRITE_SECONDS = 2.0
 RECORD_VERBS = ("change", "put")
 # How a tools service learns which person an actor's call is from: the actor's identity in that service.
 IDENTITY_HEADER = "X-ALK-Actor-Identity"
+# HTTP methods that only read: a call made with one changes nothing in the world.
+READ_METHODS = ("GET", "HEAD", "OPTIONS")
 _IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,62}$")
 
 
@@ -65,6 +67,8 @@ class ToolCall:
     content_type: str = "application/json"
     # Who the actor is in the service it acts in (its identity there), sent to the service beside the call.
     identity: str = ""
+    # `read` or `write` as the tool's contract declares it; empty reads the HTTP method (see `call_effect`).
+    effect: str = ""
 
 
 @dataclass
@@ -179,6 +183,22 @@ def same_action(row: Mapping[str, Any], action: str) -> bool:
     if row.get("action"):
         return action_matches(str(row["action"]), action)
     return bool(action) and str(row.get("name") or "") in (action, action.rsplit(".", 1)[-1])
+
+
+def call_effect(call: ToolCall) -> str:
+    """Whether a call reads or writes the world: a record change writes; else the tool's declared effect; else a
+    read-only HTTP method reads. Anything undeclared and not read-only counts as a write, as every call did before."""
+    if call.form == "record":
+        return "write"
+    if call.effect in ("read", "write"):
+        return call.effect
+    return "read" if (call.method or "").upper() in READ_METHODS else "write"
+
+
+def is_read(row: Mapping[str, Any]) -> bool:
+    """Whether a log row is a read: committed or not, it changed nothing. A row from before effects were logged is
+    a write."""
+    return row.get("effect") == "read"
 
 
 def permitted(permitted_actions: object, action: str) -> bool:
@@ -506,6 +526,7 @@ class WorldDoor:
             "actor_id": call.actor,
             "parent_event_id": call.parent,
             "on_behalf_of": on_behalf_of,
+            "effect": call_effect(call),
         }
         if wait:
             self._write_row(row)
@@ -704,6 +725,8 @@ _EXTENDED = (
 )
 # Written beside the extended columns when the table has it.
 _ACTION = "action"
+# Written beside either set of columns when the table has it: a log made before effects were recorded has no column.
+_EFFECT = "effect"
 _BASIC = "name, arguments, result, ok, error, at"
 # Each actor key a door claimed before its action ran, so no later door runs it again; beside the log, which a
 # failed write can leave without the row.
@@ -754,6 +777,8 @@ class PostgresLog:
         columns = _EXTENDED if extended else _BASIC
         if extended and self._records_action():
             columns += ", " + _ACTION
+        if _EFFECT in self._table_columns():
+            columns += ", " + _EFFECT
         keys = [one.strip() for one in columns.split(",")]
         values = [
             json.dumps(row.get(key), default=str)

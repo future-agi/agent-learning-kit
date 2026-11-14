@@ -550,7 +550,10 @@ class _HostedChatTarget:
             ),
             "POST",
         )
-        outcome = self._door.enter(ToolCall(action=self._action(name), name=name, arguments=arguments, method=method))
+        effect = next((str(entry.get("effect") or "") for entry in _entries(self._contract) if entry.get("tool") == name), "")
+        outcome = self._door.enter(
+            ToolCall(action=self._action(name), name=name, arguments=arguments, method=method, effect=effect)
+        )
         if outcome.fault is not None:
             if outcome.fault.get("mode") == "timeout_after_commit":
                 if self.world.calls:

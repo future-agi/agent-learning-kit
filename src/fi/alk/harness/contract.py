@@ -205,6 +205,9 @@ class ToolEntry(BaseModel):
     service: str = ""
     endpoint: str = ""
     method: str = "POST"
+    # `read` when the tool only reads (a lookup, a search, a list), `write` when it changes anything. Empty reads the
+    # HTTP method: GET, HEAD and OPTIONS read, everything else counts as a write.
+    effect: str = ""
     notes: str = ""
 
 

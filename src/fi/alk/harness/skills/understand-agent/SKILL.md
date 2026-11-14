@@ -222,6 +222,10 @@ Find, in roughly this order:
    sees the dependency path; without this mapping ALK cannot normalize it back to the semantic
    tool the agent actually chose.
 
+   Record each entry's `effect`: `read` when the code only reads (a lookup, a search, a list),
+   `write` when it creates, changes or deletes anything. Leave it empty only when you cannot tell;
+   an empty one counts as a write unless the endpoint is called with GET.
+
    Some tools cannot be reached at all. A framework may define them as closures inside a class,
    so there is nothing importable. **Record that plainly rather than leaving the entry blank**:
    the environment stage must stop and tell the person which runnable seam the agent needs. It
