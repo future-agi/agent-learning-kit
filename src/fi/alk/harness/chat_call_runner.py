@@ -1008,7 +1008,11 @@ class HostedChatCallRunner:
         from .call_runner import NOT_RECORDED, duplicate_commits
 
         if door_sees_tools:
-            world_record = {**(world_record or {}), **await asyncio.to_thread(self._records.end, id(runtime), records_dsn)}
+            from .call_runner import upload_end_state
+
+            sealed = await asyncio.to_thread(self._records.end, id(runtime), records_dsn)
+            await upload_end_state(self._adapter, scenario.scenario_key, sealed, _trial_log(door, trial_started))
+            world_record = {**(world_record or {}), **sealed}
         else:
             # The agent runs its own tools where no door stands: World changes says so, never "no change".
             world_record = dict(NOT_RECORDED)

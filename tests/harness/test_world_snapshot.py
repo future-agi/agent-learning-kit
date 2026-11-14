@@ -99,3 +99,43 @@ def test_world_changes_carry_the_rows_the_trial_changed(monkeypatch):
     kinds = sorted((one["table"], one["kind"]) for one in sealed["records"]["changes"])
     assert kinds == [("orders", "changed"), ("refunds", "added")]
     assert sealed["start"]["state"] == "seeded"
+
+
+def test_the_trial_s_end_state_is_stored_as_its_own_artifact_with_the_action_log(monkeypatch):
+    import asyncio
+    import json
+
+    import fi.alk.harness.world_snapshot as ws
+    from fi.alk.harness.call_runner import END_STATE_KEY, upload_end_state
+    from fi.alk.harness.outbound import ArtifactKind
+
+    taken = iter([from_rows(_orders({"id": 1, "status": "paid"})), from_rows(_orders({"id": 1, "status": "refunded"}))])
+    monkeypatch.setattr(ws, "snapshot", lambda dsn, **_: next(taken))
+    records = TrialRecords()
+    records.start("w0", "dsn")
+    sealed = records.end("w0", "dsn")
+    uploads = []
+
+    class _Adapter:
+        async def upload_artifact(self, data, *, kind, scenario_key):
+            uploads.append((kind, scenario_key, json.loads(data)))
+            return "art-1"
+
+    log = [{"name": "issue_refund", "actor_id": "agent", "outcome": "committed"}]
+    assert asyncio.run(upload_end_state(_Adapter(), "k1", sealed, log)) == "art-1"
+    [(kind, key, body)] = uploads
+    assert (kind, key, body["schema"]) == (ArtifactKind.WORLD_STATE, "k1", "futureagi.world-state.v1")
+    assert body["tables"]["orders"] == [{"id": 1, "status": "refunded"}] and body["action_log"] == log
+    assert END_STATE_KEY not in sealed and "records" in sealed
+
+
+def test_no_end_state_is_stored_when_the_end_could_not_be_read():
+    import asyncio
+
+    from fi.alk.harness.call_runner import upload_end_state
+
+    class _Adapter:
+        async def upload_artifact(self, data, *, kind, scenario_key):
+            raise AssertionError("nothing to store")
+
+    assert asyncio.run(upload_end_state(_Adapter(), "k1", {"records": {"unreadable": True}}, [])) is None

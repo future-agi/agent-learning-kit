@@ -2231,7 +2231,39 @@ class TrialRecords:
         except Exception as exc:  # noqa: BLE001 - only the type: a database error can carry the world's password
             logger.debug("trial end records unreadable: %s", type(exc).__name__)
             return {"records": {"unreadable": True}, "start": start}
-        return {"records": diff(before, after), "start": start}
+        # The end state itself is kept apart (`END_STATE_KEY`): stored as its own artifact, never in the transcript.
+        return {"records": diff(before, after), "start": start, END_STATE_KEY: after}
+
+
+# What `TrialRecords.end` carries the trial's end snapshot under, for `upload_end_state`.
+END_STATE_KEY = "_end_state"
+END_STATE_SCHEMA = "futureagi.world-state.v1"
+
+
+async def upload_end_state(
+    adapter: Any, scenario_key: str, sealed: dict[str, Any], log: Sequence[Mapping[str, Any]] | None
+) -> str | None:
+    """Store the world's records at the trial's end and its action log as the trial's `world_state` artifact, so a
+    fixed check can grade the trial again without calling the agent; pops the snapshot out of `sealed`. Nothing is
+    stored when the end could not be read."""
+    end = sealed.pop(END_STATE_KEY, None)
+    if end is None:
+        return None
+    body = {
+        "schema": END_STATE_SCHEMA,
+        "tables": {table: list(rows.values()) for table, rows in end.tables.items()},
+        "skipped": list(end.skipped),
+        "action_log": [dict(row) for row in log or []],
+    }
+    try:
+        return await adapter.upload_artifact(
+            json.dumps(body, sort_keys=True, default=str).encode("utf-8"),
+            kind=ArtifactKind.WORLD_STATE,
+            scenario_key=scenario_key,
+        )
+    except Exception as exc:  # noqa: BLE001 - a lost end state never fails the trial
+        logger.warning("trial end state not stored: %s", type(exc).__name__)
+        return None
 
 
 # Sealed instead of World changes when the agent's tools run where the world's door cannot see them.
@@ -2887,6 +2919,12 @@ class CallRunnerImpl:
             if case is not None and door_seen
             else {}
         )
+        if records:
+            log_rows: list[dict[str, Any]] | None = None
+            if world_database is not None:
+                with contextlib.suppress(Exception):
+                    log_rows = await asyncio.to_thread(_read_action_log, world_database.address)
+            await upload_end_state(self._adapter, scenario_key, records, log_rows)
         duplicates = _duplicates(runtime) if case is not None and door_seen else []
         # Hand-off records are not the world's actions: marks pair the graded calls with the action log.
         graded = graded_calls(calls)

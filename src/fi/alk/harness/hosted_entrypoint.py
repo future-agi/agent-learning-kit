@@ -1082,6 +1082,7 @@ _ARTIFACT_LEVEL_FORBIDDEN_KINDS: dict[ArtifactLevel, frozenset[ob.ArtifactKind]]
             ob.ArtifactKind.TRACE,
             ob.ArtifactKind.TOOL_TRACE,
             ob.ArtifactKind.TRANSCRIPT,
+            ob.ArtifactKind.WORLD_STATE,
             ob.ArtifactKind.OTHER,
         }
     ),

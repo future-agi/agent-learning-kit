@@ -2844,6 +2844,8 @@ class ArtifactKind(str, Enum):
     RECORDING_ASSISTANT = "recording_assistant"
     TRANSCRIPT = "transcript"
     TOOL_TRACE = "tool_trace"
+    # The world's records at a trial's end, with its action log: kept so a fixed check can grade the trial again.
+    WORLD_STATE = "world_state"
     RESULT = "result"
     BUILD = "build"
     TRACE = "trace"
@@ -2856,6 +2858,7 @@ _RESERVED_ARTIFACT_KINDS = frozenset(
         ArtifactKind.BUILD,
         ArtifactKind.TRANSCRIPT,
         ArtifactKind.TOOL_TRACE,
+        ArtifactKind.WORLD_STATE,
         ArtifactKind.RESULT,
         # Complete manifests require build, result, and log. A recording-heavy run must not be
         # allowed to consume the budget and strand terminalization after all scenarios finish.
