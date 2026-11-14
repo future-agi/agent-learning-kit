@@ -140,3 +140,72 @@ def test_a_folder_given_away_must_not_itself_be_a_link(tmp_path):
 
     with pytest.raises(OSError):
         user_files.own_tree(tmp_path / "world", uid=1, gid=1, chown=lambda *a, **k: None)
+
+
+# --- below a folder the harness trusts --------------------------------------------------------
+
+
+def _receipt_under_a_linked_folder(tmp_path: Path) -> tuple[Path, Path, Path]:
+    """A lifecycle folder whose ``receipts`` a user swapped for a link to the harness's files."""
+    harness = tmp_path / "harness" / "deep"
+    harness.mkdir(parents=True)
+    (harness / "receipt.json").write_text("held back\n", encoding="utf-8")
+    lifecycle = tmp_path / "provider" / "w0"
+    lifecycle.mkdir(parents=True)
+    (lifecycle / "receipts").symlink_to(tmp_path / "harness", target_is_directory=True)
+    return lifecycle, lifecycle / "receipts" / "deep" / "receipt.json", harness
+
+
+def test_a_read_below_a_folder_never_passes_a_linked_folder(tmp_path):
+    lifecycle, receipt, _ = _receipt_under_a_linked_folder(tmp_path)
+
+    with pytest.raises(OSError):
+        user_files.read_text(receipt, beneath=lifecycle)
+
+
+def test_a_read_below_a_folder_reads_its_own_nested_file(tmp_path):
+    lifecycle = tmp_path / "w0"
+    (lifecycle / "receipts" / "deep").mkdir(parents=True)
+    (lifecycle / "receipts" / "deep" / "receipt.json").write_text("{}", encoding="utf-8")
+
+    text = user_files.read_text(lifecycle / "receipts" / "deep" / "receipt.json", beneath=lifecycle)
+
+    assert text == "{}"
+
+
+def test_a_read_outside_its_folder_is_refused(tmp_path):
+    (tmp_path / "w0").mkdir()
+    (tmp_path / "other.json").write_text("{}", encoding="utf-8")
+
+    with pytest.raises(OSError):
+        user_files.read_text(tmp_path / "w0" / ".." / "other.json", beneath=tmp_path / "w0")
+    with pytest.raises(OSError):
+        user_files.read_text(tmp_path / "other.json", beneath=tmp_path / "w0")
+
+
+def test_a_read_longer_than_its_limit_is_refused(tmp_path):
+    receipt = tmp_path / "receipt.json"
+    receipt.write_bytes(b"x" * 65)
+
+    assert user_files.read_text(receipt, limit=65) == "x" * 65
+    with pytest.raises(OSError, match="longer than 64 bytes"):
+        user_files.read_text(receipt, limit=64)
+
+
+def test_folders_are_never_made_through_a_linked_folder(tmp_path):
+    lifecycle, receipt, harness = _receipt_under_a_linked_folder(tmp_path)
+
+    with pytest.raises(OSError):
+        user_files.make_folders(receipt.parent / "deeper", beneath=lifecycle)
+
+    assert sorted(path.name for path in harness.iterdir()) == ["receipt.json"]
+
+
+def test_folders_below_a_folder_are_made_at_any_depth(tmp_path):
+    lifecycle = tmp_path / "w0"
+    lifecycle.mkdir()
+
+    user_files.make_folders(lifecycle / "receipts" / "deep", beneath=lifecycle)
+    user_files.make_folders(lifecycle / "receipts" / "deep", beneath=lifecycle)  # already there
+
+    assert (lifecycle / "receipts" / "deep").is_dir()

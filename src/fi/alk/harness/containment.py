@@ -8,9 +8,11 @@ kills every process in it, wherever its session went.
 
 A process joins its leaf before any customer code runs: it starts as a small gate, the harness's
 own interpreter, that waits on a pipe until the harness has moved it, then executes the real
-command. A process
-cannot leave its leaf, because a declared user cannot write any ``cgroup.procs``. Leaves sit
-under the harness's own cgroup, so the limits the harness reads for admission still apply.
+command. The gate starts with an empty environment, so nothing the customer declares (an
+``LD_PRELOAD``, say) acts before the move; the command's own environment arrives over the pipe
+as the signal to go. A process cannot leave its leaf, because a declared user cannot write any
+``cgroup.procs``. Leaves sit under the harness's own cgroup, so the limits the harness reads for
+admission still apply.
 """
 
 from __future__ import annotations
@@ -20,7 +22,6 @@ import errno
 import itertools
 import logging
 import os
-import shutil
 import signal
 import subprocess
 import sys
@@ -36,18 +37,33 @@ logger = logging.getLogger(__name__)
 _CGROUP_ROOT = Path("/sys/fs/cgroup")
 _PROC_SELF_CGROUP = Path("/proc/self/cgroup")
 _EMPTY_WAIT_SECONDS = 5.0
-# The gate reads one byte from an inherited pipe, closes it and executes the command; EOF (the
-# harness gone before it moved the process) ends it unrun. Not a shell: dash cannot redirect from
-# a descriptor above 9, and the pipe is never that low in a harness with open files.
+# The gate reads the command's environment from one inherited pipe, up to EOF, and executes the
+# command with it; a message without the go mark (the harness gone before it moved the process)
+# ends it unrun. The second pipe closes on exec: EOF tells the harness the command started, and
+# an errno written there tells it why not, so the exec is judged as the declared user, not the
+# harness. Not a shell: dash cannot redirect from a descriptor above 9, and the pipes are never
+# that low in a harness with open files.
+_GO = b"go\0"
 _GATE = (
     "import os, sys\n"
-    "fd = int(sys.argv[1])\n"
-    "ready = os.read(fd, 1)\n"
-    "os.close(fd)\n"
-    "if not ready:\n"
+    "go, done = int(sys.argv[1]), int(sys.argv[2])\n"
+    "os.set_inheritable(done, False)\n"
+    "chunks = []\n"
+    "while chunk := os.read(go, 65536):\n"
+    "    chunks.append(chunk)\n"
+    "os.close(go)\n"
+    "message = b''.join(chunks)\n"
+    f"if not message.startswith({_GO!r}):\n"
     "    os._exit(125)\n"
-    "os.execvp(sys.argv[2], sys.argv[2:])\n"
+    f"env = dict(e.split(b'=', 1) for e in message[{len(_GO)}:].split(b'\\0') if e)\n"
+    "try:\n"
+    "    os.execvpe(sys.argv[3], sys.argv[3:], env)\n"
+    "except OSError as exc:\n"
+    "    os.write(done, str(exc.errno or 0).encode())\n"
+    "os._exit(127)\n"
 )
+# Nothing of the harness's or the customer's: the gate needs no variable to run.
+_GATE_ENVIRONMENT: dict[str, str] = {}
 
 
 def _self_cgroup(proc_self_cgroup: Path, cgroup_root: Path) -> Path | None:
@@ -169,54 +185,83 @@ def active() -> Containment | None:
     return _containment
 
 
-def _executable(argv0: str, *, cwd: Path | str | None, env: Mapping[str, str] | None) -> None:
-    """Fail the way a direct exec would, before the gate hides it behind an exit status."""
-    if "/" in argv0:
-        path = Path(argv0) if os.path.isabs(argv0) or cwd is None else Path(cwd) / argv0
-        if not path.is_file():
-            raise FileNotFoundError(errno.ENOENT, os.strerror(errno.ENOENT), argv0)
-        if not os.access(path, os.X_OK):
-            raise PermissionError(errno.EACCES, os.strerror(errno.EACCES), argv0)
-        return
-    search = (env or os.environ).get("PATH", os.defpath)
-    if shutil.which(argv0, path=search) is None:
-        raise FileNotFoundError(errno.ENOENT, os.strerror(errno.ENOENT), argv0)
+def _go_message(env: Mapping[Any, Any] | None) -> bytes:
+    """The command's environment as the gate's go message, refused where ``subprocess`` would."""
+    entries = []
+    for key, value in (os.environb if env is None else env).items():
+        name, text = os.fsencode(key), os.fsencode(value)
+        if not name or b"=" in name or b"\0" in name or b"\0" in text:
+            raise ValueError(f"illegal environment variable name or value: {key!r}")
+        entries.append(name + b"=" + text)
+    return _GO + b"\0".join(entries)
+
+
+def _write_all(fd: int, data: bytes) -> None:
+    view = memoryview(data)
+    while view:
+        view = view[os.write(fd, view) :]
+
+
+def _read_all(fd: int) -> bytes:
+    chunks = []
+    while chunk := os.read(fd, 4096):
+        chunks.append(chunk)
+    return b"".join(chunks)
+
+
+def _close(*fds: int) -> None:
+    for fd in fds:
+        if fd >= 0:
+            os.close(fd)
 
 
 def popen(args: Sequence[str], **kwargs: Any) -> tuple[subprocess.Popen, Leaf | None]:
     """``subprocess.Popen`` for a customer execution, inside a leaf of its own when contained.
 
     Without containment this is a plain Popen. With it, the process starts as the gate, joins
-    a fresh leaf, and only then runs ``args``; any process it starts is born inside the leaf.
+    a fresh leaf, and only then runs ``args`` with ``env``; any process it starts is born inside
+    the leaf. A command that cannot be executed raises here, as ``subprocess.Popen`` does.
     """
     containment = _containment
     if containment is None:
         return subprocess.Popen(list(args), **kwargs), None
     argv = [str(arg) for arg in args]
-    _executable(argv[0], cwd=kwargs.get("cwd"), env=kwargs.get("env"))
-    read_end, write_end = os.pipe()
+    message = _go_message(kwargs.pop("env", None))
+    pass_fds = tuple(kwargs.pop("pass_fds", ()))
     leaf = containment.leaf()
+    go_read = go_write = done_read = done_write = -1
     try:
+        go_read, go_write = os.pipe()
+        done_read, done_write = os.pipe()
         process = subprocess.Popen(
-            [sys.executable, "-I", "-S", "-c", _GATE, str(read_end), *argv],
-            pass_fds=(*kwargs.pop("pass_fds", ()), read_end),
+            [sys.executable, "-I", "-S", "-c", _GATE, str(go_read), str(done_write), *argv],
+            env=_GATE_ENVIRONMENT,
+            pass_fds=(*pass_fds, go_read, done_write),
             **kwargs,
         )
     except BaseException:
-        os.close(write_end)
+        _close(go_read, go_write, done_read, done_write)
         leaf.close()
         raise
-    finally:
-        os.close(read_end)
+    _close(go_read, done_write)
     try:
         leaf.add(process.pid)
-        os.write(write_end, b"\n")
+        _write_all(go_write, message)
+        _close(go_write)
+        go_write = -1
+        failure = _read_all(done_read)  # EOF once the command is executing
     except BaseException:
-        os.close(write_end)
+        # Closing the go pipe before the mark arrived ends the gate unrun.
+        _close(go_write, done_read)
         leaf.close()
         process.wait()
         raise
-    os.close(write_end)
+    _close(done_read)
+    if failure:
+        process.wait()
+        leaf.close()
+        code = int(failure) or errno.ENOEXEC
+        raise OSError(code, os.strerror(code), argv[0])
     return process, leaf
 
 

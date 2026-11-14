@@ -7,8 +7,12 @@ skips them.
 
 from __future__ import annotations
 
+import errno
+import json
 import os
+import shutil
 import subprocess
+import sys
 import time
 from pathlib import Path
 
@@ -107,8 +111,9 @@ def test_a_process_that_cannot_join_its_leaf_runs_nothing(tmp_path, contained):
     assert leaf.closed == 1
 
 
-def test_a_command_that_cannot_run_fails_like_exec_and_makes_no_leaf(tmp_path, contained):
-    subtree = contained(_Leaf())
+def test_a_command_that_cannot_run_fails_like_exec_and_leaves_no_leaf(tmp_path, contained):
+    leaf = _Leaf()
+    subtree = contained(leaf)
     script = tmp_path / "script"
     script.write_text("#!/bin/sh\n")  # no execute bit
 
@@ -118,7 +123,101 @@ def test_a_command_that_cannot_run_fails_like_exec_and_makes_no_leaf(tmp_path, c
         containment.popen(["./missing"], cwd=tmp_path)
     with pytest.raises(PermissionError):
         containment.popen([str(script)])
+    assert subtree.made == leaf.closed == 3
+
+
+def test_the_gate_starts_with_no_caller_variable_and_the_command_gets_them_all(
+    contained, monkeypatch
+):
+    # A variable the customer declares, a loader one above all, must not act on the gate: the
+    # gate runs before the process is in its leaf.
+    gate_environments = []
+    spawn = subprocess.Popen
+
+    def recording(args, **kwargs):
+        gate_environments.append(kwargs.get("env"))
+        return spawn(args, **kwargs)
+
+    monkeypatch.setattr(containment.subprocess, "Popen", recording)
+    contained(_Leaf())
+    declared = {
+        "PATH": os.environ["PATH"],
+        "LD_PRELOAD": "/work/build/agent/preload.so",
+        "ALK_DECLARED": "a=b and ü",
+    }
+
+    result = containment.run(
+        [sys.executable, "-c", "import json, os; print(json.dumps(dict(os.environ)))"],
+        env=declared,
+        capture_output=True,
+        text=True,
+    )
+
+    assert gate_environments == [{}]
+    seen = json.loads(result.stdout)
+    assert {name: seen.get(name) for name in declared} == declared
+
+
+@pytest.mark.skipif(
+    not Path("/proc/self/environ").exists(), reason="reads the held gate's environment in /proc"
+)
+def test_the_held_gate_carries_no_caller_variable(contained):
+    held = []
+    contained(_Leaf(on_add=lambda pid: held.append(Path(f"/proc/{pid}/environ").read_bytes())))
+
+    process, _ = containment.popen(
+        ["true"], env={"PATH": os.environ["PATH"], "LD_PRELOAD": "/nowhere/preload.so"}
+    )
+
+    assert process.wait(5) == 0
+    assert held == [b""]
+
+
+def test_without_an_env_the_command_gets_the_harness_s_own(contained, monkeypatch):
+    monkeypatch.setenv("ALK_INHERITED", "yes")
+    contained(_Leaf())
+
+    result = containment.run(
+        [sys.executable, "-c", "import os; print(os.environ['ALK_INHERITED'])"],
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.stdout == "yes\n"
+
+
+def test_an_illegal_variable_name_is_refused_before_anything_starts(contained):
+    subtree = contained(_Leaf())
+
+    with pytest.raises(ValueError):
+        containment.popen(["true"], env={"A=B": "1"})
     assert subtree.made == 0
+
+
+def test_the_harness_never_judges_a_command_by_its_own_access(contained, monkeypatch):
+    # The harness's access(2) answers for svc-control with no capabilities. A command only the
+    # declared user can reach (its home, a 0700 repo folder) would look missing to it.
+    monkeypatch.setattr(os, "access", lambda *args, **kwargs: False)
+    monkeypatch.setattr(shutil, "which", lambda *args, **kwargs: None)
+    contained(_Leaf())
+
+    result = containment.run(["sh", "-c", "echo ran"], capture_output=True, text=True)
+
+    assert result.stdout == "ran\n"
+
+
+def test_a_leaf_that_cannot_be_made_leaves_no_descriptor_open(monkeypatch):
+    class Refusing:
+        def leaf(self):
+            raise OSError(errno.EBUSY, "cgroup busy")
+
+    monkeypatch.setattr(containment, "_containment", Refusing())
+    before = set(os.listdir("/dev/fd"))
+
+    with pytest.raises(OSError, match="cgroup busy"):
+        containment.popen(["true"])
+
+    assert set(os.listdir("/dev/fd")) == before
 
 
 def test_without_containment_a_process_starts_as_it_always_did():

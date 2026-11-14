@@ -37,6 +37,12 @@ def _status(tmp_path: Path, capabilities: str) -> Path:
     return path
 
 
+def _hardlinks(tmp_path: Path, value: str = "1") -> Path:
+    path = tmp_path / "protected_hardlinks"
+    path.write_text(f"{value}\n", encoding="ascii")
+    return path
+
+
 # --- the mode ----------------------------------------------------------------------------------
 
 
@@ -50,6 +56,7 @@ def test_the_granted_capabilities_turn_on_per_user_isolation(tmp_path, monkeypat
     mode = privilege.establish_isolation(
         {privilege.ISOLATION_ENV: "required"},
         status_path=_status(tmp_path, _ALL),
+        protected_hardlinks=_hardlinks(tmp_path),
         contain=lambda: subtree,
     )
 
@@ -69,6 +76,7 @@ def test_a_required_isolation_without_containment_refuses_to_start(tmp_path, mon
         privilege.establish_isolation(
             {privilege.ISOLATION_ENV: "required"},
             status_path=_status(tmp_path, _ALL),
+            protected_hardlinks=_hardlinks(tmp_path),
             contain=lambda: None,
         )
 
@@ -83,11 +91,52 @@ def test_without_containment_or_a_request_it_runs_as_before_and_says_so(
     monkeypatch.setattr(privilege.os, "umask", lambda mask: pytest.fail("umask changed"))
 
     mode = privilege.establish_isolation(
-        {}, status_path=_status(tmp_path, _ALL), contain=lambda: None
+        {},
+        status_path=_status(tmp_path, _ALL),
+        protected_hardlinks=_hardlinks(tmp_path),
+        contain=lambda: None,
     )
 
     assert mode is IsolationMode.FIXED_USER
-    assert "per-user isolation is off" in caplog.text
+    assert "per-user isolation is off: no writable cgroup" in caplog.text
+
+
+@pytest.mark.parametrize("value", ["0", None], ids=["off", "unreadable"])
+def test_a_required_isolation_where_a_user_can_hard_link_any_file_refuses_to_start(
+    tmp_path, monkeypatch, value
+):
+    # The link-count checks before the harness acts on a user's file hold only with this on.
+    monkeypatch.setattr(
+        privilege, "_clear_ambient_capabilities", lambda: pytest.fail("isolation went on")
+    )
+    hardlinks = tmp_path / "absent" if value is None else _hardlinks(tmp_path, value)
+
+    with pytest.raises(IsolationUnavailable, match="process_isolation_unavailable: .*hard-link"):
+        privilege.establish_isolation(
+            {privilege.ISOLATION_ENV: "required"},
+            status_path=_status(tmp_path, _ALL),
+            protected_hardlinks=hardlinks,
+            contain=lambda: pytest.fail("a cgroup subtree was made"),
+        )
+
+
+def test_where_a_user_can_hard_link_any_file_it_runs_as_before_and_says_so(
+    tmp_path, monkeypatch, caplog
+):
+    monkeypatch.setattr(
+        privilege, "_clear_ambient_capabilities", lambda: pytest.fail("isolation went on")
+    )
+    subtree = privilege.containment.Containment(tmp_path / "cgroup")
+
+    mode = privilege.establish_isolation(
+        {},
+        status_path=_status(tmp_path, _ALL),
+        protected_hardlinks=_hardlinks(tmp_path, "0"),
+        contain=lambda: subtree,
+    )
+
+    assert mode is IsolationMode.FIXED_USER
+    assert "fs.protected_hardlinks is not 1" in caplog.text
 
 
 @pytest.mark.parametrize("capabilities", ["0000000000000000", "00000000000000c0"])

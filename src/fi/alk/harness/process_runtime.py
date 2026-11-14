@@ -6831,8 +6831,10 @@ class ProcessRuntimeProvider:
             or datetime.fromtimestamp(time.time() + 7200, tz=timezone.utc),
         )
         context_path = lifecycle_directory / "context.json"
-        context_path.write_text(context.model_dump_json(indent=2), encoding="utf-8")
-        context_path.chmod(0o600)
+        # After the first provision the folder is the lifecycle user's, and so is what it holds.
+        with user_files.open_log(context_path) as handle:
+            os.fchmod(handle.fileno(), 0o600)
+            handle.write(context.model_dump_json(indent=2).encode("utf-8"))
         secret_values = {
             name: self._secret_values.get(name, "") for name in spec.required_secrets
         }
@@ -6873,6 +6875,7 @@ class ProcessRuntimeProvider:
                 invocation.output_path,
                 context=context,
                 secret_values=secret_values,
+                beneath=lifecycle_directory,
             )
         except ProviderLifecycleError as exc:
             raise ProcessRuntimeError(

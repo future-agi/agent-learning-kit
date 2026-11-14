@@ -19,6 +19,7 @@ from typing import BinaryIO, Protocol
 
 # O_NONBLOCK: opening a FIFO blocks until the other end opens, and nobody ever would.
 _NO_LINK = os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC
+_DIRECTORY = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
 
 
 def _own_file(fd: int) -> bool:
@@ -51,17 +52,64 @@ def open_log(path: Path) -> BinaryIO:
     return os.fdopen(fd, "wb")
 
 
-def read_text(path: Path) -> str:
-    """The text of ``path``, which must be a regular file of its own, else ``OSError``."""
-    fd = os.open(path, os.O_RDONLY | _NO_LINK)
+def _folder(root: Path, relative: Path, *, create: bool) -> int:
+    """A descriptor of ``root / relative``. Every folder below ``root`` is opened from its parent's
+    descriptor and never through a link; ``create`` makes one that is missing."""
+    if relative.is_absolute() or ".." in relative.parts:
+        raise OSError(errno.EPERM, "not a path below its folder", str(relative))
+    fd = os.open(root, _DIRECTORY)
+    try:
+        for part in relative.parts:
+            if create:
+                try:
+                    os.mkdir(part, dir_fd=fd)
+                except FileExistsError:
+                    pass
+            child = os.open(part, _DIRECTORY, dir_fd=fd)
+            os.close(fd)
+            fd = child
+    except BaseException:
+        os.close(fd)
+        raise
+    return fd
+
+
+def _below(path: Path, beneath: Path) -> Path:
+    try:
+        return path.relative_to(beneath)
+    except ValueError as exc:
+        raise OSError(errno.EPERM, "not a path below its folder", str(path)) from exc
+
+
+def make_folders(path: Path, *, beneath: Path) -> None:
+    """Make ``path`` and the folders above it up to ``beneath``, never through a link."""
+    os.close(_folder(beneath, _below(path, beneath), create=True))
+
+
+def read_text(path: Path, *, beneath: Path | None = None, limit: int | None = None) -> str:
+    """The text of ``path``, which must be a regular file of its own, else ``OSError``.
+
+    With ``beneath``, a folder the harness trusts, every folder between it and the file is opened
+    by descriptor, never through a link. With ``limit``, a longer file is refused.
+    """
+    folder = None
+    if beneath is not None:
+        folder = _folder(beneath, _below(path, beneath).parent, create=False)
+    try:
+        fd = os.open(path if folder is None else path.name, os.O_RDONLY | _NO_LINK, dir_fd=folder)
+    finally:
+        if folder is not None:
+            os.close(folder)
     try:
         if not _own_file(fd):
             raise OSError(errno.EPERM, "not a regular file of its own", str(path))
         os.set_blocking(fd, True)
         with os.fdopen(fd, "rb", closefd=False) as handle:
-            data = handle.read()
+            data = handle.read() if limit is None else handle.read(limit + 1)
     finally:
         os.close(fd)
+    if limit is not None and len(data) > limit:
+        raise OSError(errno.EFBIG, f"longer than {limit} bytes", str(path))
     return data.decode("utf-8", errors="replace")
 
 

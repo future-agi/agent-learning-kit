@@ -5504,6 +5504,140 @@ def test_environment_backed_provider_is_created_exposed_and_destroyed(
     assert lifecycle_calls == ["provision", "destroy"]
 
 
+def _vapi_receipt(context: dict[str, Any]) -> str:
+    return json.dumps(
+        {
+            "schema_version": "1",
+            "provider": "vapi",
+            "attempt_id": context["attempt_id"],
+            "world_id": context["world_id"],
+            "target": {"kind": "assistant", "id": "asst-test"},
+            "resources": [{"kind": "assistant", "id": "asst-test", "owned": True}],
+            "cleanup": {
+                "receipt_version": "1",
+                "idempotency_key": context["idempotency_key"],
+            },
+        }
+    )
+
+
+def _lifecycle_provider(
+    tmp_path: Path, lifecycle_run: Callable[..., subprocess.CompletedProcess], output: str
+) -> tuple[Any, Any, Path, Path]:
+    manifest = _manifest(
+        lambda body: {
+            **body,
+            "metadata": {
+                "provider_lifecycle": {
+                    "type": "vapi",
+                    "scope": "world",
+                    "process": "agent",
+                    "public_capability": "tools",
+                    "provision": {"command": ["python", "provider.py", "provision"]},
+                    "destroy": {"command": ["python", "provider.py", "destroy"]},
+                    "required_secrets": ["VAPI_API_KEY"],
+                    "output": output,
+                }
+            },
+        }
+    )
+    source, bundle_dir = _provision_dirs(tmp_path)
+    (source / "provider.py").write_text("# lifecycle", encoding="utf-8")
+    secrets_path = tmp_path / "secrets.json"
+    secrets_path.write_text(json.dumps({"VAPI_API_KEY": "test-secret"}), encoding="utf-8")
+    provider = _sql_spy_provider(
+        secrets_path=secrets_path,
+        secret_purpose_map={"VAPI_API_KEY": "target_provider"},
+        sync_run=lifecycle_run,
+        public_url_resolver=lambda port, _ttl: f"https://signed.example/{port}",
+    )
+    return provider, manifest, source, bundle_dir
+
+
+def _provision_one(provider: Any, manifest: Any, source: Path, bundle_dir: Path, work: Path):
+    return asyncio.run(
+        provider.provision(
+            manifest,
+            source=source,
+            bundle_dir=bundle_dir,
+            work_directory=work,
+            instances=1,
+            require_declared_user=False,
+        )
+    )
+
+
+def test_a_nested_receipt_is_read_below_its_lifecycle_folder(tmp_path: Path) -> None:
+    def lifecycle_run(argv: list[str], **kwargs: Any) -> subprocess.CompletedProcess:
+        if argv[-1] == "provision":
+            context = json.loads(Path(kwargs["env"]["ALK_PROVIDER_CONTEXT"]).read_text())
+            Path(kwargs["env"]["ALK_PROVIDER_OUTPUT"]).write_text(_vapi_receipt(context))
+        return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+
+    provider, manifest, source, bundle_dir = _lifecycle_provider(
+        tmp_path, lifecycle_run, "receipts/deep/provider-target.json"
+    )
+
+    runtimes = _provision_one(provider, manifest, source, bundle_dir, tmp_path)
+
+    assert runtimes[0].metadata["provider_target_id"] == "asst-test"
+    asyncio.run(provider.close(work_directory=tmp_path))
+
+
+def test_a_receipt_reached_through_a_linked_folder_is_refused(tmp_path: Path) -> None:
+    # The lifecycle command owns the folders below its lifecycle folder: it swaps one for a link
+    # to a valid receipt of its choosing elsewhere.
+    elsewhere = tmp_path / "elsewhere"
+
+    def lifecycle_run(argv: list[str], **kwargs: Any) -> subprocess.CompletedProcess:
+        if argv[-1] == "provision":
+            context = json.loads(Path(kwargs["env"]["ALK_PROVIDER_CONTEXT"]).read_text())
+            output = Path(kwargs["env"]["ALK_PROVIDER_OUTPUT"])
+            (elsewhere / "deep").mkdir(parents=True)
+            (elsewhere / "deep" / output.name).write_text(_vapi_receipt(context))
+            receipts = output.parent.parent
+            receipts.rename(tmp_path / "receipts-moved")
+            receipts.symlink_to(elsewhere, target_is_directory=True)
+        return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+
+    provider, manifest, source, bundle_dir = _lifecycle_provider(
+        tmp_path, lifecycle_run, "receipts/deep/provider-target.json"
+    )
+
+    with pytest.raises(pr.ProcessRuntimeError, match="provider_provision_receipt_invalid"):
+        _provision_one(provider, manifest, source, bundle_dir, tmp_path)
+
+
+def test_a_re_provision_never_writes_its_context_through_a_link(tmp_path: Path) -> None:
+    # After the first provision the lifecycle folder is the lifecycle user's. A process of that
+    # user can leave a link where the next provision writes its context.
+    held_back = tmp_path / "held-back.yaml"
+    held_back.write_text("held-back case\n", encoding="utf-8")
+
+    def lifecycle_run(argv: list[str], **kwargs: Any) -> subprocess.CompletedProcess:
+        if argv[-1] == "provision":
+            context = json.loads(Path(kwargs["env"]["ALK_PROVIDER_CONTEXT"]).read_text())
+            Path(kwargs["env"]["ALK_PROVIDER_OUTPUT"]).write_text(_vapi_receipt(context))
+        return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+
+    provider, manifest, source, bundle_dir = _lifecycle_provider(
+        tmp_path, lifecycle_run, "provider-target.json"
+    )
+    runtimes = _provision_one(provider, manifest, source, bundle_dir, tmp_path)
+    context_path = tmp_path / "provider" / "w0" / "context.json"
+    provider._destroy_provider_target(0)
+    context_path.unlink()
+    context_path.symlink_to(held_back)
+
+    provider._ensure_provider_target(0, runtimes[0])
+
+    assert held_back.read_text(encoding="utf-8") == "held-back case\n"
+    assert not context_path.is_symlink()
+    assert stat.S_IMODE(context_path.stat().st_mode) == 0o600
+    assert json.loads(context_path.read_text())["world_id"] == "0"
+    asyncio.run(provider.close(work_directory=tmp_path))
+
+
 def test_provider_provision_failure_surfaces_redacted_provider_output(
     tmp_path: Path,
 ) -> None:
