@@ -169,3 +169,49 @@ def test_every_tool_def_is_at_the_builder_s_top_level(monkeypatch) -> None:
     )
     monkeypatch.setenv("RETURNS_FAULT", "skip_refund_check")
     corpus.test_returns_reference_declares_the_workers_and_tools_its_app_builds()
+
+
+class _Answer:
+    def __init__(self, body: bytes) -> None:
+        self._body = body
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_exc) -> None:
+        return None
+
+    def read(self) -> bytes:
+        return self._body
+
+
+@pytest.mark.parametrize("fault", ["refund_never_returns", "payment_times_out"])
+def test_hang_fault_skips_certify_probes(monkeypatch, fault: str) -> None:
+    """A probe turn (no scenario-call header) reaches the ledger at once; a scenario call turn waits and fails."""
+    module_ref = {}
+
+    class _Runner:
+        @staticmethod
+        async def run(_agent, _conversation):
+            # As the pinned SDK runs a sync tool: in a thread that copies the turn's context.
+            text = await asyncio.to_thread(module_ref["m"].REFUND.tools[1], "1043", 89.0)
+            return types.SimpleNamespace(final_output=text)
+
+    module = _agent_module(monkeypatch, fault=fault, hang="0", runner=_Runner)
+    module_ref["m"] = module
+    monkeypatch.setenv("REFUND_API_URL", "http://refund-channel")
+    monkeypatch.setattr(
+        module.urllib.request, "urlopen", lambda *_a, **_k: _Answer(b'{"refund_id": "RF-9"}')
+    )
+    probe = module.reply([{"role": "user", "content": "Hello"}], scenario_call=False)
+    assert json.loads(probe) == {"refund_id": "RF-9"}
+    scenario = module.reply([{"role": "user", "content": "refund"}], scenario_call=True)
+    assert "error" in json.loads(scenario)
+
+
+def test_the_scenario_call_header_reaches_the_agent_s_request_headers() -> None:
+    from fi.alk.harness.chat_call_runner import SCENARIO_CALL_HEADER
+
+    agent = (APP / "agent.py").read_text(encoding="utf-8")
+    # The fixture reads the same header the harness sends on scenario calls.
+    assert f'SCENARIO_CALL_HEADER = "{SCENARIO_CALL_HEADER}"' in agent

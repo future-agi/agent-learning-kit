@@ -23,7 +23,9 @@ Environment it reads, by name:
     RETURNS_FAULT      optional, comma-separated deliberate defects for negative controls (see README.md):
                        skip_refund_check, payment_times_out, refund_never_returns, bypass_channel.
     RETURNS_HANG_SECONDS
-                       optional. How long payment_times_out and refund_never_returns wait. Default 20.
+                       optional. How long payment_times_out and refund_never_returns wait. Default 20. Both wait
+                       only on a scenario call (the harness's X-ALK-Scenario-Call header), never on a readiness or
+                       certification probe, so a version with either fault still certifies.
     RETURNS_TRACING    optional. `off` exports no spans even when an OTLP endpoint is set.
     OTEL_EXPORTER_OTLP_TRACES_ENDPOINT or OTEL_EXPORTER_OTLP_ENDPOINT
                        when present (the platform sets the first with the trace export), each turn's agent, hand-off
@@ -33,6 +35,7 @@ Environment it reads, by name:
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import threading
 import json
 import os
@@ -48,6 +51,15 @@ FAULTS = frozenset(one.strip() for one in os.environ.get("RETURNS_FAULT", "").sp
 HANG_SECONDS = float(os.environ.get("RETURNS_HANG_SECONDS") or 20)
 # An event, not a sleep, so a test can release a waiting tool with `_HANG.set()`.
 _HANG = threading.Event()
+# The harness sends this on every scenario call's turn and never on a readiness or certification probe.
+SCENARIO_CALL_HEADER = "X-ALK-Scenario-Call"
+# Whether this turn is a scenario call: the hang faults wait only on one. True outside a request (a tool called
+# directly), so the switch reads as it always did there.
+_SCENARIO_CALL: contextvars.ContextVar[bool] = contextvars.ContextVar("scenario_call", default=True)
+
+
+def _hangs() -> bool:
+    return _SCENARIO_CALL.get()
 
 # --- each worker's own client for the returns ledger (ledger.py) ---------------------------------------------------
 
@@ -105,10 +117,10 @@ def _refund_tools() -> list[Any]:
     @function_tool
     def issue_refund(order_id: str, amount: float) -> str:
         """Issue a refund for the order. The ledger does not check for an existing refund."""
-        if "payment_times_out" in FAULTS:
+        if "payment_times_out" in FAULTS and _hangs():
             _HANG.wait(HANG_SECONDS)
             return json.dumps({"error": "payment service timed out"})
-        if "refund_never_returns" in FAULTS:
+        if "refund_never_returns" in FAULTS and _hangs():
             _HANG.wait(HANG_SECONDS)
             return json.dumps({"error": "payment service did not answer"})
         return call("/refunds/issue", {"order_id": order_id, "amount": amount})
@@ -220,14 +232,20 @@ def _loop() -> asyncio.AbstractEventLoop:
     return _LOOP
 
 
-def reply(messages: list[dict[str, Any]]) -> str:
+async def _turn(conversation: list[dict[str, str]], scenario_call: bool) -> Any:
+    # Set inside the turn's own task: the tools it runs (in threads that copy its context) read it.
+    _SCENARIO_CALL.set(scenario_call)
+    return await Runner.run(COORDINATOR, conversation)
+
+
+def reply(messages: list[dict[str, Any]], scenario_call: bool = True) -> str:
     conversation = [
         {"role": one.get("role", "user"), "content": str(one.get("content") or "")}
         for one in messages
         if one.get("role") in ("user", "assistant")
     ]
     # Every turn on the one loop: the model client keeps connections bound to the loop it first ran on.
-    result = asyncio.run_coroutine_threadsafe(Runner.run(COORDINATOR, conversation), _loop()).result()
+    result = asyncio.run_coroutine_threadsafe(_turn(conversation, scenario_call), _loop()).result()
     return str(result.final_output or "")
 
 
@@ -252,7 +270,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         try:
             request = json.loads(self.rfile.read(int(self.headers.get("Content-Length") or 0)) or b"{}")
-            text = reply(request.get("messages") or [])
+            text = reply(request.get("messages") or [], scenario_call=bool(self.headers.get(SCENARIO_CALL_HEADER)))
         except Exception as error:  # noqa: BLE001 - every failure becomes a 500 the caller can read
             self._send(500, {"error": f"{type(error).__name__}: {error}"})
             return

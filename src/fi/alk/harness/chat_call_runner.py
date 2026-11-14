@@ -125,6 +125,11 @@ def _unproxied_worker_notices(document: Mapping[str, Any], bundle_dir: Any = Non
     }]
 
 
+# Sent on every scenario call's chat turn, never on a readiness or certification probe, so an app (a test fixture's
+# deliberate fault) can tell the two apart.
+SCENARIO_CALL_HEADER = "X-ALK-Scenario-Call"
+
+
 def _chat_target_timeout_seconds() -> float:
     """Return the per-turn target deadline without accepting unusable values."""
     raw = os.getenv("ALK_CHAT_TARGET_TIMEOUT_SECONDS", "").strip()
@@ -922,6 +927,8 @@ class HostedChatCallRunner:
                 "target": "hosted_repository_runtime",
                 "scenario": scenario.scenario_key,
             },
+            # Tells the agent this turn is a scenario call, not a readiness or certification probe.
+            headers={SCENARIO_CALL_HEADER: "1"},
         )
         if hasattr(wrapper, "abandon_on_cancel"):
             # A stopped run's world is never reused: its call seals what it kept without waiting out the agent's reply.

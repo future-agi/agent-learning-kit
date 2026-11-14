@@ -10,4 +10,5 @@ Fault switches (`RETURNS_FAULT`, comma-separated, read once at import; unset mea
 `skip_refund_check` (the Refund worker has only `issue_refund` and the coordinator always asks for a refund),
 `payment_times_out` (`issue_refund` waits `RETURNS_HANG_SECONDS`, default 20, then returns a timeout error),
 `refund_never_returns` (`issue_refund` waits `RETURNS_HANG_SECONDS`; set it above the chat target timeout),
-`bypass_channel` (the Refund worker's client uses the shared address). `RETURNS_TRACING=off` exports no spans.
+`bypass_channel` (the Refund worker's client uses the shared address). The two waiting faults wait only on a
+scenario call (the harness's `X-ALK-Scenario-Call` header), never on a readiness or certification probe. `RETURNS_TRACING=off` exports no spans.
