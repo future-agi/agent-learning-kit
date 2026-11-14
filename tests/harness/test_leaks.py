@@ -100,6 +100,8 @@ def test_single_word_sub_goal_name_is_not_a_leak():
 def test_failure_message_is_not_grader_only():
     said = _catalogue(refund_once={"check": _check("if world.data['refunds']:\n    return None\nreturn 'no refund was issued'")})
     assert leaks(_case("I am worried no refund was issued."), said, None, WORLD) == []
+    raised = _catalogue(refund_once={"check": _check("if not world.data['refunds']:\n    raise AssertionError('no refund was issued')")})
+    assert leaks(_case("I am worried no refund was issued."), raised, None, WORLD) == []
     expected = _catalogue(refund_once={"check": _check("if world.data['total'] == '42.50 refunded':\n    return None\nreturn 'no'")})
     found = leaks(_case("It should say 42.50 refunded."), expected, None, WORLD)
     assert [one.grader_field for one in found] == ["check literal"]
