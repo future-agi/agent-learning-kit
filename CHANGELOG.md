@@ -58,6 +58,13 @@ Post-rc.1 increments on the release branch. Each one adds gates on top of the
   `on_tool` trigger waits for the action in full. An actor waiting for a record only it may write is refused when the
   scenario is written. A timeout another actor answers reads `answered_by` only once that actor has acted or spoken,
   else `limit_blocked` or `unresolved`.
+- World changes on every trial with a door, actors or not: every new world is seeded with the full action log, and
+  a trial whose tools run where no door stands seals `{"recorded": false, "why": "in_process_tools"}`. The runner
+  snapshots the world's tables at a trial's start and end (read-only, by primary key, `_alk_*` never compared,
+  tables over 5,000 rows or without a key named in `skipped`, at most 100 changes listed) and seals `records`
+  and `start` (`seeded`, `differs` with the tables, or `unknown`). A check that reads an unreadable action log
+  (`EvidenceUnavailable`) is unmeasured, never settled on an empty log; the scenario errors as
+  `evidence_unmeasured`.
 - Two more fault modes: `unavailable` (the world never sees the call; the agent hears 503 at once) and `error`
   (the scenario's `status` 400-599 and `message`). The door answers the agent's keyed retry (`Idempotency-Key`)
   from its first result, as it does an actor's; a fault before commit releases the key. A write the world commits
