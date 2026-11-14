@@ -1173,7 +1173,10 @@ def trial_shared_records(log: list[dict[str, Any]], contract: Any) -> list[dict[
     for row in log:
         if is_pre_run(row.get("idempotency_key")):
             continue
-        who = str(row.get("actor_id") or "") or (f"worker:{row['worker_id']}" if row.get("worker_id") else AGENT)
+        # As in `trial_state_changes`: the door writes actor_id "agent" for every agent-side row, workers included.
+        who = str(row.get("actor_id") or AGENT)
+        if who == AGENT and row.get("worker_id"):
+            who = f"worker:{row['worker_id']}"
         arguments = row.get("arguments")
         if not isinstance(arguments, Mapping):
             continue

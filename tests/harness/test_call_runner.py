@@ -3191,7 +3191,15 @@ _RETURNS_TOOLS = {
 
 
 def _row(tool: str, worker: str = "", outcome: str = "committed", **arguments: Any) -> dict[str, Any]:
-    return {"name": tool, "agent_tool": tool, "worker_id": worker, "arguments": arguments, "outcome": outcome}
+    # As the world door writes it: every agent-side row has actor_id "agent", a worker's row also its worker_id.
+    return {
+        "name": tool,
+        "agent_tool": tool,
+        "actor_id": "agent",
+        "worker_id": worker,
+        "arguments": arguments,
+        "outcome": outcome,
+    }
 
 
 def test_shared_records_list_two_participants_on_one_order() -> None:
