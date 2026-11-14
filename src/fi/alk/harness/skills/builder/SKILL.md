@@ -182,7 +182,8 @@ what the gates check. Then:
   the world's rule reads, and read every actor's list back against the request before you answer. When the agent's
   own app has no place for a decision the request asks for (no record its rule reads, no action that records it),
   say so plainly and ask how to proceed; never stand in for it by giving an actor the change the agent's own action
-  makes.
+  makes. A policy point you could not model goes in `note_unresolved`; drop it with `drop: true` once the
+  person settles it.
 - **Units**: when the person gives a field's unit or format (amounts in cents, a timeout in seconds), record it on
   each tool argument that carries it with `fix_tool`'s `arg_units`, as well as in the world's data. Check it against
   the code that reads the field and the data it holds first: when they disagree, the code wins, and you tell the

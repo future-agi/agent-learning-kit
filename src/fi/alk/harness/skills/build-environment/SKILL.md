@@ -752,6 +752,11 @@ nothing more: a decision is a record change on the collection the world's rule r
 it. Write the rule that reads the record into the world, so the agent's dependent action is refused until it exists.
 Before you save, read each actor's list against the request: every permission asked for is on someone's list.
 
+A policy point in the agent's material you cannot turn into an actor's permissions or knowledge (a rule with no
+record the world's rule reads, a rule with two readings, a decision no listed actor owns) is never dropped silently
+and never guessed: record it with `note_unresolved`, the rule in one sentence and why it is not modelled. The person
+sees each one above the cast as needing their decision, and accepts the cast as written or edits an actor for it.
+
 ## If the contract is wrong
 
 You will sometimes find the contract does not match the source: a tool recorded with the wrong

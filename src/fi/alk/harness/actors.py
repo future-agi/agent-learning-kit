@@ -196,9 +196,25 @@ class Actor(BaseModel):
         return self
 
 
+class Unresolved(BaseModel):
+    """A policy point the builder could not turn into an actor's permissions or knowledge: shown to the person above
+    the cast as needing their decision, until they accept the cast as written or edit an actor for it."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    # The policy as the agent's material states it, in a sentence.
+    policy: str = Field(min_length=1, max_length=500)
+    # Why it was not modelled: no record the world's rule reads, two readings of it, no actor it belongs to.
+    why: str = Field(min_length=1, max_length=500)
+    # The actor it is about, when there is one.
+    actor: str | None = Field(default=None, min_length=1)
+
+
 class ActorList(BaseModel):
     actors: list[Actor] = Field(default_factory=list)
     limits: Limits = Field(default_factory=Limits)
+    # Policy points the builder left for the person to decide when it proposed this cast.
+    unresolved: list[Unresolved] = Field(default_factory=list)
 
     @field_validator("actors")
     @classmethod

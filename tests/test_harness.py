@@ -9511,7 +9511,7 @@ def test_the_list_keeps_one_entry_per_call_actor_and_refuses_what_no_run_can_del
     from fi.alk.harness.call_actor import load_call_actors
     from fi.alk.harness.world.tools import world_actor_tools
 
-    add, drop = world_actor_tools(tmp_path, _contract(modality="voice"))
+    add, drop, _note = world_actor_tools(tmp_path, _contract(modality="voice"))
 
     def said(tool, args):
         out = asyncio.run(tool.handler(args))
