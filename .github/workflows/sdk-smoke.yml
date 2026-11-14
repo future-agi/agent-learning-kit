@@ -63,6 +63,7 @@ jobs:
           tests/test_call_originator_factory.py
           tests/test_retell_evidence.py
           tests/harness/test_process_runtime.py
+          tests/harness/test_multi_agent_compatibility_references.py
           tests/test_harness_sandbox_server.py
           --deselect tests/test_harness_sandbox_server.py::test_private_github_submission_becomes_hosted_job
           --deselect tests/test_harness_sandbox_server.py::test_public_github_branch_url_populates_job_ref

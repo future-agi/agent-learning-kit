@@ -1,3 +1,5 @@
+Compatibility evidence for three pinned upstream applications for multi-agent testing in CI. It is not a sample agent, not a template, and not a statement of which frameworks are supported.
+
 # Multi-agent compatibility references
 
 This corpus tests ALK against complete upstream multi-agent applications. ALK
@@ -32,7 +34,7 @@ names every nested agent. The verifier rejects a reduced Google topology.
 Run the offline contract check.
 
 ```bash
-python examples/harness/multi_agent_compatibility/verify_references.py
+python tests/fixtures/harness_agents/multi_agent_compatibility/verify_references.py
 ```
 
 The check validates pinned revisions, topology integrity, scenario ownership,
@@ -43,7 +45,7 @@ and the common evidence contract.
 Clone each pinned revision and extract its application directory.
 
 ```bash
-python examples/harness/multi_agent_compatibility/materialize_references.py \
+python tests/fixtures/harness_agents/multi_agent_compatibility/materialize_references.py \
   /tmp/multi-agent-references
 ```
 
@@ -57,7 +59,7 @@ Verify that each materialized tree still contains the orchestration recorded
 by its manifest.
 
 ```bash
-python examples/harness/multi_agent_compatibility/verify_references.py \
+python tests/fixtures/harness_agents/multi_agent_compatibility/verify_references.py \
   --source google-adk-travel-concierge=/tmp/multi-agent-references/google-adk-travel-concierge \
   --source langgraph-async-deep-agents=/tmp/multi-agent-references/langgraph-async-deep-agents \
   --source crewai-self-evaluation-flow=/tmp/multi-agent-references/crewai-self-evaluation-flow

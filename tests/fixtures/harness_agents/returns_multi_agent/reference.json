@@ -2,7 +2,7 @@
   "schema_version": "futureagi.multi-agent-reference.v1",
   "id": "returns-reference",
   "framework": {"name": "openai-agents", "version": "0.24.0"},
-  "source": {"path": "examples/harness/returns_reference", "license": "Apache-2.0"},
+  "source": {"path": "tests/fixtures/harness_agents/returns_multi_agent", "license": "Apache-2.0"},
   "runtime": {
     "kind": "http_service",
     "command": ["python", "agent.py"],
