@@ -215,3 +215,59 @@ def test_the_scenario_call_header_reaches_the_agent_s_request_headers() -> None:
     agent = (APP / "agent.py").read_text(encoding="utf-8")
     # The fixture reads the same header the harness sends on scenario calls.
     assert f'SCENARIO_CALL_HEADER = "{SCENARIO_CALL_HEADER}"' in agent
+
+
+def test_voice_entry_routes_to_the_same_coordinator(monkeypatch) -> None:
+    """Each spoken turn is answered by agent.py's `reply`, the one that runs `COORDINATOR`: no second topology."""
+    desk = _agent_module(monkeypatch)
+    monkeypatch.setitem(sys.modules, "agent", desk)
+    livekit = types.ModuleType("livekit")
+    agents = types.ModuleType("livekit.agents")
+    plugins = types.ModuleType("livekit.plugins")
+
+    class _VoiceAgent:
+        def __init__(self, **_fields):
+            pass
+
+    class _Server:
+        def rtc_session(self, **_fields):
+            return lambda function: function
+
+    agents.Agent = _VoiceAgent
+    agents.AgentServer = _Server
+    agents.AgentSession = object
+    agents.JobContext = object
+    agents.cli = types.SimpleNamespace(run_app=lambda _server: None)
+    for name in ("deepgram", "openai", "silero"):
+        setattr(plugins, name, types.SimpleNamespace())
+    for name, module in (("livekit", livekit), ("livekit.agents", agents), ("livekit.plugins", plugins)):
+        monkeypatch.setitem(sys.modules, name, module)
+    voice = _load("returns_fixture_voice", APP / "voice_agent.py")
+    assert voice.returns_desk is desk
+
+    asked = []
+
+    def _reply(messages):
+        asked.append(messages)
+        return "Refund RF-9 issued."
+
+    monkeypatch.setattr(desk, "reply", _reply)
+    said = types.SimpleNamespace
+    chat = said(
+        items=[
+            said(type="message", role="system", text_content="be brief"),
+            said(type="message", role="user", text_content="Refund order 1043"),
+            said(type="function_call", role=None, text_content=""),
+            said(type="message", role="assistant", text_content="Checking."),
+            said(type="message", role="user", text_content="Thanks"),
+        ]
+    )
+    answer = asyncio.run(voice.ReturnsVoiceAgent().llm_node(chat, [], None))
+    assert answer == "Refund RF-9 issued."
+    assert asked == [
+        [
+            {"role": "user", "content": "Refund order 1043"},
+            {"role": "assistant", "content": "Checking."},
+            {"role": "user", "content": "Thanks"},
+        ]
+    ]

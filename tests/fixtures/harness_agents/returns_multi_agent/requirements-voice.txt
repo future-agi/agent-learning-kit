@@ -1,0 +1,5 @@
+-r requirements.txt
+livekit-agents==1.6.9
+livekit-plugins-deepgram==1.6.10
+livekit-plugins-openai==1.6.10
+livekit-plugins-silero==1.6.10
