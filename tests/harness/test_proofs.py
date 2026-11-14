@@ -97,3 +97,10 @@ def test_lane_codes_never_hide_a_fault(monkeypatch, tmp_path):
 
     clean = module.prove(refund_case(), goals, tmp_path, contract=None, actors=[])
     assert clean.blocked_reason() == "solution_assumed" and clean.kept_as_written is True
+
+
+def test_why_names_the_block_not_the_lane(tmp_path):
+    record_proof(tmp_path, "k", Proof(ready=True, solvable=True, vacuous=False, assumed=["place_order"], controls=[]))
+    saved = load_proofs(tmp_path)["k"]
+    assert saved["blocked_reason"] == "no_negative_control"
+    assert saved["why"].startswith("no negative control")

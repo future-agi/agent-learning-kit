@@ -96,3 +96,11 @@ def test_unreadable_state_reads_change(monkeypatch, tmp_path):
     install(monkeypatch, unreadable=True)
     proof = module.prove(_refusal(), catalogue(no_refund=NO_REFUND, looked_up_o20=LOOKED_UP_O20), tmp_path)
     assert proof.outcome == "change"
+
+
+def test_assumed_write_never_reads_no_change(monkeypatch, tmp_path):
+    # The refund step never ran, so the unchanged world says nothing: the case is no refusal case.
+    install(monkeypatch, runtime_tools={"refund_order"})
+    proof = module.prove(refund_case(), catalogue(**REFUND_CATALOGUE), tmp_path, contract=None, actors=[])
+    assert proof.assumed == ["refund_order"]
+    assert proof.outcome == "change"

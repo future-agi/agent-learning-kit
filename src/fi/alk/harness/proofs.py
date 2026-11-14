@@ -54,7 +54,7 @@ def _entry(proof: Proof, solution_steps: int) -> dict[str, Any]:
         why = ""
     elif not proof.holds:
         why = proof.why()
-    elif proof.assumed:
+    elif proof.assumed and blocked == "solution_assumed":
         why = (
             "kept as written: these tools have no endpoint here, so their solution steps never ran: "
             + ", ".join(proof.assumed)

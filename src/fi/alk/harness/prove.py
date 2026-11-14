@@ -665,11 +665,13 @@ def _controls(
 
 def _outcome(scenario: Scenario, world_root: Path) -> str:
     """"no_change" when the reference leaves the world as doing nothing does; unreadable reads "change"."""
-    done, _, _, _ = _run(scenario, world_root, with_solution=True)
+    done, _, _, assumed = _run(scenario, world_root, with_solution=True)
     try:
         after = _end_state(done)
     finally:
         done.close()
+    if assumed:
+        return "change"
     nothing, _, _, _ = _run(scenario, world_root, with_solution=False)
     try:
         untouched = _end_state(nothing)
@@ -892,9 +894,14 @@ def prove(
     )
     # A refusal case: the reference leaves the world as doing nothing does. Its checks should hold on
     # an untouched world; what proves they can fail is a control performing the forbidden change.
+    # An assumed step never ran, so an unchanged world says nothing about what the solution does:
+    # it reads "change", as an unreadable state does, and its weak checks are not excused.
     proof.outcome = (
         "no_change"
-        if right_state is not None and untouched_state is not None and right_state == untouched_state
+        if not proof.assumed
+        and right_state is not None
+        and untouched_state is not None
+        and right_state == untouched_state
         else "change"
     )
     proof.controls = _controls(scenario, world_root, checks, reference)
