@@ -481,6 +481,22 @@ def test_an_overlay_claim_its_contract_ties_to_an_action_requires_tool_evidence(
     assert ss.load_scenarios(bundle)[0].requires_tool_evidence is True
 
 
+def test_the_catalogue_row_is_trusted_for_an_overlay_claim(tmp_path: Path) -> None:
+    # The rule's boundary: a claim whose row says it is settled by what was said is exempt even
+    # when the solution names a hand-over. Nothing else in the bundle tells it from a refusal.
+    bundle = _clinic_bundle(
+        tmp_path,
+        sub_goals=["caller_handed_over"],
+        overlay="emergency_crisis",
+        solution=[
+            {"tool": "get_clinic_info", "arguments": {}},
+            {"tool": "transfer_to_human", "arguments": {}},
+        ],
+        catalogue=[_said_only("caller_handed_over", "emergency_crisis")],
+    )
+    assert ss.load_scenarios(bundle)[0].requires_tool_evidence is False
+
+
 def test_a_name_the_overlay_holds_is_not_its_claim(tmp_path: Path) -> None:
     bundle = _clinic_bundle(
         tmp_path,

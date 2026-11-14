@@ -1876,25 +1876,76 @@ def test_a_strict_trace_file_read_fails_only_on_a_file_it_cannot_read(
         cr._collect_file_tool_calls(runtime, strict=True)
 
 
+class _NoTablePsycopg:
+    """Connects, then finds no `_alk_tool_trace` table, as a world whose seed never ran."""
+
+    class UndefinedTable(Exception):
+        sqlstate = "42P01"
+
+    def connect(self, dsn: str, **kwargs: Any) -> Any:
+        missing = self.UndefinedTable('relation "_alk_tool_trace" does not exist')
+
+        class Connection:
+            def execute(self, *_args: Any, **_kwargs: Any) -> Any:
+                raise missing
+
+            def __enter__(self) -> Any:
+                return self
+
+            def __exit__(self, *exc_info: Any) -> bool:
+                return False
+
+        return Connection()
+
+
 @pytest.mark.parametrize(
-    "seam,trace,database,failed",
+    "seam,trace,database,failed,captured",
     [
-        pytest.param(EvidenceSeam.HTTP_TOOL, "none", None, False, id="http-tool-empty"),
         pytest.param(
-            EvidenceSeam.HTTP_TOOL, "unreadable", None, True, id="trace-file-unreadable"
+            EvidenceSeam.HTTP_TOOL, "none", None, False, [], id="http-tool-empty"
         ),
         pytest.param(
-            EvidenceSeam.TOOL_TRACE, "none", "empty", False, id="tool-trace-empty"
+            EvidenceSeam.HTTP_TOOL,
+            "unreadable",
+            None,
+            True,
+            [],
+            id="trace-file-unreadable",
         ),
         pytest.param(
-            EvidenceSeam.TOOL_TRACE, "none", "down", True, id="tool-trace-read-failed"
+            EvidenceSeam.TOOL_TRACE, "none", "empty", False, [], id="tool-trace-empty"
+        ),
+        pytest.param(
+            EvidenceSeam.TOOL_TRACE,
+            "none",
+            "down",
+            True,
+            [],
+            id="tool-trace-connection-refused",
+        ),
+        pytest.param(
+            EvidenceSeam.TOOL_TRACE,
+            "none",
+            "no-table",
+            True,
+            [],
+            id="tool-trace-table-missing",
         ),
         pytest.param(
             EvidenceSeam.TOOL_TRACE,
             "unreadable",
             "rows",
             False,
+            ["lookup"],
             id="trace-file-unreadable-but-the-seam-captured",
+        ),
+        pytest.param(
+            EvidenceSeam.TOOL_TRACE,
+            "spans",
+            "down",
+            False,
+            ["ask_writer", "draft_note"],
+            id="span-lines-with-the-database-down",
         ),
     ],
 )
@@ -1905,6 +1956,7 @@ def test_a_completed_call_says_whether_its_tool_capture_failed(
     trace: str,
     database: str | None,
     failed: bool,
+    captured: list[str],
 ) -> None:
     _job_obj, context = _context(tmp_path=tmp_path, evidence_seam=seam)
     _write_scenario_doc(context.bundle_dir, scenario_key="k1")
@@ -1912,6 +1964,8 @@ def test_a_completed_call_says_whether_its_tool_capture_failed(
     columns = ["name", "arguments", "result", "ok", "error", "at"]
     if database == "down":
         monkeypatch.setitem(sys.modules, "psycopg", _RaisingPsycopg())
+    elif database == "no-table":
+        monkeypatch.setitem(sys.modules, "psycopg", _NoTablePsycopg())
     elif database is not None:
         rows = [("lookup", {}, "ok", True, "", 1.0)] if database == "rows" else []
         monkeypatch.setitem(sys.modules, "psycopg", _FakePsycopg(rows, columns))
@@ -1927,6 +1981,8 @@ def test_a_completed_call_says_whether_its_tool_capture_failed(
         if trace == "unreadable":
             _trace_lines(trace_path, {"name": "lookup", "arguments": {}})
             monkeypatch.setattr(type(trace_path), "read_text", read_unless_refused)
+        elif trace == "spans":
+            _trace_lines(trace_path, *_SPAN_LINES)
         return _report()
 
     runner = cr.CallRunnerImpl(FakeAdapter(), context, place_call=place_call)
@@ -1943,9 +1999,7 @@ def test_a_completed_call_says_whether_its_tool_capture_failed(
     )
 
     assert outcome.tool_capture_failed is failed
-    assert [call.name for call in outcome.calls] == (
-        ["lookup"] if database == "rows" else []
-    )
+    assert [call.name for call in outcome.calls] == captured
 
 
 def test_tool_trace_result_string_form_is_truncated_at_2000_chars(monkeypatch) -> None:

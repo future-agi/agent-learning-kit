@@ -2192,9 +2192,13 @@ class CallRunnerImpl:
                 list(_collect_http_tool_calls(runtime)), from_spans
             )
         elif seam is EvidenceSeam.TOOL_TRACE:
-            calls = _merge_span_calls(
-                list(_collect_tool_trace_calls(runtime, strict=True)), from_spans
-            )
+            # The bundle's seed creates the table, so a missing one is a failed capture too. The
+            # file's span lines still count when the database cannot be read.
+            try:
+                seam_calls = _collect_tool_trace_calls(runtime, strict=True)
+            except ToolCaptureFailed as exc:
+                seam_calls, unread = (), unread or exc
+            calls = _merge_span_calls(list(seam_calls), from_spans)
         else:
             # Unrecognized/None (should not happen for a `kind: process` bundle past preflight --
             # bundle_v2.py requires `evidence_seam` whenever `kind is PROCESS` -- but degrading
