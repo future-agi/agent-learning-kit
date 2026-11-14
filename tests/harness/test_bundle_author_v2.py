@@ -1699,6 +1699,27 @@ def test_native_multi_store_contract_uses_source_compose_dependency_topology(
     assert plan.capabilities["cache_redis"].service == "cache"
 
 
+def test_a_compose_selected_python_agent_is_observed_for_its_hand_offs(tmp_path: Path, monkeypatch) -> None:
+    """Hand-offs and each worker's tool calls are read from the agent's framework spans in the sandbox; an app shipped
+    with a Compose file must get that observation as a native one does."""
+    plans = []
+    real = resolve_environment_plan
+
+    def keep(*args, **kwargs):
+        plans.append(real(*args, **kwargs))
+        return plans[-1]
+
+    monkeypatch.setitem(globals(), "resolve_environment_plan", keep)
+    test_native_multi_store_contract_uses_source_compose_dependency_topology(tmp_path)
+    (plan,) = plans
+    assert plan.packaging == "compose"
+    agent = next(process for process in plan.processes if process.name == "agent")
+    assert agent.environment["ALK_OBSERVE_FRAMEWORKS"] == "1"
+    assert agent.environment["HARNESS_TOOL_TRACE"] == "{{WORLD_DIR}}/agent-tool-calls.jsonl"
+    assert "ALK_TOOL_TRACE_BINDINGS" not in agent.environment
+    assert any("framework instrumentors" in " ".join(command) for command in agent.build_commands)
+
+
 def test_native_multi_store_contract_accepts_compose_list_environment(
     tmp_path: Path,
 ) -> None:

@@ -3165,16 +3165,15 @@ def resolve_environment_plan(
         for process in normalized_processes
     ]
 
-    # A voice agent's tool calls are traced by its LiveKit worker, never twice.
-    if (
-        not isinstance(selected, ComposeSelection)
-        and runtime_model.command
-        and str(contract_modality or "").strip().lower() != "voice"
-    ):
+    # A voice agent's tool calls are traced by its LiveKit worker, never twice. A Compose-selected agent gets the
+    # framework observation too (its hand-offs and per-worker tool calls), but not import-mode tool bindings.
+    if runtime_model.command and str(contract_modality or "").strip().lower() != "voice":
         trace_environment = _source_tool_trace_environment(
             root,
             runtime_model,
-            (tool_entrypoints or []) if contract_interface_kind == "command" else [],
+            (tool_entrypoints or [])
+            if contract_interface_kind == "command" and not isinstance(selected, ComposeSelection)
+            else [],
         )
         if trace_environment:
             processes = [
