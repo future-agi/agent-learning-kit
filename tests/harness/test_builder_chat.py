@@ -2198,3 +2198,26 @@ def test_a_folder_a_run_cannot_load_keeps_its_sealed_version(tmp_path):
 
     assert json.loads((staging / "scenarios" / "broken" / "scenario.json").read_text())["v"] == 1
     assert (staging / "scenarios" / "good").is_dir()
+
+
+def test_publish_sends_at_most_the_platform_limit_of_failed_scenarios():
+    from types import SimpleNamespace
+
+    body = _capabilities().model_dump(mode="json")
+    body["endpoints"]["publish"] = body["endpoints"]["run_status"].replace("run-status", "publish")
+    sent = []
+
+    class Transport:
+        def request(self, method, url, **kwargs):
+            sent.append(kwargs.get("json_body"))
+            return SimpleNamespace(status_code=200, body={"applied": True})
+
+    client = ConversationClient(ConversationCapabilities.model_validate(body), transport=Transport())
+    failed = [{"scenario_key": f"case-{one}", "reason": "bad check"} for one in range(250)]
+
+    asyncio.run(client.publish("sha256:abc", failed_scenarios=failed))
+    asyncio.run(client.publish("sha256:abc"))
+
+    assert len(sent[0]["failed_scenarios"]) == 200
+    assert sent[0]["failed_scenarios"][0] == {"scenario_key": "case-0", "reason": "bad check"}
+    assert "failed_scenarios" not in sent[1]
