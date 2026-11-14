@@ -30,6 +30,7 @@ GRADER_ONLY_FIELDS = (
     "sub_goal.check (compared literals)",
     "scenario.tests",
     "scenario.negative_controls",
+    "scenario.solution (argument values)",
     "evaluator_only files",
 )
 # What each audience is given.
@@ -129,6 +130,22 @@ def _check_literals(source: str) -> set[str]:
     return found
 
 
+def _solution_literals(scenario: Any) -> set[str]:
+    """Argument values of the reference steps a caller would not know: strings with a digit or 3+
+    tokens, and decimal numbers. Values the caller already holds are dropped by the caller."""
+    found: set[str] = set()
+    for step in getattr(scenario, "solution", None) or []:
+        for value in (getattr(step, "arguments", None) or {}).values():
+            if isinstance(value, bool):
+                continue
+            if isinstance(value, str) and not value.startswith("$"):
+                if any(ch.isdigit() for ch in value) or len(_tokens(value)) >= 3:
+                    found.add(value)
+            elif isinstance(value, float):
+                found.add(f"{value:.2f}" if round(value, 2) == value else repr(value))
+    return found
+
+
 def _strings(value: Any) -> Iterable[str]:
     if isinstance(value, str):
         yield value
@@ -216,6 +233,15 @@ def leaks(
     variables = getattr(scenario, "variables", None) or {}
     instruction = str(getattr(scenario, "instruction", "") or "")
     initial = str((persona_values or {}).get("initial_message") or "")
+    # The caller's own facts (their variables, persona, instruction and the records the world holds)
+    # are theirs to say; any other value the reference sends is the answer.
+    caller_text = [instruction, *_strings(variables)]
+    caller_text += [
+        text for key, value in (persona_values or {}).items() if key != "initial_message" for text in _strings(value)
+    ]
+    if rule_b:
+        caller_text += world_text
+    answers = {one for one in _solution_literals(scenario) if not _in_world(one, caller_text)}
     visible: list[tuple[str, str, str]] = [("simulated person", "instruction", instruction)]
     visible += [("simulated person", f"variables.{key}", text) for key, value in variables.items() for text in _strings(value)]
     visible += [
@@ -266,6 +292,10 @@ def leaks(
                 needle = _tokens(literal)
                 if _contains(tokens, needle) >= 0:
                     add(who, field_name, "check literal", _excerpt(needle))
+        for answer in sorted(answers):
+            needle = _tokens(answer)
+            if _contains(tokens, needle) >= 0:
+                add(who, field_name, "scenario.solution", _excerpt(needle))
         for name in names:
             needle = _tokens(name)
             if len(needle) >= 2 and _contains(tokens, needle) >= 0:

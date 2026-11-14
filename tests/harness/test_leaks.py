@@ -105,3 +105,35 @@ def test_failure_message_is_not_grader_only():
     expected = _catalogue(refund_once={"check": _check("if world.data['total'] == '42.50 refunded':\n    return None\nreturn 'no'")})
     found = leaks(_case("It should say 42.50 refunded."), expected, None, WORLD)
     assert [one.grader_field for one in found] == ["check literal"]
+
+
+def _step(tool, **arguments):
+    return SimpleNamespace(tool=tool, arguments=arguments)
+
+
+def test_solution_argument_in_the_opening_is_a_leak():
+    from fi.alk.harness.leaks import GRADER_ONLY_FIELDS
+
+    assert "scenario.solution (argument values)" in GRADER_ONLY_FIELDS
+    catalogue = _catalogue(refund_once={"what": "The agent refunds the order."})
+    case = _case(
+        "Ask for your money back.",
+        persona={"name": "Asha", "initial_message": "Please refund 37.25 as store credit for my order."},
+        solution=[_step("refund_order", order_id="O-123", amount=37.25)],
+    )
+    found = leaks(case, catalogue, None, WORLD)
+    assert [(one.who, one.field, one.grader_field, one.excerpt) for one in found] == [
+        ("simulated person", "persona.initial_message", "scenario.solution", "37.25"),
+        ("tested agent", "persona.initial_message", "scenario.solution", "37.25"),
+    ]
+
+
+def test_customer_fact_in_both_is_not_a_leak():
+    catalogue = _catalogue(refund_once={"what": "The agent refunds the order."})
+    case = _case(
+        "Ask for your money back for the order on your receipt.",
+        variables={"receipt": "RX-4417"},
+        persona={"name": "Asha", "initial_message": "Hi, my receipt number is RX-4417."},
+        solution=[_step("refund_order", receipt="RX-4417", note="the customer asked nicely today")],
+    )
+    assert leaks(case, catalogue, None, WORLD) == []
