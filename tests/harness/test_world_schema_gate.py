@@ -190,15 +190,17 @@ def test_save_world_refuses_an_array_cell_the_seed_cannot_read(tmp_path):
     assert not (tmp_path / "world.sqlite").exists()
 
 
-def _json_world(tmp_path, world_type="TEXT"):
+def _json_world(
+    tmp_path,
+    world_type="TEXT",
+    schema="CREATE TABLE users (rider_id TEXT PRIMARY KEY, profile JSONB);\n",
+):
     """A world as a repository agent leaves it at authoring: its own ``db/schema.sql`` types
     ``users.profile`` jsonb, the world copied it as TEXT, and the recorded source model has
     no tables, since the seed-time model is read from a running database only at validation."""
     agent = tmp_path / "agent"
     (agent / "db").mkdir(parents=True)
-    (agent / "db" / "schema.sql").write_text(
-        "CREATE TABLE users (rider_id TEXT PRIMARY KEY, profile JSONB);\n"
-    )
+    (agent / "db" / "schema.sql").write_text(schema)
     return _array_world(
         tmp_path,
         tables=(),
@@ -295,3 +297,70 @@ def test_save_world_keeps_what_a_json_column_may_hold(tmp_path, profile):
         imported = import_sqlite_world(connection, _seed_time_model())
     expected = "gold" if profile == '"gold"' else profile
     assert imported.world.tables[0].rows[0].values["profile"].value == expected
+
+
+def test_save_world_refuses_a_literal_json_has_no_form_for(tmp_path):
+    call = _json_world(tmp_path)
+    # A legacy Python literal parses, here to a set inside a list, which JSON cannot hold.
+    assert not call(
+        "seed", {"table": "users", "rows": [{"rider_id": "r1", "profile": "[{1, 2}]"}]}
+    ).get("is_error")
+
+    refused = call("save_world", {})
+
+    assert refused["is_error"]
+    assert "users.profile" in refused["content"][0]["text"]
+    assert not (tmp_path / "world.sqlite").exists()
+
+
+@pytest.mark.parametrize(
+    ("schema", "json_columns"),
+    [
+        # A JSON column whose default is a JSON list is JSON, not an array.
+        ("CREATE TABLE meta (key TEXT, tags JSONB DEFAULT '[]'::jsonb);", [("meta", "tags")]),
+        ("CREATE TABLE public.meta (key TEXT, value JSONB);", [("meta", "value")]),
+        ('CREATE TABLE "public"."meta" (key TEXT, value JSON);', [("meta", "value")]),
+        (
+            "CREATE TABLE meta (key TEXT);\n"
+            "ALTER TABLE ONLY public.meta ADD COLUMN IF NOT EXISTS value JSONB NOT NULL,\n"
+            "  ADD extra json, ADD CONSTRAINT meta_key UNIQUE (key);",
+            [("meta", "extra"), ("meta", "value")],
+        ),
+        # A literal holding a parenthesis and a comment marker is not SQL.
+        (
+            "CREATE TABLE meta (note TEXT DEFAULT 'a) -- b', value JSONB);",
+            [("meta", "value")],
+        ),
+        # A genuine array of JSON values, and text whose default looks like a list.
+        ("CREATE TABLE meta (tags JSONB[], note TEXT DEFAULT '[]');", []),
+    ],
+)
+def test_declared_json_columns_reads_each_form_a_schema_declares_them_in(
+    tmp_path, schema, json_columns
+):
+    from fi.alk.harness.bundle_author_v2 import declared_json_columns
+
+    (tmp_path / "db").mkdir()
+    (tmp_path / "db" / "schema.sql").write_text(schema + "\n")
+
+    assert sorted(declared_json_columns(tmp_path)) == json_columns
+
+
+def test_save_world_refuses_bare_text_in_a_qualified_json_column_with_a_list_default(
+    tmp_path,
+):
+    call = _json_world(
+        tmp_path,
+        schema="CREATE TABLE public.users (rider_id TEXT PRIMARY KEY, "
+        "profile JSONB DEFAULT '[]'::jsonb);\n",
+    )
+    assert not call(
+        "seed",
+        {"table": "users", "rows": [{"rider_id": "r1", "profile": "2026-06-03"}]},
+    ).get("is_error")
+
+    refused = call("save_world", {})
+
+    assert refused["is_error"]
+    assert "users.profile" in refused["content"][0]["text"]
+    assert not (tmp_path / "world.sqlite").exists()

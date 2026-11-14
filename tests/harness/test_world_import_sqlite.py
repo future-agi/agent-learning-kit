@@ -529,3 +529,28 @@ def test_unreadable_json_columns_names_each_json_column_holding_bare_text() -> N
     # A text column may hold anything; a JSON column holding bare text is what the seed refuses.
     connection.execute("INSERT INTO users VALUES ('u2', '2026-06-03', 'plain')")
     assert unreadable_json_columns(connection, json_columns) == ["users.payload"]
+
+
+def test_json_value_refuses_a_literal_json_has_no_form_for() -> None:
+    from fi.alk.harness.world_import.sqlite import json_value
+
+    # A legacy Python literal parses, here to a set inside a list, which JSON cannot hold.
+    with pytest.raises(ValueError, match="json_value_invalid"):
+        json_value("[{1, 2}]")
+
+
+@pytest.mark.parametrize("order", [("null", "NULL"), ("NULL", "null")])
+def test_unreadable_json_columns_reads_every_value_whatever_the_collation(
+    order,
+) -> None:
+    from fi.alk.harness.world_import.sqlite import unreadable_json_columns
+
+    # NOCASE makes JSON null and the bare text NULL compare equal; only one is JSON.
+    connection = sqlite3.connect(":memory:")
+    connection.execute("CREATE TABLE users (id TEXT, payload TEXT COLLATE NOCASE)")
+    for at, value in enumerate(order):
+        connection.execute("INSERT INTO users VALUES (?, ?)", (f"u{at}", value))
+
+    assert unreadable_json_columns(connection, {("users", "payload")}) == [
+        "users.payload"
+    ]

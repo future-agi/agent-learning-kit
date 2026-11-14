@@ -13,6 +13,7 @@ import hashlib
 import json
 import math
 import sqlite3
+from collections import Counter
 from collections.abc import Iterable
 from datetime import datetime, timezone
 from enum import Enum
@@ -172,17 +173,22 @@ def json_value(value: Any) -> Any:
         expected=(dict, list, str, int, float, bool, type(None)),
         code="json_value_invalid",
     )
-    return _json_value(parsed)
+    try:
+        return _json_value(parsed)
+    except TypeError as exc:
+        # A legacy literal can parse to a value JSON has no form for, such as a set.
+        raise ValueError("json_value_invalid") from exc
 
 
-def unreadable_json_columns(
+def unreadable_json_values(
     connection: sqlite3.Connection, columns: Iterable[tuple[str, str]]
-) -> list[str]:
-    """The ``table.column`` of each of ``columns`` (JSON-typed, named without regard to
-    case) whose stored values the seed import would refuse, so a writer can refuse them
-    where they are written rather than when the world is imported much later."""
+) -> dict[str, Counter[Any]]:
+    """Each of ``columns`` (JSON-typed, named without regard to case) holding values the
+    seed import would refuse, as ``table.column``, with how many cells hold each such value.
+    Values are grouped byte for byte, not by the column's collation, so a refused value is
+    never hidden behind a readable one it only compares equal to (``NULL`` and ``null``)."""
     tables = {name.lower(): name for name in _sqlite_tables(connection)}
-    problems: list[str] = []
+    problems: dict[str, Counter[Any]] = {}
     for table_name, column_name in sorted(set(columns)):
         table = tables.get(table_name.lower())
         if table is None:
@@ -192,16 +198,28 @@ def unreadable_json_columns(
         if column is None:
             continue
         found = connection.execute(
-            f"SELECT DISTINCT {_identifier(column)} FROM {_identifier(table)} "
-            f"WHERE {_identifier(column)} IS NOT NULL"
+            f"SELECT {_identifier(column)}, COUNT(*) FROM {_identifier(table)} "
+            f"WHERE {_identifier(column)} IS NOT NULL "
+            f"GROUP BY {_identifier(column)} COLLATE BINARY"
         )
-        for (value,) in found:
+        refused: Counter[Any] = Counter()
+        for value, cells in found:
             try:
                 json_value(value)
             except ValueError:
-                problems.append(f"{table}.{column}")
-                break
+                refused[value] += cells
+        if refused:
+            problems[f"{table}.{column}"] = refused
     return problems
+
+
+def unreadable_json_columns(
+    connection: sqlite3.Connection, columns: Iterable[tuple[str, str]]
+) -> list[str]:
+    """The ``table.column`` of each of ``columns`` whose stored values the seed import would
+    refuse, so a writer can refuse them where they are written rather than when the world
+    is imported much later."""
+    return list(unreadable_json_values(connection, columns))
 
 
 def _postgres_array(text: str) -> list[str | None]:

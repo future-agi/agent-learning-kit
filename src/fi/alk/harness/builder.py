@@ -340,8 +340,10 @@ def world_change(
     verb = statement.strip().split(None, 1)[0].upper() if statement.strip() else ""
     if verb not in ("INSERT", "UPDATE", "DELETE") or ";" in statement.strip().rstrip(";"):
         return "Not changed: give exactly one INSERT, UPDATE or DELETE statement."
+    from collections import Counter
+
     from .bundle_author_v2 import declared_json_columns
-    from .world_import.sqlite import unreadable_json_columns
+    from .world_import.sqlite import unreadable_json_values
 
     json_columns = declared_json_columns(
         source_root, contract=contract.model_dump() if contract is not None else None
@@ -349,15 +351,16 @@ def world_change(
     connection = sqlite3.connect(out / "world.sqlite")
     try:
         connection.execute("PRAGMA foreign_keys = ON")
-        before = set(unreadable_json_columns(connection, json_columns))
+        before = unreadable_json_values(connection, json_columns)
         with connection:
             changed = connection.execute(statement).rowcount
-            # Checked before the commit, so a refused value never reaches the world; only what
-            # this statement broke is refused, not what the world already held.
+            # Checked before the commit, so a refused value never reaches the world. A column
+            # breaks when some refused value is held by more cells than before: a world that
+            # already held one can be repaired a cell at a time, but never given another.
             broke = [
-                found
-                for found in unreadable_json_columns(connection, json_columns)
-                if found not in before
+                column
+                for column, refused in unreadable_json_values(connection, json_columns).items()
+                if refused - before.get(column, Counter())
             ]
             if broke:
                 raise _NotJson(broke)
