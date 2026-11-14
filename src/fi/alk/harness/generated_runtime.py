@@ -14,6 +14,7 @@ import re
 import shlex
 import shutil
 import stat
+from collections.abc import Sequence
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
@@ -668,6 +669,82 @@ def select_python_extras(
             projects[0].resolve() != root.resolve() for projects in owners.values()
         ),
     )
+
+
+# A framework's distribution, and the traceAI instrumentor that marks its agent and tool spans, pinned.
+FRAMEWORK_INSTRUMENTORS = (
+    ("openai-agents", "traceai-openai-agents==0.1.7"),
+    ("langchain-core", "traceai-langchain==0.2.1"),
+    ("crewai", "traceai-crewai==0.1.10"),
+    ("google-adk", "traceai-google-adk==0.1.7"),
+    ("autogen-agentchat", "traceai-autogen==0.2.1"),
+    ("smolagents", "traceai-smolagents==0.1.6"),
+    ("claude-agent-sdk", "traceai-claude-agent-sdk==0.1.1"),
+    ("llama-index-core", "traceai-llamaindex==0.1.10"),
+    ("pydantic-ai-slim", "traceai-pydantic-ai==0.1.0"),
+    ("strands-agents", "traceai-strands==0.1.1"),
+    # A framework that makes its own spans through the OpenTelemetry API alone, as AutoGen Core
+    # does, has them recorded only once the SDK is there, at the API's own version.
+    ("opentelemetry-api", "opentelemetry-sdk"),
+)
+# Half the build step's default limit, so a stalled index skips the instrumentors and never fails the build.
+INSTRUMENTOR_INSTALL_SECONDS = 300
+
+
+def uv_run_project(command: Sequence[str] | None) -> str:
+    """The project a `uv run --project <dir>` command runs in, or "" for any other command."""
+    parts = list(command or [])
+    if parts[:2] != ["uv", "run"]:
+        return ""
+    for index, part in enumerate(parts):
+        if part == "--project" and index + 1 < len(parts):
+            return parts[index + 1]
+        if part.startswith("--project="):
+            return part.split("=", 1)[1]
+    return ""
+
+
+def framework_instrumentation_command(project: str = "") -> list[str]:
+    """Install the instrumentor of each agent framework the built environment holds.
+
+    Runs after the source's own install, in its interpreter, with every installed version pinned,
+    so the source's resolution never changes. An instrumentor that cannot be added in time is
+    reported as a warning and skipped: that framework's calls are then unobserved, and the build
+    still succeeds.
+    """
+    script = (
+        "import importlib.metadata as m, re, shutil, subprocess, sys, tempfile, time\n"
+        "n = lambda s: re.sub(r'[-_.]+', '-', s).lower()\n"
+        "have = {n(d.metadata['Name']): d.version for d in m.distributions() if d.metadata['Name']}\n"
+        f"want = [t if '==' in t else t + '==' + have[f] for f, t in {FRAMEWORK_INSTRUMENTORS!r} "
+        "if f in have and t.split('==')[0] not in have]\n"
+        "f = tempfile.NamedTemporaryFile(mode='w', suffix='.txt')\n"
+        "f.write(''.join(k + '==' + v + '\\n' for k, v in have.items())); f.flush()\n"
+        f"deadline = time.monotonic() + {INSTRUMENTOR_INSTALL_SECONDS}\n"
+        "pip = ['uv', 'pip', 'install', '--python', sys.executable] if shutil.which('uv') else [sys.executable, '-m', 'pip', 'install']\n"
+        "for t in want:\n"
+        "    try:\n"
+        "        failed = subprocess.run([*pip, '--constraint', f.name, t], timeout=max(1, deadline - time.monotonic())).returncode\n"
+        "    except (OSError, subprocess.TimeoutExpired) as e:\n"
+        "        failed = type(e).__name__\n"
+        "    if failed: print('warning: framework instrumentor not installed, its calls go unobserved: ' + t, file=sys.stderr)\n"
+    )
+    # A `uv run --project <dir>` agent runs in <dir>'s own environment, which `uv run` creates at start: create it now so
+    # the instrumentors land where the frameworks are; `uv run` keeps packages its lock does not name.
+    venv = f"{project.rstrip('/')}/.venv" if project else ".venv"
+    sync = (
+        f"uv sync --project {shlex.quote(project)} || echo 'warning: uv sync failed; instrumentors go to python3' >&2; "
+        if project
+        else ""
+    )
+    return [
+        "sh",
+        "-c",
+        sync
+        + f"if [ -x {venv}/bin/python ]; then p={venv}/bin/python; else p=python3; fi; "
+        '"$p" -c "$0" || echo "warning: framework instrumentors not installed" >&2',
+        script,
+    ]
 
 
 def supplemental_requirements_command(

@@ -21,7 +21,7 @@ from .call_runner import (
     CallRunnerContext,
     ToolCaptureFailed,
     _clear_file_tool_calls,
-    _collect_file_tool_calls,
+    _with_span_calls,
     _with_scenario_edits,
 )
 from .contract import AgentContract
@@ -36,7 +36,7 @@ from .usage import (
     failure_domain_for_code,
     simulator_funding,
 )
-from .world.runtime import Call, GeneratedWorld
+from .world.runtime import Call, GeneratedWorld, trace_row
 from .world.stores.postgres import AttachedPostgresStore
 
 logger = logging.getLogger(__name__)
@@ -615,13 +615,13 @@ class HostedChatCallRunner:
         # of returning tool requests over HTTP. These observed calls belong to the same attempt;
         # do not replay the tool through the generated world or fabricate evidence from text.
         try:
-            traced_calls = _collect_file_tool_calls(runtime, strict=True)
+            transcript.calls[:] = _with_span_calls(
+                transcript.calls, runtime, strict=True
+            )
             capture_failed = False
         except ToolCaptureFailed as exc:
             logger.warning("tool capture failed for %s: %s", scenario.scenario_key, exc)
-            traced_calls, capture_failed = (), True
-        if traced_calls and not transcript.calls:
-            transcript.calls.extend(traced_calls)
+            capture_failed = True
         # Calls returned over HTTP are recorded here as they run, so they are a full capture.
         capture_failed = capture_failed and not transcript.calls
 
@@ -634,19 +634,7 @@ class HostedChatCallRunner:
         calls = tuple(transcript.calls)
         if calls:
             tool_trace = "\n".join(
-                json.dumps(
-                    {
-                        "name": call.name,
-                        "arguments": call.arguments,
-                        "result": call.result,
-                        "ok": call.ok,
-                        "error": call.error,
-                        "refused": call.refused,
-                        "at": call.at,
-                    },
-                    sort_keys=True,
-                    default=str,
-                )
+                json.dumps(trace_row(call), sort_keys=True, default=str)
                 for call in calls
             ).encode("utf-8")
             await self._adapter.upload_artifact(

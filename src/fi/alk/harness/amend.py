@@ -150,6 +150,8 @@ def set_modality(
             False,
             f"{named!r} is not a modality. It is one of: {', '.join(known_modalities())}",
         )
+    if named == "browser":
+        return False, "browser agents aren't supported, so the type stays " + contract.modality + "."
     if not why.strip():
         return False, "say why: modality decides how every scenario is run"
     if named == contract.modality:
@@ -174,7 +176,6 @@ def set_modality(
         "voice": "a call placed to the agent where it is hosted, its own tools answered over a "
         "webhook",
         "chat": "a typed conversation, the agent reconstructed here from its contract",
-        "browser": "a browser the agent drives",
     }[named]
     return True, f"modality is now {named}. Every scenario will be run as {reached}."
 

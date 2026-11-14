@@ -136,6 +136,7 @@ def open_stage(
                 destination,
                 available_evals,
                 source_root=source.workdir() if source.kind == "repo" else None,
+                scan_root=source.workdir() if source.kind in {"repo", "github"} else None,
                 require_setup_contract=require_setup_contract
                 and source.kind == "repo",
             ),

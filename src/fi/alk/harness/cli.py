@@ -23,6 +23,7 @@ from . import observability
 from .build import open_stage as build_stage
 from .build import opening as build_opening
 from .build import require_buildable
+from .agent_type_check import EXIT_REFUSED, failure_message
 from .chat import open_conversation
 from .config import (
     artifact_dir,
@@ -30,6 +31,7 @@ from .config import (
     credentials_hint,
     permission_gate,
 )
+from .failure_file import FAILURE_FILE
 from .run.targets import supported as target_kinds
 from .scenarios import load as load_written
 from .scenarios import open_stage as scenario_stage
@@ -265,6 +267,10 @@ def after_world(source_root: Any, destination: Path, contract: Any) -> Any:
     return export_session_bundle(source_root, destination, name=f"{contract.agent}-environment")
 
 
+def _report_failure_file(output: Path) -> None:
+    print(f"\n{failure_message(output)}\n{output / FAILURE_FILE}", file=sys.stderr)
+
+
 async def _understand(args: argparse.Namespace) -> int:
     if args.kind == "provider":
         source = resolve(
@@ -299,17 +305,27 @@ async def _understand(args: argparse.Namespace) -> int:
     print(f"model: {chosen_model()}")
     print(f"out:   {destination}\n")
 
+    # A person's own new reading starts clean; a job's failure stands for the platform to read.
+    if job is None:
+        (destination / FAILURE_FILE).unlink(missing_ok=True)
+
     await _converse(
         stage,
         opening(source) + _guidance(args),
         interactive=args.interactive,
-        until=lambda: load(destination) is not None,
+        until=lambda: load(destination) is not None
+        or (destination / FAILURE_FILE).is_file(),
         nudge=(
             "Nothing was saved: you finished without calling submit_contract. Call it now "
             "with the contract you worked out."
         ),
     )
 
+    if (destination / FAILURE_FILE).is_file():
+        _report_failure_file(destination)
+        # A refused reading still cost what its turns did.
+        print(f"spent:    ${stage.spent_usd:.4f}")
+        return EXIT_REFUSED
     contract = load(destination)
     if contract is None:
         print("\nNo contract was submitted.", file=sys.stderr)
@@ -1481,6 +1497,9 @@ async def _chat(args: argparse.Namespace) -> int:
         await conversation.say(said, on_event=_render_observable)
     await conversation.close()
     print(f"\nspent: ${conversation.spent_usd:.4f}")
+    if conversation.out and (conversation.out / FAILURE_FILE).is_file():
+        _report_failure_file(conversation.out)
+        return EXIT_REFUSED
     return 0
 
 

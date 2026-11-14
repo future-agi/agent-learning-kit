@@ -22,7 +22,9 @@ import shutil
 import sys
 import tempfile
 
+from .agent_type_check import EXIT_REFUSED, failure_message
 from .cli import _auto
+from .failure_file import FAILURE_FILE
 from .job import HarnessJob, ProviderExecutionMode, SourceKind
 from .hosted_compose_bootstrap import initialize_hosted_compose
 from .provider_import import inspect_provider_target
@@ -552,6 +554,10 @@ def _await_harness(output: Path) -> int:
     finished = output / ".futureagi-build-finished.json"
     deadline = time.monotonic() + int(os.environ.get("ALK_HOSTED_AUTHORING_MAX_DURATION_SECONDS") or 3300)
     while time.monotonic() < deadline:
+        # The failure wins: a build that was refused and also finished is still refused.
+        if (output / FAILURE_FILE).is_file():
+            print(failure_message(output), file=sys.stderr)
+            return EXIT_REFUSED
         if finished.is_file():
             return 0
         time.sleep(5)

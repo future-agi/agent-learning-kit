@@ -24,6 +24,7 @@ from . import understand as understand_stage
 from .backends import SessionSpec
 from .config import artifact_dir
 from .contract import AgentContract
+from .failure_file import FAILURE_FILE
 from .job import HarnessJob
 from .run import stage as run_stage
 from .session import Stage
@@ -152,6 +153,9 @@ class Conversation:
                 "cannot re-read the agent without knowing where it lives"
             )
         if stage_name == UNDERSTAND:
+            # A person's own new reading starts clean.
+            if self.out:
+                (self.out / FAILURE_FILE).unlink(missing_ok=True)
             self.stage, _ = understand_stage.open_stage(
                 self.source, out=self.out, ask=self.ask
             )

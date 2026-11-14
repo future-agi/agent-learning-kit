@@ -12,6 +12,7 @@ import re
 import subprocess
 from typing import Callable, Protocol
 
+from .failure_file import FAILURE_FILE
 from .job import (
     FailureDomain,
     HarnessFailure,
@@ -269,7 +270,11 @@ class HarnessExecutor:
                     retryable=False,
                 )
                 status = 1
-        failure = _failure_from_events(output) if status not in (0, 2) else None
+        failure = (
+            _failure_from_file(output) or _failure_from_events(output)
+            if status not in (0, 2)
+            else None
+        )
         if generic_failure is not None:
             failure = generic_failure
         return HarnessJobStatus(
@@ -335,6 +340,16 @@ def _scenario_count(output: Path) -> int:
     except (OSError, ValueError):
         return 0
     return len(value) if isinstance(value, list) else 0
+
+
+def _failure_from_file(output: Path) -> HarnessFailure | None:
+    """The failure a build left for the platform, which says more than its stage event can."""
+    try:
+        return HarnessFailure.model_validate_json(
+            (output / FAILURE_FILE).read_text(encoding="utf-8")
+        )
+    except (OSError, ValueError):
+        return None
 
 
 def _failure_from_events(output: Path) -> HarnessFailure:
