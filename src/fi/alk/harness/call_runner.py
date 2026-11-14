@@ -1089,6 +1089,66 @@ def trial_state_changes(
     return [agent] + list(entries.values())
 
 
+def duplicate_commits(log: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    """Each write the agent made twice after its answer was lost: a committed write whose answer a
+    `timeout_after_commit` fault replaced with a timeout (`response_lost`), then a later committed write of the same
+    action with equal arguments. The world applied it twice, whatever the scenario's checks say. A read is never a
+    duplicate, and a retry the door answered from its idempotency key is logged `duplicate`, never committed."""
+    rows = [
+        row
+        for row in log
+        if (row.get("actor_id") or AGENT) == AGENT
+        and not is_pre_run(row.get("idempotency_key"))
+        and not is_read(row)
+        and (row.get("outcome") or ("committed" if row.get("ok", True) else "")) == "committed"
+    ]
+    found: list[dict[str, Any]] = []
+    repeated: set[int] = set()
+    for index, first in enumerate(rows):
+        if first.get("error") != "response_lost" or index in repeated:
+            continue
+        action = logged_as(first)
+        for later_index in range(index + 1, len(rows)):
+            later = rows[later_index]
+            if later_index in repeated or logged_as(later) != action:
+                continue
+            if _arguments(later.get("arguments")) != _arguments(first.get("arguments")):
+                continue
+            repeated.add(later_index)
+            found.append(
+                {
+                    "action": action,
+                    "name": str(first.get("name") or action),
+                    "arguments": _arguments(first.get("arguments")),
+                    "first_action_id": first.get("action_id"),
+                    "repeat_action_id": later.get("action_id"),
+                }
+            )
+    return found
+
+
+def _arguments(value: Any) -> Any:
+    """A row's arguments as data: a log read back from the database can hold them as JSON text."""
+    if isinstance(value, (str, bytes)):
+        try:
+            return json.loads(value)
+        except ValueError:
+            return value
+    return value
+
+
+def _duplicates(runtime: EnvironmentRuntime) -> list[dict[str, Any]]:
+    """This trial's duplicate commits, read from the world's action log; none when there is no log to read."""
+    database = _find_postgres_endpoint(runtime)
+    if database is None:
+        return []
+    try:
+        return duplicate_commits(_read_action_log(database.address))
+    except Exception as exc:  # noqa: BLE001 - no log read, no duplicate claimed
+        logger.debug("duplicate check skipped: %s", type(exc).__name__)
+        return []
+
+
 def approvals(log: list[dict[str, Any]], decisions: Sequence[dict[str, Any]] = ()) -> list[dict[str, Any]]:
     """One line per approval, read from the action log only: the agent's request (the agent row an actor's row or a
     timeout points at through its parent), the decision (that actor row, or the timeout's fallback), and the agent's
@@ -2734,6 +2794,11 @@ class CallRunnerImpl:
             if acted or actor_decisions
             else []
         )
+        duplicates = (
+            _duplicates(runtime)
+            if case is not None and self._context.evidence_seam is EvidenceSeam.TOOL_TRACE
+            else []
+        )
         # Hand-off records are not the world's actions: marks pair the graded calls with the action log.
         graded = graded_calls(calls)
         marks = _agent_marks(runtime, self._context.bundle_dir, graded) if acted else []
@@ -2755,7 +2820,7 @@ class CallRunnerImpl:
             notices = self._fault_notices(runtime, faults, calls)
             # A call that ended with no words still says what did not take effect, and what actors did in the world,
             # never only logging it.
-            if result.transcript or notices or acted or actor_decisions or took_part.get("call_actors"):
+            if result.transcript or notices or acted or actor_decisions or duplicates or took_part.get("call_actors"):
                 transcript_document = {
                     "schema_version": "futureagi.call-transcript.v1",
                     "transcript": result.transcript,
@@ -2785,6 +2850,9 @@ class CallRunnerImpl:
                         "limits": dict(limits or {}),
                         "usage": list(actor_usage),
                     }
+                if duplicates:
+                    # The world applied one of the agent's writes twice after its answer was lost: the scenario fails.
+                    transcript_document.setdefault("world_actors", {})["duplicates"] = duplicates
                 if notices:
                     # A fault that did not take effect is said, never only logged: the trial ran without it.
                     transcript_document["notices"] = notices
@@ -2845,6 +2913,7 @@ class CallRunnerImpl:
             ),
             target_metrics=_target_metrics(case),
             world_actions=tuple(acted),
+            duplicates=tuple(duplicates),
             actor_briefs={
                 **{str(one["id"]): str(one.get("brief") or "") for one in call_actors if one.get("brief")},
                 **(actor_briefs or {}),

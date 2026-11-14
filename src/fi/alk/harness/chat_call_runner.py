@@ -555,14 +555,19 @@ class _HostedChatTarget:
             ToolCall(action=self._action(name), name=name, arguments=arguments, method=method, effect=effect)
         )
         if outcome.fault is not None:
-            if outcome.fault.get("mode") == "timeout_after_commit":
+            mode = outcome.fault.get("mode")
+            if mode == "timeout_after_commit":
                 if self.world.calls:
                     # Committed, with the answer lost on the way back.
                     self.world.calls[-1].error = "response_lost"
-            else:
-                self.world._record(
-                    Call(name=name, arguments=arguments, result=None, ok=False, error="timeout_before_commit")
-                )
+                return "Error: the request timed out"
+            self.world._record(
+                Call(name=name, arguments=arguments, result=None, ok=False, error=str(mode or "faulted"))
+            )
+            if mode == "unavailable":
+                return "Error: the service is unavailable (503)"
+            if mode == "error":
+                return f"Error ({outcome.status}): {outcome.reason}"
             return "Error: the request timed out"
         return outcome.answer().decode("utf-8", errors="replace")
 
@@ -987,6 +992,12 @@ class HostedChatCallRunner:
         transcript.calls[:] = _with_span_calls(transcript.calls, runtime)
 
         world_record = _world_actors_record(door, listing, dispatcher, cast, meter, limits, since=trial_started)
+        from .call_runner import duplicate_commits
+
+        # The world applied one of the agent's writes twice after its answer was lost: the scenario fails.
+        duplicates = duplicate_commits(_trial_log(door, trial_started))
+        if duplicates:
+            world_record = {**(world_record or {}), "duplicates": duplicates}
         if world_record is not None:
             transcript.world_actors = world_record
         # Every actor that took part, the ones acting only through the world too, so the call is found by each.
@@ -1029,6 +1040,7 @@ class HostedChatCallRunner:
             messages=tuple(transcript.canonical_messages()),
             call_actors=_chat_actor_summary(cast, world_record, listing),
             world_actions=tuple((world_record or {}).get("actions") or ()),
+            duplicates=tuple(duplicates),
             actor_briefs={
                 **{str(one["id"]): str(one.get("brief") or "") for one in chat_actors if one.get("brief")},
                 **(dispatcher.briefs if dispatcher is not None else {}),

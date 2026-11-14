@@ -4867,3 +4867,22 @@ def test_an_actor_who_speaks_but_only_acted_in_the_world_reached_the_agent() -> 
     refused = replace(posted, world_actions=({"actor_id": "jordan", "outcome": "refused", "name": "post_message"},))
     # Its refused attempt is the reason it said nothing, so the reader looks at the world data, not the agent.
     assert hs._call_actors_missing(scenario, refused) == "Jordan (not_delivered: the world refused its post_message)"
+
+
+def test_a_duplicate_commit_fails_the_scenario(monkeypatch) -> None:
+    async def _all(goals, world, calls, *, messages=()):
+        return {}
+
+    duplicated = replace(
+        _call_outcome(turns=2),
+        duplicates=({"action": "orders.issue_refund", "name": "issue_refund", "arguments": {"order": 7}},),
+    )
+    passing = [FakeSubGoal("refunded", lambda w, c: None)]
+    receipt, _ = _two_judged(monkeypatch, _all, goals=passing, outcome=duplicated)
+    assert receipt.status == "failed"
+    assert receipt.failure is not None and receipt.failure.code == "duplicate_commit"
+    assert receipt.failure.message == (
+        "The agent repeated issue_refund after its answer was lost, and the world committed it twice."
+    )
+    clean, _ = _two_judged(monkeypatch, _all, goals=passing, outcome=_call_outcome(turns=2))
+    assert clean.status == "passed" and clean.failure is None

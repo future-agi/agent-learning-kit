@@ -42,7 +42,7 @@ import tempfile
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
-from typing import Any, Awaitable, Callable, Protocol, Sequence
+from typing import Any, Awaitable, Callable, Mapping, Protocol, Sequence
 
 from . import observability
 from .job import FailureDomain, HarnessStage
@@ -259,6 +259,9 @@ class CallOutcome:
     world_actions: tuple[dict[str, Any], ...] = ()
     # What each actor was told to play from, so a judge can tell an actor that strayed from it.
     actor_briefs: dict[str, str] = field(default_factory=dict)
+    # Each of the agent's writes the world applied twice after its answer was lost (`duplicate_commits`): the
+    # scenario fails whatever its sub-goals say.
+    duplicates: tuple[dict[str, Any], ...] = ()
 
 
 class CallAborted(RuntimeError):
@@ -423,6 +426,7 @@ _CODE_DOMAIN: dict[str, FailureDomain] = {
     "check_broken": FailureDomain.SIMULATOR,
     "judge_undecided": FailureDomain.SIMULATOR,
     "caller_off_script": FailureDomain.SIMULATOR,
+    "duplicate_commit": FailureDomain.AGENT,
     "evidence_missing": FailureDomain.SIMULATOR,
     "actor_missing": FailureDomain.SIMULATOR,
     "world_usage": FailureDomain.SIMULATOR,
@@ -567,6 +571,14 @@ def _sanitize_cause(message: str) -> str:
     # M7: `cause` is capped at 200 chars and must never carry endpoint credentials — postgres
     # error strings routinely embed the DSN (`postgresql://user:pw@host/db`).
     return _truncate(_USERINFO_PATTERN.sub("://***@", message), _CAUSE_LIMIT)
+
+
+def duplicate_reason(duplicates: Sequence[Mapping[str, Any]]) -> str:
+    """Why a scenario failed on duplicate commits, one sentence per action."""
+    names = list(dict.fromkeys(str(one.get("name") or one.get("action") or "an action") for one in duplicates))
+    return " ".join(
+        f"The agent repeated {name} after its answer was lost, and the world committed it twice." for name in names
+    )
 
 
 def _failure(code: str, message: str) -> ReceiptFailure:
@@ -2594,6 +2606,11 @@ class HostedScheduler:
         else:
             status = "passed"
         failure = None
+        if call_outcome.duplicates:
+            # The world applied a write twice after the agent's answer was lost: a failure of the agent's, whatever
+            # the sub-goals say.
+            status = "failed"
+            failure = _failure("duplicate_commit", duplicate_reason(call_outcome.duplicates))
         return ResultReceipt(
             scenario_key=scenario.scenario_key,
             scenario_id=scenario.scenario_id,
