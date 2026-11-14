@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import contextlib
 import os
+import signal
 from typing import Any, Iterator, Mapping
 
 _OFF = {"0", "off", "false", "no"}
@@ -47,13 +48,23 @@ def begin(job_id: str, run_id: str, context: Mapping[str, Any] | None = None) ->
         )
         from fi_instrumentation.fi_types import ProjectType
 
-        _provider = register(
-            project_name=os.getenv("FI_HARNESS_PROJECT") or "hosted-harness",
-            project_type=ProjectType.OBSERVE,
-            # The platform binds the global provider to its own infrastructure tracing.
-            set_global_tracer_provider=False,
-            verbose=False,
-        )
+        # `register` installs SIGTERM and SIGINT handlers that exit at once. SIGTERM is the platform's Stop, which the
+        # harness turns into sealing the calls in flight: keep the handlers it had.
+        handlers = {one: signal.getsignal(one) for one in (signal.SIGTERM, signal.SIGINT)}
+        try:
+            _provider = register(
+                project_name=os.getenv("FI_HARNESS_PROJECT") or "hosted-harness",
+                project_type=ProjectType.OBSERVE,
+                # The platform binds the global provider to its own infrastructure tracing.
+                set_global_tracer_provider=False,
+                verbose=False,
+            )
+        finally:
+            for one, handler in handlers.items():
+                # Off the main thread neither side can set a handler.
+                if handler is not None:
+                    with contextlib.suppress(ValueError):
+                        signal.signal(one, handler)
         _instrument(_provider)
         # Only FITracer writes the baggage-carried session, user, metadata and tags onto a span.
         _tracer = FITracer(_provider.get_tracer(__name__))
