@@ -377,12 +377,12 @@ def _write_generic_certificate(
 
     store = GenericHarnessArtifactStore(authoring / "generic-harness")
     evidence = store.read_runtime_evidence()
-    source = getattr(job, "source", None)
+    origin = getattr(job, "source", None)
     certificate = HarnessCertification.create(
         status=CertificationStatus.CERTIFIED,
         source=CertificationSource(
-            repository=getattr(source, "repository", None),
-            commit=getattr(source, "commit_sha", None),
+            repository=getattr(origin, "repository", None),
+            commit=getattr(origin, "commit_sha", None),
             digest=evidence.source_digest,
             schema_hash=evidence.source_schema_hash,
         ),

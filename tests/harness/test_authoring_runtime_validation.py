@@ -1110,11 +1110,20 @@ def test_generic_certificate_combines_runtime_evidence_and_repair_history(
         metadata={"daytona_snapshot": "snapshot-r1"},
     )
 
-    _write_generic_certificate(job, authoring, controller.history)
+    agent = tmp_path / "agent"
+    info = agent / ".venv/lib/python3.11/site-packages/langchain_core-0.3.12.dist-info"
+    info.mkdir(parents=True)
+    (info / "METADATA").write_text(
+        "Metadata-Version: 2.1\nName: langchain-core\nVersion: 0.3.12\n", encoding="utf-8"
+    )
+
+    _write_generic_certificate(job, authoring, controller.history, agent)
 
     certificate = store.read_certification()
     assert certificate.status.value == "certified"
     assert certificate.source.repository == "future-agi/example"
+    # The frameworks are read from the agent's own source, beside the job's repository.
+    assert certificate.runtime.frameworks == {"langchain-core": "0.3.12"}
     assert certificate.runtime.snapshot == "snapshot-r1"
     assert certificate.runtime.validation_attempts == 1
     assert certificate.checks.scenario_setup_ready == "2/2"
