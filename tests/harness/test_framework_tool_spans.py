@@ -397,6 +397,8 @@ def test_an_agent_named_on_the_tool_span_or_by_operation_name_is_read(
         "search_notes": ("research_worker", None),
         "publish_note": ("writer_worker", None),
         "WebSearch": ("researcher", None),
+        # The Task span is the hand-off and the sub-agent's run at once.
+        "Task": (None, "researcher"),
     }
 
 
@@ -2121,3 +2123,114 @@ def test_a_call_named_by_its_worker_label_never_takes_another_worker_s_place() -
         (c.worker_label, c.runtime_ids.get("event_id"), c.parent_span_id) for c in merged if c.name == "search"
     )
     assert searches == [("A", None, ""), ("B", "sB", "hB")]
+
+
+# Two workers, order_lookup and refund, under one coordinator, as each framework's pinned instrumentor shapes the spans
+# (the shapes read from traceai-claude-agent-sdk 0.1.1, traceai-pydantic-ai 0.1.0, traceai-smolagents 0.1.6,
+# traceai-llamaindex 0.1.10 and Strands' own telemetry). The fixtures under multi_agent_compatibility/<framework>/
+# make the same calls for real.
+_TWO_WORKERS = {
+    "claude_agent_sdk": """
+        from opentelemetry.trace import set_span_in_context
+        root = tracer.start_span("claude_agent.conversation", attributes={"claude_agent.span_kind": "conversation"})
+        for worker, tools in (("order_lookup", ("get_order", "list_refunds")), ("refund", ("issue_refund",))):
+            # The SDK's hook starts the Task span, then sets what it is.
+            task = tracer.start_span("tool.Task", context=set_span_in_context(root))
+            task.set_attribute("claude_agent.span_kind", "subagent")
+            task.set_attribute("claude_agent.tool.name", "Task")
+            task.set_attribute("claude_agent.subagent.type", worker)
+            task.set_attribute("claude_agent.tool.input", '{"subagent_type": "%s"}' % worker)
+            for tool in tools:
+                call = tracer.start_span("tool.mcp__%s__%s" % (worker, tool), context=set_span_in_context(task))
+                call.set_attribute("claude_agent.span_kind", "tool_execution")
+                call.set_attribute("claude_agent.tool.name", "mcp__%s__%s" % (worker, tool))
+                call.set_attribute("claude_agent.tool.input", '{"order_id": "1043"}')
+                call.set_attribute("claude_agent.tool.output", "ok")
+                call.end()
+            task.set_attribute("claude_agent.tool.output", worker + " done")
+            task.end()
+        root.end()
+    """,
+    "pydantic_ai": """
+        lead = {"pydantic_ai.span_kind": "agent_run", "pydantic_ai.agent.name": "returns_coordinator"}
+        with span("agent_run", **lead):
+            for worker, tools in (("order_lookup", ("get_order", "list_refunds")), ("refund", ("issue_refund",))):
+                with span("tool_call." + worker, **{"pydantic_ai.span_kind": "tool_call",
+                                                    "pydantic_ai.tool.name": worker,
+                                                    "pydantic_ai.tool.args": '{"order_id": "1043"}'}):
+                    with span("agent_run", **{"pydantic_ai.span_kind": "agent_run",
+                                              "pydantic_ai.agent.name": worker}):
+                        for tool in tools:
+                            with span("tool_call." + tool, **{"pydantic_ai.span_kind": "tool_call",
+                                                              "pydantic_ai.tool.name": tool,
+                                                              "pydantic_ai.tool.args": '{"order_id": "1043"}',
+                                                              "pydantic_ai.tool.result": "ok"}):
+                                pass
+    """,
+    # smolagents names an agent's span by its class only; each worker is a Tool that runs it, so the worker takes the
+    # name of the tool that handed it the work.
+    "smolagents": """
+        with span("CodeAgent.run", **{"gen_ai.span.kind": "AGENT"}):
+            for worker, tools in (("order_lookup", ("get_order", "list_refunds")), ("refund", ("issue_refund",))):
+                with span("WorkerTool", **{"gen_ai.span.kind": "TOOL", "gen_ai.tool.name": worker,
+                                           "input.value": '{"task": "order 1043"}'}):
+                    with span("ToolCallingAgent.run", **{"gen_ai.span.kind": "AGENT"}):
+                        for tool in tools:
+                            with span("SimpleTool", **{"gen_ai.span.kind": "TOOL", "gen_ai.tool.name": tool,
+                                                       "input.value": '{"order_id": "1043"}'}):
+                                pass
+    """,
+    # LlamaIndex's workflow agents carry no agent name either: each worker is a FunctionTool that runs it.
+    "llama_index": """
+        with span("FunctionAgent.run", **{"fi.span.kind": "AGENT"}):
+            for worker, tools in (("order_lookup", ("get_order", "list_refunds")), ("refund", ("issue_refund",))):
+                with span("FunctionTool.acall", **{"fi.span.kind": "TOOL", "gen_ai.tool.name": worker,
+                                                   "input.value": '{"order_id": "1043"}'}):
+                    with span("FunctionAgent.run", **{"fi.span.kind": "AGENT"}):
+                        for tool in tools:
+                            with span("FunctionTool.acall", **{"fi.span.kind": "TOOL", "gen_ai.tool.name": tool,
+                                                               "input.value": '{"order_id": "1043"}'}):
+                                pass
+    """,
+    "strands": """
+        with span("invoke_agent returns_coordinator", **{"gen_ai.operation.name": "invoke_agent",
+                                                       "gen_ai.agent.name": "returns_coordinator"}):
+            for worker, tools in (("order_lookup", ("get_order", "list_refunds")), ("refund", ("issue_refund",))):
+                with span("execute_tool " + worker, **{"gen_ai.operation.name": "execute_tool",
+                                                       "gen_ai.tool.name": worker}):
+                    with span("invoke_agent " + worker, **{"gen_ai.operation.name": "invoke_agent",
+                                                           "gen_ai.agent.name": worker}):
+                        for tool in tools:
+                            with span("execute_tool " + tool, **{"gen_ai.operation.name": "execute_tool",
+                                                                 "gen_ai.tool.name": tool}):
+                                pass
+    """,
+}
+# The tool each framework's worker calls is recorded under the name its instrumentor gives it.
+_WORKER_TOOLS = {
+    "claude_agent_sdk": {
+        "order_lookup": ["mcp__order_lookup__get_order", "mcp__order_lookup__list_refunds"],
+        "refund": ["mcp__refund__issue_refund"],
+    },
+}
+
+
+@pytest.mark.parametrize("framework", sorted(_TWO_WORKERS))
+def test_each_framework_s_two_workers_are_handed_off_to_and_own_their_tool_calls(tmp_path: Path, framework) -> None:
+    _run(tmp_path, _TWO_WORKERS[framework])
+    rows = _sealed(tmp_path)
+    hand_offs = {row["delegated_to"]: row for row in rows if row.get("delegated_to")}
+    assert set(hand_offs) == {"order_lookup", "refund"}
+    assert all(row.get("ended_at") for row in hand_offs.values())
+    tools = _WORKER_TOOLS.get(
+        framework, {"order_lookup": ["get_order", "list_refunds"], "refund": ["issue_refund"]}
+    )
+    for worker, names in tools.items():
+        owned = [row for row in rows if row["name"] in names]
+        assert [row["name"] for row in owned] == names
+        for row in owned:
+            assert (row["agent"], row["relationship"], row["parent_span_id"]) == (
+                worker,
+                "observed",
+                hand_offs[worker]["span_id"],
+            )

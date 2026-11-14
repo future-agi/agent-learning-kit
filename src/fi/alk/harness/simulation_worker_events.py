@@ -28,12 +28,29 @@ _OPERATION_KINDS = {
     "invoke_agent": "AGENT",
     "create_agent": "AGENT",
 }
-_OWN_KINDS = {"tool": "TOOL", "subagent": "AGENT", "agent": "AGENT"}
+# Frameworks whose instrumentors name the span kind under their own key, with their own values: the Claude Agent SDK
+# (`tool_execution` and `mcp_tool` for a tool call, `subagent` for its Task tool, which runs the sub-agent) and
+# Pydantic AI (`agent_run`, `tool_call`).
+_OWN_KINDS = {
+    "claude_agent.span_kind": {
+        "tool": "TOOL",
+        "tool_execution": "TOOL",
+        "mcp_tool": "TOOL",
+        "subagent": "AGENT",
+        "agent": "AGENT",
+    },
+    "pydantic_ai.span_kind": {"agent_run": "AGENT", "tool_call": "TOOL"},
+}
+# A span that is both the tool call that handed work to a worker and that worker's run, named by the worker it ran:
+# the Claude Agent SDK's Task tool.
+_SELF_HANDING_KEYS = ("claude_agent.subagent.type", "claude_agent.subagent_type")
 _AGENT_NAME_KEYS = (
     "gen_ai.agent.name",
     "agent.name",
     "autogen.agent.name",
+    "claude_agent.subagent.type",
     "claude_agent.subagent_type",
+    "pydantic_ai.agent.name",
     "graph.node.id",
     "recipient_agent_type",
     "lc_agent_name",
@@ -50,9 +67,15 @@ _SAID_KEYS = (
 
 _LAUNCHES_MAX = 256
 _GRAPH_NAMESPACE = "langgraph_checkpoint_ns"
-_TOOL_NAME_KEYS = ("gen_ai.tool.name", "tool.name")
-_TOOL_ARGUMENT_KEYS = ("gen_ai.tool.call.arguments", "tool.parameters", "input.value")
-_TOOL_RESULT_KEYS = ("gen_ai.tool.call.result", "output.value")
+_TOOL_NAME_KEYS = ("gen_ai.tool.name", "tool.name", "claude_agent.tool.name", "pydantic_ai.tool.name")
+_TOOL_ARGUMENT_KEYS = (
+    "gen_ai.tool.call.arguments",
+    "tool.parameters",
+    "input.value",
+    "claude_agent.tool.input",
+    "pydantic_ai.tool.args",
+)
+_TOOL_RESULT_KEYS = ("gen_ai.tool.call.result", "output.value", "claude_agent.tool.output", "pydantic_ai.tool.result")
 _LIVE_SPANS_MAX = 4096
 _TRACE_LINE_MAX = 65536
 _PAYLOAD_MAX = 4096
@@ -99,7 +122,17 @@ def _kind(span):
     ):
         # AutoGen Core's runtime handing a message to the agent that handles it.
         return "AGENT"
-    return _OWN_KINDS.get(_first(attributes, ("claude_agent.span_kind",)) or "")
+    for key, kinds in _OWN_KINDS.items():
+        own = kinds.get(_first(attributes, (key,)) or "")
+        if own:
+            return own
+    return None
+
+
+def _self_handing(span):
+    """The worker a span that is both a hand-off and the worker's run ran, else None."""
+    attributes = getattr(span, "attributes", None) or {}
+    return _first(attributes, _SELF_HANDING_KEYS) if _kind(span) == "AGENT" else None
 
 
 def _graph_worker(attributes):
@@ -215,6 +248,15 @@ class _ToolSpans:
                 span,
                 parent.span_id if parent is not None else None,
             )
+            above = self._live.get(parent.span_id) if parent is not None else None
+            if above is not None and parent.span_id not in self._opened_hand_offs:
+                # Its attributes are set just after it starts, so a self-handing run is known by its first span.
+                worker = _self_handing(above[0])
+                if worker:
+                    try:
+                        self._self_hand_off(above[0], parent.span_id, worker, ended=False)
+                    except Exception:
+                        pass
             if _kind(span) == "AGENT":
                 try:
                     self._hand_off_opened(span, context.span_id)
@@ -286,6 +328,43 @@ class _ToolSpans:
         }
         _bounded(record, "arguments", _first(attributes, _TOOL_ARGUMENT_KEYS) or "", "input_omitted")
         holder = self._above(tool_id, ("AGENT",))
+        if holder is not None:
+            record["parent_event_id"] = _hex(holder.get_span_context().span_id)
+            holder_name = self._agent_name(holder)
+            if holder_name:
+                record.update(agent_key=holder_name[:256], agent_role=holder_name[:256])
+        self._forget_cleared_call()
+        _append(self._path, record)
+        self._appended = True
+
+    def _self_hand_off(self, span, span_id, worker, *, ended: bool) -> None:
+        """Write a span that is both a hand-off and the worker's run as that hand-off: once when its first span starts
+        (no end, no answer) and again when it ends, which replaces the first line."""
+        attributes = span.attributes or {}
+        if not ended:
+            self._opened_hand_offs[span_id] = None
+            if len(self._opened_hand_offs) > _LAUNCHES_MAX:
+                self._opened_hand_offs.popitem(last=False)
+        status = getattr(getattr(span, "status", None), "status_code", None)
+        parent_span_id, relationship = self._delegation(span_id)
+        record = {
+            "name": (_first(attributes, _TOOL_NAME_KEYS) or span.name or worker)[:256],
+            "is_error": ended
+            and (getattr(status, "name", "") == "ERROR" or attributes.get("claude_agent.tool.is_error") is True),
+            "at": (span.start_time or 0) / 1e9,
+            "source": "otel",
+            "event_id": _hex(span_id),
+            "parent_span_id": parent_span_id,
+            "relationship": relationship,
+            "delegated_to": worker[:256],
+        }
+        if ended:
+            record["ended_at"] = (span.end_time or 0) / 1e9
+        else:
+            record["opened"] = True
+        _bounded(record, "arguments", _first(attributes, _TOOL_ARGUMENT_KEYS) or "", "input_omitted")
+        _bounded(record, "output", (_first(attributes, _TOOL_RESULT_KEYS) or "") if ended else "", "output_omitted")
+        holder = self._above(span_id, ("AGENT",))
         if holder is not None:
             record["parent_event_id"] = _hex(holder.get_span_context().span_id)
             holder_name = self._agent_name(holder)
@@ -369,6 +448,9 @@ class _ToolSpans:
             if parent in self._jobs:
                 return _hex(parent), "observed"
             kind = _kind(above[0])
+            if agent is None and _self_handing(above[0]):
+                # Inside a worker's run that is its own hand-off (the Claude Agent SDK's Task tool).
+                return _hex(parent), "observed"
             if (
                 agent is not None
                 and kind not in ("AGENT", "TOOL")
@@ -522,6 +604,9 @@ class _ToolSpans:
             elif self._waiting:
                 self._join_waiting(self._root(span_id), span.attributes)
             if kind == "AGENT":
+                worker = _self_handing(span)
+                if worker:
+                    self._self_hand_off(span, span_id, worker, ended=True)
                 handing = self._above(span_id, ("TOOL",))
                 name = self._agent_name(span)
                 if name:
