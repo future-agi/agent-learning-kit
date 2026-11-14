@@ -6240,6 +6240,24 @@ def test_a_templated_route_s_real_call_is_logged_under_its_tool_s_own_name():
     assert action_tool(None, "orders.get") == ""
 
 
+def test_a_declared_read_on_a_templated_route_covers_its_real_calls_and_never_another_method_or_route():
+    from fi.alk.harness.bundle_author_v2 import _tool_actions, declared_read_actions
+    from fi.alk.harness.world_door import declared_read, method_action, world_action
+
+    entries = [
+        {"tool": "get_order", "endpoint": "/orders/{order_id}", "method": "GET", "effect": "read"},
+        {"tool": "cancel_order", "endpoint": "/orders/{order_id}", "method": "DELETE", "effect": "write"},
+        {"tool": "list_orders", "endpoint": "/orders/recent", "method": "GET", "effect": "write"},
+    ]
+    reads = declared_read_actions(entries)
+    routes = _tool_actions({"tools": [{"name": one["tool"]} for one in entries], "tool_entrypoints": entries}).keys()
+    assert declared_read(reads, method_action("GET", world_action("/orders/1042")), routes)
+    # Another method on the same path is another tool, and a literal route is never a value of the template.
+    assert not declared_read(reads, method_action("DELETE", world_action("/orders/1042")), routes)
+    assert not declared_read(reads, method_action("GET", world_action("/orders/recent")), routes)
+    assert not declared_read([], method_action("GET", world_action("/orders/1042")), routes)
+
+
 def test_a_templated_route_names_the_values_its_path_carries():
     from fi.alk.harness.world_door import route_values, world_action
 
@@ -6258,3 +6276,19 @@ def test_a_sealed_tool_proxy_says_its_door_holds_each_worker_to_its_own_deadline
     sealed = tmp_path / "generated" / "tool-proxy"
     assert {"proxy.py", "world_door.py", "door.json"} <= {one.name for one in sealed.iterdir()}
     assert _door_holds_worker_limits(tmp_path)
+
+
+def test_the_tool_proxy_learns_the_declared_read_actions_and_a_plan_without_any_is_unchanged():
+    from fi.alk.harness.bundle_author_v2 import _tool_proxy_process, declared_read_actions
+
+    entries = [
+        {"tool": "get_order", "endpoint": "/orders/get", "method": "POST", "effect": "read"},
+        {"tool": "issue_refund", "endpoint": "/orders/refund", "method": "POST", "effect": "write"},
+        {"tool": "lookup", "endpoint": "", "effect": "read"},
+        {"tool": "list_refunds", "endpoint": "/refunds/list", "method": "POST"},
+    ]
+    assert declared_read_actions(entries) == ["POST orders.get"]
+    assert _tool_proxy_process(["POST orders.get"]).environment["READ_ACTIONS"] == "POST orders.get"
+    # The worker channels survive beside the read declarations.
+    assert "WORKER_CHANNELS_FILE" in _tool_proxy_process(["POST orders.get"]).environment
+    assert "READ_ACTIONS" not in _tool_proxy_process(declared_read_actions(entries[1:])).environment

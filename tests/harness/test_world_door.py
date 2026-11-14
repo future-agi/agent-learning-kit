@@ -156,7 +156,7 @@ def test_a_fault_naming_the_tool_holds_its_call_through_the_proxy_and_a_worker_s
 
 def test_a_fault_is_never_guessed_onto_every_call_when_the_log_cannot_count_the_calls():
     class _Uncountable(MemoryLog):
-        def agent_calls(self, name):
+        def agent_calls(self, action, name):
             raise RuntimeError("log down")
 
     executor = _Executor()
@@ -642,8 +642,8 @@ def test_two_calls_at_once_never_both_take_a_one_shot_fault():
     import time as clock
 
     class _SlowCount(MemoryLog):
-        def agent_calls(self, name):
-            made = super().agent_calls(name)
+        def agent_calls(self, action, name):
+            made = super().agent_calls(action, name)
             # Both calls read the count before either row lands, unless the door holds them apart.
             clock.sleep(0.05)
             return made
@@ -822,3 +822,120 @@ def test_an_actor_s_templated_permission_never_reaches_another_tool_s_own_route(
     assert enter("crm.8").outcome == "committed"
     # `crm.delete_all` is the world's own route, never a deal id.
     assert enter("crm.delete_all", "POST").refusal_code == "not_permitted"
+
+
+def test_two_actions_with_one_last_part_are_numbered_apart_for_a_fault():
+    executor = _Executor()
+    door = _door(
+        executor,
+        faults=[{"action": "crm.update", "mode": "timeout_before_commit", "on_call": 1, "delay_seconds": 0}],
+    )
+    # `ticket.update` is not a call of `crm.update`, though the two share their last part.
+    assert door.enter(ToolCall(action="ticket.update", name="update")).fault is None
+    assert door.enter(ToolCall(action="crm.update", name="update")).fault is not None
+    assert door.enter(ToolCall(action="crm.update", name="update")).fault is None
+    assert [row["action"] for row in door.events()] == ["ticket.update", "crm.update", "crm.update"]
+
+
+def test_a_door_whose_log_lost_its_rows_still_numbers_each_action_apart():
+    class _LosesRows(MemoryLog):
+        def write(self, row):
+            raise RuntimeError("log down")
+
+    door = _door(
+        faults=[{"action": "crm.update", "mode": "timeout_before_commit", "on_call": 2, "delay_seconds": 0}],
+        log=_LosesRows(),
+    )
+    door.faults = lambda: [
+        {"action": "crm.update", "mode": "timeout_before_commit", "on_call": 2, "delay_seconds": 0},
+        {"action": "ticket.update", "mode": "timeout_before_commit", "on_call": 9, "delay_seconds": 0},
+    ]
+    assert door.enter(ToolCall(action="ticket.update", name="update")).fault is None
+    assert door.enter(ToolCall(action="crm.update", name="update")).fault is None
+    assert door.enter(ToolCall(action="crm.update", name="update")).fault is not None
+
+
+def test_a_row_written_before_actions_were_recorded_is_counted_by_its_name():
+    log = MemoryLog()
+    log.write({"name": "update", "actor_id": AGENT, "outcome": "committed"})
+    door = _door(
+        faults=[{"action": "crm.update", "mode": "timeout_before_commit", "on_call": 2, "delay_seconds": 0}],
+        log=log,
+    )
+    assert door.enter(ToolCall(action="crm.update", name="update")).fault is not None
+
+
+def test_one_action_s_faulted_call_never_holds_up_another_action_with_the_same_last_part():
+    import threading
+
+    release = threading.Event()
+
+    class _Holds(_Executor):
+        def run(self, call):
+            if call.action == "ticket.update":
+                release.wait(5)
+            return super().run(call)
+
+    door = _door(
+        _Holds(),
+        faults=[
+            {"action": "ticket.update", "mode": "timeout_before_commit", "on_call": 9, "delay_seconds": 0},
+            {"action": "crm.update", "mode": "timeout_before_commit", "on_call": 9, "delay_seconds": 0},
+        ],
+    )
+    held = threading.Thread(target=lambda: door.enter(ToolCall(action="ticket.update", name="update")))
+    held.start()
+    try:
+        done = threading.Event()
+        other = threading.Thread(
+            target=lambda: (door.enter(ToolCall(action="crm.update", name="update")), done.set())
+        )
+        other.start()
+        assert done.wait(2), "crm.update waited on ticket.update's lock"
+    finally:
+        release.set()
+        held.join()
+        other.join()
+
+
+def test_a_key_reused_for_another_action_is_a_conflict_never_the_first_action_s_answer():
+    executor = _Executor(result={"approved": 7})
+    roster = {"manager": {"permitted_actions": ["crm.approve", "crm.reject"], "on_behalf_of": None}}
+    log = MemoryLog()
+    door = _door(executor, roster=roster, log=log)
+    assert door.enter(ToolCall(action="crm.approve", name="approve", actor="manager", key="k")).outcome == "committed"
+    other = door.enter(ToolCall(action="crm.reject", name="reject", actor="manager", key="k"))
+    assert (other.outcome, other.refusal_code, other.result) == ("refused", "idempotency_conflict", None)
+    # A later door reads the first action from the log and refuses the same way.
+    later = _door(executor, roster=roster, log=log)
+    again = later.enter(ToolCall(action="crm.reject", name="reject", actor="manager", key="k"))
+    assert again.refusal_code == "idempotency_conflict"
+    assert len(executor.ran) == 1
+    assert later.enter(ToolCall(action="crm.approve", name="approve", actor="manager", key="k")).outcome == "duplicate"
+
+
+def test_a_new_door_on_the_same_log_counts_only_the_fault_s_own_action():
+    log = MemoryLog()
+    _door(log=log).enter(ToolCall(action="ticket.update", name="update"))
+    door = _door(
+        faults=[{"action": "crm.update", "mode": "timeout_before_commit", "on_call": 1, "delay_seconds": 0}], log=log
+    )
+    assert door.enter(ToolCall(action="crm.update", name="update")).fault is not None
+
+
+@pytest.mark.parametrize(
+    ("call", "effect"),
+    [
+        (ToolCall(action="orders.get", name="get", method="GET"), "read"),
+        (ToolCall(action="orders.get", name="get", method="head"), "read"),
+        (ToolCall(action="orders.search", name="search", method="POST", effect="read"), "read"),
+        (ToolCall(action="orders.refund", name="refund", method="POST"), "write"),
+        (ToolCall(action="orders.refund", name="refund", method="GET", effect="write"), "write"),
+        (ToolCall(action="approvals.change", name="change", actor="manager", form="record", method="GET"), "write"),
+    ],
+)
+def test_each_call_is_logged_as_a_read_or_a_write_from_its_declared_effect_else_its_method(call, effect):
+    door = _door(roster={"manager": {"permitted_actions": ["approvals.change"], "on_behalf_of": None}})
+    assert door.enter(call).outcome == "committed"
+    [row] = door.events()
+    assert row["effect"] == effect

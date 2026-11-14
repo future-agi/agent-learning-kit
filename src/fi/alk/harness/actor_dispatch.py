@@ -39,6 +39,7 @@ from .actors import (
     ScheduledAction,
     is_pre_run,
 )
+from .world_door import calls_tool, logged_as, same_action
 
 logger = logging.getLogger(__name__)
 
@@ -248,11 +249,13 @@ class ActorDispatcher:
         ]
 
     def _moment(
-        self, actor: Actor, elapsed: float, agent_rows: list[dict[str, Any]]
+        self, actor: Actor, elapsed: float, agent_rows: list[dict[str, Any]], watched: str = ""
     ) -> Moment:
+        # Each call by its world action in full; a call of the watched action (a row from before actions were logged
+        # in full included) by the watched name.
         return Moment(
             agent_turns=None,
-            tools_called=[str(row.get("name") or "") for row in agent_rows],
+            tools_called=[watched if watched and self._calls(row, watched) else logged_as(row) for row in agent_rows],
             elapsed=elapsed,
             contacted=any(contacts(row.get("arguments"), actor) for row in agent_rows),
             records=self.records,
@@ -274,13 +277,13 @@ class ActorDispatcher:
         agent_rows = self._agent_rows(log)
         if not due(
             trigger.model_dump(),
-            self._moment(actor, elapsed, agent_rows),
+            self._moment(actor, elapsed, agent_rows, trigger.tool if trigger.kind == "on_tool" else ""),
             seed=self.seed,
             actor_id=actor.id,
         ):
             return None
         if trigger.kind == "on_tool":
-            calls = [row for row in agent_rows if row.get("name") == trigger.tool]
+            calls = [row for row in agent_rows if self._calls(row, trigger.tool)]
             return (
                 str(calls[trigger.on_call - 1].get("action_id") or "")
                 if len(calls) >= trigger.on_call
@@ -301,10 +304,8 @@ class ActorDispatcher:
             row.get("idempotency_key")
         ):
             return False
-        name = str(row.get("name") or "")
         return contacts(row.get("arguments"), actor) or any(
-            name in (one, one.rsplit(".", 1)[-1], one.replace(".", "/"))
-            for one in actor.permitted_actions
+            same_action(row, one) for one in actor.permitted_actions
         )
 
     def _watches(self, actor: Actor, row: dict[str, Any]) -> bool:
@@ -315,8 +316,13 @@ class ActorDispatcher:
             trigger is not None
             and trigger.kind == "on_tool"
             and (row.get("actor_id") or AGENT) == AGENT
-            and str(row.get("name") or "") == trigger.tool
+            and self._calls(row, trigger.tool)
         )
+
+    @staticmethod
+    def _calls(row: dict[str, Any], tool: str) -> bool:
+        """Whether an agent's row is a call an `on_tool` trigger on `tool` waits for."""
+        return same_action(row, tool) or calls_tool(logged_as(row), tool)
 
     # -- acting ------------------------------------------------------------------------------------------------
 
@@ -415,7 +421,7 @@ class ActorDispatcher:
             json.dumps(
                 {
                     "by": "you" if r.get("actor_id") == actor.id else (r.get("actor_id") or AGENT),
-                    "action": r.get("name"),
+                    "action": logged_as(r),
                     "arguments": r.get("arguments"),
                     "outcome": r.get("outcome"),
                     # What the world told it when its own action was refused, so it can correct it.
@@ -556,7 +562,10 @@ class ActorDispatcher:
     async def _fall_back(self, actor: Actor, log: list[dict[str, Any]]) -> None:
         """No answer within its timeout: its fallback is the outcome, recorded as the timeout's, and it takes no more
         part. `silent` is a time-out, `decline` the request declined, one of its own permitted actions taken for it and
-        labelled as the fallback, another actor's id that actor answering instead."""
+        labelled as the fallback, another actor's id that actor answering instead. `answered_by` is recorded only once
+        the other actor's turn has started or its action has gone; when neither can happen the outcome says why:
+        `limit_blocked` (no live turn left) or `unresolved` (no such actor free to answer, or nothing left for it to
+        do)."""
         self.settled.add(actor.id)
         self.fell_back.add(actor.id)
         self.pending = [one for one in self.pending if one[0].id != actor.id]
@@ -586,24 +595,43 @@ class ActorDispatcher:
             )
             record["status"] = sent.get("status")
             record["action_outcome"] = sent.get("outcome")
-        self.fired.append(record)
-        instead = self.actors.get(fallback) if outcome == "answered_by" else None
-        if instead is None or instead.id in self.fell_back:
+        if outcome != "answered_by":
+            self.fired.append(record)
             return
+        # The timeout's record goes before what the other actor does, and says what came of it once that is known. A
+        # trial that ends mid-way leaves it `answered_by`: nothing can be cut before the other's turn or action starts.
+        at = len(self.fired)
+        try:
+            outcome, why = await self._answer_instead(fallback, cause, log)
+        finally:
+            self.fired.insert(at, record)
+        record["outcome"] = outcome
+        if why:
+            record["why"] = why
+
+    async def _answer_instead(self, fallback: str, cause: str, log: list[dict[str, Any]]) -> tuple[str, str]:
+        """Another actor answering for one that timed out: its live turn, or its scheduled actions. The outcome is
+        `answered_by` only once that turn has started or an action has gone."""
+        instead = self.actors.get(fallback)
+        if instead is None or instead.id in self.fell_back:
+            return "unresolved", "stand_in_unavailable"
         if instead.play in ("live", "both"):
             if instead not in self.live:
                 self.live.append(instead)
                 self.live_turns[instead.id] = 0
                 self.answered[instead.id] = set()
             # Answering for another is a live turn like any other, held to the same limits.
-            if self._turn_left(instead):
-                await self._live_turn(instead, cause, log)
-            return
-        for one, index, action in [
-            one for one in self.pending if one[0].id == instead.id
-        ]:
+            if not self._turn_left(instead):
+                return "limit_blocked", "turn_limit"
+            await self._live_turn(instead, cause, log)
+            return "answered_by", ""
+        scheduled = [one for one in self.pending if one[0].id == instead.id]
+        if not scheduled:
+            return "unresolved", "nothing_left_to_do"
+        for one, index, action in scheduled:
             self.pending.remove((one, index, action))
             await self._fire(one, index, action, cause)
+        return "answered_by", ""
 
     def unresolved(self) -> list[dict[str, Any]]:
         """Waits still open when the trial ended, recorded as such."""
@@ -839,7 +867,7 @@ def build_dispatcher(
     from pathlib import Path
 
     from .actors import actor_brief, brief_text, load_actors, with_knowledge_read
-    from .call_actor import logged_tool_name
+    from .call_actor import logged_action
     from .scenario import pre_run_of
 
     doc = pre_run_of(dict(doc))
@@ -855,17 +883,17 @@ def build_dispatcher(
     )
     for action in (one for entry in cast for one in entry.actions):
         if action.trigger.kind == "on_tool":
-            # The log records the route the agent's tool calls, which can differ from the tool's name.
-            action.trigger.tool = logged_tool_name(contract, action.trigger.tool)
+            # The log records the world action (the route) the agent's tool calls, which can differ from the tool's name.
+            action.trigger.tool = logged_action(contract, action.trigger.tool)
     for entry in cast:
         if entry.trigger is not None and entry.trigger.kind == "on_tool":
-            entry.trigger.tool = logged_tool_name(contract, entry.trigger.tool)
+            entry.trigger.tool = logged_action(contract, entry.trigger.tool)
     listing = load_actors(bundle_dir)
     listed = listing.by_id()
     for actor in listed.values():
         own = actor.activation.trigger if actor.activation else None
         if own is not None and own.kind == "on_tool":
-            own.tool = logged_tool_name(contract, own.tool)
+            own.tool = logged_action(contract, own.tool)
     sessions = [PreRunSession.model_validate(one) for one in doc.get("pre_run") or []]
     in_sessions = {
         one

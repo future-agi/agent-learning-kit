@@ -67,6 +67,7 @@ from fi.simulate.simulation.call_actors import (
 
 from .actor_dispatch import ActorDispatcher, DoorActs, build_dispatcher, world_summary
 from .actor_meter import ActorMeter
+from .world_door import is_read, logged_as, same_action
 from .actors import (
     AGENT,
     ScenarioActor,
@@ -83,7 +84,7 @@ from .bundle_v2 import EvidenceSeam
 from .call_actor import (
     load_call_actors,
     speaking_entries,
-    logged_tool_name,
+    logged_action,
 )
 from .hosted_scheduler import CallAborted, CallCancelled, CallOutcome
 from .hosted_scheduler import Scenario as HostedScenario
@@ -820,8 +821,8 @@ def _resolved_call_actors(
             continue
         taken.add(voice)
         if trigger.get("kind") == "on_tool":
-            # The engine counts the calls the trace logs, which name the route a tool calls.
-            trigger["tool"] = logged_tool_name(contract, str(trigger.get("tool") or ""))
+            # The engine counts the calls the trace logs, each by the world action (the route) a tool calls.
+            trigger["tool"] = logged_action(contract, str(trigger.get("tool") or ""))
         resolved.append(
             {
                 **here,
@@ -1065,9 +1066,9 @@ _OUTCOMES = ("committed", "refused", "faulted", "duplicate")
 
 
 def _shown_action(name: str, actor: Any) -> str:
-    """How a person reads an actor's logged action: the door logs it by its last part (`change`, `post_message`), as
-    the proof does, so the actor's one permitted action ending that way (`approvals.change`) names it. More than one,
-    or none, keeps the logged name."""
+    """How a person reads an actor's logged action: a row from before the door logged actions in full has only the
+    last part (`change`, `post_message`), as the proof does, so the actor's one permitted action ending that way
+    (`approvals.change`) names it. More than one, or none, keeps the logged name."""
     if actor is None or "." in name:
         return name
     full = [one for one in getattr(actor, "permitted_actions", None) or () if one.rsplit(".", 1)[-1] == name]
@@ -1101,8 +1102,9 @@ def trial_state_changes(
     actor that acted and one per agent worker the world told apart (`worker:<id>`, by the channel it came through),
     with attempted, committed, refused, faulted and duplicate counts, the actions it committed and the ones the world
     refused with why, in order. Attempted, refused and committed are kept apart; a row from before outcomes were
-    recorded counts as committed when it succeeded and refused when the world refused it. `answer_lost_actions` lists
-    the committed actions whose answer a `timeout_after_commit` fault replaced with a timeout."""
+    recorded counts as committed when it succeeded and refused when the world refused it. A read changed nothing: it
+    counts in `read` and `read_actions`, never in `committed`. `answer_lost_actions` lists the committed actions whose
+    answer a `timeout_after_commit` fault replaced with a timeout."""
     entries: dict[str, dict[str, Any]] = {}
     chosen = _ChosenActions(decisions)
     for row in log:
@@ -1126,18 +1128,24 @@ def trial_state_changes(
                 **{outcome: 0 for outcome in _OUTCOMES},
                 "committed_actions": [],
                 "refused_actions": [],
+                "read": 0,
+                "read_actions": [],
             },
         )
         entry["attempted"] += 1
         outcome = row.get("outcome") or (
             "refused" if row.get("refused") else "committed" if row.get("ok", True) else "faulted"
         )
-        if outcome in _OUTCOMES:
-            entry[outcome] += 1
         # A call through the tool proxy is named by the agent's own tool, as its checks are graded, not by its route.
         name = str(row.get("agent_tool") or row.get("name") or "")
+        if outcome == "committed" and is_read(row):
+            entry["read"] += 1
+            entry["read_actions"].append(name if who == AGENT or who.startswith("worker:") else logged_as(row))
+            continue
+        if outcome in _OUTCOMES:
+            entry[outcome] += 1
         if outcome == "committed":
-            shown = name if who == AGENT else chosen.name(who, name, actor)
+            shown = name if who == AGENT or who.startswith("worker:") else chosen.name(who, logged_as(row), actor)
             entry["committed_actions"].append(shown)
             if row.get("error") == "response_lost":
                 # Committed, yet the one who acted was told it timed out: a retry after it commits twice.
@@ -1155,7 +1163,7 @@ def trial_state_changes(
     # agent too, so a change one of them committed is not "no change".
     agent = entries.pop(AGENT, None) or {
         "who": AGENT, "name": "the agent", "attempted": 0, **{outcome: 0 for outcome in _OUTCOMES},
-        "committed_actions": [], "refused_actions": [],
+        "committed_actions": [], "refused_actions": [], "read": 0, "read_actions": [],
     }
     agent["no_change"] = not agent["committed_actions"] and not any(
         entry["committed_actions"] for who, entry in entries.items() if who.startswith("worker:")
@@ -1247,13 +1255,14 @@ def approvals(log: list[dict[str, Any]], decisions: Sequence[dict[str, Any]] = (
     writes before the decision and after it, in log order. No record matching, no inference."""
     rows = [row for row in log if not is_pre_run(row.get("idempotency_key"))]
     by_id = {str(row.get("action_id")): row for row in rows if row.get("action_id")}
-    agent_writes = [row for row in rows if (row.get("actor_id") or AGENT) == AGENT]
+    # A read changed nothing, so it is never a write before or after the decision; it can still be the request.
+    agent_writes = [row for row in rows if (row.get("actor_id") or AGENT) == AGENT and not is_read(row)]
     found = []
     for row in rows:
         parent = by_id.get(str(row.get("parent_event_id") or ""))
         if (row.get("actor_id") or AGENT) == AGENT or parent is None or (parent.get("actor_id") or AGENT) != AGENT:
             continue
-        found.append((parent, {"by": row.get("actor_id"), "action": row.get("name"), "outcome": row.get("outcome"),
+        found.append((parent, {"by": row.get("actor_id"), "action": logged_as(row), "outcome": row.get("outcome"),
                                "at": row.get("at")}))
     for one in decisions:
         if one.get("play") == "timeout" and one.get("parent") in by_id:
@@ -1321,7 +1330,7 @@ def actor_rows(
             continue
         rows.append(
             {
-                "name": chosen.name(who, str(row.get("name") or ""), actor),
+                "name": chosen.name(who, logged_as(row), actor),
                 "arguments": row.get("arguments") or {},
                 "result": _structured(row.get("result")),
                 "ok": bool(row.get("ok")),
@@ -1431,13 +1440,22 @@ def fault_notices(
             notices.append({**base, "code": "fault_not_applied",
                             "message": f"The {mode} fault on call {on_call} of {action} could not be applied: {unreachable}."})
             continue
+        agent_rows = [row for row in log or [] if (row.get("actor_id") or AGENT) == AGENT]
+        # A call through the tool proxy also carries the agent's own tool name, which a fault may name instead.
         rows = [
-            row for row in log or []
-            if _same_action(action, str(row.get("name") or "")) or _same_action(action, str(row.get("agent_tool") or ""))
+            row for row in agent_rows
+            if same_action(row, action) or _same_action(action, str(row.get("agent_tool") or ""))
         ]
         if any(_fault_applied(row) for row in rows):
             continue
-        made = sum(1 for call in calls if _same_action(action, call.name))
+        # A call names only its tool, so a call the door logged as another action with the same last part
+        # (`ticket.update` beside `crm.update`) is that action's, never this one's.
+        others = sum(
+            1
+            for row in agent_rows
+            if row.get("action") and row.get("action") != action and _same_action(action, str(row.get("name") or ""))
+        )
+        made = max(len(rows), sum(1 for call in calls if _same_action(action, call.name)) - others)
         if made >= on_call:
             notices.append({**base, "code": "fault_not_applied",
                             "message": f"The {mode} fault on call {on_call} of {action} could not be applied: the agent "

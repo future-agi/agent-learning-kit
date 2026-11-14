@@ -1254,3 +1254,82 @@ def test_a_worker_s_attempts_are_its_own_participant_with_each_refusal_and_why()
             "reason": "orders.update_status is not permitted for order_lookup",
         }
     ]
+
+
+@pytest.mark.parametrize("deputy_lines, outcome", [(None, "answered_by"), (0, "limit_blocked")])
+def test_a_chat_timeout_reads_answered_by_only_once_the_stand_in_has_written(monkeypatch, deputy_lines, outcome):
+    clock = SimpleNamespace(now=0.0)
+    deputy = {**_MANAGER, "id": "deputy", "name": "Dev", "trigger": {"kind": "on_keyword", "words": ["never"]},
+              **({"max_lines": deputy_lines} if deputy_lines is not None else {})}
+    cast = conv.ChatActors(
+        [{**_MANAGER, "trigger": {"kind": "always"}, "timeout_seconds": 30, "fallback": "deputy"}, deputy],
+        seed="run", model=None, clock=lambda: clock.now,
+    )
+
+    async def write(actor, brief):
+        clock.now += 20
+        return '{"line": "I can approve that."}' if actor["id"] == "deputy" else ""
+
+    monkeypatch.setattr(cast, "_write", write)
+
+    async def turns():
+        for turn in range(1, 4):
+            await cast.due_lines(agent_turns=turn, last_text="", tools_called=[], conversation=[])
+            if turn == 2:
+                timeout = next(one for one in cast.events if one.get("kind") == "timeout")
+                # Dev has not written yet: nobody has answered for Mia.
+                assert timeout["outcome"] == ("unresolved" if deputy_lines is None else "limit_blocked")
+
+    asyncio.run(turns())
+    timeout = next(one for one in cast.events if one.get("kind") == "timeout")
+    assert (timeout["actor"], timeout["fallback"], timeout["outcome"]) == ("manager", "deputy", outcome)
+
+
+def test_a_free_form_knowledge_item_is_kept_as_written_and_reaches_the_actor(tmp_path):
+    from fi.alk.harness.actors import Actor, ScenarioActor, read_knowledge
+
+    items = [
+        {"text": "Deliveries stop at noon on Fridays."},
+        {"kind": "facts", "text": "You manage the north store.", "source": "handbook"},
+    ]
+    assert Actor(id="manager", name="Mia", knowledge=items).knowledge == items
+    assert ScenarioActor(id="manager", knowledge=items).knowledge == items
+    read = read_knowledge(items, tmp_path)
+    # No `kind`, and a field the harness does not know, are kept exactly as written.
+    assert read == items
+    text = brief_text(actor_brief({"id": "manager", "name": "Mia", "knowledge": read}))
+    assert "Deliveries stop at noon on Fridays." in text and "You manage the north store." in text
+
+
+def test_a_read_counts_apart_from_committed_writes_and_a_participant_that_only_read_changed_nothing():
+    from fi.alk.harness.call_runner import trial_state_changes
+
+    log = [
+        {"name": "get_order", "outcome": "committed", "effect": "read"},
+        {"name": "list_refunds", "outcome": "committed", "effect": "read"},
+        {"name": "issue_refund", "outcome": "committed", "effect": "write"},
+        # Logged before effects were recorded: a write, as it always was.
+        {"name": "issue_refund", "outcome": "committed"},
+        {"actor_id": "manager", "action": "orders.lookup", "name": "lookup", "outcome": "committed", "effect": "read"},
+    ]
+    agent, manager = trial_state_changes(log, {"manager": Actor(id="manager", name="Mia")})
+    assert (agent["attempted"], agent["committed"], agent["read"]) == (4, 2, 2)
+    assert agent["committed_actions"] == ["issue_refund", "issue_refund"]
+    assert agent["read_actions"] == ["get_order", "list_refunds"]
+    assert (manager["committed"], manager["read"], manager["read_actions"]) == (0, 1, ["orders.lookup"])
+    only_read = trial_state_changes(log[:2], {})[0]
+    assert only_read["no_change"] is True and only_read["committed"] == 0
+
+
+def test_an_agent_read_before_the_decision_is_not_a_write_before_it():
+    from fi.alk.harness.call_runner import approvals
+
+    log = [
+        {"actor_id": "agent", "name": "request_refund", "action_id": "a1", "at": 1.0, "outcome": "committed"},
+        {"actor_id": "agent", "name": "get_order", "action_id": "a2", "at": 2.0, "outcome": "committed",
+         "effect": "read"},
+        {"actor_id": "manager", "name": "approve", "action_id": "m1", "at": 3.0, "outcome": "committed",
+         "parent_event_id": "a1"},
+    ]
+    [line] = approvals(log)
+    assert line["before_decision"] == [] and line["acted_before_decision"] is False

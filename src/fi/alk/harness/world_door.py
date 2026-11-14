@@ -37,6 +37,8 @@ LOG_WRITE_SECONDS = 2.0
 RECORD_VERBS = ("change", "put")
 # How a tools service learns which person an actor's call is from: the actor's identity in that service.
 IDENTITY_HEADER = "X-ALK-Actor-Identity"
+# HTTP methods that only read: a call made with one changes nothing in the world.
+READ_METHODS = ("GET", "HEAD", "OPTIONS")
 _IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,62}$")
 
 
@@ -71,6 +73,8 @@ class ToolCall:
     # The agent's own name for the tool this action is, when the surface knows it (a route is often named otherwise,
     # `get_order` -> `orders.get`); kept beside `name` so grading reads the tool the agent called.
     tool: str = ""
+    # `read` or `write` as the tool's contract declares it; empty reads the HTTP method (see `call_effect`).
+    effect: str = ""
 
 
 @dataclass
@@ -135,7 +139,10 @@ class ActionLog(Protocol):
 
     def rows(self) -> list[dict[str, Any]]: ...
 
-    def committed(self, key: str, actor: str) -> tuple[Any, Any] | None: ...
+    def committed(self, key: str, actor: str) -> tuple[str | None, Any, Any] | None:
+        """The action, arguments and result an actor's key first committed; the action is None on a row written
+        before actions were recorded."""
+        ...
 
     def claim(self, key: str, actor: str) -> str | None:
         """Claim an actor's key before its action runs: None when this call claimed it, else the state a door before
@@ -146,7 +153,58 @@ class ActionLog(Protocol):
         """A claimed key's state once its action ran; None releases it (refused: nothing took effect)."""
         ...
 
-    def agent_calls(self, name: str) -> int: ...
+    def agent_calls(self, action: str, name: str) -> int: ...
+
+
+def logged_as(row: Mapping[str, Any]) -> str:
+    """The world action a log row is a call of, in full; a row written before actions were recorded has only its
+    name."""
+    return str(row.get("action") or row.get("name") or "")
+
+
+def action_matches(logged: str, action: str) -> bool:
+    """Whether a logged world action is this one. A `{part}` in `action` (a route's template, `orders.{id}.cancel`)
+    stands for any one part."""
+    if not action or logged == action:
+        return bool(action)
+    if "{" not in action:
+        return False
+    pattern = ".".join(
+        "[^.]+" if part.startswith("{") and part.endswith("}") else re.escape(part) for part in action.split(".")
+    )
+    return re.fullmatch(pattern, logged) is not None
+
+
+def calls_tool(logged: str, tool: str) -> bool:
+    """Whether a logged world action is a call an `on_tool` trigger waits for. A trigger names the world action in
+    full; one that names only a tool (no route to read it from) is matched by the logged action's last part, as before
+    actions were logged in full."""
+    return action_matches(logged, tool) or ("." not in tool and bool(tool) and logged.rsplit(".", 1)[-1] == tool)
+
+
+def same_action(row: Mapping[str, Any], action: str) -> bool:
+    """Whether a log row is a call of this world action. A row names its action in full (`crm.update`), so
+    `ticket.update` is never taken for it; one written before actions were recorded has only its name, the action
+    itself or its last part (`update`)."""
+    if row.get("action"):
+        return action_matches(str(row["action"]), action)
+    return bool(action) and str(row.get("name") or "") in (action, action.rsplit(".", 1)[-1])
+
+
+def call_effect(call: ToolCall) -> str:
+    """Whether a call reads or writes the world: a record change writes; else the tool's declared effect; else a
+    read-only HTTP method reads. Anything undeclared and not read-only counts as a write, as every call did before."""
+    if call.form == "record":
+        return "write"
+    if call.effect in ("read", "write"):
+        return call.effect
+    return "read" if (call.method or "").upper() in READ_METHODS else "write"
+
+
+def is_read(row: Mapping[str, Any]) -> bool:
+    """Whether a log row is a read: committed or not, it changed nothing. A row from before effects were logged is
+    a write."""
+    return row.get("effect") == "read"
 
 
 def world_action(route: str) -> str:
@@ -211,6 +269,12 @@ def permitted(permitted_actions: object, action: str, routes: object = ()) -> bo
         _matches(str(allowed), action) and ("{" not in str(allowed) or path not in literal or _split(str(allowed))[1] == path)
         for allowed in permitted_actions
     )
+
+
+def declared_read(read_actions: object, action: str, routes: object = ()) -> bool:
+    """Whether the contract declares this world action read-only, matched as an allow-list is: a templated read
+    (`GET orders.{order_id}`) covers each order it is called for, never another tool's own route or method."""
+    return permitted(list(read_actions) if isinstance(read_actions, (list, tuple, frozenset, set)) else None, action, routes)
 
 
 def action_tool(actions: object, action: str) -> str:
@@ -282,10 +346,10 @@ class WorldDoor:
         self._keys_lock = threading.Lock()
         self._key_locks: dict[str, threading.Lock] = {}
         # Each keyed action this door ran, by actor and key: "pending" while it runs, "committed" with its answer, or
-        # "unknown" when the world may have applied it but did not say. Kept here as well as in the log, so a log that
+        # "unknown" when the world may have applied it but did not say, with the action and arguments it was used for. Kept here as well as in the log, so a log that
         # cannot be written or read never lets a retry run the action again.
         self._keyed: dict[str, tuple[str, Any, Any]] = {}
-        # How many calls of each faulted action this door has numbered, so a call whose row the log failed to keep
+        # How many calls of each faulted world action (in full: `crm.update`, never `update`) this door has numbered, so a call whose row the log failed to keep
         # still counts and a one-shot fault is never taken again by the next call.
         self._numbered: dict[str, int] = {}
         # Which trial the numbers belong to, for a door that outlives a trial (the tool proxy); None for one door a trial.
@@ -373,7 +437,9 @@ class WorldDoor:
                 # Which call of this action this is, and its row, are decided under one lock: two calls at once
                 # never both take a one-shot fault set on the same call number. The lock is held across the world
                 # call, so calls of one faulted action run one at a time (each at most the executor's timeout).
-                with self._key_lock(f"\x01calls\x00{call.name}"):
+                # The lock and the call count belong to this door: a trial serves each action through one door, so
+                # the numbering holds per trial. Two doors serving the same action would number separately.
+                with self._key_lock(f"\x01calls\x00{call.action}"):
                     fault = self._fault(call, named)
                     if fault is not None:
                         return self._faulted(call, fault)
@@ -398,28 +464,28 @@ class WorldDoor:
                 elif claimed is not None:
                     return self._key_unknown(call, key, on_behalf_of)
             if known is None:
-                self._keyed[slot] = ("pending", call.arguments, None)
+                self._keyed[slot] = ("pending", call.action, call.arguments, None)
                 outcome = self._run(call, key, on_behalf_of)
                 if outcome.outcome == "committed":
-                    self._keyed[slot] = ("committed", call.arguments, outcome.result)
+                    self._keyed[slot] = ("committed", call.action, call.arguments, outcome.result)
                     self._settle(key, call.actor, "committed")
                 elif outcome.outcome == "faulted":
                     # The world failed mid-action: whether it applied it is unknown, so the key is never run again.
-                    self._keyed[slot] = ("unknown", call.arguments, None)
+                    self._keyed[slot] = ("unknown", call.action, call.arguments, None)
                     self._settle(key, call.actor, "unknown")
                 else:
                     # Refused: nothing took effect, and a retry is a new attempt.
                     del self._keyed[slot]
                     self._settle(key, call.actor, None)
                 return outcome
-            state, arguments, result = known
+            state, action, arguments, result = known
             if state != "committed":
                 return self._key_unknown(call, key, on_behalf_of)
-            if arguments != call.arguments:
+            if (action is not None and action != call.action) or arguments != call.arguments:
                 outcome = Outcome(
                     "refused",
                     409,
-                    reason="this idempotency key was already used with other arguments",
+                    reason="this idempotency key was already used for another action or with other arguments",
                     refusal_code="idempotency_conflict",
                 )
                 self._write(call, outcome, key=key, on_behalf_of=on_behalf_of)
@@ -499,7 +565,7 @@ class WorldDoor:
     def _fault(self, call: ToolCall, named: list[dict[str, Any]]) -> dict[str, Any] | None:
         """The fault set on this call of the action, by which call of it this is."""
         try:
-            made = self.log.agent_calls(call.name)
+            made = self.log.agent_calls(call.action, call.name)
         except Exception:  # noqa: BLE001 - which call this is is unknown: a guess would fault every call as the first
             return None
         if self.trial is not None:
@@ -507,8 +573,8 @@ class WorldDoor:
             if current != self._numbered_trial:
                 self._numbered.clear()
                 self._numbered_trial = current
-        made = max(made, self._numbered.get(call.name, 0))
-        self._numbered[call.name] = made + 1
+        made = max(made, self._numbered.get(call.action, 0))
+        self._numbered[call.action] = made + 1
         return next(
             (one for one in named if _int(one.get("on_call"), 1) == made + 1), None
         )
@@ -587,6 +653,8 @@ class WorldDoor:
         outcome.action_id = action_id
         row = {
             "name": call.name,
+            # The world action in full: `name` alone cannot tell `crm.update` from `ticket.update`.
+            "action": call.action,
             "arguments": call.arguments,
             "result": outcome.result
             if outcome.outcome in ("committed", "duplicate")
@@ -605,6 +673,7 @@ class WorldDoor:
             "agent_tool": call.tool or None,
             "parent_event_id": call.parent,
             "on_behalf_of": on_behalf_of,
+            "effect": call_effect(call),
         }
         if wait:
             self._write_row(row)
@@ -801,6 +870,10 @@ _EXTENDED = (
     "name, arguments, result, ok, error, at, action_id, outcome, refusal, refusal_code, idempotency_key, actor_id, "
     "worker_id, agent_tool, parent_event_id, on_behalf_of"
 )
+# Written beside the extended columns when the table has it.
+_ACTION = "action"
+# Written beside either set of columns when the table has it: a log made before effects were recorded has no column.
+_EFFECT = "effect"
 _BASIC = "name, arguments, result, ok, error, at"
 # Each actor key a door claimed before its action ran, so no later door runs it again; beside the log, which a
 # failed write can leave without the row.
@@ -817,7 +890,7 @@ class PostgresLog:
     def __init__(self, dsn: str, connect_seconds: int = 5) -> None:
         self.dsn = dsn
         self.connect_seconds = connect_seconds
-        self._extended: bool | None = None
+        self._columns: frozenset[str] | None = None
         self._keys_made = False
 
     def _connect(self, **options: Any) -> Any:
@@ -827,26 +900,32 @@ class PostgresLog:
             self.dsn, autocommit=True, connect_timeout=self.connect_seconds, **options
         )
 
-    def records_actors(self) -> bool:
-        if self._extended is None:
-            import psycopg
-
+    def _table_columns(self) -> frozenset[str]:
+        """The log table's columns, read once; nothing (and asked again next time) when it cannot be read."""
+        if self._columns is None:
             try:
                 with self._connect() as connection:
-                    connection.execute("SELECT actor_id FROM _alk_tool_trace LIMIT 0")
-            except psycopg.errors.UndefinedColumn:
-                self._extended = False
+                    cursor = connection.execute("SELECT * FROM _alk_tool_trace LIMIT 0")
+                    self._columns = frozenset(one[0] for one in cursor.description or [])
             except Exception:  # noqa: BLE001 - unknown this time, asked again next time
-                return False
-            else:
-                self._extended = True
-        return self._extended
+                return frozenset()
+        return self._columns
+
+    def records_actors(self) -> bool:
+        return "actor_id" in self._table_columns()
+
+    def _records_action(self) -> bool:
+        return _ACTION in self._table_columns()
 
     def write(self, row: dict[str, Any]) -> None:
         extended = self.records_actors()
         if not extended and row.get("actor_id") != AGENT:
             return
         columns = _EXTENDED if extended else _BASIC
+        if extended and self._records_action():
+            columns += ", " + _ACTION
+        if _EFFECT in self._table_columns():
+            columns += ", " + _EFFECT
         keys = [one.strip() for one in columns.split(",")]
         values = [
             json.dumps(row.get(key), default=str)
@@ -866,14 +945,15 @@ class PostgresLog:
             columns = [one[0] for one in cursor.description or []]
             return [dict(zip(columns, row, strict=True)) for row in cursor.fetchall()]
 
-    def committed(self, key: str, actor: str) -> tuple[Any, Any] | None:
+    def committed(self, key: str, actor: str) -> tuple[str | None, Any, Any] | None:
+        action = _ACTION if self._records_action() else "NULL"
         with self._connect() as connection:
             row = connection.execute(
-                "SELECT arguments, result FROM _alk_tool_trace "
+                f"SELECT {action}, arguments, result FROM _alk_tool_trace "  # noqa: S608 - a fixed column name
                 "WHERE idempotency_key = %s AND actor_id = %s AND outcome = 'committed' ORDER BY at LIMIT 1",
                 (key, actor),
             ).fetchone()
-        return (row[0], row[1]) if row else None
+        return (row[0], row[1], row[2]) if row else None
 
     def _keys_table(self, connection: Any) -> None:
         """The keys table, made once per log; two first claims at once can race on creating it, and the loser finds it
@@ -913,12 +993,17 @@ class PostgresLog:
                     (state, actor, key),
                 )
 
-    def agent_calls(self, name: str) -> int:
+    def agent_calls(self, action: str, name: str) -> int:
         clause = " AND actor_id = 'agent'" if self.records_actors() else ""
+        if self._records_action():
+            # A row from before actions were recorded counts by its name, as `same_action` reads it.
+            match, params = "(action = %s OR (action IS NULL AND name IN (%s, %s)))", (action, action, name)
+        else:
+            match, params = "name = %s", (name,)
         with self._connect() as connection:
             row = connection.execute(
-                f"SELECT count(*) FROM _alk_tool_trace WHERE name = %s{clause}",
-                (name,),  # noqa: S608
+                f"SELECT count(*) FROM _alk_tool_trace WHERE {match}{clause}",  # noqa: S608 - fixed clauses
+                params,
             ).fetchone()
         return int(row[0]) if row else 0
 
@@ -990,7 +1075,7 @@ class MemoryLog:
         with self._lock:
             return [dict(one) for one in self._rows]
 
-    def committed(self, key: str, actor: str) -> tuple[Any, Any] | None:
+    def committed(self, key: str, actor: str) -> tuple[str | None, Any, Any] | None:
         found = next(
             (
                 one
@@ -1001,13 +1086,14 @@ class MemoryLog:
             ),
             None,
         )
-        return (found["arguments"], found["result"]) if found else None
+        return (found.get("action"), found["arguments"], found["result"]) if found else None
 
-    def agent_calls(self, name: str) -> int:
+    def agent_calls(self, action: str, name: str) -> int:
         return sum(
             1
             for one in self.rows()
-            if one.get("name") == name and one.get("actor_id") == AGENT
+            if one.get("actor_id") == AGENT
+            and (one.get("action") == action if one.get("action") else one.get("name") in (action, name))
         )
 
 
@@ -1033,7 +1119,7 @@ class TeeLog:
     def rows(self) -> list[dict[str, Any]]:
         return self.primary.rows()
 
-    def committed(self, key: str, actor: str) -> tuple[Any, Any] | None:
+    def committed(self, key: str, actor: str) -> tuple[str | None, Any, Any] | None:
         return self.primary.committed(key, actor)
 
     def claim(self, key: str, actor: str) -> str | None:
@@ -1042,8 +1128,8 @@ class TeeLog:
     def settle(self, key: str, actor: str, state: str | None) -> None:
         self.primary.settle(key, actor, state)
 
-    def agent_calls(self, name: str) -> int:
-        return self.primary.agent_calls(name)
+    def agent_calls(self, action: str, name: str) -> int:
+        return self.primary.agent_calls(action, name)
 
 
 class DictRoster:

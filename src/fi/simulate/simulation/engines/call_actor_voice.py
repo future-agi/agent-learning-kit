@@ -528,17 +528,15 @@ def world_records(dsn: str) -> Callable[[str], list[dict[str, Any]]] | None:
 
 
 def world_access(dsn: str) -> Callable[[], list[str]] | None:
-    """The names of the tools the agent has called so far, read from the run's live tool trace."""
+    """The world actions the agent has called so far, in full, read from the run's live tool trace."""
     if not dsn:
         return None
     from fi.alk.harness.call_runner import read_tool_trace
+    from fi.alk.harness.world_door import logged_as
 
     def tools_called() -> list[str]:
         try:
-            return [
-                str(record.get("name"))
-                for record in read_tool_trace(dsn, timeout_ms=2000)
-            ]
+            return [logged_as(record) for record in read_tool_trace(dsn, timeout_ms=2000)]
         except Exception as exc:  # noqa: BLE001 - not knowing the tools so far never holds up the call
             logger.warning(
                 "actors could not read the tool trace",

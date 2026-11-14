@@ -24,6 +24,7 @@ try:  # Beside the proxy in a bundle; the harness package when run from source.
         ToolCall,
         WorldDoor,
         action_tool,
+        declared_read,
         method_action,
         permitted,
         route_values,
@@ -41,6 +42,7 @@ except ImportError:  # pragma: no cover - imported as part of the package
         ToolCall,
         WorldDoor,
         action_tool,
+        declared_read,
         method_action,
         permitted,
         route_values,
@@ -57,6 +59,8 @@ WORKER_PERMISSIONS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)
 _CHANNEL_PREFIX = "/w/"
 # The tool each world action is, {"orders.get": "get_order"}, sealed beside this file from the contract's routes.
 ACTIONS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "actions.json")
+# The world actions the agent's contract declares read-only, named as sealed routes are (`GET orders.{order_id}`).
+READ_ACTIONS = [one for one in os.environ.get("READ_ACTIONS", "").split(",") if one]
 
 __all__ = ["Handler", "door", "permitted"]
 
@@ -235,6 +239,8 @@ class Handler(BaseHTTPRequestHandler):
             content_type=self.headers.get("content-type", "application/json"),
             worker=worker,
             tool=action_tool(actions, sealed),
+            # A templated read (`GET orders.{order_id}`) covers each order it is called for, as an allow-list does.
+            effect="read" if declared_read(READ_ACTIONS, sealed, (actions or {}).keys()) else "",
         )
 
     def _enter(self) -> None:
