@@ -18,7 +18,10 @@ def _chat_target_cause(trace):
     """The closed cause of a failed request to the agent, from the transport's own flags.
 
     An HTTP error status is the agent answering, not a refusal: it has no cause here.
+    A failure in the tool-events stage came after the chat answered: it has no cause here either.
     """
+    if trace.get("failure_stage") == "tool_events":
+        return None
     if trace.get("timeout_error") is True:
         return FailureCause.CHAT_TARGET_TIMEOUT
     if trace.get("network_error") is True and not trace.get("status_code"):

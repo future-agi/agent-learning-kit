@@ -16,7 +16,7 @@ from urllib.request import urlopen
 import pytest
 
 from fi.alk.harness.authoring_runtime_validation import RuntimeValidationError
-from fi.alk.harness.chat_readiness import probe_chat_ingress
+from fi.alk.harness.chat_readiness import _chat_target_cause, probe_chat_ingress
 from fi.alk.harness.contract import AgentContract, Runtime, RuntimeInterface
 from fi.alk.harness.job import FailureCause
 from fi.alk.harness.runtime_repair import (
@@ -289,6 +289,16 @@ def test_ingress_names_a_silent_or_closed_agent_by_a_closed_cause(
     with pytest.raises(RuntimeValidationError) as error:
         asyncio.run(probe(tmp_path, silent_or_closed_port))
     assert error.value.cause is cause
+
+
+def test_evidence_fetch_timeout_after_a_chat_answer_is_no_chat_target_cause():
+    # The chat answered; only the completed-tool-events GET timed out.
+    trace = {"timeout_error": True, "failure_stage": "tool_events", "status_code": 200}
+    assert _chat_target_cause(trace) is None
+    assert (
+        _chat_target_cause({"timeout_error": True, "failure_stage": "http"})
+        is FailureCause.CHAT_TARGET_TIMEOUT
+    )
 
 
 @pytest.mark.parametrize(
