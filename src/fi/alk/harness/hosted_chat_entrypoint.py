@@ -55,6 +55,7 @@ _JOURNAL = ".futureagi-conversation.json"
 # Each turn's ending as it was reported, usage included: kept before the turn's final
 # checkpoint, so a restart after a failed delivery replays the same ending.
 _TURN_ENDINGS = ".futureagi-turn-endings.json"
+_ENDING_OUTCOMES = frozenset({"success", "failed", "interrupted"})
 _PROVIDER_SESSIONS = ".futureagi-provider-sessions.json"
 _AUTHORING_BASIS = ".futureagi-authoring-basis.json"
 _PUBLISHED = ".futureagi-published.json"
@@ -334,6 +335,7 @@ class HostedChatRuntime:
         # Endings the coordinator state already holds, as stored: each control-only checkpoint
         # adds only new or changed ones, so its entries do not grow with the number of turns.
         self._stored_endings: dict[str, str] = {}
+        self._skipped_endings: set[str] = set()
         # The rebuild command this sandbox runs.
         self._nudge: dict[str, Any] | None = None
         # The spend when the running turn began: every turn reports what it spent with its
@@ -1335,7 +1337,20 @@ class HostedChatRuntime:
             return {}
         if not isinstance(body, dict):
             return {}
-        return {str(key): value for key, value in body.items() if isinstance(value, dict)}
+        endings: dict[str, dict[str, Any]] = {}
+        for key, value in body.items():
+            key = str(key)
+            if (
+                isinstance(value, dict)
+                and value.get("command_message_id") == key
+                and value.get("outcome") in _ENDING_OUTCOMES
+                and isinstance(value.get("usage", {}), dict)
+            ):
+                endings[key] = value
+            elif key not in self._skipped_endings:
+                self._skipped_endings.add(key)
+                print(f"hosted conversation skipped a malformed turn ending: {key}", flush=True)
+        return endings
 
     def _nudge_note(self) -> str:
         if self._nudge is None:
