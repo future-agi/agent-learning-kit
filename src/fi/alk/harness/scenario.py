@@ -1333,11 +1333,18 @@ def vocabulary_from(design: dict | None) -> set[str] | None:
 
 
 def tidy_keywords(
-    scenarios: list[Scenario], vocabulary: set[str] | None = None
+    scenarios: list[Scenario],
+    vocabulary: set[str] | None = None,
+    *,
+    among: list[Scenario] | None = None,
 ) -> tuple[int, set[str]]:
-    """Settle one spelling per keyword and drop words the plan did not deal; returns (moved, dropped)."""
+    """Settle one spelling per keyword and drop words the plan did not deal; returns (moved, dropped).
+
+    Only ``scenarios`` are rewritten; spellings are settled across ``among`` (the whole suite) when
+    given, so a case written now takes the suite's spelling and a case not written now is untouched.
+    """
     spellings: dict[str, Counter[str]] = defaultdict(Counter)
-    for one in scenarios:
+    for one in among if among is not None else scenarios:
         for word in one.keywords or []:
             clean = word.strip()
             if clean:

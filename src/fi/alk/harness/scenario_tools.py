@@ -1368,6 +1368,7 @@ def scenario_tools(
         write_scenarios(unique, destination, catalogue)
     kept[:] = unique
     used.update(one.scenario_key for one in kept)
+    as_loaded = {one.scenario_key: one.model_dump(mode="json") for one in kept}
 
     def cap() -> int:
         return int(target["count"] or 0) if can_grow else wanted
@@ -2428,7 +2429,10 @@ def scenario_tools(
         if target.get("axes"):
             design = {**(design or {})}
             design["axes"] = {**target["axes"], **(design.get("axes") or {})}
-        settled, invented = tidy_keywords(kept, vocabulary_from(design))
+        written = [
+            one for one in kept if as_loaded.get(one.scenario_key) != one.model_dump(mode="json")
+        ]
+        settled, invented = tidy_keywords(written, vocabulary_from(design), among=kept)
         path = write_scenarios(kept, destination, catalogue)
         # Only sub-goals the suite actually names ship.
         dropped = unused_sub_goals(catalogue, kept)

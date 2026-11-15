@@ -1600,3 +1600,38 @@ def test_usage_delta_counts_only_what_the_turn_spent():
         "unpriced_turns": 1,
         "models": ["m1", "m2"],
     }
+
+
+def test_a_builder_add_leaves_the_cases_it_did_not_write_byte_identical(tmp_path):
+    from fi.alk.harness.scenario_tools import write_scenarios
+
+    root = _suite(tmp_path, "adds-a-big-mac")
+    (legacy,) = load_scenarios(root)
+    legacy.keywords = ["Cart order", "legacy word"]
+    write_scenarios([legacy], root, load_catalogue(root))
+    before = {
+        path.relative_to(root): path.read_bytes()
+        for path in (root / "scenarios" / "adds-a-big-mac").rglob("*")
+        if path.is_file()
+    }
+    scenarios, _server, _catalogue, _kept = _session(root, "suite")
+
+    added = _call(
+        scenarios, "submit_scenario", _scenario(
+            "adds-two-big-macs",
+            keywords=["cart order"],
+            sources=[{"kind": "assumption", "quote": "Orders repeat.", "supports": "two items"}],
+        )
+    )
+    saved = _call(scenarios, "save_scenarios", {"design": {"keywords": ["cart order"]}})
+
+    assert not added.get("is_error"), added
+    assert saved["content"][0]["text"].startswith("Saved 2 scenarios"), saved
+    assert {
+        path.relative_to(root): path.read_bytes()
+        for path in (root / "scenarios" / "adds-a-big-mac").rglob("*")
+        if path.is_file()
+    } == before
+    assert {one.name: one.keywords for one in load_scenarios(root)}["adds-two-big-macs"] == [
+        "Cart order"
+    ]
