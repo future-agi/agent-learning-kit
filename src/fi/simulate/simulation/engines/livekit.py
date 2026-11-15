@@ -2967,7 +2967,10 @@ class LiveKitEngine(BaseEngine):
                         extra={"run_id": run_id, "test_case_id": test_case_id},
                     )
             _loop = asyncio.get_running_loop()
-            _commit_deadline = _loop.time() + _FINAL_TURN_COMMIT_WAIT_SECONDS
+            # A person's Stop cuts the call where it is: no wait for the turn in flight or the target's last words.
+            _commit_deadline = _loop.time() + (
+                0.0 if stop_reason == "user_canceled" else _FINAL_TURN_COMMIT_WAIT_SECONDS
+            )
             while _loop.time() < _commit_deadline:
                 try:
                     if session.current_speech is None:
@@ -2976,7 +2979,7 @@ class LiveKitEngine(BaseEngine):
                     break
                 await asyncio.sleep(0.2)
             session_messages = _session_messages(session)
-            waited = await _await_target_last_words(
+            waited = 0.0 if stop_reason == "user_canceled" else await _await_target_last_words(
                 speaking=lambda: bool(target_transcription_tasks)
                 or getattr(session, "user_state", None) == "speaking",
                 present=lambda: any(
