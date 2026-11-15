@@ -104,6 +104,9 @@ def _names(text: str, value: str) -> bool:
 def _first(attributes, keys):
     for key in keys:
         value = attributes.get(key)
+        if isinstance(value, str):
+            # A NUL byte is never stored (Postgres JSON refuses it), so a name or payload carrying one would lose the call.
+            value = value.replace("\x00", "")
         if isinstance(value, str) and value:
             return value
     return None

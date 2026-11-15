@@ -2234,3 +2234,25 @@ def test_each_framework_s_two_workers_are_handed_off_to_and_own_their_tool_calls
                 "observed",
                 hand_offs[worker]["span_id"],
             )
+
+
+def test_a_nul_byte_in_a_span_s_worker_name_or_payload_is_dropped(tmp_path: Path) -> None:
+    _run(
+        tmp_path,
+        r"""
+        from opentelemetry.trace import set_span_in_context
+        root = tracer.start_span("claude_agent.conversation", attributes={"claude_agent.span_kind": "conversation"})
+        task = tracer.start_span("tool.Task", context=set_span_in_context(root))
+        task.set_attribute("claude_agent.span_kind", "subagent")
+        task.set_attribute("claude_agent.subagent.type", "ref\x00und")
+        call = tracer.start_span("tool.issue_refund", context=set_span_in_context(task))
+        call.set_attribute("claude_agent.span_kind", "tool_execution")
+        call.set_attribute("claude_agent.tool.name", "issue_refund")
+        call.set_attribute("claude_agent.tool.input", '{"order_id": "10\x0043"}')
+        call.end(); task.end(); root.end()
+        """,
+    )
+    rows = _sealed(tmp_path)
+    assert [row["delegated_to"] for row in rows if row.get("delegated_to")] == ["refund"]
+    assert [row["agent"] for row in rows if row["name"] == "issue_refund"] == ["refund"]
+    assert "\\u0000" not in json.dumps(rows)
