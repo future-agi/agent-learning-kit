@@ -3545,6 +3545,35 @@ def _source_tool_trace_bindings(contract: dict[str, Any]) -> list[dict[str, str]
     return bindings
 
 
+def _with_door_bindings(
+    processes: list[Any] | tuple[Any, ...],
+    *,
+    control_service: str,
+    tool_entrypoints: list[dict[str, Any]] | None,
+    language: str,
+) -> list[Any]:
+    """A resealed plan's door kept in step with the contract: the agent's bound tools and the door's read tools. A
+    plan with no world door is returned as it is."""
+    if not any(getattr(process, "name", None) == WORLD_DOOR_PROCESS for process in processes):
+        return list(processes)
+    bound = in_process_door_bindings(tool_entrypoints, language)
+    read_tools = declared_read_tools(tool_entrypoints)
+    updated = []
+    for process in processes:
+        if isinstance(process, SourceProcess) and process.name == control_service:
+            environment = {key: value for key, value in process.environment.items() if key != "ALK_WORLD_DOOR_BINDINGS"}
+            if bound:
+                environment["ALK_WORLD_DOOR_BINDINGS"] = json.dumps(bound, sort_keys=True)
+            process = process.model_copy(update={"environment": environment})
+        elif isinstance(process, SourceProcess) and process.name == WORLD_DOOR_PROCESS:
+            environment = {key: value for key, value in process.environment.items() if key != "READ_ACTIONS"}
+            if read_tools:
+                environment["READ_ACTIONS"] = ",".join(read_tools)
+            process = process.model_copy(update={"environment": environment})
+        updated.append(process)
+    return updated
+
+
 def _with_source_tool_trace(
     processes: list[Any] | tuple[Any, ...],
     *,
@@ -4316,6 +4345,12 @@ def _carry_contract(
             metadata["source_tool_trace_version"] = _SOURCE_TOOL_TRACE_VERSION
         else:
             metadata.pop("source_tool_trace_version", None)
+    processes = _with_door_bindings(
+        processes,
+        control_service=manifest.runtime.control_service or "",
+        tool_entrypoints=body.get("tool_entrypoints"),
+        language=str((runtime if isinstance(runtime, dict) else {}).get("language") or "python"),
+    )
     return True, processes, metadata
 
 
