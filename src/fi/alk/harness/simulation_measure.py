@@ -209,11 +209,11 @@ def _provider():
             )
 
         class _MeasuredOnly(SpanExporter):
-            """Sends each span with the model, the tokens and the timing only. It drops what
-            the instrumentors may keep: the agent's tool definitions (names, descriptions,
-            argument schemas), which no TraceConfig flag hides, and error text, which an older
-            fi-instrumentation does not hide. Only our exporter is wrapped; the agent's own
-            are not."""
+            """Sends each span with the model, the tokens and the timing only (_KEPT_KEYS). It
+            drops whatever else the instrumentors keep, which no TraceConfig flag hides: the
+            agent's tool definitions, error text an older fi-instrumentation keeps, and
+            context the agent or a library set around the call. Only our exporter is wrapped;
+            the agent's own are not."""
 
             def __init__(self, exporter):
                 self._exporter = exporter
@@ -267,30 +267,51 @@ def _provider():
         return provider
 
 
-# The attributes a measured span never carries: the request's tool definitions, as the list and
-# each tool's JSON schema (traceAI) and OpenInference's older form, and the error text an older
-# fi-instrumentation keeps.
-_DROPPED_KEYS = (
-    "gen_ai.tool.definitions",
-    "llm.tools",
-    "exception.message",
-    "exception.stacktrace",
-    "error.message",
+# The only attributes a measured span carries: what fi-collector reads for its model, provider,
+# kind, tokens and cost, and the call id and partial mark. Everything else stays in the process:
+# the request's tool definitions, error text, and whatever the instrumentors copy from the
+# context (traceAI's session, user, metadata, tags and prompt template).
+_KEPT_KEYS = frozenset(
+    {
+        "llm.model_name",
+        "llm.request.model",
+        "gen_ai.request.model",
+        "gen_ai.response.model",
+        "gen_ai.provider.name",
+        "gen_ai.system",
+        "llm.system",
+        "llm.vendor",
+        "llm.provider",
+        "fi.span.kind",
+        "gen_ai.span.kind",
+        "llm.request.type",
+        "openinference.span.kind",
+        "gen_ai.operation.name",
+        "fi.normalization.profile",
+        "fi.simulator.call_execution_id",
+        STATE_KEY,
+    }
+)
+# Counts and prices only.
+_KEPT_PREFIXES = (
+    "gen_ai.usage.",
+    "llm.token_count.",
+    "llm.usage.",
+    "gen_ai.cost.",
+    "llm.cost.",
 )
 
 
 def _kept_attributes(attributes):
-    """The span's attributes without the dropped ones, or None when it carries none of them."""
+    """The span's measured attributes, or None when it carries no other."""
     if not attributes:
         return None
-    dropped = {
-        name
-        for name in attributes
-        if any(name == key or name.startswith(f"{key}.") for key in _DROPPED_KEYS)
+    kept = {
+        name: value
+        for name, value in attributes.items()
+        if name in _KEPT_KEYS or name.startswith(_KEPT_PREFIXES)
     }
-    if not dropped:
-        return None
-    return {name: value for name, value in attributes.items() if name not in dropped}
+    return None if len(kept) == len(attributes) else kept
 
 
 def _hidden_content():

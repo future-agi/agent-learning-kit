@@ -531,6 +531,41 @@ def test_the_agents_own_span_limits_never_drop_the_tokens(
     assert attributes["fi.simulator.call_execution_id"] == CALL
 
 
+def test_context_set_around_a_call_never_leaves_with_its_measured_span(
+    tmp_path: Path, collector: Collector
+) -> None:
+    # The instrumentors copy traceAI's context onto each span: a library the agent imports
+    # may set it. Only the measured attributes leave; the session, user, metadata, tags and
+    # prompt template stay in the process.
+    _needs("openai", "traceai_openai")
+    result = _run(
+        OPENAI_CALL
+        + """
+from fi_instrumentation import using_attributes
+
+with using_attributes(
+    session_id="CTX-SESSION-5a1",
+    user_id="CTX-USER-5a1",
+    metadata={"k": "CTX-METADATA-5a1"},
+    tags=["CTX-TAG-5a1"],
+    prompt_template="CTX-TEMPLATE-5a1",
+    prompt_template_version="CTX-VERSION-5a1",
+):
+    ask()
+""",
+        _environment(tmp_path, collector),
+    )
+
+    assert result.returncode == 0, result.stderr
+    [span] = _settled(collector, 1)
+    assert "CTX-" not in collector.raw().decode("latin-1")
+    attributes = span["attributes"]
+    assert "gpt-4o-mini" in str(attributes.get("gen_ai.request.model"))
+    assert attributes["gen_ai.usage.input_tokens"] == 11
+    assert attributes["gen_ai.usage.output_tokens"] == 7
+    assert attributes["fi.simulator.call_execution_id"] == CALL
+
+
 @pytest.mark.parametrize(
     "older", [False, True], ids=["fi-instrumentation-now", "fi-instrumentation-1.0"]
 )
