@@ -236,3 +236,51 @@ def test_no_tool_proxy_plays_nothing(monkeypatch, tmp_path):
     contract = _contract({"lookup_order": "service", "refund_order": "service"})
     assert live_proof.service_endpoints(contract, {"target_http": "x"}) == {}
     assert live_proof.service_endpoints(contract, {"tool_proxy": "y"}) == {"lookup_order": "lookup", "refund_order": "refund"}
+
+
+RAISES_ON_TWO = check(
+    "if len(world.data['refunds']) > 1:\n    raise KeyError('second refund')\n"
+    "return None if len(world.data['refunds']) == 1 else 'no refund'"
+)
+
+
+def test_a_check_that_raises_under_a_control_is_broken_not_failing(monkeypatch, tmp_path):
+    install(monkeypatch)
+    goals = dict(refund_once=RAISES_ON_TWO, looked_up=REFUND_CATALOGUE["looked_up"])
+    proof = module.prove(refund_case(), catalogue(**goals), tmp_path)
+
+    control = proof.controls[0]
+    assert control["failed"] is False and control["broken"] == ["refund_once"]
+    assert proof.proved is False
+    assert proof.blocked_reason() == "broken_check"
+    assert proof.broken == ["refund_once (under negative control two_refunds)"]
+
+
+def test_a_control_that_could_not_be_played_is_no_evidence():
+    proof = Proof(ready=True, solvable=True, vacuous=False, outcome="change")
+    proof.controls = [{"name": "two_refunds", "why": "", "failed": None, "held": [], "assumed": []}]
+
+    assert proof.ran_controls == []
+    assert proof.proved is False
+    assert proof.blocked_reason() == "control_not_run"
+
+
+def test_a_control_that_crashes_on_the_runtime_keeps_the_case_live_proof(monkeypatch, tmp_path):
+    real = live_proof._play
+    played = []
+
+    def play(scenario, world, steps):
+        played.append(len(steps))
+        if len(played) == 3:  # reference, empty run, then the control
+            raise ConnectionError("tools service went away")
+        return real(scenario, world, steps)
+
+    monkeypatch.setattr(live_proof, "_play", play)
+    results, _stack = _prove(monkeypatch, tmp_path, {"lookup_order": "service", "refund_order": "service"})
+
+    live = results["refund_case"]
+    assert [one["held"] for one in live["with_solution"]] == [True, True]
+    control = live["controls"][0]
+    assert control["failed"] is None and "tools service went away" in control["error"]
+    proof = live_proof.apply_live(Proof(deferred=True), live)
+    assert proof.proved is False and proof.blocked_reason() == "control_not_run"

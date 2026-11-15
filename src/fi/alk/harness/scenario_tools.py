@@ -1057,7 +1057,9 @@ def accept_scenario(
             finally:
                 trial.close()
 
-        if require_sources and not scenario.sources and not _unchanged(scenario, payload, kept):
+        # An assumption that writes down nothing it assumed cites nothing either.
+        cited = [one for one in scenario.sources if one.kind != "assumption" or (one.quote or one.supports).strip()]
+        if require_sources and not cited and not _unchanged(scenario, payload, kept):
             problems.append(NO_SOURCES)
         if problems:
             return _err(

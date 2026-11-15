@@ -100,7 +100,13 @@ class Proof:
 
     @property
     def ran_controls(self) -> list[dict[str, Any]]:
-        return [one for one in self.controls if not one.get("assumed") and not one.get("judged")]
+        """Controls played by code to a pass or fail; one that could not be played (no checks, a
+        crash) is no evidence either way."""
+        return [
+            one
+            for one in self.controls
+            if not one.get("assumed") and not one.get("judged") and one.get("failed") is not None
+        ]
 
     @property
     def judged_controls(self) -> list[dict[str, Any]]:
@@ -716,8 +722,10 @@ def _controls(
             {
                 "name": control.name,
                 "why": control.why,
-                "failed": any(not one.held for one in outcomes if one.name in named),
+                # A check that raised under the control is broken, not failing: no evidence.
+                "failed": any(not one.held and not one.broken for one in outcomes if one.name in named),
                 "held": held,
+                "broken": [one.name for one in outcomes if one.broken and one.name in named],
                 "assumed": assumed,
             }
         )
@@ -1044,6 +1052,16 @@ def prove(
         else "change"
     )
     proof.controls = _controls(scenario, world_root, checks, reference)
+    proof.broken += control_broken(proof.controls)
     if proof.outcome == "no_change" and any(one.get("failed") for one in proof.ran_controls):
         proof.vacuous = False
     return proof
+
+
+def control_broken(controls: list[dict[str, Any]]) -> list[str]:
+    """Each check that raised under a negative control, named with the control."""
+    return [
+        f"{name} (under negative control {one.get('name')})"
+        for one in controls
+        for name in one.get("broken") or []
+    ]

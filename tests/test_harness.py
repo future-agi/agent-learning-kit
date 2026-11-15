@@ -9332,6 +9332,9 @@ def test_new_case_without_sources_is_refused(tmp_path):
     said = accept_scenario(_delta(), world_root=root, catalogue=catalogue, kept=kept, require_sources=True)
     assert said.get("is_error") and NO_SOURCES in said["content"][0]["text"]
     assert kept == []
+    blank = [{"kind": "assumption", "quote": "  ", "supports": ""}]
+    said = accept_scenario(_delta(sources=blank), world_root=root, catalogue=catalogue, kept=kept, require_sources=True)
+    assert said.get("is_error") and NO_SOURCES in said["content"][0]["text"]
 
     assumed = [{"kind": "assumption", "quote": "Customers order one item at a time.", "supports": "one Big Mac"}]
     said = accept_scenario(

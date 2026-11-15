@@ -134,15 +134,27 @@ def _solution_literals(scenario: Any) -> set[str]:
     """Argument values of the reference steps a caller would not know: strings with a digit or 3+
     tokens, and decimal numbers. Values the caller already holds are dropped by the caller."""
     found: set[str] = set()
+
+    def visit(value: Any) -> None:
+        if isinstance(value, bool):
+            return
+        if isinstance(value, dict):
+            for item in value.values():
+                visit(item)
+        elif isinstance(value, (list, tuple)):
+            for item in value:
+                visit(item)
+        elif isinstance(value, str) and not value.startswith("$"):
+            if any(ch.isdigit() for ch in value) or len(_tokens(value)) >= 3:
+                found.add(value)
+        elif isinstance(value, float):
+            # As a person would write it: 37.5 and 37.50 are the same answer.
+            found.add(repr(value))
+            if round(value, 2) == value:
+                found.add(f"{value:.2f}")
+
     for step in getattr(scenario, "solution", None) or []:
-        for value in (getattr(step, "arguments", None) or {}).values():
-            if isinstance(value, bool):
-                continue
-            if isinstance(value, str) and not value.startswith("$"):
-                if any(ch.isdigit() for ch in value) or len(_tokens(value)) >= 3:
-                    found.add(value)
-            elif isinstance(value, float):
-                found.add(f"{value:.2f}" if round(value, 2) == value else repr(value))
+        visit(dict(getattr(step, "arguments", None) or {}))
     return found
 
 
