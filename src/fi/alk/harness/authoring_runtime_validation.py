@@ -668,6 +668,7 @@ async def _probe_runtime_readiness(
 ):
     from .chat_call_runner import _tools, _chat_target_timeout_seconds
     from .chat_readiness import probe_chat_ingress
+    from .process_runtime import ProcessRuntimeError
 
     interface = contract.runtime.interface if contract.runtime else None
     endpoint = runtime.endpoints.get("target_http")
@@ -711,7 +712,10 @@ async def _probe_runtime_readiness(
                 raise
             except Exception as exc:
                 raise RuntimeValidationError(
-                    "environment", f"Readiness reset failed: {exc}"
+                    "environment",
+                    f"Readiness reset failed: {exc}",
+                    diagnostics=tuple(getattr(exc, "diagnostics", ())),
+                    cause=exc.cause if isinstance(exc, ProcessRuntimeError) else None,
                 ) from exc
             receipt["reset"] = "equivalent" if compare_baseline else "restarted"
         receipt["status"] = "passed"

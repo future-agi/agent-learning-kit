@@ -879,6 +879,48 @@ def test_internal_readiness_initializes_real_chat_and_requires_reset(tmp_path, p
     assert not (authoring / "runtime-validation.json").exists()
 
 
+def test_internal_readiness_keeps_the_cause_of_an_agent_that_crashes_on_reset(
+    tmp_path, profile_app
+):
+    """The agent answered once, then exited when the reset restarted it."""
+    from fi.alk.harness.authoring_runtime_validation import _probe_runtime_readiness
+    from fi.alk.harness.process_runtime import ProcessRuntimeError
+
+    url, _state = profile_app
+    contract = AgentContract(runtime=Runtime(
+        language="python", command=["python", "app.py"],
+        interface=interface(setup_requests=[{"path": "/profiles"}]),
+    ))
+
+    class World:
+        def read_only(self):
+            return self
+
+        def state(self):
+            return {}
+
+    class Factory:
+        async def create(self, *args, **kwargs):
+            return World()
+
+    class Provider:
+        async def reset(self, *args, **kwargs):
+            raise ProcessRuntimeError(
+                "depends_on", "spawn_failed", "agent: exited before started_check passed",
+                process="agent", cause=FailureCause.AGENT_EXITED_BEFORE_READY,
+            )
+
+    with pytest.raises(RuntimeValidationError, match="reset") as failure:
+        asyncio.run(_probe_runtime_readiness(
+            job=SimpleNamespace(seed=0), source=tmp_path, authoring=tmp_path,
+            manifest=SimpleNamespace(digest="bundle"), contract=contract,
+            provider=Provider(), runtime=SimpleNamespace(
+                endpoints={"target_http": SimpleNamespace(address=url)}
+            ), factory=Factory(), work=tmp_path, values={}, redactions={},
+        ))
+    assert failure.value.cause is FailureCause.AGENT_EXITED_BEFORE_READY
+
+
 def workflow_probe(tmp_path, url, **changes):
     from fi.alk.harness.chat_readiness import probe_chat_workflow
 
