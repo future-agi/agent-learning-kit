@@ -2119,8 +2119,8 @@ def with_in_process_door(
     for process in plan.processes:
         if isinstance(process, SourceProcess) and process.name == plan.control_service:
             environment = {**process.environment, "ALK_WORLD_DOOR_URL": "{{ALK_WORLD_DOOR_URL}}"}
-            # The door wraps the bindings the tool trace already reads; a plan without them gets them here.
-            environment.setdefault("ALK_TOOL_TRACE_BINDINGS", json.dumps(bound, sort_keys=True))
+            # Its own list: the tool trace's bindings also turn on its call records, which this process may not keep.
+            environment["ALK_WORLD_DOOR_BINDINGS"] = json.dumps(bound, sort_keys=True)
             depends = [*process.depends_on, *([] if WORLD_DOOR_PROCESS in process.depends_on else [WORLD_DOOR_PROCESS])]
             process = process.model_copy(update={"environment": environment, "depends_on": depends})
         processes.append(process)

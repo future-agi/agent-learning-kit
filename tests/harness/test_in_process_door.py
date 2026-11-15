@@ -158,7 +158,7 @@ def test_an_imported_module_s_tool_is_wrapped_as_it_is_defined(tmp_path, monkeyp
     monkeypatch.syspath_prepend(str(tmp_path))
     monkeypatch.setattr(bootstrap, "URL", "http://127.0.0.1:1")
     monkeypatch.setenv(
-        "ALK_TOOL_TRACE_BINDINGS",
+        "ALK_WORLD_DOOR_BINDINGS",
         json.dumps([{"name": "issue_refund", "module": "agent_tools_mod", "callable": "issue_refund"}]),
     )
     before = list(sys.meta_path)
@@ -246,7 +246,7 @@ def test_a_tool_that_is_not_a_plain_def_in_its_module_is_wrapped_beside_one_that
     monkeypatch.syspath_prepend(str(tmp_path))
     monkeypatch.setattr(bootstrap, "URL", "http://127.0.0.1:1")
     monkeypatch.setenv(
-        "ALK_TOOL_TRACE_BINDINGS",
+        "ALK_WORLD_DOOR_BINDINGS",
         json.dumps(
             [{"name": name, "module": "mixed_tools_mod", "callable": name} for name in ("issue_refund", "lookup", "cancel")]
         ),

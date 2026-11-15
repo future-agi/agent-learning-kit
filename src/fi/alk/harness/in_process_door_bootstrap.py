@@ -1,7 +1,7 @@
 """The world's door, inside an agent that runs its tools in its own process.
 
 Imported by the ALK `sitecustomize` hook when the bundle sets `ALK_WORLD_DOOR_URL`. Each contract tool the bundle
-binds (`ALK_TOOL_TRACE_BINDINGS`: tool name, module, callable) is wrapped so every call asks the world's door first
+binds (`ALK_WORLD_DOOR_BINDINGS`: tool name, module, callable) is wrapped so every call asks the world's door first
 (`in_process_door.py`): the scenario's fault can hold it before it runs, or lose its answer after; the door logs what
 came of it in the world's action log, beside every other surface's calls.
 
@@ -265,7 +265,7 @@ class _DoorFinder(importlib.abc.MetaPathFinder):
 def bindings() -> dict[str, dict[str, str]]:
     """The bound tools by module: `{module: {callable path: tool name}}`."""
     try:
-        listed = json.loads(os.environ.get("ALK_TOOL_TRACE_BINDINGS", "[]"))
+        listed = json.loads(os.environ.get("ALK_WORLD_DOOR_BINDINGS", "[]"))
     except ValueError:
         return {}
     modules: dict[str, dict[str, str]] = {}
