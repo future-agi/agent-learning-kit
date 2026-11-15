@@ -1738,8 +1738,10 @@ def test_a_suite_rebuild_can_add_a_scenario(tmp_path, monkeypatch):
 
     async def act(stage):
         await _tool(stage, "scenarios", "aim_for").handler({"count": 2})
+        # A rebuild cites where a new case comes from, as any builder submit does.
+        assumed = [{"kind": "assumption", "quote": "Customers order one item at a time.", "supports": "one Big Mac"}]
         seen["added"] = await _tool(stage, "scenarios", "submit_scenario").handler(
-            _scenario("adds-one-big-mac")
+            {**_scenario("adds-one-big-mac"), "sources": assumed}
         )
 
     _rebuild(tmp_path, monkeypatch, "suite", act)
@@ -1749,6 +1751,22 @@ def test_a_suite_rebuild_can_add_a_scenario(tmp_path, monkeypatch):
         "adds-a-big-mac",
         "adds-one-big-mac",
     }
+
+
+def test_the_builder_s_submit_refuses_a_new_case_that_cites_nothing(tmp_path, monkeypatch):
+    from test_nudge_turn import _scenario
+
+    from fi.alk.harness.scenario_tools import NO_SOURCES
+
+    seen: dict = {}
+
+    async def act(stage):
+        await _tool(stage, "scenarios", "aim_for").handler({"count": 2})
+        seen["added"] = await _tool(stage, "scenarios", "submit_scenario").handler(_scenario("adds-one-big-mac"))
+
+    _rebuild(tmp_path, monkeypatch, "suite", act)
+
+    assert seen["added"].get("is_error") and NO_SOURCES in seen["added"]["content"][0]["text"]
 
 
 def test_a_replayed_rebuild_commits_the_workspace_holding_its_result(
