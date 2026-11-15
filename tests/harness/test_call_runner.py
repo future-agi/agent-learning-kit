@@ -1768,6 +1768,9 @@ class _FakeConnection:
 
     def execute(self, statement: str, params: Any = None) -> _FakeCursor:
         self.executed.append(statement)
+        if "_alk_worker_stops" in statement:
+            # No worker was stopped: the rows are the door's log, not stops.
+            return _FakeCursor([], self._columns)
         return _FakeCursor(self._rows, self._columns)
 
     def __enter__(self) -> "_FakeConnection":

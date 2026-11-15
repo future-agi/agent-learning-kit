@@ -1497,7 +1497,7 @@ def read_worker_stops(runtime: EnvironmentRuntime) -> list[dict[str, Any]]:
 
 def _clear_worker_stops(runtime: EnvironmentRuntime) -> None:
     """A new trial: no worker of it has been stopped yet, whatever an earlier trial on this world left."""
-    database = _find_postgres_endpoint(runtime)
+    database = _find_postgres_endpoint(runtime) if runtime is not None else None
     if database is None:
         return
     import psycopg
