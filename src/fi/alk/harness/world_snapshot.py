@@ -19,6 +19,8 @@ from typing import Any
 
 MAX_ROWS = 5000
 MAX_CHANGES = 100
+# Longest text a change shows for one field; a document or blob column would otherwise ride in every trial's record.
+MAX_VALUE_CHARS = 2000
 INTERNAL_PREFIX = "_alk_"
 
 
@@ -33,6 +35,19 @@ class Snapshot:
 def _plain(row: dict[str, Any]) -> dict[str, Any]:
     """A row as JSON data: dates, decimals and the like as text."""
     return json.loads(json.dumps(row, default=str))
+
+
+def _shown(row: dict[str, Any] | None) -> dict[str, Any] | None:
+    """A record as a change shows it: text past MAX_VALUE_CHARS is cut, and says how much was cut."""
+    if row is None:
+        return None
+    shown: dict[str, Any] = {}
+    for name, value in row.items():
+        text = value if isinstance(value, str) else json.dumps(value) if isinstance(value, (dict, list)) else None
+        if text is not None and len(text) > MAX_VALUE_CHARS:
+            value = f"{text[:MAX_VALUE_CHARS]}... ({len(text) - MAX_VALUE_CHARS} more characters)"
+        shown[name] = value
+    return shown
 
 
 def from_rows(
@@ -130,6 +145,7 @@ def diff(before: Snapshot, after: Snapshot, *, max_changes: int = MAX_CHANGES) -
                          "fields": fields}
             total += 1
             if len(changes) < max_changes:
+                entry["before"], entry["after"] = _shown(entry["before"]), _shown(entry["after"])
                 changes.append(entry)
     return {"changes": changes, "skipped": list(skipped.values()), "truncated": max(total - len(changes), 0)}
 
@@ -151,4 +167,4 @@ def start_state(seeded: dict[str, str] | None, start: dict[str, str] | None) -> 
     return {"state": "differs" if tables else "seeded", "tables": tables}
 
 
-__all__ = ["MAX_CHANGES", "MAX_ROWS", "Snapshot", "diff", "digest", "from_rows", "snapshot", "start_state"]
+__all__ = ["MAX_CHANGES", "MAX_ROWS", "MAX_VALUE_CHARS", "Snapshot", "diff", "digest", "from_rows", "snapshot", "start_state"]

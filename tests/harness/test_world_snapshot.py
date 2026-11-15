@@ -99,3 +99,18 @@ def test_world_changes_carry_the_rows_the_trial_changed(monkeypatch):
     kinds = sorted((one["table"], one["kind"]) for one in sealed["records"]["changes"])
     assert kinds == [("orders", "changed"), ("refunds", "added")]
     assert sealed["start"]["state"] == "seeded"
+
+
+def test_a_huge_field_is_cut_in_the_change_but_still_counts_as_changed():
+    from fi.alk.harness.world_snapshot import MAX_VALUE_CHARS, diff, from_rows
+
+    big = "x" * (MAX_VALUE_CHARS * 50)
+    before = from_rows({"docs": (["id"], [{"id": 1, "body": big, "notes": {"k": big}}])})
+    after = from_rows({"docs": (["id"], [{"id": 1, "body": big + "y", "notes": {"k": big}}])})
+
+    [change] = diff(before, after)["changes"]
+    assert change["fields"] == ["body"]
+    assert len(change["after"]["body"]) < MAX_VALUE_CHARS + 50
+    assert change["after"]["body"].endswith(f"({len(big) + 1 - MAX_VALUE_CHARS} more characters)")
+    assert len(change["before"]["notes"]) < MAX_VALUE_CHARS + 50
+    assert change["after"]["id"] == 1
