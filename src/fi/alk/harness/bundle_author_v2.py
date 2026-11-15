@@ -2069,6 +2069,27 @@ def in_process_door_bindings(
     return bound
 
 
+_SCRIPT_RUN = r"(?<![^\s'\"])((?:\S*/)?python[0-9.]*)\s+({stem})\.py(?=[\s'\"]|$)"
+
+
+def run_bound_script_as_module(command: list[str], bound: list[dict[str, str]]) -> list[str]:
+    """`python agent.py` as `python -m agent` when `agent` holds bound tools: a script started by its path is never
+    imported, so the door's import hook could not reach the tools it defines. Same working directory, same
+    `__name__ == "__main__"`; any other command is returned as it is."""
+    stems = {item["module"] for item in bound if item["module"].isidentifier()}
+    command = list(command)
+    for index, part in enumerate(command[:-1]):
+        script = command[index + 1]
+        if Path(part).name.startswith("python") and script.endswith(".py") and script[:-3] in stems:
+            return [*command[: index + 1], "-m", script[:-3], *command[index + 2 :]]
+    if len(command) >= 3 and Path(command[0]).name in {"sh", "bash"} and command[1] == "-c":
+        for stem in sorted(stems):
+            shelled = re.sub(_SCRIPT_RUN.format(stem=re.escape(stem)), rf"\1 -m {stem}", command[2])
+            if shelled != command[2]:
+                return [*command[:2], shelled, *command[3:]]
+    return command
+
+
 def declared_read_tools(tool_entrypoints: list[dict[str, Any]] | None) -> list[str]:
     """The tools the contract declares read-only, by name: what the in-process door logs as reads."""
     return sorted(
@@ -2122,7 +2143,8 @@ def with_in_process_door(
             # Its own list: the tool trace's bindings also turn on its call records, which this process may not keep.
             environment["ALK_WORLD_DOOR_BINDINGS"] = json.dumps(bound, sort_keys=True)
             depends = [*process.depends_on, *([] if WORLD_DOOR_PROCESS in process.depends_on else [WORLD_DOOR_PROCESS])]
-            process = process.model_copy(update={"environment": environment, "depends_on": depends})
+            run = run_bound_script_as_module(process.run_command, bound)
+            process = process.model_copy(update={"environment": environment, "depends_on": depends, "run_command": run})
         processes.append(process)
     processes.append(_world_door_process(declared_read_tools(tool_entrypoints)))
     return replace(
@@ -3564,7 +3586,8 @@ def _with_door_bindings(
             environment = {key: value for key, value in process.environment.items() if key != "ALK_WORLD_DOOR_BINDINGS"}
             if bound:
                 environment["ALK_WORLD_DOOR_BINDINGS"] = json.dumps(bound, sort_keys=True)
-            process = process.model_copy(update={"environment": environment})
+            run = run_bound_script_as_module(process.run_command, bound)
+            process = process.model_copy(update={"environment": environment, "run_command": run})
         elif isinstance(process, SourceProcess) and process.name == WORLD_DOOR_PROCESS:
             environment = {key: value for key, value in process.environment.items() if key != "READ_ACTIONS"}
             if read_tools:
