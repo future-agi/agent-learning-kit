@@ -1,1 +1,3 @@
 claude-agent-sdk==0.1.6
+# claude-agent-sdk 0.1 registers tools through the MCP Server decorators that mcp 2 removed.
+mcp==1.30.0
