@@ -710,6 +710,12 @@ async def _invoke(
                 work_directory=Path(tempfile.gettempdir()) / "alk-phase-workers",
                 # Authored phases can print private login responses before redaction.
                 suppress_output=True,
+                # This process opens the workspace files for the worker, which cannot.
+                serve=(
+                    world._workspace_service()
+                    if isinstance(world, (HostedWorld, HostedReadOnlyWorld))
+                    else None
+                ),
             )
             world.rng.setstate(tuples(result["rng"]))
             from .world.http_session import validate_events

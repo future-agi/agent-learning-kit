@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import pwd
+import shutil
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -329,6 +330,47 @@ def test_a_declared_user_can_pass_through_to_its_own_trees_but_not_list_them(tmp
         assert mode == 0o711, relative
 
 
+def test_a_digest_rebuild_opens_the_directories_it_just_recreated(tmp_path, monkeypatch):
+    work = tmp_path / "work"
+    provider = object.__new__(pr.ProcessRuntimeProvider)
+    provider._manifest = object()
+    provider._bundle_digest = "old"
+    provider._secrets_loaded = True
+
+    def teardown(work_directory):
+        for name in ("build", "worlds", "managed", "provider"):
+            shutil.rmtree(work_directory / name, ignore_errors=True)
+
+    class Stop(Exception):
+        pass
+
+    def stop(work_directory):
+        raise Stop
+
+    monkeypatch.setattr(pr, "isolation_mode", lambda: pr.IsolationMode.PER_USER)
+    monkeypatch.setattr(pr, "_open_seed_files_for_declared_users", lambda *a: None)
+    monkeypatch.setattr(provider, "_teardown_processes_and_directories", teardown, raising=False)
+    monkeypatch.setattr(provider, "_verify_secret_refs_resolved", stop, raising=False)
+
+    previous = os.umask(0o077)
+    try:
+        pr._open_for_declared_users(work, worlds=2)
+        with pytest.raises(Stop):
+            provider._provision_sync(
+                SimpleNamespace(digest="new"),
+                source=tmp_path,
+                bundle_dir=tmp_path,
+                work_directory=work,
+                instances=2,
+                require_declared_user=True,
+            )
+    finally:
+        os.umask(previous)
+
+    for relative in ("build", "worlds", "managed", "provider", "worlds/w0", "worlds/w1"):
+        assert (work / relative).stat().st_mode & 0o777 == 0o711, relative
+
+
 def test_a_store_s_user_can_read_its_declared_seed_files_and_nothing_else(tmp_path):
     bundle = tmp_path / "bundle"
     previous = os.umask(0o077)
@@ -437,3 +479,101 @@ def test_a_declared_user_child_has_no_capabilities_and_cannot_read_a_held_back_c
     assert "CANARY" not in done.stdout and "DENIED" in done.stdout
     assert "CapEff:\t0000000000000000" in done.stdout
     assert any(line.split() == ["Groups:"] for line in done.stdout.splitlines())
+
+
+# The harness as an entrypoint starts it: isolation first, then each phase in a phase worker.
+_WORKSPACE_PHASES = r"""
+import asyncio, json, os, pwd, random, sys
+from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
+
+from fi.alk.harness import privilege
+from fi.alk.harness.hosted_scheduler import _invoke
+from fi.alk.harness.scenario_source import _compile_entry
+from fi.alk.harness.world.handle import HostedWorld
+
+try:
+    mode = privilege.establish_isolation()
+except privilege.IsolationUnavailable:
+    mode = None
+if mode is not privilege.IsolationMode.PER_USER:
+    print("SKIP")
+    sys.exit(0)
+
+
+class Store:
+    def dsn(self):
+        return "postgresql://unused"
+
+    def freeze(self):
+        return "baseline"
+
+    def restore(self, value):
+        pass
+
+
+agent = pwd.getpwnam("svc-agent")
+root = Path(sys.argv[1])
+root.mkdir(mode=0o700)
+os.chown(root, agent.pw_uid, agent.pw_gid)
+world = HostedWorld(
+    Store(), 0, random.Random(0), {}, _validate_baseline=False,
+    workspace_roots={"project": root},
+)
+phases = [
+    ("setup", "def setup(world):\n    world.write_file('project', 'native.txt', 'from child')\n", world),
+    # True only when the worker itself is refused the workspace and the harness reads it.
+    ("ready", (
+        "def ready(world):\n"
+        "    import os\n"
+        "    try:\n"
+        f"        os.listdir({str(root)!r})\n"
+        "    except PermissionError:\n"
+        "        return world.read_file('project', 'native.txt') == 'from child'\n"
+        "    return 'the phase worker opened the workspace itself'\n"
+    ), world.read_only()),
+    ("check", "def check(world):\n    return world.read_file('project', 'native.txt')\n", world.read_only()),
+]
+results = {}
+for entry, source, handle in phases:
+    fn = _compile_entry(source, label="workspace", entry=entry)
+    try:
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            results[entry] = asyncio.run(
+                _invoke(fn, handle, timeout=60, phase=entry, executor=executor)
+            )
+    except Exception as exc:
+        results[entry] = f"raised {type(exc).__name__}: {exc}"
+written = root / "native.txt"
+print(json.dumps({
+    "results": results,
+    "root_mode": oct(os.stat(root).st_mode & 0o777),
+    "file_owner_is_agent": written.exists() and os.stat(written).st_uid == agent.pw_uid,
+}))
+"""
+
+
+@pytest.mark.skipif(
+    sys.platform != "linux" or os.geteuid() == 0,
+    reason="needs Linux and the harness's own user holding the six capabilities",
+)
+def test_a_workspace_bundle_runs_setup_ready_and_check_under_per_user_isolation(tmp_path):
+    import json
+    import subprocess
+
+    done = subprocess.run(
+        [sys.executable, "-c", _WORKSPACE_PHASES, str(tmp_path / "workspace")],
+        capture_output=True,
+        text=True,
+        timeout=300,
+    )
+    if done.stdout.strip() == "SKIP":
+        pytest.skip("per-user isolation is not available to this process")
+    assert done.returncode == 0, done.stderr[-2000:]
+    report = json.loads(done.stdout.strip().splitlines()[-1])
+
+    # The workspace is the agent's, 0700: the phase worker cannot open it (ready), the harness
+    # can, and what it writes stays the agent's.
+    assert report["root_mode"] == "0o700"
+    assert report["results"] == {"setup": None, "ready": True, "check": "from child"}
+    assert report["file_owner_is_agent"]
