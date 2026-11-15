@@ -154,3 +154,26 @@ def test_a_huge_field_is_cut_in_the_change_but_still_counts_as_changed():
     assert change["after"]["body"].endswith(f"({len(big) + 1 - MAX_VALUE_CHARS} more characters)")
     assert len(change["before"]["notes"]) < MAX_VALUE_CHARS + 50
     assert change["after"]["id"] == 1
+
+
+def test_pre_run_sessions_neither_make_a_trial_read_differs_nor_count_as_its_changes(monkeypatch):
+    import fi.alk.harness.world_snapshot as ws
+
+    seed = from_rows({"orders": (["id"], [{"id": 1, "status": "paid"}]), "messages": (["id"], [])})
+    pre_run = from_rows(
+        {"orders": (["id"], [{"id": 1, "status": "paid"}]), "messages": (["id"], [{"id": 9, "body": "hi"}])}
+    )
+    end = from_rows(
+        {"orders": (["id"], [{"id": 1, "status": "refunded"}]), "messages": (["id"], [{"id": 9, "body": "hi"}])}
+    )
+    taken = iter([seed, seed, pre_run, end])
+    monkeypatch.setattr(ws, "snapshot", lambda dsn, **_: next(taken))
+    records = TrialRecords()
+    # The first trial set the seed; the second wrote a pre-run session's message before it started.
+    records.start("w0", "dsn")
+    records._starts.pop("w0")
+    records.start("w0", "dsn")
+    records.rebase("w0", "dsn")
+    sealed = records.end("w0", "dsn")
+    assert sealed["start"] == {"state": "seeded", "tables": []}
+    assert [(one["table"], one["kind"]) for one in sealed["records"]["changes"]] == [("orders", "changed")]

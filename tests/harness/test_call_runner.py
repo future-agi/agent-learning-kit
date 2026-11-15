@@ -2988,3 +2988,46 @@ def test_a_voice_trial_whose_tools_the_door_cannot_see_says_world_changes_were_n
     sealed = {kind: data for kind, _key, data in adapter.uploads}
     world = json.loads(sealed[cr.ArtifactKind.TRANSCRIPT])["world_actors"]
     assert world == {"recorded": False, "why": "in_process_tools"}
+
+
+def test_a_voice_trial_reads_its_start_before_its_pre_run_sessions_write(tmp_path, monkeypatch) -> None:
+    _job_obj, context = _context(tmp_path=tmp_path, evidence_seam=EvidenceSeam.TOOL_TRACE)
+    _write_scenario_doc(context.bundle_dir, scenario_key="k1")
+    monkeypatch.setitem(sys.modules, "psycopg", _FakePsycopg([], ["name"]))
+    order: list[str] = []
+
+    class _PreRunActors:
+        pre_run = ["session"]
+        read_log = None
+        briefs = None
+
+        async def replay(self) -> None:
+            order.append("replay")
+
+        async def run(self) -> None:
+            await asyncio.Event().wait()
+
+        async def settle(self) -> None:
+            return None
+
+        async def send_reported(self) -> None:
+            return None
+
+        def record(self) -> list:
+            return []
+
+    monkeypatch.setattr(cr, "_actor_dispatcher", lambda *args, **kwargs: _PreRunActors())
+    monkeypatch.setattr(cr.TrialRecords, "start", lambda self, key, dsn: order.append("start"))
+    monkeypatch.setattr(cr.TrialRecords, "rebase", lambda self, key, dsn: order.append("rebase"))
+
+    async def place_call(spec):
+        order.append("call")
+        return _report()
+
+    runner = cr.CallRunnerImpl(FakeAdapter(), context, place_call=place_call)
+    _run(
+        runner,
+        _FakeScenario("k1"),
+        _runtime(endpoints={"database": _postgres_endpoint()}, metadata={"livekit_agent_name": "agent-w0"}),
+    )
+    assert order == ["start", "replay", "rebase", "call"]

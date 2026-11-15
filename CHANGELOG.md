@@ -64,7 +64,9 @@ Post-rc.1 increments on the release branch. Each one adds gates on top of the
   a trial whose tools run where no door stands seals `{"recorded": false, "why": "in_process_tools"}`. The runner
   snapshots the world's tables at a trial's start and end (read-only, by primary key, `_alk_*` never compared,
   tables over 5,000 rows or without a key named in `skipped`, at most 100 changes listed) and seals `records`
-  and `start` (`seeded`, `differs` with the tables, or `unknown`). A check that reads an unreadable action log
+  and `start` (`seeded`, `differs` with the tables, or `unknown`). `start` is read after the trial's reset and
+  before its pre-run sessions write; `records` compares the end against the world after them, so pre-run writes
+  are neither a start that differs nor the trial's changes. A check that reads an unreadable action log
   (`EvidenceUnavailable`) is unmeasured, never settled on an empty log; the scenario errors as
   `evidence_unmeasured`.
 - Two more fault modes: `unavailable` (the world never sees the call; the agent hears 503 at once) and `error`

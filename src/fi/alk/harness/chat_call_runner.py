@@ -919,12 +919,13 @@ class HostedChatCallRunner:
             # Every trial writes its own faults, none included, so nothing an earlier trial left can apply to this one.
             _set_trial_faults(runtime, faults)
         try:
+            # The trial's starting records, after its reset: whether it started from the seed.
+            await asyncio.to_thread(self._records.start, id(runtime), records_dsn)
             if dispatcher is not None:
                 # What the actors wrote before T0 is in the world before the conversation starts.
                 await dispatcher.replay()
-            # The trial's starting records, after its reset and pre-run sessions: what World changes compares against.
-            await asyncio.to_thread(self._records.start, id(runtime), records_dsn)
-            if dispatcher is not None:
+                if dispatcher.pre_run:
+                    await asyncio.to_thread(self._records.rebase, id(runtime), records_dsn)
                 acting = asyncio.create_task(dispatcher.run())
             transcript = await _drive_conversation(
                 _HostedChatTarget(

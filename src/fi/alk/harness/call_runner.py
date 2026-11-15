@@ -2201,16 +2201,24 @@ class TrialRecords:
         self._starts: dict[Any, tuple[Any, dict[str, Any]]] = {}
         self._lock = threading.Lock()
 
-    def start(self, key: Any, dsn: str | None) -> None:
-        """Read the world's records at a trial's start (after its reset and pre-run sessions). The first trial's start
-        is the run's seed."""
-        from .world_snapshot import digest, snapshot, start_state
+    @staticmethod
+    def _read(dsn: str | None, moment: str) -> Any:
+        """The world's records now, or None when they cannot be read."""
+        from .world_snapshot import snapshot
 
         try:
-            taken = snapshot(dsn) if dsn else None
+            return snapshot(dsn) if dsn else None
         except Exception as exc:  # noqa: BLE001 - only the type: a database error can carry the world's password
-            logger.debug("trial start records unreadable: %s", type(exc).__name__)
-            taken = None
+            logger.debug("trial %s records unreadable: %s", moment, type(exc).__name__)
+            return None
+
+    def start(self, key: Any, dsn: str | None) -> None:
+        """Read the world's records at a trial's start, after its reset and before its pre-run sessions write theirs:
+        whether it started from the seed, and what World changes compares its end against. The first trial's start is
+        the run's seed."""
+        from .world_snapshot import digest, start_state
+
+        taken = self._read(dsn, "start")
         start = digest(taken) if taken is not None else None
         with self._lock:
             if not self._seeded_taken:
@@ -2218,18 +2226,23 @@ class TrialRecords:
                 self.seeded = start
             self._starts[key] = (taken, start_state(self.seeded, start))
 
+    def rebase(self, key: Any, dsn: str | None) -> None:
+        """Read a trial's records again once its pre-run sessions wrote theirs, so World changes shows only what the
+        trial itself changed. Whether it started from the seed stays as read before them: pre-run sessions differ by
+        scenario, and are shown apart, under Before the run."""
+        taken = self._read(dsn, "start")
+        with self._lock:
+            if key in self._starts:
+                self._starts[key] = (taken, self._starts[key][1])
+
     def end(self, key: Any, dsn: str | None) -> dict[str, Any]:
         """The trial's records before and after (`records`) and whether it started from the seed (`start`)."""
-        from .world_snapshot import diff, snapshot
+        from .world_snapshot import diff
 
         with self._lock:
             before, start = self._starts.pop(key, (None, {"state": "unknown", "tables": []}))
-        if before is None or not dsn:
-            return {"records": {"unreadable": True}, "start": start}
-        try:
-            after = snapshot(dsn)
-        except Exception as exc:  # noqa: BLE001 - only the type: a database error can carry the world's password
-            logger.debug("trial end records unreadable: %s", type(exc).__name__)
+        after = self._read(dsn, "end") if before is not None else None
+        if before is None or after is None:
             return {"records": {"unreadable": True}, "start": start}
         # The end state itself is kept apart (`END_STATE_KEY`): stored as its own artifact, never in the transcript.
         return {"records": diff(before, after), "start": start, END_STATE_KEY: after}
@@ -2742,13 +2755,14 @@ class CallRunnerImpl:
         records_dsn = world_database.address if world_database is not None else None
 
         async def place_with_world_actors() -> SimulationReport:
+            # The trial's starting records, after its reset: whether it started from the seed.
+            await asyncio.to_thread(self._records.start, id(runtime), records_dsn)
             if actors is None:
-                # The trial's starting records, after its reset: what World changes compares its end against.
-                await asyncio.to_thread(self._records.start, id(runtime), records_dsn)
                 return await place()
             # What the actors wrote before T0 is in the world before the call starts.
             await actors.replay()
-            await asyncio.to_thread(self._records.start, id(runtime), records_dsn)
+            if actors.pre_run:
+                await asyncio.to_thread(self._records.rebase, id(runtime), records_dsn)
             acting = asyncio.create_task(actors.run())
             try:
                 return await place()
