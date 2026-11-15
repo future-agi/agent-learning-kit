@@ -15,7 +15,6 @@ import json
 import os
 import signal
 import socket
-import struct
 import subprocess
 import sys
 from collections.abc import Mapping, Sequence
@@ -26,6 +25,7 @@ from typing import Any
 from . import containment
 from .bundle_v2 import ProcessUser
 from .hosted_scheduler import CallAborted
+from .isolated_process import encode_message, receive_message, send_message
 from .process_runtime import (
     _as_declared_user,
     default_user_resolver,
@@ -38,35 +38,6 @@ from .world.runtime import Call, GeneratedWorld
 HANDLER_USER = ProcessUser.SVC_AGENT
 MAX_MESSAGE_BYTES = 4 * 1024 * 1024
 CALL_TIMEOUT_SECONDS = 300.0
-_LENGTH = struct.Struct(">I")
-
-
-def _encode(message: Mapping[str, Any]) -> bytes:
-    return json.dumps(message, default=str).encode("utf-8")
-
-
-def _send(sock: socket.socket, body: bytes) -> None:
-    sock.sendall(_LENGTH.pack(len(body)) + body)
-
-
-def _receive_exactly(sock: socket.socket, size: int) -> bytes:
-    chunks = bytearray()
-    while len(chunks) < size:
-        chunk = sock.recv(size - len(chunks))
-        if not chunk:
-            raise EOFError("the handler channel closed")
-        chunks.extend(chunk)
-    return bytes(chunks)
-
-
-def _receive(sock: socket.socket) -> dict[str, Any]:
-    (size,) = _LENGTH.unpack(_receive_exactly(sock, _LENGTH.size))
-    if size > MAX_MESSAGE_BYTES:
-        raise ValueError("handler message exceeds the limit")
-    message = json.loads(_receive_exactly(sock, size))
-    if not isinstance(message, dict):
-        raise ValueError("handler message must be an object")
-    return message
 
 
 class HandlerChannel:
@@ -78,7 +49,7 @@ class HandlerChannel:
 
     def call(self, name: str, arguments: Mapping[str, Any]) -> Call:
         args = dict(arguments)
-        request = _encode({"name": name, "arguments": args})
+        request = encode_message({"name": name, "arguments": args})
         if len(request) > MAX_MESSAGE_BYTES:
             # Arguments that large are the agent's own doing; the world did not fail.
             return Call(
@@ -88,8 +59,8 @@ class HandlerChannel:
                 error="tool arguments exceed the handler message limit",
             )
         try:
-            _send(self._sock, request)
-            outcome = _receive(self._sock)
+            send_message(self._sock, request)
+            outcome = receive_message(self._sock, limit=MAX_MESSAGE_BYTES)
         except (OSError, EOFError, ValueError) as exc:
             # The handlers' process is gone or misbehaving: the world fell over, not the agent.
             raise CallAborted(
@@ -272,13 +243,13 @@ def serve(sock: socket.socket, world: GeneratedWorld) -> None:
     """Answer each call until the conversation's side closes."""
     while True:
         try:
-            request = _receive(sock)
+            request = receive_message(sock, limit=MAX_MESSAGE_BYTES)
         except EOFError:
             return
         call = world.call(
             str(request.get("name") or ""), request.get("arguments") or {}
         )
-        body = _encode(
+        body = encode_message(
             {
                 "result": call.result,
                 "ok": call.ok,
@@ -287,10 +258,10 @@ def serve(sock: socket.socket, world: GeneratedWorld) -> None:
             }
         )
         if len(body) > MAX_MESSAGE_BYTES:
-            body = _encode(
+            body = encode_message(
                 {"ok": False, "error": "tool result exceeds the handler message limit"}
             )
-        _send(sock, body)
+        send_message(sock, body)
 
 
 def main() -> None:
