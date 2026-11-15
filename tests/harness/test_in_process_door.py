@@ -371,3 +371,49 @@ def test_a_module_run_as_main_gets_the_door_on_its_tools_before_its_framework_de
     assert as_module.stdout.split() == ["True", "A-1"], as_module.stderr
     by_path = subprocess.run([sys.executable, "agent.py"], cwd=app, env=env, capture_output=True, text=True, timeout=60)
     assert by_path.stdout.split() == ["False", "A-1"], by_path.stderr
+
+
+@pytest.mark.parametrize(
+    ("command", "module", "unreached"),
+    [
+        (["python", "-m", "agent"], "agent", False),
+        (["uvicorn", "agent:app"], "agent", False),
+        (["python", "agent.py"], "agent", True),
+        (["python", "-u", "agent.py"], "agent", True),
+        (["python", "src/agent.py"], "agent", True),
+        (["python", "src/agent.py"], "src.agent", True),
+        (["sh", "-c", "exec python ./test.py --port $PORT"], "test", True),
+        (["python", "server.py"], "agent", False),
+    ],
+)
+def test_the_sealed_contract_says_which_bound_tools_the_door_cannot_reach(command, module, unreached):
+    from fi.alk.harness.bundle_author_v2 import (
+        DOOR_UNREACHED_SCRIPT,
+        WORLD_DOOR_PROCESS,
+        door_unreached_tools,
+        with_door_unreached,
+    )
+    from fi.alk.harness.bundle_v2 import ProcessUser, SourceProcess
+
+    agent = SourceProcess(name="agent", working_directory="source", run_command=command, user=ProcessUser.SVC_AGENT)
+    door = SourceProcess(
+        name=WORLD_DOOR_PROCESS, working_directory="d", run_command=["python", "server.py"], user=ProcessUser.SVC_TOOLS
+    )
+    entries = [
+        {"tool": "issue_refund", "mode": "import", "module": module, "callable": "issue_refund"},
+        {"tool": "lookup", "mode": "service", "service": "tools-api", "endpoint": "orders/lookup"},
+    ]
+    found = door_unreached_tools([agent, door], "agent", entries, "python")
+    assert found == ({"issue_refund": DOOR_UNREACHED_SCRIPT} if unreached else {})
+    marked = with_door_unreached({"tool_entrypoints": entries}, found)["tool_entrypoints"]
+    assert bool(marked[0].get("door_unreached")) is unreached
+    assert "door_unreached" not in marked[1]
+    # No door in the bundle: nothing is said.
+    assert door_unreached_tools([agent], "agent", entries, "python") == {}
+
+
+def test_a_mark_from_an_earlier_seal_is_cleared_when_the_door_reaches_the_tool():
+    from fi.alk.harness.bundle_author_v2 import with_door_unreached
+
+    contract = {"tool_entrypoints": [{"tool": "issue_refund", "mode": "import", "door_unreached": "old"}]}
+    assert "door_unreached" not in with_door_unreached(contract, {})["tool_entrypoints"][0]

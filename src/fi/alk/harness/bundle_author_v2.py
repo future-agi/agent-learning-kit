@@ -2101,6 +2101,56 @@ def run_bound_script_as_module(
     return command
 
 
+DOOR_UNREACHED_SCRIPT = "the agent is started as a script, so the world's door cannot reach the tools it defines"
+
+
+def _modules_started_as_scripts(command: Sequence[str], bound: list[dict[str, str]]) -> set[str]:
+    """The bound modules the command starts by their file path: run as `__main__`, never imported, out of the door's
+    reach."""
+    parts = list(command)
+    if len(parts) >= 3 and Path(parts[0]).name in {"sh", "bash"} and parts[1] == "-c":
+        try:
+            parts = [*parts[:2], *shlex.split(parts[2])]
+        except ValueError:
+            parts = [*parts[:2], *parts[2].split()]
+    started = set()
+    for part in parts:
+        if not part.endswith(".py"):
+            continue
+        dotted = part[:-3].lstrip("./").replace("/", ".")
+        started.update(
+            item["module"] for item in bound if dotted == item["module"] or dotted.endswith("." + item["module"])
+        )
+    return started
+
+
+def door_unreached_tools(
+    processes: Sequence[Any], control_service: str, tool_entrypoints: list[dict[str, Any]] | None, language: str
+) -> dict[str, str]:
+    """The in-process tools the world's door is bound to but cannot reach, by tool name, with why. Empty when the
+    bundle has no door."""
+    if not any(getattr(process, "name", None) == WORLD_DOOR_PROCESS for process in processes):
+        return {}
+    bound = in_process_door_bindings(tool_entrypoints, language)
+    for process in processes:
+        if isinstance(process, SourceProcess) and process.name == control_service:
+            scripts = _modules_started_as_scripts(process.run_command, bound)
+            return {item["name"]: DOOR_UNREACHED_SCRIPT for item in bound if item["module"] in scripts}
+    return {}
+
+
+def with_door_unreached(contract: dict[str, Any], unreached: dict[str, str]) -> dict[str, Any]:
+    """The contract with each tool entry saying whether the door is bound to it but out of reach (`door_unreached`)."""
+    entries = []
+    for entry in contract.get("tool_entrypoints") or []:
+        if isinstance(entry, dict):
+            entry = {key: value for key, value in entry.items() if key != "door_unreached"}
+            if unreached.get(str(entry.get("tool") or "")):
+                entry["door_unreached"] = unreached[str(entry["tool"])]
+        entries.append(entry)
+    return {**contract, "tool_entrypoints": entries} if "tool_entrypoints" in contract else dict(contract)
+
+
 def declared_read_tools(tool_entrypoints: list[dict[str, Any]] | None) -> list[str]:
     """The tools the contract declares read-only, by name: what the in-process door logs as reads."""
     return sorted(
@@ -3813,6 +3863,16 @@ def author_bundle_v2(
         contract_body.get("tool_entrypoints"),
         str((runtime if isinstance(runtime, dict) else {}).get("language") or "python"),
     )
+    if contract_body:
+        contract_body = with_door_unreached(
+            contract_body,
+            door_unreached_tools(
+                plan.processes,
+                plan.control_service or "",
+                contract_body.get("tool_entrypoints"),
+                str((runtime if isinstance(runtime, dict) else {}).get("language") or "python"),
+            ),
+        )
     provided_environment = {
         str(name).upper()
         for name in (job.metadata.get("environment_value_names", []) or [])
@@ -4343,6 +4403,15 @@ def _carry_contract(
     built = (sealed.get("runtime") or {}).get("interface")
     if built is not None and _interface(authored) != _interface(sealed):
         body = {**authored, "runtime": {**(authored.get("runtime") or {}), "interface": built}}
+    runtime = body.get("runtime") if isinstance(body.get("runtime"), dict) else {}
+    language = str(runtime.get("language") or "python")
+    control_service = manifest.runtime.control_service or ""
+    door_bound = _with_door_bindings(
+        processes, control_service=control_service, tool_entrypoints=body.get("tool_entrypoints"), language=language
+    )
+    body = with_door_unreached(
+        body, door_unreached_tools(door_bound, control_service, body.get("tool_entrypoints"), language)
+    )
     sealed_path.write_text(json.dumps(body, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     if body == sealed:
         return True, processes, metadata
