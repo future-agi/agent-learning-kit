@@ -1970,7 +1970,7 @@ class LiveKitEngine(BaseEngine):
             if not _cleanup_started:
                 _cleanup_started.append(time.monotonic())
             spent = time.monotonic() - _cleanup_started[0]
-            remaining = max(0.1, cleanup_timeout - spent)
+            remaining = max(0.1, _cleanup_limit(cleanup_timeout) - spent)
             return min(cap, remaining)
 
         api_key = os.environ.get(runtime.api_key_env)
@@ -4051,6 +4051,24 @@ STOP_CHECK: contextvars.ContextVar[Callable[[], bool] | None] = contextvars.Cont
     "livekit_stop_check", default=None
 )
 _STOP_POLL_SECONDS = 0.25
+
+
+# After a person's Stop the call is sealed with what it has: teardown gets this much in all, so the transcript and the
+# recording reach the harness inside its seal bound (15 s from the stop) however long LiveKit takes to let go.
+_STOPPED_CLEANUP_SECONDS = 8.0
+
+
+def _stop_requested() -> bool:
+    check = STOP_CHECK.get()
+    try:
+        return bool(check is not None and check())
+    except Exception:  # noqa: BLE001 - a failing check is no stop
+        return False
+
+
+def _cleanup_limit(cleanup_timeout: float) -> float:
+    """The whole teardown's budget: the run's own, cut short once the person stopped the call."""
+    return min(cleanup_timeout, _STOPPED_CLEANUP_SECONDS) if _stop_requested() else cleanup_timeout
 
 
 async def _wait_for_stop(check: Callable[[], bool]) -> None:

@@ -4018,6 +4018,20 @@ def test_a_person_s_stop_ends_the_live_conversation_and_keeps_what_was_said() ->
     assert outcome.metadata == {"stop_reason": "user_canceled"}
 
 
+def test_a_stopped_call_s_teardown_is_cut_short_so_it_seals_inside_the_stop_bound() -> None:
+    stopped = {"now": False}
+    token = livekit.STOP_CHECK.set(lambda: stopped["now"])
+    try:
+        assert livekit._cleanup_limit(30.0) == 30.0
+        stopped["now"] = True
+        # A LiveKit teardown that hangs takes at most this bound once the person stopped the call.
+        assert livekit._cleanup_limit(30.0) == livekit._STOPPED_CLEANUP_SECONDS < 15
+        assert livekit._cleanup_limit(3.0) == 3.0
+    finally:
+        livekit.STOP_CHECK.reset(token)
+    assert livekit._cleanup_limit(30.0) == 30.0
+
+
 def test_short_explicit_farewell_disconnect_is_completed_for_eval() -> None:
     messages = [
         {"role": "assistant", "content": "Hello, what can I help with?"},
