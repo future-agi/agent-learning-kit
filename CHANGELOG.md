@@ -10,8 +10,9 @@ Post-rc.1 increments on the release branch. Each one adds gates on top of the
 - Builder chat: every turn's ending reports what that turn spent: tokens, USD, unpriced
   turns and only the models it called. The ending is kept before the turn's final
   checkpoint, so a restart after a failed delivery replays the same ending, usage included.
-  A chat sandbox of its own stores each ending once in its coordinator state, so the state
-  appended per checkpoint no longer grows with the number of turns.
+  A chat sandbox of its own stores each ending once in its coordinator state: a checkpoint
+  adds only the endings new or changed since the last one (the turn journal is still
+  stored whole).
 - Multi-agent compatibility references preserve native Google ADK, LangGraph,
   and CrewAI orchestration, while Python command agents capture bounded tool
   evidence with explicit worker and task attribution.

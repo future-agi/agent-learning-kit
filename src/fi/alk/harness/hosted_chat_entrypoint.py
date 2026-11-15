@@ -333,7 +333,7 @@ class HostedChatRuntime:
         self._confirming = asyncio.Lock()
         self._restart_after_turn = False
         # Endings the coordinator state already holds, as stored: each control-only checkpoint
-        # adds only new or changed ones, so its entries do not grow with the number of turns.
+        # adds only new or changed endings, not the whole history of them.
         self._stored_endings: dict[str, str] = {}
         self._skipped_endings: set[str] = set()
         # The rebuild command this sandbox runs.
