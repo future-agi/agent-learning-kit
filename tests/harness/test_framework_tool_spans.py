@@ -1417,6 +1417,72 @@ def test_a_span_starting_or_ending_waits_for_another_thread_s_bookkeeping(
         assert not thread.is_alive()
 
 
+def test_a_smolagents_tool_that_uses_a_module_helper_never_fails_the_call_through_the_instrumentor(
+    tmp_path: Path,
+) -> None:
+    # traceai-smolagents 0.1.6 serialises a call's arguments with each object's to_dict(); smolagents' to_dict() on a
+    # tool whose code uses a module-level helper raises its self-contained check. The guard records that tool by name.
+    files = {
+        "smolagents/__init__.py": "",
+        "traceai_smolagents/__init__.py": "from traceai_smolagents._wrappers import SmolagentsInstrumentor\n",
+        "traceai_smolagents/_wrappers.py": textwrap.dedent("""
+            def _to_dict(result):
+                if hasattr(result, "to_dict"):
+                    return result.to_dict()
+                if isinstance(result, list):
+                    return [_to_dict(item) for item in result]
+                return result
+
+            class SmolagentsInstrumentor:
+                is_instrumented_by_opentelemetry = False
+
+                def instrument(self, **kwargs):
+                    self.is_instrumented_by_opentelemetry = True
+
+                def uninstrument(self):
+                    self.is_instrumented_by_opentelemetry = False
+        """),
+        "hook/sitecustomize.py": "import simulation_mark_bootstrap\nsimulation_mark_bootstrap.install()\n",
+    }
+    for path, source in files.items():
+        (tmp_path / path).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / path).write_text(source)
+    _place_hook(tmp_path / "hook")
+    script = textwrap.dedent("""
+        import smolagents
+        from traceai_smolagents import _wrappers
+
+        def _ledger(order_id):
+            return order_id
+
+        class GetOrder:
+            name = "get_order"
+
+            def to_dict(self):
+                raise ValueError("SimpleTool validation failed for get_order: Name '_ledger' is undefined.")
+
+        class Plain:
+            def to_dict(self):
+                return {"plain": True}
+
+        print(_wrappers._to_dict([GetOrder(), Plain(), "order 1043"]))
+    """)
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        env={
+            **os.environ,
+            "PYTHONPATH": f"{tmp_path / 'hook'}:{tmp_path}",
+            "ALK_OBSERVE_FRAMEWORKS": "1",
+            "HARNESS_TOOL_TRACE": str(tmp_path / "calls.jsonl"),
+        },
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "['get_order', {'plain': True}, 'order 1043']"
+
+
 def test_the_process_instrumenting_after_the_hook_with_its_own_provider_gets_it() -> (
     None
 ):
