@@ -725,6 +725,20 @@ def world_role(credentials: EngineCredentials, world_index: int) -> EngineCreden
     return EngineCredentials(username=name, password=password)
 
 
+def _engine_diagnostic_secrets(
+    credentials: dict[str, EngineCredentials], instances: int
+) -> dict[str, str]:
+    """Every engine password a retained log must not carry: each superuser password and, for a
+    postgres process, the password of each world role the job can provision."""
+    secrets_by_name = {name: value.password for name, value in credentials.items()}
+    for name, value in credentials.items():
+        if value.world_secret:
+            for world_index in range(instances):
+                role = world_role(value, world_index)
+                secrets_by_name[f"{name}:{role.username}"] = role.password
+    return secrets_by_name
+
+
 def generate_engine_credentials(
     manifest: EnvironmentBundleV2, *, token: Callable[[], str] | None = None
 ) -> dict[str, EngineCredentials]:
@@ -6701,9 +6715,9 @@ class ProcessRuntimeProvider:
             # First call for this job identity, or the bundle changed underneath it (§2c: a
             # digest mismatch forces a rebuild) — build once, seed+freeze once, gate once.
             credentials = generate_engine_credentials(bundle, token=self._token)
-            self._diagnostic_engine_secrets = {
-                name: value.password for name, value in credentials.items()
-            }
+            self._diagnostic_engine_secrets = _engine_diagnostic_secrets(
+                credentials, ceiling
+            )
             self._diagnostic_work_directory = work_directory
             job_id = _read_job_id(work_directory)
             context = SpawnContext(
