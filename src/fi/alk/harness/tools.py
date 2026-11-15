@@ -476,14 +476,16 @@ def contract_tools(
                             "allowed_tools": {"type": "array", "items": {"type": "string"}},
                             "binding": {"type": "string", "enum": ["separate", "shared"]},
                             "address_env": {"type": "string"},
+                            "process": {"type": "string"},
                         },
                         "required": ["id"],
                     },
                     "description": "Agents this one hands work to, if any: an id no other worker has, the name the app "
                     "gives the agent (its spans carry it), the names of the tools above that it holds, "
                     "separate when its tools run through code of their own, with address_env naming the "
-                    "environment variable that code reads for its tools' base address, and allowed_tools when it "
-                    "may use fewer tools than its code holds. Leave out for an agent that hands no work on.",
+                    "environment variable that code reads for its tools' base address, allowed_tools when it "
+                    "may use fewer tools than its code holds, and process naming the environment process that runs "
+                    "it alone when the app serves it as its own service. Leave out for an agent that hands no work on.",
                 },
                 "data_schema": {
                     "type": "object",
@@ -692,6 +694,12 @@ def contract_tools(
                                 "type": "string",
                                 "enum": ["POST"],
                                 "description": "HTTP method used by the submitted implementation.",
+                            },
+                            "effect": {
+                                "type": "string",
+                                "enum": ["read", "write"],
+                                "description": "read when the tool only reads (a lookup, a search, a list), write "
+                                "when it changes anything. Leave out to go by the HTTP method.",
                             },
                             "notes": {
                                 "type": "string",
