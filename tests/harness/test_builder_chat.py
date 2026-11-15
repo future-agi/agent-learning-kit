@@ -1489,6 +1489,30 @@ def test_an_endings_file_that_is_not_an_object_is_ignored(tmp_path, monkeypatch)
     assert list(endings) == ["m-1"]
 
 
+def test_a_malformed_persisted_ending_is_skipped_and_reported(
+    tmp_path, monkeypatch, capsys
+):
+    runtime = _runtime(tmp_path, BuilderClient(), monkeypatch)
+    good = {
+        "command_message_id": "m-1",
+        "outcome": "success",
+        "usage": {"tokens_in": 4},
+    }
+    endings = {
+        "m-1": good,
+        "m-2": {"command_message_id": "other", "outcome": "success"},
+        "m-3": {"command_message_id": "m-3", "outcome": "done"},
+        "m-4": {"command_message_id": "m-4", "outcome": "failed", "usage": "free"},
+    }
+    (tmp_path / ".futureagi-turn-endings.json").write_text(json.dumps(endings))
+
+    assert runtime._read_turn_endings() == {"m-1": good}
+    # A malformed ending is not replayed: the turn gets a bare ending, never the forged one.
+    assert runtime._turn_ending("m-2") == {"command_message_id": "m-2"}
+    reported = capsys.readouterr().out
+    assert all(key in reported for key in ("m-2", "m-3", "m-4"))
+
+
 def test_prove_scenarios_records_each_proof(tmp_path):
     from test_nudge_turn import _suite
 
