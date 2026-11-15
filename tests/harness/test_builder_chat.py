@@ -1737,8 +1737,10 @@ def test_a_suite_rebuild_can_add_a_scenario(tmp_path, monkeypatch):
 
     async def act(stage):
         await _tool(stage, "scenarios", "aim_for").handler({"count": 2})
+        # A rebuild cites where a new case comes from, as any builder submit does.
+        assumed = [{"kind": "assumption", "quote": "Customers order one item at a time.", "supports": "one Big Mac"}]
         seen["added"] = await _tool(stage, "scenarios", "submit_scenario").handler(
-            _scenario("adds-one-big-mac")
+            {**_scenario("adds-one-big-mac"), "sources": assumed}
         )
 
     _rebuild(tmp_path, monkeypatch, "suite", act)

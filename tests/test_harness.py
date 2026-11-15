@@ -2673,6 +2673,8 @@ def _delta(**overrides):
             {"tool": "add", "arguments": {"item_id": "big_mac"}},
         ],
         "sub_goals": ["item-added", "right-item"],
+        # The builder cites where each new case comes from; an assumption source when nothing does.
+        "sources": [{"kind": "assumption", "quote": "Customers order one item at a time.", "supports": "one Big Mac"}],
         "negative_controls": [
             {
                 "name": "adds_twice",
@@ -9329,7 +9331,7 @@ def test_new_case_without_sources_is_refused(tmp_path):
 
     root, _contract, catalogue = _built_environment(tmp_path)
     kept = []
-    said = accept_scenario(_delta(), world_root=root, catalogue=catalogue, kept=kept, require_sources=True)
+    said = accept_scenario(_delta(sources=[]), world_root=root, catalogue=catalogue, kept=kept, require_sources=True)
     assert said.get("is_error") and NO_SOURCES in said["content"][0]["text"]
     assert kept == []
     blank = [{"kind": "assumption", "quote": "  ", "supports": ""}]
@@ -9349,15 +9351,15 @@ def test_unchanged_legacy_case_without_sources_saves(tmp_path):
     root, _contract, catalogue = _built_environment(tmp_path)
     kept = []
     # Written before sources were required.
-    assert not accept_scenario(_delta(), world_root=root, catalogue=catalogue, kept=kept).get("is_error")
+    assert not accept_scenario(_delta(sources=[]), world_root=root, catalogue=catalogue, kept=kept).get("is_error")
     key = kept[0].scenario_key
 
     same = accept_scenario(
-        _delta(scenario_key=key), world_root=root, catalogue=catalogue, kept=kept, require_sources=True
+        _delta(scenario_key=key, sources=[]), world_root=root, catalogue=catalogue, kept=kept, require_sources=True
     )
     assert not same.get("is_error"), same
     edited = accept_scenario(
-        _delta(scenario_key=key, instruction="Order one Big Mac, please."),
+        _delta(scenario_key=key, instruction="Order one Big Mac, please.", sources=[]),
         world_root=root,
         catalogue=catalogue,
         kept=kept,
