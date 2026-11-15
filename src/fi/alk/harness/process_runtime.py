@@ -3683,7 +3683,9 @@ def apply_postgres_world_ir(
         dbname=dbname,
     ) as postgres:
         source = inspect_postgres(postgres, source_digest=canonical_source_digest)
-        source = _compose_seed_source_model(source, file, artifact_root)
+        source = _compose_seed_source_model(
+            source.without_harness_tables(), file, artifact_root
+        )
         if artifact_root is not None:
             artifacts = GenericHarnessArtifactStore(artifact_root)
         unsupported = tuple(

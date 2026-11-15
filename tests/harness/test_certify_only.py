@@ -1321,6 +1321,73 @@ def test_real_postgres_seeds_the_saved_world_for_the_agent_version_run(
     ] == [expected]
 
 
+def _recorded_source_model(dsn: str, source: Path, schema: str) -> SourceModel:
+    """The source model a build recorded: the source schema and the sentinel, no other harness table."""
+    import uuid
+
+    from fi.alk.harness.source_schema.postgres import inspect_postgres
+
+    psycopg = pytest.importorskip("psycopg")
+    database = f"recorded_{uuid.uuid4().hex[:8]}"
+    with psycopg.connect(dsn, autocommit=True) as admin:
+        admin.execute(f'CREATE DATABASE "{database}"')
+    try:
+        target = psycopg.conninfo.make_conninfo(dsn, dbname=database)
+        with psycopg.connect(target, autocommit=True) as connection:
+            connection.execute(
+                "CREATE TABLE harness_seed_sentinel (id text PRIMARY KEY);\n" + schema
+            )
+            return inspect_postgres(
+                connection, source_digest="sha256:" + source_fingerprint(source)
+            )
+    finally:
+        with psycopg.connect(dsn, autocommit=True) as admin:
+            admin.execute(f'DROP DATABASE IF EXISTS "{database}" WITH (FORCE)')
+
+
+@pytest.mark.parametrize("seed", ["world.sqlite", "world-ir.json"])
+def test_real_postgres_recertifies_an_environment_from_its_own_archive(
+    tmp_path, seed: str
+) -> None:
+    """A re-certify seeds the world the first certify sealed, beside the harness's tables."""
+    import sqlite3
+    from contextlib import closing
+
+    from fi.alk.harness.world_import.sqlite import import_sqlite_world
+
+    dsn = os.environ.get("ALK_TEST_POSTGRES_DSN")
+    if not dsn:
+        pytest.skip("set ALK_TEST_POSTGRES_DSN to run the real seed test")
+    schema = "CREATE TABLE users (id TEXT PRIMARY KEY, name TEXT NOT NULL);\n"
+    source, authoring, _ = _assembled(tmp_path, {"one": ["works"]})
+    (source / "db" / "schema.sql").write_text(schema, encoding="utf-8")
+    with closing(sqlite3.connect(authoring / "world.sqlite")) as connection:
+        connection.execute("CREATE TABLE users (id TEXT, name TEXT)")
+        connection.execute("INSERT INTO users VALUES ('u1', 'Ada')")
+        connection.commit()
+    store = GenericHarnessArtifactStore(authoring / "generic-harness")
+    store.write_source_model(_recorded_source_model(dsn, source, schema))
+    first = tmp_path / "first"
+    bundle_author.author_bundle_v2(
+        source=source, job=_job(1), authoring=authoring, output=first
+    )
+    assert _seed_real_postgres(dsn, "first", first) == {"users": 1}
+
+    if seed == "world-ir.json":
+        with closing(sqlite3.connect(authoring / "world.sqlite")) as connection:
+            imported = import_sqlite_world(
+                connection, store.read_source_model(), validate=False
+            )
+        store.write_world_ir(imported.world)
+    again = tmp_path / "again"
+    bundle_author.author_bundle_v2(
+        source=source, job=_job(1), authoring=authoring, output=again
+    )
+    (sealed,) = load_bundle_v2(again).seed.stores
+    assert any(path.endswith(seed) for path in sealed.seed_files)
+    assert _seed_real_postgres(dsn, "again", again) == {"users": 1}
+
+
 def _rebuilt_voice_environment(tmp_path: Path, agent_code: str):
     """An environment a nudge rebuild renamed geocode_address to search_places in.
 
