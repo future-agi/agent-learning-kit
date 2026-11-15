@@ -288,7 +288,11 @@ def test_the_door_never_raises_into_its_caller_when_the_world_or_the_log_fails()
     door = _door(_Executor(fail=True), log=_Broken())
     outcome = door.enter(ToolCall(action="crm.update", name="update"))
     assert outcome.outcome == "faulted" and outcome.status == 502
-    assert door.events() == []
+    from fi.alk.harness.world_door import EvidenceUnavailable
+
+    # The read side says the evidence is missing rather than reading as an empty log.
+    with pytest.raises(EvidenceUnavailable):
+        door.events()
 
 
 def test_an_unexpected_failure_inside_the_door_comes_back_as_an_outcome():
