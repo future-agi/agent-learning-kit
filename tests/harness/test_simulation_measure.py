@@ -506,6 +506,31 @@ def test_a_measured_span_carries_only_the_simulations_resource_attributes(
         assert text.encode() not in collector.raw()
 
 
+def test_the_agents_own_span_limits_never_drop_the_tokens(
+    tmp_path: Path, collector: Collector
+) -> None:
+    # The agent's OTEL_*_LIMIT settings are for its own tracing: at a limit of one
+    # attribute, a measured span would keep its first and lose the model and the tokens.
+    _needs("openai", "traceai_openai")
+    result = _run(
+        OPENAI_CALL + "ask()",
+        _environment(
+            tmp_path,
+            collector,
+            OTEL_ATTRIBUTE_COUNT_LIMIT="1",
+            OTEL_SPAN_ATTRIBUTE_COUNT_LIMIT="1",
+        ),
+    )
+
+    assert result.returncode == 0, result.stderr
+    [span] = _settled(collector, 1)
+    attributes = span["attributes"]
+    assert "gpt-4o-mini" in str(attributes.get("gen_ai.request.model"))
+    assert attributes["gen_ai.usage.input_tokens"] == 11
+    assert attributes["gen_ai.usage.output_tokens"] == 7
+    assert attributes["fi.simulator.call_execution_id"] == CALL
+
+
 @pytest.mark.parametrize(
     "older", [False, True], ids=["fi-instrumentation-now", "fi-instrumentation-1.0"]
 )

@@ -164,7 +164,12 @@ def _provider():
             OTLPSpanExporter,
         )
         from opentelemetry.sdk.resources import Resource
-        from opentelemetry.sdk.trace import ReadableSpan, SpanProcessor, TracerProvider
+        from opentelemetry.sdk.trace import (
+            ReadableSpan,
+            SpanLimits,
+            SpanProcessor,
+            TracerProvider,
+        )
         from opentelemetry.sdk.trace.export import BatchSpanProcessor, SpanExporter
         from opentelemetry.sdk.trace.sampling import ALWAYS_ON
         from opentelemetry.trace import Status
@@ -234,8 +239,22 @@ def _provider():
         # resource attribute with the span.
         # The agent's OTEL_TRACES_SAMPLER and OTEL_SDK_DISABLED are for its own tracing. Read
         # here, they would turn measuring off, and its calls would read as costing nothing.
+        # So are its OTEL_*_LIMIT settings: a low attribute limit would drop the tokens. The
+        # SDK's own defaults, set here, are not read from the environment.
+        limits = SpanLimits(
+            max_attributes=128,
+            max_events=128,
+            max_links=128,
+            max_span_attributes=128,
+            max_event_attributes=128,
+            max_link_attributes=128,
+            max_attribute_length=SpanLimits.UNSET,
+            max_span_attribute_length=SpanLimits.UNSET,
+        )
         provider = TracerProvider(
-            resource=Resource(_state["resource"]), sampler=ALWAYS_ON
+            resource=Resource(_state["resource"]),
+            sampler=ALWAYS_ON,
+            span_limits=limits,
         )
         provider._disabled = False
         provider.add_span_processor(_Stamp())
