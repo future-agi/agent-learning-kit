@@ -357,7 +357,7 @@ def test_a_digest_rebuild_opens_the_directories_it_just_recreated(tmp_path, monk
         pr._open_for_declared_users(work, worlds=2)
         with pytest.raises(Stop):
             provider._provision_sync(
-                SimpleNamespace(digest="new"),
+                SimpleNamespace(digest="new", seed=None, processes=[]),
                 source=tmp_path,
                 bundle_dir=tmp_path,
                 work_directory=work,
