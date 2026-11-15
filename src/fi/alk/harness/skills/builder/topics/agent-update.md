@@ -25,6 +25,9 @@ decided in the notes.
   rebuilt in its own turn after this one lands.
 - There is no running world and no credentials here. Do not try to run the agent's tools; the
   checks are static.
+- A tool the agent's source defines that the contract lacks (one it gained, or one an earlier version
+  removed and this one has again) is added with `declare_tool`, citing the line that defines it.
+  `fix_tool` and `adopt_tool` only change tools the contract already has.
 - For every tool the agent gained, add a sub-goal that checks what the tool lets the person using
   the agent do, so the suite stage adds a scenario for it. `report_update` warns about a new tool
   no sub-goal names; check that one covers it, by name or by its effect.

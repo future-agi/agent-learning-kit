@@ -1939,10 +1939,19 @@ def test_an_amendment_is_recorded_rather_than_blended_in(tmp_path):
     assert "mango_smoothie" in recorded[0] and "this morning" in recorded[0]
 
 
+def test_fixing_a_tool_the_contract_lacks_points_at_declare_tool(tmp_path):
+    from fi.alk.harness.amend import fix_tool
+
+    contract = _written_contract(tmp_path)
+    done, said = fix_tool(contract, tmp_path, tool_name="apply_discount", why="the agent has it again")
+
+    assert not done and "is not in the contract" in said and "declare_tool" in said
+
+
 @pytest.mark.parametrize(
     "overrides,expected",
     [
-        ({"tool_name": "nope"}, "is not a tool this agent has"),
+        ({"tool_name": "nope"}, "is not in the contract"),
         ({"argument": "colour"}, "takes no argument"),
         ({"why": "  "}, "say why"),
         ({"values": ["big_mac"]}, "already accepts"),
