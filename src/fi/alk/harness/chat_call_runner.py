@@ -113,10 +113,10 @@ DEFAULT_CHAT_TARGET_TIMEOUT_SECONDS = 300.0
 def _unproxied_worker_notices(document: Mapping[str, Any], bundle_dir: Any = None) -> list[dict[str, Any]]:
     """A chat agent whose tool calls the harness runs itself has no tool proxy, so nothing holds a worker's deadline or
     permitted actions: a scenario that relies on either says so, and is held rather than graded."""
-    from .call_runner import declares_worker_limits
+    from .call_runner import relies_on_worker_limits
 
     budget = document.get("worker_budget_seconds")
-    if (not budget or isinstance(budget, bool)) and not declares_worker_limits(bundle_dir):
+    if (not budget or isinstance(budget, bool)) and not relies_on_worker_limits(document, bundle_dir):
         return []
     return [{
         "code": "worker_limits_not_enforced",

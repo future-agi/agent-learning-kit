@@ -1921,9 +1921,13 @@ def test_a_chat_agent_without_a_tool_proxy_says_its_workers_budgets_were_not_hel
 
 def test_a_chat_agent_without_a_tool_proxy_says_its_workers_permissions_were_not_held(tmp_path) -> None:
     (tmp_path / "contract.json").write_text(json.dumps({"workers": [{"id": "refund", "allowed_tools": ["get"]}]}))
-    [notice] = chat._unproxied_worker_notices({}, tmp_path)
+    (tmp_path / "sub_goals.json").write_text(json.dumps({"sub_goals": [
+        {"name": "refund_refused", "subject": "worker:refund"}, {"name": "task_done", "subject": "task"}]}))
+    [notice] = chat._unproxied_worker_notices({"sub_goals": ["refund_refused"]}, tmp_path)
     assert notice["code"] == "worker_limits_not_enforced"
     assert "permitted actions" in notice["message"]
+    # A scenario that checks only the task is graded: it relies on no worker's limits.
+    assert chat._unproxied_worker_notices({"sub_goals": ["task_done"]}, tmp_path) == []
 
 
 def _stop_runtime() -> EnvironmentRuntime:

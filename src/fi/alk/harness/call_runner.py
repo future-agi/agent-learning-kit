@@ -1642,7 +1642,7 @@ def trial_worker_deadlines(
     told. A tool proxy sealed before this release has no worker limits at all, so neither a budget nor a worker's
     permitted actions are held there: a scenario that relies on either says so, and is held rather than graded."""
     deadline, deadlines = worker_deadline(document), worker_deadlines(document)
-    relies = bool(deadline or deadlines) or declares_worker_limits(bundle_dir)
+    relies = bool(deadline or deadlines) or relies_on_worker_limits(document, bundle_dir)
     if not relies:
         return deadline, deadlines, []
     if _door_holds_worker_limits(bundle_dir):
@@ -1693,6 +1693,46 @@ def declares_worker_limits(bundle_dir: Path | str | None) -> bool:
         isinstance(one, dict) and (one.get("binding") == "separate" or bool(one.get("allowed_tools")))
         for one in workers or []
     )
+
+
+def scenario_worker_subjects(document: Mapping[str, Any], bundle_dir: Path | str | None) -> set[str]:
+    """The workers this scenario's own sub-goals are about (``subject: worker:<id>``), read from the bundle's
+    catalogue; none when it cannot be read."""
+    named = {
+        str(one.get("name") if isinstance(one, Mapping) else one)
+        for one in document.get("sub_goals") or []
+        if one
+    }
+    if not named or bundle_dir is None:
+        return set()
+    from .catalogue import CATALOGUE
+
+    try:
+        catalogue = json.loads((Path(bundle_dir) / CATALOGUE).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return set()
+    return {
+        str(goal.get("subject"))[len("worker:") :]
+        for goal in (catalogue.get("sub_goals") if isinstance(catalogue, dict) else None) or []
+        if isinstance(goal, dict) and goal.get("name") in named and str(goal.get("subject") or "").startswith("worker:")
+    }
+
+
+def relies_on_worker_limits(document: Mapping[str, Any], bundle_dir: Path | str | None) -> bool:
+    """Whether this scenario relies on a worker's own limits: one of its sub-goals is about a worker the agent
+    declares held to its own tools. A scenario about the task alone relies on none, so it is graded whatever the
+    door holds."""
+    if not declares_worker_limits(bundle_dir):
+        return False
+    subjects = scenario_worker_subjects(document, bundle_dir)
+    if not subjects:
+        return False
+    limited = {
+        str(one.get("id"))
+        for one in _bundle_contract(Path(bundle_dir)).get("workers") or []  # type: ignore[arg-type]
+        if isinstance(one, dict) and (one.get("binding") == "separate" or bool(one.get("allowed_tools")))
+    }
+    return bool(subjects & limited)
 
 
 def _door_holds_worker_limits(bundle_dir: Path | str | None) -> bool:

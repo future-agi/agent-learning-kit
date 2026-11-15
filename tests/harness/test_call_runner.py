@@ -3012,23 +3012,31 @@ def test_limits_on_a_shared_worker_are_said_not_enforced_on_a_new_door(monkeypat
     # One deadline for all with no separate worker cannot be held either.
     contract.write_text(json.dumps({"workers": [shared]}))
     assert cr.trial_worker_deadlines({"worker_budget_seconds": 30}, tmp_path)[2]
-    # Permitted tools on a shared worker cannot be held.
+    # Permitted tools on a shared worker cannot be held, for a scenario with a check about that worker.
     contract.write_text(json.dumps({"workers": [{**shared, "allowed_tools": ["get_order"]}]}))
-    assert cr.trial_worker_deadlines({}, tmp_path)[2]
+    (tmp_path / "sub_goals.json").write_text(json.dumps({"sub_goals": [{"name": "refund_refused", "subject": "worker:refund"}]}))
+    assert cr.trial_worker_deadlines({"sub_goals": ["refund_refused"]}, tmp_path)[2]
+    assert cr.trial_worker_deadlines({}, tmp_path)[2] == []
 
 
 def test_a_permission_only_scenario_on_a_door_sealed_before_worker_limits_is_said_not_enforced(tmp_path):
-    # No budget, but the agent declares a worker held to its own tools: an old door holds none of it.
+    # No budget, but the scenario checks a worker the agent declares held to its own tools: an old door holds none.
+    (tmp_path / "sub_goals.json").write_text(json.dumps({"sub_goals": [
+        {"name": "refund_refused", "subject": "worker:refund"}, {"name": "task_done", "subject": "task"}]}))
+    about_refund = {"sub_goals": ["task_done", "refund_refused"]}
     (tmp_path / "contract.json").write_text(
         json.dumps({"workers": [{"id": "refund", "binding": "separate", "address_env": "REFUND_URL"}]})
     )
-    [notice] = cr.trial_worker_deadlines({}, tmp_path)[2]
+    [notice] = cr.trial_worker_deadlines(about_refund, tmp_path)[2]
     assert notice["code"] == "worker_limits_not_enforced"
     (tmp_path / "contract.json").write_text(json.dumps({"workers": [{"id": "refund", "allowed_tools": ["get"]}]}))
-    assert cr.trial_worker_deadlines({}, tmp_path)[2]
+    assert cr.trial_worker_deadlines(about_refund, tmp_path)[2]
+    # A scenario about the task alone relies on no worker's limits: graded, nothing said.
+    assert cr.trial_worker_deadlines({"sub_goals": ["task_done"]}, tmp_path)[2] == []
+    assert cr.trial_worker_deadlines({}, tmp_path)[2] == []
     # A worker with no limits of its own relies on nothing the door must hold.
     (tmp_path / "contract.json").write_text(json.dumps({"workers": [{"id": "refund", "tools": ["get"]}]}))
-    assert cr.trial_worker_deadlines({}, tmp_path)[2] == []
+    assert cr.trial_worker_deadlines(about_refund, tmp_path)[2] == []
     # Sealed with worker limits: nothing to say.
     door = tmp_path / "generated" / "tool-proxy"
     door.mkdir(parents=True)
