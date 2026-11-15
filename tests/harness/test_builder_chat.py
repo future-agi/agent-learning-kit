@@ -1444,9 +1444,25 @@ def test_a_control_only_checkpoint_stores_each_ending_once(tmp_path, monkeypatch
     # A fresh sandbox still gets every ending back.
     fresh = tmp_path / "restarted"
     fresh.mkdir()
-    asyncio.run(_runtime(fresh, client, monkeypatch)._restore_coordinator_state())
+    restored = _runtime(fresh, client, monkeypatch)
+    asyncio.run(restored._restore_coordinator_state())
     endings = json.loads((fresh / ".futureagi-turn-endings.json").read_text())
     assert sorted(endings) == turns
+
+    # A turn after the restore adds only its own ending, not the restored ones again.
+    restored.conversation = SpendingConversation(fresh, writes=False)
+    asyncio.run(
+        restored._handle(
+            {
+                "sequence": 6,
+                "message_id": "m-6",
+                "kind": "user_message",
+                "payload": {"content": "turn 6"},
+            }
+        )
+    )
+    newest = client.sessions["futureagi-coordinator-state"][-1]
+    assert list(newest["files"][".futureagi-turn-endings.json"]) == ["m-6"]
 
 
 def test_an_endings_file_that_is_not_an_object_is_ignored(tmp_path, monkeypatch):
