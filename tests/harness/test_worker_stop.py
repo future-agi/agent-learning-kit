@@ -5,9 +5,13 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import os
+import threading
 import time
 from pathlib import Path
 from types import SimpleNamespace
+
+import pytest
 
 from fi.alk.harness import call_runner, hosted_scheduler
 from fi.alk.harness.hosted_entrypoint import _worker_processes
@@ -46,11 +50,15 @@ def _watch(monkeypatch, scheduler, deadlines, *, rounds: int = 5) -> list[tuple]
     monkeypatch.setattr(hosted_scheduler, "_WORKER_STOP_POLL_SECONDS", 0)
     monkeypatch.setattr(call_runner, "_find_postgres_endpoint", lambda _runtime: SimpleNamespace(address="db"))
     monkeypatch.setattr(call_runner, "read_trial_deadlines", lambda _address: deadlines)
-    monkeypatch.setattr(
-        call_runner,
-        "record_worker_stop",
-        lambda _address, worker, process, at: recorded.append((worker, process)),
-    )
+
+    def claim(_address, worker, process, stop):
+        # The trial is not sealed: the stop is made, and kept when the provider ended the process.
+        if stop():
+            recorded.append((worker, process))
+            return True
+        return False
+
+    monkeypatch.setattr(call_runner, "claim_worker_stop", claim)
 
     async def run() -> None:
         task = asyncio.create_task(scheduler._stop_workers_past_deadline(_runtime()))
@@ -164,3 +172,76 @@ def test_a_contract_worker_may_name_the_process_that_runs_it_alone() -> None:
 
     assert DeclaredWorker(id="refund").process == ""
     assert DeclaredWorker(id="refund", process="refund-worker").process == "refund-worker"
+
+
+def test_a_stop_the_seal_refuses_is_never_made(monkeypatch) -> None:
+    pool = _Pool()
+    scheduler = _scheduler(pool, {"refund": "refund-worker"})
+    monkeypatch.setattr(hosted_scheduler, "_WORKER_STOP_POLL_SECONDS", 0)
+    monkeypatch.setattr(call_runner, "_find_postgres_endpoint", lambda _runtime: SimpleNamespace(address="db"))
+    monkeypatch.setattr(call_runner, "read_trial_deadlines", lambda _address: (time.time() - 1, {}))
+    monkeypatch.setattr(call_runner, "claim_worker_stop", lambda _address, worker, process, stop: False)
+
+    async def run() -> None:
+        task = asyncio.create_task(scheduler._stop_workers_past_deadline(_runtime()))
+        await asyncio.sleep(0.05)
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+
+    asyncio.run(run())
+    assert pool.stopped == []
+
+
+@pytest.fixture
+def world_database(monkeypatch):
+    """A real Postgres for the seal's lock: set ALK_TEST_POSTGRES_DSN (a database this test may create tables in)."""
+    dsn = os.environ.get("ALK_TEST_POSTGRES_DSN")
+    if not dsn:
+        pytest.skip("set ALK_TEST_POSTGRES_DSN to run the worker stop seal tests")
+    psycopg = pytest.importorskip("psycopg")
+    with psycopg.connect(dsn, autocommit=True) as connection:
+        connection.execute("DROP TABLE IF EXISTS _alk_trial_faults, _alk_worker_stops")
+    monkeypatch.setattr(call_runner, "_find_postgres_endpoint", lambda _runtime: SimpleNamespace(address=dsn))
+    return dsn
+
+
+def test_a_stop_after_the_seal_is_never_made_and_the_next_trial_may_stop_again(world_database) -> None:
+    call_runner._write_trial_state(_runtime(), [], worker_deadline_at=time.time() - 1)
+    assert call_runner.read_worker_stops(_runtime()) == []
+    asked: list[str] = []
+    assert call_runner.claim_worker_stop(world_database, "refund", "refund-worker", lambda: asked.append("x") or True) is False
+    assert asked == []
+    call_runner._write_trial_state(_runtime(), [], worker_deadline_at=time.time() - 1)
+    assert call_runner.claim_worker_stop(world_database, "refund", "refund-worker", lambda: True) is True
+    assert [row["worker"] for row in call_runner.read_worker_stops(_runtime())] == ["refund"]
+
+
+def test_the_seal_waits_for_a_stop_under_way_and_seals_it(world_database) -> None:
+    call_runner._write_trial_state(_runtime(), [], worker_deadline_at=time.time() - 1)
+    inside = threading.Event()
+
+    def slow_stop() -> bool:
+        inside.set()
+        time.sleep(1.0)
+        return True
+
+    claimed: list[bool] = []
+    thread = threading.Thread(
+        target=lambda: claimed.append(call_runner.claim_worker_stop(world_database, "refund", "refund-worker", slow_stop))
+    )
+    thread.start()
+    assert inside.wait(5)
+    # The process is being ended as the call seals: the seal waits and includes it.
+    sealed = call_runner.read_worker_stops(_runtime())
+    thread.join(5)
+    assert claimed == [True]
+    assert [row["worker"] for row in sealed] == ["refund"]
+
+
+def test_a_deadline_cleared_with_the_call_stops_no_one(world_database) -> None:
+    call_runner._write_trial_state(_runtime(), [], worker_deadline_at=time.time() - 1)
+    call_runner._write_trial_state(_runtime(), [])
+    assert call_runner.claim_worker_stop(world_database, "refund", "refund-worker", lambda: True) is False
+    call_runner._write_trial_state(_runtime(), [], worker_deadlines={"refund": time.time() + 3600})
+    assert call_runner.claim_worker_stop(world_database, "refund", "refund-worker", lambda: True) is False

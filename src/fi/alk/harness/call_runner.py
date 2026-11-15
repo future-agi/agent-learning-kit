@@ -1399,6 +1399,11 @@ TRIAL_DEADLINE_DDL = "ALTER TABLE _alk_trial_faults ADD COLUMN IF NOT EXISTS wor
 TRIAL_WORKER_DEADLINES_DDL = "ALTER TABLE _alk_trial_faults ADD COLUMN IF NOT EXISTS worker_deadlines JSONB"
 
 
+# When this trial's call read its stopped workers to seal them; a worker's process is never ended after it, so a stop
+# is sealed or never made. Null until then, and again at each trial's start.
+TRIAL_SEALED_DDL = "ALTER TABLE _alk_trial_faults ADD COLUMN IF NOT EXISTS sealed_at DOUBLE PRECISION"
+
+
 # The workers the harness stopped in this trial, written by the scheduler when it ends a worker's own process past
 # its deadline; cleared at each trial's start.
 WORKER_STOPS_DDL = (
@@ -1429,21 +1434,45 @@ def read_trial_deadlines(address: str) -> tuple[float | None, dict[str, float]]:
     )
 
 
-def record_worker_stop(address: str, worker: str, process: str, at: float, reason: str = "deadline_passed") -> None:
-    """Keep that the harness ended this worker's own process, so the call seals it beside the world's changes."""
+def claim_worker_stop(address: str, worker: str, process: str, stop: Callable[[], bool]) -> bool:
+    """End this worker's own process and keep that it was ended, unless the call has already sealed its stops: the
+    trial's row stays locked from the check to the record, so the seal (`read_worker_stops`) waits for a stop under
+    way and a stop never lands after it. True when the process was ended and kept."""
     import psycopg
 
-    with psycopg.connect(address, autocommit=True, connect_timeout=5) as connection:
+    with psycopg.connect(address, connect_timeout=5) as connection:
+        connection.execute(TRIAL_SEALED_DDL)
         connection.execute(WORKER_STOPS_DDL)
-        connection.execute(
-            "INSERT INTO _alk_worker_stops (worker, process, at, reason) VALUES (%s, %s, %s, %s) "
-            "ON CONFLICT (worker) DO NOTHING",
-            (worker, process, at, reason),
-        )
+        connection.commit()
+        with connection.transaction():
+            row = connection.execute(
+                "SELECT sealed_at, worker_deadline_at, worker_deadlines FROM _alk_trial_faults WHERE id = 1 FOR UPDATE"
+            ).fetchone()
+            if row is None or row[0] is not None:
+                return False
+            # Read again under the lock: the deadline the watcher saw may since have been cleared with the call.
+            named = row[2] if isinstance(row[2], dict) else {}
+            due = named.get(worker, row[1])
+            if not isinstance(due, (int, float)) or time.time() <= due:
+                return False
+            if not stop():
+                return False
+            connection.execute(
+                "INSERT INTO _alk_worker_stops (worker, process, at, reason) VALUES (%s, %s, %s, %s) "
+                "ON CONFLICT (worker) DO NOTHING",
+                (worker, process, time.time(), "deadline_passed"),
+            )
+    return True
+
+
+# How long the seal waits for a worker's stop under way (a process that ignores SIGTERM is killed within the
+# provider's own bound) before reading without it.
+_SEAL_LOCK_TIMEOUT = "60s"
 
 
 def read_worker_stops(runtime: EnvironmentRuntime) -> list[dict[str, Any]]:
-    """The workers the harness stopped in this trial, in the order it stopped them; empty when it stopped none."""
+    """The workers the harness stopped in this trial, in the order it stopped them; empty when it stopped none. Read
+    once, at the seal: it first marks the trial sealed, after any stop under way, so no worker is stopped later."""
     database = _find_postgres_endpoint(runtime)
     if database is None:
         return []
@@ -1451,6 +1480,13 @@ def read_worker_stops(runtime: EnvironmentRuntime) -> list[dict[str, Any]]:
 
     try:
         with psycopg.connect(database.address, autocommit=True, connect_timeout=5) as connection:
+            connection.execute(f"SET lock_timeout = '{_SEAL_LOCK_TIMEOUT}'")
+            try:
+                # No DDL here: an ALTER would lock the table, and the row lock is what orders a stop and the seal.
+                connection.execute("UPDATE _alk_trial_faults SET sealed_at = %s WHERE id = 1", (time.time(),))
+            except psycopg.Error:
+                # No trial row this harness wrote (it adds the column with the row): no stop can be claimed either.
+                pass
             rows = connection.execute(
                 "SELECT worker, process, at, reason FROM _alk_worker_stops ORDER BY at ASC"
             ).fetchall()
@@ -1498,10 +1534,12 @@ def _write_trial_state(
         connection.execute(TRIAL_FAULTS_DDL)
         connection.execute(TRIAL_DEADLINE_DDL)
         connection.execute(TRIAL_WORKER_DEADLINES_DDL)
+        connection.execute(TRIAL_SEALED_DDL)
         connection.execute(
-            "INSERT INTO _alk_trial_faults (id, faults, worker_deadline_at, worker_deadlines) "
-            "VALUES (1, %s::jsonb, %s, %s::jsonb) ON CONFLICT (id) DO UPDATE SET faults = EXCLUDED.faults, "
-            "worker_deadline_at = EXCLUDED.worker_deadline_at, worker_deadlines = EXCLUDED.worker_deadlines",
+            "INSERT INTO _alk_trial_faults (id, faults, worker_deadline_at, worker_deadlines, sealed_at) "
+            "VALUES (1, %s::jsonb, %s, %s::jsonb, NULL) ON CONFLICT (id) DO UPDATE SET faults = EXCLUDED.faults, "
+            "worker_deadline_at = EXCLUDED.worker_deadline_at, worker_deadlines = EXCLUDED.worker_deadlines, "
+            "sealed_at = NULL",
             (json.dumps(list(faults)), worker_deadline_at, json.dumps(dict(worker_deadlines or {}))),
         )
 

@@ -1812,7 +1812,7 @@ class HostedScheduler:
     async def _stop_workers_past_deadline(self, runtime: EnvironmentRuntime) -> None:
         """While one call runs: end the own process of each worker whose deadline in this trial has passed, once, and
         keep that it was stopped so the call seals it. A worker inside the app's one process is only refused."""
-        from .call_runner import _find_postgres_endpoint, read_trial_deadlines, record_worker_stop
+        from .call_runner import _find_postgres_endpoint, claim_worker_stop, read_trial_deadlines
 
         database = _find_postgres_endpoint(runtime)
         if database is None:
@@ -1827,10 +1827,19 @@ class HostedScheduler:
                 if worker in stopped or due is None or now <= due:
                     continue
                 stopped.add(worker)
+
+                def stop(process: str = process) -> bool:
+                    # Runs in the claim's thread while it holds the trial's row, so the seal waits for it. Its own
+                    # loop: the seal reads on the call's loop, which is blocked while it waits.
+                    return asyncio.run(self._pool.stop_process(runtime, process))
+
                 try:
-                    ended = await self._pool.stop_process(runtime, process)
-                    if ended:
-                        await asyncio.to_thread(record_worker_stop, database.address, worker, process, time.time())
+                    # Shielded: a call that ends meanwhile cancels this watcher, never a stop half made.
+                    await asyncio.shield(
+                        asyncio.to_thread(claim_worker_stop, database.address, worker, process, stop)
+                    )
+                except asyncio.CancelledError:
+                    raise
                 except Exception as exc:  # noqa: BLE001 - a stop that failed leaves the refusal, never fails the call
                     logger.warning("worker %s could not be stopped: %s", worker, type(exc).__name__)
 
