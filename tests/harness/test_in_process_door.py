@@ -284,6 +284,66 @@ def test_a_script_started_by_its_path_is_started_as_a_module_so_the_door_reaches
     assert run_bound_script_as_module(["sh", "-c", "python my_agent.py"], bound) == ["sh", "-c", "python my_agent.py"]
 
 
+@pytest.mark.parametrize(
+    ("command", "module", "environment"),
+    [
+        (["python", "src/agent.py"], "agent", None),  # sys.path[0] would move from src/ to the working directory
+        (["python", "src/agent.py"], "src.agent", None),
+        (["python", "my-agent.py"], "my-agent", None),  # not a module name
+        (["python", "test.py"], "test", None),  # the standard library's `test` package
+        (["python", "json.py"], "json", None),
+        (["python", "sys.py"], "sys", None),  # built in: found before any file
+        (["sh", "-c", "exec python test.py"], "test", None),
+        (["python", "-P", "agent.py"], "agent", None),  # the working directory kept off the path
+        (["python", "-u", "agent.py"], "agent", None),  # interpreter flags: not proven the same, left alone
+        (["python", "agent.py"], "agent", {"PYTHONSAFEPATH": "1"}),
+    ],
+)
+def test_a_script_is_left_as_it_starts_wherever_running_it_as_a_module_could_differ(command, module, environment):
+    from fi.alk.harness.bundle_author_v2 import run_bound_script_as_module
+
+    bound = [{"name": "issue_refund", "module": module, "callable": "issue_refund"}]
+    assert run_bound_script_as_module(command, bound, environment) == command
+
+
+def test_a_script_run_as_its_module_starts_exactly_as_it_did(tmp_path):
+    import subprocess
+    from pathlib import Path
+
+    hook = tmp_path / "hook"
+    hook.mkdir()
+    (hook / "in_process_door_bootstrap.py").write_bytes(Path(bootstrap.__file__).read_bytes())
+    (hook / "sitecustomize.py").write_text("import in_process_door_bootstrap\nin_process_door_bootstrap.install()\n")
+    app = tmp_path / "app"
+    app.mkdir()
+    (app / "store.py").write_text("ORDERS = {'A-1': 1}\n")
+    (app / "orders.json").write_text('{"A-1": 1}')
+    (app / "agent.py").write_text(
+        "import json, os, sys\nimport store\n\ndef issue_refund(order):\n    return store.ORDERS[order]\n\n"
+        "if __name__ == '__main__':\n"
+        "    here = os.path.dirname(os.path.abspath(__file__))\n"
+        "    print(json.dumps({'name': __name__, 'path0': sys.path[0], 'cwd': os.getcwd(), 'file': __file__,\n"
+        "        'beside': json.load(open(os.path.join(here, 'orders.json'))), 'refund': issue_refund('A-1')}))\n"
+    )
+    env = {
+        "PATH": "/usr/bin:/bin",
+        "PYTHONPATH": str(hook),
+        "ALK_WORLD_DOOR_URL": "http://127.0.0.1:1",
+        "ALK_WORLD_DOOR_BINDINGS": json.dumps([{"name": "issue_refund", "module": "agent", "callable": "issue_refund"}]),
+    }
+
+    def started(command):
+        done = subprocess.run(command, cwd=app, env=env, capture_output=True, text=True, timeout=60)
+        assert done.returncode == 0, done.stderr
+        return json.loads(done.stdout)
+
+    by_path = started([sys.executable, "agent.py"])
+    as_module = started([sys.executable, "-m", "agent"])
+    assert as_module == by_path
+    assert as_module["name"] == "__main__" and as_module["refund"] == 1
+    assert Path(as_module["path0"]).resolve() == app.resolve() == Path(as_module["file"]).resolve().parent
+
+
 def test_a_module_run_as_main_gets_the_door_on_its_tools_before_its_framework_decorator(tmp_path):
     import subprocess
     from pathlib import Path

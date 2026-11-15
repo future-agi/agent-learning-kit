@@ -2072,11 +2072,22 @@ def in_process_door_bindings(
 _SCRIPT_RUN = r"(?<![^\s'\"])((?:\S*/)?python[0-9.]*)\s+({stem})\.py(?=[\s'\"]|$)"
 
 
-def run_bound_script_as_module(command: list[str], bound: list[dict[str, str]]) -> list[str]:
+def run_bound_script_as_module(
+    command: list[str], bound: list[dict[str, str]], environment: dict[str, str] | None = None
+) -> list[str]:
     """`python agent.py` as `python -m agent` when `agent` holds bound tools: a script started by its path is never
-    imported, so the door's import hook could not reach the tools it defines. Same working directory, same
-    `__name__ == "__main__"`; any other command is returned as it is."""
-    stems = {item["module"] for item in bound if item["module"].isidentifier()}
+    imported, so the door's import hook could not reach the tools it defines. Only where the two start the same:
+    a bare file name in the working directory (so `sys.path[0]` is that directory either way), a valid module name
+    that no standard-library or built-in module shares, and the working directory left on the path (no `-P`,
+    no `PYTHONSAFEPATH`). `__name__` is `"__main__"` and `__file__` the script's path in both. Any other command is
+    returned as it is, and the run says the faults on its tools were not applied."""
+    if (environment or {}).get("PYTHONSAFEPATH"):
+        return list(command)
+    # `test` ships with Python though the list leaves it out.
+    reserved = set(sys.stdlib_module_names) | set(sys.builtin_module_names) | {"test"}
+    stems = {
+        item["module"] for item in bound if item["module"].isidentifier() and item["module"] not in reserved
+    }
     command = list(command)
     for index, part in enumerate(command[:-1]):
         script = command[index + 1]
@@ -2143,7 +2154,7 @@ def with_in_process_door(
             # Its own list: the tool trace's bindings also turn on its call records, which this process may not keep.
             environment["ALK_WORLD_DOOR_BINDINGS"] = json.dumps(bound, sort_keys=True)
             depends = [*process.depends_on, *([] if WORLD_DOOR_PROCESS in process.depends_on else [WORLD_DOOR_PROCESS])]
-            run = run_bound_script_as_module(process.run_command, bound)
+            run = run_bound_script_as_module(process.run_command, bound, process.environment)
             process = process.model_copy(update={"environment": environment, "depends_on": depends, "run_command": run})
         processes.append(process)
     processes.append(_world_door_process(declared_read_tools(tool_entrypoints)))
@@ -3586,7 +3597,7 @@ def _with_door_bindings(
             environment = {key: value for key, value in process.environment.items() if key != "ALK_WORLD_DOOR_BINDINGS"}
             if bound:
                 environment["ALK_WORLD_DOOR_BINDINGS"] = json.dumps(bound, sort_keys=True)
-            run = run_bound_script_as_module(process.run_command, bound)
+            run = run_bound_script_as_module(process.run_command, bound, process.environment)
             process = process.model_copy(update={"environment": environment, "run_command": run})
         elif isinstance(process, SourceProcess) and process.name == WORLD_DOOR_PROCESS:
             environment = {key: value for key, value in process.environment.items() if key != "READ_ACTIONS"}
