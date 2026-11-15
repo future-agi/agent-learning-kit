@@ -156,14 +156,19 @@ def test_a_worker_cannot_make_the_harness_reach_outside_its_world(tmp_path, phas
     outside.mkdir()
     (outside / "secret.txt").write_text("held back")
     (root / "link").symlink_to(outside, target_is_directory=True)
+    (root / "leaf").symlink_to(outside / "secret.txt")
+    os.link(outside / "secret.txt", root / "hardlink")
     requests = [
         {"op": "read_file", "workspace": "project", "path": "../outside/secret.txt"},
         {"op": "read_file", "workspace": "project", "path": str(outside / "secret.txt")},
         {"op": "read_file", "workspace": "project", "path": "link/secret.txt"},
+        {"op": "read_file", "workspace": "project", "path": "leaf"},
+        {"op": "read_file", "workspace": "project", "path": "hardlink"},
         {"op": "write_file", "workspace": "project", "path": "link/planted.txt", "content": "x"},
+        {"op": "write_file", "workspace": "project", "path": "leaf", "content": "x"},
+        {"op": "write_file", "workspace": "project", "path": "hardlink", "content": "x"},
         {"op": "read_file", "workspace": "other", "path": "secret.txt", "root": str(outside)},
         {"op": "write_file", "workspace": "project", "path": "ok.txt", "content": 5},
-        {"op": "revert", "digest": "0" * 64},
         {"op": "unlink", "workspace": "project", "path": "link"},
     ]
 
@@ -172,7 +177,21 @@ def test_a_worker_cannot_make_the_harness_reach_outside_its_world(tmp_path, phas
     assert [sorted(reply) for reply in replies] == [["error", "message"]] * len(requests)
     assert "held back" not in json.dumps(replies)
     assert sorted(path.name for path in outside.iterdir()) == ["secret.txt"]
+    assert (outside / "secret.txt").read_text() == "held back"
     assert not (root / "ok.txt").exists()
+
+
+def test_a_revert_handle_the_harness_never_issued_is_refused(tmp_path, phase):
+    w = world(tmp_path / "workspace")
+    w.write_file("project", "a.txt", "one")
+    forged = [{"op": "revert", "digest": "0" * 64}, {"op": "revert", "digest": str(tmp_path)}]
+
+    replies = json.loads(phase(_RAW_REQUESTS.format(entry="setup", requests=forged), w))
+
+    assert replies == [
+        {"error": "WorldUsageError", "message": "revert names no snapshot this phase took"}
+    ] * 2
+    assert (tmp_path / "workspace/a.txt").read_text() == "one"
 
 
 def test_a_read_only_phase_cannot_write_through_the_channel(tmp_path, phase):
@@ -187,21 +206,80 @@ def test_a_read_only_phase_cannot_write_through_the_channel(tmp_path, phase):
     assert not (tmp_path / "workspace/x.txt").exists()
 
 
-def test_a_worker_checkpoint_is_a_digest_and_revert_restores_the_harness_snapshot(tmp_path):
+@pytest.mark.parametrize(
+    "call", ["write_file('project', 'x.txt', '\\ud800')", "read_file('project', '\\ud800')"],
+    ids=["content", "path"],
+)
+def test_text_no_file_can_hold_is_the_scenario_s_mistake_not_the_world_s(tmp_path, phase, call):
+    from fi.alk.harness.hosted_scheduler import _PhaseMisuse
+
+    w = world(tmp_path / "workspace")
+
+    # A misuse, not a world that went away (_PhaseWorldGone).
+    with pytest.raises(_PhaseMisuse, match="WorldUsageError"):
+        phase(f"def setup(world):\n    world.{call}\n", w)
+
+
+# Scenario code that breaks the channel, then finishes its phase.
+_BREAKS_THE_CHANNEL = """def setup(world):
+    import os, socket
+    from fi.alk.harness.isolated_process import CHANNEL_FD_ENV, encode_message, send_message
+    channel = socket.socket(fileno=os.dup(int(os.environ[CHANNEL_FD_ENV])))
+    send_message(channel, {body})
+    return 'finished'
+"""
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "b'[' * 200000",  # nested past the parser's recursion limit
+        "b'not json'",
+        "encode_message({'op': 'read_file', 'workspace': 'project', 'path': 'a.txt'})",
+    ],
+    ids=["deep-nesting", "not-json", "unread-reply"],
+)
+def test_a_worker_that_breaks_its_channel_keeps_its_phase_outcome(tmp_path, phase, body):
+    # unread-reply: the worker exits before reading; on Linux the harness then reads ECONNRESET.
     w = world(tmp_path / "workspace")
     w.write_file("project", "a.txt", "one")
-    parent, child = socket.socketpair()
-    serving = threading.Thread(
-        target=asyncio.run,
-        args=(isolated_process._serve(parent, w._workspace_service(read_only=True)),),
-    )
-    serving.start()
-    try:
-        remote = HostedWorld(
+
+    assert phase(_BREAKS_THE_CHANNEL.format(body=body), w) == "finished"
+
+
+class _Served:
+    """A worker-side world whose workspace channel this test process serves, as a parent would."""
+
+    def __init__(self, parent_world, *, read_only, **world_options):
+        self._parent, child = socket.socketpair()
+        self._serving = threading.Thread(
+            target=asyncio.run,
+            args=(
+                isolated_process._serve(
+                    self._parent, parent_world._workspace_service(read_only=read_only)
+                ),
+            ),
+        )
+        self._serving.start()
+        self.world = HostedWorld(
             Store(), 0, random.Random(0), {},
             _validate_baseline=False,
             workspace_channel=WorkspaceClient(child.detach()),
+            **world_options,
         )
+
+    def close(self):
+        self.world._workspace_channel._socket.close()
+        self._serving.join(timeout=10)
+        assert not self._serving.is_alive()
+
+
+def test_a_worker_checkpoint_is_a_digest_and_revert_restores_the_harness_snapshot(tmp_path):
+    w = world(tmp_path / "workspace")
+    w.write_file("project", "a.txt", "one")
+    served = _Served(w, read_only=True)
+    try:
+        remote = served.world
         checkpoint = remote.checkpoint()
         # Only a digest crossed; the snapshot stayed in the harness.
         assert checkpoint[0] == "baseline" and len(checkpoint[1]) == 64
@@ -213,9 +291,54 @@ def test_a_worker_checkpoint_is_a_digest_and_revert_restores_the_harness_snapsho
         with pytest.raises(WorldReadOnly):
             remote.write_file("project", "a.txt", "three")
     finally:
-        remote._workspace_channel._socket.close()
-        serving.join(timeout=10)
-    assert not serving.is_alive()
+        served.close()
+
+
+def test_an_observation_that_changes_the_workspace_is_refused_and_undone(tmp_path):
+    import test_named_observations as named
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+    root = tmp_path / "workspace"
+    w = world(root)
+    w.write_file("project", "a.txt", "one")
+    writes = {"on": False}
+
+    class Agent(BaseHTTPRequestHandler):
+        def do_POST(self):
+            self.rfile.read(int(self.headers["Content-Length"]))
+            if writes["on"]:
+                (root / "a.txt").write_text("changed while observed")
+            body = json.dumps({"events": ["completed"]}).encode()
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *args):
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Agent)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    served = _Served(
+        w, read_only=True,
+        endpoints={"app": f"http://127.0.0.1:{server.server_port}"},
+        observations=named.CATALOGUE,
+    )
+    try:
+        readonly = served.world.read_only()
+        assert readonly.observe("history", {"session": "abc", "limit": 3})["json"] == {
+            "events": ["completed"]
+        }
+        writes["on"] = True
+        with pytest.raises(WorldReadOnly):
+            readonly.observe("history", {"session": "abc", "limit": 3})
+        assert (root / "a.txt").read_text() == "one"
+    finally:
+        served.close()
+        server.shutdown()
+        thread.join()
+        server.server_close()
 
 
 def test_workspace_process_uses_private_copy_even_single_world_and_respawn_resets(

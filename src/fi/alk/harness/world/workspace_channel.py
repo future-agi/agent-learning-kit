@@ -39,8 +39,8 @@ _ERRORS = {
     error.__name__: error
     for error in (WorldReadOnly, WorldStateTooLarge, WorldUnavailable, WorldUsageError)
 }
-# Each observation takes two snapshots and may restore the first.
-_SNAPSHOTS_KEPT = 8
+# An observation takes two snapshots and may restore the first.
+_SNAPSHOTS_KEPT = 2
 
 
 def _digest(saved: Mapping[str, Mapping[str, FileSnapshot]]) -> str:
@@ -74,6 +74,9 @@ class WorkspaceService:
             return self._answer(request)
         except WorldError as error:
             return {"error": type(error).__name__, "message": str(error)}
+        except UnicodeError:
+            # A path or content no file name or UTF-8 file can hold: the scenario's mistake.
+            return {"error": "WorldUsageError", "message": "workspace text is not valid UTF-8"}
 
     def _answer(self, request: dict[str, Any]) -> dict[str, Any]:
         operation = request.get("op")

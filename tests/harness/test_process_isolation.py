@@ -522,7 +522,16 @@ world = HostedWorld(
 )
 phases = [
     ("setup", "def setup(world):\n    world.write_file('project', 'native.txt', 'from child')\n", world),
-    ("ready", "def ready(world):\n    return world.read_file('project', 'native.txt') == 'from child'\n", world.read_only()),
+    # True only when the worker itself is refused the workspace and the harness reads it.
+    ("ready", (
+        "def ready(world):\n"
+        "    import os\n"
+        "    try:\n"
+        f"        os.listdir({str(root)!r})\n"
+        "    except PermissionError:\n"
+        "        return world.read_file('project', 'native.txt') == 'from child'\n"
+        "    return 'the phase worker opened the workspace itself'\n"
+    ), world.read_only()),
     ("check", "def check(world):\n    return world.read_file('project', 'native.txt')\n", world.read_only()),
 ]
 results = {}
@@ -563,7 +572,8 @@ def test_a_workspace_bundle_runs_setup_ready_and_check_under_per_user_isolation(
     assert done.returncode == 0, done.stderr[-2000:]
     report = json.loads(done.stdout.strip().splitlines()[-1])
 
-    # The workspace is the agent's, 0700: the phase worker cannot open it, the harness can.
+    # The workspace is the agent's, 0700: the phase worker cannot open it (ready), the harness
+    # can, and what it writes stays the agent's.
     assert report["root_mode"] == "0o700"
     assert report["results"] == {"setup": None, "ready": True, "check": "from child"}
     assert report["file_owner_is_agent"]

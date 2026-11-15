@@ -77,7 +77,8 @@ async def _serve(
                 if size > MAX_CHANNEL_MESSAGE_BYTES:
                     return
                 request = _decode_message(await reader.readexactly(size))
-            except (asyncio.IncompleteReadError, ValueError):
+            except (asyncio.IncompleteReadError, ValueError, OSError, RecursionError):
+                # A worker that closed or broke the frame loses its channel, not its phase.
                 return
             try:
                 reply = encode_message(await asyncio.to_thread(serve, request))
