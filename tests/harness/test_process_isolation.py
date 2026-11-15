@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import pwd
+import shutil
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -327,6 +328,47 @@ def test_a_declared_user_can_pass_through_to_its_own_trees_but_not_list_them(tmp
     ):
         mode = (tmp_path / "work" / relative).stat().st_mode & 0o777
         assert mode == 0o711, relative
+
+
+def test_a_digest_rebuild_opens_the_directories_it_just_recreated(tmp_path, monkeypatch):
+    work = tmp_path / "work"
+    provider = object.__new__(pr.ProcessRuntimeProvider)
+    provider._manifest = object()
+    provider._bundle_digest = "old"
+    provider._secrets_loaded = True
+
+    def teardown(work_directory):
+        for name in ("build", "worlds", "managed", "provider"):
+            shutil.rmtree(work_directory / name, ignore_errors=True)
+
+    class Stop(Exception):
+        pass
+
+    def stop(work_directory):
+        raise Stop
+
+    monkeypatch.setattr(pr, "isolation_mode", lambda: pr.IsolationMode.PER_USER)
+    monkeypatch.setattr(pr, "_open_seed_files_for_declared_users", lambda *a: None)
+    monkeypatch.setattr(provider, "_teardown_processes_and_directories", teardown, raising=False)
+    monkeypatch.setattr(provider, "_verify_secret_refs_resolved", stop, raising=False)
+
+    previous = os.umask(0o077)
+    try:
+        pr._open_for_declared_users(work, worlds=2)
+        with pytest.raises(Stop):
+            provider._provision_sync(
+                SimpleNamespace(digest="new"),
+                source=tmp_path,
+                bundle_dir=tmp_path,
+                work_directory=work,
+                instances=2,
+                require_declared_user=True,
+            )
+    finally:
+        os.umask(previous)
+
+    for relative in ("build", "worlds", "managed", "provider", "worlds/w0", "worlds/w1"):
+        assert (work / relative).stat().st_mode & 0o777 == 0o711, relative
 
 
 def test_a_store_s_user_can_read_its_declared_seed_files_and_nothing_else(tmp_path):

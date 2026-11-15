@@ -6457,6 +6457,9 @@ class ProcessRuntimeProvider:
                 # the secrets unlink — this is a re-sealed bundle, not a new job identity, so the
                 # in-memory secret map must survive it).
                 self._teardown_processes_and_directories(work_directory)
+                if isolation_mode() is IsolationMode.PER_USER:
+                    # The teardown removed the directories opened above.
+                    _open_for_declared_users(work_directory, instances)
             if not self._secrets_loaded:
                 # C2 §4 item 1: HOISTED to BEFORE plan_ports (stage 2 needs the resolved values).
                 # B3 / §0.3: loaded and the file deleted BEFORE any customer process starts.
