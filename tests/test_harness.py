@@ -10072,8 +10072,7 @@ def test_a_built_environment_s_chat_can_still_change_its_cast_and_nothing_else_o
     assert set(_published(server)) == {
         "add_actor",
         "drop_actor",
-        "add_actor",
-        "drop_actor",
+        "note_unresolved",
     }
 
 

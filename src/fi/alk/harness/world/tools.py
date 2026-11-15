@@ -2212,6 +2212,7 @@ TOOL_NAMES = (
     "write_simulator_prompt",
     "add_actor",
     "drop_actor",
+    "note_unresolved",
     "add_sub_goal",
     "write_store_ops",
     "add_world_check",
