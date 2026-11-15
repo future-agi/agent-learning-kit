@@ -47,6 +47,9 @@ _READ_KEYWORDS = {"select", "with", "values"}
 # `AttributeError` instead of masquerading as a write refusal.
 _WRITE_VERBS = frozenset({"put", "change", "drop", "call"})
 
+# A route in `endpoint_for` naming a tool the bundle's MCP Toolbox serves, rather than a path behind the tool proxy.
+MCP_ROUTE = "mcp:"
+
 
 class HostedWorld(HttpObservationHandle):
     """The `World` surface, backed by this scenario's own logical postgres database.
@@ -97,12 +100,22 @@ class HostedWorld(HttpObservationHandle):
         self.endpoint_for: dict[str, str] = {}
         self.calls: list[Call] = []
         self._tool_proxy = ""
+        self._mcp_toolbox = ""
         if _validate_baseline:
             self._require_baseline_coverage(self._visible_tables())
 
-    def bind_tools(self, tool_proxy: str, endpoint_for: Mapping[str, str], runtime_tools: Sequence[str]) -> None:
-        """Let `call` play the service-backed tools in `endpoint_for` through the tool proxy."""
+    def bind_tools(
+        self,
+        tool_proxy: str,
+        endpoint_for: Mapping[str, str],
+        runtime_tools: Sequence[str],
+        *,
+        mcp_toolbox: str = "",
+    ) -> None:
+        """Let `call` play the tools in `endpoint_for`: a path goes through the tool proxy, an `MCP_ROUTE` to the
+        bundle's MCP Toolbox at `mcp_toolbox`."""
         self._tool_proxy = str(tool_proxy or "").rstrip("/")
+        self._mcp_toolbox = str(mcp_toolbox or "").rstrip("/")
         self.endpoint_for = {name: str(path).strip("/") for name, path in endpoint_for.items() if path}
         self.runtime_tools = set(runtime_tools) | set(self.endpoint_for)
 
@@ -307,12 +320,14 @@ class HostedWorld(HttpObservationHandle):
     ) -> Call:
         """POST `arguments` as JSON to `endpoint` behind the bundle's tool proxy, which forwards it to
         the agent's own tools service and records the call. The same wire format a provisioned
-        world uses for a submitted service."""
+        world uses for a submitted service. An `MCP_ROUTE` endpoint is a `tools/call` to the MCP Toolbox."""
         import json
         import time
 
         import requests
 
+        if endpoint.startswith(MCP_ROUTE):
+            return self._forward_mcp(endpoint[len(MCP_ROUTE):], arguments, record_as=record_as, record=record)
         if not self._tool_proxy:
             raise WorldUnavailable("no tool proxy is bound to this world, so no tool can be played")
         args = dict(arguments or {})
@@ -329,6 +344,24 @@ class HostedWorld(HttpObservationHandle):
             call = Call(name=name, arguments=args, result=body, ok=not refused, refused=refused, error=error, at=at)
         except requests.RequestException as exc:
             call = Call(name=name, arguments=args, ok=False, error=f"{type(exc).__name__}: {exc}", at=at)
+        if record:
+            self.calls.append(call)
+        return call
+
+    def _forward_mcp(
+        self, tool: str, arguments: Mapping[str, Any] | None, *, record_as: str, record: bool
+    ) -> Call:
+        """Call `tool` on the bundle's MCP Toolbox, the server the agent's own toolbox client reaches."""
+        import time
+
+        if not self._mcp_toolbox:
+            raise WorldUnavailable(f"no MCP Toolbox is bound to this world, so {tool} cannot be played")
+        args = dict(arguments or {})
+        at = time.time()
+        ok, result, error, refused = mcp_tool_call(self._mcp_toolbox, tool, args)
+        call = Call(
+            name=record_as or tool, arguments=args, result=result, ok=ok, refused=refused, error=error, at=at
+        )
         if record:
             self.calls.append(call)
         return call
@@ -569,6 +602,49 @@ class ReadOnlyWorld(HttpObservationHandle):
                 "a run."
             )
         raise AttributeError(name)
+
+
+def mcp_request(address: str, method: str, params: Mapping[str, Any], *, timeout: float = 30.0) -> dict[str, Any]:
+    """One JSON-RPC request to the stateless, JSON-answering MCP server at `address` (the bundle's MCP Toolbox), as
+    its parsed response. A transport failure or a non-JSON answer raises `requests.RequestException` or `ValueError`."""
+    import requests
+
+    response = requests.post(
+        f"{address.rstrip('/')}/mcp/",
+        json={"jsonrpc": "2.0", "id": 1, "method": method, "params": dict(params)},
+        headers={"accept": "application/json, text/event-stream"},
+        timeout=timeout,
+    )
+    body = response.json()
+    if not isinstance(body, dict):
+        raise ValueError(f"MCP {method} answered {type(body).__name__}, not a JSON-RPC response")
+    return body
+
+
+def mcp_tool_call(address: str, tool: str, arguments: Mapping[str, Any]) -> tuple[bool, Any, str, bool]:
+    """`(ok, result, error, refused)` of one `tools/call`. A tool error or a JSON-RPC error is a refusal, as an
+    HTTP 4xx is behind the tool proxy; a server that cannot be reached is a failure, not a refusal. The result is the
+    tool's text content, parsed as JSON where it is JSON."""
+    import json
+
+    import requests
+
+    try:
+        body = mcp_request(address, "tools/call", {"name": tool, "arguments": dict(arguments)})
+    except (requests.RequestException, ValueError) as exc:
+        return False, None, f"{type(exc).__name__}: {exc}", False
+    if "error" in body:
+        return False, None, json.dumps(body["error"], default=str), True
+    result = body.get("result") if isinstance(body.get("result"), dict) else {}
+    texts = [str(item.get("text") or "") for item in result.get("content") or [] if isinstance(item, dict)]
+    text = "\n".join(texts)
+    try:
+        value: Any = json.loads(text) if text else None
+    except ValueError:
+        value = text
+    if result.get("isError"):
+        return False, value, text, True
+    return True, value, "", False
 
 
 def _is_word_char(char: str) -> bool:

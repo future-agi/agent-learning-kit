@@ -1335,7 +1335,7 @@ async def validate_once(
             )
             if not readiness_only:
                 # While the stack is up, play each case's reference and controls through the
-                # service-backed tools for real; never fails validation.
+                # service-backed and MCP Toolbox tools for real; never fails validation.
                 from .live_proof import prove_live
 
                 try:

@@ -6,8 +6,9 @@ has the agent's own stack up, a tool whose contract entry is `service` can be pl
 the bundle's tool proxy forwards a JSON POST to the agent's tools service, records the call, and
 the change lands in the real datastore. So, per case and with a reset between each: set up, play
 the reference and run the checks; set up, play nothing and run the checks; set up, play each
-control and run the checks. A tool the agent runs inside its own process has no endpoint and stays
-assumed. The result per case is written beside the authoring tree and laid over the offline proof
+control and run the checks. A tool the bundle's MCP Toolbox serves is played the same way, as a `tools/call` to that
+server, which runs its SQL on the world's database. A tool the agent runs inside its own process has no endpoint and
+stays assumed. The result per case is written beside the authoring tree and laid over the offline proof
 by `prove_suite`, so leaks, sources and rule checks still come from the offline proof.
 """
 
@@ -26,20 +27,46 @@ logger = logging.getLogger(__name__)
 
 LIVE_PROOFS = ".futureagi-live-proofs.json"
 TOOL_PROXY = "tool_proxy"
+MCP_TOOLBOX = "mcp_toolbox"
+# Entry modes whose tool runs inside the agent's own process: a server serving a tool of the same name is not it.
+IN_PROCESS_MODES = ("import", "construct")
 
 
-def service_endpoints(contract: Any, endpoints: dict[str, Any]) -> dict[str, str]:
-    """Contract tool -> route behind the tool proxy, for tools whose entry mode is `service`.
+def service_endpoints(
+    contract: Any, endpoints: dict[str, Any], toolbox_tools: set[str] | frozenset[str] = frozenset()
+) -> dict[str, str]:
+    """Contract tool -> route a live proof plays it on: the path behind the tool proxy for an entry whose mode is
+    `service`, else `MCP_ROUTE` for a tool in `toolbox_tools` (what the MCP Toolbox serves) that the contract does not
+    place in the agent's own process.
 
-    Empty when the runtime has no tool proxy: nothing could be played."""
-    if TOOL_PROXY not in (endpoints or {}):
-        return {}
+    Empty when neither server is up: nothing could be played."""
+    from .world.handle import MCP_ROUTE
+
+    endpoints = endpoints or {}
     bound: dict[str, str] = {}
     for name in contract.tool_names():
         entry = contract.entry_for(name)
-        if entry is not None and entry.mode == "service":
+        mode = entry.mode if entry is not None else ""
+        if TOOL_PROXY in endpoints and mode == "service":
             bound[name] = str(entry.endpoint or name).strip("/")
+        elif MCP_TOOLBOX in endpoints and name in toolbox_tools and mode not in IN_PROCESS_MODES:
+            bound[name] = MCP_ROUTE + name
     return bound
+
+
+def served_by_toolbox(endpoints: dict[str, Any]) -> set[str]:
+    """The tool names the runtime's MCP Toolbox lists; empty when it has none or cannot be listed."""
+    from .world.handle import mcp_request
+
+    if MCP_TOOLBOX not in (endpoints or {}):
+        return set()
+    try:
+        body = mcp_request(_address(endpoints[MCP_TOOLBOX]), "tools/list", {})
+    except Exception as exc:  # noqa: BLE001 - an unlisted toolbox plays nothing, the cases keep their offline proof
+        logger.warning("live proof: MCP Toolbox tools not listed: %s: %s", type(exc).__name__, exc)
+        return set()
+    tools = (body.get("result") or {}).get("tools") if isinstance(body.get("result"), dict) else None
+    return {str(tool["name"]) for tool in tools or [] if isinstance(tool, dict) and tool.get("name")}
 
 
 def _address(endpoint: Any) -> str:
@@ -95,15 +122,16 @@ async def prove_live(
     seed: int = 0,
 ) -> dict[str, dict[str, Any]]:
     """Play each case's reference, an empty run and its controls on the live runtime; write and
-    return `{scenario_key: live result}`. Returns {} when no tool is service-bound."""
+    return `{scenario_key: live result}`. Returns {} when no tool is bound to a running server."""
     from .catalogue import load_catalogue
     from .proofs import proof_key
     from .scenario_tools import load_scenarios
 
-    bound = service_endpoints(contract, runtime.endpoints)
+    bound = service_endpoints(contract, runtime.endpoints, served_by_toolbox(runtime.endpoints))
     if not bound:
         return {}
-    proxy = _address(runtime.endpoints[TOOL_PROXY])
+    proxy = _address(runtime.endpoints.get(TOOL_PROXY, ""))
+    toolbox = _address(runtime.endpoints.get(MCP_TOOLBOX, ""))
     scenarios = load_scenarios(authoring)
     catalogue = load_catalogue(authoring)
     results: dict[str, dict[str, Any]] = {}
@@ -111,7 +139,7 @@ async def prove_live(
     async def fresh() -> Any:
         await provider.reset(runtime, work_directory=work)
         world = await factory.create(runtime, rng=random.Random(seed))
-        world.bind_tools(proxy, bound, contract.tool_names())
+        world.bind_tools(proxy, bound, contract.tool_names(), mcp_toolbox=toolbox)
         return world
 
     for scenario in scenarios:

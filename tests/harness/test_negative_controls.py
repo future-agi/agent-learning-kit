@@ -131,7 +131,7 @@ class ServiceWorld:
     def data(self) -> dict:
         return self.store
 
-    def bind_tools(self, proxy, endpoint_for, runtime_tools) -> None:
+    def bind_tools(self, proxy, endpoint_for, runtime_tools, *, mcp_toolbox="") -> None:
         assert proxy == "http://proxy"
         self.endpoint_for = dict(endpoint_for)
         self.runtime_tools = set(runtime_tools) | set(endpoint_for)
@@ -284,3 +284,131 @@ def test_a_control_that_crashes_on_the_runtime_keeps_the_case_live_proof(monkeyp
     assert control["failed"] is None and "tools service went away" in control["error"]
     proof = live_proof.apply_live(Proof(deferred=True), live)
     assert proof.proved is False and proof.blocked_reason() == "control_not_run"
+
+
+class _Toolbox:
+    """The real MCP Toolbox adapter, served on a free local port, its SQL standing in for a dict datastore."""
+
+    TOOLS = {
+        "lookup_order": {"kind": "postgres-sql", "statement": "lookup", "parameters": [{"name": "order_id", "type": "string"}]},
+        "refund_order": {"kind": "postgres-sql", "statement": "refund", "parameters": [{"name": "order_id", "type": "string"}]},
+    }
+
+    def __init__(self, monkeypatch, tmp_path, store: dict) -> None:
+        import json
+        import socket
+        import threading
+        import time
+
+        import uvicorn
+
+        from fi.alk.harness import mcp_toolbox_adapter
+
+        def execute(tool_name, spec, arguments, *, database_url, trace_path):
+            order = store["orders"].get(arguments["order_id"])
+            if spec["statement"] == "lookup":
+                return json.dumps(order)
+            if order is None or order["age_days"] > 14:
+                raise RuntimeError("refused by policy")
+            store["refunds"].append(arguments["order_id"])
+            return json.dumps({"refunded": arguments["order_id"]})
+
+        monkeypatch.setattr(mcp_toolbox_adapter, "_execute", execute)
+        application = mcp_toolbox_adapter._application({"tools": self.TOOLS}, "postgresql://unused", tmp_path / "t.jsonl")
+        self.socket = socket.socket()
+        self.socket.bind(("127.0.0.1", 0))
+        self.address = f"http://127.0.0.1:{self.socket.getsockname()[1]}"
+        self.server = uvicorn.Server(uvicorn.Config(application, log_level="warning"))
+        self.thread = threading.Thread(target=self.server.run, kwargs={"sockets": [self.socket]}, daemon=True)
+        self.thread.start()
+        deadline = time.monotonic() + 10
+        while not self.server.started and time.monotonic() < deadline:
+            time.sleep(0.05)
+
+    def close(self) -> None:
+        self.server.should_exit = True
+        self.thread.join(timeout=10)
+        self.socket.close()
+
+
+def _toolbox_world(store: dict):
+    import random
+
+    from fi.alk.harness.world.handle import HostedWorld
+
+    class ToolboxWorld(HostedWorld):
+        """The hosted world handle, reading the dict datastore the toolbox writes."""
+
+        @property
+        def data(self) -> dict:
+            return store
+
+        def state(self, table=None) -> dict:
+            return copy.deepcopy(store)
+
+    return ToolboxWorld(object(), 0, random.Random(0), {}, _validate_baseline=False)
+
+
+def test_a_toolbox_tool_is_played_on_the_toolbox_the_agent_reaches(monkeypatch, tmp_path):
+    from fi.alk.harness.prove import play_reference_step
+    from fi.alk.harness.scenario import Step
+
+    store = copy.deepcopy(BASE)
+    toolbox = _Toolbox(monkeypatch, tmp_path, store)
+    try:
+        endpoints = {"mcp_toolbox": SimpleNamespace(address=toolbox.address), "target_http": "x"}
+        served = live_proof.served_by_toolbox(endpoints)
+        assert served == {"lookup_order", "refund_order"}
+        # A tool the contract places in the agent's own process is not the toolbox's, whatever its name.
+        assert live_proof.service_endpoints(_contract({"lookup_order": "unreachable", "refund_order": "import"}), endpoints, served) == {
+            "lookup_order": "mcp:lookup_order"
+        }
+        world = _toolbox_world(store)
+        bound = live_proof.service_endpoints(_contract({"lookup_order": "service", "refund_order": "unreachable"}), endpoints, served)
+        world.bind_tools("", bound, ["lookup_order", "refund_order"], mcp_toolbox=toolbox.address)
+
+        looked_up = world.call("lookup_order", {"order_id": "O-10"})
+        assert looked_up.ok and looked_up.result == {"age_days": 10, "total": 42.5}
+        refused = world.call("refund_order", {"order_id": "O-20"})
+        assert refused.ok is False and refused.refused is True and "refused by policy" in refused.error
+
+        played = play_reference_step(world, Step.model_validate(REFUND_O10))
+        assert played.ok and played.name == "refund_order"
+        assert store["refunds"] == ["O-10"]
+    finally:
+        toolbox.close()
+
+
+def test_a_toolbox_case_is_proved_on_the_live_runtime(monkeypatch, tmp_path):
+    monkeypatch.setattr(scenario_tools, "load_scenarios", lambda path: [refund_case()])
+    monkeypatch.setattr(catalogue_module, "load_catalogue", lambda path: catalogue(**REFUND_CATALOGUE))
+    monkeypatch.setattr(live_proof, "_digest", lambda world: repr(sorted(world.state()["refunds"])))
+    stack = Stack()
+    toolbox = _Toolbox(monkeypatch, tmp_path, stack.store)
+    try:
+        # A toolbox agent's bundle has no tools service, so no tool proxy: only the toolbox is up.
+        stack.endpoints = {"mcp_toolbox": SimpleNamespace(address=toolbox.address), "target_http": "x"}
+
+        async def create(runtime, *, rng):
+            return _toolbox_world(stack.store)
+
+        stack.create = create
+        results = asyncio.run(
+            live_proof.prove_live(
+                authoring=tmp_path,
+                contract=_contract({"lookup_order": "unreachable", "refund_order": "unreachable"}),
+                runtime=stack,
+                provider=stack,
+                factory=stack,
+                work=tmp_path,
+            )
+        )
+    finally:
+        toolbox.close()
+
+    live = results["refund_case"]
+    assert live["assumed"] == []
+    assert [(one["name"], one["held"]) for one in live["with_solution"]] == [("refund_once", True), ("looked_up", True)]
+    assert live["controls"][0]["failed"] is True
+    proof = live_proof.apply_live(Proof(deferred=True), live)
+    assert proof.proved is True and proof.blocked_reason() is None
