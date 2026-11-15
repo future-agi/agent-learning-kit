@@ -36,7 +36,7 @@ from .usage import (
     failure_domain_for_code,
     simulator_funding,
 )
-from .world.runtime import Call, GeneratedWorld, trace_row
+from .world.runtime import Call, GeneratedWorld, graded_calls, trace_row
 from .world.stores.postgres import AttachedPostgresStore
 
 logger = logging.getLogger(__name__)
@@ -623,7 +623,7 @@ class HostedChatCallRunner:
             logger.warning("tool capture failed for %s: %s", scenario.scenario_key, exc)
             capture_failed = True
         # Calls returned over HTTP are recorded here as they run, so they are a full capture.
-        capture_failed = capture_failed and not transcript.calls
+        capture_failed = capture_failed and not graded_calls(transcript.calls)
 
         ended = datetime.now(timezone.utc)
         transcript_id = await self._adapter.upload_artifact(

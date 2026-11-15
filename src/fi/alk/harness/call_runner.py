@@ -82,7 +82,13 @@ from .simulator_voice import (
     simulator_definition,
 )
 from .world.errors import WorldUnavailable
-from .world.runtime import Call, runtime_ids, tool_call_attribution, trace_row
+from .world.runtime import (
+    Call,
+    graded_calls,
+    runtime_ids,
+    tool_call_attribution,
+    trace_row,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -690,7 +696,12 @@ def _find_postgres_endpoint(runtime: EnvironmentRuntime) -> Any | None:
 class ToolCaptureFailed(RuntimeError):
     """A capture surface the bundle declares could not be read for this call. Not the same as an
     empty capture: the agent may have acted through a tool that nothing recorded. Raised only by
-    a collector asked to be ``strict``; the message never carries a DSN."""
+    a collector asked to be ``strict``; the message never carries a DSN. ``calls`` holds what was
+    still captured that checks do not grade, such as hand-offs, so it stays visible."""
+
+    def __init__(self, message: str, *, calls: tuple[Call, ...] = ()) -> None:
+        super().__init__(message)
+        self.calls = calls
 
 
 def _collect_http_tool_calls(runtime: EnvironmentRuntime) -> tuple[Call, ...]:
@@ -846,7 +857,7 @@ def _read_file_tool_calls(
     """The attempt's tool-trace file: its written lines and its span lines. No file is no
     evidence either way: the file is removed before the call, and an agent that called no tool
     never writes it. ``strict`` raises `ToolCaptureFailed` when a file is there and cannot be
-    read."""
+    read, or when it holds records and none of them can be read as a call."""
     path = _tool_trace_file(runtime)
     if path is None or not path.is_file():
         return [], []
@@ -862,15 +873,24 @@ def _read_file_tool_calls(
                 f"tool_trace file unreadable: {type(exc).__name__}"
             ) from None
         return [], []
+    # Records that cannot be read as a call: a cut JSON line, a value that is not an object, a
+    # record with no name. One among good records is dropped; a file of nothing else is not a
+    # call that used no tool.
+    unreadable = 0
     for line in lines:
+        if not line.strip():
+            continue
         try:
             record = json.loads(line)
         except ValueError:
+            unreadable += 1
             continue
         if not isinstance(record, dict):
+            unreadable += 1
             continue
         name = record.get("name")
         if not isinstance(name, str) or not name:
+            unreadable += 1
             continue
         arguments = record.get("arguments")
         if isinstance(arguments, str) and not arguments.strip():
@@ -933,6 +953,10 @@ def _read_file_tool_calls(
             continue
         untimed.remove(written)
         written.at = call.at
+    if strict and unreadable and not calls and not from_spans:
+        raise ToolCaptureFailed(
+            f"tool_trace file has no readable record ({unreadable} unreadable)"
+        )
     return calls, from_spans
 
 
@@ -1948,16 +1972,18 @@ class CallRunnerImpl:
             calls = self._collect_calls(runtime) if case is not None else ()
         except ToolCaptureFailed as exc:
             logger.warning("tool capture failed for %s: %s", scenario_key, exc)
-            calls, capture_failed = (), True
+            calls, capture_failed = exc.calls, True
         # Provider-hosted agents execute tools outside the guest process, so their
         # authoritative call evidence is returned by Vapi/Retell after the call.
         # Preserve provider-native controls such as ``end_call`` because scenario
         # checks may verify termination ordering. Fall back to that observed stream
         # when the submitted backend exposes no local trace seam; never infer calls
         # from transcript prose.
-        if not calls and case is not None:
-            calls = _collect_provider_tool_calls(case)
-        capture_failed = capture_failed and not calls
+        # Hand-offs are kept for the record but are not calls checks grade, so they neither stand
+        # in for the provider's stream nor count as a capture.
+        if not graded_calls(calls) and case is not None:
+            calls = (*calls, *_collect_provider_tool_calls(case))
+        capture_failed = capture_failed and not graded_calls(calls)
         if calls:
             tool_trace = "\n".join(
                 json.dumps(trace_row(call), sort_keys=True, default=str)
@@ -2185,26 +2211,25 @@ class CallRunnerImpl:
             written, from_spans = _read_file_tool_calls(runtime, strict=True)
         except ToolCaptureFailed as exc:
             written, from_spans, unread = [], [], exc
-        if written:
+        if graded_calls(written):
             return _merge_span_calls(written, from_spans)
+        # Hand-offs alone are not a capture: the seam's own record still decides.
         if seam is EvidenceSeam.HTTP_TOOL:
-            calls = _merge_span_calls(
-                list(_collect_http_tool_calls(runtime)), from_spans
-            )
+            observed = list(_collect_http_tool_calls(runtime))
         elif seam is EvidenceSeam.TOOL_TRACE:
             # The bundle's seed creates the table, so a missing one is a failed capture too. The
             # file's span lines still count when the database cannot be read.
             try:
-                seam_calls = _collect_tool_trace_calls(runtime, strict=True)
+                observed = list(_collect_tool_trace_calls(runtime, strict=True))
             except ToolCaptureFailed as exc:
-                seam_calls, unread = (), unread or exc
-            calls = _merge_span_calls(list(seam_calls), from_spans)
+                observed, unread = [], unread or exc
         else:
             # Unrecognized/None (should not happen for a `kind: process` bundle past preflight --
             # bundle_v2.py requires `evidence_seam` whenever `kind is PROCESS` -- but degrading
             # rather than crashing keeps this on the scheduler's own evidence_missing path, never
             # a raw exception).
-            calls = _merge_span_calls([], from_spans)
-        if not calls and unread is not None:
-            raise unread
+            observed = []
+        calls = _merge_span_calls([*written, *observed], from_spans)
+        if unread is not None and not graded_calls(calls):
+            raise ToolCaptureFailed(str(unread), calls=calls) from None
         return calls

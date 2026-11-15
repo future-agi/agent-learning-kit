@@ -49,6 +49,10 @@ import time
 from pathlib import Path
 from typing import Any
 
+# A declared tool's trace line is kept under this size by cutting its values, never the line.
+_MAX_RECORD_CHARS = 10000
+_MAX_VALUE_CHARS = 2000
+
 
 def _record(event: Any) -> None:
     destination = os.environ.get("HARNESS_TOOL_TRACE", "").strip()
@@ -334,21 +338,26 @@ def _install_declared_python_tools() -> None:
             }
             path = Path(os.environ["HARNESS_TOOL_TRACE"])
             path.parent.mkdir(parents=True, exist_ok=True)
+            record = {
+                "name": key,
+                "arguments": arguments,
+                "output": value,
+                "is_error": False,
+                "at": started,
+            }
+            line = json.dumps(record, default=str, sort_keys=True)
+            if len(line) > _MAX_RECORD_CHARS:
+                # Cut the values, never the line: a cut line is not JSON, so the call would read
+                # as no evidence at all.
+                record["arguments"] = {
+                    name: str(item)[:_MAX_VALUE_CHARS]
+                    for name, item in arguments.items()
+                }
+                record["output"] = str(value)[:_MAX_VALUE_CHARS]
+                record["truncated"] = True
+                line = json.dumps(record, default=str, sort_keys=True)
             with path.open("a", encoding="utf-8") as trace:
-                trace.write(
-                    json.dumps(
-                        {
-                            "name": key,
-                            "arguments": arguments,
-                            "output": value,
-                            "is_error": False,
-                            "at": started,
-                        },
-                        default=str,
-                        sort_keys=True,
-                    )[:10000]
-                    + "\n"
-                )
+                trace.write(line + "\n")
         except (OSError, KeyError, TypeError, ValueError):
             pass
         finally:

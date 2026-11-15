@@ -74,6 +74,28 @@ def test_declared_python_tool_is_traced_without_changing_result(tmp_path: Path) 
     assert finished - forecast["at"] >= 0.2
 
 
+def test_a_large_tool_result_is_cut_without_breaking_the_trace_line(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "agent.py").write_text("def search(query):\n    return 'x' * 20000\n")
+    trace, env = _trace_environment(
+        tmp_path, [{"name": "search", "module": "agent", "callable": "search"}]
+    )
+
+    subprocess.run(
+        [sys.executable, "-c", "from agent import search\nsearch('q' * 30000)\n"],
+        check=True,
+        env=env,
+    )
+
+    # Every line stays JSON, so the call is still evidence; its values are cut instead.
+    (record,) = [json.loads(line) for line in trace.read_text().splitlines()]
+    assert record["name"] == "search"
+    assert record["truncated"] is True
+    assert record["output"] == "x" * 2000
+    assert record["arguments"] == {"query": "q" * 2000}
+
+
 def test_declared_python_tool_does_not_match_same_named_functions_in_other_modules(
     tmp_path: Path,
 ) -> None:

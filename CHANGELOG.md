@@ -13,9 +13,11 @@ Post-rc.1 increments on the release branch. Each one adds gates on top of the
   is graded instead of ending `evidence_missing`. The claim is matched by the catalogue's
   `overlay` field or by holding the overlay's whole name. Every other sub-goal, coded ones
   included, still requires evidence.
-- A call whose declared tool capture could not be read (an unreadable trace file, or a
-  `tool_trace` world database that is missing or fails) ends `evidence_missing` even when its
-  scenario needs no tool call, instead of being graded as a call that made none.
+- A call whose declared tool capture could not be read ends `evidence_missing` even when its
+  scenario needs no tool call, instead of being graded as a call that made none. Unread means an
+  unreadable trace file, a trace file with no readable record, or a `tool_trace` world database
+  that is missing or fails. Hand-offs alone never count as a capture. A traced declared tool's
+  oversized record is now cut by value, so its trace line stays valid JSON.
 - Multi-agent compatibility references preserve native Google ADK, LangGraph,
   and CrewAI orchestration, while Python command agents capture bounded tool
   evidence with explicit worker and task attribution.
