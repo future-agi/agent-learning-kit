@@ -3259,10 +3259,12 @@ def _copy_scenarios(
         if skip and sealed is not None and (sealed / "scenarios").is_dir()
         else {}
     )
+    # A held copy never takes a folder name a case being written now uses; it is left out instead.
+    written = {path.name for path in folders[:count] if _folder_key(path) not in skip}
     for source_folder in folders[:count]:
         key = _folder_key(source_folder)
         if key in skip:
-            if key in held:
+            if key in held and held[key].name not in written:
                 shutil.copytree(held[key], target / held[key].name)
             continue
         shutil.copytree(source_folder, target / source_folder.name)

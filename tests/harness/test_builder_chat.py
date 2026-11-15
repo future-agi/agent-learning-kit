@@ -2200,6 +2200,25 @@ def test_a_folder_a_run_cannot_load_keeps_its_sealed_version(tmp_path):
     assert (staging / "scenarios" / "good").is_dir()
 
 
+def test_a_held_copy_never_takes_the_folder_of_a_case_written_now(tmp_path):
+    from fi.alk.harness.bundle_author_v2 import _copy_scenarios
+
+    authoring = tmp_path / "authoring"
+    for name, body in (("a_broken", "{not json"), ("late", '{"scenario_key": "late"}')):
+        (authoring / "scenarios" / name).mkdir(parents=True)
+        (authoring / "scenarios" / name / "scenario.json").write_text(body, encoding="utf-8")
+    sealed = tmp_path / "bundle"
+    (sealed / "scenarios" / "late").mkdir(parents=True)
+    (sealed / "scenarios" / "late" / "scenario.json").write_text('{"scenario_key": "a_broken"}', encoding="utf-8")
+    staging = tmp_path / "staging"
+    staging.mkdir()
+
+    _copy_scenarios(authoring, staging, count=2, skip=frozenset({"a_broken"}), sealed=sealed)
+
+    assert json.loads((staging / "scenarios" / "late" / "scenario.json").read_text())["scenario_key"] == "late"
+    assert sorted(path.name for path in (staging / "scenarios").iterdir()) == ["late"]
+
+
 def test_publish_sends_at_most_the_platform_limit_of_failed_scenarios():
     from types import SimpleNamespace
 
