@@ -27,6 +27,7 @@ import inspect
 import json
 import os
 import sys
+import threading
 import time
 from typing import Any
 from urllib import request
@@ -91,6 +92,12 @@ def _delay(answer: dict[str, Any]) -> float:
         return 0.0
 
 
+def _report_in_background(call_id: str, exc: BaseException) -> None:
+    threading.Thread(
+        target=_post, args=("/end", {"id": call_id, "ok": False, "error": repr(exc)}), daemon=True
+    ).start()
+
+
 def door(tool: str) -> Any:
     """The decorator that puts the world's door in front of one tool."""
 
@@ -118,6 +125,11 @@ def door(tool: str) -> Any:
                     if call_id:
                         await asyncio.to_thread(_post, "/end", {"id": call_id, "ok": False, "error": repr(exc)})
                     raise
+                except BaseException as exc:
+                    # Cancelled (or interrupted): told without awaiting, or the door waits out the call for minutes.
+                    if call_id:
+                        _report_in_background(call_id, exc)
+                    raise
                 if call_id:
                     answer = await asyncio.to_thread(_post, "/end", {"id": call_id, "ok": True, "result": result})
                     if answer is not None and answer.get("lost"):
@@ -138,7 +150,7 @@ def door(tool: str) -> Any:
             call_id = str((decision or {}).get("id") or "")
             try:
                 result = function(*args, **kwargs)
-            except Exception as exc:
+            except BaseException as exc:
                 if call_id:
                     _post("/end", {"id": call_id, "ok": False, "error": repr(exc)})
                 raise
@@ -158,11 +170,15 @@ def door(tool: str) -> Any:
 def decorate_source(source: str, targets: dict[str, str]) -> ast.Module | None:
     """The module's code with the door as the innermost decorator of each target: `targets` maps a callable's path
     in the module (`issue_refund`, `Tools.issue_refund`) to its tool name. None when no target is found."""
+    return _decorate(source, targets)[0]
+
+
+def _decorate(source: str, targets: dict[str, str]) -> tuple[ast.Module | None, set[str]]:
+    """`decorate_source`, and which target paths got the decorator."""
     tree = ast.parse(source)
-    found = False
+    decorated: set[str] = set()
 
     def visit(body: list[ast.stmt], prefix: str) -> None:
-        nonlocal found
         for node in body:
             if isinstance(node, ast.ClassDef):
                 visit(node.body, f"{prefix}{node.name}.")
@@ -173,12 +189,12 @@ def decorate_source(source: str, targets: dict[str, str]) -> ast.Module | None:
                 call = ast.Call(func=ast.Name(id=DECORATOR, ctx=ast.Load()), args=[ast.Constant(value=tool)], keywords=[])
                 # Last in the list is applied first: the framework's decorators receive the wrapped function.
                 node.decorator_list.append(ast.copy_location(call, node))
-                found = True
+                decorated.add(f"{prefix}{node.name}")
 
     visit(tree.body, "")
-    if not found:
-        return None
-    return ast.fix_missing_locations(tree)
+    if not decorated:
+        return None, decorated
+    return ast.fix_missing_locations(tree), decorated
 
 
 def _patch_attributes(module: Any, targets: dict[str, str]) -> None:
@@ -212,9 +228,9 @@ class _DoorLoader(importlib.abc.Loader):
         name = module.__spec__.name if module.__spec__ else module.__name__
         try:
             source = self.original.get_source(name)
-            tree = decorate_source(source, self.targets) if source else None
+            tree, decorated = _decorate(source, self.targets) if source else (None, set())
         except Exception:  # noqa: BLE001 - unreadable or unparseable: patched by attribute instead
-            tree = None
+            tree, decorated = None, set()
         if tree is None:
             self.original.exec_module(module)
             _patch_attributes(module, self.targets)
@@ -222,6 +238,8 @@ class _DoorLoader(importlib.abc.Loader):
         module.__dict__[DECORATOR] = door
         filename = getattr(module, "__file__", None) or name
         exec(compile(tree, filename, "exec"), module.__dict__)  # noqa: S102 - the module's own code, one decorator more
+        # A tool not written as a plain `def` (made by a factory, defined under `try`) is wrapped by attribute.
+        _patch_attributes(module, {path: tool for path, tool in self.targets.items() if path not in decorated})
 
     def get_source(self, name: str) -> Any:
         return self.original.get_source(name)

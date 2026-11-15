@@ -185,3 +185,79 @@ def test_the_plan_gets_a_door_for_in_process_tools_and_none_behind_the_tool_prox
     ]
     assert in_process_door_bindings(entries, "typescript") == []
     assert WORLD_DOOR_PROCESS == "world-door"
+
+
+def _wired(monkeypatch, in_process):
+    def post(path, body):
+        if path == "/begin":
+            return in_process.begin(body["name"], body["arguments"])
+        return in_process.end(body["id"], body["ok"], body.get("result"), body.get("error", ""))
+
+    monkeypatch.setattr(bootstrap, "_post", post)
+    monkeypatch.setattr("fi.alk.harness.in_process_door.RUN_SECONDS", 3)
+
+
+def test_an_interrupted_tool_still_tells_the_door_it_ended(monkeypatch):
+    """Not told, the door waits out the call for minutes, holding every later call of a faulted action."""
+    in_process, _ = _door()
+    _wired(monkeypatch, in_process)
+
+    @bootstrap.door("refund")
+    def refund(order):
+        raise KeyboardInterrupt
+
+    with pytest.raises(KeyboardInterrupt):
+        refund(1)
+    assert [row["outcome"] for row in in_process.door.events()] == ["refused"]
+
+
+def test_a_cancelled_async_tool_still_tells_the_door_it_ended(monkeypatch):
+    import asyncio
+    import time
+
+    in_process, _ = _door()
+    _wired(monkeypatch, in_process)
+
+    @bootstrap.door("refund")
+    async def refund(order):
+        await asyncio.sleep(10)
+
+    async def cancel_it():
+        task = asyncio.ensure_future(refund(1))
+        await asyncio.sleep(0.2)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    asyncio.run(cancel_it())
+    deadline = time.monotonic() + 2
+    while not in_process.door.events() and time.monotonic() < deadline:
+        time.sleep(0.05)
+    assert [row["outcome"] for row in in_process.door.events()] == ["refused"]
+
+
+def test_a_tool_that_is_not_a_plain_def_in_its_module_is_wrapped_beside_one_that_is(tmp_path, monkeypatch):
+    (tmp_path / "mixed_tools_mod.py").write_text(
+        "def issue_refund(order):\n    return order\n\n"
+        "def _make():\n    def inner(order):\n        return order\n    return inner\n\n"
+        "lookup = _make()\n"
+        "try:\n    def cancel(order):\n        return order\nexcept Exception:\n    pass\n"
+    )
+    monkeypatch.syspath_prepend(str(tmp_path))
+    monkeypatch.setattr(bootstrap, "URL", "http://127.0.0.1:1")
+    monkeypatch.setenv(
+        "ALK_TOOL_TRACE_BINDINGS",
+        json.dumps(
+            [{"name": name, "module": "mixed_tools_mod", "callable": name} for name in ("issue_refund", "lookup", "cancel")]
+        ),
+    )
+    before = list(sys.meta_path)
+    try:
+        assert bootstrap.install() is True
+        import mixed_tools_mod
+
+        for name in ("issue_refund", "lookup", "cancel"):
+            assert getattr(getattr(mixed_tools_mod, name), "__alk_world_door__", False), name
+    finally:
+        sys.meta_path[:] = before
+        sys.modules.pop("mixed_tools_mod", None)
