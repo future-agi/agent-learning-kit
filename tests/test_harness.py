@@ -9379,3 +9379,5 @@ def test_must_pass_round_trips(tmp_path):
     assert not said.get("is_error"), said
     assert document_for(kept[0])["must_pass"] is True
     assert [one.must_pass for one in load_scenarios(root)] == [True]
+    # An unflagged case writes no must_pass, so an older suite rewritten as it was is unchanged.
+    assert "must_pass" not in document_for(Scenario(name="plain"))
