@@ -1562,6 +1562,32 @@ def test_a_worker_still_out_when_the_process_stops_keeps_its_hand_off_with_no_re
     ]
 
 
+def test_a_worker_the_openai_agents_instrumentor_names_only_by_its_span_keeps_its_hand_off_at_stop(
+    tmp_path: Path,
+) -> None:
+    # traceai-openai-agents 0.1.6 starts an agent span named after the agent with an empty input and sets
+    # gen_ai.agent.name only when the span ends; a worker still out at Stop never gets that attribute.
+    _run(
+        tmp_path,
+        """
+        from opentelemetry.trace import set_span_in_context
+        lead = tracer.start_span("Lead", attributes={"gen_ai.span.kind": "AGENT", "gen_ai.agent.name": "Lead"})
+        ask = tracer.start_span("refund", context=set_span_in_context(lead), attributes={
+            "gen_ai.span.kind": "TOOL", "input.value": '{"name": "refund", "input": "order 1042"}'})
+        run = tracer.start_span("Refund worker", context=set_span_in_context(ask), attributes={
+            "gen_ai.span.kind": "AGENT", "gen_ai.provider.name": "openai", "input.value": "{}"})
+        with trace.use_span(run):
+            with span("list_refunds", **{"gen_ai.span.kind": "TOOL", "gen_ai.tool.name": "list_refunds"}):
+                pass
+    """,
+    )
+    rows = _sealed(tmp_path)
+    (hand_off,) = [row for row in rows if row["name"] == "refund"]
+    lookup = next(row for row in rows if row["name"] == "list_refunds")
+    assert (hand_off["delegated_to"], "ended_at" in hand_off) == ("Refund worker", False)
+    assert lookup["parent_span_id"] == hand_off["span_id"]
+
+
 def test_a_hand_off_written_at_its_start_is_replaced_by_the_line_written_when_the_worker_returns(
     tmp_path: Path,
 ) -> None:
@@ -1593,7 +1619,7 @@ def test_a_worker_named_only_after_the_tool_that_ran_it_writes_no_hand_off_at_it
         lead = tracer.start_span("Lead", attributes={"gen_ai.span.kind": "AGENT", "gen_ai.agent.name": "Lead"})
         ask = tracer.start_span("refund", context=set_span_in_context(lead), attributes={
             "gen_ai.span.kind": "TOOL", "gen_ai.tool.name": "refund"})
-        tracer.start_span("worker run", context=set_span_in_context(ask), attributes={"gen_ai.span.kind": "AGENT"})
+        tracer.start_span("agent.run", context=set_span_in_context(ask), attributes={"gen_ai.span.kind": "AGENT"})
     """,
     )
     assert [r for r in records if r.get("opened")] == []

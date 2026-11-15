@@ -112,6 +112,15 @@ def _first(attributes, keys):
     return None
 
 
+def _named_at_start(span):
+    """The agent an agent span names when it starts, before its name attribute is set: the OpenAI Agents SDK's
+    instrumentor names the span after the agent and sets the name attribute only when the span ends. A method-like
+    span name (with a dot) names no agent."""
+    name = getattr(span, "name", None)
+    attributes = getattr(span, "attributes", None) or {}
+    return name if isinstance(name, str) and name and "." not in name and _first(attributes, _KIND_KEYS) else None
+
+
 def _kind(span):
     attributes = getattr(span, "attributes", None) or {}
     value = _first(attributes, _KIND_KEYS)
@@ -304,7 +313,7 @@ class _ToolSpans:
         """Write the hand-off a tool call makes when the worker it runs starts, before either ends: the line has no
         end and no answer, and the line written when the tool call ends replaces it. Only a worker named at its start,
         never one named after the tool that ran it."""
-        name = _first(span.attributes or {}, _AGENT_NAME_KEYS)
+        name = _first(span.attributes or {}, _AGENT_NAME_KEYS) or _named_at_start(span)
         handing = self._above(span_id, ("TOOL",))
         if not name or handing is None:
             return
