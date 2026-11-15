@@ -9,7 +9,8 @@ The wrapper goes on as the function is defined, not after: the tool's module is 
 the tool's `def`, the innermost, so a framework decorator above it (`@tool`, `@function_tool`) receives the wrapped
 function and keeps it. A module whose source cannot be read or changed is patched by attribute after it runs, which
 a framework that already copied the function escapes; those calls then run outside the door, and the run says the
-faults set on them were not applied. A tool defined in the script started as `__main__` is not wrapped either.
+faults set on them were not applied. A script started by its path (`python agent.py`) is never imported, so the
+bundle starts it as a module (`python -m agent`), which comes through here too (`get_code`).
 
 Never alters a tool otherwise: its signature, name and documentation are kept (`functools.wraps`), its answer and
 its own errors are passed through as they are, and a door that cannot be reached lets every call run as without it.
@@ -20,6 +21,7 @@ from __future__ import annotations
 
 import ast
 import asyncio
+import builtins
 import functools
 import importlib.abc
 import importlib.machinery
@@ -243,6 +245,19 @@ class _DoorLoader(importlib.abc.Loader):
 
     def get_source(self, name: str) -> Any:
         return self.original.get_source(name)
+
+    def get_code(self, name: str) -> Any:
+        """The module's code with the door on its tools, for `python -m <module>`: runpy runs the code itself, in
+        `__main__`, so the decorator is found among the builtins."""
+        try:
+            source = self.original.get_source(name)
+            tree = decorate_source(source, self.targets) if source else None
+        except Exception:  # noqa: BLE001 - unreadable or unparseable: the module runs as without a door
+            tree = None
+        if tree is None:
+            return self.original.get_code(name)
+        setattr(builtins, DECORATOR, door)
+        return compile(tree, self.original.get_filename(name), "exec")
 
 
 class _DoorFinder(importlib.abc.MetaPathFinder):
