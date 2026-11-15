@@ -1450,6 +1450,7 @@ def test_a_control_only_checkpoint_stores_each_ending_once(tmp_path, monkeypatch
     assert sorted(endings) == turns
 
     # A turn after the restore adds only its own ending, not the restored ones again.
+    before = len(client.sessions["futureagi-coordinator-state"])
     restored.conversation = SpendingConversation(fresh, writes=False)
     asyncio.run(
         restored._handle(
@@ -1461,8 +1462,12 @@ def test_a_control_only_checkpoint_stores_each_ending_once(tmp_path, monkeypatch
             }
         )
     )
-    newest = client.sessions["futureagi-coordinator-state"][-1]
-    assert list(newest["files"][".futureagi-turn-endings.json"]) == ["m-6"]
+    added = [
+        key
+        for entry in client.sessions["futureagi-coordinator-state"][before:]
+        for key in entry["files"].get(".futureagi-turn-endings.json") or {}
+    ]
+    assert added == ["m-6"]
 
 
 def test_an_endings_file_that_is_not_an_object_is_ignored(tmp_path, monkeypatch):
