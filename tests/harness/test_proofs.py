@@ -17,7 +17,7 @@ def test_assumed_steps_are_saved_and_not_proved(monkeypatch, tmp_path):
         [{"tool": "place_order", "arguments": {"order_id": "O-10"}, "fixed": {"order_id": "the caller"}}],
         sub_goals=["placed"],
     )
-    proof = module.prove(case, catalogue(placed="def check(world, calls):\n    return None if any(c.name == 'place_order' and c.arguments.get('order_id') == 'O-10' for c in calls) else 'not placed'\n"), tmp_path)
+    proof = module.prove(case, catalogue(placed="def check(world, calls):\n    return None if any(c.ok and c.name == 'place_order' and c.arguments.get('order_id') == 'O-10' for c in calls) else 'not placed'\n"), tmp_path)
 
     record_proof(tmp_path, "refund_case", proof, solution_steps=1)
     saved = load_proofs(tmp_path)["refund_case"]
