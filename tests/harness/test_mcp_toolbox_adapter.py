@@ -153,3 +153,29 @@ def test_source_sql_executes_without_rewriting_literals_or_comments(tmp_path):
         }
     ]
     assert json.loads(trace.read_text())["is_error"] is False
+
+
+@pytest.mark.parametrize("accept", ["*/*", None, "application/json, text/event-stream"])
+def test_a_toolbox_client_accepting_any_type_is_answered(tmp_path, accept):
+    from starlette.testclient import TestClient
+
+    application = _application({"tools": {}}, "postgresql://unused", tmp_path / "trace.jsonl")
+    headers = {"content-type": "application/json", **({"accept": accept} if accept else {})}
+    with TestClient(application, base_url="http://127.0.0.1:15302") as client:
+        response = client.post(
+            "/mcp/catalog",
+            headers=headers,
+            json={
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "initialize",
+                "params": {
+                    "protocolVersion": "2025-11-25",
+                    "capabilities": {},
+                    "clientInfo": {"name": "toolbox-core", "version": "1.4.0"},
+                },
+            },
+        )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["result"]["serverInfo"]["name"] == "source-mcp-toolbox"

@@ -88,6 +88,20 @@ def _execute(
             )
 
 
+def _json_accepted(headers: list[tuple[bytes, bytes]]) -> list[tuple[bytes, bytes]]:
+    """Request headers that ask for JSON by name when the client takes any type.
+
+    The server only answers in JSON, and the MCP SDK sends JSON only to a request that names it;
+    a Toolbox client accepts anything (``*/*``) and would be refused with 406.
+    """
+    accept = b",".join(value for name, value in headers if name.lower() == b"accept")
+    types = {part.split(b";")[0].strip().lower() for part in accept.split(b",") if part.strip()}
+    if types and not types & {b"*/*", b"application/*"}:
+        return headers
+    kept = [(name, value) for name, value in headers if name.lower() != b"accept"]
+    return [*kept, (b"accept", b"application/json")]
+
+
 def _application(definitions: dict[str, Any], database_url: str, trace_path: Path):
     try:
         from mcp.server.mcpserver import MCPServer
@@ -135,7 +149,7 @@ def _application(definitions: dict[str, Any], database_url: str, trace_path: Pat
     async def toolset_compatible(
         scope: dict[str, Any], receive: Any, send: Any
     ) -> None:
-        """Toolbox clients append a toolset name to ``/mcp/``; MCP itself does not."""
+        """Toolbox clients append a toolset name to ``/mcp/`` and accept any type; MCP itself does not."""
 
         if scope.get("type") == "http" and scope.get("path") == "/health":
             await send(
@@ -150,7 +164,12 @@ def _application(definitions: dict[str, Any], database_url: str, trace_path: Pat
         if scope.get("type") == "http" and str(scope.get("path") or "").startswith(
             "/mcp/"
         ):
-            scope = {**scope, "path": "/mcp/", "raw_path": b"/mcp/"}
+            scope = {
+                **scope,
+                "path": "/mcp/",
+                "raw_path": b"/mcp/",
+                "headers": _json_accepted(list(scope.get("headers") or [])),
+            }
         await application(scope, receive, send)
 
     return toolset_compatible
