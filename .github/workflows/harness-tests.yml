@@ -12,6 +12,20 @@ jobs:
   harness:
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: alk
+          POSTGRES_PASSWORD: alk
+          POSTGRES_DB: alk
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U alk"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
@@ -20,4 +34,6 @@ jobs:
       - name: Install
         run: uv sync --extra livekit --extra harness-stores --extra harness-ui --extra hosted-tracing
       - name: Run harness tests
-        run: uv run pytest -q -p no:cacheprovider tests/test_harness.py tests/harness
+        env:
+          ALK_TEST_POSTGRES_DSN: postgresql://alk:alk@localhost:5432/alk
+        run: uv run pytest -q -p no:cacheprovider -rs tests/test_harness.py tests/harness
