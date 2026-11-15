@@ -13,7 +13,8 @@ Environment it reads, by name:
     OPENAI_API_KEY or ANTHROPIC_API_KEY  one is required.
     RETURNS_MODEL      optional. Default `claude-sonnet-4-5`.
     RETURNS_API_URL or TOOLS_API_URL
-                       required. The returns ledger (returns_multi_agent/ledger.py) base address.
+                       optional. The returns ledger (returns_multi_agent/ledger.py) base address. Default
+                       http://127.0.0.1:$LEDGER_PORT (8090), where the ledger listens by default.
     ORDER_LOOKUP_API_URL, REFUND_API_URL
                        optional. Each worker's own address for the ledger; the shared address when unset.
     PORT               optional. Default 8080.
@@ -53,7 +54,10 @@ REFUND_PROMPT = (
 def _ledger(address_env: str, path: str, body: dict[str, Any]) -> str:
     """One call into the ledger at the address this worker is given, falling back to the shared one."""
     base = (
-        os.environ.get(address_env) or os.environ.get("RETURNS_API_URL") or os.environ.get("TOOLS_API_URL") or ""
+        os.environ.get(address_env)
+        or os.environ.get("RETURNS_API_URL")
+        or os.environ.get("TOOLS_API_URL")
+        or f"http://127.0.0.1:{os.environ.get('LEDGER_PORT') or 8090}"
     ).rstrip("/")
     request = urllib.request.Request(
         base + path, data=json.dumps(body).encode(), method="POST", headers={"Content-Type": "application/json"}
