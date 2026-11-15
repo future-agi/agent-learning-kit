@@ -54,6 +54,27 @@ _MAX_RECORD_CHARS = 10000
 _MAX_VALUE_CHARS = 2000
 
 
+def _cut_text(value: Any) -> Any:
+    """The value unchanged when its JSON fits a value's share, otherwise its text cut, with a
+    note giving the full length so that a reader knows the cut happened."""
+    text = (
+        value
+        if isinstance(value, str)
+        else json.dumps(value, default=str, sort_keys=True)
+    )
+    if len(text) <= _MAX_VALUE_CHARS:
+        return value
+    return f"{text[:_MAX_VALUE_CHARS]} [cut from {len(text)} characters]"
+
+
+def _bounded(value: Any) -> Any:
+    """Like `_cut_text`, but a mapping keeps its keys and each value is bounded the same way,
+    so a small value beside a large one keeps its JSON type."""
+    if isinstance(value, Mapping):
+        return {key: _bounded(item) for key, item in value.items()}
+    return _cut_text(value)
+
+
 def _record(event: Any) -> None:
     destination = os.environ.get("HARNESS_TOOL_TRACE", "").strip()
     if not destination:
@@ -348,13 +369,18 @@ def _install_declared_python_tools() -> None:
             line = json.dumps(record, default=str, sort_keys=True)
             if len(line) > _MAX_RECORD_CHARS:
                 # Cut the values, never the line: a cut line is not JSON, so the call would read
-                # as no evidence at all.
-                record["arguments"] = {
-                    name: str(item)[:_MAX_VALUE_CHARS]
-                    for name, item in arguments.items()
-                }
-                record["output"] = str(value)[:_MAX_VALUE_CHARS]
+                # as no evidence at all. Only an oversize value is cut, so the rest keep their
+                # types for a check, and each cut value says it was cut.
+                record["arguments"] = _bounded(arguments)
+                record["output"] = _bounded(value)
                 record["truncated"] = True
+                line = json.dumps(record, default=str, sort_keys=True)
+            if len(line) > _MAX_RECORD_CHARS:
+                # Many values that each fit: bound the record at the cost of their types.
+                record["arguments"] = {
+                    name: _cut_text(item) for name, item in arguments.items()
+                }
+                record["output"] = _cut_text(value)
                 line = json.dumps(record, default=str, sort_keys=True)
             with path.open("a", encoding="utf-8") as trace:
                 trace.write(line + "\n")
