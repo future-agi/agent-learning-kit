@@ -4537,6 +4537,29 @@ def test_submit_contract_schema_teaches_and_leaves_gating_to_the_gate(tmp_path):
     assert schema["properties"]["tools"]["items"]["properties"]["arg_values"]
 
 
+def test_submit_contract_lets_the_model_mark_a_tool_as_a_read(tmp_path):
+    """The only advertised method is POST, so a tool the model cannot mark `read` counts every lookup as a
+    committed write: duplicate-commit checks and World changes then flag reads. The field has to be on each tool
+    entrypoint itself (where ToolEntry is filled); the reflection test above is satisfied by any property named `effect` anywhere."""
+    import asyncio
+
+    from fi.alk.harness.contract import ToolEntry
+    from fi.alk.harness.tools import contract_tools
+    from mcp.types import PaginatedRequestParams
+
+    instance = _instance(contract_tools(tmp_path))
+
+    async def schema_of():
+        result = await _request_handler(instance, "tools/list").handler(None, PaginatedRequestParams())
+        tool = next(tool for tool in result.tools if tool.name == "submit_contract")
+        return getattr(tool, "input_schema", None) or tool.inputSchema
+
+    item = asyncio.run(schema_of())["properties"]["tool_entrypoints"]["items"]["properties"]
+    assert {"read", "write"} <= set(item["effect"]["enum"])
+    assert item["effect"]["description"]
+    assert ToolEntry(tool="get_order", effect="read").effect == "read"
+
+
 def test_a_bare_conversational_contract_is_nudged_once_then_accepted(tmp_path):
     """No rules and no prompt excerpt on a conversational agent almost always means the prompt
     was not found, so the first submission bounces with directions. The second goes through,
