@@ -6834,16 +6834,16 @@ class ProcessRuntimeProvider:
             or datetime.fromtimestamp(time.time() + 7200, tz=timezone.utc),
         )
         context_path = lifecycle_directory / "context.json"
-        # After the first provision the folder is the lifecycle user's, and so is what it holds.
-        with user_files.open_log(context_path) as handle:
-            os.fchmod(handle.fileno(), 0o600)
-            handle.write(context.model_dump_json(indent=2).encode("utf-8"))
         secret_values = {
             name: self._secret_values.get(name, "") for name in spec.required_secrets
         }
         try:
-            # Inside the try: the lifecycle user owns the output folders from the first
-            # provision on, and one swapped for a link is the environment's failure.
+            # Inside the try: the lifecycle user owns its folder and what it holds from the
+            # first provision on, and an entry it swapped for a link or a folder is the
+            # environment's failure.
+            with user_files.open_log(context_path) as handle:
+                os.fchmod(handle.fileno(), 0o600)
+                handle.write(context.model_dump_json(indent=2).encode("utf-8"))
             invocation = build_lifecycle_invocation(
                 command=spec.provision,
                 # Lifecycle code and its per-process dependency installation live in the
@@ -6882,7 +6882,7 @@ class ProcessRuntimeProvider:
                 secret_values=secret_values,
                 beneath=lifecycle_directory,
             )
-        except ProviderLifecycleError as exc:
+        except (ProviderLifecycleError, OSError) as exc:
             raise ProcessRuntimeError(
                 "provider_lifecycle",
                 "spawn_failed",

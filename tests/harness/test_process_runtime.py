@@ -5711,6 +5711,24 @@ def test_a_re_provision_through_a_linked_output_folder_fails_as_the_environment(
     assert list((tmp_path / "elsewhere").iterdir()) == []
 
 
+def test_a_re_provision_with_a_folder_where_its_context_goes_fails_as_the_environment(
+    tmp_path: Path,
+) -> None:
+    provider, manifest, source, bundle_dir = _lifecycle_provider(
+        tmp_path, _nested_receipt_run, "provider-target.json"
+    )
+    runtimes = _provision_one(provider, manifest, source, bundle_dir, tmp_path)
+    provider._destroy_provider_target(0)
+    context_path = tmp_path / "provider" / "w0" / "context.json"
+    context_path.unlink()
+    context_path.mkdir()
+
+    with pytest.raises(pr.ProcessRuntimeError) as info:
+        provider._ensure_provider_target(0, runtimes[0])
+
+    assert info.value.domain is FailureDomain.ENVIRONMENT
+
+
 def test_provider_provision_failure_surfaces_redacted_provider_output(
     tmp_path: Path,
 ) -> None:
