@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import array
 import asyncio
+import contextvars
 import json
 import math
 import logging
@@ -4044,6 +4045,24 @@ async def _await_target_last_words(
     return loop.time() - started
 
 
+# The hosting harness's Stop, read while a conversation runs: set by the voice environment for one run, so a person's
+# Stop ends the call at once and the call is sealed with what was said up to it.
+STOP_CHECK: contextvars.ContextVar[Callable[[], bool] | None] = contextvars.ContextVar(
+    "livekit_stop_check", default=None
+)
+_STOP_POLL_SECONDS = 0.25
+
+
+async def _wait_for_stop(check: Callable[[], bool]) -> None:
+    while True:
+        try:
+            if check():
+                return
+        except Exception:  # noqa: BLE001 - a failing check never ends the call
+            pass
+        await asyncio.sleep(_STOP_POLL_SECONDS)
+
+
 async def _wait_for_conversation_end(
     room: rtc.Room,
     session: AgentSession,
@@ -4115,6 +4134,9 @@ async def _wait_for_conversation_end(
         )
     if provider_task is not None:
         tasks["provider_disconnected"] = provider_task
+    stop_check = STOP_CHECK.get()
+    if stop_check is not None:
+        tasks["user_canceled"] = asyncio.create_task(_wait_for_stop(stop_check))
     try:
         done, pending = await asyncio.wait(
             set(tasks.values()),
@@ -4153,6 +4175,8 @@ async def _wait_for_conversation_end(
         if "provider_disconnected" in monitor_failures:
             completed.add("provider_disconnected")
         for reason in (
+            # The person's Stop outranks every other ending.
+            "user_canceled",
             "simulator_end_call",
             "target_disconnected",
             "room_disconnected",
@@ -5204,6 +5228,14 @@ def _conversation_outcome(
     transcript = "\n".join(
         f"{message['role']}: {message['content']}" for message in messages
     )
+    if stop_reason == "user_canceled":
+        # Stopped by the person: the call is kept as said up to the stop; the harness reports it as cancelled.
+        return _CaseOutcome(
+            status=TestCaseStatus.COMPLETED,
+            transcript=transcript,
+            messages=messages,
+            metadata={"stop_reason": stop_reason},
+        )
     if (
         stop_reason in {"target_disconnected", "room_disconnected"}
         and _has_role_alternation(messages)

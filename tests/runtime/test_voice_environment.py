@@ -370,3 +370,34 @@ def test_voice_all_cases_failed_downgrades_to_failed(monkeypatch) -> None:
     report = asyncio.run(SimulationRunner().run(spec))
     assert report.status == RunStatus.FAILED
     assert report.failure is not None
+
+
+def test_a_person_s_stop_reaches_the_live_voice_call_and_is_cleared_after_it() -> None:
+    from fi.simulate.simulation.engines.livekit import STOP_CHECK
+
+    job = _voice_job()
+    spec = _build_voice_spec(job)
+    persona = spec.scenario.dataset[0]
+    stopped = {"now": False}
+    seen: dict = {}
+
+    async def fake_run_voice_simulation(**_kwargs):
+        check = STOP_CHECK.get()
+        seen["before"] = check()
+        stopped["now"] = True
+        seen["after"] = check()
+        return _legacy(persona)
+
+    import fi.simulate.voice as voice_api
+
+    original = voice_api.run_voice_simulation
+    voice_api.run_voice_simulation = fake_run_voice_simulation
+    try:
+        report = asyncio.run(SimulationRunner().run(spec, stop_when=lambda _messages, _persona: stopped["now"]))
+    finally:
+        voice_api.run_voice_simulation = original
+
+    assert report.status == RunStatus.COMPLETED
+    # The engine reads the person's Stop while the call runs, and nothing of it is left for the next run.
+    assert seen == {"before": False, "after": True}
+    assert STOP_CHECK.get() is None
