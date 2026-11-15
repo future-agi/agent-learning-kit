@@ -18,6 +18,7 @@ from typing import Any
 
 from pydantic import ValidationError
 
+from . import dropped as drops
 from .amend import _persist, drop_tool_references
 from .backends import FILE_TOOLS, SessionSpec, ToolServer, ToolSpec, tool, tool_server
 from .builder import _err, _ok, scenario_problems
@@ -637,8 +638,14 @@ def write_result(
     warnings: list[str],
     not_checked: list[str],
     left_out: list[dict],
+    restored: list[dict] | None = None,
+    restore_failed: list[dict] | None = None,
 ) -> None:
-    """Write the result the platform lands; the last write wins."""
+    """Write the result the platform lands; the last write wins.
+
+    ``restored`` are the dropped scenarios this rebuild put back and proved; ``restore_failed``
+    those it could not, each with why.
+    """
     notes = _cut(notes, _NOTES_MAX)
     used = _size(notes) + 1024
     listed: dict[str, list[Any]] = {}
@@ -648,6 +655,8 @@ def write_result(
         ("warnings", warnings),
         ("not_checked", not_checked),
         ("left_out", left_out),
+        ("restored", restored or []),
+        ("restore_failed", restore_failed or []),
     ):
         listed[name] = []
         for item in items[:_LISTED_MAX]:
@@ -672,6 +681,8 @@ def write_result(
             "not_checked": listed["not_checked"],
         },
         "left_out": listed["left_out"],
+        "restored": listed["restored"],
+        "restore_failed": listed["restore_failed"],
     }
     target = Path(workspace) / NUDGE_RESULT
     temporary = target.with_name(target.name + ".tmp")
@@ -691,8 +702,15 @@ def report_update(
     started_with: set[str] | None = None,
     world: Mapping[str, Any] | None = None,
     invariants: Mapping[str, str] | None = None,
+    before: Mapping[str, Mapping[str, Any]] | None = None,
+    restored: Mapping[str, Mapping[str, Any]] | None = None,
+    unrestorable: list[str] | None = None,
 ) -> dict[str, Any]:
     """Run the stage gate and write the result file. ``nudge`` is the command payload.
+
+    ``before`` is each scenario's content when a suite turn began: one it no longer holds because a
+    capability it needs is gone is recorded as dropped. ``restored`` are the dropped scenarios the
+    turn put back, settled here; ``unrestorable`` those it could not put back.
 
     ``world`` is the turn's world tracking: world changes not yet saved fail the gate.
     ``started_with`` is what the piece held when the turn began: its scenario keys (suite) or
@@ -704,6 +722,8 @@ def report_update(
     stage = str(nudge.get("stage") or "")
     warnings: list[str] = []
     left_out: list[dict] = []
+    restored_rows: list[dict] = []
+    restore_failed: list[dict] = []
     if stage == ENVIRONMENT:
         problems, not_checked = environment_gate(workspace)
         if "world" not in not_checked:
@@ -756,6 +776,15 @@ def report_update(
             started_with=started_with,
             new_sub_goals=list(nudge.get("new_sub_goals") or []),
         )
+        problems, left_out, restored_rows, restore_failed = _settle_drops(
+            workspace,
+            nudge,
+            problems,
+            left_out,
+            before=before,
+            restored=restored or {},
+            unrestorable=unrestorable or [],
+        )
     write_result(
         workspace,
         nudge_id=str(nudge.get("nudge_id") or ""),
@@ -766,6 +795,8 @@ def report_update(
         warnings=warnings,
         not_checked=not_checked,
         left_out=left_out,
+        restored=restored_rows,
+        restore_failed=restore_failed,
     )
     return {
         "passed": not problems,
@@ -773,7 +804,63 @@ def report_update(
         "warnings": warnings,
         "not_checked": not_checked,
         "left_out": left_out,
+        "restored": restored_rows,
+        "restore_failed": restore_failed,
     }
+
+
+def _settle_drops(
+    workspace: Path,
+    nudge: Mapping[str, Any],
+    problems: list[dict],
+    left_out: list[dict],
+    *,
+    before: Mapping[str, Mapping[str, Any]] | None,
+    restored: Mapping[str, Mapping[str, Any]],
+    unrestorable: list[str],
+) -> tuple[list[dict], list[dict], list[dict], list[dict]]:
+    """Settle a suite turn's restores and record its drops for a missing capability:
+    (problems, left_out, restored, restore_failed).
+
+    A restored scenario that did not prove leaves the suite again; its problem becomes a failed
+    restore rather than failing the rebuild.
+    """
+    present = {one.scenario_key for one in load_scenarios(workspace)}
+    done: list[dict] = []
+    failed: list[dict] = []
+    if restored:
+        done, failed, problems = drops.finish_restore(
+            workspace, restored, problems, present
+        )
+        out = {one["key"] for one in failed}
+        if out & present:
+            catalogue = load_catalogue(workspace)
+            write_scenarios(
+                [one for one in load_scenarios(workspace) if one.scenario_key not in out],
+                workspace,
+                catalogue,
+            )
+            present -= out
+    failed += drops.failed_restores(workspace, unrestorable)
+    if before is not None:
+        labels = nudge.get("base_labels") or {}
+        recorded = drops.record_drops(
+            workspace,
+            before,
+            present,
+            tools=_contract_tools(workspace),
+            sub_goals=load_catalogue(workspace).names(),
+            agent_version=str(nudge.get("agent_label") or ""),
+            suite_version=str(labels.get("suite") or "") if isinstance(labels, Mapping) else "",
+        )
+        left_out = [
+            {**one, "why": _cut(recorded[one["key"]]["reason"])}
+            if one.get("key") in recorded
+            else one
+            for one in left_out
+        ]
+    failed = [{"key": one["key"], "why": _cut(one["why"])} for one in failed]
+    return problems, left_out, done, failed
 
 
 def rename_refusal(workspace: Path, payload: dict[str, Any]) -> str:
@@ -821,7 +908,11 @@ def guard_renames(server: ToolServer, workspace: Path) -> ToolServer:
             submit = one.handler
 
             async def guarded(args: dict[str, Any], _submit=submit) -> dict[str, Any]:
-                said = rename_refusal(workspace, args)
+                said = rename_refusal(workspace, args) or drops.submit_refusal(
+                    workspace,
+                    args,
+                    {one.scenario_key for one in load_scenarios(workspace)},
+                )
                 if said:
                     return _err(said)
                 return await _submit(args)
@@ -1007,6 +1098,19 @@ def nudge_server(
         if stage == ENVIRONMENT
         else None
     )
+    before: dict[str, dict[str, Any]] | None = None
+    restored: dict[str, dict[str, Any]] = {}
+    unrestorable: list[str] = []
+    if stage == SUITE:
+        suite = kept if kept is not None else load_scenarios(workspace)
+        before = {one.scenario_key: one.model_dump(mode="json") for one in suite}
+        held = catalogue if catalogue is not None else load_catalogue(workspace)
+        restored, refused = drops.restore(
+            workspace, suite, tools=_contract_tools(workspace), sub_goals=held.names()
+        )
+        unrestorable = sorted(refused)
+        if restored:
+            write_scenarios(suite, workspace, held)
 
     @tool(
         "retire_sub_goal",
@@ -1040,8 +1144,15 @@ def nudge_server(
             "started_with": started_with,
             "world": world,
             "invariants": invariants,
+            "before": before,
+            "restored": restored,
+            "unrestorable": unrestorable,
         }
         result = report_update(workspace, nudge=nudge, **done)
+        if kept is not None and result["restore_failed"]:
+            # Saving the session's list again must not bring a failed restore back.
+            out = {one["key"] for one in result["restore_failed"]}
+            kept[:] = [one for one in kept if one.scenario_key not in out]
         if reported is not None:
             reported.update(done)
         said = json.dumps(result, indent=1)

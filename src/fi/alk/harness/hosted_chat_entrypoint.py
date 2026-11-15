@@ -1425,18 +1425,36 @@ class HostedChatRuntime:
         keys = [str(one) for one in self._nudge.get("user_draft_keys") or []]
         if self._nudge.get("stage") != SUITE:
             return _NUDGE_NOTE + _ENVIRONMENT_NUDGE_NOTE
+        restored = self._restore_note()
         if not keys:
             return (
                 _NUDGE_NOTE
                 + "\n\nNo scenario is being edited by the person now: no list of edits in "
                 "an earlier message applies any more, so repair every scenario this update "
                 "breaks."
+                + restored
             )
         return (
             _NUDGE_NOTE
             + "\n\nScenarios the person is still editing (keep what they wrote; only carry "
             "over a renamed tool or argument): " + ", ".join(keys)
+            + restored
         )
+
+    def _restore_note(self) -> str:
+        """The line on dropped scenarios this suite rebuild restores, or ""."""
+        from .catalogue import load_catalogue
+        from .dropped import restore_note
+        from .understand import load as load_contract
+
+        try:
+            return restore_note(
+                self.workspace,
+                load_contract(self.workspace),
+                load_catalogue(self.workspace).names(),
+            )
+        except (OSError, ValueError):
+            return ""
 
     def _report_again_if_written(self) -> None:
         """A write after the last report_update runs the gate again over what lands."""
