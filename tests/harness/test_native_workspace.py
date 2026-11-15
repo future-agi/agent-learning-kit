@@ -1,16 +1,25 @@
+import asyncio
+import json
 import os
 import random
+import socket
 import subprocess
 import sys
+import threading
 
 import pytest
 
+from fi.alk.harness import isolated_process
 from fi.alk.harness.world.handle import HostedWorld
 from fi.alk.harness.world.errors import (
     WorldUsageError,
     WorldReadOnly,
     WorldStateTooLarge,
 )
+from fi.alk.harness.world.workspace_channel import WorkspaceClient
+import test_observation_http_sessions as sessions
+
+phase = sessions.phase
 
 
 class Store:
@@ -111,29 +120,102 @@ def test_bounds_file_reads_and_writes(tmp_path):
         w.write_file("project", "large", "x" * (1024 * 1024 + 1))
 
 
-def test_disposable_phase_worker_materializes_native_fixture(tmp_path):
-    import json
-
+def test_setup_ready_and_check_reach_the_workspace_through_the_harness(tmp_path, phase):
     w = world(tmp_path / "workspace")
-    payload = {
-        "world": w._execution_state(),
-        "source": "def setup(world):\n    world.write_file('project', 'native.txt', 'from child')\n",
-        "entry": "setup",
-    }
-    subprocess.run(
-        [
-            sys.executable,
-            "-m",
-            "fi.alk.harness.phase_worker",
-            str(tmp_path / "receipt.json"),
-        ],
-        input=json.dumps(payload),
-        text=True,
-        capture_output=True,
-        check=True,
-    )
-    assert json.loads((tmp_path / "receipt.json").read_text())["value"] is None
+
+    # The worker gets no root: under per-user isolation it could not open one.
+    assert "workspace_roots" not in json.dumps(w._execution_state())
+    setup = "def setup(world):\n    world.write_file('project', 'native.txt', 'from child')\n"
+    assert phase(setup, w) is None
     assert (tmp_path / "workspace/native.txt").read_text() == "from child"
+    ready = "def ready(world):\n    return world.read_file('project', 'native.txt') == 'from child'\n"
+    assert phase(ready, w.read_only(), "ready") is True
+    check = "def check(world):\n    return world.read_file('project', 'native.txt')\n"
+    assert phase(check, w.read_only(), "check") == "from child"
+
+
+# Scenario code that skips the handle and writes its own requests on the channel.
+_RAW_REQUESTS = """def {entry}(world):
+    import json, os, socket
+    from fi.alk.harness.isolated_process import (
+        CHANNEL_FD_ENV, encode_message, receive_message, send_message,
+    )
+    channel = socket.socket(fileno=os.dup(int(os.environ[CHANNEL_FD_ENV])))
+    replies = []
+    for request in {requests!r}:
+        send_message(channel, encode_message(request))
+        replies.append(receive_message(channel, limit=1 << 23))
+    return json.dumps(replies)
+"""
+
+
+def test_a_worker_cannot_make_the_harness_reach_outside_its_world(tmp_path, phase):
+    root = tmp_path / "workspace"
+    w = world(root)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "secret.txt").write_text("held back")
+    (root / "link").symlink_to(outside, target_is_directory=True)
+    requests = [
+        {"op": "read_file", "workspace": "project", "path": "../outside/secret.txt"},
+        {"op": "read_file", "workspace": "project", "path": str(outside / "secret.txt")},
+        {"op": "read_file", "workspace": "project", "path": "link/secret.txt"},
+        {"op": "write_file", "workspace": "project", "path": "link/planted.txt", "content": "x"},
+        {"op": "read_file", "workspace": "other", "path": "secret.txt", "root": str(outside)},
+        {"op": "write_file", "workspace": "project", "path": "ok.txt", "content": 5},
+        {"op": "revert", "digest": "0" * 64},
+        {"op": "unlink", "workspace": "project", "path": "link"},
+    ]
+
+    replies = json.loads(phase(_RAW_REQUESTS.format(entry="setup", requests=requests), w))
+
+    assert [sorted(reply) for reply in replies] == [["error", "message"]] * len(requests)
+    assert "held back" not in json.dumps(replies)
+    assert sorted(path.name for path in outside.iterdir()) == ["secret.txt"]
+    assert not (root / "ok.txt").exists()
+
+
+def test_a_read_only_phase_cannot_write_through_the_channel(tmp_path, phase):
+    w = world(tmp_path / "workspace")
+    requests = [{"op": "write_file", "workspace": "project", "path": "x.txt", "content": "x"}]
+
+    replies = json.loads(
+        phase(_RAW_REQUESTS.format(entry="check", requests=requests), w.read_only(), "check")
+    )
+
+    assert replies == [{"error": "WorldReadOnly", "message": "write_file reached a read-only handle"}]
+    assert not (tmp_path / "workspace/x.txt").exists()
+
+
+def test_a_worker_checkpoint_is_a_digest_and_revert_restores_the_harness_snapshot(tmp_path):
+    w = world(tmp_path / "workspace")
+    w.write_file("project", "a.txt", "one")
+    parent, child = socket.socketpair()
+    serving = threading.Thread(
+        target=asyncio.run,
+        args=(isolated_process._serve(parent, w._workspace_service(read_only=True)),),
+    )
+    serving.start()
+    try:
+        remote = HostedWorld(
+            Store(), 0, random.Random(0), {},
+            _validate_baseline=False,
+            workspace_channel=WorkspaceClient(child.detach()),
+        )
+        checkpoint = remote.checkpoint()
+        # Only a digest crossed; the snapshot stayed in the harness.
+        assert checkpoint[0] == "baseline" and len(checkpoint[1]) == 64
+        (tmp_path / "workspace/a.txt").write_text("two")  # what the agent might do
+        assert remote.checkpoint() != checkpoint
+        remote.revert(checkpoint)
+        assert (tmp_path / "workspace/a.txt").read_text() == "one"
+        assert remote.read_file("project", "a.txt") == "one"
+        with pytest.raises(WorldReadOnly):
+            remote.write_file("project", "a.txt", "three")
+    finally:
+        remote._workspace_channel._socket.close()
+        serving.join(timeout=10)
+    assert not serving.is_alive()
 
 
 def test_workspace_process_uses_private_copy_even_single_world_and_respawn_resets(
