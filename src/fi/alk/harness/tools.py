@@ -688,6 +688,12 @@ def contract_tools(
                                 "enum": ["POST"],
                                 "description": "HTTP method used by the submitted implementation.",
                             },
+                            "effect": {
+                                "type": "string",
+                                "enum": ["read", "write"],
+                                "description": "read when the tool only reads (a lookup, a search, a list), write "
+                                "when it changes anything. Leave out to go by the HTTP method.",
+                            },
                             "notes": {
                                 "type": "string",
                                 "description": "Anything about reaching it that the fields above "
