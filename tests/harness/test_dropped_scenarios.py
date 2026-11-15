@@ -183,6 +183,21 @@ def test_a_rebuild_without_the_capability_back_restores_nothing(tmp_path):
     assert _result(root)["restored"] == []
 
 
+def test_drops_sit_beside_the_scenarios_and_leave_no_file_once_none_remain(tmp_path):
+    """The platform hashes a suite with no dropped.json exactly as before drops existed."""
+    from fi.alk.harness.authoring_runtime_validation import _artifact_digest
+
+    root = _drop_cancels(_v4(tmp_path))
+    with_drops = _artifact_digest(root / "scenarios")
+    records = dropped.load(root)
+    dropped.save(root, {})
+
+    assert not (root / dropped.DROPPED).exists()
+    assert _artifact_digest(root / "scenarios") == with_drops
+    dropped.save(root, records)
+    assert (root / dropped.DROPPED).exists()
+
+
 # Done when 2: v7 brings `cancel_booking` back and the rebuild restores the three.
 
 
