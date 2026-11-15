@@ -61,7 +61,7 @@ class HandlerChannel:
         try:
             send_message(self._sock, request)
             outcome = receive_message(self._sock, limit=MAX_MESSAGE_BYTES)
-        except (OSError, EOFError, ValueError) as exc:
+        except (OSError, EOFError, ValueError, RecursionError) as exc:
             # The handlers' process is gone or misbehaving: the world fell over, not the agent.
             raise CallAborted(
                 f"handler_child_failed: {type(exc).__name__}", code="call_failed"

@@ -270,6 +270,30 @@ def test_arguments_too_large_to_send_fail_the_call_and_not_the_world():
         child_end.close()
 
 
+@pytest.mark.parametrize(
+    "reply", [b"[" * 200000, b"not json", b"[1]"], ids=["deep-nesting", "not-json", "not-an-object"]
+)
+def test_a_reply_the_child_breaks_aborts_the_call_as_the_world_s_failure(reply):
+    # The child runs the agent's code, which can write anything on its end of the socket.
+    import threading
+
+    from fi.alk.harness.isolated_process import send_message
+
+    parent_end, child_end = socket.socketpair()
+    child_end.settimeout(10)
+    writer = threading.Thread(target=send_message, args=(child_end, reply), daemon=True)
+    writer.start()
+    try:
+        with pytest.raises(CallAborted, match="handler_child_failed") as aborted:
+            HandlerChannel(parent_end).call("lookup_account", {})
+
+        assert aborted.value.code == "call_failed"
+    finally:
+        parent_end.close()
+        writer.join(timeout=10)
+        child_end.close()
+
+
 def test_a_sandbox_without_the_handlers_user_fails_closed(
     per_user, tmp_path, monkeypatch, spawned
 ):
