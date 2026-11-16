@@ -12,12 +12,15 @@ lives under ``coverage/`` — coverage is never a standalone kind.
 from __future__ import annotations
 
 import itertools
-from typing import Any, Dict, List, Mapping, Sequence, Tuple
+from typing import TYPE_CHECKING, Any, Dict, List, Mapping, Sequence, Tuple
 
 from fi.simulate.simulation.models import (
     CoverageDeclaration,
     Scenario,
 )
+
+if TYPE_CHECKING:
+    from fi.alk.studio._source_scenarios import GeneratedScenarioDraftSet
 
 SCENARIO_COVERAGE_AXES = (
     "intents", "personas", "perturbations",
@@ -103,23 +106,37 @@ def expand_scenarios(
 
 
 def coverage_report(
-    scenarios: Sequence[Scenario],
+    scenarios: Sequence[Scenario] | GeneratedScenarioDraftSet,
     *,
     axes: Sequence[str] = SCENARIO_COVERAGE_AXES,
 ) -> Dict[str, Any]:
-    """Obligation coverage per axis: declared (anywhere in the set) vs
-    covered (declared on a TYPED scenario — kind=None legacy rows declare but
-    cannot exercise an obligation)."""
+    """Report structural obligations for scenarios or trusted draft readiness.
+
+    Pass the full source draft set for author admission reports. Its source-case
+    axis retains blocked cases as uncovered and can reveal private evaluator
+    readiness. A public scenario sequence has no admission information and
+    measures structural coverage only. Neither form measures executed success.
+    """
+    from fi.alk.studio._source_scenarios import GeneratedScenarioDraftSet
+
+    source_drafts = (
+        scenarios.drafts if isinstance(scenarios, GeneratedScenarioDraftSet) else None
+    )
+    rows = (
+        [(draft.scenario, draft.status == "reviewable") for draft in source_drafts]
+        if source_drafts is not None
+        else [(scenario, True) for scenario in scenarios]
+    )
     per_axis: Dict[str, Any] = {}
     declared_total = 0
     covered_total = 0
     uncovered_cells: List[str] = []
     for axis in axes:
         declared = sorted({
-            value for scenario in scenarios for value in _declared_values(scenario, axis)
+            value for scenario, _ in rows for value in _declared_values(scenario, axis)
         })
         covered = sorted({
-            value for scenario in scenarios if scenario.kind is not None
+            value for scenario, ready in rows if ready and scenario.kind is not None
             for value in _declared_values(scenario, axis)
         })
         uncovered = sorted(set(declared) - set(covered))
@@ -131,6 +148,19 @@ def coverage_report(
         declared_total += len(declared)
         covered_total += len(covered)
         uncovered_cells.extend(f"{axis}:{value}" for value in uncovered)
+    if source_drafts is not None:
+        blocked = sorted(
+            draft.scenario_id for draft in source_drafts if draft.status == "blocked"
+        )
+        ready_count = len(source_drafts) - len(blocked)
+        per_axis["source_cases"] = {
+            "declared": len(source_drafts),
+            "covered": ready_count,
+            "uncovered": blocked,
+        }
+        declared_total += len(source_drafts)
+        covered_total += ready_count
+        uncovered_cells.extend(f"source_cases:{identifier}" for identifier in blocked)
     report = {
         "obligation_coverage": {
             "declared": declared_total,
@@ -147,7 +177,7 @@ def coverage_report(
         },
         "metadata": {
             # demoted by contract — never the headline (doctrine #3)
-            "library_size": len(scenarios),
+            "library_size": len(rows),
         },
     }
     for key in COVERAGE_FORBIDDEN_HEADLINE_KEYS:

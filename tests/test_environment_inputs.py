@@ -1530,6 +1530,53 @@ def test_existing_environment_adapter_and_identifier_collisions_are_rejected(
         compile_environment_inputs(reviewed, existing_environments=existing)
 
 
+@pytest.mark.parametrize("field", ["documents", "artifacts"])
+@pytest.mark.parametrize(
+    "entries",
+    [
+        [{}],
+        [{"id": None}],
+        [{"id": ""}],
+        [{"id": "  "}],
+        [{"id": 1}],
+        [{"id": []}],
+        [None],
+        "document-id",
+        None,
+        1,
+        {"": {}},
+        {" ": {}},
+        {1: {}},
+    ],
+)
+def test_malformed_existing_environment_identifiers_return_typed_error(
+    field, entries
+) -> None:
+    _, reviewed = _approve_proposals(
+        (_policy_source("Reference material."),), hidden=("policy",)
+    )
+    with pytest.raises(EnvironmentInputError) as exc:
+        existing = AgentEnvironmentSpec(
+            "retrieval_memory" if field == "documents" else "structured_artifacts",
+            {field: entries},
+        )
+        compile_environment_inputs(reviewed, existing_environments=(existing,))
+    assert exc.value.code == "source_mapping_invalid"
+
+
+@pytest.mark.parametrize("field", ["documents", "artifacts"])
+@pytest.mark.parametrize("entries", [{"valid-id": {}}, [{"id": "valid-id"}], []])
+def test_valid_existing_environment_identifier_shapes_compile(field, entries) -> None:
+    _, reviewed = _approve_proposals(
+        (_policy_source("Reference material."),), hidden=("policy",)
+    )
+    existing = AgentEnvironmentSpec(
+        "retrieval_memory" if field == "documents" else "structured_artifacts",
+        {field: entries},
+    )
+    compile_environment_inputs(reviewed, existing_environments=(existing,))
+
+
 def test_policy_proposals_cannot_be_approved_without_decisions_or_source_support() -> (
     None
 ):

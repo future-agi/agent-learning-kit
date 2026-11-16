@@ -5,7 +5,7 @@ import json
 import math
 import re
 from collections import defaultdict
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, fields, is_dataclass
 from dataclasses import field as dataclass_field
 from datetime import date, datetime, timezone
@@ -359,6 +359,9 @@ class AgentEnvironmentSpec:
     data: Mapping[str, Any]
 
     def __post_init__(self) -> None:
+        for field in ("documents", "artifacts"):
+            if field in self.data:
+                _environment_entry_ids(self.data[field], field)
         object.__setattr__(self, "data", _deep_freeze(self.data))
 
     def as_dict(self) -> dict[str, Any]:
@@ -1495,6 +1498,31 @@ def _public_source_id(reviewed: ReviewedEnvironmentInputs, source_id: str) -> st
     return "source_" + _content_digest((reviewed.snapshot_digest, source_id))[7:31]
 
 
+def _environment_entry_ids(entries: object, field: str) -> list[str]:
+    if isinstance(entries, Mapping):
+        identifiers = list(entries)
+    elif isinstance(entries, Sequence) and not isinstance(entries, (str, bytes)):
+        if any(not isinstance(entry, Mapping) for entry in entries):
+            raise EnvironmentInputError(
+                "source_mapping_invalid", f"Environment {field} entries must be objects"
+            )
+        identifiers = [entry.get("id") for entry in entries]
+    else:
+        raise EnvironmentInputError(
+            "source_mapping_invalid",
+            f"Environment {field} must be a mapping or sequence",
+        )
+    if any(
+        not isinstance(identifier, str) or not identifier.strip()
+        for identifier in identifiers
+    ):
+        raise EnvironmentInputError(
+            "source_mapping_invalid",
+            f"Environment {field} identifiers must be nonempty strings",
+        )
+    return identifiers
+
+
 def _validate_environment_collisions(
     environments: tuple[AgentEnvironmentSpec, ...],
 ) -> None:
@@ -1547,17 +1575,11 @@ def _validate_environment_collisions(
         owned.update(declared_names)
         if environment.data.get("tool_name"):
             owned.add(environment.data["tool_name"])
-        documents = environment.data.get("documents", ())
-        document_ids = (
-            list(documents)
-            if isinstance(documents, Mapping)
-            else [document["id"] for document in documents]
+        document_ids = _environment_entry_ids(
+            environment.data.get("documents", ()), "documents"
         )
-        artifacts = environment.data.get("artifacts", {})
-        artifact_ids = (
-            list(artifacts)
-            if isinstance(artifacts, Mapping)
-            else [artifact["id"] for artifact in artifacts]
+        artifact_ids = _environment_entry_ids(
+            environment.data.get("artifacts", {}), "artifacts"
         )
         new_ids = document_ids + artifact_ids
         if (
