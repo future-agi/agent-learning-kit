@@ -58,7 +58,7 @@ from .bundle_v2 import (
     load_bundle_v2,
     seal_bundle_v2,
 )
-from .contract import DataStore, Runtime, ToolEntry, runtime_public_environment
+from .contract import DataStore, Runtime, RuntimeToolService, ToolEntry, runtime_public_environment
 from .generated_runtime import (
     GeneratedRuntimeError,
     framework_instrumentation_command,
@@ -1975,6 +1975,59 @@ def _tool_proxy_process() -> SourceProcess:
     )
 
 
+def _behind_tool_proxy(
+    processes: list[ManagedProcess | SourceProcess],
+    capabilities: dict[str, CapabilityV2],
+    readiness: list[ReadinessProbeV2],
+    control_name: str,
+) -> list[ManagedProcess | SourceProcess]:
+    """Put the evidence proxy in front of the `tools-api` process, so the agent reaches its tools through it."""
+    processes = [*processes, _tool_proxy_process()]
+    # The target must not become eligible to start until the evidence proxy is ready.
+    # Depending only on the upstream tools process leaves a race where the agent starts
+    # with TOOLS_API_URL pointing at a port that has not been bound yet.
+    rewritten: list[ManagedProcess | SourceProcess] = []
+    for process in processes:
+        if isinstance(process, SourceProcess) and process.name == control_name:
+            dependencies = [
+                "tool-proxy" if item == "tools-api" else item
+                for item in process.depends_on
+            ]
+            if "tool-proxy" not in dependencies:
+                dependencies.append("tool-proxy")
+            process = process.model_copy(update={"depends_on": dependencies})
+        rewritten.append(process)
+    capabilities["tool_proxy"] = CapabilityV2(
+        protocol=CapabilityProtocol.HTTP,
+        service="tool-proxy",
+        container_port=8080,
+        configuration_name="TOOLS_API_URL",
+    )
+    readiness.append(
+        ReadinessProbeV2(capability="tool_proxy", path="/health", timeout_seconds=180)
+    )
+    return rewritten
+
+
+def _tool_service_process(source: Path, service: RuntimeToolService) -> SourceProcess:
+    """The source's own tools server as the `tools-api` process, listening on its world's port where its command
+    names one."""
+    component = _runtime_component(source, service.workdir)
+    process = _plan_source_process(
+        source,
+        name="tools-api",
+        root=component,
+        entry=None,
+        control=False,
+        needs_secrets=False,
+        port=service.port,
+        environment={},
+        run_override=list(service.command),
+    )
+    process = _consumable_source_process(process, _FI_TOOLS_PORT, "{{PORT_tools-api}}")
+    return _python_component_command(source=source, component=component, process=process)
+
+
 def _mcp_toolbox_definition(root: Path) -> tuple[Path, dict[str, Any]] | None:
     """Find one source-owned MCP Toolbox SQL configuration.
 
@@ -2636,33 +2689,7 @@ def resolve_environment_plan(
                     )
                 )
         if "tools-api" in source_services:
-            processes.append(_tool_proxy_process())
-            # The target must not become eligible to start until the evidence proxy is ready.
-            # Depending only on the upstream tools process leaves a race where the agent starts
-            # with TOOLS_API_URL pointing at a port that has not been bound yet.
-            rewritten: list[ManagedProcess | SourceProcess] = []
-            for process in processes:
-                if isinstance(process, SourceProcess) and process.name == control_name:
-                    dependencies = [
-                        "tool-proxy" if item == "tools-api" else item
-                        for item in process.depends_on
-                    ]
-                    if "tool-proxy" not in dependencies:
-                        dependencies.append("tool-proxy")
-                    process = process.model_copy(update={"depends_on": dependencies})
-                rewritten.append(process)
-            processes = rewritten
-            capabilities["tool_proxy"] = CapabilityV2(
-                protocol=CapabilityProtocol.HTTP,
-                service="tool-proxy",
-                container_port=8080,
-                configuration_name="TOOLS_API_URL",
-            )
-            readiness.append(
-                ReadinessProbeV2(
-                    capability="tool_proxy", path="/health", timeout_seconds=180
-                )
-            )
+            processes = _behind_tool_proxy(processes, capabilities, readiness, control_name)
         packaging = "compose"
     else:
         contract_is_callback = (contract_interface_kind or "").strip().lower().replace(
@@ -2919,6 +2946,29 @@ def resolve_environment_plan(
                     timeout_seconds=180,
                 )
             )
+        if runtime_model.tool_service is not None:
+            # The source's own tools server, which only its developer starts beside the agent.
+            processes.append(_tool_service_process(root, runtime_model.tool_service))
+            capabilities["tools_api"] = CapabilityV2(
+                protocol=CapabilityProtocol.HTTP,
+                service="tools-api",
+                container_port=runtime_model.tool_service.port,
+                configuration_name="TOOLS_UPSTREAM_URL",
+            )
+            processes = [
+                candidate.model_copy(
+                    update={
+                        "environment": {
+                            **candidate.environment,
+                            runtime_model.tool_service.url_environment: "{{TOOLS_API_URL}}",
+                        }
+                    }
+                )
+                if isinstance(candidate, SourceProcess) and candidate.name == control_name
+                else candidate
+                for candidate in processes
+            ]
+            processes = _behind_tool_proxy(processes, capabilities, readiness, control_name)
         packaging = (
             "dockerfile"
             if (root / "Dockerfile").is_file()
