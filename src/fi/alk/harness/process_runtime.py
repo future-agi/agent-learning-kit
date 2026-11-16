@@ -899,9 +899,20 @@ def _worker_channel(world_dir: Path, worker: str) -> str:
         token = secrets.token_hex(16)
         channels[token] = worker
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(channels), encoding="utf-8")
-        path.chmod(0o644)
+        _write_private(path, json.dumps(channels))
     return token
+
+
+def _write_private(path: Path, text: str) -> None:
+    """Writes `path` readable by its owner only, given to the owner of its directory (the tool proxy's user, once its
+    world directory is made); the proxy's spawn re-owns it when the file came first."""
+    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+        handle.write(text)
+    path.chmod(0o600)
+    owner = path.parent.stat()
+    if (owner.st_uid, owner.st_gid) != (os.getuid(), os.getgid()):
+        user_files.chown_no_follow(path, owner.st_uid, owner.st_gid)
 
 
 def render_template(
@@ -2463,6 +2474,9 @@ def spawn_source_process(
                 observer.chmod(0o444)
         if resolved_user is not None:
             chown(world_dir, resolved_user.pw_uid, resolved_user.pw_gid)
+            # Worker channel tokens written before this world directory was given away stay readable by its process.
+            if (world_dir / WORKER_CHANNELS_FILE).is_file():
+                chown(world_dir / WORKER_CHANNELS_FILE, resolved_user.pw_uid, resolved_user.pw_gid)
             if isolation_mode() is IsolationMode.PER_USER:
                 # The harness's workers hold no capabilities, yet read what the process writes
                 # here (its tool-call trace) by name: they pass through, though not list it.

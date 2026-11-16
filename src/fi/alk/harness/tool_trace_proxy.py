@@ -19,6 +19,7 @@ try:  # Beside the proxy in a bundle; the harness package when run from source.
         PostgresRoster,
         RecordExecutor,
         Routed,
+        SHARED_ADDRESS,
         ToolCall,
         WorldDoor,
         action_tool,
@@ -37,6 +38,7 @@ except ImportError:  # pragma: no cover - imported as part of the package
         PostgresRoster,
         RecordExecutor,
         Routed,
+        SHARED_ADDRESS,
         ToolCall,
         WorldDoor,
         action_tool,
@@ -203,13 +205,18 @@ class Handler(BaseHTTPRequestHandler):
         except ValueError:
             arguments = {"_raw": body.decode("utf-8", errors="replace")}
         worker = None
+        attribution = None
         # `/w/<token>/...` is a worker's channel only in a trial that gave its workers channels; an app's own `/w/`
         # routes run as before otherwise.
-        if self.path.startswith(_CHANNEL_PREFIX) and _channels_given():
-            token, _, rest = self.path[len(_CHANNEL_PREFIX) :].partition("/")
-            # The token is the channel's credential: stripped here, never logged or forwarded.
-            self.path = "/" + rest
-            worker = _channel_worker(token)
+        if _channels_given():
+            if self.path.startswith(_CHANNEL_PREFIX):
+                token, _, rest = self.path[len(_CHANNEL_PREFIX) :].partition("/")
+                # The token is the channel's credential: stripped here, never logged or forwarded.
+                self.path = "/" + rest
+                worker = _channel_worker(token)
+            else:
+                # On the shared address: the coordinator's, with the reason logged, as with no channels at all.
+                attribution = SHARED_ADDRESS
         route = self.path.split("?", 1)[0]
         # Actors act through the door in the runner's own process; a request here that names one is the agent's own
         # attempt to act as someone else, refused and logged as the agent's.
@@ -236,6 +243,7 @@ class Handler(BaseHTTPRequestHandler):
             body=body,
             content_type=self.headers.get("content-type", "application/json"),
             worker=worker,
+            attribution=attribution,
             tool=action_tool(actions, sealed),
             # A templated read (`GET <resource>.{id}`) covers each record it is called for, as an allow-list does.
             effect="read" if declared_read(READ_ACTIONS, sealed, (actions or {}).keys()) else "",

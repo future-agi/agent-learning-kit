@@ -812,14 +812,16 @@ def test_a_channel_no_worker_owns_is_refused_and_the_agent_s_own_calls_are_not_l
     assert [row.get("worker_id") for row in door.events()] == [None, None]
 
 
-def test_worker_limits_that_cannot_be_read_refuse_and_never_widen():
+def test_worker_limits_that_cannot_be_read_refuse_as_the_world_s_failure_never_the_worker_s():
     def broken():
         raise OSError("unreadable")
 
     executor = _Executor()
     door = WorldDoor(executor, MemoryLog(), DictRoster({}), workers=broken)
-    assert door.enter(ToolCall(action="refunds.issue", name="issue", worker="refund")).refusal_code == "not_permitted"
-    assert executor.ran == []
+    refused = door.enter(ToolCall(action="refunds.issue", name="issue", worker="refund"))
+    # Never widened, and never read as the worker breaking its allow-list or deadline.
+    assert refused.outcome == "refused" and executor.ran == []
+    assert refused.refusal_code not in ("not_permitted", "deadline_passed")
 
 
 def test_a_worker_naming_an_actor_never_borrows_that_actor_s_permissions():

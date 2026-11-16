@@ -115,7 +115,9 @@ class IsolatedChatCallRunner:
                     "evidence_seam": context.evidence_seam.value if context.evidence_seam else None,
                     "runtime": runtime.model_dump(mode="json"),
                     "scenario_key": scenario.scenario_key,
-                    "source_scenario_key": getattr(scenario, "source_scenario_key", None),
+                    "source_scenario_key": getattr(
+                        scenario, "source_scenario_key", None
+                    ),
                     "scenario_id": scenario.scenario_id,
                 },
                 environ=environ,

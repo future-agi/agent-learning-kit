@@ -2,7 +2,7 @@
 
 With `REFUND_WORKER_URL` pointing here, agent.py's coordinator reaches the Refund worker over HTTP instead of running
 it in its own process, so the worker can be stopped alone. Nothing else changes: the same agent, tools, ledger address
-(`REFUND_API_URL`) and fault switches.
+(`REFUND_API_URL`) and records' defects.
 
 How it is reached:
     GET  /health  -> 200 {"status": "ok"}

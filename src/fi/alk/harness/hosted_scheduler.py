@@ -52,7 +52,7 @@ from .job import FailureDomain, HarnessStage
 from .checks import check_reads, reference_of, takes_reference
 from .joint_judge import OFF_SCRIPT
 from .judge import INCONCLUSIVE, NOT_APPLICABLE, UNMEASURED, verdict_named
-from .world_door import EvidenceUnavailable, claim_worker_stop
+from .world_door import LIMITS_UNREADABLE, EvidenceUnavailable, claim_worker_stop
 from .judge import judge_sub_goal as _judge
 from .outbound import (
     HostedAttemptSupersededError,
@@ -482,7 +482,6 @@ class OutboundPort(Protocol):
 # (domain infrastructure).
 
 WORKER_LIMITS_NOT_ENFORCED = "worker_limits_not_enforced"
-WORKER_CHANNEL_BYPASSED = "worker_channel_bypassed"
 
 _CODE_DOMAIN: dict[str, FailureDomain] = {
     "setup_crashed": FailureDomain.SIMULATOR,
@@ -1854,8 +1853,11 @@ class HostedScheduler:
         require_tool_workflow: bool = False,
         joint_judge: JointJudgeFn | None = None,
         worker_processes: dict[str, str] | None = None,
+        worker_names: dict[str, str] | None = None,
     ) -> None:
         self._pool = pool
+        # Each declared worker's name as its framework spells it in spans, {worker id: name}.
+        self._worker_names = dict(worker_names or {})
         # Each declared worker the app serves as its own process, {worker id: process name}: past its deadline the
         # call's watcher ends that process, so the worker is stopped, not only refused.
         self._worker_processes = dict(worker_processes or {})
@@ -2588,6 +2590,33 @@ class HostedScheduler:
         # Set the moment the call step returns, so a crash later in this method (e.g.
         # `world.read_only()` below) still reports the call that genuinely ran, not `null`.
         context.call = self._call_summary(call_outcome)
+        unenforced = next(
+            (
+                str(one.get("message") or "")
+                for one in call_outcome.notices
+                if isinstance(one, dict) and one.get("code") == WORKER_LIMITS_NOT_ENFORCED
+            ),
+            None,
+        )
+        if unenforced is not None:
+            # Relies on worker limits nobody could hold: held, every check unmeasured. The runner places no call for
+            # it, so this comes before any check of what a call left.
+            return self._fault(
+                scenario,
+                world_index,
+                attempt,
+                _failure(
+                    WORKER_LIMITS_NOT_ENFORCED,
+                    "inconclusive: scenario problem, not the agent's: "
+                    + (unenforced or "worker limits were not enforced in this trial"),
+                ),
+                sub_goals=tuple(
+                    SubGoalResult(name=goal.name, held=None, reason=None, judged=goal.judged != "")
+                    for goal in scenario.sub_goals
+                ),
+                call=self._call_summary(call_outcome),
+                retry=False,
+            )
         missing = _call_actors_missing(scenario, call_outcome)
         if missing:
             # The scenario's actor is part of the test: a call it never reached tested something
@@ -2645,41 +2674,17 @@ class HostedScheduler:
                 call=self._call_summary(call_outcome),
             )
 
-        unenforced = next(
-            (
-                str(one.get("message") or "")
-                for one in call_outcome.notices
-                if isinstance(one, dict) and one.get("code") == WORKER_LIMITS_NOT_ENFORCED
-            ),
-            None,
-        )
-        if unenforced is not None:
-            # The scenario relies on worker limits this trial could not hold: grading it would count a limit nobody
-            # enforced as the agent's doing, so it is held, every check unmeasured, until the environment is rebuilt.
-            return self._fault(
-                scenario,
-                world_index,
-                attempt,
-                _failure(
-                    WORKER_LIMITS_NOT_ENFORCED,
-                    "inconclusive: scenario problem, not the agent's: "
-                    + (unenforced or "worker limits were not enforced in this trial"),
-                ),
-                sub_goals=tuple(
-                    SubGoalResult(name=goal.name, held=None, reason=None, judged=goal.judged != "")
-                    for goal in scenario.sub_goals
-                ),
-                call=self._call_summary(call_outcome),
-                retry=False,
-            )
+        from .call_runner import WORKER_CHANNEL_BYPASSED, is_worker_call
+
         # A separate worker that reached the world without its own channel: its limits were not held for those calls,
-        # so its own checks are not graded; the task's checks read the world and are graded as usual.
+        # so its own checks are not graded and the task's are, as the multi-agent plan's bypass decision (D5) set.
         bypassed = {
             str(worker)
             for one in call_outcome.notices
             if isinstance(one, dict) and one.get("code") == WORKER_CHANNEL_BYPASSED
             for worker in one.get("workers") or ()
         }
+        worker_names = self._worker_names
         sub_goal_results: list[SubGoalResult] = []
         judged_pending: list[tuple[int, Any]] = []
         off_script = ""
@@ -2700,12 +2705,16 @@ class HostedScheduler:
                     _worker_unmeasured(goal, f"not graded: {worker} reached the world without its own channel")
                 )
                 continue
-            lane = [one for one in calls if getattr(one, "worker_id", "") == worker] if worker else calls
+            # Matched by contract id or by the framework's name for it, as spans carry the framework's name.
+            lane = [one for one in calls if is_worker_call(one, worker, worker_names.get(worker, ""))] if worker else calls
+            # A worker past its deadline keeps its partial evidence as its own outcome (the plan's hand-off journey).
             inconclusive = (
                 f"worker {worker} made no tool call the world recorded"
                 if not lane
                 else f"worker {worker} passed its deadline, so its result is partial"
                 if any(getattr(one, "refusal_code", "") == "deadline_passed" for one in lane)
+                else f"the world could not read the limits of worker {worker}"
+                if any(getattr(one, "refusal_code", "") == LIMITS_UNREADABLE for one in lane)
                 else ""
             ) if worker else ""
             if inconclusive:
@@ -2954,8 +2963,8 @@ class HostedScheduler:
                 call=self._call_summary(call_outcome),
                 retry=False,
             )
-        # A settled `False` fails the scenario; an unsettled sub-goal (unmeasured included) makes it not decided. A
-        # worker's own sub-goals are reported beside the task's verdict, never folded into it.
+        # A task sub-goal's `False` fails the scenario, an unsettled one leaves it undecided. Worker sub-goals sit beside
+        # the verdict, never in it: the product plan's hand-off journey asks for both, aggregate and per worker.
         if any(result.held is False and result.subject == "task" for result in sub_goal_results):
             status = "failed"
         elif any(result.held is None and result.subject == "task" for result in sub_goal_results):

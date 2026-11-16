@@ -29,9 +29,9 @@ from .call_runner import (
     contract_worker_names,
 )
 from .contract import AgentContract
-from .hosted_scheduler import CallAborted, CallCancelled, CallOutcome, Scenario, World
-from .outbound import ArtifactKind, format_rfc3339_millis
 from .privilege import IsolationMode, isolation_mode
+from .hosted_scheduler import WORKER_LIMITS_NOT_ENFORCED, CallAborted, CallCancelled, CallOutcome, Scenario, World
+from .outbound import ArtifactKind, format_rfc3339_millis
 from .process_runtime import EnvironmentRuntime
 from .run.conversation import ChatActors, TargetConversationEnded, Transcript, converse
 from .scenario import Scenario as ConversationScenario
@@ -120,12 +120,9 @@ _STOP_POLL_SECONDS = 0.25
 async def _sealed_through_stop(
     stop_requested: Callable[[], bool], drive: Callable[[asyncio.Event], Awaitable[CallOutcome]]
 ) -> CallOutcome:
-    """Run a chat call so that a person's stop cuts its conversation, never what follows it.
-
-    `drive` sets the event it is given once the conversation is over. A stop before that is passed on to the call, which
-    seals the cut conversation; a stop after it is absorbed, so the call seals what it kept and is then said as the
-    person's stop. A cancel that is not a stop reaches the call anywhere.
-    """
+    """Run a chat call so a person's stop cuts its conversation, never what follows: `drive` sets its event when the
+    conversation is over; a stop before that reaches the call, a stop after is absorbed and said as the person's stop
+    once the call has sealed. A cancel that is not a stop reaches the call anywhere."""
     sealing = asyncio.Event()
     call = asyncio.ensure_future(drive(sealing))
     stopped_while_sealing = False
@@ -193,15 +190,10 @@ def _unproxied_worker_notices(document: Mapping[str, Any], bundle_dir: Any = Non
     if (not budget or isinstance(budget, bool)) and not relies_on_worker_limits(document, bundle_dir):
         return []
     return [{
-        "code": "worker_limits_not_enforced",
+        "code": WORKER_LIMITS_NOT_ENFORCED,
         "message": "This agent's tools are not reached through the world's tool proxy, so no worker's deadline or "
         "permitted actions were enforced in this trial, and its checks were not graded.",
     }]
-
-
-# Sent on every scenario call's chat turn, never on a readiness or certification probe, so an app (a test fixture's
-# deliberate fault) can tell the two apart.
-SCENARIO_CALL_HEADER = "X-ALK-Scenario-Call"
 
 
 def _chat_target_timeout_seconds() -> float:
@@ -1036,9 +1028,8 @@ class HostedChatCallRunner:
         listing = load_actors(self._context.bundle_dir)
         world_db = runtime.endpoints.get("world_db")
         service = runtime.endpoints.get("tools_api")
-        # The tool proxy logs the agent's own calls (and the faults it applies) in the world's table, and limited workers
-        # act through it: read that table whenever the trial is proxied or has limited workers, cast or not. The world's
-        # door for tools the agent runs in its own process logs to the same table and reads the same faults.
+        # The tool proxy and the in-process door log the agent's and its limited workers' calls in the world's table:
+        # read it whenever the trial is proxied or has limited workers, cast or not.
         proxied = runtime.endpoints.get("tool_proxy") is not None or runtime.endpoints.get("world_door") is not None
         limited_workers = (Path(self._context.bundle_dir) / "generated" / "tool-proxy" / "permissions.json").is_file()
         # The scenario's faults are a rule of its graded trials; a readiness probe checks the tools' binding without them.
@@ -1102,8 +1093,6 @@ class HostedChatCallRunner:
                 "target": "hosted_repository_runtime",
                 "scenario": scenario.scenario_key,
             },
-            # Tells the agent this turn is a scenario call, not a readiness or certification probe.
-            headers={SCENARIO_CALL_HEADER: "1"},
         )
         if hasattr(wrapper, "abandon_on_cancel"):
             # A stopped run's world is never reused: its call seals what it kept without waiting out the agent's reply.
@@ -1122,13 +1111,26 @@ class HostedChatCallRunner:
             from .call_runner import _set_trial_faults, trial_worker_deadlines
 
             deadline, deadlines, deadline_notices = trial_worker_deadlines(document, self._context.bundle_dir)
+        else:
+            deadline_notices = _unproxied_worker_notices(document, self._context.bundle_dir)
+        held = tuple(one for one in deadline_notices if one.get("code") == WORKER_LIMITS_NOT_ENFORCED)
+        if held and not self._context.readiness_probe:
+            # Known before the conversation: a trial relying on limits nobody can hold is held without starting it.
+            ended = datetime.now(timezone.utc)
+            return CallOutcome(
+                calls=(),
+                turns=0,
+                started_at=format_rfc3339_millis(started),
+                ended_at=format_rfc3339_millis(ended),
+                duration_ms=_duration_ms(started, ended),
+                notices=held,
+            )
+        if proxied:
             if self._context.readiness_probe:
                 # The workers' deadline is a rule of the scenario's graded trials; the probe checks the tools' binding.
                 deadline, deadlines = None, {}
             # Every trial writes its own faults, none included, so nothing an earlier trial left can apply to this one.
-            _set_trial_faults(runtime, faults, deadline, deadlines)
-        else:
-            deadline_notices = _unproxied_worker_notices(document, self._context.bundle_dir)
+            await asyncio.to_thread(_set_trial_faults, runtime, faults, deadline, deadlines)
         try:
             # The trial's starting records, after its reset: whether it started from the seed.
             await asyncio.to_thread(self._records.start, id(runtime), records_dsn)
@@ -1200,7 +1202,7 @@ class HostedChatCallRunner:
                 from .call_runner import _write_trial_state
 
                 with contextlib.suppress(Exception):
-                    _write_trial_state(runtime, [])
+                    await asyncio.to_thread(_write_trial_state, runtime, [])
             if acting is not None:
                 acting.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
@@ -1217,9 +1219,8 @@ class HostedChatCallRunner:
                 failure=failure,
             )
 
-        # The submitted agent may execute tools inside its own process or against the world's services instead of
-        # returning tool requests over HTTP. These observed calls belong to the same attempt; do not replay the tool
-        # through the generated world or fabricate evidence from text.
+        # Calls the agent made in its own process or against the world's services belong to this attempt: never
+        # replayed through the generated world, never inferred from text.
         try:
             transcript.calls[:] = collect_seam_calls(
                 runtime,
@@ -1250,7 +1251,8 @@ class HostedChatCallRunner:
             # The agent runs its own tools where no door stands: World changes says so, never "no change".
             world_record = dict(NOT_RECORDED)
         if proxied:
-            stopped = read_worker_stops(runtime)
+            # Off the loop: the seal may wait on a worker's stop under way, and other calls share this loop.
+            stopped = await asyncio.to_thread(read_worker_stops, runtime)
             if stopped:
                 # Workers whose own process the harness ended past their deadline.
                 world_record["stopped_workers"] = stopped
