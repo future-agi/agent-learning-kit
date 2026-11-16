@@ -127,11 +127,12 @@ class ToolSpec(BaseModel):
     def _normalize_args(cls, payload: Any) -> Any:
         if not isinstance(payload, dict):
             return payload
-        if not payload.get("arg_units"):
-            for alias in ("units", "arg_formats", "formats"):
-                if isinstance(payload.get(alias), dict) and payload[alias]:
-                    payload["arg_units"] = {str(k): str(v) for k, v in payload[alias].items()}
-                    break
+        if isinstance(payload.get("returns"), list):
+            payload["returns"] = {str(one): "" for one in payload["returns"]}
+        if isinstance(payload.get("returns"), dict):
+            payload["returns"] = {str(k): str(v) for k, v in payload["returns"].items()}
+        elif "returns" in payload:
+            payload.pop("returns")
         if not payload.get("args"):
             for alias in ("parameters", "arguments", "params", "arg_names"):
                 value = payload.get(alias)
@@ -163,10 +164,14 @@ class ToolSpec(BaseModel):
     args: list[str] = Field(default_factory=list)
     arg_types: dict[str, str] = Field(default_factory=dict)
     arg_values: dict[str, Any] = Field(default_factory=dict)
-    # The unit or format a field is written in, where the name alone does not say: `refund_amount` -> "cents, USD",
-    # `timeout` -> "milliseconds", `date` -> "ISO 8601 date". The agent, the world and every actor read the same
-    # value the same way from it.
+    # The unit or format a field is written in, where the name alone does not say: `timeout` -> "milliseconds".
     arg_units: dict[str, str] = Field(default_factory=dict)
+    # What the tool hands back, by output field: its type and, where the name does not say it, its unit or format.
+    returns: dict[str, str] = Field(default_factory=dict)
+    # The world's tables the tool reads, and the ones it adds to, changes or deletes from, declared from its code.
+    # Empty means not recorded.
+    tables_read: list[str] = Field(default_factory=list)
+    tables_changed: list[str] = Field(default_factory=list)
     description: str = ""
     # Tools that must have run before this one stops refusing, and only for state the agent builds
     # during the conversation. Empty means callable first thing. Marking a tool gated when it is not
@@ -1246,6 +1251,9 @@ class AgentContract(BaseModel):
                         ("effects", tool.effects),
                         ("arguments from", ", ".join(f"{arg} <- {source}" for arg, source in tool.inputs_from.items())),
                         ("units", ", ".join(f"{arg} in {unit}" for arg, unit in sorted(tool.arg_units.items()))),
+                        ("returns", ", ".join(f"{field}: {kind}" for field, kind in tool.returns.items())),
+                        ("reads tables (declared)", ", ".join(tool.tables_read)),
+                        ("changes tables (declared)", ", ".join(tool.tables_changed)),
                     )
                     if text
                 )

@@ -7,6 +7,7 @@ import base64
 import json
 import logging
 import os
+import socket
 import sys
 from dataclasses import asdict
 from datetime import datetime
@@ -17,10 +18,12 @@ from typing import Any
 from .backends import GOOGLE_ADK_APPROVAL_ENV
 from .bundle_v2 import EvidenceSeam
 from .call_runner import ArtifactUploader, CallRunnerContext
-from .chat_call_runner import _check_text_usage
+from .chat_call_runner import _check_text_usage, handler_child_for
+from .handler_child import HandlerChannel
 from .hosted_scheduler import USER_CANCELED, CallAborted, CallCancelled, CallOutcome, Scenario, World, call_sealed
 from .isolated_process import IsolatedWorkerError, run_json_worker, run_worker, stop_requested
 from .outbound import ArtifactKind
+from .privilege import IsolationMode, isolation_mode
 from .process_runtime import EnvironmentRuntime, _allowlisted_ambient_env
 from .usage import simulator_funding
 from .world.runtime import Call
@@ -89,6 +92,11 @@ class IsolatedChatCallRunner:
         # worker's call used is recorded here.
         funding = simulator_funding()
         await _check_text_usage(context.usage_reporter, funding)
+        mode = isolation_mode()
+        # Under per-user isolation the tool handlers, and the agent code they import, run in a
+        # child of their own; the worker gets its socket and never the source.
+        handlers = await asyncio.to_thread(handler_child_for, context, runtime)
+        handler_fd = handlers.sock.fileno() if handlers is not None else None
         try:
             result = await run_json_worker(
                 "fi.alk.harness.chat_worker",
@@ -97,8 +105,10 @@ class IsolatedChatCallRunner:
                     "bundle_dir": str(context.bundle_dir),
                     "work_directory": str(context.work_directory),
                     "source_directory": str(context.source_directory)
-                    if context.source_directory
+                    if context.source_directory and mode is not IsolationMode.PER_USER
                     else None,
+                    "process_isolation": mode.value,
+                    "handler_fd": handler_fd,
                     "target_secrets": dict(context.target_provider_secret_values),
                     "local_auth_values": dict(runtime._local_auth_values),
                     "attempt_number": context.attempt_number,
@@ -111,19 +121,30 @@ class IsolatedChatCallRunner:
                 environ=environ,
                 work_directory=context.work_directory / "chat-workers",
                 stop_requested=context.stop_requested,
+                pass_fds=(handler_fd,) if handler_fd is not None else (),
             )
         except IsolatedWorkerError:
             if not context.stop_requested():
                 raise
             # Stopped before the worker could seal anything: it was still starting, or failed on the way out.
             raise CallCancelled() from None
+        finally:
+            # This side's copy of the socket goes with the child, once the worker is done.
+            if handlers is not None:
+                handlers.close()
         # The worker sealed the call: what follows delivers it, and a stop no longer cuts that.
         call_sealed()
         await _record_worker_usage(context.usage_reporter, result.get("usage") or [], funding)
         artifact_ids = {}
-        for artifact in result.get("artifacts", []):
+        artifacts = list(result.get("artifacts", []))
+        # A transcript names the trial's end state by the worker's own id, so the end state is stored before it.
+        ends = [one for one in artifacts if one["kind"] == ArtifactKind.WORLD_STATE.value]
+        for artifact in ends + [one for one in artifacts if one not in ends]:
+            data = base64.b64decode(artifact["data"], validate=True)
+            if artifact["kind"] == "transcript":
+                data = _with_stored_end_state(data, artifact_ids)
             artifact_ids[artifact["id"]] = await self._adapter.upload_artifact(
-                base64.b64decode(artifact["data"], validate=True),
+                data,
                 kind=ArtifactKind(artifact["kind"]),
                 scenario_key=scenario.scenario_key,
             )
@@ -150,6 +171,25 @@ class IsolatedChatCallRunner:
                 partial=outcome,
             )
         return outcome
+
+
+def _with_stored_end_state(data: bytes, artifact_ids: dict[str, Any]) -> bytes:
+    """A transcript whose World changes name the end state by the worker's id, naming it by the id it was stored
+    under instead; any other transcript is returned as it was."""
+    try:
+        document = json.loads(data)
+    except ValueError:
+        return data
+    world = document.get("world_actors") if isinstance(document, dict) else None
+    local = world.get("end_state_artifact") if isinstance(world, dict) else None
+    if local is None:
+        return data
+    stored = artifact_ids.get(str(local))
+    if stored:
+        world["end_state_artifact"] = stored
+    else:
+        world.pop("end_state_artifact", None)
+    return json.dumps(document, sort_keys=True, default=str).encode("utf-8")
 
 
 async def _record_worker_usage(
@@ -217,6 +257,21 @@ async def main() -> None:
     collector = _ArtifactCollector()
     usage = _UsageCollector()
     try:
+        isolated = payload.get("process_isolation") == IsolationMode.PER_USER.value
+        native = (
+            payload["runtime"].get("metadata", {}).get("observation_mode") == "native"
+        )
+        if isolated and (
+            payload.get("source_directory")
+            or (payload.get("handler_fd") is None and not native)
+        ):
+            # The tool handlers, and the agent's code they import, run only in their handler
+            # child; this process never runs them as the harness.
+            raise CallAborted(
+                "chat_worker_refused: per-user isolation runs tool handlers only in their child",
+                code="call_failed",
+            )
+        handler_fd = payload.get("handler_fd")
         job = HarnessJob.model_validate(payload["job"])
         context = CallRunnerContext(
             job=job,
@@ -230,6 +285,9 @@ async def main() -> None:
             else None,
             usage_reporter=usage,  # type: ignore[arg-type]
             stop_requested=stop_requested,
+            handler_channel=HandlerChannel(socket.socket(fileno=handler_fd))
+            if handler_fd is not None
+            else None,
         )
         runner_type = (
             RetellChatCallRunner

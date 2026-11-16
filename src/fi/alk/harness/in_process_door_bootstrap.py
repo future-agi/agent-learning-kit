@@ -1,21 +1,6 @@
 """The world's door, inside an agent that runs its tools in its own process.
 
-Imported by the ALK `sitecustomize` hook when the bundle sets `ALK_WORLD_DOOR_URL`. Each contract tool the bundle
-binds (`ALK_WORLD_DOOR_BINDINGS`: tool name, module, callable) is wrapped so every call asks the world's door first
-(`in_process_door.py`): the scenario's fault can hold it before it runs, or lose its answer after; the door logs what
-came of it in the world's action log, beside every other surface's calls.
-
-The wrapper goes on as the function is defined, not after: the tool's module is compiled with one more decorator on
-the tool's `def`, the innermost, so a framework decorator above it (`@tool`, `@function_tool`) receives the wrapped
-function and keeps it. A module whose source cannot be read or changed is patched by attribute after it runs, which
-a framework that already copied the function escapes; those calls then run outside the door, and the run says the
-faults set on them were not applied. A script started by its path (`python agent.py`) is never imported, so the
-bundle starts it as a module (`python -m agent`), which comes through here too (`get_code`).
-
-Never alters a tool otherwise: its signature, name and documentation are kept (`functools.wraps`), its answer and
-its own errors are passed through as they are, and a door that cannot be reached lets every call run as without it.
-Standard library only: the customer's interpreter has nothing of ALK's.
-"""
+Standard library only: the customer's interpreter has nothing of ALK's."""
 
 from __future__ import annotations
 
@@ -66,6 +51,22 @@ def _post(path: str, body: dict[str, Any]) -> dict[str, Any] | None:
         return None
 
 
+# Each tool's calls that ran while the door was out of reach, told to the door on the tool's next call, so the trial's
+# evidence says they went unrecorded.
+_UNRECORDED: dict[str, int] = {}
+_UNRECORDED_LOCK = threading.Lock()
+
+
+def _begin(tool: str, arguments: dict[str, Any]) -> dict[str, Any] | None:
+    with _UNRECORDED_LOCK:
+        missed = _UNRECORDED.pop(tool, 0)
+    decision = _post("/begin", {"name": tool, "arguments": arguments, **({"unrecorded": missed} if missed else {})})
+    if decision is None:
+        with _UNRECORDED_LOCK:
+            _UNRECORDED[tool] = _UNRECORDED.get(tool, 0) + missed + 1
+    return decision
+
+
 def _arguments(function: Any, args: tuple[Any, ...], kwargs: dict[str, Any]) -> dict[str, Any]:
     try:
         bound = inspect.signature(function).bind_partial(*args, **kwargs)
@@ -113,9 +114,7 @@ def door(tool: str) -> Any:
 
             @functools.wraps(function)
             async def held_async(*args: Any, **kwargs: Any) -> Any:
-                decision = await asyncio.to_thread(
-                    _post, "/begin", {"name": tool, "arguments": _arguments(function, args, kwargs)}
-                )
+                decision = await asyncio.to_thread(_begin, tool, _arguments(function, args, kwargs))
                 if decision is not None and decision.get("run") is False:
                     if decision.get("mode") == "timeout_before_commit":
                         await asyncio.sleep(_delay(decision))
@@ -144,7 +143,7 @@ def door(tool: str) -> Any:
 
         @functools.wraps(function)
         def held(*args: Any, **kwargs: Any) -> Any:
-            decision = _post("/begin", {"name": tool, "arguments": _arguments(function, args, kwargs)})
+            decision = _begin(tool, _arguments(function, args, kwargs))
             if decision is not None and decision.get("run") is False:
                 if decision.get("mode") == "timeout_before_commit":
                     time.sleep(_delay(decision))
@@ -171,7 +170,7 @@ def door(tool: str) -> Any:
 
 def decorate_source(source: str, targets: dict[str, str]) -> ast.Module | None:
     """The module's code with the door as the innermost decorator of each target: `targets` maps a callable's path
-    in the module (`issue_refund`, `Tools.issue_refund`) to its tool name. None when no target is found."""
+    in the module (`update_record`, `Tools.update_record`) to its tool name. None when no target is found."""
     return _decorate(source, targets)[0]
 
 

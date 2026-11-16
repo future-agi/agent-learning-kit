@@ -29,11 +29,8 @@ CONTRACT = "contract.json"
 
 
 def _kept_shape(written: Any, before: Any) -> Any:
-    """``written`` without the empty keys ``before`` never had.
-
-    A contract read by an older harness lacks fields added since; dumping the model fills them with their empty
-    defaults, and an edit that touched one rule then also shows a change to a field nobody set.
-    """
+    """``written`` without the empty keys ``before`` never had, so an edit never shows a change to a field nobody
+    set."""
     if isinstance(written, dict) and isinstance(before, dict):
         return {
             key: _kept_shape(value, before.get(key))
@@ -256,6 +253,7 @@ def fix_tool(
     args: list[str] | None = None,
     arg_types: dict[str, str] | None = None,
     arg_units: dict[str, str] | None = None,
+    returns: dict[str, str] | None = None,
     description: str = "",
     refuses: str = "",
     effects: str = "",
@@ -321,6 +319,9 @@ def fix_tool(
             + "); if the code that reads a field or the data it holds says otherwise, the code's unit is the one to "
             "record, and the person is told about the mismatch"
         )
+    if returns:
+        spec.returns.update(returns)
+        changed.append("returned fields updated")
     if description:
         spec.description = description
         changed.append("description updated")
@@ -330,7 +331,7 @@ def fix_tool(
             changed.append(f"{field} updated")
     if not changed:
         return False, (
-            "nothing to change: give args, arg_types, arg_units, description, refuses, effects, inputs_from, "
+            "nothing to change: give args, arg_types, arg_units, returns, description, refuses, effects, inputs_from, "
             "or remove"
         )
 

@@ -410,7 +410,7 @@ def test_a_chat_agent_s_service_tools_run_in_its_tools_service_for_it_and_for_ac
         def log_message(self, *args):
             return
 
-        def do_POST(self):  # noqa: N802
+        def do_POST(self):  # noqa: N802 - BaseHTTPRequestHandler API
             body = json.loads(self.rfile.read(int(self.headers["content-length"])) or b"{}")
             seen.append((self.path, body, self.headers.get("X-ALK-Actor-Identity")))
             status, answer = (404, {"detail": "no deal"}) if body.get("deal_id") == 0 else (200, {"deal_id": 7})
@@ -1026,3 +1026,19 @@ def test_events_raise_when_the_log_cannot_be_read():
     door = _door(log=_Unreadable())
     with pytest.raises(EvidenceUnavailable):
         door.events()
+
+
+def test_events_hold_only_actions_attempted_in_the_world_never_stopped_egress_or_unrecorded_marks():
+    from fi.alk.harness.egress_proxy import REFUSAL_CODE as EGRESS_BLOCKED
+    from fi.alk.harness.world_door import EVIDENCE_INCOMPLETE
+
+    log = MemoryLog()
+    for row in (
+        {"name": "telemetry.example.net", "actor_id": "agent", "outcome": "refused", "refusal_code": EGRESS_BLOCKED},
+        {"name": "update", "actor_id": "agent", "outcome": "unrecorded", "refusal_code": EVIDENCE_INCOMPLETE},
+        {"name": "update", "actor_id": "agent", "outcome": "committed", "refusal_code": None},
+    ):
+        log.write(row)
+    door = _door(log=log)
+    assert [(row["name"], row["outcome"]) for row in door.events(actor="agent")] == [("update", "committed")]
+    assert door.events(outcome="refused") == []

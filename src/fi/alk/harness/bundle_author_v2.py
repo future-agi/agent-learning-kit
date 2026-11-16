@@ -158,9 +158,8 @@ _TOOL_TRACE_DDL = (
 
 
 def _action_log_seed(authoring: Path) -> str:
-    """The world's full action log, and who may do what in it: every world records who did what and what came of it,
-    so World changes can be shown on every trial, actors or not. A world with no actors seeds no actor rows. A bundle
-    certified before this keeps the table it was seeded with; the door writes either shape."""
+    """The world's full action log, and who may do what in it, so World changes can be shown on every trial. An older
+    bundle keeps the table it was seeded with; the door writes either shape."""
     return _TOOL_TRACE_DDL + actors_seed(load_actors(authoring))
 
 
@@ -2100,7 +2099,6 @@ def _tool_proxy_process(read_actions: list[str] | None = None) -> SourceProcess:
         "WORKER_CHANNELS_FILE": "{{WORLD_DIR}}/worker-channels.json",
     }
     if read_actions:
-        # Only when declared, so a plan without declarations is the plan it always was.
         environment["READ_ACTIONS"] = ",".join(read_actions)
     return SourceProcess(
         name="tool-proxy",
@@ -2218,12 +2216,8 @@ _SCRIPT_RUN = r"(?<![^\s'\"])((?:\S*/)?python[0-9.]*)\s+({stem})\.py(?=[\s'\"]|$
 def run_bound_script_as_module(
     command: list[str], bound: list[dict[str, str]], environment: dict[str, str] | None = None
 ) -> list[str]:
-    """`python agent.py` as `python -m agent` when `agent` holds bound tools: a script started by its path is never
-    imported, so the door's import hook could not reach the tools it defines. Only where the two start the same:
-    a bare file name in the working directory (so `sys.path[0]` is that directory either way), a valid module name
-    that no standard-library or built-in module shares, and the working directory left on the path (no `-P`,
-    no `PYTHONSAFEPATH`). `__name__` is `"__main__"` and `__file__` the script's path in both. Any other command is
-    returned as it is, and the run says the faults on its tools were not applied."""
+    """`python agent.py` as `python -m agent` when `agent` holds bound tools, so the door's import hook reaches them.
+    Only where the two start the same; any other command is returned as it is."""
     if (environment or {}).get("PYTHONSAFEPATH"):
         return list(command)
     # `test` ships with Python though the list leaves it out.
@@ -4091,7 +4085,7 @@ def author_bundle_v2(
             if (authoring_root / ACTORS_FILE).is_file():
                 shutil.copy2(authoring_root / ACTORS_FILE, temporary / ACTORS_FILE)
                 # Only with actors, so a bundle without them seals exactly as before.
-                write_actor_rules(temporary)
+                write_actor_rules(temporary, config=job.agent.config)
                 adopted_catalogue += [ACTORS_FILE, ACTOR_RULES_FILE]
         adopted_chat_files = _copy_chat_authoring(
             authoring_root, temporary, include_simulator=include_scenarios
@@ -4833,13 +4827,69 @@ if __name__ == "__main__":  # pragma: no cover
     raise SystemExit(main())
 
 
+# A table as a schema names it: bare or quoted, with an optional bare or quoted schema.
+_SQL_TABLE = r'(?:"?[A-Za-z_]\w*"?\s*\.\s*)?"?([A-Za-z_]\w*)"?'
+# Where a column's type ends in its definition: at its first default or constraint.
+_COLUMN_TYPE_END = re.compile(
+    r"\s(?:DEFAULT|NOT|NULL|PRIMARY|REFERENCES|CHECK|UNIQUE|CONSTRAINT|COLLATE|GENERATED)\b",
+    re.IGNORECASE,
+)
+# Table-level clauses that sit among the column definitions.
+_NOT_COLUMNS = ("PRIMARY", "FOREIGN", "UNIQUE", "CHECK", "CONSTRAINT")
+
+
+def _sql_code(text: str) -> str:
+    """``text`` without its comments, and with each string literal emptied to ``''``, so a
+    quote, comma, parenthesis or ``--`` inside a default never reads as SQL."""
+    out: list[str] = []
+    at = 0
+    while at < len(text):
+        if text[at] == "'":
+            end = at + 1
+            while end < len(text) and not (
+                text[end] == "'" and text[end + 1 : end + 2] != "'"
+            ):
+                end += 2 if text[end : end + 2] == "''" else 1
+            out.append("''")
+            at = end + 1
+        elif text.startswith("--", at):
+            end = text.find("\n", at)
+            at = len(text) if end < 0 else end
+        elif text.startswith("/*", at):
+            end = text.find("*/", at + 2)
+            out.append(" ")
+            at = len(text) if end < 0 else end + 2
+        else:
+            out.append(text[at])
+            at += 1
+    return "".join(out)
+
+
+def _column_kind(definition: str) -> str | None:
+    """What a column definition declares, as the gates read it: ``boolean``, ``text[]`` (any
+    array), ``jsonb`` or ``json``. Read off the type alone, never its default or constraints,
+    so ``jsonb DEFAULT '[]'`` is JSON and ``jsonb[]`` an array."""
+    kind = _COLUMN_TYPE_END.split(" " + definition.strip(), maxsplit=1)[0].strip().upper()
+    if kind.startswith("BOOL"):
+        return "boolean"
+    if "[" in kind or kind.startswith("ARRAY") or kind.endswith(" ARRAY"):
+        return "text[]"
+    if kind.startswith("JSONB"):
+        return "jsonb"
+    if kind.startswith("JSON"):
+        return "json"
+    return None
+
+
 def _schema_column_types(paths: list[Path]) -> dict[tuple[str, str], str]:
-    """Column declarations read off the agent's own schema, keyed by table and column."""
+    """Column declarations read off the agent's own schema, keyed by table and column: those
+    of each ``CREATE TABLE`` and each ``ALTER TABLE ... ADD COLUMN``. A schema-qualified
+    table is keyed by its own name, as the world names it."""
     declared: dict[tuple[str, str], str] = {}
     for path in paths:
-        sql = re.sub(r"--[^\n]*", "", path.read_text(encoding="utf-8"))
+        sql = _sql_code(path.read_text(encoding="utf-8"))
         for found in re.finditer(
-            r'CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?"?([A-Za-z_]\w*)"?\s*\(',
+            rf"CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?{_SQL_TABLE}\s*\(",
             sql,
             re.IGNORECASE,
         ):
@@ -4848,24 +4898,44 @@ def _schema_column_types(paths: list[Path]) -> dict[tuple[str, str], str]:
                 depth += (sql[at] == "(") - (sql[at] == ")")
                 at += 1
             for part in re.split(r",(?![^()]*\))", sql[found.end() : at - 1]):
-                words = part.strip().split()
-                if len(words) < 2:
+                words = part.strip().split(None, 1)
+                if len(words) < 2 or words[0].strip('"').upper() in _NOT_COLUMNS:
                     continue
-                name = words[0].strip('"')
-                if name.upper() in (
-                    "PRIMARY",
-                    "FOREIGN",
-                    "UNIQUE",
-                    "CHECK",
-                    "CONSTRAINT",
-                ):
+                if kind := _column_kind(words[1]):
+                    declared[(found.group(1).lower(), words[0].strip('"').lower())] = kind
+        for found in re.finditer(
+            rf"ALTER\s+TABLE\s+(?:IF\s+EXISTS\s+)?(?:ONLY\s+)?{_SQL_TABLE}\s+([^;]*)",
+            sql,
+            re.IGNORECASE,
+        ):
+            for part in re.split(r",(?![^()]*\))", found.group(2)):
+                added = re.match(
+                    r'\s*ADD\s+(?:COLUMN\s+)?(?:IF\s+NOT\s+EXISTS\s+)?"?([A-Za-z_]\w*)"?\s+(.+)',
+                    part,
+                    re.IGNORECASE | re.DOTALL,
+                )
+                if not added or added.group(1).upper() in _NOT_COLUMNS:
                     continue
-                kind = words[1].upper()
-                rest = " ".join(words[1:]).upper()
-                if kind.startswith("BOOL"):
-                    declared[(found.group(1).lower(), name.lower())] = "boolean"
-                elif "[]" in rest or kind.startswith("ARRAY"):
-                    declared[(found.group(1).lower(), name.lower())] = "text[]"
-                elif kind.startswith("JSONB"):
-                    declared[(found.group(1).lower(), name.lower())] = "jsonb"
+                if kind := _column_kind(added.group(2)):
+                    declared[(found.group(1).lower(), added.group(1).lower())] = kind
     return declared
+
+
+def declared_json_columns(
+    source: Path | str | None, *, contract: dict[str, Any] | None = None
+) -> set[tuple[str, str]]:
+    """The ``(table, column)`` pairs the agent's own schema declares JSON or JSONB.
+
+    These are the types the validation seed imports against (``inspect_postgres`` on the same
+    schema), known here before any database exists, so a world can be checked where it is
+    written. Empty when the source declares no schema file, for example when its tables exist
+    only in ORM migrations.
+    """
+    if not source:
+        return set()
+    try:
+        declared = _schema_column_types(_source_schema_paths(Path(source), contract=contract))
+    except (OSError, ValueError, BundleAuthorError):
+        # A missing or unreadable schema is reported where the bundle is compiled.
+        return set()
+    return {key for key, kind in declared.items() if kind in ("json", "jsonb")}

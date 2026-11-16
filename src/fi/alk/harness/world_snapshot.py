@@ -1,14 +1,6 @@
-"""The world's records before and after a trial.
+"""The world's records before and after a trial, compared by primary key on a read-only connection.
 
-A trial's World changes says which records it added, changed or removed: the runner reads every table of the world's
-database at the trial's start (after its reset and pre-run sessions) and again at its end, on a connection that cannot
-write, and compares them by primary key. The harness's own tables (`_alk_*`) are never compared. A table with no
-primary key, or over `max_rows`, is not compared and is named with why, never dropped silently; changes over
-`max_changes` are counted, not listed.
-
-The same snapshot says whether a trial started from the seeded records (`digest`): the first trial's start is the
-seed, and a later trial whose start differs did not start clean.
-"""
+A table that cannot be compared is named with why, never dropped silently."""
 
 from __future__ import annotations
 

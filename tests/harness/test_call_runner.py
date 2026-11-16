@@ -219,6 +219,20 @@ def test_the_sealed_trace_row_keeps_the_runtime_worker_task_and_event_ids(
     } & set(plain)
 
 
+# A worker's run, as a CrewAI agent records it: a hand-off, not a call checks grade.
+_HANDOFF_LINE = {
+    "name": "Draft checker",
+    "arguments": {},
+    "output": "valid",
+    "is_error": False,
+    "source": "crewai",
+    "agent_key": "DraftFlow",
+    "delegated_to": "Draft checker",
+    "at": 4.0,
+    "ended_at": 6.5,
+    "kind": "handoff",
+}
+
 _SPAN_LINES = (
     {
         "name": "ask_writer",
@@ -343,7 +357,7 @@ def test_a_process_agent_s_seam_calls_keep_their_evidence_and_take_the_agent_fro
 ) -> None:
     trace = _trace_lines(tmp_path / "agent-tool-calls.jsonl", *_SPAN_LINES)
     for reader in ("_collect_tool_trace_calls", "_collect_http_tool_calls"):
-        monkeypatch.setattr(cr, reader, lambda runtime: tuple(_observed()))
+        monkeypatch.setattr(cr, reader, lambda runtime, **_: tuple(_observed()))
     _job_obj, context = _context(tmp_path=tmp_path, evidence_seam=seam)
     runner = cr.CallRunnerImpl(FakeAdapter(), context, place_call=None)
     calls = runner._collect_calls(_runtime(metadata={"tool_trace_path": str(trace)}))
@@ -1367,7 +1381,9 @@ def test_non_completed_tool_trace_call_preserves_evidence_and_uploads_trace(
         refused=False,
         at="2026-01-01T00:00:01.000Z",
     )
-    monkeypatch.setattr(cr, "_collect_tool_trace_calls", lambda runtime: (captured,))
+    monkeypatch.setattr(
+        cr, "_collect_tool_trace_calls", lambda runtime, **_: (captured,)
+    )
 
     async def place_call(spec):
         failure = SimulationFailure(
@@ -1905,6 +1921,217 @@ def test_tool_trace_read_failure_degrades_to_no_calls_never_crashes(
 def test_tool_trace_missing_endpoint_degrades_to_no_calls() -> None:
     runtime = _runtime(endpoints={})
     assert cr._collect_tool_trace_calls(runtime) == ()
+
+
+def test_a_strict_tool_trace_read_says_the_capture_failed(monkeypatch) -> None:
+    monkeypatch.setitem(sys.modules, "psycopg", _RaisingPsycopg())
+    with pytest.raises(cr.ToolCaptureFailed, match="tool_trace read failed"):
+        cr._collect_tool_trace_calls(
+            _runtime(endpoints={"database": _postgres_endpoint()}), strict=True
+        )
+    with pytest.raises(cr.ToolCaptureFailed, match="no world database"):
+        cr._collect_tool_trace_calls(_runtime(endpoints={}), strict=True)
+
+
+def test_a_strict_trace_file_read_fails_only_on_a_file_it_cannot_read(
+    tmp_path: Path, monkeypatch
+) -> None:
+    trace = tmp_path / "agent-tool-calls.jsonl"
+    runtime = _runtime(metadata={"tool_trace_path": str(trace)})
+    # No file: the agent called no tool, or nothing wrote one. Neither is a failed read.
+    assert cr._collect_file_tool_calls(runtime, strict=True) == ()
+    _trace_lines(trace, {"name": "lookup", "arguments": {}})
+
+    def refuse(*_args: Any, **_kwargs: Any) -> str:
+        raise PermissionError("denied")
+
+    monkeypatch.setattr(type(trace), "read_text", refuse)
+    assert cr._collect_file_tool_calls(runtime) == ()
+    with pytest.raises(cr.ToolCaptureFailed, match="tool_trace file unreadable"):
+        cr._collect_file_tool_calls(runtime, strict=True)
+
+
+@pytest.mark.parametrize(
+    "lines,failed,names",
+    [
+        pytest.param(['{"name": "lookup", "argu'], True, [], id="cut-json-line"),
+        pytest.param(['["lookup"]'], True, [], id="not-an-object"),
+        pytest.param(['{"arguments": {}}'], True, [], id="no-name"),
+        pytest.param(
+            ['{"name": "lookup", "arguments": {}}', '{"name": "book", "argu'],
+            False,
+            ["lookup"],
+            id="one-bad-line-among-good",
+        ),
+        pytest.param(["", "   "], False, [], id="blank-lines-only"),
+    ],
+)
+def test_a_trace_file_with_no_readable_record_is_a_failed_capture(
+    tmp_path: Path, lines: list[str], failed: bool, names: list[str]
+) -> None:
+    trace = tmp_path / "agent-tool-calls.jsonl"
+    trace.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    runtime = _runtime(metadata={"tool_trace_path": str(trace)})
+
+    # Lenient reads drop what they cannot parse, as before.
+    assert [call.name for call in cr._collect_file_tool_calls(runtime)] == names
+    if failed:
+        with pytest.raises(cr.ToolCaptureFailed, match="no readable record"):
+            cr._collect_file_tool_calls(runtime, strict=True)
+    else:
+        calls = cr._collect_file_tool_calls(runtime, strict=True)
+        assert [call.name for call in calls] == names
+
+
+class _NoTablePsycopg:
+    """Connects, then finds no `_alk_tool_trace` table, as a world whose seed never ran."""
+
+    class UndefinedTable(Exception):
+        sqlstate = "42P01"
+
+    def connect(self, dsn: str, **kwargs: Any) -> Any:
+        missing = self.UndefinedTable('relation "_alk_tool_trace" does not exist')
+
+        class Connection:
+            def execute(self, *_args: Any, **_kwargs: Any) -> Any:
+                raise missing
+
+            def __enter__(self) -> Any:
+                return self
+
+            def __exit__(self, *exc_info: Any) -> bool:
+                return False
+
+        return Connection()
+
+
+@pytest.mark.parametrize(
+    "seam,trace,database,failed,captured",
+    [
+        pytest.param(
+            EvidenceSeam.HTTP_TOOL, "none", None, False, [], id="http-tool-empty"
+        ),
+        pytest.param(
+            EvidenceSeam.HTTP_TOOL,
+            "unreadable",
+            None,
+            True,
+            [],
+            id="trace-file-unreadable",
+        ),
+        pytest.param(
+            EvidenceSeam.TOOL_TRACE, "none", "empty", False, [], id="tool-trace-empty"
+        ),
+        pytest.param(
+            EvidenceSeam.TOOL_TRACE,
+            "none",
+            "down",
+            True,
+            [],
+            id="tool-trace-connection-refused",
+        ),
+        pytest.param(
+            EvidenceSeam.TOOL_TRACE,
+            "none",
+            "no-table",
+            True,
+            [],
+            id="tool-trace-table-missing",
+        ),
+        pytest.param(
+            EvidenceSeam.TOOL_TRACE,
+            "unreadable",
+            "rows",
+            False,
+            ["lookup"],
+            id="trace-file-unreadable-but-the-seam-captured",
+        ),
+        pytest.param(
+            EvidenceSeam.TOOL_TRACE,
+            "spans",
+            "down",
+            False,
+            ["ask_writer", "draft_note"],
+            id="span-lines-with-the-database-down",
+        ),
+        # A hand-off is kept for the record but is not a call checks grade, so it does not
+        # stand in for the database the seam could not read.
+        pytest.param(
+            EvidenceSeam.TOOL_TRACE,
+            "handoff",
+            "down",
+            True,
+            ["Draft checker"],
+            id="handoff-only-with-the-database-down",
+        ),
+        pytest.param(
+            EvidenceSeam.TOOL_TRACE,
+            "handoff",
+            "empty",
+            False,
+            ["Draft checker"],
+            id="handoff-only-with-the-database-read",
+        ),
+        pytest.param(
+            EvidenceSeam.HTTP_TOOL, "cut", None, True, [], id="trace-file-of-cut-lines"
+        ),
+    ],
+)
+def test_a_completed_call_says_whether_its_tool_capture_failed(
+    tmp_path: Path,
+    monkeypatch,
+    seam: EvidenceSeam,
+    trace: str,
+    database: str | None,
+    failed: bool,
+    captured: list[str],
+) -> None:
+    _job_obj, context = _context(tmp_path=tmp_path, evidence_seam=seam)
+    _write_scenario_doc(context.bundle_dir, scenario_key="k1")
+    trace_path = tmp_path / "agent-tool-calls.jsonl"
+    columns = ["name", "arguments", "result", "ok", "error", "at"]
+    if database == "down":
+        monkeypatch.setitem(sys.modules, "psycopg", _RaisingPsycopg())
+    elif database == "no-table":
+        monkeypatch.setitem(sys.modules, "psycopg", _NoTablePsycopg())
+    elif database is not None:
+        rows = [("lookup", {}, "ok", True, "", 1.0)] if database == "rows" else []
+        monkeypatch.setitem(sys.modules, "psycopg", _FakePsycopg(rows, columns))
+    read_text = Path.read_text
+
+    def read_unless_refused(self: Path, *args: Any, **kwargs: Any) -> str:
+        if self == trace_path:
+            raise PermissionError("denied")
+        return read_text(self, *args, **kwargs)
+
+    async def place_call(spec):
+        # Written during the call, after the runner cleared the previous attempt's file.
+        if trace == "unreadable":
+            _trace_lines(trace_path, {"name": "lookup", "arguments": {}})
+            monkeypatch.setattr(type(trace_path), "read_text", read_unless_refused)
+        elif trace == "spans":
+            _trace_lines(trace_path, *_SPAN_LINES)
+        elif trace == "handoff":
+            _trace_lines(trace_path, _HANDOFF_LINE)
+        elif trace == "cut":
+            trace_path.write_text('{"name": "lookup", "argu\n', encoding="utf-8")
+        return _report()
+
+    runner = cr.CallRunnerImpl(FakeAdapter(), context, place_call=place_call)
+    outcome = _run(
+        runner,
+        _FakeScenario("k1"),
+        _runtime(
+            metadata={
+                "livekit_agent_name": "agent-w0",
+                "tool_trace_path": str(trace_path),
+            },
+            endpoints={"database": _postgres_endpoint()} if database else None,
+        ),
+    )
+
+    assert outcome.tool_capture_failed is failed
+    assert [call.name for call in outcome.calls] == captured
 
 
 def test_tool_trace_result_string_form_is_truncated_at_2000_chars(monkeypatch) -> None:
@@ -2880,6 +3107,44 @@ def test_the_speaking_actors_actions_file_is_the_run_s_alone(tmp_path):
     assert path.read_text() == ""
 
 
+def test_a_voice_trial_whose_fault_could_not_apply_reaches_the_scheduler_as_unmeasured(tmp_path, monkeypatch) -> None:
+    _job_obj, context = _context(tmp_path=tmp_path, evidence_seam=EvidenceSeam.TOOL_TRACE)
+    _write_scenario_doc(context.bundle_dir, scenario_key="k1")
+    document = context.bundle_dir / "scenarios" / "k1" / "scenario.json"
+    body = json.loads(document.read_text())
+    body["faults"] = [{"action": "approve", "mode": "timeout_before_commit"}]
+    document.write_text(json.dumps(body))
+    monkeypatch.setattr(cr, "_write_trial_state", lambda runtime, faults: None)
+
+    async def place_call(spec):
+        return _report(transcript="hello", messages=[])
+
+    runner = cr.CallRunnerImpl(FakeAdapter(), context, place_call=place_call)
+    outcome = _run(runner, _FakeScenario("k1"), _runtime(metadata={"livekit_agent_name": "agent-w0"}))
+    # No world database held the fault, so the trial never ran under it.
+    assert outcome.unmeasured and "could not be applied" in outcome.unmeasured[0]
+
+
+def test_a_voice_trial_whose_log_or_faults_cannot_be_read_says_its_faults_are_unreadable(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    _job_obj, context = _context(tmp_path=tmp_path, evidence_seam=EvidenceSeam.TOOL_TRACE)
+    runner = cr.CallRunnerImpl(FakeAdapter(), context, place_call=None)
+    monkeypatch.setattr(cr, "_find_postgres_endpoint", lambda runtime: SimpleNamespace(address="dsn"))
+    fault = [{"action": "approve", "mode": "unavailable"}]
+
+    def unreadable(dsn, **_):
+        raise RuntimeError("down")
+
+    monkeypatch.setattr(cr, "trial_faults_readable", lambda dsn: False)
+    [notice] = runner._fault_notices(object(), fault, [])
+    assert notice["code"] == "fault_unreadable" and cr.unmeasured_reasons([notice])
+    monkeypatch.setattr(cr, "trial_faults_readable", lambda dsn: True)
+    monkeypatch.setattr(cr, "_read_action_log", unreadable)
+    [notice] = runner._fault_notices(object(), fault, [])
+    assert notice["code"] == "fault_unreadable" and "action log could not be read" in notice["message"]
+
+
 def test_a_voice_call_with_no_words_still_seals_the_notice_for_a_fault_it_never_reached(tmp_path, monkeypatch) -> None:
     _job_obj, context = _context(tmp_path=tmp_path, evidence_seam=EvidenceSeam.TOOL_TRACE)
     _write_scenario_doc(context.bundle_dir, scenario_key="k1")
@@ -3406,8 +3671,8 @@ def test_a_worker_s_door_row_and_its_span_are_one_call(monkeypatch) -> None:
                   result={"detail": "the deadline for refund has passed"}, worker_id="Refund worker",
                   worker_label="Refund worker", runtime_ids={"event_id": "s2"}),
     ]
-    monkeypatch.setattr(cr, "_read_file_tool_calls", lambda _runtime: ([], spans))
-    monkeypatch.setattr(cr, "_collect_tool_trace_calls", lambda _runtime: tuple(door))
+    monkeypatch.setattr(cr, "_read_file_tool_calls", lambda _runtime, **_: ([], spans))
+    monkeypatch.setattr(cr, "_collect_tool_trace_calls", lambda _runtime, **_: tuple(door))
     calls = cr.collect_seam_calls(
         _runtime(), cr.EvidenceSeam.TOOL_TRACE, worker_names={"refund": "Refund worker", "order_lookup": "Lookup"}
     )
@@ -3500,6 +3765,88 @@ def test_arguments_read_back_as_json_text_still_match():
         _logged("issue_refund", {"order": 7}),
     ]
     assert len(duplicate_commits(log)) == 1
+
+
+def test_a_retry_that_rewords_free_text_but_writes_the_same_record_is_a_duplicate():
+    from fi.alk.harness.call_runner import duplicate_commits
+
+    log = [
+        _logged("issue_refund", {"order": 7, "amount": 500, "note": "first try"}, error="response_lost"),
+        _logged("issue_refund", {"order": 7, "amount": 500, "note": "retrying after the timeout"}),
+    ]
+    # The reference fixes the record and the value; the note is the agent's own words.
+    solution = [{"tool": "issue_refund", "arguments": {"order": 7, "amount": 500}, "fixed": {"order": "the person", "amount": "the person"}}]
+    [found] = duplicate_commits(log, solution)
+    assert found["action"] == "orders.issue_refund"
+    # Another record is another write, whatever the free text says.
+    other = [log[0], _logged("issue_refund", {"order": 8, "amount": 500, "note": "first try"})]
+    assert duplicate_commits(other, solution) == []
+    # With nothing fixed for the action, every argument still has to match.
+    assert duplicate_commits(log) == []
+
+
+def test_an_identical_retry_is_a_duplicate_even_when_the_solution_fixes_a_field_the_call_does_not_carry():
+    from fi.alk.harness.call_runner import duplicate_commits
+
+    log = [
+        _logged("issue_refund", {"order": 7}, error="response_lost"),
+        _logged("issue_refund", {"order": 7}),
+    ]
+    solution = [{"tool": "issue_refund", "arguments": {"reason": "late"}, "fixed": {"reason": "the person"}}]
+    assert len(duplicate_commits(log, solution)) == 1
+
+
+def test_writes_to_two_records_are_not_a_duplicate_when_only_their_amount_is_fixed():
+    from fi.alk.harness.call_runner import duplicate_commits
+
+    log = [
+        _logged("issue_refund", {"order": 7, "amount": 500}, error="response_lost"),
+        _logged("issue_refund", {"order": 8, "amount": 500}),
+    ]
+    solution = [{"tool": "issue_refund", "arguments": {"amount": 500}, "fixed": {"amount": "the person"}}]
+    assert duplicate_commits(log, solution) == []
+
+
+def test_an_unreadable_action_log_leaves_duplicates_unknown_never_cleared(monkeypatch):
+    from types import SimpleNamespace
+
+    from fi.alk.harness import call_runner as cr
+
+    monkeypatch.setattr(cr, "_find_postgres_endpoint", lambda runtime: SimpleNamespace(address="dsn"))
+
+    def unreadable(dsn, **_):
+        raise RuntimeError("down")
+
+    monkeypatch.setattr(cr, "_read_action_log", unreadable)
+    assert cr._duplicates(object()) is None
+    # Missing evidence for every check that reads the agent's calls or the log, never an empty log.
+    assert cr.missing_evidence([dict(cr.DUPLICATES_UNREADABLE)], {}) == {"tool_calls": cr.DUPLICATES_UNREADABLE["message"]}
+    monkeypatch.setattr(cr, "_read_action_log", lambda dsn, **_: [])
+    assert cr._duplicates(object()) == []
+
+
+def test_egress_refusals_are_never_the_agent_s_tool_calls_and_show_once_per_host_and_method(monkeypatch):
+    from fi.alk.harness import call_runner as cr
+    from fi.alk.harness.egress_proxy import REFUSAL_CODE
+
+    def blocked(host, method):
+        return {"name": host, "actor_id": "agent", "outcome": "refused", "ok": False, "refusal_code": REFUSAL_CODE,
+                "arguments": {"host": host, "method": method}, "at": 1.0, "action_id": f"{host}-{method}"}
+
+    log = [
+        blocked("telemetry.example.net", "POST"),
+        blocked("telemetry.example.net", "POST"),
+        blocked("telemetry.example.net", "GET"),
+        _logged("issue_refund", {"order": 7}),
+    ]
+    monkeypatch.setattr(cr, "_read_action_log", lambda dsn, **_: log)
+    assert [row["name"] for row in cr.read_tool_trace("dsn")] == ["issue_refund"]
+    [agent] = cr.trial_state_changes(log, {})
+    assert agent["attempted"] == 1 and agent["refused"] == 0
+    assert agent["blocked"] == [
+        {"host": "telemetry.example.net", "method": "POST", "count": 2},
+        {"host": "telemetry.example.net", "method": "GET", "count": 1},
+    ]
 
 
 def test_voice_trial_without_actors_seals_world_changes(tmp_path, monkeypatch) -> None:

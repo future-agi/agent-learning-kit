@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from .job import FailureCause
     from .source_model import SourceModel
     from .world_ir import WorldIR
 
@@ -183,6 +184,21 @@ def _write_runtime_evidence(
         )
 
     contract = authoring / "contract.json"
+    from .contract import AgentContract
+    from .proofs import load_proofs
+    from .tool_certification import compare_declared_tables
+
+    proofs = load_proofs(authoring)
+    try:
+        declared = AgentContract.model_validate_json(contract.read_text(encoding="utf-8")) if proofs else None
+    except (OSError, ValueError):
+        declared = None
+    if declared is not None:
+        tool_report, skipped = compare_declared_tables(tool_report, declared, proofs)
+        if skipped:
+            limitations.append(
+                "declared tables were not compared for proof runs no one tool wrote in: " + "; ".join(skipped)
+            )
     scenarios = authoring / "scenarios"
     if not scenarios.exists():
         scenarios = authoring / "scenario"
@@ -610,9 +626,18 @@ def _needs_runtime_plan_repair(diagnostics) -> bool:
 
 
 class RuntimeValidationError(RuntimeError):
-    def __init__(self, phase: str, detail: str, *, diagnostics=()):
+    def __init__(
+        self,
+        phase: str,
+        detail: str,
+        *,
+        diagnostics=(),
+        cause: FailureCause | None = None,
+    ):
         self.phase = phase
         self.diagnostics = tuple(diagnostics)
+        # The closed reason a reader without access to guest text gets; None when unknown.
+        self.cause = cause
         self.process_evidence = ""
         self.target_process_evidence = ""
         super().__init__(detail)
@@ -658,6 +683,7 @@ async def _probe_runtime_readiness(
 ):
     from .chat_call_runner import _tools, _chat_target_timeout_seconds
     from .chat_readiness import probe_chat_ingress
+    from .process_runtime import ProcessRuntimeError
 
     interface = contract.runtime.interface if contract.runtime else None
     endpoint = runtime.endpoints.get("target_http")
@@ -701,7 +727,10 @@ async def _probe_runtime_readiness(
                 raise
             except Exception as exc:
                 raise RuntimeValidationError(
-                    "environment", f"Readiness reset failed: {exc}"
+                    "environment",
+                    f"Readiness reset failed: {exc}",
+                    diagnostics=tuple(getattr(exc, "diagnostics", ())),
+                    cause=exc.cause if isinstance(exc, ProcessRuntimeError) else None,
                 ) from exc
             receipt["reset"] = "equivalent" if compare_baseline else "restarted"
         receipt["status"] = "passed"
@@ -736,9 +765,10 @@ async def validate_once(
     from .job import ProviderExecutionMode, SourceKind
     from .process_preflight import preflight_bundle
     from .process_runtime import (
+        ProcessRuntimeError,
         ProcessRuntimeProvider,
         default_user_resolver,
-        fixed_sandbox_user_resolver,
+        hosted_user_resolution,
     )
     from .scenario_source import does_nothing, load_scenarios
     from .source_data_invariants import author_invariants, check_invariants
@@ -851,14 +881,13 @@ async def validate_once(
             secrets_path=secrets,
             secret_purpose_map=job_secret_purposes(job),
             # A local parity run shares the host/container process namespace and must resolve
-            # the same unprivileged identities installed in its image. E2B, however, launches
-            # the guest as one fixed OS identity and does not grant setuid/chown capabilities.
-            user_resolver=(
-                default_user_resolver
+            # the same unprivileged identities installed in its image. A hosted sandbox runs
+            # each declared user only when the platform granted per-user isolation.
+            **(
+                {"user_resolver": default_user_resolver, "require_declared_user": False}
                 if local_runtime and os.environ.get("ALK_FIXED_SANDBOX_USER") != "1"
-                else fixed_sandbox_user_resolver
+                else hosted_user_resolution()
             ),
-            require_declared_user=False,
             public_url_resolver=(
                 None
                 if capabilities is None
@@ -1216,7 +1245,7 @@ async def validate_once(
                     if getattr(representative, "requires_tool_evidence", False):
                         await probe_chat_workflow(
                             job=job, source=source, bundle=bundle, authoring=authoring,
-                            runtime=runtime, scenario=representative,
+                            work_directory=work, runtime=runtime, scenario=representative,
                             candidate_hash=_generic_candidate_hash(source, authoring),
                             bundle_digest=manifest.digest,
                             secret_values=target_secret_values,
@@ -1378,6 +1407,7 @@ async def validate_once(
                     str(exc), extra_secret_values=secret_values
                 ),
                 diagnostics=exc.diagnostics,
+                cause=exc.cause,
             )
             raise validation_error from None
         except Exception as exc:
@@ -1390,6 +1420,7 @@ async def validate_once(
                     f"{type(exc).__name__}: {exc}", extra_secret_values=secret_values
                 ),
                 diagnostics=tuple(getattr(exc, "diagnostics", ())),
+                cause=exc.cause if isinstance(exc, ProcessRuntimeError) else None,
             )
             raise validation_error from None
         finally:

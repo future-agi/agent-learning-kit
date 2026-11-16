@@ -1,10 +1,6 @@
 """Actors: people on the person's side who are not the person.
 
-The environment keeps one list of who might be around its users (`actors.json`, beside the
-sub-goal list): each with a name, role, channel and persona, so the same person sounds the same in
-every scenario. A scenario that includes one names its id and writes what that person does in this
-scenario and when they enter.
-"""
+Listed once per environment (`actors.json`), so the same person sounds the same in every scenario."""
 
 from __future__ import annotations
 
@@ -34,8 +30,7 @@ class CallActor(BaseModel):
     channel: str
     # The caller persona's fields; the voice is chosen from them.
     persona: dict[str, Any] = Field(default_factory=dict)
-    # Background voices only: its level as a ratio of the person's voice (RMS over RMS, per line).
-    # Empty takes a draw from the default range, fixed by the run seed.
+    # Background voices only: RMS ratio to the person's voice; empty draws from the default range by the run seed.
     loudness_ratio: float | None = Field(default=None, gt=0, le=1)
 
     @model_validator(mode="after")
@@ -103,9 +98,7 @@ def speaking_entries(
     own: Mapping[str, Any] | None = None,
 ) -> list[ScenarioCallActor]:
     """A scenario's actors that speak on the call (listed with a channel), each with what it says and when. With
-    `every_listed`, the ids of the whole actor list, an entry missing from the list is kept too, so the call's record
-    can say it was not there. An entry with no trigger of its own comes in on the actor's own activation (`own`, the
-listed records by id), else from the start."""
+    `every_listed`, an entry missing from the list is kept too, so the call's record can say it was not there."""
     speaking = []
     for entry in entries:
         missing = every_listed is not None and entry.id not in every_listed
@@ -290,10 +283,8 @@ def scenario_problems(
 
 
 def logged_action(contract: dict[str, Any], tool: str) -> str:
-    """The world action the world's door logs a call of `tool` as: the route its entrypoint calls with `/` read as
-    `.` (a `{part}` standing for any one part), or the tool's own name when it has no route. Never the route's last
-    part alone, which two routes can share (`crm/update`, `ticket/update`). `tool` may be the agent's tool name or the
-    world action the platform names it by."""
+    """The world action the door logs a call of `tool` as: its entrypoint's route with `/` read as `.`, else the
+    tool's own name. Never the route's last part alone, which two routes can share."""
     for entry in contract.get("tool_entrypoints") or []:
         if not isinstance(entry, dict):
             continue

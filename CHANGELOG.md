@@ -22,7 +22,8 @@ Post-rc.1 increments on the release branch. Each one adds gates on top of the
   with a limiter; per-actor and call-wide limits keep the person in charge. Every call records whether each
   actor was triggered, delivered or dropped, and why, on voice and chat alike.
 - A build gives a speaking actor to between 15% and 25% of its scenarios by default; `aim_for` takes the
-  share the person asks for (`call_actor_share`, 0 for none) in its place.
+  share the person asks for (`actor_share` with `min` and `max`: every scenario, none, or a range) in its
+  place, and the actor list keeps it for later sessions.
 - A sub-goal may name the actor it is about (`actor`): it reads not applicable on a call that actor never
   came into and inconclusive when the actor came in and never reached the agent. A call one of its speaking
   actors never reached, with no sub-goal about that actor, is errored as inconclusive (`actor_missing`,
@@ -85,6 +86,29 @@ Post-rc.1 increments on the release branch. Each one adds gates on top of the
 - The builder chat of a built environment can change its actors (`add_actor`, `drop_actor`) and nothing else
   of the world; adding or dropping one, or changing which scenarios include one, waits for the person's yes,
   and an automatic repair cannot change a scenario's actors.
+- Builder chat: every turn's ending reports what that turn spent: tokens, USD, unpriced
+  turns and only the models it called. The ending is kept before the turn's final
+  checkpoint, so a restart after a failed delivery replays the same ending, usage included.
+  A chat sandbox of its own stores each ending once in its coordinator state: a checkpoint
+  adds only the endings new or changed since the last one (the turn journal is still
+  stored whole).
+- A world whose JSON columns hold values the seed import refuses, such as a jsonb string
+  written as bare text, is refused where it is written: `save_world` and the builder's
+  `change_world` name the table and column and the JSON text expected, instead of the
+  environment failing its seed import at validation. The columns are those the agent's
+  own `CREATE TABLE` statements declare `json` or `jsonb`.
+- A claim for a scenario's coverage overlay (a refusal, an escalation, an out-of-scope request)
+  that its catalogue row settles by what was said (`verifier: llm`, no check, reference or
+  observed record) no longer requires tool evidence, so a correct agent that makes no tool call
+  is graded instead of ending `evidence_missing`. The claim is matched by the catalogue's
+  `overlay` field or by holding the overlay's whole name. Every other sub-goal, coded ones
+  included, still requires evidence.
+- A call whose declared tool capture could not be read ends `evidence_missing` even when its
+  scenario needs no tool call, instead of being graded as a call that made none. Unread means an
+  unreadable trace file, a trace file with no readable record, or a `tool_trace` world database
+  that is missing or fails. A hand-off is never graded as a tool call. A traced declared tool's
+  oversized record is now cut by value, so its trace line stays valid JSON. Only an oversize
+  value is cut, and it says it was cut; the other values keep their types.
 - Multi-agent compatibility references preserve native Google ADK, LangGraph,
   and CrewAI orchestration, while Python command agents capture bounded tool
   evidence with explicit worker and task attribution.

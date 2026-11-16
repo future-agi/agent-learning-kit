@@ -424,7 +424,26 @@ def contract_tools(
                                 "time argument whose name does not say it, from the code that reads it, the "
                                 "data it holds or what the person you work with said; when the code and "
                                 "their words disagree, the code's: "
-                                '{"refund_amount": "cents, USD", "timeout": "milliseconds"}.',
+                                '{"<an amount field>": "<its minor unit and currency>", "timeout": "milliseconds"}.',
+                            },
+                            "returns": {
+                                "type": "object",
+                                "description": "Every field the tool hands back, with its type and, where the "
+                                "name does not say it, its unit or format, read from the code that builds the "
+                                "result or the record it returns: "
+                                '{"<an id field>": "string", "<an amount field>": "integer, <its minor unit and '
+                                'currency>"}.',
+                            },
+                            "tables_read": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                                "description": "The world's tables the tool reads, declared from its code.",
+                            },
+                            "tables_changed": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                                "description": "The world's tables the tool adds to, changes or deletes from, "
+                                "declared from its code.",
                             },
                             "description": {"type": "string"},
                             "requires": {

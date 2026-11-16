@@ -1,8 +1,6 @@
 """Bundle-owned observable HTTP tool proxy used by hosted process environments.
 
-One surface of the world's door (`world_door.py`, copied beside it): it reads an HTTP request into a `ToolCall`, proves
-an actor by this trial's token, and writes the door's outcome back as HTTP. Every rule lives in the door.
-"""
+The HTTP surface of the world's door (`world_door.py`): every rule lives in the door."""
 
 from __future__ import annotations
 
@@ -27,7 +25,6 @@ try:  # Beside the proxy in a bundle; the harness package when run from source.
         declared_read,
         is_timeout,
         method_action,
-        permitted,
         route_values,
         world_action,
     )
@@ -46,7 +43,6 @@ except ImportError:  # pragma: no cover - imported as part of the package
         declared_read,
         is_timeout,
         method_action,
-        permitted,
         route_values,
         world_action,
     )
@@ -64,7 +60,7 @@ ACTIONS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "actions
 # The world actions the agent's contract declares read-only, named as sealed routes are (`GET orders.{order_id}`).
 READ_ACTIONS = [one for one in os.environ.get("READ_ACTIONS", "").split(",") if one]
 
-__all__ = ["Handler", "door", "permitted"]
+__all__ = ["Handler", "door"]
 
 
 # One connection, opened on the first agent call and kept: reading the trial's faults never opens a connection per call.

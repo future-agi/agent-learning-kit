@@ -28,6 +28,7 @@ import os
 import random
 import re
 import signal
+import sys
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -37,6 +38,8 @@ from typing import Any, Callable, Protocol, Sequence
 
 from . import observability
 from . import outbound as ob
+from . import user_files
+from .actors import ACTOR_RULES_FILE, ACTORS_FILE
 from .backends import GOOGLE_ADK_APPROVAL_ENV
 from .bundle_v2 import BundleV2Error, EnvironmentBundleV2, RuntimeKindV2, load_bundle_v2
 from .compose_broker import BrokerError, ComposeBrokerClient
@@ -63,14 +66,15 @@ from .job import (
     HarnessJob,
     HarnessStage,
 )
+from .privilege import IsolationMode, IsolationUnavailable, establish_isolation, isolation_mode
 from .process_preflight import PreflightError, preflight_bundle
 from .process_runtime import (
     SECTION_2F_DOMAIN,
     EnvironmentRuntime,
     ProcessRuntimeError,
     ProcessRuntimeProvider,
-    fixed_sandbox_user_resolver,
     RuntimeEndpoint,
+    hosted_user_resolution,
 )
 from .judge import judge_sub_goal as _judge_sub_goal
 from .joint_judge import judge_sub_goals_jointly as _judge_sub_goals_jointly
@@ -471,6 +475,19 @@ class DefaultBundleSource:
                 _bundle_unavailable_code(exc.args[0]), str(exc)
             ) from exc
         return manifest, bundle_dir
+
+
+def close_actor_files(bundle_dir: Path, *, chown: user_files.Chown = user_files.chown_no_follow) -> None:
+    """Under per-user isolation, the bundle's actor files become the harness's own, mode 0600: actors act in the
+    harness's process, which still reads them, and no customer process can. Without it nothing changes."""
+    if isolation_mode() is not IsolationMode.PER_USER:
+        return
+    for name in (ACTORS_FILE, ACTOR_RULES_FILE):
+        path = bundle_dir / name
+        if path.is_symlink() or not path.is_file():
+            continue
+        chown(path, os.geteuid(), os.getegid())
+        path.chmod(0o600)
 
 
 # =================================================================================================
@@ -1612,18 +1629,7 @@ class OutboundAdapter:
             scenario_attempt=receipt.scenario_attempt,
             world_index=receipt.world_index,
             status=receipt.status,
-            sub_goals=[
-                {
-                    "name": g.name,
-                    "held": g.held,
-                    "reason": g.reason,
-                    "judged": g.judged,
-                    **({"verdict": g.verdict} if g.verdict else {}),
-                    **({"evidence": list(g.evidence)} if getattr(g, "evidence", ()) else {}),
-                    **({"subject": g.subject} if g.subject != "task" else {}),
-                }
-                for g in receipt.sub_goals
-            ],
+            sub_goals=[sub_goal_wire(g) for g in receipt.sub_goals],
             evaluations=[_evaluation_wire(e) for e in receipt.evaluations],
             call=call,
             failure=failure,
@@ -1925,6 +1931,20 @@ class OutboundAdapter:
         return self.is_fenced
 
 
+def sub_goal_wire(goal: Any) -> dict[str, Any]:
+    """One sub-goal as the receipt carries it. `verdict` is always given when there is one (`unmeasured`,
+    `inconclusive`, `not_applicable`, `pass`, `fail`), so the platform never reads it from the reason's wording."""
+    return {
+        "name": goal.name,
+        "held": goal.held,
+        "reason": goal.reason,
+        "judged": goal.judged,
+        **({"verdict": goal.verdict} if goal.verdict else {}),
+        **({"evidence": list(goal.evidence)} if getattr(goal, "evidence", ()) else {}),
+        **({"subject": goal.subject} if getattr(goal, "subject", "task") != "task" else {}),
+    }
+
+
 def _evaluation_wire(evaluation: Any) -> dict[str, Any]:
     if evaluation.kind == "metric":
         return {
@@ -2069,13 +2089,13 @@ class HostedEntrypointDeps:
     # Daytona forces the sandbox to a fixed non-root user (svc-control) and ignores os_user
     # overrides, so the guest cannot setuid/chown to the bundle's svc-agent/svc-tools/svc-data
     # users -- every process runs uniformly as svc-control. The bundle may still DECLARE those
-    # users (the model validates them); they are simply not enforced at runtime here.
+    # users (the model validates them); they are enforced only where the platform granted
+    # per-user isolation (`privilege.py`).
     build_provider: Callable[
         [ob.HostedCapabilities, ob.Transport], WorldProvisioner
     ] = field(
         default=lambda capabilities, transport: ProcessRuntimeProvider(
-            user_resolver=fixed_sandbox_user_resolver,
-            require_declared_user=False,
+            **hosted_user_resolution(),
             public_url_resolver=lambda port, ttl: _resolve_hosted_public_url(
                 capabilities, transport, port=port, expires_in_seconds=ttl
             ),
@@ -2533,6 +2553,7 @@ async def run_job(
                 code=exc.code,
                 message=exc.message,
             )
+        close_actor_files(bundle_dir)
 
         if (manifest.metadata or {}).get("generic_harness") == "v1":
             from .certification import (
@@ -2929,6 +2950,12 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--output", required=True, type=Path, help="/work/artifacts")
     args = parser.parse_args(argv)
+    try:
+        establish_isolation()
+    except IsolationUnavailable as exc:
+        # Infrastructure, not the agent: the platform retries within its attempt budget.
+        print(f"IsolationUnavailable: {exc}", file=sys.stderr, flush=True)
+        return EXIT_CRASHED
     try:
         return asyncio.run(run_job(args.job, args.source, args.output))
     finally:

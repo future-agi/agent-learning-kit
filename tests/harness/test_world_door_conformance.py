@@ -40,7 +40,7 @@ class _Upstream(BaseHTTPRequestHandler):
     def log_message(self, *args):
         return
 
-    def do_POST(self):  # noqa: N802
+    def do_POST(self):  # noqa: N802 - BaseHTTPRequestHandler API
         size = int(self.headers.get("content-length") or 0)
         self.rfile.read(size)
         if _Upstream.failing:

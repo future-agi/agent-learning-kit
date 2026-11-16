@@ -22,6 +22,7 @@ from .actors import with_caller_actor
 from .call_runner import (
     ArtifactUploader,
     CallRunnerContext,
+    ToolCaptureFailed,
     _clear_file_tool_calls,
     _with_scenario_edits,
     collect_seam_calls,
@@ -30,6 +31,7 @@ from .call_runner import (
 from .contract import AgentContract
 from .hosted_scheduler import CallAborted, CallCancelled, CallOutcome, Scenario, World
 from .outbound import ArtifactKind, format_rfc3339_millis
+from .privilege import IsolationMode, isolation_mode
 from .process_runtime import EnvironmentRuntime
 from .run.conversation import ChatActors, TargetConversationEnded, Transcript, converse
 from .scenario import Scenario as ConversationScenario
@@ -39,7 +41,8 @@ from .usage import (
     failure_domain_for_code,
     simulator_funding,
 )
-from .world.runtime import Call, GeneratedWorld, trace_row
+from .handler_child import ChildWorld, HandlerChannel, HandlerChild, start_handler_child
+from .world.runtime import Call, GeneratedWorld, graded_calls, trace_row
 from .world.stores.postgres import AttachedPostgresStore
 from .world_door import world_action
 
@@ -395,16 +398,32 @@ def _trial_log(door: Any, since: float = 0.0) -> list[dict[str, Any]]:
     """This trial's action log. The world's own table holds every row, the agent's calls through its tool proxy
     included; this process's memory holds only what passed its own door. The table keeps every trial played on it, so
     this trial's rows are the ones from its start on."""
+    return _readable_trial_log(door, since) or []
+
+
+def _faults_readable(runtime: Any) -> bool:
+    """Whether the faults set for this trial read back from the world's database, where the tool proxy reads them."""
+    from .call_runner import _find_postgres_endpoint, trial_faults_readable
+
+    database = _find_postgres_endpoint(runtime)
+    return database is not None and trial_faults_readable(database.address)
+
+
+def _readable_trial_log(door: Any, since: float = 0.0, *, proxied: bool = False) -> list[dict[str, Any]] | None:
+    """This trial's action log as `_trial_log` reads it, or None when it could not be read: neither the world's table
+    nor this process's own rows, or, on a proxied trial, the world's table, which alone holds the agent's calls."""
     try:
         log = door.log.rows()
-    except Exception:  # noqa: BLE001 - no rows, never a failed call
-        log = []
+    except Exception:  # noqa: BLE001 - this process's own rows unreadable: the world's table may stand
+        log = None
     mirror = getattr(door.log, "mirror", None)
     if mirror is not None:
         try:
-            log = [row for row in mirror.rows() if _at(row) >= since] or log
-        except Exception:  # noqa: BLE001 - the world's table unreadable: this process's own rows stand
-            pass
+            own = [row for row in mirror.rows() if _at(row) >= since]
+            log = own or (log if log is not None else own)
+        except Exception:  # noqa: BLE001 - the world's table unreadable: this process's own rows stand, unless proxied
+            if proxied:
+                return None
     return log
 
 
@@ -432,7 +451,8 @@ def _world_actors_record(
     if cast is not None:
         decisions += [
             {"actor": one["actor"], "play": "live", "action": one.get("action"),
-             "outcome": (one.get("outcome") or {}).get("outcome"), "why": one.get("why")}
+             "outcome": (one.get("outcome") or {}).get("outcome"), "why": one.get("why"),
+             "verdict": one.get("verdict")}
             for one in cast.events
             if one.get("kind") == "acted"
         ]
@@ -473,11 +493,22 @@ def _chat_actor_summary(cast: Any, world_record: dict[str, Any] | None, listing:
     return speaking + tuple(world_summary(decisions, listing.by_id(), {str(one.get("actor")) for one in speaking}))
 
 
+def handler_sources(bundle_dir: Path, contract: AgentContract) -> dict[str, str]:
+    """Each declared tool's generated handler source, by tool name."""
+    sources: dict[str, str] = {}
+    for tool in contract.tools:
+        path = bundle_dir / "handlers" / f"{tool.name}.py"
+        if path.is_file():
+            sources[tool.name] = path.read_text(encoding="utf-8")
+    return sources
+
+
 def _tool_world(
     bundle_dir: Path,
     contract: AgentContract,
     runtime: EnvironmentRuntime,
     source_directory: Path | None = None,
+    handler_channel: HandlerChannel | None = None,
 ) -> GeneratedWorld:
     if runtime.metadata.get("observation_mode") == "native":
         import random
@@ -491,17 +522,71 @@ def _tool_world(
         raise CallAborted(
             "chat_world_unavailable: world_db postgres endpoint is absent"
         )
+    tools = [tool.model_dump(mode="json") for tool in contract.tools]
+    if handler_channel is not None:
+        # Under per-user isolation the handlers, and the agent code they import, run in the
+        # handler child; nothing of the agent's code is imported into this process. State is
+        # read as the harness, as with one fixed user, so checks grade the same rows.
+        return ChildWorld(
+            store=_HostedToolStore(endpoint.address),
+            channel=handler_channel,
+            tools=tools,
+            refusal_signature=contract.refusal_signature,
+        )
     world = GeneratedWorld(store=_HostedToolStore(endpoint.address))
-    world.tools = [tool.model_dump(mode="json") for tool in contract.tools]
-    world.handlers = {}
-    for tool in contract.tools:
-        path = bundle_dir / "handlers" / f"{tool.name}.py"
-        if path.is_file():
-            world.handlers[tool.name] = path.read_text(encoding="utf-8")
+    world.tools = tools
+    world.handlers = handler_sources(bundle_dir, contract)
     world.refusal_signature = contract.refusal_signature
     if source_directory is not None:
+        if isolation_mode() is IsolationMode.PER_USER:
+            # This process holds the harness's capabilities; the agent's code runs only in its
+            # handler child.
+            raise CallAborted(
+                "handler_child_required: per-user isolation never imports the agent's code here",
+                code="call_failed",
+            )
         world.reach(str(source_directory))
     return world
+
+
+def handler_child_for(
+    context: CallRunnerContext, runtime: EnvironmentRuntime
+) -> HandlerChild | None:
+    """Under per-user isolation, the process a conversation's generated tool handlers run in.
+
+    None with one fixed user, and for a world that runs no generated handlers.
+    """
+    if isolation_mode() is not IsolationMode.PER_USER:
+        return None
+    if runtime.metadata.get("observation_mode") == "native":
+        return None
+    endpoint = runtime.endpoints.get("world_db")
+    contract_path = context.bundle_dir / "contract.json"
+    if (
+        endpoint is None
+        or endpoint.protocol != "postgres"
+        or not contract_path.is_file()
+    ):
+        return None
+    if endpoint.tool_address is None:
+        # The world's own role is what the agent's code may use; without one (an authoring lane)
+        # there is no safe address to hand it, so the conversation does not start.
+        raise CallAborted(
+            "handler_world_unscoped: this world has no role of its own",
+            code="call_failed",
+        )
+    contract = AgentContract.model_validate_json(
+        contract_path.read_text(encoding="utf-8")
+    )
+    return start_handler_child(
+        handlers=handler_sources(context.bundle_dir, contract),
+        tools=[tool.model_dump(mode="json") for tool in contract.tools],
+        refusal_signature=contract.refusal_signature,
+        dsn=endpoint.tool_address,
+        source=context.source_directory,
+        work_directory=context.work_directory,
+        world_index=runtime.world_index,
+    )
 
 
 def _tools(contract: AgentContract) -> list[dict[str, Any]]:
@@ -866,11 +951,11 @@ class HostedChatCallRunner:
     """Drive a repository chat ingress inside its leased world."""
 
     def __init__(self, adapter: ArtifactUploader, context: CallRunnerContext) -> None:
-        from .call_runner import TrialRecords
+        from .call_runner import TrialRecords, sealed_seed
 
         self._adapter = adapter
         self._context = context
-        self._records = TrialRecords()
+        self._records = TrialRecords(sealed_seed(context.work_directory))
         contract_path = context.bundle_dir / "contract.json"
         if not contract_path.is_file():
             self._contract: AgentContract | None = None
@@ -923,6 +1008,7 @@ class HostedChatCallRunner:
             self._contract,
             runtime,
             self._context.source_directory,
+            self._context.handler_channel,
         )
         # An actor's knowledge of the world's records is read from this trial's own store.
         chat_actors = _resolved_chat_actors(
@@ -1134,24 +1220,32 @@ class HostedChatCallRunner:
         # The submitted agent may execute tools inside its own process or against the world's services instead of
         # returning tool requests over HTTP. These observed calls belong to the same attempt; do not replay the tool
         # through the generated world or fabricate evidence from text.
-        transcript.calls[:] = collect_seam_calls(
-            runtime,
-            self._context.evidence_seam,
-            transcript.calls,
-            worker_names=contract_worker_names(self._context.bundle_dir),
-        )
+        try:
+            transcript.calls[:] = collect_seam_calls(
+                runtime,
+                self._context.evidence_seam,
+                transcript.calls,
+                worker_names=contract_worker_names(self._context.bundle_dir),
+                strict=True,
+            )
+            capture_failed = False
+        except ToolCaptureFailed as exc:
+            logger.warning("tool capture failed for %s: %s", scenario.scenario_key, exc)
+            capture_failed = True
+        # Calls returned over HTTP are recorded here as they run, so they are a full capture.
+        capture_failed = capture_failed and not graded_calls(transcript.calls)
 
         world_record = _world_actors_record(
             door, listing, dispatcher, cast, meter, limits, since=trial_started, contract=self._contract
         )
-        from .call_runner import NOT_RECORDED, duplicate_commits, read_worker_stops
+        from .call_runner import NOT_RECORDED, duplicate_commits, missing_evidence, read_worker_stops, unmeasured_reasons
 
         if door_sees_tools:
             from .call_runner import upload_end_state
 
             sealed = await asyncio.to_thread(self._records.end, id(runtime), records_dsn)
-            await upload_end_state(self._adapter, scenario.scenario_key, sealed, _trial_log(door, trial_started))
-            world_record = {**(world_record or {}), **sealed}
+            kept = await upload_end_state(self._adapter, scenario.scenario_key, sealed, _trial_log(door, trial_started))
+            world_record = {**(world_record or {}), **sealed, **({"end_state_artifact": kept} if kept else {})}
         else:
             # The agent runs its own tools where no door stands: World changes says so, never "no change".
             world_record = dict(NOT_RECORDED)
@@ -1162,7 +1256,8 @@ class HostedChatCallRunner:
                 world_record["stopped_workers"] = stopped
 
         # The world applied one of the agent's writes twice after its answer was lost: the scenario fails.
-        duplicates = duplicate_commits(_trial_log(door, trial_started))
+        trial_log = _readable_trial_log(door, trial_started, proxied=proxied) if door is not None else []
+        duplicates = duplicate_commits(trial_log or [], getattr(scenario, "solution", None) or ())
         if duplicates:
             world_record = {**world_record, "duplicates": duplicates}
         if world_record is not None:
@@ -1175,14 +1270,35 @@ class HostedChatCallRunner:
                 "summary": summary,
                 "events": cast.events if cast is not None else [],
             }
+        from .call_runner import (
+            DUPLICATES_UNREADABLE,
+            _bundle_contract,
+            channel_bypass_notices,
+            evidence_notices,
+            fault_notices,
+            in_process_tools,
+        )
+
         said = list(deadline_notices)
         if faults:
-            from .call_runner import fault_notices
-
             # A fault that did not take effect is said, never only logged: the trial ran without it.
-            said += fault_notices(faults, _trial_log(door, trial_started), transcript.calls)
-        from .call_runner import channel_bypass_notices
-
+            said += (
+                fault_notices(
+                    faults, None, transcript.calls, unreachable="the trial's faults were unreadable in the world's "
+                    "database", code="fault_unreadable",
+                )
+                if proxied and not _faults_readable(runtime)
+                else fault_notices(
+                    faults, _trial_log(door, trial_started), transcript.calls,
+                    contract=_bundle_contract(self._context.bundle_dir),
+                )
+            )
+        if door is not None:
+            # A call of the agent's that ran without the door recording it leaves the trial's evidence incomplete.
+            # An action log that could not be read is missing evidence, never an empty log.
+            said += evidence_notices(
+                trial_log, transcript.calls, in_process_tools(_bundle_contract(self._context.bundle_dir))
+            ) + ([dict(DUPLICATES_UNREADABLE)] if trial_log is None else [])
         # A separate worker that reached the world on the shared address: said, and held from its own checks.
         said += channel_bypass_notices(transcript.calls, self._context.bundle_dir)
         if said:
@@ -1206,6 +1322,7 @@ class HostedChatCallRunner:
             )
         outcome = CallOutcome(
             calls=calls,
+            tool_capture_failed=capture_failed,
             turns=len(transcript.exchanges),
             notices=tuple(said),
             started_at=format_rfc3339_millis(started),
@@ -1216,6 +1333,8 @@ class HostedChatCallRunner:
             call_actors=_chat_actor_summary(cast, world_record, listing),
             world_actions=tuple((world_record or {}).get("actions") or ()),
             duplicates=tuple(duplicates),
+            unmeasured=unmeasured_reasons(transcript.notices or ()),
+            missing_evidence=missing_evidence(transcript.notices or (), world_record),
             actor_briefs={
                 **{str(one["id"]): str(one.get("brief") or "") for one in chat_actors if one.get("brief")},
                 **(dispatcher.briefs if dispatcher is not None else {}),

@@ -81,7 +81,7 @@ from .prove import (
     workspace_bindings,
     workspace_fixture,
 )
-from .actors import CALLER, Actor, cycles, load_actors
+from .actors import ACTORS_FILE, CALLER, Actor, ActorShare, cycles, load_actors, save_actors
 from .scenario import (
     ANSWERED_BY,
     CALLER_AWARENESS,
@@ -112,6 +112,7 @@ from .scenario import (
 )
 from .simulator import load_simulator_prompt
 from .tools import brief, schema
+from .world_door import ToolCall, call_effect
 from .world.snapshot import read_manifest, restore
 
 logger = logging.getLogger(__name__)
@@ -268,6 +269,12 @@ def _actor_fields() -> dict[str, Any]:
                             "properties": {
                                 "action": {"type": "string"},
                                 "arguments": {"type": "object"},
+                                "verdict": {
+                                    "type": "string",
+                                    "enum": ["approved", "refused"],
+                                    "description": "Only for an action that decides a request someone made of the "
+                                    "actor: whether it approves or refuses it.",
+                                },
                                 "trigger": {
                                     "type": "object",
                                     "properties": {
@@ -342,23 +349,42 @@ def _actor_fields() -> dict[str, Any]:
             "`timeout_before_commit` (the world never sees the call; the agent hears a timeout), "
             "`timeout_after_commit` (the world makes the change and the agent never hears back, so a careless retry "
             "makes it twice), `unavailable` (the service is down: the world never sees the call and the agent hears "
-            "503 at once; use it for 'inventory unavailable', 'payments down'), or `error` (the world never sees the "
+            "503 at once), or `error` (the world never sees the "
             "call and the agent gets `status` with `message`; use it when the service refuses in a specific way, a "
             "429 rate limit or a 500 with a message), on the agent's `on_call`th call of `action`, the world action "
-            "as the environment names it. A check reading the world then fails a duplicate, or one system changed "
-            "without the other. Never shown to any actor or the person.",
+            "as the environment names it. Give one only where the scenario is about coping with it. A check reading "
+            "the world then fails a duplicate, or one system changed without the other. A write retried after "
+            "`timeout_after_commit` that the world commits twice fails the scenario by itself; a retry carrying the "
+            "first call's `Idempotency-Key` is answered from the first result. When a workflow changes records in "
+            "two systems (`<system A>`, `<system B>`), write one "
+            "scenario whose checks read both, and a negative control where only one changes, which the check over "
+            "the other must fail. Never shown to any actor or the person.",
             "items": {
                 "type": "object",
                 "properties": {
                     "action": {"type": "string"},
                     "mode": {
                         "type": "string",
-                        "enum": ["timeout_before_commit", "timeout_after_commit", "unavailable", "error"],
+                        "enum": [
+                            "timeout_before_commit",
+                            "timeout_after_commit",
+                            "unavailable",
+                            "error",
+                            "approval_required",
+                        ],
                     },
                     "on_call": {"type": "integer", "minimum": 1},
                     "delay_seconds": {"type": "number", "minimum": 0, "maximum": 30},
                     "status": {"type": "integer", "minimum": 400, "maximum": 599},
                     "message": {"type": "string", "maxLength": 500},
+                    "approval": {
+                        "type": "string",
+                        "description": "For `approval_required` only: the world action an approver takes to approve "
+                        "(a record change or a tool), as the environment names it. Every write of `action` is "
+                        "refused until an actor in this scenario permitted to take it has taken it, with arguments "
+                        "that include `approved_when`; the writes after that go through. Never on a read.",
+                    },
+                    "approved_when": {"type": "object"},
                 },
                 "required": ["action", "mode"],
                 "additionalProperties": False,
@@ -395,6 +421,14 @@ def _unlisted_actors(scenario: Scenario, world_root: Path) -> list[str]:
         problems.append("actors: the caller is the person in every scenario, through its persona; leave it out of actors")
     problems += _activation_problems(scenario, listed)
     problems += _folded_actors(scenario, listed)
+    playing = _in_scenario(scenario)
+    problems += [
+        f"faults: approval_required on {fault.action} needs an actor in this scenario permitted to take "
+        f"{fault.approval}; add one to actors, or drop the fault"
+        for fault in scenario.faults
+        if fault.mode == "approval_required"
+        and not any(fault.approval in listed[one].permitted_actions for one in playing if one in listed)
+    ]
     for loop in cycles(listed, scenario.actors):
         if len(loop) == 1:
             problems.append(
@@ -1031,9 +1065,14 @@ def _call_actors_short(
         return ""
     return (
         f"{including} of the {wanted} scenarios you are writing include an actor who speaks on the call and at "
-        f"least {needed} must, so every remaining one has to include one. Write this same task with one of "
-        f"the environment's speaking actors ({', '.join(usable)}) whose presence fits the person's "
-        "situation, in `actors` with its instruction and trigger."
+        f"least {needed} must, and the scenarios still to come can no longer make up the difference. Where "
+        f"someone else fits this person's situation, write this same task with one of the environment's "
+        f"speaking actors ({', '.join(usable)}) in `actors` with its instruction and trigger. Where nobody "
+        "fits, keep this one actor-free and give the actor to a scenario already written whose situation has "
+        "someone else around: resubmit that one with its `scenario_key` and the actor added, then submit this "
+        "one again. If the person asked for another share, call aim_for with `actor_share` set to it: "
+        '{"min": 1, "max": 1} for every scenario, {"min": 0, "max": 0} for none, or their range; no submission '
+        "is refused for the share after that."
     )
 
 
@@ -1339,11 +1378,8 @@ def late_changes_note(scenario: Scenario, world_root: Path) -> str:
 
 
 def _records_the_agent_cannot_see(scenario: Scenario, world_root: Path) -> list[str]:
-    """A setup that writes records for an agent whose data lives inside its own process.
-
-    Such an agent builds its copy of the data when it starts, so a record added to the world is one it
-    never sees: every run of that scenario fails the agent for a record the scenario invented.
-    """
+    """A setup that writes records for an agent whose data lives inside its own process: the agent copied its data
+    at start, so it never sees such a record."""
     store = _in_process_store(world_root)
     if not store:
         return []
@@ -1536,6 +1572,19 @@ def _service_tools(contract: Any) -> set[str]:
     } - {""}
 
 
+def _read_tools(contract: Any) -> set[str]:
+    """The agent's tools that only read, by the rule the world's door applies: the declared effect, else the method."""
+    entries = (one if isinstance(one, dict) else one.model_dump() for one in (contract.tool_entrypoints or []))
+    return {
+        str(entry.get("tool") or "")
+        for entry in entries
+        if call_effect(
+            ToolCall(action="", name="", method=str(entry.get("method") or "POST"), effect=str(entry.get("effect") or ""))
+        )
+        == "read"
+    } - {""}
+
+
 def _call_actors_that_cannot_run(
     scenario: Scenario,
     listing: CallActorList | None,
@@ -1625,6 +1674,7 @@ def accept_scenario(
     used: set[str] | None = None,
     renaming: bool = False,
     service_tools: set[str] | None = None,
+    read_tools: set[str] | None = None,
 ) -> dict[str, Any]:
     """Validate one scenario, then prove it. A plain function so both halves are testable.
 
@@ -1644,6 +1694,15 @@ def accept_scenario(
         return _err("Not kept. " + " ".join(unlisted))
     if unknown := _budgets_for_unknown_workers(scenario, world_root):
         return _err("Not kept. " + unknown)
+    if reading := [
+        fault.action
+        for fault in scenario.faults
+        if fault.mode == "approval_required" and fault.action.rsplit(".", 1)[-1] in (read_tools or set())
+    ]:
+        return _err(
+            "Not kept. faults: approval_required holds a change, and " + ", ".join(reading) + " only reads; set it "
+            "on the write that needs the approval"
+        )
     if scenario.starts_with is not None and spoken:
         # No transport delivers an event to a voice agent: the scenario would run as an ordinary call instead.
         return _err(
@@ -2001,6 +2060,9 @@ def scenario_tools(
     catalogue = catalogue if catalogue is not None else load_catalogue(destination)
     simulator_prompt = load_simulator_prompt(destination)
     target = {"count": wanted}
+    # The share an earlier session recorded carries over; an environment without one draws the default.
+    if (saved := load_actors(destination).actor_share) is not None:
+        target["actor_share"] = saved.model_dump()
     # Keys this environment has given out, a dropped scenario's included: never given to a new one.
     used = used_keys(destination)
     unique = with_unique_keys(kept, used)
@@ -2013,12 +2075,11 @@ def scenario_tools(
         return int(target["count"] or 0) if can_grow else wanted
 
     def call_actor_share() -> float:
-        """The share of scenarios that include an actor: what the person asked for through
-        `aim_for`, else this environment's default."""
-        asked = target.get("call_actor_share")
-        if asked is not None:
-            return float(asked)
-        return default_share(os.environ.get("ALK_HARNESS_JOB_ID") or str(destination))
+        """The share of scenarios that include an actor: drawn within the range the person asked for
+        through `aim_for`, else within this environment's default range."""
+        seed = os.environ.get("ALK_HARNESS_JOB_ID") or str(destination)
+        asked = target.get("actor_share")
+        return default_share(seed, (asked["min"], asked["max"])) if asked else default_share(seed)
 
     def usable_call_actors() -> list[str]:
         """The listed actors a run can deliver to this agent."""
@@ -2585,11 +2646,18 @@ def scenario_tools(
             # Nothing local can replay reference calls against a connect-only agent.
             args = {**args, "solution": []}
 
-        def _refuse(said: str, as_given: dict[str, Any] | None = None) -> dict[str, Any]:
-            seen = _count_refusal(refused, str(args.get("name") or ""), said)
+        def _refuse(said: str, as_given: dict[str, Any] | None = None, gate: str = "") -> dict[str, Any]:
+            # A gate held over the whole suite counts its refusals per stage, so a rename never resets it.
+            seen = (
+                _count_refusal(refused, gate, gate)
+                if gate
+                else _count_refusal(refused, str(args.get("name") or ""), said)
+            )
             if seen >= _REFUSALS_BEFORE_MOVING_ON:
                 return _err(
-                    f"{said}\n\nThis is refusal {seen} of this scenario for the same reason, so "
+                    f"{said}\n\nThis is refusal {seen} "
+                    + ("across the scenarios written here" if gate else "of this scenario")
+                    + " for the same reason, so "
                     "submitting it again will not work. Drop it and write a different scenario for "
                     "this cell, or place it on a level the call actually has."
                 )
@@ -2633,11 +2701,12 @@ def scenario_tools(
             short = _red_team_short(args, target.get("axes"), kept, cap())
             if short:
                 return _refuse(short)
-        # Held in every build for new scenarios; the person's own share replaces it. A scenario
-        # already in the suite is never refused for it, so editing one never changes what it tests.
+        # The default share is a minimum held for new scenarios; a share the person set is never
+        # refused for. A scenario already in the suite is never refused for it either, so editing one
+        # never changes what it tests.
         short = (
             ""
-            if any(one.name == same for one in kept)
+            if target.get("actor_share") or any(one.name == same for one in kept)
             else _call_actors_short(
                 {**args, "name": same},
                 kept,
@@ -2647,7 +2716,7 @@ def scenario_tools(
             )
         )
         if short:
-            return _refuse(short)
+            return _refuse(short, gate="actor_share")
         twin = _already_in_the_suite(
             {**args, "name": same}, kept, _first_names_on_disk(destination, same)
         )
@@ -2705,6 +2774,7 @@ def scenario_tools(
             tools=set(contract.tool_names()),
             used=used,
             service_tools=_service_tools(contract),
+            read_tools=_read_tools(contract),
         )
         if not result.get("is_error"):
             exploration["since_submit"] = 0
@@ -2793,13 +2863,16 @@ def scenario_tools(
         "fix_tool",
         "Correct a tool that was read wrong, or remove one the agent does not have. Everything "
         "is built from these, so a wrong argument name produces a world that refuses everything. `arg_units` "
-        "records the unit or format of a field (cents or dollars, seconds or milliseconds).",
+        "records the unit or format of a field (a currency's minor or major unit, seconds or milliseconds); "
+        "`returns` the fields "
+        "the tool hands back, each with its type and unit.",
         schema(
             {
                 "tool_name": str,
                 "args": list,
                 "arg_types": dict,
                 "arg_units": dict,
+                "returns": dict,
                 "description": str,
                 "refuses": str,
                 "effects": str,
@@ -2821,6 +2894,7 @@ def scenario_tools(
                 str(k): str(v) for k, v in (args.get("arg_types") or {}).items()
             },
             arg_units={str(k): str(v) for k, v in (args.get("arg_units") or {}).items()},
+            returns={str(k): str(v) for k, v in (args.get("returns") or {}).items()},
             description=str(args.get("description") or ""),
             refuses=str(args.get("refuses") or ""),
             effects=str(args.get("effects") or ""),
@@ -2891,18 +2965,18 @@ def scenario_tools(
                     "additionalProperties": {"type": "array", "items": {"type": "string"}},
                 },
                 "keywords": {"type": "array", "items": {"type": "string"}},
-                **(
-                    {
-                        "call_actor_share": {
-                            "type": "number",
-                            "minimum": 0,
-                            "maximum": 100,
-                            "description": "Only when the person asked how many scenarios should include "
-                            "an actor: that share as a percentage of the suite, 0 for none. It replaces "
-                            "the environment's default share. Leave it out otherwise.",
-                        }
-                    }
-                ),
+                "actor_share": {
+                    "type": "object",
+                    "properties": {
+                        "min": {"type": "number", "minimum": 0, "maximum": 1},
+                        "max": {"type": "number", "minimum": 0, "maximum": 1},
+                    },
+                    "required": ["min", "max"],
+                    "description": "Only when the person's request says how many scenarios should include an "
+                    "actor: that share of the suite as fractions, min and max both 1 for every scenario, both 0 "
+                    "for none, or the range they gave. It replaces the environment's default share. Leave it out "
+                    "otherwise.",
+                },
                 "axes": {
                     "type": "object",
                     "additionalProperties": {"type": "array", "items": {"type": "string"}},
@@ -2933,10 +3007,16 @@ def scenario_tools(
                 if people == "alike"
                 else ". No accent, language or location may dominate the suite"
             )
-        if args.get("call_actor_share") is not None:
-            target["call_actor_share"] = (
-                min(max(float(args["call_actor_share"]), 0.0), 100.0) / 100
-            )
+        if args.get("actor_share") is not None:
+            given = args["actor_share"]
+            try:
+                low, high = sorted(min(max(float(given[end]), 0.0), 1.0) for end in ("min", "max"))
+            except (TypeError, KeyError, ValueError):
+                return _err('actor_share takes {"min": <fraction>, "max": <fraction>}, each from 0 to 1')
+            target["actor_share"] = {"min": low, "max": high}
+            if can_save and (destination / ACTORS_FILE).is_file():
+                listed = load_actors(destination)
+                save_actors(destination, listed.model_copy(update={"actor_share": ActorShare(min=low, max=high)}))
         asked = {
             level_name(str(axis)): [str(one).strip() for one in levels if str(one).strip()]
             for axis, levels in (args.get("asked_for") or {}).items()

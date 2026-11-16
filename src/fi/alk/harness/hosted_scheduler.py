@@ -49,7 +49,7 @@ from typing import Any, Awaitable, Callable, Mapping, Protocol, Sequence
 
 from . import observability
 from .job import FailureDomain, HarnessStage
-from .checks import reference_of, takes_reference
+from .checks import check_reads, reference_of, takes_reference
 from .joint_judge import OFF_SCRIPT
 from .judge import INCONCLUSIVE, NOT_APPLICABLE, UNMEASURED, verdict_named
 from .world_door import EvidenceUnavailable
@@ -226,9 +226,9 @@ class Scenario(Protocol):
         str  # platform id from pre-allocation (outbound-channels.md Channel 2 "Join").
     )
     sub_goals: Sequence[SubGoal]
-    # True only when the reference solution contains an environment/tool action. Pure
-    # conversation scenarios (for example, refusing an unsafe request) legitimately produce no
-    # world calls and must still reach their judged checks.
+    # True only when the reference solution contains an environment/tool action and a sub-goal
+    # needs one to hold. Pure conversation scenarios and refusals (for example, refusing an unsafe
+    # request) legitimately produce no world calls and must still reach their checks.
     requires_tool_evidence: bool
     call_execution_id: str | None
 
@@ -268,6 +268,15 @@ class CallOutcome:
     # Each of the agent's writes the world applied twice after its answer was lost (`duplicate_commits`): the
     # scenario fails whatever its sub-goals say.
     duplicates: tuple[dict[str, Any], ...] = ()
+    # Why this trial cannot be graded (a fault the scenario set never applied, evidence that could not be read or was
+    # never written), one reason each, as its notices say: the trial reads unmeasured, never passed or failed.
+    unmeasured: tuple[str, ...] = ()
+    # Each kind of evidence this trial is missing or could not read (`world_state`, `tool_calls`, `transcript`,
+    # `recording`), with why: a sub-goal that reads one is unmeasured, never passed or failed.
+    missing_evidence: dict[str, str] = field(default_factory=dict)
+    # True when a capture surface the bundle declares could not be read for this call, so an
+    # empty `calls` is not evidence that the agent made no tool call.
+    tool_capture_failed: bool = False
 
 
 class CallAborted(RuntimeError):
@@ -811,6 +820,12 @@ async def _invoke(
                 work_directory=Path(tempfile.gettempdir()) / "alk-phase-workers",
                 # Authored phases can print private login responses before redaction.
                 suppress_output=True,
+                # This process opens the workspace files for the worker, which cannot.
+                serve=(
+                    world._workspace_service()
+                    if isinstance(world, (HostedWorld, HostedReadOnlyWorld))
+                    else None
+                ),
             )
             world.rng.setstate(tuples(result["rng"]))
             from .world.http_session import validate_events
@@ -1677,8 +1692,9 @@ def _evidence_of(goal: Any, outcome: CallOutcome) -> tuple[str, ...]:
     """What a sub-goal was decided from: a check reads the world's state and the agent's calls; a judged one reads the
     transcript, and the recording on a call that has one."""
     out: list[str] = []
-    if getattr(goal, "check", ""):
-        out += ["world_state", "tool_calls"]
+    # A judged sub-goal's check is a stand-in unless the sub-goal is both coded and judged.
+    if getattr(goal, "check", "") and (not getattr(goal, "judged", "") or getattr(goal, "both", False)):
+        out += list(check_reads(goal.check))
     if getattr(goal, "judged", ""):
         out.append("transcript")
         if outcome.recording:
@@ -1686,10 +1702,17 @@ def _evidence_of(goal: Any, outcome: CallOutcome) -> tuple[str, ...]:
     return tuple(dict.fromkeys(out))
 
 
+def _missing_evidence(goal: Any, outcome: CallOutcome) -> str:
+    """Why a sub-goal cannot be decided on this trial: each evidence it reads that the trial is missing, with why;
+    empty when it has everything it reads."""
+    return "; ".join(
+        outcome.missing_evidence[kind] for kind in _evidence_of(goal, outcome) if kind in outcome.missing_evidence
+    )
+
+
 def _about_an_actor(goal: Any, result: SubGoalResult, outcome: CallOutcome) -> SubGoalResult:
-    """A sub-goal about an actor, as plan #76 s8 settles it: not applicable when the actor never came in (a
-    `probability` draw that left it out included), inconclusive when it came in and never reached the agent, else as
-    graded."""
+    """A sub-goal about an actor: not applicable when the actor never came in, inconclusive when it came in and never
+    reached the agent, else as graded."""
     actor_id = str(getattr(goal, "actor", "") or "")
     if not actor_id:
         return result
@@ -2586,13 +2609,18 @@ class HostedScheduler:
         if not calls and (
             self._require_tool_workflow
             or getattr(scenario, "requires_tool_evidence", True)
+            or call_outcome.tool_capture_failed
         ):
             # M10: unconditioned on `turns` — an empty list must never reach checks regardless of
             # whether the simulator observed a turn (world-handle-interface.md "Coverage
-            # guarantee": "An empty list is never handed to checks").
+            # guarantee": "An empty list is never handed to checks"). A scenario that needs no
+            # tool call still stops here when capture failed: a call nothing recorded can hold
+            # what its claim forbids.
             failure = _failure(
                 "evidence_missing",
-                "no tool calls were captured for this scenario's call",
+                "tool capture failed for this scenario's call"
+                if call_outcome.tool_capture_failed
+                else "no tool calls were captured for this scenario's call",
             )
             return _Retry(
                 failure,
@@ -2688,6 +2716,14 @@ class HostedScheduler:
                         reason=f"{INCONCLUSIVE}{inconclusive}",
                         judged=goal.judged != "",
                     )
+                )
+                continue
+            missing = _missing_evidence(goal, call_outcome)
+            if missing:
+                # What this sub-goal reads is missing or unreadable for this trial: no verdict on what is not there,
+                # and never one inferred from the transcript.
+                sub_goal_results.append(
+                    SubGoalResult(name=goal.name, held=None, reason=f"{UNMEASURED}{missing}", judged=goal.judged != "")
                 )
                 continue
             outcome = await _run_phase(
@@ -2905,13 +2941,29 @@ class HostedScheduler:
             replace(result, evidence=_evidence_of(goal, call_outcome))
             for goal, result in zip(scenario.sub_goals, sub_goal_results)
         ]
+        if call_outcome.unmeasured:
+            # The scenario's condition never applied, or the trial's evidence is missing: whatever its sub-goals say,
+            # it was not the trial the scenario describes.
+            return self._fault(
+                scenario,
+                world_index,
+                attempt,
+                _failure("evidence_unmeasured", "unmeasured: " + "; ".join(call_outcome.unmeasured)),
+                sub_goals=tuple(sub_goal_results),
+                call=self._call_summary(call_outcome),
+                retry=False,
+            )
         # A settled `False` fails the scenario; an unsettled sub-goal (unmeasured included) makes it not decided. A
         # worker's own sub-goals are reported beside the task's verdict, never folded into it.
         if any(result.held is False and result.subject == "task" for result in sub_goal_results):
             status = "failed"
         elif any(result.held is None and result.subject == "task" for result in sub_goal_results):
             undecided = [result for result in sub_goal_results if result.held is None and result.subject == "task"]
-            unmeasured = all(not result.judged and (result.reason or "").startswith(UNMEASURED) for result in undecided)
+            lacking = {goal.name for goal in scenario.sub_goals if _missing_evidence(goal, call_outcome)}
+            unmeasured = all(
+                (not result.judged or result.name in lacking) and (result.reason or "").startswith(UNMEASURED)
+                for result in undecided
+            )
             return self._fault(
                 scenario,
                 world_index,

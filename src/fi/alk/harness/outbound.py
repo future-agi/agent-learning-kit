@@ -2583,7 +2583,7 @@ _LATER_CALL_FIELDS = frozenset({"stop_reason", "target_metrics"})
 
 def _without_unsent_fields(body: dict[str, Any], draft: "ResultReceiptDraft") -> None:
     """Drop fields added after the first receipt protocol that the caller did not send, so a receipt
-    without them stays byte-for-byte what it always was."""
+    without them is unchanged byte for byte."""
     if draft.call is not None:
         for name in _LATER_CALL_FIELDS - draft.call.model_fields_set:
             body["call"].pop(name, None)

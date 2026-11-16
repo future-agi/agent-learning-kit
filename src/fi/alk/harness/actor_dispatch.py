@@ -1,16 +1,6 @@
 """Plays a scenario's actors in the world, through the world's door.
 
-A mocked actor takes the actions its scenario schedules, each when its trigger is met, and decides nothing. A live
-actor decides from its brief on every new event it can see (anything addressed to it, and any action taken where it
-can act itself, by the agent or another actor) and when its activation is first met, for as long as the trial lasts;
-`both` does the two. Whether an actor is due is the one `due()` every runtime uses. Every action is sent by an `Acts`
-surface (HTTP to the bundle's tool proxy, or the in-process door) under the actor's id, so the door checks the actor's
-permissions and logs the attempt with what the world made of it. A live decision is kept with its reason, never
-trusted for permission.
-
-Before the run, the scenario's pre-run sessions are replayed through the same surface, each message under its actor's
-id with its own `h<n>` key, so a retry never writes it twice and a pre-run row is told apart from the run's.
-"""
+Every action is sent under the actor's id, so the door checks its permissions and logs what the world made of it."""
 
 from __future__ import annotations
 
@@ -44,8 +34,7 @@ from .world_door import calls_tool, logged_as, same_action
 logger = logging.getLogger(__name__)
 
 POLL_SECONDS = 0.25
-# At the trial's end, how long actors may still take a turn that was due or under way: the agent's last call often
-# wakes an actor just as the conversation ends.
+# The agent's last call often wakes an actor just as the conversation ends.
 SETTLE_SECONDS = 30.0
 
 Decide = Callable[[str, Actor], Any]
@@ -181,7 +170,6 @@ class ActorDispatcher:
         self.pending: list[tuple[Actor, int, ScheduledAction]] = [
             (actor, index, action)
             for actor, index, action in listed
-            # A live-only actor takes no scheduled actions.
             if actor.play != "live"
             and (
                 action.trigger.kind != "probability"
@@ -194,8 +182,7 @@ class ActorDispatcher:
         self.decide = decide
         self.briefs = briefs or {}
         self.world_actions = world_actions or {}
-        # Only an actor with no channel is decided here; one that speaks is decided by its channel, once per turn,
-        # its line and its action together, so no actor is ever asked twice about the same moment.
+        # A speaking actor is decided by its channel, so it is never asked twice about the same moment.
         self.live = [
             actors[entry.id]
             for entry in cast
@@ -212,9 +199,7 @@ class ActorDispatcher:
         self.answered: dict[str, set[str]] = {one.id: set() for one in self.live}
         self.woken: set[str] = set()
         self.problems: list[dict[str, Any]] = []
-        # When each actor comes in here: the scenario's own trigger, else the actor's own activation. A speaking
-        # actor's trigger, wait and fallback belong to its channel's cast; here it only has its scheduled actions and
-        # the actions its channel reports.
+        # A speaking actor's trigger, wait and fallback belong to its channel's cast.
         self.triggers = {
             entry.id: entry.trigger or actors[entry.id].activation.trigger
             for entry in cast
@@ -251,8 +236,7 @@ class ActorDispatcher:
     def _moment(
         self, actor: Actor, elapsed: float, agent_rows: list[dict[str, Any]], watched: str = ""
     ) -> Moment:
-        # Each call by its world action in full; a call of the watched action (a row from before actions were logged
-        # in full included) by the watched name.
+        # A row logged before actions were logged in full still matches the watched name.
         return Moment(
             agent_turns=None,
             tools_called=[watched if watched and self._calls(row, watched) else logged_as(row) for row in agent_rows],
@@ -333,10 +317,8 @@ class ActorDispatcher:
 
         service = action.split(".", 1)[0]
         if action in self.names_actor:
-            # A world that checks who acts takes the actor's id in the call: its identity there, else its own id,
-            # never one the actor's model wrote.
+            # Never an id the actor's model wrote.
             arguments = {**arguments, "actor_id": actor.identities.get(service) or actor.id}
-        # Every service the actor acts in learns who it is beside the call, so its action is never the agent's.
         # Without an identity there the actor still acts as itself, so the world never credits it to the agent.
         identity = (actor.identities.get(service, "") or actor.id) if record_action(action) is None else ""
         try:
@@ -378,6 +360,7 @@ class ActorDispatcher:
                 "status": sent.get("status"),
                 "outcome": sent.get("outcome"),
                 "parent": cause or None,
+                "verdict": action.verdict,
             }
         )
 
@@ -524,6 +507,7 @@ class ActorDispatcher:
                 "outcome": sent.get("outcome"),
                 "why": decision.why or None,
                 "parent": cause or None,
+                "verdict": decision.verdict,
             }
         )
 
@@ -560,12 +544,8 @@ class ActorDispatcher:
         return due_now
 
     async def _fall_back(self, actor: Actor, log: list[dict[str, Any]]) -> None:
-        """No answer within its timeout: its fallback is the outcome, recorded as the timeout's, and it takes no more
-        part. `silent` is a time-out, `decline` the request declined, one of its own permitted actions taken for it and
-        labelled as the fallback, another actor's id that actor answering instead. `answered_by` is recorded only once
-        the other actor's turn has started or its action has gone; when neither can happen the outcome says why:
-        `limit_blocked` (no live turn left) or `unresolved` (no such actor free to answer, or nothing left for it to
-        do)."""
+        """No answer within its timeout: its fallback is the outcome and it takes no more part. `answered_by` is
+        recorded only once the other actor has acted; otherwise the outcome is `limit_blocked` or `unresolved`."""
         self.settled.add(actor.id)
         self.fell_back.add(actor.id)
         self.pending = [one for one in self.pending if one[0].id != actor.id]
@@ -584,6 +564,8 @@ class ActorDispatcher:
             "outcome": outcome,
             "timeout_seconds": actor.activation.timeout_seconds,
             "parent": cause or None,
+            # When the wait ran out, on the action log's clock: what the agent wrote after it is after the decision.
+            "at": time.time(),
         }
         if outcome == "fallback_action":
             sent = await self._send(
@@ -598,8 +580,7 @@ class ActorDispatcher:
         if outcome != "answered_by":
             self.fired.append(record)
             return
-        # The timeout's record goes before what the other actor does, and says what came of it once that is known. A
-        # trial that ends mid-way leaves it `answered_by`: nothing can be cut before the other's turn or action starts.
+        # A trial that ends mid-way leaves it `answered_by`: nothing is cut before the other's turn or action starts.
         at = len(self.fired)
         try:
             outcome, why = await self._answer_instead(fallback, cause, log)
@@ -765,7 +746,7 @@ class ActorDispatcher:
 
     async def send_reported(self) -> None:
         """Sends each action a speaking actor decided on the call, under its id, through the world's door: the same
-        door every runtime uses; the voice engine never holds the trial's token."""
+        door every runtime uses, in the runner's own process."""
         if self.reported is None:
             return
         try:
@@ -868,9 +849,7 @@ def build_dispatcher(
 
     from .actors import actor_brief, brief_text, load_actors, with_knowledge_read
     from .call_actor import logged_action
-    from .scenario import pre_run_of
 
-    doc = pre_run_of(dict(doc))
     if not (doc.get("actors") or doc.get("pre_run")):
         return None
     bundle_dir = Path(bundle_dir)
@@ -960,8 +939,8 @@ def _live_limits(environment: Any, scenario: Any) -> dict[str, Any]:
 
 def described_with_units(tool: dict[str, Any]) -> str:
     """A tool's description with its fields by name, and the unit or format of each that has one, so an actor sends
-    the arguments the world takes and writes the value the way the agent and the world do (`refund_amount` in cents,
-    not dollars)."""
+    the arguments the world takes and writes the value the way the agent and the world do (an amount in the
+    unit its field records, never another)."""
     units = tool.get("arg_units") or {}
     units = units if isinstance(units, dict) else {}
     said = str(tool.get("description") or "")

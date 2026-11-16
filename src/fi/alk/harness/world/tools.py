@@ -466,6 +466,25 @@ def _unreadable_arrays(world: Any, destination: Path) -> list[str]:
     return problems
 
 
+def _unreadable_json(world: Any, source_root: str, contract: Any) -> list[str]:
+    """The JSON columns, as the agent's own schema declares them, holding values the seed
+    import refuses, such as bare text. The types come from that schema, not the recorded
+    source model: at authoring a repository agent's source model has no tables yet, since
+    the seed-time model is only read from a running database at validation. Nothing is
+    rewritten: bare text could be meant as a string or be a mistake, so the writer decides."""
+    from ..bundle_author_v2 import declared_json_columns
+    from ..world_import.sqlite import unreadable_json_columns
+
+    store = getattr(world, "store", None)
+    if getattr(store, "engine", "") != "sqlite":
+        return []
+    columns = declared_json_columns(
+        source_root,
+        contract=contract.model_dump() if hasattr(contract, "model_dump") else None,
+    )
+    return unreadable_json_columns(store.connection, columns) if columns else []
+
+
 def _still_refusing(counts: dict[str, int], gate: str, problems: list[str]) -> bool:
     key = f"{gate}:{sorted(problems)}"
     counts[key] = counts.get(key, 0) + 1
@@ -691,11 +710,13 @@ def world_actor_tools(
             actor = Actor.model_validate({**base, **merged})
         except ValueError as exc:
             return _err(f"Not added: {exc}")
-        from ..actors import ACTOR_MODELS
+        from ..actors import actor_models
 
-        if actor.model and actor.model != (current.model if current is not None else None) and actor.model not in ACTOR_MODELS:
+        models = actor_models()
+        kept = current.model if current is not None else None
+        if actor.model and actor.model != kept and actor.model not in models:
             # A run plays the actor on this model, so an unknown one would fail each of its turns.
-            return _err(f"Not added: model is one of {', '.join(ACTOR_MODELS)}, or left out for the environment's model.")
+            return _err(f"Not added: model is one of {', '.join(models)}, or left out for the environment's model.")
         if actor.channel:
             problems = entry_problems(
                 CallActor(
@@ -1607,8 +1628,8 @@ def world_tools(
     @tool(
         "fix_tool",
         "Correct a tool that was read wrong, or remove one the agent does not have. `args` "
-        "replaces its argument names in order; `arg_types`, `arg_units` (the unit or format of a field, cents or "
-        "dollars, seconds or milliseconds) and `description` update those. Set "
+        "replaces its argument names in order; `arg_types`, `arg_units` (the unit or format of a field, a "
+        "currency's minor or major unit, seconds or milliseconds) and `description` update those. Set "
         "`remove` to take the tool away entirely. Everything downstream is built from these, so "
         "a wrong argument name produces a world that refuses everything. Say why.",
         schema(
@@ -1994,6 +2015,14 @@ def world_tools(
                 "Not saved. These array columns hold values that are not lists: "
                 + ", ".join(unreadable)
                 + '. The runtime seed reads an array as a JSON list, such as [] or ["a"]. '
+                "Set them with change_data."
+            )
+        if unreadable := _unreadable_json(world, source_root, contract):
+            return _err(
+                "Not saved. These JSON columns hold values that are not JSON: "
+                + ", ".join(unreadable)
+                + ". The runtime seed reads a JSON column as JSON text: an object such as "
+                '{"a": 1}, a list such as [], or a string in quotes such as "2026-06-03". '
                 "Set them with change_data."
             )
         data_free = (

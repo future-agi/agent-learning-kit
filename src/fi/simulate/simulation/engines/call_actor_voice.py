@@ -187,7 +187,8 @@ class CallActorVoice:
             if decision.action:
                 self.report_action(
                     {"actor": str(self.actor.get("id")), "action": decision.action,
-                     "arguments": decision.arguments, "why": decision.why, "at": time.time()}
+                     "arguments": decision.arguments, "why": decision.why, "verdict": decision.verdict,
+                     "at": time.time()}
                 )
             written = decision.line
         else:

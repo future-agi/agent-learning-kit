@@ -58,6 +58,26 @@ SIMULATOR_MODEL_ENV = frozenset(
     }
 )
 
+# The simulator's model by provider when SIMULATOR_LLM_MODEL is unset.
+SIMULATOR_LLM_DEFAULTS = {"google": "gemini-3.8-flash", "openai": "gpt-4o-mini"}
+
+
+def simulator_llm_models(
+    get: Callable[[str], str | None] = os.environ.get, config: Mapping[str, Any] | None = None
+) -> tuple[str, ...]:
+    """The models the simulator is configured to run on: its own model, then each fallback, in order. The provider is
+    read as the runner reads it: the job's `simulator_llm_provider` first, then the setting."""
+    provider = (
+        str((config or {}).get("simulator_llm_provider") or get("SIMULATOR_LLM_PROVIDER") or "").strip().lower()
+        or "google"
+    )
+    primary = (get("SIMULATOR_LLM_MODEL") or "").strip() or SIMULATOR_LLM_DEFAULTS.get(
+        provider, next(iter(SIMULATOR_LLM_DEFAULTS.values()))
+    )
+    fallbacks = [one.strip() for one in (get("SIMULATOR_LLM_FALLBACK_MODELS") or "").split(",") if one.strip()]
+    return tuple(dict.fromkeys([primary, *fallbacks]))
+
+
 _TARGET_NAME = "harness-livekit-target"
 # Urgency, cooperation and withdrawal per personality, compiled into the caller's behaviour policy.
 _TEMPERAMENTS = (
@@ -1250,8 +1270,7 @@ def persona_voice(
 ) -> str:
     """The voice this person speaks in on this provider, never one in `avoid` while the provider has another.
 
-    Empty when the provider has no voices to choose from, so everyone keeps its default voice.
-    """
+    Empty when the provider has no voices to choose from."""
     provider = (tts_provider or "").lower()
     if provider == "cartesia":
         return served_cartesia_voice(dict(persona), cartesia_key, avoid)
@@ -1279,7 +1298,7 @@ def simulator_definition(
     stt_default_provider, stt_model, stt_language = transcriber_for(language)
     stt_provider = stt_override or stt_default_provider
     defaults = {
-        "llm": {"google": "gemini-3.8-flash", "openai": "gpt-4o-mini"},
+        "llm": SIMULATOR_LLM_DEFAULTS,
         "stt": {"deepgram": stt_model, "cartesia": "ink-2", "google": "chirp_2"},
         "tts": {
             "deepgram": "aura-asteria-en",

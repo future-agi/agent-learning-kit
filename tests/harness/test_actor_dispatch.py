@@ -7,11 +7,11 @@ import asyncio
 import pytest
 
 from fi.alk.harness.actor_dispatch import ActorDispatcher as _Dispatcher
-from tests.harness._door_acts import door_acts
+from _door_acts import door_acts
 from fi.alk.harness.actors import Actor, ActorList, ScenarioActor
 
 
-def ActorDispatcher(actors, cast, *, proxy_url, token, timeout, send=None, decide=None, **rest):  # noqa: N802
+def ActorDispatcher(actors, cast, *, proxy_url, token, timeout, send=None, decide=None, **rest):  # noqa: N802 - stands in for the class
     """The dispatcher over the HTTP surface, as the voice runner builds it; `decide` reads only the situation."""
     wrapped = None
     if decide is not None:

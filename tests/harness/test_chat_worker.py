@@ -60,7 +60,7 @@ def test_isolated_chat_worker_preserves_private_runtime_auth(tmp_path, monkeypat
             "role": "assistant", "content": f"Account active. {token}",
         }}]}
 
-    async def worker(_module, payload, *, environ, work_directory, stop_requested=None):
+    async def worker(_module, payload, *, environ, work_directory, stop_requested=None, pass_fds=()):
         assert token not in json.dumps(payload["runtime"])
         assert token not in json.dumps(environ)
         result_path = tmp_path / "worker-result.json"
@@ -168,7 +168,7 @@ def test_parallel_chat_workers_keep_routing_private_and_upload_in_parent(
     async def run():
         both = asyncio.Event()
 
-        async def worker(module, payload, *, environ, work_directory, stop_requested=None):
+        async def worker(module, payload, *, environ, work_directory, stop_requested=None, pass_fds=()):
             assert "HARNESS_PLATFORM_API_KEY" not in environ
             assert environ["AGENTCC_API_KEY"] == "simulator-model-key"
             assert environ["AGENTCC_BASE_URL"] == "https://gateway.example"
@@ -455,7 +455,7 @@ def test_a_text_call_run_in_the_worker_is_checked_and_recorded_with_its_tokens(
         transcript.simulator_input_tokens, transcript.simulator_output_tokens = 11, 7
         return transcript
 
-    async def worker(_module, payload, *, environ, work_directory, stop_requested=None):
+    async def worker(_module, payload, *, environ, work_directory, stop_requested=None, pass_fds=()):
         result_path = tmp_path / "worker-result.json"
         monkeypatch.setattr(chat_worker.sys, "stdin", io.StringIO(json.dumps(payload)))
         monkeypatch.setattr(chat_worker.sys, "argv", ["chat_worker", str(result_path)])
@@ -531,7 +531,7 @@ def test_an_isolated_chat_call_keeps_the_bundle_s_evidence_seam(tmp_path, monkey
             seen["worker"] = context.evidence_seam
             raise Stop
 
-    async def worker(_module, payload, *, environ, work_directory, stop_requested=None):
+    async def worker(_module, payload, *, environ, work_directory, stop_requested=None, pass_fds=()):
         seen["payload"] = payload["evidence_seam"]
         monkeypatch.setattr(chat_worker.sys, "stdin", io.StringIO(json.dumps(payload)))
         monkeypatch.setattr(chat_worker.sys, "argv", ["chat_worker", str(tmp_path / "result.json")])
@@ -739,3 +739,17 @@ def test_a_stop_keeps_the_sealed_call_when_delivering_it_outlasts_the_seal_bound
     assert receipt.call.transcript_artifact == "transcript-1"
     assert receipt.call.stop_reason == "user_canceled"
     assert adapter.uploads == [b"the customer asked"]
+
+
+def test_the_transcript_names_the_end_state_by_the_id_it_was_stored_under():
+    import json as _json
+
+    from fi.alk.harness.chat_worker import _with_stored_end_state
+
+    transcript = _json.dumps({"messages": [], "world_actors": {"end_state_artifact": "0", "records": {}}}).encode()
+    stored = _json.loads(_with_stored_end_state(transcript, {"0": "sha256:" + "a" * 64}))
+    assert stored["world_actors"]["end_state_artifact"] == "sha256:" + "a" * 64
+    # An end state that was not stored is not named at all, and a transcript without one is left as it was.
+    assert "end_state_artifact" not in _json.loads(_with_stored_end_state(transcript, {}))["world_actors"]
+    plain = _json.dumps({"messages": []}).encode()
+    assert _with_stored_end_state(plain, {}) == plain

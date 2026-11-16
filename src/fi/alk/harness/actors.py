@@ -1,9 +1,6 @@
 """World-side actors: people and systems that act in the world through its own actions.
 
-An environment lists them once in `actors.json`. A scenario includes one by id with the actions it
-takes in that scenario. What an actor may do is world data (`permitted_actions`), checked where
-every action enters the world, never in a prompt.
-"""
+What an actor may do is world data (`permitted_actions`), checked where every action enters the world."""
 
 from __future__ import annotations
 
@@ -24,8 +21,7 @@ ACTORS_SCHEMA = "futureagi.actors.v1"
 AGENT = "agent"
 # The environment's caller, an actor like any other; each scenario still writes its persona for itself.
 CALLER = "caller"
-# The idempotency key of a message replayed before the run: `<trial>:<actor>:h<n>`. Matched at its end only, so an
-# actor whose id starts with `h` is never read as one.
+# `<trial>:<actor>:h<n>`, matched at its end only so an actor id starting with `h` is never read as one.
 _PRE_RUN_KEY = re.compile(r":h[0-9]+$")
 
 
@@ -66,15 +62,29 @@ class Activation(BaseModel):
 
     trigger: "Trigger" = Field(default_factory=lambda: Trigger())
     timeout_seconds: float = Field(default=0.0, ge=0)
-    # `silent`, `decline`, one of the actor's own permitted actions taken for it, or another actor's id who answers
-    # instead.
+    # `silent`, `decline`, one of the actor's own permitted actions, or another actor's id who answers instead.
     fallback: str = "silent"
     # The arguments a fallback action is taken with (the record a decline writes: `{"record": {...}}`, or `where`/`set`).
     fallback_arguments: dict[str, Any] = Field(default_factory=dict)
 
 
-# The models an actor or the environment's actors may name, for now two flash models; unset is the caller's own.
-ACTOR_MODELS = ("gemini-3.8-flash", "gemini-3.7-flash")
+def limit_defaults() -> dict[str, dict[str, Any]]:
+    """Each actor limit's default where nothing is set, read from what a run resolves: `default` for a chat, and
+    `by_modality` for a kind of agent whose default differs (a phone line). None is no limit; a model of None is the
+    caller simulator's own."""
+    chat, voice = Limits().resolved("chat"), Limits().resolved("voice")
+    return {
+        key: {"default": chat[key], "by_modality": {} if voice[key] == chat[key] else {"voice": voice[key]}}
+        for key in chat
+    }
+
+
+def actor_models(config: dict[str, Any] | None = None) -> tuple[str, ...]:
+    """The models an actor or the environment's actors may name: the ones the caller simulator is configured to run
+    on, with the job's own config (`config`) read first, as the runner does. Unset is the caller's own."""
+    from .simulator_voice import simulator_llm_models
+
+    return simulator_llm_models(config=config)
 
 
 class Limits(BaseModel):
@@ -131,7 +141,8 @@ class Actor(BaseModel):
     # Who brings this actor in.
     parent: str | None = None
     persona: dict[str, Any] = Field(default_factory=dict)
-    goal: str = ""
+    # Optional and never graded: what the actor aims for in the conversation it is in; empty, nothing is assumed.
+    goal: str = Field(default="", title="Aim in this conversation")
     constraints: Constraints = Field(default_factory=Constraints)
     behaviour: Behaviour = Field(default_factory=Behaviour)
     # What it can read: `{"kind": "facts", "text"}`, `{"kind": "records", "store", "collection", "where"?}`,
@@ -146,9 +157,7 @@ class Actor(BaseModel):
     identities: dict[str, str] = Field(default_factory=dict)
     on_behalf_of: str | None = None
     activation: Activation | None = None
-    # How the actor is played in the world: `mocked` takes only the actions each scenario schedules for it, `live`
-    # decides its own actions from its brief when the agent reaches it (or its activation trigger fires), `both` does
-    # the two. One with a `channel` decides in the moment after every agent reply, whatever this is.
+    # One with a `channel` decides after every agent reply, whatever this is.
     play: Literal["mocked", "live", "both"] = "mocked"
     # How the actor is heard or seen on a call when it speaks in one: beside the person, taking over from them, or
     # answering before them. Empty: it does not speak on calls, it acts through the world.
@@ -210,11 +219,22 @@ class Unresolved(BaseModel):
     actor: str | None = Field(default=None, min_length=1)
 
 
+class ActorShare(BaseModel):
+    """The share of a suite's scenarios that include an actor who speaks, as fractions of the suite."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    min: float = Field(ge=0, le=1)
+    max: float = Field(ge=0, le=1)
+
+
 class ActorList(BaseModel):
     actors: list[Actor] = Field(default_factory=list)
     limits: Limits = Field(default_factory=Limits)
     # Policy points the builder left for the person to decide when it proposed this cast.
     unresolved: list[Unresolved] = Field(default_factory=list)
+    # The share the person's request set; absent, each build draws the default.
+    actor_share: ActorShare | None = None
 
     @field_validator("actors")
     @classmethod
@@ -292,6 +312,8 @@ class ScheduledAction(BaseModel):
     action: str = Field(min_length=1)
     arguments: dict[str, Any] = Field(default_factory=dict)
     trigger: Trigger = Field(default_factory=Trigger)
+    # What this action decides about the request that brought the actor in, when it decides one.
+    verdict: Literal["approved", "refused"] | None = None
 
 
 class Reference(BaseModel):
@@ -348,22 +370,27 @@ def session_fingerprint(session: PreRunSession, actors: dict[str, "Actor"]) -> s
 
 
 class Fault(BaseModel):
-    """What the world does to the agent on one call of one action. `timeout_before_commit`: the world never sees it
-    and the agent hears a timeout after `delay_seconds`. `timeout_after_commit`: the world makes the change and the
-    agent never hears back. `unavailable`: the world never sees it and the agent hears at once that the service is
-    down (503). `error`: the world never sees it and the agent gets `status` (400-599, default 500) with `message`.
-    `delay_seconds` is read for the two timeouts only; `status` and `message` for `error` only. Graders read it and no
-    actor is ever told it; an agent whose own tools service holds the world's database URL could read the table it
-    is kept in (a known limit)."""
+    """What the world does to the agent on one call of one action. Only `timeout_after_commit` lets the world make
+    the change. `delay_seconds` is read for the two timeouts only; `status` and `message` for `error` only.
+    `approval_required` holds every write of the action, whichever call, until an actor permitted `approval` has
+    taken it in the trial with arguments that include `approved_when`."""
 
     model_config = ConfigDict(extra="forbid")
 
     action: str = Field(min_length=1)
-    mode: Literal["timeout_before_commit", "timeout_after_commit", "unavailable", "error"]
+    mode: Literal["timeout_before_commit", "timeout_after_commit", "unavailable", "error", "approval_required"]
     on_call: int = Field(default=1, ge=1)
     delay_seconds: float = Field(default=30.0, ge=0, le=30)
     status: int = Field(default=500, ge=400, le=599)
     message: str = Field(default="", max_length=500)
+    approval: str = ""
+    approved_when: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def _approval_named(self) -> "Fault":
+        if self.mode == "approval_required" and not self.approval.strip():
+            raise ValueError("an approval_required fault names `approval`: the world action an approver takes")
+        return self
 
 
 class StartsWith(BaseModel):
@@ -411,9 +438,7 @@ def cycles(actors: dict[str, "Actor"], entries: list["ScenarioActor"]) -> list[l
             for other in actors.values()
             if other.id in in_scene and names & set(other.permitted_actions)
         }
-    # Over the whole graph: an actor comes in once any one of the scenario's actors who may write its record has come
-    # in. Those with no record to wait for come in on their own, and so does one whose record none of them writes (the
-    # agent may).
+    # One whose record no actor writes comes in on its own: the agent may write it.
     came_in = {one for one, writers in triggered_by.items() if not writers}
     while True:
         more = {
@@ -532,8 +557,7 @@ BRIEF_INPUTS = [
 ]
 # Fields of one actor that no other actor is given.
 PRIVATE_TO_ACTOR = ["goal", "prompt", "instruction", "actions"]
-# Files an actor's knowledge may never name: what only the evaluator reads, and the harness's own files, which are how
-# the environment is built rather than anything a person in it would read.
+# Files an actor's knowledge may never name: evaluator-only files and the harness's own.
 NOT_KNOWLEDGE = {
     "files": [
         "contract.json",
@@ -751,7 +775,7 @@ def brief_text(items: list[dict[str, Any]]) -> str:
         "actor.name": "You are",
         "actor.role": "Who you are to the others",
         "actor.persona": "How you come across",
-        "actor.goal": "What you want",
+        "actor.goal": "Aim in this conversation",
         "actor.constraints": "What you will not do",
         "actor.behaviour": "How you behave",
         "actor.prompt": "Your instructions",
@@ -845,7 +869,7 @@ def with_caller_actor(doc: dict[str, Any], root: Path) -> dict[str, Any]:
     }
 
 
-def actor_rules() -> dict[str, Any]:
+def actor_rules(config: dict[str, Any] | None = None) -> dict[str, Any]:
     """Everything this release decides about actors, sealed into each bundle so the platform reads the rules of the
     release that built it instead of keeping its own copy."""
     from fi.simulate.simulation.call_actors import CHANNELS, DETAILS_MARK, LOUDNESS_RANGE
@@ -856,9 +880,10 @@ def actor_rules() -> dict[str, Any]:
 
     return {
         # The models an actor may be played on besides the caller simulator's own, which is what an unset model means.
-        "actor_models": list(ACTOR_MODELS),
-        # Each actor limit's default where nothing is set: on a phone line, and in a chat (none for the call-wide
-        # ones). The editor shows these; a run reads the same values.
+        "actor_models": list(actor_models(config)),
+        # Keyed as an actor list's `limits`; None is no limit.
+        "limit_defaults": limit_defaults(),
+        # Per modality; the editor shows these and a run reads the same values.
         "limits": {
             "voice": dict(LIMIT_DEFAULTS),
             "chat": {
@@ -960,7 +985,7 @@ def permission_conflicts(listing: "ActorList", actor: "Actor") -> list[tuple[str
     return conflicts
 
 
-def write_actor_rules(bundle: Path) -> None:
+def write_actor_rules(bundle: Path, config: dict[str, Any] | None = None) -> None:
     (Path(bundle) / ACTOR_RULES_FILE).write_text(
-        json.dumps(actor_rules(), indent=2) + "\n", encoding="utf-8"
+        json.dumps(actor_rules(config), indent=2) + "\n", encoding="utf-8"
     )

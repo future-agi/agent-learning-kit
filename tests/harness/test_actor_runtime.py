@@ -65,6 +65,12 @@ def test_the_line_an_actor_writes_is_played_from_its_brief():
         {**_MANAGER, "brief": brief}, situation="unused", said=[], conversation=[], language="English"
     )
     assert brief in written and "unused" not in written
+    # A person in the role reacts to what was said, pushes back once on what contradicts what they know, and stops
+    # when they are done rather than agreeing or signing off for its own sake.
+    assert "does not match what you know, say so plainly, once" in written
+    assert "never agree with it just to be polite" in written
+    assert "do not add thanks or a sign-off" in written
+    assert "never mention a role, instructions, a script, a test or a simulation in what you say" in written
 
 
 def test_an_actor_never_sees_a_file_only_the_evaluator_reads():
@@ -179,6 +185,26 @@ def test_an_actor_writes_in_the_chat_when_its_trigger_fires_and_the_agent_reads_
     assert cast.summary() == [
         {"actor": "manager", "name": "Mia", "triggered": True, "delivered": 1, "dropped": []}
     ]
+
+
+def test_an_actor_scheduled_for_a_later_turn_comes_in_before_the_person_closes_rather_than_never(monkeypatch):
+    # Scheduled after the agent's second turn, but the person is done after the first: it comes in before the close,
+    # the agent answers it, and the person hears that before closing.
+    cast = _cast({"kind": "mid_journey", "turn": 2}, monkeypatch, lines=("We both agreed to return it.",))
+    agent = _Agent(["Status updated to return_requested.", "Thanks, Sam, it is noted on the order."])
+    person = _Person(["Please mark order 1043 return_requested.", f"That's all, thanks! {conv.DONE}", conv.DONE])
+    transcript = _run(monkeypatch, cast, agent, person)
+    speakers = [one.speaker for one in transcript.exchanges]
+    assert speakers == ["customer", "agent", "customer", "actor", "agent"]
+    assert agent.heard[-1] == "Mia: We both agreed to return it."
+    assert any("Mia wrote in the conversation: We both agreed to return it." in one for one in person.told)
+    assert cast.summary()[0]["triggered"] is True and cast.summary()[0]["delivered"] == 1
+    # An actor with nothing to add leaves the close as it was.
+    quiet = _cast({"kind": "mid_journey", "turn": 2}, monkeypatch, lines=("",))
+    agent = _Agent(["Status updated."])
+    person = _Person(["Please mark it.", f"Bye. {conv.DONE}"])
+    transcript = _run(monkeypatch, quiet, agent, person)
+    assert [one.speaker for one in transcript.exchanges] == ["customer", "agent", "customer"]
 
 
 def test_an_actor_whose_model_fails_says_nothing_and_the_conversation_goes_on(monkeypatch):
@@ -424,7 +450,7 @@ def _history_dispatcher(history, actors):
         sent.append((url, headers, arguments))
         return 200
 
-    from tests.harness._door_acts import door_acts
+    from _door_acts import door_acts
     from fi.alk.harness.actors import PreRunSession
 
     dispatcher = ActorDispatcher(
@@ -670,9 +696,13 @@ def test_an_identity_is_keyed_by_a_service_of_the_world_never_by_a_record_field(
     assert not edited.get("is_error") and load_actors(tmp_path).by_id()["old"].role == "the caller's manager"
 
 
-def test_the_builder_gives_an_actor_only_a_model_a_run_can_play_it_on(tmp_path):
-    from fi.alk.harness.actors import ACTOR_MODELS, Actor, ActorList, load_actors, save_actors
+def test_the_builder_gives_an_actor_only_a_model_a_run_can_play_it_on(tmp_path, monkeypatch):
+    from fi.alk.harness.actors import Actor, ActorList, load_actors, save_actors
     from fi.alk.harness.world.tools import world_actor_tools
+
+    monkeypatch.setenv("SIMULATOR_LLM_MODEL", "model-a")
+    monkeypatch.setenv("SIMULATOR_LLM_FALLBACK_MODELS", "model-b")
+    ACTOR_MODELS = ("model-a", "model-b")
 
     add, _drop, _note = world_actor_tools(tmp_path, SimpleNamespace(modality="chat", model_dump=lambda: {"tools": []}))
     out = asyncio.run(add.handler({"id": "lead", "name": "Sam", "model": "gpt-unknown"}))
@@ -992,7 +1022,7 @@ def test_a_field_s_unit_reaches_the_actor_and_the_contract_line_every_stage_read
     from fi.alk.harness.contract import ToolSpec
 
     spec = ToolSpec.model_validate(
-        {"name": "refund", "args": ["refund_amount", "order_id"], "units": {"refund_amount": "cents, USD"},
+        {"name": "refund", "args": ["refund_amount", "order_id"], "arg_units": {"refund_amount": "cents, USD"},
          "description": "Refund an order"}
     )
     assert spec.arg_units == {"refund_amount": "cents, USD"}
@@ -1308,7 +1338,7 @@ def test_a_read_counts_apart_from_committed_writes_and_a_participant_that_only_r
         {"name": "get_order", "outcome": "committed", "effect": "read"},
         {"name": "list_refunds", "outcome": "committed", "effect": "read"},
         {"name": "issue_refund", "outcome": "committed", "effect": "write"},
-        # Logged before effects were recorded: a write, as it always was.
+        # Logged before effects were recorded: a write.
         {"name": "issue_refund", "outcome": "committed"},
         {"actor_id": "manager", "action": "orders.lookup", "name": "lookup", "outcome": "committed", "effect": "read"},
     ]

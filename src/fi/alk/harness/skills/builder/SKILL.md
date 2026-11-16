@@ -170,8 +170,8 @@ what the gates check. Then:
 - **Actors**, where `add_actor` is offered: `add_actor` and `drop_actor` change the
   environment's list of who might be around its users, and no scenario changes with it. Including one
   in scenarios changes what they test: give each its `actors` entry and resubmit it. A share of
-  scenarios the person asks for, including none, goes to `aim_for` as `call_actor_share` and replaces the
-  default; brief the sub-agents with it. When a request does not say whether it means the list or
+  scenarios the person asks for, whether every one, none or a range, goes to `aim_for` as `actor_share` and
+  replaces the default; brief the sub-agents with it. When a request does not say whether it means the list or
   scenarios, ask. An entry you write follows the write-scenarios rules for actors. When an actor
   or trigger the person asked for cannot be used with this agent, or a check refuses it, stop: tell them
   which one and why, offer what can be used instead, and change it only once they agree.
@@ -184,9 +184,10 @@ what the gates check. Then:
   say so plainly and ask how to proceed; never stand in for it by giving an actor the change the agent's own action
   makes. A policy point you could not model goes in `note_unresolved`; drop it with `drop: true` once the
   person settles it.
-- **Units**: when the person gives a field's unit or format (amounts in cents, a timeout in seconds), record it on
-  each tool argument that carries it with `fix_tool`'s `arg_units`, as well as in the world's data. Check it against
-  the code that reads the field and the data it holds first: when they disagree, the code wins, and you tell the
+- **Units**: when the person gives a field's unit or format (amounts in a currency's minor unit, a timeout in
+  seconds), record it on each tool argument that carries it with `fix_tool`'s `arg_units`, as well as in the
+  world's data. Check it against the code that reads the field and the data it holds first: when they disagree,
+  the code wins, and you tell the
   person about the mismatch instead of recording their unit. When your summary names a field's unit, read it from
   the tool's `arg_units`, never from how the person worded it: the summary says what the contract holds.
 - **The contract's reading of the agent**: `amend_contract`, `add_rule`, `drop_rule`, `fix_tool`, and

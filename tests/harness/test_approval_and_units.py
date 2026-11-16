@@ -1,0 +1,252 @@
+"""An approval held as a test condition, an actor's optional aim, and units kept as written through a trial."""
+
+from __future__ import annotations
+
+import asyncio
+import datetime as dt
+import json
+
+import pytest
+
+from fi.alk.harness.actors import Actor, ActorList, Fault, actor_brief, brief_text, save_actors
+from fi.alk.harness.call_runner import fault_notices, trial_state_changes
+from fi.alk.harness.contract import AgentContract, ToolSpec
+from fi.alk.harness.world_door import (
+    APPROVAL_MISSING,
+    AGENT,
+    DictRoster,
+    Executed,
+    MemoryLog,
+    ToolCall,
+    WorldDoor,
+)
+from fi.alk.harness.world_snapshot import diff, from_rows
+
+HOLD = {
+    "action": "ledger.update",
+    "mode": "approval_required",
+    "approval": "approvals.change",
+    "approved_when": {"decision": "approved"},
+}
+
+
+class _Executor:
+    def __init__(self):
+        self.ran: list[ToolCall] = []
+
+    def run(self, call):
+        self.ran.append(call)
+        return Executed(200, {"ok": True})
+
+
+def _door(faults):
+    executor = _Executor()
+    door = WorldDoor(
+        executor,
+        MemoryLog(),
+        DictRoster({"approver": {"permitted_actions": ["approvals.change"]}, "bystander": {"permitted_actions": []}}),
+        faults=lambda: list(faults),
+    )
+    return door, executor
+
+
+def _write(door, effect="write"):
+    return door.enter(ToolCall(action="ledger.update", name="update", arguments={"id": 1}, effect=effect))
+
+
+def _approve(door, decision="approved", actor="approver"):
+    return door.enter(
+        ToolCall(action="approvals.change", name="change", actor=actor, form="record", arguments={"decision": decision})
+    )
+
+
+def test_a_write_without_an_approval_is_refused_and_never_reaches_the_world():
+    door, executor = _door([HOLD])
+    outcome = _write(door)
+    assert (outcome.outcome, outcome.refusal_code) == ("refused", APPROVAL_MISSING)
+    assert executor.ran == []
+    [row] = door.events(actor=AGENT)
+    assert (row["outcome"], row["refusal_code"]) == ("refused", APPROVAL_MISSING)
+
+
+def test_a_write_after_an_approval_commits_and_a_refusal_or_an_unpermitted_actor_does_not_count():
+    door, executor = _door([HOLD])
+    assert _approve(door, decision="refused").outcome == "committed"
+    assert _approve(door, actor="bystander").refusal_code == "not_permitted"
+    assert _write(door).refusal_code == APPROVAL_MISSING
+    assert _approve(door).outcome == "committed"
+    assert _write(door).outcome == "committed"
+    assert [call.action for call in executor.ran][-1] == "ledger.update"
+
+
+def test_a_read_is_never_held():
+    door, _ = _door([HOLD])
+    assert _write(door, effect="read").outcome == "committed"
+
+
+def test_an_approval_hold_needs_the_action_its_approver_takes():
+    with pytest.raises(ValueError):
+        Fault(action="ledger.update", mode="approval_required")
+    assert Fault.model_validate(HOLD).approval == "approvals.change"
+
+
+def test_a_hold_the_door_saw_is_never_reported_as_not_applied():
+    door, _ = _door([HOLD])
+    _approve(door)
+    _write(door)
+    assert fault_notices([HOLD], door.events(), []) == []
+
+
+def test_a_scenario_without_an_approver_in_its_cast_or_on_a_read_tool_is_refused(tmp_path):
+    from fi.alk.harness.catalogue import Catalogue
+    from fi.alk.harness.scenario import Scenario
+    from fi.alk.harness.scenario_tools import _unlisted_actors, accept_scenario
+
+    save_actors(tmp_path, ActorList(actors=[Actor(id="approver", name="Ari", permitted_actions=["approvals.change"])]))
+    alone = Scenario(name="s", faults=[Fault.model_validate(HOLD)])
+    assert any("needs an actor in this scenario permitted" in one for one in _unlisted_actors(alone, tmp_path))
+    with_one = alone.model_copy(update={"actors": [{"id": "approver"}]})
+    assert _unlisted_actors(Scenario.model_validate(with_one.model_dump()), tmp_path) == []
+    on_read = {**with_one.model_dump(), "faults": [{**HOLD, "action": "ledger.lookup"}]}
+    said = accept_scenario(
+        on_read, world_root=tmp_path, catalogue=Catalogue(sub_goals=[]), kept=[], persist=False,
+        read_tools={"lookup"},
+    )
+    assert said.get("is_error") and "only reads" in said["content"][0]["text"]
+
+
+def test_submitting_reads_each_tool_s_effect_from_its_entrypoint(tmp_path):
+    from fi.alk.harness.catalogue import Catalogue, save_catalogue
+    from fi.alk.harness.contract import ToolEntry
+    from fi.alk.harness.scenario_tools import scenario_tools
+    from fi.alk.harness.world import GeneratedWorld
+    from fi.alk.harness.world.snapshot import save
+
+    class Ledger(GeneratedWorld):
+        name = "ledger"
+        tools = [{"name": "lookup"}, {"name": "update"}]
+        handlers = {"lookup": "def handle(args, db):\n    return {}\n", "update": "def handle(args, db):\n    return {}\n"}
+
+    world = Ledger(":memory:")
+    world.connection.executescript("CREATE TABLE entry(id TEXT);")
+    save(world, tmp_path, notes="test", sequences=[])
+    save_catalogue(Catalogue(sub_goals=[]), tmp_path)
+    save_actors(tmp_path, ActorList(actors=[Actor(id="approver", name="Ari", permitted_actions=["approvals.change"])]))
+    contract = AgentContract(
+        agent="ledger",
+        tools=[ToolSpec(name="lookup"), ToolSpec(name="update")],
+        tool_entrypoints=[
+            ToolEntry(tool="lookup", mode="service", method="GET"),
+            ToolEntry(tool="update", mode="service", method="POST"),
+        ],
+    )
+    server, _ = scenario_tools(contract, tmp_path, tmp_path, wanted=1, can_save=False, start_from=[])
+    submit = next(one.handler for one in server.tools if one.name == "submit_scenario")
+
+    def said(action):
+        hold = {**HOLD, "action": action}
+        args = {"name": "s", "instruction": "x", "actors": [{"id": "approver"}], "faults": [hold]}
+        return asyncio.run(submit(args))["content"][0]["text"]
+
+    assert "only reads" in said("ledger.lookup")
+    assert "only reads" not in said("ledger.update")
+
+
+def _dispatcher_brief(tmp_path, goal: str) -> str:
+    from fi.alk.harness.actor_dispatch import build_dispatcher
+
+    save_actors(tmp_path, ActorList(actors=[Actor(id="helper", name="Sam", play="live", goal=goal)]))
+    dispatcher = build_dispatcher(
+        {"actors": [{"id": "helper"}]}, tmp_path, act=lambda *a, **k: None, read_log=list, records=None, trial_id="t"
+    )
+    return dispatcher.briefs["helper"]
+
+
+def test_an_actor_without_a_goal_is_briefed_with_no_aim_assumed():
+    empty = brief_text(actor_brief(Actor(id="helper", name="Sam", goal="").model_dump(exclude_none=True)))
+    with_goal = brief_text(actor_brief(Actor(id="helper", name="Sam", goal="x").model_dump(exclude_none=True)))
+    added = set(with_goal.splitlines()) - set(empty.splitlines())
+    assert set(empty.splitlines()) < set(with_goal.splitlines()) and len(added) == 1 and "x" in next(iter(added))
+
+
+def test_a_goal_never_reaches_the_next_trial(tmp_path):
+    first = _dispatcher_brief(tmp_path, "Settle the date before the call ends.")
+    assert "Settle the date before the call ends." in first
+    assert "Settle the date" not in _dispatcher_brief(tmp_path, "")
+
+
+def test_a_new_trial_s_dispatcher_starts_with_none_of_the_last_trial_s_actor_state(tmp_path):
+    from fi.alk.harness.actor_dispatch import build_dispatcher
+    from fi.alk.harness.actors import Activation, Trigger
+
+    from _door_acts import door_acts
+
+    manager = Actor(
+        id="manager",
+        name="Mia",
+        permitted_actions=["desk.reject"],
+        identities={"desk": "mia"},
+        activation=Activation(trigger=Trigger(kind="contacted"), timeout_seconds=30, fallback="desk.reject"),
+    )
+    save_actors(tmp_path, ActorList(actors=[manager]))
+    log = [{"actor_id": "agent", "name": "request", "action_id": "a1", "arguments": {"to": "mia"}}]
+
+    def trial(trial_id):
+        return build_dispatcher(
+            {"actors": [{"id": "manager"}]}, tmp_path, act=door_acts(), read_log=lambda: log, records=None,
+            trial_id=trial_id,
+        )
+
+    now = [0.0]
+    first = trial("t1")
+    first.clock = lambda: now[0]
+
+    async def run():
+        await first.tick()
+        now[0] = 31
+        await first.tick()
+
+    asyncio.run(run())
+    assert [one["play"] for one in first.fired] == ["waiting", "timeout"] and first.fell_back
+    second = trial("t2")
+    assert second.fired == [] and second.waiting == {} and second.settled == set() and second.fell_back == set()
+    assert second.sent == 0 and second.cut == [] and second.problems == []
+
+
+def test_units_and_time_zones_reach_the_trial_records_as_written():
+    contract = AgentContract(
+        agent="ledger",
+        tools=[
+            ToolSpec(
+                name="record_payment",
+                args=["amount", "paid_at"],
+                arg_units={"amount": "cents", "paid_at": "ISO 8601 with its UTC offset"},
+            )
+        ],
+    )
+    sealed = AgentContract.model_validate(json.loads(contract.model_dump_json()))
+    assert sealed.tools[0].arg_units == {"amount": "cents", "paid_at": "ISO 8601 with its UTC offset"}
+
+    table: dict[int, dict] = {}
+
+    class Ledger:
+        def run(self, call):
+            table[1] = {"id": 1, **call.arguments}
+            return Executed(200, {"id": 1})
+
+    log = MemoryLog()
+    door = WorldDoor(Ledger(), log, DictRoster({}))
+    paid_at = "2026-03-01T09:30:00+05:30"
+    door.enter(ToolCall(action="ledger.record_payment", name="record_payment",
+                        arguments={"amount": 1099, "paid_at": paid_at}))
+    [row] = log.rows()
+    assert row["arguments"] == {"amount": 1099, "paid_at": paid_at}
+    [agent] = trial_state_changes(log.rows(), {})
+    assert agent["committed_actions"] == ["record_payment"]
+
+    stored = {"id": 1, "amount": 1099, "paid_at": dt.datetime.fromisoformat(paid_at)}
+    changed = diff(from_rows({"payments": (["id"], [])}), from_rows({"payments": (["id"], [stored])}))
+    [change] = changed["changes"]
+    assert change["after"]["amount"] == 1099
+    assert change["after"]["paid_at"].endswith("+05:30")
+    assert table[1]["amount"] == 1099

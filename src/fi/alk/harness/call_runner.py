@@ -46,7 +46,7 @@ import threading
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Awaitable, Callable, Mapping, Protocol, Sequence
+from typing import TYPE_CHECKING, Any, Awaitable, Callable, Collection, Mapping, Protocol, Sequence
 
 from fi import agentcc, simulate
 from fi.simulate.runtime import (
@@ -58,6 +58,7 @@ from fi.simulate.runtime.report import SimulationReport
 from fi.simulate.runtime.run import TestCaseStatus
 from fi.simulate.runtime.runner import SimulationRunner
 from fi.simulate.simulation.call_actors import (
+    VERDICTS,
     CHANNELS,
     ACTOR_VOICES_ALIAS,
     ACTOR_WORLD_ALIAS,
@@ -68,7 +69,17 @@ from fi.simulate.simulation.call_actors import (
 
 from .actor_dispatch import ActorDispatcher, DoorActs, build_dispatcher, world_summary
 from .actor_meter import ActorMeter
-from .world_door import is_read, logged_as, same_action
+from .world_door import (
+    APPROVAL_REQUIRED,
+    DOOR_OUT_OF_REACH,
+    EGRESS_BLOCKED,
+    EVIDENCE_INCOMPLETE,
+    action_matches,
+    is_attempt,
+    is_read,
+    logged_as,
+    same_action,
+)
 from .actors import (
     AGENT,
     ScenarioActor,
@@ -117,7 +128,16 @@ from .simulator_voice import (
     voice_providers,
 )
 from .world.errors import WorldUnavailable
-from .world.runtime import Call, graded_calls, runtime_ids, tool_call_attribution, trace_row
+from .world.runtime import (
+    Call,
+    graded_calls,
+    runtime_ids,
+    tool_call_attribution,
+    trace_row,
+)
+
+if TYPE_CHECKING:
+    from .handler_child import HandlerChannel
 
 logger = logging.getLogger(__name__)
 
@@ -311,6 +331,9 @@ class CallRunnerContext:
     # Whether the person stopped the run: a cancel of a call's task is a user stop only while this reads true. Read
     # per call, never kept on the runner, which serves every concurrent call.
     stop_requested: Callable[[], bool] = lambda: False
+    # Under per-user isolation, where the conversation's tool calls run: a handler child's
+    # socket. None runs them in this process, as with one fixed user.
+    handler_channel: "HandlerChannel | None" = None
 
 
 # --- pre-dial validation -----------------------------------------------------------------------
@@ -871,6 +894,17 @@ def _find_postgres_endpoint(runtime: EnvironmentRuntime) -> Any | None:
     return None
 
 
+class ToolCaptureFailed(RuntimeError):
+    """A capture surface the bundle declares could not be read for this call. Not the same as an
+    empty capture: the agent may have acted through a tool that nothing recorded. Raised only by
+    a collector asked to be ``strict``; the message never carries a DSN. ``calls`` holds what was
+    still captured that checks do not grade, such as hand-offs, so it stays visible."""
+
+    def __init__(self, message: str, *, calls: tuple[Call, ...] = ()) -> None:
+        super().__init__(message)
+        self.calls = calls
+
+
 def _collect_http_tool_calls(runtime: EnvironmentRuntime) -> tuple[Call, ...]:
     """No guest-side capture surface exists anywhere in this repo for the
     `http_tool` evidence seam. Verified, not assumed: `world/handle.py::HostedWorld.call()`
@@ -914,11 +948,62 @@ def _clear_tool_trace_calls(dsn: str) -> None:
 
 def read_tool_trace(dsn: str, *, timeout_ms: int | None = None) -> list[dict[str, Any]]:
     """The agent's own calls in the world's tool trace so far, in call order, read without writing. A world
-    actor's actions are in the same table and are left out; a row from before `actor_id` existed is the agent's."""
+    actor's actions are in the same table and are left out; a row from before `actor_id` existed is the agent's. A
+    request the egress proxy stopped is not a tool call and is left out too: it shows in the trial's World state."""
     return [
         row
         for row in _read_action_log(dsn, timeout_ms=timeout_ms)
-        if (row.get("actor_id") or AGENT) == AGENT
+        if (row.get("actor_id") or AGENT) == AGENT and is_attempt(row)
+    ]
+
+
+def _egress_blocked(row: Mapping[str, Any]) -> bool:
+    """Whether a log row is a request to a host outside the test world, which the egress proxy refused."""
+    return row.get("refusal_code") == EGRESS_BLOCKED
+
+
+def _unrecorded(row: Mapping[str, Any]) -> bool:
+    """Whether a log row only marks a call that ran without the world's door recording it."""
+    return row.get("refusal_code") == EVIDENCE_INCOMPLETE
+
+
+def evidence_notices(
+    log: Sequence[Mapping[str, Any]] | None, calls: Sequence[Call] = (), held: Collection[str] = ()
+) -> list[dict[str, Any]]:
+    """A notice when any of the agent's calls ran without the world's door recording it: what the world did on them
+    is unknown, so the trial is unmeasured. Beside the door's own marks, the agent's calls of each tool the door holds
+    (`held`) are counted against the rows the log holds for it, so a door down for the rest of the trial is seen."""
+    missing = [row for row in log or () if _unrecorded(row)]
+    why = sorted({str(row.get("error") or "") for row in missing} - {""})
+    # One mark stands for every call made while the door was out of reach, with how many in its arguments.
+    count = sum(
+        _int_or(dict(_arguments(row.get("arguments")) or {}).get("count"), 1)
+        if row.get("error") == DOOR_OUT_OF_REACH and isinstance(_arguments(row.get("arguments")), dict)
+        else 1
+        for row in missing
+    )
+    for tool in sorted(set(held)):
+        made = sum(1 for call in calls if call.name == tool)
+        logged = sum(
+            1
+            for row in log or ()
+            if (row.get("actor_id") or AGENT) == AGENT and str(row.get("name") or "") == tool and is_attempt(row)
+        )
+        marked = sum(1 for row in missing if str(row.get("name") or "") == tool)
+        unseen = made - logged - marked
+        if unseen > 0:
+            count += unseen
+            why = sorted(set(why) | {"the world's door kept no row for them"})
+    if not count:
+        return []
+    return [
+        {
+            "code": EVIDENCE_INCOMPLETE,
+            "count": count,
+            "message": f"{count} of the agent's calls ran without the world's door recording them"
+            + (f" ({'; '.join(why)})" if why else "")
+            + ", so what they changed is unknown.",
+        }
     ]
 
 
@@ -933,22 +1018,28 @@ def _read_only(dsn: str, timeout_ms: int | None = None) -> Any:
 
 def _action_log_rows(connection: Any) -> list[dict[str, Any]]:
     cursor = connection.execute(
-        f'SELECT * FROM "{_TOOL_TRACE_TABLE}" ORDER BY at ASC'  # noqa: S608
+        f'SELECT * FROM "{_TOOL_TRACE_TABLE}" ORDER BY at ASC'  # noqa: S608 - fixed identifier, no user input
     )
     columns = [description[0] for description in cursor.description or []]
     return [dict(zip(columns, row, strict=True)) for row in cursor.fetchall()]
 
 
-def _collect_tool_trace_calls(runtime: EnvironmentRuntime) -> tuple[Call, ...]:
+def _collect_tool_trace_calls(
+    runtime: EnvironmentRuntime, *, strict: bool = False
+) -> tuple[Call, ...]:
     """`_alk_tool_trace`'s name and column shape are an isolated local
     convention -- unpinned by any contract (the only harness-reserved table anywhere in this
     repo is `_alk_conformance`, unrelated), no producer exists yet. Isolated in this one function
     (+ `_clear_tool_trace_calls`) so a real producer's disagreement on the name/shape is a one-line
     change. Any failure (missing table, connection refused, malformed row) degrades to `()` --
     never a crash, never fabricated evidence, matching `_collect_http_tool_calls`'s stopped
-    behavior above."""
+    behavior above. ``strict`` raises `ToolCaptureFailed` instead of returning `()` when there is
+    no world database to read or the read fails, so the call is not graded as one that made no
+    tool call."""
     endpoint = _find_postgres_endpoint(runtime)
     if endpoint is None:
+        if strict:
+            raise ToolCaptureFailed("tool_trace seam has no world database to read")
         return ()
     try:
         records = read_tool_trace(endpoint.address)
@@ -958,6 +1049,10 @@ def _collect_tool_trace_calls(runtime: EnvironmentRuntime) -> tuple[Call, ...]:
         logger.debug(
             "tool_trace read failed; treating as no evidence: %s", type(exc).__name__
         )
+        if strict:
+            raise ToolCaptureFailed(
+                f"tool_trace read failed: {type(exc).__name__}"
+            ) from None
         return ()
 
     calls: list[Call] = []
@@ -1011,24 +1106,47 @@ def collect_seam_calls(
     seam: EvidenceSeam | None,
     observed: Sequence[Call] = (),
     worker_names: Mapping[str, str] | None = None,
+    *,
+    strict: bool = False,
 ) -> tuple[Call, ...]:
     """The calls a world observed for one attempt: calls another source saw, else the agent's own in-process trace,
     else where its bundle says evidence lands, joined with the trace file's span lines. Every runner reads them here,
-    so a voice and a chat call agree."""
-    written, from_spans = _read_file_tool_calls(runtime)
-    calls = list(observed) or written
-    if not calls and seam is EvidenceSeam.HTTP_TOOL:
-        calls = list(_collect_http_tool_calls(runtime))
-    elif not calls and seam is EvidenceSeam.TOOL_TRACE:
-        calls = list(_collect_tool_trace_calls(runtime))
+    so a voice and a chat call agree.
+
+    With ``strict``, raises `ToolCaptureFailed` when nothing graded was captured and a declared surface could not be
+    read. `http_tool` has no surface to fail, so an empty one stays an ordinary empty capture."""
+    unread: ToolCaptureFailed | None = None
+    try:
+        written, from_spans = _read_file_tool_calls(runtime, strict=strict)
+    except ToolCaptureFailed as exc:
+        written, from_spans, unread = [], [], exc
+    calls = list(observed)
+    if not calls and graded_calls(written):
+        calls = written
+    elif not calls:
+        # Hand-offs alone are not a capture: the seam's own record still decides.
+        found: list[Call] = []
+        if seam is EvidenceSeam.HTTP_TOOL:
+            found = list(_collect_http_tool_calls(runtime))
+        elif seam is EvidenceSeam.TOOL_TRACE:
+            # The bundle's seed creates the table, so a missing one is a failed capture too. The file's span lines
+            # still count when the database cannot be read.
+            try:
+                found = list(_collect_tool_trace_calls(runtime, strict=strict))
+            except ToolCaptureFailed as exc:
+                unread = unread or exc
+        # Unrecognized/None (should not happen for a `kind: process` bundle past preflight) degrades to the span
+        # lines alone, keeping this on the scheduler's own evidence_missing path, never a raw exception.
+        calls = [*written, *found]
     for call in calls:
         # The door names a worker by its contract id, its spans by the framework's name: give the call both, so the
         # span and the door row of one call are read as one worker's call, not two calls.
         if call.worker_id and not call.worker_label and (worker_names or {}).get(call.worker_id):
             call.worker_label = (worker_names or {})[call.worker_id]
-    # Unrecognized/None (should not happen for a `kind: process` bundle past preflight) degrades to the span lines
-    # alone, keeping this on the scheduler's own evidence_missing path, never a raw exception.
-    return _merge_span_calls(calls, from_spans)
+    merged = _merge_span_calls(calls, from_spans)
+    if unread is not None and not graded_calls(merged):
+        raise ToolCaptureFailed(str(unread), calls=merged) from None
+    return merged
 
 
 def _read_action_log(
@@ -1078,7 +1196,7 @@ def _shown_action(name: str, actor: Any) -> str:
 
 class _ChosenActions:
     """Each actor's actions in the order it chose them (scheduled or decided), with full names: what names a logged
-    row when the actor's permissions alone can't (`approvals.put` and `channel_members.put` both log as `put`)."""
+    row when the actor's permissions alone can't (`approvals.put` and `members.put` both log as `put`)."""
 
     def __init__(self, decisions: Sequence[dict[str, Any]]) -> None:
         self.left: dict[str, list[str]] = {}
@@ -1112,6 +1230,9 @@ def trial_state_changes(
         if is_pre_run(row.get("idempotency_key")):
             # Written before the run: the trial's starting point, not a change made during it.
             continue
+        if _unrecorded(row):
+            # A mark that a call ran unrecorded, never an attempt or a change: the trial's notices carry it.
+            continue
         who = str(row.get("actor_id") or AGENT)
         if who == AGENT and row.get("worker_id"):
             who = f"worker:{row['worker_id']}"
@@ -1133,6 +1254,19 @@ def trial_state_changes(
                 "read_actions": [],
             },
         )
+        if _egress_blocked(row):
+            # A call to a host outside the test world, stopped before it left: never a tool call or a change.
+            asked = _arguments(row.get("arguments"))
+            asked = asked if isinstance(asked, dict) else {}
+            seen = {key: str(asked[key]) for key in ("host", "method", "tool") if asked.get(key)}
+            blocked = entry.setdefault("blocked", [])
+            place = (seen.get("host"), seen.get("method"))
+            same = next((one for one in blocked if (one.get("host"), one.get("method")) == place), None)
+            if same is None:
+                blocked.append({**seen, "count": 1})
+            else:
+                same["count"] += 1
+            continue
         entry["attempted"] += 1
         outcome = row.get("outcome") or (
             "refused" if row.get("refused") else "committed" if row.get("ok", True) else "faulted"
@@ -1267,11 +1401,10 @@ def _shared_records(runtime: EnvironmentRuntime, bundle_dir: Path) -> list[dict[
     return trial_shared_records(log, _bundle_contract(Path(bundle_dir)))
 
 
-def duplicate_commits(log: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
-    """Each write the agent made twice after its answer was lost: a committed write whose answer a
-    `timeout_after_commit` fault replaced with a timeout (`response_lost`), then a later committed write of the same
-    action with equal arguments. The world applied it twice, whatever the scenario's checks say. A read is never a
-    duplicate, and a retry the door answered from its idempotency key is logged `duplicate`, never committed."""
+def duplicate_commits(log: Sequence[Mapping[str, Any]], solution: Sequence[Any] = ()) -> list[dict[str, Any]]:
+    """Each write the agent made twice after a `timeout_after_commit` fault lost its answer. The same record is read
+    from the arguments the reference solution fixes for that action, so a retry that rewords free text is still the
+    same write; with nothing fixed, every argument is compared."""
     rows = [
         row
         for row in log
@@ -1290,7 +1423,7 @@ def duplicate_commits(log: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
             later = rows[later_index]
             if later_index in repeated or logged_as(later) != action:
                 continue
-            if _arguments(later.get("arguments")) != _arguments(first.get("arguments")):
+            if not _same_write(first, later, _fixed_fields(solution, action)):
                 continue
             repeated.add(later_index)
             found.append(
@@ -1305,6 +1438,37 @@ def duplicate_commits(log: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
     return found
 
 
+def _fixed_fields(solution: Sequence[Any], action: str) -> set[str]:
+    """The arguments the reference solution fixes for this action, over every step that takes it."""
+    fields: set[str] = set()
+    for step in solution or ():
+        step = step.model_dump() if hasattr(step, "model_dump") else step
+        if isinstance(step, Mapping) and _same_action(action, str(step.get("tool") or "")):
+            fields |= set(step.get("fixed") or {})
+    return fields
+
+
+def _same_write(first: Mapping[str, Any], later: Mapping[str, Any], fixed: set[str]) -> bool:
+    """Whether two committed writes of one action are the same write: equal arguments, or equal on every fixed
+    argument either carries and on every other argument that is not text. Text the solution does not fix is the
+    agent's own words, so a retry that rewords it is still the same write; a different record, named by a value that
+    is not text, is not."""
+    one, two = _arguments(first.get("arguments")), _arguments(later.get("arguments"))
+    if one == two:
+        return True
+    if not isinstance(one, dict) or not isinstance(two, dict):
+        return False
+    carried = [field for field in fixed if field in one or field in two]
+    if not carried:
+        return False
+    others = (set(one) | set(two)) - set(fixed)
+    return all(one.get(field) == two.get(field) for field in carried) and all(
+        one.get(field) == two.get(field)
+        for field in others
+        if not isinstance(one.get(field), str) or not isinstance(two.get(field), str)
+    )
+
+
 def _arguments(value: Any) -> Any:
     """A row's arguments as data: a log read back from the database can hold them as JSON text."""
     if isinstance(value, (str, bytes)):
@@ -1315,23 +1479,52 @@ def _arguments(value: Any) -> Any:
     return value
 
 
-def _duplicates(runtime: EnvironmentRuntime) -> list[dict[str, Any]]:
-    """This trial's duplicate commits, read from the world's action log; none when there is no log to read."""
+def _duplicates(runtime: EnvironmentRuntime, solution: Sequence[Any] = ()) -> list[dict[str, Any]] | None:
+    """This trial's duplicate commits, read from the world's action log; none when there is no log to read, and None
+    when the log is there but could not be read, which leaves the trial unmeasured rather than passed."""
     database = _find_postgres_endpoint(runtime)
     if database is None:
         return []
     try:
-        return duplicate_commits(_read_action_log(database.address))
-    except Exception as exc:  # noqa: BLE001 - no log read, no duplicate claimed
-        logger.debug("duplicate check skipped: %s", type(exc).__name__)
-        return []
+        return duplicate_commits(_read_action_log(database.address), solution)
+    except Exception as exc:  # noqa: BLE001 - no log read: no duplicate claimed, and none cleared either
+        logger.warning("duplicate check could not read the action log: %s", type(exc).__name__)
+        return None
+
+
+# Said when a trial's action log could not be read to find the writes its world applied twice.
+DUPLICATES_UNREADABLE = {
+    "code": "duplicates_unreadable",
+    "message": "The world's action log could not be read, so the agent's calls and any repeated write are unknown.",
+}
+
+
+def trial_faults_readable(dsn: str) -> bool:
+    """Whether the faults this runner wrote for the trial read back as the door reads them: a list of faults."""
+    try:
+        with _read_only(dsn) as connection:
+            row = connection.execute("SELECT faults FROM _alk_trial_faults WHERE id = 1").fetchone()
+    except Exception as exc:  # noqa: BLE001 - whatever broke, the door could not have read them either
+        logger.warning("trial faults unreadable: %s", type(exc).__name__)
+        return False
+    faults = _arguments(row[0]) if row else None
+    return isinstance(faults, list) and all(isinstance(one, dict) for one in faults)
 
 
 def approvals(log: list[dict[str, Any]], decisions: Sequence[dict[str, Any]] = ()) -> list[dict[str, Any]]:
-    """One line per approval, read from the action log only: the agent's request (the agent row an actor's row or a
-    timeout points at through its parent), the decision (that actor row, or the timeout's fallback), and the agent's
-    writes before the decision and after it, in log order. No record matching, no inference."""
-    rows = [row for row in log if not is_pre_run(row.get("idempotency_key"))]
+    """One line per approval, read from the action log only: the agent's request, the decision, and the agent's
+    writes before and after it. `verdict` is `approved`, `refused` (a declining timeout included) or None when no
+    verdict was recorded."""
+    rows = [
+        row
+        for row in log
+        if not is_pre_run(row.get("idempotency_key")) and is_attempt(row)
+    ]
+    # Each actor's actions as it chose them, in order: what says the verdict its logged row carries.
+    sent_by: dict[str, list[dict[str, Any]]] = {}
+    for one in decisions:
+        if one.get("play") in ("mocked", "live") and one.get("action"):
+            sent_by.setdefault(str(one.get("actor")), []).append(one)
     by_id = {str(row.get("action_id")): row for row in rows if row.get("action_id")}
     # A read changed nothing, so it is never a write before or after the decision; it can still be the request.
     agent_writes = [row for row in rows if (row.get("actor_id") or AGENT) == AGENT and not is_read(row)]
@@ -1340,12 +1533,27 @@ def approvals(log: list[dict[str, Any]], decisions: Sequence[dict[str, Any]] = (
         parent = by_id.get(str(row.get("parent_event_id") or ""))
         if (row.get("actor_id") or AGENT) == AGENT or parent is None or (parent.get("actor_id") or AGENT) != AGENT:
             continue
-        found.append((parent, {"by": row.get("actor_id"), "action": logged_as(row), "outcome": row.get("outcome"),
-                               "at": row.get("at")}))
+        action = logged_as(row)
+        said = sent_by.get(str(row.get("actor_id"))) or []
+        sent = next(
+            (
+                one
+                for one in said
+                if _same_action(str(one.get("action") or ""), action)
+                and one.get("parent") in (None, "", parent.get("action_id"))
+            ),
+            None,
+        )
+        if sent is not None:
+            said.remove(sent)
+        verdict = sent.get("verdict") if sent is not None else None
+        found.append((parent, {"by": row.get("actor_id"), "action": action, "outcome": row.get("outcome"),
+                               "at": row.get("at"), "verdict": verdict if verdict in VERDICTS else None}))
     for one in decisions:
         if one.get("play") == "timeout" and one.get("parent") in by_id:
             found.append((by_id[one["parent"]], {"by": one.get("actor"), "action": f"timeout: {one.get('fallback')}",
-                                                 "outcome": one.get("outcome"), "at": None}))
+                                                 "outcome": one.get("outcome"), "at": one.get("at"),
+                                                 "verdict": "refused" if one.get("fallback") == "decline" else None}))
     out = []
     for request, decision in found:
         start = float(request.get("at") or 0)
@@ -1360,6 +1568,9 @@ def approvals(log: list[dict[str, Any]], decisions: Sequence[dict[str, Any]] = (
                 "before_decision": [{"action": w.get("name"), "outcome": w.get("outcome")} for w in between],
                 "after_decision": [{"action": w.get("name"), "outcome": w.get("outcome")} for w in after],
                 "acted_before_decision": any(w.get("outcome") == "committed" for w in between),
+                "verdict": decision["verdict"],
+                "committed_after_refusal": decision["verdict"] == "refused"
+                and any(w.get("outcome") == "committed" for w in after),
             }
         )
     return out
@@ -1453,8 +1664,8 @@ def _agent_marks(
     return marks
 
 
-# The trial's faults on the agent's calls, kept in the world's own database where the tool proxy reads them: never in a
-# file the agent's process could read or rewrite.
+# Kept in the world's database, never in a file the agent's process could read or rewrite.
+# Known limit: a connection with the world's role can write it until per-user database isolation is on.
 TRIAL_FAULTS_DDL = "CREATE TABLE IF NOT EXISTS _alk_trial_faults (id INT PRIMARY KEY, faults JSONB NOT NULL)"
 # When this trial's workers stop being allowed to act, beside its faults; null when the scenario sets no budget.
 TRIAL_DEADLINE_DDL = "ALTER TABLE _alk_trial_faults ADD COLUMN IF NOT EXISTS worker_deadline_at DOUBLE PRECISION"
@@ -1608,7 +1819,7 @@ def _write_trial_state(
 
 
 def _same_action(action: str, name: str) -> bool:
-    """A fault names the world action (`crm.apply_discount`); a call may carry the tool's own name (`apply_discount`)."""
+    """A fault names the world action (`service_a.update`); a call may carry the tool's own name (`update`)."""
     return bool(action) and bool(name) and (action == name or action.rsplit(".", 1)[-1] == name.rsplit(".", 1)[-1])
 
 
@@ -1618,11 +1829,13 @@ def fault_notices(
     calls: Sequence[Call],
     *,
     unreachable: str | None = None,
+    contract: Mapping[str, Any] | None = None,
+    code: str = "fault_not_applied",
 ) -> list[dict[str, Any]]:
-    """What became of each fault the scenario set, in plain words, for the faults that did not take effect: one that
-    could not be applied (no world database to hold it, or the call ran outside the world's door) and one the agent
-    never reached. A fault the door applied says nothing; the log already shows it as faulted."""
+    """A plain-words notice for each fault the scenario set that did not take effect: one that could not be applied
+    or one the agent never reached. A fault that could not be applied leaves the trial unmeasured."""
     notices: list[dict[str, Any]] = []
+    entries = [one for one in (contract or {}).get("tool_entrypoints") or [] if isinstance(one, Mapping)]
     for fault in faults:
         if not isinstance(fault, Mapping):
             continue
@@ -1631,19 +1844,32 @@ def fault_notices(
         mode = str(fault.get("mode") or "fault")
         base = {"action": action, "on_call": on_call, "mode": mode}
         if unreachable:
-            notices.append({**base, "code": "fault_not_applied",
+            notices.append({**base, "code": code,
                             "message": f"The {mode} fault on call {on_call} of {action} could not be applied: {unreachable}."})
             continue
+        if entries:
+            named = [one for one in entries if _names_action(one, action)]
+            if not named:
+                notices.append({**base, "code": "fault_unknown_action",
+                                "message": f"The {mode} fault on call {on_call} of {action} was never applied: the "
+                                           "agent has no tool or world action by that name."})
+                continue
+            held = [one for one in named if not str(one.get("door_unreached") or "")]
+            if not held:
+                notices.append({**base, "code": "fault_not_applied",
+                                "message": f"The {mode} fault on call {on_call} of {action} could not be applied: the "
+                                           f"world's door cannot hold that tool ({named[0].get('door_unreached')})."})
+                continue
         agent_rows = [row for row in log or [] if (row.get("actor_id") or AGENT) == AGENT]
         # A call through the tool proxy also carries the agent's own tool name, which a fault may name instead.
         rows = [
             row for row in agent_rows
             if same_action(row, action) or _same_action(action, str(row.get("agent_tool") or ""))
         ]
-        if any(_fault_applied(row) for row in rows):
+        # An approval hold is in force on every call the door saw, refused or let through after the approval.
+        if any(_fault_applied(row) for row in rows) or (mode == APPROVAL_REQUIRED and rows):
             continue
-        # A call names only its tool, so a call the door logged as another action with the same last part
-        # (`ticket.update` beside `crm.update`) is that action's, never this one's.
+        # A call the door logged as another action with the same last part is that action's.
         others = sum(
             1
             for row in agent_rows
@@ -1659,6 +1885,51 @@ def fault_notices(
                             "message": f"The {mode} fault on call {on_call} of {action} never took effect: the agent "
                                        f"made {made} call{'s' if made != 1 else ''} of it."})
     return notices
+
+
+def in_process_tools(contract: Mapping[str, Any]) -> set[str]:
+    """The tools the agent runs in its own process with the world's door in front of them."""
+    return {
+        str(entry.get("tool"))
+        for entry in contract.get("tool_entrypoints") or []
+        if isinstance(entry, Mapping)
+        and entry.get("tool")
+        and entry.get("mode") in ("import", "construct")
+        and not entry.get("door_unreached")
+    }
+
+
+def _names_action(entry: Mapping[str, Any], action: str) -> bool:
+    """Whether a contract's tool entry is the tool or world action a fault names: by the tool's name, or by its
+    route read as a world action."""
+    tool = str(entry.get("tool") or "")
+    route = str(entry.get("endpoint") or "").split("?", 1)[0].strip("/").replace("/", ".")
+    return _same_action(action, tool) or (
+        bool(route) and (action_matches(action, route) or action_matches(route, action))
+    )
+
+
+# Notices that make a trial unmeasured, never passed or failed on what it lacked.
+UNMEASURED_NOTICES = ("fault_not_applied", "fault_unknown_action", "fault_unreadable")
+
+
+def missing_evidence(notices: Sequence[Mapping[str, Any]], records: Mapping[str, Any] | None) -> dict[str, str]:
+    """Each kind of evidence a trial is missing or could not read, with why: the action log (`tool_calls`) when it
+    could not be read or a call ran without the door recording it, and the records before and after (`world_state`)
+    when they could not be read. A sub-goal that reads one is unmeasured."""
+    missing: dict[str, str] = {}
+    log_codes = (DUPLICATES_UNREADABLE["code"], EVIDENCE_INCOMPLETE)
+    log = [str(one.get("message")) for one in notices if one.get("code") in log_codes]
+    if log:
+        missing["tool_calls"] = " ".join(log)
+    if ((records or {}).get("records") or {}).get("unreadable"):
+        missing["world_state"] = "The world's records before and after the trial could not be read."
+    return missing
+
+
+def unmeasured_reasons(notices: Sequence[Mapping[str, Any]]) -> tuple[str, ...]:
+    """Why a trial is unmeasured, one reason per notice that makes it so; none when it can be graded."""
+    return tuple(str(one.get("message") or one.get("code")) for one in notices if one.get("code") in UNMEASURED_NOTICES)
 
 
 def _fault_applied(row: Mapping[str, Any]) -> bool:
@@ -1893,19 +2164,14 @@ def _actor_dispatcher(
     reported: Callable[[], list[dict[str, Any]]] | None = None,
     why_not: list[tuple[str, str]] | None = None,
 ) -> ActorDispatcher | None:
-    """The scenario's actors for this trial, acting through a world door built here in the runner's own process; the
-    tool proxy refuses any agent request that names an actor. Known limit: in a sandbox where the agent runs as the
-    same OS user as this runner, the agent can reach what this runner holds (the voice actions file included), so
-    actor identity is not isolated from the agent there.
-    None when the scenario has none. An actor that cannot act here is the scenario's problem, recorded by the caller
-    from `actor_problems`."""
-    if not (doc.get("actors") or doc.get("history") or doc.get("pre_run")):
+    """The scenario's actors for this trial, acting through a world door in the runner's own process; None when the
+    scenario has none. An actor that cannot act here is recorded by the caller from `actor_problems`."""
+    if not (doc.get("actors") or doc.get("pre_run")):
         return None
     tools = runtime.endpoints.get("tools_api")
     database = _find_postgres_endpoint(runtime)
     if database is not None and runtime.endpoints.get("world_door") is not None and tools is None:
-        # The agent's tools run in its own process behind the world's door there; an actor acts in the world through
-        # record changes, and one of the agent's own tools is refused with why.
+        # An actor acts through record changes there; one of the agent's own tools is refused with why.
         return build_dispatcher(
             dict(doc),
             bundle_dir,
@@ -2072,19 +2338,27 @@ _SPAN_SOURCE = "otel"
 _MISSING = object()
 
 
-def _collect_file_tool_calls(runtime: EnvironmentRuntime) -> tuple[Call, ...]:
-    return _with_span_calls((), runtime)
+def _collect_file_tool_calls(
+    runtime: EnvironmentRuntime, *, strict: bool = False
+) -> tuple[Call, ...]:
+    return _with_span_calls((), runtime, strict=strict)
 
 
 def _with_span_calls(
-    observed: Sequence[Call], runtime: EnvironmentRuntime
+    observed: Sequence[Call], runtime: EnvironmentRuntime, *, strict: bool = False
 ) -> tuple[Call, ...]:
     """Calls another source saw, else the trace file's own lines, joined with the file's span lines."""
-    written, from_spans = _read_file_tool_calls(runtime)
+    written, from_spans = _read_file_tool_calls(runtime, strict=strict)
     return _merge_span_calls(list(observed) or written, from_spans)
 
 
-def _read_file_tool_calls(runtime: EnvironmentRuntime) -> tuple[list[Call], list[Call]]:
+def _read_file_tool_calls(
+    runtime: EnvironmentRuntime, *, strict: bool = False
+) -> tuple[list[Call], list[Call]]:
+    """The attempt's tool-trace file: its written lines and its span lines. No file is no
+    evidence either way: the file is removed before the call, and an agent that called no tool
+    never writes it. ``strict`` raises `ToolCaptureFailed` when a file is there and cannot be
+    read, or when it holds records and none of them can be read as a call."""
     path = _tool_trace_file(runtime)
     if path is None or not path.is_file():
         return [], []
@@ -2096,17 +2370,30 @@ def _read_file_tool_calls(runtime: EnvironmentRuntime) -> tuple[list[Call], list
     opened: list[Call] = []
     try:
         lines = path.read_text(encoding="utf-8").splitlines()
-    except OSError:
+    except OSError as exc:
+        if strict:
+            raise ToolCaptureFailed(
+                f"tool_trace file unreadable: {type(exc).__name__}"
+            ) from None
         return [], []
+    # Records that cannot be read as a call: a cut JSON line, a value that is not an object, a
+    # record with no name. One among good records is dropped; a file of nothing else is not a
+    # call that used no tool.
+    unreadable = 0
     for line in lines:
+        if not line.strip():
+            continue
         try:
             record = json.loads(line)
         except ValueError:
+            unreadable += 1
             continue
         if not isinstance(record, dict):
+            unreadable += 1
             continue
         name = record.get("name")
         if not isinstance(name, str) or not name:
+            unreadable += 1
             continue
         arguments = record.get("arguments")
         if isinstance(arguments, str) and not arguments.strip():
@@ -2176,6 +2463,10 @@ def _read_file_tool_calls(runtime: EnvironmentRuntime) -> tuple[list[Call], list
         if event_id not in seen:
             seen.add(event_id)
             from_spans.append(call)
+    if strict and unreadable and not calls and not from_spans:
+        raise ToolCaptureFailed(
+            f"tool_trace file has no readable record ({unreadable} unreadable)"
+        )
     return calls, from_spans
 
 
@@ -2720,8 +3011,12 @@ class TrialRecords:
     end against, and whether it started clean. Snapshots are read on a connection that cannot write; one that cannot
     be read is sealed as unreadable, never a failed trial."""
 
-    def __init__(self) -> None:
+    def __init__(self, sealed_seed: Callable[[], dict[str, str] | None] | None = None) -> None:
         self.seeded: dict[str, str] | None = None
+        # What every trial's start is compared against: the seed's digest the build took at seal time (never a
+        # connection to the template every world is reset from); trial 1's start only when none was sealed.
+        self.seeded_from = ""
+        self._sealed_seed = sealed_seed
         self._seeded_taken = False
         self._starts: dict[Any, tuple[Any, dict[str, Any]]] = {}
         self._lock = threading.Lock()
@@ -2739,8 +3034,8 @@ class TrialRecords:
 
     def start(self, key: Any, dsn: str | None) -> None:
         """Read the world's records at a trial's start, after its reset and before its pre-run sessions write theirs:
-        whether it started from the seed, and what World changes compares its end against. The first trial's start is
-        the run's seed."""
+        whether it started from the sealed seed, and what World changes compares its end against. Without a sealed seed
+        to read, the first trial's start stands in for it, and every start says which it was compared against."""
         from .world_snapshot import digest, start_state
 
         taken = self._read(dsn, "start")
@@ -2748,8 +3043,12 @@ class TrialRecords:
         with self._lock:
             if not self._seeded_taken:
                 self._seeded_taken = True
-                self.seeded = start
-            self._starts[key] = (taken, start_state(self.seeded, start))
+                sealed = self._sealed_seed() if self._sealed_seed is not None else None
+                if sealed:
+                    self.seeded, self.seeded_from = sealed, "sealed_seed"
+                else:
+                    self.seeded, self.seeded_from = start, "first_trial"
+            self._starts[key] = (taken, {**start_state(self.seeded, start), "against": self.seeded_from})
 
     def rebase(self, key: Any, dsn: str | None) -> None:
         """Read a trial's records again once its pre-run sessions wrote theirs, so World changes shows only what the
@@ -2771,6 +3070,25 @@ class TrialRecords:
             return {"records": {"unreadable": True}, "start": start}
         # The end state itself is kept apart (`END_STATE_KEY`): stored as its own artifact, never in the transcript.
         return {"records": diff(before, after), "start": start, END_STATE_KEY: after}
+
+
+def sealed_seed(work_directory: Path) -> Callable[[], dict[str, str] | None]:
+    """The seed's digest the build took at seal time (`seed_digest` in its build output), read from that file alone.
+    None when the build output is missing or holds no single store's digest."""
+
+    def seed() -> dict[str, str] | None:
+        try:
+            build = json.loads((Path(work_directory) / "artifacts" / "build.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return None
+        sealed = [
+            store["seed_digest"]
+            for store in build.get("stores") or []
+            if isinstance(store, dict) and isinstance(store.get("seed_digest"), dict) and store["seed_digest"]
+        ]
+        return {str(table): str(hashed) for table, hashed in sealed[0].items()} if len(sealed) == 1 else None
+
+    return seed
 
 
 # What `TrialRecords.end` carries the trial's end snapshot under, for `upload_end_state`.
@@ -2826,7 +3144,7 @@ class CallRunnerImpl:
         # A place-call that takes `stop_when`, and the call worker, which gets the stop as a signal, hang up at the
         # next turn boundary on a user stop; the scheduler gives them the seal bound to do so before it cuts the task.
         self.stops_at_turn_boundary = place_call is None or _takes_stop_when(place_call)
-        self._records = TrialRecords()
+        self._records = TrialRecords(sealed_seed(context.work_directory))
         simulator_secret_values = _canonical_simulator_secrets(
             context.simulator_provider_secret_values
         )
@@ -3240,8 +3558,7 @@ class CallRunnerImpl:
             if self._context.evidence_seam is EvidenceSeam.TOOL_TRACE
             else None
         )
-        # An actor that should act in the world and cannot here is the scenario's problem, in the record, with the
-        # reason it could not.
+        # An actor that cannot act in the world here is the scenario's problem, recorded with why.
         problem, why = why_not[0] if why_not else (
             "no_world_door", "no world door: this agent's tools run where actors cannot act"
         )
@@ -3354,6 +3671,7 @@ class CallRunnerImpl:
                 actor_briefs=actors.briefs if actors is not None else None,
                 faults=list(doc.get("faults") or []),
                 notices=deadline_notices,
+                solution=list(doc.get("solution") or []),
             )
         except (CallAborted, WorldUnavailable):
             # `_translate_report`'s own typed control-flow (non-completed status, no test case,
@@ -3382,11 +3700,18 @@ class CallRunnerImpl:
             return fault_notices(
                 faults, None, calls, unreachable="this world has no database the tool proxy reads trial state from"
             )
+        if not trial_faults_readable(database.address):
+            return fault_notices(
+                faults, None, calls, unreachable="the trial's faults were unreadable in the world's database",
+                code="fault_unreadable",
+            )
         try:
             log = _read_action_log(database.address)
-        except Exception:  # noqa: BLE001 - an unreadable log says nothing rather than something wrong
-            return []
-        return fault_notices(faults, log, calls)
+        except Exception:  # noqa: BLE001 - whether the faults applied is unknown: said as unreadable
+            return fault_notices(
+                faults, None, calls, unreachable="the world's action log could not be read", code="fault_unreadable"
+            )
+        return fault_notices(faults, log, calls, contract=_bundle_contract(self._context.bundle_dir))
 
     def _approvals(self, runtime: EnvironmentRuntime, decisions: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
         database = _find_postgres_endpoint(runtime)
@@ -3421,6 +3746,7 @@ class CallRunnerImpl:
         actor_briefs: Mapping[str, str] | None = None,
         faults: Sequence[Any] = (),
         notices: Sequence[dict[str, Any]] = (),
+        solution: Sequence[Any] = (),
     ) -> CallOutcome:
         case = report.test_cases[0] if report.test_cases else None
         took_part = (
@@ -3457,17 +3783,24 @@ class CallRunnerImpl:
         # tool activity in its partial receipt.  Previously the early CallAborted below discarded
         # every tool call from failed calls, making a real upstream tool error indistinguishable
         # from a proxy/transport failure.
-        calls = self._collect_calls(runtime) if case is not None else ()
+        capture_failed = False
+        try:
+            calls = self._collect_calls(runtime) if case is not None else ()
+        except ToolCaptureFailed as exc:
+            logger.warning("tool capture failed for %s: %s", scenario_key, exc)
+            calls, capture_failed = exc.calls, True
         # Provider-hosted agents execute tools outside the guest process, so their
         # authoritative call evidence is returned by Vapi/Retell after the call.
         # Preserve provider-native controls such as ``end_call`` because scenario
         # checks may verify termination ordering. Fall back to that observed stream
         # when the submitted backend exposes no local trace seam; never infer calls
         # from transcript prose.
-        if not calls and case is not None:
-            calls = _collect_provider_tool_calls(case)
-        # The world's door saw the agent's tools: a tool proxy in front of its tools service, or the door in its own
-        # process. Only then can the trial say what changed in the world.
+        # Hand-offs are kept for the record but are not calls checks grade, so they neither stand
+        # in for the provider's stream nor count as a capture.
+        if not graded_calls(calls) and case is not None:
+            calls = (*calls, *_collect_provider_tool_calls(case))
+        capture_failed = capture_failed and not graded_calls(calls)
+        # Only when the world's door saw the agent's tools can the trial say what changed in the world.
         door_seen = (
             self._context.evidence_seam is EvidenceSeam.TOOL_TRACE or runtime.endpoints.get("world_door") is not None
         )
@@ -3492,8 +3825,17 @@ class CallRunnerImpl:
             if world_database is not None:
                 with contextlib.suppress(Exception):
                     log_rows = await asyncio.to_thread(_read_action_log, world_database.address)
-            await upload_end_state(self._adapter, scenario_key, records, log_rows)
-        duplicates = _duplicates(runtime) if case is not None and door_seen else []
+            kept = await upload_end_state(self._adapter, scenario_key, records, log_rows)
+            if kept:
+                # Which stored artifact is this trial's end state, so the result can link it.
+                records["end_state_artifact"] = kept
+        found = _duplicates(runtime, solution) if case is not None and door_seen else []
+        duplicates = found or []
+        # Whether the trial can be graded at all: its faults applied and its evidence read and complete.
+        trial_notices = [] if found is not None else [dict(DUPLICATES_UNREADABLE)]
+        if world_database is not None and door_seen:
+            with contextlib.suppress(Exception):
+                trial_notices += evidence_notices(await asyncio.to_thread(_read_action_log, world_database.address))
         # Hand-off records are not the world's actions: marks pair the graded calls with the action log.
         graded = graded_calls(calls)
         marks = _agent_marks(runtime, self._context.bundle_dir, graded) if acted else []
@@ -3514,7 +3856,8 @@ class CallRunnerImpl:
             result = case.result
             combined = result.audio_combined_path
             recording = combined if combined and Path(combined).is_file() else None
-            said = [*notices, *self._fault_notices(runtime, faults, calls), *bypassed]
+            trial_notices = [*self._fault_notices(runtime, faults, calls), *trial_notices]
+            said = [*notices, *trial_notices, *bypassed]
             # A call that ended with no words still says what did not take effect, and what actors and workers did in
             # the world, never only logging it; a call with words carries World changes, or why they were not recorded.
             if (
@@ -3545,9 +3888,7 @@ class CallRunnerImpl:
                     }
                 stopped = read_worker_stops(runtime)
                 if door_seen:
-                    # Every trial the door saw, actors or not: World changes is shown on each. Kept out of the tool
-                    # trace, whose every line is one of the agent's own calls. `decisions` is what each actor chose
-                    # and why (live) or was scheduled to do (mocked); `actions` what the world made of it.
+                    # Kept out of the tool trace, whose every line is one of the agent's own calls.
                     transcript_document["world_actors"] = {
                         "actions": acted,
                         "decisions": list(actor_decisions),
@@ -3609,6 +3950,7 @@ class CallRunnerImpl:
 
         base = CallOutcome(
             calls=calls,
+            tool_capture_failed=capture_failed,
             turns=turns,
             notices=(*notices, *bypassed),
             started_at=format_rfc3339_millis(case_started_at),
@@ -3632,6 +3974,8 @@ class CallRunnerImpl:
             target_metrics=_target_metrics(case),
             world_actions=tuple(acted),
             duplicates=tuple(duplicates),
+            unmeasured=unmeasured_reasons(trial_notices),
+            missing_evidence=missing_evidence(trial_notices, records),
             actor_briefs={
                 **{str(one["id"]): str(one.get("brief") or "") for one in call_actors if one.get("brief")},
                 **(actor_briefs or {}),
@@ -3788,5 +4132,8 @@ class CallRunnerImpl:
 
     def _collect_calls(self, runtime: EnvironmentRuntime) -> tuple[Call, ...]:
         return collect_seam_calls(
-            runtime, self._context.evidence_seam, worker_names=contract_worker_names(self._context.bundle_dir)
+            runtime,
+            self._context.evidence_seam,
+            worker_names=contract_worker_names(self._context.bundle_dir),
+            strict=True,
         )

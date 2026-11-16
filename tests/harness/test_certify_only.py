@@ -219,6 +219,7 @@ def _hosted(tmp_path: Path, monkeypatch, argv: list[str]) -> int:
     monkeypatch.setattr(entrypoint, "_SIMULATOR_SECRETS_PATH", tmp_path / "none.json")
     monkeypatch.setattr(entrypoint, "_ADC_PATH", tmp_path / "adc.json")
     monkeypatch.setattr(entrypoint, "_TARGET_SECRETS_PATH", tmp_path / "target.json")
+    monkeypatch.setattr(entrypoint, "_FAILURE_CAUSE_PATH", tmp_path / "cause.json")
     return entrypoint.main(argv)
 
 
@@ -1033,6 +1034,53 @@ def test_certify_only_runs_the_real_runtime_gate_without_a_model(
     assert json.loads((authoring / ARTIFACT).read_text())["status"] == "not_applicable"
 
 
+@pytest.mark.parametrize(
+    "failure,cause",
+    [("agent_crashed", "agent_exited_before_ready"), ("chat_timed_out", "chat_target_timeout")],
+)
+def test_certify_only_rejection_records_the_closed_cause_and_no_guest_text(
+    tmp_path, monkeypatch, failure, cause
+) -> None:
+    """Through the real runtime gate and repair loop: the cause survives, the text stays out."""
+    from fi.alk.harness import chat_readiness, process_runtime
+    from fi.alk.harness.job import FailureCause, FailureDomain
+
+    source, authoring, job_path = _assembled(tmp_path, {"one": ["works"]})
+    _forbid_models(monkeypatch)
+    _real_runtime(tmp_path, monkeypatch, state={}, authoring=authoring)
+    guest_text = "RuntimeError: HELD-BACK CASE"
+    if failure == "agent_crashed":
+
+        async def provision(self, *args, **kwargs):
+            raise process_runtime.ProcessRuntimeError(
+                "depends_on",
+                "spawn_failed",
+                f"agent: exited before started_check passed\n{guest_text}",
+                process="agent",
+                domain=FailureDomain.AGENT,
+                cause=FailureCause.AGENT_EXITED_BEFORE_READY,
+            )
+
+        monkeypatch.setattr(process_runtime.ProcessRuntimeProvider, "provision", provision)
+    else:
+
+        async def ingress(**_kwargs):
+            raise RuntimeValidationError(
+                "environment", guest_text, cause=FailureCause.CHAT_TARGET_TIMEOUT
+            )
+
+        monkeypatch.setattr(chat_readiness, "probe_chat_ingress", ingress)
+
+    assert (
+        _hosted(tmp_path, monkeypatch, _argv(source, authoring, job_path, tmp_path / "bundle"))
+        == 78
+    )
+
+    recorded = (tmp_path / "cause.json").read_text()
+    assert json.loads(recorded) == {"cause": cause}
+    assert "HELD-BACK" not in recorded
+
+
 def test_certify_only_refuses_to_author_invariants_for_a_live_world_with_data(
     tmp_path, monkeypatch, capsys
 ) -> None:
@@ -1319,6 +1367,73 @@ def test_real_postgres_seeds_the_saved_world_for_the_agent_version_run(
         (item.code, item.location.table if item.location else None)
         for item in raised.value.diagnostics
     ] == [expected]
+
+
+def _recorded_source_model(dsn: str, source: Path, schema: str) -> SourceModel:
+    """The source model a build recorded: the source schema and the sentinel, no other harness table."""
+    import uuid
+
+    from fi.alk.harness.source_schema.postgres import inspect_postgres
+
+    psycopg = pytest.importorskip("psycopg")
+    database = f"recorded_{uuid.uuid4().hex[:8]}"
+    with psycopg.connect(dsn, autocommit=True) as admin:
+        admin.execute(f'CREATE DATABASE "{database}"')
+    try:
+        target = psycopg.conninfo.make_conninfo(dsn, dbname=database)
+        with psycopg.connect(target, autocommit=True) as connection:
+            connection.execute(
+                "CREATE TABLE harness_seed_sentinel (id text PRIMARY KEY);\n" + schema
+            )
+            return inspect_postgres(
+                connection, source_digest="sha256:" + source_fingerprint(source)
+            )
+    finally:
+        with psycopg.connect(dsn, autocommit=True) as admin:
+            admin.execute(f'DROP DATABASE IF EXISTS "{database}" WITH (FORCE)')
+
+
+@pytest.mark.parametrize("seed", ["world.sqlite", "world-ir.json"])
+def test_real_postgres_recertifies_an_environment_from_its_own_archive(
+    tmp_path, seed: str
+) -> None:
+    """A re-certify seeds the world the first certify sealed, beside the harness's tables."""
+    import sqlite3
+    from contextlib import closing
+
+    from fi.alk.harness.world_import.sqlite import import_sqlite_world
+
+    dsn = os.environ.get("ALK_TEST_POSTGRES_DSN")
+    if not dsn:
+        pytest.skip("set ALK_TEST_POSTGRES_DSN to run the real seed test")
+    schema = "CREATE TABLE users (id TEXT PRIMARY KEY, name TEXT NOT NULL);\n"
+    source, authoring, _ = _assembled(tmp_path, {"one": ["works"]})
+    (source / "db" / "schema.sql").write_text(schema, encoding="utf-8")
+    with closing(sqlite3.connect(authoring / "world.sqlite")) as connection:
+        connection.execute("CREATE TABLE users (id TEXT, name TEXT)")
+        connection.execute("INSERT INTO users VALUES ('u1', 'Ada')")
+        connection.commit()
+    store = GenericHarnessArtifactStore(authoring / "generic-harness")
+    store.write_source_model(_recorded_source_model(dsn, source, schema))
+    first = tmp_path / "first"
+    bundle_author.author_bundle_v2(
+        source=source, job=_job(1), authoring=authoring, output=first
+    )
+    assert _seed_real_postgres(dsn, "first", first) == {"users": 1}
+
+    if seed == "world-ir.json":
+        with closing(sqlite3.connect(authoring / "world.sqlite")) as connection:
+            imported = import_sqlite_world(
+                connection, store.read_source_model(), validate=False
+            )
+        store.write_world_ir(imported.world)
+    again = tmp_path / "again"
+    bundle_author.author_bundle_v2(
+        source=source, job=_job(1), authoring=authoring, output=again
+    )
+    (sealed,) = load_bundle_v2(again).seed.stores
+    assert any(path.endswith(seed) for path in sealed.seed_files)
+    assert _seed_real_postgres(dsn, "again", again) == {"users": 1}
 
 
 def _rebuilt_voice_environment(tmp_path: Path, agent_code: str):

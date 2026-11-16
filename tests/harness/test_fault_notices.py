@@ -111,3 +111,59 @@ def test_an_unavailable_or_error_fault_the_door_applied_says_nothing(mode):
     door = WorldDoor(_Ok(), log, DictRoster({}), faults=lambda: [fault])
     door.enter(ToolCall(action="crm.apply_discount", name="apply_discount", arguments={"pct": 10}))
     assert fault_notices([fault], log.rows(), [_call("apply_discount")]) == []
+
+
+CONTRACT = {
+    "tool_entrypoints": [
+        {"tool": "apply_discount", "endpoint": "/crm/apply_discount"},
+        {"tool": "post_note", "mode": "import", "door_unreached": "the tool runs inside the agent's own process"},
+    ]
+}
+
+
+def test_a_fault_on_an_action_the_agent_does_not_have_is_never_applied_and_leaves_the_trial_unmeasured():
+    from fi.alk.harness.call_runner import unmeasured_reasons
+
+    [notice] = fault_notices([{**FAULT, "action": "crm.no_such_action"}], [], [], contract=CONTRACT)
+    assert notice["code"] == "fault_unknown_action" and "no tool or world action by that name" in notice["message"]
+    assert unmeasured_reasons([notice]) == (notice["message"],)
+    # The same fault on an action the agent has, which it never reached, is said but still graded.
+    [reached_not] = fault_notices([FAULT], [], [], contract=CONTRACT)
+    assert reached_not["code"] == "fault_not_triggered" and unmeasured_reasons([reached_not]) == ()
+
+
+def test_a_fault_on_a_tool_the_door_cannot_hold_is_never_applied_and_says_why():
+    from fi.alk.harness.call_runner import unmeasured_reasons
+
+    [notice] = fault_notices([{**FAULT, "action": "post_note"}], [], [], contract=CONTRACT)
+    assert notice["code"] == "fault_not_applied" and "runs inside the agent's own process" in notice["message"]
+    assert unmeasured_reasons([notice])
+
+
+def test_faults_that_cannot_be_read_back_are_reported_unreadable(monkeypatch):
+    from fi.alk.harness import call_runner as cr
+
+    class _Connection:
+        def __init__(self, row):
+            self.row = row
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def execute(self, sql, *args):
+            if isinstance(self.row, Exception):
+                raise self.row
+            return type("C", (), {"fetchone": lambda _self: self.row})()
+
+    for row, readable in (((json.dumps([FAULT]),), True), (("not json",), False), (RuntimeError("no table"), False),
+                          (({"action": "x"},), False)):
+        monkeypatch.setattr(cr, "_read_only", lambda dsn, timeout_ms=None, row=row: _Connection(row))
+        assert cr.trial_faults_readable("dsn") is readable
+    [notice] = fault_notices(
+        [FAULT], None, [], unreachable="the trial's faults were unreadable in the world's database", code="fault_unreadable"
+    )
+    assert notice["code"] == "fault_unreadable" and "unreadable" in notice["message"]
+    assert cr.unmeasured_reasons([notice])

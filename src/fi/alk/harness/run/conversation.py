@@ -238,10 +238,8 @@ def _message(turn: Exchange) -> dict[str, Any]:
 
 
 class ChatActors:
-    """The actors who write in one chat conversation. Each comes in when its trigger is met (one definition with every
-    other runtime, `due`), and from then on is asked after every agent turn what it does: write a message, act in the
-    world through the door, both, or wait. Nothing caps an actor but the limits the environment sets (`limits`, and
-    an actor's own `max_lines`); what happened to each is recorded as a call records it."""
+    """The actors who write in one chat conversation. Each comes in when its trigger is met (`due`), then is asked
+    after every agent turn whether it writes, acts in the world, both, or waits."""
 
     def __init__(
         self,
@@ -335,6 +333,17 @@ class ChatActors:
         if per_trial is not None and sum(self.follow_ups.values()) >= int(per_trial):
             return False
         return self._room() and any(self._may_follow_up(key) for key in self.triggered - self.done)
+
+    def still_to_come(self) -> int | None:
+        """The agent turn a scheduled actor (`mid_journey`) is still waiting for, when the conversation is about to close
+        before it: the scenario put that actor in it, so it comes in before the close rather than never."""
+        turns = [
+            int((actor.get("trigger") or {}).get("turn") or 0)
+            for actor in self.actors
+            if str((actor.get("trigger") or {}).get("kind")) == "mid_journey"
+            and str(actor["id"]) not in self.triggered | self.done
+        ]
+        return max(turns) if turns and self._room() else None
 
     def _may_follow_up(self, key: str) -> bool:
         per_actor = self.limits.get("live_turns_per_actor")
@@ -471,7 +480,8 @@ class ChatActors:
             **({"identity": identity} if identity and record_action(decision.action) is None else {}),
         )
         self.events.append(
-            {"actor": key, "kind": "acted", "action": decision.action, "outcome": outcome, "why": decision.why}
+            {"actor": key, "kind": "acted", "action": decision.action, "outcome": outcome, "why": decision.why,
+             "verdict": decision.verdict}
         )
         said = outcome.get("outcome") if isinstance(outcome, dict) else outcome
         self.acted.setdefault(key, []).append(
@@ -733,6 +743,40 @@ async def converse(
                 opened_for_them = False
             turn = await customer.say(heard)
             said = turn.text.strip()
+            due_turn = actors.still_to_come() if actors is not None and DONE in said else None
+            if due_turn is not None:
+                # The person is about to close, but an actor the scenario schedules has not come in yet: it comes in
+                # now, the agent answers it, and the person hears that before deciding again.
+                closing = said.replace(DONE, "").strip()
+                if closing:
+                    record("customer", closing)
+                heard_after = []
+                for actor, line in await actors.due_lines(
+                    agent_turns=due_turn,
+                    last_text=reply or "",
+                    tools_called=[str(one.name) for one in getattr(getattr(target, "world", None), "calls", [])],
+                    conversation=[f"{one.speaker}: {one.text}" for one in transcript.exchanges],
+                ):
+                    record("actor", line, {"id": actor["id"], "name": actor.get("name")})
+                    try:
+                        answer = await target.say(f"{actor.get('name') or 'Someone else'}: {line}")
+                    except TargetConversationEnded as ended:
+                        if ended.final_message:
+                            record("agent", ended.final_message)
+                        transcript.ended = FINISHED
+                        break
+                    record("agent", answer or "(said nothing)")
+                    heard_after.append(
+                        f"{actor.get('name') or 'Someone else'} wrote in the conversation: {line}\n"
+                        f"The agent replied: {answer or '(no response)'}"
+                    )
+                if transcript.ended:
+                    break
+                if not heard_after:
+                    # It had nothing to add: the close stands, its line already recorded.
+                    transcript.ended = FINISHED
+                    break
+                said = (await customer.say("\n".join(heard_after))).text.strip()
             if DONE in said or STUCK in said:
                 transcript.ended = GAVE_UP if STUCK in said else FINISHED
                 # The closing line comes with the sentinel, and is kept. Breaking on the marker

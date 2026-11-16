@@ -9,7 +9,7 @@ import pytest
 
 from fi.alk.harness.actor_dispatch import ActorDispatcher, world_summary
 
-from tests.harness._door_acts import door_acts
+from _door_acts import door_acts
 from fi.alk.harness.actors import (
     Activation,
     Actor,
@@ -283,20 +283,6 @@ def test_pre_run_sessions_replay_in_order_and_a_reply_takes_the_id_the_world_gav
     assert all(one["play"] == "history" for one in dispatcher.fired)
 
 
-def test_an_old_scenario_s_typed_history_reads_as_one_pre_run_session():
-    from fi.alk.harness.scenario import pre_run_of
-
-    doc = pre_run_of(
-        {
-            "history": [
-                {"actor": "priya", "action": "slack.post", "arguments": {"text": "hi"}}
-            ]
-        }
-    )
-    assert "history" not in doc
-    assert doc["pre_run"][0]["thread"][0]["actor"] == "priya"
-
-
 def test_limits_are_settings_with_channel_defaults_and_a_scenario_override():
     voice = Limits().resolved("voice")
     chat = Limits().resolved("chat")
@@ -482,6 +468,75 @@ def test_an_approval_line_reads_request_decision_and_the_agent_s_writes_around_i
         {"action": "apply_discount", "outcome": "committed"}
     ]
     assert line["acted_before_decision"] is False
+
+
+@pytest.mark.parametrize(
+    "reply, verdict, flagged",
+    [('"verdict": "refused"', "refused", True), ('"verdict": "approved"', "approved", False),
+     ('"verdict": "maybe"', None, False), ('"why": "no verdict given"', None, False)],
+)
+def test_a_live_actor_s_verdict_is_recorded_and_a_write_after_a_refusal_is_flagged(reply, verdict, flagged):
+    from fi.alk.harness.call_runner import approvals
+    from fi.simulate.simulation.call_actors import read_decision
+
+    said = read_decision('{"action": "approvals.change", ' + reply + "}")
+    log = [
+        {"actor_id": "agent", "name": "ask", "action_id": "a1", "at": 1.0, "outcome": "committed"},
+        {"actor_id": "approver", "name": "approvals.change", "action_id": "m1", "at": 2.0, "outcome": "committed",
+         "parent_event_id": "a1"},
+        {"actor_id": "agent", "name": "apply", "action_id": "a2", "at": 3.0, "outcome": "committed"},
+    ]
+    decisions = [{"actor": "approver", "play": "live", "action": said.action, "parent": "a1",
+                  "outcome": "committed", "verdict": said.verdict}]
+    [line] = approvals(log, decisions)
+    assert line["verdict"] == line["decision"]["verdict"] == verdict
+    assert line["committed_after_refusal"] is flagged
+
+
+@pytest.mark.parametrize("verdict", ["approved", "refused"])
+def test_a_scheduled_action_s_verdict_reaches_the_approval_line_through_the_dispatcher(verdict):
+    from fi.alk.harness.call_runner import approvals
+
+    sent: list = []
+    actor = Actor(id="mgr", name="Mgr", permitted_actions=["approvals.change"])
+    dispatcher = ActorDispatcher(
+        {"mgr": actor},
+        [ScenarioActor.model_validate(
+            {"id": "mgr", "actions": [{"action": "approvals.change", "arguments": {}, "verdict": verdict}]}
+        )],
+        act=door_acts(_sent_to(sent)),
+        trial_id="t",
+        read_log=list,
+        seed="t",
+    )
+    asyncio.run(dispatcher.tick())
+    [fired] = [one for one in dispatcher.record() if one.get("play") == "mocked"]
+    assert fired["verdict"] == verdict
+    log = [
+        {"actor_id": "agent", "name": "ask", "action_id": "a1", "at": 1.0, "outcome": "committed"},
+        {"actor_id": "mgr", "name": "approvals.change", "action_id": "m1", "at": 2.0, "outcome": "committed",
+         "parent_event_id": "a1"},
+        {"actor_id": "agent", "name": "apply", "action_id": "a2", "at": 3.0, "outcome": "committed"},
+    ]
+    [line] = approvals(log, [{**fired, "parent": "a1"}])
+    # The write after the decision committed, and the verdict is on the approval and on its decision.
+    assert line["after_decision"] == [{"action": "apply", "outcome": "committed"}]
+    assert line["verdict"] == line["decision"]["verdict"] == verdict
+    assert line["committed_after_refusal"] is (verdict == "refused")
+
+
+def test_a_declining_timeout_has_a_decision_time_so_a_later_write_reads_committed_after_refusal():
+    from fi.alk.harness.call_runner import approvals
+
+    log = [
+        {"action_id": "a1", "actor_id": "agent", "name": "approvals.request", "outcome": "committed", "at": 1.0},
+        {"action_id": "a2", "actor_id": "agent", "name": "orders.cancel", "outcome": "committed", "at": 5.0},
+    ]
+    decisions = [{"actor": "mgr", "play": "timeout", "fallback": "decline", "outcome": "declined", "parent": "a1",
+                  "at": 3.0}]
+    [line] = approvals(log, decisions)
+    assert line["after_decision"] == [{"action": "orders.cancel", "outcome": "committed"}]
+    assert line["committed_after_refusal"] is True
 
 
 def test_a_world_tool_that_asks_who_acts_gets_the_actor_s_identity_there():
@@ -1309,7 +1364,9 @@ def test_an_approval_that_timed_out_reads_the_fallback_as_its_decision_and_every
     ]
     decisions = [{"actor": "manager", "play": "timeout", "fallback": "decline", "outcome": "declined", "parent": "a1"}]
     (line,) = approvals(log, decisions)
-    assert line["decision"] == {"by": "manager", "action": "timeout: decline", "outcome": "declined", "at": None}
+    assert line["decision"] == {
+        "by": "manager", "action": "timeout: decline", "outcome": "declined", "at": None, "verdict": "refused"
+    }
     # With no time for the decision, every write after the request came before it.
     assert line["before_decision"] == [{"action": "orders.cancel", "outcome": "committed"}]
     assert line["acted_before_decision"] is True
@@ -1382,10 +1439,37 @@ def test_a_speaking_actor_on_the_caller_s_model_is_counted_by_the_session_the_en
     assert engine.actor_llm({"id": "mia"}, "shared", None, None) == "shared"
 
 
-def test_the_models_an_actor_may_name_are_sealed_with_the_actor_rules():
-    from fi.alk.harness.actors import ACTOR_MODELS, actor_rules
+def test_the_models_an_actor_may_name_are_the_simulator_s_configured_models_sealed_with_the_actor_rules(monkeypatch):
+    from fi.alk.harness.actors import actor_rules
 
-    assert actor_rules()["actor_models"] == list(ACTOR_MODELS) and ACTOR_MODELS
+    monkeypatch.setenv("SIMULATOR_LLM_PROVIDER", "openai")
+    monkeypatch.setenv("SIMULATOR_LLM_MODEL", "model-a")
+    monkeypatch.setenv("SIMULATOR_LLM_FALLBACK_MODELS", "model-b, model-a ,")
+    assert actor_rules()["actor_models"] == ["model-a", "model-b"]
+    monkeypatch.delenv("SIMULATOR_LLM_MODEL")
+    monkeypatch.delenv("SIMULATOR_LLM_FALLBACK_MODELS")
+    from fi.alk.harness.simulator_voice import SIMULATOR_LLM_DEFAULTS
+
+    assert actor_rules()["actor_models"] == [SIMULATOR_LLM_DEFAULTS["openai"]]
+    # The job's own provider is read first, as the runner reads it.
+    monkeypatch.setenv("SIMULATOR_LLM_PROVIDER", "google")
+    assert actor_rules({"simulator_llm_provider": "openai"})["actor_models"] == [SIMULATOR_LLM_DEFAULTS["openai"]]
+
+
+def test_the_sealed_actor_rules_carry_each_limit_s_default_as_a_run_resolves_it(tmp_path):
+    import json
+
+    from fi.alk.harness.actors import ACTOR_RULES_FILE, Limits, write_actor_rules
+    from fi.simulate.simulation.call_actors import LIMIT_DEFAULTS
+
+    write_actor_rules(tmp_path)
+    sealed = json.loads((tmp_path / ACTOR_RULES_FILE).read_text())["limit_defaults"]
+    assert set(sealed) == set(Limits.model_fields)
+    assert sealed["max_active"] == {"default": None, "by_modality": {"voice": LIMIT_DEFAULTS["max_active"]}}
+    assert sealed["actor_seconds_per_call"]["by_modality"] == {"voice": LIMIT_DEFAULTS["actor_seconds_per_call"]}
+    assert sealed["max_messages"] == {"default": LIMIT_DEFAULTS["max_messages"], "by_modality": {}}
+    assert sealed["live_turns_per_trial"]["default"] == LIMIT_DEFAULTS["live_turns_per_trial"]
+    assert sealed["model"] == {"default": None, "by_modality": {}}
 
 
 def test_a_conversation_actors_write_among_themselves_stops_at_twenty_messages_by_default():

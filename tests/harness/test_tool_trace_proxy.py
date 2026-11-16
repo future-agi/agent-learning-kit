@@ -212,7 +212,7 @@ def test_an_actor_s_key_whose_first_try_the_world_refused_may_be_tried_again(pro
     assert [one["outcome"] for one in rows()] == ["refused", "refused"]
 
 
-def test_the_agent_s_retried_request_reaches_the_world_each_time_and_is_logged_as_it_was(
+def test_the_agent_s_keyed_retry_is_answered_from_the_first_result_and_reaches_the_world_once(
     proxy,
 ):
     url, rows = proxy
@@ -221,11 +221,16 @@ def test_the_agent_s_retried_request_reaches_the_world_each_time_and_is_logged_a
         {"id": "d-1", "count": 1},
     )
     assert _post(url, "/ok", {"item": "1"}, key="k-1") == (
-        201,
-        {"id": "d-1", "count": 2},
+        200,
+        {"id": "d-1", "count": 1},
     )
+    assert _post(url, "/ok", {"item": "1"}) == (201, {"id": "d-1", "count": 2})
     assert _World.seen == ["/ok", "/ok"]
-    assert [(one["outcome"], one["ok"]) for one in rows()] == [("committed", True)] * 2
+    assert [(one["outcome"], one["ok"]) for one in rows()] == [
+        ("committed", True),
+        ("duplicate", False),
+        ("committed", True),
+    ]
 
 
 def test_an_actor_s_key_used_again_with_other_arguments_is_refused_and_never_applied(

@@ -4869,7 +4869,9 @@ def test_a_sub_goal_about_an_actor_that_acts_through_the_world_reads_its_record(
         (SimpleNamespace(check="x", judged=""), None, ("world_state", "tool_calls")),
         (SimpleNamespace(check="", judged="j"), None, ("transcript",)),
         (SimpleNamespace(check="", judged="j"), "call.wav", ("transcript", "recording")),
-        (SimpleNamespace(check="x", judged="j"), "call.wav", ("world_state", "tool_calls", "transcript", "recording")),
+        (SimpleNamespace(check="x", judged="j", both=True), "call.wav", ("world_state", "tool_calls", "transcript", "recording")),
+        # A judged sub-goal's check is only a stand-in: it reads the transcript alone.
+        (SimpleNamespace(check="x", judged="j"), None, ("transcript",)),
     ],
 )
 def test_each_sub_goal_says_what_it_was_decided_from(goal, recording, evidence) -> None:
@@ -5292,3 +5294,150 @@ def test_a_check_that_never_reads_the_log_still_settles(monkeypatch) -> None:
         monkeypatch, _all, goals=[FakeSubGoal("greeted", lambda w, c: None)], outcome=_call_outcome(turns=2)
     )
     assert receipt.status == "passed"
+
+
+def _graded_on(rows: dict[str, list[dict[str, Any]]], goals: list[FakeSubGoal], outcome: hs.CallOutcome | None = None):
+    """One scenario graded by the scheduler against a world holding `rows` after its call."""
+
+    class _World(InMemoryWorld):
+        def read_only(self) -> "InMemoryWorld":
+            view = InMemoryWorld(self.world_index, self.rng, read_only=True)
+            view.rows = self.rows
+            return view
+
+    class _Factory:
+        async def create(self, runtime: EnvironmentRuntime, *, rng: random.Random) -> InMemoryWorld:
+            world = _World(runtime.world_index, rng)
+            world.rows = {name: list(records) for name, records in rows.items()}
+            return world
+
+    class _Runner:
+        async def run(self, scenario, runtime):
+            return outcome or _call_outcome(turns=2)
+
+    out: dict[str, Any] = {}
+
+    async def scenario() -> None:
+        outbound = FakeOutbound()
+        pool, _ = _pool(1, outbound=outbound)
+        await pool.start()
+        scheduler = hs.HostedScheduler(
+            pool=pool, world_factory=_Factory(), call_runner=_Runner(), outbound=outbound, job_seed=1
+        )
+        result = await scheduler.run([FakeScenario("two", "id-2", sub_goals=goals, requires_tool_evidence=False)])
+        out["receipt"] = result.receipts[0]
+        await pool.close()
+
+    asyncio.run(scenario())
+    return out["receipt"]
+
+
+def _both_systems(world, calls):
+    """A scenario's check over two systems: the record in each, by the same reference."""
+    state = world.state()
+    first = [one for one in state.get("system_a_records", []) if one.get("ref") == "R-1"]
+    second = [one for one in state.get("system_b_records", []) if one.get("ref") == "R-1"]
+    if not first:
+        return "not done: system_a_records holds no record R-1"
+    if not second:
+        return "not done: system_b_records holds no record R-1"
+    if first[0].get("status") != second[0].get("status"):
+        return f"done wrong: system_b_records status expected {first[0].get('status')}, got {second[0].get('status')}"
+    return None
+
+
+def test_a_workflow_over_two_systems_passes_only_when_both_were_updated() -> None:
+    both = {"system_a_records": [{"ref": "R-1", "status": "closed"}], "system_b_records": [{"ref": "R-1", "status": "closed"}]}
+    receipt = _graded_on(both, [FakeSubGoal("both_systems_updated", _both_systems)])
+    assert receipt.status == "passed" and receipt.sub_goals[0].held is True
+    # The negative control: only the first system changed.
+    one = {"system_a_records": [{"ref": "R-1", "status": "closed"}], "system_b_records": []}
+    receipt = _graded_on(one, [FakeSubGoal("both_systems_updated", _both_systems)])
+    assert receipt.status == "failed" and receipt.sub_goals[0].held is False
+    assert "system_b_records" in receipt.sub_goals[0].reason
+    stale = {"system_a_records": [{"ref": "R-1", "status": "closed"}], "system_b_records": [{"ref": "R-1", "status": "open"}]}
+    receipt = _graded_on(stale, [FakeSubGoal("both_systems_updated", _both_systems)])
+    assert receipt.status == "failed" and "system_b_records status expected closed, got open" in receipt.sub_goals[0].reason
+
+
+def test_a_trial_whose_condition_never_applied_is_unmeasured_whatever_its_checks_say() -> None:
+    from fi.alk.harness.call_runner import fault_notices, unmeasured_reasons
+
+    contract = {"tool_entrypoints": [{"tool": "update_record", "endpoint": "/service_a/update"}]}
+    notices = fault_notices([{"action": "service_a.missing", "mode": "unavailable"}], [], (), contract=contract)
+    unmeasured = replace(_call_outcome(turns=2), unmeasured=unmeasured_reasons(notices))
+    holds = [FakeSubGoal("done", lambda w, c: None)]
+    receipt = _graded_on({}, holds, unmeasured)
+    assert receipt.status == "errored" and receipt.failure.code == "evidence_unmeasured"
+    assert "no tool or world action by that name" in receipt.failure.message
+    fails = [FakeSubGoal("done", lambda w, c: "not done")]
+    assert _graded_on({}, fails, unmeasured).failure.code == "evidence_unmeasured"
+    # With every fault applied, the same trial is graded.
+    assert _graded_on({}, holds).status == "passed"
+
+
+def _compiled(source: str):
+    namespace: dict[str, Any] = {}
+    exec(compile(source, "<check>", "exec"), namespace)  # noqa: S102 - the test's own source
+    check = namespace["check"]
+    check._alk_source = source
+    return check
+
+
+WORLD_CHECK = "def check(world, calls):\n    if not world.state().get('system_a_records'):\n        return 'not done'\n"
+CALLS_CHECK = "def check(world, calls):\n    if not calls:\n        return 'no call'\n"
+LOG_CHECK = "def check(world, calls):\n    if world.events(outcome='committed'):\n        return 'a write committed'\n"
+
+
+def test_a_check_s_evidence_is_read_from_its_own_code() -> None:
+    from fi.alk.harness.checks import check_reads
+
+    assert check_reads(_compiled(WORLD_CHECK)) == ("world_state",)
+    assert check_reads(_compiled(CALLS_CHECK)) == ("tool_calls",)
+    assert check_reads(_compiled(LOG_CHECK)) == ("tool_calls",)
+    assert check_reads(lambda world, calls: None) == ("world_state", "tool_calls")
+    # A world handed to a helper, or under another name, may be read for either.
+    helper = "def check(world, calls):\n    return _committed(world)\n\ndef _committed(w):\n    return w.events()\n"
+    alias = "def check(world, calls):\n    w = world\n    return w.events()\n"
+    assert check_reads(_compiled(helper)) == check_reads(_compiled(alias)) == ("world_state", "tool_calls")
+
+
+def test_a_world_state_check_with_no_world_state_is_unmeasured_with_that_reason() -> None:
+    goal = SimpleNamespace(name="recorded", check=_compiled(WORLD_CHECK), judged="", both=False, actor="")
+    missing = replace(_call_outcome(turns=2), missing_evidence={"world_state": "The world's records could not be read."})
+    receipt = _graded_on({}, [goal], missing)
+    [result] = receipt.sub_goals
+    assert result.held is None and result.reason == f"{hs.UNMEASURED}The world's records could not be read."
+    assert receipt.status == "errored" and receipt.failure.code == "evidence_unmeasured"
+    # The receipt carries the verdict itself, so the platform never reads it from the reason's wording.
+    from fi.alk.harness.hosted_entrypoint import sub_goal_wire
+
+    assert [sub_goal_wire(one)["verdict"] for one in receipt.sub_goals] == ["unmeasured"]
+    inconclusive = hs.SubGoalResult(name="asked", held=None, reason=f"{hs.INCONCLUSIVE}never reached", judged=True)
+    assert sub_goal_wire(inconclusive)["verdict"] == "inconclusive"
+    # The same check with its evidence there is graded: here it fails on the empty world.
+    assert _graded_on({}, [goal]).status == "failed"
+
+
+def test_an_unreadable_action_log_leaves_a_check_on_it_unmeasured_never_passed() -> None:
+    from fi.alk.harness.call_runner import DUPLICATES_UNREADABLE, missing_evidence
+
+    goal = SimpleNamespace(name="nothing_committed", check=_compiled(LOG_CHECK), judged="", both=False, actor="")
+    lost = replace(_call_outcome(turns=2), missing_evidence=missing_evidence([dict(DUPLICATES_UNREADABLE)], {}))
+    receipt = _graded_on({}, [goal], lost)
+    assert receipt.sub_goals[0].held is None and "action log could not be read" in receipt.sub_goals[0].reason
+    assert receipt.status == "errored" and receipt.failure.code == "evidence_unmeasured"
+
+
+def test_a_transcript_only_check_is_still_graded_when_the_world_s_evidence_is_missing(monkeypatch) -> None:
+    async def _all(goals, world, calls, *, messages=()):
+        return {"greeted": (True, "it greeted")}
+
+    missing = replace(
+        _call_outcome(turns=2),
+        missing_evidence={"world_state": "The world's records could not be read.", "tool_calls": "The log is gone."},
+    )
+    receipt, _ = _two_judged(
+        monkeypatch, _all, goals=[FakeSubGoal("greeted", lambda w, c: None, judged="judge")], outcome=missing
+    )
+    assert receipt.status == "passed" and receipt.sub_goals[0].held is True

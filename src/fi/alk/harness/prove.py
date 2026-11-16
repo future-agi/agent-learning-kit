@@ -77,6 +77,9 @@ class Proof:
     too_strict: list[str] = field(default_factory=list)
     # Values the scenario marks fixed that no code check notices when they are wrong.
     unchecked: list[str] = field(default_factory=list)
+    # The reference solution's trial, for comparing tools' declared tables with what changed: the calls the world took
+    # in order, the tables that ended different from the start, and why it cannot say which tool changed them.
+    trial: dict[str, Any] = field(default_factory=dict)
 
     @property
     def holds(self) -> bool:
@@ -819,6 +822,8 @@ def prove(
         passing = {one.name for one in proof.with_solution if one.held}
         held = [(name, source) for name, source in checks if name in passing]
         right_state = _end_state(world)
+        played = [call.name for call in calls if call.ok and not call.refused]
+        others = len(world.calls) - len(calls) if right_state is not None else 0
     finally:
         world.close()
     varied, changed = _other_choices(scenario, _declared_options(world_root))
@@ -904,6 +909,21 @@ def prove(
     # Gate 3: do those same checks fail when nothing is done?
     untouched, nothing, _, _ = _run(scenario, world_root, with_solution=False)
     try:
+        start = _end_state(untouched)
+        if start is not None and right_state is not None:
+            # The untouched world holds only the pre-run threads; any other call not the solution's is an actor's.
+            acted = others > len(untouched.calls) - len(nothing)
+            proof.trial = {
+                "calls": played,
+                "changed": sorted(one for one in {*start, *right_state} if start.get(one) != right_state.get(one)),
+                "unattributable": (
+                    "a world actor acted during it"
+                    if acted
+                    else "a solution step was assumed, not run"
+                    if assumed
+                    else ""
+                ),
+            }
         proof.with_nothing = [
             run_check(source, untouched, nothing, name=name, reference=reference)
             for name, source in checks
