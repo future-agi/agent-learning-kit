@@ -2947,7 +2947,10 @@ class CallRunnerImpl:
             if world_database is not None:
                 with contextlib.suppress(Exception):
                     log_rows = await asyncio.to_thread(_read_action_log, world_database.address)
-            await upload_end_state(self._adapter, scenario_key, records, log_rows)
+            kept = await upload_end_state(self._adapter, scenario_key, records, log_rows)
+            if kept:
+                # Which stored artifact is this trial's end state, so the result can link it.
+                records["end_state_artifact"] = kept
         duplicates = _duplicates(runtime) if case is not None and door_seen else []
         # Hand-off records are not the world's actions: marks pair the graded calls with the action log.
         graded = graded_calls(calls)
