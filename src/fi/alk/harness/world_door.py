@@ -286,6 +286,13 @@ LIMITS_UNREADABLE = "limits_unreadable"
 # The attribution of a call that reached the door on the shared tools address while workers had channels.
 SHARED_ADDRESS = "shared_address"
 
+# Kept in the world's database, never in a file the agent's process could read or rewrite.
+# Known limit: a connection with the world's role can write it until per-user database isolation is on.
+TRIAL_FAULTS_DDL = "CREATE TABLE IF NOT EXISTS _alk_trial_faults (id INT PRIMARY KEY, faults JSONB NOT NULL)"
+# When this trial's workers stop being allowed to act, beside its faults; null when the scenario sets no budget.
+TRIAL_DEADLINE_DDL = "ALTER TABLE _alk_trial_faults ADD COLUMN IF NOT EXISTS worker_deadline_at DOUBLE PRECISION"
+# Each named worker's own deadline, {worker id: epoch seconds}, when the scenario gives a budget per worker.
+TRIAL_WORKER_DEADLINES_DDL = "ALTER TABLE _alk_trial_faults ADD COLUMN IF NOT EXISTS worker_deadlines JSONB"
 # When this trial's call read its stopped workers to seal them; a worker's process is never ended after it, so a stop
 # is sealed or never made. Null until then, and again at each trial's start.
 TRIAL_SEALED_DDL = "ALTER TABLE _alk_trial_faults ADD COLUMN IF NOT EXISTS sealed_at DOUBLE PRECISION"
@@ -299,10 +306,46 @@ WORKER_STOPS_DDL = (
 )
 
 
+# The world databases whose trial tables this process has made, so the schema is changed once per world, never at
+# each trial: an ALTER takes the table's lock, which a stop under way holds.
+_TRIAL_SCHEMA_MADE: set[str] = set()
+_TRIAL_SCHEMA_LOCK = threading.Lock()
+
+
+def _trial_schema(address: str) -> None:
+    """Makes this world's trial tables and columns, once per world database in this process."""
+    with _TRIAL_SCHEMA_LOCK:
+        if address in _TRIAL_SCHEMA_MADE:
+            return
+        import psycopg
+
+        with psycopg.connect(address, autocommit=True, connect_timeout=5) as connection:
+            for statement in (
+                TRIAL_FAULTS_DDL, TRIAL_DEADLINE_DDL, TRIAL_WORKER_DEADLINES_DDL, TRIAL_SEALED_DDL, WORKER_STOPS_DDL
+            ):
+                connection.execute(statement)
+        _TRIAL_SCHEMA_MADE.add(address)
+
+
+def _on_trial_tables(address: str, work: Callable[[], Any]) -> Any:
+    """Runs `work` on this world's trial tables, making them first; once more after making them again when the world's
+    database was made anew since (a reset from its seed drops them)."""
+    import psycopg
+
+    _trial_schema(address)
+    try:
+        return work()
+    except (psycopg.errors.UndefinedTable, psycopg.errors.UndefinedColumn):
+        with _TRIAL_SCHEMA_LOCK:
+            _TRIAL_SCHEMA_MADE.discard(address)
+        _trial_schema(address)
+        return work()
+
+
 def claim_worker_stop(address: str, worker: str, process: str, stop: Callable[[], bool]) -> bool:
-    """End this worker's own process and keep that it was ended, unless the call has already sealed its stops: the
+    """End this worker's run with `stop` and keep that it ended, unless the call has already sealed its stops: the
     trial's row stays locked from the check to the record, so the seal (`read_worker_stops`) waits for a stop under
-    way and a stop never lands after it. True when the process was ended and kept."""
+    way and a stop never lands after it. True when the run was ended and kept."""
     import psycopg
 
     def claim() -> bool:
@@ -328,14 +371,7 @@ def claim_worker_stop(address: str, worker: str, process: str, stop: Callable[[]
                 )
         return True
 
-    try:
-        return claim()
-    except (psycopg.errors.UndefinedTable, psycopg.errors.UndefinedColumn):
-        # The runner makes these once per world; a table from before stops were kept gets them here, once.
-        with psycopg.connect(address, autocommit=True, connect_timeout=5) as connection:
-            connection.execute(TRIAL_SEALED_DDL)
-            connection.execute(WORKER_STOPS_DDL)
-        return claim()
+    return bool(_on_trial_tables(address, claim))
 
 
 _METHODS = frozenset({"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"})

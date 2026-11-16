@@ -274,7 +274,7 @@ def test_a_trial_s_start_changes_no_schema_after_the_world_s_first(monkeypatch) 
     psycopg = pytest.importorskip("psycopg")
     monkeypatch.setattr(psycopg, "connect", lambda *_args, **_kwargs: _Connection())
     monkeypatch.setattr(call_runner, "_find_postgres_endpoint", lambda _runtime: SimpleNamespace(address="db-once"))
-    call_runner._TRIAL_SCHEMA_MADE.discard("db-once")
+    world_door._TRIAL_SCHEMA_MADE.discard("db-once")
     call_runner._write_trial_state(_runtime(), [])
     first = [one for one in statements if one.lstrip().upper().startswith(("ALTER", "CREATE"))]
     statements.clear()

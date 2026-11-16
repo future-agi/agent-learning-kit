@@ -75,8 +75,7 @@ from .world_door import (
     DOOR_OUT_OF_REACH,
     EGRESS_BLOCKED,
     EVIDENCE_INCOMPLETE,
-    TRIAL_SEALED_DDL,
-    WORKER_STOPS_DDL,
+    _on_trial_tables,
     action_matches,
     fixed_fields,
     is_attempt,
@@ -1627,51 +1626,6 @@ def _agent_marks(
     return marks
 
 
-# Kept in the world's database, never in a file the agent's process could read or rewrite.
-# Known limit: a connection with the world's role can write it until per-user database isolation is on.
-TRIAL_FAULTS_DDL = "CREATE TABLE IF NOT EXISTS _alk_trial_faults (id INT PRIMARY KEY, faults JSONB NOT NULL)"
-# When this trial's workers stop being allowed to act, beside its faults; null when the scenario sets no budget.
-TRIAL_DEADLINE_DDL = "ALTER TABLE _alk_trial_faults ADD COLUMN IF NOT EXISTS worker_deadline_at DOUBLE PRECISION"
-# Each named worker's own deadline, {worker id: epoch seconds}, when the scenario gives a budget per worker.
-TRIAL_WORKER_DEADLINES_DDL = "ALTER TABLE _alk_trial_faults ADD COLUMN IF NOT EXISTS worker_deadlines JSONB"
-
-
-# The world databases whose trial tables this process has made, so the schema is changed once per world, never at
-# each trial: an ALTER takes the table's lock, which a stop under way holds.
-_TRIAL_SCHEMA_MADE: set[str] = set()
-_TRIAL_SCHEMA_LOCK = threading.Lock()
-
-
-def _trial_schema(address: str) -> None:
-    """Makes this world's trial tables and columns, once per world database in this process."""
-    with _TRIAL_SCHEMA_LOCK:
-        if address in _TRIAL_SCHEMA_MADE:
-            return
-        import psycopg
-
-        with psycopg.connect(address, autocommit=True, connect_timeout=5) as connection:
-            for statement in (
-                TRIAL_FAULTS_DDL, TRIAL_DEADLINE_DDL, TRIAL_WORKER_DEADLINES_DDL, TRIAL_SEALED_DDL, WORKER_STOPS_DDL
-            ):
-                connection.execute(statement)
-        _TRIAL_SCHEMA_MADE.add(address)
-
-
-def _on_trial_tables(address: str, work: Callable[[], Any]) -> Any:
-    """Runs `work` on this world's trial tables, making them first; once more after making them again when the world's
-    database was made anew since (a reset from its seed drops them)."""
-    import psycopg
-
-    _trial_schema(address)
-    try:
-        return work()
-    except (psycopg.errors.UndefinedTable, psycopg.errors.UndefinedColumn):
-        with _TRIAL_SCHEMA_LOCK:
-            _TRIAL_SCHEMA_MADE.discard(address)
-        _trial_schema(address)
-        return work()
-
-
 def read_trial_deadlines(address: str) -> tuple[float | None, dict[str, float]]:
     """This trial's deadline for all workers and each named worker's own, as the runner wrote them; nothing when the
     trial set none or has not started."""
@@ -1935,6 +1889,13 @@ def trial_worker_deadlines(
         unheld = _limits_on_shared_workers(document, bundle_dir)
         if not unheld:
             return deadline, deadlines, []
+        if _door_record(bundle_dir).get("surface") == "in_process":
+            return deadline, deadlines, [{
+                "code": WORKER_LIMITS_NOT_ENFORCED,
+                "message": f"{unheld} cannot be held for this agent's workers: the world's door inside the agent stops "
+                "a worker it runs at its deadline but cannot tell the workers' calls apart, so this trial's checks "
+                "were not graded.",
+            }]
         return deadline, deadlines, [{
             "code": WORKER_LIMITS_NOT_ENFORCED,
             "message": f"{unheld} cannot be held for a worker wired as shared, because the world cannot tell its "
@@ -1969,6 +1930,16 @@ def limits_not_held(document: Mapping[str, Any], bundle_dir: Path | str | None) 
     return [one for one in notices if one.get("code") == WORKER_LIMITS_NOT_ENFORCED]
 
 
+def faults_not_held(faults: Sequence[Any], calls: Sequence[Call], bundle_dir: Path | str | None) -> list[dict[str, Any]]:
+    """A notice for each of the scenario's faults on a build whose tool service runs but not behind the world's door:
+    nothing there applies a fault, so the trial is not graded, as one relying on worker limits is held."""
+    if not faults or _door_record(bundle_dir).get("reason") != "tool_service_not_fronted":
+        return []
+    return fault_notices(
+        faults, None, calls, unreachable="this agent's tool service does not run behind the world's door"
+    )
+
+
 def _door_record(bundle_dir: Path | str | None) -> dict[str, Any]:
     """Whether this bundle's world has a door in front of the agent's tools, and why not, as it was sealed; empty for a
     bundle sealed before it was recorded."""
@@ -1992,11 +1963,25 @@ def _limits_on_shared_workers(document: Mapping[str, Any], bundle_dir: Path | st
     if bundle_dir is None:
         return ""
     workers = [one for one in _bundle_contract(Path(bundle_dir)).get("workers") or [] if isinstance(one, dict)]
+    budgets = document.get("worker_budget_seconds")
+    record = _door_record(bundle_dir)
+    if record.get("surface") == "in_process":
+        # The door inside the agent holds a deadline by stopping the workers it was told it runs, and no worker's
+        # permitted tools, since no call there names its worker.
+        stopped = {str(one) for one in record.get("workers") or []}
+        if isinstance(budgets, Mapping) and any(str(one) not in stopped for one in budgets):
+            return "A worker deadline"
+        if worker_deadline(document) is not None and (
+            not stopped or any(str(one.get("id")) not in stopped for one in workers)
+        ):
+            return "A worker deadline"
+        if any(one.get("binding") == "separate" or one.get("allowed_tools") for one in workers):
+            return "A worker's permitted tools"
+        return ""
     if not workers:
         # A contract that declares no workers: the budget's worker names were checked at authoring.
         return ""
     separate = {str(one.get("id")) for one in workers if one.get("binding") == "separate"}
-    budgets = document.get("worker_budget_seconds")
     if isinstance(budgets, Mapping) and any(str(one) not in separate for one in budgets):
         return "A worker deadline"
     if worker_deadline(document) is not None and not separate:
@@ -2089,9 +2074,12 @@ def write_worker_limits(bundle_dir: Path) -> None:
 
 
 def _door_holds_worker_limits(bundle_dir: Path | str | None) -> bool:
-    """Whether this bundle's tool proxy enforces workers' limits: only one sealed with its capabilities file does."""
+    """Whether this bundle's door enforces workers' limits: a tool proxy sealed with its capabilities file, or the
+    door inside the agent, which stops the workers it runs at their deadline."""
     if bundle_dir is None:
         # No sealed bundle: the proxy is this harness's own, which holds every limit.
+        return True
+    if _door_record(bundle_dir).get("surface") == "in_process":
         return True
     try:
         sealed = json.loads((Path(bundle_dir) / "generated" / "tool-proxy" / DOOR_FILE).read_text(encoding="utf-8"))
@@ -3719,6 +3707,8 @@ class CallRunnerImpl:
         """The scenario's faults that did not take effect on this call, each with why."""
         if not faults:
             return []
+        if unfronted := faults_not_held(faults, calls, self._context.bundle_dir):
+            return unfronted
         database = _find_postgres_endpoint(runtime)
         if database is None:
             return fault_notices(

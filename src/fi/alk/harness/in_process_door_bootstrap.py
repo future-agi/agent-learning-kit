@@ -2,9 +2,9 @@
 
 Standard library only: the customer's interpreter has nothing of ALK's.
 
-ALK std 1 exception: `WORKER_RUNS` names framework internals, because a worker's deadline can only stop a worker where
-its framework runs it as a task of its own. Every other framework, and any worker those entries miss, is refused at the
-world's door past its deadline and runs on, which is what the trial records."""
+A stated framework exception: `WORKER_RUNS` names framework internals, because a worker can only be stopped at its
+deadline where its framework runs it as a task of its own. A worker those entries miss runs on past its deadline, and
+is not listed as stopped."""
 
 from __future__ import annotations
 
@@ -26,6 +26,8 @@ from urllib import request
 URL = os.environ.get("ALK_WORLD_DOOR_URL", "").rstrip("/")
 DECORATOR = "__alk_world_door__"
 _TIMEOUT_SECONDS = 35.0
+# Longest a worker's run is given to end once cancelled; one still running is not stopped.
+_CANCEL_SECONDS = 5.0
 
 
 class ToolTimedOut(TimeoutError):
@@ -300,15 +302,14 @@ def bindings() -> dict[str, dict[str, str]]:
     return modules
 
 
-# Where a framework runs one of the app's agents as an asyncio task of its own: the module, the class and method that
-# run it, the argument holding the agent, and the name the framework gives an agent the app never named, which names
-# no one worker. Only these runs are stopped at a deadline; any other worker is refused at the world's door.
+# Where a framework runs an agent as an asyncio task of its own: module, class, method, the argument holding the
+# agent, and the name the framework gives an unnamed agent. Only these awaited runs are stopped at a deadline.
 WORKER_RUNS = (
-    # OpenAI Agents SDK: a worker its coordinator holds as a tool runs as `Runner.run(worker, ...)`. A hand-off changes
-    # the agent inside one run, so a worker reached by hand-off is refused, not stopped.
+    # OpenAI Agents SDK: a worker held as a tool runs as `await Runner.run(worker, ...)`. A hand-off changes the agent
+    # inside one run, and `run_streamed` and `run_sync` are not awaited runs, so neither is stopped.
     ("agents.run", "Runner", "run", "starting_agent", ""),
-    # LangGraph: a worker compiled as a graph of its own, which its coordinator awaits with `ainvoke`. A graph compiled
-    # without a name carries the default, so it is refused, not stopped.
+    # LangGraph: a worker compiled as a graph of its own and awaited with `ainvoke`. A graph without a name, one run
+    # with `invoke`, or one added as a node of its parent's graph (a swarm or supervisor member) is not stopped.
     ("langgraph.pregel", "Pregel", "ainvoke", "self", "LangGraph"),
 )
 _STOPS = "__alk_worker_stop__"
@@ -345,13 +346,22 @@ def stop_at_deadline(run: Any, agent_argument: str, named: dict[str, str], unnam
         task = asyncio.ensure_future(run(*args, **kwargs))
         try:
             done, _ = await asyncio.wait({task}, timeout=remaining)
+            if task in done:
+                return task.result()
+            # Claimed before the cancel: once the call has sealed its stops, the worker runs on.
+            claim = await asyncio.to_thread(_post, "/worker_stop", {"worker": worker}) or {}
+            if claim.get("stop") is not True:
+                return await task
+            task.cancel()
+            await asyncio.wait({task}, timeout=_CANCEL_SECONDS)
+            stopped = task.cancelled()
+            await asyncio.to_thread(_post, "/worker_stop_end", {"id": claim.get("id"), "stopped": stopped})
         except asyncio.CancelledError:
             task.cancel()
             raise
-        if task in done:
-            return task.result()
-        task.cancel()
-        await asyncio.to_thread(_post, "/worker_stopped", {"worker": worker})
+        if not stopped:
+            # The run did not end at its cancel: it is not stopped, and what it returns stands.
+            return await task
         raise WorkerStopped(f"{worker} was stopped at its deadline")
 
     setattr(stopping, _STOPS, True)
@@ -388,7 +398,8 @@ class _AfterLoad(importlib.abc.Loader):
 
 
 class _WorkerRunFinder(importlib.abc.MetaPathFinder):
-    """Finds the modules that run a framework's agents, and loads them with the worker stop on that run."""
+    """Finds the modules that run a framework's agents through `sys.path`, and loads them with the worker stop on that
+    run; a module only another finder on `sys.meta_path` can load (an editable install's own) runs without it."""
 
     def __init__(self, named: dict[str, str]) -> None:
         self.named = named

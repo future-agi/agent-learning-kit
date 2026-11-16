@@ -1278,6 +1278,7 @@ class HostedChatCallRunner:
             channel_bypass_notices,
             evidence_notices,
             fault_notices,
+            faults_not_held,
             in_process_tools,
         )
 
@@ -1290,7 +1291,8 @@ class HostedChatCallRunner:
                     "database", code="fault_unreadable",
                 )
                 if proxied and not _faults_readable(runtime)
-                else fault_notices(
+                else faults_not_held(faults, transcript.calls, self._context.bundle_dir)
+                or fault_notices(
                     faults, _trial_log(door, trial_started), transcript.calls,
                     contract=_bundle_contract(self._context.bundle_dir),
                 )

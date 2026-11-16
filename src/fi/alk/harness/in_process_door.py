@@ -237,7 +237,7 @@ def _held(outcome: Outcome) -> dict[str, Any]:
 
 def worker_remaining(worker: str) -> dict[str, Any]:
     """How long a worker has left this trial, `{"remaining": seconds}`; nothing when no deadline names it or none can
-    be read, and the worker then runs on, refused at the door past its deadline."""
+    be read, and the worker then runs on."""
     row = _proxy._trial_row("worker_deadline_at, worker_deadlines")
     if not row:
         return {}
@@ -248,11 +248,66 @@ def worker_remaining(worker: str) -> dict[str, Any]:
     return {"remaining": max(float(due) - time.time(), 0.0)}
 
 
-def worker_stopped(worker: str) -> dict[str, Any]:
-    """Keep that the agent's process stopped this worker's run at its deadline, unless the call has sealed its stops."""
+@dataclass
+class _Stop:
+    """One worker's stop between its claim and the agent's word on whether the worker's run ended."""
+
+    claimed: threading.Event = field(default_factory=threading.Event)
+    inside: bool = False
+    ended: threading.Event = field(default_factory=threading.Event)
+    stopped: bool = False
+    done: threading.Event = field(default_factory=threading.Event)
+    kept: bool = False
+
+
+_STOPS: dict[str, _Stop] = {}
+_STOPS_LOCK = threading.Lock()
+
+
+def worker_stop(worker: str) -> dict[str, Any]:
+    """Claim a worker's stop before the agent's process cancels its run: `{"stop": true, "id"}` while the trial's row
+    is held for it, until `worker_stop_end` says whether the run ended; `{"stop": false}` when the call has sealed its
+    stops or the deadline no longer holds, and the worker runs on."""
     if not DATABASE_URL or not worker:
+        return {"stop": False}
+    stop_id, one = uuid.uuid4().hex, _Stop()
+    with _STOPS_LOCK:
+        _STOPS[stop_id] = one
+
+    def stop() -> bool:
+        one.inside = True
+        one.claimed.set()
+        # Unreported in time: the run is taken as not ended, and nothing is kept.
+        one.ended.wait(DECIDE_SECONDS)
+        return one.stopped
+
+    def claim() -> None:
+        try:
+            one.kept = claim_worker_stop(DATABASE_URL, worker, "", stop)
+        except Exception:  # noqa: BLE001 - a world out of reach keeps no stop, and the worker runs on
+            one.kept = False
+        finally:
+            one.claimed.set()
+            one.done.set()
+
+    threading.Thread(target=claim, daemon=True).start()
+    if one.claimed.wait(DECIDE_SECONDS) and one.inside:
+        return {"stop": True, "id": stop_id}
+    with _STOPS_LOCK:
+        _STOPS.pop(stop_id, None)
+    return {"stop": False}
+
+
+def worker_stop_end(stop_id: str, stopped: bool) -> dict[str, Any]:
+    """Whether the worker's run ended at its cancel, from the agent's process: kept as stopped only when it did."""
+    with _STOPS_LOCK:
+        one = _STOPS.pop(stop_id, None)
+    if one is None:
         return {"kept": False}
-    return {"kept": claim_worker_stop(DATABASE_URL, worker, "", lambda: True)}
+    one.stopped = stopped
+    one.ended.set()
+    one.done.wait(DECIDE_SECONDS)
+    return {"kept": one.kept}
 
 
 _DOOR: InProcessDoor | None = None
@@ -289,8 +344,10 @@ class Handler(BaseHTTPRequestHandler):
                                          str(body.get("error") or "")))
         elif self.path == "/worker_deadline":
             self._reply(200, worker_remaining(str(body.get("worker") or "")))
-        elif self.path == "/worker_stopped":
-            self._reply(200, worker_stopped(str(body.get("worker") or "")))
+        elif self.path == "/worker_stop":
+            self._reply(200, worker_stop(str(body.get("worker") or "")))
+        elif self.path == "/worker_stop_end":
+            self._reply(200, worker_stop_end(str(body.get("id") or ""), body.get("stopped") is True))
         else:
             self._reply(404, {})
 

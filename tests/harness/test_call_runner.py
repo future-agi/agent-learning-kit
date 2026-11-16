@@ -3259,7 +3259,8 @@ def test_worker_budgets_on_a_door_sealed_before_worker_limits_are_said_not_enfor
         *_, notices = cr.trial_worker_deadlines({"worker_budget_seconds": budget}, tmp_path)
         [notice] = notices
         assert notice["code"] == "worker_limits_not_enforced"
-    # No tool proxy at all: held too, for a cause a rebuild does not fix, so it is not told to rebuild.
+    # No tool proxy and no door inside the agent: held too, for a cause a rebuild does not fix, so it is not told to
+    # rebuild.
     (door / "proxy.py").unlink()
     [unproxied] = cr.trial_worker_deadlines({"worker_budget_seconds": 30}, tmp_path)[2]
     assert unproxied["code"] == "worker_limits_not_enforced" and unproxied["message"] != notice["message"]
@@ -3975,3 +3976,33 @@ def test_a_build_whose_tool_service_is_not_behind_the_door_holds_a_trial_relying
     assert [one["code"] for one in held] == [cr.WORKER_LIMITS_NOT_ENFORCED]
     # A trial relying on no worker limit runs on the same build as before.
     assert cr.limits_not_held({}, tmp_path) == []
+
+
+def test_a_build_whose_door_runs_inside_the_agent_holds_a_deadline_only_for_the_workers_it_stops(tmp_path):
+    (tmp_path / "door.json").write_text(json.dumps({"present": True, "surface": "in_process", "workers": ["writer"]}))
+    (tmp_path / "contract.json").write_text(json.dumps({"workers": [{"id": "writer"}, {"id": "reviewer"}]}))
+    # A deadline on a worker the door stops: the trial runs, and the deadline is written for the door to read.
+    assert cr.limits_not_held({"worker_budget_seconds": {"writer": 5}}, tmp_path) == []
+    assert cr.trial_worker_deadlines({"worker_budget_seconds": {"writer": 5}}, tmp_path)[1].keys() == {"writer"}
+    # A worker the door does not stop, or one deadline for all while one of them is such a worker: held.
+    for budget in ({"reviewer": 5}, 30):
+        [held] = cr.limits_not_held({"worker_budget_seconds": budget}, tmp_path)
+        assert held["code"] == cr.WORKER_LIMITS_NOT_ENFORCED and "Rebuild" not in held["message"]
+    # Nothing there tells the workers' calls apart, so a worker's permitted tools are never held.
+    (tmp_path / "contract.json").write_text(json.dumps({"workers": [{"id": "writer", "allowed_tools": ["a"]}]}))
+    assert cr.limits_not_held({"worker_budget_seconds": {"writer": 5}}, tmp_path)
+    # A bundle sealed before the root record has no door that holds limits, as before.
+    (tmp_path / "door.json").unlink()
+    assert cr.limits_not_held({"worker_budget_seconds": {"writer": 5}}, tmp_path)
+
+
+def test_a_build_whose_tool_service_is_not_behind_the_door_leaves_a_trial_with_faults_unmeasured(tmp_path):
+    faults = [{"action": "issue_refund", "mode": "unavailable", "on_call": 1}]
+    (tmp_path / "door.json").write_text(json.dumps({"present": False, "reason": "tool_service_not_fronted"}))
+    notices = cr.faults_not_held(faults, [], tmp_path)
+    assert [one["code"] for one in notices] == ["fault_not_applied"]
+    assert cr.unmeasured_reasons(notices)
+    # A build with a door applies its faults there, and a trial with none has nothing to say.
+    (tmp_path / "door.json").write_text(json.dumps({"present": True, "surface": "in_process", "workers": []}))
+    assert cr.faults_not_held(faults, [], tmp_path) == []
+    assert cr.faults_not_held([], [], None) == []

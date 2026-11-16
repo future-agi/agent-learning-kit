@@ -357,7 +357,7 @@ def _faults(store, faults: list[dict]) -> None:
     """The trial's faults where the runner writes them: the world's own database, never a file."""
     import psycopg
 
-    from fi.alk.harness.call_runner import TRIAL_FAULTS_DDL
+    from fi.alk.harness.world_door import TRIAL_FAULTS_DDL
 
     with psycopg.connect(store.dsn(), autocommit=True) as connection:
         connection.execute(TRIAL_FAULTS_DDL)

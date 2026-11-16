@@ -2076,7 +2076,16 @@ def door_outcome(plan: EnvironmentPlanV2, contract_body: dict[str, Any] | None) 
     if "tool-proxy" in names:
         return {"present": True, "surface": "tool_proxy", **DOOR_CAPABILITIES}
     if WORLD_DOOR_PROCESS in names:
-        return {"present": True, "surface": "in_process"}
+        # The workers the door stops at their deadline, as `with_in_process_workers` told it.
+        told = next(
+            (
+                process.environment.get("ALK_WORLD_DOOR_WORKERS")
+                for process in plan.processes
+                if isinstance(process, SourceProcess) and process.name == plan.control_service
+            ),
+            None,
+        )
+        return {"present": True, "surface": "in_process", "workers": sorted(json.loads(told or "{}").values())}
     modes = {entry.mode for entry in AgentContract.model_validate(contract_body or {}).tool_entrypoints}
     if "service" in modes:
         return {"present": False, "reason": "tool_service_not_fronted"}
@@ -2657,7 +2666,7 @@ def resolve_environment_plan(
             except ValueError:
                 topology = None
             # Only a tool service shipped as `tools-api` puts the world's door in front of the tools; for any other
-            # name the native choice stands, as before.
+            # name the native choice stands.
             if isinstance(topology, ComposeSelection) and (
                 runtime_model.required_environment
                 or "tools-api" in topology.services
