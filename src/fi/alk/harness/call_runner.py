@@ -1379,8 +1379,8 @@ def _decision_of(row: Mapping[str, Any]) -> str | None:
 
 def approvals(log: list[dict[str, Any]], decisions: Sequence[dict[str, Any]] = ()) -> list[dict[str, Any]]:
     """One line per approval, read from the action log only: the agent's request, the decision, and the agent's
-    writes before and after it. `verdict` is the one the actor gave, else the decision the record it wrote carries
-    (`refused` too for a declining timeout); None when nothing says (a fallback taken for a silent actor)."""
+    writes before and after it. `verdict` is the one the actor gave, else the decision the record it wrote carries, a
+    fallback's included (`refused` too for a declining timeout); None when nothing says."""
     rows = [
         row
         for row in log
@@ -1392,12 +1392,6 @@ def approvals(log: list[dict[str, Any]], decisions: Sequence[dict[str, Any]] = (
         if one.get("play") in ("mocked", "live") and one.get("action"):
             sent_by.setdefault(str(one.get("actor")), []).append(one)
     by_id = {str(row.get("action_id")): row for row in rows if row.get("action_id")}
-    # The actions taken for an actor that did not answer in time: no decision of its own.
-    taken_for = {
-        (str(one.get("actor")), str(one.get("parent") or ""))
-        for one in decisions
-        if one.get("play") == "timeout" and one.get("outcome") == "fallback_action"
-    }
     # A read changed nothing, so it is never a write before or after the decision; it can still be the request.
     agent_writes = [row for row in rows if (row.get("actor_id") or AGENT) == AGENT and not is_read(row)]
     found = []
@@ -1420,16 +1414,26 @@ def approvals(log: list[dict[str, Any]], decisions: Sequence[dict[str, Any]] = (
             said.remove(sent)
         verdict = sent.get("verdict") if sent is not None else None
         if verdict not in VERDICTS:
-            # Unsaid, the record the actor wrote says it: the decision it carries, never only that it was written.
-            fallback = (str(row.get("actor_id")), str(parent.get("action_id") or "")) in taken_for
-            verdict = None if fallback else _decision_of(row)
+            # Unsaid, the record the actor wrote says it, a fallback's too: the decision it carries.
+            verdict = _decision_of(row)
         found.append((parent, {"by": row.get("actor_id"), "action": action, "outcome": row.get("outcome"),
                                "at": row.get("at"), "verdict": verdict}))
     for one in decisions:
         if one.get("play") == "timeout" and one.get("parent") in by_id:
+            # A timeout's verdict is its fallback's: a decline refuses, a fallback action says what its record says.
+            taken = next(
+                (
+                    row
+                    for row in rows
+                    if str(row.get("actor_id")) == str(one.get("actor"))
+                    and str(row.get("parent_event_id") or "") == str(one.get("parent"))
+                ),
+                None,
+            )
+            verdict = "refused" if one.get("fallback") == "decline" else _decision_of(taken) if taken else None
             found.append((by_id[one["parent"]], {"by": one.get("actor"), "action": f"timeout: {one.get('fallback')}",
                                                  "outcome": one.get("outcome"), "at": one.get("at"),
-                                                 "verdict": "refused" if one.get("fallback") == "decline" else None}))
+                                                 "verdict": verdict}))
     out = []
     for request, decision in found:
         start = float(request.get("at") or 0)
@@ -1992,6 +1996,7 @@ def _read_file_tool_calls(
                 untimed.append(call)
             continue
         hooked.append(call)
+    timed: list[tuple[Call, str]] = []
     for call in hooked:
         # The agent's untimed line and the hook's timed line of one call: same tool or route, outcome and arguments.
         names = {_tool_key(call.name), _tool_key((routes or {}).get(call.name, ""))} - {""}
@@ -2012,7 +2017,18 @@ def _read_file_tool_calls(
             calls.append(call)
             continue
         untimed.remove(written)
+        timed.append((written, written.name))
         written.name, written.at = call.name, call.at
+    # An agent that records one call from two places writes it twice; the copy the hook did not time is that call.
+    for extra in untimed:
+        if any(
+            _tool_key(extra.name) in {_tool_key(one.name), _tool_key(as_written)}
+            and extra.ok == one.ok
+            and extra.arguments == one.arguments
+            and _loose(extra.result) == _loose(one.result)
+            for one, as_written in timed
+        ):
+            calls.remove(extra)
     if strict and unreadable and not calls and not from_spans:
         raise ToolCaptureFailed(
             f"tool_trace file has no readable record ({unreadable} unreadable)"

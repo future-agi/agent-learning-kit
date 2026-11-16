@@ -306,8 +306,14 @@ def test_a_timed_out_approver_s_fallback_decline_commits_on_the_request_s_record
         # A field whose value is no decision gives way to one that is.
         ({"outcome": "committed", "arguments": {"status": "submitted", "approved": True}}, None, "approved"),
         (None, {"fallback": "decline", "outcome": "declined"}, "refused"),
+        # A fallback taken for a silent actor says what its record says.
         (
-            {"outcome": "committed", "arguments": {"status": "approved"}},
+            {"outcome": "committed", "arguments": {"status": "declined"}},
+            {"fallback": "approvals.put", "outcome": "fallback_action"},
+            "refused",
+        ),
+        (
+            {"outcome": "committed", "arguments": {"note": "timed out"}},
             {"fallback": "approvals.put", "outcome": "fallback_action"},
             None,
         ),

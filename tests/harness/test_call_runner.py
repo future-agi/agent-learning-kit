@@ -453,6 +453,37 @@ def test_file_tool_trace_counts_each_call_once_whichever_line_comes_first_and_ho
     ]
 
 
+def test_file_tool_trace_counts_once_a_local_tool_the_agent_records_from_two_places(tmp_path: Path) -> None:
+    # As the insurance agent writes a state-only tool: its tools client records it, and so does its own
+    # function_tools_executed hook; LiveKit's hook then times it once. One call.
+    prepared = {"confirmation_token": "bXB3", "summary_to_read": "Cancel MM-5590318 on 2027-01-15."}
+    trace = _trace_lines(
+        tmp_path / "agent-tool-calls.jsonl",
+        {"name": "prepare_cancellation", "arguments": {}, "output": prepared, "is_error": False},
+        {"name": "prepare_cancellation", "arguments": {}, "output": prepared, "is_error": False},
+        {"name": "prepare_cancellation", "arguments": "{}", "output": str(prepared), "is_error": False, "at": 12.5,
+         "source": "livekit"},
+    )
+
+    written, _ = cr._read_file_tool_calls(_runtime(metadata={"tool_trace_path": str(trace)}))
+
+    assert [(call.name, call.at) for call in written] == [("prepare_cancellation", 12.5)]
+
+
+def test_file_tool_trace_keeps_two_calls_of_one_tool_the_hook_timed_twice(tmp_path: Path) -> None:
+    prepared = {"confirmation_token": "t1"}
+    line = {"name": "prepare_cancellation", "arguments": {}, "output": prepared, "is_error": False}
+    hook = {"name": "prepare_cancellation", "arguments": "{}", "output": "{}", "is_error": False, "source": "livekit"}
+    trace = _trace_lines(
+        tmp_path / "agent-tool-calls.jsonl",
+        line, line, {**hook, "at": 5.0}, line, line, {**hook, "at": 9.0},
+    )
+
+    written, _ = cr._read_file_tool_calls(_runtime(metadata={"tool_trace_path": str(trace)}))
+
+    assert sorted(call.at for call in written) == [5.0, 9.0]
+
+
 def test_file_tool_trace_keeps_a_rejected_call_apart_from_a_same_name_success(
     tmp_path: Path,
 ) -> None:
