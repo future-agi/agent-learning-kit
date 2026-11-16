@@ -87,6 +87,8 @@ class EgressProxy:
             "https_proxy": self.url,
             "NO_PROXY": excluded,
             "no_proxy": excluded,
+            # Node's built-in fetch and http read the variables above only when this is set.
+            "NODE_USE_ENV_PROXY": "1",
         }
 
     def refuse(self, host: str, method: str) -> None:

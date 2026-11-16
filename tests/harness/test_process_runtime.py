@@ -10231,6 +10231,7 @@ def test_a_controlled_run_points_only_the_agent_at_the_refusing_proxy(tmp_path: 
     assert agents and tools
     for env in agents:
         assert env["HTTP_PROXY"] == env["HTTPS_PROXY"] == env["https_proxy"]
+        assert env["NODE_USE_ENV_PROXY"] == "1"
         assert env["HTTP_PROXY"].startswith("http://127.0.0.1:")
         excluded = env["NO_PROXY"].split(",")
         assert env["no_proxy"] == env["NO_PROXY"]
