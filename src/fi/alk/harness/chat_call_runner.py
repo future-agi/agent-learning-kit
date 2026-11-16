@@ -1103,7 +1103,13 @@ class HostedChatCallRunner:
         capture_failed = capture_failed and not graded_calls(transcript.calls)
 
         world_record = _world_actors_record(door, listing, dispatcher, cast, meter, limits, since=trial_started)
-        from .call_runner import NOT_RECORDED, duplicate_commits, missing_evidence, unmeasured_reasons
+        from .call_runner import (
+            NOT_RECORDED,
+            duplicate_commits,
+            missing_evidence,
+            one_call_per_lost_answer,
+            unmeasured_reasons,
+        )
 
         if door_sees_tools:
             from .call_runner import upload_end_state
@@ -1117,6 +1123,7 @@ class HostedChatCallRunner:
 
         # The world applied one of the agent's writes twice after its answer was lost: the scenario fails.
         trial_log = _readable_trial_log(door, trial_started, proxied=proxied) if door is not None else []
+        transcript.calls[:] = one_call_per_lost_answer(transcript.calls, trial_log)
         duplicates = duplicate_commits(trial_log or [], getattr(scenario, "solution", None) or ())
         if duplicates:
             world_record = {**(world_record or {}), "duplicates": duplicates}

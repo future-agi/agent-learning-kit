@@ -89,7 +89,12 @@ def test_a_timeout_after_commit_lets_the_tool_run_and_loses_its_answer():
 
 
 def test_a_lost_answer_is_recorded_and_its_trial_graded_though_the_agent_s_tracers_keep_it_twice(monkeypatch):
-    from fi.alk.harness.call_runner import _merge_span_calls, evidence_notices, missing_evidence
+    from fi.alk.harness.call_runner import (
+        _merge_span_calls,
+        evidence_notices,
+        missing_evidence,
+        one_call_per_lost_answer,
+    )
     from fi.alk.harness.world.runtime import Call
 
     door, log = _door([{"action": "issue_refund", "mode": "timeout_after_commit", "on_call": 1, "delay_seconds": 0}])
@@ -104,7 +109,9 @@ def test_a_lost_answer_is_recorded_and_its_trial_graded_though_the_agent_s_trace
     # The tool's own trace line saw the run commit; the framework's span saw the timeout the agent heard.
     ran = Call(name="issue_refund", arguments={"order_id": "1043", "amount": 89}, ok=True, result={"refund_id": "RF-100"})
     heard = Call(name="issue_refund", arguments={"order_id": "1043", "amount": 89.0}, ok=False, error="timed out")
-    calls = _merge_span_calls([ran], [heard])
+    calls = one_call_per_lost_answer(_merge_span_calls([ran], [heard]), log.rows())
+    # Graded as the one call it was, as the agent heard it.
+    assert [(call.name, call.ok) for call in calls] == [("issue_refund", False)]
     notices = evidence_notices(log.rows(), calls, {"issue_refund"})
     assert notices == [] and missing_evidence(notices, {}) == {}
     # A retry the door never saw is still a call it kept no row for.

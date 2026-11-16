@@ -473,7 +473,7 @@ def test_an_approval_line_reads_request_decision_and_the_agent_s_writes_around_i
 @pytest.mark.parametrize(
     "reply, verdict, flagged",
     [('"verdict": "refused"', "refused", True), ('"verdict": "approved"', "approved", False),
-     ('"verdict": "maybe"', "approved", False), ('"why": "no verdict given"', "approved", False)],
+     ('"verdict": "maybe"', None, False), ('"why": "no verdict given"', None, False)],
 )
 def test_a_live_actor_s_verdict_is_recorded_and_a_write_after_a_refusal_is_flagged(reply, verdict, flagged):
     from fi.alk.harness.call_runner import approvals

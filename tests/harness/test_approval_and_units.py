@@ -243,12 +243,16 @@ def test_a_timed_out_approver_s_fallback_decline_commits_on_the_request_s_record
         ),
     )
     save_actors(tmp_path, ActorList(actors=[supervisor]))
+    (tmp_path / "contract.json").write_text(
+        json.dumps({"data_schema": {"cancellation_approvals": {"policy_id": "TEXT NOT NULL", "status": "TEXT"}}})
+    )
+    # The request carries an argument the decline's record has no field for: only the record's own are sent.
     request = {
         "actor_id": AGENT,
         "name": "request_policy_cancellation",
         "action": "request_policy_cancellation",
         "action_id": "a1",
-        "arguments": json.dumps({"policy_id": "pol_elena"}),
+        "arguments": json.dumps({"policy_id": "pol_elena", "reason": "moving abroad"}),
     }
     dispatcher = build_dispatcher(
         {"actors": [{"id": "supervisor"}]}, tmp_path, act=DoorActs(door), read_log=lambda: [request], records=None,
@@ -271,13 +275,23 @@ def test_a_timed_out_approver_s_fallback_decline_commits_on_the_request_s_record
 @pytest.mark.parametrize(
     ("decision", "timeout", "verdict"),
     [
-        ({"outcome": "committed"}, None, "approved"),
-        ({"outcome": "refused"}, None, "refused"),
+        ({"outcome": "committed", "arguments": {"status": "approved"}}, None, "approved"),
+        # A record that says no, committed, is a refusal, whether written or set on a change.
+        ({"outcome": "committed", "arguments": {"status": "denied"}}, None, "refused"),
+        ({"outcome": "committed", "arguments": {"where": {"id": 1}, "set": {"decision": "Declined"}}}, None, "refused"),
+        # A decline the world refused still said no.
+        ({"outcome": "refused", "arguments": {"status": "declined"}}, None, "refused"),
+        # A record that carries no decision says nothing.
+        ({"outcome": "committed", "arguments": {"note": "seen"}}, None, None),
         (None, {"fallback": "decline", "outcome": "declined"}, "refused"),
-        ({"outcome": "committed"}, {"fallback": "approvals.put", "outcome": "fallback_action"}, None),
+        (
+            {"outcome": "committed", "arguments": {"status": "approved"}},
+            {"fallback": "approvals.put", "outcome": "fallback_action"},
+            None,
+        ),
     ],
 )
-def test_an_approval_s_verdict_is_what_the_world_made_of_the_decision(decision, timeout, verdict):
+def test_an_approval_s_verdict_is_the_decision_its_record_carries(decision, timeout, verdict):
     from fi.alk.harness.call_runner import approvals
 
     log = [{"actor_id": AGENT, "name": "request_cancellation", "action_id": "a1", "at": 1.0, "outcome": "committed"}]

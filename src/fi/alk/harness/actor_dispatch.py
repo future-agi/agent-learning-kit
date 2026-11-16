@@ -151,6 +151,7 @@ class ActorDispatcher:
         write_session: Decide | None = None,
         session_briefs: dict[str, str] | None = None,
         limits: dict[str, Any] | None = None,
+        action_fields: dict[str, frozenset[str]] | None = None,
     ) -> None:
         from fi.simulate.simulation.call_actors import LIMIT_DEFAULTS
 
@@ -167,6 +168,8 @@ class ActorDispatcher:
         self.reported_sent = 0
         # World actions whose tool takes an `actor_id` argument.
         self.names_actor = set(names_actor or ())
+        # The arguments each world action takes, where the contract says.
+        self.action_fields = action_fields or {}
         self.trial_id = trial_id
         self.read_log = read_log
         self.clock = clock
@@ -584,7 +587,7 @@ class ActorDispatcher:
             sent = await self._send(
                 actor,
                 fallback,
-                dict(actor.activation.fallback_arguments) or _request_arguments(cause, log),
+                dict(actor.activation.fallback_arguments) or self._taken_by(fallback, _request_arguments(cause, log)),
                 f"{self.trial_id}:{actor.id}:fallback",
                 cause,
             )
@@ -602,6 +605,11 @@ class ActorDispatcher:
         record["outcome"] = outcome
         if why:
             record["why"] = why
+
+    def _taken_by(self, action: str, arguments: dict[str, Any]) -> dict[str, Any]:
+        """Only the arguments ``action`` takes, when the contract says which."""
+        fields = self.action_fields.get(action)
+        return {name: value for name, value in arguments.items() if name in fields} if fields else arguments
 
     async def _answer_instead(self, fallback: str, cause: str, log: list[dict[str, Any]]) -> tuple[str, str]:
         """Another actor answering for one that timed out: its live turn, or its scheduled actions. The outcome is
@@ -939,6 +947,7 @@ def build_dispatcher(
         names_actor=names_actor,
         reported=reported,
         limits=_live_limits(listing.limits, doc.get("limits")),
+        action_fields=action_fields(contract),
     )
 
 
@@ -962,6 +971,28 @@ def described_with_units(tool: dict[str, Any]) -> str:
         return said
     named = "; ".join(f"{field} in {units[field]}" if str(units.get(field) or "").strip() else field for field in fields)
     return f"{said} (fields: {named})" if said else f"Fields: {named}"
+
+
+def action_fields(contract: dict[str, Any]) -> dict[str, frozenset[str]]:
+    """The arguments each world action takes: a record's fields as the contract's data schema names them, and a
+    route's as its tool declares them."""
+    taken = {
+        f"{collection}.put": frozenset(map(str, columns))
+        for collection, columns in (contract.get("data_schema") or {}).items()
+        if isinstance(columns, dict) and columns
+    }
+    args = {
+        str(one.get("name")): frozenset(map(str, one.get("args") or []))
+        for one in contract.get("tools") or []
+        if isinstance(one, dict) and one.get("args")
+    }
+    for entry in contract.get("tool_entrypoints") or []:
+        if not isinstance(entry, dict):
+            continue
+        route = str(entry.get("endpoint") or "").strip("/")
+        if route and str(entry.get("tool") or "") in args:
+            taken[route.replace("/", ".")] = args[str(entry["tool"])]
+    return taken
 
 
 def actions_naming_actor(contract: dict[str, Any]) -> set[str]:

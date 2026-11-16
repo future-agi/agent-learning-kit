@@ -963,14 +963,14 @@ def evidence_notices(
         for row in missing
     )
     for tool in sorted(set(held)):
-        made = [call for call in calls if call.name == tool]
-        rows = [
-            row
+        made = sum(1 for call in calls if call.name == tool)
+        logged = sum(
+            1
             for row in log or ()
             if (row.get("actor_id") or AGENT) == AGENT and str(row.get("name") or "") == tool and is_attempt(row)
-        ]
+        )
         marked = sum(1 for row in missing if str(row.get("name") or "") == tool)
-        unseen = len(made) - len(rows) - marked - _lost_answers_seen_twice(rows, made)
+        unseen = made - logged - marked
         if unseen > 0:
             count += unseen
             why = sorted(set(why) | {"the world's door kept no row for them"})
@@ -987,22 +987,24 @@ def evidence_notices(
     ]
 
 
-def _lost_answers_seen_twice(rows: Sequence[Mapping[str, Any]], calls: Sequence[Call]) -> int:
-    """How many of the door's lost-answer rows the agent's tracers kept as two calls: the tool's own record of the
-    run that committed and the framework's record of the failure the agent heard, both with the row's arguments."""
-    left = list(calls)
-    seen = 0
-    for row in rows:
-        if row.get("error") != "response_lost":
+def one_call_per_lost_answer(calls: Sequence[Call], log: Sequence[Mapping[str, Any]] | None) -> list[Call]:
+    """The agent's calls with each lost answer counted once. The door committed the call and then lost its answer, so
+    the tool's own tracer saw it run and the framework's saw the failure the agent heard: two records of one call. The
+    one the agent heard is kept."""
+    kept = list(calls)
+    for row in log or ():
+        if (row.get("actor_id") or AGENT) != AGENT or row.get("error") != "response_lost":
             continue
-        wanted = _arguments(row.get("arguments"))
-        same = [call for call in left if _loose_arguments(call.arguments) == _loose_arguments(wanted)]
+        wanted = _loose_arguments(_arguments(row.get("arguments")))
+        same = [
+            call
+            for call in kept
+            if call.name == str(row.get("name") or "") and _loose_arguments(call.arguments) == wanted
+        ]
         ran = next((call for call in same if call.ok), None)
-        heard = next((call for call in same if not call.ok), None)
-        if ran is not None and heard is not None:
-            left = [call for call in left if call is not ran and call is not heard]
-            seen += 1
-    return seen
+        if ran is not None and any(not call.ok for call in same):
+            kept = [call for call in kept if call is not ran]
+    return kept
 
 
 def _loose_arguments(arguments: Any) -> Any:
@@ -1330,11 +1332,33 @@ def trial_faults_readable(dsn: str) -> bool:
     return isinstance(faults, list) and all(isinstance(one, dict) for one in faults)
 
 
+# The values a record's decision field takes, as the verdict each is.
+_DECIDED = {
+    **dict.fromkeys(("approved", "approve", "accepted", "accept", "granted", "allowed", "yes", "true"), "approved"),
+    **dict.fromkeys(
+        ("denied", "deny", "declined", "decline", "rejected", "reject", "refused", "refuse", "no", "false"), "refused"
+    ),
+}
+_DECISION_FIELDS = ("decision", "verdict", "status", "approval", "approved")
+
+
+def _decision_of(row: Mapping[str, Any]) -> str | None:
+    """The decision an approver's record carries, in its own decision field: what it wrote, or set on a change."""
+    arguments = _arguments(row.get("arguments"))
+    if isinstance(arguments, dict) and isinstance(arguments.get("set"), dict):
+        arguments = arguments["set"]
+    if not isinstance(arguments, dict):
+        return None
+    for field in _DECISION_FIELDS:
+        if field in arguments:
+            return _DECIDED.get(str(arguments[field]).strip().lower())
+    return None
+
+
 def approvals(log: list[dict[str, Any]], decisions: Sequence[dict[str, Any]] = ()) -> list[dict[str, Any]]:
     """One line per approval, read from the action log only: the agent's request, the decision, and the agent's
-    writes before and after it. `verdict` is the one the actor gave, else `approved` for a committed decision and
-    `refused` for a refused one or a declining timeout; None when nothing decided (a fallback taken for a silent
-    actor)."""
+    writes before and after it. `verdict` is the one the actor gave, else the decision the record it wrote carries
+    (`refused` too for a declining timeout); None when nothing says (a fallback taken for a silent actor)."""
     rows = [
         row
         for row in log
@@ -1374,9 +1398,9 @@ def approvals(log: list[dict[str, Any]], decisions: Sequence[dict[str, Any]] = (
             said.remove(sent)
         verdict = sent.get("verdict") if sent is not None else None
         if verdict not in VERDICTS:
-            # Unsaid, the world's answer is the verdict: a committed decision approves, a refused one does not.
+            # Unsaid, the record the actor wrote says it: the decision it carries, never only that it was written.
             fallback = (str(row.get("actor_id")), str(parent.get("action_id") or "")) in taken_for
-            verdict = None if fallback else {"committed": "approved", "refused": "refused"}.get(str(row.get("outcome")))
+            verdict = None if fallback else _decision_of(row)
         found.append((parent, {"by": row.get("actor_id"), "action": action, "outcome": row.get("outcome"),
                                "at": row.get("at"), "verdict": verdict}))
     for one in decisions:
@@ -3323,7 +3347,9 @@ class CallRunnerImpl:
         trial_notices = [] if found is not None else [dict(DUPLICATES_UNREADABLE)]
         if world_database is not None and door_seen:
             with contextlib.suppress(Exception):
-                trial_notices += evidence_notices(await asyncio.to_thread(_read_action_log, world_database.address))
+                action_log = await asyncio.to_thread(_read_action_log, world_database.address)
+                calls = tuple(one_call_per_lost_answer(calls, action_log))
+                trial_notices += evidence_notices(action_log)
         # Hand-off records are not the world's actions: marks pair the graded calls with the action log.
         graded = graded_calls(calls)
         marks = _agent_marks(runtime, self._context.bundle_dir, graded) if acted else []
