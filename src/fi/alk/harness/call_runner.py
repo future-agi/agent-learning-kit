@@ -1978,8 +1978,7 @@ def trial_worker_deadlines(
     told. A tool proxy sealed before this release has no worker limits at all, so neither a budget nor a worker's
     permitted actions are held there: a scenario that relies on either says so, and is held rather than graded."""
     deadline, deadlines = worker_deadline(document), worker_deadlines(document)
-    relies = bool(deadline or deadlines) or relies_on_worker_limits(document, bundle_dir)
-    if not relies:
+    if not trial_relies_on_worker_limits(document, bundle_dir):
         return deadline, deadlines, []
     if _door_holds_worker_limits(bundle_dir):
         unheld = _limits_on_shared_workers(document, bundle_dir)
@@ -2063,6 +2062,42 @@ def relies_on_worker_limits(document: Mapping[str, Any], bundle_dir: Path | str 
     door holds."""
     limited = limited_workers(bundle_dir)
     return bool(limited and scenario_worker_subjects(document, bundle_dir) & limited)
+
+
+def trial_relies_on_worker_limits(document: Mapping[str, Any], bundle_dir: Path | str | None) -> bool:
+    """Whether a scenario's trial needs the door to hold worker limits: it gives a worker budget, or relies on a
+    worker's own limits."""
+    return bool(worker_deadline(document) or worker_deadlines(document)) or relies_on_worker_limits(
+        document, bundle_dir
+    )
+
+
+# Each declared worker's `limited` flag and what each scenario relies on of its workers, sealed for the platform.
+WORKER_LIMITS_FILE = "worker-limits.json"
+
+
+def write_worker_limits(bundle_dir: Path) -> None:
+    """Seal this rule's outcome beside the contract and catalogue it reads; a bundle declaring no workers gets none."""
+    workers = [one for one in _bundle_contract(bundle_dir).get("workers") or [] if isinstance(one, dict)]
+    if not workers:
+        return
+    limited = limited_workers(bundle_dir)
+    scenarios = {}
+    for path in sorted((bundle_dir / "scenarios").glob("*/scenario.json")):
+        try:
+            document = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if isinstance(document, dict):
+            scenarios[str(document.get("scenario_key") or path.parent.name)] = {
+                "workers": sorted(scenario_worker_subjects(document, bundle_dir)),
+                "relies_on_worker_limits": trial_relies_on_worker_limits(document, bundle_dir),
+            }
+    sealed = {
+        "workers": {str(one.get("id")): {"limited": str(one.get("id")) in limited} for one in workers},
+        "scenarios": scenarios,
+    }
+    (bundle_dir / WORKER_LIMITS_FILE).write_text(json.dumps(sealed, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
 def _door_holds_worker_limits(bundle_dir: Path | str | None) -> bool:

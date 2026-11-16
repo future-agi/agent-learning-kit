@@ -38,6 +38,7 @@ from .actors import (
     write_actor_rules,
 )
 from .bundle import CapabilityProtocol
+from .call_runner import write_worker_limits
 from .catalogue import CATALOGUE
 from .bundle_v2 import (
     BUNDLE_V2_MANIFEST,
@@ -4098,6 +4099,8 @@ def author_bundle_v2(
         adopted_chat_files.extend(
             _compile_source_tool_handlers(contract_body, temporary)
         )
+        if include_scenarios:
+            write_worker_limits(temporary)
         if any(process.name == "tool-proxy" for process in plan.processes):
             _seal_tool_proxy(temporary / "generated" / "tool-proxy", contract_body)
         if any(process.name == WORLD_DOOR_PROCESS for process in plan.processes):

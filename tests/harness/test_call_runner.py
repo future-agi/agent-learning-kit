@@ -3284,6 +3284,35 @@ def test_limits_on_a_shared_worker_are_said_not_enforced_on_a_new_door(monkeypat
     assert cr.trial_worker_deadlines({}, tmp_path)[2] == []
 
 
+def test_the_bundle_seals_each_worker_s_limited_flag_and_what_each_scenario_relies_on(tmp_path):
+    (tmp_path / "contract.json").write_text(json.dumps({"workers": [
+        {"id": "writer", "binding": "separate", "address_env": "WRITER_URL"}, {"id": "reader", "tools": ["read"]}]}))
+    (tmp_path / "sub_goals.json").write_text(json.dumps({"sub_goals": [
+        {"name": "writer_held", "subject": "worker:writer"}, {"name": "reader_said", "subject": "worker:reader"},
+        {"name": "task_done", "subject": "task"}]}))
+    for key, document in {
+        "about_writer": {"sub_goals": ["writer_held", "task_done"]},
+        "about_reader": {"sub_goals": ["reader_said"]},
+        "budgeted": {"sub_goals": ["task_done"], "worker_budget_seconds": {"reader": 5}},
+    }.items():
+        (tmp_path / "scenarios" / key).mkdir(parents=True)
+        (tmp_path / "scenarios" / key / "scenario.json").write_text(json.dumps({**document, "scenario_key": key}))
+    cr.write_worker_limits(tmp_path)
+    sealed = json.loads((tmp_path / cr.WORKER_LIMITS_FILE).read_text())
+    assert sealed["workers"] == {"writer": {"limited": True}, "reader": {"limited": False}}
+    assert sealed["scenarios"] == {
+        "about_writer": {"workers": ["writer"], "relies_on_worker_limits": True},
+        # About a worker with no limits of its own: nothing the door must hold.
+        "about_reader": {"workers": ["reader"], "relies_on_worker_limits": False},
+        "budgeted": {"workers": [], "relies_on_worker_limits": True},
+    }
+    # A bundle whose agent declares no workers seals no file, as before.
+    (tmp_path / cr.WORKER_LIMITS_FILE).unlink()
+    (tmp_path / "contract.json").write_text(json.dumps({}))
+    cr.write_worker_limits(tmp_path)
+    assert not (tmp_path / cr.WORKER_LIMITS_FILE).exists()
+
+
 def test_a_permission_only_scenario_on_a_door_sealed_before_worker_limits_is_said_not_enforced(tmp_path):
     # No budget, but the scenario checks a worker the agent declares held to its own tools: an old door holds none.
     (tmp_path / "sub_goals.json").write_text(json.dumps({"sub_goals": [
