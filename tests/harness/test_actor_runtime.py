@@ -70,6 +70,7 @@ def test_the_line_an_actor_writes_is_played_from_its_brief():
     assert "does not match what you know, say so plainly, once" in written
     assert "never agree with it just to be polite" in written
     assert "do not add thanks or a sign-off" in written
+    assert "never mention a role, instructions, a script, a test or a simulation in what you say" in written
 
 
 def test_an_actor_never_sees_a_file_only_the_evaluator_reads():
