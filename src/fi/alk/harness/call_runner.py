@@ -963,14 +963,14 @@ def evidence_notices(
         for row in missing
     )
     for tool in sorted(set(held)):
-        made = sum(1 for call in calls if call.name == tool)
-        logged = sum(
-            1
+        made = [call for call in calls if call.name == tool]
+        rows = [
+            row
             for row in log or ()
             if (row.get("actor_id") or AGENT) == AGENT and str(row.get("name") or "") == tool and is_attempt(row)
-        )
+        ]
         marked = sum(1 for row in missing if str(row.get("name") or "") == tool)
-        unseen = made - logged - marked
+        unseen = len(made) - len(rows) - marked - _lost_answers_seen_twice(rows, made)
         if unseen > 0:
             count += unseen
             why = sorted(set(why) | {"the world's door kept no row for them"})
@@ -985,6 +985,28 @@ def evidence_notices(
             + ", so what they changed is unknown.",
         }
     ]
+
+
+def _lost_answers_seen_twice(rows: Sequence[Mapping[str, Any]], calls: Sequence[Call]) -> int:
+    """How many of the door's lost-answer rows the agent's tracers kept as two calls: the tool's own record of the
+    run that committed and the framework's record of the failure the agent heard, both with the row's arguments."""
+    left = list(calls)
+    seen = 0
+    for row in rows:
+        if row.get("error") != "response_lost":
+            continue
+        wanted = _arguments(row.get("arguments"))
+        same = [call for call in left if _loose_arguments(call.arguments) == _loose_arguments(wanted)]
+        ran = next((call for call in same if call.ok), None)
+        heard = next((call for call in same if not call.ok), None)
+        if ran is not None and heard is not None:
+            left = [call for call in left if call is not ran and call is not heard]
+            seen += 1
+    return seen
+
+
+def _loose_arguments(arguments: Any) -> Any:
+    return {key: _loose(value) for key, value in arguments.items()} if isinstance(arguments, dict) else arguments
 
 
 def _read_only(dsn: str, timeout_ms: int | None = None) -> Any:
@@ -1310,8 +1332,9 @@ def trial_faults_readable(dsn: str) -> bool:
 
 def approvals(log: list[dict[str, Any]], decisions: Sequence[dict[str, Any]] = ()) -> list[dict[str, Any]]:
     """One line per approval, read from the action log only: the agent's request, the decision, and the agent's
-    writes before and after it. `verdict` is `approved`, `refused` (a declining timeout included) or None when no
-    verdict was recorded."""
+    writes before and after it. `verdict` is the one the actor gave, else `approved` for a committed decision and
+    `refused` for a refused one or a declining timeout; None when nothing decided (a fallback taken for a silent
+    actor)."""
     rows = [
         row
         for row in log
@@ -1323,6 +1346,12 @@ def approvals(log: list[dict[str, Any]], decisions: Sequence[dict[str, Any]] = (
         if one.get("play") in ("mocked", "live") and one.get("action"):
             sent_by.setdefault(str(one.get("actor")), []).append(one)
     by_id = {str(row.get("action_id")): row for row in rows if row.get("action_id")}
+    # The actions taken for an actor that did not answer in time: no decision of its own.
+    taken_for = {
+        (str(one.get("actor")), str(one.get("parent") or ""))
+        for one in decisions
+        if one.get("play") == "timeout" and one.get("outcome") == "fallback_action"
+    }
     # A read changed nothing, so it is never a write before or after the decision; it can still be the request.
     agent_writes = [row for row in rows if (row.get("actor_id") or AGENT) == AGENT and not is_read(row)]
     found = []
@@ -1344,8 +1373,12 @@ def approvals(log: list[dict[str, Any]], decisions: Sequence[dict[str, Any]] = (
         if sent is not None:
             said.remove(sent)
         verdict = sent.get("verdict") if sent is not None else None
+        if verdict not in VERDICTS:
+            # Unsaid, the world's answer is the verdict: a committed decision approves, a refused one does not.
+            fallback = (str(row.get("actor_id")), str(parent.get("action_id") or "")) in taken_for
+            verdict = None if fallback else {"committed": "approved", "refused": "refused"}.get(str(row.get("outcome")))
         found.append((parent, {"by": row.get("actor_id"), "action": action, "outcome": row.get("outcome"),
-                               "at": row.get("at"), "verdict": verdict if verdict in VERDICTS else None}))
+                               "at": row.get("at"), "verdict": verdict}))
     for one in decisions:
         if one.get("play") == "timeout" and one.get("parent") in by_id:
             found.append((by_id[one["parent"]], {"by": one.get("actor"), "action": f"timeout: {one.get('fallback')}",
@@ -2468,6 +2501,7 @@ class TrialRecords:
         self._sealed_seed = sealed_seed
         self._seeded_taken = False
         self._starts: dict[Any, tuple[Any, dict[str, Any]]] = {}
+        self._read_before_setup: set[Any] = set()
         self._lock = threading.Lock()
 
     @staticmethod
@@ -2498,6 +2532,21 @@ class TrialRecords:
                 else:
                     self.seeded, self.seeded_from = start, "first_trial"
             self._starts[key] = (taken, {**start_state(self.seeded, start), "against": self.seeded_from})
+
+    def before_setup(self, key: Any, dsn: str | None) -> None:
+        """Read a trial's start before its scenario's setup writes the records the scenario starts from, so whether it
+        started from the seed is never the setup's own writes."""
+        self.start(key, dsn)
+        with self._lock:
+            self._read_before_setup.add(key)
+
+    def begin(self, key: Any, dsn: str | None) -> None:
+        """Read a trial's records as its call begins: what World changes compares its end against. Its start is read
+        now unless it was read before its setup."""
+        with self._lock:
+            read = key in self._read_before_setup
+            self._read_before_setup.discard(key)
+        (self.rebase if read else self.start)(key, dsn)
 
     def rebase(self, key: Any, dsn: str | None) -> None:
         """Read a trial's records again once its pre-run sessions wrote theirs, so World changes shows only what the
@@ -2708,6 +2757,12 @@ class CallRunnerImpl:
         )
         self._scenario_room_counts: dict[str, int] = {}
         self._closed = False
+
+    async def before_setup(self, runtime: EnvironmentRuntime) -> None:
+        """Read the trial's start on its reset world, before the scenario's setup writes."""
+        world_database = _find_postgres_endpoint(runtime)
+        dsn = world_database.address if world_database is not None else None
+        await asyncio.to_thread(self._records.before_setup, id(runtime), dsn)
 
     def _cleanup_credentials(self) -> None:
         if self._adc_path is None:
@@ -3046,7 +3101,7 @@ class CallRunnerImpl:
 
         async def place_with_world_actors() -> SimulationReport:
             # The trial's starting records, after its reset: whether it started from the seed.
-            await asyncio.to_thread(self._records.start, id(runtime), records_dsn)
+            await asyncio.to_thread(self._records.begin, id(runtime), records_dsn)
             if actors is None:
                 return await place()
             # What the actors wrote before T0 is in the world before the call starts.

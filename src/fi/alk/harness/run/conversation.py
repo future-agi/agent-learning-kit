@@ -745,11 +745,9 @@ async def converse(
             said = turn.text.strip()
             due_turn = actors.still_to_come() if actors is not None and DONE in said else None
             if due_turn is not None:
-                # The person is about to close, but an actor the scenario schedules has not come in yet: it comes in
-                # now, the agent answers it, and the person hears that before deciding again.
+                # The person is about to close, but an actor the scenario schedules has not come in yet: the close
+                # waits, the actor comes in now, the agent answers it, and the person hears that before deciding again.
                 closing = said.replace(DONE, "").strip()
-                if closing:
-                    record("customer", closing)
                 heard_after = []
                 for actor, line in await actors.due_lines(
                     agent_turns=due_turn,
@@ -773,10 +771,16 @@ async def converse(
                 if transcript.ended:
                     break
                 if not heard_after:
-                    # It had nothing to add: the close stands, its line already recorded.
+                    # It had nothing to add: the close stands.
+                    if closing:
+                        record("customer", closing)
                     transcript.ended = FINISHED
                     break
-                said = (await customer.say("\n".join(heard_after))).text.strip()
+                said = (
+                    await customer.say(
+                        "Before you finished, someone else spoke up:\n" + "\n".join(heard_after)
+                    )
+                ).text.strip()
             if DONE in said or STUCK in said:
                 transcript.ended = GAVE_UP if STUCK in said else FINISHED
                 # The closing line comes with the sentinel, and is kept. Breaking on the marker

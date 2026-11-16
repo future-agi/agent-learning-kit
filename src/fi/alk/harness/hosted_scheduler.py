@@ -2265,6 +2265,9 @@ class HostedScheduler:
             "world_index": world_index,
             "scenario_attempt": attempt,
         }
+        before_setup = getattr(self._call_runner, "before_setup", None)
+        if before_setup is not None:
+            await before_setup(runtime)
         setup = await _run_phase(
             scenario.setup,
             world,

@@ -88,6 +88,30 @@ def test_a_timeout_after_commit_lets_the_tool_run_and_loses_its_answer():
     assert (row["outcome"], row["error"]) == ("committed", "response_lost")
 
 
+def test_a_lost_answer_is_recorded_and_its_trial_graded_though_the_agent_s_tracers_keep_it_twice(monkeypatch):
+    from fi.alk.harness.call_runner import _merge_span_calls, evidence_notices, missing_evidence
+    from fi.alk.harness.world.runtime import Call
+
+    door, log = _door([{"action": "issue_refund", "mode": "timeout_after_commit", "on_call": 1, "delay_seconds": 0}])
+    _wired(monkeypatch, door)
+    held = bootstrap.door("issue_refund")(lambda order_id, amount: {"refund_id": "RF-100", "amount": amount})
+    with pytest.raises(TimeoutError):
+        held("1043", 89.0)
+    [row] = log.rows()
+    assert (row["outcome"], row["error"], row["arguments"]) == (
+        "committed", "response_lost", {"order_id": "1043", "amount": 89.0}
+    )
+    # The tool's own trace line saw the run commit; the framework's span saw the timeout the agent heard.
+    ran = Call(name="issue_refund", arguments={"order_id": "1043", "amount": 89}, ok=True, result={"refund_id": "RF-100"})
+    heard = Call(name="issue_refund", arguments={"order_id": "1043", "amount": 89.0}, ok=False, error="timed out")
+    calls = _merge_span_calls([ran], [heard])
+    notices = evidence_notices(log.rows(), calls, {"issue_refund"})
+    assert notices == [] and missing_evidence(notices, {}) == {}
+    # A retry the door never saw is still a call it kept no row for.
+    retried = [*calls, Call(name="issue_refund", arguments={"order_id": "1043", "amount": 89.0}, ok=True)]
+    assert evidence_notices(log.rows(), retried, {"issue_refund"})[0]["count"] == 1
+
+
 def test_a_door_that_fails_lets_the_tool_run_and_marks_the_trial_s_evidence_incomplete(monkeypatch):
     import fi.alk.harness.call_runner as cr
     from fi.alk.harness.call_runner import evidence_notices, missing_evidence, read_tool_trace

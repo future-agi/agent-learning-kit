@@ -213,6 +213,87 @@ def test_a_new_trial_s_dispatcher_starts_with_none_of_the_last_trial_s_actor_sta
     assert second.sent == 0 and second.cut == [] and second.problems == []
 
 
+@pytest.mark.parametrize(
+    ("fallback_arguments", "decided"),
+    [({}, ("pol_elena", "declined")), ({"record": {"policy_id": "pol_given", "status": "void"}}, ("pol_given", "void"))],
+)
+def test_a_timed_out_approver_s_fallback_decline_commits_on_the_request_s_record(tmp_path, fallback_arguments, decided):
+    import sqlite3
+
+    from fi.alk.harness.actor_dispatch import DoorActs, build_dispatcher
+    from fi.alk.harness.actors import Activation, Trigger
+    from fi.alk.harness.world_door import RecordExecutor, Routed
+
+    db = sqlite3.connect(":memory:", check_same_thread=False)
+    db.execute('CREATE TABLE "cancellation_approvals" (policy_id TEXT NOT NULL, status TEXT DEFAULT \'declined\')')
+    door = WorldDoor(
+        Routed(None, RecordExecutor(lambda sql, params: db.execute(sql.replace("%s", "?"), params).rowcount)),
+        MemoryLog(),
+        DictRoster({"supervisor": {"permitted_actions": ["cancellation_approvals.put"]}}),
+    )
+    supervisor = Actor(
+        id="supervisor",
+        name="Dana",
+        permitted_actions=["cancellation_approvals.put"],
+        activation=Activation(
+            trigger=Trigger(kind="on_tool", tool="request_policy_cancellation"),
+            timeout_seconds=30,
+            fallback="cancellation_approvals.put",
+            fallback_arguments=fallback_arguments,
+        ),
+    )
+    save_actors(tmp_path, ActorList(actors=[supervisor]))
+    request = {
+        "actor_id": AGENT,
+        "name": "request_policy_cancellation",
+        "action": "request_policy_cancellation",
+        "action_id": "a1",
+        "arguments": json.dumps({"policy_id": "pol_elena"}),
+    }
+    dispatcher = build_dispatcher(
+        {"actors": [{"id": "supervisor"}]}, tmp_path, act=DoorActs(door), read_log=lambda: [request], records=None,
+        trial_id="t1",
+    )
+    now = [0.0]
+    dispatcher.clock = lambda: now[0]
+
+    async def run():
+        await dispatcher.tick()
+        now[0] = 31
+        await dispatcher.tick()
+
+    asyncio.run(run())
+    [row] = door.events(actor="supervisor")
+    assert row["outcome"] == "committed" and row["parent_event_id"] == "a1"
+    assert db.execute('SELECT policy_id, status FROM "cancellation_approvals"').fetchall() == [decided]
+
+
+@pytest.mark.parametrize(
+    ("decision", "timeout", "verdict"),
+    [
+        ({"outcome": "committed"}, None, "approved"),
+        ({"outcome": "refused"}, None, "refused"),
+        (None, {"fallback": "decline", "outcome": "declined"}, "refused"),
+        ({"outcome": "committed"}, {"fallback": "approvals.put", "outcome": "fallback_action"}, None),
+    ],
+)
+def test_an_approval_s_verdict_is_what_the_world_made_of_the_decision(decision, timeout, verdict):
+    from fi.alk.harness.call_runner import approvals
+
+    log = [{"actor_id": AGENT, "name": "request_cancellation", "action_id": "a1", "at": 1.0, "outcome": "committed"}]
+    decisions = []
+    if decision is not None:
+        log.append({"actor_id": "supervisor", "name": "put", "action": "approvals.put", "action_id": "s1", "at": 2.0,
+                    "parent_event_id": "a1", **decision})
+        if timeout is None:
+            decisions.append({"actor": "supervisor", "play": "mocked", "action": "approvals.put", "parent": "a1",
+                              "outcome": decision["outcome"], "verdict": None})
+    if timeout is not None:
+        decisions.append({"actor": "supervisor", "play": "timeout", "parent": "a1", "at": 2.0, **timeout})
+    lines = approvals(log, decisions)
+    assert {line["verdict"] for line in lines} == {verdict}
+
+
 def test_units_and_time_zones_reach_the_trial_records_as_written():
     contract = AgentContract(
         agent="ledger",

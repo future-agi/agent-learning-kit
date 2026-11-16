@@ -5063,3 +5063,38 @@ def test_a_transcript_only_check_is_still_graded_when_the_world_s_evidence_is_mi
         monkeypatch, _all, goals=[FakeSubGoal("greeted", lambda w, c: None, judged="judge")], outcome=missing
     )
     assert receipt.status == "passed" and receipt.sub_goals[0].held is True
+
+
+def test_a_call_runner_reads_a_trial_s_start_before_the_scenario_s_setup_writes() -> None:
+    worlds: dict[int, InMemoryWorld] = {}
+    read: dict[str, Any] = {}
+
+    class _Factory:
+        async def create(self, runtime: EnvironmentRuntime, *, rng: random.Random) -> InMemoryWorld:
+            worlds[runtime.world_index] = InMemoryWorld(runtime.world_index, rng)
+            return worlds[runtime.world_index]
+
+    class _Runner:
+        async def before_setup(self, runtime: EnvironmentRuntime) -> None:
+            read["start"] = worlds[runtime.world_index].state()
+
+        async def run(self, scenario: FakeScenario, runtime: EnvironmentRuntime) -> hs.CallOutcome:
+            read["call"] = worlds[runtime.world_index].state()
+            return _call_outcome(turns=2)
+
+    async def scenario() -> None:
+        outbound = FakeOutbound()
+        pool, _ = _pool(1, outbound=outbound)
+        await pool.start()
+        scheduler = hs.HostedScheduler(
+            pool=pool, world_factory=_Factory(), call_runner=_Runner(), outbound=outbound, job_seed=1
+        )
+        declined = {"id": 1, "status": "declined"}
+        await scheduler.run(
+            [FakeScenario("declines", "id-1", setup_fn=lambda world: world.put("approvals", declined),
+                          requires_tool_evidence=False)]
+        )
+        await pool.close()
+
+    asyncio.run(scenario())
+    assert read == {"start": {}, "call": {"approvals": [{"id": 1, "status": "declined"}]}}

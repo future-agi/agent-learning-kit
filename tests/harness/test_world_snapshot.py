@@ -249,3 +249,77 @@ def test_pre_run_sessions_neither_make_a_trial_read_differs_nor_count_as_its_cha
     sealed = records.end("w0", "dsn")
     assert sealed["start"] == {"state": "seeded", "tables": [], "against": "first_trial"}
     assert [(one["table"], one["kind"]) for one in sealed["records"]["changes"]] == [("orders", "changed")]
+
+
+@pytest.mark.skipif(not os.environ.get("ALK_TEST_POSTGRES_DSN"), reason="needs ALK_TEST_POSTGRES_DSN")
+def test_each_trial_of_a_run_starts_from_the_seed_and_its_setup_s_key_never_blocks_a_generated_one(tmp_path):
+    import json
+    import uuid
+
+    import psycopg
+    from psycopg.conninfo import conninfo_to_dict, make_conninfo
+
+    from fi.alk.harness.call_runner import sealed_seed
+    from fi.alk.harness.process_runtime import (
+        EngineCredentials,
+        _reset_template_database,
+        default_sql_runner,
+        sealed_seed_digest,
+    )
+    from fi.alk.harness.world.stores.postgres import AttachedPostgresStore
+
+    admin = os.environ["ALK_TEST_POSTGRES_DSN"]
+    parts = conninfo_to_dict(admin)
+    port = int(parts.get("port") or 5432)
+    credentials = EngineCredentials(parts["user"], parts.get("password", ""))
+    template, world = f"seed_{uuid.uuid4().hex[:8]}", f"w_{uuid.uuid4().hex[:8]}"
+    with psycopg.connect(admin, autocommit=True) as connection:
+        connection.execute(f'CREATE DATABASE "{template}"')
+    try:
+        with psycopg.connect(make_conninfo(admin, dbname=template), autocommit=True) as connection:
+            connection.execute("CREATE TABLE policies (policy_id text PRIMARY KEY, status text)")
+            connection.execute("INSERT INTO policies VALUES ('pol_1', 'active')")
+            connection.execute(
+                "CREATE TABLE approvals (id SERIAL PRIMARY KEY, policy_id text REFERENCES policies, status text)"
+            )
+        digested = sealed_seed_digest(host=parts["host"], port=port, credentials=credentials, dbname=template)
+        with psycopg.connect(admin, autocommit=True) as connection:
+            connection.execute(f'ALTER DATABASE "{template}" WITH IS_TEMPLATE true ALLOW_CONNECTIONS false')
+        (tmp_path / "artifacts").mkdir()
+        (tmp_path / "artifacts" / "build.json").write_text(
+            json.dumps({"stores": [{"strategy": "template_database", "seed_digest": digested}]})
+        )
+        world_dsn = make_conninfo(admin, dbname=world)
+        store = AttachedPostgresStore(world_dsn)
+        records = TrialRecords(sealed_seed(tmp_path))
+
+        def reset() -> None:
+            _reset_template_database(
+                host=parts["host"], port=port, credentials=credentials, world_db=world, template_db=template,
+                sql_runner=default_sql_runner, process_name="world-db",
+            )
+
+        # Trial 1: its scenario's setup puts a decided approval under an explicit key, then an actor's approval
+        # takes its key from the table's own sequence.
+        reset()
+        records.before_setup("w0", world_dsn)
+        store.add("approvals", {"id": 1, "policy_id": "pol_1", "status": "declined"})
+        records.begin("w0", world_dsn)
+        written = store.add("approvals", {"policy_id": "pol_1", "status": "approved"})
+        first = records.end("w0", world_dsn)
+        assert first["start"] == {"state": "seeded", "tables": [], "against": "sealed_seed"}
+        assert [(one["kind"], one["key"]) for one in first["records"]["changes"]] == [("added", [written["id"]])]
+
+        # Trial 2 on the same world: none of trial 1's records are there, and it starts from the seed.
+        reset()
+        records.before_setup("w0", world_dsn)
+        assert store.state()["approvals"] == []
+        records.begin("w0", world_dsn)
+        second = records.end("w0", world_dsn)
+        assert second["start"] == {"state": "seeded", "tables": [], "against": "sealed_seed"}
+        assert second["records"]["changes"] == []
+    finally:
+        with psycopg.connect(admin, autocommit=True) as connection:
+            connection.execute(f'DROP DATABASE IF EXISTS "{world}" WITH (FORCE)')
+            connection.execute(f'ALTER DATABASE "{template}" WITH IS_TEMPLATE false')
+            connection.execute(f'DROP DATABASE IF EXISTS "{template}"')

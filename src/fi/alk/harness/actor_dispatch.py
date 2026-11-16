@@ -106,6 +106,19 @@ def contacts(arguments: Any, actor: Actor) -> bool:
     )
 
 
+def _request_arguments(cause: str, log: list[dict[str, Any]]) -> dict[str, Any]:
+    """The arguments of the request an actor timed out on: what its fallback action is taken with when the actor
+    names none of its own, so the answer reaches the record the request is about."""
+    row = next((one for one in log if cause and str(one.get("action_id") or "") == cause), None)
+    arguments = (row or {}).get("arguments")
+    if isinstance(arguments, (str, bytes)):
+        try:
+            arguments = json.loads(arguments)
+        except ValueError:
+            return {}
+    return dict(arguments) if isinstance(arguments, dict) else {}
+
+
 def form_of(action: str, actor: Actor) -> str:
     """`record` for a record change the actor is permitted (`approvals.change`), else `tool`."""
     from .world_door import record_action
@@ -571,7 +584,7 @@ class ActorDispatcher:
             sent = await self._send(
                 actor,
                 fallback,
-                dict(actor.activation.fallback_arguments),
+                dict(actor.activation.fallback_arguments) or _request_arguments(cause, log),
                 f"{self.trial_id}:{actor.id}:fallback",
                 cause,
             )
