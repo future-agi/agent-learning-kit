@@ -2,14 +2,14 @@ def check(world, calls, reference=None):
     want = {}
     for step in reference or ():
         if step.get("tool") == "update_insurance":
-            want = {k: v for k, v in step.get("arguments", {}).items() if k in ("patient_id", "payer", "member_id")}
+            want = {k: v for k, v in step.get("arguments", {}).items() if k in ("patient_id", "payer", "member_id") or (k == "group_number" and v)}
     state = world.state()
     now = (state.get("clock") or [{"now": ""}])[0]["now"]
     rows = [r for r in state.get("insurance", []) if r["updated_at"] == now]
     if not rows:
         return "not done: no insurance record was updated"
     if want and not any(all(r.get(k) == v for k, v in want.items()) for r in rows):
-        return f"done wrong: recorded {[(r['patient_id'], r['payer'], r['member_id']) for r in rows]}, the patient gave {want}"
+        return f"done wrong: recorded {[(r['patient_id'], r['payer'], r['member_id'], r['group_number']) for r in rows]}, the patient gave {want}"
     missing = _evidence_missing(world, calls, reference)
     if missing:
         return f"done blind: the decision rests on {', '.join(missing)}, which was never read"

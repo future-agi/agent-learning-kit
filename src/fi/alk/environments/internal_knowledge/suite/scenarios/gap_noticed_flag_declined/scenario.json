@@ -14,7 +14,7 @@
     "name": "Maya Patel",
     "gender": "female",
     "age_group": "25-32",
-    "occupation": "Engineer",
+    "occupation": "QA Engineer",
     "location": "India",
     "personality": "Cautious and skeptical",
     "communication_style": "Questioning",
@@ -60,7 +60,9 @@
         "employee_id": "E13"
       },
       "environment_arguments": {},
-      "fixed": {}
+      "fixed": {
+        "passage_id": "record: Acceptable Use Policy 2.0, section 1"
+      }
     },
     {
       "tool": "search_documents",

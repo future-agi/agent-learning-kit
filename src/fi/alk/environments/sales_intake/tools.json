@@ -117,7 +117,7 @@
   },
   {
     "name": "get_lead",
-    "description": "A lead: the rubric facts on file, status, owner or queue, notes and demos.",
+    "description": "A lead: the rubric facts on file, status, owner (id and name) or queue, notes and demos.",
     "parameters": {
       "type": "object",
       "required": [
@@ -198,7 +198,7 @@
   },
   {
     "name": "get_routing_rules",
-    "description": "Territory owners by country and the fallback queue for unmapped countries; with country, the owner that applies.",
+    "description": "Territory owners (id and name) by country and the fallback queue for unmapped countries; with country, the owner that applies.",
     "parameters": {
       "type": "object",
       "required": [],
@@ -596,6 +596,49 @@
       "properties": {
         "demo_id": {},
         "status": {}
+      }
+    }
+  },
+  {
+    "name": "reschedule_demo",
+    "description": "Move a booked demo to another slot the prospect chose, in one step: the new slot is booked on the lead owner's calendar first and only then is the old demo released (status rescheduled, its event cancelled, its slot open). If the new slot is taken or not the owner's, nothing changes and the original demo stays booked. Needs prospect_confirmed=true.",
+    "parameters": {
+      "type": "object",
+      "required": [
+        "demo_id",
+        "slot_id",
+        "prospect_confirmed"
+      ],
+      "properties": {
+        "demo_id": {
+          "type": "string",
+          "description": "The booked demo to move, e.g. D01"
+        },
+        "slot_id": {
+          "type": "string",
+          "description": "The new slot, from list_demo_slots"
+        },
+        "prospect_confirmed": {
+          "type": "boolean",
+          "description": "The prospect picked this new slot"
+        },
+        "request_key": {
+          "type": "string",
+          "description": "Idempotency key"
+        }
+      }
+    },
+    "mutates_state": true,
+    "returns": {
+      "type": "object",
+      "required": [
+        "demo_id",
+        "status"
+      ],
+      "properties": {
+        "demo_id": {},
+        "status": {},
+        "replaces": {}
       }
     }
   },
@@ -2880,6 +2923,50 @@
       "required": [
         "messages",
         "has_more"
+      ]
+    }
+  },
+  {
+    "name": "slack_get_approval",
+    "description": "Read an approval the desk holds for a Slack post: the exact text it covers, the channel, its status (approved, used) and expiry. Post that text exactly with slack_send_message.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "approval_id": {
+          "type": "string",
+          "description": "The approval id the approver gave."
+        }
+      },
+      "required": [
+        "approval_id"
+      ]
+    },
+    "mutates_state": false,
+    "returns": {
+      "type": "object",
+      "properties": {
+        "approval_id": {
+          "type": "string"
+        },
+        "channel_id": {
+          "type": "string"
+        },
+        "approved_text": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "expires_at": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "approval_id",
+        "channel_id",
+        "approved_text",
+        "status",
+        "expires_at"
       ]
     }
   },

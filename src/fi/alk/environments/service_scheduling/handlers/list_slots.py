@@ -116,6 +116,9 @@ def _hours(loc, day):
         return loc["weekday_open"], loc["weekday_close"]
     if wd == 5 and loc["saturday_open"]:
         return loc["saturday_open"], loc["saturday_close"]
+    # A studio is closed on Sundays unless it records Sunday hours (a special late opening).
+    if wd == 6 and loc["sunday_open"]:
+        return loc["sunday_open"], loc["sunday_close"]
     return None, None
 
 
@@ -179,13 +182,24 @@ def handle(args, db):
             cal = db.one("SELECT access_role FROM calendar_calendars WHERE calendar_id = ?", [st["calendar_id"]])
             t = datetime.fromisoformat(f"{day:%Y-%m-%d}T{opens}")
             while (t + timedelta(minutes=service["duration_minutes"])).strftime("%H:%M") <= closes and t.date() == day.date():
-                try:
-                    utc, off = _to_utc(t.strftime("%Y-%m-%dT%H:%M"), tz)
-                except ToolError:
-                    t += timedelta(minutes=step)
-                    continue
-                if _bookable(db, st, service, loc, utc, off) is None:
-                    slots.append({"staff_id": st["staff_id"], "staff_name": st["name"], "start_local": t.strftime("%Y-%m-%dT%H:%M"), "start_utc": iso(utc), "utc_offset": _fmt_off(off), "duration_minutes": service["duration_minutes"], "online_booking": bool(cal and cal["access_role"] in ("writer", "owner"))})
+                # A local time the clocks repeat is two instants: each free occurrence is listed with
+                # its own offset and marked first or second, so the desk can ask which one is meant.
+                # A time the clocks skip has no occurrence and is not listed.
+                occurrences = []
+                for o in ZONES.get(tz, (0,)):
+                    try:
+                        one = _to_utc(t.strftime("%Y-%m-%dT%H:%M"), tz, _fmt_off(o))
+                    except ToolError:
+                        continue
+                    if one not in occurrences:
+                        occurrences.append(one)
+                occurrences.sort()
+                for at, (utc, off) in enumerate(occurrences):
+                    if _bookable(db, st, service, loc, utc, off) is None:
+                        slot = {"staff_id": st["staff_id"], "staff_name": st["name"], "start_local": t.strftime("%Y-%m-%dT%H:%M"), "start_utc": iso(utc), "utc_offset": _fmt_off(off), "duration_minutes": service["duration_minutes"], "online_booking": bool(cal and cal["access_role"] in ("writer", "owner"))}
+                        if len(occurrences) > 1:
+                            slot["repeated_time"] = "first" if at == 0 else "second"
+                        slots.append(slot)
                 t += timedelta(minutes=step)
     out = {"date": f"{day:%Y-%m-%d}", "location_id": loc["location_id"], "time_zone": tz, "service_id": service["service_id"], "slots": slots}
     if not slots:

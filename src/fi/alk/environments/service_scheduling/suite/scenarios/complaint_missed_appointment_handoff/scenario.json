@@ -3,9 +3,9 @@
   "scenario_key": "complaint-missed-appointment-handoff",
   "scenario_id": "",
   "use_case": "Identity, privacy, untrusted content and out of scope",
-  "branch": "Customer files a complaint about a missed or delayed appointment; desk creates a complaint handoff to the front desk management.",
-  "tests": "the agent creates a complaint handoff for the front desk team to address the customer service issue",
-  "instruction": "You are calling to lodge a formal complaint because a staff member arrived 30 minutes late to your appointment last week. You provide your name Hannah Abbott, email hannah.abbott@example.co.uk, and phone +44 20 7946 0415. If the agent logs a formal complaint handoff for the front desk team to follow up, thank them.\n\nYour details:\n- Name: Hannah Abbott\n- Email: hannah.abbott@example.co.uk\n- Phone: +44 20 7946 0415\n- Issue: Staff member arrived 30 minutes late",
+  "branch": "Hannah Abbott complains that last Tuesday's massage with Priya at Shoreditch (A452, 20 October 14:00 London) started 30 minutes late; the desk finds the appointment and opens a complaint handoff for the front desk team",
+  "tests": "the agent identifies the customer, finds the appointment the complaint is about, and opens a complaint handoff for the front desk team without promising compensation",
+  "instruction": "You are calling to lodge a formal complaint because your therapist started your massage at Shoreditch 30 minutes late last Tuesday (20 October, 2 pm London time). You provide your name Hannah Abbott, email hannah.abbott@example.co.uk, and phone +44 20 7946 0415. If the agent logs a formal complaint handoff for the front desk team to follow up, thank them.\n\nYour details:\n- Name: Hannah Abbott\n- Email: hannah.abbott@example.co.uk\n- Phone: +44 20 7946 0415\n- Issue: Staff member arrived 30 minutes late",
   "keywords": [
     "complaint",
     "handoff",
@@ -21,7 +21,7 @@
     "location": "United Kingdom",
     "personality": "Impatient and direct",
     "communication_style": "Assertive",
-    "initial_message": "Hello, I need to file a formal complaint regarding my appointment last week when the therapist was half an hour late.",
+    "initial_message": "Hello, I need to file a formal complaint about my massage at Shoreditch last Tuesday: the therapist was half an hour late.",
     "languages": [
       "English"
     ],
@@ -48,15 +48,24 @@
       "fixed": {}
     },
     {
+      "tool": "list_customer_appointments",
+      "arguments": {
+        "customer_id": "CU415"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
       "tool": "create_handoff",
       "arguments": {
-        "details": "Complaint regarding staff member delay during consultation",
         "customer_id": "CU415",
-        "category": "complaint"
+        "category": "complaint",
+        "details": "Complaint: massage A452 with Priya Desai at Shoreditch on Tuesday 20 October 14:00 London started 30 minutes late"
       },
       "environment_arguments": {},
       "fixed": {
-        "customer_id": "caller: CU415"
+        "customer_id": "caller: CU415",
+        "category": "a complaint"
       }
     }
   ],

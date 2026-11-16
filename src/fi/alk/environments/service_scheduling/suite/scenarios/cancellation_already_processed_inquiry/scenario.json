@@ -5,12 +5,12 @@
   "use_case": "Pick up a booking request from the bookings mailbox",
   "branch": "An email thread th_s403 requests cancellation for appointment A404 which is already cancelled; the agent checks appointment status and explains it is already cancelled",
   "tests": "the agent checks appointment status from the records and explains that the requested appointment is already cancelled",
-  "instruction": "You are on the front desk team. Ask the assistant to process Elena Rostova's cancellation request email (thread th_s403_cancel_again) for her appointment A404.\n\nDetails you have:\n- Customer: Elena Rostova\n- Email: elena.rostova@example.com\n- Phone on file: +1 212 555 0406\n- Appointment: A404",
+  "instruction": "You are Jordan Ellis on the front desk team. Ask the assistant to process Elena Rostova's cancellation request email (thread th_s403_cancel_again) for her appointment A404.\n\nDetails you have:\n- Customer: Elena Rostova\n- Email: elena.rostova@example.com\n- Phone on file: +1 212 555 0406\n- Appointment: A404",
   "keywords": [
     "cancellation"
   ],
   "persona": {
-    "name": "Samira Khan",
+    "name": "Jordan Ellis",
     "gender": "",
     "age_group": "",
     "occupation": "Customer Service",

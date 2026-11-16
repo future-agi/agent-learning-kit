@@ -4,7 +4,7 @@
   "scenario_id": "",
   "use_case": "Email requests and corrections",
   "branch": "Elena Ortiz's husband asks for a reply to her email th_c12_waitlist_p03 about an earlier dermatology slot before her appointment A10 on 5 November; the desk checks dermatology slots 2-4 November, finds none open, and drafts a reply",
-  "tests": "the agent reads th_c12_waitlist_p03, verifies Elena Ortiz, checks find_available_slots for dermatology 2 to 4 November, and drafts a reply explaining A10 stands and no earlier slot is open",
+  "tests": "the agent reads th_c12_waitlist_p03, verifies Elena Ortiz, checks dermatology slots for 2 to 4 November, looks up A10, and drafts a reply that no earlier slot is open and A10 (5 November, 15:00, Riverbank Central) stands",
   "instruction": "You are Carlos Ortiz, contacting the clinic as the authorised proxy for your wife Elena Ortiz. Elena sent an email (thread th_c12_waitlist_p03) asking if any earlier dermatology slots are open before her mole review A10 on 5 November. Contact the clinic desk on chat, provide Elena's details, and ask them to check availability for earlier dermatology slots between 2 and 4 November and draft a reply to Elena's email explaining that appointment A10 stands and no earlier slot is currently available.\n\nDetails:\n- Patient Name: Elena Ortiz\n- Patient DOB: 1975-06-21\n- Patient Email: elena.ortiz@example.com\n- Appointment: A10 (5 November 2026)\n- Specialty: dermatology\n- Date range to check: 2 November to 4 November 2026",
   "keywords": [
     "waitlist"
@@ -71,14 +71,22 @@
       "fixed": {}
     },
     {
+      "tool": "get_appointment",
+      "arguments": {
+        "appointment_id": "A10"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
       "tool": "create_draft",
       "arguments": {
         "cc": null,
-        "body": "Dear Elena Ortiz, we have checked our dermatology availability for 2 to 4 November and there are currently no earlier slots open. Your appointment A10 on Thursday 5 November at 15:00 at Riverbank Central remains confirmed. Riverbank Appointments Desk",
+        "body": "Dear Elena Ortiz, we have checked dermatology availability for 2 to 4 November and no earlier slot is open on those days. Your appointment A10 on Thursday 5 November at 15:00 at Riverbank Central stays as it is. Riverbank Appointments Desk",
         "to": [
           "elena.ortiz@example.com"
         ],
-        "replyToMessageId": "cmsg_013",
+        "replyToMessageId": "cmsg_040",
         "attachments": null,
         "subject": "Re: Earlier dermatology appointment",
         "htmlBody": null,

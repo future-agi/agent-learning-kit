@@ -3,8 +3,8 @@
   "scenario_key": "no-version-in-effect-on-the-date",
   "scenario_id": "",
   "use_case": "Answer what applied on a past date from the version then in effect",
-  "branch": "Ben Carter (E12) asks what relocation allowance applied to his UK move on 2025-11-15; desk checks version history, notes policy took effect 2026-02-01, and explains no policy was in effect on that date",
-  "tests": "the desk looks up relocation policy versions, identifies that no version was in effect on 2025-11-15 (policy started 2026-02-01), and explains retroactive claims depend on People Ops",
+  "branch": "Ben Carter (E12) asks what relocation allowance applied to his UK move on 2025-11-15; desk checks version history and section 5, which says the policy took effect 2026-02-01 with no earlier version and earlier moves were handled individually by People, and quotes no allowance for that date",
+  "tests": "the desk lists the relocation policy versions, finds none in effect on 2025-11-15 (the only version took effect 2026-02-01), and cites section 5: moves before that date were handled individually by People, so it quotes no allowance",
   "instruction": "You relocated within the UK on November 15, 2025 (2025-11-15). You ask what relocation allowance applied on that date. If the desk explains that the Relocation Policy did not take effect until February 1, 2026 and that no policy was in effect on November 15, 2025, accept this explanation.\n\nYour details:\n- Name: Ben Carter\n- Employee ID: E12\n- Move Date: 2025-11-15",
   "keywords": [
     "effective_version",
@@ -14,7 +14,7 @@
     "name": "Ben Carter",
     "gender": "male",
     "age_group": "25-32",
-    "occupation": "Customer Service",
+    "occupation": "People Coordinator",
     "location": "Canada",
     "personality": "Easy-going",
     "communication_style": "Direct and concise",
@@ -51,8 +51,17 @@
         "employee_id": "E12"
       },
       "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "fetch_passage",
+      "arguments": {
+        "employee_id": "E12",
+        "passage_id": "P-RELOCATIONV1-05"
+      },
+      "environment_arguments": {},
       "fixed": {
-        "family": "record: relocation"
+        "passage_id": "record: Relocation Policy 1.0, section 5"
       }
     }
   ],

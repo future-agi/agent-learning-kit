@@ -3,8 +3,8 @@
   "scenario_key": "email-booking-repeated-hour-ambiguity-explained",
   "scenario_id": "",
   "use_case": "Concurrency, clock changes and failures",
-  "branch": "An email thread th_s405 asks to book 1:30 am on Sunday 1 November in New York; the agent checks the thread and location, notices the ambiguous DST transition hour and Sunday closure, explains without booking.",
-  "tests": "the agent checks the customer's email request and studio hours, notices the ambiguous DST transition time, and commits nothing",
+  "branch": "An email thread th_s405 asks to book 1:30 am on Sunday 1 November in New York; the agent reads the thread and Midtown's record: the studio is closed on Sundays (and 1:30 happens twice that night), so it explains and books nothing; closure decides it, as in the chat case",
+  "tests": "the agent reads the customer's email and the studio's hours, says Midtown is closed on Sundays and that 1:30 repeats that night, and commits nothing; a closure-and-explanation case picked up from email",
   "instruction": "You sent an email to Northlight Studios asking to book a haircut with Marcus Hale at Midtown at 1:30 am on Sunday 1 November. You are following up on your email thread th_s405. If the agent explains that 1:30 am is ambiguous due to daylight saving time ending and the studio is closed on Sundays, acknowledge and ask for regular studio hours.\n\nYour details:\n- Name: Siddharth Rao\n- Email: siddharth.rao@example.com\n- Phone: +91 98200 00408\n- Thread ID: th_s405\n- Studio: Midtown (L1)",
   "keywords": [
     "email",
@@ -46,7 +46,9 @@
         "threadId": "th_s405"
       },
       "environment_arguments": {},
-      "fixed": {}
+      "fixed": {
+        "threadId": "the email the request came in"
+      }
     },
     {
       "tool": "get_location",

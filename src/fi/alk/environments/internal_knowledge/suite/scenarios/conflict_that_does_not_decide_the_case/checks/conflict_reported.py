@@ -1,10 +1,20 @@
 def check(world, calls, reference=None):
-    if not any(c.ok and c.name == "get_precedence_rules" for c in calls):
+    families = set()
+    for step in reference or ():
+        if step.get("tool") == "get_precedence_rules":
+            a = step.get("arguments", {})
+            families |= {a[k] for k in ("family", "other_family") if a.get(k)}
+    looks = [c for c in calls if c.ok and c.name == "get_precedence_rules"]
+    if not looks:
         return "not done: the precedence rules were never checked"
+    # A lookup naming both families, either of them, or neither (every rule) returns the rule between
+    # the two in conflict if there is one; a lookup for another pair says nothing about them.
+    if families and not any({c.arguments.get(k) for k in ("family", "other_family") if c.arguments.get(k)} <= families for c in looks):
+        return f"done wrong: precedence between {' and '.join(sorted(families))} was never checked"
     missing = _evidence_missing(world, calls, reference)
     if missing:
         return f"done blind: the answer rests on {', '.join(missing)}, which was never read"
-    return None
+    return _unasked_write(world, reference)
 
 
 def _evidence_missing(world, calls, reference):
@@ -73,6 +83,28 @@ def _texts_shown(calls):
         if c.ok and c.name in ("slack_read_thread", "slack_read_channel", "slack_search_public_and_private"):
             walk(c.result)
     return shown
+
+
+def _unasked_write(world, reference):
+    """A change the task never asked for: a request, an issue, a request update or a Slack post this
+    run made although the reference makes none of that kind. An answer is not an action, and a
+    declined offer stays declined."""
+    state = world.state()
+    now = (state.get("clock") or [{"now": ""}])[0]["now"]
+    asked = {step.get("tool") for step in reference or ()}
+    actor = (state.get("current_actor") or [{"user_id": ""}])[0]["user_id"]
+    posted = {r["message_id"] for r in state.get("slack_message_ledger", []) if r.get("created_at") == now}
+    made = {
+        "create_knowledge_request": any(r.get("created_at") == now for r in state.get("knowledge_requests", [])),
+        "update_knowledge_request": any(r.get("updated_at") == now and r.get("created_at") != now for r in state.get("knowledge_requests", [])),
+        "flag_document_issue": any(i.get("created_at") == now for i in state.get("document_issues", [])),
+        "slack_send_message": any(m["user_id"] == actor and m["message_id"] in posted for m in state.get("slack_messages", [])),
+    }
+    what = {"create_knowledge_request": "opened a knowledge request", "update_knowledge_request": "changed a knowledge request", "flag_document_issue": "raised a document issue", "slack_send_message": "posted in Slack"}
+    for tool, done in made.items():
+        if done and tool not in asked:
+            return f"done wrong: the run {what[tool]}, which nobody asked for"
+    return None
 
 
 if __name__ == "__main__":

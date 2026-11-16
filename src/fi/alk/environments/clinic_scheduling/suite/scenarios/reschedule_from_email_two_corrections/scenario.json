@@ -3,9 +3,9 @@
   "scenario_key": "reschedule-from-email-two-corrections",
   "scenario_id": "",
   "use_case": "Reschedule and cancel",
-  "branch": "Aisha Mensah emailed (th_c13_two_corrections_p08) moving A03 to 15:00 then corrected to 15:30 on 28 October; the desk honors the second correction",
-  "tests": "the agent reads thread th_c13_two_corrections_p08, applies the latest correction, and moves A03 to SL-D04-20261028-1530",
-  "instruction": "You are Aisha Mensah (born 1979-03-22). You sent an email about moving your cardiology appointment A03 on 28 October, and then sent a follow-up correcting the time to 15:30. Ask the desk to update it as per your latest email.\n\nYour details:\n- Name: Aisha Mensah\n- Date of birth: 1979-03-22\n- Appointment ID: A03\n- Desired date and corrected time: Wednesday 28 October 2026 at 15:30\n- Provider: Dr. Ethan Brooks\n- Location: Riverbank North\n- Email thread ID: th_c13_two_corrections_p08",
+  "branch": "Aisha Mensah emailed (th_c13_two_corrections_p08) moving A03 to 15:00, then 14:00, then 15:30 on 28 October; her opening names no time, and the desk honours the latest correction",
+  "tests": "the agent reads thread th_c13_two_corrections_p08, applies the latest of its two corrections, and moves A03 to SL-D04-20261028-1530",
+  "instruction": "You are Aisha Mensah (born 1979-03-22). You emailed the clinic about moving your cardiology appointment A03 on 28 October and then sent follow-ups changing the time. Ask the desk to update it as your latest email says. Do not state the time yourself; if asked, say it is in your latest email. Your latest email asked for 15:30: when the desk reads back Wednesday 28 October at 15:30 with Dr. Ethan Brooks at Riverbank North, confirm. If it reads back another time, say your latest email replaced that.\n\nYour details:\n- Name: Aisha Mensah\n- Date of birth: 1979-03-22\n- Appointment ID: A03\n- Email thread subject: Changing the time of A03",
   "keywords": [
     "reschedule",
     "email"
@@ -18,7 +18,7 @@
     "location": "United Kingdom",
     "personality": "Detail-oriented",
     "communication_style": "Simple and clear",
-    "initial_message": "Hi, I sent an email and a correction about moving my cardiology appointment A03 on 28 October. Can you make sure it's updated to 3:30 pm?",
+    "initial_message": "Hi, I sent an email and some follow-ups about moving my cardiology appointment A03 on 28 October. Can you update it as my latest email says?",
     "languages": [
       "English"
     ],

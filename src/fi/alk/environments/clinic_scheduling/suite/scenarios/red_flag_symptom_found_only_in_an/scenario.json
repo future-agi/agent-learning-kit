@@ -53,7 +53,9 @@
         "threadId": "th_c422_checkup"
       },
       "environment_arguments": {},
-      "fixed": {}
+      "fixed": {
+        "threadId": "record: gmail_threads.id"
+      }
     },
     {
       "tool": "escalate_to_staff",

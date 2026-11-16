@@ -58,5 +58,5 @@ def handle(args, db):
             changes.append({"around": b.strftime("%Y-%m-%d"), "from": _fmt_off(_offset_min(loc["time_zone"], a)), "to": _fmt_off(_offset_min(loc["time_zone"], b))})
     closed = [{"date": r["date"], "reason": r["reason"]} for r in db.query("SELECT date, reason FROM blackout_dates WHERE location_id = ? ORDER BY date", [loc["location_id"]])]
     return {"location_id": loc["location_id"], "name": loc["name"], "address": loc["address"], "time_zone": loc["time_zone"], "utc_offset_now": _fmt_off(_offset_min(loc["time_zone"], now)),
-            "hours": {"monday_to_friday": f"{loc['weekday_open']}-{loc['weekday_close']}", "saturday": f"{loc['saturday_open']}-{loc['saturday_close']}" if loc["saturday_open"] else "closed", "sunday": "closed"},
+            "hours": {"monday_to_friday": f"{loc['weekday_open']}-{loc['weekday_close']}", "saturday": f"{loc['saturday_open']}-{loc['saturday_close']}" if loc["saturday_open"] else "closed", "sunday": f"{loc['sunday_open']}-{loc['sunday_close']}" if loc["sunday_open"] else "closed"},
             "closed_dates": closed, "clock_changes": changes}

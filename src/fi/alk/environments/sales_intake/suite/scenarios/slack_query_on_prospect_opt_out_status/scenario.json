@@ -4,7 +4,7 @@
   "scenario_id": "",
   "use_case": "Record consent and stop outreach",
   "branch": "Oliver Hughes asks in Slack message SM09 whether Harbourline's (C05) opt-out is recorded; the desk reads SM09 and contact C05, reporting that C05 remains opted_in as BrightDesk requires the prospect's direct request to opt out",
-  "tests": "the agent reads SM09 in Slack and inspects contact C05, accurately reporting the consent status",
+  "tests": "the agent reads SM09 in Slack, looks up lead L05 to find its contact, reads contact C05 and reports the consent status the record holds (opted_in)",
   "instruction": "You are Oliver Hughes, BrightDesk account executive. You posted in Slack asking if Harbourline's opt-out has been recorded. Ask the desk for an update based on your message SM09. Acknowledge when told that Imogen Pryce's record is still opted_in and requires her direct request.\n\nYour details:\n- Name: Oliver Hughes\n- Lead: L05 (Harbourline)",
   "keywords": [
     "slack",
@@ -49,6 +49,14 @@
       }
     },
     {
+      "tool": "get_lead",
+      "arguments": {
+        "lead_id": "L05"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
       "tool": "get_contact",
       "arguments": {
         "contact_id": "C05"
@@ -57,14 +65,6 @@
       "fixed": {
         "contact_id": "record: Imogen Pryce, C05, Harbourline's contact on L05"
       }
-    },
-    {
-      "tool": "get_lead",
-      "arguments": {
-        "lead_id": "L05"
-      },
-      "environment_arguments": {},
-      "fixed": {}
     }
   ],
   "alternatives": [],

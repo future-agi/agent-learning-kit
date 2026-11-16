@@ -4,7 +4,7 @@
   "scenario_id": "",
   "use_case": "Intake, insurance, preparation and locations",
   "branch": "New insurer that my booked provider does not take",
-  "tests": "Tests updating insurance to an insurer not accepted by the patient's booked provider, recording the update, and explaining provider acceptance without coverage guarantees.",
+  "tests": "the agent records Bupa BU-612300 after read-back, looks up A05 and the orthopaedics directory, and tells her that Dr. Mira Kowalski does not accept Bupa, without guaranteeing cover",
   "instruction": "You are Mei Tanaka (born 27 February 1971). You have recently switched your insurance from AXA Health to Bupa (member number BU-612300). Ask the assistant to update your insurance details. When the assistant reads back and records your new insurer and member number, and notes that your upcoming orthopaedics appointment A05 is with Dr. Mira Kowalski who does not accept Bupa (while explaining options like self-pay or speaking to the front desk, without guaranteeing insurance coverage), acknowledge the information and keep your existing appointment A05 as is for now.",
   "keywords": [
     "insurance",
@@ -64,7 +64,9 @@
         "appointment_id": "A05"
       },
       "environment_arguments": {},
-      "fixed": {}
+      "fixed": {
+        "appointment_id": "record: appointments.appointment_id"
+      }
     },
     {
       "tool": "get_provider_directory",
@@ -82,7 +84,8 @@
   },
   "sub_goals": [
     "insurance_updated",
-    "no_coverage_guarantee"
+    "no_coverage_guarantee",
+    "booked_provider_checked_against_new_insurer"
   ],
   "max_turns": 10,
   "background_noise": false,

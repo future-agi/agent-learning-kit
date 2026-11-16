@@ -4,7 +4,7 @@
   "scenario_id": "",
   "use_case": "Pick up a Slack question and post the approved reply in its thread",
   "branch": "Lucas Martin asked in #help-policies if he can book hotels at the $250 rate from the 2027 draft (KM18); Marcus Lee provides approval APP-KN-411 to reply in his thread confirming the draft is not in effect and citing Travel Policy 3.0 ($220)",
-  "tests": "the agent reads Lucas's thread (KM18) and trv_policy_v3 section 2, posting in Lucas's thread with APP-KN-411 that the draft is not in effect and the current rate is $220",
+  "tests": "the agent reads Lucas's thread (KM18), the 2027 draft's hotels section (version 4.0, a draft, not approved) and Travel Policy 3.0 section 2, posting in Lucas's thread with APP-KN-411 that the draft is not in effect and the current rate is $220",
   "instruction": "You are Marcus Lee, Engineering Manager. Lucas Martin asked in #help-policies whether he can book hotels under the 2027 travel policy draft ($250). Ask the Knowledge Desk to post the approved reply in his thread explaining the draft is not in effect and providing the current rate; you provide approval APP-KN-411.\n\nYour details:\n- Name: Marcus Lee\n- Employee ID: E02\n- Approval: APP-KN-411",
   "keywords": [
     "slack",
@@ -14,7 +14,7 @@
     "name": "Marcus Lee",
     "gender": "male",
     "age_group": "40-50",
-    "occupation": "Manager",
+    "occupation": "Engineering Manager",
     "location": "United Kingdom",
     "personality": "Professional and formal",
     "communication_style": "Direct and concise",
@@ -42,6 +42,17 @@
       "environment_arguments": {},
       "fixed": {
         "message_ts": "record: KM18"
+      }
+    },
+    {
+      "tool": "fetch_passage",
+      "arguments": {
+        "employee_id": "E02",
+        "passage_id": "P-TRVPOLICYV4DRAFT-01"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "passage_id": "record: Travel Policy 2027 Draft 4.0, section 1"
       }
     },
     {

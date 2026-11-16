@@ -4,7 +4,7 @@
   "scenario_id": "",
   "use_case": "Answer availability from the staff calendars and hold slots",
   "branch": "Customer asks for Lucia Fernandez on Friday 30 October when she is marked out of office on her calendar.",
-  "tests": "passes when the agent checks Lucia Fernandez's schedule and accurately reports that she is out of office on Friday 30 October.",
+  "tests": "the agent reads Lucia's calendar for Friday 30 October, sees the all-day out-of-office block, and says she has no consultation times that day (offering another day or staff member) without inventing slots",
   "instruction": "You are checking if Lucia Fernandez is available for an Initial Consultation at the Midtown Studio on Friday 30 October 2026.\n\nYour details:\n- Name: Lucas Silva\n- Email: lucas.silva@example.com\n- Phone: +61 2 9555 0407\n- Service: Initial Consultation\n- Staff: Lucia Fernandez\n- Studio location: Midtown Studio\n- Date: Friday 30 October 2026",
   "keywords": [
     "availability",
@@ -51,17 +51,16 @@
       "fixed": {}
     },
     {
-      "tool": "list_slots",
+      "tool": "list_events",
       "arguments": {
-        "date": "2026-10-30",
-        "location_id": "L1",
-        "staff_id": "ST02",
-        "service_id": "SV1"
+        "calendarId": "CAL-ST02",
+        "startTime": "2026-10-30T00:00:00Z",
+        "endTime": "2026-10-31T04:00:00Z"
       },
       "environment_arguments": {},
       "fixed": {
-        "staff_id": "record: staff.staff_id where name='Lucia Fernandez'",
-        "date": "the day the customer asked about"
+        "calendarId": "Lucia Fernandez's calendar",
+        "startTime": "the day the customer asked about"
       }
     }
   ],

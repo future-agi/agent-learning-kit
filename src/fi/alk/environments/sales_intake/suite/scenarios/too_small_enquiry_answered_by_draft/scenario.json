@@ -63,7 +63,7 @@
     {
       "tool": "create_draft",
       "arguments": {
-        "body": "Hi Ciara, thank you for reaching out. Our platform requires a minimum of 20 support agent seats, so we cannot support a team of 5 at this time.",
+        "body": "Hi Ciara, thank you for reaching out. Our sales team arranges demos for teams of 20 or more support agent seats, so with a team of 5 we cannot offer a demo at this time. Best regards, BrightDesk sales",
         "subject": "Re: Small team enquiry",
         "replyToMessageId": "smsg_013",
         "to": [

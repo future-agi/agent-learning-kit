@@ -3,9 +3,9 @@
   "scenario_key": "slack-reply-corrected-parental-leave-maya",
   "scenario_id": "",
   "use_case": "Pick up a Slack question and post the approved reply in its thread",
-  "branch": "Maya Patel asked about office days in KM09 but immediately corrected her question in KM10 to parental leave for secondary caregivers; Ben Carter provides approval APP-KN-406 to answer the corrected question in the thread",
-  "tests": "the agent reads Maya's thread (KM09 and KM10 correction), reads parental_v1 section 2, and posts 4 weeks in Maya's thread with APP-KN-406",
-  "instruction": "You are Ben Carter, People Coordinator. Maya Patel posted in #help-policies (KM09) and replied to her own thread (KM10) clarifying she wants to know about secondary caregiver parental leave, not office days. Ask the Knowledge Desk to post the approved reply to the corrected question in her thread; you provide approval APP-KN-406.\n\nYour details:\n- Name: Ben Carter\n- Employee ID: E12\n- Approval: APP-KN-406",
+  "branch": "Maya Patel asked about office days in KM09, got an answer, then corrected her question to parental leave and, asked which kind, said she is the secondary caregiver; Ben Carter, who has not read the thread, provides approval APP-KN-406",
+  "tests": "the agent reads Maya's whole thread (the office-days question, an answer to it, her correction to parental leave and her clarification that she is the secondary caregiver), reads Parental Leave Policy 1.0 section 2 rather than section 1 or the office-days policy, and posts 4 weeks in Maya's thread with APP-KN-406",
+  "instruction": "You are Ben Carter, People Coordinator. Maya Patel asked a question in #help-policies (KM09) and followed up in her own thread. Ask the Knowledge Desk to post the approved answer in her thread; you provide approval APP-KN-406. You have not read her follow-ups: if the desk asks what she wants to know, tell it to check her thread.\n\nYour details:\n- Name: Ben Carter\n- Employee ID: E12\n- Approval: APP-KN-406",
   "keywords": [
     "slack",
     "approval"
@@ -14,11 +14,11 @@
     "name": "Ben Carter",
     "gender": "male",
     "age_group": "25-32",
-    "occupation": "Customer Service",
+    "occupation": "People Coordinator",
     "location": "United Kingdom",
     "personality": "Friendly and cooperative",
     "communication_style": "Casual and friendly",
-    "initial_message": "Hi, Maya corrected her question in the #help-policies thread to secondary caregiver parental leave. Can you post the approved answer with approval APP-KN-406?",
+    "initial_message": "Hi, can you post the approved answer to Maya's question in #help-policies (KM09)? Approval is APP-KN-406.",
     "languages": [
       "English"
     ],

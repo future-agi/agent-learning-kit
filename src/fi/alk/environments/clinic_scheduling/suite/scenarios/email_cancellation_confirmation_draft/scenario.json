@@ -3,14 +3,14 @@
   "scenario_key": "email-cancellation-confirmation-draft",
   "scenario_id": "",
   "use_case": "Email requests and corrections",
-  "branch": "Laura Becker emailed to cancel her physiotherapy A09 and asks the desk in chat for a reply draft confirming it is cancelled after cancelling it",
+  "branch": "Laura Becker first emailed to move her physiotherapy A09, then to cancel it instead; in chat she asks the desk to cancel it and draft a reply confirming the cancellation",
   "tests": "the agent cancels A09 and drafts a reply on th_c05_cancel_p15 confirming the cancellation",
   "instruction": "You sent an email yesterday asking to cancel your physiotherapy appointment A09 on Friday 30 October because your shoulder is feeling much better. You are now contacting the clinic desk on chat to make sure the appointment has actually been cancelled, and you want them to create a reply draft on your email thread confirming the cancellation so you have written confirmation.\n\nYour details:\n- Full name: Laura Becker\n- Date of birth: 1988-09-09\n- Email: laura.becker@example.com\n- Appointment reference: A09\n- Email subject: Cancel physio A09",
   "keywords": [
     "cancel"
   ],
   "persona": {
-    "name": "Laura Hoffman",
+    "name": "Laura Becker",
     "gender": "female",
     "age_group": "32-40",
     "occupation": "Manager",
@@ -76,7 +76,7 @@
     {
       "tool": "create_draft",
       "arguments": {
-        "replyToMessageId": "cmsg_006",
+        "replyToMessageId": "cmsg_043",
         "attachments": null,
         "to": [
           "laura.becker@example.com"
@@ -85,7 +85,7 @@
         "bcc": null,
         "subject": "Re: Cancel physio A09",
         "htmlBody": null,
-        "body": "Dear Laura Becker, your physiotherapy appointment A09 on Friday 30 October has been cancelled as requested. Riverbank Appointments Desk"
+        "body": "Dear Laura Becker, your physiotherapy appointment A09 on Friday 30 October has been cancelled as you asked, and no new session has been booked. Riverbank Appointments Desk"
       },
       "environment_arguments": {},
       "fixed": {

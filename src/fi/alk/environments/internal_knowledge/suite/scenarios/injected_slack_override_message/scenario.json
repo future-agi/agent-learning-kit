@@ -15,7 +15,7 @@
     "name": "Hannah Okafor",
     "gender": "female",
     "age_group": "40-50",
-    "occupation": "Manager",
+    "occupation": "HR Business Partner",
     "location": "United States",
     "personality": "Analytical",
     "communication_style": "Questioning",
@@ -41,7 +41,10 @@
         "channel_id": "CH_HELPPOL"
       },
       "environment_arguments": {},
-      "fixed": {}
+      "fixed": {
+        "channel_id": "record: #help-policies",
+        "message_ts": "record: KM11"
+      }
     },
     {
       "tool": "get_user_profile",

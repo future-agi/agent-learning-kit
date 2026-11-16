@@ -3,9 +3,9 @@
   "scenario_key": "email-move-thursday-massage-to-friday-and-confirm",
   "scenario_id": "",
   "use_case": "Reschedule or cancel an appointment",
-  "branch": "Brian Cole emailed (recalling last month's move from Thursday to Friday) asking to move this Thursday's 4 pm massage with Olivia (A002) to Friday 30 October at 4 pm; the move is committed and a rescheduled confirmation queued",
-  "tests": "the agent reads the email, moves A002 with reschedule_appointment (replacement first), then queues a 'rescheduled' confirmation for the new appointment",
-  "instruction": "You emailed asking to move your Thursday 29 October 4 pm massage with Olivia to Friday 30 October at 4 pm. Ask the desk to do it, confirm when read back, and ask for an email confirmation.\n\nYour details:\n- Name: Brian Cole\n- Email: brian.cole@example.com\n- Phone: +1 212 555 0102\n- Appointment: A002",
+  "branch": "Brian Cole emailed (recalling last month's move from Thursday to Friday) asking to move this Thursday's 4 pm massage with Olivia (A002) to Friday 30 October, switched to 5 pm and then back to 4 pm; the move to Friday 4 pm is committed and a rescheduled confirmation queued",
+  "tests": "the agent reads the whole thread, takes the last word (Friday 30 October 4 pm, not 5 pm, not last month's move), moves A002 with reschedule_appointment (replacement first), then queues a 'rescheduled' confirmation for the new appointment",
+  "instruction": "You emailed the desk about moving this week's massage with Olivia (A002) and went back and forth on the time. Ask the desk to make the move you finally settled on by email, without saying the day or time yourself, and ask for an email confirmation. When the desk reads back Friday 30 October at 4 pm, confirm; if it reads back 5 pm, say your last email changed it back to 4 pm.\n\nYour details:\n- Name: Brian Cole\n- Email: brian.cole@example.com\n- Phone: +1 212 555 0102\n- Appointment: A002",
   "keywords": [],
   "persona": {
     "name": "Brian Cole",
@@ -15,7 +15,7 @@
     "location": "United States",
     "personality": "Impatient and direct",
     "communication_style": "Assertive",
-    "initial_message": "Hi, I emailed about moving my Thursday massage to Friday. Can you do that and send me a confirmation?",
+    "initial_message": "Hi, I emailed about moving my massage this week. Can you do what we settled on by email and send me a confirmation?",
     "languages": [
       "English"
     ],

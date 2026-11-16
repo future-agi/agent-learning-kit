@@ -71,7 +71,9 @@
         "contact_id": "C33"
       },
       "environment_arguments": {},
-      "fixed": {}
+      "fixed": {
+        "contact_id": "record: Sean Doyle of Liffey Analytics, C33, the person in this conversation"
+      }
     }
   ],
   "alternatives": [],

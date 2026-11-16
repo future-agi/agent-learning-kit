@@ -1,30 +1,42 @@
 def check(world, calls, reference=None):
+    want = _want(reference, "book_appointment")
     s = world.state()
     now = _now(s)
-    loc = _want(reference, "get_location").get("location_id")
-    if not loc:
-        return "broken: the reference fixes no location to check"
-    # What the answer rests on is that studio's hours and clock change on 1 November: its
-    # location record, its slots for that day, or a booking refused for that day there.
-    seen = any(
-        c.ok and isinstance(c.result, dict) and (
-            (c.name == "get_location" and c.result.get("location_id") == loc)
-            or (c.name == "list_slots" and c.result.get("location_id") == loc and c.result.get("date") == "2026-11-01"))
-        for c in calls
-    ) or any(
-        c.refused and c.name in ("book_appointment", "hold_slot") and c.arguments.get("location_id") == loc
-        and str(c.arguments.get("start_time") or "").startswith("2026-11-01")
-        for c in calls
-    )
-    if not seen:
-        return f"not done: {loc}'s hours and clock change on 1 November never reached the agent"
-    for a in s.get("appointments", []):
-        if a["created_at"] == now and a["source"] == "desk" and "2026-11-01T05:00:00Z" <= a["start_utc"] < "2026-11-01T07:00:00Z":
-            return f"done wrong: {a['appointment_id']} was committed in the repeated hour"
-    for h in s.get("holds", []):
-        if h["created_at"] == now and "2026-11-01T05:00:00Z" <= h["start_utc"] < "2026-11-01T07:00:00Z":
-            return f"done wrong: hold {h['hold_id']} was placed in the repeated hour"
-    return None
+    if not any(c.name == "book_appointment" and c.ok and (c.result or {}).get("booked") for c in calls):
+        return "not done: no booking was committed"
+    mine = [a for a in s.get("appointments", []) if a["created_at"] == now and a["source"] == "desk" and a["status"] == "booked" and not a["rescheduled_from"]]
+    if not mine:
+        return "not done: no booked appointment in the records"
+    if want.get("customer_id"):
+        theirs = [a for a in mine if a["customer_id"] == want["customer_id"]]
+        if not theirs:
+            return f"done wrong: the booking is for {mine[0]['customer_id']}, not {want['customer_id']}"
+        if len(theirs) > 1 or len(mine) > len(theirs):
+            return f"done wrong: {len(mine)} appointments were booked, the customer asked for one"
+        mine = theirs
+    a = mine[0]
+    for k in ("service_id", "staff_id", "location_id"):
+        if want.get(k) and a[k] != want[k]:
+            return f"done wrong: booked {k} {a[k]}, the customer confirmed {want[k]}"
+    if want.get("start_time") and a["local_start"] != str(want["start_time"])[:16]:
+        return f"done wrong: booked {a['local_start']} local, the customer confirmed {str(want['start_time'])[:16]}"
+    if want.get("utc_offset") and a["utc_offset"] != want["utc_offset"]:
+        return f"done wrong: booked at UTC{a['utc_offset']}, the customer chose UTC{want['utc_offset']}"
+    services = {r["service_id"]: r for r in s.get("services", [])}
+    staff = {r["staff_id"]: r for r in s.get("staff", [])}
+    from datetime import datetime
+    for a in mine:
+        span = (datetime.fromisoformat(a["end_utc"][:19]) - datetime.fromisoformat(a["start_utc"][:19])).total_seconds() / 60
+        if span != services[a["service_id"]]["duration_minutes"]:
+            return f"done wrong: {a['appointment_id']} lasts {span:.0f} minutes, the service takes {services[a['service_id']]['duration_minutes']}"
+        ev = next((e for e in s.get("calendar_events", []) if e["event_id"] == a["calendar_event_id"]), None)
+        if not ev or ev["calendar_id"] != staff[a["staff_id"]]["calendar_id"] or ev["status"] != "confirmed" or (ev["start_time"], ev["end_time"]) != (a["start_utc"], a["end_utc"]):
+            return f"done wrong: {a['appointment_id']} has no matching event on {staff[a['staff_id']]['calendar_id']}"
+    stray = _stray_events(s)
+    if stray:
+        return f"done wrong: calendar events without an appointment record: {stray}"
+    return _blind(world, calls, reference)
+
 
 def _now(state):
     return (state.get("clock") or [{"now": ""}])[0]["now"]

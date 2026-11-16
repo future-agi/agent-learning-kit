@@ -65,7 +65,9 @@
         "appointment_id": "A411"
       },
       "environment_arguments": {},
-      "fixed": {}
+      "fixed": {
+        "appointment_id": "the appointment the claim is about"
+      }
     },
     {
       "tool": "cancel_appointment",
@@ -96,8 +98,8 @@
     "interaction": "multi_turn"
   },
   "sub_goals": [
-    "appointment_cancelled_with_fee_disclosed",
     "claim_checked_not_confirmed",
+    "appointment_cancelled_with_fee_disclosed",
     "fee_disclosed_before_cancel"
   ],
   "max_turns": 10,

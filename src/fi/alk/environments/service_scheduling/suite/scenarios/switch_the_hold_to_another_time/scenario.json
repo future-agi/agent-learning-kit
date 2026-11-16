@@ -4,8 +4,8 @@
   "scenario_id": "",
   "use_case": "Answer availability from the staff calendars and hold slots",
   "branch": "Switch the hold to another time: CU444 Daniel Reeve holds a consultation with Priya Desai at Shoreditch on Thursday 29 October at 10:00 London. A minute later he asks to move the hold to 14:00 the same day instead. Priya's 12:00-13:00 lunch block and A019 at 13:00 rule out the middle of the day.",
-  "tests": "the desk releases the first hold and places a new hold at the requested alternative time",
-  "instruction": "You want to place a hold on an Initial Consultation slot with Priya Desai at Shoreditch on Thursday 29 October 2026. Initially ask to hold the 10:00 am slot. Once the hold is placed, change your mind and ask to switch the hold to 2:00 pm (14:00) on the same day instead. When the desk releases the 10:00 am hold and places a new hold on 14:00, confirm.\n\nYour details:\n- Name: Daniel Reeve\n- Email: daniel.reeve@example.com\n- Phone: +44 20 7946 0444\n- Service: Initial Consultation (SV1)\n- Staff: Priya Desai (ST04)\n- Location: Shoreditch Studio (L2)\n- Initial Held Time: 10:00 am (2026-10-29T10:00)\n- Switched Held Time: 2:00 pm (2026-10-29T14:00)",
+  "tests": "the desk places the 14:00 hold first and only then releases the 10:00 hold, so a failed replacement never leaves the customer with nothing held",
+  "instruction": "You want to place a hold on an Initial Consultation slot with Priya Desai at Shoreditch on Thursday 29 October 2026. Initially ask to hold the 10:00 am slot. Once the hold is placed, change your mind and ask to switch the hold to 2:00 pm (14:00) on the same day instead. When the desk has the 2:00 pm hold in place and has let the 10:00 am one go, confirm.\n\nYour details:\n- Name: Daniel Reeve\n- Email: daniel.reeve@example.com\n- Phone: +44 20 7946 0444\n- Service: Initial Consultation (SV1)\n- Staff: Priya Desai (ST04)\n- Location: Shoreditch Studio (L2)\n- Initial Held Time: 10:00 am (2026-10-29T10:00)\n- Switched Held Time: 2:00 pm (2026-10-29T14:00)",
   "keywords": [
     "hold_slot",
     "release_hold",
@@ -70,15 +70,6 @@
       "fixed": {}
     },
     {
-      "tool": "release_hold",
-      "arguments": {
-        "hold_id": "H600",
-        "customer_id": "CU444"
-      },
-      "environment_arguments": {},
-      "fixed": {}
-    },
-    {
       "tool": "hold_slot",
       "arguments": {
         "customer_id": "CU444",
@@ -93,6 +84,17 @@
         "start_time": "caller: 2026-10-29T14:00",
         "customer_id": "record: customers[CU444].customer_id",
         "staff_id": "record: staff[ST04].staff_id"
+      }
+    },
+    {
+      "tool": "release_hold",
+      "arguments": {
+        "hold_id": "H600",
+        "customer_id": "CU444"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "hold_id": "the 10:00 hold placed first"
       }
     }
   ],

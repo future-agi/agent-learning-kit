@@ -4,7 +4,7 @@
   "scenario_id": "",
   "use_case": "Recognise known contacts and accounts",
   "branch": "Sofia Bianchi asks whether she and Quillon Travel are on file and whether she has a demo; she is a known contact with no open lead",
-  "tests": "the agent finds Sofia Bianchi's own contact C31 and Quillon Travel, and reports no open lead or demo without creating anything",
+  "tests": "the agent finds Sofia Bianchi's own contact C31 and the Quillon Travel account, reads her record's leads (none), and reports she has no open lead or demo, creating nothing",
   "instruction": "You are Sofia Bianchi, procurement manager at Quillon Travel (sofia.bianchi@quillon.example). Ask the sales desk whether you and Quillon Travel are already in BrightDesk's records, and whether you have an open enquiry or a demo scheduled. When told you are on file with no open lead or demo, thank the desk.\n\nYour details:\n- Name: Sofia Bianchi\n- Company: Quillon Travel\n- Email: sofia.bianchi@quillon.example",
   "keywords": [
     "duplicate",
@@ -41,9 +41,7 @@
         "email": "sofia.bianchi@quillon.example"
       },
       "environment_arguments": {},
-      "fixed": {
-        "email": "caller: sofia.bianchi@quillon.example"
-      }
+      "fixed": {}
     },
     {
       "tool": "search_accounts",
@@ -51,7 +49,19 @@
         "name": "Quillon Travel"
       },
       "environment_arguments": {},
-      "fixed": {}
+      "fixed": {
+        "name": "caller: Quillon Travel, her company"
+      }
+    },
+    {
+      "tool": "get_contact",
+      "arguments": {
+        "contact_id": "C31"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "contact_id": "record: Sofia Bianchi, C31, the person in this conversation"
+      }
     }
   ],
   "alternatives": [],

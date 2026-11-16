@@ -94,7 +94,9 @@
         "rep_id": "A06"
       },
       "environment_arguments": {},
-      "fixed": {}
+      "fixed": {
+        "rep_id": "record: territory_rules[Australia].rep_id"
+      }
     }
   ],
   "alternatives": [],
@@ -102,6 +104,7 @@
   "sub_goals": [
     "lead_qualified_by_rubric",
     "owner_assigned_by_territory",
+    "availability_offered",
     "declined_action_explained"
   ],
   "max_turns": 10,

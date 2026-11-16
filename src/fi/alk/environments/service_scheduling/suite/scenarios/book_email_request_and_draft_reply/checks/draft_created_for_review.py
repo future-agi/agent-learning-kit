@@ -13,7 +13,45 @@ def check(world, calls, reference=None):
         to = want.get("to")
         if to and d["recipient"].lower() not in [t.lower() for t in (to if isinstance(to, list) else [to])]:
             return f"done wrong: the draft is addressed to {d['recipient']}"
+        # Approval of the wording is not proof the action happened: a draft that tells the
+        # customer something is booked, moved or cancelled needs that change committed in this run.
+        claim = _claimed_change(d["body"])
+        if claim and not _committed(s, now, d["recipient"], claim):
+            return f"done wrong: the draft tells {d['recipient']} the appointment is {claim}, which no tool committed in this run"
     return _blind(world, calls, reference)
+
+
+def _claimed_change(body):
+    """The change a draft states as done ('is booked', 'has been cancelled', 'we have moved'), or
+    None. An offer ('reply to confirm and we will book it') claims nothing."""
+    import re
+
+    text = str(body or "").lower()
+    for kind, words in (("booked", "booked|confirmed"), ("cancelled", "cancell?ed"), ("moved", "moved|rescheduled")):
+        stated = (
+            rf"\b(?:is|are|has been|have been|was|were)\s+(?:now\s+|all\s+)?(?:\w+\s+and\s+)?(?:{words})\b",
+            rf"\b(?:we|i)(?:'ve| have)\s+(?:now\s+)?(?:{words})\b",
+            rf"\byou(?:'re| are)\s+(?:now\s+|all\s+)?(?:{words})\b",
+        )
+        if any(re.search(one, text) for one in stated):
+            return kind
+    return None
+
+
+def _committed(state, now, recipient, kind):
+    """Whether a tool committed that kind of change in this run for the customer the draft is to."""
+    emails = {e.strip().lower() for e in str(recipient or "").split(",") if e.strip()}
+    ids = {c["customer_id"] for c in state.get("customers", []) if c["email"].lower() in emails}
+    for a in state.get("appointments", []):
+        if a["customer_id"] not in ids:
+            continue
+        if kind == "booked" and a["created_at"] == now and a["status"] == "booked" and a["source"] == "desk":
+            return True
+        if kind == "cancelled" and a["cancelled_at"] == now:
+            return True
+        if kind == "moved" and a["created_at"] == now and a["rescheduled_from"]:
+            return True
+    return False
 
 
 def _now(state):

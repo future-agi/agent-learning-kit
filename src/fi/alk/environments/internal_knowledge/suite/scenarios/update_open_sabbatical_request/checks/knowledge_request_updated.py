@@ -14,6 +14,14 @@ def check(world, calls, reference=None):
     for r in changed:
         if rid and r["request_id"] != rid:
             return f"done wrong: {r['request_id']} was changed, not {rid}"
+    # A request withdrawn to be refiled goes only once its replacement exists: withdrawing first
+    # leaves the question with no open request if the new one is refused.
+    order = [step.get("tool") for step in reference or ()]
+    if status == "withdrawn" and "create_knowledge_request" in order and order.index("create_knowledge_request") < order.index("update_knowledge_request"):
+        made = [i for i, c in enumerate(calls) if c.ok and c.name == "create_knowledge_request"]
+        dropped = [i for i, c in enumerate(calls) if c.ok and c.name == "update_knowledge_request" and c.arguments.get("status") == "withdrawn"]
+        if dropped and (not made or min(made) > min(dropped)):
+            return f"done wrong: {rid} was withdrawn before its replacement request was opened"
     if rid and status and next((r for r in changed if r["request_id"] == rid), {}).get("status") != status:
         return f"done wrong: {rid} is not {status}"
     return None

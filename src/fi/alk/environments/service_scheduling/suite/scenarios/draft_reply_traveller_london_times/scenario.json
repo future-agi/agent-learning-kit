@@ -4,11 +4,11 @@
   "scenario_id": "",
   "use_case": "Pick up a booking request from the bookings mailbox",
   "branch": "Isabel Reyes emailed from New York asking for a London consultation on Wednesday 4 November at 3 pm London time with both time zones; the front desk asks for a draft reply listing Priya's free times",
-  "tests": "the agent reads the email and Priya's computed slots, and drafts a reply on Isabel's thread, to her, without booking",
-  "instruction": "You are on the front desk team. Ask the assistant to draft a reply to Isabel Reyes's email about a London consultation, saying what times Priya has free that day. Do not ask it to book.",
+  "tests": "the agent reads the email and Priya's computed slots, and drafts a reply on Isabel's thread, to her, listing the free times in London and New York time, without booking or sending",
+  "instruction": "You are Jordan Ellis on the front desk team. Ask the assistant to draft a reply to Isabel Reyes's email about a London consultation, saying what times Priya has free that day. Do not ask it to book.",
   "keywords": [],
   "persona": {
-    "name": "Grace Mbeki",
+    "name": "Jordan Ellis",
     "gender": "female",
     "age_group": "32-40",
     "occupation": "Front desk",
@@ -57,7 +57,7 @@
           "isabel.reyes@example.com"
         ],
         "subject": "Re: Booking while I'm in London",
-        "body": "Hi Isabel, Priya has a consultation free on Wednesday 4 November at 3:00 pm London time (10:00 am New York time). Reply to confirm and we will book it.",
+        "body": "Hi Isabel, Priya is free for an Initial Consultation at Shoreditch on Wednesday 4 November at any start time from 8:00 am to 5:15 pm London time (3:00 am to 12:15 pm New York time), every 15 minutes, including the 3:00 pm London time (10:00 am New York time) you asked for. Reply to confirm a time and we will book it. - Front desk",
         "replyToMessageId": "smsg_011"
       },
       "environment_arguments": {},

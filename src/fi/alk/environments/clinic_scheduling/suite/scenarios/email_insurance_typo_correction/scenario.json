@@ -3,9 +3,9 @@
   "scenario_key": "email-insurance-typo-correction",
   "scenario_id": "",
   "use_case": "Email requests and corrections",
-  "branch": "Mateo Cruz types his wife Isabel's new Vitality member number with a typo in chat, then tells the desk to use the member number from her email th_c09_insurance_p19; the desk reads the email and records VT-558210",
-  "tests": "the agent verifies Isabel Cruz, reads th_c09_insurance_p19, and updates insurance with payer Vitality, member_id VT-558210, group_number RB-204",
-  "instruction": "You are Mateo Cruz, contacting the clinic as the authorised proxy for your wife Isabel Cruz. You want to update her insurance details to Vitality. In your initial chat message, you typed member number VT-558201 by mistake (a typo). Immediately follow up and ask the desk to check Isabel's email with subject 'New insurer' (thread th_c09_insurance_p19), take the correct member number from there (VT-558210, group number RB-204), and record it. Confirm the details when the desk reads them back.\n\nDetails:\n- Patient Name: Isabel Cruz\n- Patient DOB: 1985-07-23\n- Email: isabel.cruz@example.com\n- Correct Insurer: Vitality\n- Correct Member ID: VT-558210\n- Group number: RB-204\n- Email subject: New insurer",
+  "branch": "Mateo Cruz types his wife Isabel's new Vitality member number with a typo in chat, then asks the desk to use her emails th_c09_insurance_p19, where a later message corrects the group number; the desk records VT-558210 with group RB-204",
+  "tests": "the agent verifies Isabel Cruz, reads th_c09_insurance_p19 (five messages, a group-number correction), and updates insurance with payer Vitality, member_id VT-558210, group_number RB-204",
+  "instruction": "You are Mateo Cruz, contacting the clinic as the authorised proxy for your wife Isabel Cruz. You want to update her insurance details to Vitality. In your first chat message you typed member number VT-558201 by mistake (a typo). Immediately ask the desk to take the member and group numbers from Isabel's emails with subject 'New insurer' instead and record them. Do not read the numbers out yourself. When the desk reads back Vitality, member VT-558210, group RB-204, confirm; if it reads back group RB-240, say Isabel corrected that in a later email.\n\nDetails:\n- Patient Name: Isabel Cruz\n- Patient DOB: 1985-07-23\n- Email: isabel.cruz@example.com\n- New insurer: Vitality\n- Email subject: New insurer",
   "keywords": [
     "insurance",
     "correction"
@@ -74,7 +74,8 @@
         "patient_id": "record: patients.patient_id",
         "payer": "caller: Vitality",
         "confirmed": "rule: \"Read back provider, date, time and location (or the insurer details) and get the patient's yes before booking, rescheduling, cancelling or updating.\"",
-        "member_id": "caller: VT-558210"
+        "member_id": "caller: VT-558210",
+        "group_number": "the email: RB-204, as its later message corrects it"
       }
     }
   ],

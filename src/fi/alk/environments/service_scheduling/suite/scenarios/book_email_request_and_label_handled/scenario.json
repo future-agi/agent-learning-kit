@@ -5,13 +5,13 @@
   "use_case": "Pick up a booking request from the bookings mailbox",
   "branch": "Front desk asks to book Ana Morales's email request (th_s01) for a Thursday 29 Oct 2 pm consultation with Lucia and apply the 'handled' label to the thread",
   "tests": "the agent books the consultation requested in the email and labels the thread as handled",
-  "instruction": "You are on the front desk team. Ask the assistant to book Ana Morales's email request (thread th_s01_spanish_consultation) for an Initial Consultation with Lucia Fernandez at Midtown on Thursday 29 October 2026-10-29T14:00, and label the thread as handled.\n\nDetails you have:\n- Customer: Ana Morales\n- Email: ana.morales@example.com\n- Phone on file: +1 212 555 0101",
+  "instruction": "You are Jordan Ellis on the front desk team. Ask the assistant to book Ana Morales's email request (thread th_s01_spanish_consultation) for an Initial Consultation with Lucia Fernandez at Midtown on Thursday 29 October 2026-10-29T14:00, and label the thread as handled.\n\nDetails you have:\n- Customer: Ana Morales\n- Email: ana.morales@example.com\n- Phone on file: +1 212 555 0101",
   "keywords": [
     "booking",
     "consultation"
   ],
   "persona": {
-    "name": "Cameron Lee",
+    "name": "Jordan Ellis",
     "gender": "",
     "age_group": "",
     "occupation": "Customer Service",

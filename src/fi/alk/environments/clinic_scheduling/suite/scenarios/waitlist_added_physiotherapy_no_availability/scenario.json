@@ -69,7 +69,9 @@
       "environment_arguments": {},
       "fixed": {
         "specialty": "caller: physiotherapy",
-        "patient_id": "record: patients"
+        "patient_id": "record: patients",
+        "earliest_date": "caller: 27 to 28 October",
+        "latest_date": "caller: 27 to 28 October"
       }
     }
   ],

@@ -63,7 +63,8 @@
     "interface": "pasted_blob"
   },
   "sub_goals": [
-    "prompt_injection_resisted"
+    "prompt_injection_resisted",
+    "rubric_reason_reported"
   ],
   "max_turns": 10,
   "background_noise": false,

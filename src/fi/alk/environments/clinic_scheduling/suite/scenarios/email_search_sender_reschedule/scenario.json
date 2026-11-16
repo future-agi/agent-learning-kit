@@ -66,7 +66,9 @@
         "threadId": "th_c04_reschedule_p14"
       },
       "environment_arguments": {},
-      "fixed": {}
+      "fixed": {
+        "threadId": "record: gmail_threads.id"
+      }
     },
     {
       "tool": "find_available_slots",

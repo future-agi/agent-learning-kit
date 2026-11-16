@@ -74,7 +74,8 @@
   "sub_goals": [
     "declined_action_explained",
     "duplicate_detected",
-    "lead_status_reported"
+    "lead_status_reported",
+    "rubric_reason_reported"
   ],
   "max_turns": 10,
   "background_noise": false,

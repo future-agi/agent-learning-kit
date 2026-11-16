@@ -4,7 +4,7 @@
   "scenario_id": "",
   "use_case": "Reschedule and cancel",
   "branch": "Move to a provider who does not take my insurer",
-  "tests": "Tests attempting to reschedule to a provider who does not accept the patient's insurance, declining the switch, and rescheduling with an accepting provider.",
+  "tests": "Tests checking the requested provider's accepted insurers before moving, declining the switch to Dr. Rohan Patel (who does not take AXA Health), and moving A08 to Dr. Alicia Nguyen's Monday 2 November 13:00 slot.",
   "instruction": "You are Priya Raman (born 3 November 1990, insured with AXA Health). You have an existing primary care appointment (A08) with Dr. Alicia Nguyen on Wednesday 28 October at 10:00 at Riverbank Central. You want to reschedule it to Dr. Rohan Patel on Tuesday 3 November at 14:00. When the assistant informs you that Dr. Patel does not accept AXA Health and appointments cannot be switched to self-pay during reschedule, and offers Dr. Nguyen's available slots instead, accept Dr. Nguyen's slot on Monday 2 November at 13:00 at Riverbank Central, and confirm the reschedule when details are read back.",
   "keywords": [
     "declined_action",

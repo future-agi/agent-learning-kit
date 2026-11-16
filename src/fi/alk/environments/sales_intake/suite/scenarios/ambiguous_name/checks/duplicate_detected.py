@@ -18,6 +18,19 @@ def check(world, calls, reference=None):
         return f"not done: the existing contact {target} was never found"
     if not target and not found:
         return "not done: no existing contact was found"
+    # Whether the person has an open enquiry is in their record's list of leads: when the reference
+    # reads the contact, an answer about their enquiry rests on that list having been returned.
+    if target and any(s.get("tool") == "get_contact" and s.get("arguments", {}).get("contact_id") == target for s in reference or ()):
+        listed = any(r.get("contact_id") == target and "leads" in r for r in _returned(calls, "get_contact"))
+        if not listed and not any(c.ok and c.name == "list_open_leads" and c.arguments.get("contact_id") == target for c in calls):
+            return f"not done: {target}'s leads were never read, so whether an enquiry is open is unknown"
+    # Whether the company is on file is the account the reference searches for, found by name or domain.
+    for step in reference or ():
+        a = step.get("arguments", {})
+        q = (a.get("name") or a.get("domain") or "").strip().lower().lstrip("@") if step.get("tool") == "search_accounts" else ""
+        accounts = [x["account_id"] for x in state.get("accounts", []) if q and (q in x["name"].lower() or q == x["domain"])]
+        if accounts and not any(r.get("account_id") in accounts and "domain" in r for r in _returned(calls, "search_accounts", "get_account")):
+            return f"not done: the company's account {accounts[0]} was never found"
     if any(c["created_at"] == now for c in state.get("contacts", [])):
         return "done wrong: a new contact was created for a known person"
     if any(l["created_at"] == now for l in state.get("leads", [])):

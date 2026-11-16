@@ -5,7 +5,7 @@
   "use_case": "Book a demo on the owner's calendar after the prospect picks",
   "branch": "Theo Sandoval of Cedar & Finch Retail (lead L06, owner A01) replied by email choosing Wednesday 11 November at 2 pm Eastern; the desk books that slot, DS02, on Jordan Ellis's calendar",
   "tests": "the agent reads the email, matches 2 pm Eastern on 11 November to A01's slot DS02, and books it with the prospect's confirmation",
-  "instruction": "You are Theo Sandoval at Cedar & Finch Retail. BrightDesk sent you demo times and you replied by email this morning with the one that suits you. Ask them to go ahead with the time you picked. If they read it back as Wednesday 11 November at 2 pm Eastern, confirm.\n\nYour details:\n- Name: Theo Sandoval\n- Email: theo.sandoval@cedarfinch.example\n- Company: Cedar & Finch Retail",
+  "instruction": "You are Theo Sandoval at Cedar & Finch Retail. BrightDesk sent you demo times and you replied by email this morning with the one that suits you. Ask them to go ahead with the time you picked, without saying the time yourself: it is in your email. If they read it back as Wednesday 11 November at 2 pm Eastern, confirm.\n\nYour details:\n- Name: Theo Sandoval\n- Email: theo.sandoval@cedarfinch.example\n- Company: Cedar & Finch Retail",
   "keywords": [
     "demo",
     "calendar",

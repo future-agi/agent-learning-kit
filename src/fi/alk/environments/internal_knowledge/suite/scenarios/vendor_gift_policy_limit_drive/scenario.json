@@ -3,8 +3,8 @@
   "scenario_key": "vendor-gift-policy-limit-drive",
   "scenario_id": "",
   "use_case": "Answer a policy question with citations from the version in effect",
-  "branch": "Ravi Shah asks gift policy limit for an $80 vendor gift; Code of Conduct 2.0 is in effect",
-  "tests": "the agent answers gifts up to $50 are allowed and gifts over $50 must be declared from Code of Conduct 2.0, section 2, via Drive search",
+  "branch": "Ravi Shah asks the gift limit for an $80 vendor gift offered during contract negotiations; Code of Conduct 2.0 section 1 allows gifts up to $50 with anything above declared, but a gift during a live negotiation is declined whatever its value",
+  "tests": "the agent finds the Code of Conduct in Drive and answers from Code of Conduct 2.0, section 1: gifts up to $50 may be accepted and anything above must be declared to People, but a gift from a supplier in a live contract negotiation is declined whatever its value",
   "instruction": "A vendor has offered you a gift basket valued at around $80 during contract negotiations. You want to know the company gift policy limit and what action is required when a gift exceeds that limit. Ask the Knowledge Desk for the gift limit, reporting rules, and the policy citation.\n\nYour details:\n- Name: Ravi Shah\n- Employee ID: E18",
   "keywords": [
     "citation",
@@ -15,11 +15,11 @@
     "name": "Ravi Shah",
     "gender": "male",
     "age_group": "32-40",
-    "occupation": "Accountant",
+    "occupation": "Procurement Specialist",
     "location": "India",
     "personality": "Detail-oriented",
     "communication_style": "Formal and polite",
-    "initial_message": "Hello, a vendor offered me an $80 gift. What is the allowable gift value threshold and what must I do if it exceeds it? Please cite the policy.",
+    "initial_message": "Hello, a vendor we're in contract negotiations with offered me an $80 gift basket. What is the allowable gift value and what must I do? Please cite the policy.",
     "languages": [
       "English"
     ],

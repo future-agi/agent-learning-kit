@@ -24,7 +24,7 @@ def check(world, calls, reference=None):
     for h in s.get("holds", []):
         if h["created_at"] == now and "2026-11-01T05:00:00Z" <= h["start_utc"] < "2026-11-01T07:00:00Z":
             return f"done wrong: hold {h['hold_id']} was placed in the repeated hour"
-    return None
+    return _blind(world, calls, reference)
 
 def _now(state):
     return (state.get("clock") or [{"now": ""}])[0]["now"]

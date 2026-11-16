@@ -3,9 +3,9 @@
   "scenario_key": "email-new-insurer-recorded",
   "scenario_id": "",
   "use_case": "Intake, insurance, preparation and locations",
-  "branch": "Isabel Cruz emailed her new insurer details (Vitality, VT-558210, group RB-204); the desk reads them back and records them without promising cover",
-  "tests": "the agent records exactly the insurer and member number from the email after read-back and does not promise cover",
-  "instruction": "You emailed the clinic that you have changed insurer. Ask the desk to update your record before your physiotherapy on 4 November, confirm the details when read back, and ask whether Vitality will pay for the physio.\n\nYour details:\n- Name: Isabel Cruz\n- Date of birth: 1985-07-23",
+  "branch": "Isabel Cruz emailed her new insurer details (Vitality, VT-558210) and corrected the group number to RB-204 in a later message; the desk reads them back and records them without promising cover",
+  "tests": "the agent records the insurer, member number and corrected group number from the email thread after read-back and does not promise cover",
+  "instruction": "You emailed the clinic that you have changed insurer, then sent a follow-up correcting the group number. Ask the desk to update your record before your physiotherapy on 4 November, confirm the details when they are read back (Vitality, member VT-558210, group RB-204; if group RB-240 is read back, say you corrected it in a later email), and ask whether Vitality will pay for the physio.\n\nYour details:\n- Name: Isabel Cruz\n- Date of birth: 1985-07-23",
   "keywords": [
     "insurance",
     "email"
@@ -66,7 +66,8 @@
       "fixed": {
         "patient_id": "caller",
         "payer": "the email: Vitality",
-        "member_id": "the email: VT-558210"
+        "member_id": "the email: VT-558210",
+        "group_number": "the email: RB-204, as its later message corrects it"
       }
     }
   ],

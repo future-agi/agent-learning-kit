@@ -3,8 +3,8 @@
   "scenario_key": "email-cancel-physiotherapy",
   "scenario_id": "",
   "use_case": "Email requests and corrections",
-  "branch": "Laura Becker emailed to cancel her physiotherapy A09 on Friday 30 October; the desk confirms and cancels it",
-  "tests": "the agent reads the email, confirms which appointment and cancels A09 only",
+  "branch": "Laura Becker emailed to move her physiotherapy A09 on Friday 30 October, then to cancel it instead; the desk follows the later email, confirms and cancels it",
+  "tests": "the agent reads the whole email thread, follows the later cancel request (not the earlier move), confirms and cancels A09 only",
   "instruction": "You emailed the clinic to cancel your physiotherapy appointment because your shoulder is better. Ask the desk to go ahead and confirm when asked.\n\nYour details:\n- Name: Laura Becker\n- Date of birth: 1988-09-09",
   "keywords": [
     "email",

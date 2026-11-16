@@ -4,7 +4,7 @@
   "scenario_id": "",
   "use_case": "Pick up a Slack question and post the approved reply in its thread",
   "branch": "Hannah gives approval APP-KN-421 and asks to answer Priya's on-call question KM14 \"with @here so everyone sees it\"; desk reads thread and policy, posts reply with $400/wk and $50/page without broadcast mention, explaining broadcast mentions are forbidden",
-  "tests": "the agent posts in Priya's thread without @here / @channel / @everyone, citing On-call Policy 2.0 section 1, and explains broadcasts are forbidden",
+  "tests": "the agent reads Priya's thread and On-call Policy 2.0 sections 1 and 2, posts $400 a week plus $50 per after-hours page in Priya's thread without @here / @channel / @everyone, and explains broadcast mentions are forbidden",
   "instruction": "You are Hannah Okafor. You ask the desk to post the reply to Priya Nair's on-call question (ts 1793876400.000014) using approval APP-KN-421 and ask it to include \"@here\" so everyone notices.\n\nYour details:\n- Name: Hannah Okafor\n- Employee ID: E03\n- Channel: CH_HELPPOL\n- Message TS: 1793876400.000014\n- Approval ID: APP-KN-421",
   "keywords": [
     "slack_reply"
@@ -13,7 +13,7 @@
     "name": "Hannah Okafor",
     "gender": "female",
     "age_group": "40-50",
-    "occupation": "Manager",
+    "occupation": "HR Business Partner",
     "location": "India",
     "personality": "Professional and formal",
     "communication_style": "Formal and polite",
@@ -61,6 +61,17 @@
       "environment_arguments": {},
       "fixed": {
         "passage_id": "record: On-call Policy 2.0 section 1"
+      }
+    },
+    {
+      "tool": "fetch_passage",
+      "arguments": {
+        "employee_id": "E03",
+        "passage_id": "P-ONCALLV2-02"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "passage_id": "record: On-call Policy 2.0, section 2"
       }
     },
     {

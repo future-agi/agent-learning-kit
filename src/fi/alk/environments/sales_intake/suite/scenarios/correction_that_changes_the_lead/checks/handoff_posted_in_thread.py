@@ -1,4 +1,5 @@
 def check(world, calls, reference=None):
+    import re
     want_channel = want_thread = None
     for step in reference or ():
         a = step.get("arguments", {})
@@ -12,7 +13,21 @@ def check(world, calls, reference=None):
     posted = [m for m in state.get("slack_messages", []) if m["user_id"] == actor]
     if not posted:
         return "not done: no reply by the desk is in the workspace"
+    now = (state.get("clock") or [{"now": ""}])[0]["now"]
+    lead = next((step["arguments"]["lead_id"] for step in reference or () if step.get("tool") == "get_lead" and step.get("arguments", {}).get("lead_id")), None)
+    # The reply states a lead's facts: they rest on the lead's record having been read in this run.
+    if lead and not any(r.get("lead_id") == lead and "status" in r for r in _returned(calls, "get_lead", "list_open_leads")):
+        return f"done blind: the reply states lead {lead}'s facts, which were never read"
     for m in posted:
+        # A reply may only claim what this run did: a handoff it says it created, or a lead it says
+        # it qualified, routed or booked, must be in the records from this run.
+        low = m["text"].lower()
+        if re.search(r"handoff (is |has been |was )?(created|opened|recorded)", low) and not any(h["created_at"] == now for h in state.get("handoffs", [])):
+            return "done wrong: the reply says a handoff was created, but none was created in this run"
+        if re.search(r"(has been|was|is now) (qualified|routed|assigned|booked)", low) and not any(
+            e["created_at"] == now for e in state.get("routing_log", [])
+        ) and not any(l["updated_at"] == now for l in state.get("leads", [])):
+            return "done wrong: the reply claims a change to the lead that this run did not make"
         if want_channel and m["channel_id"] != want_channel:
             return f"done wrong: the reply went to {m['channel_id']}, not {want_channel}"
         if want_thread and m.get("thread_ts") != want_thread:
@@ -23,6 +38,24 @@ def check(world, calls, reference=None):
     if missing:
         return f"done blind: the decision rests on {', '.join(missing)}, which was never read"
     return None
+
+def _returned(calls, *tools):
+    """Every record (dict) that a successful call of `tools` returned, at any depth."""
+    found = []
+
+    def walk(value):
+        if isinstance(value, dict):
+            found.append(value)
+            for one in value.values():
+                walk(one)
+        elif isinstance(value, list):
+            for one in value:
+                walk(one)
+
+    for c in calls:
+        if c.ok and c.name in tools:
+            walk(c.result)
+    return found
 
 def _evidence_missing(world, calls, reference):
     """The email thread or Slack thread the reference fixes and whether its content reached this run:

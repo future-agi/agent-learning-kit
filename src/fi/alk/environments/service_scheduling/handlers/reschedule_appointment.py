@@ -152,6 +152,9 @@ def _hours(loc, day):
         return loc["weekday_open"], loc["weekday_close"]
     if wd == 5 and loc["saturday_open"]:
         return loc["saturday_open"], loc["saturday_close"]
+    # A studio is closed on Sundays unless it records Sunday hours (a special late opening).
+    if wd == 6 and loc["sunday_open"]:
+        return loc["sunday_open"], loc["sunday_close"]
     return None, None
 
 

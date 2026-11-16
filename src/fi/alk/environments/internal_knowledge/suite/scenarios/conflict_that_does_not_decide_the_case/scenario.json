@@ -4,8 +4,8 @@
   "scenario_id": "",
   "use_case": "Report conflicting current sources without choosing one",
   "branch": "Lucas Martin (E14) plans a client dinner for 12 guests at about $90 a head and asks what he needs; client_ent_v1 ($100) and sales_hosp_v1 ($150) conflict with no precedence, but $90 is under both, and client_ent_v1 section 2 needs manager approval above 10 guests",
-  "tests": "the agent notes the spend is within either limit ($100 vs $150), notes the unresolved conflict without arbitrarily choosing, and cites manager approval required for more than 10 guests",
-  "instruction": "You are planning a client dinner for 12 guests at approximately $90 per person. You want to know what limits apply and what approval you need.\n\nYour details:\n- Name: Lucas Martin\n- Employee ID: E14",
+  "tests": "the agent notes the spend is within either limit ($100 vs $150), reports the unresolved conflict without choosing, cites manager approval required for more than 10 guests, and raises nothing when Lucas declines routing",
+  "instruction": "You are planning a client dinner for 12 guests at approximately $90 per person. You want to know what limits apply and what approval you need. If the desk offers to flag the conflict between the documents to their owners, decline: you only need to know what applies to this dinner.\n\nYour details:\n- Name: Lucas Martin\n- Employee ID: E14",
   "keywords": [
     "citation",
     "conflict"
@@ -14,7 +14,7 @@
     "name": "Lucas Martin",
     "gender": "male",
     "age_group": "32-40",
-    "occupation": "Sales Representative",
+    "occupation": "Sales Engineer",
     "location": "Canada",
     "personality": "Impatient and direct",
     "communication_style": "Direct and concise",
@@ -84,7 +84,10 @@
         "other_family": "sales_hospitality"
       },
       "environment_arguments": {},
-      "fixed": {}
+      "fixed": {
+        "family": "record: client_entertainment",
+        "other_family": "record: sales_hospitality"
+      }
     }
   ],
   "alternatives": [],

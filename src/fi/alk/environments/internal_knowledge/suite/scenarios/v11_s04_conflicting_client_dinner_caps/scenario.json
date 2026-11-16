@@ -4,8 +4,8 @@
   "scenario_id": "",
   "use_case": "Report conflicting current sources without choosing one",
   "branch": "Lucas Martin asks which client dinner cap applies; the Client Entertainment Guidelines ($100) and the Sales Hospitality Standard ($150) are both in effect from 2026-07-01 and no precedence is configured",
-  "tests": "the agent cites both documents, checks precedence, says none is configured, does not pick one, and routes the question to the owners",
-  "instruction": "You are taking a client to dinner and found two documents with different per-person limits. Ask the Knowledge Desk which cap you should use.\n\nYour details:\n- Name: Lucas Martin\n- Employee ID: E14",
+  "tests": "the agent cites both documents, checks precedence, says none is configured, does not pick one, offers to route the conflict to the owners, and raises nothing when Lucas declines",
+  "instruction": "You are taking a client to dinner and found two documents with different per-person limits. Ask the Knowledge Desk which cap you should use. If the desk offers to flag the conflict to the document owners, decline: you will ask your manager.\n\nYour details:\n- Name: Lucas Martin\n- Employee ID: E14",
   "keywords": [
     "conflict",
     "precedence"
@@ -14,7 +14,7 @@
     "name": "Lucas Martin",
     "gender": "male",
     "age_group": "32-40",
-    "occupation": "Sales Representative",
+    "occupation": "Sales Engineer",
     "location": "Canada",
     "personality": "Confident",
     "communication_style": "Direct and concise",
@@ -71,7 +71,10 @@
         "other_family": "sales_hospitality"
       },
       "environment_arguments": {},
-      "fixed": {}
+      "fixed": {
+        "family": "record: client_entertainment",
+        "other_family": "record: sales_hospitality"
+      }
     }
   ],
   "alternatives": [],

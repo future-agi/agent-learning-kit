@@ -1,24 +1,27 @@
 def check(world, calls, reference=None):
-    want = _want(reference, "cancel_appointment")
     s = world.state()
-    now = _now(s)
-    if not any(c.name == "cancel_appointment" and c.ok for c in calls):
-        return "not done: no cancellation was committed"
-    gone = [a for a in s.get("appointments", []) if a["cancelled_at"] == now]
-    if want.get("appointment_id"):
-        if not any(a["appointment_id"] == want["appointment_id"] for a in gone):
-            return f"not done: {want['appointment_id']} is not cancelled"
-        other = [a["appointment_id"] for a in gone if a["appointment_id"] != want["appointment_id"]]
-        if other:
-            return f"done wrong: other appointments were cancelled too: {other}"
-    events = {e["event_id"]: e for e in s.get("calendar_events", [])}
-    for a in gone:
-        if events.get(a["calendar_event_id"], {}).get("status") != "cancelled":
-            return f"done wrong: {a['appointment_id']} is cancelled but its calendar event is not"
-    if want.get("acknowledged_fee") is True and not any(a["late_fee_cents"] > 0 for a in gone):
-        return "done wrong: a late cancellation was recorded without its fee"
-    return _blind(world, calls, reference)
-
+    cal_of = {r["staff_id"]: r["calendar_id"] for r in s.get("staff", [])}
+    loc_of = {r["staff_id"]: r["location_id"] for r in s.get("staff", [])}
+    slots_want, events_want = _want(reference, "list_slots"), _want(reference, "list_events")
+    want_staff = slots_want.get("staff_id")
+    want_cal = events_want.get("calendarId") or (cal_of.get(want_staff) if want_staff else None)
+    want_date = str(slots_want.get("date") or events_want.get("startTime") or "")[:10]
+    if not want_cal or not want_date:
+        return "broken: the reference fixes no staff calendar and date to read"
+    target = {v: k for k, v in cal_of.items()}.get(want_cal)
+    for c in calls:
+        if not c.ok or not isinstance(c.result, dict):
+            continue
+        a, r = c.arguments, c.result
+        # Slots computed for that day from that staff member's calendar (asked for by name, or
+        # every staff member at their studio), or the calendar itself over a window that day.
+        if c.name == "list_slots" and r.get("date") == want_date and (a.get("staff_id") == target or (not a.get("staff_id") and r.get("location_id") == loc_of.get(target))):
+            return _blind(world, calls, reference)
+        if c.name == "list_events" and a.get("calendarId") == want_cal:
+            lo, hi = str(a.get("startTime") or "")[:10], str(a.get("endTime") or "")[:10]
+            if (not lo or lo <= want_date) and (not hi or hi >= want_date):
+                return _blind(world, calls, reference)
+    return f"not done: {want_cal}'s availability on {want_date} never reached the agent"
 
 def _now(state):
     return (state.get("clock") or [{"now": ""}])[0]["now"]

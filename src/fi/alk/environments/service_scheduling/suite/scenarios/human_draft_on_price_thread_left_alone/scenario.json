@@ -5,10 +5,10 @@
   "use_case": "Pick up a booking request from the bookings mailbox",
   "branch": "Hana Sato emailed about colour treatment prices; a person on the front desk already drafted the reply, so the agent leaves that draft",
   "tests": "the agent reads the thread, lists the drafts, finds the person's draft, and adds no draft of its own",
-  "instruction": "You are on the front desk team. Ask the assistant to draft a reply to Hana Sato's email about colour treatment prices.",
+  "instruction": "You are Jordan Ellis on the front desk team. Ask the assistant to draft a reply to Hana Sato's email about colour treatment prices.",
   "keywords": [],
   "persona": {
-    "name": "Grace Mbeki",
+    "name": "Jordan Ellis",
     "gender": "male",
     "age_group": "60+",
     "occupation": "Front desk",

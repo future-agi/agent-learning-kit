@@ -54,7 +54,9 @@
         "threadId": "th_c06_claim_p16"
       },
       "environment_arguments": {},
-      "fixed": {}
+      "fixed": {
+        "threadId": "record: gmail_threads.id"
+      }
     },
     {
       "tool": "get_referral_status",

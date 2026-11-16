@@ -4,7 +4,7 @@
   "scenario_id": "",
   "use_case": "Record consent and stop outreach",
   "branch": "Grace Okafor of Ridgeway Utilities (contact C15, already opted_out) asks for a demo; the desk looks up her contact record and declines outreach or demo scheduling while she remains opted out",
-  "tests": "the agent checks Grace Okafor's contact record C15 and explains that no demo can be scheduled while her status is opted_out",
+  "tests": "the agent finds Grace Okafor's contact record C15 by her email, sees it is opted_out, and explains that no demo can be scheduled while she is opted out",
   "instruction": "You are Grace Okafor at Ridgeway Utilities. You previously opted out of communications, but you are now asking for a BrightDesk demo. If the desk explains that your record is marked opted_out and that outreach cannot occur without opting back in first, understand and ask what the process is.\n\nYour details:\n- Name: Grace Okafor\n- Email: grace.okafor@ridgeway.example\n- Company: Ridgeway Utilities",
   "keywords": [
     "consent",
@@ -39,15 +39,9 @@
         "email": "grace.okafor@ridgeway.example"
       },
       "environment_arguments": {},
-      "fixed": {}
-    },
-    {
-      "tool": "get_contact",
-      "arguments": {
-        "contact_id": "C15"
-      },
-      "environment_arguments": {},
-      "fixed": {}
+      "fixed": {
+        "email": "caller: grace.okafor@ridgeway.example"
+      }
     }
   ],
   "alternatives": [],

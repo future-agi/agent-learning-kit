@@ -65,3 +65,36 @@ def test_an_identical_retry_returns_the_original_post(vertical: str, tmp_path: P
         assert len(world.state()["slack_messages"]) == posted
     finally:
         world.close()
+
+
+@pytest.mark.parametrize("vertical", VERTICALS)
+def test_the_desk_reads_the_approved_text_before_posting(vertical: str, tmp_path: Path) -> None:
+    """An approver hands over only an approval id, and a post must match the approved text: the
+    desk reads that text with slack_get_approval, and posting it goes through. Another user's
+    approval is not shown."""
+    here = Path(environments.__file__).parent / vertical
+    designed.build_environment(here, tmp_path / "environment")
+    shutil.copytree(tmp_path / "environment" / WORLD, tmp_path / WORLD)
+    for folder in sorted(p for p in (here / "suite" / "scenarios").iterdir() if p.is_dir()):
+        scenario = read_folder(here / "suite", folder.name)
+        at = next((i for i, s in enumerate(scenario.solution) if s.tool == "slack_send_message" and s.arguments.get("approval_id")), None)
+        if at is None:
+            continue
+        world, *_ = _run(scenario, tmp_path / WORLD, with_solution=False)
+        try:
+            for step in scenario.solution[:at]:
+                play_reference_step(world, step)
+            post = copy.deepcopy(scenario.solution[at])
+            shown = world.call("slack_get_approval", {"approval_id": post.arguments["approval_id"]})
+            if not shown.ok or shown.result["status"] != "approved":
+                continue
+            assert shown.result["channel_id"] == post.arguments["channel_id"]
+            post.arguments["message"] = shown.result["approved_text"]
+            assert play_reference_step(world, post).ok
+            world.change("current_actor", "default", {"user_id": "U_SOMEONE_ELSE"}, by="id")
+            other = world.call("slack_get_approval", {"approval_id": post.arguments["approval_id"]})
+            assert not other.ok and "another user" in other.error
+            return
+        finally:
+            world.close()
+    raise AssertionError(f"no reference in {vertical} posts with a usable approval")

@@ -4,7 +4,7 @@
   "scenario_id": "",
   "use_case": "Pick up a Slack question and post the approved reply in its thread",
   "branch": "Kenji Tanaka asked about a relocation allowance for Tokyo in #help-policies (KM07); Oliver Grant provides approval APP-KN-404 to reply in the thread stating no preset allowance applies to Japan under Relocation Policy 1.0 and offering a knowledge request",
-  "tests": "the agent reads KM07 and relocation_v1, posting that Japan has no preset allowance in Kenji's thread with APP-KN-404",
+  "tests": "the agent reads KM07 and Relocation Policy 1.0 sections 1 to 3, posting in Kenji's thread with APP-KN-404 the US and UK allowances and that Japan has no preset allowance",
   "instruction": "You are Oliver Grant, IT Manager. Kenji Tanaka asked in #help-policies whether there is a relocation allowance for moving to Tokyo. Ask the Knowledge Desk to post the approved reply in his thread; you provide approval APP-KN-404.\n\nYour details:\n- Name: Oliver Grant\n- Employee ID: E08\n- Approval: APP-KN-404",
   "keywords": [
     "slack",
@@ -14,7 +14,7 @@
     "name": "Oliver Grant",
     "gender": "male",
     "age_group": "32-40",
-    "occupation": "Manager",
+    "occupation": "IT Manager",
     "location": "United Kingdom",
     "personality": "Professional and formal",
     "communication_style": "Direct and concise",
@@ -42,6 +42,28 @@
       "environment_arguments": {},
       "fixed": {
         "message_ts": "record: KM07"
+      }
+    },
+    {
+      "tool": "fetch_passage",
+      "arguments": {
+        "employee_id": "E08",
+        "passage_id": "P-RELOCATIONV1-01"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "passage_id": "record: Relocation Policy 1.0, section 1"
+      }
+    },
+    {
+      "tool": "fetch_passage",
+      "arguments": {
+        "employee_id": "E08",
+        "passage_id": "P-RELOCATIONV1-02"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "passage_id": "record: Relocation Policy 1.0, section 2"
       }
     },
     {

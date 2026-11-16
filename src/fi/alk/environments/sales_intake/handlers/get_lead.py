@@ -2,6 +2,9 @@ def handle(args, db):
     l = _lead(db, args.get("lead_id"))
     _for_lead(db, l)
     out = _lead_view(l)
+    # Who owns the lead, by name as well as id: a status answer names the rep from the record.
+    owner = db.one("SELECT name FROM reps WHERE rep_id = ?", [l["owner_rep_id"]]) if l["owner_rep_id"] else None
+    out["owner_name"] = owner["name"] if owner else None
     # Notes are the reps' internal working notes: staff see them, the prospect does not.
     if _caller(db)[0] == "staff":
         out["notes"] = db.query("SELECT note_id, body, created_at FROM lead_notes WHERE lead_id = ?", [l["lead_id"]])

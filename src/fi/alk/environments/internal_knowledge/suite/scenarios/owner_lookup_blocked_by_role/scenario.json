@@ -15,7 +15,7 @@
     "name": "Sam Taylor",
     "gender": "male",
     "age_group": "25-32",
-    "occupation": "Sales Representative",
+    "occupation": "Sales Development Rep",
     "location": "United States",
     "personality": "Professional and formal",
     "communication_style": "Assertive",
@@ -53,7 +53,9 @@
         "employee_id": "E20"
       },
       "environment_arguments": {},
-      "fixed": {}
+      "fixed": {
+        "drive_file_id": "record: Vendor Onboarding 1.0 (vendor_v1)"
+      }
     },
     {
       "tool": "get_team_directory",

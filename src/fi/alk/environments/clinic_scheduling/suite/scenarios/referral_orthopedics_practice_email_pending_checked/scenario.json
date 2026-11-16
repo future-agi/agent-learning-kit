@@ -56,7 +56,9 @@
         "threadId": "th_c02_referral_p09"
       },
       "environment_arguments": {},
-      "fixed": {}
+      "fixed": {
+        "threadId": "record: gmail_threads.id"
+      }
     },
     {
       "tool": "get_referral_status",

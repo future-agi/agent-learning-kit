@@ -53,7 +53,9 @@
         "lead_id": "L08"
       },
       "environment_arguments": {},
-      "fixed": {}
+      "fixed": {
+        "lead_id": "record: L08, the Fernhill lead Oliver's thread asks about"
+      }
     },
     {
       "tool": "slack_send_message",

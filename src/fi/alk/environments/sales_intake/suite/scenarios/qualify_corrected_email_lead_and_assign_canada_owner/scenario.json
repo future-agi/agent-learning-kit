@@ -5,7 +5,7 @@
   "use_case": "Qualify an inbound enquiry against the rubric",
   "branch": "Priya Raman (A02, Canada owner) asks the desk to qualify Prairie Grain's lead (L16) from thread th_s13_prairie_correction and assign it to her; desk qualifies with seats 60 and assigns A02",
   "tests": "the agent reads th_s13_prairie_correction, qualifies L16 with seats 60, and assigns owner A02",
-  "instruction": "You are Priya Raman, Account Executive for Canada at BrightDesk. You want the sales intake desk to qualify Prairie Grain Co-op's lead (L16) from their email thread th_s13_prairie_correction (using the corrected 60 seat count) and route the lead to you as the territory owner.\n\nYour details:\n- Name: Priya Raman\n- Role: Account Executive (Canada)\n- Email thread: th_s13_prairie_correction\n- Lead ID: L16\n- Prospect: Noah Bergeron (Prairie Grain Co-op)\n- Rep ID: A02",
+  "instruction": "You are Priya Raman, Account Executive for Canada at BrightDesk. You want the sales intake desk to qualify Prairie Grain Co-op's lead (L16) from their email thread th_s13_prairie_correction (using the seat count as corrected in the thread) and route the lead to you as the territory owner.\n\nYour details:\n- Name: Priya Raman\n- Role: Account Executive (Canada)\n- Email thread: th_s13_prairie_correction\n- Lead ID: L16\n- Prospect: Noah Bergeron (Prairie Grain Co-op)\n- Rep ID: A02",
   "keywords": [
     "qualify_lead"
   ],

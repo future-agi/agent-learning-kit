@@ -4,8 +4,8 @@
   "scenario_id": "",
   "use_case": "Pick up a Slack question and post the approved reply in its thread",
   "branch": "Priya Nair asked the on-call pay in #help-policies; the desk lead gives approval APP-KN-401 to answer in her thread from On-call Policy 2.0",
-  "tests": "the agent reads the thread and the policy, posts $400 a week plus $50 per after-hours page in Priya's thread with APP-KN-401",
-  "instruction": "You lead the Knowledge Desk. Priya Nair asked in #help-policies what the on-call pay per week is. Ask the desk to answer her in her thread; you approve the reply with approval APP-KN-401.\n\nYour details:\n- Name: Hannah Okafor\n- Employee ID: E03\n- Approval: APP-KN-401",
+  "tests": "the agent reads Priya's whole thread (KM14, an old $300 figure, its correction, her follow-up about pages and her clarification that she is on the primary rota), On-call Policy 2.0 sections 1 and 2, and posts $400 a week plus $50 per after-hours page in Priya's thread with APP-KN-401",
+  "instruction": "You lead the Knowledge Desk. Priya Nair asked in #help-policies about on-call pay. Ask the desk to answer her in her thread; you approve the reply with approval APP-KN-401.\n\nYour details:\n- Name: Hannah Okafor\n- Employee ID: E03\n- Approval: APP-KN-401",
   "keywords": [
     "slack",
     "approval"
@@ -14,7 +14,7 @@
     "name": "Hannah Okafor",
     "gender": "female",
     "age_group": "40-50",
-    "occupation": "Manager",
+    "occupation": "HR Business Partner",
     "location": "United Kingdom",
     "personality": "Analytical",
     "communication_style": "Formal and polite",
@@ -53,6 +53,17 @@
       "environment_arguments": {},
       "fixed": {
         "passage_id": "record: On-call Policy 2.0, section 1"
+      }
+    },
+    {
+      "tool": "fetch_passage",
+      "arguments": {
+        "employee_id": "E03",
+        "passage_id": "P-ONCALLV2-02"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "passage_id": "record: On-call Policy 2.0, section 2"
       }
     },
     {

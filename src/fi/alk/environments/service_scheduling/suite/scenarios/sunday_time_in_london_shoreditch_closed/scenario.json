@@ -3,9 +3,9 @@
   "scenario_key": "sunday-time-in-london-shoreditch-closed",
   "scenario_id": "",
   "use_case": "Concurrency, clock changes and failures",
-  "branch": "The customer asks for 1:30 on 1 November at Shoreditch (no clock change there, but closed on Sundays) and accepts Monday.",
-  "tests": "the agent checks location opening days and explains Sunday closure instead of confusing London with New York DST",
-  "instruction": "You want to book an Initial Consultation at the Shoreditch Studio in London on Sunday 1 November at 1:30 pm. You believe the studio is open on Sundays. If you are told that the Shoreditch Studio is closed on Sundays, ask what times are available on Monday 2 November instead.\n\nYour details:\n- Name: Layla Mahmoud\n- Email: layla.mahmoud@example.com\n- Phone: +44 20 7946 0401\n- Location: Shoreditch Studio (London)\n- Service: Initial Consultation",
+  "branch": "The customer asks for an Initial Consultation at 1:30 pm on Sunday 1 November at Shoreditch, which is closed on Sundays (London has no clock change that day), and then asks for Priya Desai's Monday 2 November times",
+  "tests": "the agent reads Shoreditch's hours (closed on Sundays; London's clocks already went back on 25 October, so nothing repeats there), explains the closure without inventing a clock change, books nothing on Sunday, and gives Priya's Monday 2 November times from the slots",
+  "instruction": "You want to book an Initial Consultation at the Shoreditch Studio in London on Sunday 1 November at 1:30 pm. You believe the studio is open on Sundays. If you are told that the Shoreditch Studio is closed on Sundays, ask what times Priya Desai has for an Initial Consultation on Monday 2 November instead.\n\nYour details:\n- Name: Layla Mahmoud\n- Email: layla.mahmoud@example.com\n- Phone: +44 20 7946 0401\n- Location: Shoreditch Studio (London)\n- Service: Initial Consultation",
   "keywords": [
     "concurrency",
     "clock_changes",
@@ -60,7 +60,10 @@
         "staff_id": "ST04"
       },
       "environment_arguments": {},
-      "fixed": {}
+      "fixed": {
+        "staff_id": "the consultant the customer asked about on Monday",
+        "date": "the Monday she asked about"
+      }
     }
   ],
   "alternatives": [],
@@ -75,7 +78,8 @@
     "task": "concurrency"
   },
   "sub_goals": [
-    "ambiguous_time_not_committed",
+    "closed_day_explained",
+    "availability_reported_from_calendar",
     "declined_action_explained"
   ],
   "max_turns": 10,

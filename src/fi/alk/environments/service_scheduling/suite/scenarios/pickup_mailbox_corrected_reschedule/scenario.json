@@ -4,8 +4,8 @@
   "scenario_id": "",
   "use_case": "Reschedule or cancel an appointment",
   "branch": "agent reads email thread th_s401 where customer asked for Thursday and then corrected to Friday, and reschedules appointment A430 to the corrected Friday time",
-  "tests": "the agent reads the full thread th_s401 including the correction and moves appointment A430 to Friday 6 November 11:00",
-  "instruction": "You are Toby Marshall. You sent an email asking to move your haircut with Tom (appointment A430) to Thursday, and then immediately sent a follow-up correcting it to Friday 6 November at 11:00 am (thread th_s401). In chat, you ask the desk to review the thread and reschedule to your corrected time (Friday 6 November at 11:00 am).\n\nYour details:\n- Name: Toby Marshall\n- Email: toby.marshall@example.com\n- Phone: +44 20 7946 0430\n- Existing appointment ID: A430\n- Thread ID: th_s401\n- Target time: Friday 6 November 2026 at 11:00 am (2026-11-06T11:00)\n- Time zone: Europe/London (+00:00)",
+  "tests": "the agent reads the whole thread th_s401 (Thursday is closed, corrected to Friday, a wavering PS that settles on 11) and moves A430 to Friday 6 November 11:00 London time",
+  "instruction": "You are Toby Marshall. You emailed asking to move your haircut with Tom (appointment A430), corrected the day in a follow-up, and wavered on the time before settling (thread th_s401). In chat, ask the desk to review the thread and make the move your emails settled on, without saying the new day or time yourself. When the desk reads back Friday 6 November at 11:00 am London time, confirm; if it reads back Thursday or 10 am, say that is not what you settled on.\n\nYour details:\n- Name: Toby Marshall\n- Email: toby.marshall@example.com\n- Phone: +44 20 7946 0430\n- Existing appointment ID: A430\n- Thread ID: th_s401",
   "keywords": [
     "reschedule_appointment",
     "self_correction",
@@ -19,7 +19,7 @@
     "location": "United Kingdom",
     "personality": "Friendly and cooperative",
     "communication_style": "Direct and concise",
-    "initial_message": "Hi, I sent an email thread with a correction about moving my haircut with Tom (thread th_s401). Could you please reschedule it to Friday?",
+    "initial_message": "Hi, I sent an email thread with a correction about moving my haircut with Tom (thread th_s401). Could you please move it as my emails say?",
     "languages": [
       "English"
     ],

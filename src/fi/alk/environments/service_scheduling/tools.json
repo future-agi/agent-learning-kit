@@ -211,7 +211,7 @@
   },
   {
     "name": "get_location",
-    "description": "A location's address, time zone, current UTC offset, opening hours and closed dates.",
+    "description": "A location's address, time zone, current UTC offset, opening hours (Sunday hours only when the studio records a special opening), closed dates and clock changes.",
     "parameters": {
       "type": "object",
       "required": [
@@ -258,7 +258,7 @@
   },
   {
     "name": "list_slots",
-    "description": "Free start times for a service at a location on one local date, computed from each staff member's calendar, holds and closures. Each slot gives the local time, the UTC instant and the offset. When a day has no slots because the studio is closed, the date is past the booking horizon or too soon, unavailable_reason says so.",
+    "description": "Free start times for a service at a location on one local date, computed from each staff member's calendar, holds and closures. Each slot gives the local time, the UTC instant and the offset; a local time the clocks repeat is listed once per free occurrence, marked repeated_time first or second. When a day has no slots because the studio is closed, the date is past the booking horizon or too soon, unavailable_reason says so.",
     "parameters": {
       "type": "object",
       "required": [

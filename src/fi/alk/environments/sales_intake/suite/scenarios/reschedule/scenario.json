@@ -3,13 +3,12 @@
   "scenario_key": "reschedule",
   "scenario_id": "",
   "use_case": "Book a demo on the owner's calendar after the prospect picks",
-  "branch": "Prospect reschedules existing demo to another open slot",
-  "tests": "the desk cancels demo D419 on Chloe Nguyen's calendar and books new demo on slot DS18 upon prospect choice",
+  "branch": "Prospect moves an existing demo to another open slot on the owner's calendar in one step, the original kept until the new time is booked",
+  "tests": "the desk reads lead L419 and its demo D419, offers Chloe Nguyen's open slots, and moves D419 to slot DS18 with reschedule_demo when Declan picks it, so the original stands until the new time is booked and is then released",
   "instruction": "You are Declan Fraser from Tasman Health (lead L419, email declan.fraser@tasmanhealth.example). You have a demo D419 booked with Chloe Nguyen for Friday 13 November at 10:00 Sydney time (slot DS419). Ask the sales desk to reschedule your demo. When offered alternative slots on Chloe's calendar, choose Friday 13 November at 11:00 AM Sydney time (slot DS18) and confirm.\n\nYour details:\n- Name: Declan Fraser\n- Company: Tasman Health\n- Email: declan.fraser@tasmanhealth.example\n- Lead ID: L419\n- Existing demo ID: D419\n- Assigned Rep: Chloe Nguyen (A06)",
   "keywords": [
     "reschedule",
-    "cancel_demo",
-    "book_demo",
+    "reschedule_demo",
     "tasman_health"
   ],
   "persona": {
@@ -65,17 +64,6 @@
       "fixed": {}
     },
     {
-      "tool": "cancel_demo",
-      "arguments": {
-        "demo_id": "D419",
-        "confirmed": true
-      },
-      "environment_arguments": {},
-      "fixed": {
-        "demo_id": "record: demos[D419].demo_id"
-      }
-    },
-    {
       "tool": "list_demo_slots",
       "arguments": {
         "rep_id": "A06"
@@ -84,16 +72,16 @@
       "fixed": {}
     },
     {
-      "tool": "book_demo",
+      "tool": "reschedule_demo",
       "arguments": {
-        "prospect_confirmed": true,
+        "demo_id": "D419",
         "slot_id": "DS18",
-        "request_key": "REQ-L419-RESCHED",
-        "lead_id": "L419"
+        "prospect_confirmed": true,
+        "request_key": "REQ-L419-RESCHED"
       },
       "environment_arguments": {},
       "fixed": {
-        "lead_id": "record: leads[L419].lead_id",
+        "demo_id": "record: demos[D419].demo_id",
         "slot_id": "record: demo_slots[DS18].slot_id"
       }
     }
@@ -101,8 +89,7 @@
   "alternatives": [],
   "coverage": {},
   "sub_goals": [
-    "demo_cancelled_as_requested",
-    "demo_booked_on_owner_calendar",
+    "demo_rescheduled_safely",
     "demo_time_in_prospect_timezone"
   ],
   "max_turns": 10,

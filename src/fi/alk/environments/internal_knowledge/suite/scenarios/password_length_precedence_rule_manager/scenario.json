@@ -13,7 +13,7 @@
     "name": "Oliver Grant",
     "gender": "male",
     "age_group": "40-50",
-    "occupation": "Manager",
+    "occupation": "IT Manager",
     "location": "United Kingdom",
     "personality": "Analytical",
     "communication_style": "Technical",
@@ -72,7 +72,10 @@
         "family": "password_policy"
       },
       "environment_arguments": {},
-      "fixed": {}
+      "fixed": {
+        "family": "record: password_policy",
+        "other_family": "record: data_classification"
+      }
     }
   ],
   "alternatives": [],

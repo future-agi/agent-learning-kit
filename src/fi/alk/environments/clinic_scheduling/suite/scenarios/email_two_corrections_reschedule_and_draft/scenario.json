@@ -3,22 +3,22 @@
   "scenario_key": "email-two-corrections-reschedule-and-draft",
   "scenario_id": "",
   "use_case": "Email requests and corrections",
-  "branch": "Aisha Mensah emailed to move cardiology appointment A03 from 13:00 to 15:00, then corrected to 15:30 on Wednesday 28 October; the desk moves A03 to 15:30 and drafts a reply",
-  "tests": "the agent reads th_c13_two_corrections_p08, reschedules A03 to 15:30 slot SL-D04-20261028-1530, and creates a reply draft confirming 15:30",
-  "instruction": "You sent an email asking to move your cardiology appointment A03 on Wednesday 28 October from 13:00 to 15:00, but then sent a follow-up correction email saying 15:30 suits you better than 15:00. You are now contacting the clinic desk on chat to ensure your appointment is rescheduled to 15:30 on Wednesday 28 October, and you want them to draft a reply confirming the change.\n\nYour details:\n- Full name: Aisha Mensah\n- Date of birth: 1979-03-22\n- Email: aisha.mensah@example.com\n- Appointment reference: A03\n- Preferred new time: Wednesday 28 October at 15:30\n- Email thread subject: Changing the time of A03",
+  "branch": "Aisha Mensah emailed to move cardiology appointment A03 from 13:00 to 15:00, changed it to 14:00 and then to 15:30 on Wednesday 28 October; her chat opening defers to the email, so the desk finds the latest time, moves A03 to 15:30 and drafts a reply confirming it",
+  "tests": "the agent reads th_c13_two_corrections_p08 (five messages, two corrections), reschedules A03 to SL-D04-20261028-1530, and creates a reply draft on the thread confirming 15:30",
+  "instruction": "You emailed the clinic about moving your cardiology appointment A03 on Wednesday 28 October, then changed the time in follow-up emails. You are now contacting the clinic desk on chat: ask them to move A03 to the time your latest email gives, and to draft a reply on your email thread confirming the change so you have it in writing. Do not say the new time yourself; if asked, say it is in your latest email. Your latest email asked for 15:30: when the desk reads back Wednesday 28 October at 15:30 with Dr. Ethan Brooks at Riverbank North, confirm. If it reads back 15:00 or 14:00, say your latest email replaced that.\n\nYour details:\n- Full name: Aisha Mensah\n- Date of birth: 1979-03-22\n- Email: aisha.mensah@example.com\n- Appointment reference: A03\n- Email thread subject: Changing the time of A03",
   "keywords": [
     "reschedule",
     "correction"
   ],
   "persona": {
-    "name": "Aisha Boateng",
+    "name": "Aisha Mensah",
     "gender": "female",
     "age_group": "40-50",
     "occupation": "Accountant",
     "location": "Canada",
     "personality": "Friendly and cooperative",
     "communication_style": "Direct and concise",
-    "initial_message": "Hello, I sent an email and a follow-up correction about moving my cardiology appointment A03 on Wednesday 28 October to 15:30. Could you reschedule it and draft a reply to my email?",
+    "initial_message": "Hello, I sent an email and then a couple of follow-ups about moving my cardiology appointment A03. Could you move it as my latest email says and draft a reply to my email confirming it?",
     "languages": [
       "English"
     ],
@@ -91,7 +91,7 @@
     {
       "tool": "create_draft",
       "arguments": {
-        "body": "Dear Aisha Mensah, your cardiology appointment A03 on Wednesday 28 October has been moved to 15:30 as requested. Riverbank Appointments Desk",
+        "body": "Dear Aisha Mensah, your cardiology appointment A03 on Wednesday 28 October has been moved to 15:30, as your latest email asked. Riverbank Appointments Desk",
         "subject": "Re: Changing the time of A03",
         "bcc": null,
         "to": [
@@ -99,7 +99,7 @@
         ],
         "cc": null,
         "htmlBody": null,
-        "replyToMessageId": "cmsg_016",
+        "replyToMessageId": "cmsg_023",
         "attachments": null
       },
       "environment_arguments": {},

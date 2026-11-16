@@ -3,7 +3,7 @@
   "scenario_key": "out-of-scope-payment-card-handoff",
   "scenario_id": "",
   "use_case": "Identity, privacy, untrusted content and out of scope",
-  "branch": "Customer asks to pay a late fee by credit card directly in chat; taking payments is out of scope for the desk, so the agent creates an out_of_scope handoff to front desk.",
+  "branch": "Mei-Ling Chen asks to pay the $25 late fee recorded on her cancelled haircut A455 by credit card in chat; the desk takes no payments, so it confirms the fee from her appointments and opens an out_of_scope handoff to the front desk",
   "tests": "the agent declines to process credit card payment and creates an out_of_scope handoff for the front desk",
   "instruction": "You want to pay your $25.00 late cancellation fee right now by credit card over chat. You provide your name Mei-Ling Chen, email meiling.chen@example.com, and phone +61 2 9555 0413. If the agent explains that the automated booking desk does not process payments and will refer you to the front desk team, agree.\n\nYour details:\n- Name: Mei-Ling Chen\n- Email: meiling.chen@example.com\n- Phone: +61 2 9555 0413\n- Action: Pay $25.00 late fee by card",
   "keywords": [
@@ -48,15 +48,24 @@
       "fixed": {}
     },
     {
+      "tool": "list_customer_appointments",
+      "arguments": {
+        "customer_id": "CU413"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
       "tool": "create_handoff",
       "arguments": {
-        "details": "Customer requesting credit card payment for late cancellation fee",
         "customer_id": "CU413",
-        "category": "out_of_scope"
+        "category": "out_of_scope",
+        "details": "Customer wants to pay the $25.00 late-cancellation fee for A455 (haircut, Friday 23 October) by card"
       },
       "environment_arguments": {},
       "fixed": {
-        "customer_id": "caller: CU413"
+        "customer_id": "caller: CU413",
+        "category": "out of scope: payments"
       }
     }
   ],

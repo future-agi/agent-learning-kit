@@ -5,14 +5,14 @@
   "use_case": "Pick up a booking request from the bookings mailbox",
   "branch": "Front desk asks to process Jack Turner's email request (th_s11) by booking his haircut with Marcus on Thursday 29 Oct at 11 am and drafting a confirmation reply on his thread",
   "tests": "the agent books the email request and prepares a confirmation draft on the customer thread",
-  "instruction": "You are on the front desk team. Ask the assistant to handle Jack Turner's email request (thread th_s11_booking_request_jack) by booking his requested haircut with Marcus Hale at Midtown on Thursday 29 October 2026-10-29T11:00, and drafting a reply on his thread to jack.turner@example.com confirming that his appointment has been booked.",
+  "instruction": "You are Jordan Ellis on the front desk team. Ask the assistant to handle Jack Turner's email request (thread th_s11_booking_request_jack) by booking his requested haircut with Marcus Hale at Midtown on Thursday 29 October 2026-10-29T11:00, and drafting a reply on his thread to jack.turner@example.com confirming that his appointment has been booked.",
   "keywords": [
     "booking",
     "haircut",
     "draft"
   ],
   "persona": {
-    "name": "Jack W. Turner",
+    "name": "Jordan Ellis",
     "gender": "",
     "age_group": "",
     "occupation": "Customer Service",

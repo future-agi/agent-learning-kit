@@ -58,7 +58,9 @@
         "calendarId": "CAL-ST03"
       },
       "environment_arguments": {},
-      "fixed": {}
+      "fixed": {
+        "calendarId": "Marcus Hale's calendar"
+      }
     },
     {
       "tool": "book_appointment",

@@ -15,6 +15,12 @@ def check(world, calls, reference=None):
         return "not done: the owner's open demo slots were never returned"
     if rep and not any(c.result.get("rep_id") == rep for c in offered):
         return f"done wrong: {rep}'s open slots were never returned"
+    # The slots offered must be the lead's owner's: the lead the reference works on, as it stands
+    # after this run (a lead routed in this run counts only if the routing took effect).
+    lead = want.get("lead_id") or next((step["arguments"]["lead_id"] for step in reference or () if step.get("arguments", {}).get("lead_id")), None)
+    owner = next((l["owner_rep_id"] for l in state.get("leads", []) if l["lead_id"] == lead), None) if lead else None
+    if lead and rep and owner != rep:
+        return f"done wrong: {rep}'s slots were offered, but lead {lead} belongs to {owner or 'no rep'}"
     if any(c.name in ("book_demo", "create_event") and c.ok for c in calls):
         return "done wrong: a demo was booked before the prospect chose a slot"
     missing = _evidence_missing(world, calls, reference)

@@ -15,7 +15,7 @@ def check(world, calls, reference=None):
     # The value as the customer put it, in any spelling or punctuation: "step_free access" is "Step-free access".
     if want.get("kind") and not any(p["kind"] == want["kind"] and (not want.get("value") or sorted(words(want["value"])) == sorted(words(p["value"]))) for p in rows):
         return f"done wrong: recorded {[(p['kind'], p['value']) for p in rows]}, the customer said {want.get('kind')} = {want.get('value')}"
-    return None
+    return _blind(world, calls, reference)
 
 
 def _now(state):

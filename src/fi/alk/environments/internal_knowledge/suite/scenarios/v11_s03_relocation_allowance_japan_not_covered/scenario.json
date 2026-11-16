@@ -14,7 +14,7 @@
     "name": "Kenji Tanaka",
     "gender": "male",
     "age_group": "60+",
-    "occupation": "Retired",
+    "occupation": "Software Engineer",
     "location": "Australia",
     "personality": "Reserved",
     "communication_style": "Formal and polite",
@@ -57,7 +57,9 @@
         "passage_id": "P-RELOCATIONV1-03"
       },
       "environment_arguments": {},
-      "fixed": {}
+      "fixed": {
+        "passage_id": "record: Relocation Policy 1.0, section 3"
+      }
     },
     {
       "tool": "create_knowledge_request",

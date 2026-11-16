@@ -3,9 +3,9 @@
   "scenario_key": "pickup-mailbox-consultation-olivia-monday",
   "scenario_id": "",
   "use_case": "Book an appointment by service, staff, language, location and time zone",
-  "branch": "agent picks up email booking request th_s12_booking_request_emma and books Olivia for a consultation on Monday 2 November at 10:00",
-  "tests": "the agent reads email thread th_s12_booking_request_emma and books Olivia for Hannah Schmidt on 2 November 10:00",
-  "instruction": "You are Hannah Schmidt. You previously sent an email (thread th_s12_booking_request_emma) requesting a consultation with Olivia on Monday 2 November at 10:00 am. You follow up in chat across two quick messages asking the desk to review the thread and book the consultation for you.\n\nYour details:\n- Name: Hannah Schmidt\n- Email: hannah.schmidt@example.com\n- Phone: +1 212 555 0419\n- Service: Initial Consultation (SV1)\n- Staff: Olivia Bennett (ST01)\n- Location: Midtown Studio (L1)\n- Date and time: Monday 2 November 2026 at 10:00 am (2026-11-02T10:00)\n- Time zone: America/New_York (-05:00)",
+  "branch": "agent picks up email booking request th_s419_consultation and books Olivia for a consultation on Monday 2 November at 10:00",
+  "tests": "the agent reads email thread th_s419_consultation and books Olivia for Hannah Schmidt on 2 November 10:00",
+  "instruction": "You are Hannah Schmidt. You previously sent an email (thread th_s419_consultation) requesting a consultation with Olivia on Monday 2 November at 10:00 am. You follow up in chat across two quick messages asking the desk to review the thread and book the consultation for you.\n\nYour details:\n- Name: Hannah Schmidt\n- Email: hannah.schmidt@example.com\n- Phone: +1 212 555 0419\n- Service: Initial Consultation (SV1)\n- Staff: Olivia Bennett (ST01)\n- Location: Midtown Studio (L1)\n- Date and time: Monday 2 November 2026 at 10:00 am (2026-11-02T10:00)\n- Time zone: America/New_York (-05:00)",
   "keywords": [
     "book_appointment",
     "mailbox_request",
@@ -19,7 +19,7 @@
     "location": "Australia",
     "personality": "Friendly and cooperative",
     "communication_style": "Direct and concise",
-    "initial_message": "Hi, I sent an email regarding my booking request (thread th_s12_booking_request_emma). Could you check it and book the consultation with Olivia on Monday Nov 2 at 10 am?",
+    "initial_message": "Hi, I sent an email regarding my booking request (thread th_s419_consultation). Could you check it and book the consultation with Olivia on Monday Nov 2 at 10 am?",
     "languages": [
       "English"
     ],
@@ -46,11 +46,11 @@
       "tool": "get_thread",
       "arguments": {
         "messageFormat": "FULL_CONTENT",
-        "threadId": "th_s12_booking_request_emma"
+        "threadId": "th_s419_consultation"
       },
       "environment_arguments": {},
       "fixed": {
-        "threadId": "record: th_s12_booking_request_emma"
+        "threadId": "record: th_s419_consultation"
       }
     },
     {

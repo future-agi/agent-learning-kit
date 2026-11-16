@@ -4,7 +4,7 @@
   "scenario_id": "",
   "use_case": "Post an approved handoff summary in Slack",
   "branch": "Slack thread query corrected to a different lead with valid approval",
-  "tests": "the agent posts the approved handoff summary in the asking thread for the corrected lead",
+  "tests": "the agent reads Oliver's whole thread, where he corrects his ask from Fernhill to Harbourline (L25), reads L25 and posts the approved Harbourline summary in that thread, not in his separate Kestrel thread",
   "instruction": "You are Rachel Holloway, Sales Operations Manager. Tell the sales desk to answer Oliver Hughes's recent thread in #sales-handoffs (CH_SALESHANDOFF) with the approved summary, using approval ID APP-SH-412. If asked, confirm you authorized APP-SH-412.\n\nYour details:\n- Name: Rachel Holloway\n- Role: Sales Operations Manager\n- Channel: #sales-handoffs (CH_SALESHANDOFF)\n- Approval ID: APP-SH-412",
   "keywords": [
     "slack",
@@ -53,7 +53,9 @@
         "lead_id": "L25"
       },
       "environment_arguments": {},
-      "fixed": {}
+      "fixed": {
+        "lead_id": "record: L25, the Harbourline lead Oliver's correction in the thread names"
+      }
     },
     {
       "tool": "slack_send_message",

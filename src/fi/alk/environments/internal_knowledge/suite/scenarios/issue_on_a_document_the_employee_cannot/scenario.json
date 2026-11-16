@@ -15,7 +15,7 @@
     "name": "Sam Taylor",
     "gender": "male",
     "age_group": "25-32",
-    "occupation": "Sales Representative",
+    "occupation": "Sales Development Rep",
     "location": "Australia",
     "personality": "Cautious and skeptical",
     "communication_style": "Assertive",
@@ -52,7 +52,9 @@
         "drive_file_id": "salary_bands_2026"
       },
       "environment_arguments": {},
-      "fixed": {}
+      "fixed": {
+        "drive_file_id": "record: Salary Bands 2026 (salary_bands_2026)"
+      }
     }
   ],
   "alternatives": [],

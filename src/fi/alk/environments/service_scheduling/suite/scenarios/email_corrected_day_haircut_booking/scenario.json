@@ -5,7 +5,7 @@
   "use_case": "Pick up a booking request from the bookings mailbox",
   "branch": "Chloe Park emailed asking for a haircut with Lucia on Tuesday 3 November at 10 am, then corrected it to Wednesday 4 November in a reply; the booking is for Wednesday 10:00 New York time (UTC-05:00 after the clocks go back)",
   "tests": "the agent reads the whole thread, books Wednesday not Tuesday, and reads back the time with its time zone",
-  "instruction": "You emailed the bookings desk about a haircut with Lucia and then corrected the day in a second email. Ask the desk to go ahead with what you settled on by email (Wednesday 4 November at 10 am). Confirm when read back.\n\nYour details:\n- Name: Chloe Park\n- Email: chloe.park@example.com\n- Phone: +1 212 555 0103",
+  "instruction": "You emailed the bookings desk about a haircut with Lucia, went back and forth with the desk, and corrected the day in a later email. Ask the desk to go ahead with what you settled on by email, without saying the day or time yourself. When the desk reads back Wednesday 4 November at 10 am New York time, confirm; if it reads back Tuesday, say that was the day you corrected.\n\nYour details:\n- Name: Chloe Park\n- Email: chloe.park@example.com\n- Phone: +1 212 555 0103",
   "keywords": [],
   "persona": {
     "name": "Chloe Park",

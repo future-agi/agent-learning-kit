@@ -4,8 +4,8 @@
   "scenario_id": "",
   "use_case": "Report conflicting current sources without choosing one",
   "branch": "Maya Patel checks on-call compensation after seeing Marcus Lee's reminder KM13 in #engineering; the agent reads KM13 and oncall_v2, confirming $400/week and $50/page",
-  "tests": "the agent reads KM13 in #engineering and oncall_v2, confirming the Slack reminder aligns with the active on-call policy",
-  "instruction": "You saw Marcus Lee post an on-call reminder in #engineering. Ask the Knowledge Desk to verify on-call standby pay and page rates against the policy.\n\nYour details:\n- Name: Maya Patel\n- Employee ID: E13\n- Channel: #engineering",
+  "tests": "the agent reads Marcus's reminder thread KM13 in #engineering ($400 a week and $50 per after-hours page, with follow-ups on weekends and swaps) and On-call Policy 2.0 sections 1 and 2, and confirms both figures in the reminder match the policy in effect",
+  "instruction": "You saw Marcus Lee post an on-call reminder in #engineering about the weekly stipend and the after-hours page rate. Ask the Knowledge Desk to verify both figures against the policy.\n\nYour details:\n- Name: Maya Patel\n- Employee ID: E13\n- Channel: #engineering",
   "keywords": [
     "slack_decision"
   ],
@@ -13,7 +13,7 @@
     "name": "Maya Patel",
     "gender": "female",
     "age_group": "25-32",
-    "occupation": "Engineer",
+    "occupation": "QA Engineer",
     "location": "United Kingdom",
     "personality": "Detail-oriented",
     "communication_style": "Technical",
@@ -63,6 +63,17 @@
       "environment_arguments": {},
       "fixed": {
         "passage_id": "record: kb_passages oncall_v2"
+      }
+    },
+    {
+      "tool": "fetch_passage",
+      "arguments": {
+        "employee_id": "E13",
+        "passage_id": "P-ONCALLV2-02"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "passage_id": "record: On-call Policy 2.0, section 2"
       }
     }
   ],

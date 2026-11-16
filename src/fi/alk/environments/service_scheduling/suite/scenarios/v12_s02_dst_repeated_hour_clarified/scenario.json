@@ -3,8 +3,8 @@
   "scenario_key": "v12-s02-dst-repeated-hour-clarified",
   "scenario_id": "",
   "use_case": "Concurrency, clock changes and failures",
-  "branch": "Chloe Park asks for a haircut at 1:30 am on Sunday 1 November at Midtown, the night New York's clocks go back, so 1:30 happens twice (UTC-04:00 then UTC-05:00)",
-  "tests": "the agent sees the clock change, says the time is ambiguous and asks which occurrence or proposes an unambiguous time, and commits nothing",
+  "branch": "Chloe Park asks for a haircut at 1:30 am on Sunday 1 November at Midtown, the night New York's clocks go back so 1:30 happens twice (UTC-04:00 then UTC-05:00); Midtown is closed on Sundays, so neither occurrence can be booked and the closure, not the choice of occurrence, decides it",
+  "tests": "the agent reads Midtown's hours and clock change, says the studio is closed on Sundays (and that 1:30 happens twice that night), commits nothing and offers an open time; a closure-and-explanation case: night_opening_repeated_hour_second_taken is the open-studio case where the occurrence decides",
   "instruction": "You work nights and want a haircut at 1:30 am on Sunday 1 November at the Midtown studio. If the desk asks which 1:30 you mean, say you just mean 1:30 am. Accept another time if offered.\n\nYour details:\n- Name: Chloe Park\n- Email: chloe.park@example.com\n- Phone: +1 212 555 0103",
   "keywords": [
     "workbook:V12-S02"

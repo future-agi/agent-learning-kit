@@ -50,7 +50,9 @@
         "name": "Fernhill Logistics"
       },
       "environment_arguments": {},
-      "fixed": {}
+      "fixed": {
+        "name": "caller: Fernhill Logistics, the company Sarah asks about"
+      }
     },
     {
       "tool": "search_contacts",

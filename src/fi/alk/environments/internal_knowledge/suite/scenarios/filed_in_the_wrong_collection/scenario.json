@@ -3,9 +3,9 @@
   "scenario_key": "filed-in-the-wrong-collection",
   "scenario_id": "",
   "use_case": "Report missing evidence and open a knowledge request with consent",
-  "branch": "Ivan Petrov (E16) has an open request KR-410 in C_PEOPLE regarding airport parking and asks to move it to C_TRAVEL; requests cannot be moved, so desk withdraws KR-410 and creates a new one in C_TRAVEL",
-  "tests": "the agent withdraws KR-410 and creates a new request in C_TRAVEL for Ivan Petrov with his confirmation",
-  "instruction": "You filed knowledge request KR-410 about airport parking reimbursement in the People and Leave collection by mistake. You ask the desk to move it to Travel and Expenses. If the desk explains that requests cannot be transferred directly and offers to have it withdrawn and open a new request in Travel and Expenses, agree.\n\nYour details:\n- Name: Ivan Petrov\n- Employee ID: E16\n- Request ID: KR-410",
+  "branch": "Ivan Petrov (E16) has an open request KR-410 in C_PEOPLE regarding airport parking and asks to move it to C_TRAVEL; requests cannot be moved, so the desk opens the replacement in C_TRAVEL first and only then withdraws KR-410",
+  "tests": "the agent opens the replacement request in C_TRAVEL for Ivan with his agreement first, and only then withdraws KR-410, so his question is never left without an open request",
+  "instruction": "You filed knowledge request KR-410 about airport parking reimbursement in the People and Leave collection by mistake. You ask the desk to move it to Travel and Expenses. If the desk explains that requests cannot be moved and offers to open a new request in Travel and Expenses and then withdraw KR-410, agree.\n\nYour details:\n- Name: Ivan Petrov\n- Employee ID: E16\n- Request ID: KR-410",
   "keywords": [
     "missing_evidence"
   ],
@@ -13,7 +13,7 @@
     "name": "Ivan Petrov",
     "gender": "male",
     "age_group": "32-40",
-    "occupation": "Customer Service",
+    "occupation": "Facilities Coordinator",
     "location": "United States",
     "personality": "Impatient and direct",
     "communication_style": "Direct and concise",
@@ -43,20 +43,6 @@
       "fixed": {}
     },
     {
-      "tool": "update_knowledge_request",
-      "arguments": {
-        "note": "Withdrawn to refile in Travel and Expenses",
-        "request_id": "KR-410",
-        "status": "withdrawn",
-        "employee_id": "E16"
-      },
-      "environment_arguments": {},
-      "fixed": {
-        "status": "caller: withdrawn",
-        "request_id": "caller: KR-410"
-      }
-    },
-    {
       "tool": "create_knowledge_request",
       "arguments": {
         "confirmed": true,
@@ -69,6 +55,20 @@
       "fixed": {
         "employee_id": "caller: E16",
         "collection_id": "caller: Travel and Expenses"
+      }
+    },
+    {
+      "tool": "update_knowledge_request",
+      "arguments": {
+        "note": "Refiled in Travel and Expenses",
+        "request_id": "KR-410",
+        "status": "withdrawn",
+        "employee_id": "E16"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "status": "caller: withdrawn",
+        "request_id": "caller: KR-410"
       }
     }
   ],

@@ -5,7 +5,7 @@
   "use_case": "Qualify an inbound enquiry against the rubric",
   "branch": "Samira Holt of Northwind Support Co (L01, United States, 40 support seats, live within three months) asks for a demo; the lead meets the rubric, goes to the US owner A01, and the owner's open slots are offered",
   "tests": "the agent qualifies L01 on the rubric with the facts on file, assigns it to A01 by territory, and offers A01's open demo slots without booking one",
-  "instruction": "You lead customer support at Northwind Support Co in the United States and filled in BrightDesk's web form last week. You want a demo for your team. If asked: 40 support agents, you want to go live within three months, budget not confirmed yet. When you are offered demo times, say you will check with your team and come back; do not pick one yet.\n\nYour details:\n- Name: Samira Holt\n- Email: samira.holt@northwind-support.example\n- Company: Northwind Support Co\n- Country: United States\n- Lead reference: L01",
+  "instruction": "You are Samira Holt. You lead customer support at Northwind Support Co in the United States and filled in BrightDesk's web form last week. You want a demo for your team. If asked: 40 support agents, you want to go live within three months, budget not confirmed yet. When you are offered demo times, say you will check with your team and come back; do not pick one yet.\n\nYour details:\n- Name: Samira Holt\n- Email: samira.holt@northwind-support.example\n- Company: Northwind Support Co\n- Country: United States\n- Lead reference: L01",
   "keywords": [
     "qualification",
     "routing",
@@ -78,7 +78,9 @@
         "rep_id": "A01"
       },
       "environment_arguments": {},
-      "fixed": {}
+      "fixed": {
+        "rep_id": "rule: United States is A01's territory"
+      }
     }
   ],
   "alternatives": [],
@@ -95,6 +97,7 @@
   "sub_goals": [
     "lead_qualified_by_rubric",
     "owner_assigned_by_territory",
+    "availability_offered",
     "demo_time_in_prospect_timezone"
   ],
   "max_turns": 10,

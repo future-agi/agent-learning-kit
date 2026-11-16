@@ -70,7 +70,9 @@
         "appointment_id": "A424"
       },
       "environment_arguments": {},
-      "fixed": {}
+      "fixed": {
+        "appointment_id": "record: A424, the appointment she asked to cancel"
+      }
     }
   ],
   "alternatives": [],
@@ -85,6 +87,7 @@
     "counterparty": "returning_customer"
   },
   "sub_goals": [
+    "late_fee_quoted_appointment_kept",
     "appointment_status_reported",
     "fee_disclosed_before_cancel"
   ],

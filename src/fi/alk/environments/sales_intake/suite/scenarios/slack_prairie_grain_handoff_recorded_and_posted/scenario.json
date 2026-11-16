@@ -53,7 +53,9 @@
         "lead_id": "L16"
       },
       "environment_arguments": {},
-      "fixed": {}
+      "fixed": {
+        "lead_id": "record: L16, the Prairie Grain lead Priya's message names"
+      }
     },
     {
       "tool": "create_handoff",

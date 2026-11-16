@@ -5,13 +5,13 @@
   "use_case": "Pick up a booking request from the bookings mailbox",
   "branch": "Front desk staff asks for a draft reply to Ana Morales on thread th_s01 with Lucia's free Thursday 29 Oct afternoon times for an initial consultation; the agent creates a draft on her thread addressed to her",
   "tests": "the agent drafts a grounded reply on the customer's thread with available times without sending it",
-  "instruction": "You are on the front desk team. Ask the assistant to prepare a draft reply on Ana Morales's email thread (th_s01_spanish_consultation) addressed to ana.morales@example.com listing Lucia Fernandez's available afternoon appointment slots for an Initial Consultation at Midtown on Thursday 29 October 2026. Do not send the email.",
+  "instruction": "You are Jordan Ellis on the front desk team. Ask the assistant to prepare a draft reply on Ana Morales's email thread (th_s01_spanish_consultation) addressed to ana.morales@example.com listing Lucia Fernandez's available afternoon appointment slots for an Initial Consultation at Midtown on Thursday 29 October 2026. Do not send the email.",
   "keywords": [
     "draft",
     "consultation"
   ],
   "persona": {
-    "name": "Jordan Brooks",
+    "name": "Jordan Ellis",
     "gender": "",
     "age_group": "",
     "occupation": "Customer Service",

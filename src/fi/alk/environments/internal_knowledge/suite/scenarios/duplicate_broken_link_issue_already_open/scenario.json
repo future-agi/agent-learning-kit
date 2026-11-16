@@ -4,7 +4,7 @@
   "scenario_id": "",
   "use_case": "Flag a document problem to its owner",
   "branch": "Maya Patel wants to report the broken stipend link in remote_v2 again; DI-101 is already open and the agent identifies the owner Hannah Okafor and explains the issue is already tracked",
-  "tests": "the agent looks up the owner of remote_v2, explains that issue DI-101 is already open, and raises no duplicate issue",
+  "tests": "the agent looks up the owner of remote_v2 (Hannah Okafor); a report it raises returns the open issue DI-101 instead of a second one, so no duplicate issue exists, and it tells Maya the problem is already with the owner",
   "instruction": "You noticed that the link to the stipend policy in the Remote Work Policy is broken. Ask the Knowledge Desk to report this issue to the document owner.\n\nYour details:\n- Name: Maya Patel\n- Employee ID: E13",
   "keywords": [
     "document_issue"
@@ -13,7 +13,7 @@
     "name": "Maya Patel",
     "gender": "female",
     "age_group": "25-32",
-    "occupation": "Engineer",
+    "occupation": "QA Engineer",
     "location": "United Kingdom",
     "personality": "Detail-oriented",
     "communication_style": "Direct and concise",

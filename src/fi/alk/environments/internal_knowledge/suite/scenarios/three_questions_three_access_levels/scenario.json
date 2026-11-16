@@ -16,7 +16,7 @@
     "name": "Grace Kim",
     "gender": "female",
     "age_group": "40-50",
-    "occupation": "Sales Representative",
+    "occupation": "Account Executive",
     "location": "Australia",
     "personality": "Analytical",
     "communication_style": "Direct and concise",
@@ -72,7 +72,9 @@
         "drive_file_id": "proc_v2"
       },
       "environment_arguments": {},
-      "fixed": {}
+      "fixed": {
+        "drive_file_id": "record: Procurement Policy 2.0 (proc_v2)"
+      }
     }
   ],
   "alternatives": [],

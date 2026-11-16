@@ -4,7 +4,7 @@
   "scenario_id": "",
   "use_case": "Answer availability from the staff calendars and hold slots",
   "branch": "Jack Turner's hold H001 expired; he asks to release it; desk explains it already expired and the slot is already free.",
-  "tests": "passes when the desk attempts to release the hold and explains to Jack Turner that hold H001 has already expired.",
+  "tests": "the desk tries to release H001, learns from the refusal that it expired at 08:00 UTC (4:00 am New York), tells Jack there is nothing to release, and answers from Lucia's slots whether Wednesday 11:00 am is still free",
   "instruction": "You placed a temporary hold (H001) earlier for a Haircut with Lucia Fernandez at Midtown on Wednesday 28 October at 11:00 AM. You are currently travelling in Toronto and want to ask the desk if you can cancel or release that hold because you won't need it, and whether that Wednesday 11:00 AM slot is still free in case you change your mind.\n\nYour details:\n- Name: Jack Turner\n- Email: jack.turner@example.com\n- Phone: +1 212 555 0110\n- Hold reference: H001",
   "keywords": [
     "hold",
@@ -66,7 +66,9 @@
         "hold_id": "H001"
       },
       "environment_arguments": {},
-      "fixed": {}
+      "fixed": {
+        "hold_id": "caller: H001"
+      }
     }
   ],
   "alternatives": [],
@@ -81,6 +83,7 @@
     "overlay": "none"
   },
   "sub_goals": [
+    "hold_expiry_reported",
     "availability_reported_from_calendar",
     "declined_action_explained"
   ],

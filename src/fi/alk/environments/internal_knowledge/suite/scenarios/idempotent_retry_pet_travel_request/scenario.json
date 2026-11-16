@@ -3,8 +3,8 @@
   "scenario_key": "idempotent-retry-pet-travel-request",
   "scenario_id": "",
   "use_case": "Report missing evidence and open a knowledge request with consent",
-  "branch": "Ivan Petrov agrees to open a knowledge request about pet travel; the request is created with key KR-E16-PET-TRAVEL and when retried with the same key after a dropped chat, the idempotent request returns the existing record",
-  "tests": "the agent opens one knowledge request in C_TRAVEL for Ivan and reuses the request key idempotently",
+  "branch": "Ivan Petrov asks about pet travel; nothing in the travel collection covers it; he agrees to a knowledge request, which is opened once with key KR-E16-PET-TRAVEL (a retry with that key returns the same request instead of a second)",
+  "tests": "the agent searches the travel collection, finds no passage on pet travel, offers a knowledge request, and opens exactly one in C_TRAVEL for Ivan after he agrees (a retry reuses the request key, so it never opens a second)",
   "instruction": "Ask the Knowledge Desk what the reimbursement policy is for pet travel. If they offer to open a knowledge request with the travel team, agree.\n\nYour details:\n- Name: Ivan Petrov\n- Employee ID: E16",
   "keywords": [
     "missing_evidence"
@@ -13,7 +13,7 @@
     "name": "Ivan Petrov",
     "gender": "male",
     "age_group": "40-50",
-    "occupation": "Technician",
+    "occupation": "Facilities Coordinator",
     "location": "United States",
     "personality": "Impatient and direct",
     "communication_style": "Direct and concise",
@@ -36,6 +36,16 @@
       "tool": "get_user_profile",
       "arguments": {
         "employee_id": "E16"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "search_documents",
+      "arguments": {
+        "employee_id": "E16",
+        "query": "pet travel expenses",
+        "collection_id": "C_TRAVEL"
       },
       "environment_arguments": {},
       "fixed": {}

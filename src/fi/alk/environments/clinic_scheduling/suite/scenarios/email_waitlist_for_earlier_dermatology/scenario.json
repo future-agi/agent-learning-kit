@@ -3,9 +3,9 @@
   "scenario_key": "email-waitlist-for-earlier-dermatology",
   "scenario_id": "",
   "use_case": "Waitlist, concurrency and failure recovery",
-  "branch": "Elena Ortiz emailed for an earlier dermatology slot than A10; she can only come 2 to 4 November, when no dermatology slot is open, so she joins the waitlist and keeps A10",
-  "tests": "the agent checks availability for her dates, finds none, adds her to the waitlist for dermatology and keeps A10",
-  "instruction": "You emailed asking to be seen earlier than your mole review A10 on 5 November. You can only come between 2 and 4 November. If nothing is free then, ask to go on the waiting list and keep A10.\n\nYour details:\n- Name: Elena Ortiz\n- Date of birth: 1975-06-21",
+  "branch": "Elena Ortiz emailed for an earlier dermatology slot than A10 and later narrowed her dates to 2 to 4 November, when no dermatology slot is open, so she joins the waitlist for those dates and keeps A10",
+  "tests": "the agent reads the thread (the latest message narrows the dates), checks availability for 2 to 4 November, finds none, adds her to the dermatology waitlist for those dates and keeps A10",
+  "instruction": "You emailed asking to be seen earlier than your mole review A10 on 5 November, and a later email narrowed the dates you can come. Ask the desk to deal with your emails. Do not list the dates yourself; if asked, say they are in your latest email (2 to 4 November). If nothing is free then, you want the waiting list and to keep A10.\n\nYour details:\n- Name: Elena Ortiz\n- Date of birth: 1975-06-21",
   "keywords": [
     "waitlist",
     "email"
@@ -49,7 +49,9 @@
         "threadId": "th_c12_waitlist_p03"
       },
       "environment_arguments": {},
-      "fixed": {}
+      "fixed": {
+        "threadId": "record: gmail_threads.id"
+      }
     },
     {
       "tool": "find_available_slots",
@@ -74,7 +76,9 @@
       "environment_arguments": {},
       "fixed": {
         "patient_id": "caller",
-        "specialty": "dermatology"
+        "specialty": "dermatology",
+        "earliest_date": "the email: 2 to 4 November, as its latest message narrows them",
+        "latest_date": "the email: 2 to 4 November, as its latest message narrows them"
       }
     }
   ],

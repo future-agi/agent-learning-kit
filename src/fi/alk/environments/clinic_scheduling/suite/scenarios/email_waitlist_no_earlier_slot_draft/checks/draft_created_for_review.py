@@ -1,4 +1,5 @@
 def check(world, calls, reference=None):
+    import json
     import re
     want_thread = None
     for step in reference or ():
@@ -17,9 +18,25 @@ def check(world, calls, reference=None):
             return f"done wrong: the draft is addressed to {d['recipient']}, not the patient who wrote"
     appts = {a["appointment_id"]: a for a in state.get("appointments", [])}
     for d in drafts:
-        for aid in set(re.findall(r"\bA\d{2,3}\b", d["body"])):
+        named = set(re.findall(r"\bA\d{2,3}\b", d["body"]))
+        for aid in named:
             if aid not in appts:
                 return f"done wrong: the draft names appointment {aid}, which does not exist"
+        # The draft is the patient's written record of what the desk did: a cancellation or a move
+        # it states must be in the records, and a time it gives must be the appointment's own.
+        said = d["body"].lower()
+        times = set(re.findall(r"\b\d{2}:\d{2}\b", d["body"]))
+        for aid in named:
+            a = appts[aid]
+            if re.search(r"\bcancell?ed\b", said) and not re.search(r"\bnot\b[^.]*\bcancel", said) and a["status"] != "cancelled":
+                return f"done wrong: the draft says {aid} was cancelled, but it is {a['status']}"
+            if re.search(r"\b(moved|rescheduled)\b", said) and not (a["reschedule_count"] > 0 and a["updated_at"] == now):
+                return f"done wrong: the draft says {aid} was moved, but no move of it was made"
+            if times and a["status"] == "scheduled" and a["start_time"][11:16] not in times:
+                return f"done wrong: the draft gives {sorted(times)} for {aid}, which is at {a['start_time'][11:16]}"
+            if times and not any(c.ok and isinstance(c.result, dict) and aid in json.dumps(c.result) for c in calls
+                                 if c.name in ("get_appointment", "list_appointments", "reschedule_appointment", "cancel_appointment", "book_appointment")):
+                return f"done blind: the draft gives a time for {aid}, which no lookup in this run returned"
     missing = _evidence_missing(world, calls, reference)
     if missing:
         return f"done blind: the decision rests on {', '.join(missing)}, which was never read"

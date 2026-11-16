@@ -1,31 +1,28 @@
 def check(world, calls, reference=None):
     state = world.state()
-    now = (state.get("clock") or [{"now": ""}])[0]["now"]
     want = {}
     for step in reference or ():
-        if step.get("tool") == 'book_demo':
-            for k in ('lead_id', 'slot_id'):
+        if step.get("tool") == "list_demo_slots":
+            for k in ("rep_id", "lead_id"):
                 if step.get("arguments", {}).get(k) is not None:
                     want[k] = step["arguments"][k]
-    if not any(c.name == "book_demo" and c.ok for c in calls):
-        return "not done: book_demo was not called successfully"
-    if any(c.name == "create_event" and c.ok for c in calls):
-        return "done wrong: an event was written on a calendar directly; demos are booked with book_demo"
-    new = [d for d in state.get("demos", []) if d["created_at"] == now]
-    if len(new) != 1:
-        return f"done wrong: {len(new)} demos were booked, one was asked for"
-    d = new[0]
-    if want.get("lead_id") and d["lead_id"] != want["lead_id"]:
-        return f"done wrong: the demo is for {d['lead_id']}, not {want['lead_id']}"
-    if want.get("slot_id") and d["slot_id"] != want["slot_id"]:
-        return f"done wrong: slot {d['slot_id']} was booked, the prospect chose {want['slot_id']}"
-    lead = next((l for l in state.get("leads", []) if l["lead_id"] == d["lead_id"]), {})
-    rep = next((r for r in state.get("reps", []) if r["rep_id"] == d["rep_id"]), {})
-    ev = next((e for e in state.get("calendar_events", []) if e["event_id"] == d["calendar_event_id"]), None)
-    if lead.get("owner_rep_id") != d["rep_id"]:
-        return f"done wrong: the demo is on {d['rep_id']}'s calendar, the lead belongs to {lead.get('owner_rep_id')}"
-    if not ev or ev["calendar_id"] != rep.get("calendar_id") or ev["status"] == "cancelled":
-        return "not done: the demo has no event on the owner's calendar"
+    rep = want.get("rep_id")
+    if not rep and want.get("lead_id"):
+        rep = next((l["owner_rep_id"] for l in state.get("leads", []) if l["lead_id"] == want["lead_id"]), None)
+    # Open slots are what list_demo_slots returns; a rep's busy events are not slots to offer.
+    offered = [c for c in calls if c.name == "list_demo_slots" and c.ok and isinstance(c.result, dict) and "slots" in c.result]
+    if not offered:
+        return "not done: the owner's open demo slots were never returned"
+    if rep and not any(c.result.get("rep_id") == rep for c in offered):
+        return f"done wrong: {rep}'s open slots were never returned"
+    # The slots offered must be the lead's owner's: the lead the reference works on, as it stands
+    # after this run (a lead routed in this run counts only if the routing took effect).
+    lead = want.get("lead_id") or next((step["arguments"]["lead_id"] for step in reference or () if step.get("arguments", {}).get("lead_id")), None)
+    owner = next((l["owner_rep_id"] for l in state.get("leads", []) if l["lead_id"] == lead), None) if lead else None
+    if lead and rep and owner != rep:
+        return f"done wrong: {rep}'s slots were offered, but lead {lead} belongs to {owner or 'no rep'}"
+    if any(c.name in ("book_demo", "create_event") and c.ok for c in calls):
+        return "done wrong: a demo was booked before the prospect chose a slot"
     missing = _evidence_missing(world, calls, reference)
     if missing:
         return f"done blind: the decision rests on {', '.join(missing)}, which was never read"
