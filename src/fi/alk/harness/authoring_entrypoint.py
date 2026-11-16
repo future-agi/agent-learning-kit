@@ -463,6 +463,32 @@ def _certify_only(args: argparse.Namespace) -> int:
 SCENARIO_PROOFS = "scenario-proofs.json"
 
 
+def _prove_only(args: argparse.Namespace) -> int:
+    """Prove the cases of a certified pair, `--keys` or every one, into `SCENARIO_PROOFS`: first on the
+    pair's sealed runtime for the tools a running server serves, then offline. Certifies nothing,
+    calls no model and never fails: a case the live pass did not reach keeps its offline proof."""
+    from .authoring_runtime_validation import prove_on_sealed_runtime
+    from .live_proof import forget_live
+    from .prove_suite import DEADLINE_MARGIN_SECONDS, prove_suite
+
+    output = args.output.resolve()
+    keys = {one.strip() for one in args.keys.split(",") if one.strip()} if args.keys is not None else None
+    if args.target_secrets is not None:
+        # A one-shot provider credential; proving never uses it.
+        args.target_secrets.unlink(missing_ok=True)
+    forget_live(output, keys)
+    # The offline pass after it keeps its own margin before the deadline.
+    until = args.deadline_at - 2 * DEADLINE_MARGIN_SECONDS if args.deadline_at is not None else None
+    try:
+        job = HarnessJob.model_validate_json(args.job.read_text(encoding="utf-8"))
+        live = asyncio.run(prove_on_sealed_runtime(job, args.source.resolve(), output, keys=keys, until=until))
+        print(f"prove-only: proved {len(live)} cases on the live runtime", file=sys.stderr, flush=True)
+    except Exception as exc:  # noqa: BLE001 - live proofs only add evidence
+        print(f"prove-only: live proofs not run: {_one_line(exc)}", file=sys.stderr, flush=True)
+    prove_suite(output, output / SCENARIO_PROOFS, deadline_at=args.deadline_at, keys=keys)
+    return 0
+
+
 def _prove_scenarios(output: Path, deadline_at: float | None) -> None:
     """Prove every scenario on this certification's authoring tree; never fails the certify."""
     from .prove_suite import prove_suite
@@ -695,12 +721,24 @@ def main(argv: list[str] | None = None, *, validate_runtime: bool = False) -> in
         help="With --certify-only: prove every scenario after validation and before sealing",
     )
     parser.add_argument(
+        "--prove-only",
+        action="store_true",
+        help="Prove the certified pair's cases, on its sealed runtime where a tool can be played there; certify nothing",
+    )
+    parser.add_argument(
+        "--keys",
+        default=None,
+        help="With --prove-only: comma-separated scenario keys to prove; default every one",
+    )
+    parser.add_argument(
         "--deadline-at",
         type=float,
         default=None,
         help="Epoch seconds the validation job is stopped at; scenario proving keeps a margin before it",
     )
     args = parser.parse_args(argv)
+    if args.prove_only:
+        return _prove_only(args)
     if args.certify_only:
         if args.bundle_output is None:
             parser.error("--certify-only requires --bundle-output")

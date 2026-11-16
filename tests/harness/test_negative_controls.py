@@ -181,14 +181,15 @@ def _contract(modes: dict[str, str]):
     return SimpleNamespace(tool_names=lambda: list(modes), entry_for=entries.get)
 
 
-def _prove(monkeypatch, tmp_path, modes, goals=REFUND_CATALOGUE):
+def _prove(monkeypatch, tmp_path, modes, goals=REFUND_CATALOGUE, **options):
     monkeypatch.setattr(scenario_tools, "load_scenarios", lambda path: [refund_case()])
     monkeypatch.setattr(catalogue_module, "load_catalogue", lambda path: catalogue(**goals))
     monkeypatch.setattr(live_proof, "_digest", lambda world: repr(sorted(world.state()["refunds"])))
     stack = Stack()
     results = asyncio.run(
         live_proof.prove_live(
-            authoring=tmp_path, contract=_contract(modes), runtime=stack, provider=stack, factory=stack, work=tmp_path
+            authoring=tmp_path, contract=_contract(modes), runtime=stack, provider=stack, factory=stack, work=tmp_path,
+            **options,
         )
     )
     return results, stack
@@ -424,3 +425,34 @@ def test_a_toolbox_that_cannot_be_listed_binds_nothing():
     served = live_proof.served_by_toolbox(endpoints)
     assert served == set()
     assert live_proof.service_endpoints(_contract({"lookup_order": "service", "refund_order": "service"}), endpoints, served) == {}
+
+
+SERVICE_MODES = {"lookup_order": "service", "refund_order": "service"}
+
+
+def test_only_the_requested_cases_are_played_live(monkeypatch, tmp_path):
+    results, stack = _prove(monkeypatch, tmp_path, SERVICE_MODES, keys={"another_case"})
+    assert results == {} and all(not world.forwarded for world in stack.worlds)
+    assert live_proof.load_live(tmp_path) == {}
+
+    results, _ = _prove(monkeypatch, tmp_path, SERVICE_MODES, keys={"refund_case"})
+    assert results["refund_case"]["assumed"] == []
+
+
+def test_no_case_starts_once_the_time_budget_is_spent(monkeypatch, tmp_path):
+    import time
+
+    results, stack = _prove(monkeypatch, tmp_path, SERVICE_MODES, until=time.time() - 1)
+    assert results == {} and all(not world.forwarded for world in stack.worlds)
+
+    results, _ = _prove(monkeypatch, tmp_path, SERVICE_MODES, until=time.time() + 600)
+    assert results["refund_case"]["assumed"] == []
+
+
+def test_forgetting_live_results_keeps_the_other_cases(tmp_path):
+    live_proof.write_live(tmp_path, {"one": {"assumed": []}, "two": {"assumed": []}})
+    live_proof.forget_live(tmp_path, {"one"})
+    assert live_proof.load_live(tmp_path) == {"two": {"assumed": []}}
+    live_proof.forget_live(tmp_path, None)
+    assert live_proof.load_live(tmp_path) == {}
+    live_proof.forget_live(tmp_path / "absent", None)

@@ -9,7 +9,8 @@ the reference and run the checks; set up, play nothing and run the checks; set u
 control and run the checks. A tool the bundle's MCP Toolbox serves is played the same way, as a `tools/call` to that
 server, which runs its SQL on the world's database. A tool the agent runs inside its own process has no endpoint and
 stays assumed. The result per case is written beside the authoring tree and laid over the offline proof
-by `prove_suite`, so leaks, sources and rule checks still come from the offline proof.
+by `prove_suite`, so leaks, sources and rule checks still come from the offline proof. Proving a certified pair
+again starts its sealed bundle and plays the cases the same way, without certifying it again.
 """
 
 from __future__ import annotations
@@ -20,6 +21,7 @@ import logging
 import os
 import random
 import tempfile
+import time
 from pathlib import Path
 from typing import Any
 
@@ -120,9 +122,14 @@ async def prove_live(
     factory: Any,
     work: Path,
     seed: int = 0,
+    keys: set[str] | None = None,
+    until: float | None = None,
 ) -> dict[str, dict[str, Any]]:
     """Play each case's reference, an empty run and its controls on the live runtime; write and
-    return `{scenario_key: live result}`. Returns {} when no tool is bound to a running server."""
+    return `{scenario_key: live result}`. Returns {} when no tool is bound to a running server.
+
+    `keys` plays only those cases. No case starts once `until` (epoch seconds) has passed: a case not
+    reached keeps its offline proof."""
     from .catalogue import load_catalogue
     from .proofs import proof_key
     from .scenario_tools import load_scenarios
@@ -144,6 +151,11 @@ async def prove_live(
 
     for scenario in scenarios:
         key = proof_key(scenario)
+        if keys is not None and key not in keys:
+            continue
+        if until is not None and time.time() >= until:
+            logger.warning("live proof: time budget spent before %s; it keeps its offline proof", key)
+            continue
         if not any(str(step.tool) in bound for step in scenario.solution) and not any(
             str(step.tool) in bound for control in scenario.negative_controls for step in control.steps
         ):
@@ -210,6 +222,16 @@ def write_live(authoring: Path, results: dict[str, dict[str, Any]]) -> None:
     except BaseException:
         Path(temporary).unlink(missing_ok=True)
         raise
+
+
+def forget_live(authoring: Path, keys: set[str] | None) -> None:
+    """Drop the live results of `keys` (every key when None), so a case is never given a result an
+    earlier job played on what may since have been edited."""
+    if not (Path(authoring) / LIVE_PROOFS).is_file():
+        return
+    kept = {} if keys is None else {key: value for key, value in load_live(authoring).items() if key not in keys}
+    (Path(authoring) / LIVE_PROOFS).unlink()
+    write_live(authoring, kept)
 
 
 def load_live(authoring: Path) -> dict[str, dict[str, Any]]:

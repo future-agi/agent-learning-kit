@@ -711,6 +711,68 @@ async def _probe_runtime_readiness(
         path.write_text(json.dumps(receipt, indent=2) + "\n", encoding="utf-8")
 
 
+def _prepare_runtime_work(job, work: Path, secrets_path: Path, *, local_runtime: bool) -> Path:
+    """Lay out a disposable runtime workspace: the job's sizes and a private copy of the secrets."""
+    runtime = getattr(job, "runtime", None)
+    (work / "job.json").write_text(
+        json.dumps(
+            {
+                "job_id": getattr(job, "job_id", ""),
+                "runtime": {
+                    "cpu_units": getattr(runtime, "cpu_units", 1),
+                    "memory_mb": getattr(runtime, "memory_mb", 512),
+                }
+            }
+        )
+    )
+    if local_runtime:
+        # Child processes drop to svc-* identities. They need search permission on the
+        # disposable workspace parent in order to reach their individually chowned trees;
+        # secrets below retain mode 0600 and are injected by the controller.
+        work.chmod(0o755)
+    secrets = work / "secrets.json"
+    secrets.write_bytes(secrets_path.read_bytes())
+    secrets.chmod(0o600)
+    return secrets
+
+
+def _runtime_provider(job, secrets: Path, authoring: Path, *, local_runtime: bool, generic: bool):
+    """The process runtime provider validation starts the bundle with."""
+    from . import outbound
+    from .hosted_entrypoint import _resolve_hosted_public_url, job_secret_purposes
+    from .process_runtime import (
+        ProcessRuntimeProvider,
+        default_user_resolver,
+        fixed_sandbox_user_resolver,
+    )
+
+    capabilities = None if local_runtime else outbound.load_capabilities(unlink=False)
+    transport = outbound.RequestsTransport()
+    return ProcessRuntimeProvider(
+        secrets_path=secrets,
+        secret_purpose_map=job_secret_purposes(job),
+        # A local parity run shares the host/container process namespace and must resolve
+        # the same unprivileged identities installed in its image. E2B, however, launches
+        # the guest as one fixed OS identity and does not grant setuid/chown capabilities.
+        user_resolver=(
+            default_user_resolver
+            if local_runtime and os.environ.get("ALK_FIXED_SANDBOX_USER") != "1"
+            else fixed_sandbox_user_resolver
+        ),
+        require_declared_user=False,
+        public_url_resolver=(
+            None
+            if capabilities is None
+            else lambda port, ttl: _resolve_hosted_public_url(
+                capabilities, transport, port=port, expires_in_seconds=ttl
+            )
+        ),
+        provider_attempt_id=(capabilities.attempt_id if capabilities is not None else None),
+        provider_expires_at=(capabilities.expires_at if capabilities is not None else None),
+        generic_artifact_root=(authoring / "generic-harness") if generic else None,
+    )
+
+
 async def validate_once(
     job,
     source: Path,
@@ -727,19 +789,10 @@ async def validate_once(
     from .compose_integration import enabled as compose_enabled
     from .hosted_compose_bootstrap import initialize_hosted_compose
     from .contract import AgentContract
-    from .hosted_entrypoint import (
-        ProcessWorldFactory,
-        _resolve_hosted_public_url,
-        job_secret_purposes,
-    )
+    from .hosted_entrypoint import ProcessWorldFactory, job_secret_purposes
     from .hosted_scheduler import _classify_ready, _run_phase
     from .job import ProviderExecutionMode, SourceKind
     from .process_preflight import preflight_bundle
-    from .process_runtime import (
-        ProcessRuntimeProvider,
-        default_user_resolver,
-        fixed_sandbox_user_resolver,
-    )
     from .scenario_source import does_nothing, load_scenarios
     from .source_data_invariants import author_invariants, check_invariants
     from .tool_certification import ToolAvailability, certify_tool_inventory
@@ -810,26 +863,7 @@ async def validate_once(
         prefix="runtime-validation-", dir=temporary_parent
     ) as root:
         work = Path(root)
-        runtime = getattr(job, "runtime", None)
-        (work / "job.json").write_text(
-            json.dumps(
-                {
-                    "job_id": getattr(job, "job_id", ""),
-                    "runtime": {
-                        "cpu_units": getattr(runtime, "cpu_units", 1),
-                        "memory_mb": getattr(runtime, "memory_mb", 512),
-                    }
-                }
-            )
-        )
-        if local_runtime:
-            # Child processes drop to svc-* identities. They need search permission on the
-            # disposable workspace parent in order to reach their individually chowned trees;
-            # secrets below retain mode 0600 and are injected by the controller.
-            work.chmod(0o755)
-        secrets = work / "secrets.json"
-        secrets.write_bytes(secrets_path.read_bytes())
-        secrets.chmod(0o600)
+        secrets = _prepare_runtime_work(job, work, secrets_path, local_runtime=local_runtime)
         redaction_values = json.loads(secrets.read_text())
         process_logs = authoring / "generic-harness" / "process-logs"
         logs_before = set(process_logs.glob("*.log"))
@@ -843,36 +877,8 @@ async def validate_once(
         secret_values = tuple(
             str(value) for value in json.loads(secrets.read_text()).values()
         )
-        capabilities = (
-            None if local_runtime else outbound.load_capabilities(unlink=False)
-        )
-        transport = outbound.RequestsTransport()
-        provider = ProcessRuntimeProvider(
-            secrets_path=secrets,
-            secret_purpose_map=job_secret_purposes(job),
-            # A local parity run shares the host/container process namespace and must resolve
-            # the same unprivileged identities installed in its image. E2B, however, launches
-            # the guest as one fixed OS identity and does not grant setuid/chown capabilities.
-            user_resolver=(
-                default_user_resolver
-                if local_runtime and os.environ.get("ALK_FIXED_SANDBOX_USER") != "1"
-                else fixed_sandbox_user_resolver
-            ),
-            require_declared_user=False,
-            public_url_resolver=(
-                None
-                if capabilities is None
-                else lambda port, ttl: _resolve_hosted_public_url(
-                    capabilities, transport, port=port, expires_in_seconds=ttl
-                )
-            ),
-            provider_attempt_id=(
-                capabilities.attempt_id if capabilities is not None else None
-            ),
-            provider_expires_at=(
-                capabilities.expires_at if capabilities is not None else None
-            ),
-            generic_artifact_root=(authoring / "generic-harness") if generic else None,
+        provider = _runtime_provider(
+            job, secrets, authoring, local_runtime=local_runtime, generic=generic
         )
         # Parallel runtime instances inside the one sandbox, each with its own ports and databases.
         requested_lanes = max(1, int(os.environ.get("ALK_VALIDATION_INSTANCES", "4") or 4))
@@ -1428,6 +1434,53 @@ async def validate_once(
                         )
                 except OSError:
                     pass
+
+
+async def prove_on_sealed_runtime(
+    job,
+    source: Path,
+    authoring: Path,
+    *,
+    keys: set[str] | None = None,
+    until: float | None = None,
+    secrets_path: Path = Path("/run/futureagi/secrets.json"),
+    local_runtime: bool = False,
+) -> dict[str, dict[str, object]]:
+    """Start the pair's sealed bundle and play its cases on it, as certification does, without
+    certifying again: no compile, no setup pass, no repair. `{}` when the bundle serves no tool a
+    case could be played on; the cases then keep their offline proofs."""
+    from .bundle_v2 import RuntimeKindV2, load_bundle_v2
+    from .contract import AgentContract
+    from .hosted_entrypoint import ProcessWorldFactory
+    from .live_proof import MCP_TOOLBOX, TOOL_PROXY, prove_live
+
+    bundle = authoring / "environment-bundle"
+    manifest = load_bundle_v2(bundle)
+    if manifest.runtime.kind is RuntimeKindV2.COMPOSE or not {TOOL_PROXY, MCP_TOOLBOX} & set(manifest.capabilities):
+        return {}
+    contract = AgentContract.model_validate_json((bundle / "contract.json").read_text(encoding="utf-8"))
+    generic = bool(isinstance(getattr(job, "metadata", None), dict) and job.metadata.get("generic_harness_v1") is True)
+    with tempfile.TemporaryDirectory(prefix="live-proof-", dir=authoring.parent) as root:
+        work = Path(root)
+        secrets = _prepare_runtime_work(job, work, secrets_path, local_runtime=local_runtime)
+        provider = _runtime_provider(job, secrets, authoring, local_runtime=local_runtime, generic=generic)
+        try:
+            runtimes = await provider.provision(
+                manifest, source=source, bundle_dir=bundle, work_directory=work, instances=1
+            )
+            return await prove_live(
+                authoring=authoring,
+                contract=contract,
+                runtime=runtimes[0],
+                provider=provider,
+                factory=ProcessWorldFactory(work, bundle),
+                work=work,
+                seed=job.seed or 0,
+                keys=keys,
+                until=until,
+            )
+        finally:
+            await provider.close(work_directory=work)
 
 
 def _invariants_the_ir_still_breaks(world, authoring: Path) -> list[str]:
