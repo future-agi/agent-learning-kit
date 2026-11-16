@@ -4,7 +4,7 @@
   "scenario_id": "",
   "use_case": "Preview and schedule a plan or seat change",
   "branch": "billing admin previews downgrade from Pro to Basic with 8 seats to inspect lost features and price delta without confirming change",
-  "tests": "the agent previews the downgrade from Pro to Basic outlining cost delta and lost features without scheduling any changes",
+  "tests": "Previews Pro to Basic with 8 seats: the price delta, the features lost, and the warning that LunarOps' 25 active seats exceed Basic's 10; schedules nothing",
   "instruction": "You are Leo Lunar, the billing admin for LunarOps (tenant ID T12, actor ID U12_ADMIN). LunarOps currently has an active Pro subscription with 25 seats. You are considering downsizing and want to see what happens if you downgrade to Basic with 8 seats at the end of the period. You want to see the pricing changes and which features would be lost. You do not want to schedule or confirm any plan change right now, only review the preview.\n\nYour details:\n- Tenant ID: T12\n- Actor ID: U12_ADMIN\n- Tenant Name: LunarOps\n- Current Plan: Pro\n- Target Plan: Basic\n- Target Seats: 8\n- Effective Timing: end of period (2026-11-01)\n- Role: billing_admin",
   "keywords": [
     "plan_downgrade"

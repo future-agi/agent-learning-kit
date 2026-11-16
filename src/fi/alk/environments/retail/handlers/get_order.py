@@ -26,6 +26,7 @@ def handle(args, db):
             "item_id": it["item_id"],
             "sku": it["sku"],
             "title": title,
+            "size": it.get("size"),
             "quantity": it["quantity"],
             "unit_price_cents": it["unit_price_cents"],
             "line_discount_cents": it["line_discount_cents"],
@@ -51,7 +52,7 @@ def handle(args, db):
         "total_net_cents": order["total_net_cents"],
         "items": res_items,
         "exchanges": [
-            {"exchange_id": e["exchange_id"], "original_sku": e["original_sku"], "replacement_sku": e["replacement_sku"], "quantity": e["quantity"], "status": e["status"], "created_at": e["created_at"]}
+            {"exchange_id": e["exchange_id"], "original_sku": e["original_sku"], "replacement_sku": e["replacement_sku"], "replacement_size": e.get("replacement_size"), "quantity": e["quantity"], "status": e["status"], "created_at": e["created_at"]}
             for e in exchanges
         ],
     }

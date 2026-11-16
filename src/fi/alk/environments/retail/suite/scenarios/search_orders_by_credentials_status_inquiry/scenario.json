@@ -4,7 +4,7 @@
   "scenario_id": "",
   "use_case": "Track an order, report a damaged delivery",
   "branch": "Customer requests status of recent order without having their order number",
-  "tests": "the agent searches orders using email and postal code, then retrieves the order details and quotes pricing",
+  "tests": "the agent searches orders using email and postal code, which verifies the customer, and reports the status of the newest order (O423, in transit)",
   "instruction": "You want to check the status of your latest order, but you cannot find your order number. You can provide your email address and postal code.\n\nYour details:\nName: Elena Rostova\nEmail: elena.rostova@example.com\nPostal code: 30301",
   "keywords": [
     "order_status"

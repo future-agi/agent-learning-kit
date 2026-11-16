@@ -7,6 +7,7 @@
       "slack_read_channel",
       "slack_read_thread",
       "slack_search_public_and_private",
+      "slack_get_approval",
       "slack_send_message",
       "slack_check_message_status"
     ],

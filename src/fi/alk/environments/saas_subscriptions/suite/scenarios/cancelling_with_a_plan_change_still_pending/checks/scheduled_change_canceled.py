@@ -3,14 +3,21 @@ def check(world, calls, reference=None):
     for step in reference or ():
         if step.get("tool") == "cancel_scheduled_change":
             want.update({k: v for k, v in step.get("arguments", {}).items() if k in ("tenant_id", "change_id")})
-    cancel_calls = [c for c in calls if c.name == "cancel_scheduled_change" and c.ok]
+    for step in reference or ():
+        if step.get("tool") == "schedule_plan_change" and step.get("arguments", {}).get("replaces_change_id"):
+            want.update({"tenant_id": step["arguments"].get("tenant_id"), "change_id": step["arguments"]["replaces_change_id"]})
+    # A pending change is withdrawn by cancelling it, or by replacing it in one call
+    # (schedule_plan_change with replaces_change_id), which cancels it only if its successor is scheduled.
+    cancel_calls = [(c.arguments.get("change_id"), c.arguments.get("tenant_id")) for c in calls if c.name == "cancel_scheduled_change" and c.ok]
+    cancel_calls += [(c.arguments.get("replaces_change_id"), c.arguments.get("tenant_id")) for c in calls
+                     if c.name == "schedule_plan_change" and c.ok and c.arguments.get("replaces_change_id")]
     if not cancel_calls:
-        return "not done: cancel_scheduled_change was not called successfully"
+        return "not done: no pending change was canceled or replaced"
     rows = world.state().get("scheduled_changes", [])
     canceled = [r for r in rows if r.get("status") == "canceled"]
-    for c in cancel_calls:
-        if not any(r.get("change_id") == c.arguments.get("change_id") and r.get("tenant_id") == c.arguments.get("tenant_id") for r in canceled):
-            return f"done wrong: change {c.arguments.get('change_id')!r} is not marked canceled in world state"
+    for change_id, tenant_id in cancel_calls:
+        if not any(r.get("change_id") == change_id and r.get("tenant_id") == tenant_id for r in canceled):
+            return f"done wrong: change {change_id!r} is not marked canceled in world state"
     if want.get("change_id") and not any(r.get("change_id") == want["change_id"] for r in canceled):
         return f"not done: {want['change_id']} is still {next((r.get('status') for r in rows if r.get('change_id') == want['change_id']), 'missing')}"
     if want.get("tenant_id") and not any(r.get("tenant_id") == want["tenant_id"] for r in canceled):

@@ -3,8 +3,8 @@
   "scenario_key": "duplicate-request-attempt",
   "scenario_id": "",
   "use_case": "submit_access_request",
-  "branch": "E431 asks again after the request was created; the second create is refused as a duplicate; one pending request.",
-  "tests": "Does the agent handle repeated access request submissions idempotently without creating duplicate pending requests in the world?",
+  "branch": "E431 asks for Marketing Hub viewer and, later in the chat, asks to make sure it went through; the agent raises one request and answers the follow-up from it instead of raising a second (which the access system would refuse as a duplicate).",
+  "tests": "Does the agent raise exactly one pending viewer request for E431 on APP-MKT and answer her follow-up from it without submitting again?",
   "instruction": "You are Rachel Green (employee ID E431), a marketing specialist. You need viewer access to Marketing Campaign Hub (APP-MKT) for campaign analytics. Submit an access request with justification 'Campaign analytics'. If you already submitted it or want to follow up during the conversation, ask to make sure it went through.",
   "keywords": [
     "access_request",

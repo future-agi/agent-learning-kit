@@ -4,7 +4,7 @@
   "scenario_id": "",
   "use_case": "Exchange an item or use store credit",
   "branch": "Customer C412 requests exchange for AP04 delivered 35 days ago on order O412, exceeding the 30-day exchange window",
-  "tests": "the agent evaluates delivery date on order O412 and refuses exchange for AP04 delivered 35 days ago past the 30-day window",
+  "tests": "the agent reads the delivery date on order O412 and refuses an exchange for AP04 delivered 35 days ago, past the 30-day window",
   "instruction": "You bought a Linen Long-Sleeve Shirt (SKU AP04) in order O412. It was delivered 35 days ago. You want to exchange it for a different size.\n\nYour details:\n- Name: Arthur Pendelton\n- Email: arthur.pendelton@example.com\n- Postal Code: 43215\n- Order ID: O412\n- SKU: AP04 (Quantity 1)",
   "keywords": [
     "out_of_window",
@@ -53,14 +53,6 @@
       "fixed": {
         "order_id": "record: orders.order_id of the order the request is about"
       }
-    },
-    {
-      "tool": "get_product",
-      "arguments": {
-        "sku": "AP04"
-      },
-      "environment_arguments": {},
-      "fixed": {}
     }
   ],
   "alternatives": [],

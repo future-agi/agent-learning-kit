@@ -389,7 +389,7 @@
   },
   {
     "name": "schedule_plan_change",
-    "description": "Schedule a plan change for a tenant. The tenant's billing admin only, signed in to this conversation, after explicit confirmation. 'end_of_period' takes effect at current_period_end; 'immediate' applies an upgrade now (a downgrade is refused immediately). One pending change at a time: cancel it first. Idempotent via request_key: the same request returns the same change, a different request with that key is a conflict.",
+    "description": "Schedule a plan change for a tenant. The tenant's billing admin only, signed in to this conversation, after explicit confirmation. 'end_of_period' takes effect at current_period_end; 'immediate' applies an upgrade now (a downgrade is refused immediately). One pending change at a time: to replace it, name it in replaces_change_id and the swap happens in this one call (if the new change is refused, the pending one stays). Idempotent via request_key: the same request returns the same change, a different request with that key is a conflict.",
     "parameters": {
       "properties": {
         "target_plan_id": {
@@ -417,6 +417,10 @@
         "actor_id": {
           "type": "string",
           "description": "The user id of the person signed in to this conversation (a tenant user, e.g. U01_ADMIN, or a Cloudnest staff member). The desk acts only for that person; any other id is refused."
+        },
+        "replaces_change_id": {
+          "type": "string",
+          "description": "The tenant's pending change this one replaces, canceled in the same call only if this change is scheduled."
         }
       },
       "required": [
@@ -467,6 +471,12 @@
         },
         "request_key": {
           "type": "string"
+        },
+        "replaced_change_id": {
+          "type": [
+            "string",
+            "null"
+          ]
         }
       }
     }
@@ -2006,6 +2016,50 @@
       "required": [
         "messages",
         "has_more"
+      ]
+    }
+  },
+  {
+    "name": "slack_get_approval",
+    "description": "Read an approval the desk holds for a Slack post: the exact text it covers, the channel, its status (approved, used) and expiry. Post that text exactly with slack_send_message.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "approval_id": {
+          "type": "string",
+          "description": "The approval id the approver gave."
+        }
+      },
+      "required": [
+        "approval_id"
+      ]
+    },
+    "mutates_state": false,
+    "returns": {
+      "type": "object",
+      "properties": {
+        "approval_id": {
+          "type": "string"
+        },
+        "channel_id": {
+          "type": "string"
+        },
+        "approved_text": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "expires_at": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "approval_id",
+        "channel_id",
+        "approved_text",
+        "status",
+        "expires_at"
       ]
     }
   },

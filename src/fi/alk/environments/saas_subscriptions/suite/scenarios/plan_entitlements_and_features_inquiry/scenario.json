@@ -4,7 +4,7 @@
   "scenario_id": "",
   "use_case": "Preview and schedule a plan or seat change",
   "branch": "billing admin asks for complete list of features and entitlements included in their active Basic plan",
-  "tests": "the agent verifies billing admin authorization and retrieves plan entitlements to list all Basic features",
+  "tests": "Verifies the billing admin, reads KiteWorks' subscription (Basic) and lists the Basic plan's features from get_entitlements, adding none",
   "instruction": "You are Karen Kite, the billing admin for KiteWorks (tenant ID T11, actor ID U11_ADMIN). You want to verify what features are included with your organization's current Basic plan tier.\n\nYour details:\n- Tenant ID: T11\n- Actor ID: U11_ADMIN\n- Tenant Name: KiteWorks\n- Current Plan: Basic\n- Role: billing_admin",
   "keywords": [
     "entitlements"
@@ -53,7 +53,9 @@
         "actor_id": "U11_ADMIN"
       },
       "environment_arguments": {},
-      "fixed": {}
+      "fixed": {
+        "tenant_id": "caller: T11"
+      }
     },
     {
       "tool": "get_entitlements",
@@ -61,7 +63,9 @@
         "plan_id": "basic"
       },
       "environment_arguments": {},
-      "fixed": {}
+      "fixed": {
+        "plan_id": "record: subscriptions.plan_id of T11 (basic)"
+      }
     }
   ],
   "alternatives": [],
@@ -76,7 +80,8 @@
     "task": "verify_authorization"
   },
   "sub_goals": [
-    "admin_role_verified"
+    "admin_role_verified",
+    "plan_features_reported"
   ],
   "max_turns": 10,
   "background_noise": false,

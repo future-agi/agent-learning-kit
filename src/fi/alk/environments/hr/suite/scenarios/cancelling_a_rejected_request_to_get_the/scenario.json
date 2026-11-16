@@ -4,7 +4,7 @@
   "scenario_id": "",
   "use_case": "Change or cancel a leave request",
   "branch": "An employee attempts to cancel an already rejected leave request to reclaim days, but rejected requests cannot be cancelled and days were never deducted.",
-  "tests": "Checks request status REQ-1107 and balance BAL-E12-ANN, explaining that rejected requests cannot be cancelled and no days were deducted.",
+  "tests": "Checks REQ-1107's status in the HR system and explains that a rejected request cannot be cancelled and that its days were never deducted from the balance.",
   "instruction": "You submitted an annual leave request REQ-1107 for 28 to 31 December 2026 that was rejected. You want to cancel this rejected request so that you can get the 4 annual leave days back into your leave balance.\n\nYour details:\n- Employee ID: E12\n- Name: Laura Croft\n- Request ID: REQ-1107\n- Leave type: annual",
   "keywords": [
     "cancel",

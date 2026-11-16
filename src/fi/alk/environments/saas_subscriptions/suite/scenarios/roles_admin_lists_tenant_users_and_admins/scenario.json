@@ -4,7 +4,7 @@
   "scenario_id": "",
   "use_case": "Check who may do what",
   "branch": "Billing admin lists all tenant users to identify billing admins",
-  "tests": "Can a verified billing admin list users in their tenant to identify who holds the billing admin role?",
+  "tests": "A verified billing admin reads Acme Corp's user list and is told every user with their role, with Alice Admin as the only billing admin",
   "instruction": "You are Alice Admin (user U01_ADMIN, tenant T01). Ask the billing desk to list all users in your tenant T01 to check who has billing admin permissions.\n\nYour details:\n- Name: Alice Admin\n- Role: Billing Admin\n- Email: alice@acme.com\n- Tenant ID: T01",
   "keywords": [
     "check_roles_and_permissions"
@@ -50,7 +50,9 @@
         "actor_id": "U01_ADMIN"
       },
       "environment_arguments": {},
-      "fixed": {}
+      "fixed": {
+        "tenant_id": "caller: T01"
+      }
     }
   ],
   "alternatives": [],
@@ -65,7 +67,8 @@
     "task": "check_roles_and_permissions"
   },
   "sub_goals": [
-    "admin_role_verified"
+    "admin_role_verified",
+    "tenant_users_reported"
   ],
   "max_turns": 10,
   "background_noise": false,

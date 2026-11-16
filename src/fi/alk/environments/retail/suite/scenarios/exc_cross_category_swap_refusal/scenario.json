@@ -63,7 +63,9 @@
         "sku": "AC13"
       },
       "environment_arguments": {},
-      "fixed": {}
+      "fixed": {
+        "sku": "caller: item AC13"
+      }
     },
     {
       "tool": "get_product",
@@ -71,7 +73,9 @@
         "sku": "SH01"
       },
       "environment_arguments": {},
-      "fixed": {}
+      "fixed": {
+        "sku": "caller: item SH01"
+      }
     }
   ],
   "alternatives": [],

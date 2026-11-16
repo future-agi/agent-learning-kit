@@ -19,6 +19,18 @@ def handle(args, db):
     role = db.one("SELECT * FROM roles WHERE app_id = ? AND role_name = ?", [app_id, role_name])
     if role is None:
         raise ToolError(f"Role {role_name!r} not found for application {app_id!r}.")
+    # A separation-of-duties swap names the role it replaces. That role stays active while the new
+    # one waits for its approvals and ends in the same step as the grant, so a refused or failed
+    # replacement never leaves the employee without the access they had.
+    replaces = args.get("replaces_entitlement_id")
+    if replaces is not None:
+        old = db.one("SELECT * FROM entitlements WHERE entitlement_id = ?", [str(replaces)])
+        if old is None or old["status"] != "active":
+            raise ToolError(f"Entitlement {replaces!r} is not an active entitlement, so there is nothing to swap.")
+        if old["employee_id"] != emp_id or old["app_id"] != app_id:
+            raise ToolError(f"Entitlement {replaces!r} is {old['employee_id']}'s {old['role_name']} on {old['app_id']}; a swap replaces a role of the same employee on the same application.")
+        if old["role_name"] == role_name:
+            raise ToolError(f"Entitlement {replaces!r} already is {role_name}; there is nothing to swap.")
     if db.one("SELECT 1 FROM entitlements WHERE employee_id = ? AND app_id = ? AND role_name = ? AND status = 'active'", [emp_id, app_id, role_name]):
         raise ToolError(f"Employee {emp_id} already has active role '{role_name}' on {app_id}.")
     dedup_policy = db.one("SELECT value FROM environment_policy WHERE name = 'prevent_duplicate_pending_requests'")
@@ -28,7 +40,7 @@ def handle(args, db):
             raise ToolError(f"A pending request ({pending['request_id']}) already exists for employee {emp_id}, app {app_id}, and role {role_name}.")
     sod_policy = db.one("SELECT value FROM environment_policy WHERE name = 'sod_enabled'")
     if json.loads(sod_policy["value"]) if sod_policy else True:
-        active = [r["role_name"] for r in db.query("SELECT role_name FROM entitlements WHERE employee_id = ? AND app_id = ? AND status = 'active'", [emp_id, app_id])]
+        active = [r["role_name"] for r in db.query("SELECT role_name FROM entitlements WHERE employee_id = ? AND app_id = ? AND status = 'active' AND entitlement_id != ?", [emp_id, app_id, str(replaces or "")])]
         for rule in db.query("SELECT * FROM sod_rules WHERE app_id = ?", [app_id]):
             if (rule["role_a"] == role_name and rule["role_b"] in active) or (rule["role_b"] == role_name and rule["role_a"] in active):
                 raise ToolError(f"Cannot create request: violates Separation of Duties ({rule['description']}).")
@@ -40,9 +52,11 @@ def handle(args, db):
         n += 1
     req_id = f"AR{n:02d}"
     approver = chain[0] if chain else None
-    db.execute("INSERT INTO access_requests (request_id, employee_id, app_id, role_name, justification, status, approver_id, created_at, updated_at, duration_days) VALUES (?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?)", [req_id, emp_id, app_id, role_name, justification, approver, now, now, None])
+    db.execute("INSERT INTO access_requests (request_id, employee_id, app_id, role_name, justification, status, approver_id, created_at, updated_at, duration_days, replaces_entitlement_id) VALUES (?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?)", [req_id, emp_id, app_id, role_name, justification, approver, now, now, None, replaces])
     _audit(db, "create_access_request", actor, "access_request", req_id, f"Requested {role_name} on {app_id} for {emp_id} (approvers: {', '.join(chain) or 'none'})", now)
     out = {"request_id": req_id, "employee_id": emp_id, "app_id": app_id, "role_name": role_name, "status": "pending", "approver_id": approver, "approvers": chain, "created_at": now}
+    if replaces:
+        out["replaces_entitlement_id"] = replaces
     if not chain:
         # The catalogue asks no approval for this role: the request is approved on creation and
         # its token issued at once, so the grant needs nothing further.

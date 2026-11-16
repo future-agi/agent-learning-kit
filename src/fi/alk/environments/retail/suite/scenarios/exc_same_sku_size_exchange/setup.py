@@ -32,6 +32,7 @@ def setup(world):
         "line_tax_cents": 0,
         "line_net_cents": 8000,
         "returned_quantity": 0,
+        "size": "9",
     })
     world.put("shipments", {
         "shipment_id": "SHP408",

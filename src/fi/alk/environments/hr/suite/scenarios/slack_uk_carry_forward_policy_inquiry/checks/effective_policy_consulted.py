@@ -40,6 +40,30 @@ def check(world, calls, reference=None):
     by_drive = any(c.arguments.get("fileId") in in_force_files and c.result.get("fileContent") for c in reads)
     if not by_tool and not by_drive:
         return f"done wrong: the policy in force ({region or ''} {topic or ''} {sorted(in_force_files)}) was not consulted"
+    # When the question was asked in Slack, its details (how many days, which rule) are in the
+    # thread: every message of it must have reached the agent. Documents stay a free choice of route.
+    desk = (state.get("current_actor") or [{}])[0].get("user_id")
+    shown = set()
+
+    def walk(value):
+        if isinstance(value, dict):
+            if value.get("ts") and "text" in value:
+                shown.add(value["ts"])
+            for one in value.values():
+                walk(one)
+        elif isinstance(value, list):
+            for one in value:
+                walk(one)
+
+    for c in calls:
+        if c.ok and c.name in ("slack_read_thread", "slack_read_channel", "slack_search_public_and_private"):
+            walk(c.result)
+    for step in reference or ():
+        a = step.get("arguments", {})
+        if step.get("tool") == "slack_read_thread" and a.get("message_ts"):
+            needed = [m["ts"] for m in state.get("slack_messages", []) if (m["ts"] == a["message_ts"] or m.get("thread_ts") == a["message_ts"]) and m["user_id"] != desk]
+            if not needed or not all(t in shown for t in needed):
+                return f"done blind: the question in Slack thread {a['message_ts']} was never read"
     return None
 
 

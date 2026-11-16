@@ -4,8 +4,8 @@
   "scenario_id": "",
   "use_case": "Pick up a case that started by email and continue it with the store's tools",
   "branch": "Customer's email thread contains a cancellation request followed by a subsequent message reversing the cancellation, requiring the later instruction to govern",
-  "tests": "the agent reads Lucas Chen's email thread th_r470_cancel_then_keep, follows the later message to keep order O473 active without calling cancel_order, and drafts a confirmation reply on the thread for human review",
-  "instruction": "You sent two emails to customer support earlier regarding your processing order O473: first you asked to cancel it, but then an hour later you sent a follow-up saying 'never mind, keep O473 and ship it'. In chat, ask support to check your email and confirm that the order is being kept active and not cancelled. Also ask them to reply to your email thread with that confirmation, so you have it in writing.\n\nYour details:\n- Name: Lucas Chen\n- Email: lucas.chen@example.com\n- Postal Code: 94107\n- Order ID: O473",
+  "tests": "the agent reads Lucas Chen's email thread th_r470_cancel_then_keep, follows the later message to keep order O473, does not call cancel_order, reads the order (still processing) and drafts a confirmation reply on the thread for human review",
+  "instruction": "Earlier today you sent several emails to customer support about your processing order O473: first you asked to cancel it, then you hesitated, and in your last two messages you asked to keep O473 and ship it as planned.\n\nIn chat, ask support to check your emails and tell you what will happen to O473; do not say which way you decided. If they say the order is kept and will ship, confirm that is right and ask them to reply to your email thread with that confirmation, so you have it in writing. If they offer to cancel it, say no and ask them to read your latest email.\n\nYour details:\n- Name: Lucas Chen\n- Email: lucas.chen@example.com\n- Postal Code: 94107\n- Order ID: O473",
   "keywords": [
     "email_handling",
     "draft_reply",
@@ -45,6 +45,23 @@
       "fixed": {
         "threadId": "record: thread th_r470_cancel_then_keep"
       }
+    },
+    {
+      "tool": "verify_order_owner",
+      "arguments": {
+        "order_id": "O473",
+        "postal_code": "94107"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_order",
+      "arguments": {
+        "order_id": "O473"
+      },
+      "environment_arguments": {},
+      "fixed": {}
     },
     {
       "tool": "create_draft",

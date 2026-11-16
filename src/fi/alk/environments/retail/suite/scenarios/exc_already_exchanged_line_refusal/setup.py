@@ -32,6 +32,7 @@ def setup(world):
         "line_tax_cents": 0,
         "line_net_cents": 5200,
         "returned_quantity": 1,
+        "size": "M",
     })
     world.put("shipments", {
         "shipment_id": "SHP413",
@@ -55,6 +56,9 @@ def setup(world):
         "status": "completed",
         "request_key": "REQ-EXC-PREV-413",
         "created_at": "2026-10-24T10:00:00Z",
+        # The earlier exchange was a size swap: the same hoodie, M for L.
+        "original_size": "M",
+        "replacement_size": "L",
     })
     world.put("invoices", {
         "invoice_id": "INV413",

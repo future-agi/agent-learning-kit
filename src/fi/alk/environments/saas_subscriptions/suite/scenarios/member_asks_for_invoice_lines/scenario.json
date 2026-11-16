@@ -42,16 +42,6 @@
       },
       "environment_arguments": {},
       "fixed": {}
-    },
-    {
-      "tool": "get_user_role",
-      "arguments": {
-        "tenant_id": "T02",
-        "actor_id": "U02_MEMBER",
-        "user_id": "U02_MEMBER"
-      },
-      "environment_arguments": {},
-      "fixed": {}
     }
   ],
   "alternatives": [],

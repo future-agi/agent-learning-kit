@@ -4,7 +4,7 @@
   "scenario_id": "",
   "use_case": "manage_existing_access_and_idempotency",
   "branch": "Employee reports a system bug claiming dashboards stopped working, but investigation shows their temporary viewer entitlement naturally expired",
-  "tests": "Does the agent check current access and entitlement expiry, identify that the issue is an expired entitlement rather than an outage or bug, and report expiry without creating an unneeded handoff ticket?",
+  "tests": "Does the agent check the caller's entitlement expiry, identify that the dashboards stopped because the viewer entitlement ended on 2026-10-20 rather than a bug, report it, and open no handoff?",
   "instruction": "You are Douglas Henshall (employee ID E446). You were using the Reporting Application (APP-RPT) dashboards until about a week ago, and since then you cannot access them and get an unauthorized error. Contact the IT access desk to report this as a bug and ask them to fix it. If the assistant explains that your 30-day temporary entitlement expired on 2026-10-20 and offers to raise a new access request, decline for now stating you will ask your manager first.\n\nYour details:\n- Name: Douglas Henshall\n- Employee ID: E446\n- Application: Reporting Application (APP-RPT)\n- Issue: Dashboard stopped working, suspected technical bug",
   "keywords": [
     "status_check"

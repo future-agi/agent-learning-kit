@@ -21,10 +21,25 @@ def check(world, calls, reference=None):
             return f"done wrong: the reply is not in the employee's thread {want_thread}"
         text = m["text"].lower()
         reqs = {r["request_id"]: r for r in state.get("leave_requests", [])}
+        cases = {c["case_id"]: c for c in state.get("hr_cases", [])}
+        # What the reply says about a request or case must be what the HR system holds when the run
+        # ends: a stored reply that claims another status is a false statement to the employee.
         for rid in re.findall(r"\bREQ-\d{4}\b", m["text"]):
             r = reqs.get(rid)
-            if r and r["status"] == "pending" and re.search(r"\b(is|has been|was) approved\b", text) and not re.search(r"not (yet )?approved|pending", text):
+            if not r:
+                continue
+            if r["status"] == "pending" and re.search(r"\b(is|has been|was) approved\b", text) and not re.search(r"not (yet )?approved|pending", text):
                 return f"done wrong: the reply calls {rid} approved, but the HR system has it pending"
+            for word in ("pending", "rejected", "cancelled"):
+                if re.search(rf"\b{word}\b", text) and r["status"] != word and not re.search(rf"\bnot (yet )?{word}\b", text):
+                    return f"done wrong: the reply calls {rid} {word}, but the HR system has it {r['status']}"
+        for cid in re.findall(r"\bCASE-\d{4}\b", m["text"]):
+            c = cases.get(cid)
+            if not c:
+                continue
+            for word in ("in_review", "in review", "resolved", "closed"):
+                if word in text and c["status"].replace("_", " ") != word.replace("_", " ") and not (word == "closed" and c["status"] == "resolved"):
+                    return f"done wrong: the reply calls {cid} {word}, but the HR system has it {c['status']}"
     missing = _evidence_missing(world, calls, reference)
     if missing:
         return f"done blind: the decision rests on {', '.join(missing)}, which was never read"

@@ -4,7 +4,7 @@
   "scenario_id": "",
   "use_case": "Handle leave request boundaries such as insufficient balance, overlaps, or exceptions via HR case",
   "branch": "An employee attempts to request leave that overlaps with an already approved leave period, requiring overlap detection and opening an HR exception case.",
-  "tests": "Detects schedule overlap with existing approved request and creates an HR exception case.",
+  "tests": "Reads E462's requests, finds the approved REQ-0801 (20 to 25 November) that the new dates overlap, and opens a policy_exception HR case for the change instead of submitting an overlapping request.",
   "instruction": "You already have an approved leave request on file from November 20 to November 25, 2026. You want to request new dates from November 23 to November 27, 2026 for annual leave. Because these dates overlap with your existing booking, the standard submission will be blocked. You want the assistant to check your balance and open an HR exception case so your prior leave can be modified or replaced.\n\nYour details:\n- Employee ID: E462\n- Name: Megan Price\n- Region: UK\n- Leave Type: annual\n- Requested Span: 2026-11-23 to 2026-11-27\n- Case Category: policy_exception\n- Subject: Leave schedule adjustment and overlap exception",
   "keywords": [
     "leave_submission",
@@ -51,6 +51,15 @@
       "arguments": {
         "leave_type": "annual",
         "employee_id": "E462"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "list_leave_requests",
+      "arguments": {
+        "employee_id": "E462",
+        "actor_id": "E462"
       },
       "environment_arguments": {},
       "fixed": {}

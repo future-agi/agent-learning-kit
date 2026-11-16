@@ -68,6 +68,16 @@
       "fixed": {}
     },
     {
+      "tool": "search_hr_policy",
+      "arguments": {
+        "region": "APAC",
+        "topic": "sick_leave",
+        "effective_date": "2026-10-26"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
       "tool": "submit_leave_request",
       "arguments": {
         "leave_type": "sick",
@@ -100,7 +110,8 @@
   "sub_goals": [
     "leave_request_submitted_correctly",
     "details_confirmed_before_submission",
-    "confidentiality_and_medical_privacy_preserved"
+    "confidentiality_and_medical_privacy_preserved",
+    "policy_source_cited"
   ],
   "max_turns": 10,
   "background_noise": false,

@@ -23,6 +23,7 @@ def handle(args, db):
     quantity = args.get("quantity")
     confirmed = args.get("confirmed")
     request_key = args.get("request_key")
+    replacement_size = str(args.get("replacement_size") or "").strip() or None
     if not order_id or not customer_id or not original_sku or not replacement_sku:
         raise ToolError("order_id, customer_id, original_sku and replacement_sku are required.", category="invalid_input")
     if not isinstance(quantity, int) or isinstance(quantity, bool) or quantity <= 0:
@@ -45,9 +46,9 @@ def handle(args, db):
         if existing:
             # A replay is the same exchange by the same customer; anything else under the key is a
             # conflict, never another exchange reported as this one.
-            if (existing["order_id"], existing["customer_id"], existing["original_sku"], existing["replacement_sku"], existing["quantity"]) != (order_id, customer_id, original_sku, replacement_sku, quantity):
+            if (existing["order_id"], existing["customer_id"], existing["original_sku"], existing["replacement_sku"], existing["quantity"], existing.get("replacement_size")) != (order_id, customer_id, original_sku, replacement_sku, quantity, replacement_size):
                 raise ToolError(f"request_key {request_key!r} was already used for a different exchange.", category="conflict")
-            return {"exchange_id": existing["exchange_id"], "order_id": order_id, "original_sku": existing["original_sku"], "replacement_sku": existing["replacement_sku"], "quantity": existing["quantity"], "price_difference_cents": existing["price_difference_cents"], "status": existing["status"], "idempotent": True}
+            return {"exchange_id": existing["exchange_id"], "order_id": order_id, "original_sku": existing["original_sku"], "original_size": existing.get("original_size"), "replacement_sku": existing["replacement_sku"], "replacement_size": existing.get("replacement_size"), "quantity": existing["quantity"], "price_difference_cents": existing["price_difference_cents"], "status": existing["status"], "idempotent": True}
     line = db.one("SELECT * FROM order_items WHERE order_id = ? AND sku = ?", [order_id, original_sku])
     if not line:
         raise ToolError(f"SKU {original_sku} is not part of order {order_id}.", category="not_found")
@@ -62,6 +63,17 @@ def handle(args, db):
         raise ToolError(f"SKU {original_sku} is not returnable, so it cannot be exchanged.", category="policy_blocked")
     if original and replacement["category"] != original["category"]:
         raise ToolError(f"Policy: an exchange stays within the category; {replacement_sku} is {replacement['category']}, {original_sku} is {original['category']}.", category="policy_blocked")
+    # A size is one the replacement comes in, and swapping an item for itself is only a size
+    # exchange: the same SKU needs a size, a different one from the size bought.
+    sizes = [x.strip() for x in (replacement.get("sizes") or "").split(",") if x.strip()]
+    original_size = line.get("size")
+    if replacement_size and replacement_size not in sizes:
+        raise ToolError(f"{replacement_sku} does not come in size {replacement_size}; its sizes are {', '.join(sizes) or 'one size only'}.", category="invalid_input")
+    if replacement_sku == original_sku:
+        if not replacement_size:
+            raise ToolError(f"Exchanging {original_sku} for itself is a size exchange: replacement_size is required ({', '.join(sizes) or 'one size only'}).", category="invalid_input")
+        if original_size and replacement_size == original_size:
+            raise ToolError(f"{original_sku} on {order_id} was bought in size {original_size}; the same size is the same item, not an exchange.", category="invalid_input")
     window = int(policy.get("exchange_window_days", 30))
     if original and original["category"] == "Accessories":
         window = min(window, int(policy.get("accessories_return_window_days", 14)))
@@ -84,10 +96,10 @@ def handle(args, db):
     difference = (replacement["list_price_cents"] - unit_net) * quantity
     count = db.one("SELECT COUNT(*) AS c FROM exchanges")["c"]
     exchange_id = f"EX{count + 1:02d}"
-    db.execute("INSERT INTO exchanges (exchange_id, order_id, customer_id, original_sku, replacement_sku, quantity, price_difference_cents, status, request_key, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", [exchange_id, order_id, customer_id, original_sku, replacement_sku, quantity, difference, "authorized", request_key, clock])
+    db.execute("INSERT INTO exchanges (exchange_id, order_id, customer_id, original_sku, replacement_sku, quantity, price_difference_cents, status, request_key, created_at, original_size, replacement_size) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", [exchange_id, order_id, customer_id, original_sku, replacement_sku, quantity, difference, "authorized", request_key, clock, original_size, replacement_size])
     db.execute("UPDATE order_items SET returned_quantity = returned_quantity + ? WHERE item_id = ?", [quantity, line["item_id"]])
     if difference < 0:
         credit_count = db.one("SELECT COUNT(*) AS c FROM store_credits")["c"]
         db.execute("INSERT INTO store_credits (credit_id, customer_id, amount_cents, source, issued_at, expires_at) VALUES (?, ?, ?, ?, ?, ?)", [f"SCR{credit_count + 1:02d}", customer_id, -difference, f"price difference on exchange {exchange_id}", clock, clock[:4].replace(clock[:4], str(int(clock[:4]) + 1)) + clock[4:]])
         db.execute("UPDATE customers SET store_credit_cents = store_credit_cents + ? WHERE customer_id = ?", [-difference, customer_id])
-    return {"exchange_id": exchange_id, "order_id": order_id, "original_sku": original_sku, "replacement_sku": replacement_sku, "quantity": quantity, "price_difference_cents": difference, "difference_note": ("charged before the replacement ships" if difference > 0 else "issued as store credit" if difference < 0 else "no difference"), "status": "authorized", "idempotent": False}
+    return {"exchange_id": exchange_id, "order_id": order_id, "original_sku": original_sku, "original_size": original_size, "replacement_sku": replacement_sku, "replacement_size": replacement_size, "quantity": quantity, "price_difference_cents": difference, "difference_note": ("charged before the replacement ships" if difference > 0 else "issued as store credit" if difference < 0 else "no difference"), "status": "authorized", "idempotent": False}

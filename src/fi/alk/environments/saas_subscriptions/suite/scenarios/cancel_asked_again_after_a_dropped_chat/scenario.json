@@ -4,7 +4,7 @@
   "scenario_id": "",
   "use_case": "Manage and cancel pending scheduled plan changes",
   "branch": "Admin asks again to cancel change PC406 which was already canceled in a prior dropped chat",
-  "tests": "Checks subscription and informs admin that PC406 is already canceled without performing duplicate cancellation",
+  "tests": "Checks the subscription, finds no pending change (PC406 is already canceled), tells the admin so and cancels nothing again",
   "instruction": "You are Daniel Drummond, billing administrator for Tenant T406 (User ID: U406_ADMIN). You were previously in a chat to cancel scheduled change PC406, but the connection dropped. You want to ask the billing desk to cancel PC406 if it is still pending, or confirm its cancellation status.\n\nYour details:\n- Tenant ID: T406\n- User ID: U406_ADMIN\n- Change ID to check/cancel: PC406",
   "keywords": [
     "cancel_plan_change",
@@ -51,14 +51,17 @@
         "tenant_id": "T406"
       },
       "environment_arguments": {},
-      "fixed": {}
+      "fixed": {
+        "tenant_id": "caller: T406"
+      }
     }
   ],
   "alternatives": [],
   "coverage": {},
   "sub_goals": [
     "admin_role_verified",
-    "declined_action_explained"
+    "declined_action_explained",
+    "scheduled_change_status_reported"
   ],
   "max_turns": 10,
   "background_noise": false,

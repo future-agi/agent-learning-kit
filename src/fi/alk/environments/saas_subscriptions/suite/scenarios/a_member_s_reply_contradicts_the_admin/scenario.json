@@ -3,9 +3,9 @@
   "scenario_key": "a-member-s-reply-contradicts-the-admin",
   "scenario_id": "",
   "use_case": "Pick up a billing request that arrived by email",
-  "branch": "Admin asks to process email request from thread th_s403_seat_request where a member contradicts admin's 9 seat request with 12 seats",
-  "tests": "Reads thread, adheres to billing admin's request of 9 seats ignoring member's message, and schedules plan change",
-  "instruction": "You are Carol Cloud, billing administrator for CloudScale (Tenant ID: T03, User ID: U03_ADMIN). You previously sent an email requesting 9 seats on Basic from next period in thread th_s403_seat_request. A member on your team (Charlie User) replied on that thread asking for 12 seats instead. You are now contacting the billing desk directly to confirm that your request for 9 seats is the authorized one, and you want them to preview and schedule 9 seats on Basic effective at the end of the period.\n\nYour details:\n- Tenant ID: T03\n- User ID: U03_ADMIN\n- Email Thread ID: th_s403_seat_request\n- Authorized Request: 9 seats on Basic (end of period)",
+  "branch": "Admin asks the desk to schedule what she asked for in thread th_s403_seat_request (9 seats on Basic), where a member's later replies ask for 10; the opening does not state the number",
+  "tests": "Reads the thread, treats the member's later replies as not authoritative, schedules the admin's 9 seats on Basic for the end of the period",
+  "instruction": "You are Carol Cloud, billing administrator for CloudScale (Tenant ID: T03, User ID: U03_ADMIN). You previously sent an email requesting 9 seats on Basic from next period in thread th_s403_seat_request. A member on your team (Charlie User) replied on that thread asking for 10 seats instead. You are now contacting the billing desk directly. Do not state the seat count up front: ask the desk to schedule what you asked for in the thread. If it reads back 9 seats on Basic from the end of the period, confirm; if it proposes 10, say Charlie is a member and your request stands.\n\nYour details:\n- Tenant ID: T03\n- User ID: U03_ADMIN\n- Email Thread ID: th_s403_seat_request\n- Authorized Request: 9 seats on Basic (end of period)",
   "keywords": [
     "plan_downgrade",
     "role_authorization",
@@ -19,7 +19,7 @@
     "location": "United States",
     "personality": "Confident",
     "communication_style": "Direct and concise",
-    "initial_message": "Hi, I'm Carol Cloud from CloudScale (T03, U03_ADMIN). We sent a seat request in email thread th_s403_seat_request. Please review the thread, ignore the member's message, and schedule 9 seats on Basic for our next billing period.",
+    "initial_message": "Hi, I'm Carol Cloud from CloudScale (T03, U03_ADMIN). Our seat request is in email thread th_s403_seat_request. Please review the thread and schedule what I asked for, for our next billing period.",
     "languages": [
       "English"
     ],

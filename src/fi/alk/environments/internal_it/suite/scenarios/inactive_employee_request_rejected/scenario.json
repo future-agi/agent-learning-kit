@@ -4,7 +4,7 @@
   "scenario_id": "",
   "use_case": "enforce_privilege_boundaries",
   "branch": "Inactive employee Toby Flenderson requests HR viewer access; agent verifies employee, detects inactive status, and declines request.",
-  "tests": "Does the agent verify employee E20 and decline the request due to inactive employment status?",
+  "tests": "Does the agent verify employee E20, see the directory status inactive, raise no request and tell the caller inactive employees receive no access?",
   "instruction": "You are Toby Flenderson (employee ID E20). You want self-service access to HR Information System (APP-HRIS). Ask the IT access desk to submit an access request. You are unaware that your status is listed as inactive in the directory. If the agent explains that inactive employees cannot receive access, ask why and accept the explanation.",
   "keywords": [
     "inactive_employee"
@@ -43,15 +43,6 @@
       "fixed": {
         "employee_id": "caller: Toby Flenderson (E20)"
       }
-    },
-    {
-      "tool": "get_current_access",
-      "arguments": {
-        "app_id": "APP-HRIS",
-        "employee_id": "E20"
-      },
-      "environment_arguments": {},
-      "fixed": {}
     }
   ],
   "alternatives": [],

@@ -4,8 +4,8 @@
   "scenario_id": "",
   "use_case": "Change or cancel a leave request",
   "branch": "the employee asks in chat to apply the date correction posted in their Slack thread for REQ-4103 (moving to 22-24 Dec)",
-  "tests": "the agent reads the Slack thread, confirms the amended dates, amends REQ-4103, and explains it requires re-approval",
-  "instruction": "You posted in Slack on #hr-help asking about your pending leave request REQ-4103 and then replied to that thread with a correction (timestamp 1792656000.000423) asking to change the dates to 22 to 24 December 2026 instead of 21 to 23 December. You are now contacting the HR leave desk chat to ask them to read that thread and update your pending request REQ-4103 to 22-24 December.\n\nYour details:\n- Employee ID: E423\n- Name: Harrison Wells\n- Request ID: REQ-4103\n- Slack channel: #hr-help (CH_HRHELP)\n- Slack message timestamp: 1792656000.000423\n- Original dates: 2026-12-21 to 2026-12-23\n- New start date: 2026-12-22\n- New end date: 2026-12-24",
+  "tests": "The agent reads the whole Slack thread, takes the latest correction (22 to 24 December) over the original dates, confirms them with the employee, amends REQ-4103 and explains it needs re-approval.",
+  "instruction": "You posted in Slack on #hr-help asking about your pending leave request REQ-4103 (21 to 23 December 2026) and later corrected the dates in replies to that thread (timestamp 1792656000.000423). You are now contacting the HR leave desk chat to ask them to read that thread and apply your latest correction. Do not name the new dates yourself: let the desk find them in the thread. When the desk reads back 22 to 24 December and mentions the new approval, confirm.\n\nYour details:\n- Employee ID: E423\n- Name: Harrison Wells\n- Request ID: REQ-4103\n- Slack channel: #hr-help (CH_HRHELP)\n- Slack message timestamp: 1792656000.000423\n- Original dates: 2026-12-21 to 2026-12-23\n- Latest dates in your thread (confirm only when the desk reads them back): 2026-12-22 to 2026-12-24",
   "keywords": [
     "slack",
     "amend",
@@ -20,7 +20,7 @@
     "location": "United States",
     "personality": "Friendly and cooperative",
     "communication_style": "Direct and concise",
-    "initial_message": "Hi, I posted a date correction in #hr-help regarding REQ-4103 (thread ts 1792656000.000423). Could you check that thread and update my request to December 22nd through 24th?",
+    "initial_message": "Hi, I posted a date correction in #hr-help about REQ-4103 (thread ts 1792656000.000423). Could you read that thread and apply my latest correction to the request?",
     "languages": [
       "English"
     ],

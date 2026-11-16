@@ -3,9 +3,9 @@
   "scenario_key": "email-seat-correction-preview-only",
   "scenario_id": "",
   "use_case": "Pick up a billing request that arrived by email",
-  "branch": "Alice Admin asks to preview the corrected 5-seat Pro plan change from email thread th_b02_seat_correction without scheduling",
-  "tests": "Previews plan change from email thread inquiry without mutating state or scheduling changes",
-  "instruction": "You are Alice Admin, billing administrator for Acme Corp. You previously sent an email thread (th_b02_seat_correction) where you first asked for 4 seats, then sent a follow-up correcting it to 5 seats on the Pro plan at renewal.\n\nYou want the billing desk to preview the cost and details of changing to 5 seats on Pro at the end of the billing period, but you specifically do NOT want to schedule or commit any plan changes yet. If asked to confirm scheduling, state clearly that you only want the preview right now.\n\nYour details:\n- Name: Alice Admin / Alice Admin\n- Tenant ID: T01 (Acme Corp)\n- User / Actor ID: U01_ADMIN\n- Email: alice@acme.com\n- Email Thread ID: th_b02_seat_correction\n- Target Plan: Pro (pro)\n- Target Seats: 5\n- Desired Timing: End of period (at renewal)",
+  "branch": "Alice asks for a preview of the seat change she settled on in th_b02_seat_correction (4, then 6 mentioned, corrected to 5 on Pro) without scheduling; the opening defers to the thread",
+  "tests": "Works out the corrected seat count from the email history, previews Pro with 5 seats at the period end and schedules nothing",
+  "instruction": "You are Alice Admin, billing administrator for Acme Corp (T01). In email thread th_b02_seat_correction you first asked for 4 seats on Pro, a colleague later mentioned 6, and your correction settled on 5 seats on Pro at renewal.\n\nYou want the billing desk to preview the cost of the change you settled on, but you do NOT want anything scheduled yet. Do not state the seat count yourself up front: say it is in the thread. If the desk previews 4 or 6 seats, tell it to look again at your latest emails. If asked to confirm scheduling, say you only want the preview right now.\n\nYour details:\n- Name: Alice Admin\n- Tenant ID: T01 (Acme Corp)\n- User / Actor ID: U01_ADMIN\n- Email: alice@acme.com\n- Email Thread ID: th_b02_seat_correction",
   "keywords": [
     "preview"
   ],
@@ -17,7 +17,7 @@
     "location": "United States",
     "personality": "Detail-oriented",
     "communication_style": "Questioning",
-    "initial_message": "Hi, in email thread th_b02_seat_correction I asked for 5 seats on Pro at renewal. Can you preview what that will cost without scheduling anything yet?",
+    "initial_message": "Hi, in email thread th_b02_seat_correction I asked to change our seats at renewal. Can you preview what the change I settled on will cost, without scheduling anything yet?",
     "languages": [
       "English"
     ],

@@ -44,7 +44,10 @@
         "message_ts": "1792753200.000005"
       },
       "environment_arguments": {},
-      "fixed": {}
+      "fixed": {
+        "message_ts": "caller: 1792753200.000005",
+        "channel_id": "record: CH_HRHELP"
+      }
     },
     {
       "tool": "search_hr_policy",

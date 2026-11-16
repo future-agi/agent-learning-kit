@@ -323,7 +323,7 @@
   },
   {
     "name": "create_access_request",
-    "description": "Submit an access request with business justification, routed to its approvers in order (manager, application owner, or both). A role that needs no approval is approved on creation and its token returned. Acts only for the person signed in to the conversation, their manager, or IT operations; naming an employee does not make you them.",
+    "description": "Submit an access request with business justification, routed to its approvers in order (manager, application owner, or both). A role that needs no approval is approved on creation and its token returned. Acts only for the person signed in to the conversation, their manager, or IT operations; naming an employee does not make you them. To swap a role that conflicts under separation of duties, name the entitlement it replaces: the old role stays until the new one is granted and ends in the same step.",
     "parameters": {
       "type": "object",
       "properties": {
@@ -342,6 +342,10 @@
         "employee_id": {
           "description": "Employee ID (e.g. 'E01')",
           "type": "string"
+        },
+        "replaces_entitlement_id": {
+          "type": "string",
+          "description": "Optional: the employee's active entitlement on the same application that this role replaces (a separation-of-duties swap). It stays active until this request is granted."
         }
       },
       "required": [
@@ -376,6 +380,9 @@
           "type": "string"
         },
         "employee_id": {
+          "type": "string"
+        },
+        "replaces_entitlement_id": {
           "type": "string"
         }
       },
@@ -533,6 +540,9 @@
           "type": "string"
         },
         "expires_at": {
+          "type": "string"
+        },
+        "replaced_entitlement_id": {
           "type": "string"
         }
       }
@@ -1422,6 +1432,50 @@
       "required": [
         "messages",
         "has_more"
+      ]
+    }
+  },
+  {
+    "name": "slack_get_approval",
+    "description": "Read an approval the desk holds for a Slack post: the exact text it covers, the channel, its status (approved, used) and expiry. Post that text exactly with slack_send_message.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "approval_id": {
+          "type": "string",
+          "description": "The approval id the approver gave."
+        }
+      },
+      "required": [
+        "approval_id"
+      ]
+    },
+    "mutates_state": false,
+    "returns": {
+      "type": "object",
+      "properties": {
+        "approval_id": {
+          "type": "string"
+        },
+        "channel_id": {
+          "type": "string"
+        },
+        "approved_text": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "expires_at": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "approval_id",
+        "channel_id",
+        "approved_text",
+        "status",
+        "expires_at"
       ]
     }
   },

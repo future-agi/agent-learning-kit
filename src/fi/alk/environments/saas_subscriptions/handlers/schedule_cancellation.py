@@ -27,6 +27,8 @@ def handle(args, db):
     cid = f"CX-{501 + n}"
     db.execute("INSERT INTO cancellation_requests (cancellation_id, tenant_id, subscription_id, effective_at, status, request_key, requested_by, created_at) VALUES (?, ?, ?, ?, 'scheduled', ?, ?, ?)", [cid, tenant_id, sub["subscription_id"], effective_at, args["request_key"], actor_id, now])
     db.execute("UPDATE subscriptions SET cancel_at_period_end = TRUE WHERE subscription_id = ?", [sub["subscription_id"]])
+    # A subscription set to end does not renew, so its renewal terms say so too.
+    db.execute("UPDATE renewal_terms SET auto_renew = FALSE WHERE subscription_id = ?", [sub["subscription_id"]])
     return {"cancellation_id": cid, "subscription_id": sub["subscription_id"], "effective_at": effective_at, "status": "scheduled", "idempotent": False, "message": f"The subscription stays active, with its plan and seats, until {effective_at}, and then ends."}
 
 

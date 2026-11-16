@@ -4,7 +4,7 @@
   "scenario_id": "",
   "use_case": "Draft a reply on a customer's email thread for a person to review",
   "branch": "Draft a reply explaining that received return R90 will be refunded within 5 business days of inspection, citing policy",
-  "tests": "the agent reads Iris West's email thread th_r05_refund_status, checks return R90, consults ret_pol_v3, and drafts a reply stating the item was received and refund will be issued within 5 business days after inspection",
+  "tests": "the agent reads Iris West's email thread th_r05_refund_status, checks return R90 (received), consults ret_pol_v3, and drafts a reply stating the return was received and the refund is issued within 5 business days after inspection",
   "instruction": "You emailed support (subject 'When will my refund for R90 arrive?') asking when you will receive your refund for return R90. You are contacting support in chat asking them to draft a reply to your email thread explaining the refund timeline.\n\nYour details:\n- Name: Iris West\n- Email: iris.west@example.com\n- Postal Code: 63101\n- Order ID: O29\n- Return ID: R90",
   "keywords": [
     "email_draft"
@@ -80,7 +80,7 @@
       "arguments": {
         "subject": "Re: When will my refund for R90 arrive",
         "replyToMessageId": "rmsg_007",
-        "body": "Hello Iris, your return R90 has been received and is undergoing inspection. According to our Returns Policy, refunds are issued within 5 business days after inspection.",
+        "body": "Hello Iris, your return R90 (order O29) has been received at our warehouse. Under Returns Policy version 3.0, the refund of the net amount paid is issued within 5 business days after the item is inspected.",
         "to": [
           "iris.west@example.com"
         ]

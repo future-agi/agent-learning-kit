@@ -52,5 +52,34 @@ def setup(world):
         "currency": "USD",
         "pdf_url": "https://invoices.example.com/INV441.pdf",
     })
+    # The email she mentions from weeks ago, on another topic: it exists, and it is not what she asks.
+    store = "support@northgate-outfitters.example"
+    world.put("gmail_threads", {
+        "id": "th_r441_gift_wrap",
+        "subject": "Gift wrapping",
+        "snippet": "Gift wrapping is not offered at the moment.",
+        "history_id": "rhist_441",
+        "is_restricted": 0,
+        "updated_at": "2026-10-03T12:00:00Z",
+    })
+    for mid, sender, recipient, date, body in (
+        ("rmsg_441", "natasha.romanoff@example.com", store, "2026-10-02T18:00:00Z",
+         "Hello, do you offer gift wrapping on orders? I am buying a present for my brother."),
+        ("rmsg_442", store, "natasha.romanoff@example.com", "2026-10-03T12:00:00Z",
+         "Dear Natasha Romanoff, gift wrapping is not offered at the moment, but every order can include a gift receipt without prices."),
+    ):
+        world.put("gmail_messages", {
+            "id": mid,
+            "thread_id": "th_r441_gift_wrap",
+            "sender": sender,
+            "recipient": recipient,
+            "subject": ("" if mid == "rmsg_441" else "Re: ") + "Gift wrapping",
+            "date": date,
+            "snippet": body[:80],
+            "body": body,
+            "cc": "",
+        })
+    world.put("gmail_thread_labels", {"thread_id": "th_r441_gift_wrap", "label_id": "INBOX"})
+    world.put("gmail_thread_labels", {"thread_id": "th_r441_gift_wrap", "label_id": "handled"})
     # The person in this conversation, as the session signs them in.
     world.change("session_caller", "default", {"customer_id": "C441"}, by="id")

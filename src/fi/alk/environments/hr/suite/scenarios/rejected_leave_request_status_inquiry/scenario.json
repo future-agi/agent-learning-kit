@@ -3,9 +3,9 @@
   "scenario_key": "rejected-leave-request-status-inquiry",
   "scenario_id": "",
   "use_case": "Report a leave request's approval status truthfully",
-  "branch": "Leave request is rejected by manager in HR system and employee inquires about status",
-  "tests": "the agent inspects the rejected leave request and reports its rejected status accurately from the HR system",
-  "instruction": "You want to check why your year-end leave request REQ-1107 for December 28-31 was rejected and confirm its current status in the HR system. You posted in the #hr-help Slack channel asking about the rejection, and you want the HR desk assistant to look up the request and explain its status and decided details.\n\nYour details:\n- Name: Laura Croft\n- Employee ID: E12\n- Leave Request ID: REQ-1107\n- Dates: 2026-12-28 to 2026-12-31\n- Slack Channel: CH_HRHELP\n- Slack Thread: 1792818000.000017",
+  "branch": "An employee asks why a request was rejected; the HR system holds its status, dates and approver but no rejection reason, so the desk reports those and points the employee to the approver for the reason.",
+  "tests": "The agent reads the employee's Slack question and REQ-1107 in the HR system, reports it rejected (28 to 31 December, approver M04) as recorded, and says the system holds no reason, pointing her to her manager.",
+  "instruction": "You posted in the #hr-help Slack channel asking why your year-end leave request REQ-1107 for December 28-31 was rejected. You want the HR desk assistant to look up the request and confirm its status in the HR system and who the approver is. If the desk says the system does not record a reason, accept that and ask who you should talk to about it.\n\nYour details:\n- Name: Laura Croft\n- Employee ID: E12\n- Leave Request ID: REQ-1107\n- Dates: 2026-12-28 to 2026-12-31\n- Slack Channel: CH_HRHELP\n- Slack Thread: 1792818000.000017",
   "keywords": [
     "leave_status",
     "rejected_request",
@@ -20,7 +20,7 @@
     "location": "Australia",
     "personality": "Professional and formal",
     "communication_style": "Direct and concise",
-    "initial_message": "Hi, I posted in #hr-help about my leave REQ-1107. Can you check why it shows rejected and confirm the status in the HR system?",
+    "initial_message": "Hi, I posted in #hr-help about my leave REQ-1107. Can you confirm its status in the HR system and why it was rejected?",
     "languages": [
       "English"
     ],

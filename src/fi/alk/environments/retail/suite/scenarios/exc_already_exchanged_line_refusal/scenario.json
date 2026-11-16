@@ -4,8 +4,8 @@
   "scenario_id": "",
   "use_case": "Exchange an item or use store credit",
   "branch": "Customer C413 requests a second exchange on order line AP08 of order O413 which has already been exchanged, which is refused",
-  "tests": "the agent checks existing order exchange records and refuses a second exchange on the same order line",
-  "instruction": "You ordered a Pullover Fleece Hoodie (SKU AP08) in order O413. You already exchanged this line previously, but you want to exchange it again for a different color.\n\nYour details:\n- Name: Barry Allen\n- Email: barry.allen@example.com\n- Postal Code: 64101\n- Order ID: O413\n- SKU: AP08 (Quantity 1)",
+  "tests": "the agent reads order O413, whose AP08 line and exchange record show it was already exchanged, and refuses a second exchange on the same order line",
+  "instruction": "You ordered a Pullover Fleece Hoodie (SKU AP08) in order O413. You bought it in size M and already exchanged it once, for size L. The L fits badly too, so you want to exchange it again, this time for size XL.\n\nYour details:\n- Name: Barry Allen\n- Email: barry.allen@example.com\n- Postal Code: 64101\n- Order ID: O413\n- SKU: AP08 (Quantity 1)",
   "keywords": [
     "already_exchanged",
     "exchange_refusal"
@@ -18,7 +18,7 @@
     "location": "Canada",
     "personality": "Friendly and cooperative",
     "communication_style": "Casual and friendly",
-    "initial_message": "Hi there, I have order O413 and would like to exchange my fleece hoodie (AP08) again for another color.",
+    "initial_message": "Hi there, I have order O413 and would like to exchange my fleece hoodie (AP08) again, this time for an XL.",
     "languages": [
       "English"
     ],
@@ -53,14 +53,6 @@
       "fixed": {
         "order_id": "record: orders.order_id of the order the request is about"
       }
-    },
-    {
-      "tool": "get_product",
-      "arguments": {
-        "sku": "AP08"
-      },
-      "environment_arguments": {},
-      "fixed": {}
     }
   ],
   "alternatives": [],

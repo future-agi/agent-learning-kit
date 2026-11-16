@@ -1,4 +1,5 @@
 def check(world, calls, reference=None):
+    import json
     import re
     state = world.state()
     messages = state.get("gmail_messages", [])
@@ -25,7 +26,6 @@ def check(world, calls, reference=None):
     customers = {c["email"].lower(): c for c in state.get("customers", [])}
     returns = {r["return_id"]: r for r in state.get("returns", [])}
     category = {p["sku"]: p["category"] for p in state.get("products", [])}
-    category = {p["sku"]: p["category"] for p in state.get("products", [])}
     for thread in ([wanted_thread] if wanted_thread else sorted({d["thread_id"] for d in drafts})):
         in_thread = sorted((m for m in messages if m["thread_id"] == thread), key=lambda m: m["date"])
         email = next((m["sender"].lower() for m in in_thread if not m["sender"].lower().endswith(store)), None)
@@ -36,8 +36,32 @@ def check(world, calls, reference=None):
                 return f"done wrong: the draft on {thread!r} is addressed to {to}, not to the customer {email}"
             body = d.get("body") or ""
             low = body.lower()
-            if re.search(r"(refund (has been|was) (issued|processed|sent)|we have refunded|refunded to your|credited to your (card|account))", low):
+            if re.search(r"(refund\b[^.]{0,30}\b((has been|was) (issued|processed|sent|completed|paid)|is (now )?(complete|completed|done)|is (now )?(issued|paid|processed)(?! (within|after|once|when|in)\b))|we have refunded|refunded to your|credited to your (card|account))", low):
                 return "done wrong: the draft says a refund was issued; a return authorization is not a refund"
+            # Keeping the goods with no return is an exception no record grants.
+            if re.search(r"(keep (all )?(of )?(the |your )?(goods|items?|products?|merchandise)|no return (is )?(needed|required|necessary)|(do not|don't) need to (send|return))", low):
+                return "done wrong: the draft waives the return, an exception no record grants"
+            # Every amount, tracking number and order status the draft states is one this run was
+            # shown: a price, net, discount or balance a tool returned, or a figure the customer's
+            # own email quotes; a number from nowhere is a claim the records do not back.
+            amounts, texts = _shown(calls)
+            for amount in re.findall(r"\$\s?(\d[\d,]*(?:\.\d{1,2})?)", body):
+                if round(float(amount.replace(",", "")) * 100) not in amounts:
+                    return f"done wrong: the draft states ${amount}, which no record this run read holds"
+            for number in re.findall(r"\b1Z[0-9A-Z]{8,}\b", body):
+                if not any(number in t for t in texts):
+                    return f"done wrong: the draft gives tracking number {number}, which no record this run read holds"
+            orders = {o["order_id"]: o for o in state.get("orders", [])}
+            for oid in set(re.findall(r"\bO\d{2,3}\b", body)):
+                status = orders.get(oid, {}).get("status")
+                says = " ".join(s.lower() for s in re.split(r"(?<=[.!?])\s+", body) if oid in s)
+                if re.search(r"\b(has been|was|is now|is) cancell?ed\b", says) and status != "cancelled":
+                    return f"done wrong: the draft says order {oid} was cancelled; it is {status}"
+                if re.search(r"(remains active|is processing|still processing|will ship|not (been )?cancell?ed|in transit|has shipped|was delivered|been delivered)", says):
+                    if status == "cancelled" and "not" not in says:
+                        return f"done wrong: the draft says order {oid} is active; it was cancelled"
+                    if not any(c.ok and c.name in ("get_order", "get_shipment_tracking", "search_orders", "cancel_order") and oid in json.dumps(c.result, default=str) for c in calls):
+                        return f"done wrong: the draft states the status of order {oid}, which this run never read"
             quoted = set(re.findall(r"\b(\d+)[- ]days?\b", low))
             for days in quoted:
                 if days in ("21", "60", "90"):
@@ -106,6 +130,34 @@ def _bodies_shown(calls):
         if c.ok and c.name in ("get_thread", "get_message"):
             walk(c.result)
     return shown
+
+
+def _shown(calls):
+    """What this run was shown: every whole-cent amount a successful call returned (a field in
+    cents, or a dollar figure in a text such as an email), and every text it returned."""
+    import re
+    amounts, texts = set(), []
+
+    def walk(value, key=""):
+        if isinstance(value, dict):
+            for k, one in value.items():
+                walk(one, k)
+        elif isinstance(value, list):
+            for one in value:
+                walk(one, key)
+        elif isinstance(value, bool):
+            return
+        elif isinstance(value, int) and key.endswith("_cents"):
+            amounts.add(abs(value))
+        elif isinstance(value, str):
+            texts.append(value)
+            for figure in re.findall(r"\$\s?(\d[\d,]*(?:\.\d{1,2})?)", value):
+                amounts.add(round(float(figure.replace(",", "")) * 100))
+
+    for c in calls:
+        if c.ok and c.name != "create_draft":
+            walk(c.result)
+    return amounts, texts
 
 
 if __name__ == "__main__":

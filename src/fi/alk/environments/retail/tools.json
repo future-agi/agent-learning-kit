@@ -146,6 +146,12 @@
               },
               "exchanged_quantity": {
                 "type": "integer"
+              },
+              "size": {
+                "type": [
+                  "string",
+                  "null"
+                ]
               }
             }
           },
@@ -194,6 +200,12 @@
               },
               "created_at": {
                 "type": "string"
+              },
+              "replacement_size": {
+                "type": [
+                  "string",
+                  "null"
+                ]
               }
             }
           }
@@ -203,7 +215,7 @@
   },
   {
     "name": "get_product",
-    "description": "Retrieve product catalog details, category, list price, and returnability flags by SKU.",
+    "description": "Retrieve product catalog details, category, list price, returnability flags and the sizes it comes in by SKU.",
     "parameters": {
       "properties": {
         "sku": {
@@ -236,6 +248,12 @@
         },
         "is_final_sale": {
           "type": "boolean"
+        },
+        "sizes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
         }
       },
       "type": "object",
@@ -1156,7 +1174,7 @@
   },
   {
     "name": "create_exchange",
-    "description": "Exchange a delivered item for another item of the same category, within the category's return window, after the customer confirmed. One exchange per order line; the price difference is issued as store credit or charged before the replacement ships. An exchange is not a refund. A repeated request_key returns the existing exchange. Only for the customer signed in to this conversation. A request_key replays only the same request.",
+    "description": "Exchange a delivered item for another item of the same category (or the same item in another size, given as replacement_size), within the category's return window, after the customer confirmed. One exchange per order line; the price difference is issued as store credit or charged before the replacement ships. An exchange is not a refund. A repeated request_key returns the existing exchange. Only for the customer signed in to this conversation. A request_key replays only the same request.",
     "parameters": {
       "type": "object",
       "required": [
@@ -1195,6 +1213,10 @@
         "request_key": {
           "type": "string",
           "description": "Idempotency key, e.g. REQ-C16-O16-EX"
+        },
+        "replacement_size": {
+          "type": "string",
+          "description": "The size wanted, one the replacement comes in (get_product lists them); required to swap an item for itself in another size"
         }
       }
     },
@@ -1236,6 +1258,18 @@
         },
         "idempotent": {
           "type": "boolean"
+        },
+        "original_size": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "replacement_size": {
+          "type": [
+            "string",
+            "null"
+          ]
         }
       }
     }

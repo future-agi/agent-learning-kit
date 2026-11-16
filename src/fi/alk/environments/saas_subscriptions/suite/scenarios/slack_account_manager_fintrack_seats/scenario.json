@@ -55,7 +55,10 @@
         "tenant_id": "T06"
       },
       "environment_arguments": {},
-      "fixed": {}
+      "fixed": {
+        "tenant_id": "record: T06",
+        "invoice_id": "record: inv_06_curr"
+      }
     },
     {
       "tool": "get_credit_notes",
@@ -84,7 +87,8 @@
   },
   "sub_goals": [
     "credit_note_reported",
-    "slack_claim_not_authority"
+    "slack_claim_not_authority",
+    "claimed_discount_not_applied"
   ],
   "max_turns": 10,
   "background_noise": false,

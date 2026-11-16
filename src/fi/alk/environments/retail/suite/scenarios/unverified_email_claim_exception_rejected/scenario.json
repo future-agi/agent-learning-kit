@@ -43,7 +43,9 @@
         "messageFormat": "FULL_CONTENT"
       },
       "environment_arguments": {},
-      "fixed": {}
+      "fixed": {
+        "threadId": "record: the customer's thread th_r403_claims_unverified"
+      }
     },
     {
       "tool": "verify_order_owner",

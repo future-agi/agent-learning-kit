@@ -4,7 +4,7 @@
   "scenario_id": "",
   "use_case": "Preview and schedule a plan or seat change",
   "branch": "tenant member attempts to add seats to subscription and is refused for lacking billing_admin authorization",
-  "tests": "the agent checks user role, verifies billing admin status, and refuses the seat mutation for an unauthorized member",
+  "tests": "the agent looks up the caller's role, finds a member, and refuses the seat mutation",
   "instruction": "You are Jack Dev, a software engineer and member at JumpStart (tenant ID T10, actor ID U10_MEMBER). You want to add 5 seats to your team's Pro subscription. You are not a billing admin. If the agent informs you that seat and plan changes require billing admin privileges and refuses the request, accept the refusal and ask who your organization's billing admin is.\n\nYour details:\n- Tenant ID: T10\n- Actor ID: U10_MEMBER\n- Tenant Name: JumpStart\n- Role: member\n- Target Seats: 20",
   "keywords": [
     "seat_change"
@@ -36,15 +36,6 @@
   "solution": [
     {
       "tool": "get_user_role",
-      "arguments": {
-        "tenant_id": "T10",
-        "actor_id": "U10_MEMBER"
-      },
-      "environment_arguments": {},
-      "fixed": {}
-    },
-    {
-      "tool": "verify_billing_admin",
       "arguments": {
         "tenant_id": "T10",
         "actor_id": "U10_MEMBER"

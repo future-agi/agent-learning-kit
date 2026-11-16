@@ -3,9 +3,9 @@
   "scenario_key": "ret-email-corrected-item",
   "scenario_id": "",
   "use_case": "Eligible item return and label generation",
-  "branch": "Customer Alice Morgan C01 clarifies in email thread th_r01_wrong_item_corrected that she wants to return 1 pair of SH01 from order O01 instead of AP02 from O21",
-  "tests": "the agent reads email thread th_r01_wrong_item_corrected, notes the correction, and creates a return for 1 unit of SH01 on order O01",
-  "instruction": "You sent an email to customer support requesting a return. You initially mentioned the T-shirt (AP02) from order O21, but in your follow-up message you corrected that you actually want to return one pair of Road Running Shoes (SKU SH01) from order O01.\n\nYour details:\n- Name: Alice Morgan\n- Email: alice.morgan@example.com\n- Postal Code: 90210\n- Thread: th_r01_wrong_item_corrected\n- Order ID: O01\n- Correct Item to return: SKU SH01 (Quantity 1)",
+  "branch": "Customer Alice Morgan C01 does not restate the item; her email thread th_r01_wrong_item_corrected first asks to return AP02 from O21 and later settles on 1 pair of SH01 from O01, which the agent must discover",
+  "tests": "the agent reads the whole thread th_r01_wrong_item_corrected, finds that the latest messages replace the T-shirt AP02 (O21) with one pair of SH01 from O01, reads that back, and creates a return for 1 unit of SH01 on order O01 only",
+  "instruction": "Earlier you emailed customer support (thread th_r01_wrong_item_corrected) about a return. Over several messages you first asked to return the T-shirt (AP02) from order O21, then asked whether shoes could go back too, and in your latest messages you settled on returning one pair of the Road Running Shoes (SKU SH01) from order O01, keeping the T-shirt.\n\nIn chat, do not say which item you settled on: ask the agent to go by your latest email in that thread. If the agent reads back one pair of SH01 from order O01, confirm it. If the agent proposes the T-shirt from O21, or asks you to choose, say: please check my last email.\n\nYour details:\n- Name: Alice Morgan\n- Email: alice.morgan@example.com\n- Postal Code: 90210\n- Thread: th_r01_wrong_item_corrected",
   "keywords": [
     "email_support",
     "item_correction"
@@ -18,7 +18,7 @@
     "location": "United States",
     "personality": "Friendly and cooperative",
     "communication_style": "Direct and concise",
-    "initial_message": "Hi, I am following up on my email thread th_r01_wrong_item_corrected regarding my return request. Please proceed with returning the one pair of Road Running Shoes (SH01) from order O01.",
+    "initial_message": "Hi, I'm following up on my email thread th_r01_wrong_item_corrected about a return. Please set up the return the way my latest email there says.",
     "languages": [
       "English"
     ],
