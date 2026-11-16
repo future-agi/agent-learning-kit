@@ -191,3 +191,29 @@ def test_a_toolbox_client_that_does_not_name_json_is_answered(tmp_path, accept):
 
     assert response.status_code == 200, response.text
     assert [tool["name"] for tool in response.json()["result"]["tools"]] == ["lookup"]
+
+
+@pytest.mark.parametrize("accept", ["*/*", None, "application/json, text/event-stream"])
+def test_a_toolbox_client_accepting_any_type_is_answered(tmp_path, accept):
+    from starlette.testclient import TestClient
+
+    application = _application({"tools": {}}, "postgresql://unused", tmp_path / "trace.jsonl")
+    headers = {"content-type": "application/json", **({"accept": accept} if accept else {})}
+    with TestClient(application, base_url="http://127.0.0.1:15302") as client:
+        response = client.post(
+            "/mcp/catalog",
+            headers=headers,
+            json={
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "initialize",
+                "params": {
+                    "protocolVersion": "2025-11-25",
+                    "capabilities": {},
+                    "clientInfo": {"name": "toolbox-core", "version": "1.4.0"},
+                },
+            },
+        )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["result"]["serverInfo"]["name"] == "source-mcp-toolbox"
