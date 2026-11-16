@@ -65,6 +65,11 @@ def test_the_line_an_actor_writes_is_played_from_its_brief():
         {**_MANAGER, "brief": brief}, situation="unused", said=[], conversation=[], language="English"
     )
     assert brief in written and "unused" not in written
+    # A person in the role reacts to what was said, pushes back once on what contradicts what they know, and stops
+    # when they are done rather than agreeing or signing off for its own sake.
+    assert "does not match what you know, say so plainly, once" in written
+    assert "never agree with it just to be polite" in written
+    assert "do not add thanks or a sign-off" in written
 
 
 def test_an_actor_never_sees_a_file_only_the_evaluator_reads():

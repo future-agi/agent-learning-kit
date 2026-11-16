@@ -334,6 +334,10 @@ def line_brief(
             else "Nothing has been said yet."
         ),
         "Respond to where it is now, and never repeat what you have already said.",
+        "Talk the way a person in your role would: a sentence or two, in your own words. React to what was just said. "
+        "When the agent says something that does not match what you know, say so plainly, once, with what you know; "
+        "never agree with it just to be polite. Once what you came for is settled, or clearly cannot be, stop: do not "
+        "add thanks or a sign-off for its own sake.",
     ]
     return "\n\n".join(part for part in parts if part)
 
