@@ -612,3 +612,24 @@ def test_the_plan_names_only_the_workers_inside_the_agent_s_process_to_its_door(
     # No in-process door: nothing can stop a worker there, and the plan stays as it was.
     alone = replace(plan, processes=(agent,))
     assert with_in_process_workers(alone, contract) is alone
+
+
+def test_a_graph_under_its_framework_s_default_name_is_never_taken_for_a_worker(monkeypatch):
+    import asyncio
+    from types import SimpleNamespace
+
+    asked = []
+    monkeypatch.setattr(bootstrap, "_post", lambda path, body: asked.append((path, body)) or {"remaining": 0.01})
+
+    async def ainvoke(self, seconds):
+        await asyncio.sleep(seconds)
+        return self.name
+
+    # A worker recorded under the default name: every unnamed graph, the coordinator's included, carries it too.
+    run = bootstrap.stop_at_deadline(ainvoke, "self", {"LangGraph": "researcher", "Coder": "coder"}, "LangGraph")
+    assert asyncio.run(run(SimpleNamespace(name="LangGraph"), 0.05)) == "LangGraph"
+    assert asked == []
+    # A graph compiled under its own name is that worker, and is stopped at its deadline.
+    with pytest.raises(bootstrap.WorkerStopped):
+        asyncio.run(run(SimpleNamespace(name="Coder"), 5))
+    assert ("/worker_stopped", {"worker": "coder"}) in asked

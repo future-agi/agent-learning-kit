@@ -3966,3 +3966,12 @@ def test_a_voice_trial_reads_its_start_before_its_pre_run_sessions_write(tmp_pat
         _runtime(endpoints={"database": _postgres_endpoint()}, metadata={"livekit_agent_name": "agent-w0"}),
     )
     assert order == ["start", "replay", "rebase", "call"]
+
+
+def test_a_build_whose_tool_service_is_not_behind_the_door_holds_a_trial_relying_on_worker_limits(tmp_path):
+    (tmp_path / "door.json").write_text(json.dumps({"present": False, "reason": "tool_service_not_fronted"}))
+    (tmp_path / "contract.json").write_text(json.dumps({"workers": [{"id": "refund", "binding": "separate"}]}))
+    held = cr.limits_not_held({"worker_budget_seconds": {"refund": 5}}, tmp_path)
+    assert [one["code"] for one in held] == [cr.WORKER_LIMITS_NOT_ENFORCED]
+    # A trial relying on no worker limit runs on the same build as before.
+    assert cr.limits_not_held({}, tmp_path) == []

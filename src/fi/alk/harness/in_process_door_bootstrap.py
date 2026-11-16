@@ -1,6 +1,10 @@
 """The world's door, inside an agent that runs its tools in its own process.
 
-Standard library only: the customer's interpreter has nothing of ALK's."""
+Standard library only: the customer's interpreter has nothing of ALK's.
+
+ALK std 1 exception: `WORKER_RUNS` names framework internals, because a worker's deadline can only stop a worker where
+its framework runs it as a task of its own. Every other framework, and any worker those entries miss, is refused at the
+world's door past its deadline and runs on, which is what the trial records."""
 
 from __future__ import annotations
 
@@ -297,13 +301,15 @@ def bindings() -> dict[str, dict[str, str]]:
 
 
 # Where a framework runs one of the app's agents as an asyncio task of its own: the module, the class and method that
-# run it, and the argument holding the agent. Only these workers are stopped at their deadline; on every other
-# framework a worker past its deadline is refused at the world's door and runs on.
+# run it, the argument holding the agent, and the name the framework gives an agent the app never named, which names
+# no one worker. Only these runs are stopped at a deadline; any other worker is refused at the world's door.
 WORKER_RUNS = (
-    # OpenAI Agents SDK: a worker its coordinator holds as a tool runs as `Runner.run(worker, ...)`.
-    ("agents.run", "Runner", "run", "starting_agent"),
-    # LangGraph: a worker compiled as a graph of its own, which its coordinator awaits with `ainvoke`.
-    ("langgraph.pregel", "Pregel", "ainvoke", "self"),
+    # OpenAI Agents SDK: a worker its coordinator holds as a tool runs as `Runner.run(worker, ...)`. A hand-off changes
+    # the agent inside one run, so a worker reached by hand-off is refused, not stopped.
+    ("agents.run", "Runner", "run", "starting_agent", ""),
+    # LangGraph: a worker compiled as a graph of its own, which its coordinator awaits with `ainvoke`. A graph compiled
+    # without a name carries the default, so it is refused, not stopped.
+    ("langgraph.pregel", "Pregel", "ainvoke", "self", "LangGraph"),
 )
 _STOPS = "__alk_worker_stop__"
 
@@ -319,8 +325,9 @@ def workers() -> dict[str, str]:
     return {str(name): str(worker) for name, worker in named.items() if name and worker}
 
 
-def stop_at_deadline(run: Any, agent_argument: str, named: dict[str, str]) -> Any:
-    """`run` with a worker's run cancelled once the worker passes its deadline; any other agent's run is unchanged."""
+def stop_at_deadline(run: Any, agent_argument: str, named: dict[str, str], unnamed: str = "") -> Any:
+    """`run` with a worker's run cancelled once the worker passes its deadline; any other agent's run, and one under
+    the framework's default name `unnamed`, is unchanged."""
     signature = inspect.signature(run)
 
     @functools.wraps(run)
@@ -329,7 +336,8 @@ def stop_at_deadline(run: Any, agent_argument: str, named: dict[str, str]) -> An
             agent = signature.bind_partial(*args, **kwargs).arguments.get(agent_argument)
         except TypeError:
             agent = None
-        worker = named.get(str(getattr(agent, "name", "") or ""))
+        name = str(getattr(agent, "name", "") or "")
+        worker = named.get(name) if name != unnamed else None
         answer = await asyncio.to_thread(_post, "/worker_deadline", {"worker": worker}) if worker else None
         remaining = (answer or {}).get("remaining")
         if isinstance(remaining, bool) or not isinstance(remaining, (int, float)):
@@ -351,7 +359,7 @@ def stop_at_deadline(run: Any, agent_argument: str, named: dict[str, str]) -> An
 
 
 def _stop_workers_in(module: Any, named: dict[str, str]) -> None:
-    for module_name, owner_name, method, agent_argument in WORKER_RUNS:
+    for module_name, owner_name, method, agent_argument, unnamed in WORKER_RUNS:
         if module.__name__ != module_name:
             continue
         owner = getattr(module, owner_name, None)
@@ -360,7 +368,7 @@ def _stop_workers_in(module: Any, named: dict[str, str]) -> None:
         function = raw.__func__ if isinstance(raw, (classmethod, staticmethod)) else raw
         if not inspect.iscoroutinefunction(function) or getattr(function, _STOPS, False):
             continue
-        stopping = stop_at_deadline(function, agent_argument, named)
+        stopping = stop_at_deadline(function, agent_argument, named, unnamed)
         setattr(owner, method, type(raw)(stopping) if bound else stopping)
 
 

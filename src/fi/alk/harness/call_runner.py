@@ -1941,7 +1941,13 @@ def trial_worker_deadlines(
             "calls apart, so this trial's checks were not graded. Record the worker as separate and rebuild the "
             "environment.",
         }]
-    if _sealed_tool_proxy(bundle_dir):
+    if _door_record(bundle_dir).get("reason") == "tool_service_not_fronted":
+        # Sealed with the reason: the agent's tool service runs, but not behind the world's door.
+        message = (
+            "This agent's tool service does not run behind the world's door in this environment, so no worker's "
+            "deadline or permitted actions were enforced in this trial, and its checks were not graded."
+        )
+    elif _sealed_tool_proxy(bundle_dir):
         message = (
             "This environment was sealed before worker limits, so no worker's deadline or permitted actions were "
             "enforced in this trial, and its checks were not graded. Rebuild the environment to enforce them."
@@ -1961,6 +1967,18 @@ def limits_not_held(document: Mapping[str, Any], bundle_dir: Path | str | None) 
     hold. Empty when they hold, or the trial relies on none."""
     notices = trial_worker_deadlines(document, bundle_dir)[2]
     return [one for one in notices if one.get("code") == WORKER_LIMITS_NOT_ENFORCED]
+
+
+def _door_record(bundle_dir: Path | str | None) -> dict[str, Any]:
+    """Whether this bundle's world has a door in front of the agent's tools, and why not, as it was sealed; empty for a
+    bundle sealed before it was recorded."""
+    if bundle_dir is None:
+        return {}
+    try:
+        record = json.loads((Path(bundle_dir) / DOOR_FILE).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return record if isinstance(record, dict) else {}
 
 
 def _sealed_tool_proxy(bundle_dir: Path | str | None) -> bool:
