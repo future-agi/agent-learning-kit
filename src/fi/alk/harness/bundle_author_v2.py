@@ -2077,7 +2077,7 @@ def _managed_world_db() -> ManagedProcess:
 
 
 def declared_read_actions(tool_entrypoints: list[dict[str, Any]] | None) -> list[str]:
-    """The world actions the contract declares read-only, named as the sealed routes are (`GET orders.{order_id}`):
+    """The world actions the contract declares read-only, named as the sealed routes are (`GET <resource>.{id}`):
     what the tool proxy logs as reads."""
     return sorted(
         {
@@ -2116,7 +2116,7 @@ def _tool_proxy_process(read_actions: list[str] | None = None) -> SourceProcess:
 
 def _tool_actions(contract_body: dict[str, Any] | None) -> dict[str, str]:
     """Each service-backed tool's world action, as the tool proxy names it (the route it calls, dotted), mapped to the
-    tool's own name: a route is often named otherwise (`get_order` -> `orders/get`)."""
+    tool's own name: a route is often named otherwise (`<tool>` -> `<resource>/get`)."""
     contract = AgentContract.model_validate(contract_body or {})
     return {
         method_action(entry.method, world_action(entry.endpoint)): entry.tool

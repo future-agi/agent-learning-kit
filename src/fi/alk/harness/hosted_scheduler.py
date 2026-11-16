@@ -499,7 +499,7 @@ _CODE_DOMAIN: dict[str, FailureDomain] = {
     "evidence_missing": FailureDomain.SIMULATOR,
     "actor_missing": FailureDomain.SIMULATOR,
     # The scenario relies on worker limits the environment's sealed world door cannot hold; rebuilding it fixes that.
-    "worker_limits_not_enforced": FailureDomain.SIMULATOR,
+    "worker_limits_not_enforced": FailureDomain.ENVIRONMENT,
     "world_usage": FailureDomain.SIMULATOR,
     "world_unavailable": FailureDomain.ENVIRONMENT,
     "state_too_large": FailureDomain.SIMULATOR,

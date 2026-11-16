@@ -83,7 +83,7 @@ class ToolCall:
     # channel, "" when the channel belongs to no worker of this trial.
     worker: str | None = None
     # The agent's own name for the tool this action is, when the surface knows it (a route is often named otherwise,
-    # `get_order` -> `orders.get`); kept beside `name` so grading reads the tool the agent called.
+    # `<tool>` -> `<resource>.get`); kept beside `name` so grading reads the tool the agent called.
     tool: str = ""
     # `read` or `write` as the tool's contract declares it; empty reads the HTTP method (see `call_effect`).
     effect: str = ""
@@ -233,19 +233,20 @@ _METHODS = frozenset({"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"
 
 
 def method_action(method: str, action: str) -> str:
-    """A world action with the HTTP method that takes it (`GET orders.{order_id}`): two tools on one path are two
+    """A world action with the HTTP method that takes it (`GET <resource>.{id}`): two tools on one path are two
     actions. Sealed routes and worker allow-lists are named this way."""
     return f"{(method or 'POST').upper()} {action}"
 
 
 def _split(value: str) -> tuple[str, str]:
-    """The method and path of `GET orders.get`, or no method for a bare action (`orders.get`), which any method takes."""
+    """The method and path of `GET <resource>.get`, or no method for a bare action (`<resource>.get`), which any method
+    takes."""
     method, _, path = str(value).partition(" ")
     return (method, path) if path and method in _METHODS else ("", str(value))
 
 
 def _matches(allowed: str, action: str) -> bool:
-    """An allowed action matches the same action, and a templated route (`orders.{order_id}`) matches any value in
+    """An allowed action matches the same action, and a templated route (`<resource>.{id}`) matches any value in
     each of its `{...}` segments. When both name a method, the methods must agree."""
     allowed_method, want = _split(allowed)
     action_method, have = _split(action)
@@ -285,13 +286,13 @@ def permitted(permitted_actions: object, action: str, routes: object = ()) -> bo
 
 def declared_read(read_actions: object, action: str, routes: object = ()) -> bool:
     """Whether the contract declares this world action read-only, matched as an allow-list is: a templated read
-    (`GET orders.{order_id}`) covers each order it is called for, never another tool's own route or method."""
+    (`GET <resource>.{id}`) covers each record it is called for, never another tool's own route or method."""
     return permitted(list(read_actions) if isinstance(read_actions, (list, tuple, frozenset, set)) else None, action, routes)
 
 
 def action_tool(actions: object, action: str) -> str:
     """The agent's own tool a world action is, from the sealed map of routes to tools: the action itself first, then a
-    templated route (`refunds.{order_id}.issue`) whose `{...}` segments its values fill. Empty when no route names it."""
+    templated route (`<resource>.{id}.<verb>`) whose `{...}` segments its values fill. Empty when no route names it."""
     if not isinstance(actions, dict):
         return ""
     tool = actions.get(action)
@@ -307,8 +308,8 @@ def _templated_match(actions: Mapping[str, Any], route: str, action: str) -> boo
 
 
 def route_values(actions: object, action: str) -> dict[str, str]:
-    """The values a world action's path carries for the templated route it matches (`refunds.{order_id}.issue` and
-    `refunds.1043.issue` give `{"order_id": "1043"}`), so a check reads them as it reads the body. Empty otherwise."""
+    """The values a world action's path carries for the templated route it matches (`<resource>.{id}.<verb>` and
+    `<resource>.7.<verb>` give `{"id": "7"}`), so a check reads them as it reads the body. Empty otherwise."""
     if not isinstance(actions, dict) or action in actions:
         return {}
     for route in actions:

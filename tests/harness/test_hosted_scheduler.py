@@ -5023,6 +5023,8 @@ def test_a_trial_that_could_not_hold_the_worker_limits_its_scenario_relies_on_is
     assert ran == []
     assert receipt.status != "failed"
     assert receipt.failure is not None and receipt.failure.code == "worker_limits_not_enforced"
+    # The sealed environment causes it and a rebuild fixes it.
+    assert receipt.failure.domain == "environment"
     assert "not the agent's" in receipt.failure.message
     assert [one.held for one in receipt.sub_goals] == [None, None]
 

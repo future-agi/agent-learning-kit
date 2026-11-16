@@ -71,6 +71,7 @@ from .actor_dispatch import ActorDispatcher, DoorActs, build_dispatcher, world_s
 from .actor_meter import ActorMeter
 from .world_door import (
     APPROVAL_REQUIRED,
+    DOOR_FILE,
     DOOR_OUT_OF_REACH,
     EGRESS_BLOCKED,
     EVIDENCE_INCOMPLETE,
@@ -93,6 +94,7 @@ from .actors import (
 )
 from .background_noise import place_of, scenario_source
 from .bundle_v2 import EvidenceSeam
+from .catalogue import CATALOGUE
 from .call_actor import (
     load_call_actors,
     speaking_entries,
@@ -2017,16 +2019,21 @@ def _limits_on_shared_workers(document: Mapping[str, Any], bundle_dir: Path | st
     return ""
 
 
-def declares_worker_limits(bundle_dir: Path | str | None) -> bool:
-    """Whether this environment's agent declares a worker held to its own permitted tools: a separately wired worker,
-    or one allowed fewer tools than it holds."""
+def limited_workers(bundle_dir: Path | str | None) -> set[str]:
+    """The workers this environment's agent declares held to their own permitted tools: each one wired separately,
+    or allowed fewer tools than it holds."""
     if bundle_dir is None:
-        return False
-    workers = _bundle_contract(Path(bundle_dir)).get("workers")
-    return any(
-        isinstance(one, dict) and (one.get("binding") == "separate" or bool(one.get("allowed_tools")))
-        for one in workers or []
-    )
+        return set()
+    return {
+        str(one.get("id"))
+        for one in _bundle_contract(Path(bundle_dir)).get("workers") or []
+        if isinstance(one, dict) and (one.get("binding") == "separate" or bool(one.get("allowed_tools")))
+    }
+
+
+def declares_worker_limits(bundle_dir: Path | str | None) -> bool:
+    """Whether this environment's agent declares a worker held to its own permitted tools."""
+    return bool(limited_workers(bundle_dir))
 
 
 def scenario_worker_subjects(document: Mapping[str, Any], bundle_dir: Path | str | None) -> set[str]:
@@ -2039,8 +2046,6 @@ def scenario_worker_subjects(document: Mapping[str, Any], bundle_dir: Path | str
     }
     if not named or bundle_dir is None:
         return set()
-    from .catalogue import CATALOGUE
-
     try:
         catalogue = json.loads((Path(bundle_dir) / CATALOGUE).read_text(encoding="utf-8"))
     except (OSError, ValueError):
@@ -2056,23 +2061,12 @@ def relies_on_worker_limits(document: Mapping[str, Any], bundle_dir: Path | str 
     """Whether this scenario relies on a worker's own limits: one of its sub-goals is about a worker the agent
     declares held to its own tools. A scenario about the task alone relies on none, so it is graded whatever the
     door holds."""
-    if not declares_worker_limits(bundle_dir):
-        return False
-    subjects = scenario_worker_subjects(document, bundle_dir)
-    if not subjects:
-        return False
-    limited = {
-        str(one.get("id"))
-        for one in _bundle_contract(Path(bundle_dir)).get("workers") or []  # type: ignore[arg-type]
-        if isinstance(one, dict) and (one.get("binding") == "separate" or bool(one.get("allowed_tools")))
-    }
-    return bool(subjects & limited)
+    limited = limited_workers(bundle_dir)
+    return bool(limited and scenario_worker_subjects(document, bundle_dir) & limited)
 
 
 def _door_holds_worker_limits(bundle_dir: Path | str | None) -> bool:
     """Whether this bundle's tool proxy enforces workers' limits: only one sealed with its capabilities file does."""
-    from .world_door import DOOR_FILE
-
     if bundle_dir is None:
         # No sealed bundle: the proxy is this harness's own, which holds every limit.
         return True
