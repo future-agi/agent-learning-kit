@@ -299,6 +299,10 @@ def test_each_trial_of_a_run_starts_from_the_seed_and_its_setup_s_key_never_bloc
                 sql_runner=default_sql_runner, process_name="world-db",
             )
 
+        # A table's columns read from the database's own schema, as an actor's fallback takes them.
+        reset()
+        assert sorted(store.columns("approvals")) == ["id", "policy_id", "status"]
+
         # Trial 1: its scenario's setup puts a decided approval under an explicit key, then an actor's approval
         # takes its key from the table's own sequence.
         reset()

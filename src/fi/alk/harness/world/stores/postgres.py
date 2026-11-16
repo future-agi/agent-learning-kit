@@ -207,6 +207,11 @@ class PostgresStore(ContainerStore):
             tables = self._tables(connection) if only is None else list(only)
             return {table: self._select_ordered(connection, table) for table in tables}
 
+    def columns(self, name: str) -> list[str]:
+        """One table's columns, as the database's catalogue lists them."""
+        with self._connect() as connection:
+            return list(self._column_types(connection, name))
+
     def table(self, name: str) -> list[dict[str, Any]]:
         """One table's rows, ordered by primary key where it has one.
 

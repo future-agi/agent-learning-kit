@@ -10,7 +10,7 @@ import json
 import logging
 import re
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Collection
 from typing import Any, Protocol
 
 from fi.simulate.simulation.call_actors import (
@@ -152,6 +152,7 @@ class ActorDispatcher:
         session_briefs: dict[str, str] | None = None,
         limits: dict[str, Any] | None = None,
         action_fields: dict[str, frozenset[str]] | None = None,
+        columns: Callable[[str], Collection[str]] | None = None,
     ) -> None:
         from fi.simulate.simulation.call_actors import LIMIT_DEFAULTS
 
@@ -170,6 +171,8 @@ class ActorDispatcher:
         self.names_actor = set(names_actor or ())
         # The arguments each world action takes, where the contract says.
         self.action_fields = action_fields or {}
+        # Each world table's columns, as its database lists them.
+        self.columns = columns
         self.trial_id = trial_id
         self.read_log = read_log
         self.clock = clock
@@ -624,10 +627,9 @@ class ActorDispatcher:
 
     def _columns(self, action: str) -> frozenset[str]:
         collection, _, verb = action.rpartition(".")
-        if verb != "put" or not collection or self.records is None:
+        if verb != "put" or not collection or self.columns is None:
             return frozenset()
-        rows = self.records(collection)
-        return frozenset(rows[0]) if rows else frozenset()
+        return frozenset(self.columns(collection))
 
     async def _answer_instead(self, fallback: str, cause: str, log: list[dict[str, Any]]) -> tuple[str, str]:
         """Another actor answering for one that timed out: its live turn, or its scheduled actions. The outcome is
@@ -881,6 +883,7 @@ def build_dispatcher(
     trial_id: str,
     meter: Any = None,
     reported: Callable[[], list[dict[str, Any]]] | None = None,
+    columns: Callable[[str], Collection[str]] | None = None,
 ) -> ActorDispatcher | None:
     """The scenario's actors for this trial, the same way on every runtime; None when it has no actor or pre-run
     session. The surface (`act`) is the only thing a runtime chooses."""
@@ -966,6 +969,7 @@ def build_dispatcher(
         reported=reported,
         limits=_live_limits(listing.limits, doc.get("limits")),
         action_fields=action_fields(contract),
+        columns=columns,
     )
 
 

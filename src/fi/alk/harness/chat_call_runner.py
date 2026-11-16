@@ -964,6 +964,7 @@ class HostedChatCallRunner:
             # What actors watch (an on_tool trigger) includes the agent's calls through its tool proxy.
             document, self._context.bundle_dir, act=acts, read_log=lambda: _trial_log(door, trial_started),
             records=records, trial_id=trial, meter=meter,
+            columns=getattr(getattr(target_world, "store", None), "columns", None),
         )
         cast = (
             ChatActors(

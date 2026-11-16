@@ -750,6 +750,16 @@ def _world_records(runtime: Any) -> Callable[[str], list[dict[str, Any]]] | None
     return store.table
 
 
+def _world_columns(runtime: Any) -> Callable[[str], list[str]] | None:
+    """Each world table's columns, as its database lists them; None where none can be read."""
+    endpoint = _find_postgres_endpoint(runtime) if runtime is not None else None
+    if endpoint is None:
+        return None
+    from .world.stores.postgres import AttachedPostgresStore
+
+    return AttachedPostgresStore(endpoint.address).columns
+
+
 def _resolved_call_actors(
     doc: Mapping[str, Any],
     bundle_dir: Any,
@@ -1764,6 +1774,7 @@ def _actor_dispatcher(
             act=DoorActs(record_door(database.address), _bundle_contract(bundle_dir)),
             read_log=_ActionLog(database.address),
             records=_world_records(runtime),
+            columns=_world_columns(runtime),
             trial_id=trial_id,
             meter=meter,
             reported=reported,
@@ -1779,6 +1790,7 @@ def _actor_dispatcher(
         act=DoorActs(runner_door(tools.address, database.address, budget), _bundle_contract(bundle_dir)),
         read_log=_ActionLog(database.address),
         records=_world_records(runtime),
+        columns=_world_columns(runtime),
         trial_id=trial_id,
         meter=meter,
         reported=reported,
@@ -1981,13 +1993,7 @@ def _read_file_tool_calls(
             continue
         hooked.append(call)
     for call in hooked:
-        # An agent implementing HARNESS_AGENT_TOOL_TRACE writes its own line while the tool runs: the arguments it
-        # executed with and the structured result, but no time, named as the tool or as the world route it reached
-        # (`routes`). The hook writes the same call after the step, with the model's arguments, a stringified output
-        # and when the model issued it. Keep the agent's evidence under the tool's name and take the hook's time.
-        # A name alone does not identify the call: LiveKit rejects malformed arguments without running the tool, so a
-        # batch can hold a failed hook line with no agent line next to a same-name success. Pair only when the outcome
-        # agrees and every argument the model sent is one the agent executed with (agents may add their own).
+        # The agent's untimed line and the hook's timed line of one call: same tool or route, outcome and arguments.
         names = {_tool_key(call.name), _tool_key((routes or {}).get(call.name, ""))} - {""}
         written = next(
             (

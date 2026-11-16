@@ -220,7 +220,7 @@ def test_a_new_trial_s_dispatcher_starts_with_none_of_the_last_trial_s_actor_sta
         ({"record": {"policy_id": "pol_given", "status": "void"}}, True, False, [("pol_given", "void")]),
         # The actor's own arguments leave out whose record it is: the request it answers says.
         ({"status": "declined"}, True, False, [("pol_elena", "declined")]),
-        # The contract declares nothing for the table: its columns are read from the records it holds in the world.
+        # The contract declares nothing for the table: its columns are read from the world's own schema.
         ({"status": "declined"}, False, True, [("pol_elena", "pending"), ("pol_elena", "declined")]),
         # Nothing says which fields the record takes: none of the request's are sent.
         ({}, False, False, []),
@@ -270,9 +270,12 @@ def test_a_timed_out_approver_s_fallback_decline_commits_on_the_request_s_record
         cursor = db.execute(f'SELECT * FROM "{collection}"')
         return [dict(zip([one[0] for one in cursor.description], row)) for row in cursor.fetchall()]
 
+    def columns(collection):
+        return [row[1] for row in db.execute(f'PRAGMA table_info("{collection}")')]
+
     dispatcher = build_dispatcher(
         {"actors": [{"id": "supervisor"}]}, tmp_path, act=DoorActs(door), read_log=lambda: [request], records=records,
-        trial_id="t1",
+        trial_id="t1", columns=columns if pending else None,
     )
     now = [0.0]
     dispatcher.clock = lambda: now[0]
