@@ -187,6 +187,26 @@ def test_an_actor_writes_in_the_chat_when_its_trigger_fires_and_the_agent_reads_
     ]
 
 
+def test_an_actor_scheduled_for_a_later_turn_comes_in_before_the_person_closes_rather_than_never(monkeypatch):
+    # Scheduled after the agent's second turn, but the person is done after the first: it comes in before the close,
+    # the agent answers it, and the person hears that before closing.
+    cast = _cast({"kind": "mid_journey", "turn": 2}, monkeypatch, lines=("We both agreed to return it.",))
+    agent = _Agent(["Status updated to return_requested.", "Thanks, Sam, it is noted on the order."])
+    person = _Person(["Please mark order 1043 return_requested.", f"That's all, thanks! {conv.DONE}", conv.DONE])
+    transcript = _run(monkeypatch, cast, agent, person)
+    speakers = [one.speaker for one in transcript.exchanges]
+    assert speakers == ["customer", "agent", "customer", "actor", "agent"]
+    assert agent.heard[-1] == "Mia: We both agreed to return it."
+    assert any("Mia wrote in the conversation: We both agreed to return it." in one for one in person.told)
+    assert cast.summary()[0]["triggered"] is True and cast.summary()[0]["delivered"] == 1
+    # An actor with nothing to add leaves the close as it was.
+    quiet = _cast({"kind": "mid_journey", "turn": 2}, monkeypatch, lines=("",))
+    agent = _Agent(["Status updated."])
+    person = _Person(["Please mark it.", f"Bye. {conv.DONE}"])
+    transcript = _run(monkeypatch, quiet, agent, person)
+    assert [one.speaker for one in transcript.exchanges] == ["customer", "agent", "customer"]
+
+
 def test_an_actor_whose_model_fails_says_nothing_and_the_conversation_goes_on(monkeypatch):
     from fi.alk.harness.actor_model import ActorModelFailed
 
