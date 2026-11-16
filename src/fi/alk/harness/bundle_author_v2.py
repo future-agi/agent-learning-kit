@@ -2547,6 +2547,25 @@ def _compose_environment(service: dict[str, Any]) -> dict[str, str]:
     return {}
 
 
+def _compose_service_running(root: Path, command: list[str]) -> dict[str, str]:
+    """The source's one Compose file and its one source-built service that runs exactly `command`, else nothing; a
+    file that publishes no ports names its agent this way only."""
+    found = [path for name in ("compose.yaml", "compose.yml", "docker-compose.yaml", "docker-compose.yml")
+             if (path := root / name).is_file()]
+    if len(found) != 1 or not command:
+        return {}
+    try:
+        services = (yaml.safe_load(found[0].read_text(encoding="utf-8")) or {}).get("services") or {}
+        matches = [
+            name
+            for name, service in services.items()
+            if isinstance(service, dict) and service.get("build") and _compose_command(service.get("command")) == command
+        ]
+    except (yaml.YAMLError, AttributeError, BundleAuthorError, OSError):
+        return {}
+    return {"compose_file": found[0].name, "service": matches[0]} if len(matches) == 1 else {}
+
+
 def resolve_environment_plan(
     source: str | Path,
     job: HarnessJob,
@@ -2601,11 +2620,19 @@ def resolve_environment_plan(
             contract_runtime or {},
             public_environment=declared_runtime_environment,
         )
+        # A tool service the agent calls over HTTP, which the source's own Compose file may ship as `tools-api`.
+        calls_tool_service = any(
+            dependency.get("kind", "").lower() == "service"
+            and dependency.get("engine", "").lower() == "http"
+            and dependency.get("used_by")
+            for dependency in (runtime_dependencies or [])
+        )
         if (
             not isinstance(selected, ComposeSelection)
             and runtime_model.execution == "native"
             and (
                 runtime_model.required_environment
+                or calls_tool_service
                 or any(
                     dependency.get("kind", "").lower()
                     in {"datastore", "database", "file", "queue"}
@@ -2619,6 +2646,7 @@ def resolve_environment_plan(
                 "execution": "auto",
                 "compose_file": "",
                 "service": "",
+                **(_compose_service_running(root, runtime_model.command) if calls_tool_service else {}),
             }
             try:
                 topology = select_runtime(
@@ -2628,7 +2656,13 @@ def resolve_environment_plan(
                 )
             except ValueError:
                 topology = None
-            if isinstance(topology, ComposeSelection):
+            # Only a tool service shipped as `tools-api` puts the world's door in front of the tools; for any other
+            # name the native choice stands, as before.
+            if isinstance(topology, ComposeSelection) and (
+                runtime_model.required_environment
+                or "tools-api" in topology.services
+                or not calls_tool_service
+            ):
                 required = runtime_model.required_environment
                 requirements_are_wired = all(
                     all(

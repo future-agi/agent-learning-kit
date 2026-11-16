@@ -1699,6 +1699,66 @@ def test_native_multi_store_contract_uses_source_compose_dependency_topology(
     assert plan.capabilities["cache_redis"].service == "cache"
 
 
+def test_a_native_contract_whose_tools_call_the_shipped_tools_api_runs_it_behind_the_world_s_door(
+    tmp_path: Path,
+) -> None:
+    """The same returns app was authored once as Compose (door, worker channels) and once as native: its Compose file
+    ships the tools-api its tools call, so both must run that service behind the world's door."""
+    source = Path(__file__).resolve().parents[1] / "fixtures" / "harness_agents" / "returns_multi_agent"
+    runtime = {
+        "language": "python", "version": "3.11", "execution": "native", "command": ["python", "agent.py"],
+        "interface": {
+            "kind": "http", "protocol": "openai_chat", "port": 8080,
+            "path": "/v1/chat/completions", "health_path": "/health",
+        },
+    }
+    dependencies = [
+        {"name": "returns_ledger", "kind": "service", "engine": "http",
+         "reached": {"dsn_env": "RETURNS_API_URL", "host": "127.0.0.1", "port": 8090},
+         "used_by": ["get_order", "list_refunds", "update_order_status", "issue_refund"]},
+    ]
+
+    # As that build wrote them: the tools as the agent module's own functions.
+    entrypoints = [
+        {"tool": name, "mode": "import", "module": "agent", "callable": name, "endpoint": endpoint, "method": "POST"}
+        for name, endpoint in (("get_order", "orders/get"), ("list_refunds", "refunds/list"),
+                               ("update_order_status", "orders/status"), ("issue_refund", "refunds/issue"))
+    ]
+
+    plan = resolve_environment_plan(
+        source, _job(connector="auto"), contract_modality="chat",
+        contract_interface_kind="http", contract_runtime=runtime,
+        runtime_dependencies=dependencies, tool_entrypoints=entrypoints,
+    )
+
+    assert plan.packaging == "compose"
+    assert {process.name for process in plan.processes} >= {"agent", "tools-api", "tool-proxy"}
+    assert plan.capabilities["tool_proxy"].service == "tool-proxy"
+
+
+def test_a_native_contract_with_no_tools_api_in_its_compose_stays_native(tmp_path: Path) -> None:
+    import shutil
+
+    source = tmp_path / "returns"
+    shutil.copytree(Path(__file__).resolve().parents[1] / "fixtures" / "harness_agents" / "returns_multi_agent", source)
+    (source / "docker-compose.yml").write_text(
+        (source / "docker-compose.yml").read_text().replace("tools-api", "ledger")
+    )
+    runtime = {
+        "language": "python", "execution": "native", "command": ["python", "agent.py"],
+        "interface": {"kind": "http", "protocol": "openai_chat", "port": 8080,
+                      "path": "/v1/chat/completions", "health_path": "/health"},
+    }
+    dependencies = [{"name": "returns_ledger", "kind": "service", "engine": "http",
+                     "reached": {"dsn_env": "RETURNS_API_URL"}, "used_by": ["get_order"]}]
+    plan = resolve_environment_plan(
+        source, _job(connector="auto"), contract_modality="chat",
+        contract_interface_kind="http", contract_runtime=runtime, runtime_dependencies=dependencies,
+    )
+    assert plan.packaging != "compose"
+    assert "tool-proxy" not in {process.name for process in plan.processes}
+
+
 def test_native_multi_store_contract_accepts_compose_list_environment(
     tmp_path: Path,
 ) -> None:
