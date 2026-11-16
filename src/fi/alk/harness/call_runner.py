@@ -1952,7 +1952,7 @@ WORKER_DEADLINE_NOT_ENFORCED = "worker_deadline_not_enforced"
 # Why the door inside the agent could not hold a listed worker's deadline: the worker never ran as a task of its own.
 _NOT_ITS_OWN_TASK = (
     "it did not run as a task of its own in this trial (a hand-off, run_streamed or run_sync, a LangGraph invoke, a "
-    "swarm or supervisor subgraph node, or an unnamed graph), so the world's door inside the agent could not stop it"
+    "swarm subgraph node, or an unnamed graph), so the world's door inside the agent could not stop it"
 )
 
 
@@ -2033,7 +2033,7 @@ def _limits_on_shared_workers(document: Mapping[str, Any], bundle_dir: Path | st
             not stopped or any(str(one.get("id")) not in stopped for one in workers)
         ):
             return "A worker deadline"
-        if any(one.get("binding") == "separate" or one.get("allowed_tools") for one in workers):
+        if relies_on_worker_limits(document, bundle_dir):
             return "A worker's permitted tools"
         return ""
     if not workers:

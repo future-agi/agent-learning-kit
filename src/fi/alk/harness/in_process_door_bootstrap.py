@@ -309,7 +309,7 @@ WORKER_RUNS = (
     # inside one run, and `run_streamed` and `run_sync` are not awaited runs, so neither is stopped.
     ("agents.run", "Runner", "run", "starting_agent", ""),
     # LangGraph: a worker compiled as a graph of its own and awaited with `ainvoke`. A graph without a name, one run
-    # with `invoke`, or one added as a node of its parent's graph (a swarm or supervisor member) is not stopped.
+    # with `invoke`, or one added as a node of its parent's graph (a swarm member) is not stopped.
     ("langgraph.pregel", "Pregel", "ainvoke", "self", "LangGraph"),
 )
 _STOPS = "__alk_worker_stop__"

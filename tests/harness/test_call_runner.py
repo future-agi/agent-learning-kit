@@ -3988,12 +3988,20 @@ def test_a_build_whose_door_runs_inside_the_agent_holds_a_deadline_only_for_the_
     for budget in ({"reviewer": 5}, 30):
         [held] = cr.limits_not_held({"worker_budget_seconds": budget}, tmp_path)
         assert held["code"] == cr.WORKER_LIMITS_NOT_ENFORCED and "Rebuild" not in held["message"]
-    # Nothing there tells the workers' calls apart, so a worker's permitted tools are never held.
+    # Nothing there tells the workers' calls apart, so a scenario relying on a worker's permitted tools is held.
     (tmp_path / "contract.json").write_text(json.dumps({"workers": [{"id": "writer", "allowed_tools": ["a"]}]}))
-    assert cr.limits_not_held({"worker_budget_seconds": {"writer": 5}}, tmp_path)
+    (tmp_path / "sub_goals.json").write_text(json.dumps({"sub_goals": [{"name": "w", "subject": "worker:writer"}]}))
+    assert cr.limits_not_held({"worker_budget_seconds": {"writer": 5}, "sub_goals": ["w"]}, tmp_path)
     # A bundle sealed before the root record has no door that holds limits, as before.
     (tmp_path / "door.json").unlink()
     assert cr.limits_not_held({"worker_budget_seconds": {"writer": 5}}, tmp_path)
+
+
+def test_a_deadline_only_trial_on_an_in_process_build_with_a_separate_worker_is_not_held(tmp_path):
+    (tmp_path / "door.json").write_text(json.dumps({"present": True, "surface": "in_process", "workers": ["writer"]}))
+    (tmp_path / "contract.json").write_text(json.dumps({"workers": [{"id": "writer", "binding": "separate"}]}))
+    assert cr.limits_not_held({"worker_budget_seconds": {"writer": 5}}, tmp_path) == []
+    assert cr.limits_not_held({"worker_budget_seconds": 30}, tmp_path) == []
 
 
 def test_a_build_whose_tool_service_is_not_behind_the_door_leaves_a_trial_with_faults_unmeasured(tmp_path):
