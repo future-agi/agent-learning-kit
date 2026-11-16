@@ -1813,6 +1813,98 @@ def test_a_transfer_named_call_whose_agent_never_runs_is_a_tool_call_and_the_lea
     ]
 
 
+def test_a_root_agent_that_hands_off_to_two_top_level_agents_has_two_workers_each_under_its_transfer(
+    tmp_path: Path,
+) -> None:
+    turn = _ROOT_TRANSFER.replace("TOOL_TYPE", "TransferToAgentTool")
+    second = turn.replace("leaf_agent", "billing_agent").replace("look_up_tide", "look_up_invoice")
+    records = _run(tmp_path, turn + second)
+    first_pass, second_pass = (r["event_id"] for r in records if r["name"] == "transfer_to_agent")
+    assert _placed(_sealed(tmp_path)) == [
+        ("transfer_to_agent", "transferred", "root_agent", "observed", ""),
+        ("look_up_tide", "tool_call", "leaf_agent", "observed", first_pass),
+        ("transfer_to_agent", "transferred", "root_agent", "observed", ""),
+        ("look_up_invoice", "tool_call", "billing_agent", "observed", second_pass),
+    ]
+
+
+# A LangGraph graph as traceai-langchain records it: every attribute is set only when the span ends, a run whose name
+# says "agent" is labelled an agent, and a hand-off tool's metadata names the agent that takes over.
+_GRAPH = """
+from opentelemetry.trace import set_span_in_context
+graph = tracer.start_span("LangGraph")
+
+def node(name, parent):
+    return tracer.start_span(name, context=set_span_in_context(parent))
+
+def call(parent, tool, agent, step, **extra):
+    one = node(tool, parent)
+    one.set_attributes({"fi.span.kind": "AGENT" if "agent" in tool else "TOOL", "tool.name": tool,
+                        "lc_agent_name": agent, "langgraph_node": "tools",
+                        "langgraph_checkpoint_ns": agent + ":" + step + "|tools:" + step, **extra})
+    one.end()
+
+def turn(agent, step, tool, **extra):
+    run = node(agent, graph)
+    tools = node("tools", run)
+    call(tools, tool, agent, step, **extra)
+    tools.end()
+    run.end()
+"""
+
+
+def test_a_langgraph_hand_off_tool_is_a_transfer_that_holds_the_named_agent_s_calls(
+    tmp_path: Path,
+) -> None:
+    records = _run(
+        tmp_path,
+        _GRAPH
+        + """
+turn("supervisor", "1", "transfer_to_billing_agent", __handoff_destination="billing_agent")
+turn("billing_agent", "2", "look_up_invoice")
+graph.end()
+""",
+    )
+    handed = next(r for r in records if r["name"] == "transfer_to_billing_agent")
+    assert (handed["transfer"], handed["delegated_to"]) == (True, "billing_agent")
+    assert _placed(_sealed(tmp_path)) == [
+        ("transfer_to_billing_agent", "transferred", "supervisor", "unknown", ""),
+        ("look_up_invoice", "tool_call", "billing_agent", "observed", handed["event_id"]),
+    ]
+
+
+def test_an_agent_handed_control_again_holds_its_later_calls_under_the_latest_transfer(
+    tmp_path: Path,
+) -> None:
+    records = _run(
+        tmp_path,
+        _GRAPH
+        + """
+turn("triage", "1", "transfer_to_billing", __handoff_destination="billing")
+turn("billing", "2", "transfer_to_triage", __handoff_destination="triage")
+turn("triage", "3", "close_ticket")
+graph.end()
+""",
+    )
+    back = next(r for r in records if r["name"] == "transfer_to_triage")
+    rows = {row["name"]: row for row in _sealed(tmp_path)}
+    assert (rows["close_ticket"]["agent"], rows["close_ticket"]["parent_span_id"]) == ("triage", back["event_id"])
+
+
+def test_a_graph_agent_no_transfer_named_keeps_an_unknown_place(tmp_path: Path) -> None:
+    _run(
+        tmp_path,
+        _GRAPH
+        + """
+turn("supervisor", "1", "transfer_to_billing", __handoff_destination="billing")
+turn("reviewer", "2", "read_notes")
+graph.end()
+""",
+    )
+    rows = {row["name"]: row for row in _sealed(tmp_path)}
+    assert (rows["read_notes"]["agent"], rows["read_notes"]["relationship"]) == ("reviewer", "unknown")
+
+
 def test_the_top_agent_under_the_caller_s_context_hands_off_at_the_top_level(
     tmp_path: Path,
 ) -> None:

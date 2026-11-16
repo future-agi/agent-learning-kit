@@ -36,6 +36,9 @@ run the next ``sitecustomize`` on the path, which is theirs, so a repository's o
 not lost behind this one; a failure of that hook is reported as Python reports it, never as ours.
 A failure of this patch leaves the process as it would be without the hook and writes one fixed
 line to stderr.
+
+Framework instrumentation differs per framework, so what this hook knows about one (its instrumentor, a helper to
+guard) sits in data tables only: the stated exception to the rule that harness code names no framework.
 """
 
 from __future__ import annotations
@@ -479,10 +482,7 @@ def _instrument(module, target) -> None:
         _keep_agents_processors()
 
 
-# An instrumentor helper that serialises the framework's own objects into span attributes, where a failure would fail
-# the app's call: traceai-smolagents 0.1.6 calls each argument's ``to_dict()``, and a smolagents tool's ``to_dict()``
-# raises when the tool's code uses a module-level helper (smolagents' self-contained check), so every model call of a
-# normal app would fail once the instrumentor is on.
+# Instrumentor helpers whose failure to serialise an object into a span would fail the app's call.
 _SERIALISERS = {"traceai_smolagents": ("traceai_smolagents._wrappers", "_to_dict")}
 
 
@@ -505,7 +505,7 @@ def _guard_serialiser(module_name, attribute) -> None:
 
     functools.update_wrapper(guarded, original)
     setattr(guarded, _PATCHED, True)
-    # The helper calls itself by its module-level name for lists and dicts, so each item is guarded on its own.
+    # Recursive calls go through the module name, so each item is guarded on its own.
     setattr(module, attribute, guarded)
 
 

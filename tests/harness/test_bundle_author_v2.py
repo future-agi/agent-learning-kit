@@ -4370,6 +4370,56 @@ def test_only_apps_adk_can_load_are_candidates(tmp_path: Path) -> None:
     assert _adk_app_name(tmp_path, ".", ["adk", "web", "agents/my-app"]) is None
 
 
+def test_an_app_package_is_one_whose_init_binds_root_agent_not_one_that_mentions_it(tmp_path: Path) -> None:
+    from fi.alk.harness.bundle_author_v2 import _adk_app_name
+
+    agents = tmp_path / "agents"
+    for name, init in (("bound_app", "from .core import root_agent\n"), ("noted", "# see root_agent in docs\n")):
+        (agents / name).mkdir(parents=True)
+        (agents / name / "__init__.py").write_text(init, encoding="utf-8")
+
+    assert _adk_app_name(tmp_path, ".", ["adk", "web", "agents"]) == "bound_app"
+
+
+def _fake_adk_cli(monkeypatch, module) -> None:
+    from fi.alk.harness.bundle_author_v2 import _adk_server_options
+
+    monkeypatch.setitem(sys.modules, "google.adk.cli.cli_tools_click", module)
+    _adk_server_options.cache_clear()
+
+
+def test_an_option_the_installed_adk_declares_is_read_from_its_own_cli(monkeypatch, tmp_path: Path) -> None:
+    import types
+
+    import click
+
+    from fi.alk.harness.bundle_author_v2 import _adk_app_name, _adk_server_options
+
+    command = click.Command("web", params=[click.Option(["--release_channel"]), click.Argument(["agents_dir"])])
+    _fake_adk_cli(monkeypatch, types.SimpleNamespace(main=click.Group(commands={"web": command, "api_server": command})))
+    app = tmp_path / "agents" / "only_app"
+    app.mkdir(parents=True)
+    (app / "agent.py").write_text("root_agent = 1\n", encoding="utf-8")
+    try:
+        assert _adk_app_name(tmp_path, ".", ["adk", "api_server", "--release_channel", "beta", "agents"]) == "only_app"
+    finally:
+        _adk_server_options.cache_clear()
+
+
+def test_without_adk_s_cli_the_option_copy_still_finds_the_agents_directory(monkeypatch, tmp_path: Path) -> None:
+    from fi.alk.harness.bundle_author_v2 import _adk_app_name, _adk_server_options
+
+    _fake_adk_cli(monkeypatch, None)
+    app = tmp_path / "agents" / "only_app"
+    app.mkdir(parents=True)
+    (app / "agent.py").write_text("root_agent = 1\n", encoding="utf-8")
+    try:
+        assert _adk_app_name(tmp_path, ".", ["adk", "web", "--port", "8000", "--reload", "agents"]) == "only_app"
+        assert _adk_app_name(tmp_path, ".", ["adk", "web", "--release_channel", "beta", "agents"]) is None
+    finally:
+        _adk_server_options.cache_clear()
+
+
 def test_a_command_that_only_mentions_adk_is_not_its_server() -> None:
     from fi.alk.harness.bundle_author_v2 import _adk_server_arguments
 

@@ -217,6 +217,48 @@ def test_the_sealed_trace_row_keeps_the_runtime_worker_task_and_event_ids(
     } & set(plain)
 
 
+def _events(**fields) -> list[tuple]:
+    from fi.alk.harness.world.runtime import Call, trace_row
+
+    row = trace_row(Call(name="ask", arguments={}, at=4.0, **fields))
+    return [
+        (one["type"], one["id"], one["worker_id"], one.get("by"), one["parent_id"], one["relationship"], one["at"])
+        for one in row["worker_events"]
+    ]
+
+
+def test_a_hand_off_whose_worker_returned_is_a_delegated_and_a_returned_worker_event() -> None:
+    placed = dict(runtime_ids={"event_id": "e2"}, parent_span_id="e1", relationship="observed")
+    assert _events(worker_id="lead", delegated_to="research", ended_at=6.5, **placed) == [
+        ("delegated", "e2", "research", "lead", "e1", "observed", 4.0),
+        ("returned", "e2", "research", "lead", "e1", "observed", 6.5),
+    ]
+
+
+def test_a_control_pass_and_a_hand_off_still_out_have_no_returned_worker_event() -> None:
+    ids = {"runtime_ids": {"event_id": "e2"}}
+    assert [one[0] for one in _events(worker_id="lead", delegated_to="billing", transferred=True, **ids)] == [
+        "transferred"
+    ]
+    assert [one[0] for one in _events(worker_id="lead", delegated_to="research", **ids)] == ["delegated"]
+
+
+def test_a_tool_call_worker_event_names_its_worker_place_end_and_outcome() -> None:
+    from fi.alk.harness.world.runtime import Call, trace_row
+
+    refused = trace_row(
+        Call(name="refund", arguments={}, ok=False, refused=True, at=4.0, ended_at=4.5, worker_id="billing",
+             runtime_ids={"event_id": "e3"}, parent_span_id="e2", relationship="observed")
+    )
+    (event,) = refused["worker_events"]
+    assert (event["type"], event["worker_id"], event["parent_id"], event["ended_at"], event["status"]) == (
+        "tool_call", "billing", "e2", 4.5, "refused",
+    )
+    # A call no runtime attributed still carries its event, so a reader can tell a new run from an old one.
+    (plain,) = trace_row(Call(name="lookup", arguments={}, at=1.0))["worker_events"]
+    assert (plain["worker_id"], plain["relationship"], plain["status"]) == (None, "unknown", "ok")
+
+
 # A worker's run, as a CrewAI agent records it: a hand-off, not a call checks grade.
 _HANDOFF_LINE = {
     "name": "Draft checker",

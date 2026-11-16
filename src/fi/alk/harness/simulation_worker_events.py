@@ -4,6 +4,11 @@ The sandbox's startup hook (``simulation_mark_bootstrap``) owns the hook's lifec
 starts to :class:`_ToolSpans`; this module turns those spans into the lines of the tool trace. It sits beside the hook
 in a customer process's world directory, so it runs inside the CUSTOMER's interpreter, which has no ``fi``: standard
 library only, Python 3.9 syntax, and it never imports the customer's modules.
+
+Instrumentation conventions differ per framework, so the keys and values each framework's spans use are named here, as
+data tables only: the stated exception to the rule that harness code names no framework. The code reads every table
+alike. A background job that
+starts after the call has ended is outside the trace: the call is sealed when it ends.
 """
 
 from __future__ import annotations
@@ -67,7 +72,12 @@ _SAID_KEYS = (
 
 _LAUNCHES_MAX = 256
 _GRAPH_NAMESPACE = "langgraph_checkpoint_ns"
-_TOOL_NAME_KEYS = ("gen_ai.tool.name", "tool.name", "claude_agent.tool.name", "pydantic_ai.tool.name")
+_TOOL_NAME_KEYS = (
+    "gen_ai.tool.name",
+    "tool.name",
+    "claude_agent.tool.name",
+    "pydantic_ai.tool.name",
+)
 _TOOL_ARGUMENT_KEYS = (
     "gen_ai.tool.call.arguments",
     "tool.parameters",
@@ -75,7 +85,12 @@ _TOOL_ARGUMENT_KEYS = (
     "claude_agent.tool.input",
     "pydantic_ai.tool.args",
 )
-_TOOL_RESULT_KEYS = ("gen_ai.tool.call.result", "output.value", "claude_agent.tool.output", "pydantic_ai.tool.result")
+_TOOL_RESULT_KEYS = (
+    "gen_ai.tool.call.result",
+    "output.value",
+    "claude_agent.tool.output",
+    "pydantic_ai.tool.result",
+)
 _LIVE_SPANS_MAX = 4096
 _TRACE_LINE_MAX = 65536
 _PAYLOAD_MAX = 4096
@@ -86,6 +101,10 @@ _TRANSFER_TOOL_TYPES = ("TransferToAgentTool",)
 _BUILTIN_TRANSFER = "transfer_to_agent"
 _TRANSFER_ARGUMENT_KEYS = ("gcp.vertex.agent.tool_call_args",) + _TOOL_ARGUMENT_KEYS
 _HANDED_FROM_KEYS = ("graph.node.parent_id",)
+# The agent a hand-off tool's own metadata names as taking over (LangGraph's supervisor and swarm hand-off tools).
+_HANDOFF_DESTINATION_KEYS = ("__handoff_destination",)
+# A flag a framework sets on a self-handing span whose worker failed.
+_ERROR_FLAG_KEYS = ("claude_agent.tool.is_error",)
 
 
 def _names(text: str, value: str) -> bool:
@@ -118,11 +137,21 @@ def _named_at_start(span):
     span name (with a dot) names no agent."""
     name = getattr(span, "name", None)
     attributes = getattr(span, "attributes", None) or {}
-    return name if isinstance(name, str) and name and "." not in name and _first(attributes, _KIND_KEYS) else None
+    return (
+        name
+        if isinstance(name, str)
+        and name
+        and "." not in name
+        and _first(attributes, _KIND_KEYS)
+        else None
+    )
 
 
 def _kind(span):
     attributes = getattr(span, "attributes", None) or {}
+    if _first(attributes, _HANDOFF_DESTINATION_KEYS):
+        # A hand-off tool is a tool call whatever kind its instrumentor labels it.
+        return "TOOL"
     value = _first(attributes, _KIND_KEYS)
     if value:
         return value.upper()
@@ -173,6 +202,9 @@ def _bounded(record, key, value, flag) -> None:
 
 def _transfer_target(attributes):
     """The agent a framework's own transfer tool handed control to, when the span records the call."""
+    destination = _first(attributes, _HANDOFF_DESTINATION_KEYS)
+    if destination:
+        return destination
     if attributes.get("gen_ai.tool.type") not in _TRANSFER_TOOL_TYPES:
         return None
     try:
@@ -232,6 +264,9 @@ class _ToolSpans:
         # then each agent run handed control, with the event id of the transfer that handed it.
         self._transfers = {}
         self._transferred = {}
+        # Transfers made where no agent span is open (a graph's nodes), by the run they were made in: the event id of
+        # the latest transfer to each agent, which holds that agent's later calls in the run.
+        self._run_transfers = {}
         # Calls to ADK's built-in transfer function by the run they were made in, held until the agent they name
         # starts there (a control pass) or the run ends (a plain tool call).
         self._candidates = {}
@@ -266,7 +301,9 @@ class _ToolSpans:
                 worker = _self_handing(above[0])
                 if worker:
                     try:
-                        self._self_hand_off(above[0], parent.span_id, worker, ended=False)
+                        self._self_hand_off(
+                            above[0], parent.span_id, worker, ended=False
+                        )
                     except Exception:
                         pass
             if _kind(span) == "AGENT":
@@ -338,7 +375,12 @@ class _ToolSpans:
             "delegated_to": name[:256],
             "opened": True,
         }
-        _bounded(record, "arguments", _first(attributes, _TOOL_ARGUMENT_KEYS) or "", "input_omitted")
+        _bounded(
+            record,
+            "arguments",
+            _first(attributes, _TOOL_ARGUMENT_KEYS) or "",
+            "input_omitted",
+        )
         holder = self._above(tool_id, ("AGENT",))
         if holder is not None:
             record["parent_event_id"] = _hex(holder.get_span_context().span_id)
@@ -362,7 +404,10 @@ class _ToolSpans:
         record = {
             "name": (_first(attributes, _TOOL_NAME_KEYS) or span.name or worker)[:256],
             "is_error": ended
-            and (getattr(status, "name", "") == "ERROR" or attributes.get("claude_agent.tool.is_error") is True),
+            and (
+                getattr(status, "name", "") == "ERROR"
+                or any(attributes.get(key) is True for key in _ERROR_FLAG_KEYS)
+            ),
             "at": (span.start_time or 0) / 1e9,
             "source": "otel",
             "event_id": _hex(span_id),
@@ -374,8 +419,18 @@ class _ToolSpans:
             record["ended_at"] = (span.end_time or 0) / 1e9
         else:
             record["opened"] = True
-        _bounded(record, "arguments", _first(attributes, _TOOL_ARGUMENT_KEYS) or "", "input_omitted")
-        _bounded(record, "output", (_first(attributes, _TOOL_RESULT_KEYS) or "") if ended else "", "output_omitted")
+        _bounded(
+            record,
+            "arguments",
+            _first(attributes, _TOOL_ARGUMENT_KEYS) or "",
+            "input_omitted",
+        )
+        _bounded(
+            record,
+            "output",
+            (_first(attributes, _TOOL_RESULT_KEYS) or "") if ended else "",
+            "output_omitted",
+        )
         holder = self._above(span_id, ("AGENT",))
         if holder is not None:
             record["parent_event_id"] = _hex(holder.get_span_context().span_id)
@@ -666,7 +721,7 @@ class _ToolSpans:
                 self._closed.popitem(last=False)
             if kind != "TOOL":
                 self._handed.pop(span_id, None)
-            for one in (self._transfers, self._transferred):
+            for one in (self._transfers, self._transferred, self._run_transfers):
                 one.pop(span_id, None)
             self._jobs.discard(span_id)
             self._live.pop(span_id, None)
@@ -801,6 +856,10 @@ class _ToolSpans:
         )
         if worker:
             record.update(agent_key=worker[:256], agent_role=worker[:256])
+            handed_in = self._run_transfers.get(self._root(span_id), {}).get(worker)
+            if relationship == "unknown" and handed_in:
+                parent_span_id, relationship = handed_in, "observed"
+                record.update(parent_span_id=parent_span_id, relationship=relationship)
         if agent is not None:
             record["parent_event_id"] = _hex(agent.get_span_context().span_id)
         delegated = self._handed.pop(span_id, None)
@@ -837,6 +896,11 @@ class _ToolSpans:
                 and len(self._transfers) + len(pending) < _LAUNCHES_MAX
             ):
                 self._transfers[scope] = pending + [(record["event_id"], target)]
+            run = self._root(span_id) if scope is None else None
+            if run is not None and (
+                run in self._run_transfers or len(self._run_transfers) < _LAUNCHES_MAX
+            ):
+                self._run_transfers.setdefault(run, {})[target] = record["event_id"]
         self._forget_cleared_call()
         if record["output"]:
             self._launches.append(

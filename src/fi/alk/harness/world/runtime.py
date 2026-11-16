@@ -246,6 +246,30 @@ def _worker_event(call: Call) -> dict[str, Any]:
     }
 
 
+def worker_events(call: Call) -> list[dict[str, Any]]:
+    """The call as normalised worker events, the shape documented in HOW-IT-WORKS.md (worker events): its tool call,
+    hand-off or control pass, then a hand-off's return once its worker came back."""
+    placed = _worker_event(call)
+    kind = placed.get("kind", "tool_call")
+    agent = call.worker_id or call.worker_label or None
+    status = "refused" if call.refused else "ok" if call.ok else "error"
+    event: dict[str, Any] = {
+        "type": kind,
+        "id": placed.get("span_id", ""),
+        "worker_id": agent if kind == "tool_call" else call.delegated_to,
+        "parent_id": placed.get("parent_span_id", ""),
+        "relationship": placed.get("relationship", "unknown"),
+        "tool": call.name,
+        "at": call.at,
+    }
+    if kind == "tool_call":
+        return [{**event, "ended_at": call.ended_at or None, "status": status}]
+    event["by"] = agent
+    if kind != "delegated" or not call.ended_at:
+        return [event]
+    return [event, {**event, "type": "returned", "at": call.ended_at, "status": status}]
+
+
 def trace_row(call: Call) -> dict[str, Any]:
     """One call as the sealed tool trace keeps it, with who in the agent made it when the runtime said."""
     return {
@@ -275,6 +299,7 @@ def trace_row(call: Call) -> dict[str, Any]:
             if getattr(call, key)
         },
         **_worker_event(call),
+        "worker_events": worker_events(call),
     }
 
 

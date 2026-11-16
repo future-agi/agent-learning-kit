@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import ast
+import functools
 import hashlib
 import json
 import logging
@@ -1850,7 +1851,7 @@ def _adk_server_arguments(command: list[str]) -> list[str] | None:
     return None
 
 
-# ADK's server options that take no value; every other option consumes the next token.
+# A copy of ADK's server options that take no value, for when ``google.adk.cli`` cannot be imported.
 _ADK_SERVER_FLAGS = frozenset(
     {
         "-v",
@@ -1870,11 +1871,18 @@ _ADK_SERVER_FLAGS = frozenset(
 )
 
 
-# Options of ``adk web`` / ``adk api_server`` that take a value (ADK 1.31 to 2.14), each also
-# under the other spelling of its separator.
-_ADK_SERVER_VALUE_OPTIONS = frozenset(
-    spelling
-    for option in (
+def _both_separators(options) -> frozenset[str]:
+    """Each option also under the other spelling of its separator."""
+    return frozenset(
+        spelling
+        for option in options
+        for spelling in (option, "--" + option[2:].replace("-", "_"), "--" + option[2:].replace("_", "-"))
+    )
+
+
+# A copy of ADK's server options that take a value.
+_ADK_SERVER_VALUE_OPTIONS = _both_separators(
+    (
         "--allow_origins",
         "--artifact_service_uri",
         "--artifact_storage_uri",
@@ -1895,18 +1903,35 @@ _ADK_SERVER_VALUE_OPTIONS = frozenset(
         "--trigger_sources",
         "--url_prefix",
     )
-    for spelling in (option, "--" + option[2:].replace("-", "_"), "--" + option[2:].replace("_", "-"))
 )
 
-# An option this parser does not know: whether it takes a value, and so which token is the
-# agents directory, cannot be told.
+# An option neither table knows, so which token is the agents directory cannot be told.
 _UNKNOWN_ADK_OPTION = object()
+
+
+@functools.cache
+def _adk_server_options() -> tuple[frozenset[str], frozenset[str]]:
+    """ADK's ``web`` and ``api_server`` options as (flags, options taking a value): the copies above, with what the
+    installed ADK's own CLI declares when it can be imported."""
+    try:
+        from google.adk.cli.cli_tools_click import main
+
+        params = [param for name in ("web", "api_server") for param in main.commands[name].params]
+    except Exception:
+        return _ADK_SERVER_FLAGS, _ADK_SERVER_VALUE_OPTIONS
+    flags: set[str] = set()
+    values: set[str] = set()
+    for param in params:
+        names = [name for name in (*param.opts, *param.secondary_opts) if name.startswith("-")]
+        (flags if getattr(param, "is_flag", False) or getattr(param, "count", False) else values).update(names)
+    return _ADK_SERVER_FLAGS | flags, _ADK_SERVER_VALUE_OPTIONS | _both_separators(values)
 
 
 def _adk_agents_dir_argument(arguments: list[str]) -> str | object | None:
     """The positional ``AGENTS_DIR`` among ``adk web`` / ``adk api_server`` arguments, if any;
     ``_UNKNOWN_ADK_OPTION`` when an option before it is not one ADK is known to take."""
 
+    flags, value_options = _adk_server_options()
     index = 0
     while index < len(arguments):
         token = arguments[index]
@@ -1914,9 +1939,9 @@ def _adk_agents_dir_argument(arguments: list[str]) -> str | object | None:
             return arguments[index + 1] if index + 1 < len(arguments) else None
         if token.startswith("-"):
             name = token.split("=", 1)[0]
-            if name in _ADK_SERVER_FLAGS or (name in _ADK_SERVER_VALUE_OPTIONS and "=" in token):
+            if name in flags or (name in value_options and "=" in token):
                 index += 1
-            elif name in _ADK_SERVER_VALUE_OPTIONS:
+            elif name in value_options:
                 index += 2
             else:
                 return _UNKNOWN_ADK_OPTION
@@ -1953,15 +1978,8 @@ def _command_port(command: list[str], *, default: int) -> int:
 def _adk_app_name(
     root: Path, configured_workdir: str, command: list[str] | None = None
 ) -> str | None:
-    """Discover the unique ADK app package exposed by ``adk web`` or ``adk api_server``.
-
-    ADK serves the agents directory named by the command's positional argument (default: its
-    working directory). That directory is one app when it holds ``agent.py`` or
-    ``root_agent.yaml`` itself; otherwise ADK discovers applications as its immediate
-    subdirectories with an ``agent.py`` (``__init__.py`` is optional), a ``root_agent.yaml``, or
-    an ``__init__.py`` that defines ``root_agent``. An app name must be a Python identifier.
-    Keep this source-derived and deterministic: when a checkout contains more than one possible
-    app, authoring must describe the desired HTTP boundary instead of the compiler guessing.
+    """The one ADK app ``adk web`` or ``adk api_server`` serves from the agents directory its argv names
+    (default: its working directory), by ADK's own loading rules; None when there is not exactly one.
     """
 
     configured = configured_workdir.strip()
@@ -1973,7 +1991,6 @@ def _adk_app_name(
     if not workdir.is_relative_to(root.resolve()) or not workdir.is_dir():
         return None
     agents_arg = _adk_agents_dir_argument(_adk_server_arguments(command or []) or [])
-    # An unknown option may have swallowed the agents directory: no app rather than a guess.
     if agents_arg is _UNKNOWN_ADK_OPTION:
         return None
     if isinstance(agents_arg, str):
@@ -1984,8 +2001,7 @@ def _adk_app_name(
         workdir = agents_dir
     # ADK treats a directory as one app when it holds agent.py or root_agent.yaml.
     if _is_adk_app_directory(workdir, package=False):
-        # The checkout root is copied under a per-process directory at run time, so its
-        # name there is not this one.
+        # The checkout root is renamed at run time, so its name here is not the app's.
         if workdir == root.resolve() or not _ADK_APP_NAME.fullmatch(workdir.name):
             return None
         return workdir.name
@@ -2006,7 +2022,7 @@ _ADK_APP_NAME = re.compile(r"[A-Za-z0-9_]+")
 
 def _is_adk_app_directory(path: Path, *, package: bool) -> bool:
     """Whether ADK loads an app from ``path``: ``agent.py``, ``root_agent.yaml`` or, for a
-    sub-app, a package whose ``__init__.py`` defines ``root_agent``."""
+    sub-app, a package whose ``__init__.py`` binds ``root_agent``."""
 
     if (path / "agent.py").is_file() or (path / "root_agent.yaml").is_file():
         return True
@@ -2014,9 +2030,26 @@ def _is_adk_app_directory(path: Path, *, package: bool) -> bool:
     if not package or not init.is_file():
         return False
     try:
-        return "root_agent" in init.read_text(encoding="utf-8", errors="replace")
-    except OSError:
+        tree = ast.parse(init.read_text(encoding="utf-8", errors="replace"))
+    except (OSError, SyntaxError, ValueError):
         return False
+    return _ADK_ROOT_AGENT in _module_bindings(tree)
+
+
+# The name ADK's loader looks up on an app package.
+_ADK_ROOT_AGENT = "root_agent"
+
+
+def _module_bindings(tree: ast.Module) -> set[str]:
+    """The names a module's top-level statements assign or import."""
+    names: set[str] = set()
+    for node in tree.body:
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            names.update((alias.asname or alias.name).split(".")[0] for alias in node.names)
+        elif isinstance(node, (ast.Assign, ast.AnnAssign)):
+            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+            names.update(target.id for target in targets if isinstance(target, ast.Name))
+    return names
 
 
 def _adk_web_interface(root: Path, runtime: dict[str, Any]) -> dict[str, Any] | None:
@@ -3649,8 +3682,7 @@ def author_bundle_v2(
             runtime = dict(runtime)
             adk_interface = _adk_web_interface(source_root, runtime)
             if adk_interface is not None:
-                # ``adk web`` / ``adk api_server`` is a persistent source-owned HTTP server, not
-                # a one-shot command.
+                # ``adk web`` / ``adk api_server`` is a persistent source-owned HTTP server.
                 # Launch it directly and describe its existing API rather than nesting it inside
                 # the subprocess bridge (which would make both processes bind the same port).
                 runtime["interface"] = adk_interface
