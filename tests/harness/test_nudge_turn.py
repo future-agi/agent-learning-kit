@@ -1545,6 +1545,7 @@ def test_usage_delta_counts_only_what_the_turn_spent():
                 "stage": "builder",
                 "turns": 2,
                 "models": ["m1"],
+                "model_turns": {"m1": 2},
                 "tokens_in": 10,
                 "tokens_out": 5,
                 "tokens_cached": 0,
@@ -1567,6 +1568,7 @@ def test_usage_delta_counts_only_what_the_turn_spent():
                 "stage": "builder",
                 "turns": 3,
                 "models": ["m1", "m2"],
+                "model_turns": {"m1": 2, "m2": 1},
                 "tokens_in": 30,
                 "tokens_out": 8,
                 "tokens_cached": 4,
@@ -1587,5 +1589,6 @@ def test_usage_delta_counts_only_what_the_turn_spent():
         "tokens_cached": 4,
         "usd": 0.25,
         "unpriced_turns": 1,
-        "models": ["m1", "m2"],
+        # Only the model this turn called: m1 ran in an earlier turn.
+        "models": ["m2"],
     }

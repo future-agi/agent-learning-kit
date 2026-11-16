@@ -12,6 +12,7 @@ mid-turn loses that turn only, and the platform reads the file while the sandbox
 
 from __future__ import annotations
 
+import copy
 import json
 import os
 import tempfile
@@ -68,6 +69,7 @@ def record(
             "tokens_cached": 0,
             "tools": {},
             "refusals": {},
+            "model_turns": {},
         },
     )
     if usd is None:
@@ -85,6 +87,11 @@ def record(
     for model in sorted(models or set()):
         if model not in entry["models"]:
             entry["models"].append(model)
+        # Counted per model, so one turn's spend names only the models that turn called; a
+        # report that names a model counts once even when it reports no turns.
+        entry["model_turns"][model] = entry["model_turns"].get(model, 0) + max(
+            int(turns or 0), 1
+        )
     _flush()
 
 
@@ -98,6 +105,12 @@ def unpriced_turns() -> int:
 
 
 def snapshot() -> dict[str, Any]:
+    """The ledger now, copied: a reading taken at a turn's start must not change as the turn
+    spends."""
+    return copy.deepcopy(_reading())
+
+
+def _reading() -> dict[str, Any]:
     return {
         "schema": "futureagi.harness-spend.v1",
         "total_usd": total_usd(),
@@ -118,6 +131,7 @@ def snapshot() -> dict[str, Any]:
                         "tokens_cached",
                         "tools",
                         "refusals",
+                        "model_turns",
                     )
                 },
             }
