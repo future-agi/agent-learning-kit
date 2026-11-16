@@ -11,5 +11,7 @@ def handle(args, db):
         "category": prod["category"],
         "list_price_cents": prod["list_price_cents"],
         "is_final_sale": bool(prod["is_final_sale"]),
-        "returnable": bool(prod["returnable"])
+        "returnable": bool(prod["returnable"]),
+        # The sizes the item comes in; a one-size item (accessories, clearance) has none.
+        "sizes": [x.strip() for x in (prod.get("sizes") or "").split(",") if x.strip()],
     }

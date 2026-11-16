@@ -3,9 +3,9 @@
   "scenario_key": "email-seat-correction-schedule-plan-change",
   "scenario_id": "",
   "use_case": "Pick up a billing request that arrived by email",
-  "branch": "Email thread th_b02_seat_correction had an initial 4 seats request corrected to 5 seats; agent reads thread and schedules Pro at 5 seats for end of period",
-  "tests": "Reads corrected seat count from email thread and schedules end-of-period plan change with confirmed 5 seats",
-  "instruction": "You are Alice Admin, billing administrator for Acme Corp (T01). You sent email messages in thread th_b02_seat_correction originally asking for 4 seats, but followed up with a correction asking for 5 seats on the Pro plan at the next billing period. You want the desk to review the thread, preview the 5-seat Pro plan change at end of period, and schedule the change once confirmed.\n\nYour details:\n- Name: Alice Admin\n- Actor ID: U01_ADMIN\n- Organization / Tenant ID: Acme Corp (T01)\n- Email Thread: th_b02_seat_correction\n- Target Plan: Pro (pro)\n- Corrected Target Seats: 5\n- Effective Timing: end_of_period",
+  "branch": "Email thread th_b02_seat_correction asks for 4 seats, mentions 6, and corrects to 5; the opening defers to the thread, the agent reads it and schedules Pro at 5 seats for the end of the period",
+  "tests": "Works out the latest intent from the email history (Pro, 5 seats, end of period) without the caller stating it, then previews and schedules it once confirmed",
+  "instruction": "You are Alice Admin, billing administrator for Acme Corp (T01). Over several emails in thread th_b02_seat_correction you asked to change Acme Corp's seats at renewal: you first asked for 4 seats on Pro, a colleague later mentioned 6, and your correction settled on 5 seats on Pro from the next billing period. You want the desk to work out from the thread what you settled on.\n\nDo not state the plan, seat count or timing yourself up front: say it is in the thread. If the desk reads back Pro with 5 seats from the end of the current period, confirm it. If it proposes 4 or 6 seats, tell it to look again at your latest emails.\n\nYour details:\n- Name: Alice Admin\n- Actor ID: U01_ADMIN\n- Organization / Tenant ID: Acme Corp (T01)\n- Email Thread: th_b02_seat_correction",
   "keywords": [
     "billing_admin"
   ],
@@ -17,7 +17,7 @@
     "location": "United States",
     "personality": "Friendly and cooperative",
     "communication_style": "Direct and concise",
-    "initial_message": "Hi, I sent an email thread th_b02_seat_correction requesting seat changes for Acme Corp at renewal. Please check the thread, preview the Pro plan with 5 seats at end of period, and schedule it.",
+    "initial_message": "Hi, I sent an email thread th_b02_seat_correction about Acme Corp's seats at renewal. Please check the thread and schedule the change I settled on there.",
     "languages": [
       "English"
     ],

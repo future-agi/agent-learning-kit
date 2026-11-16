@@ -35,9 +35,13 @@ def handle(args, db):
         raise ToolError(f"Employee {req['employee_id']} is not active; no access is granted.")
     if db.one("SELECT 1 FROM entitlements WHERE employee_id = ? AND app_id = ? AND role_name = ? AND status = 'active'", [req["employee_id"], req["app_id"], req["role_name"]]):
         raise ToolError(f"Active entitlement already exists for employee {req['employee_id']} on {req['app_id']} ({req['role_name']}).")
+    # A swap ends the role it replaces in this same step; it must still be the employee's.
+    replaced = None
+    if req.get("replaces_entitlement_id"):
+        replaced = db.one("SELECT * FROM entitlements WHERE entitlement_id = ? AND employee_id = ? AND app_id = ? AND status = 'active'", [req["replaces_entitlement_id"], req["employee_id"], req["app_id"]])
     lic = db.one("SELECT seats_total FROM app_licenses WHERE app_id = ?", [req["app_id"]])
     if lic:
-        used = db.one("SELECT COUNT(*) AS c FROM entitlements WHERE app_id = ? AND status = 'active'", [req["app_id"]])["c"]
+        used = db.one("SELECT COUNT(*) AS c FROM entitlements WHERE app_id = ? AND status = 'active'", [req["app_id"]])["c"] - (1 if replaced else 0)
         if used >= lic["seats_total"]:
             raise ToolError(f"No licence seat left on {req['app_id']} ({used} of {lic['seats_total']} used).")
     expiry_policy = db.one("SELECT value FROM environment_policy WHERE name = 'default_expiry_days'")
@@ -48,6 +52,9 @@ def handle(args, db):
         n += 1
     ent_id = f"ENT-{n:02d}"
     db.execute("INSERT INTO entitlements (entitlement_id, employee_id, app_id, role_name, status, granted_at, expires_at, granted_by) VALUES (?, ?, ?, ?, 'active', ?, ?, ?)", [ent_id, req["employee_id"], req["app_id"], req["role_name"], now, expires_at, approval["approver_id"]])
+    if replaced:
+        db.execute("UPDATE entitlements SET status = 'revoked' WHERE entitlement_id = ?", [replaced["entitlement_id"]])
+        _audit(db, "revoke_synthetic_access", actor, "entitlement", replaced["entitlement_id"], f"Ended {replaced['role_name']} on {req['app_id']} for {req['employee_id']}: replaced by {req['role_name']} ({req_id})", now)
     db.execute("UPDATE access_requests SET status = 'completed', updated_at = ? WHERE request_id = ?", [now, req_id])
     db.execute("UPDATE approvals SET status = 'used' WHERE approval_id = ?", [approval["approval_id"]])
     _audit(db, "grant_synthetic_access", actor, "entitlement", ent_id, f"Granted {req['role_name']} on {req['app_id']} to {req['employee_id']} via token {token} approved by {approval['approver_id']}", now)
@@ -60,7 +67,8 @@ def handle(args, db):
         "granted_by": approval["approver_id"],
         "message": "Synthetic access granted successfully.",
         "role_name": req["role_name"],
-        "status": "active"
+        "status": "active",
+        **({"replaced_entitlement_id": replaced["entitlement_id"]} if replaced else {}),
     }
 
 

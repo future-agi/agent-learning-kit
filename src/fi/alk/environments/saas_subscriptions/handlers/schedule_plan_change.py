@@ -51,9 +51,15 @@ def handle(args, db):
             "message": "Existing scheduled change returned (idempotent)."
         }
 
+    # One pending change at a time. Replacing it is one call (replaces_change_id): the pending change
+    # is withdrawn only in the same transaction that schedules its successor, so a successor that
+    # cannot be scheduled leaves the original pending instead of leaving the tenant with neither.
+    replaces = args.get("replaces_change_id")
     pending = db.one("SELECT change_id FROM scheduled_changes WHERE tenant_id = ? AND status = 'pending'", [tenant_id])
-    if pending:
-        raise ToolError(f"Change {pending['change_id']} is already pending for {tenant_id}; cancel it first, then schedule the new one.", category="conflict")
+    if replaces and (pending is None or pending["change_id"] != replaces):
+        raise ToolError(f"replaces_change_id {replaces!r} is not the pending change of {tenant_id}" + (f"; {pending['change_id']} is." if pending else "; nothing is pending."), category="conflict")
+    if pending and not replaces:
+        raise ToolError(f"Change {pending['change_id']} is already pending for {tenant_id}; name it in replaces_change_id to replace it in one step (it stays pending if the new change cannot be scheduled), or cancel it.", category="conflict")
 
     new_plan = db.one("SELECT * FROM plans WHERE plan_id = ?", [target_plan_id])
     if new_plan is None:
@@ -90,6 +96,10 @@ def handle(args, db):
     else:
         effective_at, status = sub["current_period_end"], "pending"
         message = f"Successfully scheduled plan change to {new_plan['name']} effective at {effective_at}."
+    if replaces:
+        # Every refusal above has already been raised, so from here the swap completes.
+        db.execute("UPDATE scheduled_changes SET status = 'canceled' WHERE tenant_id = ? AND change_id = ?", [tenant_id, replaces])
+        message += f" It replaces {replaces}, which is canceled."
     db.execute("INSERT INTO scheduled_changes (change_id, tenant_id, target_plan_id, target_seats, effective_at, status, request_key, created_at, requested_by, effective_timing) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                [change_id, tenant_id, target_plan_id, target_seats, effective_at, status, request_key, now_ts, actor_id, effective_timing])
 
@@ -101,6 +111,7 @@ def handle(args, db):
         "effective_at": effective_at,
         "status": status,
         "request_key": request_key,
+        "replaced_change_id": replaces or None,
         "message": message
     }
 

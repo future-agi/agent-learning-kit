@@ -3,9 +3,9 @@
   "scenario_key": "update-shipping-address-from-email",
   "scenario_id": "",
   "use_case": "Change or cancel an order before it ships",
-  "branch": "Address change request for a processing order received via customer email thread",
-  "tests": "the agent reads the email thread and updates the shipping address for processing order O32 to the specified office address",
-  "instruction": "You sent an email (thread th_r07_ship_to_office) requesting to change the shipping address for processing order O32 to your office at 1700 Lincoln St, Suite 900, Denver, CO 80203. You want customer support to update the address on the order.\n\nYour details:\nName: Noah Taylor\nEmail: noah.taylor@example.com\nPostal code: 80202\nThread ID: th_r07_ship_to_office\nOrder ID: O32\nNew Address: 1700 Lincoln St, Suite 900, Denver, CO 80203",
+  "branch": "Address change for processing order O32 requested in email thread th_r07_ship_to_office, where a later message corrects the office address the first one gave",
+  "tests": "the agent reads the whole thread th_r07_ship_to_office, takes the corrected office address from the later message (1700 Lincoln St, Suite 900, not 1650 Lincoln St), reads it back, and updates processing order O32 to it",
+  "instruction": "You emailed customer support (thread th_r07_ship_to_office) to have processing order O32 shipped to your office. Your first email gave 1650 Lincoln St, which is the parking garage; your later email corrected it to 1700 Lincoln St, Suite 900, Denver, CO 80203.\n\nIn chat, do not state the address: ask the agent to use the office address from your latest email. If the agent reads back 1700 Lincoln St, Suite 900, Denver, CO 80203, confirm the change. If they read back 1650 Lincoln St, say that was corrected in your later email.\n\nYour details:\nName: Noah Taylor\nEmail: noah.taylor@example.com\nPostal code: 80202\nThread ID: th_r07_ship_to_office\nOrder ID: O32",
   "keywords": [
     "update_shipping_address"
   ],

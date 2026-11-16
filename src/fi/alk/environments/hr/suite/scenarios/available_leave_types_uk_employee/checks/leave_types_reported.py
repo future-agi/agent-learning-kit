@@ -1,18 +1,21 @@
 def check(world, calls, reference=None):
-    rid = None
+    emp = None
     for step in reference or ():
-        if step.get("tool") == "get_request_status" and step.get("arguments", {}).get("request_id"):
-            rid = step["arguments"]["request_id"]
-    # The status must come back from the HR system: the request itself, or the employee's list of
-    # requests that includes it.
-    looks = [c for c in calls if c.ok and isinstance(c.result, dict) and c.name in ("get_request_status", "list_leave_requests")]
+        if step.get("tool") == "get_leave_types" and step.get("arguments", {}).get("employee_id"):
+            emp = step["arguments"]["employee_id"]
+    looks = [c for c in calls if c.name == "get_leave_types" and c.ok and isinstance(c.result, dict)]
     if not looks:
-        return "not done: get_request_status was not called successfully"
+        return "not done: the leave types the employee may request were never read"
+    # The list must be the employee's own: their region decides which policy governs each type, and
+    # the balance each one draws on is theirs.
+    state = world.state()
+    region = next((e["region"] for e in state.get("employees", []) if e["employee_id"] == emp), None)
     for c in looks:
-        rows = [c.result] if c.name == "get_request_status" else c.result.get("requests") or []
-        if any(r.get("status") and (not rid or r.get("request_id") == rid) for r in rows):
+        if emp and c.arguments.get("employee_id") != emp:
+            continue
+        if c.result.get("leave_types") and (not region or c.result.get("region") == region):
             return None
-    return f"done wrong: the status of {rid} was never returned"
+    return f"done wrong: the leave types of {emp} were never returned"
 
 
 if __name__ == "__main__":

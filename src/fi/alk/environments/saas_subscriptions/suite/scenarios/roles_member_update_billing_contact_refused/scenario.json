@@ -43,15 +43,6 @@
       },
       "environment_arguments": {},
       "fixed": {}
-    },
-    {
-      "tool": "verify_billing_admin",
-      "arguments": {
-        "actor_id": "U03_MEMBER",
-        "tenant_id": "T03"
-      },
-      "environment_arguments": {},
-      "fixed": {}
     }
   ],
   "alternatives": [],

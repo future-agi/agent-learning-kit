@@ -3,9 +3,9 @@
   "scenario_key": "email-contact-change-updated",
   "scenario_id": "",
   "use_case": "Pick up a billing request that arrived by email",
-  "branch": "David Data requests billing contact update via email th_b09_contact_change; agent verifies, reads back details, and updates billing contact after confirmation",
-  "tests": "Updates tenant billing contact email following verification and explicit confirmation",
-  "instruction": "You are David Data, billing administrator for DataFlow (T04). You sent an email (thread th_b09_contact_change) asking for DataFlow's invoices to be sent to accounts@dataflow.com (attention Priya Raman).\n\nIn this chat, ask the billing desk to process this billing contact update. When the agent reads back the new name (Priya Raman) and email (accounts@dataflow.com) and asks for confirmation, explicitly confirm.\n\nYour details:\n- Name: David Data / David Data\n- Tenant ID: T04 (DataFlow)\n- User / Actor ID: U04_ADMIN\n- Email: david@dataflow.com\n- Thread ID: th_b09_contact_change\n- New Billing Contact Name: Priya Raman\n- New Billing Contact Email: accounts@dataflow.com",
+  "branch": "David's email asks for invoices to go to ap@dataflow.com and then corrects it to accounts@dataflow.com (attention Priya Raman); the agent reads the thread, reads the corrected contact back and updates it after confirmation",
+  "tests": "Updates the billing contact to the corrected address from the email history (accounts@dataflow.com, not the retired ap@dataflow.com) after verification and explicit confirmation",
+  "instruction": "You are David Data, billing administrator for DataFlow (T04). In email thread th_b09_contact_change you asked for DataFlow's invoices to go to Priya Raman at ap@dataflow.com, then corrected the address to accounts@dataflow.com because ap@ is being retired.\n\nIn this chat, ask the billing desk to process the change in the thread; do not state the address yourself up front. When the agent reads back Priya Raman and accounts@dataflow.com and asks for confirmation, confirm. If it reads back ap@dataflow.com, tell it to check your latest email.\n\nYour details:\n- Name: David Data\n- Tenant ID: T04 (DataFlow)\n- User / Actor ID: U04_ADMIN\n- Email: david@dataflow.com\n- Thread ID: th_b09_contact_change",
   "keywords": [
     "billing_contact"
   ],
@@ -17,7 +17,7 @@
     "location": "United Kingdom",
     "personality": "Professional and formal",
     "communication_style": "Direct and concise",
-    "initial_message": "Hi, I sent email thread th_b09_contact_change requesting our billing contact be updated to accounts@dataflow.com (attention Priya Raman). Can you process this?",
+    "initial_message": "Hi, I sent email thread th_b09_contact_change about where DataFlow's invoices should go. Can you process it?",
     "languages": [
       "English"
     ],

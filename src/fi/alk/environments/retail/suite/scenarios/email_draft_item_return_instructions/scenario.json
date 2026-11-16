@@ -4,7 +4,7 @@
   "scenario_id": "",
   "use_case": "Draft a reply on a customer's email thread for a person to review",
   "branch": "Customer asks support to draft a reply to their email thread with instructions on returning an eligible item",
-  "tests": "the agent reads Bob Smith's email thread th_r03_return_request_bob, verifies order O22, and drafts a reply with return instructions without creating a return authorization",
+  "tests": "the agent reads Bob Smith's email thread th_r03_return_request_bob, verifies order O22, reads the Returns Policy in effect (v3.0), and drafts a reply with the return instructions it states, without creating a return authorization",
   "instruction": "You emailed customer support earlier (subject 'Return request') about how to return the Linen Long-Sleeve Shirt (SKU AP04) from order O22 because it is too large. You are contacting support on chat asking them to send you the return instructions by drafting a reply on your email thread.\n\nYour details:\n- Name: Bob Smith\n- Email: bob.smith@example.com\n- Postal Code: 10001\n- Order ID: O22\n- Item: Linen Long-Sleeve Shirt (SKU: AP04)",
   "keywords": [
     "email_draft"
@@ -63,6 +63,16 @@
       "fixed": {}
     },
     {
+      "tool": "read_file_content",
+      "arguments": {
+        "fileId": "ret_pol_v3"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "fileId": "record: the Returns Policy in effect, ret_pol_v3"
+      }
+    },
+    {
       "tool": "create_draft",
       "arguments": {
         "replyToMessageId": "rmsg_005",
@@ -70,7 +80,7 @@
           "bob.smith@example.com"
         ],
         "subject": "Re: Return request",
-        "body": "Hello Bob, here are the instructions for returning SKU AP04 from order O22. Items in the Apparel category may be returned within 30 days of delivery."
+        "body": "Hello Bob, the Linen Long-Sleeve Shirt (AP04) from order O22 is Apparel, which Returns Policy version 3.0 accepts within 30 days of delivery, with no restocking fee. To return it, reply to confirm and we will authorize the return and send a prepaid label; the refund of the net amount paid is issued within 5 business days after we receive and inspect it."
       },
       "environment_arguments": {},
       "fixed": {

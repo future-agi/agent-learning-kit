@@ -3,8 +3,8 @@
   "scenario_key": "new-change-replaces-a-pending-one",
   "scenario_id": "",
   "use_case": "Manage and cancel pending scheduled plan changes",
-  "branch": "Admin replaces a pending downgrade (PC405) with a scheduled Enterprise upgrade (20 seats) at renewal",
-  "tests": "Cancels pending change PC405 and schedules new Enterprise plan change for 20 seats at end of period",
+  "branch": "Admin replaces the pending seat cut PC405 with Enterprise at 20 seats at renewal, in one call that cancels PC405 only if the new change is scheduled",
+  "tests": "Schedules Enterprise with 20 seats for the end of the period replacing PC405 atomically (replaces_change_id); a refused replacement leaves PC405 pending",
   "instruction": "You are Nancy Naughton, billing administrator for Tenant T405 (User ID: U405_ADMIN). Your company currently has a Pro subscription with 20 seats, and there is a pending scheduled downgrade to 10 Pro seats (PC405). You now want to cancel that pending downgrade and instead schedule an upgrade to Enterprise with 20 seats at renewal (end of period). When the agent asks, confirm canceling PC405 and then confirm scheduling Enterprise with 20 seats.\n\nYour details:\n- Tenant ID: T405\n- User ID: U405_ADMIN\n- Pending Change to Cancel: PC405\n- Target Plan: Enterprise (enterprise)\n- Target Seats: 20\n- Effective Timing: end of period",
   "keywords": [
     "cancel_plan_change",
@@ -54,17 +54,9 @@
         "tenant_id": "T405"
       },
       "environment_arguments": {},
-      "fixed": {}
-    },
-    {
-      "tool": "cancel_scheduled_change",
-      "arguments": {
-        "tenant_id": "T405",
-        "actor_id": "U405_ADMIN",
-        "change_id": "PC405"
-      },
-      "environment_arguments": {},
-      "fixed": {}
+      "fixed": {
+        "tenant_id": "caller: T405"
+      }
     },
     {
       "tool": "preview_plan_change",
@@ -87,13 +79,15 @@
         "target_seats": 20,
         "actor_id": "U405_ADMIN",
         "confirmation_code": "confirmed",
-        "effective_timing": "end_of_period"
+        "effective_timing": "end_of_period",
+        "replaces_change_id": "PC405"
       },
       "environment_arguments": {},
       "fixed": {
         "target_plan_id": "caller: enterprise",
         "target_seats": "caller: 20",
-        "tenant_id": "caller: T405"
+        "tenant_id": "caller: T405",
+        "replaces_change_id": "caller: PC405"
       }
     }
   ],

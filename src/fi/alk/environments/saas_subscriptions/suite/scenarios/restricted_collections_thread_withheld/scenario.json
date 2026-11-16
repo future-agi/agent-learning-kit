@@ -35,6 +35,15 @@
   },
   "solution": [
     {
+      "tool": "verify_billing_admin",
+      "arguments": {
+        "actor_id": "U08_ADMIN",
+        "tenant_id": "T08"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
       "tool": "search_threads",
       "arguments": {
         "query": "HyperScale collections",
@@ -42,15 +51,6 @@
         "pageSize": 10,
         "pageToken": "",
         "includeTrash": false
-      },
-      "environment_arguments": {},
-      "fixed": {}
-    },
-    {
-      "tool": "verify_billing_admin",
-      "arguments": {
-        "actor_id": "U08_ADMIN",
-        "tenant_id": "T08"
       },
       "environment_arguments": {},
       "fixed": {}

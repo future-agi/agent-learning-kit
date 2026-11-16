@@ -52,7 +52,9 @@
         "fileId": "acc_pol_v3"
       },
       "environment_arguments": {},
-      "fixed": {}
+      "fixed": {
+        "fileId": "record: drive_files.file_id of the Application Access Policy in effect"
+      }
     }
   ],
   "alternatives": [],
@@ -67,6 +69,7 @@
     "task": "answer_access_policy_questions_with_citations"
   },
   "sub_goals": [
+    "edit_routed_to_document_owner",
     "effective_policy_consulted",
     "policy_source_cited",
     "declined_action_explained"

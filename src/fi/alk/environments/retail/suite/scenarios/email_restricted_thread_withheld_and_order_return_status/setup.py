@@ -1,9 +1,11 @@
 def setup(world):
+    # Trust and Safety has put the return on hold (the reason is in a restricted thread the desk
+    # cannot open); the record says on hold and the label is suspended, which is all she may be told.
     world.put("returns", {
         "return_id": "R411",
         "order_id": "O11",
         "customer_id": "C11",
-        "status": "authorized",
+        "status": "on_hold",
         "return_reason": "AC07:does_not_fit",
         "estimated_refund_cents": 8500,
         "restocking_fee_cents": 0,
@@ -18,7 +20,7 @@ def setup(world):
         "tracking_number": "9400111899223190000411",
         "carrier": "USPS",
         "label_url": "https://labels.example.com/L411.pdf",
-        "status": "active",
+        "status": "suspended",
         "created_at": "2026-10-24T10:00:00Z",
     })
     world.change("order_items", "IT11", {"returned_quantity": 1}, by="item_id")

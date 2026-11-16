@@ -55,7 +55,9 @@
         "customer_id": "C476"
       },
       "environment_arguments": {},
-      "fixed": {}
+      "fixed": {
+        "order_id": "caller: order O477"
+      }
     }
   ],
   "alternatives": [],

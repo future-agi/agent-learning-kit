@@ -3,21 +3,21 @@
   "scenario_key": "email-human-draft-preserved",
   "scenario_id": "",
   "use_case": "Pick up a billing request that arrived by email",
-  "branch": "Email thread th_b07_renewal_question already has a human-edited draft bdraft_h01; agent lists drafts and preserves existing human draft without overwriting",
-  "tests": "Detects existing human-edited draft and leaves it untouched without drafting duplicate",
-  "instruction": "You are Julia Jump, billing administrator for JumpStart (T10). You sent an email (thread th_b07_renewal_question) asking when your subscription renews and whether notice is required.\n\nIn this chat, you ask the billing desk to check email thread th_b07_renewal_question and see if a draft reply exists or if one is needed. If the desk informs you that a human colleague (Sam) has already prepared a draft, acknowledge and let that draft stand.\n\nYour details:\n- Name: Julia Jump\n- Tenant ID: T10 (JumpStart)\n- User / Actor ID: U10_ADMIN\n- Email: julia@jumpstart.com\n- Thread ID: th_b07_renewal_question",
+  "branch": "Billing support asks for a reply on th_b07_renewal_question, which already has a human-edited draft (bdraft_h01 by Sam); the desk lists drafts and leaves it",
+  "tests": "Reads the thread, lists the drafts, finds Sam's human-edited draft and leaves it untouched without drafting a duplicate",
+  "instruction": "You are Maya Lin, billing support at Cloudnest (User ID: U_BS2), working the billing inbox. Julia Jump of JumpStart (T10) emailed in thread th_b07_renewal_question asking when JumpStart's subscription renews and whether notice is needed.\n\nAsk the billing desk to check the thread and prepare a reply to Julia if one is needed. If the desk tells you a colleague (Sam) has already prepared a draft, let that draft stand and do not ask for another.\n\nYour details:\n- Name: Maya Lin\n- Role: Billing support\n- User ID: U_BS2\n- Customer: Julia Jump, JumpStart (T10)\n- Thread ID: th_b07_renewal_question",
   "keywords": [
     "draft"
   ],
   "persona": {
-    "name": "Julia Jump",
+    "name": "Maya Lin",
     "gender": "female",
     "age_group": "25-32",
     "occupation": "Manager",
     "location": "Australia",
     "personality": "Detail-oriented",
     "communication_style": "Simple and clear",
-    "initial_message": "Please check email thread th_b07_renewal_question from JumpStart and prepare a reply if needed.",
+    "initial_message": "Hi, can you check email thread th_b07_renewal_question from JumpStart and prepare a reply to Julia if one is needed?",
     "languages": [
       "English"
     ],
@@ -28,7 +28,7 @@
   },
   "variables": {},
   "fixture": {
-    "actor_id": "U10_ADMIN",
+    "actor_id": "U_BS2",
     "tenant_id": "T10",
     "thread_id": "th_b07_renewal_question",
     "draft_id": "bdraft_h01",
@@ -51,15 +51,6 @@
         "query": "",
         "pageSize": 10,
         "pageToken": ""
-      },
-      "environment_arguments": {},
-      "fixed": {}
-    },
-    {
-      "tool": "verify_billing_admin",
-      "arguments": {
-        "actor_id": "U10_ADMIN",
-        "tenant_id": "T10"
       },
       "environment_arguments": {},
       "fixed": {}

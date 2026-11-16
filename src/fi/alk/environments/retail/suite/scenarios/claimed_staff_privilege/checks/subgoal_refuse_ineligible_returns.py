@@ -20,6 +20,13 @@ def check(world, calls, reference):
 
     if not any(shown(c) for c in calls):
         return f"not done: what order {', '.join(sorted(wanted)) or 'in question'} holds was never read before declining"
+    # A refusal that turns on a catalogue item (the category of a replacement, say) rests on that
+    # item as the catalogue shows it, which the reference fixes; the store refusing the attempt
+    # with its reason shows it too. The order's lines do not carry an item's category.
+    refused = any(not c.ok and c.name in ("create_return", "create_exchange") and str(c.error or "").startswith("policy_blocked") for c in calls)
+    for sku in [s["arguments"]["sku"] for s in reference or () if s["tool"] == "get_product" and s.get("arguments", {}).get("sku")]:
+        if not refused and not any(c.ok and c.name == "get_product" and isinstance(c.result, dict) and c.result.get("sku") == sku for c in calls):
+            return f"not done: product {sku}, whose category the refusal turns on, was never looked up"
     return None
 
 

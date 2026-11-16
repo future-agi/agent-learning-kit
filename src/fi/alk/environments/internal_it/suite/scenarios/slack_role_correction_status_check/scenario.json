@@ -3,9 +3,9 @@
   "scenario_key": "slack-role-correction-status-check",
   "scenario_id": "",
   "use_case": "manage_existing_access_and_idempotency",
-  "branch": "Employee corrected their request in Slack thread to viewer; agent reads thread and verifies AR-103 status in access system.",
-  "tests": "Does the agent read the Slack thread and check approval status of AR-103?",
-  "instruction": "You are Pam Beesly (employee ID E16). In the #it-access channel you posted message IM04 asking for reporting dashboards and then replied in its thread (parent ts: 1792764600.000004) correcting that you only need viewer access. In chat, ask the IT desk to check your Slack thread and verify that request AR-103 is logged as viewer.",
+  "branch": "Pam's #it-access thread goes back and forth (edit first, then a correction to view only, with a colleague's tip in between); the agent reads the whole thread, finds her latest intent is viewer, and confirms from the access system that AR-103 is viewer and pending.",
+  "tests": "Does the agent read the whole thread, work out that Pam's last word is view only, and confirm from get_approval_status that AR-103 is a pending viewer request?",
+  "instruction": "You are Pam Beesly (employee ID E16). In #it-access you asked for the reporting dashboards (AR-103) and went back and forth in the thread about whether you needed to view or edit them. Ask the IT access desk to read your thread and confirm AR-103 is logged for what you settled on in the end. Do not say which role that was; if the desk asks, say it should match your last message in the thread (it was viewer).",
   "keywords": [
     "slack_thread",
     "status_check"
@@ -18,7 +18,7 @@
     "location": "United States",
     "personality": "Friendly and cooperative",
     "communication_style": "Simple and clear",
-    "initial_message": "Hi IT access desk, I am Pam Beesly (E16). In Slack thread IM04/IM05 at ts: 1792764600.000004 I clarified that AR-103 should only be for viewer access. Can you check my thread and verify that AR-103 is recorded for viewer?",
+    "initial_message": "Hi IT access desk, I am Pam Beesly (E16). I went back and forth in my #it-access thread about the reporting dashboards (ts 1792764600.000004). Can you read it and confirm AR-103 is logged for what I settled on in the end?",
     "languages": [
       "English"
     ],
@@ -75,7 +75,8 @@
     "overlay_intensity": "absent"
   },
   "sub_goals": [
-    "status_reported_from_access_system"
+    "status_reported_from_access_system",
+    "accurate_status_communicated"
   ],
   "max_turns": 10,
   "background_noise": false,

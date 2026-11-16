@@ -3,9 +3,9 @@
   "scenario_key": "slack-charlie-amend-request-dates",
   "scenario_id": "",
   "use_case": "Pick up a leave question from Slack and reply in the thread after approval",
-  "branch": "The US HR business partner asks the desk to process Charlie Brown's date correction in Slack thread SM03/SM04 to amend REQ-1103.",
-  "tests": "Reads the Slack correction thread and updates the leave request to the amended dates.",
-  "instruction": "You are Rachel Green (HR01), the US HR business partner. In Slack #hr-help (thread ts 1792656000.000003), Charlie Brown (E03) originally requested 21 to 23 December for REQ-1103, but followed up in the thread correcting the requested dates to 22 to 24 December 2026. Ask the leave desk to read the thread and amend REQ-1103 for Charlie with confirmed dates 2026-12-22 to 2026-12-24.\n\nYour details:\n- Your ID: HR01\n- Name: Rachel Green\n- Employee: Charlie Brown (E03)\n- Request ID: REQ-1103\n- Corrected dates: 2026-12-22 to 2026-12-24\n- Slack thread ts: 1792656000.000003",
+  "branch": "The US HR business partner asks the desk to apply Charlie Brown's date correction for REQ-1103 from his Slack thread, where he corrected the dates twice; the latest correction governs.",
+  "tests": "Reads the whole Slack thread, takes Charlie's latest correction (22 to 24 December, not the earlier 23 to 24), and amends REQ-1103 to those dates.",
+  "instruction": "You are Rachel Green (HR01), the US HR business partner. In Slack #hr-help (thread ts 1792656000.000003), Charlie Brown (E03) originally requested 21 to 23 December for REQ-1103 and then corrected his dates in the thread more than once. You have not checked which dates he settled on. Ask the leave desk to read the thread and amend REQ-1103 for Charlie to his latest dates. Do not name the dates yourself; when the desk reads back 22 to 24 December, confirm.\n\nYour details:\n- Your ID: HR01\n- Name: Rachel Green\n- Employee: Charlie Brown (E03)\n- Request ID: REQ-1103\n- Slack thread ts: 1792656000.000003\n- Charlie's latest dates (confirm only when the desk reads them back): 2026-12-22 to 2026-12-24",
   "keywords": [
     "slack_thread",
     "leave_submission"
@@ -18,7 +18,7 @@
     "location": "United States",
     "personality": "Professional and formal",
     "communication_style": "Direct and concise",
-    "initial_message": "Hi! Charlie Brown posted a correction in Slack #hr-help at 1792656000.000003 for REQ-1103 to change dates to 22-24 December. Can you amend it?",
+    "initial_message": "Hi! Charlie Brown posted a date correction in Slack #hr-help at 1792656000.000003 for REQ-1103. Can you read the thread and amend the request to the dates he settled on?",
     "languages": [
       "English"
     ],

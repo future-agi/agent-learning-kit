@@ -67,7 +67,9 @@
         "status": "paid"
       },
       "environment_arguments": {},
-      "fixed": {}
+      "fixed": {
+        "tenant_id": "caller: T02"
+      }
     }
   ],
   "alternatives": [],

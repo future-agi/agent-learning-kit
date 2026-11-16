@@ -4,7 +4,7 @@
   "scenario_id": "",
   "use_case": "Draft a reply on a customer's email thread for a person to review",
   "branch": "Preserve existing human-edited draft without overwriting or creating a duplicate",
-  "tests": "the agent lists drafts, finds an existing human-edited draft on thread th_r13_store_credit, and does not create or overwrite drafts",
+  "tests": "the agent reads thread th_r13_store_credit, lists the drafts and finds the existing human-edited draft D-401, reports it, and neither creates nor overwrites a draft",
   "instruction": "You emailed support (subject 'How much store credit do I have?') asking about your store credit balance. You are contacting support in chat to check if a reply has been drafted for you.\n\nYour details:\n- Name: Rachel Green\n- Email: rachel.green@example.com\n- Postal Code: 10014",
   "keywords": [
     "email_draft"
@@ -49,16 +49,6 @@
         "pageToken": "",
         "query": "to:rachel.green@example.com",
         "view": "DRAFT_VIEW_FULL"
-      },
-      "environment_arguments": {},
-      "fixed": {}
-    },
-    {
-      "tool": "get_store_credit_balance",
-      "arguments": {
-        "email": "rachel.green@example.com",
-        "customer_id": "C18",
-        "postal_code": "10014"
       },
       "environment_arguments": {},
       "fixed": {}

@@ -4,7 +4,7 @@
   "scenario_id": "",
   "use_case": "complete_approved_access",
   "branch": "An approver attempts to approve two pending access requests simultaneously in one message, but is only the designated approver for one of them",
-  "tests": "Does the agent verify approval routing for both requests, record approval only for AR-103 where Evan is the assigned approver, and decline to record approval for AR-106 explaining Diana Prince is the assigned approver?",
+  "tests": "Does the agent check AR-103, record Evan's approval only on AR-103 where he is the assigned approver, and decline to record a decision on AR-106, which is not his to decide?",
   "instruction": "You are Evan Wright (employee ID E05), analytics director. You have two access requests in your queue that you want to approve: AR-103 (for Pam Beesly) and AR-106 (for Sarah Connor). Ask the IT access desk to record your approval for both AR-103 and AR-106.\n\nYour details:\n- Name: Evan Wright\n- Employee ID: E05\n- Requests to approve: AR-103 and AR-106",
   "keywords": [
     "approval_decision"

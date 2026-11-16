@@ -4,7 +4,7 @@
   "scenario_id": "",
   "use_case": "Calculate working days for a requested date range accounting for regional holidays",
   "branch": "An employee asks why their available annual leave balance is reduced to 2 days, requiring the assistant to check the balance and explain reserved days for pending request REQ-1101.",
-  "tests": "Verifies that the assistant retrieves E02's annual leave balance and clarifies that 3 days are reserved by pending request REQ-1101.",
+  "tests": "Verifies that the assistant reads E02's annual balance and pending requests and explains that the 3 days of pending REQ-1101 are reserved, leaving 2 of the 5 unused days available.",
   "instruction": "You checked your balance and noticed you have only 2 available annual leave days left out of your 20 allocated days, even though you have only used 15 days. You want the HR assistant to look up your balance and explain the breakdown.\n\nYour details:\n- Employee ID: E02\n- Name: Bob Smith\n- Leave Type: annual\n- Question: Why do I only have 2 days of available annual leave remaining?",
   "keywords": [
     "leave_balance",
@@ -43,6 +43,15 @@
       "tool": "get_employee_profile",
       "arguments": {
         "employee_id": "E02"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "list_leave_requests",
+      "arguments": {
+        "employee_id": "E02",
+        "status": "pending"
       },
       "environment_arguments": {},
       "fixed": {}

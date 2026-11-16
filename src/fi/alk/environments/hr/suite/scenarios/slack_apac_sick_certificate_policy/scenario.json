@@ -44,7 +44,10 @@
         "channel_id": "CH_HRHELP"
       },
       "environment_arguments": {},
-      "fixed": {}
+      "fixed": {
+        "message_ts": "caller: 1792807200.000007",
+        "channel_id": "record: CH_HRHELP"
+      }
     },
     {
       "tool": "search_hr_policy",

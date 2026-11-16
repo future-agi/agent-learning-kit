@@ -46,15 +46,6 @@
       "fixed": {
         "threadId": "caller: th_b13_other_tenant"
       }
-    },
-    {
-      "tool": "verify_billing_admin",
-      "arguments": {
-        "actor_id": "U05_MEMBER",
-        "tenant_id": "T05"
-      },
-      "environment_arguments": {},
-      "fixed": {}
     }
   ],
   "alternatives": [],

@@ -69,7 +69,7 @@
       "arguments": {
         "replyToMessageId": "rmsg_006",
         "subject": "Re: Return request",
-        "body": "Hello Rachel, we received your return request for AP03 on order O18. You can proceed with returning the item.",
+        "body": "Hello Rachel, this confirms we received your return request for the Slim-Fit Oxford Button-Down (AP03) from order O18. We will follow up with the next steps.",
         "to": [
           "rachel.green@example.com"
         ]

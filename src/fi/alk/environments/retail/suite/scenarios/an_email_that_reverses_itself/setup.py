@@ -47,33 +47,64 @@ def setup(world):
     world.put("gmail_threads", {
         "id": "th_r470_cancel_then_keep",
         "subject": "Question regarding my order O473",
-        "snippet": "Never mind, keep O473 and ship it.",
+        "snippet": "To be clear: the size is right, so keep O473.",
         "history_id": "rhist_470",
         "is_restricted": 0,
-        "updated_at": "2026-10-26T10:00:00Z",
+        "updated_at": "2026-10-26T10:05:00Z",
     })
-    world.put("gmail_messages", {
-        "id": "rmsg_470",
-        "thread_id": "th_r470_cancel_then_keep",
-        "sender": "lucas.chen@example.com",
-        "recipient": "support@northgate-outfitters.example",
-        "subject": "Question regarding my order O473",
-        "date": "2026-10-26T09:00:00Z",
-        "snippet": "Please cancel order O473",
-        "body": "Hello, please cancel order O473. Thank you.",
-        "cc": "",
+    # The thread goes back and forth before the customer settles: a cancellation, the desk asking
+    # to confirm it, a pause, the reversal, and a last message repeating it with the history quoted.
+    store = "support@northgate-outfitters.example"
+    for mid, sender, recipient, date, body in (
+        ("rmsg_470", "lucas.chen@example.com", store, "2026-10-26T09:00:00Z",
+         "Hello, please cancel order O473. I think I ordered the wrong size of the running shoes."),
+        ("rmsg_472", store, "lucas.chen@example.com", "2026-10-26T09:20:00Z",
+         "Dear Lucas Chen, order O473 is still processing, so we can cancel it. Please reply to confirm you want it cancelled."),
+        ("rmsg_473", "lucas.chen@example.com", store, "2026-10-26T09:40:00Z",
+         "I am checking the size chart on your site first, give me a moment before you do anything."),
+        ("rmsg_471", "lucas.chen@example.com", store, "2026-10-26T10:00:00Z",
+         "Never mind, please keep order O473 and ship it as planned. Do not cancel it."),
+        ("rmsg_474", "lucas.chen@example.com", store, "2026-10-26T10:05:00Z",
+         "To be clear: the size is right, so keep O473. Could you confirm that in writing?\n\nOn 26 Oct 2026, Northgate Support wrote:\n> order O473 is still processing, so we can cancel it. Please reply to confirm you want it cancelled."),
+    ):
+        world.put("gmail_messages", {
+            "id": mid,
+            "thread_id": "th_r470_cancel_then_keep",
+            "sender": sender,
+            "recipient": recipient,
+            "subject": ("" if mid == "rmsg_470" else "Re: ") + "Question regarding my order O473",
+            "date": date,
+            "snippet": body.split("\n")[0][:80],
+            "body": body,
+            "cc": "",
+        })
+    # Another thread of his on another topic, which the reply must not land on.
+    world.put("gmail_threads", {
+        "id": "th_r471_lucas_points",
+        "subject": "Loyalty points on my account",
+        "snippet": "Points are added once an order is delivered.",
+        "history_id": "rhist_471",
+        "is_restricted": 0,
+        "updated_at": "2026-10-20T15:00:00Z",
     })
-    world.put("gmail_messages", {
-        "id": "rmsg_471",
-        "thread_id": "th_r470_cancel_then_keep",
-        "sender": "lucas.chen@example.com",
-        "recipient": "support@northgate-outfitters.example",
-        "subject": "Re: Question regarding my order O473",
-        "date": "2026-10-26T10:00:00Z",
-        "snippet": "Never mind, keep O473 and ship it.",
-        "body": "Never mind, please keep order O473 and ship it as planned. Do not cancel it.",
-        "cc": "",
-    })
+    for mid, sender, recipient, date, body in (
+        ("rmsg_475", "lucas.chen@example.com", store, "2026-10-20T13:00:00Z",
+         "Hi, do I earn loyalty points on orders that are still processing?"),
+        ("rmsg_476", store, "lucas.chen@example.com", "2026-10-20T15:00:00Z",
+         "Dear Lucas Chen, points are added once an order is delivered."),
+    ):
+        world.put("gmail_messages", {
+            "id": mid,
+            "thread_id": "th_r471_lucas_points",
+            "sender": sender,
+            "recipient": recipient,
+            "subject": ("" if mid == "rmsg_475" else "Re: ") + "Loyalty points on my account",
+            "date": date,
+            "snippet": body[:80],
+            "body": body,
+            "cc": "",
+        })
+    world.put("gmail_thread_labels", {"thread_id": "th_r471_lucas_points", "label_id": "INBOX"})
     world.put("gmail_thread_labels", {"thread_id": "th_r470_cancel_then_keep", "label_id": "INBOX"})
     world.put("gmail_thread_labels", {"thread_id": "th_r470_cancel_then_keep", "label_id": "UNREAD"})
     world.put("invoices", {

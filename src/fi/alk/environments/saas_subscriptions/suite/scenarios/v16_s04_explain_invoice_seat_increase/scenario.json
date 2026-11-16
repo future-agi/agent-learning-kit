@@ -5,7 +5,7 @@
   "use_case": "Explain invoice charge and line-item changes",
   "branch": "The October invoice increased by $82.50 due to 3 additional seats and 10% tax",
   "tests": "Explains line-level delta and tax breakdown from invoice data without inventing charges",
-  "instruction": "You are the billing administrator for Acme Corp. You noticed that your October invoice total was higher than September's invoice and want to know why. Ask support to explain what changed on the bill. If asked for your details or invoice references, provide them.\n\nYour details:\n- Organization: Acme Corp (Tenant ID: T01)\n- Your User ID: U01_ADMIN (Role: Billing Administrator)\n- October Invoice ID: inv_01_curr\n- September Invoice ID: inv_01_prev",
+  "instruction": "You are Alice Admin, the billing administrator for Acme Corp. You noticed that your October invoice total was higher than September's invoice and want to know why. Ask support to explain what changed on the bill. If asked for your details or invoice references, provide them.\n\nYour details:\n- Organization: Acme Corp (Tenant ID: T01)\n- Your User ID: U01_ADMIN (Role: Billing Administrator)\n- October Invoice ID: inv_01_curr\n- September Invoice ID: inv_01_prev",
   "keywords": [
     "invoice_breakdown",
     "role_authorization"

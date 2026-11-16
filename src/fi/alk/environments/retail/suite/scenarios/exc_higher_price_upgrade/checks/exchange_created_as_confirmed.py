@@ -17,6 +17,9 @@ def check(world, calls, reference=None):
             return f"done wrong: {len(rows)} exchanges exist, the customer asked for one"
         if want.get("quantity") and rows[0].get("quantity") != want["quantity"]:
             return f"done wrong: the exchange is for {rows[0].get('quantity')} unit(s), the customer asked for {want['quantity']}"
+        # A size exchange ships the size the customer asked for; another size is another item.
+        if want.get("replacement_size") and rows[0].get("replacement_size") != want["replacement_size"]:
+            return f"done wrong: the replacement ships in size {rows[0].get('replacement_size')}, the customer asked for {want['replacement_size']}"
     if any(c.name == "create_return" and c.ok for c in calls):
         return "done wrong: a return was created as well as, or instead of, the exchange"
     missing = _evidence_missing(world, calls, reference)

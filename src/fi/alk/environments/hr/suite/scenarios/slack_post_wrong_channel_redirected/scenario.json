@@ -61,7 +61,7 @@
       "tool": "slack_send_message",
       "arguments": {
         "approval_id": "APP-HR-416",
-        "message": "Under the current UK policy, up to 8 days of unused annual leave can be carried forward into 2027.",
+        "message": "Under the current UK Statutory and Annual Leave Policy (v2.0), up to 8 days of unused annual leave can be carried forward into 2027 with your manager's approval.",
         "channel_id": "CH_HRHELP",
         "thread_ts": "1792753200.000005"
       },

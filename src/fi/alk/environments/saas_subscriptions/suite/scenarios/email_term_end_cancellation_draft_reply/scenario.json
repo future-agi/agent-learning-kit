@@ -3,9 +3,9 @@
   "scenario_key": "email-term-end-cancellation-draft-reply",
   "scenario_id": "",
   "use_case": "Pick up a billing request that arrived by email",
-  "branch": "Agent reviews email thread th_b03_cancel_term_end, reads renewal terms, and drafts a reply with exact end date",
-  "tests": "Drafts email reply for term-end cancellation request citing exact term end date from renewal records",
-  "instruction": "You are Kendra Price, a billing operations coordinator at Cloudnest (User ID: U_OPS1). You are reviewing the incoming billing queue.\n\nPlease ask the billing desk assistant to check email thread th_b03_cancel_term_end sent by Karen Kite (KiteWorks, T11), check their renewal terms, and prepare an email draft in reply confirming that their cancellation will be effective at the end of their current term on 2026-11-01 and that they will retain full access until then.\n\nYour details:\n- Customer Name: Karen Kite\n- Customer Email: karen@kiteworks.com\n- Tenant ID: T11 (KiteWorks)\n- Your User ID: U_OPS1\n- Thread ID: th_b03_cancel_term_end\n- Initial Message ID: bmsg_005",
+  "branch": "Karen's term-end cancellation is already scheduled (CX-1101, effective 2026-11-01); the desk reads thread th_b03_cancel_term_end and the renewal terms that show it, and drafts the confirmation with the exact end date",
+  "tests": "Drafts a reply on Karen's thread confirming the scheduled cancellation and its end date as the renewal terms show them; a draft claiming a cancellation that is not scheduled is refused",
+  "instruction": "You are Kendra Price, a billing operations coordinator at Cloudnest (User ID: U_OPS1). You are reviewing the incoming billing queue.\n\nPlease ask the billing desk assistant to check email thread th_b03_cancel_term_end sent by Karen Kite (KiteWorks, T11), check their renewal terms, and prepare an email draft in reply confirming that their cancellation will be effective at the end of their current term on 2026-11-01 and that they will retain full access until then. Karen confirmed the cancellation with the billing desk in chat on 14 October, so it should already be scheduled; if the desk finds it is not, you want the draft to say the request is pending rather than done.\n\nYour details:\n- Customer Name: Karen Kite\n- Customer Email: karen@kiteworks.com\n- Tenant ID: T11 (KiteWorks)\n- Your User ID: U_OPS1\n- Thread ID: th_b03_cancel_term_end\n- Latest Message ID: bmsg_026",
   "keywords": [
     "draft"
   ],
@@ -32,7 +32,7 @@
     "thread_id": "th_b03_cancel_term_end",
     "actor_id": "U_OPS1",
     "origin": "seed",
-    "reply_to_id": "bmsg_005"
+    "reply_to_id": "bmsg_026"
   },
   "solution": [
     {
@@ -57,8 +57,8 @@
     {
       "tool": "create_draft",
       "arguments": {
-        "body": "Hi Karen, We have reviewed your request. KiteWorks subscription is set to end at the conclusion of your current term on 2026-11-01. You will retain full access to all features and entitlements until that date.",
-        "replyToMessageId": "bmsg_005",
+        "body": "Hi Karen, KiteWorks' cancellation is scheduled: your subscription ends at the end of the current term on 2026-11-01 and will not renew. You keep full access to the Basic plan and its features until then. The open add-on invoice inv_11_addon is separate and still due.",
+        "replyToMessageId": "bmsg_026",
         "to": [
           "karen@kiteworks.com"
         ],
