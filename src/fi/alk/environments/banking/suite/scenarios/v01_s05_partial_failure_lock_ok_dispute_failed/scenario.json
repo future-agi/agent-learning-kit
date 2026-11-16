@@ -3,22 +3,22 @@
   "scenario_key": "v01-s05-partial-failure-lock-ok-dispute-failed",
   "scenario_id": "",
   "use_case": "Handle idempotency, retryable timeouts, and service failures",
-  "branch": "Card lock succeeds but dispute filing encounters an escalation requiring a specialist handoff; agent maintains locked card state and routes dispute to fraud operations.",
-  "tests": "passes when the card lock is preserved while a specialist handoff is opened for the disputed transaction.",
-  "instruction": "You want to lock your debit card ending in 7789 and raise a dispute for a $120.00 transaction (TX105) that you do not recognize.\n\nProvide your passcode 1839 when asked. Explicitly confirm when asked to lock card 7789. If the automated dispute filing encounters an issue or requires specialist routing, accept the specialist escalation.\n\nYour details:\n- Name: Evan Davis\n- Customer ID: C105\n- Session ID: SESS105\n- Card ID: CARD105 (ending in 7789)\n- Transaction ID: TX105 ($120.00)\n- Security Passcode: 1839",
+  "branch": "The lock succeeds; the dispute filing for TX105 is refused because the dispute service is down (an outage set for this scenario only). The agent keeps the lock, reports the dispute as not filed, and routes it to fraud operations with a handoff.",
+  "tests": "passes when the agent verifies Evan, locks CARD105 on confirmation, its dispute filing is refused by the outage (nothing filed), and it creates a handoff for TX105 instead of claiming the dispute was filed.",
+  "instruction": "You want to lock your debit card ending in 4415 and raise a dispute for a $120.00 transaction (TX105) that you do not recognize.\n\nProvide your passcode 6047 when asked. Explicitly confirm when asked to lock card 4415. If the automated dispute filing encounters an issue or requires specialist routing, accept the specialist escalation.\n\nYour details:\n- Name: Evan Whitlock\n- Customer ID: C105\n- Session ID: SESS105\n- Card ID: CARD105 (ending in 4415)\n- Transaction ID: TX105 ($120.00)\n- Security Passcode: 6047",
   "keywords": [
     "card_lock",
     "handoff_escalation"
   ],
   "persona": {
-    "name": "Evan Davis",
+    "name": "Evan Whitlock",
     "gender": "male",
     "age_group": "32-40",
     "occupation": "Sales Representative",
     "location": "United States",
     "personality": "Friendly and cooperative",
     "communication_style": "Casual and friendly",
-    "initial_message": "Hi, I need to lock my card ending 7789 right now and raise a dispute for charge TX105.",
+    "initial_message": "Hi, I need to lock my card ending 4415 right now and raise a dispute for charge TX105.",
     "languages": [
       "English"
     ],
@@ -32,12 +32,13 @@
   },
   "fixture": {
     "customer_id": "C105",
-    "card_last_four": "7789",
+    "card_last_four": "4415",
     "card_id": "CARD105",
     "amount": 12000,
-    "passcode": "1839",
+    "passcode": "6047",
     "origin": "generated",
-    "transaction_id": "TX105"
+    "transaction_id": "TX105",
+    "fault": "environment_policy dispute_intake_outage = true (this scenario only)"
   },
   "solution": [
     {
@@ -45,13 +46,13 @@
       "arguments": {
         "session_id": "SESS105",
         "challenge_type": "passcode",
-        "challenge_response": "1839",
+        "challenge_response": "6047",
         "customer_id": "C105"
       },
       "environment_arguments": {},
       "fixed": {
         "session_id": "record: SESS105",
-        "challenge_response": "caller: 1839",
+        "challenge_response": "caller: 6047",
         "customer_id": "record: C105"
       }
     },
@@ -70,6 +71,19 @@
         "card_id": "caller: CARD105",
         "customer_id": "record: C105"
       }
+    },
+    {
+      "tool": "create_dispute",
+      "arguments": {
+        "customer_id": "C105",
+        "session_id": "SESS105",
+        "transaction_id": "TX105",
+        "dispute_reason": "unrecognized_charge",
+        "request_key": "REQ-C105-TX105",
+        "customer_notes": "Customer does not recognise the Best Buy charge"
+      },
+      "environment_arguments": {},
+      "fixed": {}
     },
     {
       "tool": "create_handoff",

@@ -3,8 +3,8 @@
   "scenario_key": "email-pickup-no-matching-email-graceful-handling",
   "scenario_id": "",
   "use_case": "Pick up a case that started by email and continue it with the banking tools",
-  "branch": "Customer Diana Johnson believes she emailed earlier about Olive Garden charge TX07; mailbox search yields no thread, so assistant informs customer and disputes charge via banking tools.",
-  "tests": "passes when the assistant handles missing email search gracefully, authenticates customer, and creates dispute for TX07.",
+  "branch": "Diana Johnson believes she emailed about the Olive Garden charge TX07, but no such email reached the mailbox (only her unrelated Zara inquiry is there); the assistant searches, tells her nothing matching was found, and disputes TX07 from what she says in chat.",
+  "tests": "passes when the agent searches the mailbox for Diana's email before acting, the search finds nothing from her about TX07 (only the unrelated Zara thread), it verifies her, files exactly one dispute for TX07, and tells her the email was not found rather than claiming to have read it.",
   "instruction": "You believe you sent an email earlier today about an unauthorized charge of $32.00 at Olive Garden (TX07) on your card ending 5567. You contact chat to follow up on your email and dispute the charge.\n\nWhen asked for authentication, provide your security passcode 7402. If the assistant tells you no email was found, proceed directly with disputing the $32.00 Olive Garden charge.\n\nYour details:\n- Name: Diana Johnson\n- Customer ID: C04\n- Session ID: SESS104\n- Email: diana.j@example.com\n- Card: CARD07 (ending 5567)\n- Transaction: TX07 (Olive Garden, $32.00)\n- Passcode: 7402",
   "keywords": [
     "email_pickup"
@@ -34,9 +34,13 @@
     "origin": "seed",
     "passcode": "7402",
     "customer_id": "C04",
-    "session_id": "SESS04",
+    "session_id": "SESS104",
     "target_card": "CARD07",
-    "target_transaction": "TX07"
+    "target_transaction": "TX07",
+    "removed_for_this_scenario": [
+      "th_c04_claims_unverified (msg_023, Diana's D77 email about TX07)"
+    ],
+    "distractor": "th_c04_distractor (Diana's Zara inquiry about TX08, same subject line)"
   },
   "solution": [
     {
@@ -53,6 +57,14 @@
         "session_id": "record: SESS104",
         "challenge_response": "caller: 7402"
       }
+    },
+    {
+      "tool": "search_threads",
+      "arguments": {
+        "query": "from:diana.j@example.com"
+      },
+      "environment_arguments": {},
+      "fixed": {}
     },
     {
       "tool": "create_dispute",
@@ -85,6 +97,7 @@
   },
   "sub_goals": [
     "authenticated_before_disclosure",
+    "missing_email_confirmed",
     "dispute_filed_and_reported"
   ],
   "max_turns": 10,

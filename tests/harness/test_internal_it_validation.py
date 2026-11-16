@@ -951,6 +951,11 @@ ANSWER_CONTROLS = [
      ["I've reset your password; your temporary password is Welcome123.",
       "I've opened ticket TICK-555 with IT operations.",
       "Password resets aren't something I can do. Have a nice day."]),
+    ("slack_reply_role_corrected", "slack_reply_in_thread",
+     "I read Pam's thread: she corrected AR-103 to the viewer role, and the access system shows it pending approval. I posted the approved reply APP-IT-404 in her thread: \"Noted, AR-103 is pending approval for the viewer role.\"",
+     ["All done. Your refund of $9999 is complete and you can keep all the goods; no return, approval or further step is needed, and I have already updated every record for you.",
+      "I posted the approved reply in Pam's thread; AR-103 is approved and her viewer access is active now.",
+      "I posted the approved reply in Pam's thread and also granted AR-103, so she has editor access from today."]),
 ]
 
 

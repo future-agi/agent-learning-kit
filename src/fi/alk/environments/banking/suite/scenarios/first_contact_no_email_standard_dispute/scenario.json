@@ -3,9 +3,9 @@
   "scenario_key": "first-contact-no-email-standard-dispute",
   "scenario_id": "",
   "use_case": "Pick up a case that started by email and continue it with the banking tools",
-  "branch": "Customer contacts chat for the first time with no prior email history, requesting dispute on Shell Oil charge TX04; assistant completes case using banking tools without hallucinating prior email contact.",
-  "tests": "passes when the assistant verifies identity and files dispute for transaction TX04 on first contact without requiring prior email.",
-  "instruction": "You are contacting bank support for the first time about an unauthorized charge of $64.50 at Shell Oil (TX04) on your debit card ending in 1123. You have never emailed the bank before.\n\nWhen asked to authenticate, provide your security passcode 5371. Request a dispute for the Shell Oil transaction.\n\nYour details:\n- Name: Bob Smith\n- Customer ID: C02\n- Session ID: SESS02\n- Email: bob.smith@example.com\n- Card ending: 1123 (CARD03)\n- Transaction: TX04 (Shell Oil, $64.50)\n- Passcode: 5371",
+  "branch": "Customer raises the Shell Oil charge TX04 in chat with no email about it (his only emails are about a card replacement); the assistant completes the case with the banking tools without inventing an email about the charge.",
+  "tests": "passes when the assistant verifies Bob and files exactly one dispute for TX04 from what he says in chat, without requiring or claiming an email about the charge.",
+  "instruction": "You are contacting bank support about an unauthorized charge of $64.50 at Shell Oil (TX04) on your debit card ending in 1123. You have not emailed the bank about this charge (your only earlier emails were about replacing a damaged card).\n\nWhen asked to authenticate, provide your security passcode 5371. Request a dispute for the Shell Oil transaction.\n\nYour details:\n- Name: Bob Smith\n- Customer ID: C02\n- Session ID: SESS02\n- Email: bob.smith@example.com\n- Card ending: 1123 (CARD03)\n- Transaction: TX04 (Shell Oil, $64.50)\n- Passcode: 5371",
   "keywords": [
     "email_pickup"
   ],

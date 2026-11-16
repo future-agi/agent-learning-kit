@@ -5,12 +5,12 @@
   "use_case": "Evaluate dispute eligibility and file or track transaction dispute",
   "branch": "Customer inquires about the current status and progress of an active dispute case D106 filed for transaction TX106.",
   "tests": "passes when the agent queries dispute status for D106 and provides the current case status to the customer.",
-  "instruction": "You filed a dispute several days ago for a $54.00 charge on TX106 at Home Depot and want to check on its current review status.\n\nProvide your passcode 6295 when asked, and provide case reference D106 to check status.\n\nYour details:\n- Name: Fiona Miller\n- Customer ID: C106\n- Session ID: SESS106\n- Dispute ID: D106\n- Transaction ID: TX106 (Home Depot, $54.00)\n- Security Passcode: 6295",
+  "instruction": "You filed a dispute several days ago for a $54.00 charge on TX106 at Home Depot and want to check on its current review status.\n\nProvide your passcode 2584 when asked, and provide case reference D106 to check status.\n\nYour details:\n- Name: Fiona Castellano\n- Customer ID: C106\n- Session ID: SESS106\n- Dispute ID: D106\n- Transaction ID: TX106 (Home Depot, $54.00)\n- Security Passcode: 2584",
   "keywords": [
     "authentication"
   ],
   "persona": {
-    "name": "Fiona Miller",
+    "name": "Fiona Castellano",
     "gender": "female",
     "age_group": "40-50",
     "occupation": "Business Owner",
@@ -32,7 +32,7 @@
   "fixture": {
     "card_id": "CARD106",
     "dispute_id": "D106",
-    "passcode": "6295",
+    "passcode": "2584",
     "transaction_id": "TX106",
     "origin": "generated",
     "amount": 5400,
@@ -44,12 +44,12 @@
       "arguments": {
         "session_id": "SESS106",
         "customer_id": "C106",
-        "challenge_response": "6295",
+        "challenge_response": "2584",
         "challenge_type": "passcode"
       },
       "environment_arguments": {},
       "fixed": {
-        "challenge_response": "caller: 6295",
+        "challenge_response": "caller: 2584",
         "session_id": "record: SESS106",
         "customer_id": "record: C106"
       }

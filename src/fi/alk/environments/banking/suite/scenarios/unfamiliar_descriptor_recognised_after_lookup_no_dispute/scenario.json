@@ -48,14 +48,6 @@
       "fixed": {
         "descriptor": "caller: BOSE STR 2214 FRAMINGHAM MA"
       }
-    },
-    {
-      "tool": "get_dispute_policy",
-      "arguments": {
-        "policy_type": "transaction_dispute"
-      },
-      "environment_arguments": {},
-      "fixed": {}
     }
   ],
   "alternatives": [],

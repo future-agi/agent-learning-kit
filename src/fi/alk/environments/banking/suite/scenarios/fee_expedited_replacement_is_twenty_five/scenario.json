@@ -57,7 +57,18 @@
       }
     }
   ],
-  "alternatives": [],
+  "alternatives": [
+    [
+      {
+        "tool": "get_dispute_policy",
+        "arguments": {
+          "policy_type": "fee_schedule"
+        },
+        "environment_arguments": {},
+        "fixed": {}
+      }
+    ]
+  ],
   "coverage": {
     "task": "answer_policy_question",
     "disposition": "fee",

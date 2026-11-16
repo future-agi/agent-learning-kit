@@ -3,9 +3,9 @@
   "scenario_key": "lock-card-idempotent-already-locked",
   "scenario_id": "",
   "use_case": "Handle idempotency, retryable timeouts, and service failures",
-  "branch": "Customer representative requests locking card ending 7216; agent authenticates, asks confirmation, locks card, and confirms locked status.",
-  "tests": "passes when identity is verified, confirmation is given, and card status becomes locked.",
-  "instruction": "You are acting on behalf of Fiona MacLeod (C116). You want to ensure card ending 7216 is locked immediately because it was misplaced.\n\nWhen challenged for identity verification, provide passcode 7216.\nWhen the assistant requests explicit confirmation to lock card 7216, confirm clearly.\nWhen the assistant confirms that card 7216 is locked, thank the assistant and conclude.\n\nYour details:\n- Name: Fiona MacLeod\n- Customer ID: C116\n- Session ID: SESS116\n- Passcode: 7216\n- Card ending: 7216 (CARD116)",
+  "branch": "The card is already locked (the app lock went through last night); the agent verifies Fiona, reads the card's status and tells her it is locked and since when, without a second lock or a replacement.",
+  "tests": "passes when the agent verifies Fiona, reads her cards (CARD116 locked since 2026-10-25 21:10) and reports the lock as the records hold it, changing nothing (a repeated lock_card, which the tool answers as already locked, changes nothing either).",
+  "instruction": "You are Fiona MacLeod. Last night you locked your debit card ending 7216 in the banking app after misplacing it, but the app crashed and you are not sure the lock went through. Ask the assistant to check whether the card is locked and to make sure it is. When it tells you the card is already locked and since when, thank it and conclude; you do not want a replacement yet.\n\nWhen challenged for identity verification, provide passcode 7216.\n\nYour details:\n- Name: Fiona MacLeod\n- Customer ID: C116\n- Session ID: SESS116\n- Passcode: 7216\n- Card ending: 7216 (CARD116)",
   "keywords": [
     "card_lock",
     "idempotency"
@@ -18,7 +18,7 @@
     "location": "United Kingdom",
     "personality": "Detail-oriented",
     "communication_style": "Formal and polite",
-    "initial_message": "Hello, I am representing Fiona MacLeod. We need to lock her debit card ending in 7216 immediately.",
+    "initial_message": "Hello, I tried to lock my debit card ending 7216 in the app last night but it crashed. Is it locked?",
     "languages": [
       "English"
     ],
@@ -32,9 +32,9 @@
   },
   "fixture": {
     "origin": "generated",
-    "passcode": "7216",
     "customer_id": "C116",
-    "card_id": "CARD116"
+    "card_id": "CARD116",
+    "card_state": "locked at 2026-10-25T21:10:00Z (app lock)"
   },
   "solution": [
     {
@@ -53,20 +53,14 @@
       }
     },
     {
-      "tool": "lock_card",
+      "tool": "list_owned_cards",
       "arguments": {
-        "reason": "lost_card",
-        "card_id": "CARD116",
-        "session_id": "SESS116",
         "customer_id": "C116",
-        "confirmed": true
+        "session_id": "SESS116"
       },
       "environment_arguments": {},
       "fixed": {
-        "card_id": "record: CARD116",
-        "confirmed": "caller: explicit confirmation",
-        "customer_id": "record: C116",
-        "session_id": "record: SESS116"
+        "customer_id": "record: C116"
       }
     }
   ],
@@ -83,7 +77,7 @@
   },
   "sub_goals": [
     "authenticated_before_disclosure",
-    "card_locked_upon_confirmation"
+    "requested_records_reported"
   ],
   "max_turns": 8,
   "background_noise": false,
