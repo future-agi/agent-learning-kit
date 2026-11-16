@@ -7507,13 +7507,13 @@ class ProcessRuntimeProvider:
             self._context.work_directory, world_index, control
         )
 
-        def _fill(value: str) -> str:
+        def _fill(value: str, directory: Path = world_dir) -> str:
             return (
                 value.replace(
                     "{{JOB_ID}}", self._context.dispatch_id or self._context.job_id
                 )
                 .replace("{{WORLD_INDEX}}", str(world_index))
-                .replace("{{WORLD_DIR}}", str(world_dir))
+                .replace("{{WORLD_DIR}}", str(directory))
             )
 
         agent_name = env.get("LIVEKIT_AGENT_NAME")
@@ -7529,6 +7529,21 @@ class ProcessRuntimeProvider:
         trace = env.get("HARNESS_TOOL_TRACE")
         if trace:
             metadata["tool_trace_path"] = _fill(trace)
+        else:
+            # An older bundle traces the calls in its tools service, not its control service: read them there.
+            tracer = next(
+                (
+                    one
+                    for one in self._manifest.processes
+                    if (getattr(one, "environment", None) or {}).get("HARNESS_TOOL_TRACE")
+                ),
+                None,
+            )
+            if tracer is not None:
+                metadata["tool_trace_path"] = _fill(
+                    tracer.environment["HARNESS_TOOL_TRACE"],
+                    world_scratch_dir(self._context.work_directory, world_index, tracer.name),
+                )
         return metadata
 
     def _drop_world_shared_databases(self, world_index: int) -> None:

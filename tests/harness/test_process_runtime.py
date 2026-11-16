@@ -11301,3 +11301,28 @@ def test_native_config_resource_path_rejects_escape_at_model_boundary(path):
         _source_process(config_files={path: {"values": {"MODE": "test"}}})
 
 
+
+
+@pytest.mark.parametrize(
+    ("agent_env", "traced_by"),
+    [({}, "mcp-toolbox"), ({"HARNESS_TOOL_TRACE": "{{WORLD_DIR}}/agent-tool-calls.jsonl"}, "agent")],
+    ids=["an older seal traces in its tools service", "the control service traces itself"],
+)
+def test_the_tool_trace_is_read_from_the_process_that_writes_it(tmp_path: Path, agent_env, traced_by) -> None:
+    from types import SimpleNamespace
+
+    toolbox = SimpleNamespace(
+        name="mcp-toolbox",
+        environment={"DATABASE_URL": "{{WORLD_DATABASE_URL}}", "HARNESS_TOOL_TRACE": "{{WORLD_DIR}}/agent-tool-calls.jsonl"},
+    )
+    agent = SimpleNamespace(name="agent", environment={"HARNESS_MODE": "1", **agent_env})
+    provider = object.__new__(pr.ProcessRuntimeProvider)
+    provider._manifest = SimpleNamespace(
+        processes=[SimpleNamespace(name="world-db", environment=None), agent, toolbox],
+        runtime=SimpleNamespace(control_service="agent"),
+    )
+    provider._context = SimpleNamespace(work_directory=tmp_path, dispatch_id="", job_id="job-1")
+
+    metadata = provider._control_metadata(0)
+
+    assert metadata["tool_trace_path"] == str(tmp_path / "worlds" / "w0" / traced_by / "agent-tool-calls.jsonl")
