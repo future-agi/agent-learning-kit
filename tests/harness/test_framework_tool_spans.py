@@ -18,6 +18,7 @@ import pytest
 from fi.alk.harness import (
     call_runner,
     simulation_mark_bootstrap,
+    simulation_measure,
     simulation_worker_events,
 )
 from fi.alk.harness.process_runtime import EnvironmentRuntime, RuntimeState
@@ -1443,6 +1444,8 @@ def test_the_process_instrumenting_after_the_hook_with_its_own_provider_gets_it(
 
 
 def test_the_hook_turns_on_every_instrumentor_the_build_installs() -> None:
+    """A framework's instrumentor is turned on by the mark hook, a model SDK's by the measuring
+    module beside it; between them, every one the build installs."""
     from fi.alk.harness.generated_runtime import FRAMEWORK_INSTRUMENTORS
 
     built = {
@@ -1450,9 +1453,12 @@ def test_the_hook_turns_on_every_instrumentor_the_build_installs() -> None:
         for _framework, one in FRAMEWORK_INSTRUMENTORS
         if one.startswith("traceai")
     }
-    assert built == {
+    frameworks = {
         module for module, _cls in simulation_mark_bootstrap._INSTRUMENTORS.values()
     }
+    sdks = {module for module, _cls in simulation_measure.SDK_INSTRUMENTORS.values()}
+    assert not frameworks & sdks
+    assert built == frameworks | sdks
 
 
 def test_a_framework_whose_instrumentor_is_missing_is_reported_unobserved(

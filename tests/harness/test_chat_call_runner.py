@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import importlib
 import json
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -10,9 +11,11 @@ from typing import Any
 import pytest
 
 from fi.alk.harness import chat_call_runner as chat
+from fi.alk.harness import privilege
 from fi.alk.harness.call_runner import CallRunnerContext
 from fi.alk.harness.hosted_scheduler import CallAborted
 from fi.alk.harness.job import HarnessJob
+from fi.alk.harness.privilege import IsolationMode
 from fi.alk.harness.process_runtime import (
     EnvironmentRuntime,
     RuntimeEndpoint,
@@ -392,6 +395,70 @@ def test_hosted_chat_executes_response_carried_tool_and_uploads_transcript(
     assert outcome.transcript_artifact == "transcript-1"
     assert b"The account is active" in adapter.uploads[0]
     assert b'"name": "lookup_account"' in adapter.uploads[1]
+
+
+@pytest.mark.parametrize(
+    "written,readable,failed",
+    [
+        pytest.param(False, True, False, id="agent-wrote-no-trace"),
+        pytest.param(True, True, False, id="trace-read"),
+        pytest.param(True, False, True, id="trace-unreadable"),
+    ],
+)
+def test_hosted_chat_says_when_the_agent_s_tool_trace_could_not_be_read(
+    tmp_path: Path, monkeypatch: Any, written: bool, readable: bool, failed: bool
+) -> None:
+    monkeypatch.setattr(chat, "_tool_world", lambda *_args: _ToolWorld())
+    monkeypatch.setattr(chat, "_drive_conversation", _single_exchange)
+    trace = tmp_path / "agent-tool-calls.jsonl"
+
+    class Wrapper:
+        def __init__(self, **_kwargs: Any) -> None:
+            pass
+
+        async def call(self, _request: Any) -> AgentResponse:
+            # The agent runs its tools in its own process and writes them to the trace file.
+            if written:
+                trace.write_text(
+                    json.dumps({"name": "lookup_account", "arguments": {}}) + "\n",
+                    encoding="utf-8",
+                )
+            return AgentResponse(content="I can't share that account.")
+
+    monkeypatch.setattr(chat, "HTTPAgentWrapper", Wrapper)
+    read_text = Path.read_text
+
+    def read_unless_refused(self: Path, *args: Any, **kwargs: Any) -> str:
+        if self == trace and not readable:
+            raise PermissionError("denied")
+        return read_text(self, *args, **kwargs)
+
+    monkeypatch.setattr(type(trace), "read_text", read_unless_refused)
+    runtime = EnvironmentRuntime(
+        runtime_id="runtime-1",
+        world_index=0,
+        bundle_digest="sha256:" + "a" * 64,
+        state=RuntimeState.READY,
+        endpoints={
+            "target_http": RuntimeEndpoint(
+                capability="target_http",
+                protocol="http",
+                address="http://localhost:18080",
+            )
+        },
+        metadata={"tool_trace_path": str(trace)},
+    )
+
+    outcome = asyncio.run(
+        chat.HostedChatCallRunner(_Adapter(), _context(tmp_path)).run(
+            SimpleNamespace(scenario_key="one", scenario_id="scenario-1"), runtime
+        )
+    )
+
+    assert [call.name for call in outcome.calls] == (
+        ["lookup_account"] if written and readable else []
+    )
+    assert outcome.tool_capture_failed is failed
 
 
 def test_hosted_chat_takes_each_call_s_worker_from_the_agent_s_framework_spans(
@@ -874,9 +941,11 @@ def test_hosted_chat_continues_when_agent_asks_customer_for_account_id(
     assert {"role": "user", "content": "My account ID is CLI-04."} in outcome.messages
 
 
-def test_tool_world_can_import_customer_tool_from_uploaded_source(
-    tmp_path: Path, monkeypatch: Any
+@pytest.mark.parametrize("mode", [IsolationMode.FIXED_USER, IsolationMode.PER_USER])
+def test_only_with_one_fixed_user_a_tool_world_imports_customer_code_from_the_upload(
+    tmp_path: Path, monkeypatch: Any, mode: IsolationMode
 ) -> None:
+    monkeypatch.setattr(privilege, "_mode", mode)
     context = _context(tmp_path)
     source = tmp_path / "source"
     source.mkdir()
@@ -926,6 +995,13 @@ def test_tool_world_can_import_customer_tool_from_uploaded_source(
         },
     )
 
+    if mode is IsolationMode.PER_USER:
+        # This process holds the harness's capabilities: the agent's code runs only in its
+        # handler child (tests/harness/test_handler_child.py).
+        with pytest.raises(CallAborted, match="handler_child_required"):
+            chat._tool_world(context.bundle_dir, contract, runtime, source)
+        assert str(source) not in sys.path
+        return
     world = chat._tool_world(context.bundle_dir, contract, runtime, source)
     result = world.handle_tool_call(
         {
