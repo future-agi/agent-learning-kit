@@ -60,7 +60,7 @@ def parse_environment_source(
     content: bytes,
     filename: str,
     media_type: str,
-    role: Literal["policy", "seed_records"],
+    role: Literal["policy", "reference", "seed_records"],
 ) -> RawParsedSource:
     if len(content) > MAX_SOURCE_BYTES:
         raise SourceParseError(
@@ -69,11 +69,26 @@ def parse_environment_source(
         )
     suffix = PurePath(filename).suffix.lower()
     normalized_media_type = media_type.split(";", 1)[0].strip().lower()
-    if role == "policy":
+    if (
+        role == "reference"
+        and normalized_media_type == "text/plain"
+        and suffix == ".txt"
+    ):
+        text = _normalize_text(_decode_text(content))
+        if len(text) > MAX_EXTRACTED_TEXT_CHARS:
+            raise SourceParseError(
+                "source_too_large", "Reference text exceeds the 10 MiB character limit"
+            )
+        if not text:
+            raise SourceParseError(
+                "source_no_extractable_text", "The reference contains no text"
+            )
+        return RawPolicyDocument(pages=(RawPolicyPage(page=1, text=text),))
+    if role in {"policy", "reference"}:
         if suffix != ".pdf" or normalized_media_type != "application/pdf":
             raise SourceParseError(
                 "source_unsupported_type",
-                "Week 1 policy sources must be application/pdf files",
+                "Policy sources require PDF; reference sources require PDF or UTF-8 text",
             )
         return _parse_pdf(content)
     if suffix == ".csv" and normalized_media_type in {

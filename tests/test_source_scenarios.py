@@ -496,3 +496,35 @@ def test_forbidden_only_material_supports_a_compliant_case() -> None:
         "negative_control",
     ]
     assert all(draft.status == "reviewable" for draft in generated.drafts)
+
+
+def test_participant_only_policy_does_not_shape_tested_agent_scenarios() -> None:
+    from fi.alk.studio import SourceAudience
+    from test_environment_source_audiences import _approve
+
+    reviewed = _approve(
+        (
+            _policy_source('The response must contain "approved".', source_id="public"),
+            _policy_source(
+                'The response must contain "PARTICIPANT_ONLY_SENTINEL".',
+                source_id="participant",
+            ),
+        ),
+        {
+            "public": SourceAudience(True),
+            "participant": SourceAudience(False, ("buyer",)),
+        },
+    )
+    generated = generate_source_scenarios(
+        reviewed,
+        environment_requirements=EnvironmentRequirements(task="Handle a request"),
+        requested_count=2,
+    )
+    assert all(
+        "PARTICIPANT_ONLY_SENTINEL" not in payload
+        for payload in generated.scenario_payloads
+    )
+    assert any(
+        check.check_arguments.get("value") == "PARTICIPANT_ONLY_SENTINEL"
+        for check in generated.evaluator_specs[0].checks
+    )

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, fields, is_dataclass
 from dataclasses import field as dataclass_field
@@ -13,7 +14,7 @@ from pydantic import ConfigDict
 
 from fi.simulate.suite import DETERMINISTIC_ASSERTION_TYPES
 
-SourceRole: TypeAlias = Literal["policy", "seed_records"]
+SourceRole: TypeAlias = Literal["policy", "reference", "seed_records"]
 
 SourceVisibility: TypeAlias = Literal["agent_visible", "evaluator_only"]
 
@@ -56,6 +57,60 @@ class EnvironmentInputError(ValueError):
 
 
 @dataclass(frozen=True)
+class SourceAudience(_ImmutableValue):
+    tested_agent: bool = False
+    participant_ids: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        if (
+            type(self.tested_agent) is not bool
+            or not isinstance(self.participant_ids, tuple)
+            or any(
+                not isinstance(identifier, str)
+                or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}", identifier)
+                for identifier in self.participant_ids
+            )
+            or len(set(self.participant_ids)) != len(self.participant_ids)
+        ):
+            raise EnvironmentInputError(
+                "source_audience_invalid", "Source audience contains invalid recipients"
+            )
+        object.__setattr__(self, "participant_ids", tuple(sorted(self.participant_ids)))
+
+    @property
+    def untrusted_recipients(self) -> frozenset[str]:
+        return frozenset(
+            (("tested_agent",) if self.tested_agent else ())
+            + tuple("participant:" + identifier for identifier in self.participant_ids)
+        )
+
+
+def _normalize_audience(
+    visibility: SourceVisibility | None, audience: SourceAudience | None
+) -> SourceAudience:
+    if visibility not in {None, "agent_visible", "evaluator_only"}:
+        raise EnvironmentInputError(
+            "source_audience_invalid", "Unknown source visibility"
+        )
+    if audience is not None and not isinstance(audience, SourceAudience):
+        raise EnvironmentInputError(
+            "source_audience_invalid", "A typed source audience is required"
+        )
+    if audience is None:
+        return SourceAudience(tested_agent=visibility == "agent_visible")
+    if visibility is not None and (
+        (visibility == "agent_visible") != audience.tested_agent
+        or (visibility == "evaluator_only" and audience.participant_ids)
+    ):
+        raise EnvironmentInputError(
+            "source_audience_invalid",
+            "Legacy visibility conflicts with the source audience",
+        )
+    return audience
+
+
+@dataclass(frozen=True)
 class EnvironmentSource(_ImmutableValue):
     source_id: str
     filename: str
@@ -68,8 +123,8 @@ class EnvironmentSource(_ImmutableValue):
             raise ValueError("source_id must be nonempty")
         if not self.filename.strip():
             raise ValueError("filename must be nonempty")
-        if self.role not in {"policy", "seed_records"}:
-            raise ValueError("role must be policy or seed_records")
+        if self.role not in {"policy", "reference", "seed_records"}:
+            raise ValueError("role must be policy, reference, or seed_records")
 
 
 @dataclass(frozen=True)
@@ -212,9 +267,10 @@ class RecordRelationship(_ImmutableValue):
 @dataclass(frozen=True)
 class RecordReview(_ImmutableValue):
     source_id: str
-    visibility: SourceVisibility
-    personal_data_mode: PersonalDataMode
-    fields: tuple[FieldMapping, ...]
+    visibility: SourceVisibility | None = None
+    personal_data_mode: PersonalDataMode = "none"
+    fields: tuple[FieldMapping, ...] = ()
+    audience: SourceAudience | None = dataclass_field(default=None, kw_only=True)
 
 
 @dataclass(frozen=True)
@@ -240,8 +296,16 @@ class PolicyRuleReview(_ImmutableValue):
 @dataclass(frozen=True)
 class PolicyReview(_ImmutableValue):
     source_id: str
-    visibility: SourceVisibility
+    visibility: SourceVisibility | None = None
     rules: tuple[PolicyRuleReview, ...] = ()
+    audience: SourceAudience | None = dataclass_field(default=None, kw_only=True)
+
+
+@dataclass(frozen=True)
+class ReferenceReview(_ImmutableValue):
+    source_id: str
+    visibility: SourceVisibility | None = None
+    audience: SourceAudience | None = dataclass_field(default=None, kw_only=True)
 
 
 @dataclass(frozen=True)
@@ -250,6 +314,9 @@ class EnvironmentInputReview(_ImmutableValue):
     record_reviews: tuple[RecordReview, ...]
     policy_reviews: tuple[PolicyReview, ...]
     relationships: tuple[RecordRelationship, ...] = ()
+    reference_reviews: tuple[ReferenceReview, ...] = dataclass_field(
+        default=(), kw_only=True
+    )
 
 
 @dataclass(frozen=True)
@@ -269,8 +336,25 @@ class ReviewedRecord(_ImmutableValue):
         return dict(self.values)
 
 
+class _ReviewedAudienceSource(_ImmutableValue):
+    visibility: SourceVisibility
+    audience: SourceAudience
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        audience = _normalize_audience(
+            self.visibility if self.audience is None else None, self.audience
+        )
+        object.__setattr__(self, "audience", audience)
+        object.__setattr__(
+            self,
+            "visibility",
+            "agent_visible" if audience.tested_agent else "evaluator_only",
+        )
+
+
 @dataclass(frozen=True)
-class ReviewedRecordSource(_ImmutableValue):
+class ReviewedRecordSource(_ReviewedAudienceSource):
     pin: SourcePin
     filename: str
     visibility: SourceVisibility
@@ -278,16 +362,18 @@ class ReviewedRecordSource(_ImmutableValue):
     records: tuple[ReviewedRecord, ...]
     rejected_records: tuple[RejectedRecord, ...]
     personal_data_mode: PersonalDataMode = "none"
+    audience: SourceAudience = dataclass_field(default=None, kw_only=True)
 
 
 @dataclass(frozen=True)
-class ReviewedPolicySource(_ImmutableValue):
+class ReviewedPolicySource(_ReviewedAudienceSource):
     pin: SourcePin
     filename: str
     visibility: SourceVisibility
     pages: tuple[ParsedPolicyPage, ...]
     statements: tuple[PolicyStatement, ...]
     rule_reviews: tuple[PolicyRuleReview, ...]
+    audience: SourceAudience = dataclass_field(default=None, kw_only=True)
 
     @property
     def active_rules(self) -> tuple[PolicyRuleProposal, ...]:
@@ -296,6 +382,16 @@ class ReviewedPolicySource(_ImmutableValue):
             for review in self.rule_reviews
             if review.decision == "accepted"
         )
+
+
+@dataclass(frozen=True)
+class ReviewedReferenceSource(_ReviewedAudienceSource):
+    pin: SourcePin
+    filename: str
+    visibility: SourceVisibility
+    pages: tuple[ParsedPolicyPage, ...]
+    statements: tuple[PolicyStatement, ...]
+    audience: SourceAudience = dataclass_field(default=None, kw_only=True)
 
 
 @dataclass(frozen=True)
@@ -316,6 +412,9 @@ class ReviewedEnvironmentInputs(_ImmutableValue):
     relationships: tuple[RecordRelationship, ...]
     private_replacement_receipt: tuple[ReplacementReceipt, ...]
     diagnostics: tuple[SourceDiagnostic, ...] = ()
+    schema_version: Literal[
+        "environment-inputs.snapshot.v1", "environment-inputs.snapshot.v2"
+    ] = dataclass_field(default="environment-inputs.snapshot.v2", kw_only=True)
 
 
 @dataclass(frozen=True)
@@ -323,6 +422,9 @@ class EvaluatorInputSet(_ImmutableValue):
     policies: tuple[ReviewedPolicySource, ...]
     records: tuple[ReviewedRecordSource, ...]
     rules: tuple[PolicyRuleProposal, ...]
+    references: tuple[ReviewedReferenceSource, ...] = dataclass_field(
+        default=(), kw_only=True
+    )
 
 
 @dataclass(frozen=True)
@@ -356,6 +458,9 @@ class CompiledEnvironmentInputs(_ImmutableValue):
     evaluator_inputs: EvaluatorInputSet
     snapshot_digest: str
     public_provenance: tuple[PublicSourceProvenance, ...]
+    participant_environments: Mapping[str, tuple[AgentEnvironmentSpec, ...]] = (
+        dataclass_field(default_factory=dict, kw_only=True)
+    )
 
 
 @dataclass(frozen=True)
@@ -491,4 +596,6 @@ def _deep_thaw(value: Any) -> Any:
 ParsedSource: TypeAlias = (
     ParsedRecordSource | ParsedPolicySource | FailedEnvironmentSource
 )
-ReviewedSource: TypeAlias = ReviewedRecordSource | ReviewedPolicySource
+ReviewedSource: TypeAlias = (
+    ReviewedRecordSource | ReviewedPolicySource | ReviewedReferenceSource
+)

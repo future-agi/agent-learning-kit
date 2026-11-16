@@ -35,6 +35,10 @@ from fi.alk.studio._environment_input_types import (
     PublicSourceProvenance,
     RecordRelationship,
     RecordReview,
+    ReferenceReview,
+    ReviewedReferenceSource,
+    SourceAudience,
+    _normalize_audience,
     RejectedRecord,
     RelationshipProposal,
     ReviewedEnvironmentInputs,
@@ -170,6 +174,13 @@ def review_environment_inputs(
     review: EnvironmentInputReview,
     reviewer_id: str,
 ) -> ReviewedEnvironmentInputs:
+    for decision in (
+        *review.record_reviews,
+        *review.policy_reviews,
+        *review.reference_reviews,
+    ):
+        if decision.audience is not None:
+            _normalize_audience(decision.visibility, decision.audience)
     try:
         review = TypeAdapter(EnvironmentInputReview).validate_json(
             _canonical_json(review)
@@ -213,8 +224,19 @@ def review_environment_inputs(
     parsed_policies = {
         source.pin.source_id: source
         for source in draft.sources
-        if isinstance(source, ParsedPolicySource)
+        if isinstance(source, ParsedPolicySource) and source.pin.role == "policy"
     }
+    parsed_references = {
+        source.pin.source_id: source
+        for source in draft.sources
+        if isinstance(source, ParsedPolicySource) and source.pin.role == "reference"
+    }
+    reference_reviews = _index_reviews(review.reference_reviews, "reference")
+    if set(reference_reviews) != set(parsed_references):
+        raise EnvironmentInputError(
+            "source_mapping_invalid",
+            "Every reference source requires exactly one review",
+        )
     record_reviews = _index_reviews(review.record_reviews, "record")
     policy_reviews = _index_reviews(review.policy_reviews, "policy")
     if set(record_reviews) != set(parsed_records):
@@ -244,8 +266,23 @@ def review_environment_inputs(
         for source_id in sorted(parsed_policies)
     )
     _validate_policy_conflicts(reviewed_policies)
+    reviewed_references = tuple(
+        ReviewedReferenceSource(
+            pin=source.pin,
+            filename=source.filename,
+            visibility="evaluator_only",
+            pages=source.pages,
+            statements=source.statements,
+            audience=_normalize_audience(
+                reference_reviews[source_id].visibility,
+                reference_reviews[source_id].audience,
+            ),
+        )
+        for source_id, source in sorted(parsed_references.items())
+    )
     reviewed_sources: tuple[ReviewedSource, ...] = (
         *reviewed_policies,
+        *reviewed_references,
         *(reviewed_records[source_id] for source_id in sorted(reviewed_records)),
     )
     snapshot_diagnostics = (*draft.diagnostics, *conversion_diagnostics)
@@ -270,45 +307,131 @@ def compile_environment_inputs(
     existing_environments: tuple[AgentEnvironmentSpec, ...] = (),
 ) -> CompiledEnvironmentInputs:
     _assert_reviewed_snapshot(reviewed)
-    visible_policies = tuple(
-        source
-        for source in reviewed.sources
-        if isinstance(source, ReviewedPolicySource)
-        and source.visibility == "agent_visible"
+    _validate_audience_relationships(reviewed)
+    participant_ids = sorted(
+        {
+            identifier
+            for source in reviewed.sources
+            for identifier in source.audience.participant_ids
+        }
     )
-    visible_records = tuple(
-        source
-        for source in reviewed.sources
-        if isinstance(source, ReviewedRecordSource)
-        and source.visibility == "agent_visible"
+    agent_sources = tuple(
+        source for source in reviewed.sources if source.audience.tested_agent
     )
-    hidden_policies = tuple(
-        source
-        for source in reviewed.sources
-        if isinstance(source, ReviewedPolicySource)
-        and source.visibility == "evaluator_only"
+    environments = _compile_projection(reviewed, agent_sources)
+    _validate_environment_collisions((*existing_environments, *environments))
+    participants = {
+        identifier: _compile_projection(
+            reviewed,
+            tuple(
+                source
+                for source in reviewed.sources
+                if identifier in source.audience.participant_ids
+            ),
+        )
+        for identifier in participant_ids
+    }
+    for projection in participants.values():
+        _validate_environment_collisions(projection)
+    trusted_sources = tuple(
+        sorted(reviewed.sources, key=lambda source: source.audience.tested_agent)
     )
-    hidden_records = tuple(
-        source
-        for source in reviewed.sources
-        if isinstance(source, ReviewedRecordSource)
-        and source.visibility == "evaluator_only"
+    if reviewed.schema_version == LEGACY_SNAPSHOT_SCHEMA_VERSION:
+        trusted_sources = tuple(
+            source for source in trusted_sources if not source.audience.tested_agent
+        )
+    return CompiledEnvironmentInputs(
+        agent_environments=(*existing_environments, *environments),
+        participant_environments=participants,
+        evaluator_inputs=EvaluatorInputSet(
+            policies=tuple(
+                source
+                for source in trusted_sources
+                if isinstance(source, ReviewedPolicySource)
+            ),
+            records=tuple(
+                source
+                for source in trusted_sources
+                if isinstance(source, ReviewedRecordSource)
+            ),
+            references=tuple(
+                source
+                for source in trusted_sources
+                if isinstance(source, ReviewedReferenceSource)
+            ),
+            rules=tuple(
+                rule
+                for source in reviewed.sources
+                if isinstance(source, ReviewedPolicySource)
+                for rule in source.active_rules
+            ),
+        ),
+        snapshot_digest=reviewed.snapshot_digest,
+        public_provenance=tuple(
+            PublicSourceProvenance(
+                source.pin.source_id,
+                source.pin.source_sha256,
+                source.pin.parser_revision,
+                source.pin.role,
+            )
+            for source in agent_sources
+        ),
     )
 
+
+def _validate_audience_relationships(reviewed: ReviewedEnvironmentInputs) -> None:
+    sources = {source.pin.source_id: source for source in reviewed.sources}
+    diagnostics = []
+    for relationship in reviewed.relationships:
+        origin = sources[relationship.from_source_id]
+        target = sources[relationship.to_source_id]
+        if (
+            not origin.audience.untrusted_recipients
+            <= target.audience.untrusted_recipients
+        ):
+            diagnostics.append(
+                SourceDiagnostic(
+                    "source_audience_invalid",
+                    "blocking",
+                    "A referenced record source is unavailable to an approved audience",
+                    SourceSpan(
+                        relationship.from_source_id, field=relationship.from_field
+                    ),
+                )
+            )
+    if diagnostics:
+        raise EnvironmentInputError(
+            "source_audience_invalid",
+            "Source audiences would break an approved relationship",
+            diagnostics=tuple(diagnostics),
+        )
+
+
+def _compile_projection(
+    reviewed: ReviewedEnvironmentInputs, sources: tuple[ReviewedSource, ...]
+) -> tuple[AgentEnvironmentSpec, ...]:
+    visible_documents = tuple(
+        source
+        for source in sources
+        if isinstance(source, (ReviewedPolicySource, ReviewedReferenceSource))
+    )
+    visible_records = tuple(
+        source for source in sources if isinstance(source, ReviewedRecordSource)
+    )
     environments: list[AgentEnvironmentSpec] = []
-    if visible_policies:
+    if visible_documents:
         documents = []
-        for source in visible_policies:
+        for source in visible_documents:
             for page in source.pages:
                 documents.append(
                     {
                         "id": _public_source_id(reviewed, source.pin.source_id)
                         + f":page:{page.page}",
-                        "title": f"Approved policy, page {page.page}",
+                        "title": f"Approved {source.pin.role}, page {page.page}",
                         "content": page.text,
                         "source": source.pin.source_id,
                         "version": reviewed.snapshot_digest,
-                        "metadata": {"page": page.page, "role": "policy"},
+                        "metadata": {"page": page.page, "role": source.pin.role},
                     }
                 )
         environments.append(
@@ -348,34 +471,7 @@ def compile_environment_inputs(
             )
         )
 
-    _validate_environment_collisions((*existing_environments, *environments))
-    rules = tuple(
-        rule
-        for source in reviewed.sources
-        if isinstance(source, ReviewedPolicySource)
-        for rule in source.active_rules
-    )
-    public_sources = tuple(
-        source for source in reviewed.sources if source.visibility == "agent_visible"
-    )
-    return CompiledEnvironmentInputs(
-        agent_environments=(*existing_environments, *environments),
-        evaluator_inputs=EvaluatorInputSet(
-            policies=hidden_policies,
-            records=hidden_records,
-            rules=rules,
-        ),
-        snapshot_digest=reviewed.snapshot_digest,
-        public_provenance=tuple(
-            PublicSourceProvenance(
-                source_id=source.pin.source_id,
-                source_sha256=source.pin.source_sha256,
-                parser_revision=source.pin.parser_revision,
-                role=source.pin.role,
-            )
-            for source in public_sources
-        ),
-    )
+    return tuple(environments)
 
 
 def _prepare_policy_source(
@@ -554,10 +650,11 @@ def _review_policy_source(
     return ReviewedPolicySource(
         pin=source.pin,
         filename=source.filename,
-        visibility=review.visibility,
+        visibility="evaluator_only",
         pages=source.pages,
         statements=source.statements,
         rule_reviews=review.rules,
+        audience=_normalize_audience(review.visibility, review.audience),
     )
 
 
@@ -702,7 +799,7 @@ def _propose_inputs(
     rules = [
         _propose_policy_rule(statement)
         for source in sources
-        if isinstance(source, ParsedPolicySource)
+        if isinstance(source, ParsedPolicySource) and source.pin.role == "policy"
         for statement in source.statements
     ]
     opposing = {(rule.check_type, rule.check_arguments.get("value")) for rule in rules}
@@ -813,17 +910,18 @@ def _validate_environment_collisions(
         tools.update(owned)
 
 
-SNAPSHOT_SCHEMA_VERSION = "environment-inputs.snapshot.v1"
+LEGACY_SNAPSHOT_SCHEMA_VERSION = "environment-inputs.snapshot.v1"
+SNAPSHOT_SCHEMA_VERSION = "environment-inputs.snapshot.v2"
 MAX_SNAPSHOT_BYTES = 256 * 1024 * 1024
 
 
 def serialize_environment_snapshot(reviewed: ReviewedEnvironmentInputs) -> bytes:
     """Return a canonical private snapshot for caller-owned trusted storage."""
     _assert_reviewed_snapshot(reviewed)
-    data = _canonical_value(reviewed)
+    data = _snapshot_data(reviewed)
     payload = _canonical_json(
         {
-            "version": SNAPSHOT_SCHEMA_VERSION,
+            "version": reviewed.schema_version,
             "data": data,
             "digest": _content_digest(data),
         }
@@ -850,10 +948,9 @@ def deserialize_environment_snapshot(payload: bytes) -> ReviewedEnvironmentInput
             object_pairs_hook=_unique_object,
             parse_constant=_reject_json_constant,
         )
-        if (
-            set(envelope) != {"version", "data", "digest"}
-            or envelope["version"] != SNAPSHOT_SCHEMA_VERSION
-        ):
+        if set(envelope) != {"version", "data", "digest"} or envelope[
+            "version"
+        ] not in {LEGACY_SNAPSHOT_SCHEMA_VERSION, SNAPSHOT_SCHEMA_VERSION}:
             raise ValueError("Unknown snapshot schema")
         if _content_digest(envelope["data"]) != envelope["digest"]:
             raise ValueError("Snapshot envelope digest mismatch")
@@ -863,8 +960,21 @@ def deserialize_environment_snapshot(payload: bytes) -> ReviewedEnvironmentInput
             if "records" in source
         ):
             raise ValueError("Record snapshot is missing its privacy decision")
+        data = envelope["data"]
+        if "schema_version" in data:
+            raise ValueError("Snapshot schema belongs in its envelope")
+        if envelope["version"] == LEGACY_SNAPSHOT_SCHEMA_VERSION:
+            if any(
+                "audience" in source or source["pin"]["role"] == "reference"
+                for source in data["sources"]
+            ):
+                raise ValueError(
+                    "Legacy snapshots cannot grant new audiences or purposes"
+                )
+        elif any("audience" not in source for source in data["sources"]):
+            raise ValueError("Snapshot is missing its audience decision")
         reviewed = TypeAdapter(ReviewedEnvironmentInputs).validate_json(
-            _canonical_json(envelope["data"])
+            _canonical_json({**data, "schema_version": envelope["version"]})
         )
         _assert_reviewed_snapshot(reviewed)
         return reviewed
@@ -888,15 +998,46 @@ def _reviewed_snapshot_digest(
     sources: tuple[ReviewedSource, ...],
     relationships: tuple[RecordRelationship, ...],
     diagnostics: tuple[SourceDiagnostic, ...] = (),
+    schema_version: str = SNAPSHOT_SCHEMA_VERSION,
 ) -> str:
+    source_data = _canonical_value(sources)
+    if schema_version == LEGACY_SNAPSHOT_SCHEMA_VERSION:
+        for source in source_data:
+            source.pop("audience")
     return _content_digest(
-        {"sources": sources, "relationships": relationships, "diagnostics": diagnostics}
+        {
+            "sources": source_data,
+            "relationships": relationships,
+            "diagnostics": diagnostics,
+        }
     )
 
 
+def _snapshot_data(reviewed: ReviewedEnvironmentInputs) -> dict[str, Any]:
+    data = _canonical_value(reviewed)
+    data.pop("schema_version")
+    if reviewed.schema_version == LEGACY_SNAPSHOT_SCHEMA_VERSION:
+        for source in data["sources"]:
+            if (
+                source["audience"]
+                != _canonical_value(_normalize_audience(source["visibility"], None))
+                or source["pin"]["role"] == "reference"
+            ):
+                raise EnvironmentInputError(
+                    "source_snapshot_invalid",
+                    "Legacy snapshots cannot grant new audiences or purposes",
+                )
+            source.pop("audience")
+    return data
+
+
 def _assert_reviewed_snapshot(reviewed: ReviewedEnvironmentInputs) -> None:
+    _snapshot_data(reviewed)
     digest = _reviewed_snapshot_digest(
-        reviewed.sources, reviewed.relationships, reviewed.diagnostics
+        reviewed.sources,
+        reviewed.relationships,
+        reviewed.diagnostics,
+        reviewed.schema_version,
     )
     expected_id = f"source_snapshot_{digest.removeprefix('sha256:')[:16]}"
     if reviewed.snapshot_digest != digest or reviewed.snapshot_id != expected_id:
@@ -930,6 +1071,9 @@ __all__ = [
     "PublicSourceProvenance",
     "RecordRelationship",
     "RecordReview",
+    "ReferenceReview",
+    "ReviewedReferenceSource",
+    "SourceAudience",
     "ReviewedEnvironmentInputs",
     "SourceDiagnostic",
     "SourcePin",

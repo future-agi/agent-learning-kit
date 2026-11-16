@@ -91,6 +91,12 @@ _EXPORTS = {
     "PolicyRuleProposal": ("fi.alk.studio._environment_inputs", "PolicyRuleProposal"),
     "PolicyRuleReview": ("fi.alk.studio._environment_inputs", "PolicyRuleReview"),
     "RecordRelationship": ("fi.alk.studio._environment_inputs", "RecordRelationship"),
+    "SourceAudience": ("fi.alk.studio._environment_inputs", "SourceAudience"),
+    "ReferenceReview": ("fi.alk.studio._environment_inputs", "ReferenceReview"),
+    "ReviewedReferenceSource": (
+        "fi.alk.studio._environment_inputs",
+        "ReviewedReferenceSource",
+    ),
     "RecordReview": ("fi.alk.studio._environment_inputs", "RecordReview"),
     "ReviewedEnvironmentInputs": (
         "fi.alk.studio._environment_inputs",
