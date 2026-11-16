@@ -3,8 +3,8 @@
 Standard library only: the customer's interpreter has nothing of ALK's.
 
 A stated framework exception: `WORKER_RUNS` names framework internals, because a worker can only be stopped at its
-deadline where its framework runs it as a task of its own. A worker those entries miss runs on past its deadline, and
-is not listed as stopped."""
+deadline where its framework runs it as a task of its own. A worker those entries miss runs on past its deadline, is
+not listed as stopped, and its deadline is recorded as not enforced."""
 
 from __future__ import annotations
 

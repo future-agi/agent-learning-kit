@@ -5099,6 +5099,41 @@ def test_a_bypass_leaves_that_worker_s_checks_unmeasured_and_grades_the_task() -
     assert (task.held, task.verdict, receipt.status) == (False, "fail", "failed")
 
 
+
+def test_a_listed_worker_the_in_process_door_cannot_stop_has_its_deadline_not_enforced_and_the_trial_graded(
+    tmp_path, monkeypatch
+) -> None:
+    from fi.alk.harness import call_runner as cr
+
+    (tmp_path / "door.json").write_text('{"present": true, "surface": "in_process", "workers": ["refund"]}')
+    (tmp_path / "contract.json").write_text('{"workers": [{"id": "refund", "name": "Refund"}]}')
+    document = {"worker_budget_seconds": {"refund": 5}}
+    # Listed for the door, so the trial is placed rather than held.
+    assert cr.limits_not_held(document, tmp_path) == []
+    # The door's hook never saw the worker run as a task of its own (a hand-off): its deadline is not enforced.
+    monkeypatch.setattr(cr, "read_worker_runs", lambda _runtime: set())
+    [record] = cr.deadlines_not_enforced(object(), document, tmp_path)
+    assert record["worker"] == "refund" and "task of its own" in record["reason"]
+    outcome = replace(
+        _call_outcome(turns=2, calls=(hs.Call(name="issue_refund", arguments={}, worker_id="refund"),)),
+        notices=tuple(cr.unenforced_deadline_notices([record])),
+    )
+    ran: list[str] = []
+    receipt = _graded(
+        [
+            _WorkerGoal("refund_by_deadline", lambda w, c: ran.append("worker") or None, worker="refund"),
+            _WorkerGoal("no_second_refund", lambda w, c: ran.append("task") or "a second refund exists"),
+        ],
+        outcome,
+    )
+    worker, task = receipt.sub_goals
+    assert ran == ["task"]
+    assert (worker.held, worker.verdict) == (None, "unmeasured")
+    assert "deadline of refund was not enforced" in worker.reason
+    # Not held: the rest of the trial is graded.
+    assert receipt.failure is None or receipt.failure.code != "worker_limits_not_enforced"
+    assert (task.held, task.verdict, receipt.status) == (False, "fail", "failed")
+
 def _stop_run(runner, scenarios, *, stop_after: float = 0.05, instances: int = 1):
     """Run the scheduler with a stop that flips `stop_after` seconds in; the runner reads it through its context."""
 

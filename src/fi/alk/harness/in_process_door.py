@@ -30,6 +30,7 @@ try:  # Beside the server in a bundle; the harness package when run from source.
         WorldDoor,
         claim_worker_stop,
         is_timeout,
+        mark_worker_run,
     )
 except ImportError:  # pragma: no cover - imported as part of the package
     from fi.alk.harness import tool_trace_proxy as _proxy  # type: ignore[no-redef]
@@ -48,6 +49,7 @@ except ImportError:  # pragma: no cover - imported as part of the package
         WorldDoor,
         claim_worker_stop,
         is_timeout,
+        mark_worker_run,
     )
 
 DATABASE_URL = os.environ.get("DATABASE_URL", "")
@@ -237,7 +239,8 @@ def _held(outcome: Outcome) -> dict[str, Any]:
 
 def worker_remaining(worker: str) -> dict[str, Any]:
     """How long a worker has left this trial, `{"remaining": seconds}`; nothing when no deadline names it or none can
-    be read, and the worker then runs on."""
+    be read, and the worker then runs on. Asked only from a run the door can stop, which is kept: a worker with a
+    deadline that never ran so is recorded at the seal as not enforced."""
     row = _proxy._trial_row("worker_deadline_at, worker_deadlines")
     if not row:
         return {}
@@ -245,6 +248,10 @@ def worker_remaining(worker: str) -> dict[str, Any]:
     due = named.get(worker, row[0])
     if isinstance(due, bool) or not isinstance(due, (int, float)):
         return {}
+    try:
+        mark_worker_run(DATABASE_URL, worker)
+    except Exception:  # noqa: BLE001 - an unkept run reads as not enforced, never as a failed call
+        pass
     return {"remaining": max(float(due) - time.time(), 0.0)}
 
 

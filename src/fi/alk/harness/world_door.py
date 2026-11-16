@@ -305,6 +305,10 @@ WORKER_STOPS_DDL = (
     "(worker TEXT PRIMARY KEY, process TEXT NOT NULL, at DOUBLE PRECISION NOT NULL, reason TEXT NOT NULL)"
 )
 
+# The workers the in-process door saw run as a task of their own this trial, so ones it could stop at their deadline;
+# only the run shows how the framework runs a worker. Cleared at each trial's start.
+WORKER_RUNS_DDL = "CREATE TABLE IF NOT EXISTS _alk_worker_runs (worker TEXT PRIMARY KEY, at DOUBLE PRECISION NOT NULL)"
+
 
 # The world databases whose trial tables this process has made, so the schema is changed once per world, never at
 # each trial: an ALTER takes the table's lock, which a stop under way holds.
@@ -321,7 +325,8 @@ def _trial_schema(address: str) -> None:
 
         with psycopg.connect(address, autocommit=True, connect_timeout=5) as connection:
             for statement in (
-                TRIAL_FAULTS_DDL, TRIAL_DEADLINE_DDL, TRIAL_WORKER_DEADLINES_DDL, TRIAL_SEALED_DDL, WORKER_STOPS_DDL
+                TRIAL_FAULTS_DDL, TRIAL_DEADLINE_DDL, TRIAL_WORKER_DEADLINES_DDL, TRIAL_SEALED_DDL, WORKER_STOPS_DDL,
+                WORKER_RUNS_DDL,
             ):
                 connection.execute(statement)
         _TRIAL_SCHEMA_MADE.add(address)
@@ -372,6 +377,20 @@ def claim_worker_stop(address: str, worker: str, process: str, stop: Callable[[]
         return True
 
     return bool(_on_trial_tables(address, claim))
+
+
+def mark_worker_run(address: str, worker: str) -> None:
+    """Keep that this worker ran as a task of its own in this trial, which the in-process door can stop."""
+    import psycopg
+
+    def mark() -> None:
+        with psycopg.connect(address, autocommit=True, connect_timeout=5) as connection:
+            connection.execute(
+                "INSERT INTO _alk_worker_runs (worker, at) VALUES (%s, %s) ON CONFLICT (worker) DO NOTHING",
+                (worker, time.time()),
+            )
+
+    _on_trial_tables(address, mark)
 
 
 _METHODS = frozenset({"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"})

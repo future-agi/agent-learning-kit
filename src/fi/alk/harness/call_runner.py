@@ -1678,8 +1678,25 @@ def read_worker_stops(runtime: EnvironmentRuntime) -> list[dict[str, Any]]:
     return [{"worker": worker, "process": process, "at": at, "reason": reason} for worker, process, at, reason in rows]
 
 
+def read_worker_runs(runtime: EnvironmentRuntime) -> set[str] | None:
+    """The workers the in-process door saw run as a task of their own in this trial; None when they could not be read."""
+    database = _find_postgres_endpoint(runtime)
+    if database is None:
+        return None
+    import psycopg
+
+    def read() -> set[str]:
+        with psycopg.connect(database.address, autocommit=True, connect_timeout=5) as connection:
+            return {str(one) for (one,) in connection.execute("SELECT worker FROM _alk_worker_runs").fetchall()}
+
+    try:
+        return _on_trial_tables(database.address, read)
+    except Exception:  # noqa: BLE001 - unread runs leave every deadline not enforced, never a failed call
+        return None
+
+
 def _clear_worker_stops(runtime: EnvironmentRuntime) -> None:
-    """A new trial: no worker of it has been stopped yet, whatever an earlier trial on this world left."""
+    """A new trial: no worker of it has been stopped yet, nor seen run, whatever an earlier trial on this world left."""
     database = _find_postgres_endpoint(runtime) if runtime is not None else None
     if database is None:
         return
@@ -1689,6 +1706,7 @@ def _clear_worker_stops(runtime: EnvironmentRuntime) -> None:
         def clear() -> None:
             with psycopg.connect(database.address, autocommit=True, connect_timeout=5) as connection:
                 connection.execute("DELETE FROM _alk_worker_stops")
+                connection.execute("DELETE FROM _alk_worker_runs")
 
         _on_trial_tables(database.address, clear)
     except Exception as exc:  # noqa: BLE001 - a world database out of reach never fails a trial that stops no one
@@ -1930,6 +1948,45 @@ def limits_not_held(document: Mapping[str, Any], bundle_dir: Path | str | None) 
     return [one for one in notices if one.get("code") == WORKER_LIMITS_NOT_ENFORCED]
 
 
+WORKER_DEADLINE_NOT_ENFORCED = "worker_deadline_not_enforced"
+# Why the door inside the agent could not hold a listed worker's deadline: the worker never ran as a task of its own.
+_NOT_ITS_OWN_TASK = (
+    "it did not run as a task of its own in this trial (a hand-off, run_streamed or run_sync, a LangGraph invoke, a "
+    "swarm or supervisor subgraph node, or an unnamed graph), so the world's door inside the agent could not stop it"
+)
+
+
+def deadlines_not_enforced(
+    runtime: EnvironmentRuntime, document: Mapping[str, Any], bundle_dir: Path | str | None
+) -> list[dict[str, str]]:
+    """Each worker the door inside the agent was told it runs whose deadline in this trial it could not hold, with why;
+    empty on any other door, or when no deadline names such a worker. Decided at run time from the door's hook, since
+    only the run shows whether the framework ran the worker as a task of its own."""
+    record = _door_record(bundle_dir)
+    if record.get("surface") != "in_process":
+        return []
+    everyone, named = worker_deadline(document) is not None, set(worker_deadlines(document))
+    due = [str(one) for one in record.get("workers") or [] if everyone or str(one) in named]
+    if not due:
+        return []
+    ran = read_worker_runs(runtime)
+    reason = _NOT_ITS_OWN_TASK if ran is not None else "the runs the world's door inside the agent saw could not be read"
+    return [{"worker": one, "reason": reason} for one in due if one not in (ran or set())]
+
+
+def unenforced_deadline_notices(unenforced: Sequence[Mapping[str, str]]) -> list[dict[str, Any]]:
+    """One notice naming every worker whose deadline was not enforced, so their own checks read unmeasured while the
+    rest of the trial is graded; none when every deadline was."""
+    if not unenforced:
+        return []
+    return [{
+        "code": WORKER_DEADLINE_NOT_ENFORCED,
+        "message": "; ".join(f"{one['worker']}'s deadline was not enforced: {one['reason']}" for one in unenforced)
+        + ". Their own checks were not graded.",
+        "workers": [one["worker"] for one in unenforced],
+    }]
+
+
 def faults_not_held(faults: Sequence[Any], calls: Sequence[Call], bundle_dir: Path | str | None) -> list[dict[str, Any]]:
     """A notice for each of the scenario's faults on a build whose tool service runs but not behind the world's door:
     nothing there applies a fault, so the trial is not graded, as one relying on worker limits is held."""
@@ -1967,7 +2024,8 @@ def _limits_on_shared_workers(document: Mapping[str, Any], bundle_dir: Path | st
     record = _door_record(bundle_dir)
     if record.get("surface") == "in_process":
         # The door inside the agent holds a deadline by stopping the workers it was told it runs, and no worker's
-        # permitted tools, since no call there names its worker.
+        # permitted tools, since no call there names its worker. A listed worker it never saw run as a task of its own
+        # is recorded at the seal (`deadlines_not_enforced`), and only its own checks go ungraded.
         stopped = {str(one) for one in record.get("workers") or []}
         if isinstance(budgets, Mapping) and any(str(one) not in stopped for one in budgets):
             return "A worker deadline"
@@ -3684,6 +3742,7 @@ class CallRunnerImpl:
                 faults=list(doc.get("faults") or []),
                 notices=deadline_notices,
                 solution=list(doc.get("solution") or []),
+                document=doc,
             )
         except (CallAborted, WorldUnavailable):
             # `_translate_report`'s own typed control-flow (non-completed status, no test case,
@@ -3761,6 +3820,7 @@ class CallRunnerImpl:
         faults: Sequence[Any] = (),
         notices: Sequence[dict[str, Any]] = (),
         solution: Sequence[Any] = (),
+        document: Mapping[str, Any] | None = None,
     ) -> CallOutcome:
         case = report.test_cases[0] if report.test_cases else None
         took_part = (
@@ -3856,6 +3916,9 @@ class CallRunnerImpl:
         mark_of = {id(call): mark for call, mark in zip(graded, marks)}
         # A separate worker that reached the world on the shared address: said, and held from its own checks.
         bypassed = channel_bypass_notices(calls, self._context.bundle_dir)
+        # A listed worker the door inside the agent could not stop at its deadline: recorded, and held from its checks.
+        unenforced = await asyncio.to_thread(deadlines_not_enforced, runtime, document or {}, self._context.bundle_dir)
+        bypassed += unenforced_deadline_notices(unenforced)
         if calls:
             tool_trace = "\n".join(
                 json.dumps({**trace_row(call), **mark_of.get(id(call), {})}, sort_keys=True, default=str)
@@ -3923,6 +3986,9 @@ class CallRunnerImpl:
                 if stopped:
                     # Workers whose own process the harness ended past their deadline.
                     transcript_document["world_actors"]["stopped_workers"] = stopped
+                if unenforced:
+                    # Workers whose deadline the door could not stop them at, each with why.
+                    transcript_document["world_actors"]["unenforced_deadlines"] = unenforced
                 if duplicates:
                     # The world applied one of the agent's writes twice after its answer was lost: the scenario fails.
                     transcript_document["world_actors"]["duplicates"] = duplicates

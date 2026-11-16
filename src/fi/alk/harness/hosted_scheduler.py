@@ -2674,7 +2674,7 @@ class HostedScheduler:
                 call=self._call_summary(call_outcome),
             )
 
-        from .call_runner import WORKER_CHANNEL_BYPASSED, is_worker_call
+        from .call_runner import WORKER_CHANNEL_BYPASSED, WORKER_DEADLINE_NOT_ENFORCED, is_worker_call
 
         # A separate worker that reached the world without its own channel: its limits were not held for those calls,
         # so its own checks are not graded and the task's are, as the multi-agent plan's bypass decision (D5) set.
@@ -2682,6 +2682,14 @@ class HostedScheduler:
             str(worker)
             for one in call_outcome.notices
             if isinstance(one, dict) and one.get("code") == WORKER_CHANNEL_BYPASSED
+            for worker in one.get("workers") or ()
+        }
+        # A worker whose deadline the door inside the agent could not stop it at: its own checks are not graded, the
+        # rest of the trial is.
+        unenforced = {
+            str(worker)
+            for one in call_outcome.notices
+            if isinstance(one, dict) and one.get("code") == WORKER_DEADLINE_NOT_ENFORCED
             for worker in one.get("workers") or ()
         }
         worker_names = self._worker_names
@@ -2703,6 +2711,11 @@ class HostedScheduler:
             if worker and worker in bypassed:
                 sub_goal_results.append(
                     _worker_unmeasured(goal, f"not graded: {worker} reached the world without its own channel")
+                )
+                continue
+            if worker and worker in unenforced:
+                sub_goal_results.append(
+                    _worker_unmeasured(goal, f"not graded: the deadline of {worker} was not enforced in this trial")
                 )
                 continue
             # Matched by contract id or by the framework's name for it, as spans carry the framework's name.

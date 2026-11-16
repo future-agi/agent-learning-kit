@@ -1239,7 +1239,15 @@ class HostedChatCallRunner:
         world_record = _world_actors_record(
             door, listing, dispatcher, cast, meter, limits, since=trial_started, contract=self._contract
         )
-        from .call_runner import NOT_RECORDED, duplicate_commits, missing_evidence, read_worker_stops, unmeasured_reasons
+        from .call_runner import (
+            NOT_RECORDED,
+            deadlines_not_enforced,
+            duplicate_commits,
+            missing_evidence,
+            read_worker_stops,
+            unenforced_deadline_notices,
+            unmeasured_reasons,
+        )
 
         if door_sees_tools:
             from .call_runner import upload_end_state
@@ -1250,12 +1258,17 @@ class HostedChatCallRunner:
         else:
             # The agent runs its own tools where no door stands: World changes says so, never "no change".
             world_record = dict(NOT_RECORDED)
+        unenforced: list[dict[str, str]] = []
         if proxied:
             # Off the loop: the seal may wait on a worker's stop under way, and other calls share this loop.
             stopped = await asyncio.to_thread(read_worker_stops, runtime)
             if stopped:
                 # Workers whose own process the harness ended past their deadline.
                 world_record["stopped_workers"] = stopped
+            # A listed worker the door inside the agent could not stop at its deadline, each with why.
+            unenforced = await asyncio.to_thread(deadlines_not_enforced, runtime, document, self._context.bundle_dir)
+            if unenforced:
+                world_record["unenforced_deadlines"] = unenforced
 
         # The world applied one of the agent's writes twice after its answer was lost: the scenario fails.
         trial_log = _readable_trial_log(door, trial_started, proxied=proxied) if door is not None else []
@@ -1305,6 +1318,8 @@ class HostedChatCallRunner:
             ) + ([dict(DUPLICATES_UNREADABLE)] if trial_log is None else [])
         # A separate worker that reached the world on the shared address: said, and held from its own checks.
         said += channel_bypass_notices(transcript.calls, self._context.bundle_dir)
+        # Such a worker's own checks are not graded; the rest of the trial is.
+        said += unenforced_deadline_notices(unenforced)
         if said:
             transcript.notices = said
         ended = datetime.now(timezone.utc)
