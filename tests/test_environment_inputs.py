@@ -1564,6 +1564,22 @@ def test_malformed_existing_environment_identifiers_return_typed_error(
     assert exc.value.code == "source_mapping_invalid"
 
 
+@pytest.mark.parametrize(
+    "tools",
+    [
+        {"lookup": {}},
+        ["lookup"],
+        [{"name": ""}],
+        [{"function": "lookup"}],
+        [{"function": {"name": ""}}],
+    ],
+)
+def test_malformed_existing_environment_tools_return_typed_error(tools) -> None:
+    with pytest.raises(EnvironmentInputError) as exc:
+        AgentEnvironmentSpec("custom", {"tools": tools})
+    assert exc.value.code == "source_mapping_invalid"
+
+
 @pytest.mark.parametrize("field", ["documents", "artifacts"])
 @pytest.mark.parametrize("entries", [{"valid-id": {}}, [{"id": "valid-id"}], []])
 def test_valid_existing_environment_identifier_shapes_compile(field, entries) -> None:
@@ -1715,10 +1731,34 @@ def test_json_nonfinite_overflow_and_excessive_nesting_return_parse_diagnostics(
     assert draft.diagnostics[0].span.source_id == "records"
 
 
+def test_json_integer_too_large_for_number_mapping_does_not_crash() -> None:
+    value = 10**400
+    draft = prepare_environment_inputs(
+        (
+            _record_source(
+                json.dumps([{"score": value}]).encode(),
+                filename="records.json",
+                media_type="application/json",
+            ),
+        ),
+        destination_schema=DestinationSchema((DestinationField("score", "number"),)),
+    )
+    source = draft.sources[0]
+    assert isinstance(source, ParsedRecordSource)
+    assert source.fields[0].suggested_target_field is None
+
+
 @pytest.mark.parametrize(
     "existing",
     [
         AgentEnvironmentSpec("retrieval_hook", {"endpoint": "https://example.invalid"}),
+        AgentEnvironmentSpec(
+            "retrieval_hook",
+            {
+                "endpoint": "https://example.invalid",
+                "tool_name": "custom_lookup",
+            },
+        ),
         AgentEnvironmentSpec("workflow_hook", {"tools": [{"name": "read_document"}]}),
         AgentEnvironmentSpec("structured_artifact", {}),
     ],

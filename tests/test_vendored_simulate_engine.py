@@ -1405,6 +1405,10 @@ def test_deterministic_assertion_validator_rejects_unsupported_checks(
         ({"type": "not_contains", "value": "secret"}, "Request approved"),
         ({"type": "equals", "value": "approved"}, "approved"),
         ({"type": "json_path_exists", "path": "$.score"}, '{"score":1}'),
+        (
+            {"type": "json_path_equals", "path": "$[0].status", "value": "ready"},
+            '[{"status":"ready"}]',
+        ),
         ({"type": "json_path_gte", "path": "score", "value": 0.5}, '{"score":1}'),
         ({"type": "json_path_lte", "path": "score", "value": 2}, '{"score":1}'),
         ({"type": "json_path_equals", "path": "score", "value": 1}, '{"score":1}'),

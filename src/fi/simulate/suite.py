@@ -917,6 +917,8 @@ def _artifact_path_tokens(path: str) -> List[str]:
         raise ManifestError("artifact path cannot be empty")
     if normalized.startswith("$."):
         normalized = normalized[2:]
+    elif normalized.startswith("$["):
+        normalized = normalized[1:]
     elif normalized == "$":
         return []
     tokens: List[str] = []

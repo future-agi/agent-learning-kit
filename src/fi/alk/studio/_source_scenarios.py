@@ -5,7 +5,7 @@ import re
 from dataclasses import dataclass
 from typing import Literal
 
-from fi.alk.studio._environment_inputs import (
+from fi.alk.studio._environment_input_types import (
     JsonScalar,
     PolicyRuleProposal,
     RecordRelationship,
@@ -15,10 +15,10 @@ from fi.alk.studio._environment_inputs import (
     ReviewedRecordSource,
     SourceSpan,
     _ImmutableValue,
-    _assert_reviewed_snapshot,
     _canonical_json,
     _content_digest,
 )
+from fi.alk.studio._environment_inputs import _assert_reviewed_snapshot
 from fi.simulate.manifest import ManifestError
 from fi.simulate.simulation.models import Persona, Scenario, ScenarioConstraints
 from fi.simulate.suite import evaluate_assertions, validate_deterministic_assertion
