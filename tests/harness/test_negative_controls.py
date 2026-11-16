@@ -412,3 +412,15 @@ def test_a_toolbox_case_is_proved_on_the_live_runtime(monkeypatch, tmp_path):
     assert live["controls"][0]["failed"] is True
     proof = live_proof.apply_live(Proof(deferred=True), live)
     assert proof.proved is True and proof.blocked_reason() is None
+
+
+def test_a_toolbox_that_cannot_be_listed_binds_nothing():
+    import socket
+
+    with socket.socket() as closed:
+        closed.bind(("127.0.0.1", 0))
+        address = f"http://127.0.0.1:{closed.getsockname()[1]}"
+    endpoints = {"mcp_toolbox": SimpleNamespace(address=address), "target_http": "x"}
+    served = live_proof.served_by_toolbox(endpoints)
+    assert served == set()
+    assert live_proof.service_endpoints(_contract({"lookup_order": "service", "refund_order": "service"}), endpoints, served) == {}
