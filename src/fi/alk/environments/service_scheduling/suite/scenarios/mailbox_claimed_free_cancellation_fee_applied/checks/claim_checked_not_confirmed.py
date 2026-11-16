@@ -10,7 +10,7 @@ def check(world, calls, reference=None):
     ) or any(
         c.refused and c.name == "cancel_appointment" and c.arguments.get("appointment_id") == target and "fee" in str(c.error)
         for c in calls
-    )
+    ) or (_general_policy_read(calls) and _start_seen(world, calls, target))
     if not checked:
         return f"not done: the claim was never checked against {target}'s cancellation policy"
     # What the customer then chose is recorded, and not on the claim's terms: cancelled late only
@@ -29,6 +29,41 @@ def check(world, calls, reference=None):
     if a["status"] == "booked":
         return f"not done: nothing was settled for {target}; it is still booked as before"
     return _blind(world, calls, reference)
+
+
+def _general_policy_read(calls):
+    """The studio-wide cancellation policy (its window and fee) came back: one policy governs every
+    appointment, the per-appointment form only adds the arithmetic of how far off it is."""
+    return any(
+        c.ok and c.name == "get_cancellation_policy" and isinstance(c.result, dict)
+        and "window_hours" in c.result and "late_fee_cents" in c.result and not c.result.get("appointment_id")
+        for c in calls
+    )
+
+
+def _start_seen(world, calls, target):
+    """The appointment's own start came back from the records (the appointment, or its calendar
+    event), so the general policy could be applied to it."""
+    state = world.state()
+    event = next((a.get("calendar_event_id") for a in state.get("appointments", []) if a["appointment_id"] == target), None)
+    found = []
+
+    def walk(value):
+        if isinstance(value, dict):
+            if (value.get("appointment_id") == target and (value.get("start_utc") or value.get("local_start"))) or (
+                event and value.get("id") == event and value.get("start")
+            ):
+                found.append(value)
+            for one in value.values():
+                walk(one)
+        elif isinstance(value, list):
+            for one in value:
+                walk(one)
+
+    for c in calls:
+        if c.ok and c.name in ("get_appointment", "list_customer_appointments", "get_event", "list_events", "search_events"):
+            walk(c.result)
+    return bool(found)
 
 
 def _now(state):

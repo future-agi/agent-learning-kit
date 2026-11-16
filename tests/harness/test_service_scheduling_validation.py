@@ -245,6 +245,13 @@ WRONG_RUNS = [
     # The claimed waiver: checked, the fee stands, and he chose the free move.
     (
         "pickup_mailbox_claimed_waiver_checked",
+        "reads the studio-wide policy but never A429's own start, so it cannot know the fee applies",
+        lambda k: _replace(k, "get_cancellation_policy", ("get_cancellation_policy", {})),
+        "claim_checked_not_confirmed",
+        "not done",
+    ),
+    (
+        "pickup_mailbox_claimed_waiver_checked",
         "cancels with the fee instead of the free move he chose",
         lambda k: _without(k, "reschedule_appointment")
         + [Step(tool="cancel_appointment", arguments={"appointment_id": "A429", "customer_id": "CU429", "confirmed": True, "acknowledged_fee": True}, environment_arguments={}, fixed={})],
@@ -781,6 +788,14 @@ ANSWER_CONTROLS = [
      ["Done: you're booked with Marcus at Midtown for 1:30 am on Sunday 1 November.",
       "Good news, the 1:30 am after the clocks go back is free with Marcus, and I've booked it for you.",
       NO_ANSWER]),
+    # Live round 4 (Claude Code): names the later occurrence instead of spelling out "twice", says
+    # truthfully that the one she means is taken, and books 2:00 am UTC-05:00. A right answer.
+    ("night_opening_repeated_hour_second_taken", "repeated_hour_occurrence_resolved",
+     "Rosa, the later 1:30 am (after the clocks go back) with Marcus isn't free, so I booked the next time he has after it: your haircut with "
+     "Marcus Hale is confirmed at the Midtown Studio on Sunday, 1 November 2026 at 2:00 am Eastern Standard Time (UTC-05:00).",
+     ["Rosa, the later 1:30 am (after the clocks go back) with Marcus is free, and I've booked it for you.",
+      "Rosa, the later 1:30 am (after the clocks go back) with Marcus isn't free, so I booked the earlier 1:30 am instead (UTC-04:00).",
+      "Your haircut with Marcus is booked for 2:00 am on Sunday 1 November."]),
     ("v12_s02_dst_repeated_hour_clarified", "ambiguous_time_not_committed",
      "I can't book 1:30 am on Sunday 1 November: Midtown is closed on Sundays. That night 1:30 also happens twice, because New York's clocks "
      "go back at 2 am (first at UTC-04:00, then at UTC-05:00). Nothing is booked. Midtown opens Monday 2 November from 8:00 am; would a time then work?",
@@ -1030,6 +1045,11 @@ ALTERNATE_PATHS = [
      lambda k: _reordered(k, 1, 0, 2, 3, 4)),
     ("expired_hold_release_request_handled", "tries the release before looking at the slots",
      lambda k: _reordered(k, 0, 2, 1)),
+    # Live round 4: the agent read his thread and A429's calendar event (its start), then asked for the
+    # studio-wide cancellation policy (the per-appointment form had been refused for want of the
+    # customer), which governs A429 as every appointment: the claim was checked against the records.
+    ("pickup_mailbox_claimed_waiver_checked", "the studio-wide policy plus A429's calendar event, instead of the per-appointment policy",
+     lambda k: _replace(k, "get_cancellation_policy", ("get_event", {"calendarId": "CAL-ST02", "eventId": "EV-A429"}), ("get_cancellation_policy", {}))),
 ]
 
 

@@ -34,7 +34,7 @@ def _evidence_missing(world, calls, reference):
     read, channel read or search; a passage's text returned by fetching it or inside its document's
     text read in Drive; a document the reference reads whole, its text, or every one of its passages.
     A reference fixes the decision-bearing passage, so the facts the answer needs are asked for and
-    the rest of the document is not. A search returns a snippet, not the passage, and another section
+    the rest of the document is not. A search returns a snippet, not the passage (unless every figure the passage states came back in it: see _figures_in_snippet), and another section
     or another version of the document is not that passage."""
     state = world.state()
     desk = (state.get("current_actor") or [{}])[0].get("user_id")
@@ -50,6 +50,13 @@ def _evidence_missing(world, calls, reference):
         elif step.get("tool") == "fetch_passage" and a.get("passage_id"):
             wanted.append(("passage", a["passage_id"]))
     texts = _texts_shown(calls)
+    snippets = {}
+    for c in calls:
+        if c.ok and c.name == "search_documents" and isinstance(c.result, dict):
+            for r in c.result.get("results") or []:
+                for p in r.get("passages") or []:
+                    if p.get("snippet"):
+                        snippets.setdefault(p.get("passage_id"), []).append(p["snippet"])
     contents = {}
     fetched = {}
     for c in calls:
@@ -70,10 +77,20 @@ def _evidence_missing(world, calls, reference):
         else:
             seen = (target in text_of and fetched.get(target) == text_of[target]) or any(
                 text_of.get(target, "\0") in body for body in contents.get(file_of.get(target), [])
-            )
+            ) or _figures_in_snippet(text_of.get(target), snippets.get(target, []))
         if not seen:
             missing.append(f"{kind} {target}")
     return missing
+
+
+def _figures_in_snippet(text, snippets):
+    """A search snippet stands in for a passage only when the passage's decisive content is figures
+    (limits, amounts, counts) and every one of them came back in the snippet: the conflict or answer
+    the reference rests on is those figures. A passage without figures, or whose figures sit past
+    the snippet, must be fetched."""
+    import re as _re
+    figures = set(_re.findall(r"\$?\d[\d,.]*%?", text or ""))
+    return bool(figures) and any(all(f in s for f in figures) for s in snippets)
 
 
 def _texts_shown(calls):

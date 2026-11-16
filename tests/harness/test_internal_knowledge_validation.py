@@ -314,6 +314,16 @@ WRONG_RUNS = [
     # The enriched threads and documents: each workflow has a distractor beside the record it needs.
     (
         "slack_reply_client_dinner_conflict_lucas",
+        "flags and posts having seen only a snippet of the guidelines' section 7, never the $100 limit",
+        lambda k: [
+            _step("search_documents", employee_id="E11", query="report the difference to both owners"),
+            *[copy.deepcopy(s) for s in _scenario(k).solution if not (s.tool == "fetch_passage" and s.arguments.get("passage_id") == "P-CLIENTENTV1-01")],
+        ],
+        "document_issue_flagged",
+        "done blind",
+    ),
+    (
+        "slack_reply_client_dinner_conflict_lucas",
         "posts in Grace's similar team-dinner thread instead of Lucas's",
         lambda k: _swap(k, "slack_send_message", thread_ts="1793790600.000040"),
         "slack_reply_in_thread",
@@ -1073,6 +1083,19 @@ ALTERNATES = [
             *[copy.deepcopy(s) for s in _scenario(k).solution if s.tool == "flag_document_issue"],
             _step("get_precedence_rules", employee_id="E11"),
             *[copy.deepcopy(s) for s in _scenario(k).solution if s.tool == "slack_send_message"],
+        ],
+    ),
+    (
+        # Live round 4 (Claude Code): searched the library, whose snippet of Client Entertainment 1.0
+        # section 1 carries its one figure ($100 per person per event), fetched the Sales Hospitality
+        # limit and the guidelines' "Other documents" section, then flagged and posted.
+        "slack_reply_client_dinner_conflict_lucas",
+        "the $100 limit from the search snippet, the $150 limit and section 7 fetched",
+        lambda k: [
+            _step("search_documents", employee_id="E11", query="client entertainment dinner limit per person"),
+            _step("fetch_passage", employee_id="E11", passage_id="P-SALESHOSPV1-01"),
+            _step("fetch_passage", employee_id="E11", passage_id="P-CLIENTENTV1-07"),
+            *[copy.deepcopy(s) for s in _scenario(k).solution if s.tool not in ("fetch_passage",)],
         ],
     ),
     (

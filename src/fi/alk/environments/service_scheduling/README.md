@@ -300,6 +300,7 @@ Evidence-aware checks read their target from the scenario's fixed values and req
 | `already_on_waitlist_duplicate_declined` | never learns of the existing waitlist entry | `waitlist_duplicate_not_added` | not done |
 | `human_draft_on_price_thread_left_alone` | lists drafts filtered so the person's draft never shows | `human_draft_preserved` | not done |
 | `night_opening_repeated_hour_second_taken` | books the first 1:30 (UTC-04:00), the occurrence she did not mean | `repeated_hour_occurrence_resolved` | done wrong |
+| `pickup_mailbox_claimed_waiver_checked` | reads the studio-wide policy but never A429's own start, so it cannot know the fee applies | `claim_checked_not_confirmed` | not done |
 | `pickup_mailbox_claimed_waiver_checked` | cancels with the fee instead of the free move he chose | `appointment_rescheduled_atomically` | not done |
 | `mailbox_claimed_free_cancellation_fee_applied` | cancels without ever checking the claim against the policy | `claim_checked_not_confirmed` | not done |
 | `cancel_late_fee_declined_appointment_kept` | cancels anyway after the customer declined the fee | `late_fee_quoted_appointment_kept` | done wrong |
