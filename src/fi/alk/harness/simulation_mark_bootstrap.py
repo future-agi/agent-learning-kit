@@ -472,41 +472,8 @@ def _instrument(module, target) -> None:
         return
     instrumentor.instrument()
     _yield_to_process(type(instrumentor))
-    serialiser = _SERIALISERS.get(name)
-    if serialiser is not None:
-        _guard_serialiser(*serialiser)
     if module.__name__ == "agents":
         _keep_agents_processors()
-
-
-# An instrumentor helper that serialises the framework's own objects into span attributes, where a failure would fail
-# the app's call: traceai-smolagents 0.1.6 calls each argument's ``to_dict()``, and a smolagents tool's ``to_dict()``
-# raises when the tool's code uses a module-level helper (smolagents' self-contained check), so every model call of a
-# normal app would fail once the instrumentor is on.
-_SERIALISERS = {"traceai_smolagents": ("traceai_smolagents._wrappers", "_to_dict")}
-
-
-def _guard_serialiser(module_name, attribute) -> None:
-    """Keep an instrumentor's serialiser from failing the app: an object it cannot serialise is recorded by name."""
-    try:
-        module = importlib.import_module(module_name)
-        original = getattr(module, attribute)
-    except Exception:
-        return
-    if getattr(original, _PATCHED, False):
-        return
-
-    def guarded(result, __original=original):
-        try:
-            return __original(result)
-        except Exception:
-            name = getattr(result, "name", None)
-            return name if isinstance(name, str) and name else type(result).__name__
-
-    functools.update_wrapper(guarded, original)
-    setattr(guarded, _PATCHED, True)
-    # The helper calls itself by its module-level name for lists and dicts, so each item is guarded on its own.
-    setattr(module, attribute, guarded)
 
 
 def _yield_to_process(cls) -> None:
