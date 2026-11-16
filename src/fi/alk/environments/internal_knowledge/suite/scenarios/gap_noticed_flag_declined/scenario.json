@@ -54,14 +54,13 @@
       "fixed": {}
     },
     {
-      "tool": "fetch_passage",
+      "tool": "read_file_content",
       "arguments": {
-        "passage_id": "P-AUPV2-01",
-        "employee_id": "E13"
+        "fileId": "aup_v2"
       },
       "environment_arguments": {},
       "fixed": {
-        "passage_id": "record: Acceptable Use Policy 2.0, section 1"
+        "fileId": "record: Acceptable Use Policy 2.0, read whole: a definition could sit in any section"
       }
     },
     {

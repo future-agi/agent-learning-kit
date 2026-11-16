@@ -10,7 +10,8 @@ def check(world, calls, reference=None):
 
     def owner_returned(c, target):
         """Whether this call returned `target`'s owner: the owner tool, the document's metadata,
-        its Drive metadata, or an issue raised on it (which names the owner it was routed to)."""
+        its Drive metadata (or a Drive search or listing that carries it), or an issue raised on it
+        (which names the owner it was routed to)."""
         r = c.result if isinstance(c.result, dict) else {}
         owner = owner_of.get(target)
         if owner is None:
@@ -22,6 +23,9 @@ def check(world, calls, reference=None):
             return r.get("owner_id") == owner and issue is not None and issue["owner_id"] == owner
         if c.name == "get_file_metadata" and c.arguments.get("fileId") == target:
             return bool(r.get("owner")) and r.get("owner") == email_of.get(owner)
+        # A Drive search or recent-files listing returns each file's owner, as its metadata does.
+        if c.name in ("search_files", "list_recent_files"):
+            return any(f.get("id") == target and f.get("owner") and f.get("owner") == email_of.get(owner) for f in r.get("files") or [])
         return False
 
     ok = [c for c in calls if c.ok]
