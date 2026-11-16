@@ -3294,6 +3294,23 @@ def test_limits_on_a_shared_worker_are_said_not_enforced_on_a_new_door(monkeypat
     assert cr.trial_worker_deadlines({}, tmp_path)[2] == []
 
 
+def test_permitted_tools_on_a_shared_worker_the_scenario_does_not_rely_on_do_not_hold_a_tool_proxy_trial(tmp_path):
+    (tmp_path / "contract.json").write_text(json.dumps({"workers": [
+        {"id": "writer", "binding": "separate", "address_env": "WRITER_URL"},
+        {"id": "reader", "binding": "shared", "tools": ["read"], "allowed_tools": ["read"]}]}))
+    (tmp_path / "sub_goals.json").write_text(json.dumps({"sub_goals": [
+        {"name": "writer_held", "subject": "worker:writer"}, {"name": "reader_refused", "subject": "worker:reader"}]}))
+    (tmp_path / "generated" / "tool-proxy").mkdir(parents=True)
+    (tmp_path / "generated" / "tool-proxy" / "door.json").write_text(json.dumps({"worker_deadlines": "per_worker"}))
+    # Relies only on the separate writer, which the door holds: the shared reader's permitted tools do not hold it.
+    about_writer = {"worker_budget_seconds": {"writer": 5}, "sub_goals": ["writer_held"]}
+    assert cr._limits_not_held_cause(about_writer, tmp_path) == ("", "", [])
+    assert cr.limits_not_held(about_writer, tmp_path) == []
+    # Relying on the reader's permitted tools holds it, naming the reader alone.
+    about_reader = {"worker_budget_seconds": {"writer": 5}, "sub_goals": ["reader_refused"]}
+    assert cr._limits_not_held_cause(about_reader, tmp_path) == ("A worker's permitted tools", "shared_worker", ["reader"])
+
+
 def test_the_bundle_seals_each_worker_s_limited_flag_and_what_each_scenario_relies_on(tmp_path):
     (tmp_path / "contract.json").write_text(json.dumps({"workers": [
         {"id": "writer", "binding": "separate", "address_env": "WRITER_URL"}, {"id": "reader", "tools": ["read"]}]}))

@@ -2051,7 +2051,7 @@ def _sealed_tool_proxy(bundle_dir: Path | str | None) -> bool:
 def _limits_on_shared_workers(document: Mapping[str, Any], bundle_dir: Path | str | None) -> tuple[str, set[str]]:
     """Which limit, if any, this trial puts on a worker the world cannot tell apart, and every worker with a limit
     that cannot be held: a deadline naming a shared worker, one deadline for all when no worker is separate, or
-    permitted tools on a shared worker."""
+    permitted tools on a shared worker, each only on a worker this scenario relies on (`_workers_relied_on`)."""
     if bundle_dir is None:
         return "", set()
     workers = [one for one in _bundle_contract(Path(bundle_dir)).get("workers") or [] if isinstance(one, dict)]
@@ -2078,10 +2078,14 @@ def _limits_on_shared_workers(document: Mapping[str, Any], bundle_dir: Path | st
     if not workers:
         # A contract that declares no workers: the budget's worker names were checked at authoring.
         return "", set()
+    # Decided per scenario: only a limit on a worker this scenario relies on holds its trial.
+    relied = _workers_relied_on(document, bundle_dir)
     separate = {str(one.get("id")) for one in workers if one.get("binding") == "separate"}
-    late = {one for one in named if one not in separate} | (ids if everyone and not separate else set())
-    tools = {str(one.get("id")) for one in workers if one.get("binding") != "separate" and one.get("allowed_tools")}
-    if late or (everyone and not separate):
+    late = ({one for one in named if one not in separate} | (ids if everyone and not separate else set())) & relied
+    tools = {
+        str(one.get("id")) for one in workers if one.get("binding") != "separate" and one.get("allowed_tools")
+    } & relied
+    if late:
         return "A worker deadline", late | tools
     if tools:
         return "A worker's permitted tools", tools
