@@ -223,9 +223,9 @@ class Scenario(Protocol):
         str  # platform id from pre-allocation (outbound-channels.md Channel 2 "Join").
     )
     sub_goals: Sequence[SubGoal]
-    # True only when the reference solution contains an environment/tool action. Pure
-    # conversation scenarios (for example, refusing an unsafe request) legitimately produce no
-    # world calls and must still reach their judged checks.
+    # True only when the reference solution contains an environment/tool action and a sub-goal
+    # needs one to hold. Pure conversation scenarios and refusals (for example, refusing an unsafe
+    # request) legitimately produce no world calls and must still reach their checks.
     requires_tool_evidence: bool
     call_execution_id: str | None
 
@@ -263,6 +263,9 @@ class CallOutcome:
     # Each of the agent's writes the world applied twice after its answer was lost (`duplicate_commits`): the
     # scenario fails whatever its sub-goals say.
     duplicates: tuple[dict[str, Any], ...] = ()
+    # True when a capture surface the bundle declares could not be read for this call, so an
+    # empty `calls` is not evidence that the agent made no tool call.
+    tool_capture_failed: bool = False
 
 
 class CallAborted(RuntimeError):
@@ -2373,13 +2376,18 @@ class HostedScheduler:
         if not calls and (
             self._require_tool_workflow
             or getattr(scenario, "requires_tool_evidence", True)
+            or call_outcome.tool_capture_failed
         ):
             # M10: unconditioned on `turns` — an empty list must never reach checks regardless of
             # whether the simulator observed a turn (world-handle-interface.md "Coverage
-            # guarantee": "An empty list is never handed to checks").
+            # guarantee": "An empty list is never handed to checks"). A scenario that needs no
+            # tool call still stops here when capture failed: a call nothing recorded can hold
+            # what its claim forbids.
             failure = _failure(
                 "evidence_missing",
-                "no tool calls were captured for this scenario's call",
+                "tool capture failed for this scenario's call"
+                if call_outcome.tool_capture_failed
+                else "no tool calls were captured for this scenario's call",
             )
             return _Retry(
                 failure,

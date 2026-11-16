@@ -21,6 +21,7 @@ from .actors import with_caller_actor
 from .call_runner import (
     ArtifactUploader,
     CallRunnerContext,
+    ToolCaptureFailed,
     _clear_file_tool_calls,
     _with_span_calls,
     _with_scenario_edits,
@@ -39,7 +40,7 @@ from .usage import (
     simulator_funding,
 )
 from .handler_child import ChildWorld, HandlerChannel, HandlerChild, start_handler_child
-from .world.runtime import Call, GeneratedWorld, trace_row
+from .world.runtime import Call, GeneratedWorld, graded_calls, trace_row
 from .world.stores.postgres import AttachedPostgresStore
 
 logger = logging.getLogger(__name__)
@@ -1071,7 +1072,16 @@ class HostedChatCallRunner:
         # The submitted agent may execute tools entirely inside its Python process instead
         # of returning tool requests over HTTP. These observed calls belong to the same attempt;
         # do not replay the tool through the generated world or fabricate evidence from text.
-        transcript.calls[:] = _with_span_calls(transcript.calls, runtime)
+        try:
+            transcript.calls[:] = _with_span_calls(
+                transcript.calls, runtime, strict=True
+            )
+            capture_failed = False
+        except ToolCaptureFailed as exc:
+            logger.warning("tool capture failed for %s: %s", scenario.scenario_key, exc)
+            capture_failed = True
+        # Calls returned over HTTP are recorded here as they run, so they are a full capture.
+        capture_failed = capture_failed and not graded_calls(transcript.calls)
 
         world_record = _world_actors_record(door, listing, dispatcher, cast, meter, limits, since=trial_started)
         from .call_runner import NOT_RECORDED, duplicate_commits
@@ -1124,6 +1134,7 @@ class HostedChatCallRunner:
             )
         outcome = CallOutcome(
             calls=calls,
+            tool_capture_failed=capture_failed,
             turns=len(transcript.exchanges),
             started_at=format_rfc3339_millis(started),
             ended_at=format_rfc3339_millis(ended),
