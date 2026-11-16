@@ -77,3 +77,19 @@ def test_keys_prove_only_the_named_cases(monkeypatch, tmp_path):
     assert main(["--authoring", str(tmp_path), "--output", str(output), "--keys", "b, c"]) == 0
     assert proved == ["b", "c"]
     assert set(json.loads(output.read_text(encoding="utf-8"))) == {"b", "c"}
+
+
+def test_a_proof_says_whether_the_live_runtime_made_it(monkeypatch, tmp_path):
+    from fi.alk.harness import live_proof
+
+    install(monkeypatch)
+    _suite(monkeypatch, [refund_case(name=key, scenario_key=key) for key in ("live", "offline")])
+    # On the live runtime the reference did not hold.
+    live_proof.write_live(
+        tmp_path,
+        {"live": {"assumed": [], "with_solution": [{"name": "refund_once", "held": False, "said": "no refund"}],
+                  "with_nothing": [], "outcome": "change", "controls": []}},
+    )
+    proofs = prove_suite(tmp_path, tmp_path / "proofs.json")
+    assert proofs["live"]["live"] is True and proofs["live"]["blocked_reason"] == "not_solvable"
+    assert proofs["offline"]["live"] is False and proofs["offline"]["proved"] is True

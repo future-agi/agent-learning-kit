@@ -92,7 +92,8 @@ def prove_suite(
             first = (str(exc).splitlines() or [""])[0][:200]
             proofs[key] = unprovable_entry(f"{type(exc).__name__}: {first}".rstrip(": "))
         else:
-            proofs[key] = _entry(proof, len(scenario.solution))
+            # `live`: its gates are what the live runtime showed, not what was recorded without running.
+            proofs[key] = {**_entry(proof, len(scenario.solution)), "live": key in live}
         _write(output, proofs)
     _write(output, proofs)
     return proofs
