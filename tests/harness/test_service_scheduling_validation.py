@@ -1088,3 +1088,16 @@ def test_the_email_history_workflows_have_depth(built: Path) -> None:
                     assert any(m["thread_id"] == other and sender in (m["sender"], m["recipient"]) for m in messages), (thread, other)
     finally:
         world.close()
+
+
+def test_the_cancellation_policy_for_an_appointment_needs_no_customer_id_for_its_own_customer(built: Path) -> None:
+    """customer_id is optional on get_cancellation_policy: without it the appointment is the signed-in
+    customer's own, and another customer's appointment is still refused."""
+    world, *_ = _run(_scenario("pickup_mailbox_claimed_waiver_checked"), built / WORLD, with_solution=False)
+    try:
+        own = world.call("get_cancellation_policy", {"appointment_id": "A429"})
+        assert own.ok and own.result["appointment_id"] == "A429" and "fee_applies_cents" in own.result, own.error
+        other = world.call("get_cancellation_policy", {"appointment_id": "A001"})
+        assert not other.ok and "does not belong" in other.error
+    finally:
+        world.close()

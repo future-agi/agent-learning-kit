@@ -21,6 +21,10 @@ def _appointment(db, appointment_id, customer_id):
     row = db.one("SELECT * FROM appointments WHERE appointment_id = ?", [appointment_id])
     if row is None:
         raise ToolError(f"Appointment {appointment_id!r} not found.", category="not_found")
+    # Without a customer ID the appointment is looked up for the person in this conversation (any
+    # customer's, for the front desk); entitlement is checked either way.
+    if not customer_id:
+        customer_id = row["customer_id"] if _desk(db) else _caller(db)[0]
     if row["customer_id"] != customer_id:
         raise ToolError(f"Appointment {appointment_id} does not belong to customer {customer_id}.", category="permission_denied")
     _entitled(db, customer_id)

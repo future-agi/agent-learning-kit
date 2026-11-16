@@ -40,7 +40,15 @@ def check(world, calls, reference=None):
             return False
         result = c.result if isinstance(c.result, dict) else {}
         if c.name == "create_draft":
-            return c.arguments.get("threadId") in threads
+            # A reply on the enquiry: to one of its messages, or addressed to someone who wrote in it.
+            sent = [m for m in world.state().get("gmail_messages", []) if m.get("thread_id") in threads]
+            to = c.arguments.get("to") or []
+            to = {w.strip("<>\"',").lower() for one in (to if isinstance(to, list) else [to]) for w in str(one).split() if "@" in w}
+            return (
+                c.arguments.get("threadId") in threads
+                or c.arguments.get("replyToMessageId") in {m["id"] for m in sent}
+                or bool(to & {m["sender"].strip().lower() for m in sent})
+            )
         lead = c.arguments.get("lead_id") or result.get("lead_id")
         if c.name not in task or lead not in leads_of_task:
             return False

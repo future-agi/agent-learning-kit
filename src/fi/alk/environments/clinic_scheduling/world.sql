@@ -338,7 +338,7 @@ INSERT INTO "preparation_instructions" VALUES('neurology','Bring your referral l
 INSERT INTO "preparation_instructions" VALUES('pediatrics','A parent or guardian must attend. Bring the child''s red book (personal health record).');
 INSERT INTO "preparation_instructions" VALUES('physiotherapy','Wear comfortable clothing and trainers. Bring any exercise sheets you were given before.');
 INSERT INTO "escalation_routes" VALUES('nurse_line','+44 20 7946 0100 (triage nurse, answered within 15 minutes)','Symptoms that may be urgent; the desk never gives medical advice. Life-threatening symptoms: call 999.');
-INSERT INTO "escalation_routes" VALUES('front_desk','+44 20 7946 0001','Late changes inside the notice window, proxy access, complaints, anything the desk cannot do.');
+INSERT INTO "escalation_routes" VALUES('front_desk','+44 20 7946 0001','Late changes inside the notice window, granting or changing proxy access (a registered proxy acts for the patient as recorded), complaints, anything the desk cannot do.');
 INSERT INTO "escalation_routes" VALUES('referrals_team','referrals@riverbank-clinics.example','Missing, pending or expired referrals and referral paperwork.');
 
 -- calendar_scheduling_desk: tables attached by attach_capability; the rows are this vertical's own, linked to its records.

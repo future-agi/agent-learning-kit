@@ -626,7 +626,7 @@
         },
         "customer_id": {
           "type": "string",
-          "description": "Its customer"
+          "description": "Its customer; without it, the person in this conversation"
         }
       }
     },
