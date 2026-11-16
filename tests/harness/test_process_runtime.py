@@ -3642,6 +3642,85 @@ def test_canonical_seed_reads_the_harness_tables_as_the_build_recorded_them(
         assert not applied
 
 
+@pytest.mark.parametrize(
+    ("extra_table", "seeds"),
+    [("_alk_tool_trace", True), ("harness_seed_sentinel", True), ("audit_log", False)],
+)
+def test_canonical_seed_reads_past_the_harness_tables_in_the_live_schema(
+    tmp_path: Path, monkeypatch, extra_table: str, seeds: bool
+) -> None:
+    from contextlib import nullcontext
+
+    from fi.alk.harness.compile import postgres as compiler
+    from fi.alk.harness.source_model import (
+        LogicalType,
+        SourceColumn,
+        SourceModel,
+        SourceTable,
+    )
+    from fi.alk.harness.source_schema import postgres as schema
+    from fi.alk.harness.world_ir import WorldIR
+
+    def table(name: str) -> SourceTable:
+        column = SourceColumn(
+            name="id",
+            logical_type=LogicalType.STRING,
+            native_type="text",
+            nullable=False,
+            has_default=False,
+        )
+        return SourceTable(name=name, columns=(column,), primary_key=("id",))
+
+    discovered = SourceModel.create(
+        source_digest="sha256:" + "a" * 64,
+        engine="postgres",
+        engine_version="16",
+        tables=(table("orders"),),
+    )
+    inspected = SourceModel.create(
+        source_digest=discovered.source_digest,
+        engine="postgres",
+        engine_version="16",
+        tables=(table(extra_table), table("orders")),
+    )
+    seed = tmp_path / "seed"
+    seed.mkdir()
+    (seed / "source-model.json").write_text(discovered.model_dump_json())
+    world = WorldIR.create(source_model_fingerprint=discovered.fingerprint, tables=())
+    (seed / "world-ir.json").write_text(world.model_dump_json())
+    applied = []
+    monkeypatch.setitem(
+        sys.modules,
+        "psycopg",
+        types.SimpleNamespace(connect=lambda **_: nullcontext(object())),
+    )
+    monkeypatch.setattr(schema, "inspect_postgres", lambda *_args, **_kwargs: inspected)
+    monkeypatch.setattr(
+        compiler,
+        "apply_postgres",
+        lambda _connection, compiled: applied.append(compiled),
+    )
+
+    def replay():
+        pr.apply_postgres_world_ir(
+            seed / "world-ir.json",
+            port=14000,
+            dbname="baseline",
+            credentials=pr.EngineCredentials(username="harness", password="pw"),
+            source_digest=discovered.source_digest,
+        )
+
+    if seeds:
+        replay()
+        assert applied[0].source_schema_hash == discovered.fingerprint
+    else:
+        with pytest.raises(
+            pr.GenericWorldSeedError, match="source_model_fingerprint_mismatch"
+        ):
+            replay()
+        assert not applied
+
+
 def test_canonical_seed_names_a_source_model_recorded_for_other_source(
     tmp_path: Path, monkeypatch
 ) -> None:
