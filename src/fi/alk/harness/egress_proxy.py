@@ -9,7 +9,6 @@ ignores `NO_PROXY` is passed through untouched.
 
 from __future__ import annotations
 
-import http.client
 import select
 import socket
 import threading
@@ -33,7 +32,11 @@ def no_proxy_entry(domain: str) -> str:
 
 def no_proxy(allowed: Iterable[str], hosts: Iterable[str] = ()) -> str:
     """`NO_PROXY` for a controlled run: loopback, the environment's own hosts and every allowed domain."""
-    entries = [*LOOPBACK, *(host.strip().lower() for host in hosts), *(no_proxy_entry(one) for one in allowed)]
+    entries = [
+        *LOOPBACK,
+        *(host.strip().lower() for host in hosts),
+        *(no_proxy_entry(one) for one in allowed),
+    ]
     return ",".join(dict.fromkeys(one for one in entries if one))
 
 
@@ -53,7 +56,9 @@ class _Refused:
     def run(self, call: ToolCall) -> Executed:  # pragma: no cover - never called
         return Executed(403, error="outside the test world")
 
-    def actor(self, actor_id: str) -> Mapping[str, Any] | None:  # pragma: no cover - never called
+    def actor(
+        self, actor_id: str
+    ) -> Mapping[str, Any] | None:  # pragma: no cover - never called
         return None
 
 
@@ -68,7 +73,9 @@ class EgressProxy:
     ) -> None:
         self.allowed = tuple(allowed)
         self.door = WorldDoor(_Refused(), log, _Refused()) if log is not None else None
-        self.tools_by_host = {key.lower(): value for key, value in (tools_by_host or {}).items()}
+        self.tools_by_host = {
+            key.lower(): value for key, value in (tools_by_host or {}).items()
+        }
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), _handler(self))
         self.server.daemon_threads = True
         threading.Thread(target=self.server.serve_forever, daemon=True).start()
@@ -97,7 +104,13 @@ class EgressProxy:
         tool = self.tools_by_host.get(host.lower())
         arguments = {"host": host, "method": method, **({"tool": tool} if tool else {})}
         self.door.refuse(
-            ToolCall(action=f"egress.{host}", name=host, arguments=arguments, actor=AGENT, method=method),
+            ToolCall(
+                action=f"egress.{host}",
+                name=host,
+                arguments=arguments,
+                actor=AGENT,
+                method=method,
+            ),
             REFUSAL_CODE,
             f"{host} is outside the test world",
         )
@@ -120,7 +133,9 @@ def _handler(proxy: EgressProxy) -> type[BaseHTTPRequestHandler]:
                 self._refuse(host)
                 return
             try:
-                upstream = socket.create_connection((host, int(port or 443)), timeout=30)
+                upstream = socket.create_connection(
+                    (host, int(port or 443)), timeout=30
+                )
             except (OSError, ValueError):
                 self.send_error(502)
                 return
@@ -139,7 +154,9 @@ def _handler(proxy: EgressProxy) -> type[BaseHTTPRequestHandler]:
                         data = one.recv(65536)
                         if not data:
                             return
-                        (upstream if one is self.connection else self.connection).sendall(data)
+                        (
+                            upstream if one is self.connection else self.connection
+                        ).sendall(data)
             except OSError:
                 return
             finally:
@@ -153,27 +170,31 @@ def _handler(proxy: EgressProxy) -> type[BaseHTTPRequestHandler]:
                 self._refuse(host)
                 return
             size = int(self.headers.get("content-length") or 0)
-            body = self.rfile.read(size) if size else None
+            body = self.rfile.read(size) if size else b""
             path = target.path or "/"
             if target.query:
                 path += "?" + target.query
-            headers = {key: value for key, value in self.headers.items() if key.lower() != "proxy-connection"}
+            # Relayed as bytes, as a CONNECT tunnel is: the answer goes back exactly as the host sent it.
+            head = [f"{self.command} {path} {self.request_version}"] + [
+                f"{key}: {value}"
+                for key, value in self.headers.items()
+                if key.lower() not in ("proxy-connection", "connection")
+            ]
             try:
-                connection = http.client.HTTPConnection(host, target.port or 80, timeout=30)
-                connection.request(self.command, path, body=body, headers=headers)
-                answer = connection.getresponse()
-                content = answer.read()
-            except OSError:
+                upstream = socket.create_connection(
+                    (host, int(target.port or 80)), timeout=30
+                )
+            except (OSError, ValueError):
                 self.send_error(502)
                 return
-            self.send_response(answer.status, answer.reason)
-            for key, value in answer.getheaders():
-                if key.lower() not in ("transfer-encoding", "connection", "content-length"):
-                    self.send_header(key, value)
-            self.send_header("content-length", str(len(content)))
-            self.end_headers()
-            self.wfile.write(content)
-            connection.close()
+            upstream.sendall(
+                ("\r\n".join([*head, "connection: close"]) + "\r\n\r\n").encode(
+                    "latin-1"
+                )
+                + body
+            )
+            self.close_connection = True
+            self._pipe(upstream)
 
         def _refuse(self, host: str) -> None:
             content = f"{host} is outside the test world".encode()
@@ -185,6 +206,8 @@ def _handler(proxy: EgressProxy) -> type[BaseHTTPRequestHandler]:
             self.wfile.write(content)
             self.close_connection = True
 
-        do_GET = do_POST = do_PUT = do_PATCH = do_DELETE = do_HEAD = do_OPTIONS = _forward  # noqa: N815
+        do_GET = do_POST = do_PUT = do_PATCH = do_DELETE = do_HEAD = do_OPTIONS = (
+            _forward  # noqa: N815
+        )
 
     return Handler
