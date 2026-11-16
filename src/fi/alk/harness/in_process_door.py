@@ -78,6 +78,7 @@ class _Pending:
     executed: Executed | None = None
     finished: threading.Event = field(default_factory=threading.Event)
     outcome: Outcome | None = None
+    read: bool = False
 
 
 def _answered_error(result: Any) -> str | None:
@@ -152,6 +153,7 @@ class InProcessDoor:
             method="POST",
             effect="read" if name in READ_TOOLS or action in READ_TOOLS else "",
         )
+        waiting.read = call.effect == "read"
 
         def enter() -> None:
             try:
@@ -180,7 +182,8 @@ class InProcessDoor:
             waiting = self.pending.get(call_id)
         if waiting is None:
             return {"lost": False}
-        answered = _answered_error(result) if ok else None
+        # A read that answers "not found" still read; only a write that answered an error did not do its work.
+        answered = _answered_error(result) if ok and not waiting.read else None
         waiting.executed = (
             Executed(400, result, error=answered)
             if answered

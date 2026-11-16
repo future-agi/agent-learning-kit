@@ -8,6 +8,7 @@ import sys
 import pytest
 
 from fi.alk.harness import in_process_door_bootstrap as bootstrap
+from fi.alk.harness import in_process_door
 from fi.alk.harness.in_process_door import InProcessDoor
 from fi.alk.harness.world_door import DictRoster, MemoryLog, Routed, ToolCall, WorldDoor
 
@@ -42,13 +43,18 @@ def test_a_tool_that_raised_is_logged_as_the_world_refusing_it():
         {"error": "the payment provider did not accept the refund: URLError"},
     ],
 )
-def test_a_tool_that_answered_with_an_error_is_refused_never_committed(answer):
+def test_a_tool_that_answered_with_an_error_is_refused_never_committed(answer, monkeypatch):
     # The tool returned instead of raising, but it did not do its work: the same as a tools service's 4xx.
     door, log = _door()
     decision = door.begin("issue_refund", {"order": 7})
     assert door.end(decision["id"], True, answer)["outcome"] == "refused"
     [row] = log.rows()
     assert row["outcome"] == "refused" and row["error"].startswith("the payment provider did not accept")
+    # A read that answers "not found" is still a read, never a refused write.
+    monkeypatch.setattr(in_process_door, "READ_TOOLS", {"get_order"})
+    decision = door.begin("get_order", {"order": 99})
+    assert door.end(decision["id"], True, {"error": "no order 99"})["outcome"] == "committed"
+    assert [row["effect"] for row in log.rows() if row["name"] == "get_order"] == ["read"]
     # An answer that only mentions an error elsewhere still counts as done.
     decision = door.begin("issue_refund", {"order": 8})
     assert door.end(decision["id"], True, {"refund_id": "RF-9", "error_count": 0})["outcome"] == "committed"
