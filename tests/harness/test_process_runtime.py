@@ -10092,7 +10092,9 @@ _EXPORT_HEADERS = "OTEL_EXPORTER_OTLP_TRACES_HEADERS"
 
 
 def _provision_from_job_json(
-    tmp_path: Path, customer_code_environment: object
+    tmp_path: Path,
+    customer_code_environment: object,
+    egress_allowed_hosts: list[str] | None = None,
 ) -> tuple[
     list[tuple[list[str], dict[str, str]]], list[tuple[list[str], dict[str, str]]]
 ]:
@@ -10118,7 +10120,14 @@ def _provision_from_job_json(
                         },
                     }
                 },
-                "metadata": {"customer_code_environment": customer_code_environment},
+                "metadata": {
+                    "customer_code_environment": customer_code_environment,
+                    **(
+                        {"egress_allowed_hosts": egress_allowed_hosts}
+                        if egress_allowed_hosts is not None
+                        else {}
+                    ),
+                },
             }
         )
     )
@@ -10208,6 +10217,35 @@ def test_mark_read_from_job_json_reaches_every_source_process(tmp_path: Path) ->
             "PYTHONPATH",
         ):
             assert name not in env
+
+
+def test_a_controlled_run_points_only_the_agent_at_the_refusing_proxy(tmp_path: Path) -> None:
+    """`job.json` naming the allowed hosts gives the agent process HTTP(S)_PROXY at a refusing proxy and NO_PROXY
+    covering loopback, the world's own hosts and every allowed domain; without it nothing changes."""
+    allowed = ["api.openai.com", "*.hf.co", "platform.example"]
+    controlled = tmp_path / "controlled"
+    controlled.mkdir()
+    spawned, _ = _provision_from_job_json(controlled, {}, allowed)
+    agents = [env for argv, env in spawned if argv == ["python3", "agent.py"]]
+    tools = [env for argv, env in spawned if argv == ["node", "server.js"]]
+    assert agents and tools
+    for env in agents:
+        assert env["HTTP_PROXY"] == env["HTTPS_PROXY"] == env["https_proxy"]
+        assert env["HTTP_PROXY"].startswith("http://127.0.0.1:")
+        excluded = env["NO_PROXY"].split(",")
+        assert env["no_proxy"] == env["NO_PROXY"]
+        for host in ("localhost", "127.0.0.1", "::1", "api.openai.com", ".hf.co", "platform.example"):
+            assert host in excluded
+    # Each world has its own proxy, so a refusal lands in that world's action log.
+    assert len({env["HTTP_PROXY"] for env in agents}) == 2
+    for env in tools:
+        assert "HTTP_PROXY" not in env and "NO_PROXY" not in env
+
+    unrestricted = tmp_path / "unrestricted"
+    unrestricted.mkdir()
+    spawned, _ = _provision_from_job_json(unrestricted, {})
+    for argv, env in spawned:
+        assert "HTTP_PROXY" not in env and "HTTPS_PROXY" not in env and "NO_PROXY" not in env
 
 
 @pytest.mark.parametrize(

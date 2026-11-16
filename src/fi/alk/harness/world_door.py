@@ -447,6 +447,10 @@ class WorldDoor:
         self._write(call, outcome, key=key, on_behalf_of=on_behalf_of)
         return outcome
 
+    def refuse(self, call: ToolCall, code: str, reason: str) -> Outcome:
+        """Refuse a call a surface stopped before the world, logged like every other refused attempt."""
+        return self._refused(call, code, reason)
+
     def _refused(
         self, call: ToolCall, code: str, reason: str, on_behalf_of: str | None = None
     ) -> Outcome:

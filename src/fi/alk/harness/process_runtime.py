@@ -65,6 +65,8 @@ from .bundle_v2 import (
     StoreEntry,
 )
 from .diagnostics import DiagnosticLocation, HarnessDiagnostic
+from .egress_proxy import EgressProxy
+from .world_door import PostgresLog
 from .job import FailureDomain
 from .job import HarnessJobMetadata
 from .job import HarnessStage
@@ -2261,6 +2263,7 @@ def spawn_source_process(
     require_declared_user: bool = False,
     chown: Callable[[Path, int, int], None] = _default_chown,
     customer_code_environment: dict[str, str] | None = None,
+    egress_environment: dict[str, str] | None = None,
 ) -> SpawnedWorldProcess:
     """§2b: `run_command` "exec'd once per world with cwd `/work/build/<name>/`" — the build tree
     is read-only by convention at run time; `world_dir` (`{{WORLD_DIR}}`) is this process's own
@@ -2518,6 +2521,7 @@ def spawn_source_process(
             )
         env[process.local_auth.server_environment] = token
     env = target_provider_environment(env)
+    env.update(egress_environment or {})
     if resolved_user is not None:
         env["HOME"] = getattr(resolved_user, "pw_dir", f"/tmp/{process.user.value}")
     command = list(process.run_command)
@@ -4125,6 +4129,9 @@ class SpawnContext:
     # The platform's per-run decision for customer code (job.json `metadata`), applied to every
     # customer process's environment as is.
     customer_code_environment: dict[str, str] = field(default_factory=dict)
+    # The hosts a controlled run allows (job.json `metadata`); None when egress is not controlled.
+    egress_allowed_hosts: tuple[str, ...] | None = None
+    egress_proxies: dict[int, EgressProxy] = field(default_factory=dict, repr=False)
     runner: ProcessRunner = default_process_runner
     # Shared by `build_process_trees`' `build_commands` steps and `spawn_managed_process`'s
     # postgres `initdb` bootstrap — both are "run one synchronous step, check its exit code."
@@ -4256,6 +4263,11 @@ def spawn_world(
                     require_declared_user=context.require_declared_user,
                     chown=context.chown,
                     customer_code_environment=context.customer_code_environment,
+                    egress_environment=_egress_environment(
+                        context, world_index, endpoints, configuration_addresses
+                    )
+                    if process.user == ProcessUser.SVC_AGENT
+                    else None,
                 )
             handles[name] = handle
             if isinstance(process, SourceProcess) and process.started_check is not None:
@@ -5788,6 +5800,58 @@ def _read_customer_code_environment(work_directory: Path) -> dict[str, str]:
     return dict(typed.customer_code_environment)
 
 
+def _read_egress_allowed_hosts(work_directory: Path) -> tuple[str, ...] | None:
+    """The hosts a controlled run allows the agent, from `/work/job.json` `metadata.egress_allowed_hosts`; None when
+    the platform sent none (egress not controlled, or a local run)."""
+    try:
+        raw = json.loads((work_directory / "job.json").read_text(encoding="utf-8"))
+        hosts = raw["metadata"]["egress_allowed_hosts"]
+        typed = HarnessJobMetadata.model_validate({"egress_allowed_hosts": hosts})
+    except (OSError, ValueError, KeyError, TypeError, ValidationError):
+        return None
+    return None if typed.egress_allowed_hosts is None else tuple(typed.egress_allowed_hosts)
+
+
+def _egress_tools_by_host(bundle_dir: Path | None) -> dict[str, str]:
+    """The contract's tools by the host of the dependency they reach, so a blocked call can name its tool."""
+    try:
+        contract = json.loads((Path(bundle_dir) / "contract.json").read_text(encoding="utf-8"))
+    except (OSError, TypeError, ValueError):
+        return {}
+    found: dict[str, str] = {}
+    for dependency in contract.get("dependencies") or [] if isinstance(contract, dict) else []:
+        if not isinstance(dependency, dict):
+            continue
+        host = str((dependency.get("reached") or {}).get("host") or "").strip().lower()
+        tools = [str(one) for one in dependency.get("used_by") or []]
+        if host and tools:
+            found[host] = ", ".join(tools)
+    return found
+
+
+def _egress_environment(
+    context: SpawnContext,
+    world_index: int,
+    endpoints: dict[str, RuntimeEndpoint],
+    configuration_addresses: dict[str, str],
+) -> dict[str, str] | None:
+    """The agent's proxy variables in a controlled run: this world's refusing proxy, started once per world and
+    logging to the world's action log, with every host of the environment's own processes left off it."""
+    if context.egress_allowed_hosts is None:
+        return None
+    proxy = context.egress_proxies.get(world_index)
+    if proxy is None:
+        database = next((one for one in endpoints.values() if one.protocol == "postgres"), None)
+        proxy = EgressProxy(
+            context.egress_allowed_hosts,
+            PostgresLog(database.address) if database is not None else None,
+            _egress_tools_by_host(context.bundle_dir),
+        )
+        context.egress_proxies[world_index] = proxy
+    hosts = {urlsplit(address).hostname or "" for address in configuration_addresses.values() if "://" in address}
+    return proxy.environment(sorted(hosts))
+
+
 def _read_job_secret_purposes(work_directory: Path) -> dict[str, str]:
     """§0.2/§4.1: `/work/job.json` is the provisioner's own configuration source — `agent.
     secret_refs` (§1: `{alias: {manager, key, version, purpose}}`) is where each alias's REAL
@@ -6492,6 +6556,7 @@ class ProcessRuntimeProvider:
                 customer_code_environment=_read_customer_code_environment(
                     work_directory
                 ),
+                egress_allowed_hosts=_read_egress_allowed_hosts(work_directory),
                 runner=self._runner,
                 sync_run=self._sync_run,
                 prober=self._prober,
@@ -7442,6 +7507,9 @@ class ProcessRuntimeProvider:
         if self._context:
             self._context.local_auth_values.clear()
             self._context.local_auth_redactions.clear()
+            for proxy in self._context.egress_proxies.values():
+                proxy.close()
+            self._context.egress_proxies.clear()
         for runtime in self._runtimes.values():
             runtime._local_auth_values.clear()
         self._job_shared_handles = {}

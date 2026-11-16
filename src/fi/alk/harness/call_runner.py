@@ -66,6 +66,7 @@ from fi.simulate.simulation.call_actors import (
 
 from .actor_dispatch import ActorDispatcher, DoorActs, build_dispatcher, world_summary
 from .actor_meter import ActorMeter
+from .egress_proxy import REFUSAL_CODE as EGRESS_BLOCKED
 from .world_door import is_read, logged_as, same_action
 from .actors import (
     AGENT,
@@ -1044,7 +1045,8 @@ def trial_state_changes(
     committed, in order. Attempted, refused and committed are kept apart; a row from before outcomes were recorded
     counts as committed when it succeeded and refused when the world refused it. A read changed nothing: it counts in
     `read` and `read_actions`, never in `committed`. `answer_lost_actions` lists the committed actions whose answer a
-    `timeout_after_commit` fault replaced with a timeout."""
+    `timeout_after_commit` fault replaced with a timeout; `blocked` lists the refused calls to hosts outside the test
+    world, each with its host, method and tool when known."""
     entries: dict[str, dict[str, Any]] = {}
     chosen = _ChosenActions(decisions)
     for row in log:
@@ -1075,6 +1077,13 @@ def trial_state_changes(
             continue
         if outcome in _OUTCOMES:
             entry[outcome] += 1
+        if outcome == "refused" and row.get("refusal_code") == EGRESS_BLOCKED:
+            # A call to a host outside the test world, stopped before it left: an attempt, never a change.
+            asked = _arguments(row.get("arguments"))
+            asked = asked if isinstance(asked, dict) else {}
+            entry.setdefault("blocked", []).append(
+                {key: str(asked[key]) for key in ("host", "method", "tool") if asked.get(key)}
+            )
         if outcome == "committed":
             shown = str(row.get("name") or "") if who == AGENT else chosen.name(who, logged_as(row), actor)
             entry["committed_actions"].append(shown)
