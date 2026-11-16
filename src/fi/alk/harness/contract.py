@@ -132,6 +132,17 @@ class ToolSpec(BaseModel):
                 if isinstance(payload.get(alias), dict) and payload[alias]:
                     payload["arg_units"] = {str(k): str(v) for k, v in payload[alias].items()}
                     break
+        if not payload.get("returns"):
+            for alias in ("outputs", "output_fields", "returns_fields"):
+                if payload.get(alias):
+                    payload["returns"] = payload[alias]
+                    break
+        if isinstance(payload.get("returns"), list):
+            payload["returns"] = {str(one): "" for one in payload["returns"]}
+        if isinstance(payload.get("returns"), dict):
+            payload["returns"] = {str(k): str(v) for k, v in payload["returns"].items()}
+        elif "returns" in payload:
+            payload.pop("returns")
         if not payload.get("args"):
             for alias in ("parameters", "arguments", "params", "arg_names"):
                 value = payload.get(alias)
@@ -167,6 +178,10 @@ class ToolSpec(BaseModel):
     # `timeout` -> "milliseconds", `date` -> "ISO 8601 date". The agent, the world and every actor read the same
     # value the same way from it.
     arg_units: dict[str, str] = Field(default_factory=dict)
+    # What the tool hands back, by output field: its type and, where the name does not say it, its unit or format:
+    # {"refund_id": "string", "amount": "integer, cents, USD"}. Read from the code that builds the result or the
+    # record it returns. Empty on contracts written before it was recorded.
+    returns: dict[str, str] = Field(default_factory=dict)
     description: str = ""
     # Tools that must have run before this one stops refusing, and only for state the agent builds
     # during the conversation. Empty means callable first thing. Marking a tool gated when it is not
@@ -1230,6 +1245,7 @@ class AgentContract(BaseModel):
                         ("effects", tool.effects),
                         ("arguments from", ", ".join(f"{arg} <- {source}" for arg, source in tool.inputs_from.items())),
                         ("units", ", ".join(f"{arg} in {unit}" for arg, unit in sorted(tool.arg_units.items()))),
+                        ("returns", ", ".join(f"{field}: {kind}" for field, kind in tool.returns.items())),
                     )
                     if text
                 )

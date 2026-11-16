@@ -112,7 +112,9 @@ Find, in roughly this order:
    it, the data it holds, or what the person you work with told you. When the code or its data and the
    person's words disagree (they say cents, the column holds dollars), the code wins: record what it
    does and tell them about the mismatch. The agent, the world and every actor read the field by it,
-   so a field left without one is read three ways. Fill these for every
+   so a field left without one is read three ways. `returns`: every field the tool hands back, with
+   its type and the same unit or format rule (`{"refund_id": "string", "amount": "integer, cents,
+   USD"}`), read from the code that builds the result or the record it returns. Fill these for every
    tool that has them; a writer sees nothing else.
 
 6. **The rules.** Hard constraints the agent is instructed or coded to obey. Prefer the exact

@@ -426,6 +426,13 @@ def contract_tools(
                                 "their words disagree, the code's: "
                                 '{"refund_amount": "cents, USD", "timeout": "milliseconds"}.',
                             },
+                            "returns": {
+                                "type": "object",
+                                "description": "Every field the tool hands back, with its type and, where the "
+                                "name does not say it, its unit or format, read from the code that builds the "
+                                "result or the record it returns: "
+                                '{"refund_id": "string", "amount": "integer, cents, USD"}.',
+                            },
                             "description": {"type": "string"},
                             "requires": {
                                 "type": "array",

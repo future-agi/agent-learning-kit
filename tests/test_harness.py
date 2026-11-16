@@ -2286,6 +2286,30 @@ def test_a_field_s_unit_can_be_recorded_after_the_contract_is_written(tmp_path):
     assert not refused and "no argument called amount" in said
 
 
+def test_a_tool_s_returned_fields_are_recorded_and_read_on_its_contract_line(tmp_path):
+    from fi.alk.harness.amend import fix_tool
+
+    # A writer may give the fields under another name or as a bare list; both read as the same thing.
+    assert ToolSpec.model_validate({"name": "refund", "outputs": {"refund_id": "string"}}).returns == {
+        "refund_id": "string"
+    }
+    assert ToolSpec.model_validate({"name": "refund", "returns": ["refund_id"]}).returns == {"refund_id": ""}
+    assert ToolSpec.model_validate({"name": "refund", "returns": "the new id"}).returns == {}
+    contract = _written_contract(tmp_path)
+    done, said = fix_tool(
+        contract,
+        tmp_path,
+        tool_name="add",
+        returns={"basket_id": "string", "total": "integer, cents, USD"},
+        why="read from the handler's return",
+    )
+    assert done and "returned fields updated" in said
+    written = load(tmp_path)
+    assert written.tools[0].returns == {"basket_id": "string", "total": "integer, cents, USD"}
+    # Every later stage reads the tool from its contract line, so what it hands back is on that line.
+    assert "returns: basket_id: string, total: integer, cents, USD" in written.brief()
+
+
 def test_a_tool_the_agent_does_not_have_can_be_removed(tmp_path):
     from fi.alk.harness.amend import fix_tool
     from fi.alk.harness.contract import Dependency, ToolEntry
@@ -3984,8 +4008,9 @@ def test_every_contract_field_is_advertised_to_the_model(tmp_path):
         return names
 
     advertised = asyncio.run(advertised_fields())
-    # Set by the amendment tools during later stages, never by whoever submits the contract.
-    ours = {"amendments", "instrumentation"}
+    # Set by the amendment tools during later stages, or by the seal (`door_unreached`), never by whoever submits the
+    # contract.
+    ours = {"amendments", "instrumentation", "door_unreached"}
 
     def named(model: type[BaseModel]) -> list[str]:
         """Every field the model would have to fill, nested ones included.

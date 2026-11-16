@@ -256,6 +256,7 @@ def fix_tool(
     args: list[str] | None = None,
     arg_types: dict[str, str] | None = None,
     arg_units: dict[str, str] | None = None,
+    returns: dict[str, str] | None = None,
     description: str = "",
     refuses: str = "",
     effects: str = "",
@@ -321,6 +322,9 @@ def fix_tool(
             + "); if the code that reads a field or the data it holds says otherwise, the code's unit is the one to "
             "record, and the person is told about the mismatch"
         )
+    if returns:
+        spec.returns.update(returns)
+        changed.append("returned fields updated")
     if description:
         spec.description = description
         changed.append("description updated")
@@ -330,7 +334,7 @@ def fix_tool(
             changed.append(f"{field} updated")
     if not changed:
         return False, (
-            "nothing to change: give args, arg_types, arg_units, description, refuses, effects, inputs_from, "
+            "nothing to change: give args, arg_types, arg_units, returns, description, refuses, effects, inputs_from, "
             "or remove"
         )
 
