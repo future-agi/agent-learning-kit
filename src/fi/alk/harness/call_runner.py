@@ -871,6 +871,8 @@ def _read_file_tool_calls(
     # Agent-written calls not yet timed by the hook line for the same call.
     untimed: list[Call] = []
     from_spans: list[Call] = []
+    # Hand-offs written when the worker started: kept only for a tool call that never wrote its own line.
+    opened: list[Call] = []
     try:
         lines = path.read_text(encoding="utf-8").splitlines()
     except OSError as exc:
@@ -926,7 +928,7 @@ def _read_file_tool_calls(
         ended = record.get("ended_at")
         call.ended_at = float(ended) if isinstance(ended, (int, float)) else 0.0
         if record.get("source") == _SPAN_SOURCE:
-            from_spans.append(call)
+            (opened if record.get("opened") else from_spans).append(call)
             continue
         if record.get("source") != _LIVEKIT_HOOK_SOURCE:
             calls.append(call)
@@ -959,6 +961,13 @@ def _read_file_tool_calls(
             continue
         untimed.remove(written)
         written.at = call.at
+    # A worker still out when the process stopped: its hand-off has no end and no answer, never an invented return.
+    seen = {span.runtime_ids.get("event_id") for span in from_spans} - {None}
+    for call in opened:
+        event_id = call.runtime_ids.get("event_id")
+        if event_id not in seen:
+            seen.add(event_id)
+            from_spans.append(call)
     if strict and unreadable and not calls and not from_spans:
         raise ToolCaptureFailed(
             f"tool_trace file has no readable record ({unreadable} unreadable)"

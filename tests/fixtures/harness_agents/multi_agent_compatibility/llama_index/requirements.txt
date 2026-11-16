@@ -1,0 +1,2 @@
+llama-index-core==0.14.4
+llama-index-llms-litellm==0.6.3
