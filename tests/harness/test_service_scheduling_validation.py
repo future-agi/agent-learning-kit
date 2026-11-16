@@ -165,6 +165,13 @@ def test_reference_solution_holds(built: Path, key: str) -> None:
 # (scenario, what the wrong run does, the steps, the check that must fail, a word its verdict carries)
 WRONG_RUNS = [
     (
+        "record_accessibility_preference_from_email",
+        "records another accessibility need than the one in his email",
+        lambda k: _swap(k, "record_customer_preference", value="ground floor"),
+        "preference_recorded",
+        None,
+    ),
+    (
         "v12_s01_book_spanish_speaker_thursday",
         "books another staff member than the Spanish speaker confirmed",
         lambda k: _swap(k, "book_appointment", staff_id="ST01"),
@@ -1067,6 +1074,9 @@ ALTERNATE_PATHS = [
     # customer), which governs A429 as every appointment: the claim was checked against the records.
     ("pickup_mailbox_claimed_waiver_checked", "the studio-wide policy plus A429's calendar event, instead of the per-appointment policy",
      lambda k: _replace(k, "get_cancellation_policy", ("get_event", {"calendarId": "CAL-ST02", "eventId": "EV-A429"}), ("get_cancellation_policy", {}))),
+    # Live 16 Nov: Gemini recorded his need as "step-free"; "access" adds no preference of its own.
+    ("record_accessibility_preference_from_email", "records the need as \"step-free\", without the word access",
+     lambda k: _swap(k, "record_customer_preference", value="step-free")),
 ]
 
 

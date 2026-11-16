@@ -10,12 +10,17 @@ def check(world, calls, reference=None):
     import re
 
     def words(value):
-        return set(re.sub(r"[^a-z0-9]+", " ", str(value).lower()).split())
+        return set(re.sub(r"[^a-z0-9]+", " ", str(value).lower()).split()) - _FILLER
 
-    # The value as the customer put it, in any spelling or punctuation: "step_free access" is "Step-free access".
+    # The value as the customer put it, in any spelling or punctuation, with or without filler words:
+    # "step_free access" is "Step-free access" and "step-free"; "ground floor" is not.
     if want.get("kind") and not any(p["kind"] == want["kind"] and (not want.get("value") or sorted(words(want["value"])) == sorted(words(p["value"]))) for p in rows):
         return f"done wrong: recorded {[(p['kind'], p['value']) for p in rows]}, the customer said {want.get('kind')} = {want.get('value')}"
     return _blind(world, calls, reference)
+
+
+# Words that name no preference of their own: "step-free access" and "step-free" are the same need.
+_FILLER = {"a", "an", "the", "please", "access", "preferred", "preference"}
 
 
 def _now(state):
