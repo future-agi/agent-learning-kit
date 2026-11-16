@@ -128,7 +128,9 @@ def test_local_connect_only_provider_requires_no_source_upload(tmp_path) -> None
     assert response.job.source.kind.value == "provider"
     assert (sandbox.jobs_root / response.job.job_id / "provider-source").is_dir()
 
-    with pytest.raises(ValueError, match="provider_only_requires_connect_only_provider"):
+    with pytest.raises(
+        ValueError, match="provider_only_requires_connect_only_provider"
+    ):
         LocalSandboxRequest(provider_only=True, connector="auto")
 
 
@@ -1027,6 +1029,24 @@ def test_tokenless_server_serves_jobs_under_the_flag(tmp_path):
     client = TestClient(create_app(tmp_path / "state"))
 
     assert client.get("/v1/jobs").status_code == 200
+
+
+def test_environment_source_transport_runs_inside_the_trusted_server(tmp_path):
+    client = TestClient(create_app(tmp_path / "state"))
+
+    response = client.post(
+        "/v1/environment-sources",
+        json={
+            "version": "environment-sources.request.v1",
+            "operation": "prepare",
+            "sources": [],
+            "destination_schema": {"fields": [{"name": "id", "data_type": "string"}]},
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["ok"] is True
+    assert response.json()["result"]["draft"]["sources"] == []
 
 
 @pytest.mark.parametrize("flag", ["1", None])
