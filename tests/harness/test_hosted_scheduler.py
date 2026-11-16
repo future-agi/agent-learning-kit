@@ -5213,3 +5213,35 @@ def test_a_call_that_fails_under_the_stop_keeps_what_it_kept_as_the_stop() -> No
     assert (receipt.failure.code, receipt.failure.domain) == ("user_canceled", hs.FailureDomain.PLATFORM_SYNC)
     assert receipt.call.transcript_artifact == "t-partial"
     assert receipt.call.stop_reason == "user_canceled"
+
+
+def test_a_sealed_call_whose_delivery_never_ends_is_cut_at_the_delivery_bound(monkeypatch) -> None:
+    """A stopped call that sealed is left to deliver past the seal bound, but a platform that never answers cannot hold
+    the stopped run open: the delivery bound cuts it."""
+    monkeypatch.setenv(hs.CANCEL_SEAL_ENV, "0.2")
+    monkeypatch.setattr(hs, "_SEALED_DELIVERY_SECONDS", 1.0)
+    cut = []
+
+    class NeverDelivers:
+        stops_at_turn_boundary = True
+        stop_requested = staticmethod(lambda: False)
+
+        async def run(self, scenario, runtime):
+            while not self.stop_requested():
+                await asyncio.sleep(0.02)
+            hs.call_sealed()
+            try:
+                await asyncio.sleep(30)
+            except asyncio.CancelledError:
+                cut.append(time.monotonic())
+                raise
+            return _call_outcome()
+
+    started = time.monotonic()
+    result, _ = _stop_run(NeverDelivers(), [FakeScenario("s1", "id-1", sub_goals=[FakeSubGoal("g", lambda w, c: None)])])
+    (receipt,) = result.receipts
+    assert receipt.failure.code == "user_canceled"
+    assert receipt.call is None
+    assert cut, "the delivery was never cut"
+    # Left alone past the 0.2 s seal bound, cut at the delivery bound, well before the runner would have finished.
+    assert 1.0 < cut[0] - started < 4.0

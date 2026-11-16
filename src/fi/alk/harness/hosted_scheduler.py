@@ -294,6 +294,9 @@ USER_CANCELED_MESSAGE = "Stopped by the user during the call"
 CANCEL_SEAL_ENV = "ALK_CANCEL_SEAL_SECONDS"
 _CANCEL_SEAL_DEFAULT_SECONDS = 15.0
 _CANCEL_POLL_SECONDS = 0.5
+# After a stop, a call that already sealed gets this long past the seal bound to deliver what it kept (uploads through a
+# platform that is busy with the stop itself), then it is cut like any other.
+_SEALED_DELIVERY_SECONDS = 60.0
 # How often a call's watcher reads the trial's worker deadlines, for a worker the app serves as its own process.
 _WORKER_STOP_POLL_SECONDS = 0.5
 
@@ -313,7 +316,7 @@ _CALL_SEALED: contextvars.ContextVar[asyncio.Event | None] = contextvars.Context
 
 def call_sealed() -> None:
     """Inside a call runner: the call is sealed, and what follows only delivers it (uploads, metering). A stop no longer
-    cuts it: the seal bound is for the call to seal, and a delivery is bounded by its own clients."""
+    cuts it at the seal bound, which is for the call to seal: its delivery gets `_SEALED_DELIVERY_SECONDS` more."""
     sealed = _CALL_SEALED.get()
     if sealed is not None:
         sealed.set()
@@ -1915,12 +1918,15 @@ class HostedScheduler:
                     # A runner that failed while it was being stopped: still the person's stop, never infrastructure.
                     logger.warning("call runner failed while stopping", exc_info=True)
                     raise CallCancelled() from None
-            if (
-                self._stopped_at is not None
-                and not self._is_sealed(task)
-                and time.monotonic() - self._stopped_at > _cancel_seal_seconds()
-            ):
+            if self._stopped_at is None:
+                continue
+            waited = time.monotonic() - self._stopped_at
+            if not self._is_sealed(task) and waited > _cancel_seal_seconds():
                 logger.warning("call runner did not seal within %ss of the stop", _cancel_seal_seconds())
+                raise CallCancelled()
+            if waited > _SEALED_DELIVERY_SECONDS:
+                logger.warning("sealed call was not delivered within %ss of the stop", _SEALED_DELIVERY_SECONDS)
+                task.cancel()
                 raise CallCancelled()
 
     async def _judge_jointly(
