@@ -1961,3 +1961,18 @@ def test_a_proxied_trial_whose_world_log_cannot_be_read_has_no_log_never_only_th
     assert chat._readable_trial_log(door, 0.0) == own
     readable = SimpleNamespace(log=SimpleNamespace(rows=lambda: own, mirror=SimpleNamespace(rows=lambda: own)))
     assert chat._readable_trial_log(readable, 0.0, proxied=True) == own
+
+
+def test_a_trial_on_a_seal_without_a_world_door_says_its_world_actions_were_not_seen():
+    """A bundle sealed before the world door: the agent ran its toolbox's tools itself, its trace holds 8 calls and the
+    action log none of them. Its world actions are unknown, never "0 attempted, no change"."""
+    from fi.alk.harness.call_runner import SEALED_WITHOUT_DOOR, calls_passed_no_door
+    from fi.alk.harness.world.runtime import Call
+
+    calls = [Call(name="find_items", arguments={"query": "kayak"}, ok=True)] * 8
+    assert calls_passed_no_door(calls, []) is True
+    assert SEALED_WITHOUT_DOOR == {"recorded": False, "why": "sealed_without_door"}
+    # The door kept the agent's calls, nothing was called, or the log could not be read: not this case.
+    assert calls_passed_no_door(calls, [{"name": "find_items", "actor_id": "agent", "outcome": "committed"}]) is False
+    assert calls_passed_no_door([], []) is False
+    assert calls_passed_no_door(calls, None) is False

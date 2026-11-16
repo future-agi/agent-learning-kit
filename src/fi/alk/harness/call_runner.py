@@ -2756,6 +2756,20 @@ async def upload_end_state(
 
 # Sealed instead of World changes when the agent's tools run where the world's door cannot see them.
 NOT_RECORDED = {"recorded": False, "why": "in_process_tools"}
+# Sealed instead when the bundle has no world door and the agent's calls reached none: built before the door.
+SEALED_WITHOUT_DOOR = {"recorded": False, "why": "sealed_without_door"}
+
+
+def calls_passed_no_door(calls: Sequence[Call], log: Sequence[Mapping[str, Any]] | None) -> bool:
+    """Whether the agent's own trace holds calls the trial graded while the world's action log, read, holds none of
+    the agent's attempts: its tools ran where no door stood."""
+    from .world_door import AGENT, is_attempt
+
+    return (
+        log is not None
+        and bool(graded_calls(calls))
+        and not any(is_attempt(row) and (row.get("actor_id") or AGENT) == AGENT for row in log)
+    )
 
 
 class CallRunnerImpl:
