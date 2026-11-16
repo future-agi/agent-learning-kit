@@ -69,6 +69,23 @@ def _execute(
         error = f"{type(exc).__name__}: {exc}"
         raise
     finally:
+        try:
+            # The world's own call log, as the tool proxy keeps it: what reached the world.
+            with psycopg.connect(database_url, autocommit=True) as log:
+                log.execute(
+                    "INSERT INTO _alk_tool_trace(name, arguments, result, ok, error, at) "
+                    "VALUES (%s, %s, %s, %s, %s, %s)",
+                    (
+                        tool_name,
+                        json.dumps(arguments, default=str),
+                        json.dumps(result, default=str),
+                        error is None,
+                        error or "",
+                        started,
+                    ),
+                )
+        except Exception:  # noqa: BLE001 - the log must never change the tool's response
+            pass
         trace_path.parent.mkdir(parents=True, exist_ok=True)
         with trace_path.open("a", encoding="utf-8") as trace:
             trace.write(

@@ -330,6 +330,8 @@ class _HostedChatTarget:
         self._messages: list[dict[str, Any]] = []
         self._tool_call_ids: set[str] = set()
         self._turn = 0
+        # Calls the harness ran at the world itself, not ones the agent says it ran.
+        self.received: list[Call] = []
 
     async def open(self) -> None:
         return
@@ -411,6 +413,7 @@ class _HostedChatTarget:
                     result = self.world.handle_tool_call(
                         {"id": call_id, "name": name, "arguments": arguments}
                     )
+                    self.received.append(self.world.calls[-1])
                     result_content = (
                         result.content if result is not None else f"no such tool {name}"
                     )
@@ -480,6 +483,8 @@ class HostedChatCallRunner:
     def __init__(self, adapter: ArtifactUploader, context: CallRunnerContext) -> None:
         self._adapter = adapter
         self._context = context
+        # The last conversation's calls the harness ran at the world (``_HostedChatTarget``).
+        self.received: list[Call] = []
         contract_path = context.bundle_dir / "contract.json"
         if not contract_path.is_file():
             self._contract: AgentContract | None = None
@@ -550,15 +555,17 @@ class HostedChatCallRunner:
         transcript: Transcript | None = None
         failure: CallAborted | None = None
         _clear_file_tool_calls(runtime)
+        target = _HostedChatTarget(
+            wrapper=wrapper,
+            contract=self._contract,
+            world=target_world,
+            scenario_key=scenario.scenario_key,
+            scenario_id=scenario.scenario_id,
+        )
+        self.received = target.received
         try:
             transcript = await _drive_conversation(
-                _HostedChatTarget(
-                    wrapper=wrapper,
-                    contract=self._contract,
-                    world=target_world,
-                    scenario_key=scenario.scenario_key,
-                    scenario_id=scenario.scenario_id,
-                ),
+                target,
                 conversation_scenario,
                 self._contract,
                 self._context.bundle_dir,

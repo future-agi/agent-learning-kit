@@ -172,6 +172,8 @@ class Call:
     # Part of the arguments or the result was left out to keep the record bounded.
     input_omitted: bool = False
     output_omitted: bool = False
+    # The HTTP path a call through the tool proxy went to; empty for any other source.
+    endpoint: str = ""
 
 
 def tool_call_attribution(record: Mapping[str, Any]) -> dict[str, Any]:

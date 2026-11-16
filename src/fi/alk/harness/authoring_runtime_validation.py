@@ -20,6 +20,8 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from . import failure_record
+
 if TYPE_CHECKING:
     from .source_model import SourceModel
     from .world_ir import WorldIR
@@ -330,7 +332,39 @@ def _make_local_seed_files_readable(bundle: Path) -> None:
         path.chmod(path.stat().st_mode | (0o055 if path.is_dir() else 0o044))
 
 
-def _write_generic_certificate(job, authoring: Path, repairs) -> None:
+def _has_judged_sub_goals(authoring: Path) -> bool:
+    from .catalogue import load_catalogue
+
+    for root in (authoring, authoring / "environment-bundle"):
+        try:
+            catalogue = load_catalogue(root)
+        except (OSError, ValueError):
+            continue
+        if any(goal.judged.strip() for goal in catalogue.sub_goals):
+            return True
+    return False
+
+
+def _with_judge_check(checks, authoring: Path):
+    """``checks`` with whether the judge answered, only when a judged sub-goal needs it."""
+    from .certification import CheckStatus
+    from .judge import judge_reachable
+
+    if not _has_judged_sub_goals(authoring):
+        return checks
+    return checks.model_copy(update={"judge_reachable": CheckStatus(judge_reachable())})
+
+
+def _harness_version() -> str | None:
+    from fi.alk import __version__
+
+    return None if __version__.startswith("0.0.0+") else __version__
+
+
+def _write_generic_certificate(
+    job, authoring: Path, repairs, source: Path | None = None
+) -> None:
+    from .generated_runtime import installed_frameworks
     from .certification import (
         CertificationAuthoring,
         CertificationCompiler,
@@ -343,12 +377,12 @@ def _write_generic_certificate(job, authoring: Path, repairs) -> None:
 
     store = GenericHarnessArtifactStore(authoring / "generic-harness")
     evidence = store.read_runtime_evidence()
-    source = getattr(job, "source", None)
+    origin = getattr(job, "source", None)
     certificate = HarnessCertification.create(
         status=CertificationStatus.CERTIFIED,
         source=CertificationSource(
-            repository=getattr(source, "repository", None),
-            commit=getattr(source, "commit_sha", None),
+            repository=getattr(origin, "repository", None),
+            commit=getattr(origin, "commit_sha", None),
             digest=evidence.source_digest,
             schema_hash=evidence.source_schema_hash,
         ),
@@ -364,8 +398,10 @@ def _write_generic_certificate(job, authoring: Path, repairs) -> None:
         runtime=CertificationRuntime(
             snapshot=_runtime_snapshot(job),
             validation_attempts=len(repairs.decisions),
+            harness_version=_harness_version(),
+            frameworks=installed_frameworks(source),
         ),
-        checks=evidence.checks,
+        checks=_with_judge_check(evidence.checks, authoring),
         repairs=repairs,
         limitations=evidence.limitations,
     )
@@ -1184,7 +1220,13 @@ async def validate_once(
                     _tools,
                     _chat_target_timeout_seconds,
                 )
-                from .chat_readiness import probe_chat_ingress, probe_chat_workflow
+                from .chat_readiness import (
+                    probe_chat_ingress,
+                    probe_chat_workflow,
+                    record_tool_routing,
+                    request_uncovered_tools,
+                    world_call_log,
+                )
 
                 chat_ingress = CheckStatus.NOT_APPLICABLE
                 interface = contract.runtime.interface if contract.runtime else None
@@ -1223,7 +1265,20 @@ async def validate_once(
                             secret_values=target_secret_values,
                             redaction_values=redaction_values,
                         )
+                        await request_uncovered_tools(
+                            interface=interface,
+                            endpoint=endpoint.address,
+                            runtime=runtime,
+                            contract=contract,
+                            authoring=authoring,
+                            bundle=bundle,
+                            source=source,
+                            secret_values=target_secret_values,
+                            candidate_hash=_generic_candidate_hash(source, authoring),
+                            local_auth_values=getattr(runtime, "_local_auth_values", None),
+                        )
                     else:
+                        since = time.time()
                         await probe_chat_ingress(
                             interface=interface,
                             endpoint=endpoint.address,
@@ -1238,6 +1293,34 @@ async def validate_once(
                             tools=_tools(contract) if interface.include_tools else (),
                             scenario_id=representative.scenario_id,
                             timeout=_chat_target_timeout_seconds(),
+                        )
+                        from .call_runner import _collect_file_tool_calls
+
+                        # A test message can call tools too; then ask for the rest.
+                        try:
+                            called = _collect_file_tool_calls(runtime)
+                        except Exception:  # noqa: BLE001 - no trace, nothing observed
+                            called = ()
+                        record_tool_routing(
+                            authoring,
+                            representative.scenario_key,
+                            contract,
+                            runtime,
+                            received=world_call_log(runtime, since),
+                            reported=called,
+                            bundle=bundle,
+                        )
+                        await request_uncovered_tools(
+                            interface=interface,
+                            endpoint=endpoint.address,
+                            runtime=runtime,
+                            contract=contract,
+                            authoring=authoring,
+                            bundle=bundle,
+                            source=source,
+                            secret_values=target_secret_values,
+                            candidate_hash=_generic_candidate_hash(source, authoring),
+                            local_auth_values=getattr(runtime, "_local_auth_values", None),
                         )
                     chat_ingress = CheckStatus.PASSED
             phase = "environment"
@@ -1700,6 +1783,8 @@ async def validate_and_repair(
         )
         candidate_hash = _generic_candidate_hash(source, authoring)
         for _attempt in range(decision_bound):
+            # A record left by an earlier attempt must never speak for this one.
+            failure_record.clear()
             try:
                 count = await validate(job, source, authoring)
             except RuntimeValidationError as exc:
@@ -1716,6 +1801,7 @@ async def validate_and_repair(
                     f"runtime validation: {exc.phase}: {exc}",
                     flush=True,
                 )
+                failure_record.record(exc.phase, exc)
                 phase = (
                     RepairPhase.SCENARIOS
                     if exc.phase == "scenarios"
@@ -1949,7 +2035,7 @@ async def validate_and_repair(
                 )
                 if evidence_path.is_file():
                     _write_generic_certificate(
-                        job, authoring, repair_controller.history
+                        job, authoring, repair_controller.history, source
                     )
                 else:
                     # Injected validators in unit/integration consumers may not implement the
@@ -1976,10 +2062,12 @@ async def validate_and_repair(
     repairs = {"environment": 0, "scenarios": 0}
     for attempt in range(5):
         print(f"runtime validation: attempt {attempt + 1}/5", flush=True)
+        failure_record.clear()
         try:
             count = await validate(job, source, authoring)
         except RuntimeValidationError as exc:
             print(f"runtime validation: {exc.phase}: {exc}", flush=True)
+            failure_record.record(exc.phase, exc)
             if exc.phase not in repairs or repairs[exc.phase] >= 2:
                 raise
             repairs[exc.phase] += 1
