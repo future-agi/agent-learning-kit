@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import socket
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -15,8 +16,9 @@ from urllib.request import urlopen
 import pytest
 
 from fi.alk.harness.authoring_runtime_validation import RuntimeValidationError
-from fi.alk.harness.chat_readiness import probe_chat_ingress
+from fi.alk.harness.chat_readiness import _chat_target_cause, probe_chat_ingress
 from fi.alk.harness.contract import AgentContract, Runtime, RuntimeInterface
+from fi.alk.harness.job import FailureCause
 from fi.alk.harness.runtime_repair import (
     RuntimePlanPatch,
     _contract_hash,
@@ -253,6 +255,50 @@ def test_failure_routing(tmp_path, profile_app, status, code):
     with pytest.raises(RuntimeValidationError) as error:
         asyncio.run(probe(tmp_path, url))
     assert error.value.diagnostics[0].code == code
+    # The agent answered with an error status: that is no refusal and no timeout.
+    assert error.value.cause is None
+
+
+@pytest.fixture
+def silent_or_closed_port(request):
+    """A port whose agent accepts and never answers, or one that refuses the connection."""
+    listener = socket.socket()
+    listener.bind(("127.0.0.1", 0))
+    url = f"http://127.0.0.1:{listener.getsockname()[1]}"
+    if request.param == "silent":
+        listener.listen()
+    else:
+        listener.close()  # nothing holds the port: the connection is refused
+    try:
+        yield url
+    finally:
+        listener.close()
+
+
+@pytest.mark.parametrize(
+    "silent_or_closed_port,cause",
+    [
+        ("silent", FailureCause.CHAT_TARGET_TIMEOUT),
+        ("closed", FailureCause.CHAT_TARGET_REFUSED),
+    ],
+    indirect=["silent_or_closed_port"],
+)
+def test_ingress_names_a_silent_or_closed_agent_by_a_closed_cause(
+    tmp_path, silent_or_closed_port, cause
+):
+    with pytest.raises(RuntimeValidationError) as error:
+        asyncio.run(probe(tmp_path, silent_or_closed_port))
+    assert error.value.cause is cause
+
+
+def test_evidence_fetch_timeout_after_a_chat_answer_is_no_chat_target_cause():
+    # The chat answered; only the completed-tool-events GET timed out.
+    trace = {"timeout_error": True, "failure_stage": "tool_events", "status_code": 200}
+    assert _chat_target_cause(trace) is None
+    assert (
+        _chat_target_cause({"timeout_error": True, "failure_stage": "http"})
+        is FailureCause.CHAT_TARGET_TIMEOUT
+    )
 
 
 @pytest.mark.parametrize(
@@ -745,14 +791,16 @@ def test_dependency_patch_repeats_identical_http_request_and_stops_without_new_e
     assert (authoring / "scenarios.json").read_text() == '{"original": true}'
 
 
-@pytest.mark.parametrize("kind,code", [
-    ("timeout", "chat_ingress_timeout"),
-    ("wrapped_timeout", "chat_ingress_timeout"),
-    ("url_error_text", "external_service_unavailable"),
-    ("connection", "external_service_unavailable"),
-    ("value_error_text", "chat_ingress_failed"),
+@pytest.mark.parametrize("kind,code,cause", [
+    ("timeout", "chat_ingress_timeout", FailureCause.CHAT_TARGET_TIMEOUT),
+    ("wrapped_timeout", "chat_ingress_timeout", FailureCause.CHAT_TARGET_TIMEOUT),
+    ("url_error_text", "external_service_unavailable", FailureCause.CHAT_TARGET_REFUSED),
+    ("connection", "external_service_unavailable", FailureCause.CHAT_TARGET_REFUSED),
+    ("value_error_text", "chat_ingress_failed", None),
 ])
-def test_ingress_classifies_timeout_type_not_message(tmp_path, monkeypatch, kind, code):
+def test_ingress_classifies_timeout_type_not_message(
+    tmp_path, monkeypatch, kind, code, cause
+):
     import urllib.error
     import urllib.request
 
@@ -771,6 +819,7 @@ def test_ingress_classifies_timeout_type_not_message(tmp_path, monkeypatch, kind
     with pytest.raises(RuntimeValidationError) as failure:
         asyncio.run(probe(tmp_path, "http://127.0.0.1:1"))
     assert failure.value.diagnostics[0].code == code
+    assert failure.value.cause is cause
     receipt = receipts(tmp_path)[0]
     assert receipt["timeout_seconds"] == 1
     assert receipt["trace"]["timeout_error"] is (code == "chat_ingress_timeout")
@@ -828,6 +877,48 @@ def test_internal_readiness_initializes_real_chat_and_requires_reset(tmp_path, p
     assert receipt["status"] == ("passed" if reset_mode == "restore" else "failed")
     assert not (authoring / "scenarios").exists()
     assert not (authoring / "runtime-validation.json").exists()
+
+
+def test_internal_readiness_keeps_the_cause_of_an_agent_that_crashes_on_reset(
+    tmp_path, profile_app
+):
+    """The agent answered once, then exited when the reset restarted it."""
+    from fi.alk.harness.authoring_runtime_validation import _probe_runtime_readiness
+    from fi.alk.harness.process_runtime import ProcessRuntimeError
+
+    url, _state = profile_app
+    contract = AgentContract(runtime=Runtime(
+        language="python", command=["python", "app.py"],
+        interface=interface(setup_requests=[{"path": "/profiles"}]),
+    ))
+
+    class World:
+        def read_only(self):
+            return self
+
+        def state(self):
+            return {}
+
+    class Factory:
+        async def create(self, *args, **kwargs):
+            return World()
+
+    class Provider:
+        async def reset(self, *args, **kwargs):
+            raise ProcessRuntimeError(
+                "depends_on", "spawn_failed", "agent: exited before started_check passed",
+                process="agent", cause=FailureCause.AGENT_EXITED_BEFORE_READY,
+            )
+
+    with pytest.raises(RuntimeValidationError, match="reset") as failure:
+        asyncio.run(_probe_runtime_readiness(
+            job=SimpleNamespace(seed=0), source=tmp_path, authoring=tmp_path,
+            manifest=SimpleNamespace(digest="bundle"), contract=contract,
+            provider=Provider(), runtime=SimpleNamespace(
+                endpoints={"target_http": SimpleNamespace(address=url)}
+            ), factory=Factory(), work=tmp_path, values={}, redactions={},
+        ))
+    assert failure.value.cause is FailureCause.AGENT_EXITED_BEFORE_READY
 
 
 def workflow_probe(tmp_path, url, **changes):
@@ -1090,10 +1181,36 @@ def test_private_workflow_preserves_transport_classification(tmp_path, profile_a
     with pytest.raises(RuntimeValidationError) as failure:
         asyncio.run(workflow_probe(tmp_path, url))
     assert failure.value.diagnostics[0].code == code
+    assert failure.value.cause is None
     receipt_path, receipt = workflow_receipt(tmp_path)
     assert receipt["status"] == "failed"
     assert any("trace" in name for name in receipt["artifacts"])
     assert all("secret123" not in path.read_text() for path in receipt_path.parent.iterdir())
+
+
+@pytest.mark.parametrize(
+    "silent_or_closed_port,cause",
+    [
+        ("silent", FailureCause.CHAT_TARGET_TIMEOUT),
+        ("closed", FailureCause.CHAT_TARGET_REFUSED),
+    ],
+    indirect=["silent_or_closed_port"],
+)
+def test_private_workflow_names_a_silent_or_closed_agent_by_a_closed_cause(
+    tmp_path, monkeypatch, silent_or_closed_port, cause
+):
+    from fi.alk.harness import chat_call_runner
+
+    monkeypatch.setenv("ALK_CHAT_TARGET_TIMEOUT_SECONDS", "1")
+
+    async def conversation(target, *_args):
+        await target.say("Look up my account")
+
+    monkeypatch.setattr(chat_call_runner, "_drive_conversation", conversation)
+    with pytest.raises(RuntimeValidationError) as failure:
+        # The workflow's own deadline outlasts one request's, as it does in production.
+        asyncio.run(workflow_probe(tmp_path, silent_or_closed_port, timeout=10))
+    assert failure.value.cause is cause
 
 
 @pytest.mark.parametrize("cancel", [False, True])

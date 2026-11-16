@@ -22,6 +22,8 @@ _SECRETS_PATH = Path("/run/futureagi/secrets.json")
 _ADC_PATH = Path("/work/.authoring-credentials/google.json")
 _TARGET_SECRETS_PATH = Path("/run/futureagi/authoring-target-secrets.json")
 _SIMULATOR_SECRETS_PATH = Path("/run/futureagi/simulator-secrets.json")
+# The platform reads this after exit 78: {"cause": <FailureCause value or null>}, no other text.
+_FAILURE_CAUSE_PATH = Path("/run/futureagi/failure-cause.json")
 _TARGET_CREDENTIAL_NAMES = {"RETELL_API_KEY", "VAPI_API_KEY"}
 _PASSTHROUGH = {
     "AGENTCC_API_KEY",
@@ -146,6 +148,21 @@ def _authoring_job_context(forwarded: list[str]) -> tuple[str, str, dict]:
     return "", "", {}
 
 
+def _write_failure_cause(cause: str | None) -> None:
+    """Record the closed failure cause for the platform. The agent's processes have stopped by
+    now; removing the path first and creating it exclusively means nothing they left there,
+    a file or a symlink, survives as the answer. Never changes the exit code."""
+    try:
+        _FAILURE_CAUSE_PATH.unlink(missing_ok=True)
+        fd = os.open(
+            _FAILURE_CAUSE_PATH, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644
+        )
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            json.dump({"cause": cause}, handle)
+    except OSError as exc:
+        print(f"could not record the failure cause: {exc}", file=sys.stderr)
+
+
 def main(argv: list[str] | None = None) -> int:
     # This process authors the environment but never runs the submitted target. Do not let a
     # launcher-provided parent environment accidentally bypass the target-secrets file boundary.
@@ -207,6 +224,7 @@ def main(argv: list[str] | None = None) -> int:
                 "RuntimeValidationError: " + redact_outbound_text(str(exc)),
                 file=sys.stderr,
             )
+            _write_failure_cause(exc.cause.value if exc.cause else None)
             # EX_CONFIG: deterministic generated-environment failure, not retryable infra.
             return 78
     finally:

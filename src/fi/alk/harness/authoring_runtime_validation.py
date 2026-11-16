@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from .job import FailureCause
     from .source_model import SourceModel
     from .world_ir import WorldIR
 
@@ -610,9 +611,18 @@ def _needs_runtime_plan_repair(diagnostics) -> bool:
 
 
 class RuntimeValidationError(RuntimeError):
-    def __init__(self, phase: str, detail: str, *, diagnostics=()):
+    def __init__(
+        self,
+        phase: str,
+        detail: str,
+        *,
+        diagnostics=(),
+        cause: FailureCause | None = None,
+    ):
         self.phase = phase
         self.diagnostics = tuple(diagnostics)
+        # The closed reason a reader without access to guest text gets; None when unknown.
+        self.cause = cause
         self.process_evidence = ""
         self.target_process_evidence = ""
         super().__init__(detail)
@@ -658,6 +668,7 @@ async def _probe_runtime_readiness(
 ):
     from .chat_call_runner import _tools, _chat_target_timeout_seconds
     from .chat_readiness import probe_chat_ingress
+    from .process_runtime import ProcessRuntimeError
 
     interface = contract.runtime.interface if contract.runtime else None
     endpoint = runtime.endpoints.get("target_http")
@@ -701,7 +712,10 @@ async def _probe_runtime_readiness(
                 raise
             except Exception as exc:
                 raise RuntimeValidationError(
-                    "environment", f"Readiness reset failed: {exc}"
+                    "environment",
+                    f"Readiness reset failed: {exc}",
+                    diagnostics=tuple(getattr(exc, "diagnostics", ())),
+                    cause=exc.cause if isinstance(exc, ProcessRuntimeError) else None,
                 ) from exc
             receipt["reset"] = "equivalent" if compare_baseline else "restarted"
         receipt["status"] = "passed"
@@ -736,6 +750,7 @@ async def validate_once(
     from .job import ProviderExecutionMode, SourceKind
     from .process_preflight import preflight_bundle
     from .process_runtime import (
+        ProcessRuntimeError,
         ProcessRuntimeProvider,
         default_user_resolver,
         fixed_sandbox_user_resolver,
@@ -1372,6 +1387,7 @@ async def validate_once(
                     str(exc), extra_secret_values=secret_values
                 ),
                 diagnostics=exc.diagnostics,
+                cause=exc.cause,
             )
             raise validation_error from None
         except Exception as exc:
@@ -1384,6 +1400,7 @@ async def validate_once(
                     f"{type(exc).__name__}: {exc}", extra_secret_values=secret_values
                 ),
                 diagnostics=tuple(getattr(exc, "diagnostics", ())),
+                cause=exc.cause if isinstance(exc, ProcessRuntimeError) else None,
             )
             raise validation_error from None
         finally:
