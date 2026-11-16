@@ -25,11 +25,14 @@ from __future__ import annotations
 
 import ast
 import inspect
+import json
 import re
 from dataclasses import dataclass
-from typing import Any, Sequence
+from typing import Any, Mapping, Sequence
 
+from .actors import is_pre_run
 from .world.runtime import Call, GeneratedWorld
+from .world_door import AGENT, is_read, logged_as
 
 
 @dataclass
@@ -141,6 +144,86 @@ def same_id(first: Any, second: Any) -> bool:
     return bool(mine) and mine == theirs
 
 
+# What the action log says of a call the world timed out on: refused before its commit, or committed with the answer
+# lost (`world_door._faulted`).
+TIMED_OUT = ("timeout_before_commit", "response_lost")
+
+
+def _agent_writes(world: Any) -> list[Mapping[str, Any]]:
+    """The agent's attempts to change the world this trial, in the order the world saw them."""
+    return [
+        row
+        for row in world.events(actor_id=AGENT)
+        if not is_read(row) and not is_pre_run(row.get("idempotency_key"))
+    ]
+
+
+def _arguments(row: Mapping[str, Any]) -> Any:
+    value = row.get("arguments")
+    if isinstance(value, (str, bytes)):
+        try:
+            return json.loads(value)
+        except ValueError:
+            return value
+    return value
+
+
+def _same_record(first: Mapping[str, Any], later: Mapping[str, Any]) -> bool:
+    return logged_as(first) == logged_as(later) and _arguments(first) == _arguments(later)
+
+
+def _pair(first: Mapping[str, Any], later: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        "action": logged_as(first),
+        "arguments": _arguments(first),
+        "first_action_id": first.get("action_id"),
+        "later_action_id": later.get("action_id"),
+        "later_outcome": later.get("outcome"),
+    }
+
+
+def retried_timeouts(world: Any) -> list[dict[str, Any]]:
+    """Each write of the agent's the world timed out on that the agent then attempted again on the same record."""
+    rows = _agent_writes(world)
+    found = []
+    for index, first in enumerate(rows):
+        if first.get("error") not in TIMED_OUT:
+            continue
+        retry = next((later for later in rows[index + 1 :] if _same_record(first, later)), None)
+        if retry is not None:
+            found.append(_pair(first, retry))
+    return found
+
+
+def repeated_commits(world: Any) -> list[dict[str, Any]]:
+    """Each write of the agent's the world committed again on the same record: one entry per extra commit."""
+    committed = [row for row in _agent_writes(world) if row.get("outcome") == "committed"]
+    found = []
+    for index, later in enumerate(committed):
+        first = next((row for row in committed[:index] if _same_record(row, later)), None)
+        if first is not None:
+            found.append(_pair(first, later))
+    return found
+
+
+def committed_writes(world: Any) -> list[dict[str, Any]]:
+    """The agent's writes the world committed. None means any change the reply reports never happened."""
+    return [
+        {"action": logged_as(row), "arguments": _arguments(row), "action_id": row.get("action_id")}
+        for row in _agent_writes(world)
+        if row.get("outcome") == "committed"
+    ]
+
+
+# Read-only helpers every check is given beside `world` and `calls`.
+CHECK_HELPERS = {
+    "same_id": same_id,
+    "retried_timeouts": retried_timeouts,
+    "repeated_commits": repeated_commits,
+    "committed_writes": committed_writes,
+}
+
+
 def run_check(
     source: str,
     world: GeneratedWorld,
@@ -150,7 +233,7 @@ def run_check(
     reference: Sequence[dict[str, Any]] = (),
 ) -> Outcome:
     """Execute one check against what the run left behind, with the reference when it takes one."""
-    namespace: dict[str, Any] = {"same_id": same_id}
+    namespace: dict[str, Any] = dict(CHECK_HELPERS)
     try:
         exec(compile(source, f"<check:{name}>", "exec"), namespace)
     except Exception as failed:
