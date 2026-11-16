@@ -2540,6 +2540,20 @@ class TrialRecords:
         with self._lock:
             self._read_before_setup.add(key)
 
+    def started(self, key: Any, state: dict[str, Any]) -> None:
+        """Whether a trial started from the seed, as read before its setup in another process: kept as it is, and its
+        records are read as its call begins."""
+        with self._lock:
+            self._starts[key] = (None, state)
+            self._read_before_setup.add(key)
+
+    def start_of(self, key: Any) -> dict[str, Any] | None:
+        """Whether a trial started from the seed, as read before its setup, handed on to the process that runs it."""
+        with self._lock:
+            found = self._starts.pop(key, None)
+            self._read_before_setup.discard(key)
+        return found[1] if found is not None else None
+
     def begin(self, key: Any, dsn: str | None) -> None:
         """Read a trial's records as its call begins: what World changes compares its end against. Its start is read
         now unless it was read before its setup."""

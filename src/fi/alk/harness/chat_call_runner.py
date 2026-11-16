@@ -857,6 +857,10 @@ class HostedChatCallRunner:
                 contract_path.read_text(encoding="utf-8")
             )
 
+    def started_before_setup(self, runtime: EnvironmentRuntime, state: dict[str, Any]) -> None:
+        """Whether the trial started from the seed, as the process that ran its setup read it first."""
+        self._records.started(id(runtime), state)
+
     async def run(
         self,
         scenario: Scenario,
@@ -1004,7 +1008,7 @@ class HostedChatCallRunner:
             _set_trial_faults(runtime, faults)
         try:
             # The trial's starting records, after its reset: whether it started from the seed.
-            await asyncio.to_thread(self._records.start, id(runtime), records_dsn)
+            await asyncio.to_thread(self._records.begin, id(runtime), records_dsn)
             if dispatcher is not None:
                 # What the actors wrote before T0 is in the world before the conversation starts.
                 await dispatcher.replay()

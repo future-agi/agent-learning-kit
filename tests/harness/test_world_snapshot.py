@@ -318,6 +318,17 @@ def test_each_trial_of_a_run_starts_from_the_seed_and_its_setup_s_key_never_bloc
         second = records.end("w0", world_dsn)
         assert second["start"] == {"state": "seeded", "tables": [], "against": "sealed_seed"}
         assert second["records"]["changes"] == []
+
+        # Trial 3, a hosted chat: its setup runs here, its call in a worker process with records of its own.
+        reset()
+        records.before_setup("w0", world_dsn)
+        store.add("approvals", {"id": 1, "policy_id": "pol_1", "status": "declined"})
+        worker = TrialRecords(sealed_seed(tmp_path))
+        worker.started("chat", records.start_of("w0"))
+        worker.begin("chat", world_dsn)
+        third = worker.end("chat", world_dsn)
+        assert third["start"] == {"state": "seeded", "tables": [], "against": "sealed_seed"}
+        assert third["records"]["changes"] == []
     finally:
         with psycopg.connect(admin, autocommit=True) as connection:
             connection.execute(f'DROP DATABASE IF EXISTS "{world}" WITH (FORCE)')

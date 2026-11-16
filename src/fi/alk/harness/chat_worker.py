@@ -62,8 +62,18 @@ _CHAT_ENV = frozenset(
 
 class IsolatedChatCallRunner:
     def __init__(self, adapter: ArtifactUploader, context: CallRunnerContext) -> None:
+        from .call_runner import TrialRecords, sealed_seed
+
         self._adapter = adapter
         self._context = context
+        # Each trial runs in a worker of its own, so whether it started from the seed is read here, before its setup.
+        self._records = TrialRecords(sealed_seed(context.work_directory))
+
+    async def before_setup(self, runtime: EnvironmentRuntime) -> None:
+        """Read the trial's start on its reset world, before the scenario's setup writes."""
+        world_db = runtime.endpoints.get("world_db")
+        dsn = world_db.address if world_db is not None and world_db.protocol == "postgres" else None
+        await asyncio.to_thread(self._records.before_setup, id(runtime), dsn)
 
     async def run(
         self,
@@ -114,6 +124,7 @@ class IsolatedChatCallRunner:
                         scenario, "source_scenario_key", None
                     ),
                     "scenario_id": scenario.scenario_id,
+                    "start": self._records.start_of(id(runtime)),
                 },
                 environ=environ,
                 work_directory=context.work_directory / "chat-workers",
@@ -281,7 +292,11 @@ async def main() -> None:
         )
         runtime = EnvironmentRuntime.model_validate(payload["runtime"])
         runtime._local_auth_values = dict(payload.get("local_auth_values", {}))
-        outcome = await runner_type(collector, context).run(
+        runner = runner_type(collector, context)
+        started = payload.get("start")
+        if isinstance(started, dict) and isinstance(runner, HostedChatCallRunner):
+            runner.started_before_setup(runtime, started)
+        outcome = await runner.run(
             SimpleNamespace(
                 scenario_key=payload["scenario_key"],
                 source_scenario_key=payload.get("source_scenario_key"),
