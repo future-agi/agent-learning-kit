@@ -760,7 +760,7 @@ def world_actor_tools(
                 )
         try:
             kept = [one for one in listing.actors if one.id != actor.id]
-            save_actors(destination, ActorList(actors=[*kept, actor]))
+            save_actors(destination, ActorList(actors=[*kept, actor], unresolved=listing.unresolved))
         except ValueError as exc:
             return _err(f"Not added: {exc}")
         known = world_actions()
@@ -801,14 +801,54 @@ def world_actor_tools(
                 f"Not dropped. These scenarios include {gone}: " + ", ".join(using)
             )
         try:
-            remaining = ActorList(actors=kept)
+            remaining = ActorList(actors=kept, unresolved=listing.unresolved)
         except ValueError as exc:
             # Another actor still names this one as its parent, principal or fallback.
             return _err(f"Not dropped: {exc}")
         save_actors(destination, remaining)
         return _ok(f"{gone} dropped")
 
-    return [add_actor, drop_actor]
+    @tool(
+        "note_unresolved",
+        "Record a policy point from the agent's material that you could not turn into an actor's permissions or "
+        "knowledge, so the person decides it when they review the cast: a rule with no record the world's rule "
+        "reads, a rule with two readings, a decision no listed actor owns. `policy` is the rule in one sentence as "
+        "the material states it, `why` why it is not modelled, `actor` the actor it is about when there is one. "
+        "Send the same `policy` again with `drop: true` once the person settled it in the chat. Never use it for a "
+        "point you modelled.",
+        {
+            "type": "object",
+            "properties": {
+                "policy": {"type": "string"},
+                "why": {"type": "string"},
+                "actor": {"type": "string"},
+                "drop": {"type": "boolean"},
+            },
+            "required": ["policy"],
+        },
+    )
+    async def note_unresolved(args: dict[str, Any]) -> dict[str, Any]:
+        from ..actors import Unresolved
+
+        listing = load_actors(destination)
+        policy = str(args.get("policy") or "").strip()
+        kept = [one for one in listing.unresolved if one.policy != policy]
+        if args.get("drop"):
+            if len(kept) == len(listing.unresolved):
+                return _err(f"no unresolved point {policy!r}")
+            save_actors(destination, ActorList(actors=listing.actors, limits=listing.limits, unresolved=kept))
+            return _ok("dropped; the person no longer sees it")
+        actor = str(args.get("actor") or "").strip() or None
+        if actor is not None and actor not in listing.by_id():
+            return _err(f"Not noted: no actor {actor!r}. Listed: {', '.join(listing.by_id()) or 'none'}")
+        try:
+            point = Unresolved(policy=policy, why=str(args.get("why") or "").strip(), actor=actor)
+        except ValueError as exc:
+            return _err(f"Not noted: {exc}")
+        save_actors(destination, ActorList(actors=listing.actors, limits=listing.limits, unresolved=[*kept, point]))
+        return _ok(f"noted; {len(kept) + 1} point(s) wait for the person's decision above the cast")
+
+    return [add_actor, drop_actor, note_unresolved]
 
 
 ACTOR_SERVER = "actors"
@@ -2172,6 +2212,7 @@ TOOL_NAMES = (
     "write_simulator_prompt",
     "add_actor",
     "drop_actor",
+    "note_unresolved",
     "add_sub_goal",
     "write_store_ops",
     "add_world_check",

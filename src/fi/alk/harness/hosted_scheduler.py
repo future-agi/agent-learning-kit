@@ -45,13 +45,14 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
-from typing import Any, Awaitable, Callable, Protocol, Sequence
+from typing import Any, Awaitable, Callable, Mapping, Protocol, Sequence
 
 from . import observability
 from .job import FailureDomain, HarnessStage
 from .checks import reference_of, takes_reference
 from .joint_judge import OFF_SCRIPT
 from .judge import INCONCLUSIVE, NOT_APPLICABLE, UNMEASURED, verdict_named
+from .world_door import EvidenceUnavailable
 from .judge import judge_sub_goal as _judge
 from .outbound import (
     HostedAttemptSupersededError,
@@ -264,6 +265,9 @@ class CallOutcome:
     actor_briefs: dict[str, str] = field(default_factory=dict)
     # What the person is told about this trial (a fault that did not take effect, worker limits not enforced).
     notices: tuple[dict[str, Any], ...] = ()
+    # Each of the agent's writes the world applied twice after its answer was lost (`duplicate_commits`): the
+    # scenario fails whatever its sub-goals say.
+    duplicates: tuple[dict[str, Any], ...] = ()
 
 
 class CallAborted(RuntimeError):
@@ -481,6 +485,8 @@ _CODE_DOMAIN: dict[str, FailureDomain] = {
     "check_broken": FailureDomain.SIMULATOR,
     "judge_undecided": FailureDomain.SIMULATOR,
     "caller_off_script": FailureDomain.SIMULATOR,
+    "duplicate_commit": FailureDomain.AGENT,
+    "evidence_unmeasured": FailureDomain.SIMULATOR,
     "evidence_missing": FailureDomain.SIMULATOR,
     "actor_missing": FailureDomain.SIMULATOR,
     # The scenario relies on worker limits the environment's sealed world door cannot hold; rebuilding it fixes that.
@@ -631,6 +637,14 @@ def _sanitize_cause(message: str) -> str:
     return _truncate(_USERINFO_PATTERN.sub("://***@", message), _CAUSE_LIMIT)
 
 
+def duplicate_reason(duplicates: Sequence[Mapping[str, Any]]) -> str:
+    """Why a scenario failed on duplicate commits, one sentence per action."""
+    names = list(dict.fromkeys(str(one.get("name") or one.get("action") or "an action") for one in duplicates))
+    return " ".join(
+        f"The agent repeated {name} after its answer was lost, and the world committed it twice." for name in names
+    )
+
+
 def _failure(code: str, message: str) -> ReceiptFailure:
     return ReceiptFailure(
         # C3 §4.5 step 5: `.get(...)`-with-default so an unmapped code cannot KeyError here.
@@ -727,6 +741,14 @@ class _PhaseMisuse(Exception):
 
 
 class _PhaseStateTooLarge(Exception):
+    def __init__(self, phase: str, cause: BaseException) -> None:
+        super().__init__(f"{phase}: {cause}")
+        self.cause = cause
+
+
+class _PhaseEvidenceUnavailable(Exception):
+    """A check read evidence that could not be read (the world's action log): unmeasured, never passed or failed."""
+
     def __init__(self, phase: str, cause: BaseException) -> None:
         super().__init__(f"{phase}: {cause}")
         self.cause = cause
@@ -856,6 +878,8 @@ async def _invoke(
         # the fixer report). The thread is abandoned, bounded by scenario count per the contract's
         # own accepted tradeoff; its world is discarded rather than reused (M13).
         raise _PhaseTimeout(phase) from exc
+    except EvidenceUnavailable as exc:
+        raise _PhaseEvidenceUnavailable(phase, exc) from exc
     except WorldUnavailable as exc:
         raise _PhaseWorldGone(phase, exc) from exc
     except WorldStateTooLarge as exc:
@@ -893,6 +917,8 @@ _TIMEOUT_CODE_BY_PHASE = {
 class _PhaseResult:
     value: object
     failure: ReceiptFailure | None
+    # Why the phase could not be measured: the evidence it read could not be read.
+    unmeasured: str | None = None
 
 
 async def _run_phase(
@@ -927,6 +953,8 @@ async def _run_phase(
             None,
             _failure(_TIMEOUT_CODE_BY_PHASE[phase], f"{phase} exceeded its budget"),
         )
+    except _PhaseEvidenceUnavailable as exc:
+        return _PhaseResult(None, None, unmeasured=str(exc.cause))
     except _PhaseWorldGone as exc:
         return _PhaseResult(None, _failure("world_unavailable", str(exc.cause)))
     except _PhaseMisuse as exc:
@@ -2694,6 +2722,14 @@ class HostedScheduler:
                     )
                 )
                 continue
+            if outcome.unmeasured is not None and (not goal.judged or getattr(goal, "both", False)):
+                # The check read the world's action log and the log could not be read: no verdict on missing evidence.
+                sub_goal_results.append(
+                    SubGoalResult(
+                        name=goal.name, held=None, reason=f"{UNMEASURED}{outcome.unmeasured}", judged=goal.judged != ""
+                    )
+                )
+                continue
             verdict = _classify_check(outcome.value)
             both = bool(goal.judged) and getattr(goal, "both", False)
             if verdict.broken and (both or not goal.judged):
@@ -2874,11 +2910,16 @@ class HostedScheduler:
         if any(result.held is False and result.subject == "task" for result in sub_goal_results):
             status = "failed"
         elif any(result.held is None and result.subject == "task" for result in sub_goal_results):
+            undecided = [result for result in sub_goal_results if result.held is None and result.subject == "task"]
+            unmeasured = all(not result.judged and (result.reason or "").startswith(UNMEASURED) for result in undecided)
             return self._fault(
                 scenario,
                 world_index,
                 attempt,
-                _failure("judge_undecided", "a judged sub-goal was not decided"),
+                _failure("evidence_unmeasured", "a sub-goal's evidence could not be read: "
+                         + ", ".join(result.name for result in undecided))
+                if unmeasured
+                else _failure("judge_undecided", "a judged sub-goal was not decided"),
                 sub_goals=tuple(sub_goal_results),
                 call=self._call_summary(call_outcome),
                 retry=False,
@@ -2886,6 +2927,11 @@ class HostedScheduler:
         else:
             status = "passed"
         failure = None
+        if call_outcome.duplicates:
+            # The world applied a write twice after the agent's answer was lost: a failure of the agent's, whatever
+            # the sub-goals say.
+            status = "failed"
+            failure = _failure("duplicate_commit", duplicate_reason(call_outcome.duplicates))
         return ResultReceipt(
             scenario_key=scenario.scenario_key,
             scenario_id=scenario.scenario_id,

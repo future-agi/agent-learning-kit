@@ -2320,6 +2320,7 @@ def spawn_source_process(
         livekit_hook_due = (
             "HARNESS_TOOL_TRACE" in process.environment
             or "FI_WORKER_HEALTH_PORT" in process.environment
+            or "ALK_WORLD_DOOR_URL" in process.environment
         )
         mark_hook_due = "FI_SIMULATION_EXPORT" in customer_code_environment
         if livekit_hook_due or mark_hook_due:
@@ -2354,6 +2355,14 @@ def spawn_source_process(
                         Path(__file__).with_name(module_name).read_bytes()
                     )
                     mark_module.chmod(0o444)
+        if "ALK_WORLD_DOOR_URL" in process.environment:
+            # The world's door for tools the agent runs in its own process, imported by the hook above.
+            door_hook = world_dir / "in_process_door_bootstrap.py"
+            if not door_hook.exists():
+                door_hook.write_bytes(
+                    Path(__file__).with_name("in_process_door_bootstrap.py").read_bytes()
+                )
+                door_hook.chmod(0o444)
         if process.environment.get("ALK_CREWAI_TOOL_TRACE") == "1":
             observer = world_dir / "crewai_runtime_observer_bootstrap.py"
             if not observer.exists():

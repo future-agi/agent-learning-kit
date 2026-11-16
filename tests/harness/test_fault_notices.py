@@ -96,3 +96,18 @@ def test_a_fault_the_door_applied_after_another_action_with_the_same_last_part_s
     door.enter(ToolCall(action="ticket.update", name="update"))
     door.enter(ToolCall(action="crm.update", name="update"))
     assert fault_notices([fault], log.rows(), [_call("update"), _call("update")]) == []
+
+
+@pytest.mark.parametrize("mode", ["unavailable", "error"])
+def test_an_unavailable_or_error_fault_the_door_applied_says_nothing(mode):
+    from fi.alk.harness.world_door import DictRoster, Executed, MemoryLog, ToolCall, WorldDoor
+
+    class _Ok:
+        def run(self, call):
+            return Executed(200, {"applied": True})
+
+    fault = {**FAULT, "mode": mode, "status": 503}
+    log = MemoryLog()
+    door = WorldDoor(_Ok(), log, DictRoster({}), faults=lambda: [fault])
+    door.enter(ToolCall(action="crm.apply_discount", name="apply_discount", arguments={"pct": 10}))
+    assert fault_notices([fault], log.rows(), [_call("apply_discount")]) == []

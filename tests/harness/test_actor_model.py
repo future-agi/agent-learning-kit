@@ -203,3 +203,22 @@ def test_a_speaking_actor_that_comes_in_once_a_record_exists_keeps_which_record(
     (manager,) = speaking_entries([entry], listing, None, own)
     trigger = manager.trigger.model_dump()
     assert (trigger["kind"], trigger["collection"], trigger["where"]) == ("conditional", "approvals", {"deal_id": 8})
+
+
+@pytest.mark.parametrize("mode", ["timeout_before_commit", "timeout_after_commit", "unavailable", "error"])
+def test_every_fault_mode_is_valid(mode):
+    from fi.alk.harness.actors import Fault
+
+    assert Fault(action="orders.refund", mode=mode).mode == mode
+
+
+def test_an_error_fault_keeps_its_status_and_message_and_refuses_a_status_that_is_not_an_error():
+    from fi.alk.harness.actors import Fault
+
+    fault = Fault(action="orders.refund", mode="error", status=429, message="slow down")
+    assert (fault.status, fault.message) == (429, "slow down")
+    assert Fault(action="orders.refund", mode="error").status == 500
+    with pytest.raises(ValidationError):
+        Fault(action="orders.refund", mode="error", status=200)
+    with pytest.raises(ValidationError):
+        Fault(action="orders.refund", mode="explode")

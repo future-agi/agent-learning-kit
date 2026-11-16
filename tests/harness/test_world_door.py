@@ -113,15 +113,86 @@ def test_an_actor_s_retry_is_answered_from_the_first_result_and_the_world_sees_i
     assert len(executor.ran) == 1
 
 
-def test_the_agent_s_call_gets_no_permission_check_and_no_deduplication():
+def test_the_agent_s_call_gets_no_permission_check_and_an_unkeyed_retry_runs_again():
     executor = _Executor()
     door = _door(executor)
     for _ in range(2):
-        assert (
-            door.enter(ToolCall(action="crm.delete", name="delete", key="same")).outcome
-            == "committed"
-        )
+        assert door.enter(ToolCall(action="crm.delete", name="delete")).outcome == "committed"
     assert len(executor.ran) == 2
+
+
+def test_the_agent_s_keyed_retry_is_answered_from_the_first_result_and_the_world_sees_it_once():
+    executor = _Executor(result={"refund": 1})
+    door = _door(executor)
+    first = door.enter(ToolCall(action="orders.refund", name="refund", arguments={"order": 7}, key="k-1"))
+    again = door.enter(ToolCall(action="orders.refund", name="refund", arguments={"order": 7}, key="k-1"))
+    assert (first.outcome, again.outcome, again.result) == ("committed", "duplicate", {"refund": 1})
+    assert len(executor.ran) == 1
+    assert [row["outcome"] for row in door.events(actor=AGENT)] == ["committed", "duplicate"]
+    other = door.enter(ToolCall(action="orders.refund", name="refund", arguments={"order": 8}, key="k-1"))
+    assert other.refusal_code == "idempotency_conflict" and len(executor.ran) == 1
+
+
+def test_the_agent_s_keyed_retry_after_a_lost_answer_is_answered_not_committed_twice():
+    executor = _Executor(result={"refund": 1})
+    door = _door(
+        executor,
+        faults=[{"action": "orders.refund", "mode": "timeout_after_commit", "on_call": 1, "delay_seconds": 0}],
+    )
+    lost = door.enter(ToolCall(action="orders.refund", name="refund", arguments={"order": 7}, key="k-1"))
+    retry = door.enter(ToolCall(action="orders.refund", name="refund", arguments={"order": 7}, key="k-1"))
+    assert lost.fault is not None and lost.outcome == "committed"
+    assert retry.outcome == "duplicate" and len(executor.ran) == 1
+
+
+def test_the_agent_s_keyed_retry_after_a_timeout_before_commit_runs_since_nothing_took_effect():
+    executor = _Executor()
+    door = _door(
+        executor,
+        faults=[{"action": "orders.refund", "mode": "timeout_before_commit", "on_call": 1, "delay_seconds": 0}],
+    )
+    held = door.enter(ToolCall(action="orders.refund", name="refund", arguments={"order": 7}, key="k-1"))
+    retry = door.enter(ToolCall(action="orders.refund", name="refund", arguments={"order": 7}, key="k-1"))
+    assert held.outcome == "faulted" and retry.outcome == "committed" and len(executor.ran) == 1
+
+
+def test_a_door_that_outlives_a_trial_forgets_the_agent_s_keys_from_the_trial_before():
+    trial = {"id": "a"}
+    executor = _Executor()
+
+    class _NoActors(MemoryLog):
+        def records_actors(self):
+            return False
+
+    door = WorldDoor(executor, _NoActors(), DictRoster({}), trial=lambda: trial["id"])
+    door.enter(ToolCall(action="orders.refund", name="refund", key="k-1"))
+    assert door.enter(ToolCall(action="orders.refund", name="refund", key="k-1")).outcome == "duplicate"
+    trial["id"] = "b"
+    assert door.enter(ToolCall(action="orders.refund", name="refund", key="k-1")).outcome == "committed"
+    assert len(executor.ran) == 2
+
+
+def test_an_unavailable_fault_never_reaches_the_world():
+    executor = _Executor()
+    door = _door(executor, faults=[{"action": "orders.refund", "mode": "unavailable", "on_call": 1}])
+    outcome = door.enter(ToolCall(action="orders.refund", name="refund"))
+    assert (outcome.outcome, outcome.status, outcome.reason) == ("faulted", 503, "unavailable")
+    assert outcome.delay_seconds == 0.0 and executor.ran == []
+    [row] = door.events()
+    assert (row["outcome"], row["error"]) == ("faulted", "unavailable")
+
+
+def test_an_error_fault_answers_the_scenario_s_status_and_message_and_never_reaches_the_world():
+    executor = _Executor()
+    door = _door(
+        executor,
+        faults=[{"action": "orders.refund", "mode": "error", "status": 429, "message": "slow down", "on_call": 1}],
+    )
+    outcome = door.enter(ToolCall(action="orders.refund", name="refund"))
+    assert (outcome.outcome, outcome.status, outcome.reason) == ("faulted", 429, "slow down")
+    assert outcome.answer() == b'{"detail": "slow down"}' and executor.ran == []
+    unset = _door(executor, faults=[{"action": "orders.refund", "mode": "error", "status": 200}])
+    assert unset.enter(ToolCall(action="orders.refund", name="refund")).status == 500
 
 
 @pytest.mark.parametrize(
@@ -230,7 +301,11 @@ def test_the_door_never_raises_into_its_caller_when_the_world_or_the_log_fails()
     door = _door(_Executor(fail=True), log=_Broken())
     outcome = door.enter(ToolCall(action="crm.update", name="update"))
     assert outcome.outcome == "faulted" and outcome.status == 502
-    assert door.events() == []
+    from fi.alk.harness.world_door import EvidenceUnavailable
+
+    # The read side says the evidence is missing rather than reading as an empty log.
+    with pytest.raises(EvidenceUnavailable):
+        door.events()
 
 
 def test_an_unexpected_failure_inside_the_door_comes_back_as_an_outcome():
@@ -939,3 +1014,15 @@ def test_each_call_is_logged_as_a_read_or_a_write_from_its_declared_effect_else_
     assert door.enter(call).outcome == "committed"
     [row] = door.events()
     assert row["effect"] == effect
+
+
+def test_events_raise_when_the_log_cannot_be_read():
+    from fi.alk.harness.world_door import EvidenceUnavailable
+
+    class _Unreadable(MemoryLog):
+        def rows(self):
+            raise RuntimeError("no read grant")
+
+    door = _door(log=_Unreadable())
+    with pytest.raises(EvidenceUnavailable):
+        door.events()

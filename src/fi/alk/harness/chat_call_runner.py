@@ -418,9 +418,13 @@ def _world_actors_record(
     since: float = 0.0,
     contract: Any = None,
 ) -> dict[str, Any] | None:
-    """What actors did in the world this trial and what it changed, sealed beside the transcript as a call seals it;
-    None when no actor took part."""
+    """What actors did in the world this trial and what each participant changed, sealed beside the transcript as a
+    call seals it, on every trial with a door, actors or not (`actions` and `decisions` then empty); None only when
+    there is no door."""
     from .call_runner import actor_rows, approvals, trial_shared_records, trial_state_changes
+
+    if door is None:
+        return None
 
     listed = listing.by_id()
     log = _trial_log(door, since)
@@ -445,10 +449,6 @@ def _world_actors_record(
         ]
     acted = actor_rows(log, listed, decisions)
     changes = trial_state_changes(log, listed, decisions)
-    # A worker the world told apart is kept as an actor is, so its refused attempts are never lost.
-    workers_acted = any(str(entry.get("who") or "").startswith("worker:") for entry in changes)
-    if not acted and not decisions and not workers_acted:
-        return None
     record = {
         "actions": acted,
         "decisions": decisions,
@@ -664,14 +664,19 @@ class _HostedChatTarget:
             ToolCall(action=self._action(name), name=name, arguments=arguments, method=method, effect=effect)
         )
         if outcome.fault is not None:
-            if outcome.fault.get("mode") == "timeout_after_commit":
+            mode = outcome.fault.get("mode")
+            if mode == "timeout_after_commit":
                 if self.world.calls:
                     # Committed, with the answer lost on the way back.
                     self.world.calls[-1].error = "response_lost"
-            else:
-                self.world._record(
-                    Call(name=name, arguments=arguments, result=None, ok=False, error="timeout_before_commit")
-                )
+                return "Error: the request timed out"
+            self.world._record(
+                Call(name=name, arguments=arguments, result=None, ok=False, error=str(mode or "faulted"))
+            )
+            if mode == "unavailable":
+                return "Error: the service is unavailable (503)"
+            if mode == "error":
+                return f"Error ({outcome.status}): {outcome.reason}"
             return "Error: the request timed out"
         return outcome.answer().decode("utf-8", errors="replace")
 
@@ -861,8 +866,11 @@ class HostedChatCallRunner:
     """Drive a repository chat ingress inside its leased world."""
 
     def __init__(self, adapter: ArtifactUploader, context: CallRunnerContext) -> None:
+        from .call_runner import TrialRecords
+
         self._adapter = adapter
         self._context = context
+        self._records = TrialRecords()
         contract_path = context.bundle_dir / "contract.json"
         if not contract_path.is_file():
             self._contract: AgentContract | None = None
@@ -943,8 +951,9 @@ class HostedChatCallRunner:
         world_db = runtime.endpoints.get("world_db")
         service = runtime.endpoints.get("tools_api")
         # The tool proxy logs the agent's own calls (and the faults it applies) in the world's table, and limited workers
-        # act through it: read that table whenever the trial is proxied or has limited workers, cast or not.
-        proxied = runtime.endpoints.get("tool_proxy") is not None
+        # act through it: read that table whenever the trial is proxied or has limited workers, cast or not. The world's
+        # door for tools the agent runs in its own process logs to the same table and reads the same faults.
+        proxied = runtime.endpoints.get("tool_proxy") is not None or runtime.endpoints.get("world_door") is not None
         limited_workers = (Path(self._context.bundle_dir) / "generated" / "tool-proxy" / "permissions.json").is_file()
         # The scenario's faults are a rule of its graded trials; a readiness probe checks the tools' binding without them.
         faults = [] if self._context.readiness_probe else list(document.get("faults") or [])
@@ -969,6 +978,10 @@ class HostedChatCallRunner:
         job_id = getattr(self._context.job, "job_id", None) or "probe"
         trial = f"{job_id}:{scenario.scenario_key}"
         trial_started = time.time()
+        records_dsn = world_db.address if world_db is not None and world_db.protocol == "postgres" else None
+        # The door sees the agent's tools when it runs them itself (tools the agent asks for over its interface), or
+        # when a tool proxy or the in-process door stands in front of the agent's own.
+        door_sees_tools = proxied or bool(interface is not None and getattr(interface, "include_tools", False))
         dispatcher = build_dispatcher(
             # What actors watch (an on_tool trigger) includes the agent's calls through its tool proxy.
             document, self._context.bundle_dir, act=acts, read_log=lambda: _trial_log(door, trial_started),
@@ -1031,9 +1044,13 @@ class HostedChatCallRunner:
         else:
             deadline_notices = _unproxied_worker_notices(document, self._context.bundle_dir)
         try:
+            # The trial's starting records, after its reset: whether it started from the seed.
+            await asyncio.to_thread(self._records.start, id(runtime), records_dsn)
             if dispatcher is not None:
                 # What the actors wrote before T0 is in the world before the conversation starts.
                 await dispatcher.replay()
+                if dispatcher.pre_run:
+                    await asyncio.to_thread(self._records.rebase, id(runtime), records_dsn)
                 acting = asyncio.create_task(dispatcher.run())
             transcript = await _drive_conversation(
                 _HostedChatTarget(
@@ -1127,17 +1144,27 @@ class HostedChatCallRunner:
         world_record = _world_actors_record(
             door, listing, dispatcher, cast, meter, limits, since=trial_started, contract=self._contract
         )
-        if proxied:
-            from .call_runner import read_worker_stops
+        from .call_runner import NOT_RECORDED, duplicate_commits, read_worker_stops
 
+        if door_sees_tools:
+            from .call_runner import upload_end_state
+
+            sealed = await asyncio.to_thread(self._records.end, id(runtime), records_dsn)
+            await upload_end_state(self._adapter, scenario.scenario_key, sealed, _trial_log(door, trial_started))
+            world_record = {**(world_record or {}), **sealed}
+        else:
+            # The agent runs its own tools where no door stands: World changes says so, never "no change".
+            world_record = dict(NOT_RECORDED)
+        if proxied:
             stopped = read_worker_stops(runtime)
             if stopped:
                 # Workers whose own process the harness ended past their deadline.
-                world_record = world_record or {
-                    "actions": [], "decisions": [], "state_changes": [], "approvals": [], "limits": dict(limits),
-                    "usage": [],
-                }
                 world_record["stopped_workers"] = stopped
+
+        # The world applied one of the agent's writes twice after its answer was lost: the scenario fails.
+        duplicates = duplicate_commits(_trial_log(door, trial_started))
+        if duplicates:
+            world_record = {**world_record, "duplicates": duplicates}
         if world_record is not None:
             transcript.world_actors = world_record
         # Every actor that took part, the ones acting only through the world too, so the call is found by each.
@@ -1188,6 +1215,7 @@ class HostedChatCallRunner:
             messages=tuple(transcript.canonical_messages()),
             call_actors=_chat_actor_summary(cast, world_record, listing),
             world_actions=tuple((world_record or {}).get("actions") or ()),
+            duplicates=tuple(duplicates),
             actor_briefs={
                 **{str(one["id"]): str(one.get("brief") or "") for one in chat_actors if one.get("brief")},
                 **(dispatcher.briefs if dispatcher is not None else {}),

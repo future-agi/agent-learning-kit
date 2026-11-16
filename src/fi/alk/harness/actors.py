@@ -196,9 +196,25 @@ class Actor(BaseModel):
         return self
 
 
+class Unresolved(BaseModel):
+    """A policy point the builder could not turn into an actor's permissions or knowledge: shown to the person above
+    the cast as needing their decision, until they accept the cast as written or edit an actor for it."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    # The policy as the agent's material states it, in a sentence.
+    policy: str = Field(min_length=1, max_length=500)
+    # Why it was not modelled: no record the world's rule reads, two readings of it, no actor it belongs to.
+    why: str = Field(min_length=1, max_length=500)
+    # The actor it is about, when there is one.
+    actor: str | None = Field(default=None, min_length=1)
+
+
 class ActorList(BaseModel):
     actors: list[Actor] = Field(default_factory=list)
     limits: Limits = Field(default_factory=Limits)
+    # Policy points the builder left for the person to decide when it proposed this cast.
+    unresolved: list[Unresolved] = Field(default_factory=list)
 
     @field_validator("actors")
     @classmethod
@@ -332,16 +348,22 @@ def session_fingerprint(session: PreRunSession, actors: dict[str, "Actor"]) -> s
 
 
 class Fault(BaseModel):
-    """A timeout the world gives the agent on one call of one action: before commit the world never sees it; after
-    commit it does and the agent never hears back. Graders read it and no actor is ever told it; an agent whose own
-    tools service holds the world's database URL could read the table it is kept in (a known limit)."""
+    """What the world does to the agent on one call of one action. `timeout_before_commit`: the world never sees it
+    and the agent hears a timeout after `delay_seconds`. `timeout_after_commit`: the world makes the change and the
+    agent never hears back. `unavailable`: the world never sees it and the agent hears at once that the service is
+    down (503). `error`: the world never sees it and the agent gets `status` (400-599, default 500) with `message`.
+    `delay_seconds` is read for the two timeouts only; `status` and `message` for `error` only. Graders read it and no
+    actor is ever told it; an agent whose own tools service holds the world's database URL could read the table it
+    is kept in (a known limit)."""
 
     model_config = ConfigDict(extra="forbid")
 
     action: str = Field(min_length=1)
-    mode: Literal["timeout_before_commit", "timeout_after_commit"]
+    mode: Literal["timeout_before_commit", "timeout_after_commit", "unavailable", "error"]
     on_call: int = Field(default=1, ge=1)
     delay_seconds: float = Field(default=30.0, ge=0, le=30)
+    status: int = Field(default=500, ge=400, le=599)
+    message: str = Field(default="", max_length=500)
 
 
 class StartsWith(BaseModel):

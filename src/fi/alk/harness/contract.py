@@ -208,6 +208,9 @@ class ToolEntry(BaseModel):
     # `read` when the tool only reads (a lookup, a search, a list), `write` when it changes anything. Empty reads the
     # HTTP method: GET, HEAD and OPTIONS read, everything else counts as a write.
     effect: str = ""
+    # Set at seal time when the world's door is bound to this tool but cannot stand in front of it (why, in words);
+    # empty when it can. The platform reads it so a fault or acting actor on the tool is held back, not run.
+    door_unreached: str = ""
     notes: str = ""
 
 

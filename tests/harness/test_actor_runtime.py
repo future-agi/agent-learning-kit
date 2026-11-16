@@ -603,7 +603,7 @@ def test_a_way_of_speaking_sent_as_the_actor_s_surface_is_said_back_never_saved(
     from fi.alk.harness.actors import load_actors
     from fi.alk.harness.world.tools import world_actor_tools
 
-    add, _drop = world_actor_tools(tmp_path, SimpleNamespace(modality="voice", model_dump=lambda: {}))
+    add, _drop, _note = world_actor_tools(tmp_path, SimpleNamespace(modality="voice", model_dump=lambda: {}))
     out = asyncio.run(add.handler({"id": "dana", "name": "Dana", "role": "a coworker", "surface": "audio_mix"}))
     assert out.get("is_error") and "send it as `channel`" in out["content"][0]["text"]
     assert load_actors(tmp_path).actors == []
@@ -624,7 +624,7 @@ def test_an_actor_needs_its_identity_where_its_action_s_tool_names_who_acts(tmp_
         ],
     }
     contract = SimpleNamespace(modality="chat", model_dump=lambda: names_who)
-    add, _drop = world_actor_tools(tmp_path, contract, collections=lambda: ["approvals"])
+    add, _drop, _note = world_actor_tools(tmp_path, contract, collections=lambda: ["approvals"])
     # A tool that does not name who acts needs no identity.
     reader = asyncio.run(add.handler({"id": "reader", "name": "Kim", "permitted_actions": ["crm.get_deal"]}))
     assert not reader.get("is_error")
@@ -650,7 +650,7 @@ def test_an_identity_is_keyed_by_a_service_of_the_world_never_by_a_record_field(
             {"tool": "get_deal", "endpoint": "crm/get_deal"},
         ],
     }
-    add, _drop = world_actor_tools(tmp_path, SimpleNamespace(modality="chat", model_dump=lambda: world))
+    add, _drop, _note = world_actor_tools(tmp_path, SimpleNamespace(modality="chat", model_dump=lambda: world))
     # Keyed by the record field the handle sits in, the world could never find who the actor is in a service.
     out = asyncio.run(
         add.handler({"id": "lead", "name": "Sam", "permitted_actions": ["chat.post_message"], "identities": {"author": "lead"}})
@@ -674,7 +674,7 @@ def test_the_builder_gives_an_actor_only_a_model_a_run_can_play_it_on(tmp_path):
     from fi.alk.harness.actors import ACTOR_MODELS, Actor, ActorList, load_actors, save_actors
     from fi.alk.harness.world.tools import world_actor_tools
 
-    add, _drop = world_actor_tools(tmp_path, SimpleNamespace(modality="chat", model_dump=lambda: {"tools": []}))
+    add, _drop, _note = world_actor_tools(tmp_path, SimpleNamespace(modality="chat", model_dump=lambda: {"tools": []}))
     out = asyncio.run(add.handler({"id": "lead", "name": "Sam", "model": "gpt-unknown"}))
     assert out.get("is_error") and ACTOR_MODELS[0] in out["content"][0]["text"]
     assert load_actors(tmp_path).actors == []
@@ -690,7 +690,7 @@ def test_the_builder_gives_an_actor_only_a_model_a_run_can_play_it_on(tmp_path):
 def test_the_builder_answers_an_actor_of_the_wrong_shape_and_never_raises(tmp_path, field, value):
     from fi.alk.harness.world.tools import world_actor_tools
 
-    add, _drop = world_actor_tools(tmp_path, SimpleNamespace(modality="voice", model_dump=lambda: {"tools": []}))
+    add, _drop, _note = world_actor_tools(tmp_path, SimpleNamespace(modality="voice", model_dump=lambda: {"tools": []}))
     out = asyncio.run(add.handler({"id": "lead", "name": "Sam", field: value}))
     assert isinstance(out, dict) and out["content"][0]["text"]
 
@@ -859,7 +859,7 @@ def test_an_actor_may_be_given_record_changes_on_the_world_s_own_collections(tmp
 
     contract = SimpleNamespace(modality="chat", model_dump=lambda: {})
     tables = ["approvals", "deals", "harness_seed_sentinel", "_alk_tool_trace"]
-    add, _drop = world_actor_tools(tmp_path, contract, collections=lambda: tables)
+    add, _drop, _note = world_actor_tools(tmp_path, contract, collections=lambda: tables)
     assert "approvals.put" in add.description and "_alk_tool_trace" not in add.description
     out = asyncio.run(add.handler({"id": "lead", "name": "Sam", "permitted_actions": ["approvals.put"]}))
     text = out["content"][0]["text"]
@@ -1333,3 +1333,24 @@ def test_an_agent_read_before_the_decision_is_not_a_write_before_it():
     ]
     [line] = approvals(log)
     assert line["before_decision"] == [] and line["acted_before_decision"] is False
+
+
+def test_a_policy_point_the_builder_could_not_model_is_kept_for_the_person_through_actor_edits(tmp_path):
+    from fi.alk.harness.actors import load_actors
+    from fi.alk.harness.world.tools import world_actor_tools
+
+    add, drop, note = world_actor_tools(tmp_path, SimpleNamespace(modality="chat", model_dump=lambda: {"tools": []}))
+    assert not asyncio.run(add.handler({"id": "dana", "name": "Dana Brooks", "role": "claims supervisor"})).get("is_error")
+    noted = asyncio.run(
+        note.handler({"policy": "Refunds over $500 need a second approver", "why": "no record holds a second approval",
+                      "actor": "dana"})
+    )
+    assert not noted.get("is_error")
+    assert not asyncio.run(add.handler({"id": "sam", "name": "Sam", "role": "a coworker"})).get("is_error")
+    [point] = load_actors(tmp_path).unresolved
+    assert (point.policy, point.actor) == ("Refunds over $500 need a second approver", "dana")
+    assert asyncio.run(note.handler({"policy": "x", "why": "y", "actor": "ghost"})).get("is_error")
+    assert not asyncio.run(drop.handler({"id": "sam"})).get("is_error")
+    assert len(load_actors(tmp_path).unresolved) == 1
+    asyncio.run(note.handler({"policy": "Refunds over $500 need a second approver", "drop": True}))
+    assert load_actors(tmp_path).unresolved == []

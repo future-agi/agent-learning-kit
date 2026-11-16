@@ -5245,3 +5245,50 @@ def test_a_sealed_call_whose_delivery_never_ends_is_cut_at_the_delivery_bound(mo
     assert cut, "the delivery was never cut"
     # Left alone past the 0.2 s seal bound, cut at the delivery bound, well before the runner would have finished.
     assert 1.0 < cut[0] - started < 4.0
+
+
+def test_a_duplicate_commit_fails_the_scenario(monkeypatch) -> None:
+    async def _all(goals, world, calls, *, messages=()):
+        return {}
+
+    duplicated = replace(
+        _call_outcome(turns=2),
+        duplicates=({"action": "orders.issue_refund", "name": "issue_refund", "arguments": {"order": 7}},),
+    )
+    passing = [FakeSubGoal("refunded", lambda w, c: None)]
+    receipt, _ = _two_judged(monkeypatch, _all, goals=passing, outcome=duplicated)
+    assert receipt.status == "failed"
+    assert receipt.failure is not None and receipt.failure.code == "duplicate_commit"
+    assert receipt.failure.message == (
+        "The agent repeated issue_refund after its answer was lost, and the world committed it twice."
+    )
+    clean, _ = _two_judged(monkeypatch, _all, goals=passing, outcome=_call_outcome(turns=2))
+    assert clean.status == "passed" and clean.failure is None
+
+
+def test_a_check_reading_an_unreadable_log_is_unmeasured_not_passed(monkeypatch) -> None:
+    from fi.alk.harness.world_door import EvidenceUnavailable
+
+    async def _all(goals, world, calls, *, messages=()):
+        return {}
+
+    def reads_the_log(world, calls):
+        raise EvidenceUnavailable("the world's action log could not be read")
+
+    goals = [FakeSubGoal("no_refund_committed", reads_the_log), FakeSubGoal("greeted", lambda w, c: None)]
+    receipt, _ = _two_judged(monkeypatch, _all, goals=goals, outcome=_call_outcome(turns=2))
+    unmeasured, settled = receipt.sub_goals
+    assert unmeasured.held is None and unmeasured.reason.startswith(hs.UNMEASURED)
+    assert "action log could not be read" in unmeasured.reason
+    assert settled.held is True
+    assert receipt.status == "errored" and receipt.failure.code == "evidence_unmeasured"
+
+
+def test_a_check_that_never_reads_the_log_still_settles(monkeypatch) -> None:
+    async def _all(goals, world, calls, *, messages=()):
+        return {}
+
+    receipt, _ = _two_judged(
+        monkeypatch, _all, goals=[FakeSubGoal("greeted", lambda w, c: None)], outcome=_call_outcome(turns=2)
+    )
+    assert receipt.status == "passed"

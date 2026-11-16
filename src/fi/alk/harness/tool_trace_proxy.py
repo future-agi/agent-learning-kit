@@ -25,6 +25,7 @@ try:  # Beside the proxy in a bundle; the harness package when run from source.
         WorldDoor,
         action_tool,
         declared_read,
+        is_timeout,
         method_action,
         permitted,
         route_values,
@@ -43,6 +44,7 @@ except ImportError:  # pragma: no cover - imported as part of the package
         WorldDoor,
         action_tool,
         declared_read,
+        is_timeout,
         method_action,
         permitted,
         route_values,
@@ -245,10 +247,17 @@ class Handler(BaseHTTPRequestHandler):
 
     def _enter(self) -> None:
         outcome = _door().enter(self._call())
-        if outcome.fault is not None:
+        if outcome.fault is not None and is_timeout(outcome.fault):
             # The agent waits, then hears its call timed out, and may retry.
             time.sleep(outcome.delay_seconds)
             self._reply(504, {"detail": "tool_upstream_timeout"})
+            return
+        if outcome.fault is not None:
+            # Unavailable or the scenario's error: answered at once, the world never saw the call.
+            if outcome.body is not None:
+                self._reply_raw(outcome.status, outcome.body)
+            else:
+                self._reply(outcome.status, {"detail": "tool_upstream_unavailable"})
             return
         if outcome.outcome == "faulted" and outcome.body is None:
             self._reply(outcome.status, {"detail": "tool_upstream_unavailable" if outcome.status == 502 else outcome.reason})
@@ -262,7 +271,9 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(content)
 
     def _reply(self, status: int, payload: object) -> None:
-        content = json.dumps(payload).encode()
+        self._reply_raw(status, json.dumps(payload).encode())
+
+    def _reply_raw(self, status: int, content: bytes) -> None:
         self.send_response(status)
         self.send_header("content-type", "application/json")
         self.send_header("content-length", str(len(content)))

@@ -136,6 +136,7 @@ _WRITING_TOOLS = frozenset(
         "remember",
         "add_actor",
         "drop_actor",
+        "note_unresolved",
     }
 )
 

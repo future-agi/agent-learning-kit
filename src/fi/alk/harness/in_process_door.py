@@ -1,0 +1,248 @@
+"""The world's door for tools an agent runs in its own process.
+
+An agent whose tools are Python callables in its own code (no tools service to stand a proxy in front of) still meets
+the world's rules: the agent's interpreter wraps each contract tool (see `in_process_door_bootstrap.py`), and every
+call asks this server first. The server runs the call through `WorldDoor` like every other surface, with one
+difference: the door's executor is the agent's own callable, which runs back in the agent's process. So a call is two
+requests:
+
+- `POST /begin {"name", "arguments"}`: the door decides. Held by the scenario's fault before commit (a timeout,
+  unavailable, an error), the answer says so and the tool never runs. Otherwise the answer says `run`, with an id.
+- `POST /end {"id", "ok", "result", "error"}`: the agent ran it; the door logs what came of it and answers whether the
+  scenario's `timeout_after_commit` fault loses that answer.
+
+Copied into each bundle beside `world_door.py` and `tool_trace_proxy.py` (whose trial faults it reads); standard
+library only, plus `psycopg` for the world's log. A tool call is never failed by this server: anything it cannot
+decide comes back as `run`, and the agent's tool runs as it would without a door.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import threading
+import uuid
+from dataclasses import dataclass, field
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from typing import Any
+
+try:  # Beside the server in a bundle; the harness package when run from source.
+    import tool_trace_proxy as _proxy
+    from world_door import (
+        DictRoster,
+        Executed,
+        Outcome,
+        PostgresLog,
+        PostgresRecords,
+        PostgresRoster,
+        RecordExecutor,
+        Routed,
+        ToolCall,
+        WorldDoor,
+        is_timeout,
+    )
+except ImportError:  # pragma: no cover - imported as part of the package
+    from fi.alk.harness import tool_trace_proxy as _proxy  # type: ignore[no-redef]
+    from fi.alk.harness.world_door import (  # type: ignore[no-redef]
+        DictRoster,
+        Executed,
+        Outcome,
+        PostgresLog,
+        PostgresRecords,
+        PostgresRoster,
+        RecordExecutor,
+        Routed,
+        ToolCall,
+        WorldDoor,
+        is_timeout,
+    )
+
+DATABASE_URL = os.environ.get("DATABASE_URL", "")
+# The tools the contract declares read-only, by name: logged as reads.
+READ_TOOLS = frozenset(one for one in os.environ.get("READ_ACTIONS", "").split(",") if one)
+# Longest the door waits for the agent to report a call it let run; the call itself is the agent's.
+RUN_SECONDS = float(os.environ.get("ALK_WORLD_DOOR_RUN_SECONDS", "120"))
+# Longest a begin waits for the door to decide.
+DECIDE_SECONDS = 30.0
+
+__all__ = ["InProcessDoor", "Handler"]
+
+
+@dataclass
+class _Pending:
+    """One call between its begin and its end."""
+
+    decided: threading.Event = field(default_factory=threading.Event)
+    ran: bool = False
+    ended: threading.Event = field(default_factory=threading.Event)
+    executed: Executed | None = None
+    finished: threading.Event = field(default_factory=threading.Event)
+    outcome: Outcome | None = None
+
+
+class _AgentRuns:
+    """The door's executor for a tool the agent runs itself: it lets the call run in the agent's process and waits
+    for the agent to say what came of it."""
+
+    def __init__(self, pending: dict[str, _Pending]) -> None:
+        self.pending = pending
+
+    def run(self, call: ToolCall) -> Executed:
+        waiting = self.pending.get(call.path)
+        if waiting is None:
+            return Executed(502, None, error="the call is not known to the door")
+        waiting.ran = True
+        waiting.decided.set()
+        if not waiting.ended.wait(RUN_SECONDS):
+            return Executed(504, None, error="the agent's tool never reported back")
+        return waiting.executed or Executed(502, None, error="the agent's tool reported nothing")
+
+
+class _NotHere:
+    """An actor's action on one of the agent's own tools: the tool lives in the agent's process, where no actor runs."""
+
+    def run(self, call: ToolCall) -> Executed:
+        return Executed(
+            403, None, error=f"{call.action} runs inside the agent; an actor can act here only through record changes"
+        )
+
+
+class InProcessDoor:
+    """The door and its calls in flight."""
+
+    def __init__(self, door: WorldDoor | None = None) -> None:
+        self.pending: dict[str, _Pending] = {}
+        self._lock = threading.Lock()
+        self.door = door if door is not None else WorldDoor(
+            Routed(_AgentRuns(self.pending), RecordExecutor(PostgresRecords(DATABASE_URL)) if DATABASE_URL else None),
+            PostgresLog(DATABASE_URL),
+            PostgresRoster(DATABASE_URL) if DATABASE_URL else DictRoster({}),
+            faults=_proxy._trial_faults,
+            trial=lambda: _proxy._FAULTS_TRIAL,
+            faults_by_tool=True,
+        )
+        if door is not None and isinstance(getattr(door, "executor", None), Routed):
+            door.executor.tools = _AgentRuns(self.pending)
+
+    def begin(self, name: str, arguments: Any, action: str = "") -> dict[str, Any]:
+        """Whether the agent's tool may run: `{"run": true, "id"}`, or what the scenario's fault answers instead."""
+        call_id = uuid.uuid4().hex
+        waiting = _Pending()
+        with self._lock:
+            self.pending[call_id] = waiting
+        call = ToolCall(
+            action=action or name,
+            name=name,
+            arguments=arguments if arguments is not None else {},
+            path=call_id,
+            method="POST",
+            effect="read" if name in READ_TOOLS or action in READ_TOOLS else "",
+        )
+
+        def enter() -> None:
+            try:
+                waiting.outcome = self.door.enter(call)
+            finally:
+                waiting.finished.set()
+                waiting.decided.set()
+
+        threading.Thread(target=enter, daemon=True).start()
+        if not waiting.decided.wait(DECIDE_SECONDS) or (waiting.ran is False and waiting.outcome is None):
+            # Undecided in time: the tool runs as it would without a door, never failed by it.
+            self._forget(call_id)
+            return {"run": True, "id": "", "door": "undecided"}
+        if waiting.ran:
+            return {"run": True, "id": call_id}
+        self._forget(call_id)
+        if waiting.outcome is None or waiting.outcome.fault is None:
+            # Not held by the scenario: the door itself failed, and the tool runs as it would without one.
+            return {"run": True, "id": "", "door": "failed"}
+        return {"run": False, **_held(waiting.outcome)}
+
+    def end(self, call_id: str, ok: bool, result: Any, error: str = "") -> dict[str, Any]:
+        """What the door made of a call the agent ran: `lost` with the delay when the scenario's fault loses its
+        answer."""
+        with self._lock:
+            waiting = self.pending.get(call_id)
+        if waiting is None:
+            return {"lost": False}
+        waiting.executed = (
+            Executed(200, result) if ok else Executed(400, result, error=str(error or "the tool raised")[:2000])
+        )
+        waiting.ended.set()
+        waiting.finished.wait(DECIDE_SECONDS)
+        self._forget(call_id)
+        outcome = waiting.outcome
+        if outcome is not None and outcome.fault is not None and is_timeout(outcome.fault):
+            return {"lost": True, "delay_seconds": outcome.delay_seconds, "outcome": outcome.outcome}
+        return {"lost": False, "outcome": outcome.outcome if outcome is not None else ""}
+
+    def _forget(self, call_id: str) -> None:
+        with self._lock:
+            self.pending.pop(call_id, None)
+
+
+def _held(outcome: Outcome) -> dict[str, Any]:
+    """What the agent's tool says instead of running, from the scenario's fault the door applied."""
+    fault = outcome.fault or {}
+    detail = outcome.reason or outcome.outcome
+    if outcome.body is not None:
+        try:
+            detail = str(json.loads(outcome.body).get("detail") or detail)
+        except (ValueError, AttributeError):
+            pass
+    return {
+        "mode": str(fault.get("mode") or ""),
+        "status": outcome.status,
+        "detail": detail,
+        "delay_seconds": outcome.delay_seconds,
+        "outcome": outcome.outcome,
+    }
+
+
+_DOOR: InProcessDoor | None = None
+_DOOR_LOCK = threading.Lock()
+
+
+def _door() -> InProcessDoor:
+    global _DOOR
+    with _DOOR_LOCK:
+        if _DOOR is None:
+            _DOOR = InProcessDoor()
+        return _DOOR
+
+
+class Handler(BaseHTTPRequestHandler):
+    def log_message(self, *_args: object) -> None:
+        return
+
+    def do_GET(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler API
+        self._reply(200 if self.path == "/health" else 404, {})
+
+    def do_POST(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler API
+        size = int(self.headers.get("content-length") or 0)
+        try:
+            body = json.loads(self.rfile.read(size) or b"{}") if size else {}
+        except ValueError:
+            body = {}
+        body = body if isinstance(body, dict) else {}
+        if self.path == "/begin":
+            self._reply(200, _door().begin(str(body.get("name") or "unknown"), body.get("arguments"),
+                                           str(body.get("action") or "")))
+        elif self.path == "/end":
+            self._reply(200, _door().end(str(body.get("id") or ""), bool(body.get("ok")), body.get("result"),
+                                         str(body.get("error") or "")))
+        else:
+            self._reply(404, {})
+
+    def _reply(self, status: int, payload: object) -> None:
+        content = json.dumps(payload, default=str).encode()
+        self.send_response(status)
+        self.send_header("content-type", "application/json")
+        self.send_header("content-length", str(len(content)))
+        self.end_headers()
+        self.wfile.write(content)
+
+
+if __name__ == "__main__":
+    ThreadingHTTPServer(("127.0.0.1", int(os.environ["PORT"])), Handler).serve_forever()

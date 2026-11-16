@@ -157,7 +157,8 @@ def save_call_actors(root: Path, listing: CallActorList) -> None:
 
     root = Path(root)
     root.mkdir(parents=True, exist_ok=True)
-    current = load_actors(root).by_id()
+    listed = load_actors(root)
+    current = listed.by_id()
     speaking = {one.id: one for one in listing.call_actors}
     kept = [
         one for one in current.values() if not one.channel or one.id in speaking
@@ -174,7 +175,7 @@ def save_call_actors(root: Path, listing: CallActorList) -> None:
         Actor.model_validate({"side": "caller", **entry.model_dump(exclude_none=True)})
         for entry in speaking.values()
     ]
-    save_actors(root, ActorList(actors=merged))
+    save_actors(root, ActorList(actors=merged, unresolved=listed.unresolved))
 
 
 def entry_problems(actor: CallActor, *, modality: str) -> list[str]:

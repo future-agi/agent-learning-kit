@@ -42,6 +42,7 @@ import logging
 import os
 import stat
 import tempfile
+import threading
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
@@ -1266,6 +1267,66 @@ def _shared_records(runtime: EnvironmentRuntime, bundle_dir: Path) -> list[dict[
     return trial_shared_records(log, _bundle_contract(Path(bundle_dir)))
 
 
+def duplicate_commits(log: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    """Each write the agent made twice after its answer was lost: a committed write whose answer a
+    `timeout_after_commit` fault replaced with a timeout (`response_lost`), then a later committed write of the same
+    action with equal arguments. The world applied it twice, whatever the scenario's checks say. A read is never a
+    duplicate, and a retry the door answered from its idempotency key is logged `duplicate`, never committed."""
+    rows = [
+        row
+        for row in log
+        if (row.get("actor_id") or AGENT) == AGENT
+        and not is_pre_run(row.get("idempotency_key"))
+        and not is_read(row)
+        and (row.get("outcome") or ("committed" if row.get("ok", True) else "")) == "committed"
+    ]
+    found: list[dict[str, Any]] = []
+    repeated: set[int] = set()
+    for index, first in enumerate(rows):
+        if first.get("error") != "response_lost" or index in repeated:
+            continue
+        action = logged_as(first)
+        for later_index in range(index + 1, len(rows)):
+            later = rows[later_index]
+            if later_index in repeated or logged_as(later) != action:
+                continue
+            if _arguments(later.get("arguments")) != _arguments(first.get("arguments")):
+                continue
+            repeated.add(later_index)
+            found.append(
+                {
+                    "action": action,
+                    "name": str(first.get("name") or action),
+                    "arguments": _arguments(first.get("arguments")),
+                    "first_action_id": first.get("action_id"),
+                    "repeat_action_id": later.get("action_id"),
+                }
+            )
+    return found
+
+
+def _arguments(value: Any) -> Any:
+    """A row's arguments as data: a log read back from the database can hold them as JSON text."""
+    if isinstance(value, (str, bytes)):
+        try:
+            return json.loads(value)
+        except ValueError:
+            return value
+    return value
+
+
+def _duplicates(runtime: EnvironmentRuntime) -> list[dict[str, Any]]:
+    """This trial's duplicate commits, read from the world's action log; none when there is no log to read."""
+    database = _find_postgres_endpoint(runtime)
+    if database is None:
+        return []
+    try:
+        return duplicate_commits(_read_action_log(database.address))
+    except Exception as exc:  # noqa: BLE001 - no log read, no duplicate claimed
+        logger.debug("duplicate check skipped: %s", type(exc).__name__)
+        return []
+
+
 def approvals(log: list[dict[str, Any]], decisions: Sequence[dict[str, Any]] = ()) -> list[dict[str, Any]]:
     """One line per approval, read from the action log only: the agent's request (the agent row an actor's row or a
     timeout points at through its parent), the decision (that actor row, or the timeout's fallback), and the agent's
@@ -1306,15 +1367,17 @@ def approvals(log: list[dict[str, Any]], decisions: Sequence[dict[str, Any]] = (
 
 def _state_changes(
     runtime: EnvironmentRuntime, bundle_dir: Path, decisions: Sequence[dict[str, Any]] = ()
-) -> list[dict[str, Any]]:
+) -> list[dict[str, Any]] | None:
+    """What each participant attempted and what came of it; None when the action log could not be read, which the
+    trial seals as unreadable rather than as no change."""
     database = _find_postgres_endpoint(runtime)
     if database is None:
-        return []
+        return None
     try:
         log = _read_action_log(database.address)
     except Exception as exc:  # noqa: BLE001 - no state changes, never a failed call
         logger.debug("state changes unreadable: %s", type(exc).__name__)
-        return []
+        return None
     return trial_state_changes(log, load_actors(bundle_dir).by_id(), decisions)
 
 
@@ -1795,6 +1858,20 @@ def runner_door(tools_url: str, dsn: str, timeout: float) -> Any:
     )
 
 
+def record_door(dsn: str) -> Any:
+    """The world's door in the runner's process for an agent whose tools run in its own process: an actor's record
+    change runs on the world's database; an action on one of the agent's own tools is refused, since only the agent's
+    process can run it."""
+    from .in_process_door import _NotHere
+    from .world_door import PostgresLog, PostgresRecords, PostgresRoster, RecordExecutor, Routed, WorldDoor
+
+    return WorldDoor(
+        Routed(_NotHere(), RecordExecutor(PostgresRecords(dsn))),
+        PostgresLog(dsn),
+        PostgresRoster(dsn),
+    )
+
+
 def actor_limits(doc: Mapping[str, Any], bundle_dir: Path, modality: str) -> dict[str, Any]:
     """The actor limits in force for this scenario on this channel: the environment's setting, the scenario's own on
     top, and each unset value the channel's default. Stored with the trial."""
@@ -1826,6 +1903,19 @@ def _actor_dispatcher(
         return None
     tools = runtime.endpoints.get("tools_api")
     database = _find_postgres_endpoint(runtime)
+    if database is not None and runtime.endpoints.get("world_door") is not None and tools is None:
+        # The agent's tools run in its own process behind the world's door there; an actor acts in the world through
+        # record changes, and one of the agent's own tools is refused with why.
+        return build_dispatcher(
+            dict(doc),
+            bundle_dir,
+            act=DoorActs(record_door(database.address), _bundle_contract(bundle_dir)),
+            read_log=_ActionLog(database.address),
+            records=_world_records(runtime),
+            trial_id=trial_id,
+            meter=meter,
+            reported=reported,
+        )
     if tools is None or database is None or runtime.endpoints.get("tool_proxy") is None:
         logger.warning("actors cannot act: this world has no tools service and action log behind a door")
         if why_not is not None:
@@ -2625,6 +2715,99 @@ def _materialize_vertex_adc(
 # --- the runner ----------------------------------------------------------------------------
 
 
+class TrialRecords:
+    """The world's records at each trial's start, and the run's seeded start: what World changes compares a trial's
+    end against, and whether it started clean. Snapshots are read on a connection that cannot write; one that cannot
+    be read is sealed as unreadable, never a failed trial."""
+
+    def __init__(self) -> None:
+        self.seeded: dict[str, str] | None = None
+        self._seeded_taken = False
+        self._starts: dict[Any, tuple[Any, dict[str, Any]]] = {}
+        self._lock = threading.Lock()
+
+    @staticmethod
+    def _read(dsn: str | None, moment: str) -> Any:
+        """The world's records now, or None when they cannot be read."""
+        from .world_snapshot import snapshot
+
+        try:
+            return snapshot(dsn) if dsn else None
+        except Exception as exc:  # noqa: BLE001 - only the type: a database error can carry the world's password
+            logger.debug("trial %s records unreadable: %s", moment, type(exc).__name__)
+            return None
+
+    def start(self, key: Any, dsn: str | None) -> None:
+        """Read the world's records at a trial's start, after its reset and before its pre-run sessions write theirs:
+        whether it started from the seed, and what World changes compares its end against. The first trial's start is
+        the run's seed."""
+        from .world_snapshot import digest, start_state
+
+        taken = self._read(dsn, "start")
+        start = digest(taken) if taken is not None else None
+        with self._lock:
+            if not self._seeded_taken:
+                self._seeded_taken = True
+                self.seeded = start
+            self._starts[key] = (taken, start_state(self.seeded, start))
+
+    def rebase(self, key: Any, dsn: str | None) -> None:
+        """Read a trial's records again once its pre-run sessions wrote theirs, so World changes shows only what the
+        trial itself changed. Whether it started from the seed stays as read before them: pre-run sessions differ by
+        scenario, and are shown apart, under Before the run."""
+        taken = self._read(dsn, "start")
+        with self._lock:
+            if key in self._starts:
+                self._starts[key] = (taken, self._starts[key][1])
+
+    def end(self, key: Any, dsn: str | None) -> dict[str, Any]:
+        """The trial's records before and after (`records`) and whether it started from the seed (`start`)."""
+        from .world_snapshot import diff
+
+        with self._lock:
+            before, start = self._starts.pop(key, (None, {"state": "unknown", "tables": []}))
+        after = self._read(dsn, "end") if before is not None else None
+        if before is None or after is None:
+            return {"records": {"unreadable": True}, "start": start}
+        # The end state itself is kept apart (`END_STATE_KEY`): stored as its own artifact, never in the transcript.
+        return {"records": diff(before, after), "start": start, END_STATE_KEY: after}
+
+
+# What `TrialRecords.end` carries the trial's end snapshot under, for `upload_end_state`.
+END_STATE_KEY = "_end_state"
+END_STATE_SCHEMA = "futureagi.world-state.v1"
+
+
+async def upload_end_state(
+    adapter: Any, scenario_key: str, sealed: dict[str, Any], log: Sequence[Mapping[str, Any]] | None
+) -> str | None:
+    """Store the world's records at the trial's end and its action log as the trial's `world_state` artifact, so a
+    fixed check can grade the trial again without calling the agent; pops the snapshot out of `sealed`. Nothing is
+    stored when the end could not be read."""
+    end = sealed.pop(END_STATE_KEY, None)
+    if end is None:
+        return None
+    body = {
+        "schema": END_STATE_SCHEMA,
+        "tables": {table: list(rows.values()) for table, rows in end.tables.items()},
+        "skipped": list(end.skipped),
+        "action_log": [dict(row) for row in log or []],
+    }
+    try:
+        return await adapter.upload_artifact(
+            json.dumps(body, sort_keys=True, default=str).encode("utf-8"),
+            kind=ArtifactKind.WORLD_STATE,
+            scenario_key=scenario_key,
+        )
+    except Exception as exc:  # noqa: BLE001 - a lost end state never fails the trial
+        logger.warning("trial end state not stored: %s", type(exc).__name__)
+        return None
+
+
+# Sealed instead of World changes when the agent's tools run where the world's door cannot see them.
+NOT_RECORDED = {"recorded": False, "why": "in_process_tools"}
+
+
 class CallRunnerImpl:
     """Satisfies `hosted_scheduler.CallRunner`. See the module docstring for the three
     sub-systems this class implements."""
@@ -2643,6 +2826,7 @@ class CallRunnerImpl:
         # A place-call that takes `stop_when`, and the call worker, which gets the stop as a signal, hang up at the
         # next turn boundary on a user stop; the scheduler gives them the seal bound to do so before it cuts the task.
         self.stops_at_turn_boundary = place_call is None or _takes_stop_when(place_call)
+        self._records = TrialRecords()
         simulator_secret_values = _canonical_simulator_secrets(
             context.simulator_provider_secret_values
         )
@@ -3091,10 +3275,10 @@ class CallRunnerImpl:
         async def place_with_actors() -> SimulationReport:
             faults = list(doc.get("faults") or [])
             deadline, deadlines, deadline_notices[:] = trial_worker_deadlines(doc, self._context.bundle_dir)
-            proxied = runtime.endpoints.get("tool_proxy") is not None
+            proxied = runtime.endpoints.get("tool_proxy") is not None or runtime.endpoints.get("world_door") is not None
             if faults or deadline or deadlines or proxied:
-                # Every trial behind a tool proxy writes its own faults and deadline, none included, so nothing an
-                # earlier trial left can apply to this one.
+                # Every trial behind a tool proxy or the world's door writes its own faults and deadline, none
+                # included, so nothing an earlier trial left can apply to this one.
                 _set_trial_faults(runtime, faults, deadline, deadlines)
             try:
                 return await place_with_world_actors()
@@ -3103,11 +3287,18 @@ class CallRunnerImpl:
                     with contextlib.suppress(Exception):
                         _write_trial_state(runtime, [])
 
+        world_database = _find_postgres_endpoint(runtime)
+        records_dsn = world_database.address if world_database is not None else None
+
         async def place_with_world_actors() -> SimulationReport:
+            # The trial's starting records, after its reset: whether it started from the seed.
+            await asyncio.to_thread(self._records.start, id(runtime), records_dsn)
             if actors is None:
                 return await place()
             # What the actors wrote before T0 is in the world before the call starts.
             await actors.replay()
+            if actors.pre_run:
+                await asyncio.to_thread(self._records.rebase, id(runtime), records_dsn)
             acting = asyncio.create_task(actors.run())
             try:
                 return await place()
@@ -3275,22 +3466,36 @@ class CallRunnerImpl:
         # from transcript prose.
         if not calls and case is not None:
             calls = _collect_provider_tool_calls(case)
+        # The world's door saw the agent's tools: a tool proxy in front of its tools service, or the door in its own
+        # process. Only then can the trial say what changed in the world.
+        door_seen = (
+            self._context.evidence_seam is EvidenceSeam.TOOL_TRACE or runtime.endpoints.get("world_door") is not None
+        )
         acted = (
             _actor_rows(runtime, self._context.bundle_dir, actor_decisions)
-            if case is not None
-            and self._context.evidence_seam is EvidenceSeam.TOOL_TRACE
+            if case is not None and door_seen
             else []
         )
-        changes = (
-            _state_changes(runtime, self._context.bundle_dir, actor_decisions)
-            if case is not None
-            and self._context.evidence_seam is EvidenceSeam.TOOL_TRACE
-            else []
+        changes = _state_changes(runtime, self._context.bundle_dir, actor_decisions) if case is not None and door_seen else []
+        world_database = _find_postgres_endpoint(runtime)
+        records = (
+            await asyncio.to_thread(
+                self._records.end, id(runtime), world_database.address if world_database is not None else None
+            )
+            if case is not None and door_seen
+            else {}
         )
         # A worker the world told apart is kept beside the actors, so its refused attempts are never lost.
         workers_acted = any(
             str(entry.get("who") or "").startswith("worker:") for entry in changes
         )
+        if records:
+            log_rows: list[dict[str, Any]] | None = None
+            if world_database is not None:
+                with contextlib.suppress(Exception):
+                    log_rows = await asyncio.to_thread(_read_action_log, world_database.address)
+            await upload_end_state(self._adapter, scenario_key, records, log_rows)
+        duplicates = _duplicates(runtime) if case is not None and door_seen else []
         # Hand-off records are not the world's actions: marks pair the graded calls with the action log.
         graded = graded_calls(calls)
         marks = _agent_marks(runtime, self._context.bundle_dir, graded) if acted else []
@@ -3313,8 +3518,16 @@ class CallRunnerImpl:
             recording = combined if combined and Path(combined).is_file() else None
             said = [*notices, *self._fault_notices(runtime, faults, calls), *bypassed]
             # A call that ended with no words still says what did not take effect, and what actors and workers did in
-            # the world, never only logging it.
-            if result.transcript or said or acted or actor_decisions or workers_acted or took_part.get("call_actors"):
+            # the world, never only logging it; a call with words carries World changes, or why they were not recorded.
+            if (
+                result.transcript
+                or said
+                or acted
+                or actor_decisions
+                or workers_acted
+                or duplicates
+                or took_part.get("call_actors")
+            ):
                 transcript_document = {
                     "schema_version": "futureagi.call-transcript.v1",
                     "transcript": result.transcript,
@@ -3333,24 +3546,32 @@ class CallRunnerImpl:
                         "events": took_part.get("call_actor_events") or [],
                     }
                 stopped = read_worker_stops(runtime)
-                if acted or actor_decisions or workers_acted or stopped:
-                    # Kept out of the tool trace, whose every line is one of the agent's own calls. `decisions` is
-                    # what each actor chose and why (live) or was scheduled to do (mocked); `actions` what the world
-                    # made of it.
+                if door_seen:
+                    # Every trial the door saw, actors or not: World changes is shown on each. Kept out of the tool
+                    # trace, whose every line is one of the agent's own calls. `decisions` is what each actor chose
+                    # and why (live) or was scheduled to do (mocked); `actions` what the world made of it.
                     transcript_document["world_actors"] = {
                         "actions": acted,
                         "decisions": list(actor_decisions),
-                        "state_changes": changes,
+                        "state_changes": changes or [],
                         "approvals": self._approvals(runtime, actor_decisions),
                         "limits": dict(limits or {}),
                         "usage": list(actor_usage),
+                        **records,
+                        **({"unreadable": True} if changes is None else {}),
                     }
                     shared = _shared_records(runtime, self._context.bundle_dir)
                     if shared:
                         transcript_document["world_actors"]["shared_records"] = shared
-                    if stopped:
-                        # Workers whose own process the harness ended past their deadline.
-                        transcript_document["world_actors"]["stopped_workers"] = stopped
+                else:
+                    # The agent's tools run where the world's door cannot see them: said, never shown as no change.
+                    transcript_document["world_actors"] = dict(NOT_RECORDED)
+                if stopped:
+                    # Workers whose own process the harness ended past their deadline.
+                    transcript_document["world_actors"]["stopped_workers"] = stopped
+                if duplicates:
+                    # The world applied one of the agent's writes twice after its answer was lost: the scenario fails.
+                    transcript_document["world_actors"]["duplicates"] = duplicates
                 if said:
                     # A fault that did not take effect is said, never only logged: the trial ran without it.
                     transcript_document["notices"] = said
@@ -3412,6 +3633,7 @@ class CallRunnerImpl:
             ),
             target_metrics=_target_metrics(case),
             world_actions=tuple(acted),
+            duplicates=tuple(duplicates),
             actor_briefs={
                 **{str(one["id"]): str(one.get("brief") or "") for one in call_actors if one.get("brief")},
                 **(actor_briefs or {}),

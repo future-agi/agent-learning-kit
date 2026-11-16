@@ -2171,3 +2171,17 @@ def test_a_stopped_call_s_wind_down_is_cut_short_so_it_seals_inside_the_stop_bou
 
     assert asyncio.run(scenario()) < 3
     assert len(adapter.uploads) == 1
+
+
+def test_a_trial_without_actors_still_seals_world_changes() -> None:
+    from fi.alk.harness.actors import ActorList
+    from fi.alk.harness.world_door import AGENT, MemoryLog
+
+    log = MemoryLog()
+    log.write({"name": "issue_refund", "actor_id": AGENT, "outcome": "committed", "ok": True, "at": 10.0})
+    door = SimpleNamespace(log=log)
+    record = chat._world_actors_record(door, ActorList(), None, None, SimpleNamespace(rows=list), {}, since=9.0)
+    assert record is not None and record["actions"] == [] and record["decisions"] == []
+    [agent] = record["state_changes"]
+    assert agent["committed_actions"] == ["issue_refund"]
+    assert chat._world_actors_record(None, ActorList(), None, None, SimpleNamespace(rows=list), {}) is None
