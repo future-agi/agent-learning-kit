@@ -259,6 +259,26 @@ def test_a_tool_call_worker_event_names_its_worker_place_end_and_outcome() -> No
     assert (plain["worker_id"], plain["relationship"], plain["status"]) == (None, "unknown", "ok")
 
 
+def test_a_worker_event_names_a_declared_worker_by_its_contract_id_and_keeps_the_framework_s_name(tmp_path) -> None:
+    from fi.alk.harness.world.runtime import Call, trace_row
+
+    (tmp_path / "contract.json").write_text(
+        json.dumps({"workers": [{"id": "refund", "name": "Refund Desk"}, {"id": "lookup", "name": ""}]})
+    )
+    workers = cr.declared_worker_ids(tmp_path)
+    assert workers == {"Refund Desk": "refund"}
+    handed = trace_row(Call(name="ask", arguments={}, worker_id="Lead", delegated_to="Refund Desk", ended_at=2.0,
+                            runtime_ids={"event_id": "e1"}), workers)
+    assert [(one["worker_id"], one["worker_name"], one["by"], one["by_name"]) for one in handed["worker_events"]] == [
+        ("refund", "Refund Desk", "Lead", "Lead"),
+    ] * 2
+    # A call on a worker's door channel already carries its id, and a name no worker declares stays as it was.
+    (by_channel,) = trace_row(Call(name="refund", arguments={}, worker_id="refund"), workers)["worker_events"]
+    (unknown,) = trace_row(Call(name="note", arguments={}, worker_id="Scribe"), workers)["worker_events"]
+    assert (by_channel["worker_id"], unknown["worker_id"], unknown["worker_name"]) == ("refund", "Scribe", "Scribe")
+    assert cr.declared_worker_ids(None) == {} and cr.declared_worker_ids(tmp_path / "missing") == {}
+
+
 # A worker's run, as a CrewAI agent records it: a hand-off, not a call checks grade.
 _HANDOFF_LINE = {
     "name": "Draft checker",

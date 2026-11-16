@@ -5,10 +5,8 @@ starts to :class:`_ToolSpans`; this module turns those spans into the lines of t
 in a customer process's world directory, so it runs inside the CUSTOMER's interpreter, which has no ``fi``: standard
 library only, Python 3.9 syntax, and it never imports the customer's modules.
 
-Instrumentation conventions differ per framework, so the keys and values each framework's spans use are named here, as
-data tables only: the stated exception to the rule that harness code names no framework. The code reads every table
-alike. A background job that
-starts after the call has ended is outside the trace: the call is sealed when it ends.
+A stated framework exception: each framework's span keys and values are named here, as data tables the code reads
+alike. A background job that starts after the call has ended is outside the trace: the call is sealed when it ends.
 """
 
 from __future__ import annotations
@@ -33,9 +31,8 @@ _OPERATION_KINDS = {
     "invoke_agent": "AGENT",
     "create_agent": "AGENT",
 }
-# Frameworks whose instrumentors name the span kind under their own key, with their own values: the Claude Agent SDK
-# (`tool_execution` and `mcp_tool` for a tool call, `subagent` for its Task tool, which runs the sub-agent) and
-# Pydantic AI (`agent_run`, `tool_call`).
+# Frameworks whose instrumentors name the span kind under their own key, with their own values (the Claude Agent SDK's
+# `subagent` is its Task tool, which runs the sub-agent).
 _OWN_KINDS = {
     "claude_agent.span_kind": {
         "tool": "TOOL",
@@ -267,6 +264,9 @@ class _ToolSpans:
         # Transfers made where no agent span is open (a graph's nodes), by the run they were made in: the event id of
         # the latest transfer to each agent, which holds that agent's later calls in the run.
         self._run_transfers = {}
+        # Those transfers by the run they were made in, each as [its line, the agent that made it, whether the agent it
+        # named has run since], until the agent that made it runs again after it (a supervisor's worker returning).
+        self._returns = {}
         # Calls to ADK's built-in transfer function by the run they were made in, held until the agent they name
         # starts there (a control pass) or the run ends (a plain tool call).
         self._candidates = {}
@@ -306,6 +306,10 @@ class _ToolSpans:
                         )
                     except Exception:
                         pass
+            try:
+                self._returned_to(span, context.span_id)
+            except Exception:
+                pass
             if _kind(span) == "AGENT":
                 try:
                     self._hand_off_opened(span, context.span_id)
@@ -390,6 +394,33 @@ class _ToolSpans:
         self._forget_cleared_call()
         _append(self._path, record)
         self._appended = True
+
+    def _returned_to(self, span, span_id) -> None:
+        """Write a graph's transfer again as a hand-off that returned, when the agent that made it starts again in the
+        run after the agent it named ran there: that line replaces the control pass written when the transfer ended."""
+        pending = self._returns.get(self._root(span_id))
+        if not pending:
+            return
+        # A graph's node span is named after its node at start, its attributes often set only when it ends.
+        attributes = getattr(span, "attributes", None) or {}
+        names = {
+            _graph_worker(attributes),
+            _first(attributes, _AGENT_NAME_KEYS),
+            getattr(span, "name", None),
+        }
+        for held in list(pending):
+            if held[0]["delegated_to"] in names:
+                held[2] = True
+            elif held[1] in names and held[2]:
+                pending.remove(held)
+                returned = {
+                    key: value
+                    for key, value in held[0].items()
+                    if key not in ("transfer", "opened")
+                }
+                returned["ended_at"] = (span.start_time or 0) / 1e9
+                _append(self._path, returned)
+                self._appended = True
 
     def _self_hand_off(self, span, span_id, worker, *, ended: bool) -> None:
         """Write a span that is both a hand-off and the worker's run as that hand-off: once when its first span starts
@@ -721,7 +752,12 @@ class _ToolSpans:
                 self._closed.popitem(last=False)
             if kind != "TOOL":
                 self._handed.pop(span_id, None)
-            for one in (self._transfers, self._transferred, self._run_transfers):
+            for one in (
+                self._transfers,
+                self._transferred,
+                self._run_transfers,
+                self._returns,
+            ):
                 one.pop(span_id, None)
             self._jobs.discard(span_id)
             self._live.pop(span_id, None)
@@ -901,6 +937,14 @@ class _ToolSpans:
                 run in self._run_transfers or len(self._run_transfers) < _LAUNCHES_MAX
             ):
                 self._run_transfers.setdefault(run, {})[target] = record["event_id"]
+                pending = self._returns.setdefault(run, [])
+                # An agent handed control again starts by that pass, never by a return to it.
+                pending[:] = [held for held in pending if held[1] != target]
+                source = record.get("agent_key")
+                if source and source != target:
+                    # A control pass unless a later line says the agent that made it ran again after its worker.
+                    record["opened"] = True
+                    pending.append([record, source, False])
         self._forget_cleared_call()
         if record["output"]:
             self._launches.append(

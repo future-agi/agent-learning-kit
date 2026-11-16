@@ -2097,12 +2097,12 @@ def _adk_interface_for(command: list[str], app_name: str) -> dict[str, Any]:
 
 
 def _is_langgraph_server_command(command: list[str]) -> bool:
-    """Return whether argv starts the LangGraph API server (``langgraph dev`` or ``up``)."""
+    """Return whether argv starts the LangGraph development server (``langgraph dev``, by any path to the CLI).
+    ``langgraph up`` builds and runs a Docker image of the app, which a sandbox does not run."""
 
     normalized = [str(item).strip() for item in command]
     return any(
-        normalized[index] == "langgraph"
-        and normalized[index + 1] in {"dev", "up"}
+        Path(normalized[index]).name == "langgraph" and normalized[index + 1] == "dev"
         for index in range(max(0, len(normalized) - 1))
     )
 
@@ -2110,12 +2110,8 @@ def _is_langgraph_server_command(command: list[str]) -> bool:
 def _langgraph_server_interface(
     root: Path, runtime: dict[str, Any]
 ) -> dict[str, Any] | None:
-    """Compile the LangGraph server's threads and runs API into the generic JSON HTTP interface.
-
-    ``langgraph dev`` serves the graphs its ``langgraph.json`` declares through threads and runs,
-    never an OpenAI chat route. The assistant is the declared graph the written interface names
-    as its model, else the only graph, else the first one declared (the server's default).
-    """
+    """``langgraph dev``'s threads and runs API as the generic JSON HTTP interface, for the graph the written interface
+    names as its model, else the only graph declared; None when several are declared and none is named."""
 
     command = [str(item) for item in (runtime.get("command") or [])]
     if not _is_langgraph_server_command(command):
@@ -2139,7 +2135,9 @@ def _langgraph_server_interface(
         return None
     interface = runtime.get("interface")
     named = interface.get("model") if isinstance(interface, dict) else None
-    assistant = named if named in graphs else next(iter(graphs))
+    assistant = named if named in graphs else next(iter(graphs)) if len(graphs) == 1 else None
+    if assistant is None:
+        return None
     return {
         "kind": "http",
         "protocol": "json_template",
@@ -2167,12 +2165,8 @@ def _langgraph_server_interface(
 
 
 def _native_server_runtime(root: Path, runtime: dict[str, Any]) -> dict[str, Any] | None:
-    """The runtime with the documented API of a source-owned framework server sealed as its
-    interface (``adk web``, ``langgraph dev``), or None when the command starts neither.
-
-    A LangGraph command without ``--port`` gets the server's default port written out, so each
-    world's port can replace it.
-    """
+    """The runtime with its framework server's documented API (``adk web``, ``langgraph dev``) sealed as its interface,
+    a LangGraph port written out so each world's can replace it; None for any other command."""
 
     interface = _adk_web_interface(root, runtime) or _langgraph_server_interface(
         root, runtime
@@ -3773,9 +3767,8 @@ def author_bundle_v2(
         ):
             native_runtime = _native_server_runtime(source_root, runtime)
             if native_runtime is not None:
-                # ``adk web`` / ``adk api_server`` and ``langgraph dev`` are persistent source-owned HTTP servers.
-                # Launch them directly and describe their existing API rather than nesting them inside the
-                # subprocess bridge (both would bind the same port).
+                # A framework's own HTTP server runs as it is, with its API described: inside the subprocess bridge
+                # both would bind the same port.
                 runtime = native_runtime
                 contract_interface_kind = "http"
             else:

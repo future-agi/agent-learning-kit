@@ -307,7 +307,7 @@ async def probe_chat_workflow(
         )
 
     async def retain_interrupted_conversation(exc):
-        from .call_runner import _with_span_calls
+        from .call_runner import _with_span_calls, declared_worker_ids
         from .outbound import ArtifactKind
 
         transcript = getattr(exc, "partial_transcript", None)
@@ -319,7 +319,7 @@ async def probe_chat_workflow(
         await artifacts.upload_artifact(transcript.artifact(), kind=ArtifactKind.TRANSCRIPT)
         if transcript.calls:
             trace = "\n".join(
-                json.dumps(trace_row(call), sort_keys=True, default=str)
+                json.dumps(trace_row(call, declared_worker_ids(bundle)), sort_keys=True, default=str)
                 for call in transcript.calls
             ).encode("utf-8")
             await artifacts.upload_artifact(trace, kind=ArtifactKind.TOOL_TRACE)

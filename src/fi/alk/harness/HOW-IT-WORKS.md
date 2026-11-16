@@ -278,8 +278,9 @@ event, or two for a hand-off whose worker came back.
 |---|---|
 | `type` | `tool_call`, `delegated` (work handed to a worker), `transferred` (control passed; nothing returns) or `returned` |
 | `id` | The event's id; a `returned` event shares its hand-off's id |
-| `worker_id` | The worker that made the tool call, or the worker handed the work; `null` when the runtime did not say |
-| `by` | Hand-offs and returns only: the worker that handed the work over |
+| `worker_id` | The worker that made the tool call, or the worker handed the work: the contract's worker id when the name the framework gives it matches a declared worker's `name`, else that name; `null` when the runtime did not say |
+| `worker_name` | The name the runtime gave that worker, as it gave it |
+| `by`, `by_name` | Hand-offs and returns only: the worker that handed the work over, as `worker_id` and `worker_name` |
 | `parent_id` | The `id` of the hand-off this event ran in; empty at the top level or when unknown |
 | `relationship` | `observed` when the runtime's record links the event to `parent_id`, otherwise `unknown` |
 | `tool` | The tool call's name, or the name of the call that made the hand-off |

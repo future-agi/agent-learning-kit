@@ -975,6 +975,20 @@ def _read_file_tool_calls(
     return calls, from_spans
 
 
+def declared_worker_ids(bundle_dir: Path | str | None) -> dict[str, str]:
+    """Each worker the bundle's contract declares, by the name its framework gives it: `{name: worker id}`."""
+    try:
+        body = json.loads((Path(bundle_dir) / "contract.json").read_text(encoding="utf-8")) if bundle_dir else {}
+    except (OSError, ValueError):
+        return {}
+    workers = body.get("workers") if isinstance(body, dict) else None
+    return {
+        str(one["name"]): str(one["id"])
+        for one in workers or []
+        if isinstance(one, dict) and str(one.get("name") or "").strip() and one.get("id")
+    }
+
+
 def _tool_key(name: str) -> str:
     """A tool's name as two tracers of one call may spell it ("Delegate work" or "delegate_work")."""
     return "".join(ch for ch in name.lower() if ch.isalnum())
@@ -2000,8 +2014,9 @@ class CallRunnerImpl:
             calls = (*calls, *_collect_provider_tool_calls(case))
         capture_failed = capture_failed and not graded_calls(calls)
         if calls:
+            workers = declared_worker_ids(self._context.bundle_dir)
             tool_trace = "\n".join(
-                json.dumps(trace_row(call), sort_keys=True, default=str)
+                json.dumps(trace_row(call, workers), sort_keys=True, default=str)
                 for call in calls
             ).encode("utf-8")
             await self._adapter.upload_artifact(

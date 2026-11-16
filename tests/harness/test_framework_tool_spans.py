@@ -1828,7 +1828,7 @@ def test_a_root_agent_that_hands_off_to_two_top_level_agents_has_two_workers_eac
     ]
 
 
-# A LangGraph graph as traceai-langchain records it: every attribute is set only when the span ends, a run whose name
+# A LangGraph graph as traceai-langchain 0.2.1 records it: every attribute is set only when the span ends, a run whose name
 # says "agent" is labelled an agent, and a hand-off tool's metadata names the agent that takes over.
 _GRAPH = """
 from opentelemetry.trace import set_span_in_context
@@ -1889,6 +1889,49 @@ graph.end()
     back = next(r for r in records if r["name"] == "transfer_to_triage")
     rows = {row["name"]: row for row in _sealed(tmp_path)}
     assert (rows["close_ticket"]["agent"], rows["close_ticket"]["parent_span_id"]) == ("triage", back["event_id"])
+
+
+def test_a_supervisor_s_hand_off_whose_worker_comes_back_to_it_is_a_hand_off_that_returned(
+    tmp_path: Path,
+) -> None:
+    # langgraph-supervisor adds an edge from each worker back to the supervisor: the supervisor's node running again
+    # after its worker's is the worker returning, so the transfer reads as a hand-off with its return.
+    records = _run(
+        tmp_path,
+        _GRAPH
+        + """
+turn("supervisor", "1", "transfer_to_billing_agent", __handoff_destination="billing_agent")
+turn("billing_agent", "2", "look_up_invoice")
+turn("supervisor", "3", "close_ticket")
+graph.end()
+""",
+    )
+    handed = next(r for r in records if r["name"] == "transfer_to_billing_agent" and "ended_at" in r)
+    assert "transfer" not in handed and handed["delegated_to"] == "billing_agent"
+    rows = _sealed(tmp_path)
+    assert _placed(rows)[:2] == [
+        ("transfer_to_billing_agent", "delegated", "supervisor", "unknown", ""),
+        ("look_up_invoice", "tool_call", "billing_agent", "observed", handed["event_id"]),
+    ]
+    assert [one["type"] for one in rows[0]["worker_events"]] == ["delegated", "returned"]
+
+
+def test_a_swarm_agent_handed_control_back_is_passed_control_not_returned_to(tmp_path: Path) -> None:
+    # Each agent of a swarm passes control on; the first agent running again because control was passed back to it is
+    # no return, so both transfers stay control passes with nothing returned.
+    _run(
+        tmp_path,
+        _GRAPH
+        + """
+turn("triage", "1", "transfer_to_billing", __handoff_destination="billing")
+turn("billing", "2", "transfer_to_triage", __handoff_destination="triage")
+turn("triage", "3", "close_ticket")
+graph.end()
+""",
+    )
+    rows = [row for row in _sealed(tmp_path) if row["name"].startswith("transfer_to_")]
+    assert [row["kind"] for row in rows] == ["transferred", "transferred"]
+    assert all("returned" not in [one["type"] for one in row["worker_events"]] for row in rows)
 
 
 def test_a_graph_agent_no_transfer_named_keeps_an_unknown_place(tmp_path: Path) -> None:
@@ -2366,8 +2409,7 @@ def test_a_call_named_by_its_worker_label_never_takes_another_worker_s_place() -
 
 # Two workers, order_lookup and refund, under one coordinator, as each framework's pinned instrumentor shapes the spans
 # (the shapes read from traceai-claude-agent-sdk 0.1.1, traceai-pydantic-ai 0.1.0, traceai-smolagents 0.1.6,
-# traceai-llamaindex 0.1.10 and Strands' own telemetry). The fixtures under multi_agent_compatibility/<framework>/
-# make the same calls for real.
+# traceai-llamaindex 0.1.10 and Strands' own telemetry).
 _TWO_WORKERS = {
     "claude_agent_sdk": """
         from opentelemetry.trace import set_span_in_context

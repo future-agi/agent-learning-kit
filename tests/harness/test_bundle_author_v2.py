@@ -4163,6 +4163,46 @@ def test_adk_web_command_without_interface_uses_source_http_api(tmp_path: Path) 
         (["adk", "api_server", "--port=8080", "agents/nested_app"], "nested_app"),
     ],
 )
+def test_two_concurrent_calls_to_an_adk_server_each_open_their_own_session(monkeypatch) -> None:
+    import asyncio
+    import threading
+
+    from fi.alk.harness.chat_transport import create_chat_wrapper
+    from fi.alk.harness.contract import RuntimeInterface
+    from fi.simulate.agent.wrapper import AgentInput
+
+    interface = RuntimeInterface.model_validate(bundle_author_v2._adk_interface_for(["adk", "api_server"], "desk"))
+    opened: list[str] = []
+    lock = threading.Lock()
+
+    def request(self, endpoint, *, method, payload, headers, **_options):
+        if endpoint.endswith("/sessions"):
+            with lock:
+                opened.append(f"session-{len(opened) + 1}")
+                return 200, {"id": opened[-1]}
+        # The server answers with the session the turn named, so each call shows which session it ran in.
+        return 200, {"content": {"parts": [{"text": payload["session_id"]}]}}
+
+    wrappers = [create_chat_wrapper(interface, "http://agent.invalid:8000") for _ in range(2)]
+    for wrapper in wrappers:
+        monkeypatch.setattr(wrapper, "_request_json", request.__get__(wrapper))
+
+    async def both() -> list[list[str]]:
+        async def converse(wrapper) -> list[str]:
+            # The same user on both calls: each call's session comes from its own wrapper, never from the user.
+            turns = []
+            for text in ("first", "second"):
+                answer = await wrapper.call(AgentInput(thread_id="user", messages=[], new_message={"content": text}))
+                turns.append(answer.content)
+            return turns
+
+        return list(await asyncio.gather(*(converse(wrapper) for wrapper in wrappers)))
+
+    first, second = asyncio.run(both())
+    assert len(opened) == 2
+    assert first == [first[0]] * 2 and second == [second[0]] * 2 and first[0] != second[0]
+
+
 def test_adk_http_servers_resolve_the_app_their_agents_directory_serves(
     tmp_path: Path, server: list[str], app_name: str
 ) -> None:
@@ -4475,11 +4515,8 @@ def _langgraph_source(tmp_path: Path) -> Path:
     return source
 
 
-@pytest.mark.parametrize("model", ["agent", "", "gpt-4o"])
-def test_langgraph_dev_is_served_through_its_threads_and_runs_api(
-    tmp_path: Path, model: str
-) -> None:
-    """Build 5f83aede sealed the model-written OpenAI chat route for ``langgraph dev`` (404)."""
+def test_langgraph_dev_is_served_through_its_threads_and_runs_api(tmp_path: Path) -> None:
+    # ``langgraph dev`` has no OpenAI chat route, whatever route the written interface gives.
     source = _langgraph_source(tmp_path)
     authoring = _authoring(tmp_path)
     command = [
@@ -4494,7 +4531,7 @@ def test_langgraph_dev_is_served_through_its_threads_and_runs_api(
             "kind": "http",
             "path": "/chat/completions",
             "port": 2024,
-            "model": model,
+            "model": "agent",
             "protocol": "openai_chat",
             "health_path": "/ok",
         },
@@ -4518,7 +4555,7 @@ def test_langgraph_dev_is_served_through_its_threads_and_runs_api(
     assert interface["setup_requests"][0]["capture"] == {
         "langgraph_thread_id": "thread_id"
     }
-    # The supervisor graph: named by the written model, else the first one declared.
+    # The graph the written interface names as its model.
     assert interface["request_template"]["assistant_id"] == "agent"
     assert interface["response_path"] == "messages.-1.content"
     assert runtime["command"][-2:] == ["--port", "2024"]
@@ -4533,7 +4570,7 @@ def test_langgraph_dev_is_served_through_its_threads_and_runs_api(
     )
     assert readiness.path == "/ok"
     # The framework instrumentors land in the project ``uv run`` starts, though the command
-    # now runs under ``sh -c`` for the world's port (hosted run 7ccc3710 had no hand-offs).
+    # now runs under ``sh -c`` for the world's port.
     assert "ALK_OBSERVE_FRAMEWORKS" in agent.environment
     assert any(
         "uv sync --project graphs/python" in " ".join(command)
@@ -4561,6 +4598,24 @@ def test_langgraph_dev_serves_the_graph_the_written_interface_names(
         )
         is None
     )
+
+
+@pytest.mark.parametrize("model", ["", "gpt-4o"])
+def test_langgraph_dev_serves_no_graph_it_would_have_to_guess(tmp_path: Path, model: str) -> None:
+    source = _langgraph_source(tmp_path)
+    runtime = {"command": [".venv/bin/langgraph", "dev"], "interface": {"model": model}}
+    # Three graphs and none named: the server is not taken to serve one, so the agent's interface is asked for.
+    assert bundle_author_v2._langgraph_server_interface(source, runtime) is None
+    (source / "langgraph.json").write_text(json.dumps({"graphs": {"coder": "./graphs/python/src/coder.py:graph"}}))
+    only = bundle_author_v2._langgraph_server_interface(source, runtime)
+    assert only is not None and only["request_template"]["assistant_id"] == "coder"
+
+
+def test_langgraph_up_is_not_taken_for_the_development_server(tmp_path: Path) -> None:
+    # ``langgraph up`` builds and runs a Docker image of the app on its own port; a sandbox does not run it.
+    source = _langgraph_source(tmp_path)
+    assert bundle_author_v2._langgraph_server_interface(source, {"command": ["langgraph", "up"]}) is None
+    assert bundle_author_v2._native_server_runtime(source, {"command": ["langgraph", "up"]}) is None
 
 
 def test_adk_source_toolbox_is_hosted_against_world_database(tmp_path: Path) -> None:

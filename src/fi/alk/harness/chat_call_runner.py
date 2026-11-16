@@ -23,6 +23,7 @@ from .call_runner import (
     _clear_file_tool_calls,
     _with_span_calls,
     _with_scenario_edits,
+    declared_worker_ids,
 )
 from .contract import AgentContract
 from .privilege import IsolationMode, isolation_mode
@@ -701,8 +702,9 @@ class HostedChatCallRunner:
         )
         calls = tuple(transcript.calls)
         if calls:
+            workers = declared_worker_ids(self._context.bundle_dir)
             tool_trace = "\n".join(
-                json.dumps(trace_row(call), sort_keys=True, default=str)
+                json.dumps(trace_row(call, workers), sort_keys=True, default=str)
                 for call in calls
             ).encode("utf-8")
             await self._adapter.upload_artifact(
