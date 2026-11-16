@@ -20,12 +20,13 @@ Environment it reads, by name:
     ORDER_LOOKUP_API_URL, REFUND_API_URL
                        optional. Each worker's own address for the ledger; the shared address when unset.
     PORT               optional. Default 8080.
-    RETURNS_FAULT      optional, comma-separated deliberate defects for negative controls (see README.md):
-                       skip_refund_check, payment_times_out, refund_never_returns, bypass_channel.
     RETURNS_HANG_SECONDS
-                       optional. How long payment_times_out and refund_never_returns wait. Default 20. Both wait
-                       only on a scenario call (the harness's X-ALK-Scenario-Call header), never on a readiness or
-                       certification probe, so a version with either fault still certifies.
+                       optional. How long a refund on a payment_times_out or refund_never_returns record waits.
+                       Default 20. It waits only on a scenario call (the harness's X-ALK-Scenario-Call header), never
+                       on a readiness or certification probe, so the build still certifies.
+
+Deliberate defects for negative controls belong to ledger records (a record's `fault`, see README.md), never to the
+process: one build carries every one, and a scenario picks a defect by the order it names.
     REFUND_WORKER_URL  optional. When set, the Refund worker runs as a service of its own (worker_service.py, its own
                        process) at this address and the coordinator reaches it over HTTP, so a harness can stop that
                        worker alone; unset, both workers run in this process.
@@ -49,8 +50,6 @@ from typing import Any
 
 from agents import Agent, Runner, function_tool, set_trace_processors
 
-# Read once at import: each switch is a deliberate defect for a negative control and never changes the topology.
-FAULTS = frozenset(one.strip() for one in os.environ.get("RETURNS_FAULT", "").split(",") if one.strip())
 HANG_SECONDS = float(os.environ.get("RETURNS_HANG_SECONDS") or 20)
 # An event, not a sleep, so a test can release a waiting tool with `_HANG.set()`.
 _HANG = threading.Event()
@@ -61,8 +60,31 @@ SCENARIO_CALL_HEADER = "X-ALK-Scenario-Call"
 _SCENARIO_CALL: contextvars.ContextVar[bool] = contextvars.ContextVar("scenario_call", default=True)
 
 
+# Each record's defect, as the ledger's answers name it; kept from the model, which sees only the record's data.
+_RECORD_FAULTS: dict[str, str] = {}
+# The defects that hold a refund before the worker answers.
+HANG_FAULTS = ("payment_times_out", "refund_never_returns")
+
+
 def _hangs() -> bool:
     return _SCENARIO_CALL.get()
+
+
+def _fault(order_id: str) -> str:
+    return _RECORD_FAULTS.get(str(order_id).strip(), "")
+
+
+def _without_fault(order_id: str, text: str) -> str:
+    """The ledger's answer with the record's `fault` taken out and remembered for the order."""
+    try:
+        answer = json.loads(text)
+    except ValueError:
+        return text
+    if not isinstance(answer, dict) or "fault" not in answer:
+        return text
+    _RECORD_FAULTS[str(order_id).strip()] = str(answer.pop("fault") or "")
+    return json.dumps(answer)
+
 
 # --- each worker's own client for the returns ledger (ledger.py) ---------------------------------------------------
 
@@ -79,10 +101,11 @@ def _ledger(address_env: str) -> Any:
         )
         try:
             with urllib.request.urlopen(request, timeout=30) as response:
-                return response.read().decode()
+                text = response.read().decode()
         except urllib.error.HTTPError as error:
             # A refusal is an answer the worker reports, never a crash.
-            return error.read().decode() or json.dumps({"error": f"HTTP {error.code}"})
+            text = error.read().decode() or json.dumps({"error": f"HTTP {error.code}"})
+        return _without_fault(str(body.get("order_id", "")), text)
 
     return call
 
@@ -98,7 +121,7 @@ def _lookup_tools() -> list[Any]:
     @function_tool
     def list_refunds(order_id: str) -> str:
         """The refunds already issued for an order, if any."""
-        return call("/refunds/list", {"order_id": order_id})
+        return _refunds_of(call, order_id)
 
     @function_tool
     def update_order_status(order_id: str, status: str) -> str:
@@ -108,29 +131,33 @@ def _lookup_tools() -> list[Any]:
     return [get_order, list_refunds, update_order_status]
 
 
+def _refunds_of(call: Any, order_id: str) -> str:
+    answer = call("/refunds/list", {"order_id": order_id})
+    # skip_refund_check: this record's refund check comes back empty, so a second refund goes through.
+    if _fault(order_id) == "skip_refund_check":
+        return json.dumps({"order_id": order_id, "refunds": []})
+    return answer
+
+
 def _refund_tools() -> list[Any]:
-    # bypass_channel: the Refund worker's client uses the shared address instead of its own channel.
-    call = _ledger("RETURNS_API_URL" if "bypass_channel" in FAULTS else "REFUND_API_URL")
+    own = _ledger("REFUND_API_URL")
+    shared = _ledger("RETURNS_API_URL")
 
     @function_tool
     def list_refunds(order_id: str) -> str:
         """The refunds already issued for an order, if any."""
-        return call("/refunds/list", {"order_id": order_id})
+        return _refunds_of(own, order_id)
 
     @function_tool
     def issue_refund(order_id: str, amount: float) -> str:
         """Issue a refund for the order. The ledger does not check for an existing refund."""
-        if "payment_times_out" in FAULTS and _hangs():
+        # bypass_channel: this record's refund goes out on the shared address instead of the worker's own channel.
+        call = shared if _fault(order_id) == "bypass_channel" else own
+        answer = call("/refunds/issue", {"order_id": order_id, "amount": amount})
+        if _fault(order_id) in HANG_FAULTS and _hangs():
             _HANG.wait(HANG_SECONDS)
-            return json.dumps({"error": "payment service timed out"})
-        if "refund_never_returns" in FAULTS and _hangs():
-            _HANG.wait(HANG_SECONDS)
-            return json.dumps({"error": "payment service did not answer"})
-        return call("/refunds/issue", {"order_id": order_id, "amount": amount})
+        return answer
 
-    # Every def stays at the top of this body (the corpus test reads the builders by AST); a switch filters the list.
-    if "skip_refund_check" in FAULTS:
-        return [issue_refund]
     return [list_refunds, issue_refund]
 
 
@@ -171,21 +198,14 @@ REFUND = Agent(
     tools=_refund_tools(),
     model=_model_ref(),
 )
-def _coordinator_instructions() -> str:
-    careless = "skip_refund_check" in FAULTS
-    window = "inside the return window" if careless else "inside the return window with no refund yet"
-    always = (
-        " When the customer asks for a refund, always ask the refund worker to refund the full amount." if careless else ""
-    )
-    return (
-        "You are the returns desk for Northwind Outdoor. You never look up orders or issue refunds yourself: ask the "
-        "order lookup worker to inspect the order first, then, only if the customer asks for a refund and the order is "
-        f"{window}, ask the refund worker to refund the full amount. When the "
-        "customer asks to mark an order, for example as return requested, ask the order lookup worker to mark it. "
-        "Tell the customer exactly what happened, "
-        "using the workers' results: a refund id, or the reason it was refused. "
-        f"Never claim a refund that a worker did not report.{always}"
-    )
+COORDINATOR_INSTRUCTIONS = (
+    "You are the returns desk for Northwind Outdoor. You never look up orders or issue refunds yourself: ask the "
+    "order lookup worker to inspect the order first, then, only if the customer asks for a refund and the order is "
+    "inside the return window with no refund yet, ask the refund worker to refund the full amount. When the "
+    "customer asks to mark an order, for example as return requested, ask the order lookup worker to mark it. "
+    "Tell the customer exactly what happened, using the workers' results: a refund id, or the reason it was refused. "
+    "Never claim a refund that a worker did not report."
+)
 
 
 def _refund_service() -> Any:
@@ -223,7 +243,7 @@ def run_worker(worker: Any, text: str) -> str:
 
 COORDINATOR = Agent(
     name="Returns coordinator",
-    instructions=_coordinator_instructions(),
+    instructions=COORDINATOR_INSTRUCTIONS,
     tools=[
         ORDER_LOOKUP.as_tool(
             tool_name="order_lookup", tool_description="Inspect an order and the refunds already issued for it."

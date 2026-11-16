@@ -1,4 +1,4 @@
-"""The internal returns fixture: a ledger that allows duplicate refunds, and the fault switches of its negative controls.
+"""The internal returns fixture: a ledger that allows duplicate refunds, and the record defects of its negative controls.
 
 openai-agents 0.24.0 (the fixture's pinned SDK) runs a sync `function_tool` in a worker thread
 (`agents/tool.py`, `invoke_function_tool`: `await asyncio.to_thread(the_func, ...)`), so a waiting refund tool does
@@ -9,11 +9,14 @@ from __future__ import annotations
 
 import asyncio
 import importlib.util
+import io
 import json
 import sys
 import threading
 import types
+import urllib.error
 from pathlib import Path
+from urllib.parse import urlparse
 
 import pytest
 
@@ -41,19 +44,14 @@ class _Agent:
         return self
 
 
-def _agent_module(
-    monkeypatch, *, fault: str = "", hang: str = "", runner=None
-) -> types.ModuleType:
+def _agent_module(monkeypatch, *, hang: str = "", runner=None) -> types.ModuleType:
     for key in (
-        "RETURNS_FAULT",
         "RETURNS_HANG_SECONDS",
         "RETURNS_API_URL",
         "REFUND_API_URL",
         "TOOLS_API_URL",
     ):
         monkeypatch.delenv(key, raising=False)
-    if fault:
-        monkeypatch.setenv("RETURNS_FAULT", fault)
     if hang:
         monkeypatch.setenv("RETURNS_HANG_SECONDS", hang)
     stub = types.ModuleType("agents")
@@ -81,55 +79,64 @@ def test_the_ledger_creates_a_second_refund() -> None:
     assert len(listed["refunds"]) == 3
 
 
-def test_fault_switches_are_off_by_default_and_change_only_their_part(
-    monkeypatch,
-) -> None:
-    plain = _agent_module(monkeypatch)
-    assert _names(plain.REFUND.tools) == ["list_refunds", "issue_refund"]
-    assert "with no refund yet" in plain.COORDINATOR.instructions
-    assert "reused" not in plain.COORDINATOR.instructions
-    assert "always ask the refund worker" not in plain.COORDINATOR.instructions
-    issue = plain.REFUND.tools[1]
-    assert "never created" not in issue.__doc__
-
-    careless = _agent_module(monkeypatch, fault="skip_refund_check")
-    assert _names(careless.REFUND.tools) == ["issue_refund"]
-    assert "with no refund yet" not in careless.COORDINATOR.instructions
-    assert (
-        "always ask the refund worker to refund the full amount"
-        in careless.COORDINATOR.instructions
-    )
-
-    seen = []
-    monkeypatch.setenv("RETURNS_API_URL", "http://shared")
-    monkeypatch.setenv("REFUND_API_URL", "http://refund-channel")
-    bypass = _agent_module(monkeypatch, fault="bypass_channel")
-    monkeypatch.setenv("RETURNS_API_URL", "http://shared")
-    monkeypatch.setenv("REFUND_API_URL", "http://refund-channel")
+def _served_by_a_ledger(monkeypatch, module, seen: list[str]) -> types.ModuleType:
+    """Every ledger call the agent makes is answered by a fresh ledger.py, as over HTTP."""
+    ledger = _load("returns_fixture_ledger_served", APP / "ledger.py")
 
     def _urlopen(request, timeout):
         seen.append(request.full_url)
-        raise OSError("not reached")
+        status, body = ledger.ROUTES[urlparse(request.full_url).path](json.loads(request.data))
+        data = json.dumps(body).encode()
+        if status >= 400:
+            raise urllib.error.HTTPError(request.full_url, status, "", {}, io.BytesIO(data))
+        return _Answer(data)
 
-    monkeypatch.setattr(bypass.urllib.request, "urlopen", _urlopen)
-    with pytest.raises(OSError):
-        bypass.REFUND.tools[1]("1043", 89.0)
-    assert seen == ["http://shared/refunds/issue"]
+    monkeypatch.setattr(module.urllib.request, "urlopen", _urlopen)
+    return ledger
 
-    timed_out = _agent_module(monkeypatch, fault="payment_times_out", hang="0")
-    monkeypatch.setattr(
-        timed_out.urllib.request,
-        "urlopen",
-        lambda *_a, **_k: pytest.fail("the ledger must not be called"),
-    )
-    assert json.loads(timed_out.REFUND.tools[1]("1043", 89.0)) == {
-        "error": "payment service timed out"
-    }
+
+def test_each_defect_belongs_to_its_record_so_one_build_carries_every_control(monkeypatch) -> None:
+    monkeypatch.setenv("RETURNS_API_URL", "http://shared")
+    monkeypatch.setenv("REFUND_API_URL", "http://refund-channel")
+    seen: list[str] = []
+    module = _agent_module(monkeypatch, hang="0")
+    monkeypatch.setenv("RETURNS_API_URL", "http://shared")
+    monkeypatch.setenv("REFUND_API_URL", "http://refund-channel")
+    ledger = _served_by_a_ledger(monkeypatch, module, seen)
+    check, issue = module.REFUND.tools
+    lookup_refunds = module.ORDER_LOOKUP.tools[1]
+
+    # A record with no defect: the existing refund is reported and a new one commits on the worker's own channel.
+    assert [one["refund_id"] for one in json.loads(check("1042"))["refunds"]] == ["RF-7"]
+    check("1043")
+    issue("1043", 89.0)
+    assert len(ledger.REFUNDS["1043"]) == 1
+    assert seen[-1] == "http://refund-channel/refunds/issue"
+
+    # skip_refund_check: both workers' check reads nothing, so a second refund commits on the same record.
+    assert json.loads(lookup_refunds("1047"))["refunds"] == []
+    assert json.loads(check("1047"))["refunds"] == []
+    issue("1047", 41.0)
+    assert len(ledger.REFUNDS["1047"]) == 2
+
+    # bypass_channel: the refund goes out on the shared address.
+    check("1048")
+    issue("1048", 75.0)
+    assert seen[-1] == "http://shared/refunds/issue"
+
+    # payment_times_out: the worker reports an error and nothing is committed.
+    check("1045")
+    assert "error" in json.loads(issue("1045", 35.0))
+    assert "1045" not in ledger.REFUNDS
+
+    # The model never sees a record's defect.
+    for order in ("1043", "1045", "1047", "1048"):
+        assert "fault" not in json.loads(module.ORDER_LOOKUP.tools[0](order))
 
 
 def test_a_waiting_refund_tool_leaves_a_concurrent_reply_free(monkeypatch) -> None:
-    """With `payment_times_out` and a long wait, a second conversation still gets its reply while the first waits,
-    because the pinned SDK runs the sync tool in a thread; releasing `_HANG` lets the first one finish."""
+    """A refund on a `payment_times_out` record waits long, yet a second conversation still gets its reply, because
+    the pinned SDK runs the sync tool in a thread; releasing `_HANG` lets the first one finish."""
     module_ref = {}
 
     class _Runner:
@@ -137,15 +144,14 @@ def test_a_waiting_refund_tool_leaves_a_concurrent_reply_free(monkeypatch) -> No
         async def run(_agent, conversation):
             if conversation[-1]["content"] == "refund":
                 text = await asyncio.to_thread(
-                    module_ref["m"].REFUND.tools[1], "1043", 89.0
+                    module_ref["m"].REFUND.tools[1], "1045", 35.0
                 )
                 return types.SimpleNamespace(final_output=text)
             return types.SimpleNamespace(final_output="looked up")
 
-    module = _agent_module(
-        monkeypatch, fault="payment_times_out", hang="60", runner=_Runner
-    )
+    module = _agent_module(monkeypatch, hang="60", runner=_Runner)
     module_ref["m"] = module
+    _served_by_a_ledger(monkeypatch, module, [])
     answers = {}
     first = threading.Thread(
         target=lambda: answers.setdefault(
@@ -159,7 +165,7 @@ def test_a_waiting_refund_tool_leaves_a_concurrent_reply_free(monkeypatch) -> No
     finally:
         module._HANG.set()
         first.join(timeout=10)
-    assert json.loads(answers["first"]) == {"error": "payment service timed out"}
+    assert "error" in json.loads(answers["first"])
 
 
 def test_every_tool_def_is_at_the_builder_s_top_level(monkeypatch) -> None:
@@ -167,7 +173,6 @@ def test_every_tool_def_is_at_the_builder_s_top_level(monkeypatch) -> None:
         "corpus_references",
         Path(__file__).with_name("test_multi_agent_compatibility_references.py"),
     )
-    monkeypatch.setenv("RETURNS_FAULT", "skip_refund_check")
     corpus.test_returns_reference_declares_the_workers_and_tools_its_app_builds()
 
 
@@ -185,28 +190,42 @@ class _Answer:
         return self._body
 
 
-@pytest.mark.parametrize("fault", ["refund_never_returns", "payment_times_out"])
-def test_hang_fault_skips_certify_probes(monkeypatch, fault: str) -> None:
-    """A probe turn (no scenario-call header) reaches the ledger at once; a scenario call turn waits and fails."""
+@pytest.mark.parametrize("order", ["1045", "1046"])
+def test_a_waiting_record_waits_on_a_scenario_call_and_never_on_a_certify_probe(monkeypatch, order: str) -> None:
     module_ref = {}
 
     class _Runner:
         @staticmethod
         async def run(_agent, _conversation):
             # As the pinned SDK runs a sync tool: in a thread that copies the turn's context.
-            text = await asyncio.to_thread(module_ref["m"].REFUND.tools[1], "1043", 89.0)
+            text = await asyncio.to_thread(module_ref["m"].REFUND.tools[1], order, 30.0)
             return types.SimpleNamespace(final_output=text)
 
-    module = _agent_module(monkeypatch, fault=fault, hang="0", runner=_Runner)
+    module = _agent_module(monkeypatch, hang="60", runner=_Runner)
     module_ref["m"] = module
-    monkeypatch.setenv("REFUND_API_URL", "http://refund-channel")
-    monkeypatch.setattr(
-        module.urllib.request, "urlopen", lambda *_a, **_k: _Answer(b'{"refund_id": "RF-9"}')
-    )
-    probe = module.reply([{"role": "user", "content": "Hello"}], scenario_call=False)
-    assert json.loads(probe) == {"refund_id": "RF-9"}
-    scenario = module.reply([{"role": "user", "content": "refund"}], scenario_call=True)
-    assert "error" in json.loads(scenario)
+    _served_by_a_ledger(monkeypatch, module, [])
+    answers = {}
+
+    def _turn(name: str, scenario_call: bool) -> threading.Thread:
+        thread = threading.Thread(
+            target=lambda: answers.setdefault(
+                name, module.reply([{"role": "user", "content": "refund"}], scenario_call=scenario_call)
+            )
+        )
+        thread.start()
+        return thread
+
+    probe = _turn("probe", False)
+    probe.join(timeout=10)
+    assert not probe.is_alive() and "error" in json.loads(answers["probe"])
+    scenario = _turn("scenario", True)
+    try:
+        scenario.join(timeout=0.5)
+        assert scenario.is_alive()
+    finally:
+        module._HANG.set()
+        scenario.join(timeout=10)
+    assert "error" in json.loads(answers["scenario"])
 
 
 def test_the_scenario_call_header_reaches_the_agent_s_request_headers() -> None:

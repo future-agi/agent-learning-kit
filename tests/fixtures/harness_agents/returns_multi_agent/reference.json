@@ -98,6 +98,18 @@
       ]
     },
     {
+      "id": "duplicate_refund_unchecked",
+      "instruction": "Order 1047 already has refund RF-8 and the desk's refund check reads nothing for it; the customer asks for a refund.",
+      "expected_workers": [
+        "Returns coordinator",
+        "order_lookup",
+        "refund"
+      ],
+      "expected_effects": [
+        "a second refund is committed for order 1047, the failing direction a duplicate check must catch"
+      ]
+    },
+    {
       "id": "outside_window",
       "instruction": "Order 1044 was delivered 41 days ago; the customer asks for a refund.",
       "expected_workers": [
@@ -136,20 +148,20 @@
     },
     {
       "id": "payment_times_out",
-      "instruction": "Order 1043 should be refunded in full.",
+      "instruction": "Order 1045 should be refunded in full.",
       "expected_workers": [
         "Returns coordinator",
         "order_lookup",
         "refund"
       ],
       "expected_effects": [
-        "the refund worker returned an error, no refund exists for 1043",
+        "the refund worker returned an error, no refund exists for 1045",
         "the reply does not claim a refund"
       ]
     },
     {
       "id": "refund_never_returns",
-      "instruction": "Order 1043 should be refunded in full.",
+      "instruction": "Order 1046 should be refunded in full.",
       "expected_workers": [
         "Returns coordinator",
         "order_lookup",

@@ -9,12 +9,15 @@ Run it locally: `python ledger.py` (port `$LEDGER_PORT`, default 8090), then `RE
 `agent.py` also reads a model key (`ANTHROPIC_API_KEY` or `OPENAI_API_KEY`), `RETURNS_MODEL`, `OPENAI_BASE_URL`,
 `ORDER_LOOKUP_API_URL`, `REFUND_API_URL`, `PORT` and the OTLP trace endpoint; its module docstring lists each one.
 
-Fault switches (`RETURNS_FAULT`, comma-separated, read once at import; unset means none), each a deliberate defect for a negative control:
-`skip_refund_check` (the Refund worker has only `issue_refund` and the coordinator always asks for a refund),
-`payment_times_out` (`issue_refund` waits `RETURNS_HANG_SECONDS`, default 20, then returns a timeout error),
-`refund_never_returns` (`issue_refund` waits `RETURNS_HANG_SECONDS`; set it above the chat target timeout),
-`bypass_channel` (the Refund worker's client uses the shared address). The two waiting faults wait only on a
-scenario call (the harness's `X-ALK-Scenario-Call` header), never on a readiness or certification probe. `RETURNS_TRACING=off` exports no spans.
+Deliberate defects for negative controls belong to ledger records, never to the process, so one pinned build carries
+every one and a scenario picks a defect by the order it names. A record's `fault` field (ledger answers carry it; the
+agent keeps it from the model):
+`skip_refund_check` (order 1047, refunded already: both workers' refund check comes back empty, so a second refund goes
+through), `payment_times_out` (order 1045: the ledger takes no refund and `issue_refund` waits `RETURNS_HANG_SECONDS`,
+default 20, before reporting the timeout), `refund_never_returns` (order 1046: the same, with the wait set above the
+chat target timeout), `bypass_channel` (order 1048: the Refund worker issues the refund on the shared address). The
+waits happen only on a scenario call (the harness's `X-ALK-Scenario-Call` header), never on a readiness or
+certification probe. `RETURNS_TRACING=off` exports no spans.
 
 With `REFUND_WORKER_URL` set (`docker-compose.worker-service.yml`), the Refund worker runs as a service of its own
 (`worker_service.py`) and the coordinator reaches it over HTTP; the contract then declares that worker with

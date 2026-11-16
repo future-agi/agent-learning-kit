@@ -6,8 +6,9 @@
     POST /refunds/issue         {"order_id", "amount"}  -> a new refund
     GET  /health                                         -> 200 {"status": "ok"}
 
-Issuing always creates a refund; checking for an existing one is the caller's job. It listens on --port, else
-$LEDGER_PORT (8090).
+Issuing always creates a refund; checking for an existing one is the caller's job. A record's `fault` names the
+deliberate defect a negative control exercises on it, and every answer about that order carries it. It listens on
+--port, else $LEDGER_PORT (8090).
 """
 
 from __future__ import annotations
@@ -25,10 +26,24 @@ ORDERS = {
              "status": "delivered", "days_since_delivery": 3},
     "1044": {"order_id": "1044", "customer": "Lena Ortiz", "item": "Camping stove", "amount": 64.0,
              "status": "delivered", "days_since_delivery": 41},
+    "1045": {"order_id": "1045", "customer": "Sam Okafor", "item": "Head torch", "amount": 35.0,
+             "status": "delivered", "days_since_delivery": 5, "fault": "payment_times_out"},
+    "1046": {"order_id": "1046", "customer": "Ana Silva", "item": "Sleeping mat", "amount": 52.0,
+             "status": "delivered", "days_since_delivery": 6, "fault": "refund_never_returns"},
+    "1047": {"order_id": "1047", "customer": "Tom Berg", "item": "Water filter", "amount": 41.0,
+             "status": "delivered", "days_since_delivery": 8, "fault": "skip_refund_check"},
+    "1048": {"order_id": "1048", "customer": "Ida Novak", "item": "Trekking poles", "amount": 75.0,
+             "status": "delivered", "days_since_delivery": 2, "fault": "bypass_channel"},
 }
-# Order 1042 was refunded already. Issuing always creates a refund; checking for an existing one is the caller's job.
+# Orders 1042 and 1047 were refunded already. Issuing always creates a refund; checking for one is the caller's job.
 REFUNDS: dict[str, list[dict[str, Any]]] = {
-    "1042": [{"refund_id": "RF-7", "order_id": "1042", "amount": 120.0, "status": "issued"}]
+    "1042": [{"refund_id": "RF-7", "order_id": "1042", "amount": 120.0, "status": "issued"}],
+    "1047": [{"refund_id": "RF-8", "order_id": "1047", "amount": 41.0, "status": "issued"}],
+}
+# The payment service never takes a refund for a record with one of these defects: the answer is an error.
+PAYMENT_FAULTS = {
+    "payment_times_out": "payment service timed out",
+    "refund_never_returns": "payment service did not answer",
 }
 RETURN_WINDOW_DAYS = 30
 _LOCK = threading.Lock()
@@ -48,9 +63,14 @@ def _update_status(body: dict[str, Any]) -> tuple[int, dict[str, Any]]:
         return 200, order
 
 
+def _marked(key: str, answer: dict[str, Any]) -> dict[str, Any]:
+    fault = ORDERS.get(key, {}).get("fault")
+    return {**answer, "fault": fault} if fault else answer
+
+
 def _refunds(body: dict[str, Any]) -> tuple[int, dict[str, Any]]:
     key = str(body.get("order_id", "")).strip()
-    return 200, {"order_id": key, "refunds": list(REFUNDS.get(key, []))}
+    return 200, _marked(key, {"order_id": key, "refunds": list(REFUNDS.get(key, []))})
 
 
 def _issue(body: dict[str, Any]) -> tuple[int, dict[str, Any]]:
@@ -64,10 +84,12 @@ def _issue(body: dict[str, Any]) -> tuple[int, dict[str, Any]]:
         amount = float(body.get("amount") or 0)
         if amount <= 0 or amount > order["amount"]:
             return 422, {"error": "the refund must be more than 0 and at most the order amount"}
+        if order.get("fault") in PAYMENT_FAULTS:
+            return 504, _marked(key, {"error": PAYMENT_FAULTS[order["fault"]]})
         issued = sum(len(refunds) for refunds in REFUNDS.values())
         refund = {"refund_id": f"RF-{issued + 7}", "order_id": key, "amount": amount, "status": "issued"}
         REFUNDS.setdefault(key, []).append(refund)
-        return 201, dict(refund)
+        return 201, _marked(key, dict(refund))
 
 
 ROUTES = {"/orders/get": _order, "/orders/update_status": _update_status, "/refunds/list": _refunds,
