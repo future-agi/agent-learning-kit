@@ -332,6 +332,9 @@ Data depth: 11 workflows were enriched. Before, the longest Drive document was 6
 
 ### Live runs (10 Nov 2026)
 
+These runs predate the round-4 scenario corrections (16 Nov 2026). The round-4 live evidence is the
+answer controls in the scenario-quality section and the 16 Nov batches recorded in the Wave A execution plan.
+
 | Run | What | Result |
 |---|---|---|
 | MCP smoke (`e2e-harness/local/mcp_vertical_smoke.py`) | Every reference solution over the world's `/mcp` endpoint, 4 refusal probes (a team view for a non-manager, the restricted compensation bands, a private channel, a post without an approval), 2 wrong runs, then Claude Code as `sample_agent.md` over `--mcp-config` on 12 scenarios across the jobs | 122/126 on the first pass. The four Claude Code misses were scenario findings: two scenarios gave the person another name than the record for their ID (all such names now match the records), and two checks demanded one route when the agent took another valid one (the policy tool, which names its source document; a refusal without a library search). After the corrections Claude Code held all six rerun scenarios (110/110) |

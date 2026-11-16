@@ -338,6 +338,9 @@ Each scenario grades what it claims to test, checked in `tests/harness/test_reta
 
 ### Live runs (10 Nov 2026)
 
+These runs predate the round-4 scenario corrections (16 Nov 2026). The round-4 live evidence is the
+answer controls in the scenario-quality section and the 16 Nov batches recorded in the Wave A execution plan.
+
 | Run | What | Result |
 |---|---|---|
 | MCP smoke (`e2e-harness/local/mcp_vertical_smoke.py`) | Every reference solution over the world's `/mcp` endpoint, 5 refusal probes (an address change and a cancellation on a shipped order, the restricted watchlist, the restricted thread, the binary form), 2 wrong runs, then Claude Code as `sample_agent.md` over `--mcp-config` on 12 scenarios across the jobs | 125/127. All 100 reference solutions hold over MCP; every probe answers as designed. The binary-form probe expected an error, but the Drive tool returns empty content marked unsupported, as the official server does; the probe was wrong, not the world. Claude Code held 11 of 12: in `duplicate_return_creation_idempotent_retry` it correctly refused because the scenario named a product the order does not hold. That scenario and seven others with the same kind of naming slip were corrected; on the corrected suite Claude Code held all three rerun scenarios (111/111) |

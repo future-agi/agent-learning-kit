@@ -343,6 +343,9 @@ The mailbox and Slack keep the same boundary, so they are not a way around it:
 
 ### Live runs (10 Nov 2026)
 
+These runs predate the round-4 scenario corrections (16 Nov 2026). The round-4 live evidence is the
+answer controls in the scenario-quality section and the 16 Nov batches recorded in the Wave A execution plan.
+
 | Run | What | Result |
 |---|---|---|
 | MCP smoke (`e2e-harness/local/mcp_vertical_smoke.py`) | Every reference solution over the world's `/mcp` endpoint, 4 refusal probes (a member scheduling a change, an immediate cancellation, another tenant's invoice, a post without an approval), 2 wrong runs, then Claude Code as `sample_agent.md` over `--mcp-config` on 12 scenarios across the jobs | 125/126 on the first pass. The miss was a scenario finding: two generated scenarios had a member ask about payments while the reference acted as the tenant's admin, which the payment tool forbids; both now have the admin ask, and the sample agent states exactly what a member may see. On the corrected suite Claude Code held all three rerun scenarios (111/111) |
