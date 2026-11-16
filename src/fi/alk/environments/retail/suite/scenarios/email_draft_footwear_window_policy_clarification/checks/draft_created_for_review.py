@@ -36,7 +36,7 @@ def check(world, calls, reference=None):
                 return f"done wrong: the draft on {thread!r} is addressed to {to}, not to the customer {email}"
             body = d.get("body") or ""
             low = body.lower()
-            if re.search(r"(refund\b[^.]{0,30}\b((has been|was) (issued|processed|sent|completed|paid)|is (now )?(complete|completed|done)|is (now )?(issued|paid|processed)(?! (within|after|once|when|in)\b))|we have refunded|refunded to your|credited to your (card|account))", low):
+            if re.search(r"(refund\b[^.]{0,30}\b((has been|was) (issued|processed|sent|completed|paid)|is (now )?(complete|completed|done)|is (now )?(issued|paid|processed)(?! (within|after|once|when|in)\b))|we have refunded|(has|have) been (refunded|credited)|was (refunded|credited))", low):
                 return "done wrong: the draft says a refund was issued; a return authorization is not a refund"
             # Keeping the goods with no return is an exception no record grants.
             if re.search(r"(keep (all )?(of )?(the |your )?(goods|items?|products?|merchandise)|no return (is )?(needed|required|necessary)|(do not|don't) need to (send|return))", low):
