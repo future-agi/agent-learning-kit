@@ -3415,3 +3415,28 @@ def test_a_worker_s_door_row_and_its_span_are_one_call(monkeypatch) -> None:
         ("list_refunds", "refund", ""),
         ("issue_refund", "refund", "deadline_passed"),
     ]
+
+
+def test_a_stopped_voice_call_is_marked_sealed_before_it_delivers_what_it_kept(tmp_path: Path) -> None:
+    """The engine hung up on the stop with its report: the scheduler is told the call is sealed before the uploads, so
+    a platform slower than the seal bound never loses it."""
+    from fi.alk.harness import hosted_scheduler as hs
+
+    _job_obj, context = _context(tmp_path=tmp_path)
+    _write_scenario_doc(context.bundle_dir, scenario_key="k1")
+    sealed = asyncio.Event()
+    seen: list[bool] = []
+
+    class _Platform(FakeAdapter):
+        async def upload_artifact(self, data: bytes, **kwargs):
+            seen.append(sealed.is_set())
+            return await super().upload_artifact(data, **kwargs)
+
+    async def place_call(spec, stop_when=None):
+        return _report(messages=[{"role": "user", "content": "hi"}, {"role": "assistant", "content": "hello"}])
+
+    runner = cr.CallRunnerImpl(_Platform(), replace(context, stop_requested=lambda: True), place_call=place_call)
+    runtime = _runtime(metadata={"livekit_agent_name": "agent-w0"})
+    with pytest.raises(hs.CallCancelled):
+        asyncio.run(hs._run_call(runner, _FakeScenario("k1"), runtime, None, sealed))
+    assert seen and all(seen)

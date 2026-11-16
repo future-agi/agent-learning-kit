@@ -18,7 +18,7 @@ from .backends import GOOGLE_ADK_APPROVAL_ENV
 from .bundle_v2 import EvidenceSeam
 from .call_runner import ArtifactUploader, CallRunnerContext
 from .chat_call_runner import _check_text_usage
-from .hosted_scheduler import USER_CANCELED, CallAborted, CallCancelled, CallOutcome, Scenario, World
+from .hosted_scheduler import USER_CANCELED, CallAborted, CallCancelled, CallOutcome, Scenario, World, call_sealed
 from .isolated_process import IsolatedWorkerError, run_json_worker, run_worker, stop_requested
 from .outbound import ArtifactKind
 from .process_runtime import EnvironmentRuntime, _allowlisted_ambient_env
@@ -117,6 +117,8 @@ class IsolatedChatCallRunner:
                 raise
             # Stopped before the worker could seal anything: it was still starting, or failed on the way out.
             raise CallCancelled() from None
+        # The worker sealed the call: what follows delivers it, and a stop no longer cuts that.
+        call_sealed()
         await _record_worker_usage(context.usage_reporter, result.get("usage") or [], funding)
         artifact_ids = {}
         for artifact in result.get("artifacts", []):

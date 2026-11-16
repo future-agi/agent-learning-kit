@@ -86,7 +86,7 @@ from .call_actor import (
     speaking_entries,
     logged_action,
 )
-from .hosted_scheduler import CallAborted, CallCancelled, CallOutcome
+from .hosted_scheduler import CallAborted, CallCancelled, CallOutcome, call_sealed
 from .hosted_scheduler import Scenario as HostedScenario
 from .job import ExecutionMode, FailureDomain, HarnessJob, ProviderExecutionMode
 from .isolated_process import run_json_worker
@@ -3148,6 +3148,8 @@ class CallRunnerImpl:
                 partial=self._timing_only_outcome(started_at),
             ) from exc
 
+        # The call ended with the engine's report: what follows reads and delivers it, and a stop no longer cuts that.
+        call_sealed()
         try:
             outcome = await self._translate_report(
                 report,

@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import contextvars
 import json
 import inspect
 import logging
@@ -306,6 +307,18 @@ def _cancel_seal_seconds() -> float:
     return value if value >= 0 else _CANCEL_SEAL_DEFAULT_SECONDS
 
 
+# The running call's mark that it is sealed, set through `call_sealed()`.
+_CALL_SEALED: contextvars.ContextVar[asyncio.Event | None] = contextvars.ContextVar("alk_call_sealed", default=None)
+
+
+def call_sealed() -> None:
+    """Inside a call runner: the call is sealed, and what follows only delivers it (uploads, metering). A stop no longer
+    cuts it: the seal bound is for the call to seal, and a delivery is bounded by its own clients."""
+    sealed = _CALL_SEALED.get()
+    if sealed is not None:
+        sealed.set()
+
+
 class CallCancelled(CallAborted):
     """The person stopped the run during this call. `partial` carries what the runner sealed and uploaded before it
     raised (transcript and tool-trace artifacts, calls, `stop_reason`); None when nothing was kept."""
@@ -329,6 +342,7 @@ async def _run_call(
     scenario: Scenario,
     runtime: EnvironmentRuntime,
     world: World,
+    sealed: asyncio.Event | None = None,
 ) -> CallOutcome:
     """Pass the world to text runners while preserving older two-argument integrations.
 
@@ -337,6 +351,7 @@ async def _run_call(
     probe keeps the settled injected-runner seam source compatible for downstream callers while
     allowing that missing context to cross the boundary.
     """
+    _CALL_SEALED.set(sealed)
     run = runner.run
     parameters = inspect.signature(run).parameters.values()
     accepts_world = any(
@@ -1807,6 +1822,8 @@ class HostedScheduler:
         self._executor: ThreadPoolExecutor | None = None
         # Each scenario's in-flight call task, cancelled once by the job's one stop watcher; never runner state.
         self._in_flight: dict[int, asyncio.Task[CallOutcome]] = {}
+        # Each in-flight call's sealed mark: a sealed call is delivering what it kept, and a stop leaves it to finish.
+        self._sealed: dict[int, asyncio.Event] = {}
         self._stopped_at: float | None = None
 
     async def _stop_workers_past_deadline(self, runtime: EnvironmentRuntime) -> None:
@@ -1853,8 +1870,12 @@ class HostedScheduler:
             await asyncio.wait(in_flight, timeout=_cancel_seal_seconds())
         self._stopped_at = time.monotonic()
         for task in list(self._in_flight.values()):
-            if not task.done():
+            if not task.done() and not self._is_sealed(task):
                 task.cancel()
+
+    def _is_sealed(self, task: "asyncio.Task[CallOutcome]") -> bool:
+        sealed = self._sealed.get(id(task))
+        return sealed is not None and sealed.is_set()
 
     def _stopping(self) -> bool:
         # Set before the watcher cuts anything: a runner given the seal bound may fail on the stop within it.
@@ -1866,6 +1887,7 @@ class HostedScheduler:
             return await self._await_call_once(task)
         finally:
             self._in_flight.pop(id(task), None)
+            self._sealed.pop(id(task), None)
 
     async def _await_call_once(self, task: "asyncio.Task[CallOutcome]") -> CallOutcome:
         while True:
@@ -1893,7 +1915,11 @@ class HostedScheduler:
                     # A runner that failed while it was being stopped: still the person's stop, never infrastructure.
                     logger.warning("call runner failed while stopping", exc_info=True)
                     raise CallCancelled() from None
-            if self._stopped_at is not None and time.monotonic() - self._stopped_at > _cancel_seal_seconds():
+            if (
+                self._stopped_at is not None
+                and not self._is_sealed(task)
+                and time.monotonic() - self._stopped_at > _cancel_seal_seconds()
+            ):
                 logger.warning("call runner did not seal within %ss of the stop", _cancel_seal_seconds())
                 raise CallCancelled()
 
@@ -2444,8 +2470,10 @@ class HostedScheduler:
                 retry=False,
             )
         # Its own task, so a stop cuts the call and not the scenario's sealing below.
-        call_task = asyncio.create_task(_run_call(self._call_runner, scenario, runtime, world))
+        sealed = asyncio.Event()
+        call_task = asyncio.create_task(_run_call(self._call_runner, scenario, runtime, world, sealed))
         self._in_flight[id(call_task)] = call_task
+        self._sealed[id(call_task)] = sealed
         stopping = (
             asyncio.create_task(self._stop_workers_past_deadline(runtime)) if self._worker_processes else None
         )

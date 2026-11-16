@@ -663,3 +663,79 @@ def test_a_worker_lost_on_the_stop_is_the_stop(tmp_path, monkeypatch, stop):
     expected = CallCancelled if stop else IsolatedWorkerError
     with pytest.raises(expected):
         asyncio.run(runner.run(SimpleNamespace(scenario_key="trial", scenario_id="id"), _ready_runtime()))
+
+
+def test_a_stop_keeps_the_sealed_call_when_delivering_it_outlasts_the_seal_bound(tmp_path, monkeypatch):
+    """The live path: the scheduler's stop reaches a real chat worker process as its stop signal, the worker seals the
+    call it cut, and the parent delivers it through a platform slower than the seal bound. The call is kept."""
+    from dataclasses import replace
+    from pathlib import Path
+
+    from test_hosted_scheduler import FakeOutbound, FakeScenario, FakeSubGoal, FakeWorldFactory, _pool
+
+    from fi.alk.harness import hosted_scheduler as hs
+    from fi.alk.harness import isolated_process
+
+    ready = tmp_path / "in-the-call"
+    (tmp_path / "stopped_chat_worker.py").write_text(
+        "import asyncio\n"
+        "from pathlib import Path\n"
+        "from fi.alk.harness import chat_call_runner, chat_worker, isolated_process\n"
+        "from fi.alk.harness.hosted_scheduler import CallCancelled, CallOutcome\n"
+        "from fi.alk.harness.outbound import ArtifactKind\n"
+        "async def run(runner, *_args, **_kwargs):\n"
+        f" Path({str(ready)!r}).touch()\n"
+        " try:\n"
+        "  await asyncio.sleep(60)\n"
+        " except asyncio.CancelledError:\n"
+        "  if not runner._context.stop_requested():\n"
+        "   raise\n"
+        "  kept = await runner._adapter.upload_artifact(b'the customer asked', kind=ArtifactKind.TRANSCRIPT)\n"
+        "  partial = CallOutcome(calls=(), turns=1, started_at='s', ended_at='e', duration_ms=1,\n"
+        "   transcript_artifact=kept, stop_reason='user_canceled')\n"
+        "  raise CallCancelled(partial=partial) from None\n"
+        "chat_call_runner.HostedChatCallRunner.run = run\n"
+        "isolated_process.run_worker(chat_worker.main, cancel_on_stop=True)\n"
+    )
+    src = str(Path(isolated_process.__file__).resolve().parents[3])
+    real_worker = isolated_process.run_json_worker
+
+    async def worker(_module, payload, *, environ, **kwargs):
+        environ = {**environ, "PYTHONPATH": os.pathsep.join([str(tmp_path), src])}
+        return await real_worker("stopped_chat_worker", payload, environ=environ, **kwargs)
+
+    class _SlowPlatform(_Adapter):
+        async def upload_artifact(self, data: bytes, **kwargs):
+            # The platform is busy with the stop itself: delivering the sealed call outlasts the seal bound.
+            await asyncio.sleep(1.5)
+            return await super().upload_artifact(data, **kwargs)
+
+    monkeypatch.setattr(chat_worker, "run_json_worker", worker)
+    monkeypatch.setenv(hs.CANCEL_SEAL_ENV, "0.5")
+    stopped = ready.exists
+    adapter = _SlowPlatform()
+    runner = chat_worker.IsolatedChatCallRunner(adapter, replace(_context(tmp_path), stop_requested=stopped))
+
+    async def scenario():
+        outbound = FakeOutbound()
+        pool, _ = _pool(1, outbound=outbound)
+        await pool.start()
+        scheduler = hs.HostedScheduler(
+            pool=pool,
+            world_factory=FakeWorldFactory(),
+            call_runner=runner,
+            outbound=outbound,
+            job_seed=1,
+            cancel_requested=stopped,
+            judge=lambda *_args, **_kwargs: (True, ""),
+        )
+        result = await scheduler.run([FakeScenario("s1", "id-1", sub_goals=[FakeSubGoal("g", lambda w, c: None)])])
+        await pool.close()
+        return result
+
+    (receipt,) = asyncio.run(scenario()).receipts
+    assert receipt.failure.code == "user_canceled"
+    assert receipt.call is not None
+    assert receipt.call.transcript_artifact == "transcript-1"
+    assert receipt.call.stop_reason == "user_canceled"
+    assert adapter.uploads == [b"the customer asked"]
