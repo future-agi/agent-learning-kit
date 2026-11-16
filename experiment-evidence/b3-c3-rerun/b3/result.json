@@ -1,0 +1,582 @@
+{
+  "id": "B3",
+  "label": "ALK sandbox experiment using public APIs — not the production Future AGI platform.",
+  "commit_sha": "023abdf3655435a4b63177b3e24ee4c14df874ca",
+  "status": "pass",
+  "assertions": [
+    {
+      "id": "documents/missing-id",
+      "expression": "isinstance(exc, EnvironmentInputError) and exc.code == 'source_mapping_invalid'; construction and compile both inside try",
+      "status": "pass",
+      "actual": {
+        "exception": "EnvironmentInputError",
+        "code": "source_mapping_invalid",
+        "message": "Environment documents identifiers must be nonempty strings"
+      }
+    },
+    {
+      "id": "documents/null-id",
+      "expression": "isinstance(exc, EnvironmentInputError) and exc.code == 'source_mapping_invalid'; construction and compile both inside try",
+      "status": "pass",
+      "actual": {
+        "exception": "EnvironmentInputError",
+        "code": "source_mapping_invalid",
+        "message": "Environment documents identifiers must be nonempty strings"
+      }
+    },
+    {
+      "id": "documents/blank-id",
+      "expression": "isinstance(exc, EnvironmentInputError) and exc.code == 'source_mapping_invalid'; construction and compile both inside try",
+      "status": "pass",
+      "actual": {
+        "exception": "EnvironmentInputError",
+        "code": "source_mapping_invalid",
+        "message": "Environment documents identifiers must be nonempty strings"
+      }
+    },
+    {
+      "id": "documents/whitespace-id",
+      "expression": "isinstance(exc, EnvironmentInputError) and exc.code == 'source_mapping_invalid'; construction and compile both inside try",
+      "status": "pass",
+      "actual": {
+        "exception": "EnvironmentInputError",
+        "code": "source_mapping_invalid",
+        "message": "Environment documents identifiers must be nonempty strings"
+      }
+    },
+    {
+      "id": "documents/integer-id",
+      "expression": "isinstance(exc, EnvironmentInputError) and exc.code == 'source_mapping_invalid'; construction and compile both inside try",
+      "status": "pass",
+      "actual": {
+        "exception": "EnvironmentInputError",
+        "code": "source_mapping_invalid",
+        "message": "Environment documents identifiers must be nonempty strings"
+      }
+    },
+    {
+      "id": "documents/list-id",
+      "expression": "isinstance(exc, EnvironmentInputError) and exc.code == 'source_mapping_invalid'; construction and compile both inside try",
+      "status": "pass",
+      "actual": {
+        "exception": "EnvironmentInputError",
+        "code": "source_mapping_invalid",
+        "message": "Environment documents identifiers must be nonempty strings"
+      }
+    },
+    {
+      "id": "documents/null-member",
+      "expression": "isinstance(exc, EnvironmentInputError) and exc.code == 'source_mapping_invalid'; construction and compile both inside try",
+      "status": "pass",
+      "actual": {
+        "exception": "EnvironmentInputError",
+        "code": "source_mapping_invalid",
+        "message": "Environment documents entries must be objects"
+      }
+    },
+    {
+      "id": "documents/scalar-string",
+      "expression": "isinstance(exc, EnvironmentInputError) and exc.code == 'source_mapping_invalid'; construction and compile both inside try",
+      "status": "pass",
+      "actual": {
+        "exception": "EnvironmentInputError",
+        "code": "source_mapping_invalid",
+        "message": "Environment documents must be a mapping or sequence"
+      }
+    },
+    {
+      "id": "documents/scalar-null",
+      "expression": "isinstance(exc, EnvironmentInputError) and exc.code == 'source_mapping_invalid'; construction and compile both inside try",
+      "status": "pass",
+      "actual": {
+        "exception": "EnvironmentInputError",
+        "code": "source_mapping_invalid",
+        "message": "Environment documents must be a mapping or sequence"
+      }
+    },
+    {
+      "id": "documents/scalar-integer",
+      "expression": "isinstance(exc, EnvironmentInputError) and exc.code == 'source_mapping_invalid'; construction and compile both inside try",
+      "status": "pass",
+      "actual": {
+        "exception": "EnvironmentInputError",
+        "code": "source_mapping_invalid",
+        "message": "Environment documents must be a mapping or sequence"
+      }
+    },
+    {
+      "id": "documents/blank-map-key",
+      "expression": "isinstance(exc, EnvironmentInputError) and exc.code == 'source_mapping_invalid'; construction and compile both inside try",
+      "status": "pass",
+      "actual": {
+        "exception": "EnvironmentInputError",
+        "code": "source_mapping_invalid",
+        "message": "Environment documents identifiers must be nonempty strings"
+      }
+    },
+    {
+      "id": "documents/whitespace-map-key",
+      "expression": "isinstance(exc, EnvironmentInputError) and exc.code == 'source_mapping_invalid'; construction and compile both inside try",
+      "status": "pass",
+      "actual": {
+        "exception": "EnvironmentInputError",
+        "code": "source_mapping_invalid",
+        "message": "Environment documents identifiers must be nonempty strings"
+      }
+    },
+    {
+      "id": "documents/integer-map-key",
+      "expression": "isinstance(exc, EnvironmentInputError) and exc.code == 'source_mapping_invalid'; construction and compile both inside try",
+      "status": "pass",
+      "actual": {
+        "exception": "EnvironmentInputError",
+        "code": "source_mapping_invalid",
+        "message": "Environment documents identifiers must be nonempty strings"
+      }
+    },
+    {
+      "id": "documents/valid-mapping",
+      "expression": "valid mapping/list compiles and preserves existing environment",
+      "status": "pass",
+      "actual": {
+        "type": "retrieval_memory",
+        "data": {
+          "documents": {
+            "valid-id": {}
+          }
+        }
+      }
+    },
+    {
+      "id": "documents/valid-list",
+      "expression": "valid mapping/list compiles and preserves existing environment",
+      "status": "pass",
+      "actual": {
+        "type": "retrieval_memory",
+        "data": {
+          "documents": [
+            {
+              "id": "valid-id"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "documents/valid-empty-list",
+      "expression": "valid mapping/list compiles and preserves existing environment",
+      "status": "pass",
+      "actual": {
+        "type": "retrieval_memory",
+        "data": {
+          "documents": []
+        }
+      }
+    },
+    {
+      "id": "documents/valid-empty-map",
+      "expression": "valid mapping/list compiles and preserves existing environment",
+      "status": "pass",
+      "actual": {
+        "type": "retrieval_memory",
+        "data": {
+          "documents": {}
+        }
+      }
+    },
+    {
+      "id": "artifacts/missing-id",
+      "expression": "isinstance(exc, EnvironmentInputError) and exc.code == 'source_mapping_invalid'; construction and compile both inside try",
+      "status": "pass",
+      "actual": {
+        "exception": "EnvironmentInputError",
+        "code": "source_mapping_invalid",
+        "message": "Environment artifacts identifiers must be nonempty strings"
+      }
+    },
+    {
+      "id": "artifacts/null-id",
+      "expression": "isinstance(exc, EnvironmentInputError) and exc.code == 'source_mapping_invalid'; construction and compile both inside try",
+      "status": "pass",
+      "actual": {
+        "exception": "EnvironmentInputError",
+        "code": "source_mapping_invalid",
+        "message": "Environment artifacts identifiers must be nonempty strings"
+      }
+    },
+    {
+      "id": "artifacts/blank-id",
+      "expression": "isinstance(exc, EnvironmentInputError) and exc.code == 'source_mapping_invalid'; construction and compile both inside try",
+      "status": "pass",
+      "actual": {
+        "exception": "EnvironmentInputError",
+        "code": "source_mapping_invalid",
+        "message": "Environment artifacts identifiers must be nonempty strings"
+      }
+    },
+    {
+      "id": "artifacts/whitespace-id",
+      "expression": "isinstance(exc, EnvironmentInputError) and exc.code == 'source_mapping_invalid'; construction and compile both inside try",
+      "status": "pass",
+      "actual": {
+        "exception": "EnvironmentInputError",
+        "code": "source_mapping_invalid",
+        "message": "Environment artifacts identifiers must be nonempty strings"
+      }
+    },
+    {
+      "id": "artifacts/integer-id",
+      "expression": "isinstance(exc, EnvironmentInputError) and exc.code == 'source_mapping_invalid'; construction and compile both inside try",
+      "status": "pass",
+      "actual": {
+        "exception": "EnvironmentInputError",
+        "code": "source_mapping_invalid",
+        "message": "Environment artifacts identifiers must be nonempty strings"
+      }
+    },
+    {
+      "id": "artifacts/list-id",
+      "expression": "isinstance(exc, EnvironmentInputError) and exc.code == 'source_mapping_invalid'; construction and compile both inside try",
+      "status": "pass",
+      "actual": {
+        "exception": "EnvironmentInputError",
+        "code": "source_mapping_invalid",
+        "message": "Environment artifacts identifiers must be nonempty strings"
+      }
+    },
+    {
+      "id": "artifacts/null-member",
+      "expression": "isinstance(exc, EnvironmentInputError) and exc.code == 'source_mapping_invalid'; construction and compile both inside try",
+      "status": "pass",
+      "actual": {
+        "exception": "EnvironmentInputError",
+        "code": "source_mapping_invalid",
+        "message": "Environment artifacts entries must be objects"
+      }
+    },
+    {
+      "id": "artifacts/scalar-string",
+      "expression": "isinstance(exc, EnvironmentInputError) and exc.code == 'source_mapping_invalid'; construction and compile both inside try",
+      "status": "pass",
+      "actual": {
+        "exception": "EnvironmentInputError",
+        "code": "source_mapping_invalid",
+        "message": "Environment artifacts must be a mapping or sequence"
+      }
+    },
+    {
+      "id": "artifacts/scalar-null",
+      "expression": "isinstance(exc, EnvironmentInputError) and exc.code == 'source_mapping_invalid'; construction and compile both inside try",
+      "status": "pass",
+      "actual": {
+        "exception": "EnvironmentInputError",
+        "code": "source_mapping_invalid",
+        "message": "Environment artifacts must be a mapping or sequence"
+      }
+    },
+    {
+      "id": "artifacts/scalar-integer",
+      "expression": "isinstance(exc, EnvironmentInputError) and exc.code == 'source_mapping_invalid'; construction and compile both inside try",
+      "status": "pass",
+      "actual": {
+        "exception": "EnvironmentInputError",
+        "code": "source_mapping_invalid",
+        "message": "Environment artifacts must be a mapping or sequence"
+      }
+    },
+    {
+      "id": "artifacts/blank-map-key",
+      "expression": "isinstance(exc, EnvironmentInputError) and exc.code == 'source_mapping_invalid'; construction and compile both inside try",
+      "status": "pass",
+      "actual": {
+        "exception": "EnvironmentInputError",
+        "code": "source_mapping_invalid",
+        "message": "Environment artifacts identifiers must be nonempty strings"
+      }
+    },
+    {
+      "id": "artifacts/whitespace-map-key",
+      "expression": "isinstance(exc, EnvironmentInputError) and exc.code == 'source_mapping_invalid'; construction and compile both inside try",
+      "status": "pass",
+      "actual": {
+        "exception": "EnvironmentInputError",
+        "code": "source_mapping_invalid",
+        "message": "Environment artifacts identifiers must be nonempty strings"
+      }
+    },
+    {
+      "id": "artifacts/integer-map-key",
+      "expression": "isinstance(exc, EnvironmentInputError) and exc.code == 'source_mapping_invalid'; construction and compile both inside try",
+      "status": "pass",
+      "actual": {
+        "exception": "EnvironmentInputError",
+        "code": "source_mapping_invalid",
+        "message": "Environment artifacts identifiers must be nonempty strings"
+      }
+    },
+    {
+      "id": "artifacts/valid-mapping",
+      "expression": "valid mapping/list compiles and preserves existing environment",
+      "status": "pass",
+      "actual": {
+        "type": "structured_artifacts",
+        "data": {
+          "artifacts": {
+            "valid-id": {}
+          }
+        }
+      }
+    },
+    {
+      "id": "artifacts/valid-list",
+      "expression": "valid mapping/list compiles and preserves existing environment",
+      "status": "pass",
+      "actual": {
+        "type": "structured_artifacts",
+        "data": {
+          "artifacts": [
+            {
+              "id": "valid-id"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "artifacts/valid-empty-list",
+      "expression": "valid mapping/list compiles and preserves existing environment",
+      "status": "pass",
+      "actual": {
+        "type": "structured_artifacts",
+        "data": {
+          "artifacts": []
+        }
+      }
+    },
+    {
+      "id": "artifacts/valid-empty-map",
+      "expression": "valid mapping/list compiles and preserves existing environment",
+      "status": "pass",
+      "actual": {
+        "type": "structured_artifacts",
+        "data": {
+          "artifacts": {}
+        }
+      }
+    },
+    {
+      "id": "collision/duplicate-list",
+      "expression": "isinstance(exc, EnvironmentInputError) and exc.code == 'source_mapping_invalid'; construction and compile both inside try",
+      "status": "pass",
+      "actual": {
+        "exception": "EnvironmentInputError",
+        "code": "source_mapping_invalid",
+        "message": "Environment adapter, tool or identifier collision"
+      }
+    },
+    {
+      "id": "collision/cross-adapter",
+      "expression": "isinstance(exc, EnvironmentInputError) and exc.code == 'source_mapping_invalid'; construction and compile both inside try",
+      "status": "pass",
+      "actual": {
+        "exception": "EnvironmentInputError",
+        "code": "source_mapping_invalid",
+        "message": "Environment adapter, tool or identifier collision"
+      }
+    },
+    {
+      "id": "snapshot/valid-roundtrip",
+      "expression": "deserialize_environment_snapshot(serialize_environment_snapshot(reviewed)) == reviewed",
+      "status": "pass",
+      "actual": {
+        "wire_sha256": "e1780657d0de401b57a577dcbb943ec0c4cca311a638f57c6b70e01720477f53"
+      }
+    },
+    {
+      "id": "snapshot/ordinary-envelope-tamper",
+      "expression": "isinstance(exc, EnvironmentInputError) and exc.code == 'source_snapshot_invalid'; construction and compile both inside try",
+      "status": "pass",
+      "actual": {
+        "exception": "EnvironmentInputError",
+        "code": "source_snapshot_invalid",
+        "message": "The source snapshot is invalid or changed"
+      }
+    },
+    {
+      "id": "snapshot/recomputed-unkeyed-digest-classification",
+      "expression": "rewritten reviewer accepted after outer checksum recomputation; classify as authenticity limitation",
+      "status": "pass",
+      "actual": {
+        "accepted_reviewer_id": "attacker-rewritten-reviewer",
+        "classification": "authenticity limitation of caller-owned trusted storage and unkeyed envelope checksum",
+        "source_content_modified": false
+      }
+    },
+    {
+      "id": "snapshot/source-content-tamper-without-rehash",
+      "expression": "isinstance(exc, EnvironmentInputError) and exc.code == 'source_snapshot_invalid'; construction and compile both inside try",
+      "status": "pass",
+      "actual": {
+        "exception": "EnvironmentInputError",
+        "code": "source_snapshot_invalid",
+        "message": "The source snapshot is invalid or changed"
+      }
+    },
+    {
+      "id": "snapshot/source-content-outer-rehash-only",
+      "expression": "isinstance(exc, EnvironmentInputError) and exc.code == 'source_snapshot_invalid'; construction and compile both inside try",
+      "status": "pass",
+      "actual": {
+        "exception": "EnvironmentInputError",
+        "code": "source_snapshot_invalid",
+        "message": "The source snapshot is invalid or changed"
+      }
+    }
+  ],
+  "fixtures": {
+    "reviewed": {
+      "policy_text": "Refund responses must contain \"approved\".\n\nThe response must not contain \"forbidden\".",
+      "policy_visibility": "evaluator_only",
+      "customers.csv": null,
+      "orders.json": null,
+      "review": {
+        "expected_draft_digest": "sha256:0b20d109ed74d8c106539cf29bd3cc48dba4d9f19e2f043ac347e3fabc76d74a",
+        "record_reviews": [],
+        "policy_reviews": [
+          {
+            "source_id": "public-policy",
+            "visibility": "evaluator_only",
+            "rules": [
+              {
+                "proposal": {
+                  "rule_id": "public-policy:page:1:statement:1:rule",
+                  "statement_id": "public-policy:page:1:statement:1",
+                  "kind": "required_behavior",
+                  "check_type": "contains",
+                  "check_arguments": {
+                    "value": "approved"
+                  },
+                  "conflict_group": null,
+                  "status": "supported"
+                },
+                "decision": "accepted"
+              },
+              {
+                "proposal": {
+                  "rule_id": "public-policy:page:1:statement:2:rule",
+                  "statement_id": "public-policy:page:1:statement:2",
+                  "kind": "forbidden_behavior",
+                  "check_type": "not_contains",
+                  "check_arguments": {
+                    "value": "forbidden"
+                  },
+                  "conflict_group": null,
+                  "status": "supported"
+                },
+                "decision": "accepted"
+              }
+            ]
+          }
+        ],
+        "relationships": []
+      },
+      "snapshot_id": "source_snapshot_beb436cf77520136"
+    },
+    "malformed_entries": [
+      {
+        "name": "missing-id",
+        "entries": [
+          {}
+        ]
+      },
+      {
+        "name": "null-id",
+        "entries": [
+          {
+            "id": null
+          }
+        ]
+      },
+      {
+        "name": "blank-id",
+        "entries": [
+          {
+            "id": ""
+          }
+        ]
+      },
+      {
+        "name": "whitespace-id",
+        "entries": [
+          {
+            "id": "  "
+          }
+        ]
+      },
+      {
+        "name": "integer-id",
+        "entries": [
+          {
+            "id": 1
+          }
+        ]
+      },
+      {
+        "name": "list-id",
+        "entries": [
+          {
+            "id": []
+          }
+        ]
+      },
+      {
+        "name": "null-member",
+        "entries": [
+          null
+        ]
+      },
+      {
+        "name": "scalar-string",
+        "entries": "document-id"
+      },
+      {
+        "name": "scalar-null",
+        "entries": null
+      },
+      {
+        "name": "scalar-integer",
+        "entries": 1
+      },
+      {
+        "name": "blank-map-key",
+        "entries": {
+          "": {}
+        }
+      },
+      {
+        "name": "whitespace-map-key",
+        "entries": {
+          " ": {}
+        }
+      },
+      {
+        "name": "integer-map-key",
+        "entries": {
+          "1": {}
+        }
+      }
+    ]
+  },
+  "api_calls": [
+    "try:\n    existing = AgentEnvironmentSpec(adapter, {field: entries})\n    compile_environment_inputs(reviewed, existing_environments=(existing,))\nexcept Exception as exc:\n    assert isinstance(exc, EnvironmentInputError)\n    assert exc.code == 'source_mapping_invalid'",
+    "serialize_environment_snapshot(reviewed)",
+    "deserialize_environment_snapshot(wire)"
+  ],
+  "observations": {},
+  "limitations": [
+    "Unkeyed checksums detect modification relative to trusted digests; they do not authenticate an attacker-writable envelope. Recomputed reviewer metadata checksum acceptance is an authenticity limitation, not a failed source-content integrity assertion.",
+    "Source text tampering remains rejected if only the outer digest is recomputed; no keyed signature or trusted external digest is supplied.",
+    "Controlled local public SDK APIs only; no production platform E2E claim."
+  ],
+  "summary": "41/41 exact assertions passed"
+}

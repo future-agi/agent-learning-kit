@@ -1,0 +1,11 @@
+c3 Overview: exact disclaimer, 15/15 recorded passes, read-only scope
+c3 Fixture 'reviewed' matches result.json exactly
+c3 Fixture 'missing_relationship_target_requirements' matches result.json exactly
+c3 Fixture 'requested_count' matches result.json exactly
+c3 Fixture 'all_blocked_no_tool' matches result.json exactly
+c3 All recorded API excerpts match result.json; full construction harness is available
+c3 All 15 assertion IDs, exact expressions, statuses and observed JSON verified through ledger pagination
+c3 Representative security/readiness evidence isolated with the visible filter
+c3 Every recorded limitation is visible, including non-production scope
+c3 Complete observations object matches original result.json
+c3 No browser JavaScript or console errors; CDN requests blocked

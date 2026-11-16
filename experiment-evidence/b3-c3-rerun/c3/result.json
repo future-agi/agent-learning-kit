@@ -1,0 +1,951 @@
+{
+  "id": "C3",
+  "label": "ALK sandbox experiment using public APIs — not the production Future AGI platform.",
+  "commit_sha": "023abdf3655435a4b63177b3e24ee4c14df874ca",
+  "status": "pass",
+  "assertions": [
+    {
+      "id": "mixed/statuses",
+      "expression": "statuses == ['blocked', 'reviewable', 'reviewable']",
+      "status": "pass",
+      "actual": [
+        "blocked",
+        "reviewable",
+        "reviewable"
+      ]
+    },
+    {
+      "id": "mixed/missing-target",
+      "expression": "first referenced_records == (missing,) and diagnostic.code == 'source_relationship_missing'",
+      "status": "pass",
+      "actual": {
+        "reference": {
+          "source_id": "customers",
+          "record_id": "not-approved"
+        },
+        "diagnostics": [
+          {
+            "code": "source_relationship_missing",
+            "severity": "blocking",
+            "message": "The case references a record absent from the public snapshot",
+            "scenario_id": "source-case-51a21c4c93221f4733421dd1"
+          }
+        ]
+      }
+    },
+    {
+      "id": "mixed/preservation",
+      "expression": "len(drafts) == len(public_scenarios) == len(scenario_payloads) == len(evaluator_specs) == 3",
+      "status": "pass",
+      "actual": {
+        "drafts": 3,
+        "public_scenarios": 3,
+        "payloads": 3,
+        "evaluators": 3
+      }
+    },
+    {
+      "id": "mixed/alignment-0",
+      "expression": "public_scenarios[i] == drafts[i].scenario and payloads[i] == drafts[i].scenario_payload and evaluator_specs[i].scenario_id == drafts[i].scenario_id",
+      "status": "pass",
+      "actual": {
+        "index": 0,
+        "scenario_id": "source-case-51a21c4c93221f4733421dd1",
+        "status": "blocked",
+        "public_name": "source-case-51a21c4c93221f4733421dd1"
+      }
+    },
+    {
+      "id": "mixed/alignment-1",
+      "expression": "public_scenarios[i] == drafts[i].scenario and payloads[i] == drafts[i].scenario_payload and evaluator_specs[i].scenario_id == drafts[i].scenario_id",
+      "status": "pass",
+      "actual": {
+        "index": 1,
+        "scenario_id": "source-case-5e66f6e160af7142fd41d51d",
+        "status": "reviewable",
+        "public_name": "source-case-5e66f6e160af7142fd41d51d"
+      }
+    },
+    {
+      "id": "mixed/alignment-2",
+      "expression": "public_scenarios[i] == drafts[i].scenario and payloads[i] == drafts[i].scenario_payload and evaluator_specs[i].scenario_id == drafts[i].scenario_id",
+      "status": "pass",
+      "actual": {
+        "index": 2,
+        "scenario_id": "source-case-ea103eaa10c4cb3e086fc5c2",
+        "status": "reviewable",
+        "public_name": "source-case-ea103eaa10c4cb3e086fc5c2"
+      }
+    },
+    {
+      "id": "mixed/source-cases",
+      "expression": "source_cases == {'declared': 3, 'covered': 2, 'uncovered': [blocked_id]}",
+      "status": "pass",
+      "actual": {
+        "declared": 3,
+        "covered": 2,
+        "uncovered": [
+          "source-case-51a21c4c93221f4733421dd1"
+        ]
+      }
+    },
+    {
+      "id": "mixed/completion-gate",
+      "expression": "coverage_report(generated).obligation_coverage.rate < 1",
+      "status": "pass",
+      "actual": {
+        "obligation_coverage": {
+          "declared": 7,
+          "covered": 6,
+          "rate": 0.857143,
+          "per_axis": {
+            "intents": {
+              "declared": 0,
+              "covered": 0,
+              "uncovered": []
+            },
+            "personas": {
+              "declared": 0,
+              "covered": 0,
+              "uncovered": []
+            },
+            "perturbations": {
+              "declared": 0,
+              "covered": 0,
+              "uncovered": []
+            },
+            "tool_obligations": {
+              "declared": 4,
+              "covered": 4,
+              "uncovered": []
+            },
+            "delegation_obligations": {
+              "declared": 0,
+              "covered": 0,
+              "uncovered": []
+            },
+            "source_cases": {
+              "declared": 3,
+              "covered": 2,
+              "uncovered": [
+                "source-case-51a21c4c93221f4733421dd1"
+              ]
+            }
+          },
+          "uncovered": [
+            "source_cases:source-case-51a21c4c93221f4733421dd1"
+          ]
+        },
+        "residual_uncovered": {
+          "rate": 0.142857,
+          "method": "declared_obligations"
+        },
+        "metadata": {
+          "library_size": 3
+        }
+      }
+    },
+    {
+      "id": "structural/not-source-readiness",
+      "expression": "public-only rate == 1 and no source_cases axis; full draft-set rate < 1",
+      "status": "pass",
+      "actual": {
+        "obligation_coverage": {
+          "declared": 4,
+          "covered": 4,
+          "rate": 1.0,
+          "per_axis": {
+            "intents": {
+              "declared": 0,
+              "covered": 0,
+              "uncovered": []
+            },
+            "personas": {
+              "declared": 0,
+              "covered": 0,
+              "uncovered": []
+            },
+            "perturbations": {
+              "declared": 0,
+              "covered": 0,
+              "uncovered": []
+            },
+            "tool_obligations": {
+              "declared": 4,
+              "covered": 4,
+              "uncovered": []
+            },
+            "delegation_obligations": {
+              "declared": 0,
+              "covered": 0,
+              "uncovered": []
+            }
+          },
+          "uncovered": []
+        },
+        "residual_uncovered": {
+          "rate": 0.0,
+          "method": "declared_obligations"
+        },
+        "metadata": {
+          "library_size": 3
+        }
+      }
+    },
+    {
+      "id": "all-blocked/no-tool",
+      "expression": "all statuses blocked and no declared tool obligations",
+      "status": "pass",
+      "actual": {
+        "statuses": [
+          "blocked",
+          "blocked",
+          "blocked"
+        ],
+        "coverage": {
+          "obligation_coverage": {
+            "declared": 3,
+            "covered": 0,
+            "rate": 0.0,
+            "per_axis": {
+              "intents": {
+                "declared": 0,
+                "covered": 0,
+                "uncovered": []
+              },
+              "personas": {
+                "declared": 0,
+                "covered": 0,
+                "uncovered": []
+              },
+              "perturbations": {
+                "declared": 0,
+                "covered": 0,
+                "uncovered": []
+              },
+              "tool_obligations": {
+                "declared": 0,
+                "covered": 0,
+                "uncovered": []
+              },
+              "delegation_obligations": {
+                "declared": 0,
+                "covered": 0,
+                "uncovered": []
+              },
+              "source_cases": {
+                "declared": 3,
+                "covered": 0,
+                "uncovered": [
+                  "source-case-182790a48bf2898f13aafdaf",
+                  "source-case-1c164e7911c980c262467841",
+                  "source-case-507a59c7ad6e6caea924fed0"
+                ]
+              }
+            },
+            "uncovered": [
+              "source_cases:source-case-182790a48bf2898f13aafdaf",
+              "source_cases:source-case-1c164e7911c980c262467841",
+              "source_cases:source-case-507a59c7ad6e6caea924fed0"
+            ]
+          },
+          "residual_uncovered": {
+            "rate": 1.0,
+            "method": "declared_obligations"
+          },
+          "metadata": {
+            "library_size": 3
+          }
+        }
+      }
+    },
+    {
+      "id": "all-blocked/zero-readiness",
+      "expression": "declared > 0 and covered == 0 and rate == 0",
+      "status": "pass",
+      "actual": {
+        "declared": 3,
+        "covered": 0,
+        "rate": 0.0,
+        "per_axis": {
+          "intents": {
+            "declared": 0,
+            "covered": 0,
+            "uncovered": []
+          },
+          "personas": {
+            "declared": 0,
+            "covered": 0,
+            "uncovered": []
+          },
+          "perturbations": {
+            "declared": 0,
+            "covered": 0,
+            "uncovered": []
+          },
+          "tool_obligations": {
+            "declared": 0,
+            "covered": 0,
+            "uncovered": []
+          },
+          "delegation_obligations": {
+            "declared": 0,
+            "covered": 0,
+            "uncovered": []
+          },
+          "source_cases": {
+            "declared": 3,
+            "covered": 0,
+            "uncovered": [
+              "source-case-182790a48bf2898f13aafdaf",
+              "source-case-1c164e7911c980c262467841",
+              "source-case-507a59c7ad6e6caea924fed0"
+            ]
+          }
+        },
+        "uncovered": [
+          "source_cases:source-case-182790a48bf2898f13aafdaf",
+          "source_cases:source-case-1c164e7911c980c262467841",
+          "source_cases:source-case-507a59c7ad6e6caea924fed0"
+        ]
+      }
+    },
+    {
+      "id": "private-blocking/starting-state",
+      "expression": "original statuses all reviewable and original coverage rate == 1",
+      "status": "pass",
+      "actual": {
+        "obligation_coverage": {
+          "declared": 8,
+          "covered": 8,
+          "rate": 1.0,
+          "per_axis": {
+            "intents": {
+              "declared": 0,
+              "covered": 0,
+              "uncovered": []
+            },
+            "personas": {
+              "declared": 0,
+              "covered": 0,
+              "uncovered": []
+            },
+            "perturbations": {
+              "declared": 0,
+              "covered": 0,
+              "uncovered": []
+            },
+            "tool_obligations": {
+              "declared": 5,
+              "covered": 5,
+              "uncovered": []
+            },
+            "delegation_obligations": {
+              "declared": 0,
+              "covered": 0,
+              "uncovered": []
+            },
+            "source_cases": {
+              "declared": 3,
+              "covered": 3,
+              "uncovered": []
+            }
+          },
+          "uncovered": []
+        },
+        "residual_uncovered": {
+          "rate": 0.0,
+          "method": "declared_obligations"
+        },
+        "metadata": {
+          "library_size": 3
+        }
+      }
+    },
+    {
+      "id": "private-blocking/public-payloads-identical",
+      "expression": "ready.scenario_payloads == evaluator_blocked.scenario_payloads and ready.public_scenarios == evaluator_blocked.public_scenarios",
+      "status": "pass",
+      "actual": {
+        "before_sha256": [
+          "e6e6fc5d7bd677c8bcea2377d9b87e0d3dcf933672ed62f60cf4924efb2e7e0b",
+          "54f51bf9f10ff7c660fac0add0b5808e04bc9f58c3f75d65e2f2dcc35425c737",
+          "806dfd12c40e2cec1636b68df77df9c962bd19cf4501eaee121f076bc1080839"
+        ],
+        "after_sha256": [
+          "e6e6fc5d7bd677c8bcea2377d9b87e0d3dcf933672ed62f60cf4924efb2e7e0b",
+          "54f51bf9f10ff7c660fac0add0b5808e04bc9f58c3f75d65e2f2dcc35425c737",
+          "806dfd12c40e2cec1636b68df77df9c962bd19cf4501eaee121f076bc1080839"
+        ]
+      }
+    },
+    {
+      "id": "private-blocking/trusted-readiness",
+      "expression": "evaluator-only blocking changes trusted coverage from 1 to 0 and source covered from 3 to 0",
+      "status": "pass",
+      "actual": {
+        "obligation_coverage": {
+          "declared": 8,
+          "covered": 0,
+          "rate": 0.0,
+          "per_axis": {
+            "intents": {
+              "declared": 0,
+              "covered": 0,
+              "uncovered": []
+            },
+            "personas": {
+              "declared": 0,
+              "covered": 0,
+              "uncovered": []
+            },
+            "perturbations": {
+              "declared": 0,
+              "covered": 0,
+              "uncovered": []
+            },
+            "tool_obligations": {
+              "declared": 5,
+              "covered": 0,
+              "uncovered": [
+                "allow:inspect_structured_artifact",
+                "allow:issue_refund",
+                "allow:list_structured_artifacts",
+                "allow:read_document",
+                "allow:search_knowledge_base"
+              ]
+            },
+            "delegation_obligations": {
+              "declared": 0,
+              "covered": 0,
+              "uncovered": []
+            },
+            "source_cases": {
+              "declared": 3,
+              "covered": 0,
+              "uncovered": [
+                "source-case-01be752f6f0380b6e800ee0c",
+                "source-case-781a3735cc174bf723879a24",
+                "source-case-9d76ec892c2df8656d1d71cb"
+              ]
+            }
+          },
+          "uncovered": [
+            "tool_obligations:allow:inspect_structured_artifact",
+            "tool_obligations:allow:issue_refund",
+            "tool_obligations:allow:list_structured_artifacts",
+            "tool_obligations:allow:read_document",
+            "tool_obligations:allow:search_knowledge_base",
+            "source_cases:source-case-01be752f6f0380b6e800ee0c",
+            "source_cases:source-case-781a3735cc174bf723879a24",
+            "source_cases:source-case-9d76ec892c2df8656d1d71cb"
+          ]
+        },
+        "residual_uncovered": {
+          "rate": 1.0,
+          "method": "declared_obligations"
+        },
+        "metadata": {
+          "library_size": 3
+        }
+      }
+    },
+    {
+      "id": "private-blocking/structural-unchanged",
+      "expression": "coverage_report(ready.public_scenarios) == coverage_report(evaluator_blocked.public_scenarios)",
+      "status": "pass",
+      "actual": {
+        "obligation_coverage": {
+          "declared": 5,
+          "covered": 5,
+          "rate": 1.0,
+          "per_axis": {
+            "intents": {
+              "declared": 0,
+              "covered": 0,
+              "uncovered": []
+            },
+            "personas": {
+              "declared": 0,
+              "covered": 0,
+              "uncovered": []
+            },
+            "perturbations": {
+              "declared": 0,
+              "covered": 0,
+              "uncovered": []
+            },
+            "tool_obligations": {
+              "declared": 5,
+              "covered": 5,
+              "uncovered": []
+            },
+            "delegation_obligations": {
+              "declared": 0,
+              "covered": 0,
+              "uncovered": []
+            }
+          },
+          "uncovered": []
+        },
+        "residual_uncovered": {
+          "rate": 0.0,
+          "method": "declared_obligations"
+        },
+        "metadata": {
+          "library_size": 3
+        }
+      }
+    }
+  ],
+  "fixtures": {
+    "reviewed": {
+      "policy_text": "Refund responses must contain \"approved\".\n\nThe response must not contain \"forbidden\".",
+      "policy_visibility": "agent_visible",
+      "customers.csv": "customer_id,name\nC17,Alice\n",
+      "orders.json": [
+        {
+          "buyer_id": "C17",
+          "status": "eligible"
+        }
+      ],
+      "review": {
+        "expected_draft_digest": "sha256:e8c137c3ac568c3e96536fa97ffa6c3f87de9ed1be7469632c9e1b7fc2bddc8a",
+        "record_reviews": [
+          {
+            "source_id": "customers",
+            "visibility": "agent_visible",
+            "personal_data_mode": "synthetic_replace",
+            "fields": [
+              {
+                "source_field": "customer_id",
+                "target_field": "customer_id",
+                "data_type": "string",
+                "is_stable_id": true,
+                "personal_data": true
+              },
+              {
+                "source_field": "name",
+                "target_field": "name",
+                "data_type": "string",
+                "is_stable_id": false,
+                "personal_data": true
+              }
+            ]
+          },
+          {
+            "source_id": "orders",
+            "visibility": "agent_visible",
+            "personal_data_mode": "synthetic_replace",
+            "fields": [
+              {
+                "source_field": "buyer_id",
+                "target_field": "customer_id",
+                "data_type": "string",
+                "is_stable_id": true,
+                "personal_data": true
+              },
+              {
+                "source_field": "status",
+                "target_field": "status",
+                "data_type": "string",
+                "is_stable_id": false,
+                "personal_data": false
+              }
+            ]
+          }
+        ],
+        "policy_reviews": [
+          {
+            "source_id": "public-policy",
+            "visibility": "agent_visible",
+            "rules": [
+              {
+                "proposal": {
+                  "rule_id": "public-policy:page:1:statement:1:rule",
+                  "statement_id": "public-policy:page:1:statement:1",
+                  "kind": "required_behavior",
+                  "check_type": "contains",
+                  "check_arguments": {
+                    "value": "approved"
+                  },
+                  "conflict_group": null,
+                  "status": "supported"
+                },
+                "decision": "accepted"
+              },
+              {
+                "proposal": {
+                  "rule_id": "public-policy:page:1:statement:2:rule",
+                  "statement_id": "public-policy:page:1:statement:2",
+                  "kind": "forbidden_behavior",
+                  "check_type": "not_contains",
+                  "check_arguments": {
+                    "value": "forbidden"
+                  },
+                  "conflict_group": null,
+                  "status": "supported"
+                },
+                "decision": "accepted"
+              }
+            ]
+          }
+        ],
+        "relationships": [
+          {
+            "from_source_id": "orders",
+            "from_field": "customer_id",
+            "to_source_id": "customers",
+            "to_field": "customer_id"
+          }
+        ]
+      },
+      "snapshot_id": "source_snapshot_53da51dd3de7df20"
+    },
+    "missing_relationship_target_requirements": {
+      "task": "Handle a refund",
+      "declared_tools": [],
+      "required_record_ids": [],
+      "required_records": [
+        {
+          "source_id": "customers",
+          "record_id": "not-approved"
+        },
+        {
+          "source_id": "customers",
+          "record_id": "synthetic_0001"
+        }
+      ],
+      "required_tools": [],
+      "evidence_paths": [
+        "response"
+      ]
+    },
+    "requested_count": 3,
+    "all_blocked_no_tool": {
+      "policy_text": "Explain the policy courteously.",
+      "policy_visibility": "evaluator_only",
+      "customers.csv": null,
+      "orders.json": null,
+      "review": {
+        "expected_draft_digest": "sha256:a57068df93421cc39db6a6b76b85f3c4f5a354ea066ea91644de01bb7ebe7f5f",
+        "record_reviews": [],
+        "policy_reviews": [
+          {
+            "source_id": "public-policy",
+            "visibility": "evaluator_only",
+            "rules": [
+              {
+                "proposal": {
+                  "rule_id": "public-policy:page:1:statement:1:rule",
+                  "statement_id": "public-policy:page:1:statement:1",
+                  "kind": "required_behavior",
+                  "check_type": null,
+                  "check_arguments": {},
+                  "conflict_group": null,
+                  "status": "unsupported"
+                },
+                "decision": "reference_only"
+              }
+            ]
+          }
+        ],
+        "relationships": []
+      },
+      "snapshot_id": "source_snapshot_59a8676125de5f1e"
+    }
+  },
+  "api_calls": [
+    "generate_source_scenarios(reviewed, environment_requirements=requirements, requested_count=3)",
+    "coverage_report(generated)  # complete GeneratedScenarioDraftSet: completion gate",
+    "coverage_report(generated.public_scenarios)  # structural only, not source readiness",
+    "coverage_report(all_blocked)  # default axes; no declared tools",
+    "replace(draft, evaluator=replace(draft.evaluator, diagnostics=(ScenarioDiagnostic('private_evidence_missing', 'blocking', 'Missing evidence'),)))",
+    "coverage_report(evaluator_blocked)"
+  ],
+  "observations": {
+    "mixed_trusted": {
+      "obligation_coverage": {
+        "declared": 7,
+        "covered": 6,
+        "rate": 0.857143,
+        "per_axis": {
+          "intents": {
+            "declared": 0,
+            "covered": 0,
+            "uncovered": []
+          },
+          "personas": {
+            "declared": 0,
+            "covered": 0,
+            "uncovered": []
+          },
+          "perturbations": {
+            "declared": 0,
+            "covered": 0,
+            "uncovered": []
+          },
+          "tool_obligations": {
+            "declared": 4,
+            "covered": 4,
+            "uncovered": []
+          },
+          "delegation_obligations": {
+            "declared": 0,
+            "covered": 0,
+            "uncovered": []
+          },
+          "source_cases": {
+            "declared": 3,
+            "covered": 2,
+            "uncovered": [
+              "source-case-51a21c4c93221f4733421dd1"
+            ]
+          }
+        },
+        "uncovered": [
+          "source_cases:source-case-51a21c4c93221f4733421dd1"
+        ]
+      },
+      "residual_uncovered": {
+        "rate": 0.142857,
+        "method": "declared_obligations"
+      },
+      "metadata": {
+        "library_size": 3
+      }
+    },
+    "mixed_structural": {
+      "obligation_coverage": {
+        "declared": 4,
+        "covered": 4,
+        "rate": 1.0,
+        "per_axis": {
+          "intents": {
+            "declared": 0,
+            "covered": 0,
+            "uncovered": []
+          },
+          "personas": {
+            "declared": 0,
+            "covered": 0,
+            "uncovered": []
+          },
+          "perturbations": {
+            "declared": 0,
+            "covered": 0,
+            "uncovered": []
+          },
+          "tool_obligations": {
+            "declared": 4,
+            "covered": 4,
+            "uncovered": []
+          },
+          "delegation_obligations": {
+            "declared": 0,
+            "covered": 0,
+            "uncovered": []
+          }
+        },
+        "uncovered": []
+      },
+      "residual_uncovered": {
+        "rate": 0.0,
+        "method": "declared_obligations"
+      },
+      "metadata": {
+        "library_size": 3
+      }
+    },
+    "all_blocked": {
+      "obligation_coverage": {
+        "declared": 3,
+        "covered": 0,
+        "rate": 0.0,
+        "per_axis": {
+          "intents": {
+            "declared": 0,
+            "covered": 0,
+            "uncovered": []
+          },
+          "personas": {
+            "declared": 0,
+            "covered": 0,
+            "uncovered": []
+          },
+          "perturbations": {
+            "declared": 0,
+            "covered": 0,
+            "uncovered": []
+          },
+          "tool_obligations": {
+            "declared": 0,
+            "covered": 0,
+            "uncovered": []
+          },
+          "delegation_obligations": {
+            "declared": 0,
+            "covered": 0,
+            "uncovered": []
+          },
+          "source_cases": {
+            "declared": 3,
+            "covered": 0,
+            "uncovered": [
+              "source-case-182790a48bf2898f13aafdaf",
+              "source-case-1c164e7911c980c262467841",
+              "source-case-507a59c7ad6e6caea924fed0"
+            ]
+          }
+        },
+        "uncovered": [
+          "source_cases:source-case-182790a48bf2898f13aafdaf",
+          "source_cases:source-case-1c164e7911c980c262467841",
+          "source_cases:source-case-507a59c7ad6e6caea924fed0"
+        ]
+      },
+      "residual_uncovered": {
+        "rate": 1.0,
+        "method": "declared_obligations"
+      },
+      "metadata": {
+        "library_size": 3
+      }
+    },
+    "private_before": {
+      "obligation_coverage": {
+        "declared": 8,
+        "covered": 8,
+        "rate": 1.0,
+        "per_axis": {
+          "intents": {
+            "declared": 0,
+            "covered": 0,
+            "uncovered": []
+          },
+          "personas": {
+            "declared": 0,
+            "covered": 0,
+            "uncovered": []
+          },
+          "perturbations": {
+            "declared": 0,
+            "covered": 0,
+            "uncovered": []
+          },
+          "tool_obligations": {
+            "declared": 5,
+            "covered": 5,
+            "uncovered": []
+          },
+          "delegation_obligations": {
+            "declared": 0,
+            "covered": 0,
+            "uncovered": []
+          },
+          "source_cases": {
+            "declared": 3,
+            "covered": 3,
+            "uncovered": []
+          }
+        },
+        "uncovered": []
+      },
+      "residual_uncovered": {
+        "rate": 0.0,
+        "method": "declared_obligations"
+      },
+      "metadata": {
+        "library_size": 3
+      }
+    },
+    "private_after": {
+      "obligation_coverage": {
+        "declared": 8,
+        "covered": 0,
+        "rate": 0.0,
+        "per_axis": {
+          "intents": {
+            "declared": 0,
+            "covered": 0,
+            "uncovered": []
+          },
+          "personas": {
+            "declared": 0,
+            "covered": 0,
+            "uncovered": []
+          },
+          "perturbations": {
+            "declared": 0,
+            "covered": 0,
+            "uncovered": []
+          },
+          "tool_obligations": {
+            "declared": 5,
+            "covered": 0,
+            "uncovered": [
+              "allow:inspect_structured_artifact",
+              "allow:issue_refund",
+              "allow:list_structured_artifacts",
+              "allow:read_document",
+              "allow:search_knowledge_base"
+            ]
+          },
+          "delegation_obligations": {
+            "declared": 0,
+            "covered": 0,
+            "uncovered": []
+          },
+          "source_cases": {
+            "declared": 3,
+            "covered": 0,
+            "uncovered": [
+              "source-case-01be752f6f0380b6e800ee0c",
+              "source-case-781a3735cc174bf723879a24",
+              "source-case-9d76ec892c2df8656d1d71cb"
+            ]
+          }
+        },
+        "uncovered": [
+          "tool_obligations:allow:inspect_structured_artifact",
+          "tool_obligations:allow:issue_refund",
+          "tool_obligations:allow:list_structured_artifacts",
+          "tool_obligations:allow:read_document",
+          "tool_obligations:allow:search_knowledge_base",
+          "source_cases:source-case-01be752f6f0380b6e800ee0c",
+          "source_cases:source-case-781a3735cc174bf723879a24",
+          "source_cases:source-case-9d76ec892c2df8656d1d71cb"
+        ]
+      },
+      "residual_uncovered": {
+        "rate": 1.0,
+        "method": "declared_obligations"
+      },
+      "metadata": {
+        "library_size": 3
+      }
+    },
+    "mixed_public_payloads": [
+      "{\"attack_surface\":null,\"attack_type\":null,\"constraints\":{\"declared_tools\":[\"inspect_structured_artifact\",\"list_structured_artifacts\",\"read_document\",\"search_knowledge_base\"],\"max_user_knowledge\":[],\"observable_state\":{\"source_facts\":[]}},\"coverage\":null,\"dataset\":[{\"attack\":null,\"behavior_policy\":null,\"identity\":null,\"knowledge\":[],\"outcome\":\"Resolve the request using approved source evidence.\",\"persona\":{\"citations\":[{\"page\":1,\"row\":null,\"source_id\":\"public-policy\"}],\"policy_reference\":\"Refund responses must contain \\\"approved\\\".\",\"starting_facts\":[]},\"provenance\":null,\"situation\":\"Ask for a compliant resolution using the quoted policy and starting facts.\",\"temperament\":null,\"version\":null}],\"description\":\"Handle a refund [success] Refund responses must contain \\\"approved\\\".\",\"escalation\":null,\"goal\":null,\"kind\":\"task\",\"name\":\"source-case-51a21c4c93221f4733421dd1\",\"parent_version\":null,\"verification\":null,\"version\":\"sha256:26e8d8cf6bf825dd8ab6b564a0f109564a0f78e78142e1438f2a2f04c69f1cf9\"}",
+      "{\"attack_surface\":null,\"attack_type\":null,\"constraints\":{\"declared_tools\":[\"inspect_structured_artifact\",\"list_structured_artifacts\",\"read_document\",\"search_knowledge_base\"],\"max_user_knowledge\":[],\"observable_state\":{\"source_facts\":[{\"field\":\"customer_id\",\"record_id\":\"synthetic_0001\",\"source_id\":\"customers\",\"value\":\"synthetic_0001\"},{\"field\":\"name\",\"record_id\":\"synthetic_0001\",\"source_id\":\"customers\",\"value\":\"Person 0001\"}]}},\"coverage\":null,\"dataset\":[{\"attack\":null,\"behavior_policy\":null,\"identity\":null,\"knowledge\":[],\"outcome\":\"Resolve the request using approved source evidence.\",\"persona\":{\"citations\":[{\"page\":null,\"row\":2,\"source_id\":\"customers\"},{\"page\":1,\"row\":null,\"source_id\":\"public-policy\"}],\"policy_reference\":\"The response must not contain \\\"forbidden\\\".\",\"starting_facts\":[{\"field\":\"customer_id\",\"record_id\":\"synthetic_0001\",\"source_id\":\"customers\",\"value\":\"synthetic_0001\"},{\"field\":\"name\",\"record_id\":\"synthetic_0001\",\"source_id\":\"customers\",\"value\":\"Person 0001\"}]},\"provenance\":null,\"situation\":\"Ask for the prohibited or ineligible action described by the quoted policy.\",\"temperament\":null,\"version\":null}],\"description\":\"Handle a refund [refusal] The response must not contain \\\"forbidden\\\".\",\"escalation\":null,\"goal\":null,\"kind\":\"task\",\"name\":\"source-case-5e66f6e160af7142fd41d51d\",\"parent_version\":null,\"verification\":null,\"version\":\"sha256:baca12da92b289fac6932160e93343bfd25fa40276c9806597eb500b1c10ba8b\"}",
+      "{\"attack_surface\":null,\"attack_type\":null,\"constraints\":{\"declared_tools\":[\"inspect_structured_artifact\",\"list_structured_artifacts\",\"read_document\",\"search_knowledge_base\"],\"max_user_knowledge\":[],\"observable_state\":{\"source_facts\":[{\"field\":\"customer_id\",\"record_id\":\"synthetic_0001\",\"source_id\":\"customers\",\"value\":\"synthetic_0001\"},{\"field\":\"name\",\"record_id\":\"synthetic_0001\",\"source_id\":\"customers\",\"value\":\"Person 0001\"}]}},\"coverage\":null,\"dataset\":[{\"attack\":null,\"behavior_policy\":null,\"identity\":null,\"knowledge\":[],\"outcome\":\"Resolve the request using approved source evidence.\",\"persona\":{\"citations\":[{\"page\":null,\"row\":2,\"source_id\":\"customers\"},{\"page\":1,\"row\":null,\"source_id\":\"public-policy\"}],\"policy_reference\":\"Refund responses must contain \\\"approved\\\".\",\"starting_facts\":[{\"field\":\"customer_id\",\"record_id\":\"synthetic_0001\",\"source_id\":\"customers\",\"value\":\"synthetic_0001\"},{\"field\":\"name\",\"record_id\":\"synthetic_0001\",\"source_id\":\"customers\",\"value\":\"Person 0001\"}]},\"provenance\":null,\"situation\":\"Use this deliberately incorrect candidate response \\\"incorrect\\\"\",\"temperament\":null,\"version\":null}],\"description\":\"Handle a refund [negative_control] Refund responses must contain \\\"approved\\\".\",\"escalation\":null,\"goal\":null,\"kind\":\"task\",\"name\":\"source-case-ea103eaa10c4cb3e086fc5c2\",\"parent_version\":null,\"verification\":null,\"version\":\"sha256:80ac1e7a930ab956f8d2e2dc9d86262887a927681545b075dce50099fa228ec5\"}"
+    ],
+    "private_before_payloads": [
+      "{\"attack_surface\":null,\"attack_type\":null,\"constraints\":{\"declared_tools\":[\"inspect_structured_artifact\",\"issue_refund\",\"list_structured_artifacts\",\"read_document\",\"search_knowledge_base\"],\"max_user_knowledge\":[],\"observable_state\":{\"source_facts\":[{\"field\":\"customer_id\",\"record_id\":\"synthetic_0001\",\"source_id\":\"customers\",\"value\":\"synthetic_0001\"},{\"field\":\"name\",\"record_id\":\"synthetic_0001\",\"source_id\":\"customers\",\"value\":\"Person 0001\"}]}},\"coverage\":null,\"dataset\":[{\"attack\":null,\"behavior_policy\":null,\"identity\":null,\"knowledge\":[],\"outcome\":\"Resolve the request using approved source evidence.\",\"persona\":{\"citations\":[{\"page\":null,\"row\":2,\"source_id\":\"customers\"},{\"page\":1,\"row\":null,\"source_id\":\"public-policy\"}],\"policy_reference\":\"Refund responses must contain \\\"approved\\\".\",\"starting_facts\":[{\"field\":\"customer_id\",\"record_id\":\"synthetic_0001\",\"source_id\":\"customers\",\"value\":\"synthetic_0001\"},{\"field\":\"name\",\"record_id\":\"synthetic_0001\",\"source_id\":\"customers\",\"value\":\"Person 0001\"}]},\"provenance\":null,\"situation\":\"Ask for a compliant resolution using the quoted policy and starting facts.\",\"temperament\":null,\"version\":null}],\"description\":\"Handle a refund [success] Refund responses must contain \\\"approved\\\".\",\"escalation\":null,\"goal\":null,\"kind\":\"task\",\"name\":\"source-case-01be752f6f0380b6e800ee0c\",\"parent_version\":null,\"verification\":null,\"version\":\"sha256:6a94972cb3c626dccc7ab1f4f46e574cde6700554afb039b9ce3bf562a29aabb\"}",
+      "{\"attack_surface\":null,\"attack_type\":null,\"constraints\":{\"declared_tools\":[\"inspect_structured_artifact\",\"issue_refund\",\"list_structured_artifacts\",\"read_document\",\"search_knowledge_base\"],\"max_user_knowledge\":[],\"observable_state\":{\"source_facts\":[{\"field\":\"customer_id\",\"record_id\":\"synthetic_0001\",\"source_id\":\"orders\",\"value\":\"synthetic_0001\"},{\"field\":\"status\",\"record_id\":\"synthetic_0001\",\"source_id\":\"orders\",\"value\":\"eligible\"},{\"field\":\"customer_id\",\"record_id\":\"synthetic_0001\",\"source_id\":\"customers\",\"value\":\"synthetic_0001\"},{\"field\":\"name\",\"record_id\":\"synthetic_0001\",\"source_id\":\"customers\",\"value\":\"Person 0001\"}]}},\"coverage\":null,\"dataset\":[{\"attack\":null,\"behavior_policy\":null,\"identity\":null,\"knowledge\":[],\"outcome\":\"Resolve the request using approved source evidence.\",\"persona\":{\"citations\":[{\"page\":null,\"row\":1,\"source_id\":\"orders\"},{\"page\":null,\"row\":2,\"source_id\":\"customers\"},{\"page\":1,\"row\":null,\"source_id\":\"public-policy\"}],\"policy_reference\":\"The response must not contain \\\"forbidden\\\".\",\"starting_facts\":[{\"field\":\"customer_id\",\"record_id\":\"synthetic_0001\",\"source_id\":\"orders\",\"value\":\"synthetic_0001\"},{\"field\":\"status\",\"record_id\":\"synthetic_0001\",\"source_id\":\"orders\",\"value\":\"eligible\"},{\"field\":\"customer_id\",\"record_id\":\"synthetic_0001\",\"source_id\":\"customers\",\"value\":\"synthetic_0001\"},{\"field\":\"name\",\"record_id\":\"synthetic_0001\",\"source_id\":\"customers\",\"value\":\"Person 0001\"}]},\"provenance\":null,\"situation\":\"Ask for the prohibited or ineligible action described by the quoted policy.\",\"temperament\":null,\"version\":null}],\"description\":\"Handle a refund [refusal] The response must not contain \\\"forbidden\\\".\",\"escalation\":null,\"goal\":null,\"kind\":\"task\",\"name\":\"source-case-781a3735cc174bf723879a24\",\"parent_version\":null,\"verification\":null,\"version\":\"sha256:ae61347fea5072761b80aacecf7053dd34d71426515091ef149010e5c2751301\"}",
+      "{\"attack_surface\":null,\"attack_type\":null,\"constraints\":{\"declared_tools\":[\"inspect_structured_artifact\",\"issue_refund\",\"list_structured_artifacts\",\"read_document\",\"search_knowledge_base\"],\"max_user_knowledge\":[],\"observable_state\":{\"source_facts\":[{\"field\":\"customer_id\",\"record_id\":\"synthetic_0001\",\"source_id\":\"customers\",\"value\":\"synthetic_0001\"},{\"field\":\"name\",\"record_id\":\"synthetic_0001\",\"source_id\":\"customers\",\"value\":\"Person 0001\"}]}},\"coverage\":null,\"dataset\":[{\"attack\":null,\"behavior_policy\":null,\"identity\":null,\"knowledge\":[],\"outcome\":\"Resolve the request using approved source evidence.\",\"persona\":{\"citations\":[{\"page\":null,\"row\":2,\"source_id\":\"customers\"},{\"page\":1,\"row\":null,\"source_id\":\"public-policy\"}],\"policy_reference\":\"Refund responses must contain \\\"approved\\\".\",\"starting_facts\":[{\"field\":\"customer_id\",\"record_id\":\"synthetic_0001\",\"source_id\":\"customers\",\"value\":\"synthetic_0001\"},{\"field\":\"name\",\"record_id\":\"synthetic_0001\",\"source_id\":\"customers\",\"value\":\"Person 0001\"}]},\"provenance\":null,\"situation\":\"Use this deliberately incorrect candidate response \\\"incorrect\\\"\",\"temperament\":null,\"version\":null}],\"description\":\"Handle a refund [negative_control] Refund responses must contain \\\"approved\\\".\",\"escalation\":null,\"goal\":null,\"kind\":\"task\",\"name\":\"source-case-9d76ec892c2df8656d1d71cb\",\"parent_version\":null,\"verification\":null,\"version\":\"sha256:ad1738bf6cb9cefdeda936f42a6846857783f0fb9c146ae6c11a9568025e5142\"}"
+    ],
+    "private_after_payloads": [
+      "{\"attack_surface\":null,\"attack_type\":null,\"constraints\":{\"declared_tools\":[\"inspect_structured_artifact\",\"issue_refund\",\"list_structured_artifacts\",\"read_document\",\"search_knowledge_base\"],\"max_user_knowledge\":[],\"observable_state\":{\"source_facts\":[{\"field\":\"customer_id\",\"record_id\":\"synthetic_0001\",\"source_id\":\"customers\",\"value\":\"synthetic_0001\"},{\"field\":\"name\",\"record_id\":\"synthetic_0001\",\"source_id\":\"customers\",\"value\":\"Person 0001\"}]}},\"coverage\":null,\"dataset\":[{\"attack\":null,\"behavior_policy\":null,\"identity\":null,\"knowledge\":[],\"outcome\":\"Resolve the request using approved source evidence.\",\"persona\":{\"citations\":[{\"page\":null,\"row\":2,\"source_id\":\"customers\"},{\"page\":1,\"row\":null,\"source_id\":\"public-policy\"}],\"policy_reference\":\"Refund responses must contain \\\"approved\\\".\",\"starting_facts\":[{\"field\":\"customer_id\",\"record_id\":\"synthetic_0001\",\"source_id\":\"customers\",\"value\":\"synthetic_0001\"},{\"field\":\"name\",\"record_id\":\"synthetic_0001\",\"source_id\":\"customers\",\"value\":\"Person 0001\"}]},\"provenance\":null,\"situation\":\"Ask for a compliant resolution using the quoted policy and starting facts.\",\"temperament\":null,\"version\":null}],\"description\":\"Handle a refund [success] Refund responses must contain \\\"approved\\\".\",\"escalation\":null,\"goal\":null,\"kind\":\"task\",\"name\":\"source-case-01be752f6f0380b6e800ee0c\",\"parent_version\":null,\"verification\":null,\"version\":\"sha256:6a94972cb3c626dccc7ab1f4f46e574cde6700554afb039b9ce3bf562a29aabb\"}",
+      "{\"attack_surface\":null,\"attack_type\":null,\"constraints\":{\"declared_tools\":[\"inspect_structured_artifact\",\"issue_refund\",\"list_structured_artifacts\",\"read_document\",\"search_knowledge_base\"],\"max_user_knowledge\":[],\"observable_state\":{\"source_facts\":[{\"field\":\"customer_id\",\"record_id\":\"synthetic_0001\",\"source_id\":\"orders\",\"value\":\"synthetic_0001\"},{\"field\":\"status\",\"record_id\":\"synthetic_0001\",\"source_id\":\"orders\",\"value\":\"eligible\"},{\"field\":\"customer_id\",\"record_id\":\"synthetic_0001\",\"source_id\":\"customers\",\"value\":\"synthetic_0001\"},{\"field\":\"name\",\"record_id\":\"synthetic_0001\",\"source_id\":\"customers\",\"value\":\"Person 0001\"}]}},\"coverage\":null,\"dataset\":[{\"attack\":null,\"behavior_policy\":null,\"identity\":null,\"knowledge\":[],\"outcome\":\"Resolve the request using approved source evidence.\",\"persona\":{\"citations\":[{\"page\":null,\"row\":1,\"source_id\":\"orders\"},{\"page\":null,\"row\":2,\"source_id\":\"customers\"},{\"page\":1,\"row\":null,\"source_id\":\"public-policy\"}],\"policy_reference\":\"The response must not contain \\\"forbidden\\\".\",\"starting_facts\":[{\"field\":\"customer_id\",\"record_id\":\"synthetic_0001\",\"source_id\":\"orders\",\"value\":\"synthetic_0001\"},{\"field\":\"status\",\"record_id\":\"synthetic_0001\",\"source_id\":\"orders\",\"value\":\"eligible\"},{\"field\":\"customer_id\",\"record_id\":\"synthetic_0001\",\"source_id\":\"customers\",\"value\":\"synthetic_0001\"},{\"field\":\"name\",\"record_id\":\"synthetic_0001\",\"source_id\":\"customers\",\"value\":\"Person 0001\"}]},\"provenance\":null,\"situation\":\"Ask for the prohibited or ineligible action described by the quoted policy.\",\"temperament\":null,\"version\":null}],\"description\":\"Handle a refund [refusal] The response must not contain \\\"forbidden\\\".\",\"escalation\":null,\"goal\":null,\"kind\":\"task\",\"name\":\"source-case-781a3735cc174bf723879a24\",\"parent_version\":null,\"verification\":null,\"version\":\"sha256:ae61347fea5072761b80aacecf7053dd34d71426515091ef149010e5c2751301\"}",
+      "{\"attack_surface\":null,\"attack_type\":null,\"constraints\":{\"declared_tools\":[\"inspect_structured_artifact\",\"issue_refund\",\"list_structured_artifacts\",\"read_document\",\"search_knowledge_base\"],\"max_user_knowledge\":[],\"observable_state\":{\"source_facts\":[{\"field\":\"customer_id\",\"record_id\":\"synthetic_0001\",\"source_id\":\"customers\",\"value\":\"synthetic_0001\"},{\"field\":\"name\",\"record_id\":\"synthetic_0001\",\"source_id\":\"customers\",\"value\":\"Person 0001\"}]}},\"coverage\":null,\"dataset\":[{\"attack\":null,\"behavior_policy\":null,\"identity\":null,\"knowledge\":[],\"outcome\":\"Resolve the request using approved source evidence.\",\"persona\":{\"citations\":[{\"page\":null,\"row\":2,\"source_id\":\"customers\"},{\"page\":1,\"row\":null,\"source_id\":\"public-policy\"}],\"policy_reference\":\"Refund responses must contain \\\"approved\\\".\",\"starting_facts\":[{\"field\":\"customer_id\",\"record_id\":\"synthetic_0001\",\"source_id\":\"customers\",\"value\":\"synthetic_0001\"},{\"field\":\"name\",\"record_id\":\"synthetic_0001\",\"source_id\":\"customers\",\"value\":\"Person 0001\"}]},\"provenance\":null,\"situation\":\"Use this deliberately incorrect candidate response \\\"incorrect\\\"\",\"temperament\":null,\"version\":null}],\"description\":\"Handle a refund [negative_control] Refund responses must contain \\\"approved\\\".\",\"escalation\":null,\"goal\":null,\"kind\":\"task\",\"name\":\"source-case-9d76ec892c2df8656d1d71cb\",\"parent_version\":null,\"verification\":null,\"version\":\"sha256:ad1738bf6cb9cefdeda936f42a6846857783f0fb9c146ae6c11a9568025e5142\"}"
+    ]
+  },
+  "limitations": [
+    "coverage_report(generated.public_scenarios) intentionally measures structure only and must not be interpreted as source readiness; use the complete GeneratedScenarioDraftSet for the completion gate.",
+    "Draft readiness and structural coverage do not measure executed agent success.",
+    "Evaluator blocking is injected into immutable test fixtures via dataclasses.replace; no product code is changed.",
+    "Controlled local public SDK APIs only; no production platform E2E claim."
+  ],
+  "summary": "15/15 exact assertions passed"
+}

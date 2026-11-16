@@ -1,0 +1,5 @@
+Collecting uv==0.9.10
+  Downloading uv-0.9.10-py3-none-manylinux_2_17_x86_64.manylinux2014_x86_64.whl (21.4 MB)
+     ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 21.4/21.4 MB 80.6 MB/s eta 0:00:00
+Installing collected packages: uv
+Successfully installed uv-0.9.10

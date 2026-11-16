@@ -1,0 +1,14 @@
+[
+  {
+    "url": "https://static.devin.ai/artifact-kit/cc8965d841fb2ec5/ds-kit.js",
+    "sha256": "4d31eed86a9fef802ad3a2ededd731aa5bad95faa11c9fd942c48e1d0e9d20c5",
+    "bytes": 1705146,
+    "packaging": "embedded inline in portable dashboard.html"
+  },
+  {
+    "url": "https://static.devin.ai/artifact-kit/cc8965d841fb2ec5/ds-kit.css",
+    "sha256": "052282dcbebfef6fa4480752b2fc4fa2ef304040c8d78f8c1af61b540f2001a3",
+    "bytes": 110910,
+    "packaging": "embedded inline in portable dashboard.html"
+  }
+]

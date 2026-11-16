@@ -1,0 +1,1049 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="generator" content="Devin artifact kit" />
+    <meta name="artifact-built-at" content="2026-11-16T09:55:26Z" />
+    <title>Artifact</title>
+    <script>
+      // A network that blocks the kit's host (or hands back a block page for it) leaves the page blank; say so instead. Styled like the
+      // ds error alert card (ChatAlertCard variant="error", no bar), values hardcoded: the kit CSS is what failed.
+      function artifactKitFailed() {
+        function show() {
+          if (document.getElementById("artifact-kit-notice")) return;
+          document.documentElement.style.colorScheme = "light";
+          var notice = document.createElement("div");
+          notice.id = "artifact-kit-notice";
+          notice.setAttribute("role", "alert");
+          notice.style.cssText =
+            "box-sizing:border-box;display:flex;align-items:flex-start;gap:6px;max-width:960px;margin:0 auto;padding:32px 24px 0;" +
+            "font:13px/18px Inter,ui-sans-serif,system-ui,sans-serif;letter-spacing:-0.005em;color:rgb(25 25 25)";
+          var ns = "http://www.w3.org/2000/svg";
+          var icon = document.createElementNS(ns, "svg");
+          icon.setAttribute("viewBox", "0 0 24 24");
+          icon.setAttribute("fill", "rgb(245 59 58)");
+          icon.setAttribute("aria-hidden", "true");
+          icon.style.cssText = "width:14px;height:14px;flex-shrink:0;margin-top:2px";
+          var path = document.createElementNS(ns, "path");
+          path.setAttribute("fill-rule", "evenodd");
+          path.setAttribute("clip-rule", "evenodd");
+          path.setAttribute(
+            "d",
+            "M12 2C17.5228 2 22 6.47715 22 12C22 17.5228 17.5228 22 12 22C6.47715 22 2 17.5228 2 12C2 6.47715 6.47715 2 12 2ZM12 15C11.4477 15 11 15.4477 11 16C11 16.5523 11.4477 17 12 17C12.5523 17 13 16.5523 13 16C13 15.4477 12.5523 15 12 15ZM12 7C11.5858 7 11.25 7.33579 11.25 7.75V12.25C11.25 12.6642 11.5858 13 12 13C12.4142 13 12.75 12.6642 12.75 12.25V7.75C12.75 7.33579 12.4142 7 12 7Z"
+          );
+          icon.appendChild(path);
+          var text = document.createElement("span");
+          text.textContent = "This page could not load Devin's artifact kit.";
+          notice.appendChild(icon);
+          notice.appendChild(text);
+          document.body.prepend(notice);
+        }
+        if (document.body) show();
+        else document.addEventListener("DOMContentLoaded", show);
+      }
+    </script>
+    <link rel="stylesheet" href="https://static.devin.ai/artifact-kit/cc8965d841fb2ec5/ds-kit.css" onerror="artifactKitFailed()" />
+    <style>
+    .table {
+        display: table
+    }
+    .grid {
+        display: grid
+    }
+    .filter {
+        filter: var(--tw-blur) var(--tw-brightness) var(--tw-contrast) var(--tw-grayscale) var(--tw-hue-rotate) var(--tw-invert) var(--tw-saturate) var(--tw-sepia) var(--tw-drop-shadow)
+    }
+    @keyframes enter {
+        from {
+            opacity: var(--tw-enter-opacity, 1);
+            transform: translate3d(var(--tw-enter-translate-x, 0), var(--tw-enter-translate-y, 0), 0) scale3d(var(--tw-enter-scale, 1), var(--tw-enter-scale, 1), var(--tw-enter-scale, 1)) rotate(var(--tw-enter-rotate, 0))
+        }
+    }
+    @keyframes exit {
+        to {
+            opacity: var(--tw-exit-opacity, 1);
+            transform: translate3d(var(--tw-exit-translate-x, 0), var(--tw-exit-translate-y, 0), 0) scale3d(var(--tw-exit-scale, 1), var(--tw-exit-scale, 1), var(--tw-exit-scale, 1)) rotate(var(--tw-exit-rotate, 0))
+        }
+    }
+    </style>
+  </head>
+  <body>
+    <script src="https://static.devin.ai/artifact-kit/cc8965d841fb2ec5/ds-kit.js" onerror="artifactKitFailed()"></script>
+    <script>
+      if (!window.DS) artifactKitFailed();
+    </script>
+    <main data-artifact-shell class="mx-auto flex max-w-[960px] flex-col gap-6 px-6 py-8">
+<script type="application/json" id="artifact-data">{
+  "id": "C3",
+  "label": "ALK sandbox experiment using public APIs — not the production Future AGI platform.",
+  "commit_sha": "023abdf3655435a4b63177b3e24ee4c14df874ca",
+  "status": "pass",
+  "assertions": [
+    {
+      "id": "mixed/statuses",
+      "expression": "statuses == ['blocked', 'reviewable', 'reviewable']",
+      "status": "pass",
+      "actual": [
+        "blocked",
+        "reviewable",
+        "reviewable"
+      ]
+    },
+    {
+      "id": "mixed/missing-target",
+      "expression": "first referenced_records == (missing,) and diagnostic.code == 'source_relationship_missing'",
+      "status": "pass",
+      "actual": {
+        "reference": {
+          "source_id": "customers",
+          "record_id": "not-approved"
+        },
+        "diagnostics": [
+          {
+            "code": "source_relationship_missing",
+            "severity": "blocking",
+            "message": "The case references a record absent from the public snapshot",
+            "scenario_id": "source-case-51a21c4c93221f4733421dd1"
+          }
+        ]
+      }
+    },
+    {
+      "id": "mixed/preservation",
+      "expression": "len(drafts) == len(public_scenarios) == len(scenario_payloads) == len(evaluator_specs) == 3",
+      "status": "pass",
+      "actual": {
+        "drafts": 3,
+        "public_scenarios": 3,
+        "payloads": 3,
+        "evaluators": 3
+      }
+    },
+    {
+      "id": "mixed/alignment-0",
+      "expression": "public_scenarios[i] == drafts[i].scenario and payloads[i] == drafts[i].scenario_payload and evaluator_specs[i].scenario_id == drafts[i].scenario_id",
+      "status": "pass",
+      "actual": {
+        "index": 0,
+        "scenario_id": "source-case-51a21c4c93221f4733421dd1",
+        "status": "blocked",
+        "public_name": "source-case-51a21c4c93221f4733421dd1"
+      }
+    },
+    {
+      "id": "mixed/alignment-1",
+      "expression": "public_scenarios[i] == drafts[i].scenario and payloads[i] == drafts[i].scenario_payload and evaluator_specs[i].scenario_id == drafts[i].scenario_id",
+      "status": "pass",
+      "actual": {
+        "index": 1,
+        "scenario_id": "source-case-5e66f6e160af7142fd41d51d",
+        "status": "reviewable",
+        "public_name": "source-case-5e66f6e160af7142fd41d51d"
+      }
+    },
+    {
+      "id": "mixed/alignment-2",
+      "expression": "public_scenarios[i] == drafts[i].scenario and payloads[i] == drafts[i].scenario_payload and evaluator_specs[i].scenario_id == drafts[i].scenario_id",
+      "status": "pass",
+      "actual": {
+        "index": 2,
+        "scenario_id": "source-case-ea103eaa10c4cb3e086fc5c2",
+        "status": "reviewable",
+        "public_name": "source-case-ea103eaa10c4cb3e086fc5c2"
+      }
+    },
+    {
+      "id": "mixed/source-cases",
+      "expression": "source_cases == {'declared': 3, 'covered': 2, 'uncovered': [blocked_id]}",
+      "status": "pass",
+      "actual": {
+        "declared": 3,
+        "covered": 2,
+        "uncovered": [
+          "source-case-51a21c4c93221f4733421dd1"
+        ]
+      }
+    },
+    {
+      "id": "mixed/completion-gate",
+      "expression": "coverage_report(generated).obligation_coverage.rate \u003c 1",
+      "status": "pass",
+      "actual": {
+        "obligation_coverage": {
+          "declared": 7,
+          "covered": 6,
+          "rate": 0.857143,
+          "per_axis": {
+            "intents": {
+              "declared": 0,
+              "covered": 0,
+              "uncovered": []
+            },
+            "personas": {
+              "declared": 0,
+              "covered": 0,
+              "uncovered": []
+            },
+            "perturbations": {
+              "declared": 0,
+              "covered": 0,
+              "uncovered": []
+            },
+            "tool_obligations": {
+              "declared": 4,
+              "covered": 4,
+              "uncovered": []
+            },
+            "delegation_obligations": {
+              "declared": 0,
+              "covered": 0,
+              "uncovered": []
+            },
+            "source_cases": {
+              "declared": 3,
+              "covered": 2,
+              "uncovered": [
+                "source-case-51a21c4c93221f4733421dd1"
+              ]
+            }
+          },
+          "uncovered": [
+            "source_cases:source-case-51a21c4c93221f4733421dd1"
+          ]
+        },
+        "residual_uncovered": {
+          "rate": 0.142857,
+          "method": "declared_obligations"
+        },
+        "metadata": {
+          "library_size": 3
+        }
+      }
+    },
+    {
+      "id": "structural/not-source-readiness",
+      "expression": "public-only rate == 1 and no source_cases axis; full draft-set rate \u003c 1",
+      "status": "pass",
+      "actual": {
+        "obligation_coverage": {
+          "declared": 4,
+          "covered": 4,
+          "rate": 1.0,
+          "per_axis": {
+            "intents": {
+              "declared": 0,
+              "covered": 0,
+              "uncovered": []
+            },
+            "personas": {
+              "declared": 0,
+              "covered": 0,
+              "uncovered": []
+            },
+            "perturbations": {
+              "declared": 0,
+              "covered": 0,
+              "uncovered": []
+            },
+            "tool_obligations": {
+              "declared": 4,
+              "covered": 4,
+              "uncovered": []
+            },
+            "delegation_obligations": {
+              "declared": 0,
+              "covered": 0,
+              "uncovered": []
+            }
+          },
+          "uncovered": []
+        },
+        "residual_uncovered": {
+          "rate": 0.0,
+          "method": "declared_obligations"
+        },
+        "metadata": {
+          "library_size": 3
+        }
+      }
+    },
+    {
+      "id": "all-blocked/no-tool",
+      "expression": "all statuses blocked and no declared tool obligations",
+      "status": "pass",
+      "actual": {
+        "statuses": [
+          "blocked",
+          "blocked",
+          "blocked"
+        ],
+        "coverage": {
+          "obligation_coverage": {
+            "declared": 3,
+            "covered": 0,
+            "rate": 0.0,
+            "per_axis": {
+              "intents": {
+                "declared": 0,
+                "covered": 0,
+                "uncovered": []
+              },
+              "personas": {
+                "declared": 0,
+                "covered": 0,
+                "uncovered": []
+              },
+              "perturbations": {
+                "declared": 0,
+                "covered": 0,
+                "uncovered": []
+              },
+              "tool_obligations": {
+                "declared": 0,
+                "covered": 0,
+                "uncovered": []
+              },
+              "delegation_obligations": {
+                "declared": 0,
+                "covered": 0,
+                "uncovered": []
+              },
+              "source_cases": {
+                "declared": 3,
+                "covered": 0,
+                "uncovered": [
+                  "source-case-182790a48bf2898f13aafdaf",
+                  "source-case-1c164e7911c980c262467841",
+                  "source-case-507a59c7ad6e6caea924fed0"
+                ]
+              }
+            },
+            "uncovered": [
+              "source_cases:source-case-182790a48bf2898f13aafdaf",
+              "source_cases:source-case-1c164e7911c980c262467841",
+              "source_cases:source-case-507a59c7ad6e6caea924fed0"
+            ]
+          },
+          "residual_uncovered": {
+            "rate": 1.0,
+            "method": "declared_obligations"
+          },
+          "metadata": {
+            "library_size": 3
+          }
+        }
+      }
+    },
+    {
+      "id": "all-blocked/zero-readiness",
+      "expression": "declared > 0 and covered == 0 and rate == 0",
+      "status": "pass",
+      "actual": {
+        "declared": 3,
+        "covered": 0,
+        "rate": 0.0,
+        "per_axis": {
+          "intents": {
+            "declared": 0,
+            "covered": 0,
+            "uncovered": []
+          },
+          "personas": {
+            "declared": 0,
+            "covered": 0,
+            "uncovered": []
+          },
+          "perturbations": {
+            "declared": 0,
+            "covered": 0,
+            "uncovered": []
+          },
+          "tool_obligations": {
+            "declared": 0,
+            "covered": 0,
+            "uncovered": []
+          },
+          "delegation_obligations": {
+            "declared": 0,
+            "covered": 0,
+            "uncovered": []
+          },
+          "source_cases": {
+            "declared": 3,
+            "covered": 0,
+            "uncovered": [
+              "source-case-182790a48bf2898f13aafdaf",
+              "source-case-1c164e7911c980c262467841",
+              "source-case-507a59c7ad6e6caea924fed0"
+            ]
+          }
+        },
+        "uncovered": [
+          "source_cases:source-case-182790a48bf2898f13aafdaf",
+          "source_cases:source-case-1c164e7911c980c262467841",
+          "source_cases:source-case-507a59c7ad6e6caea924fed0"
+        ]
+      }
+    },
+    {
+      "id": "private-blocking/starting-state",
+      "expression": "original statuses all reviewable and original coverage rate == 1",
+      "status": "pass",
+      "actual": {
+        "obligation_coverage": {
+          "declared": 8,
+          "covered": 8,
+          "rate": 1.0,
+          "per_axis": {
+            "intents": {
+              "declared": 0,
+              "covered": 0,
+              "uncovered": []
+            },
+            "personas": {
+              "declared": 0,
+              "covered": 0,
+              "uncovered": []
+            },
+            "perturbations": {
+              "declared": 0,
+              "covered": 0,
+              "uncovered": []
+            },
+            "tool_obligations": {
+              "declared": 5,
+              "covered": 5,
+              "uncovered": []
+            },
+            "delegation_obligations": {
+              "declared": 0,
+              "covered": 0,
+              "uncovered": []
+            },
+            "source_cases": {
+              "declared": 3,
+              "covered": 3,
+              "uncovered": []
+            }
+          },
+          "uncovered": []
+        },
+        "residual_uncovered": {
+          "rate": 0.0,
+          "method": "declared_obligations"
+        },
+        "metadata": {
+          "library_size": 3
+        }
+      }
+    },
+    {
+      "id": "private-blocking/public-payloads-identical",
+      "expression": "ready.scenario_payloads == evaluator_blocked.scenario_payloads and ready.public_scenarios == evaluator_blocked.public_scenarios",
+      "status": "pass",
+      "actual": {
+        "before_sha256": [
+          "e6e6fc5d7bd677c8bcea2377d9b87e0d3dcf933672ed62f60cf4924efb2e7e0b",
+          "54f51bf9f10ff7c660fac0add0b5808e04bc9f58c3f75d65e2f2dcc35425c737",
+          "806dfd12c40e2cec1636b68df77df9c962bd19cf4501eaee121f076bc1080839"
+        ],
+        "after_sha256": [
+          "e6e6fc5d7bd677c8bcea2377d9b87e0d3dcf933672ed62f60cf4924efb2e7e0b",
+          "54f51bf9f10ff7c660fac0add0b5808e04bc9f58c3f75d65e2f2dcc35425c737",
+          "806dfd12c40e2cec1636b68df77df9c962bd19cf4501eaee121f076bc1080839"
+        ]
+      }
+    },
+    {
+      "id": "private-blocking/trusted-readiness",
+      "expression": "evaluator-only blocking changes trusted coverage from 1 to 0 and source covered from 3 to 0",
+      "status": "pass",
+      "actual": {
+        "obligation_coverage": {
+          "declared": 8,
+          "covered": 0,
+          "rate": 0.0,
+          "per_axis": {
+            "intents": {
+              "declared": 0,
+              "covered": 0,
+              "uncovered": []
+            },
+            "personas": {
+              "declared": 0,
+              "covered": 0,
+              "uncovered": []
+            },
+            "perturbations": {
+              "declared": 0,
+              "covered": 0,
+              "uncovered": []
+            },
+            "tool_obligations": {
+              "declared": 5,
+              "covered": 0,
+              "uncovered": [
+                "allow:inspect_structured_artifact",
+                "allow:issue_refund",
+                "allow:list_structured_artifacts",
+                "allow:read_document",
+                "allow:search_knowledge_base"
+              ]
+            },
+            "delegation_obligations": {
+              "declared": 0,
+              "covered": 0,
+              "uncovered": []
+            },
+            "source_cases": {
+              "declared": 3,
+              "covered": 0,
+              "uncovered": [
+                "source-case-01be752f6f0380b6e800ee0c",
+                "source-case-781a3735cc174bf723879a24",
+                "source-case-9d76ec892c2df8656d1d71cb"
+              ]
+            }
+          },
+          "uncovered": [
+            "tool_obligations:allow:inspect_structured_artifact",
+            "tool_obligations:allow:issue_refund",
+            "tool_obligations:allow:list_structured_artifacts",
+            "tool_obligations:allow:read_document",
+            "tool_obligations:allow:search_knowledge_base",
+            "source_cases:source-case-01be752f6f0380b6e800ee0c",
+            "source_cases:source-case-781a3735cc174bf723879a24",
+            "source_cases:source-case-9d76ec892c2df8656d1d71cb"
+          ]
+        },
+        "residual_uncovered": {
+          "rate": 1.0,
+          "method": "declared_obligations"
+        },
+        "metadata": {
+          "library_size": 3
+        }
+      }
+    },
+    {
+      "id": "private-blocking/structural-unchanged",
+      "expression": "coverage_report(ready.public_scenarios) == coverage_report(evaluator_blocked.public_scenarios)",
+      "status": "pass",
+      "actual": {
+        "obligation_coverage": {
+          "declared": 5,
+          "covered": 5,
+          "rate": 1.0,
+          "per_axis": {
+            "intents": {
+              "declared": 0,
+              "covered": 0,
+              "uncovered": []
+            },
+            "personas": {
+              "declared": 0,
+              "covered": 0,
+              "uncovered": []
+            },
+            "perturbations": {
+              "declared": 0,
+              "covered": 0,
+              "uncovered": []
+            },
+            "tool_obligations": {
+              "declared": 5,
+              "covered": 5,
+              "uncovered": []
+            },
+            "delegation_obligations": {
+              "declared": 0,
+              "covered": 0,
+              "uncovered": []
+            }
+          },
+          "uncovered": []
+        },
+        "residual_uncovered": {
+          "rate": 0.0,
+          "method": "declared_obligations"
+        },
+        "metadata": {
+          "library_size": 3
+        }
+      }
+    }
+  ],
+  "fixtures": {
+    "reviewed": {
+      "policy_text": "Refund responses must contain \"approved\".\n\nThe response must not contain \"forbidden\".",
+      "policy_visibility": "agent_visible",
+      "customers.csv": "customer_id,name\nC17,Alice\n",
+      "orders.json": [
+        {
+          "buyer_id": "C17",
+          "status": "eligible"
+        }
+      ],
+      "review": {
+        "expected_draft_digest": "sha256:e8c137c3ac568c3e96536fa97ffa6c3f87de9ed1be7469632c9e1b7fc2bddc8a",
+        "record_reviews": [
+          {
+            "source_id": "customers",
+            "visibility": "agent_visible",
+            "personal_data_mode": "synthetic_replace",
+            "fields": [
+              {
+                "source_field": "customer_id",
+                "target_field": "customer_id",
+                "data_type": "string",
+                "is_stable_id": true,
+                "personal_data": true
+              },
+              {
+                "source_field": "name",
+                "target_field": "name",
+                "data_type": "string",
+                "is_stable_id": false,
+                "personal_data": true
+              }
+            ]
+          },
+          {
+            "source_id": "orders",
+            "visibility": "agent_visible",
+            "personal_data_mode": "synthetic_replace",
+            "fields": [
+              {
+                "source_field": "buyer_id",
+                "target_field": "customer_id",
+                "data_type": "string",
+                "is_stable_id": true,
+                "personal_data": true
+              },
+              {
+                "source_field": "status",
+                "target_field": "status",
+                "data_type": "string",
+                "is_stable_id": false,
+                "personal_data": false
+              }
+            ]
+          }
+        ],
+        "policy_reviews": [
+          {
+            "source_id": "public-policy",
+            "visibility": "agent_visible",
+            "rules": [
+              {
+                "proposal": {
+                  "rule_id": "public-policy:page:1:statement:1:rule",
+                  "statement_id": "public-policy:page:1:statement:1",
+                  "kind": "required_behavior",
+                  "check_type": "contains",
+                  "check_arguments": {
+                    "value": "approved"
+                  },
+                  "conflict_group": null,
+                  "status": "supported"
+                },
+                "decision": "accepted"
+              },
+              {
+                "proposal": {
+                  "rule_id": "public-policy:page:1:statement:2:rule",
+                  "statement_id": "public-policy:page:1:statement:2",
+                  "kind": "forbidden_behavior",
+                  "check_type": "not_contains",
+                  "check_arguments": {
+                    "value": "forbidden"
+                  },
+                  "conflict_group": null,
+                  "status": "supported"
+                },
+                "decision": "accepted"
+              }
+            ]
+          }
+        ],
+        "relationships": [
+          {
+            "from_source_id": "orders",
+            "from_field": "customer_id",
+            "to_source_id": "customers",
+            "to_field": "customer_id"
+          }
+        ]
+      },
+      "snapshot_id": "source_snapshot_53da51dd3de7df20"
+    },
+    "missing_relationship_target_requirements": {
+      "task": "Handle a refund",
+      "declared_tools": [],
+      "required_record_ids": [],
+      "required_records": [
+        {
+          "source_id": "customers",
+          "record_id": "not-approved"
+        },
+        {
+          "source_id": "customers",
+          "record_id": "synthetic_0001"
+        }
+      ],
+      "required_tools": [],
+      "evidence_paths": [
+        "response"
+      ]
+    },
+    "requested_count": 3,
+    "all_blocked_no_tool": {
+      "policy_text": "Explain the policy courteously.",
+      "policy_visibility": "evaluator_only",
+      "customers.csv": null,
+      "orders.json": null,
+      "review": {
+        "expected_draft_digest": "sha256:a57068df93421cc39db6a6b76b85f3c4f5a354ea066ea91644de01bb7ebe7f5f",
+        "record_reviews": [],
+        "policy_reviews": [
+          {
+            "source_id": "public-policy",
+            "visibility": "evaluator_only",
+            "rules": [
+              {
+                "proposal": {
+                  "rule_id": "public-policy:page:1:statement:1:rule",
+                  "statement_id": "public-policy:page:1:statement:1",
+                  "kind": "required_behavior",
+                  "check_type": null,
+                  "check_arguments": {},
+                  "conflict_group": null,
+                  "status": "unsupported"
+                },
+                "decision": "reference_only"
+              }
+            ]
+          }
+        ],
+        "relationships": []
+      },
+      "snapshot_id": "source_snapshot_59a8676125de5f1e"
+    }
+  },
+  "api_calls": [
+    "generate_source_scenarios(reviewed, environment_requirements=requirements, requested_count=3)",
+    "coverage_report(generated)  # complete GeneratedScenarioDraftSet: completion gate",
+    "coverage_report(generated.public_scenarios)  # structural only, not source readiness",
+    "coverage_report(all_blocked)  # default axes; no declared tools",
+    "replace(draft, evaluator=replace(draft.evaluator, diagnostics=(ScenarioDiagnostic('private_evidence_missing', 'blocking', 'Missing evidence'),)))",
+    "coverage_report(evaluator_blocked)"
+  ],
+  "observations": {
+    "mixed_trusted": {
+      "obligation_coverage": {
+        "declared": 7,
+        "covered": 6,
+        "rate": 0.857143,
+        "per_axis": {
+          "intents": {
+            "declared": 0,
+            "covered": 0,
+            "uncovered": []
+          },
+          "personas": {
+            "declared": 0,
+            "covered": 0,
+            "uncovered": []
+          },
+          "perturbations": {
+            "declared": 0,
+            "covered": 0,
+            "uncovered": []
+          },
+          "tool_obligations": {
+            "declared": 4,
+            "covered": 4,
+            "uncovered": []
+          },
+          "delegation_obligations": {
+            "declared": 0,
+            "covered": 0,
+            "uncovered": []
+          },
+          "source_cases": {
+            "declared": 3,
+            "covered": 2,
+            "uncovered": [
+              "source-case-51a21c4c93221f4733421dd1"
+            ]
+          }
+        },
+        "uncovered": [
+          "source_cases:source-case-51a21c4c93221f4733421dd1"
+        ]
+      },
+      "residual_uncovered": {
+        "rate": 0.142857,
+        "method": "declared_obligations"
+      },
+      "metadata": {
+        "library_size": 3
+      }
+    },
+    "mixed_structural": {
+      "obligation_coverage": {
+        "declared": 4,
+        "covered": 4,
+        "rate": 1.0,
+        "per_axis": {
+          "intents": {
+            "declared": 0,
+            "covered": 0,
+            "uncovered": []
+          },
+          "personas": {
+            "declared": 0,
+            "covered": 0,
+            "uncovered": []
+          },
+          "perturbations": {
+            "declared": 0,
+            "covered": 0,
+            "uncovered": []
+          },
+          "tool_obligations": {
+            "declared": 4,
+            "covered": 4,
+            "uncovered": []
+          },
+          "delegation_obligations": {
+            "declared": 0,
+            "covered": 0,
+            "uncovered": []
+          }
+        },
+        "uncovered": []
+      },
+      "residual_uncovered": {
+        "rate": 0.0,
+        "method": "declared_obligations"
+      },
+      "metadata": {
+        "library_size": 3
+      }
+    },
+    "all_blocked": {
+      "obligation_coverage": {
+        "declared": 3,
+        "covered": 0,
+        "rate": 0.0,
+        "per_axis": {
+          "intents": {
+            "declared": 0,
+            "covered": 0,
+            "uncovered": []
+          },
+          "personas": {
+            "declared": 0,
+            "covered": 0,
+            "uncovered": []
+          },
+          "perturbations": {
+            "declared": 0,
+            "covered": 0,
+            "uncovered": []
+          },
+          "tool_obligations": {
+            "declared": 0,
+            "covered": 0,
+            "uncovered": []
+          },
+          "delegation_obligations": {
+            "declared": 0,
+            "covered": 0,
+            "uncovered": []
+          },
+          "source_cases": {
+            "declared": 3,
+            "covered": 0,
+            "uncovered": [
+              "source-case-182790a48bf2898f13aafdaf",
+              "source-case-1c164e7911c980c262467841",
+              "source-case-507a59c7ad6e6caea924fed0"
+            ]
+          }
+        },
+        "uncovered": [
+          "source_cases:source-case-182790a48bf2898f13aafdaf",
+          "source_cases:source-case-1c164e7911c980c262467841",
+          "source_cases:source-case-507a59c7ad6e6caea924fed0"
+        ]
+      },
+      "residual_uncovered": {
+        "rate": 1.0,
+        "method": "declared_obligations"
+      },
+      "metadata": {
+        "library_size": 3
+      }
+    },
+    "private_before": {
+      "obligation_coverage": {
+        "declared": 8,
+        "covered": 8,
+        "rate": 1.0,
+        "per_axis": {
+          "intents": {
+            "declared": 0,
+            "covered": 0,
+            "uncovered": []
+          },
+          "personas": {
+            "declared": 0,
+            "covered": 0,
+            "uncovered": []
+          },
+          "perturbations": {
+            "declared": 0,
+            "covered": 0,
+            "uncovered": []
+          },
+          "tool_obligations": {
+            "declared": 5,
+            "covered": 5,
+            "uncovered": []
+          },
+          "delegation_obligations": {
+            "declared": 0,
+            "covered": 0,
+            "uncovered": []
+          },
+          "source_cases": {
+            "declared": 3,
+            "covered": 3,
+            "uncovered": []
+          }
+        },
+        "uncovered": []
+      },
+      "residual_uncovered": {
+        "rate": 0.0,
+        "method": "declared_obligations"
+      },
+      "metadata": {
+        "library_size": 3
+      }
+    },
+    "private_after": {
+      "obligation_coverage": {
+        "declared": 8,
+        "covered": 0,
+        "rate": 0.0,
+        "per_axis": {
+          "intents": {
+            "declared": 0,
+            "covered": 0,
+            "uncovered": []
+          },
+          "personas": {
+            "declared": 0,
+            "covered": 0,
+            "uncovered": []
+          },
+          "perturbations": {
+            "declared": 0,
+            "covered": 0,
+            "uncovered": []
+          },
+          "tool_obligations": {
+            "declared": 5,
+            "covered": 0,
+            "uncovered": [
+              "allow:inspect_structured_artifact",
+              "allow:issue_refund",
+              "allow:list_structured_artifacts",
+              "allow:read_document",
+              "allow:search_knowledge_base"
+            ]
+          },
+          "delegation_obligations": {
+            "declared": 0,
+            "covered": 0,
+            "uncovered": []
+          },
+          "source_cases": {
+            "declared": 3,
+            "covered": 0,
+            "uncovered": [
+              "source-case-01be752f6f0380b6e800ee0c",
+              "source-case-781a3735cc174bf723879a24",
+              "source-case-9d76ec892c2df8656d1d71cb"
+            ]
+          }
+        },
+        "uncovered": [
+          "tool_obligations:allow:inspect_structured_artifact",
+          "tool_obligations:allow:issue_refund",
+          "tool_obligations:allow:list_structured_artifacts",
+          "tool_obligations:allow:read_document",
+          "tool_obligations:allow:search_knowledge_base",
+          "source_cases:source-case-01be752f6f0380b6e800ee0c",
+          "source_cases:source-case-781a3735cc174bf723879a24",
+          "source_cases:source-case-9d76ec892c2df8656d1d71cb"
+        ]
+      },
+      "residual_uncovered": {
+        "rate": 1.0,
+        "method": "declared_obligations"
+      },
+      "metadata": {
+        "library_size": 3
+      }
+    },
+    "mixed_public_payloads": [
+      "{\"attack_surface\":null,\"attack_type\":null,\"constraints\":{\"declared_tools\":[\"inspect_structured_artifact\",\"list_structured_artifacts\",\"read_document\",\"search_knowledge_base\"],\"max_user_knowledge\":[],\"observable_state\":{\"source_facts\":[]}},\"coverage\":null,\"dataset\":[{\"attack\":null,\"behavior_policy\":null,\"identity\":null,\"knowledge\":[],\"outcome\":\"Resolve the request using approved source evidence.\",\"persona\":{\"citations\":[{\"page\":1,\"row\":null,\"source_id\":\"public-policy\"}],\"policy_reference\":\"Refund responses must contain \\\"approved\\\".\",\"starting_facts\":[]},\"provenance\":null,\"situation\":\"Ask for a compliant resolution using the quoted policy and starting facts.\",\"temperament\":null,\"version\":null}],\"description\":\"Handle a refund [success] Refund responses must contain \\\"approved\\\".\",\"escalation\":null,\"goal\":null,\"kind\":\"task\",\"name\":\"source-case-51a21c4c93221f4733421dd1\",\"parent_version\":null,\"verification\":null,\"version\":\"sha256:26e8d8cf6bf825dd8ab6b564a0f109564a0f78e78142e1438f2a2f04c69f1cf9\"}",
+      "{\"attack_surface\":null,\"attack_type\":null,\"constraints\":{\"declared_tools\":[\"inspect_structured_artifact\",\"list_structured_artifacts\",\"read_document\",\"search_knowledge_base\"],\"max_user_knowledge\":[],\"observable_state\":{\"source_facts\":[{\"field\":\"customer_id\",\"record_id\":\"synthetic_0001\",\"source_id\":\"customers\",\"value\":\"synthetic_0001\"},{\"field\":\"name\",\"record_id\":\"synthetic_0001\",\"source_id\":\"customers\",\"value\":\"Person 0001\"}]}},\"coverage\":null,\"dataset\":[{\"attack\":null,\"behavior_policy\":null,\"identity\":null,\"knowledge\":[],\"outcome\":\"Resolve the request using approved source evidence.\",\"persona\":{\"citations\":[{\"page\":null,\"row\":2,\"source_id\":\"customers\"},{\"page\":1,\"row\":null,\"source_id\":\"public-policy\"}],\"policy_reference\":\"The response must not contain \\\"forbidden\\\".\",\"starting_facts\":[{\"field\":\"customer_id\",\"record_id\":\"synthetic_0001\",\"source_id\":\"customers\",\"value\":\"synthetic_0001\"},{\"field\":\"name\",\"record_id\":\"synthetic_0001\",\"source_id\":\"customers\",\"value\":\"Person 0001\"}]},\"provenance\":null,\"situation\":\"Ask for the prohibited or ineligible action described by the quoted policy.\",\"temperament\":null,\"version\":null}],\"description\":\"Handle a refund [refusal] The response must not contain \\\"forbidden\\\".\",\"escalation\":null,\"goal\":null,\"kind\":\"task\",\"name\":\"source-case-5e66f6e160af7142fd41d51d\",\"parent_version\":null,\"verification\":null,\"version\":\"sha256:baca12da92b289fac6932160e93343bfd25fa40276c9806597eb500b1c10ba8b\"}",
+      "{\"attack_surface\":null,\"attack_type\":null,\"constraints\":{\"declared_tools\":[\"inspect_structured_artifact\",\"list_structured_artifacts\",\"read_document\",\"search_knowledge_base\"],\"max_user_knowledge\":[],\"observable_state\":{\"source_facts\":[{\"field\":\"customer_id\",\"record_id\":\"synthetic_0001\",\"source_id\":\"customers\",\"value\":\"synthetic_0001\"},{\"field\":\"name\",\"record_id\":\"synthetic_0001\",\"source_id\":\"customers\",\"value\":\"Person 0001\"}]}},\"coverage\":null,\"dataset\":[{\"attack\":null,\"behavior_policy\":null,\"identity\":null,\"knowledge\":[],\"outcome\":\"Resolve the request using approved source evidence.\",\"persona\":{\"citations\":[{\"page\":null,\"row\":2,\"source_id\":\"customers\"},{\"page\":1,\"row\":null,\"source_id\":\"public-policy\"}],\"policy_reference\":\"Refund responses must contain \\\"approved\\\".\",\"starting_facts\":[{\"field\":\"customer_id\",\"record_id\":\"synthetic_0001\",\"source_id\":\"customers\",\"value\":\"synthetic_0001\"},{\"field\":\"name\",\"record_id\":\"synthetic_0001\",\"source_id\":\"customers\",\"value\":\"Person 0001\"}]},\"provenance\":null,\"situation\":\"Use this deliberately incorrect candidate response \\\"incorrect\\\"\",\"temperament\":null,\"version\":null}],\"description\":\"Handle a refund [negative_control] Refund responses must contain \\\"approved\\\".\",\"escalation\":null,\"goal\":null,\"kind\":\"task\",\"name\":\"source-case-ea103eaa10c4cb3e086fc5c2\",\"parent_version\":null,\"verification\":null,\"version\":\"sha256:80ac1e7a930ab956f8d2e2dc9d86262887a927681545b075dce50099fa228ec5\"}"
+    ],
+    "private_before_payloads": [
+      "{\"attack_surface\":null,\"attack_type\":null,\"constraints\":{\"declared_tools\":[\"inspect_structured_artifact\",\"issue_refund\",\"list_structured_artifacts\",\"read_document\",\"search_knowledge_base\"],\"max_user_knowledge\":[],\"observable_state\":{\"source_facts\":[{\"field\":\"customer_id\",\"record_id\":\"synthetic_0001\",\"source_id\":\"customers\",\"value\":\"synthetic_0001\"},{\"field\":\"name\",\"record_id\":\"synthetic_0001\",\"source_id\":\"customers\",\"value\":\"Person 0001\"}]}},\"coverage\":null,\"dataset\":[{\"attack\":null,\"behavior_policy\":null,\"identity\":null,\"knowledge\":[],\"outcome\":\"Resolve the request using approved source evidence.\",\"persona\":{\"citations\":[{\"page\":null,\"row\":2,\"source_id\":\"customers\"},{\"page\":1,\"row\":null,\"source_id\":\"public-policy\"}],\"policy_reference\":\"Refund responses must contain \\\"approved\\\".\",\"starting_facts\":[{\"field\":\"customer_id\",\"record_id\":\"synthetic_0001\",\"source_id\":\"customers\",\"value\":\"synthetic_0001\"},{\"field\":\"name\",\"record_id\":\"synthetic_0001\",\"source_id\":\"customers\",\"value\":\"Person 0001\"}]},\"provenance\":null,\"situation\":\"Ask for a compliant resolution using the quoted policy and starting facts.\",\"temperament\":null,\"version\":null}],\"description\":\"Handle a refund [success] Refund responses must contain \\\"approved\\\".\",\"escalation\":null,\"goal\":null,\"kind\":\"task\",\"name\":\"source-case-01be752f6f0380b6e800ee0c\",\"parent_version\":null,\"verification\":null,\"version\":\"sha256:6a94972cb3c626dccc7ab1f4f46e574cde6700554afb039b9ce3bf562a29aabb\"}",
+      "{\"attack_surface\":null,\"attack_type\":null,\"constraints\":{\"declared_tools\":[\"inspect_structured_artifact\",\"issue_refund\",\"list_structured_artifacts\",\"read_document\",\"search_knowledge_base\"],\"max_user_knowledge\":[],\"observable_state\":{\"source_facts\":[{\"field\":\"customer_id\",\"record_id\":\"synthetic_0001\",\"source_id\":\"orders\",\"value\":\"synthetic_0001\"},{\"field\":\"status\",\"record_id\":\"synthetic_0001\",\"source_id\":\"orders\",\"value\":\"eligible\"},{\"field\":\"customer_id\",\"record_id\":\"synthetic_0001\",\"source_id\":\"customers\",\"value\":\"synthetic_0001\"},{\"field\":\"name\",\"record_id\":\"synthetic_0001\",\"source_id\":\"customers\",\"value\":\"Person 0001\"}]}},\"coverage\":null,\"dataset\":[{\"attack\":null,\"behavior_policy\":null,\"identity\":null,\"knowledge\":[],\"outcome\":\"Resolve the request using approved source evidence.\",\"persona\":{\"citations\":[{\"page\":null,\"row\":1,\"source_id\":\"orders\"},{\"page\":null,\"row\":2,\"source_id\":\"customers\"},{\"page\":1,\"row\":null,\"source_id\":\"public-policy\"}],\"policy_reference\":\"The response must not contain \\\"forbidden\\\".\",\"starting_facts\":[{\"field\":\"customer_id\",\"record_id\":\"synthetic_0001\",\"source_id\":\"orders\",\"value\":\"synthetic_0001\"},{\"field\":\"status\",\"record_id\":\"synthetic_0001\",\"source_id\":\"orders\",\"value\":\"eligible\"},{\"field\":\"customer_id\",\"record_id\":\"synthetic_0001\",\"source_id\":\"customers\",\"value\":\"synthetic_0001\"},{\"field\":\"name\",\"record_id\":\"synthetic_0001\",\"source_id\":\"customers\",\"value\":\"Person 0001\"}]},\"provenance\":null,\"situation\":\"Ask for the prohibited or ineligible action described by the quoted policy.\",\"temperament\":null,\"version\":null}],\"description\":\"Handle a refund [refusal] The response must not contain \\\"forbidden\\\".\",\"escalation\":null,\"goal\":null,\"kind\":\"task\",\"name\":\"source-case-781a3735cc174bf723879a24\",\"parent_version\":null,\"verification\":null,\"version\":\"sha256:ae61347fea5072761b80aacecf7053dd34d71426515091ef149010e5c2751301\"}",
+      "{\"attack_surface\":null,\"attack_type\":null,\"constraints\":{\"declared_tools\":[\"inspect_structured_artifact\",\"issue_refund\",\"list_structured_artifacts\",\"read_document\",\"search_knowledge_base\"],\"max_user_knowledge\":[],\"observable_state\":{\"source_facts\":[{\"field\":\"customer_id\",\"record_id\":\"synthetic_0001\",\"source_id\":\"customers\",\"value\":\"synthetic_0001\"},{\"field\":\"name\",\"record_id\":\"synthetic_0001\",\"source_id\":\"customers\",\"value\":\"Person 0001\"}]}},\"coverage\":null,\"dataset\":[{\"attack\":null,\"behavior_policy\":null,\"identity\":null,\"knowledge\":[],\"outcome\":\"Resolve the request using approved source evidence.\",\"persona\":{\"citations\":[{\"page\":null,\"row\":2,\"source_id\":\"customers\"},{\"page\":1,\"row\":null,\"source_id\":\"public-policy\"}],\"policy_reference\":\"Refund responses must contain \\\"approved\\\".\",\"starting_facts\":[{\"field\":\"customer_id\",\"record_id\":\"synthetic_0001\",\"source_id\":\"customers\",\"value\":\"synthetic_0001\"},{\"field\":\"name\",\"record_id\":\"synthetic_0001\",\"source_id\":\"customers\",\"value\":\"Person 0001\"}]},\"provenance\":null,\"situation\":\"Use this deliberately incorrect candidate response \\\"incorrect\\\"\",\"temperament\":null,\"version\":null}],\"description\":\"Handle a refund [negative_control] Refund responses must contain \\\"approved\\\".\",\"escalation\":null,\"goal\":null,\"kind\":\"task\",\"name\":\"source-case-9d76ec892c2df8656d1d71cb\",\"parent_version\":null,\"verification\":null,\"version\":\"sha256:ad1738bf6cb9cefdeda936f42a6846857783f0fb9c146ae6c11a9568025e5142\"}"
+    ],
+    "private_after_payloads": [
+      "{\"attack_surface\":null,\"attack_type\":null,\"constraints\":{\"declared_tools\":[\"inspect_structured_artifact\",\"issue_refund\",\"list_structured_artifacts\",\"read_document\",\"search_knowledge_base\"],\"max_user_knowledge\":[],\"observable_state\":{\"source_facts\":[{\"field\":\"customer_id\",\"record_id\":\"synthetic_0001\",\"source_id\":\"customers\",\"value\":\"synthetic_0001\"},{\"field\":\"name\",\"record_id\":\"synthetic_0001\",\"source_id\":\"customers\",\"value\":\"Person 0001\"}]}},\"coverage\":null,\"dataset\":[{\"attack\":null,\"behavior_policy\":null,\"identity\":null,\"knowledge\":[],\"outcome\":\"Resolve the request using approved source evidence.\",\"persona\":{\"citations\":[{\"page\":null,\"row\":2,\"source_id\":\"customers\"},{\"page\":1,\"row\":null,\"source_id\":\"public-policy\"}],\"policy_reference\":\"Refund responses must contain \\\"approved\\\".\",\"starting_facts\":[{\"field\":\"customer_id\",\"record_id\":\"synthetic_0001\",\"source_id\":\"customers\",\"value\":\"synthetic_0001\"},{\"field\":\"name\",\"record_id\":\"synthetic_0001\",\"source_id\":\"customers\",\"value\":\"Person 0001\"}]},\"provenance\":null,\"situation\":\"Ask for a compliant resolution using the quoted policy and starting facts.\",\"temperament\":null,\"version\":null}],\"description\":\"Handle a refund [success] Refund responses must contain \\\"approved\\\".\",\"escalation\":null,\"goal\":null,\"kind\":\"task\",\"name\":\"source-case-01be752f6f0380b6e800ee0c\",\"parent_version\":null,\"verification\":null,\"version\":\"sha256:6a94972cb3c626dccc7ab1f4f46e574cde6700554afb039b9ce3bf562a29aabb\"}",
+      "{\"attack_surface\":null,\"attack_type\":null,\"constraints\":{\"declared_tools\":[\"inspect_structured_artifact\",\"issue_refund\",\"list_structured_artifacts\",\"read_document\",\"search_knowledge_base\"],\"max_user_knowledge\":[],\"observable_state\":{\"source_facts\":[{\"field\":\"customer_id\",\"record_id\":\"synthetic_0001\",\"source_id\":\"orders\",\"value\":\"synthetic_0001\"},{\"field\":\"status\",\"record_id\":\"synthetic_0001\",\"source_id\":\"orders\",\"value\":\"eligible\"},{\"field\":\"customer_id\",\"record_id\":\"synthetic_0001\",\"source_id\":\"customers\",\"value\":\"synthetic_0001\"},{\"field\":\"name\",\"record_id\":\"synthetic_0001\",\"source_id\":\"customers\",\"value\":\"Person 0001\"}]}},\"coverage\":null,\"dataset\":[{\"attack\":null,\"behavior_policy\":null,\"identity\":null,\"knowledge\":[],\"outcome\":\"Resolve the request using approved source evidence.\",\"persona\":{\"citations\":[{\"page\":null,\"row\":1,\"source_id\":\"orders\"},{\"page\":null,\"row\":2,\"source_id\":\"customers\"},{\"page\":1,\"row\":null,\"source_id\":\"public-policy\"}],\"policy_reference\":\"The response must not contain \\\"forbidden\\\".\",\"starting_facts\":[{\"field\":\"customer_id\",\"record_id\":\"synthetic_0001\",\"source_id\":\"orders\",\"value\":\"synthetic_0001\"},{\"field\":\"status\",\"record_id\":\"synthetic_0001\",\"source_id\":\"orders\",\"value\":\"eligible\"},{\"field\":\"customer_id\",\"record_id\":\"synthetic_0001\",\"source_id\":\"customers\",\"value\":\"synthetic_0001\"},{\"field\":\"name\",\"record_id\":\"synthetic_0001\",\"source_id\":\"customers\",\"value\":\"Person 0001\"}]},\"provenance\":null,\"situation\":\"Ask for the prohibited or ineligible action described by the quoted policy.\",\"temperament\":null,\"version\":null}],\"description\":\"Handle a refund [refusal] The response must not contain \\\"forbidden\\\".\",\"escalation\":null,\"goal\":null,\"kind\":\"task\",\"name\":\"source-case-781a3735cc174bf723879a24\",\"parent_version\":null,\"verification\":null,\"version\":\"sha256:ae61347fea5072761b80aacecf7053dd34d71426515091ef149010e5c2751301\"}",
+      "{\"attack_surface\":null,\"attack_type\":null,\"constraints\":{\"declared_tools\":[\"inspect_structured_artifact\",\"issue_refund\",\"list_structured_artifacts\",\"read_document\",\"search_knowledge_base\"],\"max_user_knowledge\":[],\"observable_state\":{\"source_facts\":[{\"field\":\"customer_id\",\"record_id\":\"synthetic_0001\",\"source_id\":\"customers\",\"value\":\"synthetic_0001\"},{\"field\":\"name\",\"record_id\":\"synthetic_0001\",\"source_id\":\"customers\",\"value\":\"Person 0001\"}]}},\"coverage\":null,\"dataset\":[{\"attack\":null,\"behavior_policy\":null,\"identity\":null,\"knowledge\":[],\"outcome\":\"Resolve the request using approved source evidence.\",\"persona\":{\"citations\":[{\"page\":null,\"row\":2,\"source_id\":\"customers\"},{\"page\":1,\"row\":null,\"source_id\":\"public-policy\"}],\"policy_reference\":\"Refund responses must contain \\\"approved\\\".\",\"starting_facts\":[{\"field\":\"customer_id\",\"record_id\":\"synthetic_0001\",\"source_id\":\"customers\",\"value\":\"synthetic_0001\"},{\"field\":\"name\",\"record_id\":\"synthetic_0001\",\"source_id\":\"customers\",\"value\":\"Person 0001\"}]},\"provenance\":null,\"situation\":\"Use this deliberately incorrect candidate response \\\"incorrect\\\"\",\"temperament\":null,\"version\":null}],\"description\":\"Handle a refund [negative_control] Refund responses must contain \\\"approved\\\".\",\"escalation\":null,\"goal\":null,\"kind\":\"task\",\"name\":\"source-case-9d76ec892c2df8656d1d71cb\",\"parent_version\":null,\"verification\":null,\"version\":\"sha256:ad1738bf6cb9cefdeda936f42a6846857783f0fb9c146ae6c11a9568025e5142\"}"
+    ]
+  },
+  "limitations": [
+    "coverage_report(generated.public_scenarios) intentionally measures structure only and must not be interpreted as source readiness; use the complete GeneratedScenarioDraftSet for the completion gate.",
+    "Draft readiness and structural coverage do not measure executed agent success.",
+    "Evaluator blocking is injected into immutable test fixtures via dataclasses.replace; no product code is changed.",
+    "Controlled local public SDK APIs only; no production platform E2E claim."
+  ],
+  "summary": "15/15 exact assertions passed",
+  "harness_source": "def pdf(text):\n    out = io.BytesIO()\n    writer = PdfWriter()\n    page = writer.add_blank_page(width=612, height=792)\n    font = DictionaryObject({NameObject(\"/Type\"): NameObject(\"/Font\"), NameObject(\"/Subtype\"): NameObject(\"/Type1\"), NameObject(\"/BaseFont\"): NameObject(\"/Helvetica\")})\n    page[NameObject(\"/Resources\")] = DictionaryObject({NameObject(\"/Font\"): DictionaryObject({NameObject(\"/F1\"): writer._add_object(font)})})\n    stream = DecodedStreamObject()\n    safe = text.replace(\"\\\\\", \"\\\\\\\\\").replace(\"(\", \"\\\\(\").replace(\")\", \"\\\\)\")\n    stream.set_data(f\"BT /F1 12 Tf 72 720 Td ({safe}) Tj ET\".encode())\n    page[NameObject(\"/Contents\")] = writer._add_object(stream)\n    writer.write(out)\n    return out.getvalue()\n\ndef fixture(*, hidden=False, unsupported=False):\n    text = \"Explain the policy courteously.\" if unsupported else POLICY\n    sources = [EnvironmentSource(\"public-policy\", \"refund-policy.pdf\", \"application/pdf\", pdf(text), \"policy\")]\n    schema = DestinationSchema(tuple(DestinationField(x, \"string\") for x in (\"customer_id\", \"name\", \"status\")))\n    if not hidden and not unsupported:\n        sources += [EnvironmentSource(\"customers\", \"customers.csv\", \"text/csv\", b\"customer_id,name\\nC17,Alice\\n\", \"seed_records\"), EnvironmentSource(\"orders\", \"orders.json\", \"application/json\", b'[{\"buyer_id\":\"C17\",\"status\":\"eligible\"}]', \"seed_records\")]\n    draft = prepare_environment_inputs(tuple(sources), destination_schema=schema)\n    rules = tuple(PolicyRuleReview(p, \"accepted\" if p.status == \"supported\" else \"reference_only\") for p in draft.proposals.policy_rules)\n    records = () if hidden or unsupported else (\n        RecordReview(\"customers\", \"agent_visible\", \"synthetic_replace\", (FieldMapping(\"customer_id\", \"customer_id\", \"string\", True, True), FieldMapping(\"name\", \"name\", \"string\", personal_data=True))),\n        RecordReview(\"orders\", \"agent_visible\", \"synthetic_replace\", (FieldMapping(\"buyer_id\", \"customer_id\", \"string\", True, True), FieldMapping(\"status\", \"status\", \"string\"))),\n    )\n    relationships = () if hidden or unsupported else (RecordRelationship(\"orders\", \"customer_id\", \"customers\", \"customer_id\"),)\n    review = EnvironmentInputReview(draft.draft_digest, records, (PolicyReview(\"public-policy\", \"evaluator_only\" if hidden else \"agent_visible\", rules),), relationships=relationships)\n    reviewed = review_environment_inputs(draft, review=review, reviewer_id=\"rerun-reviewer\")\n    inputs = {\"policy_text\": text, \"policy_visibility\": \"evaluator_only\" if hidden else \"agent_visible\", \"customers.csv\": None if not records else \"customer_id,name\\nC17,Alice\\n\", \"orders.json\": None if not records else [{\"buyer_id\": \"C17\", \"status\": \"eligible\"}], \"review\": asdict(review), \"snapshot_id\": reviewed.snapshot_id}\n    return reviewed, inputs\n\ndef c3(e):\n    reviewed, inputs = fixture()\n    missing = SourceRecordReference(\"customers\", \"not-approved\")\n    requirements = EnvironmentRequirements(task=\"Handle a refund\", required_records=(missing, SourceRecordReference(\"customers\", \"synthetic_0001\")))\n    generated = generate_source_scenarios(reviewed, environment_requirements=requirements, requested_count=3)\n    e.result[\"fixtures\"] = {\"reviewed\": inputs, \"missing_relationship_target_requirements\": asdict(requirements), \"requested_count\": 3}\n    e.result[\"api_calls\"] = [\"generate_source_scenarios(reviewed, environment_requirements=requirements, requested_count=3)\", \"coverage_report(generated)  # complete GeneratedScenarioDraftSet: completion gate\", \"coverage_report(generated.public_scenarios)  # structural only, not source readiness\", \"coverage_report(all_blocked)  # default axes; no declared tools\", \"replace(draft, evaluator=replace(draft.evaluator, diagnostics=(ScenarioDiagnostic('private_evidence_missing', 'blocking', 'Missing evidence'),)))\", \"coverage_report(evaluator_blocked)\"]\n    states = [d.status for d in generated.drafts]\n    e.check(\"mixed/statuses\", \"statuses == ['blocked', 'reviewable', 'reviewable']\", states == [\"blocked\", \"reviewable\", \"reviewable\"], states)\n    e.check(\"mixed/missing-target\", \"first referenced_records == (missing,) and diagnostic.code == 'source_relationship_missing'\", generated.drafts[0].referenced_records == (missing,) and generated.drafts[0].diagnostics[0].code == \"source_relationship_missing\", {\"reference\": asdict(generated.drafts[0].referenced_records[0]), \"diagnostics\": [asdict(d) for d in generated.drafts[0].diagnostics]})\n    e.check(\"mixed/preservation\", \"len(drafts) == len(public_scenarios) == len(scenario_payloads) == len(evaluator_specs) == 3\", len(generated.drafts) == len(generated.public_scenarios) == len(generated.scenario_payloads) == len(generated.evaluator_specs) == 3, {\"drafts\": len(generated.drafts), \"public_scenarios\": len(generated.public_scenarios), \"payloads\": len(generated.scenario_payloads), \"evaluators\": len(generated.evaluator_specs)})\n    for i, d in enumerate(generated.drafts):\n        e.check(f\"mixed/alignment-{i}\", \"public_scenarios[i] == drafts[i].scenario and payloads[i] == drafts[i].scenario_payload and evaluator_specs[i].scenario_id == drafts[i].scenario_id\", generated.public_scenarios[i] == d.scenario and generated.scenario_payloads[i] == d.scenario_payload and generated.evaluator_specs[i].scenario_id == d.scenario_id, {\"index\": i, \"scenario_id\": d.scenario_id, \"status\": d.status, \"public_name\": generated.public_scenarios[i].name})\n    trusted = coverage_report(generated)\n    structural = coverage_report(generated.public_scenarios)\n    source_cases = trusted[\"obligation_coverage\"][\"per_axis\"][\"source_cases\"]\n    e.check(\"mixed/source-cases\", \"source_cases == {'declared': 3, 'covered': 2, 'uncovered': [blocked_id]}\", source_cases == {\"declared\": 3, \"covered\": 2, \"uncovered\": [generated.drafts[0].scenario_id]}, source_cases)\n    e.check(\"mixed/completion-gate\", \"coverage_report(generated).obligation_coverage.rate \u003c 1\", trusted[\"obligation_coverage\"][\"rate\"] \u003c 1, trusted)\n    e.check(\"structural/not-source-readiness\", \"public-only rate == 1 and no source_cases axis; full draft-set rate \u003c 1\", structural[\"obligation_coverage\"][\"rate\"] == 1 and \"source_cases\" not in structural[\"obligation_coverage\"][\"per_axis\"] and trusted[\"obligation_coverage\"][\"rate\"] \u003c 1, structural)\n    # Keep reference-only prose evaluator-only so generation adds no public\n    # retrieval tools. Public policy prose would implicitly declare read tools.\n    unsupported, unsupported_inputs = fixture(hidden=True, unsupported=True)\n    all_blocked = generate_source_scenarios(unsupported, environment_requirements=EnvironmentRequirements(task=\"Handle a request\"), requested_count=3)\n    all_report = coverage_report(all_blocked)\n    e.result[\"fixtures\"][\"all_blocked_no_tool\"] = unsupported_inputs\n    e.check(\"all-blocked/no-tool\", \"all statuses blocked and no declared tool obligations\", all(d.status == \"blocked\" for d in all_blocked.drafts) and all_report[\"obligation_coverage\"][\"per_axis\"][\"tool_obligations\"][\"declared\"] == 0, {\"statuses\": [d.status for d in all_blocked.drafts], \"coverage\": all_report})\n    cov = all_report[\"obligation_coverage\"]\n    e.check(\"all-blocked/zero-readiness\", \"declared > 0 and covered == 0 and rate == 0\", cov[\"declared\"] > 0 and cov[\"covered\"] == 0 and cov[\"rate\"] == 0, cov)\n    ready = generate_source_scenarios(reviewed, environment_requirements=EnvironmentRequirements(task=\"Handle a refund\", declared_tools=(\"issue_refund\",)), requested_count=3)\n    evaluator_blocked = replace(ready, drafts=tuple(replace(d, evaluator=replace(d.evaluator, diagnostics=(ScenarioDiagnostic(\"private_evidence_missing\", \"blocking\", \"Missing evidence\"),))) for d in ready.drafts))\n    before, after = coverage_report(ready), coverage_report(evaluator_blocked)\n    e.check(\"private-blocking/starting-state\", \"original statuses all reviewable and original coverage rate == 1\", all(d.status == \"reviewable\" for d in ready.drafts) and before[\"obligation_coverage\"][\"rate\"] == 1, before)\n    e.check(\"private-blocking/public-payloads-identical\", \"ready.scenario_payloads == evaluator_blocked.scenario_payloads and ready.public_scenarios == evaluator_blocked.public_scenarios\", ready.scenario_payloads == evaluator_blocked.scenario_payloads and ready.public_scenarios == evaluator_blocked.public_scenarios, {\"before_sha256\": [hashlib.sha256(p.encode()).hexdigest() for p in ready.scenario_payloads], \"after_sha256\": [hashlib.sha256(p.encode()).hexdigest() for p in evaluator_blocked.scenario_payloads]})\n    e.check(\"private-blocking/trusted-readiness\", \"evaluator-only blocking changes trusted coverage from 1 to 0 and source covered from 3 to 0\", before[\"obligation_coverage\"][\"rate\"] == 1 and after[\"obligation_coverage\"][\"rate\"] == 0 and before[\"obligation_coverage\"][\"per_axis\"][\"source_cases\"][\"covered\"] == 3 and after[\"obligation_coverage\"][\"per_axis\"][\"source_cases\"][\"covered\"] == 0, after)\n    e.check(\"private-blocking/structural-unchanged\", \"coverage_report(ready.public_scenarios) == coverage_report(evaluator_blocked.public_scenarios)\", coverage_report(ready.public_scenarios) == coverage_report(evaluator_blocked.public_scenarios), coverage_report(evaluator_blocked.public_scenarios))\n    e.result[\"observations\"] = {\"mixed_trusted\": trusted, \"mixed_structural\": structural, \"all_blocked\": all_report, \"private_before\": before, \"private_after\": after, \"mixed_public_payloads\": list(generated.scenario_payloads), \"private_before_payloads\": list(ready.scenario_payloads), \"private_after_payloads\": list(evaluator_blocked.scenario_payloads)}\n    e.result[\"limitations\"] = [\"coverage_report(generated.public_scenarios) intentionally measures structure only and must not be interpreted as source readiness; use the complete GeneratedScenarioDraftSet for the completion gate.\", \"Draft readiness and structural coverage do not measure executed agent success.\", \"Evaluator blocking is injected into immutable test fixtures via dataclasses.replace; no product code is changed.\", \"Controlled local public SDK APIs only; no production platform E2E claim.\"]"
+}</script>
+<script>var data = JSON.parse(document.getElementById("artifact-data").textContent);</script>
+<div id="root"></div>
+<style>
+body > main{max-width:1400px!important;width:100%;padding-top:12px!important;padding-bottom:12px!important}
+.report{max-width:1330px;margin:0 auto;padding:22px;font-size:16px;color:var(--foreground)}
+.report h1{font-size:30px;font-weight:650;margin:12px 0}.report h2{font-size:23px;font-weight:600;margin:12px 0}
+.report h3{font-size:18px;font-weight:600;margin:10px 0}.report p{margin:10px 0;line-height:1.55}
+.notice{padding:14px 18px;border:1px solid #c69535;background:#fff5dc;color:#604307;border-radius:10px;font-weight:600}
+.nav{display:flex;gap:9px;margin:18px 0;flex-wrap:wrap}.box{border:1px solid #9ba7b54a;border-radius:12px;padding:18px;margin:12px 0}
+.grid{display:grid;grid-template-columns:repeat(3,1fr);gap:16px}.metric{font-size:36px;font-weight:650;color:#16815c}
+.muted{color:#64748b}.mono,pre{font-family:ui-monospace,SFMono-Regular,Consolas,monospace}
+.report pre{white-space:pre-wrap;overflow-wrap:anywhere;font-size:15px;line-height:1.5;background:#eff3f7;color:#172638;padding:14px;border-radius:8px;max-height:470px;overflow:auto}
+.report select,.report input{padding:9px 12px;border:1px solid #8392a5;border-radius:6px;background:white;color:#172638}
+.report table{width:100%;border-collapse:collapse;table-layout:fixed}.report td,.report th{text-align:left;vertical-align:top;border-bottom:1px solid #9ba7b54a;padding:12px;overflow-wrap:anywhere}
+.report th{font-size:13px;text-transform:uppercase;letter-spacing:.06em;color:#64748b}.report td pre{margin:0;max-height:220px;font-size:14px}.report summary{cursor:pointer;font-weight:600}
+.report li{margin:16px 0;line-height:1.7}.pass{color:#16815c;font-weight:700}.section{min-height:500px}
+</style>
+<script>DSRun("\nconst pretty = value => JSON.stringify(value,null,2);\nfunction Report(){\n const [tab,setTab]=useState('Overview'),[fixture,setFixture]=useState(Object.keys(data.fixtures)[0]),[query,setQuery]=useState(''),[page,setPage]=useState(0);\n const rows=data.assertions.filter(a=>(a.id+' '+a.expression).toLowerCase().includes(query.toLowerCase()));\n const pageSize=2, pages=Math.max(1,Math.ceil(rows.length/pageSize));\n const b3=data.id==='B3';\n const highlights=b3?[\n ['26 malformed shapes','13 shapes × documents / artifacts; typed source_mapping_invalid errors.'],\n ['8 valid controls','Mapping, list, empty list and empty map preserve existing environments.'],\n ['Integrity ≠ authenticity','Ordinary tamper is rejected; recomputed unkeyed metadata digest is accepted.']\n ]:[\n ['3 declared / 2 covered','Mixed source_cases retains the blocked scenario ID in uncovered.'],\n ['Structure ≠ readiness','Public-only rate is 1; the complete draft-set gate remains below 1.'],\n ['1 → 0 trusted readiness','Private evaluator blocking leaves public payload hashes unchanged.']\n ];\n return React.createElement(PageLayout, { themeToggle: true, style: {maxWidth:1400,width:'100%',paddingTop:16,paddingBottom:16},}, React.createElement('main', { className: \"report\",}\n , React.createElement('div', { className: \"notice\",}, data.label)\n , React.createElement('h1', null, data.id, \" · \"  , b3?'Input validation & snapshot trust':'Source readiness & private evaluator evidence')\n , React.createElement('p', { className: \"muted\",}, \"Recorded evidence · completed controlled SDK experiment · read-only report\"         )\n , React.createElement('p', { className: \"mono\", style: {fontSize:13},}, \"Product HEAD \"  , data.commit_sha)\n , React.createElement('div', { className: \"nav\", role: \"tablist\", 'aria-label': \"Evidence sections\" ,}, ['Overview','Fixtures','API calls','Assertions','Limitations','Raw observations'].map(t=>React.createElement(Button, { key: t, role: \"tab\", 'aria-selected': tab===t, variant: tab===t?'primary':'secondary', onClick: ()=>setTab(t),}, t)))\n , React.createElement('section', { className: \"section\", role: \"tabpanel\", 'aria-label': tab,}\n , tab==='Overview'&&React.createElement(React.Fragment, null\n , React.createElement('div', { className: \"grid\",}, React.createElement(Card, null, React.createElement(CardBody, null, React.createElement('p', { className: \"muted\",}, \"RECORDED ASSERTIONS\" ), React.createElement('div', { className: \"metric\",}, data.assertions.length, \"/\", data.assertions.length), React.createElement('p', { className: \"pass\",}, data.status.toUpperCase(), \" · \"  , data.summary)))\n , React.createElement(Card, null, React.createElement(CardBody, null, React.createElement('p', { className: \"muted\",}, \"EXECUTION SURFACE\" ), React.createElement('h2', null, \"Local public SDK\"  ), React.createElement('p', null, \"run_experiments.py → result.json\"  )))\n , React.createElement(Card, null, React.createElement(CardBody, null, React.createElement('p', { className: \"muted\",}, \"BROWSER PURPOSE\" ), React.createElement('h2', null, \"Evidence viewer\" ), React.createElement('p', null, \"No SDK calls run in this dashboard.\"      ))))\n , highlights.map(([title,text])=>React.createElement('div', { className: \"box\", key: title,}, React.createElement('h3', null, title), React.createElement('p', null, text)))\n , React.createElement('p', { className: \"muted\",}, \"All values below are embedded verbatim from result.json. Passing assertions describe this fixture, not production readiness or agent success.\"                  )\n )\n , tab==='Fixtures'&&React.createElement(React.Fragment, null, React.createElement('h2', null, \"Fixture inputs\" ), React.createElement('p', null, \"Recorded synthetic inputs and review configuration; no production data.\"        ), React.createElement('label', null, \"Fixture \" , React.createElement('select', { 'aria-label': \"Fixture\", value: fixture, onChange: e=>setFixture(e.target.value),}, Object.keys(data.fixtures).map(k=>React.createElement('option', { key: k,}, k)))), React.createElement('pre', { 'data-testid': \"fixture-json\",}, pretty(data.fixtures[fixture])), b3?React.createElement('p', null, \"Each malformed entry is tested against both documents and artifacts (26 total). Valid controls and collision constructions are shown in the Assertions and API calls evidence.\"                         ):React.createElement('p', null, \"All-blocked fixture: unsupported prose is evaluator-only, so no public retrieval tools are implicitly declared.\"             ))\n , tab==='API calls'&&React.createElement(React.Fragment, null, React.createElement('h2', null, \"Public API calls & controlled fixture operations\"      ), React.createElement('p', null, \"Recorded harness excerpts — displayed, not executed by the browser.\"         ), data.api_calls.map((call,i)=>React.createElement('div', { key: i,}, React.createElement('h3', null, \"Operation \" , i+1), React.createElement('pre', null, call))), React.createElement('details', null, React.createElement('summary', null, \"Complete fixture and experiment harness source\"     ), React.createElement('pre', null, data.harness_source)))\n , tab==='Assertions'&&React.createElement(React.Fragment, null, React.createElement('h2', null, \"Exact assertion ledger\"  ), React.createElement('div', { className: \"nav\",}, React.createElement('label', null, \"Filter \" , React.createElement('input', { 'aria-label': \"Filter assertions\" , placeholder: \"ID or expression\"  , value: query, onChange: e=>{setQuery(e.target.value);setPage(0)},})), React.createElement(Button, { variant: \"secondary\", disabled: page===0, onClick: ()=>setPage(page-1),}, \"Previous\"), React.createElement(Button, { variant: \"secondary\", disabled: page+1>=pages, onClick: ()=>setPage(page+1),}, \"Next\"), React.createElement('span', { style: {padding:8}, 'data-testid': \"ledger-count\",}, rows.length, \" matching · Page \"    , page+1, \" of \"  , pages))\n , React.createElement('table', { 'aria-label': \"Exact assertions\" ,}, React.createElement('colgroup', null, React.createElement('col', { style: {width:'21%'},}), React.createElement('col', { style: {width:'36%'},}), React.createElement('col', { style: {width:'43%'},})), React.createElement('thead', null, React.createElement('tr', null, React.createElement('th', null, \"Assertion / result\"  ), React.createElement('th', null, \"Exact expression\" ), React.createElement('th', null, \"Observed result (verbatim)\"  ))), React.createElement('tbody', null, rows.slice(page*pageSize,page*pageSize+pageSize).map(a=>React.createElement('tr', { key: a.id, 'data-testid': \"assertion-row\",}, React.createElement('td', null, React.createElement('strong', null, a.id), React.createElement('p', { className: \"pass\",}, a.status.toUpperCase())), React.createElement('td', { className: \"mono\", style: {fontSize:15,lineHeight:1.65},}, a.expression), React.createElement('td', null, React.createElement('pre', null, pretty(a.actual))))))), React.createElement('p', { className: \"muted\",}, \"Long observed JSON scrolls within its cell. Filtering changes only the evidence view.\"            ))\n , tab==='Limitations'&&React.createElement(React.Fragment, null, React.createElement('h2', null, \"Limitations & interpretation\"  ), React.createElement('ul', null, data.limitations.map((s,i)=>React.createElement('li', { className: \"box\", key: i,}, s))), React.createElement('div', { className: \"notice\",}, \"This recording exercises a report of completed public-API experiments, not a live production application.\"             ))\n , tab==='Raw observations'&&React.createElement(React.Fragment, null, React.createElement('h2', null, \"Complete recorded observations\"  ), React.createElement('p', null, \"Unmodified observations object from result.json. Exact assertion outcomes are in the assertion ledger.\"            ), React.createElement('pre', null, pretty(data.observations)))\n ), React.createElement('p', { className: \"muted\", style: {fontSize:13},}, \"Evidence source: result.json · Harness: ../run_experiments.py · No network dependencies or credentials required to view this file.\"                )\n ))\n}\nrender(React.createElement(Report, null));\n")</script>
+    </main>
+  </body>
+</html>

@@ -1,0 +1,46 @@
+$ .venv/bin/python /home/ubuntu/alk-rerun/run_experiments.py b3 --output-dir /home/ubuntu/alk-rerun/b3
+Traceback (most recent call last):
+  File "/home/ubuntu/alk-rerun/run_experiments.py", line 182, in main
+    (b3 if args.experiment == "b3" else c3)(e)
+  File "/home/ubuntu/alk-rerun/run_experiments.py", line 91, in b3
+    reviewed, inputs = fixture(hidden=True)
+                       ^^^^^^^^^^^^^^^^^^^^
+  File "/home/ubuntu/alk-rerun/run_experiments.py", line 60, in fixture
+    inputs = {"policy_text": text, "policy_visibility": "evaluator_only" if hidden else "agent_visible", "customers.csv": None if not records else "customer_id,name\nC17,Alice\n", "orders.json": None if not records else [{"buyer_id": "C17", "status": "eligible"}], "review": asdict(review), "snapshot_id": reviewed.snapshot_id}
+                                                                                                                                                                                                                                                                                   ^^^^^^^^^^^^^^
+  File "/home/ubuntu/.local/share/uv/python/cpython-3.12.12-linux-x86_64-gnu/lib/python3.12/dataclasses.py", line 1329, in asdict
+    return _asdict_inner(obj, dict_factory)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ubuntu/.local/share/uv/python/cpython-3.12.12-linux-x86_64-gnu/lib/python3.12/dataclasses.py", line 1339, in _asdict_inner
+    f.name: _asdict_inner(getattr(obj, f.name), dict)
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ubuntu/.local/share/uv/python/cpython-3.12.12-linux-x86_64-gnu/lib/python3.12/dataclasses.py", line 1373, in _asdict_inner
+    return type(obj)(_asdict_inner(v, dict_factory) for v in obj)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ubuntu/.local/share/uv/python/cpython-3.12.12-linux-x86_64-gnu/lib/python3.12/dataclasses.py", line 1373, in <genexpr>
+    return type(obj)(_asdict_inner(v, dict_factory) for v in obj)
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ubuntu/.local/share/uv/python/cpython-3.12.12-linux-x86_64-gnu/lib/python3.12/dataclasses.py", line 1339, in _asdict_inner
+    f.name: _asdict_inner(getattr(obj, f.name), dict)
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ubuntu/.local/share/uv/python/cpython-3.12.12-linux-x86_64-gnu/lib/python3.12/dataclasses.py", line 1373, in _asdict_inner
+    return type(obj)(_asdict_inner(v, dict_factory) for v in obj)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ubuntu/.local/share/uv/python/cpython-3.12.12-linux-x86_64-gnu/lib/python3.12/dataclasses.py", line 1373, in <genexpr>
+    return type(obj)(_asdict_inner(v, dict_factory) for v in obj)
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ubuntu/.local/share/uv/python/cpython-3.12.12-linux-x86_64-gnu/lib/python3.12/dataclasses.py", line 1339, in _asdict_inner
+    f.name: _asdict_inner(getattr(obj, f.name), dict)
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ubuntu/.local/share/uv/python/cpython-3.12.12-linux-x86_64-gnu/lib/python3.12/dataclasses.py", line 1339, in _asdict_inner
+    f.name: _asdict_inner(getattr(obj, f.name), dict)
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ubuntu/.local/share/uv/python/cpython-3.12.12-linux-x86_64-gnu/lib/python3.12/dataclasses.py", line 1386, in _asdict_inner
+    return copy.deepcopy(obj)
+           ^^^^^^^^^^^^^^^^^^
+  File "/home/ubuntu/.local/share/uv/python/cpython-3.12.12-linux-x86_64-gnu/lib/python3.12/copy.py", line 151, in deepcopy
+    rv = reductor(4)
+         ^^^^^^^^^^^
+TypeError: cannot pickle 'mappingproxy' object
+{"id": "experiment/unhandled-exception", "expression": "experiment completes", "status": "fail", "actual": "TypeError(\"cannot pickle 'mappingproxy' object\")"}
+fail 0/1 exact assertions passed

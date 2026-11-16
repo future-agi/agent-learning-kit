@@ -1,0 +1,3 @@
+$ .venv/bin/python -m pytest tests/test_environment_inputs.py tests/test_source_scenarios.py tests/test_vendored_simulate_engine.py tests/test_phase7_persona_studio.py -k "not test_pull_personas_from_stub_server and not test_pull_flagged_quarantined_and_scenarios_sdk_pull" -ra
+Exclusions: only the two named tests; user reports configured authenticated routing fails on baseline and fixed commits.
+$ .venv/bin/ruff check src/fi/alk/studio/_coverage.py src/fi/alk/studio/_environment_inputs.py tests/test_environment_inputs.py tests/test_source_scenarios.py

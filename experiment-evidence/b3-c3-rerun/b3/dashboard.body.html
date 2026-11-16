@@ -1,0 +1,57 @@
+<div id="root"></div>
+<style>
+body > main{max-width:1400px!important;width:100%;padding-top:12px!important;padding-bottom:12px!important}
+.report{max-width:1330px;margin:0 auto;padding:22px;font-size:16px;color:var(--foreground)}
+.report h1{font-size:30px;font-weight:650;margin:12px 0}.report h2{font-size:23px;font-weight:600;margin:12px 0}
+.report h3{font-size:18px;font-weight:600;margin:10px 0}.report p{margin:10px 0;line-height:1.55}
+.notice{padding:14px 18px;border:1px solid #c69535;background:#fff5dc;color:#604307;border-radius:10px;font-weight:600}
+.nav{display:flex;gap:9px;margin:18px 0;flex-wrap:wrap}.box{border:1px solid #9ba7b54a;border-radius:12px;padding:18px;margin:12px 0}
+.grid{display:grid;grid-template-columns:repeat(3,1fr);gap:16px}.metric{font-size:36px;font-weight:650;color:#16815c}
+.muted{color:#64748b}.mono,pre{font-family:ui-monospace,SFMono-Regular,Consolas,monospace}
+.report pre{white-space:pre-wrap;overflow-wrap:anywhere;font-size:15px;line-height:1.5;background:#eff3f7;color:#172638;padding:14px;border-radius:8px;max-height:470px;overflow:auto}
+.report select,.report input{padding:9px 12px;border:1px solid #8392a5;border-radius:6px;background:white;color:#172638}
+.report table{width:100%;border-collapse:collapse;table-layout:fixed}.report td,.report th{text-align:left;vertical-align:top;border-bottom:1px solid #9ba7b54a;padding:12px;overflow-wrap:anywhere}
+.report th{font-size:13px;text-transform:uppercase;letter-spacing:.06em;color:#64748b}.report td pre{margin:0;max-height:220px;font-size:14px}.report summary{cursor:pointer;font-weight:600}
+.report li{margin:16px 0;line-height:1.7}.pass{color:#16815c;font-weight:700}.section{min-height:500px}
+</style>
+<script type="text/jsx">
+const pretty = value => JSON.stringify(value,null,2);
+function Report(){
+ const [tab,setTab]=useState('Overview'),[fixture,setFixture]=useState(Object.keys(data.fixtures)[0]),[query,setQuery]=useState(''),[page,setPage]=useState(0);
+ const rows=data.assertions.filter(a=>(a.id+' '+a.expression).toLowerCase().includes(query.toLowerCase()));
+ const pageSize=2, pages=Math.max(1,Math.ceil(rows.length/pageSize));
+ const b3=data.id==='B3';
+ const highlights=b3?[
+ ['26 malformed shapes','13 shapes × documents / artifacts; typed source_mapping_invalid errors.'],
+ ['8 valid controls','Mapping, list, empty list and empty map preserve existing environments.'],
+ ['Integrity ≠ authenticity','Ordinary tamper is rejected; recomputed unkeyed metadata digest is accepted.']
+ ]:[
+ ['3 declared / 2 covered','Mixed source_cases retains the blocked scenario ID in uncovered.'],
+ ['Structure ≠ readiness','Public-only rate is 1; the complete draft-set gate remains below 1.'],
+ ['1 → 0 trusted readiness','Private evaluator blocking leaves public payload hashes unchanged.']
+ ];
+ return <PageLayout themeToggle={true} style={{maxWidth:1400,width:'100%',paddingTop:16,paddingBottom:16}}><main className="report">
+ <div className="notice">{data.label}</div>
+ <h1>{data.id} · {b3?'Input validation & snapshot trust':'Source readiness & private evaluator evidence'}</h1>
+ <p className="muted">Recorded evidence · completed controlled SDK experiment · read-only report</p>
+ <p className="mono" style={{fontSize:13}}>Product HEAD {data.commit_sha}</p>
+ <div className="nav" role="tablist" aria-label="Evidence sections">{['Overview','Fixtures','API calls','Assertions','Limitations','Raw observations'].map(t=><Button key={t} role="tab" aria-selected={tab===t} variant={tab===t?'primary':'secondary'} onClick={()=>setTab(t)}>{t}</Button>)}</div>
+ <section className="section" role="tabpanel" aria-label={tab}>
+ {tab==='Overview'&&<>
+ <div className="grid"><Card><CardBody><p className="muted">RECORDED ASSERTIONS</p><div className="metric">{data.assertions.length}/{data.assertions.length}</div><p className="pass">{data.status.toUpperCase()} · {data.summary}</p></CardBody></Card>
+ <Card><CardBody><p className="muted">EXECUTION SURFACE</p><h2>Local public SDK</h2><p>run_experiments.py → result.json</p></CardBody></Card>
+ <Card><CardBody><p className="muted">BROWSER PURPOSE</p><h2>Evidence viewer</h2><p>No SDK calls run in this dashboard.</p></CardBody></Card></div>
+ {highlights.map(([title,text])=><div className="box" key={title}><h3>{title}</h3><p>{text}</p></div>)}
+ <p className="muted">All values below are embedded verbatim from result.json. Passing assertions describe this fixture, not production readiness or agent success.</p>
+ </>}
+ {tab==='Fixtures'&&<><h2>Fixture inputs</h2><p>Recorded synthetic inputs and review configuration; no production data.</p><label>Fixture <select aria-label="Fixture" value={fixture} onChange={e=>setFixture(e.target.value)}>{Object.keys(data.fixtures).map(k=><option key={k}>{k}</option>)}</select></label><pre data-testid="fixture-json">{pretty(data.fixtures[fixture])}</pre>{b3?<p>Each malformed entry is tested against both documents and artifacts (26 total). Valid controls and collision constructions are shown in the Assertions and API calls evidence.</p>:<p>All-blocked fixture: unsupported prose is evaluator-only, so no public retrieval tools are implicitly declared.</p>}</>}
+ {tab==='API calls'&&<><h2>Public API calls & controlled fixture operations</h2><p>Recorded harness excerpts — displayed, not executed by the browser.</p>{data.api_calls.map((call,i)=><div key={i}><h3>Operation {i+1}</h3><pre>{call}</pre></div>)}<details><summary>Complete fixture and experiment harness source</summary><pre>{data.harness_source}</pre></details></>}
+ {tab==='Assertions'&&<><h2>Exact assertion ledger</h2><div className="nav"><label>Filter <input aria-label="Filter assertions" placeholder="ID or expression" value={query} onChange={e=>{setQuery(e.target.value);setPage(0)}}/></label><Button variant="secondary" disabled={page===0} onClick={()=>setPage(page-1)}>Previous</Button><Button variant="secondary" disabled={page+1>=pages} onClick={()=>setPage(page+1)}>Next</Button><span style={{padding:8}} data-testid="ledger-count">{rows.length} matching · Page {page+1} of {pages}</span></div>
+ <table aria-label="Exact assertions"><colgroup><col style={{width:'21%'}}/><col style={{width:'36%'}}/><col style={{width:'43%'}}/></colgroup><thead><tr><th>Assertion / result</th><th>Exact expression</th><th>Observed result (verbatim)</th></tr></thead><tbody>{rows.slice(page*pageSize,page*pageSize+pageSize).map(a=><tr key={a.id} data-testid="assertion-row"><td><strong>{a.id}</strong><p className="pass">{a.status.toUpperCase()}</p></td><td className="mono" style={{fontSize:15,lineHeight:1.65}}>{a.expression}</td><td><pre>{pretty(a.actual)}</pre></td></tr>)}</tbody></table><p className="muted">Long observed JSON scrolls within its cell. Filtering changes only the evidence view.</p></>}
+ {tab==='Limitations'&&<><h2>Limitations & interpretation</h2><ul>{data.limitations.map((s,i)=><li className="box" key={i}>{s}</li>)}</ul><div className="notice">This recording exercises a report of completed public-API experiments, not a live production application.</div></>}
+ {tab==='Raw observations'&&<><h2>Complete recorded observations</h2><p>Unmodified observations object from result.json. Exact assertion outcomes are in the assertion ledger.</p><pre>{pretty(data.observations)}</pre></>}
+ </section><p className="muted" style={{fontSize:13}}>Evidence source: result.json · Harness: ../run_experiments.py · No network dependencies or credentials required to view this file.</p>
+ </main></PageLayout>
+}
+render(<Report/>);
+</script>

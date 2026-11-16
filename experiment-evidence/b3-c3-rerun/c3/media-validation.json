@@ -1,0 +1,150 @@
+{
+  "status": "pass",
+  "codec": "h264",
+  "pixel_format": "yuv420p",
+  "width": 1440,
+  "height": 900,
+  "duration_seconds": 151.0,
+  "transcode_return_code": 0,
+  "ffprobe_return_code": 0,
+  "full_ffmpeg_decode_return_code": 0,
+  "native_ffprobe_return_code": 0,
+  "full_decode_error_log_empty": true,
+  "native_capture_provenance": {
+    "status": "pass",
+    "product_sha": "023abdf3655435a4b63177b3e24ee4c14df874ca",
+    "product_worktree_clean_before_capture": true,
+    "result_assertions": 15,
+    "viewport": {
+      "width": 1440,
+      "height": 900
+    },
+    "browser": "159.0.8154.6",
+    "playwright_version": "1.65.2",
+    "capture": "One continuous native Playwright context video; no screenshots used as frames; no synthetic cursor",
+    "record_video_dir": "/home/ubuntu/alk-rerun/c3/native",
+    "record_video_size": {
+      "width": 1440,
+      "height": 900
+    },
+    "native_video": "/home/ubuntu/alk-rerun/c3/browser.native.webm",
+    "native_sha256": "69270c42a242f1ba38ddf07759c03a050e0ff338f70618a254678881c6d3be0b",
+    "browser_errors": [],
+    "checks": [
+      {
+        "elapsed_seconds": 0.59,
+        "assertion": "Overview: exact disclaimer, 15/15 recorded passes, read-only scope",
+        "status": "pass"
+      },
+      {
+        "elapsed_seconds": 11.71,
+        "assertion": "Fixture 'reviewed' matches result.json exactly",
+        "status": "pass"
+      },
+      {
+        "elapsed_seconds": 16.79,
+        "assertion": "Fixture 'missing_relationship_target_requirements' matches result.json exactly",
+        "status": "pass"
+      },
+      {
+        "elapsed_seconds": 21.88,
+        "assertion": "Fixture 'requested_count' matches result.json exactly",
+        "status": "pass"
+      },
+      {
+        "elapsed_seconds": 26.96,
+        "assertion": "Fixture 'all_blocked_no_tool' matches result.json exactly",
+        "status": "pass"
+      },
+      {
+        "elapsed_seconds": 48.23,
+        "assertion": "All recorded API excerpts match result.json; full construction harness is available",
+        "status": "pass"
+      },
+      {
+        "elapsed_seconds": 88.73,
+        "assertion": "All 15 assertion IDs, exact expressions, statuses and observed JSON verified through ledger pagination",
+        "status": "pass"
+      },
+      {
+        "elapsed_seconds": 134.15,
+        "assertion": "Representative security/readiness evidence isolated with the visible filter",
+        "status": "pass"
+      },
+      {
+        "elapsed_seconds": 142.23,
+        "assertion": "Every recorded limitation is visible, including non-production scope",
+        "status": "pass"
+      },
+      {
+        "elapsed_seconds": 145.26,
+        "assertion": "Complete observations object matches original result.json",
+        "status": "pass"
+      },
+      {
+        "elapsed_seconds": 148.33,
+        "assertion": "No browser JavaScript or console errors; CDN requests blocked",
+        "status": "pass"
+      }
+    ]
+  },
+  "native_duration_seconds": 151.0,
+  "native_codec": "vp9",
+  "transcode_count": 1,
+  "capture_method": "Playwright BrowserContext record_video_dir + record_video_size, continuous single page/context",
+  "not_screenshot_synthesis": true,
+  "synthetic_cursor_added": false,
+  "mp4_sha256": "2ce3c0a5773f8169b1edea54610f093304dd7b71d08493f0c26caae48f668ac7",
+  "native_sha256": "69270c42a242f1ba38ddf07759c03a050e0ff338f70618a254678881c6d3be0b",
+  "commands": [
+    [
+      "ffmpeg",
+      "-y",
+      "-i",
+      "/home/ubuntu/alk-rerun/c3/browser.native.webm",
+      "-c:v",
+      "libx264",
+      "-preset",
+      "medium",
+      "-crf",
+      "18",
+      "-pix_fmt",
+      "yuv420p",
+      "-movflags",
+      "+faststart",
+      "-an",
+      "/home/ubuntu/alk-rerun/c3/browser.mp4"
+    ],
+    [
+      "ffprobe",
+      "-v",
+      "error",
+      "-show_format",
+      "-show_streams",
+      "-of",
+      "json",
+      "/home/ubuntu/alk-rerun/c3/browser.mp4"
+    ],
+    [
+      "ffmpeg",
+      "-v",
+      "error",
+      "-xerror",
+      "-i",
+      "/home/ubuntu/alk-rerun/c3/browser.mp4",
+      "-f",
+      "null",
+      "-"
+    ],
+    [
+      "ffprobe",
+      "-v",
+      "error",
+      "-show_format",
+      "-show_streams",
+      "-of",
+      "json",
+      "/home/ubuntu/alk-rerun/c3/browser.native.webm"
+    ]
+  ]
+}

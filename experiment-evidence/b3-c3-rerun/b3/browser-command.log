@@ -1,0 +1,48 @@
+Evidence-only browser/media setup; no SDK, pytest or Ruff reruns.
+Additional video frame QA commands (assertions.png ultimately extracted from MP4):
+$ ffmpeg -v error -ss 85 -i /home/ubuntu/alk-rerun/b3/browser.native.webm -frames:v 1 /home/ubuntu/alk-rerun/b3/assertions.png
+$ ffmpeg -y -v error -ss 140 -i /home/ubuntu/alk-rerun/b3/browser.mp4 -frames:v 1 /home/ubuntu/alk-rerun/b3/assertions.png
+
+Product precondition checks:
+$ git -C /home/ubuntu/repos/agent-learning-kit status --porcelain
+$ git -C /home/ubuntu/repos/agent-learning-kit rev-parse HEAD
+Expected: clean worktree, HEAD 023abdf3655435a4b63177b3e24ee4c14df874ca
+Both JSON status/count/row statuses checked in Python before each capture.
+
+Browser tooling setup:
+$ python -m venv /home/ubuntu/alk-rerun/browser-tools
+$ /home/ubuntu/alk-rerun/browser-tools/bin/pip install playwright
+$ /home/ubuntu/alk-rerun/browser-tools/bin/playwright install chromium
+Installed playwright 1.65.2; greenlet 3.5.6; pinned browser revision recorded by Playwright package.
+
+Report tooling:
+html_artifact_create(path="/home/ubuntu/alk-rerun/b3/dashboard.body.html", template="blank")
+html_artifact_create(path="/home/ubuntu/alk-rerun/c3/dashboard.body.html", template="blank")
+$ python /home/ubuntu/alk-rerun/prepare_dashboards.py
+html_artifact_compile(body_path="/home/ubuntu/alk-rerun/b3/dashboard.body.html", output_path="/home/ubuntu/alk-rerun/b3/dashboard.compiled.html", data_path="/home/ubuntu/alk-rerun/b3/dashboard-data.json", screenshot=false, overwrite=true)
+html_artifact_compile(body_path="/home/ubuntu/alk-rerun/c3/dashboard.body.html", output_path="/home/ubuntu/alk-rerun/c3/dashboard.compiled.html", data_path="/home/ubuntu/alk-rerun/c3/dashboard-data.json", screenshot=false, overwrite=true)
+$ python /home/ubuntu/alk-rerun/package_dashboards.py
+Portable packaging copies inline the pinned CDN kit dependencies without changing original dashboard.compiled.html.
+Dependency provenance and decoded-content hashes: dependency-provenance.json
+
+Dry run (no video):
+$ /home/ubuntu/alk-rerun/browser-tools/bin/python /home/ubuntu/alk-rerun/record_dashboards.py
+Initial dry run caught Python JSON float rendering 1.0 versus JavaScript rendering 1.
+Harness compares observed JSON values semantically (1 == 1.0), but expression text and IDs exactly.
+Layout expanded after preview. Final dry run passed both ledgers, fixtures and limitation checks.
+
+Native recordings (one context/video per experiment, viewport and record_video_size both 1440x900):
+$ /home/ubuntu/alk-rerun/browser-tools/bin/python /home/ubuntu/alk-rerun/record_dashboards.py --record --experiment b3
+$ /home/ubuntu/alk-rerun/browser-tools/bin/python /home/ubuntu/alk-rerun/record_dashboards.py --record --experiment c3
+Each capture starts by verifying both authoritative result statuses/counts and clean exact product HEAD.
+The script starts its own loopback ThreadingHTTPServer on an ephemeral port.
+No remote resources allowed by Playwright route; no real SDK execution in the report.
+Native output is renamed from Playwright's random filename to browser.native.webm after context.close().
+
+Media processing:
+$ python /home/ubuntu/alk-rerun/validate_media.py
+Exact ffmpeg/ffprobe commands are appended to each experiment's browser-command.log.
+$ ffmpeg -y -i /home/ubuntu/alk-rerun/b3/browser.native.webm -c:v libx264 -preset medium -crf 18 -pix_fmt yuv420p -movflags +faststart -an /home/ubuntu/alk-rerun/b3/browser.mp4
+$ ffprobe -v error -show_format -show_streams -of json /home/ubuntu/alk-rerun/b3/browser.mp4
+$ ffmpeg -v error -xerror -i /home/ubuntu/alk-rerun/b3/browser.mp4 -f null -
+$ ffprobe -v error -show_format -show_streams -of json /home/ubuntu/alk-rerun/b3/browser.native.webm

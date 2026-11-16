@@ -1,0 +1,680 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="generator" content="Devin artifact kit" />
+    <meta name="artifact-built-at" content="2026-11-16T09:55:26Z" />
+    <title>Artifact</title>
+    <script>
+      // A network that blocks the kit's host (or hands back a block page for it) leaves the page blank; say so instead. Styled like the
+      // ds error alert card (ChatAlertCard variant="error", no bar), values hardcoded: the kit CSS is what failed.
+      function artifactKitFailed() {
+        function show() {
+          if (document.getElementById("artifact-kit-notice")) return;
+          document.documentElement.style.colorScheme = "light";
+          var notice = document.createElement("div");
+          notice.id = "artifact-kit-notice";
+          notice.setAttribute("role", "alert");
+          notice.style.cssText =
+            "box-sizing:border-box;display:flex;align-items:flex-start;gap:6px;max-width:960px;margin:0 auto;padding:32px 24px 0;" +
+            "font:13px/18px Inter,ui-sans-serif,system-ui,sans-serif;letter-spacing:-0.005em;color:rgb(25 25 25)";
+          var ns = "http://www.w3.org/2000/svg";
+          var icon = document.createElementNS(ns, "svg");
+          icon.setAttribute("viewBox", "0 0 24 24");
+          icon.setAttribute("fill", "rgb(245 59 58)");
+          icon.setAttribute("aria-hidden", "true");
+          icon.style.cssText = "width:14px;height:14px;flex-shrink:0;margin-top:2px";
+          var path = document.createElementNS(ns, "path");
+          path.setAttribute("fill-rule", "evenodd");
+          path.setAttribute("clip-rule", "evenodd");
+          path.setAttribute(
+            "d",
+            "M12 2C17.5228 2 22 6.47715 22 12C22 17.5228 17.5228 22 12 22C6.47715 22 2 17.5228 2 12C2 6.47715 6.47715 2 12 2ZM12 15C11.4477 15 11 15.4477 11 16C11 16.5523 11.4477 17 12 17C12.5523 17 13 16.5523 13 16C13 15.4477 12.5523 15 12 15ZM12 7C11.5858 7 11.25 7.33579 11.25 7.75V12.25C11.25 12.6642 11.5858 13 12 13C12.4142 13 12.75 12.6642 12.75 12.25V7.75C12.75 7.33579 12.4142 7 12 7Z"
+          );
+          icon.appendChild(path);
+          var text = document.createElement("span");
+          text.textContent = "This page could not load Devin's artifact kit.";
+          notice.appendChild(icon);
+          notice.appendChild(text);
+          document.body.prepend(notice);
+        }
+        if (document.body) show();
+        else document.addEventListener("DOMContentLoaded", show);
+      }
+    </script>
+    <link rel="stylesheet" href="https://static.devin.ai/artifact-kit/cc8965d841fb2ec5/ds-kit.css" onerror="artifactKitFailed()" />
+    <style>
+    .table {
+        display: table
+    }
+    .grid {
+        display: grid
+    }
+    .filter {
+        filter: var(--tw-blur) var(--tw-brightness) var(--tw-contrast) var(--tw-grayscale) var(--tw-hue-rotate) var(--tw-invert) var(--tw-saturate) var(--tw-sepia) var(--tw-drop-shadow)
+    }
+    @keyframes enter {
+        from {
+            opacity: var(--tw-enter-opacity, 1);
+            transform: translate3d(var(--tw-enter-translate-x, 0), var(--tw-enter-translate-y, 0), 0) scale3d(var(--tw-enter-scale, 1), var(--tw-enter-scale, 1), var(--tw-enter-scale, 1)) rotate(var(--tw-enter-rotate, 0))
+        }
+    }
+    @keyframes exit {
+        to {
+            opacity: var(--tw-exit-opacity, 1);
+            transform: translate3d(var(--tw-exit-translate-x, 0), var(--tw-exit-translate-y, 0), 0) scale3d(var(--tw-exit-scale, 1), var(--tw-exit-scale, 1), var(--tw-exit-scale, 1)) rotate(var(--tw-exit-rotate, 0))
+        }
+    }
+    </style>
+  </head>
+  <body>
+    <script src="https://static.devin.ai/artifact-kit/cc8965d841fb2ec5/ds-kit.js" onerror="artifactKitFailed()"></script>
+    <script>
+      if (!window.DS) artifactKitFailed();
+    </script>
+    <main data-artifact-shell class="mx-auto flex max-w-[960px] flex-col gap-6 px-6 py-8">
+<script type="application/json" id="artifact-data">{
+  "id": "B3",
+  "label": "ALK sandbox experiment using public APIs — not the production Future AGI platform.",
+  "commit_sha": "023abdf3655435a4b63177b3e24ee4c14df874ca",
+  "status": "pass",
+  "assertions": [
+    {
+      "id": "documents/missing-id",
+      "expression": "isinstance(exc, EnvironmentInputError) and exc.code == 'source_mapping_invalid'; construction and compile both inside try",
+      "status": "pass",
+      "actual": {
+        "exception": "EnvironmentInputError",
+        "code": "source_mapping_invalid",
+        "message": "Environment documents identifiers must be nonempty strings"
+      }
+    },
+    {
+      "id": "documents/null-id",
+      "expression": "isinstance(exc, EnvironmentInputError) and exc.code == 'source_mapping_invalid'; construction and compile both inside try",
+      "status": "pass",
+      "actual": {
+        "exception": "EnvironmentInputError",
+        "code": "source_mapping_invalid",
+        "message": "Environment documents identifiers must be nonempty strings"
+      }
+    },
+    {
+      "id": "documents/blank-id",
+      "expression": "isinstance(exc, EnvironmentInputError) and exc.code == 'source_mapping_invalid'; construction and compile both inside try",
+      "status": "pass",
+      "actual": {
+        "exception": "EnvironmentInputError",
+        "code": "source_mapping_invalid",
+        "message": "Environment documents identifiers must be nonempty strings"
+      }
+    },
+    {
+      "id": "documents/whitespace-id",
+      "expression": "isinstance(exc, EnvironmentInputError) and exc.code == 'source_mapping_invalid'; construction and compile both inside try",
+      "status": "pass",
+      "actual": {
+        "exception": "EnvironmentInputError",
+        "code": "source_mapping_invalid",
+        "message": "Environment documents identifiers must be nonempty strings"
+      }
+    },
+    {
+      "id": "documents/integer-id",
+      "expression": "isinstance(exc, EnvironmentInputError) and exc.code == 'source_mapping_invalid'; construction and compile both inside try",
+      "status": "pass",
+      "actual": {
+        "exception": "EnvironmentInputError",
+        "code": "source_mapping_invalid",
+        "message": "Environment documents identifiers must be nonempty strings"
+      }
+    },
+    {
+      "id": "documents/list-id",
+      "expression": "isinstance(exc, EnvironmentInputError) and exc.code == 'source_mapping_invalid'; construction and compile both inside try",
+      "status": "pass",
+      "actual": {
+        "exception": "EnvironmentInputError",
+        "code": "source_mapping_invalid",
+        "message": "Environment documents identifiers must be nonempty strings"
+      }
+    },
+    {
+      "id": "documents/null-member",
+      "expression": "isinstance(exc, EnvironmentInputError) and exc.code == 'source_mapping_invalid'; construction and compile both inside try",
+      "status": "pass",
+      "actual": {
+        "exception": "EnvironmentInputError",
+        "code": "source_mapping_invalid",
+        "message": "Environment documents entries must be objects"
+      }
+    },
+    {
+      "id": "documents/scalar-string",
+      "expression": "isinstance(exc, EnvironmentInputError) and exc.code == 'source_mapping_invalid'; construction and compile both inside try",
+      "status": "pass",
+      "actual": {
+        "exception": "EnvironmentInputError",
+        "code": "source_mapping_invalid",
+        "message": "Environment documents must be a mapping or sequence"
+      }
+    },
+    {
+      "id": "documents/scalar-null",
+      "expression": "isinstance(exc, EnvironmentInputError) and exc.code == 'source_mapping_invalid'; construction and compile both inside try",
+      "status": "pass",
+      "actual": {
+        "exception": "EnvironmentInputError",
+        "code": "source_mapping_invalid",
+        "message": "Environment documents must be a mapping or sequence"
+      }
+    },
+    {
+      "id": "documents/scalar-integer",
+      "expression": "isinstance(exc, EnvironmentInputError) and exc.code == 'source_mapping_invalid'; construction and compile both inside try",
+      "status": "pass",
+      "actual": {
+        "exception": "EnvironmentInputError",
+        "code": "source_mapping_invalid",
+        "message": "Environment documents must be a mapping or sequence"
+      }
+    },
+    {
+      "id": "documents/blank-map-key",
+      "expression": "isinstance(exc, EnvironmentInputError) and exc.code == 'source_mapping_invalid'; construction and compile both inside try",
+      "status": "pass",
+      "actual": {
+        "exception": "EnvironmentInputError",
+        "code": "source_mapping_invalid",
+        "message": "Environment documents identifiers must be nonempty strings"
+      }
+    },
+    {
+      "id": "documents/whitespace-map-key",
+      "expression": "isinstance(exc, EnvironmentInputError) and exc.code == 'source_mapping_invalid'; construction and compile both inside try",
+      "status": "pass",
+      "actual": {
+        "exception": "EnvironmentInputError",
+        "code": "source_mapping_invalid",
+        "message": "Environment documents identifiers must be nonempty strings"
+      }
+    },
+    {
+      "id": "documents/integer-map-key",
+      "expression": "isinstance(exc, EnvironmentInputError) and exc.code == 'source_mapping_invalid'; construction and compile both inside try",
+      "status": "pass",
+      "actual": {
+        "exception": "EnvironmentInputError",
+        "code": "source_mapping_invalid",
+        "message": "Environment documents identifiers must be nonempty strings"
+      }
+    },
+    {
+      "id": "documents/valid-mapping",
+      "expression": "valid mapping/list compiles and preserves existing environment",
+      "status": "pass",
+      "actual": {
+        "type": "retrieval_memory",
+        "data": {
+          "documents": {
+            "valid-id": {}
+          }
+        }
+      }
+    },
+    {
+      "id": "documents/valid-list",
+      "expression": "valid mapping/list compiles and preserves existing environment",
+      "status": "pass",
+      "actual": {
+        "type": "retrieval_memory",
+        "data": {
+          "documents": [
+            {
+              "id": "valid-id"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "documents/valid-empty-list",
+      "expression": "valid mapping/list compiles and preserves existing environment",
+      "status": "pass",
+      "actual": {
+        "type": "retrieval_memory",
+        "data": {
+          "documents": []
+        }
+      }
+    },
+    {
+      "id": "documents/valid-empty-map",
+      "expression": "valid mapping/list compiles and preserves existing environment",
+      "status": "pass",
+      "actual": {
+        "type": "retrieval_memory",
+        "data": {
+          "documents": {}
+        }
+      }
+    },
+    {
+      "id": "artifacts/missing-id",
+      "expression": "isinstance(exc, EnvironmentInputError) and exc.code == 'source_mapping_invalid'; construction and compile both inside try",
+      "status": "pass",
+      "actual": {
+        "exception": "EnvironmentInputError",
+        "code": "source_mapping_invalid",
+        "message": "Environment artifacts identifiers must be nonempty strings"
+      }
+    },
+    {
+      "id": "artifacts/null-id",
+      "expression": "isinstance(exc, EnvironmentInputError) and exc.code == 'source_mapping_invalid'; construction and compile both inside try",
+      "status": "pass",
+      "actual": {
+        "exception": "EnvironmentInputError",
+        "code": "source_mapping_invalid",
+        "message": "Environment artifacts identifiers must be nonempty strings"
+      }
+    },
+    {
+      "id": "artifacts/blank-id",
+      "expression": "isinstance(exc, EnvironmentInputError) and exc.code == 'source_mapping_invalid'; construction and compile both inside try",
+      "status": "pass",
+      "actual": {
+        "exception": "EnvironmentInputError",
+        "code": "source_mapping_invalid",
+        "message": "Environment artifacts identifiers must be nonempty strings"
+      }
+    },
+    {
+      "id": "artifacts/whitespace-id",
+      "expression": "isinstance(exc, EnvironmentInputError) and exc.code == 'source_mapping_invalid'; construction and compile both inside try",
+      "status": "pass",
+      "actual": {
+        "exception": "EnvironmentInputError",
+        "code": "source_mapping_invalid",
+        "message": "Environment artifacts identifiers must be nonempty strings"
+      }
+    },
+    {
+      "id": "artifacts/integer-id",
+      "expression": "isinstance(exc, EnvironmentInputError) and exc.code == 'source_mapping_invalid'; construction and compile both inside try",
+      "status": "pass",
+      "actual": {
+        "exception": "EnvironmentInputError",
+        "code": "source_mapping_invalid",
+        "message": "Environment artifacts identifiers must be nonempty strings"
+      }
+    },
+    {
+      "id": "artifacts/list-id",
+      "expression": "isinstance(exc, EnvironmentInputError) and exc.code == 'source_mapping_invalid'; construction and compile both inside try",
+      "status": "pass",
+      "actual": {
+        "exception": "EnvironmentInputError",
+        "code": "source_mapping_invalid",
+        "message": "Environment artifacts identifiers must be nonempty strings"
+      }
+    },
+    {
+      "id": "artifacts/null-member",
+      "expression": "isinstance(exc, EnvironmentInputError) and exc.code == 'source_mapping_invalid'; construction and compile both inside try",
+      "status": "pass",
+      "actual": {
+        "exception": "EnvironmentInputError",
+        "code": "source_mapping_invalid",
+        "message": "Environment artifacts entries must be objects"
+      }
+    },
+    {
+      "id": "artifacts/scalar-string",
+      "expression": "isinstance(exc, EnvironmentInputError) and exc.code == 'source_mapping_invalid'; construction and compile both inside try",
+      "status": "pass",
+      "actual": {
+        "exception": "EnvironmentInputError",
+        "code": "source_mapping_invalid",
+        "message": "Environment artifacts must be a mapping or sequence"
+      }
+    },
+    {
+      "id": "artifacts/scalar-null",
+      "expression": "isinstance(exc, EnvironmentInputError) and exc.code == 'source_mapping_invalid'; construction and compile both inside try",
+      "status": "pass",
+      "actual": {
+        "exception": "EnvironmentInputError",
+        "code": "source_mapping_invalid",
+        "message": "Environment artifacts must be a mapping or sequence"
+      }
+    },
+    {
+      "id": "artifacts/scalar-integer",
+      "expression": "isinstance(exc, EnvironmentInputError) and exc.code == 'source_mapping_invalid'; construction and compile both inside try",
+      "status": "pass",
+      "actual": {
+        "exception": "EnvironmentInputError",
+        "code": "source_mapping_invalid",
+        "message": "Environment artifacts must be a mapping or sequence"
+      }
+    },
+    {
+      "id": "artifacts/blank-map-key",
+      "expression": "isinstance(exc, EnvironmentInputError) and exc.code == 'source_mapping_invalid'; construction and compile both inside try",
+      "status": "pass",
+      "actual": {
+        "exception": "EnvironmentInputError",
+        "code": "source_mapping_invalid",
+        "message": "Environment artifacts identifiers must be nonempty strings"
+      }
+    },
+    {
+      "id": "artifacts/whitespace-map-key",
+      "expression": "isinstance(exc, EnvironmentInputError) and exc.code == 'source_mapping_invalid'; construction and compile both inside try",
+      "status": "pass",
+      "actual": {
+        "exception": "EnvironmentInputError",
+        "code": "source_mapping_invalid",
+        "message": "Environment artifacts identifiers must be nonempty strings"
+      }
+    },
+    {
+      "id": "artifacts/integer-map-key",
+      "expression": "isinstance(exc, EnvironmentInputError) and exc.code == 'source_mapping_invalid'; construction and compile both inside try",
+      "status": "pass",
+      "actual": {
+        "exception": "EnvironmentInputError",
+        "code": "source_mapping_invalid",
+        "message": "Environment artifacts identifiers must be nonempty strings"
+      }
+    },
+    {
+      "id": "artifacts/valid-mapping",
+      "expression": "valid mapping/list compiles and preserves existing environment",
+      "status": "pass",
+      "actual": {
+        "type": "structured_artifacts",
+        "data": {
+          "artifacts": {
+            "valid-id": {}
+          }
+        }
+      }
+    },
+    {
+      "id": "artifacts/valid-list",
+      "expression": "valid mapping/list compiles and preserves existing environment",
+      "status": "pass",
+      "actual": {
+        "type": "structured_artifacts",
+        "data": {
+          "artifacts": [
+            {
+              "id": "valid-id"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "artifacts/valid-empty-list",
+      "expression": "valid mapping/list compiles and preserves existing environment",
+      "status": "pass",
+      "actual": {
+        "type": "structured_artifacts",
+        "data": {
+          "artifacts": []
+        }
+      }
+    },
+    {
+      "id": "artifacts/valid-empty-map",
+      "expression": "valid mapping/list compiles and preserves existing environment",
+      "status": "pass",
+      "actual": {
+        "type": "structured_artifacts",
+        "data": {
+          "artifacts": {}
+        }
+      }
+    },
+    {
+      "id": "collision/duplicate-list",
+      "expression": "isinstance(exc, EnvironmentInputError) and exc.code == 'source_mapping_invalid'; construction and compile both inside try",
+      "status": "pass",
+      "actual": {
+        "exception": "EnvironmentInputError",
+        "code": "source_mapping_invalid",
+        "message": "Environment adapter, tool or identifier collision"
+      }
+    },
+    {
+      "id": "collision/cross-adapter",
+      "expression": "isinstance(exc, EnvironmentInputError) and exc.code == 'source_mapping_invalid'; construction and compile both inside try",
+      "status": "pass",
+      "actual": {
+        "exception": "EnvironmentInputError",
+        "code": "source_mapping_invalid",
+        "message": "Environment adapter, tool or identifier collision"
+      }
+    },
+    {
+      "id": "snapshot/valid-roundtrip",
+      "expression": "deserialize_environment_snapshot(serialize_environment_snapshot(reviewed)) == reviewed",
+      "status": "pass",
+      "actual": {
+        "wire_sha256": "e1780657d0de401b57a577dcbb943ec0c4cca311a638f57c6b70e01720477f53"
+      }
+    },
+    {
+      "id": "snapshot/ordinary-envelope-tamper",
+      "expression": "isinstance(exc, EnvironmentInputError) and exc.code == 'source_snapshot_invalid'; construction and compile both inside try",
+      "status": "pass",
+      "actual": {
+        "exception": "EnvironmentInputError",
+        "code": "source_snapshot_invalid",
+        "message": "The source snapshot is invalid or changed"
+      }
+    },
+    {
+      "id": "snapshot/recomputed-unkeyed-digest-classification",
+      "expression": "rewritten reviewer accepted after outer checksum recomputation; classify as authenticity limitation",
+      "status": "pass",
+      "actual": {
+        "accepted_reviewer_id": "attacker-rewritten-reviewer",
+        "classification": "authenticity limitation of caller-owned trusted storage and unkeyed envelope checksum",
+        "source_content_modified": false
+      }
+    },
+    {
+      "id": "snapshot/source-content-tamper-without-rehash",
+      "expression": "isinstance(exc, EnvironmentInputError) and exc.code == 'source_snapshot_invalid'; construction and compile both inside try",
+      "status": "pass",
+      "actual": {
+        "exception": "EnvironmentInputError",
+        "code": "source_snapshot_invalid",
+        "message": "The source snapshot is invalid or changed"
+      }
+    },
+    {
+      "id": "snapshot/source-content-outer-rehash-only",
+      "expression": "isinstance(exc, EnvironmentInputError) and exc.code == 'source_snapshot_invalid'; construction and compile both inside try",
+      "status": "pass",
+      "actual": {
+        "exception": "EnvironmentInputError",
+        "code": "source_snapshot_invalid",
+        "message": "The source snapshot is invalid or changed"
+      }
+    }
+  ],
+  "fixtures": {
+    "reviewed": {
+      "policy_text": "Refund responses must contain \"approved\".\n\nThe response must not contain \"forbidden\".",
+      "policy_visibility": "evaluator_only",
+      "customers.csv": null,
+      "orders.json": null,
+      "review": {
+        "expected_draft_digest": "sha256:0b20d109ed74d8c106539cf29bd3cc48dba4d9f19e2f043ac347e3fabc76d74a",
+        "record_reviews": [],
+        "policy_reviews": [
+          {
+            "source_id": "public-policy",
+            "visibility": "evaluator_only",
+            "rules": [
+              {
+                "proposal": {
+                  "rule_id": "public-policy:page:1:statement:1:rule",
+                  "statement_id": "public-policy:page:1:statement:1",
+                  "kind": "required_behavior",
+                  "check_type": "contains",
+                  "check_arguments": {
+                    "value": "approved"
+                  },
+                  "conflict_group": null,
+                  "status": "supported"
+                },
+                "decision": "accepted"
+              },
+              {
+                "proposal": {
+                  "rule_id": "public-policy:page:1:statement:2:rule",
+                  "statement_id": "public-policy:page:1:statement:2",
+                  "kind": "forbidden_behavior",
+                  "check_type": "not_contains",
+                  "check_arguments": {
+                    "value": "forbidden"
+                  },
+                  "conflict_group": null,
+                  "status": "supported"
+                },
+                "decision": "accepted"
+              }
+            ]
+          }
+        ],
+        "relationships": []
+      },
+      "snapshot_id": "source_snapshot_beb436cf77520136"
+    },
+    "malformed_entries": [
+      {
+        "name": "missing-id",
+        "entries": [
+          {}
+        ]
+      },
+      {
+        "name": "null-id",
+        "entries": [
+          {
+            "id": null
+          }
+        ]
+      },
+      {
+        "name": "blank-id",
+        "entries": [
+          {
+            "id": ""
+          }
+        ]
+      },
+      {
+        "name": "whitespace-id",
+        "entries": [
+          {
+            "id": "  "
+          }
+        ]
+      },
+      {
+        "name": "integer-id",
+        "entries": [
+          {
+            "id": 1
+          }
+        ]
+      },
+      {
+        "name": "list-id",
+        "entries": [
+          {
+            "id": []
+          }
+        ]
+      },
+      {
+        "name": "null-member",
+        "entries": [
+          null
+        ]
+      },
+      {
+        "name": "scalar-string",
+        "entries": "document-id"
+      },
+      {
+        "name": "scalar-null",
+        "entries": null
+      },
+      {
+        "name": "scalar-integer",
+        "entries": 1
+      },
+      {
+        "name": "blank-map-key",
+        "entries": {
+          "": {}
+        }
+      },
+      {
+        "name": "whitespace-map-key",
+        "entries": {
+          " ": {}
+        }
+      },
+      {
+        "name": "integer-map-key",
+        "entries": {
+          "1": {}
+        }
+      }
+    ]
+  },
+  "api_calls": [
+    "try:\n    existing = AgentEnvironmentSpec(adapter, {field: entries})\n    compile_environment_inputs(reviewed, existing_environments=(existing,))\nexcept Exception as exc:\n    assert isinstance(exc, EnvironmentInputError)\n    assert exc.code == 'source_mapping_invalid'",
+    "serialize_environment_snapshot(reviewed)",
+    "deserialize_environment_snapshot(wire)"
+  ],
+  "observations": {},
+  "limitations": [
+    "Unkeyed checksums detect modification relative to trusted digests; they do not authenticate an attacker-writable envelope. Recomputed reviewer metadata checksum acceptance is an authenticity limitation, not a failed source-content integrity assertion.",
+    "Source text tampering remains rejected if only the outer digest is recomputed; no keyed signature or trusted external digest is supplied.",
+    "Controlled local public SDK APIs only; no production platform E2E claim."
+  ],
+  "summary": "41/41 exact assertions passed",
+  "harness_source": "def pdf(text):\n    out = io.BytesIO()\n    writer = PdfWriter()\n    page = writer.add_blank_page(width=612, height=792)\n    font = DictionaryObject({NameObject(\"/Type\"): NameObject(\"/Font\"), NameObject(\"/Subtype\"): NameObject(\"/Type1\"), NameObject(\"/BaseFont\"): NameObject(\"/Helvetica\")})\n    page[NameObject(\"/Resources\")] = DictionaryObject({NameObject(\"/Font\"): DictionaryObject({NameObject(\"/F1\"): writer._add_object(font)})})\n    stream = DecodedStreamObject()\n    safe = text.replace(\"\\\\\", \"\\\\\\\\\").replace(\"(\", \"\\\\(\").replace(\")\", \"\\\\)\")\n    stream.set_data(f\"BT /F1 12 Tf 72 720 Td ({safe}) Tj ET\".encode())\n    page[NameObject(\"/Contents\")] = writer._add_object(stream)\n    writer.write(out)\n    return out.getvalue()\n\ndef fixture(*, hidden=False, unsupported=False):\n    text = \"Explain the policy courteously.\" if unsupported else POLICY\n    sources = [EnvironmentSource(\"public-policy\", \"refund-policy.pdf\", \"application/pdf\", pdf(text), \"policy\")]\n    schema = DestinationSchema(tuple(DestinationField(x, \"string\") for x in (\"customer_id\", \"name\", \"status\")))\n    if not hidden and not unsupported:\n        sources += [EnvironmentSource(\"customers\", \"customers.csv\", \"text/csv\", b\"customer_id,name\\nC17,Alice\\n\", \"seed_records\"), EnvironmentSource(\"orders\", \"orders.json\", \"application/json\", b'[{\"buyer_id\":\"C17\",\"status\":\"eligible\"}]', \"seed_records\")]\n    draft = prepare_environment_inputs(tuple(sources), destination_schema=schema)\n    rules = tuple(PolicyRuleReview(p, \"accepted\" if p.status == \"supported\" else \"reference_only\") for p in draft.proposals.policy_rules)\n    records = () if hidden or unsupported else (\n        RecordReview(\"customers\", \"agent_visible\", \"synthetic_replace\", (FieldMapping(\"customer_id\", \"customer_id\", \"string\", True, True), FieldMapping(\"name\", \"name\", \"string\", personal_data=True))),\n        RecordReview(\"orders\", \"agent_visible\", \"synthetic_replace\", (FieldMapping(\"buyer_id\", \"customer_id\", \"string\", True, True), FieldMapping(\"status\", \"status\", \"string\"))),\n    )\n    relationships = () if hidden or unsupported else (RecordRelationship(\"orders\", \"customer_id\", \"customers\", \"customer_id\"),)\n    review = EnvironmentInputReview(draft.draft_digest, records, (PolicyReview(\"public-policy\", \"evaluator_only\" if hidden else \"agent_visible\", rules),), relationships=relationships)\n    reviewed = review_environment_inputs(draft, review=review, reviewer_id=\"rerun-reviewer\")\n    inputs = {\"policy_text\": text, \"policy_visibility\": \"evaluator_only\" if hidden else \"agent_visible\", \"customers.csv\": None if not records else \"customer_id,name\\nC17,Alice\\n\", \"orders.json\": None if not records else [{\"buyer_id\": \"C17\", \"status\": \"eligible\"}], \"review\": asdict(review), \"snapshot_id\": reviewed.snapshot_id}\n    return reviewed, inputs\n\ndef b3(e):\n    reviewed, inputs = fixture(hidden=True)\n    e.result[\"fixtures\"][\"reviewed\"] = inputs\n    malformed = [({}, \"missing-id\"), ({\"id\": None}, \"null-id\"), ({\"id\": \"\"}, \"blank-id\"), ({\"id\": \"  \"}, \"whitespace-id\"), ({\"id\": 1}, \"integer-id\"), ({\"id\": []}, \"list-id\")]\n    cases = [(name, [entry]) for entry, name in malformed] + [(\"null-member\", [None]), (\"scalar-string\", \"document-id\"), (\"scalar-null\", None), (\"scalar-integer\", 1), (\"blank-map-key\", {\"\": {}}), (\"whitespace-map-key\", {\" \": {}}), (\"integer-map-key\", {1: {}})]\n    e.result[\"fixtures\"][\"malformed_entries\"] = [{\"name\": name, \"entries\": entries} for name, entries in cases]\n    e.result[\"api_calls\"] += [\"try:\\n    existing = AgentEnvironmentSpec(adapter, {field: entries})\\n    compile_environment_inputs(reviewed, existing_environments=(existing,))\\nexcept Exception as exc:\\n    assert isinstance(exc, EnvironmentInputError)\\n    assert exc.code == 'source_mapping_invalid'\", \"serialize_environment_snapshot(reviewed)\", \"deserialize_environment_snapshot(wire)\"]\n    for field, adapter in ((\"documents\", \"retrieval_memory\"), (\"artifacts\", \"structured_artifacts\")):\n        for name, entries in cases:\n            def invoke(entries=entries, field=field, adapter=adapter):\n                existing = AgentEnvironmentSpec(adapter, {field: entries})\n                return compile_environment_inputs(reviewed, existing_environments=(existing,))\n            e.typed_error(f\"{field}/{name}\", invoke, \"source_mapping_invalid\")\n        for name, entries in ((\"mapping\", {\"valid-id\": {}}), (\"list\", [{\"id\": \"valid-id\"}]), (\"empty-list\", []), (\"empty-map\", {})):\n            try:\n                existing = AgentEnvironmentSpec(adapter, {field: entries})\n                compiled = compile_environment_inputs(reviewed, existing_environments=(existing,))\n                e.check(f\"{field}/valid-{name}\", \"valid mapping/list compiles and preserves existing environment\", compiled.agent_environments[0] == existing, existing.as_dict())\n            except Exception as exc:\n                e.check(f\"{field}/valid-{name}\", \"valid mapping/list compiles\", False, repr(exc))\n    def duplicate_list():\n        existing = AgentEnvironmentSpec(\"retrieval_memory\", {\"documents\": [{\"id\": \"same\"}, {\"id\": \"same\"}]})\n        return compile_environment_inputs(reviewed, existing_environments=(existing,))\n    e.typed_error(\"collision/duplicate-list\", duplicate_list, \"source_mapping_invalid\")\n    def cross_adapter():\n        first = AgentEnvironmentSpec(\"retrieval_memory\", {\"documents\": [{\"id\": \"same\"}]})\n        second = AgentEnvironmentSpec(\"structured_artifacts\", {\"artifacts\": {\"same\": {}}})\n        return compile_environment_inputs(reviewed, existing_environments=(first, second))\n    e.typed_error(\"collision/cross-adapter\", cross_adapter, \"source_mapping_invalid\")\n    wire = serialize_environment_snapshot(reviewed)\n    e.check(\"snapshot/valid-roundtrip\", \"deserialize_environment_snapshot(serialize_environment_snapshot(reviewed)) == reviewed\", deserialize_environment_snapshot(wire) == reviewed, {\"wire_sha256\": hashlib.sha256(wire).hexdigest()})\n    envelope = json.loads(wire)\n    envelope[\"data\"][\"reviewer_id\"] = \"attacker-rewritten-reviewer\"\n    e.typed_error(\"snapshot/ordinary-envelope-tamper\", lambda: deserialize_environment_snapshot(canonical(envelope)), \"source_snapshot_invalid\")\n    envelope[\"digest\"] = digest(envelope[\"data\"])\n    restored = deserialize_environment_snapshot(canonical(envelope))\n    e.check(\"snapshot/recomputed-unkeyed-digest-classification\", \"rewritten reviewer accepted after outer checksum recomputation; classify as authenticity limitation\", restored.reviewer_id == \"attacker-rewritten-reviewer\", {\"accepted_reviewer_id\": restored.reviewer_id, \"classification\": \"authenticity limitation of caller-owned trusted storage and unkeyed envelope checksum\", \"source_content_modified\": False})\n    content_envelope = json.loads(wire)\n    content_envelope[\"data\"][\"sources\"][0][\"pages\"][0][\"text\"] = \"altered source text\"\n    e.typed_error(\"snapshot/source-content-tamper-without-rehash\", lambda: deserialize_environment_snapshot(canonical(content_envelope)), \"source_snapshot_invalid\")\n    content_envelope[\"digest\"] = digest(content_envelope[\"data\"])\n    e.typed_error(\"snapshot/source-content-outer-rehash-only\", lambda: deserialize_environment_snapshot(canonical(content_envelope)), \"source_snapshot_invalid\")\n    e.result[\"limitations\"] = [\"Unkeyed checksums detect modification relative to trusted digests; they do not authenticate an attacker-writable envelope. Recomputed reviewer metadata checksum acceptance is an authenticity limitation, not a failed source-content integrity assertion.\", \"Source text tampering remains rejected if only the outer digest is recomputed; no keyed signature or trusted external digest is supplied.\", \"Controlled local public SDK APIs only; no production platform E2E claim.\"]"
+}</script>
+<script>var data = JSON.parse(document.getElementById("artifact-data").textContent);</script>
+<div id="root"></div>
+<style>
+body > main{max-width:1400px!important;width:100%;padding-top:12px!important;padding-bottom:12px!important}
+.report{max-width:1330px;margin:0 auto;padding:22px;font-size:16px;color:var(--foreground)}
+.report h1{font-size:30px;font-weight:650;margin:12px 0}.report h2{font-size:23px;font-weight:600;margin:12px 0}
+.report h3{font-size:18px;font-weight:600;margin:10px 0}.report p{margin:10px 0;line-height:1.55}
+.notice{padding:14px 18px;border:1px solid #c69535;background:#fff5dc;color:#604307;border-radius:10px;font-weight:600}
+.nav{display:flex;gap:9px;margin:18px 0;flex-wrap:wrap}.box{border:1px solid #9ba7b54a;border-radius:12px;padding:18px;margin:12px 0}
+.grid{display:grid;grid-template-columns:repeat(3,1fr);gap:16px}.metric{font-size:36px;font-weight:650;color:#16815c}
+.muted{color:#64748b}.mono,pre{font-family:ui-monospace,SFMono-Regular,Consolas,monospace}
+.report pre{white-space:pre-wrap;overflow-wrap:anywhere;font-size:15px;line-height:1.5;background:#eff3f7;color:#172638;padding:14px;border-radius:8px;max-height:470px;overflow:auto}
+.report select,.report input{padding:9px 12px;border:1px solid #8392a5;border-radius:6px;background:white;color:#172638}
+.report table{width:100%;border-collapse:collapse;table-layout:fixed}.report td,.report th{text-align:left;vertical-align:top;border-bottom:1px solid #9ba7b54a;padding:12px;overflow-wrap:anywhere}
+.report th{font-size:13px;text-transform:uppercase;letter-spacing:.06em;color:#64748b}.report td pre{margin:0;max-height:220px;font-size:14px}.report summary{cursor:pointer;font-weight:600}
+.report li{margin:16px 0;line-height:1.7}.pass{color:#16815c;font-weight:700}.section{min-height:500px}
+</style>
+<script>DSRun("\nconst pretty = value => JSON.stringify(value,null,2);\nfunction Report(){\n const [tab,setTab]=useState('Overview'),[fixture,setFixture]=useState(Object.keys(data.fixtures)[0]),[query,setQuery]=useState(''),[page,setPage]=useState(0);\n const rows=data.assertions.filter(a=>(a.id+' '+a.expression).toLowerCase().includes(query.toLowerCase()));\n const pageSize=2, pages=Math.max(1,Math.ceil(rows.length/pageSize));\n const b3=data.id==='B3';\n const highlights=b3?[\n ['26 malformed shapes','13 shapes × documents / artifacts; typed source_mapping_invalid errors.'],\n ['8 valid controls','Mapping, list, empty list and empty map preserve existing environments.'],\n ['Integrity ≠ authenticity','Ordinary tamper is rejected; recomputed unkeyed metadata digest is accepted.']\n ]:[\n ['3 declared / 2 covered','Mixed source_cases retains the blocked scenario ID in uncovered.'],\n ['Structure ≠ readiness','Public-only rate is 1; the complete draft-set gate remains below 1.'],\n ['1 → 0 trusted readiness','Private evaluator blocking leaves public payload hashes unchanged.']\n ];\n return React.createElement(PageLayout, { themeToggle: true, style: {maxWidth:1400,width:'100%',paddingTop:16,paddingBottom:16},}, React.createElement('main', { className: \"report\",}\n , React.createElement('div', { className: \"notice\",}, data.label)\n , React.createElement('h1', null, data.id, \" · \"  , b3?'Input validation & snapshot trust':'Source readiness & private evaluator evidence')\n , React.createElement('p', { className: \"muted\",}, \"Recorded evidence · completed controlled SDK experiment · read-only report\"         )\n , React.createElement('p', { className: \"mono\", style: {fontSize:13},}, \"Product HEAD \"  , data.commit_sha)\n , React.createElement('div', { className: \"nav\", role: \"tablist\", 'aria-label': \"Evidence sections\" ,}, ['Overview','Fixtures','API calls','Assertions','Limitations','Raw observations'].map(t=>React.createElement(Button, { key: t, role: \"tab\", 'aria-selected': tab===t, variant: tab===t?'primary':'secondary', onClick: ()=>setTab(t),}, t)))\n , React.createElement('section', { className: \"section\", role: \"tabpanel\", 'aria-label': tab,}\n , tab==='Overview'&&React.createElement(React.Fragment, null\n , React.createElement('div', { className: \"grid\",}, React.createElement(Card, null, React.createElement(CardBody, null, React.createElement('p', { className: \"muted\",}, \"RECORDED ASSERTIONS\" ), React.createElement('div', { className: \"metric\",}, data.assertions.length, \"/\", data.assertions.length), React.createElement('p', { className: \"pass\",}, data.status.toUpperCase(), \" · \"  , data.summary)))\n , React.createElement(Card, null, React.createElement(CardBody, null, React.createElement('p', { className: \"muted\",}, \"EXECUTION SURFACE\" ), React.createElement('h2', null, \"Local public SDK\"  ), React.createElement('p', null, \"run_experiments.py → result.json\"  )))\n , React.createElement(Card, null, React.createElement(CardBody, null, React.createElement('p', { className: \"muted\",}, \"BROWSER PURPOSE\" ), React.createElement('h2', null, \"Evidence viewer\" ), React.createElement('p', null, \"No SDK calls run in this dashboard.\"      ))))\n , highlights.map(([title,text])=>React.createElement('div', { className: \"box\", key: title,}, React.createElement('h3', null, title), React.createElement('p', null, text)))\n , React.createElement('p', { className: \"muted\",}, \"All values below are embedded verbatim from result.json. Passing assertions describe this fixture, not production readiness or agent success.\"                  )\n )\n , tab==='Fixtures'&&React.createElement(React.Fragment, null, React.createElement('h2', null, \"Fixture inputs\" ), React.createElement('p', null, \"Recorded synthetic inputs and review configuration; no production data.\"        ), React.createElement('label', null, \"Fixture \" , React.createElement('select', { 'aria-label': \"Fixture\", value: fixture, onChange: e=>setFixture(e.target.value),}, Object.keys(data.fixtures).map(k=>React.createElement('option', { key: k,}, k)))), React.createElement('pre', { 'data-testid': \"fixture-json\",}, pretty(data.fixtures[fixture])), b3?React.createElement('p', null, \"Each malformed entry is tested against both documents and artifacts (26 total). Valid controls and collision constructions are shown in the Assertions and API calls evidence.\"                         ):React.createElement('p', null, \"All-blocked fixture: unsupported prose is evaluator-only, so no public retrieval tools are implicitly declared.\"             ))\n , tab==='API calls'&&React.createElement(React.Fragment, null, React.createElement('h2', null, \"Public API calls & controlled fixture operations\"      ), React.createElement('p', null, \"Recorded harness excerpts — displayed, not executed by the browser.\"         ), data.api_calls.map((call,i)=>React.createElement('div', { key: i,}, React.createElement('h3', null, \"Operation \" , i+1), React.createElement('pre', null, call))), React.createElement('details', null, React.createElement('summary', null, \"Complete fixture and experiment harness source\"     ), React.createElement('pre', null, data.harness_source)))\n , tab==='Assertions'&&React.createElement(React.Fragment, null, React.createElement('h2', null, \"Exact assertion ledger\"  ), React.createElement('div', { className: \"nav\",}, React.createElement('label', null, \"Filter \" , React.createElement('input', { 'aria-label': \"Filter assertions\" , placeholder: \"ID or expression\"  , value: query, onChange: e=>{setQuery(e.target.value);setPage(0)},})), React.createElement(Button, { variant: \"secondary\", disabled: page===0, onClick: ()=>setPage(page-1),}, \"Previous\"), React.createElement(Button, { variant: \"secondary\", disabled: page+1>=pages, onClick: ()=>setPage(page+1),}, \"Next\"), React.createElement('span', { style: {padding:8}, 'data-testid': \"ledger-count\",}, rows.length, \" matching · Page \"    , page+1, \" of \"  , pages))\n , React.createElement('table', { 'aria-label': \"Exact assertions\" ,}, React.createElement('colgroup', null, React.createElement('col', { style: {width:'21%'},}), React.createElement('col', { style: {width:'36%'},}), React.createElement('col', { style: {width:'43%'},})), React.createElement('thead', null, React.createElement('tr', null, React.createElement('th', null, \"Assertion / result\"  ), React.createElement('th', null, \"Exact expression\" ), React.createElement('th', null, \"Observed result (verbatim)\"  ))), React.createElement('tbody', null, rows.slice(page*pageSize,page*pageSize+pageSize).map(a=>React.createElement('tr', { key: a.id, 'data-testid': \"assertion-row\",}, React.createElement('td', null, React.createElement('strong', null, a.id), React.createElement('p', { className: \"pass\",}, a.status.toUpperCase())), React.createElement('td', { className: \"mono\", style: {fontSize:15,lineHeight:1.65},}, a.expression), React.createElement('td', null, React.createElement('pre', null, pretty(a.actual))))))), React.createElement('p', { className: \"muted\",}, \"Long observed JSON scrolls within its cell. Filtering changes only the evidence view.\"            ))\n , tab==='Limitations'&&React.createElement(React.Fragment, null, React.createElement('h2', null, \"Limitations & interpretation\"  ), React.createElement('ul', null, data.limitations.map((s,i)=>React.createElement('li', { className: \"box\", key: i,}, s))), React.createElement('div', { className: \"notice\",}, \"This recording exercises a report of completed public-API experiments, not a live production application.\"             ))\n , tab==='Raw observations'&&React.createElement(React.Fragment, null, React.createElement('h2', null, \"Complete recorded observations\"  ), React.createElement('p', null, \"Unmodified observations object from result.json. Exact assertion outcomes are in the assertion ledger.\"            ), React.createElement('pre', null, pretty(data.observations)))\n ), React.createElement('p', { className: \"muted\", style: {fontSize:13},}, \"Evidence source: result.json · Harness: ../run_experiments.py · No network dependencies or credentials required to view this file.\"                )\n ))\n}\nrender(React.createElement(Report, null));\n")</script>
+    </main>
+  </body>
+</html>
