@@ -27,6 +27,7 @@ from fi.alk.harness.bundle_author_v2 import (
     resolve_environment_plan,
     sealed_from,
 )
+from fi.alk.harness import bundle_author_v2
 from fi.alk.harness.generated_runtime import framework_instrumentation_command
 from fi.alk.harness.authoring_runtime_validation import _artifact_digest
 from fi.alk.harness.bundle_v2 import load_bundle_v2
@@ -1695,6 +1696,27 @@ def test_native_multi_store_contract_uses_source_compose_dependency_topology(
     assert agent.environment["CACHE_URL"] == "{{CACHE_URL}}/2"
     assert plan.capabilities["target_http"].service == "agent"
     assert plan.capabilities["cache_redis"].service == "cache"
+
+
+def test_a_compose_selected_python_agent_is_observed_for_its_hand_offs(tmp_path: Path, monkeypatch) -> None:
+    """Hand-offs and each worker's tool calls are read from the agent's framework spans in the sandbox; an app shipped
+    with a Compose file must get that observation as a native one does."""
+    plans = []
+    real = resolve_environment_plan
+
+    def keep(*args, **kwargs):
+        plans.append(real(*args, **kwargs))
+        return plans[-1]
+
+    monkeypatch.setitem(globals(), "resolve_environment_plan", keep)
+    test_native_multi_store_contract_uses_source_compose_dependency_topology(tmp_path)
+    (plan,) = plans
+    assert plan.packaging == "compose"
+    agent = next(process for process in plan.processes if process.name == "agent")
+    assert agent.environment["ALK_OBSERVE_FRAMEWORKS"] == "1"
+    assert agent.environment["HARNESS_TOOL_TRACE"] == "{{WORLD_DIR}}/agent-tool-calls.jsonl"
+    assert "ALK_TOOL_TRACE_BINDINGS" not in agent.environment
+    assert any("framework instrumentors" in " ".join(command) for command in agent.build_commands)
 
 
 def test_native_multi_store_contract_accepts_compose_list_environment(
@@ -4426,6 +4448,119 @@ def test_a_command_that_only_mentions_adk_is_not_its_server() -> None:
     assert _adk_server_arguments(["python", "-m", "google.adk.cli", "deploy"]) is None
     assert _adk_server_arguments(["python", "main.py", "adk", "notes"]) is None
     assert _adk_server_arguments(["myadk", "web"]) is None
+
+
+def _langgraph_source(tmp_path: Path) -> Path:
+    """The async deep agents layout: a root langgraph.json declaring three graphs in a subproject."""
+    source = tmp_path / "source"
+    graphs = source / "graphs" / "python" / "src"
+    graphs.mkdir(parents=True)
+    (source / "graphs" / "python" / "pyproject.toml").write_text(
+        "[project]\nname='async-subagents'\nversion='1'\n", encoding="utf-8"
+    )
+    for name in ("agent", "researcher", "coder"):
+        (graphs / f"{name}.py").write_text("graph = object()\n", encoding="utf-8")
+    (source / "langgraph.json").write_text(
+        json.dumps(
+            {
+                "dependencies": ["./graphs/python"],
+                "graphs": {
+                    name: f"./graphs/python/src/{name}.py:graph"
+                    for name in ("agent", "researcher", "coder")
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    return source
+
+
+@pytest.mark.parametrize("model", ["agent", "", "gpt-4o"])
+def test_langgraph_dev_is_served_through_its_threads_and_runs_api(
+    tmp_path: Path, model: str
+) -> None:
+    """Build 5f83aede sealed the model-written OpenAI chat route for ``langgraph dev`` (404)."""
+    source = _langgraph_source(tmp_path)
+    authoring = _authoring(tmp_path)
+    command = [
+        "uv", "run", "--project", "graphs/python", "--with", "langgraph-cli[inmem]",
+        "langgraph", "dev", "--config", "langgraph.json", "--no-browser",
+    ]  # fmt: skip
+    _write_chat_contract(
+        authoring,
+        command=command,
+        workdir="",
+        interface={
+            "kind": "http",
+            "path": "/chat/completions",
+            "port": 2024,
+            "model": model,
+            "protocol": "openai_chat",
+            "health_path": "/ok",
+        },
+    )
+    with sqlite3.connect(authoring / "world.sqlite") as database:
+        database.execute("CREATE TABLE fixture (id TEXT PRIMARY KEY)")
+
+    output = tmp_path / "bundle"
+    manifest = author_bundle_v2(
+        source=source,
+        job=_job(connector="auto", metadata={"generic_harness_v1": True}),
+        authoring=authoring,
+        output=output,
+    )
+
+    runtime = json.loads((output / "contract.json").read_text())["runtime"]
+    interface = runtime["interface"]
+    assert interface["protocol"] == "json_template"
+    assert interface["path"] == "/threads/{{langgraph_thread_id}}/runs/wait"
+    assert interface["setup_requests"][0]["path"] == "/threads"
+    assert interface["setup_requests"][0]["capture"] == {
+        "langgraph_thread_id": "thread_id"
+    }
+    # The supervisor graph: named by the written model, else the first one declared.
+    assert interface["request_template"]["assistant_id"] == "agent"
+    assert interface["response_path"] == "messages.-1.content"
+    assert runtime["command"][-2:] == ["--port", "2024"]
+    agent = next(process for process in manifest.processes if process.name == "agent")
+    assert agent.fixed_port == 2024
+    assert agent.fixed_port_consumable is True
+    assert "langgraph dev" in agent.run_command[-1]
+    assert "$PORT" in agent.run_command[-1]
+    assert "ALK_SUBPROCESS_COMMAND" not in agent.environment
+    readiness = next(
+        item for item in manifest.readiness if item.capability == "target_http"
+    )
+    assert readiness.path == "/ok"
+    # The framework instrumentors land in the project ``uv run`` starts, though the command
+    # now runs under ``sh -c`` for the world's port (hosted run 7ccc3710 had no hand-offs).
+    assert "ALK_OBSERVE_FRAMEWORKS" in agent.environment
+    assert any(
+        "uv sync --project graphs/python" in " ".join(command)
+        for command in agent.build_commands
+    )
+
+
+def test_langgraph_dev_serves_the_graph_the_written_interface_names(
+    tmp_path: Path,
+) -> None:
+    source = _langgraph_source(tmp_path)
+    interface = bundle_author_v2._langgraph_server_interface(
+        source,
+        {
+            "command": ["langgraph", "dev", "--port=9000"],
+            "interface": {"model": "coder"},
+        },
+    )
+    assert interface is not None
+    assert interface["request_template"]["assistant_id"] == "coder"
+    assert interface["port"] == 9000
+    assert (
+        bundle_author_v2._langgraph_server_interface(
+            source, {"command": ["python", "server.py"]}
+        )
+        is None
+    )
 
 
 def test_adk_source_toolbox_is_hosted_against_world_database(tmp_path: Path) -> None:

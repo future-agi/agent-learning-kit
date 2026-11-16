@@ -699,6 +699,12 @@ INSTRUMENTOR_INSTALL_SECONDS = 300
 def uv_run_project(command: Sequence[str] | None) -> str:
     """The project a `uv run --project <dir>` command runs in, or "" for any other command."""
     parts = list(command or [])
+    if parts[:2] == ["sh", "-c"] and len(parts) >= 3:
+        # A fixed --port rewritten to the world's port runs as ``sh -c "<argv> --port $PORT"``.
+        try:
+            parts = shlex.split(parts[2])
+        except ValueError:
+            return ""
     if parts[:2] != ["uv", "run"]:
         return ""
     for index, part in enumerate(parts):

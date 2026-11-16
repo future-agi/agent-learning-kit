@@ -2096,6 +2096,97 @@ def _adk_interface_for(command: list[str], app_name: str) -> dict[str, Any]:
     }
 
 
+def _is_langgraph_server_command(command: list[str]) -> bool:
+    """Return whether argv starts the LangGraph API server (``langgraph dev`` or ``up``)."""
+
+    normalized = [str(item).strip() for item in command]
+    return any(
+        normalized[index] == "langgraph"
+        and normalized[index + 1] in {"dev", "up"}
+        for index in range(max(0, len(normalized) - 1))
+    )
+
+
+def _langgraph_server_interface(
+    root: Path, runtime: dict[str, Any]
+) -> dict[str, Any] | None:
+    """Compile the LangGraph server's threads and runs API into the generic JSON HTTP interface.
+
+    ``langgraph dev`` serves the graphs its ``langgraph.json`` declares through threads and runs,
+    never an OpenAI chat route. The assistant is the declared graph the written interface names
+    as its model, else the only graph, else the first one declared (the server's default).
+    """
+
+    command = [str(item) for item in (runtime.get("command") or [])]
+    if not _is_langgraph_server_command(command):
+        return None
+    configured = str(runtime.get("workdir") or "").strip()
+    workdir = (root / configured) if configured not in {"", ".", "/"} else root
+    config_name = "langgraph.json"
+    for index, token in enumerate(command):
+        if token == "--config" and index + 1 < len(command):
+            config_name = command[index + 1]
+        elif token.startswith("--config="):
+            config_name = token.partition("=")[2]
+    config = (workdir / config_name).resolve()
+    if not config.is_relative_to(root.resolve()) or not config.is_file():
+        return None
+    try:
+        graphs = json.loads(config.read_text(encoding="utf-8")).get("graphs")
+    except (OSError, ValueError, AttributeError):
+        return None
+    if not isinstance(graphs, dict) or not graphs:
+        return None
+    interface = runtime.get("interface")
+    named = interface.get("model") if isinstance(interface, dict) else None
+    assistant = named if named in graphs else next(iter(graphs))
+    return {
+        "kind": "http",
+        "protocol": "json_template",
+        "port": _command_port(command, default=2024),
+        "path": "/threads/{{langgraph_thread_id}}/runs/wait",
+        "health_path": "/ok",
+        "include_tools": False,
+        "setup_requests": [
+            {
+                "method": "POST",
+                "path": "/threads",
+                "body_template": {},
+                "accepted_statuses": [200],
+                "capture": {"langgraph_thread_id": "thread_id"},
+            }
+        ],
+        "request_template": {
+            "assistant_id": assistant,
+            "input": {
+                "messages": [{"role": "user", "content": "{{new_message_content}}"}]
+            },
+        },
+        "response_path": "messages.-1.content",
+    }
+
+
+def _native_server_runtime(root: Path, runtime: dict[str, Any]) -> dict[str, Any] | None:
+    """The runtime with the documented API of a source-owned framework server sealed as its
+    interface (``adk web``, ``langgraph dev``), or None when the command starts neither.
+
+    A LangGraph command without ``--port`` gets the server's default port written out, so each
+    world's port can replace it.
+    """
+
+    interface = _adk_web_interface(root, runtime) or _langgraph_server_interface(
+        root, runtime
+    )
+    if interface is None:
+        return None
+    command = [str(item) for item in (runtime.get("command") or [])]
+    if _is_langgraph_server_command(command) and not any(
+        token == "--port" or token.startswith("--port=") for token in command
+    ):
+        command = [*command, "--port", str(interface["port"])]
+    return {**runtime, "command": command, "interface": interface}
+
+
 def _submitted_command(process: SourceProcess, command: list[str]) -> list[str]:
     """Run a contract argv inside the dependency environment selected for the source."""
 
@@ -2983,8 +3074,11 @@ def resolve_environment_plan(
                     "started_check": StartedCheck(port=True, timeout_seconds=180),
                 }
             )
-        if is_http_runtime and _is_adk_web_command(runtime_command):
-            # ADK exposes a normal ``--port`` seam. Wire it to the world's allocated port so a
+        if is_http_runtime and (
+            _is_adk_web_command(runtime_command)
+            or _is_langgraph_server_command(runtime_command)
+        ):
+            # ADK and LangGraph expose a normal ``--port`` seam. Wire it to the world's allocated port so a
             # multi-world chat run does not collapse to serial execution or collide on 8080.
             process = _consumable_source_process(
                 process, "PORT", f"{{{{PORT_{control_name}}}}}"
@@ -3205,16 +3299,15 @@ def resolve_environment_plan(
         for process in normalized_processes
     ]
 
-    # A voice agent's tool calls are traced by its LiveKit worker, never twice.
-    if (
-        not isinstance(selected, ComposeSelection)
-        and runtime_model.command
-        and str(contract_modality or "").strip().lower() != "voice"
-    ):
+    # A voice agent's tool calls are traced by its LiveKit worker, never twice. A Compose-selected agent gets the
+    # framework observation too (its hand-offs and per-worker tool calls), but not import-mode tool bindings.
+    if runtime_model.command and str(contract_modality or "").strip().lower() != "voice":
         trace_environment = _source_tool_trace_environment(
             root,
             runtime_model,
-            (tool_entrypoints or []) if contract_interface_kind == "command" else [],
+            (tool_entrypoints or [])
+            if contract_interface_kind == "command" and not isinstance(selected, ComposeSelection)
+            else [],
         )
         if trace_environment:
             processes = [
@@ -3628,16 +3721,15 @@ def author_bundle_v2(
         interface = runtime.get("interface") if isinstance(runtime, dict) else None
         if isinstance(interface, dict):
             contract_interface_kind = str(interface.get("kind") or "").strip().lower()
-            adk_interface = _adk_web_interface(source_root, runtime)
+            native_runtime = _native_server_runtime(source_root, runtime)
             if (
                 contract_modality == "chat"
-                and adk_interface is not None
+                and native_runtime is not None
                 and contract_interface_kind in {"", "http"}
             ):
-                # ADK's source-owned web API is deterministic; do not retain stale model-authored
-                # request shapes from older ADK releases.
-                runtime = dict(runtime)
-                runtime["interface"] = adk_interface
+                # A source-owned framework server's API is deterministic; do not retain stale
+                # model-authored request shapes (an OpenAI chat route for ``langgraph dev``).
+                runtime = native_runtime
                 contract_body = {**contract_body, "runtime": runtime}
                 contract_interface_kind = "http"
         elif (
@@ -3679,13 +3771,12 @@ def author_bundle_v2(
             and not isinstance(interface, dict)
             and runtime.get("command")
         ):
-            runtime = dict(runtime)
-            adk_interface = _adk_web_interface(source_root, runtime)
-            if adk_interface is not None:
-                # ``adk web`` / ``adk api_server`` is a persistent source-owned HTTP server.
-                # Launch it directly and describe its existing API rather than nesting it inside
-                # the subprocess bridge (which would make both processes bind the same port).
-                runtime["interface"] = adk_interface
+            native_runtime = _native_server_runtime(source_root, runtime)
+            if native_runtime is not None:
+                # ``adk web`` / ``adk api_server`` and ``langgraph dev`` are persistent source-owned HTTP servers.
+                # Launch them directly and describe their existing API rather than nesting them inside the
+                # subprocess bridge (both would bind the same port).
+                runtime = native_runtime
                 contract_interface_kind = "http"
             else:
                 raise BundleAuthorError(
