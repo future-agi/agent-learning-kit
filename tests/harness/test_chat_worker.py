@@ -514,3 +514,17 @@ def test_a_text_call_the_plan_does_not_allow_never_starts_its_worker(tmp_path, m
 
     assert reporter.checked == ["text_call"]
     assert denied.value.code == "usage_exhausted" and started == []
+
+
+def test_the_transcript_names_the_end_state_by_the_id_it_was_stored_under():
+    import json as _json
+
+    from fi.alk.harness.chat_worker import _with_stored_end_state
+
+    transcript = _json.dumps({"messages": [], "world_actors": {"end_state_artifact": "0", "records": {}}}).encode()
+    stored = _json.loads(_with_stored_end_state(transcript, {"0": "sha256:" + "a" * 64}))
+    assert stored["world_actors"]["end_state_artifact"] == "sha256:" + "a" * 64
+    # An end state that was not stored is not named at all, and a transcript without one is left as it was.
+    assert "end_state_artifact" not in _json.loads(_with_stored_end_state(transcript, {}))["world_actors"]
+    plain = _json.dumps({"messages": []}).encode()
+    assert _with_stored_end_state(plain, {}) == plain

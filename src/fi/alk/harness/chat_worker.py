@@ -125,9 +125,15 @@ class IsolatedChatCallRunner:
                 handlers.close()
         await _record_worker_usage(context.usage_reporter, result.get("usage") or [], funding)
         artifact_ids = {}
-        for artifact in result.get("artifacts", []):
+        artifacts = list(result.get("artifacts", []))
+        # A transcript names the trial's end state by the worker's own id, so the end state is stored before it.
+        ends = [one for one in artifacts if one["kind"] == ArtifactKind.WORLD_STATE.value]
+        for artifact in ends + [one for one in artifacts if one not in ends]:
+            data = base64.b64decode(artifact["data"], validate=True)
+            if artifact["kind"] == "transcript":
+                data = _with_stored_end_state(data, artifact_ids)
             artifact_ids[artifact["id"]] = await self._adapter.upload_artifact(
-                base64.b64decode(artifact["data"], validate=True),
+                data,
                 kind=ArtifactKind(artifact["kind"]),
                 scenario_key=scenario.scenario_key,
             )
@@ -151,6 +157,25 @@ class IsolatedChatCallRunner:
                 partial=outcome,
             )
         return outcome
+
+
+def _with_stored_end_state(data: bytes, artifact_ids: dict[str, Any]) -> bytes:
+    """A transcript whose World changes name the end state by the worker's id, naming it by the id it was stored
+    under instead; any other transcript is returned as it was."""
+    try:
+        document = json.loads(data)
+    except ValueError:
+        return data
+    world = document.get("world_actors") if isinstance(document, dict) else None
+    local = world.get("end_state_artifact") if isinstance(world, dict) else None
+    if local is None:
+        return data
+    stored = artifact_ids.get(str(local))
+    if stored:
+        world["end_state_artifact"] = stored
+    else:
+        world.pop("end_state_artifact", None)
+    return json.dumps(document, sort_keys=True, default=str).encode("utf-8")
 
 
 async def _record_worker_usage(
