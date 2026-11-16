@@ -45,7 +45,7 @@ from .bundle_v2 import BundleV2Error, EnvironmentBundleV2, RuntimeKindV2, load_b
 from .compose_broker import BrokerError, ComposeBrokerClient
 from .hosted_compose_bootstrap import initialize_hosted_compose
 from .world.observation import ObservationWorldFactory
-from .call_runner import CallRunnerContext, CallRunnerImpl
+from .call_runner import CallRunnerContext, CallRunnerImpl, _bundle_contract, contract_worker_names
 from .hosted_scheduler import (
     CallOutcome,
     CallRunner,
@@ -779,11 +779,7 @@ def _agent_instructions(job: Any, bundle_dir: Path) -> str:
 
 def _worker_processes(bundle_dir: Path) -> dict[str, str]:
     """Each declared worker the app serves as its own process, {worker id: process name}, from the sealed contract."""
-    try:
-        body = json.loads((bundle_dir / "contract.json").read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return {}
-    workers = body.get("workers") if isinstance(body, dict) else None
+    workers = _bundle_contract(bundle_dir).get("workers")
     return {
         str(one["id"]): str(one["process"]).strip()
         for one in workers or []
@@ -2882,6 +2878,7 @@ async def run_job(
                 _judge_sub_goals_jointly, agent_instructions=_agent_instructions(job, bundle_dir)
             ),
             worker_processes=_worker_processes(bundle_dir),
+            worker_names=contract_worker_names(bundle_dir),
         )
         result: RunResult = await scheduler.run(scenarios)
 

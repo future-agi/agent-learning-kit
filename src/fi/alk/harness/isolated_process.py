@@ -123,10 +123,8 @@ async def _finish(task: asyncio.Task) -> bool:
 
 
 def run_worker(main: Callable[[], Awaitable[None]], *, cancel_on_stop: bool = False) -> None:
-    """Translate termination into one cancellation so async cleanup can finish.
-
-    The stop signal sets `stop_requested()`; with `cancel_on_stop` it also cancels `main` once, for a call that seals
-    its partial evidence when cancelled on a stop."""
+    """Translate termination into one cancellation so async cleanup can finish. The stop signal sets
+    `stop_requested()`; with `cancel_on_stop` it also cancels `main` once, so a call seals its partial evidence."""
 
     logging.basicConfig(
         level=logging.WARNING,

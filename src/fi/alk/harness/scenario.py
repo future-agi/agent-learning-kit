@@ -327,10 +327,8 @@ class Scenario(BaseModel):
     faults: list[Fault] = Field(default_factory=list)
 
     max_turns: int = 10
-    # A worker-action deadline: seconds from the trial's start after which a worker's call no longer reaches the
-    # world, one number for all workers or {worker id: seconds} for the named workers only, so one worker can pass its
-    # deadline while the others finish. It only refuses the worker's later world calls; it does not stop the worker's
-    # own execution. It can only shorten the run's own limit. None: the run's limit alone.
+    # Seconds from the trial's start after which a worker's world calls are refused and its own process, if it has one,
+    # is ended; one number for all workers or {worker id: seconds} for named ones. None: the run's own limit alone.
     worker_budget_seconds: int | dict[str, int] | None = None
 
     @field_validator("worker_budget_seconds", mode="after")

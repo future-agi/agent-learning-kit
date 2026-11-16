@@ -11325,3 +11325,18 @@ def test_each_worker_gets_its_own_channel_token_per_world_written_where_the_tool
     assert lookup.startswith("http://proxy/w/") and len(token) == 32 and len({token, refund, other}) == 3
     channels = json.loads((tmp_path / "worlds" / "w0" / "tool-proxy" / "worker-channels.json").read_text())
     assert channels == {token: "order_lookup", refund: "refund"}
+
+
+def test_worker_channel_tokens_are_readable_by_their_owner_alone(tmp_path: Path) -> None:
+    import stat
+
+    pr.render_template(
+        "{{WORKER_CHANNEL_refund}}",
+        process_name="agent",
+        world_index=0,
+        world_dir=tmp_path / "worlds" / "w0" / "agent",
+        port_plan=pr.plan_ports(_manifest(), instances=1),
+        configuration_addresses={},
+    )
+    channels = tmp_path / "worlds" / "w0" / "tool-proxy" / "worker-channels.json"
+    assert stat.S_IMODE(channels.stat().st_mode) == 0o600

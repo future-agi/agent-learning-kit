@@ -22,8 +22,7 @@ Environment it reads, by name:
     PORT               optional. Default 8080.
     RETURNS_HANG_SECONDS
                        optional. How long a refund on a payment_times_out or refund_never_returns record waits.
-                       Default 20. It waits only on a scenario call (the harness's X-ALK-Scenario-Call header), never
-                       on a readiness or certification probe, so the build still certifies.
+                       Default 20. Only those records wait, so a probe that names none of them never does.
 
 Deliberate defects for negative controls belong to ledger records (a record's `fault`, see README.md), never to the
 process: one build carries every one, and a scenario picks a defect by the order it names.
@@ -39,7 +38,6 @@ process: one build carries every one, and a scenario picks a defect by the order
 from __future__ import annotations
 
 import asyncio
-import contextvars
 import threading
 import json
 import os
@@ -53,21 +51,12 @@ from agents import Agent, Runner, function_tool, set_trace_processors
 HANG_SECONDS = float(os.environ.get("RETURNS_HANG_SECONDS") or 20)
 # An event, not a sleep, so a test can release a waiting tool with `_HANG.set()`.
 _HANG = threading.Event()
-# The harness sends this on every scenario call's turn and never on a readiness or certification probe.
-SCENARIO_CALL_HEADER = "X-ALK-Scenario-Call"
-# Whether this turn is a scenario call: the hang faults wait only on one. True outside a request (a tool called
-# directly), so the switch reads as it always did there.
-_SCENARIO_CALL: contextvars.ContextVar[bool] = contextvars.ContextVar("scenario_call", default=True)
 
 
 # Each record's defect, as the ledger's answers name it; kept from the model, which sees only the record's data.
 _RECORD_FAULTS: dict[str, str] = {}
 # The defects that hold a refund before the worker answers.
 HANG_FAULTS = ("payment_times_out", "refund_never_returns")
-
-
-def _hangs() -> bool:
-    return _SCENARIO_CALL.get()
 
 
 def _fault(order_id: str) -> str:
@@ -154,7 +143,7 @@ def _refund_tools() -> list[Any]:
         # bypass_channel: this record's refund goes out on the shared address instead of the worker's own channel.
         call = shared if _fault(order_id) == "bypass_channel" else own
         answer = call("/refunds/issue", {"order_id": order_id, "amount": amount})
-        if _fault(order_id) in HANG_FAULTS and _hangs():
+        if _fault(order_id) in HANG_FAULTS:
             _HANG.wait(HANG_SECONDS)
         return answer
 
@@ -290,20 +279,18 @@ def _loop() -> asyncio.AbstractEventLoop:
     return _LOOP
 
 
-async def _turn(conversation: list[dict[str, str]], scenario_call: bool) -> Any:
-    # Set inside the turn's own task: the tools it runs (in threads that copy its context) read it.
-    _SCENARIO_CALL.set(scenario_call)
+async def _turn(conversation: list[dict[str, str]]) -> Any:
     return await Runner.run(COORDINATOR, conversation)
 
 
-def reply(messages: list[dict[str, Any]], scenario_call: bool = True) -> str:
+def reply(messages: list[dict[str, Any]]) -> str:
     conversation = [
         {"role": one.get("role", "user"), "content": str(one.get("content") or "")}
         for one in messages
         if one.get("role") in ("user", "assistant")
     ]
     # Every turn on the one loop: the model client keeps connections bound to the loop it first ran on.
-    result = asyncio.run_coroutine_threadsafe(_turn(conversation, scenario_call), _loop()).result()
+    result = asyncio.run_coroutine_threadsafe(_turn(conversation), _loop()).result()
     return str(result.final_output or "")
 
 
@@ -328,7 +315,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         try:
             request = json.loads(self.rfile.read(int(self.headers.get("Content-Length") or 0)) or b"{}")
-            text = reply(request.get("messages") or [], scenario_call=bool(self.headers.get(SCENARIO_CALL_HEADER)))
+            text = reply(request.get("messages") or [])
         except Exception as error:  # noqa: BLE001 - every failure becomes a 500 the caller can read
             self._send(500, {"error": f"{type(error).__name__}: {error}"})
             return

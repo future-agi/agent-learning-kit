@@ -252,6 +252,11 @@ def compile_bundle(*, source, job, authoring, output, contract, include_scenario
             _copy_sub_goal_catalogue(authoring, temporary)
         _copy_chat_authoring(authoring, temporary, include_simulator=include_scenarios)
         _compile_source_tool_handlers(contract, temporary)
+        if include_scenarios:
+            from .call_runner import write_worker_limits
+
+            # Sealed as on a native build, so the platform reads each worker's flag and what each scenario relies on.
+            write_worker_limits(temporary)
         (temporary / "compose.json").write_text(json.dumps(document, indent=2))
         manifest = EnvironmentBundleV2(
             schema_version=BUNDLE_V2_SCHEMA_VERSION,

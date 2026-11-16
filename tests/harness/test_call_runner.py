@@ -3174,13 +3174,18 @@ def test_a_voice_call_hands_the_scheduler_the_notice_that_worker_limits_were_not
     document.write_text(json.dumps(body))
     monkeypatch.setattr(cr, "_write_trial_state", lambda *args, **kwargs: None)
 
+    placed = []
+
     async def place_call(spec):
+        placed.append(spec)
         return _report(transcript="hello", messages=[])
 
     runner = cr.CallRunnerImpl(FakeAdapter(), context, place_call=place_call)
     outcome = _run(runner, _FakeScenario("k1"), _runtime(metadata={"livekit_agent_name": "agent-w0"}))
-    # The bundle was sealed without a door that holds worker limits: the scheduler must hear it to hold the grading.
+    # The bundle was sealed without a door that holds worker limits: the scheduler must hear it to hold the grading,
+    # and no call is placed for a trial that is held whatever it does.
     assert [one["code"] for one in outcome.notices] == ["worker_limits_not_enforced"]
+    assert placed == [] and outcome.calls == ()
 
 
 def test_a_worker_s_refused_attempt_is_sealed_in_the_trial_s_state_changes_without_any_actor(
@@ -3249,11 +3254,15 @@ def test_worker_budgets_on_a_door_sealed_before_worker_limits_are_said_not_enfor
     assert cr.trial_worker_deadlines(document, tmp_path) == (None, {"refund": 1005.0, "lookup": 1009.0}, [])
     # Sealed before: that proxy has no worker limits at all, for either budget shape, and the trial says so.
     (door / "door.json").unlink()
+    (door / "proxy.py").write_text("")
     for budget in ({"refund": 5}, 30):
         *_, notices = cr.trial_worker_deadlines({"worker_budget_seconds": budget}, tmp_path)
         [notice] = notices
         assert notice["code"] == "worker_limits_not_enforced"
-        assert "rebuild" in notice["message"].lower()
+    # No tool proxy at all: held too, for a cause a rebuild does not fix, so it is not told to rebuild.
+    (door / "proxy.py").unlink()
+    [unproxied] = cr.trial_worker_deadlines({"worker_budget_seconds": 30}, tmp_path)[2]
+    assert unproxied["code"] == "worker_limits_not_enforced" and unproxied["message"] != notice["message"]
     # No budget asked: nothing to say.
     assert cr.trial_worker_deadlines({}, tmp_path) == (None, {}, [])
     # No sealed bundle (the harness's own proxy): enforced, nothing said.

@@ -189,6 +189,8 @@ class Call:
     worker_label: str = ""
     task_id: str = ""
     task_label: str = ""
+    # Why a refused call was refused: "world_rule" when the tool ran and said no, otherwise what stopped it first.
+    refusal_code: str = ""
     # The worker this call handed work to, when the call is a hand-off, and when that worker returned.
     delegated_to: str = ""
     ended_at: float = 0.0
@@ -205,9 +207,6 @@ class Call:
     # Part of the arguments or the result was left out to keep the record bounded.
     input_omitted: bool = False
     output_omitted: bool = False
-    # Why a refused call was refused: "world_rule" when the tool ran and said no, otherwise what stopped it first
-    # (`not_permitted`, `deadline_passed`, `unknown_tool`).
-    refusal_code: str = ""
     # The channel the world saw the call come in on, from its door row: "" for the shared address, a worker's id for
     # that worker's own channel, None when there was no door row or the row is from before channels. Never lent.
     channel: str | None = None

@@ -750,13 +750,3 @@ def test_a_streamed_value_other_than_the_reply_text_is_its_latest_event(
     body, path, value
 ):
     assert _select_response_value(_decode_json_or_sse(body), path) == value
-
-
-def test_a_scenario_call_s_turn_carries_the_scenario_call_header_and_a_probe_s_does_not(native_app):
-    from fi.alk.harness.chat_call_runner import SCENARIO_CALL_HEADER
-
-    base, state = native_app
-    invoke(create_chat_wrapper(interface(), base, secret_values={}, headers={SCENARIO_CALL_HEADER: "1"}))
-    invoke(create_chat_wrapper(interface(), base, secret_values={}))
-    sent = [{key.lower(): value for key, value in headers.items()} for path, _, headers in state["calls"]]
-    assert [one.get(SCENARIO_CALL_HEADER.lower()) for one in sent] == ["1", None]

@@ -283,7 +283,7 @@ def test_a_sub_goal_names_the_task_or_one_worker_and_a_task_subject_is_saved_as_
     assert "subject" not in saved[0] and saved[1]["subject"] == "worker:refund"
 
 
-def test_permitted_tools_on_a_shared_worker_are_returned_to_authoring():
+def test_permitted_tools_on_a_shared_worker_are_kept_for_the_trial_to_hold():
     contract = AgentContract.model_validate(
         {
             "agent": "returns",
@@ -301,9 +301,7 @@ def test_permitted_tools_on_a_shared_worker_are_returned_to_authoring():
             ],
         }
     )
-    assert [one.split(": ")[0] for one in validate_contract(contract)] == [
-        "worker[0]:allowed-tools-on-a-shared-worker"
-    ]
+    assert validate_contract(contract) == []
 
 
 def test_a_worker_allowed_a_tool_it_does_not_hold_is_returned_to_authoring():

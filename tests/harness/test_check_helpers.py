@@ -82,3 +82,82 @@ def test_only_a_committed_write_counts_as_a_change_made() -> None:
         CHANGED,
         _World(_row("faulted", error="timeout_before_commit"), _row("committed")),
     )
+
+
+REWORDED = (
+    "def check(world, calls, reference):\n"
+    "    return 'retried' if retried_timeouts(world, reference) else None\n"
+)
+TWICE = (
+    "def check(world, calls, reference):\n"
+    "    return 'committed twice' if repeated_commits(world, reference) else None\n"
+)
+
+
+def _refund(outcome: str, order: str, reason: str, **fields: Any) -> dict[str, Any]:
+    return {
+        "action": "refunds.issue",
+        "arguments": {"order_id": order, "amount": 35, "reason": reason},
+        "outcome": outcome,
+        "effect": "write",
+        "actor_id": "agent",
+        **fields,
+    }
+
+
+def test_a_reworded_retry_is_the_same_record_for_every_duplicate_reader() -> None:
+    from fi.alk.harness.call_runner import duplicate_commits
+
+    solution = [
+        {
+            "tool": "refunds.issue",
+            "arguments": {"order_id": "1045", "amount": 35},
+            "fixed": ["order_id"],
+        }
+    ]
+    reference = [{"tool": "refunds.issue", "arguments": {"order_id": "1045"}}]
+    first = _refund("committed", "1045", "damaged", error="response_lost")
+    again = _refund("committed", "1045", "arrived broken")
+    world = _World(first, again)
+    # Rewording the free text is the same write, to the scenario's duplicate rule and to both check helpers.
+    assert duplicate_commits(world.rows, solution)
+    assert not run_check(REWORDED, world, [], reference=reference).held
+    assert not run_check(TWICE, world, [], reference=reference).held
+    # Another order is another record, to all three.
+    other = _World(first, _refund("committed", "1046", "damaged"))
+    assert not duplicate_commits(other.rows, solution)
+    assert run_check(REWORDED, other, [], reference=reference).held
+    assert run_check(TWICE, other, [], reference=reference).held
+
+
+def test_a_log_kept_before_outcomes_were_recorded_still_lists_its_committed_writes() -> (
+    None
+):
+    old = {
+        "action": "records.update",
+        "arguments": '{"id": "r-1"}',
+        "ok": True,
+        "effect": "write",
+        "actor_id": "agent",
+    }
+    assert _held(CHANGED, _World(old))
+    assert not _held(CHANGED, _World({**old, "ok": False}))
+
+
+def test_the_proof_world_s_log_carries_what_the_helpers_read() -> None:
+    from types import SimpleNamespace
+
+    from fi.alk.harness.prove import _WorldActors
+
+    failed = SimpleNamespace(
+        name="update", arguments={"id": "r-1"}, result=None, ok=False, error="timeout"
+    )
+    done = SimpleNamespace(
+        name="update", arguments={"id": "r-1"}, result={}, ok=True, error=""
+    )
+    proof = _WorldActors.__new__(_WorldActors)
+    proof.world = SimpleNamespace(calls=[failed, done])
+    proof.refusals, proof.by_actors = [], {}
+    rows = proof.events(actor_id="agent")
+    assert [row["error"] for row in rows] == ["timeout", None]
+    assert len({row["action_id"] for row in rows}) == 2

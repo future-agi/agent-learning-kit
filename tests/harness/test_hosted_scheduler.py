@@ -4892,7 +4892,7 @@ def test_an_actor_who_speaks_but_only_acted_in_the_world_reached_the_agent() -> 
     assert hs._call_actors_missing(scenario, refused) == "Jordan (not_delivered: the world refused its post_message)"
 
 
-def _graded(goals, outcome, delay: float = 0.0):
+def _graded(goals, outcome, delay: float = 0.0, worker_names=None):
     async def scenario():
         outbound = FakeOutbound()
         pool, _ = _pool(1, outbound=outbound)
@@ -4905,7 +4905,8 @@ def _graded(goals, outcome, delay: float = 0.0):
                 return outcome
 
         scheduler = hs.HostedScheduler(
-            pool=pool, world_factory=FakeWorldFactory(), call_runner=Runner(), outbound=outbound, job_seed=1
+            pool=pool, world_factory=FakeWorldFactory(), call_runner=Runner(), outbound=outbound, job_seed=1,
+            worker_names=worker_names,
         )
         result = await scheduler.run([FakeScenario("s1", "id-1", sub_goals=goals)])
         await pool.close()
@@ -5004,6 +5005,50 @@ def test_a_worker_that_passed_its_deadline_has_its_own_checks_inconclusive_and_t
     refund, lookup, task = receipt.sub_goals
     assert (refund.verdict, lookup.verdict, task.verdict) == ("inconclusive", "pass", "pass")
     assert refund.reason == "Inconclusive: worker refund passed its deadline, so its result is partial"
+
+
+def test_a_worker_s_check_is_graded_on_the_calls_its_framework_names_it_by() -> None:
+    """Spans carry the framework's name for a worker, not the contract id: its check still reads its own calls."""
+    calls = (
+        hs.Call(name="issue_refund", arguments={}, worker_id="Refund Agent"),
+        hs.Call(name="get_order", arguments={}, worker_id="order_lookup"),
+    )
+    seen: list[str] = []
+    receipt = _graded(
+        [_WorkerGoal("refund_done", lambda w, c: seen.extend(one.name for one in c), worker="refund")],
+        _call_outcome(turns=2, calls=calls),
+        worker_names={"refund": "refund_agent"},
+    )
+    assert seen == ["issue_refund"]
+    assert receipt.sub_goals[0].verdict == "pass"
+
+
+def test_a_worker_whose_limits_the_world_could_not_read_is_not_graded_on_them() -> None:
+    calls = (
+        hs.Call(name="issue_refund", arguments={}, worker_id="refund", ok=False, refused=True,
+                refusal_code="limits_unreadable"),
+    )
+    receipt = _graded(
+        [
+            _WorkerGoal("refund_done", lambda w, c: "no refund", worker="refund"),
+            _WorkerGoal("reply_truthful", lambda w, c: None),
+        ],
+        _call_outcome(turns=2, calls=calls),
+    )
+    refund, task = receipt.sub_goals
+    # The world's failure, never the worker's: no fail on the worker, the task graded as usual.
+    assert (refund.held, task.verdict) == (None, "pass")
+
+
+def test_a_trial_held_before_its_call_is_held_though_nothing_was_captured() -> None:
+    outcome = replace(
+        _call_outcome(turns=0, calls=()),
+        notices=({"code": "worker_limits_not_enforced", "message": "no tool proxy"},),
+    )
+    receipt = _graded([_WorkerGoal("task_done", lambda w, c: None)], outcome)
+    # Not retried as missing evidence on another world: the same environment holds it again.
+    assert receipt.failure is not None and receipt.failure.code == "worker_limits_not_enforced"
+    assert receipt.status != "failed"
 
 
 def test_a_trial_that_could_not_hold_the_worker_limits_its_scenario_relies_on_is_held_not_graded() -> None:

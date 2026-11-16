@@ -154,7 +154,7 @@ _TOOL_TRACE_DDL = (
     # full) for a table made before it was recorded.
     "ALTER TABLE _alk_tool_trace ADD COLUMN IF NOT EXISTS action text, ADD COLUMN IF NOT EXISTS agent_tool text, "
     "ADD COLUMN IF NOT EXISTS provider_call_id text, ADD COLUMN IF NOT EXISTS tool_call_id text, "
-    "ADD COLUMN IF NOT EXISTS status text, ADD COLUMN IF NOT EXISTS effect text;\n"
+    "ADD COLUMN IF NOT EXISTS status text, ADD COLUMN IF NOT EXISTS effect text, ADD COLUMN IF NOT EXISTS attribution text;\n"
 )
 
 
@@ -2005,7 +2005,7 @@ def _tool_proxy_process(read_actions: list[str] | None = None) -> SourceProcess:
         "PORT": "{{PORT_tool-proxy}}",
         "UPSTREAM_URL": "{{TOOLS_UPSTREAM_URL}}",
         "DATABASE_URL": "{{WORLD_DATABASE_URL}}",
-        # This trial's worker channels, {token: worker id}, written by the runner.
+        # This world's worker channels, {token: worker id}, written by the runner.
         "WORKER_CHANNELS_FILE": "{{WORLD_DIR}}/worker-channels.json",
     }
     if read_actions:
@@ -2027,22 +2027,23 @@ def _tool_proxy_process(read_actions: list[str] | None = None) -> SourceProcess:
 def _tool_actions(contract_body: dict[str, Any] | None) -> dict[str, str]:
     """Each service-backed tool's world action, as the tool proxy names it (the route it calls, dotted), mapped to the
     tool's own name: a route is often named otherwise (`<tool>` -> `<resource>/get`)."""
+    return dict(_tool_routes(contract_body))
+
+
+def _tool_routes(contract_body: dict[str, Any] | None) -> list[tuple[str, str]]:
+    """Each service-backed tool entry's world action and the tool's own name, as the proxy names world actions."""
     contract = AgentContract.model_validate(contract_body or {})
-    return {
-        method_action(entry.method, world_action(entry.endpoint)): entry.tool
+    return [
+        (method_action(entry.method, world_action(entry.endpoint)), entry.tool)
         for entry in contract.tool_entrypoints
         if entry.endpoint.strip()
-    }
+    ]
 
 
 def _worker_permissions(contract_body: dict[str, Any] | None) -> dict[str, dict[str, list[str]]]:
     """Each declared worker's allow-list, as the tool proxy names world actions: the method and the path its tool calls, dotted."""
     contract = AgentContract.model_validate(contract_body or {})
-    routes = {
-        entry.tool: method_action(entry.method, world_action(entry.endpoint))
-        for entry in contract.tool_entrypoints
-        if entry.endpoint.strip()
-    }
+    routes = {tool: action for action, tool in _tool_routes(contract_body)}
     return {
         f"worker:{worker.id}": {"allow": sorted({routes.get(tool, tool) for tool in worker.allowed_tools or worker.tools})}
         for worker in contract.workers
@@ -2069,9 +2070,9 @@ def _seal_tool_proxy(generated: Path, contract_body: dict[str, Any] | None) -> N
 
 
 def _with_worker_channels(plan: EnvironmentPlanV2, contract_body: dict[str, Any] | None) -> EnvironmentPlanV2:
-    """Point each separately wired worker's tool address at its own channel on the tool proxy, so the world attributes
-    each worker's calls to it and applies its allow-list and deadline. Cooperative attribution, not isolation: every
-    worker runs in the agent's one process, which can read every channel and the proxy's own address."""
+    """Point each separately wired worker's tool address at its own channel on the tool proxy, in the app's process and
+    in the worker's own process when it has one, so the world attributes each worker's calls to it and applies its
+    allow-list and deadline. Attributed, not isolated: a worker can still read the shared address or another channel."""
     if not any(process.name == "tool-proxy" for process in plan.processes):
         return plan
     workers = AgentContract.model_validate(contract_body or {}).workers
@@ -2079,16 +2080,28 @@ def _with_worker_channels(plan: EnvironmentPlanV2, contract_body: dict[str, Any]
     addresses = [one.address_env for one in separate]
     # Only a worker the world can name and tell apart gets a channel: one address read by two workers, or an id no
     # channel placeholder can carry, would hand one worker's calls to another (validation returns both to authoring).
-    channels = {
-        one.address_env: f"{{{{TOOLS_API_URL}}}}/w/{{{{WORKER_CHANNEL_{one.id}}}}}"
-        for one in separate
-        if addresses.count(one.address_env) == 1 and _CHANNEL_WORKER_ID.fullmatch(one.id)
-    }
-    if not channels:
+    channelled = [
+        one for one in separate if addresses.count(one.address_env) == 1 and _CHANNEL_WORKER_ID.fullmatch(one.id)
+    ]
+    if not channelled:
         return plan
+
+    def channel(one: Any) -> dict[str, str]:
+        return {one.address_env: f"{{{{TOOLS_API_URL}}}}/w/{{{{WORKER_CHANNEL_{one.id}}}}}"}
+
+    shared = {key: value for one in channelled for key, value in channel(one).items()}
+    own = {one.process.strip(): channel(one) for one in channelled if one.process.strip()}
     processes = tuple(
-        process.model_copy(update={"environment": {**process.environment, **channels}})
-        if isinstance(process, SourceProcess) and process.name == plan.control_service
+        process.model_copy(
+            update={
+                "environment": {
+                    **process.environment,
+                    **(shared if process.name == plan.control_service else {}),
+                    **own.get(process.name, {}),
+                }
+            }
+        )
+        if isinstance(process, SourceProcess) and (process.name == plan.control_service or process.name in own)
         else process
         for process in plan.processes
     )

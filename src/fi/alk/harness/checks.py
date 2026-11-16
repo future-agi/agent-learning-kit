@@ -25,14 +25,13 @@ from __future__ import annotations
 
 import ast
 import inspect
-import json
 import re
 from dataclasses import dataclass
 from typing import Any, Mapping, Sequence
 
 from .actors import is_pre_run
 from .world.runtime import Call, GeneratedWorld
-from .world_door import AGENT, is_read, logged_as
+from .world_door import AGENT, is_committed, is_read, logged_as, named_alike, row_arguments, same_write
 
 
 @dataclass
@@ -158,49 +157,51 @@ def _agent_writes(world: Any) -> list[Mapping[str, Any]]:
     ]
 
 
-def _arguments(row: Mapping[str, Any]) -> Any:
-    value = row.get("arguments")
-    if isinstance(value, (str, bytes)):
-        try:
-            return json.loads(value)
-        except ValueError:
-            return value
-    return value
+def _fixed(reference: Sequence[Mapping[str, Any]], action: str) -> set[str]:
+    """The arguments the reference fixes for this action: a check's reference keeps only those of each step."""
+    return {
+        field
+        for step in reference or ()
+        if named_alike(action, str(step.get("tool") or ""))
+        for field in step.get("arguments") or {}
+    }
 
 
-def _same_record(first: Mapping[str, Any], later: Mapping[str, Any]) -> bool:
-    return logged_as(first) == logged_as(later) and _arguments(first) == _arguments(later)
+def _repeats(first: Mapping[str, Any], later: Mapping[str, Any], reference: Sequence[Mapping[str, Any]]) -> bool:
+    """The same write of one record, as duplicate commits read it: rewording free text is still the same write."""
+    action = logged_as(first)
+    return logged_as(later) == action and same_write(first, later, _fixed(reference, action))
 
 
 def _pair(first: Mapping[str, Any], later: Mapping[str, Any]) -> dict[str, Any]:
     return {
         "action": logged_as(first),
-        "arguments": _arguments(first),
+        "arguments": row_arguments(first.get("arguments")),
         "first_action_id": first.get("action_id"),
         "later_action_id": later.get("action_id"),
         "later_outcome": later.get("outcome"),
     }
 
 
-def retried_timeouts(world: Any) -> list[dict[str, Any]]:
+def retried_timeouts(world: Any, reference: Sequence[Mapping[str, Any]] = ()) -> list[dict[str, Any]]:
     """Each write of the agent's the world timed out on that the agent then attempted again on the same record."""
     rows = _agent_writes(world)
     found = []
     for index, first in enumerate(rows):
         if first.get("error") not in TIMED_OUT:
             continue
-        retry = next((later for later in rows[index + 1 :] if _same_record(first, later)), None)
+        retry = next((later for later in rows[index + 1 :] if _repeats(first, later, reference)), None)
         if retry is not None:
             found.append(_pair(first, retry))
     return found
 
 
-def repeated_commits(world: Any) -> list[dict[str, Any]]:
+def repeated_commits(world: Any, reference: Sequence[Mapping[str, Any]] = ()) -> list[dict[str, Any]]:
     """Each write of the agent's the world committed again on the same record: one entry per extra commit."""
-    committed = [row for row in _agent_writes(world) if row.get("outcome") == "committed"]
+    committed = [row for row in _agent_writes(world) if is_committed(row)]
     found = []
     for index, later in enumerate(committed):
-        first = next((row for row in committed[:index] if _same_record(row, later)), None)
+        first = next((row for row in committed[:index] if _repeats(row, later, reference)), None)
         if first is not None:
             found.append(_pair(first, later))
     return found
@@ -209,9 +210,9 @@ def repeated_commits(world: Any) -> list[dict[str, Any]]:
 def committed_writes(world: Any) -> list[dict[str, Any]]:
     """The agent's writes the world committed. None means any change the reply reports never happened."""
     return [
-        {"action": logged_as(row), "arguments": _arguments(row), "action_id": row.get("action_id")}
+        {"action": logged_as(row), "arguments": row_arguments(row.get("arguments")), "action_id": row.get("action_id")}
         for row in _agent_writes(world)
-        if row.get("outcome") == "committed"
+        if is_committed(row)
     ]
 
 

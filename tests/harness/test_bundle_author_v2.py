@@ -5971,6 +5971,32 @@ def test_a_separately_wired_worker_s_tool_address_points_at_its_own_channel_on_t
     assert _with_worker_channels(without_proxy, contract) is without_proxy
 
 
+def test_a_worker_served_by_its_own_process_reads_its_channel_there(tmp_path):
+    from fi.alk.harness.bundle_author_v2 import EnvironmentPlanV2, _tool_proxy_process, _with_worker_channels
+
+    agent = _tool_proxy_process().model_copy(update={"name": "agent", "environment": {}, "depends_on": []})
+    worker = agent.model_copy(update={"name": "refund-worker", "environment": {"PORT": "8081"}})
+    plan = EnvironmentPlanV2(
+        packaging="process",
+        control_service="agent",
+        processes=(agent, worker, _tool_proxy_process().model_copy(update={"depends_on": []})),
+        capabilities={},
+        readiness=(),
+    )
+    contract = {
+        "workers": [
+            {"id": "refund", "binding": "separate", "address_env": "REFUND_API_URL", "process": "refund-worker"},
+            {"id": "order_lookup", "binding": "separate", "address_env": "LOOKUP_API_URL"},
+        ]
+    }
+    wired = {p.name: p.environment for p in _with_worker_channels(plan, contract).processes}
+    # The worker's own process reaches the world on its channel, so its allow-list and deadline hold there too.
+    assert wired["refund-worker"]["REFUND_API_URL"] == wired["agent"]["REFUND_API_URL"]
+    assert "WORKER_CHANNEL_refund" in wired["refund-worker"]["REFUND_API_URL"]
+    # Another worker's channel never reaches it.
+    assert "LOOKUP_API_URL" not in wired["refund-worker"]
+
+
 def test_workers_sharing_an_address_or_with_an_id_no_channel_can_carry_get_no_channel(tmp_path):
     from fi.alk.harness.bundle_author_v2 import EnvironmentPlanV2, _tool_proxy_process, _with_worker_channels
 

@@ -245,3 +245,40 @@ def test_a_deadline_cleared_with_the_call_stops_no_one(world_database) -> None:
     assert call_runner.claim_worker_stop(world_database, "refund", "refund-worker", lambda: True) is False
     call_runner._write_trial_state(_runtime(), [], worker_deadlines={"refund": time.time() + 3600})
     assert call_runner.claim_worker_stop(world_database, "refund", "refund-worker", lambda: True) is False
+
+
+def test_a_world_s_trial_tables_are_made_once_and_made_again_after_its_database_is_made_anew(world_database) -> None:
+    import psycopg
+
+    call_runner._write_trial_state(_runtime(), [], worker_deadline_at=time.time() - 1)
+    # A reset from the seed drops them; the next trial still writes its state, and a stop can still be claimed.
+    with psycopg.connect(world_database, autocommit=True) as connection:
+        connection.execute("DROP TABLE IF EXISTS _alk_trial_faults, _alk_worker_stops")
+    call_runner._write_trial_state(_runtime(), [], worker_deadline_at=time.time() - 1)
+    assert call_runner.claim_worker_stop(world_database, "refund", "refund-worker", lambda: True) is True
+
+
+def test_a_trial_s_start_changes_no_schema_after_the_world_s_first(monkeypatch) -> None:
+    statements: list[str] = []
+
+    class _Connection:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_exc):
+            return None
+
+        def execute(self, sql, *_args):
+            statements.append(sql)
+
+    psycopg = pytest.importorskip("psycopg")
+    monkeypatch.setattr(psycopg, "connect", lambda *_args, **_kwargs: _Connection())
+    monkeypatch.setattr(call_runner, "_find_postgres_endpoint", lambda _runtime: SimpleNamespace(address="db-once"))
+    call_runner._TRIAL_SCHEMA_MADE.discard("db-once")
+    call_runner._write_trial_state(_runtime(), [])
+    first = [one for one in statements if one.lstrip().upper().startswith(("ALTER", "CREATE"))]
+    statements.clear()
+    call_runner._write_trial_state(_runtime(), [])
+    # Schema changes take the table's lock a stop under way holds: never again at a later trial's start.
+    assert first and not [one for one in statements if one.lstrip().upper().startswith(("ALTER", "CREATE"))]
+

@@ -605,3 +605,22 @@ def test_an_app_s_own_w_route_runs_as_before_in_a_trial_that_gave_no_worker_chan
     # `/w/` is a worker's channel only when the trial gave its workers channels.
     assert _post(url, "/w/export", {})[0] == 201
     assert _World.seen == ["/w/export"]
+
+
+def test_another_worker_s_channel_is_logged_as_that_worker_and_the_shared_address_as_the_coordinator_s(worker_proxy):
+    """Attributed, not isolated: a channel names whoever holds its token, and the shared address is the coordinator's,
+    with the reason kept, while workers have channels."""
+    url, rows = worker_proxy
+    # The refund worker using the lookup worker's channel is logged as the lookup worker.
+    assert _post(url, "/w/c-lookup/ok", {})[0] == 201
+    assert _post(url, "/ok", {})[0] == 201
+    assert [(one["worker_id"], one["attribution"]) for one in rows()] == [
+        ("order_lookup", None),
+        (None, "shared_address"),
+    ]
+
+
+def test_a_single_agent_build_logs_its_calls_as_before_with_no_attribution(proxy):
+    url, rows = proxy
+    assert _post(url, "/ok", {})[0] == 201
+    assert [(one["worker_id"], one["attribution"]) for one in rows()] == [(None, None)]

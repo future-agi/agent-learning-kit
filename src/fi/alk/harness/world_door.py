@@ -10,7 +10,7 @@ import re
 import threading
 import time
 import uuid
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from typing import Any, Protocol
 from urllib import error, request
@@ -82,6 +82,9 @@ class ToolCall:
     # The agent's worker that made the call, from the channel it came in on: None when it came in on no worker's
     # channel, "" when the channel belongs to no worker of this trial.
     worker: str | None = None
+    # Why a call is the coordinator's though this trial gave its workers channels: it came in on the shared tools
+    # address (`SHARED_ADDRESS`). Attributed, not isolated: any worker can call that address, and the log says so.
+    attribution: str | None = None
     # The agent's own name for the tool this action is, when the surface knows it (a route is often named otherwise,
     # `<tool>` -> `<resource>.get`); kept beside `name` so grading reads the tool the agent called.
     tool: str = ""
@@ -203,6 +206,56 @@ def same_action(row: Mapping[str, Any], action: str) -> bool:
     return bool(action) and str(row.get("name") or "") in (action, action.rsplit(".", 1)[-1])
 
 
+def row_arguments(value: Any) -> Any:
+    """A row's arguments as data: a log read back from the database can hold them as JSON text."""
+    if isinstance(value, (str, bytes)):
+        try:
+            return json.loads(value)
+        except ValueError:
+            return value
+    return value
+
+
+def is_committed(row: Mapping[str, Any]) -> bool:
+    """Whether a log row is a committed action; a row from before outcomes were logged says so by `ok`."""
+    return (row.get("outcome") or ("committed" if row.get("ok", True) else "")) == "committed"
+
+
+def named_alike(action: str, name: str) -> bool:
+    """A fault names the world action (`service_a.update`); a call may carry the tool's own name (`update`)."""
+    return bool(action) and bool(name) and (action == name or action.rsplit(".", 1)[-1] == name.rsplit(".", 1)[-1])
+
+
+def fixed_fields(solution: Sequence[Any], action: str) -> set[str]:
+    """The arguments the reference solution fixes for this action, over every step that takes it."""
+    fields: set[str] = set()
+    for step in solution or ():
+        step = step.model_dump() if hasattr(step, "model_dump") else step
+        if isinstance(step, Mapping) and named_alike(action, str(step.get("tool") or "")):
+            fields |= set(step.get("fixed") or {})
+    return fields
+
+
+def same_write(first: Mapping[str, Any], later: Mapping[str, Any], fixed: set[str]) -> bool:
+    """Whether two writes of one action are the same write: equal arguments, or equal on every fixed argument either
+    carries and on every other argument that is not text. Text the solution does not fix is the agent's own words, so
+    a retry that rewords it is still the same write; a different record, named by a value that is not text, is not."""
+    one, two = row_arguments(first.get("arguments")), row_arguments(later.get("arguments"))
+    if one == two:
+        return True
+    if not isinstance(one, dict) or not isinstance(two, dict):
+        return False
+    carried = [field for field in fixed if field in one or field in two]
+    if not carried:
+        return False
+    others = (set(one) | set(two)) - set(fixed)
+    return all(one.get(field) == two.get(field) for field in carried) and all(
+        one.get(field) == two.get(field)
+        for field in others
+        if not isinstance(one.get(field), str) or not isinstance(two.get(field), str)
+    )
+
+
 def call_effect(call: ToolCall) -> str:
     """Whether a call reads or writes the world: a record change writes; else the tool's declared effect; else a
     read-only HTTP method reads. Anything undeclared and not read-only counts as a write, as every call did before."""
@@ -228,6 +281,10 @@ def world_action(route: str) -> str:
 # What this door enforces, sealed beside it in a bundle: a runner reads it rather than assume a newer door than shipped.
 DOOR_FILE = "door.json"
 DOOR_CAPABILITIES = {"worker_deadlines": "per_worker"}
+# A worker's call refused because the world could not read its limits: an infrastructure failure, not the worker's.
+LIMITS_UNREADABLE = "limits_unreadable"
+# The attribution of a call that reached the door on the shared tools address while workers had channels.
+SHARED_ADDRESS = "shared_address"
 
 _METHODS = frozenset({"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"})
 
@@ -514,13 +571,13 @@ class WorldDoor:
     def _worker_refusal(self, call: ToolCall) -> tuple[str, str] | None:
         """Why a worker's call never reaches the world, or None: a channel no worker of this trial owns, the trial's
         worker deadline passed, or an action the worker's sealed allow-list does not hold. Limits that cannot be read
-        refuse: a broken seal never widens what a worker may do."""
+        refuse as the world's failure (`LIMITS_UNREADABLE`), never the worker's: a broken seal never widens them."""
         if not call.worker:
             return "identity_conflict", "this channel does not belong to a worker of this trial"
         try:
             limits = self.workers() or {}
-        except Exception:  # noqa: BLE001 - unreadable limits are no permission
-            return "not_permitted", f"{call.action} is not permitted for {call.worker}: its limits could not be read"
+        except Exception:  # noqa: BLE001 - unreadable limits are no permission, and no violation of the worker's
+            return LIMITS_UNREADABLE, f"the world could not read the limits of {call.worker}"
         own = (limits.get("deadlines") or {}).get(call.worker)
         for deadline in (own, limits.get("deadline_at")):
             if isinstance(deadline, (int, float)) and not isinstance(deadline, bool) and time.time() > deadline:
@@ -771,6 +828,7 @@ class WorldDoor:
             "idempotency_key": key,
             "actor_id": call.actor,
             "worker_id": call.worker or None,
+            "attribution": call.attribution,
             "agent_tool": call.tool or None,
             "parent_event_id": call.parent,
             "on_behalf_of": on_behalf_of,
@@ -975,6 +1033,8 @@ _EXTENDED = (
 _ACTION = "action"
 # Written beside either set of columns when the table has it: a log made before effects were recorded has no column.
 _EFFECT = "effect"
+# Likewise: why a call with no worker is the coordinator's while workers had channels.
+_ATTRIBUTION = "attribution"
 _BASIC = "name, arguments, result, ok, error, at"
 # Each actor key a door claimed before its action ran, so no later door runs it again; beside the log, which a
 # failed write can leave without the row.
@@ -1025,8 +1085,9 @@ class PostgresLog:
         columns = _EXTENDED if extended else _BASIC
         if extended and self._records_action():
             columns += ", " + _ACTION
-        if _EFFECT in self._table_columns():
-            columns += ", " + _EFFECT
+        for optional in (_EFFECT, _ATTRIBUTION):
+            if optional in self._table_columns():
+                columns += ", " + optional
         keys = [one.strip() for one in columns.split(",")]
         values = [
             json.dumps(row.get(key), default=str)

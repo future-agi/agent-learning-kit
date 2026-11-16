@@ -191,14 +191,16 @@ class _Answer:
 
 
 @pytest.mark.parametrize("order", ["1045", "1046"])
-def test_a_waiting_record_waits_on_a_scenario_call_and_never_on_a_certify_probe(monkeypatch, order: str) -> None:
+def test_only_a_turn_about_a_waiting_record_waits(monkeypatch, order: str) -> None:
+    """The wait is the record's defect, never a header the agent reads: a turn about another order answers at once."""
     module_ref = {}
+    asked = {}
 
     class _Runner:
         @staticmethod
-        async def run(_agent, _conversation):
+        async def run(_agent, conversation):
             # As the pinned SDK runs a sync tool: in a thread that copies the turn's context.
-            text = await asyncio.to_thread(module_ref["m"].REFUND.tools[1], order, 30.0)
+            text = await asyncio.to_thread(module_ref["m"].REFUND.tools[1], asked[conversation[-1]["content"]], 30.0)
             return types.SimpleNamespace(final_output=text)
 
     module = _agent_module(monkeypatch, hang="60", runner=_Runner)
@@ -206,34 +208,25 @@ def test_a_waiting_record_waits_on_a_scenario_call_and_never_on_a_certify_probe(
     _served_by_a_ledger(monkeypatch, module, [])
     answers = {}
 
-    def _turn(name: str, scenario_call: bool) -> threading.Thread:
+    def _turn(name: str, order_id: str) -> threading.Thread:
+        asked[name] = order_id
         thread = threading.Thread(
-            target=lambda: answers.setdefault(
-                name, module.reply([{"role": "user", "content": "refund"}], scenario_call=scenario_call)
-            )
+            target=lambda: answers.setdefault(name, module.reply([{"role": "user", "content": name}]))
         )
         thread.start()
         return thread
 
-    probe = _turn("probe", False)
-    probe.join(timeout=10)
-    assert not probe.is_alive() and "error" in json.loads(answers["probe"])
-    scenario = _turn("scenario", True)
+    other = _turn("other", "1044")
+    other.join(timeout=10)
+    assert not other.is_alive()
+    waiting = _turn("waiting", order)
     try:
-        scenario.join(timeout=0.5)
-        assert scenario.is_alive()
+        waiting.join(timeout=0.5)
+        assert waiting.is_alive()
     finally:
         module._HANG.set()
-        scenario.join(timeout=10)
-    assert "error" in json.loads(answers["scenario"])
-
-
-def test_the_scenario_call_header_reaches_the_agent_s_request_headers() -> None:
-    from fi.alk.harness.chat_call_runner import SCENARIO_CALL_HEADER
-
-    agent = (APP / "agent.py").read_text(encoding="utf-8")
-    # The fixture reads the same header the harness sends on scenario calls.
-    assert f'SCENARIO_CALL_HEADER = "{SCENARIO_CALL_HEADER}"' in agent
+        waiting.join(timeout=10)
+    assert "error" in json.loads(answers["waiting"])
 
 
 def test_voice_entry_routes_to_the_same_coordinator(monkeypatch) -> None:
