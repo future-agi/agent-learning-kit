@@ -65,7 +65,7 @@ from fi.simulate.simulation.call_actors import (
     with_others,
 )
 
-from .actor_dispatch import ActorDispatcher, DoorActs, build_dispatcher, world_summary
+from .actor_dispatch import ActorDispatcher, DoorActs, build_dispatcher, with_acts, world_summary
 from .actor_meter import ActorMeter
 from .world_door import (
     APPROVAL_REQUIRED,
@@ -988,22 +988,33 @@ def evidence_notices(
 
 
 def one_call_per_lost_answer(calls: Sequence[Call], log: Sequence[Mapping[str, Any]] | None) -> list[Call]:
-    """The agent's calls with each lost answer counted once. The door committed the call and then lost its answer, so
-    the tool's own tracer saw it run and the framework's saw the failure the agent heard: two records of one call. The
-    one the agent heard is kept."""
+    """The agent's calls with each lost answer counted once, as done. The door committed the call and then lost its
+    answer, so the tool's own tracer saw it run and the framework's saw the failure the agent heard: two records of one
+    call the world made. One is kept, done, and marked as an answer the agent never heard."""
     kept = list(calls)
     for row in log or ():
-        if (row.get("actor_id") or AGENT) != AGENT or row.get("error") != "response_lost":
+        if (
+            (row.get("actor_id") or AGENT) != AGENT
+            or row.get("error") != "response_lost"
+            or row.get("outcome") != "committed"
+        ):
             continue
         wanted = _loose_arguments(_arguments(row.get("arguments")))
         same = [
             call
             for call in kept
-            if call.name == str(row.get("name") or "") and _loose_arguments(call.arguments) == wanted
+            if call.name == str(row.get("name") or "")
+            and not call.answer_lost
+            and _loose_arguments(call.arguments) == wanted
         ]
         ran = next((call for call in same if call.ok), None)
-        if ran is not None and any(not call.ok for call in same):
-            kept = [call for call in kept if call is not ran]
+        heard = next((call for call in same if not call.ok), None)
+        one = ran or heard
+        if one is None:
+            continue
+        if ran is not None and heard is not None:
+            kept = [call for call in kept if call is not heard]
+        one.ok, one.error, one.answer_lost = True, "", True
     return kept
 
 
@@ -1822,7 +1833,9 @@ def _with_world_actors(
     """The call's actor summary with every actor that acts through the world in it too, so a check that depends on
     any actor reads that actor's real record."""
     speaking = {str(one.get("actor")) for one in summary}
-    return summary + tuple(world_summary(list(decisions), load_actors(bundle_dir).by_id(), speaking))
+    return with_acts(
+        summary + tuple(world_summary(list(decisions), load_actors(bundle_dir).by_id(), speaking)), list(decisions)
+    )
 
 
 def actor_problems(doc: Mapping[str, Any], bundle_dir: Path, why: str, problem: str = "no_world_door") -> list[dict[str, Any]]:
@@ -1879,8 +1892,17 @@ def _with_span_calls(
     return _merge_span_calls(list(observed) or written, from_spans)
 
 
+def tool_routes(contract: Mapping[str, Any]) -> dict[str, str]:
+    """Each tool's world route as its entrypoint names it, the name an agent's own trace line may give the call."""
+    return {
+        str(entry.get("tool")): route
+        for entry in contract.get("tool_entrypoints") or []
+        if isinstance(entry, Mapping) and entry.get("tool") and (route := str(entry.get("endpoint") or "").strip("/"))
+    }
+
+
 def _read_file_tool_calls(
-    runtime: EnvironmentRuntime, *, strict: bool = False
+    runtime: EnvironmentRuntime, *, strict: bool = False, routes: Mapping[str, str] | None = None
 ) -> tuple[list[Call], list[Call]]:
     """The attempt's tool-trace file: its written lines and its span lines. No file is no
     evidence either way: the file is removed before the call, and an agent that called no tool
@@ -1892,6 +1914,8 @@ def _read_file_tool_calls(
     calls: list[Call] = []
     # Agent-written calls not yet timed by the hook line for the same call.
     untimed: list[Call] = []
+    # The hook's lines, paired once every line is read: either may be written first.
+    hooked: list[Call] = []
     from_spans: list[Call] = []
     try:
         lines = path.read_text(encoding="utf-8").splitlines()
@@ -1955,19 +1979,21 @@ def _read_file_tool_calls(
             if not call.at:
                 untimed.append(call)
             continue
-        # An agent implementing HARNESS_AGENT_TOOL_TRACE writes its own line while the tool
-        # runs: the arguments it executed with and the structured result, but no time. The hook
-        # writes the same call after the step, with the model's arguments, a stringified output
-        # and when the model issued it. Keep the agent's evidence and take the hook's time.
-        # A name alone does not identify the call: LiveKit rejects malformed arguments without
-        # running the tool, so a batch can hold a failed hook line with no agent line next to a
-        # same-name success. Pair only when the outcome agrees and every argument the model
-        # sent is one the agent executed with (agents may add their own, e.g. a booking ref).
+        hooked.append(call)
+    for call in hooked:
+        # An agent implementing HARNESS_AGENT_TOOL_TRACE writes its own line while the tool runs: the arguments it
+        # executed with and the structured result, but no time, named as the tool or as the world route it reached
+        # (`routes`). The hook writes the same call after the step, with the model's arguments, a stringified output
+        # and when the model issued it. Keep the agent's evidence under the tool's name and take the hook's time.
+        # A name alone does not identify the call: LiveKit rejects malformed arguments without running the tool, so a
+        # batch can hold a failed hook line with no agent line next to a same-name success. Pair only when the outcome
+        # agrees and every argument the model sent is one the agent executed with (agents may add their own).
+        names = {_tool_key(call.name), _tool_key((routes or {}).get(call.name, ""))} - {""}
         written = next(
             (
                 pending
                 for pending in untimed
-                if pending.name == name
+                if _tool_key(pending.name) in names
                 and pending.ok == call.ok
                 and all(
                     pending.arguments.get(key, _MISSING) == value
@@ -1980,7 +2006,7 @@ def _read_file_tool_calls(
             calls.append(call)
             continue
         untimed.remove(written)
-        written.at = call.at
+        written.name, written.at = call.name, call.at
     if strict and unreadable and not calls and not from_spans:
         raise ToolCaptureFailed(
             f"tool_trace file has no readable record ({unreadable} unreadable)"
@@ -3633,7 +3659,9 @@ class CallRunnerImpl:
         seam = self._context.evidence_seam
         unread: ToolCaptureFailed | None = None
         try:
-            written, from_spans = _read_file_tool_calls(runtime, strict=True)
+            written, from_spans = _read_file_tool_calls(
+                runtime, strict=True, routes=tool_routes(_bundle_contract(self._context.bundle_dir))
+            )
         except ToolCaptureFailed as exc:
             written, from_spans, unread = [], [], exc
         if graded_calls(written):

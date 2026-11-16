@@ -214,16 +214,20 @@ def test_a_new_trial_s_dispatcher_starts_with_none_of_the_last_trial_s_actor_sta
 
 
 @pytest.mark.parametrize(
-    ("fallback_arguments", "declared", "decided"),
+    ("fallback_arguments", "declared", "pending", "decided"),
     [
-        ({}, True, ("pol_elena", "declined")),
-        ({"record": {"policy_id": "pol_given", "status": "void"}}, True, ("pol_given", "void")),
-        # An action the contract declares no fields for takes none of the request's.
-        ({}, False, None),
+        ({}, True, False, [("pol_elena", "declined")]),
+        ({"record": {"policy_id": "pol_given", "status": "void"}}, True, False, [("pol_given", "void")]),
+        # The actor's own arguments leave out whose record it is: the request it answers says.
+        ({"status": "declined"}, True, False, [("pol_elena", "declined")]),
+        # The contract declares nothing for the table: its columns are read from the records it holds in the world.
+        ({"status": "declined"}, False, True, [("pol_elena", "pending"), ("pol_elena", "declined")]),
+        # Nothing says which fields the record takes: none of the request's are sent.
+        ({}, False, False, []),
     ],
 )
 def test_a_timed_out_approver_s_fallback_decline_commits_on_the_request_s_record(
-    tmp_path, fallback_arguments, declared, decided
+    tmp_path, fallback_arguments, declared, pending, decided
 ):
     import sqlite3
 
@@ -233,6 +237,8 @@ def test_a_timed_out_approver_s_fallback_decline_commits_on_the_request_s_record
 
     db = sqlite3.connect(":memory:", check_same_thread=False)
     db.execute('CREATE TABLE "cancellation_approvals" (policy_id TEXT NOT NULL, status TEXT DEFAULT \'declined\')')
+    if pending:
+        db.execute("INSERT INTO cancellation_approvals VALUES ('pol_elena', 'pending')")
     door = WorldDoor(
         Routed(None, RecordExecutor(lambda sql, params: db.execute(sql.replace("%s", "?"), params).rowcount)),
         MemoryLog(),
@@ -260,8 +266,12 @@ def test_a_timed_out_approver_s_fallback_decline_commits_on_the_request_s_record
         "action_id": "a1",
         "arguments": json.dumps({"policy_id": "pol_elena", "reason": "moving abroad"}),
     }
+    def records(collection):
+        cursor = db.execute(f'SELECT * FROM "{collection}"')
+        return [dict(zip([one[0] for one in cursor.description], row)) for row in cursor.fetchall()]
+
     dispatcher = build_dispatcher(
-        {"actors": [{"id": "supervisor"}]}, tmp_path, act=DoorActs(door), read_log=lambda: [request], records=None,
+        {"actors": [{"id": "supervisor"}]}, tmp_path, act=DoorActs(door), read_log=lambda: [request], records=records,
         trial_id="t1",
     )
     now = [0.0]
@@ -276,9 +286,7 @@ def test_a_timed_out_approver_s_fallback_decline_commits_on_the_request_s_record
     [row] = door.events(actor="supervisor")
     assert row["parent_event_id"] == "a1"
     assert row["outcome"] == ("committed" if decided else "refused")
-    assert db.execute('SELECT policy_id, status FROM "cancellation_approvals"').fetchall() == (
-        [decided] if decided else []
-    )
+    assert db.execute('SELECT policy_id, status FROM "cancellation_approvals"').fetchall() == decided
 
 
 @pytest.mark.parametrize(

@@ -110,10 +110,21 @@ def test_a_lost_answer_is_recorded_and_its_trial_graded_though_the_agent_s_trace
     ran = Call(name="issue_refund", arguments={"order_id": "1043", "amount": 89}, ok=True, result={"refund_id": "RF-100"})
     heard = Call(name="issue_refund", arguments={"order_id": "1043", "amount": 89.0}, ok=False, error="timed out")
     calls = one_call_per_lost_answer(_merge_span_calls([ran], [heard]), log.rows())
-    # Graded as the one call it was, as the agent heard it.
-    assert [(call.name, call.ok) for call in calls] == [("issue_refund", False)]
+    # Graded as the one call the world made: done, its answer lost on the way back.
+    assert [(call.name, call.ok, call.answer_lost) for call in calls] == [("issue_refund", True, True)]
     notices = evidence_notices(log.rows(), calls, {"issue_refund"})
     assert notices == [] and missing_evidence(notices, {}) == {}
+    # Through grading, a sub-goal that needs the refund done holds; a refund the world refused is not done.
+    from fi.alk.harness.checks import run_check
+
+    refunded = (
+        "def check(world, calls):\n"
+        "    if not any(c.name == 'issue_refund' and c.ok for c in calls):\n"
+        "        return 'not done: issue_refund was not called'\n"
+    )
+    assert run_check(refunded, None, calls).held
+    refused = Call(name="issue_refund", arguments={"order_id": "1043", "amount": 89.0}, ok=False, error="refused")
+    assert not run_check(refunded, None, one_call_per_lost_answer([refused], [])).held
     # A retry the door never saw is still a call it kept no row for.
     retried = [*calls, Call(name="issue_refund", arguments={"order_id": "1043", "amount": 89.0}, ok=True)]
     assert evidence_notices(log.rows(), retried, {"issue_refund"})[0]["count"] == 1

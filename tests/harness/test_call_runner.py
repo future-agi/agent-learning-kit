@@ -420,6 +420,39 @@ def test_file_tool_trace_merges_agent_line_with_livekit_hook_time(
     ]
 
 
+@pytest.mark.parametrize("hook_first", [False, True], ids=["agent line first", "hook line first"])
+def test_file_tool_trace_counts_each_call_once_whichever_line_comes_first_and_however_the_agent_names_it(
+    tmp_path: Path, hook_first: bool
+) -> None:
+    # The agent's own line names the world route it reached; the hook names the tool the model called.
+    agent = [
+        {"name": "prepare_cancellation", "arguments": {}, "output": {"confirmation_token": "t1"}, "is_error": False},
+        {
+            "name": "request_policy_cancellation",
+            "arguments": {"confirmation_token": "t1", "reason": "moving", "policy_id": "pol_elena"},
+            "output": {"detail": "declined"},
+            "is_error": False,
+        },
+    ]
+    hook = [
+        {"name": "prepare_cancellation", "arguments": "{}", "output": "{}", "is_error": False, "at": 10.0,
+         "source": "livekit"},
+        {"name": "cancel_policy", "arguments": '{"confirmation_token": "t1", "reason": "moving"}',
+         "output": "{}", "is_error": False, "at": 20.0, "source": "livekit"},
+    ]
+    trace = _trace_lines(tmp_path / "agent-tool-calls.jsonl", *(hook + agent if hook_first else agent + hook))
+
+    written, _ = cr._read_file_tool_calls(
+        _runtime(metadata={"tool_trace_path": str(trace)}),
+        routes={"cancel_policy": "request_policy_cancellation"},
+    )
+
+    assert sorted((call.name, call.at, call.arguments.get("policy_id")) for call in written) == [
+        ("cancel_policy", 20.0, "pol_elena"),
+        ("prepare_cancellation", 10.0, None),
+    ]
+
+
 def test_file_tool_trace_keeps_a_rejected_call_apart_from_a_same_name_success(
     tmp_path: Path,
 ) -> None:
@@ -2623,8 +2656,8 @@ def test_a_call_keeps_who_its_call_actors_were_and_what_happened_to_each(
     )
     # The grader reads every actor, the one that could not enter as never triggered.
     assert outcome.call_actors == (
-        *summary,
-        {"actor": "other", "name": "Kai", "triggered": False},
+        *({**row, "acted": 0} for row in summary),
+        {"actor": "other", "name": "Kai", "triggered": False, "acted": 0},
     )
     [transcript] = [
         json.loads(data)
@@ -2632,7 +2665,7 @@ def test_a_call_keeps_who_its_call_actors_were_and_what_happened_to_each(
         if kind is cr.ArtifactKind.TRANSCRIPT
     ]
     record = transcript["call_actors"]
-    assert record["summary"] == summary and record["events"] == events
+    assert record["summary"] == [{**row, "acted": 0} for row in summary] and record["events"] == events
     resolved, other = record["resolved"]
     assert (resolved["id"], resolved["instruction"]) == (
         "near",
@@ -2946,7 +2979,7 @@ def test_a_call_where_only_a_world_actor_took_part_lists_it_in_the_call_s_actor_
     )
 
     row = {"actor": "reviewer", "name": "Robin", "triggered": True, "delivered": 1, "dropped": [],
-           "acts_in_world": True}
+           "acts_in_world": True, "acted": 1}
     assert row in outcome.call_actors
     [transcript] = [
         json.loads(data) for kind, _key, data in adapter.uploads if kind is cr.ArtifactKind.TRANSCRIPT

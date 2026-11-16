@@ -379,11 +379,14 @@ def _world_actors_record(
 
 def _chat_actor_summary(cast: Any, world_record: dict[str, Any] | None, listing: Any) -> tuple[dict[str, Any], ...]:
     """The call's actor summary: the actors who wrote in the conversation and every actor that acted in the world."""
-    from .actor_dispatch import world_summary
+    from .actor_dispatch import with_acts, world_summary
 
     speaking = tuple(cast.summary()) if cast is not None else ()
     decisions = (world_record or {}).get("decisions") or []
-    return speaking + tuple(world_summary(decisions, listing.by_id(), {str(one.get("actor")) for one in speaking}))
+    return with_acts(
+        speaking + tuple(world_summary(decisions, listing.by_id(), {str(one.get("actor")) for one in speaking})),
+        decisions,
+    )
 
 
 def handler_sources(bundle_dir: Path, contract: AgentContract) -> dict[str, str]:

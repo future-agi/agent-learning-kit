@@ -390,6 +390,20 @@ def test_every_actor_acting_through_the_world_is_in_the_call_s_actor_summary():
     ]
 
 
+def test_an_actor_that_spoke_no_line_but_acted_in_the_world_is_summarised_as_having_acted():
+    from fi.alk.harness.actor_dispatch import with_acts
+
+    speaking = ({"actor": "coworker", "name": "Jordan", "triggered": True, "delivered": 0, "dropped": []},)
+    decisions = [
+        {"actor": "coworker", "play": "live", "action": "chat.post_message", "outcome": "committed"},
+        {"actor": "coworker", "play": "live", "action": "chat.post_message", "outcome": "refused"},
+    ]
+
+    [row] = with_acts(speaking, decisions)
+
+    assert (row["delivered"], row["acted"]) == (0, 1)
+
+
 def test_a_decision_is_a_line_an_action_both_or_a_wait():
     both = read_decision(
         '{"line": "Approved.", "action": "crm.approve", "arguments": {"deal": 7}, "why": "ok"}'

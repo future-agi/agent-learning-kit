@@ -207,6 +207,8 @@ class Call:
     # Part of the arguments or the result was left out to keep the record bounded.
     input_omitted: bool = False
     output_omitted: bool = False
+    # The world committed it, but the answer never reached the agent.
+    answer_lost: bool = False
 
 
 def tool_call_attribution(record: Mapping[str, Any]) -> dict[str, Any]:
@@ -306,7 +308,7 @@ def trace_row(call: Call) -> dict[str, Any]:
         **({"runtime_ids": call.runtime_ids} if call.runtime_ids else {}),
         **{
             key: True
-            for key in ("input_omitted", "output_omitted")
+            for key in ("input_omitted", "output_omitted", "answer_lost")
             if getattr(call, key)
         },
         **_worker_event(call),

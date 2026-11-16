@@ -1599,12 +1599,12 @@ def test_a_chat_trial_plays_its_actors_through_the_same_door_as_the_agent(tmp_pa
     # The call's own record lists the actor too, so the run's actor filter finds a call where only it took part.
     [sealed] = [json.loads(data) for data in adapter.uploads if b'"world_actors"' in data]
     assert {"actor": "manager", "name": "Mia", "triggered": True, "delivered": 1, "dropped": [],
-            "acts_in_world": True} in sealed["call_actors"]["summary"]
+            "acts_in_world": True, "acted": 1} in sealed["call_actors"]["summary"]
     # The agent's own calls are what grading reads; the actor's action is never among them.
     assert [(call.name, call.arguments) for call in outcome.calls] == [("lookup_account", {"account_id": "ACC-2048"})]
     assert [(one["actor_id"], one["outcome"]) for one in outcome.world_actions] == [("manager", "committed")]
     assert {"actor": "manager", "name": "Mia", "triggered": True, "delivered": 1, "dropped": [],
-            "acts_in_world": True} in outcome.call_actors
+            "acts_in_world": True, "acted": 1} in outcome.call_actors
 
 
 def test_a_chat_trial_s_faults_are_set_for_the_tool_proxy_and_cleared_after(tmp_path: Path, monkeypatch: Any) -> None:

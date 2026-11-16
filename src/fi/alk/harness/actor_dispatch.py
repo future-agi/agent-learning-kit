@@ -587,7 +587,7 @@ class ActorDispatcher:
             sent = await self._send(
                 actor,
                 fallback,
-                dict(actor.activation.fallback_arguments) or self._taken_by(fallback, _request_arguments(cause, log)),
+                self._fallback_arguments(fallback, dict(actor.activation.fallback_arguments), cause, log),
                 f"{self.trial_id}:{actor.id}:fallback",
                 cause,
             )
@@ -606,10 +606,28 @@ class ActorDispatcher:
         if why:
             record["why"] = why
 
+    def _fallback_arguments(
+        self, action: str, given: dict[str, Any], cause: str, log: list[dict[str, Any]]
+    ) -> dict[str, Any]:
+        """What a fallback action is sent: the actor's own arguments, with the request it answers filling the fields
+        they leave out, so the answer reaches the record the request is about."""
+        request = self._taken_by(action, _request_arguments(cause, log))
+        if isinstance(given.get("record"), dict):
+            return {**given, "record": {**request, **given["record"]}}
+        return {**request, **given}
+
     def _taken_by(self, action: str, arguments: dict[str, Any]) -> dict[str, Any]:
-        """Only the arguments ``action`` takes as the contract declares them; none when it declares none."""
-        fields = self.action_fields.get(action, frozenset())
+        """Only the arguments ``action`` takes: the fields the contract declares for it, else the columns its table's
+        records hold in the world; none when neither says."""
+        fields = self.action_fields.get(action) or self._columns(action)
         return {name: value for name, value in arguments.items() if name in fields}
+
+    def _columns(self, action: str) -> frozenset[str]:
+        collection, _, verb = action.rpartition(".")
+        if verb != "put" or not collection or self.records is None:
+            return frozenset()
+        rows = self.records(collection)
+        return frozenset(rows[0]) if rows else frozenset()
 
     async def _answer_instead(self, fallback: str, cause: str, log: list[dict[str, Any]]) -> tuple[str, str]:
         """Another actor answering for one that timed out: its live turn, or its scheduled actions. The outcome is
@@ -1081,6 +1099,17 @@ def world_summary(
             row["dropped"].append(one.get("why") or one.get("problem"))
             row["problem"] = one.get("problem")
     return list(rows.values())
+
+
+def with_acts(summary: tuple[dict[str, Any], ...], decisions: list[dict[str, Any]]) -> tuple[dict[str, Any], ...]:
+    """The call's actor summary with each actor's committed actions in the world (`acted`), whether or not it also
+    spoke: an actor that only acted took part, though its lines are none."""
+    acts: dict[str, int] = {}
+    for one in decisions:
+        if one.get("play") in ("mocked", "live") and one.get("action") and one.get("outcome") in ("committed", "duplicate"):
+            actor_id = str(one.get("actor") or "")
+            acts[actor_id] = acts.get(actor_id, 0) + 1
+    return tuple({**row, "acted": acts.get(str(row.get("actor") or ""), 0)} for row in summary)
 
 
 def result_field(result: Any, path: str) -> Any:
