@@ -85,6 +85,17 @@ Post-rc.1 increments on the release branch. Each one adds gates on top of the
 - The builder chat of a built environment can change its actors (`add_actor`, `drop_actor`) and nothing else
   of the world; adding or dropping one, or changing which scenarios include one, waits for the person's yes,
   and an automatic repair cannot change a scenario's actors.
+- Builder chat: every turn's ending reports what that turn spent: tokens, USD, unpriced
+  turns and only the models it called. The ending is kept before the turn's final
+  checkpoint, so a restart after a failed delivery replays the same ending, usage included.
+  A chat sandbox of its own stores each ending once in its coordinator state: a checkpoint
+  adds only the endings new or changed since the last one (the turn journal is still
+  stored whole).
+- A world whose JSON columns hold values the seed import refuses, such as a jsonb string
+  written as bare text, is refused where it is written: `save_world` and the builder's
+  `change_world` name the table and column and the JSON text expected, instead of the
+  environment failing its seed import at validation. The columns are those the agent's
+  own `CREATE TABLE` statements declare `json` or `jsonb`.
 - Multi-agent compatibility references preserve native Google ADK, LangGraph,
   and CrewAI orchestration, while Python command agents capture bounded tool
   evidence with explicit worker and task attribution.

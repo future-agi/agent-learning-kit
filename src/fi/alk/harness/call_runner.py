@@ -44,7 +44,7 @@ import threading
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Awaitable, Callable, Mapping, Protocol, Sequence
+from typing import TYPE_CHECKING, Any, Awaitable, Callable, Mapping, Protocol, Sequence
 
 from fi import agentcc, simulate
 from fi.simulate.runtime import (
@@ -117,6 +117,9 @@ from .simulator_voice import (
 )
 from .world.errors import WorldUnavailable
 from .world.runtime import Call, graded_calls, runtime_ids, tool_call_attribution, trace_row
+
+if TYPE_CHECKING:
+    from .handler_child import HandlerChannel
 
 logger = logging.getLogger(__name__)
 
@@ -292,6 +295,9 @@ class CallRunnerContext:
     usage_reporter: UsageReporter | None = None
     # A readiness probe checks how the agent's tools reach the world, not the scenario's own trial rules.
     readiness_probe: bool = False
+    # Under per-user isolation, where the conversation's tool calls run: a handler child's
+    # socket. None runs them in this process, as with one fixed user.
+    handler_channel: "HandlerChannel | None" = None
 
 
 # --- pre-dial validation -----------------------------------------------------------------------

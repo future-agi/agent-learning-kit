@@ -28,6 +28,7 @@ from .errors import (
 from .observation import HttpObservationHandle, ObservationWorld
 from .runtime import Call
 from .stores.postgres import PostgresStore
+from .workspace_channel import WorkspaceClient, WorkspaceService
 
 # The harness's own isolation canary. It exists to prove worlds are really separate from each
 # other, never to hold scenario data, so scenario code is never allowed to see or touch it.
@@ -66,10 +67,14 @@ class HostedWorld(HttpObservationHandle):
         *,
         _validate_baseline: bool = True,
         workspace_roots: Mapping[str, Path | str] | None = None,
+        workspace_channel: WorkspaceClient | None = None,
         endpoints: Mapping[str, str] | None = None,
         observations=None,
     ) -> None:
         """Wrap `store` as the `World` surface for one scenario.
+
+        In a phase worker, `workspace_channel` stands in for `workspace_roots`: the harness
+        process serves the workspace files (`workspace_channel.py`).
 
         `baseline_row_counts` is keyed by the bare `pg_tables.tablename` value — no schema
         prefix, no quoting — for every table `public` held when the baseline was frozen. A
@@ -84,6 +89,7 @@ class HostedWorld(HttpObservationHandle):
         self._workspace_roots = {
             name: Path(root) for name, root in (workspace_roots or {}).items()
         }
+        self._workspace_channel = workspace_channel
         self.world_index = world_index
         self.rng = rng
         # Row counts as they stood when the baseline was frozen, keyed by table. Never
@@ -104,10 +110,13 @@ class HostedWorld(HttpObservationHandle):
             "rng": self.rng.getstate(),
             "baseline": self._baseline_row_counts,
             "read_only": False,
-            "workspace_roots": {
-                name: str(root) for name, root in self._workspace_roots.items()
-            },
         }
+
+    def _workspace_service(self, *, read_only: bool = False) -> WorkspaceService | None:
+        """What answers a phase worker's workspace requests; None when there is no workspace."""
+        if not self._workspace_roots:
+            return None
+        return WorkspaceService(self, read_only=read_only)
 
     def _workspace(self, name: str) -> Path:
         try:
@@ -118,9 +127,19 @@ class HostedWorld(HttpObservationHandle):
     def write_file(self, workspace: str, path: str, content: str) -> None:
         if not isinstance(content, str):
             raise WorldUsageError("write_file content must be text")
+        if self._workspace_channel is not None:
+            self._workspace_channel.request(
+                "write_file", workspace=workspace, path=path, content=content
+            )
+            return
         files.write(self._workspace(workspace), path, content.encode("utf-8"))
 
     def read_file(self, workspace: str, path: str) -> str:
+        if self._workspace_channel is not None:
+            reply = self._workspace_channel.request(
+                "read_file", workspace=workspace, path=path
+            )
+            return reply["content"]
         try:
             return files.read(self._workspace(workspace), path).decode("utf-8")
         except UnicodeDecodeError as exc:
@@ -346,6 +365,9 @@ class HostedWorld(HttpObservationHandle):
         instead of special-casing hosted agents in the validator.
         """
 
+        if self._workspace_channel is not None:
+            workspaces = self._workspace_channel.request("checkpoint")["digest"]
+            return (self._store.freeze(), workspaces)
         if not self._workspace_roots:
             return self._store.freeze()
         workspaces = self._workspace_snapshot()
@@ -354,13 +376,21 @@ class HostedWorld(HttpObservationHandle):
     def revert(self, checkpoint: Any) -> None:
         """Restore a checkpoint captured before a probe or smoke action."""
 
+        if self._workspace_channel is not None:
+            database, digest = checkpoint
+            self._workspace_channel.request("revert", digest=digest)
+            self._store.restore(database)
+            return
         if not self._workspace_roots:
             self._store.restore(checkpoint)
             return
         database, workspaces = checkpoint
+        self._workspace_restore(workspaces)
+        self._store.restore(database)
+
+    def _workspace_restore(self, workspaces) -> None:
         for name, saved in workspaces.items():
             files.restore(self._workspace(name), saved)
-        self._store.restore(database)
 
     # -- internal -----------------------------------------------------------------------------
 
@@ -499,6 +529,9 @@ class ReadOnlyWorld(HttpObservationHandle):
 
     def _execution_state(self) -> dict[str, Any]:
         return {**self.__world._execution_state(), "read_only": True}
+
+    def _workspace_service(self) -> WorkspaceService | None:
+        return self.__world._workspace_service(read_only=True)
 
     def query(self, sql: str, params: Sequence[Any] = ()) -> list[dict[str, Any]]:
         return self.__world.query(sql, params)
