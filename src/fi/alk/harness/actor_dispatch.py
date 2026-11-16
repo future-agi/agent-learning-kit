@@ -607,9 +607,9 @@ class ActorDispatcher:
             record["why"] = why
 
     def _taken_by(self, action: str, arguments: dict[str, Any]) -> dict[str, Any]:
-        """Only the arguments ``action`` takes, when the contract says which."""
-        fields = self.action_fields.get(action)
-        return {name: value for name, value in arguments.items() if name in fields} if fields else arguments
+        """Only the arguments ``action`` takes as the contract declares them; none when it declares none."""
+        fields = self.action_fields.get(action, frozenset())
+        return {name: value for name, value in arguments.items() if name in fields}
 
     async def _answer_instead(self, fallback: str, cause: str, log: list[dict[str, Any]]) -> tuple[str, str]:
         """Another actor answering for one that timed out: its live turn, or its scheduled actions. The outcome is

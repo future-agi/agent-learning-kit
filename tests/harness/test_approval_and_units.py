@@ -214,10 +214,17 @@ def test_a_new_trial_s_dispatcher_starts_with_none_of_the_last_trial_s_actor_sta
 
 
 @pytest.mark.parametrize(
-    ("fallback_arguments", "decided"),
-    [({}, ("pol_elena", "declined")), ({"record": {"policy_id": "pol_given", "status": "void"}}, ("pol_given", "void"))],
+    ("fallback_arguments", "declared", "decided"),
+    [
+        ({}, True, ("pol_elena", "declined")),
+        ({"record": {"policy_id": "pol_given", "status": "void"}}, True, ("pol_given", "void")),
+        # An action the contract declares no fields for takes none of the request's.
+        ({}, False, None),
+    ],
 )
-def test_a_timed_out_approver_s_fallback_decline_commits_on_the_request_s_record(tmp_path, fallback_arguments, decided):
+def test_a_timed_out_approver_s_fallback_decline_commits_on_the_request_s_record(
+    tmp_path, fallback_arguments, declared, decided
+):
     import sqlite3
 
     from fi.alk.harness.actor_dispatch import DoorActs, build_dispatcher
@@ -243,9 +250,8 @@ def test_a_timed_out_approver_s_fallback_decline_commits_on_the_request_s_record
         ),
     )
     save_actors(tmp_path, ActorList(actors=[supervisor]))
-    (tmp_path / "contract.json").write_text(
-        json.dumps({"data_schema": {"cancellation_approvals": {"policy_id": "TEXT NOT NULL", "status": "TEXT"}}})
-    )
+    schema = {"cancellation_approvals": {"policy_id": "TEXT NOT NULL", "status": "TEXT"}} if declared else {}
+    (tmp_path / "contract.json").write_text(json.dumps({"data_schema": schema}))
     # The request carries an argument the decline's record has no field for: only the record's own are sent.
     request = {
         "actor_id": AGENT,
@@ -268,8 +274,11 @@ def test_a_timed_out_approver_s_fallback_decline_commits_on_the_request_s_record
 
     asyncio.run(run())
     [row] = door.events(actor="supervisor")
-    assert row["outcome"] == "committed" and row["parent_event_id"] == "a1"
-    assert db.execute('SELECT policy_id, status FROM "cancellation_approvals"').fetchall() == [decided]
+    assert row["parent_event_id"] == "a1"
+    assert row["outcome"] == ("committed" if decided else "refused")
+    assert db.execute('SELECT policy_id, status FROM "cancellation_approvals"').fetchall() == (
+        [decided] if decided else []
+    )
 
 
 @pytest.mark.parametrize(
@@ -283,6 +292,8 @@ def test_a_timed_out_approver_s_fallback_decline_commits_on_the_request_s_record
         ({"outcome": "refused", "arguments": {"status": "declined"}}, None, "refused"),
         # A record that carries no decision says nothing.
         ({"outcome": "committed", "arguments": {"note": "seen"}}, None, None),
+        # A field whose value is no decision gives way to one that is.
+        ({"outcome": "committed", "arguments": {"status": "submitted", "approved": True}}, None, "approved"),
         (None, {"fallback": "decline", "outcome": "declined"}, "refused"),
         (
             {"outcome": "committed", "arguments": {"status": "approved"}},

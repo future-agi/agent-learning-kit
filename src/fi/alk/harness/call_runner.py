@@ -1350,8 +1350,9 @@ def _decision_of(row: Mapping[str, Any]) -> str | None:
     if not isinstance(arguments, dict):
         return None
     for field in _DECISION_FIELDS:
-        if field in arguments:
-            return _DECIDED.get(str(arguments[field]).strip().lower())
+        decided = _DECIDED.get(str(arguments.get(field)).strip().lower()) if field in arguments else None
+        if decided is not None:
+            return decided
     return None
 
 
