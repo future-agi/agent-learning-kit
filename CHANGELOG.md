@@ -18,6 +18,18 @@ Post-rc.1 increments on the release branch. Each one adds gates on top of the
   `change_world` name the table and column and the JSON text expected, instead of the
   environment failing its seed import at validation. The columns are those the agent's
   own `CREATE TABLE` statements declare `json` or `jsonb`.
+- A claim for a scenario's coverage overlay (a refusal, an escalation, an out-of-scope request)
+  that its catalogue row settles by what was said (`verifier: llm`, no check, reference or
+  observed record) no longer requires tool evidence, so a correct agent that makes no tool call
+  is graded instead of ending `evidence_missing`. The claim is matched by the catalogue's
+  `overlay` field or by holding the overlay's whole name. Every other sub-goal, coded ones
+  included, still requires evidence.
+- A call whose declared tool capture could not be read ends `evidence_missing` even when its
+  scenario needs no tool call, instead of being graded as a call that made none. Unread means an
+  unreadable trace file, a trace file with no readable record, or a `tool_trace` world database
+  that is missing or fails. A hand-off is never graded as a tool call. A traced declared tool's
+  oversized record is now cut by value, so its trace line stays valid JSON. Only an oversize
+  value is cut, and it says it was cut; the other values keep their types.
 - Multi-agent compatibility references preserve native Google ADK, LangGraph,
   and CrewAI orchestration, while Python command agents capture bounded tool
   evidence with explicit worker and task attribution.
