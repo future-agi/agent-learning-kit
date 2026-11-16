@@ -2019,7 +2019,7 @@ def _read_file_tool_calls(
         untimed.remove(written)
         timed.append((written, written.name))
         written.name, written.at = call.name, call.at
-    # An agent that records one call from two places writes it twice; the copy the hook did not time is that call.
+    # The hook times every tool call it runs, so an untimed line identical to a timed call is that call written again.
     for extra in untimed:
         if any(
             _tool_key(extra.name) in {_tool_key(one.name), _tool_key(as_written)}
