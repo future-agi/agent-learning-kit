@@ -48,8 +48,7 @@ def begin(job_id: str, run_id: str, context: Mapping[str, Any] | None = None) ->
         )
         from fi_instrumentation.fi_types import ProjectType
 
-        # `register` installs SIGTERM and SIGINT handlers that exit at once. SIGTERM is the platform's Stop, which the
-        # harness turns into sealing the calls in flight: keep the handlers it had.
+        # `register` replaces SIGTERM, the platform's Stop that seals calls in flight: keep the handlers it had.
         handlers = {one: signal.getsignal(one) for one in (signal.SIGTERM, signal.SIGINT)}
         try:
             _provider = register(

@@ -166,8 +166,7 @@ def run_worker(main: Callable[[], Awaitable[None]], *, cancel_on_stop: bool = Fa
             loop.remove_signal_handler(signal.SIGTERM)
             loop.remove_signal_handler(STOP_SIGNAL)
             if _stop_requested:
-                # A stopped call can leave a thread blocked on the agent, and the loop's shutdown would wait for it
-                # while the parent waits for this process: exit now with what was written; the parent reaps the rest.
+                # A thread blocked on the agent would hold the loop's shutdown: exit with what was written.
                 logging.shutdown()
                 sys.stdout.flush()
                 sys.stderr.flush()

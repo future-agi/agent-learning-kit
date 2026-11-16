@@ -236,15 +236,11 @@ class DeclaredWorker(BaseModel):
     tools: list[str] = Field(default_factory=list)
     # The ones it may use, when that is narrower than what its code holds; empty means all of `tools`.
     allowed_tools: list[str] = Field(default_factory=list)
-    # separate: the worker's tool calls are attributed to it at the world through its own channel (cooperative: the
-    # workers share one process, so this attributes calls and does not isolate one worker from another); shared: its
-    # calls cannot be told apart from the others'.
+    # separate: its calls reach the world on its own channel (attributed, not isolated); shared: told apart from none.
     binding: Literal["separate", "shared"] = "shared"
     # For a separate worker, the environment variable its tool client reads as the base address of its tools.
     address_env: str = ""
-    # The environment process that runs this worker alone, when the app serves it as its own service. Only such a
-    # worker can be stopped by itself: past its deadline the harness ends that process for the rest of the trial. Empty
-    # for a worker inside the app's one process, which only has its later world calls refused.
+    # The process that serves this worker alone, which the harness ends past its deadline; empty inside the app's one.
     process: str = ""
 
 
