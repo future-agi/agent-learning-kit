@@ -159,6 +159,21 @@ def _bookable(db, staff, service, loc, utc, off, *, ignore_event=None, customer_
 iso = _iso
 
 
+def _ranges(slots, step):
+    """The day's free start times per staff member as runs (first and last start, every `step`
+    minutes): a full day is dozens of slots, and a reader that shows only the first few (a judge's
+    trimmed view, a skimming agent) would otherwise see the morning and miss the afternoon."""
+    runs = []
+    for s in slots:
+        last = runs[-1] if runs else None
+        if last and last["staff_id"] == s["staff_id"] and _dt(s["start_utc"]) - _dt(last["_utc"]) == timedelta(minutes=step):
+            last["last_start_local"], last["_utc"] = s["start_local"], s["start_utc"]
+            last["count"] += 1
+        else:
+            runs.append({"staff_id": s["staff_id"], "staff_name": s["staff_name"], "first_start_local": s["start_local"], "last_start_local": s["start_local"], "every_minutes": step, "count": 1, "_utc": s["start_utc"]})
+    return [{k: v for k, v in r.items() if k != "_utc"} for r in runs]
+
+
 def handle(args, db):
     service, loc = _service(db, args.get("service_id")), _location(db, args.get("location_id"))
     try:
@@ -201,7 +216,7 @@ def handle(args, db):
                             slot["repeated_time"] = "first" if at == 0 else "second"
                         slots.append(slot)
                 t += timedelta(minutes=step)
-    out = {"date": f"{day:%Y-%m-%d}", "location_id": loc["location_id"], "time_zone": tz, "service_id": service["service_id"], "slots": slots}
+    out = {"date": f"{day:%Y-%m-%d}", "location_id": loc["location_id"], "time_zone": tz, "service_id": service["service_id"], "free_ranges": _ranges(slots, step), "slots": slots}
     if not slots:
         # An empty day says why when the reason is the studio's, not the calendars': the agent can
         # then explain a closure, the notice or the horizon instead of guessing.

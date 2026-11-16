@@ -978,6 +978,26 @@ def test_a_failed_replacement_leaves_the_original_in_place(built: Path, key: str
         world.close()
 
 
+@pytest.mark.parametrize("key", MOVES)
+def test_a_move_goes_to_a_provider_who_takes_the_patient_s_insurer(built: Path, key: str) -> None:
+    """The move scenarios do not test insurer rules: the new provider accepts the patient's recorded
+    insurer, so an agent applying the payer rule (get_appointment does not show self-pay) has no reason
+    to refuse. r9: A409 was a hidden self-pay booking for a Bupa patient with Omar Haddad, who takes no
+    Bupa, and Claude Code rightly declined to move it."""
+    scenario = _scenario(key)
+    world, _calls, _refused, _ = _run(scenario, built / WORLD, with_solution=False)
+    try:
+        state = world.state()
+    finally:
+        world.close()
+    move = [s for s in scenario.solution if s.tool == "reschedule_appointment"][-1].arguments
+    provider = move["new_slot_id"].split("-")[1]
+    appt = next(a for a in state["appointments"] if a["appointment_id"] == move["appointment_id"])
+    payers = [i["payer"] for i in state["insurance"] if i["patient_id"] == appt["patient_id"]]
+    accepted = {r["payer"] for r in state["provider_payers"] if r["provider_id"] == provider}
+    assert not appt["self_pay"] and (not payers or set(payers) & accepted), (key, payers, provider, accepted)
+
+
 # --- Q11: the mailbox workflows carry history and distractors ------------------------------------
 
 ENRICHED = {

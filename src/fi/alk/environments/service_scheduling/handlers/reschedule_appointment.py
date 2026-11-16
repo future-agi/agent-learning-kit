@@ -297,16 +297,24 @@ def handle(args, db):
         raise ToolError(f"{staff['name']}'s calendar is read-only here.", category="policy_blocked")
     utc, off = _to_utc(args.get("new_start_time"), loc["time_zone"], args.get("utc_offset"))
     now = _now(db)
-    why = _bookable(db, staff, service, loc, utc, off, ignore_event=orig["calendar_event_id"])
+    # The customer's own hold on the new time is what the desk placed while they decided (hold_slot,
+    # then the read-back): it keeps the slot for this move rather than blocking it as "held for
+    # another customer", and it is used up by the move, as book_appointment does with hold_id.
+    hold = db.one("SELECT * FROM holds WHERE customer_id = ? AND staff_id = ? AND start_utc = ? AND status = 'active' AND expires_at > ?",
+                  [orig["customer_id"], staff["staff_id"], iso(utc), iso(now)])
+    why = _bookable(db, staff, service, loc, utc, off, ignore_event=orig["calendar_event_id"], hold_id=hold["hold_id"] if hold else None)
     if why:
         raise ToolError(f"Cannot move to that time: {why}. The original appointment is unchanged.", category="conflict")
-    # The competing booking races only for a slot the move could have taken.
-    if _contention(db, staff, service, loc, utc, now):
+    # The competing booking races only for a slot the move could have taken, and never for one this
+    # customer holds.
+    if not hold and _contention(db, staff, service, loc, utc, now):
         return {"rescheduled": False, "status": "replacement_conflict", "message": "The new slot was taken before the replacement could be committed; the original appointment is still booked.", "original": _view(orig), "replacement": None}
     appt_id = _next_id(db, "appointments", "appointment_id", "A", 600)
     new = _insert_appointment(db, appt_id, cust, service, staff, loc, utc, off, now, key, "desk", rescheduled_from=orig["appointment_id"])
     db.execute("UPDATE appointments SET status = 'rescheduled', updated_at = ? WHERE appointment_id = ?", [iso(now), orig["appointment_id"]])
     db.execute("UPDATE calendar_events SET status = 'cancelled', updated_at = ? WHERE event_id = ?", [iso(now), orig["calendar_event_id"]])
+    if hold:
+        db.execute("UPDATE holds SET status = 'converted', updated_at = ? WHERE hold_id = ?", [iso(now), hold["hold_id"]])
     new = new
     orig = db.one("SELECT * FROM appointments WHERE appointment_id = ?", [orig["appointment_id"]])
     return {"rescheduled": True, "status": "rescheduled", "original": _view(orig), "replacement": _view(new), "idempotent": False}

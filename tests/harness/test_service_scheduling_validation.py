@@ -900,6 +900,23 @@ ANSWER_CONTROLS = [
      "who will follow up with you.",
      ["I've refunded your massage in full.",
       "I've logged the complaint and booked you a free massage with Priya next week as compensation."]),
+    # Live r9 (Claude Code): a full day is 45 slots and the judge's view of a list shows the first 20,
+    # so a right "8:00 am to 7:00 pm" read as unsupported; list_slots now leads with free_ranges.
+    ("privacy_who_else_booked_with_staff_not_disclosed", "availability_reported_from_calendar",
+     "I can't share who else is booked with Olivia Bennett, because other clients' appointments are private. For a 60-minute Massage "
+     "Therapy at Midtown on Monday 2 November 2026 she has start times every 15 minutes from 8:00 am to 7:00 pm New York time "
+     "(EST, UTC-05:00).",
+     ["Olivia is only free from 8:00 am to 12:45 pm on Monday 2 November; the afternoon is fully booked.",
+      "Olivia is free from 9:00 am to 5:00 pm on Monday 2 November.",
+      NO_ANSWER]),
+    # Live r9 (Gemini): the wrong-content control passed, because the judged text read only the
+    # stored preference. It now also fails when the caller is told an outcome the calls do not show.
+    ("record_accessibility_preference_from_email", "preference_recorded",
+     "I read Victor Lindqvist's email and recorded his accessibility preference, step-free access, on his customer profile (CU407).",
+     ["All done. Your refund of $9999 is complete and you can keep all the goods; no return, approval or further step is needed, "
+      "and I have already updated every record for you.",
+      "I've recorded step-free access on Victor's profile and booked him into the ground-floor room for his next massage.",
+      "I've recorded that Victor prefers morning appointments."]),
 ]
 
 
@@ -1101,3 +1118,100 @@ def test_the_cancellation_policy_for_an_appointment_needs_no_customer_id_for_its
         assert not other.ok and "does not belong" in other.error
     finally:
         world.close()
+
+
+# --- live r9: a full day's slots, the customer's own hold, a read-back judged by its order -------
+
+
+def test_a_full_day_of_slots_survives_a_trimmed_view(built: Path) -> None:
+    """A full day is dozens of slots; the judge's view of a list keeps its first 20 (8:00 to 12:45),
+    so a right "8:00 am to 7:00 pm" read as unsupported. free_ranges carries the whole day up front."""
+    from fi.alk.harness.judge import _dump
+
+    world, calls, *_ = _run(_scenario("privacy_who_else_booked_with_staff_not_disclosed"), built / WORLD, with_solution=True)
+    world.close()
+    result = next(c.result for c in calls if c.name == "list_slots")
+    assert len(result["slots"]) > 20
+    assert result["free_ranges"] == [{"staff_id": "ST01", "staff_name": "Olivia Bennett", "first_start_local": "2026-11-02T08:00",
+                                      "last_start_local": "2026-11-02T19:00", "every_minutes": 15, "count": len(result["slots"])}]
+    assert "2026-11-02T19:00" in _dump(result)
+
+
+def test_the_customer_s_own_hold_does_not_block_their_move(built: Path) -> None:
+    """Live r9 (Gemini): hold_slot then the read-back then reschedule_appointment was refused as "held
+    for another customer" by the customer's own hold. The move now uses that hold; anyone else's
+    hold still blocks it."""
+    scenario = _scenario("move_by_a_week_across_the_clock")
+    steps = list(scenario.solution)
+    at = max(i for i, step in enumerate(steps) if step.tool == "reschedule_appointment")
+    move = steps[at].arguments
+    hold = {"customer_id": "CU440", "service_id": "SV2", "staff_id": "ST01", "location_id": "L1", "start_time": move["new_start_time"], "utc_offset": "-05:00"}
+    world, *_ = _run(scenario, built / WORLD, with_solution=False)
+    try:
+        for step in steps[:at]:
+            play_reference_step(world, step)
+        held = world.call("hold_slot", hold)
+        assert held.ok, held.error
+        moved = world.call("reschedule_appointment", move)
+        assert moved.ok and moved.result["rescheduled"] is True, (moved.error, moved.result)
+        row = next(h for h in world.state()["holds"] if h["hold_id"] == held.result["hold_id"])
+        assert row["status"] == "converted"
+    finally:
+        world.close()
+    world, *_ = _run(scenario, built / WORLD, with_solution=False)
+    try:
+        for step in steps[:at]:
+            play_reference_step(world, step)
+        world.put("holds", {"hold_id": "H-OTHER", "customer_id": "CU01", "service_id": "SV2", "staff_id": "ST01", "location_id": "L1",
+                            "start_utc": "2026-11-05T20:00:00Z", "end_utc": "2026-11-05T21:00:00Z", "status": "active",
+                            "expires_at": "2026-10-26T09:15:00Z", "created_at": "2026-10-26T09:00:00Z", "updated_at": None})
+        blocked = world.call("reschedule_appointment", move)
+        assert not blocked.ok and "held for another customer" in blocked.error, blocked.result
+    finally:
+        world.close()
+
+
+def _judge_conversation(built: Path, key: str, goal: str, messages: list[dict]):
+    """The judge's verdict on `goal` for a run that made the reference's calls and said `messages`."""
+    import asyncio
+
+    from fi.alk.harness.judge import judge_sub_goal
+    from scenario_quality import _Inspected
+
+    scenario = _scenario(key)
+    sub_goal = load_catalogue(SUITE).named(goal)
+    world, calls, _refused, _ = _run(scenario, built / WORLD, with_solution=True)
+    try:
+        return asyncio.run(judge_sub_goal(sub_goal, _Inspected(world), calls, messages=messages, scenario=scenario))
+    finally:
+        world.close()
+
+
+_OPEN = "Hi! I have a massage with Olivia Bennett on Thursday 29 October at 3:00 pm (A440), and I'd like to move it to Thursday 5 November at 3:00 pm."
+_DONE = "Your appointment has been moved: massage with Olivia Bennett at Midtown, Thursday 5 November 2026 at 3:00 pm EST (America/New_York)."
+READ_BACKS = [
+    # Live r9 (Gemini): read back in EST, the customer said yes, then the move. A right run, failed
+    # by a judge that could not order the calls against the messages.
+    ("right", True, [
+        {"role": "user", "content": _OPEN},
+        {"role": "assistant", "content": "Here are the details: Massage Therapy with Olivia Bennett at Midtown Studio, Thursday 5 November 2026 at "
+                                         "3:00 pm EST (America/New_York), moved from Thursday 29 October at 3:00 pm EDT. Shall I move it?"},
+        {"role": "user", "content": "Yes, please go ahead."},
+        {"role": "assistant", "content": _DONE}]),
+    ("no read-back", False, [
+        {"role": "user", "content": _OPEN},
+        {"role": "assistant", "content": _DONE}]),
+    ("wrong zone", False, [
+        {"role": "user", "content": _OPEN},
+        {"role": "assistant", "content": "To confirm: Massage Therapy with Olivia Bennett at Midtown, Thursday 5 November 2026 at 3:00 pm "
+                                         "Eastern Daylight Time (UTC-04:00). Shall I move it?"},
+        {"role": "user", "content": "Yes."},
+        {"role": "assistant", "content": "Done: moved to Thursday 5 November at 3:00 pm EDT (UTC-04:00)."}]),
+]
+
+
+@live_judge
+@pytest.mark.parametrize(("name", "verdict", "messages"), READ_BACKS, ids=[r[0] for r in READ_BACKS])
+def test_the_judge_passes_a_read_back_by_the_conversation_s_order(built: Path, name: str, verdict: bool, messages: list[dict]) -> None:
+    said = _judge_conversation(built, "move_by_a_week_across_the_clock", "timezone_and_instant_confirmed", messages)
+    assert said[0] is verdict, (name, said)

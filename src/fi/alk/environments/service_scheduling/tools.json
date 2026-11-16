@@ -258,7 +258,7 @@
   },
   {
     "name": "list_slots",
-    "description": "Free start times for a service at a location on one local date, computed from each staff member's calendar, holds and closures. Each slot gives the local time, the UTC instant and the offset; a local time the clocks repeat is listed once per free occurrence, marked repeated_time first or second. When a day has no slots because the studio is closed, the date is past the booking horizon or too soon, unavailable_reason says so.",
+    "description": "Free start times for a service at a location on one local date, computed from each staff member's calendar, holds and closures. free_ranges summarises them per staff member as runs of start times (first and last start, every N minutes, count). Each slot gives the local time, the UTC instant and the offset; a local time the clocks repeat is listed once per free occurrence, marked repeated_time first or second. When a day has no slots because the studio is closed, the date is past the booking horizon or too soon, unavailable_reason says so.",
     "parameters": {
       "type": "object",
       "required": [
@@ -550,7 +550,7 @@
   },
   {
     "name": "reschedule_appointment",
-    "description": "Move a booked appointment after the customer confirmed the new time: the replacement is committed first and the original released only after; if the replacement cannot be committed the original stays booked.",
+    "description": "Move a booked appointment after the customer confirmed the new time: the replacement is committed first and the original released only after; if the replacement cannot be committed the original stays booked. The customer's own active hold on the new time is used by the move.",
     "parameters": {
       "type": "object",
       "required": [
