@@ -70,3 +70,17 @@ source-upload flow. A valid hosted result must retain the framework's raw child
 IDs, delegation events, return events, worker-attributed tool calls, and state
 effects. Later work owns normalized storage, worker-level evaluation, and
 timeout or cancellation behavior.
+
+## Framework worker fixtures
+
+Five small apps, one per framework the harness installs an instrumentor for but has no upstream reference for:
+`claude_agent_sdk/`, `llama_index/`, `pydantic_ai/`, `smolagents/` and `strands/`, beside this file. Each is the
+returns desk of `tests/fixtures/harness_agents/returns_multi_agent/` (a coordinator, an `order_lookup` worker and a
+`refund` worker, each worker on its own ledger address) built the way that framework builds multi-agent apps, so a
+hosted run can prove that each worker's hand-off and tool calls are observed. They have no `reference.json`: they are
+not pinned upstream applications, and the verifier above does not read them. Each runs beside the returns ledger
+(`docker-compose.yml`, which builds `../../returns_multi_agent`); `agent.py`'s docstring lists what it reads.
+
+smolagents and LlamaIndex name an agent's span by its class, so a worker there is reached through a tool that carries
+its name; a worker reached through the framework's own manager (smolagents `managed_agents`, a LlamaIndex
+`AgentWorkflow` hand-off) has no name on its spans and its calls read as the coordinator's.
