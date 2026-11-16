@@ -2053,3 +2053,121 @@ def test_a_stopped_call_abandons_the_agent_reply_it_was_waiting_on(tmp_path, mon
 
     assert asyncio.run(scenario()) < 2
     assert HTTPAgentWrapper(endpoint="http://x").abandon_on_cancel() is False
+
+
+def _a_full_exchange() -> Transcript:
+    return Transcript(
+        exchanges=[
+            Exchange("customer", "Refund order 1043"),
+            Exchange("agent", "Done, the refund is on its way"),
+            Exchange("customer", "Thanks"),
+            Exchange("agent", "Anything else?"),
+        ],
+        ended=FINISHED,
+    )
+
+
+def _stopped_while_sealing(context, monkeypatch, *, stop: bool):
+    """The conversation ended on its own; the stop's cancel reaches the call while it records what it used."""
+    from dataclasses import replace as replaced
+
+    stopped = {"value": False}
+    sealing = asyncio.Event()
+
+    async def drive(*_args, **_kwargs):
+        return _a_full_exchange()
+
+    async def record_usage(*_args, **_kwargs):
+        sealing.set()
+        await asyncio.sleep(0.2)
+
+    monkeypatch.setattr(chat, "_tool_world", lambda *_args: _ToolWorld())
+    monkeypatch.setattr(chat, "_drive_conversation", drive)
+    monkeypatch.setattr(chat, "_record_text_usage", record_usage)
+    adapter = _Adapter()
+    runner = chat.HostedChatCallRunner(adapter, replaced(context, stop_requested=lambda: stopped["value"]))
+
+    async def scenario():
+        task = asyncio.create_task(
+            runner.run(SimpleNamespace(scenario_key="one", scenario_id="scenario-1"), _stop_runtime())
+        )
+        await sealing.wait()
+        stopped["value"] = stop
+        task.cancel()
+        return await task
+
+    return adapter, scenario
+
+
+def test_a_stop_after_the_conversation_ended_still_seals_its_transcript(tmp_path, monkeypatch) -> None:
+    adapter, scenario = _stopped_while_sealing(_context(tmp_path), monkeypatch, stop=True)
+    with pytest.raises(chat.CallCancelled) as caught:
+        asyncio.run(scenario())
+    partial = caught.value.partial
+    assert partial is not None
+    assert partial.stop_reason == "user_canceled"
+    assert partial.turns == 4
+    (transcript,) = [json.loads(data) for data in adapter.uploads]
+    assert [one["content"] for one in transcript["messages"]] == [
+        "Refund order 1043", "Done, the refund is on its way", "Thanks", "Anything else?"
+    ]
+
+
+def test_a_cancel_that_is_not_a_stop_still_cuts_the_sealing(tmp_path, monkeypatch) -> None:
+    adapter, scenario = _stopped_while_sealing(_context(tmp_path), monkeypatch, stop=False)
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(scenario())
+    assert adapter.uploads == []
+
+
+def test_a_stopped_call_s_wind_down_is_cut_short_so_it_seals_inside_the_stop_bound(tmp_path, monkeypatch) -> None:
+    """Actors' last turns after the conversation get at most the stopped wind-down bound, then the call seals."""
+    import time
+    from dataclasses import replace as replaced
+
+    from fi.alk.harness import actor_dispatch
+
+    stopped = {"value": False}
+    settling = asyncio.Event()
+
+    class _Dispatcher:
+        briefs: dict[str, str] = {}
+
+        async def replay(self) -> None:
+            return None
+
+        async def run(self) -> None:
+            await asyncio.sleep(60)
+
+        async def settle(self, *_args) -> None:
+            settling.set()
+            await asyncio.sleep(60)
+
+        def record(self) -> list[dict[str, Any]]:
+            return []
+
+    async def drive(*_args, **_kwargs):
+        return _a_full_exchange()
+
+    monkeypatch.setattr(chat, "_STOPPED_WIND_DOWN_SECONDS", 0.3)
+    monkeypatch.setattr(chat, "_tool_world", lambda *_args: _ToolWorld())
+    monkeypatch.setattr(chat, "_drive_conversation", drive)
+    monkeypatch.setattr(actor_dispatch, "build_dispatcher", lambda *_args, **_kwargs: _Dispatcher())
+    adapter = _Adapter()
+    runner = chat.HostedChatCallRunner(adapter, replaced(_context(tmp_path), stop_requested=lambda: stopped["value"]))
+
+    async def scenario() -> float:
+        task = asyncio.create_task(
+            runner.run(SimpleNamespace(scenario_key="one", scenario_id="scenario-1"), _stop_runtime())
+        )
+        await settling.wait()
+        stopped["value"] = True
+        started = time.monotonic()
+        task.cancel()
+        with pytest.raises(chat.CallCancelled) as caught:
+            await task
+        assert caught.value.partial is not None and caught.value.partial.turns == 4
+        return time.monotonic() - started
+
+    assert asyncio.run(scenario()) < 3
+    assert len(adapter.uploads) == 1

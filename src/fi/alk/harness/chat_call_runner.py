@@ -12,7 +12,7 @@ import time
 from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any, Awaitable, Mapping, Sequence
 
 from fi._diagnostics import sanitize_diagnostic
 from fi.simulate.agent.wrapper import AgentInput
@@ -108,6 +108,10 @@ async def _record_text_usage(
 
 
 DEFAULT_CHAT_TARGET_TIMEOUT_SECONDS = 300.0
+# After a person's Stop the call seals what it kept: the actors' last turns get this much, so the transcript reaches the
+# scheduler inside its seal bound (15 s from the stop), as a stopped voice call's teardown is cut short.
+_STOPPED_WIND_DOWN_SECONDS = 8.0
+_STOP_POLL_SECONDS = 0.25
 
 
 def _unproxied_worker_notices(document: Mapping[str, Any], bundle_dir: Any = None) -> list[dict[str, Any]]:
@@ -810,6 +814,52 @@ class HostedChatCallRunner:
         del (
             world
         )  # Handler execution uses the same leased world's endpoint from runtime.
+        # A person's stop cuts the conversation, never what follows it: a stop that reaches the call once it is winding
+        # down or sealing leaves it to seal what it kept, as it seals a conversation the stop cut.
+        sealing = asyncio.Event()
+        call = asyncio.ensure_future(self._run(scenario, runtime, sealing))
+        stopped_while_sealing = False
+        while not call.done():
+            try:
+                await asyncio.wait({call})
+            except asyncio.CancelledError:
+                if self._context.stop_requested():
+                    task = asyncio.current_task()
+                    if task is not None and hasattr(task, "uncancel"):
+                        task.uncancel()
+                    if sealing.is_set():
+                        stopped_while_sealing = True
+                        continue
+                call.cancel()
+        outcome = call.result()
+        if stopped_while_sealing:
+            # Sealed like any call, then said as the person's stop.
+            raise CallCancelled(partial=replace(outcome, stop_reason="user_canceled"))
+        return outcome
+
+    async def _within_stop_bound(self, step: Awaitable[None]) -> None:
+        """Wait for `step`, but no longer than `_STOPPED_WIND_DOWN_SECONDS` after a person's stop."""
+        task = asyncio.ensure_future(step)
+        loop = asyncio.get_running_loop()
+        stopped_at: float | None = None
+        try:
+            while not task.done():
+                await asyncio.wait({task}, timeout=_STOP_POLL_SECONDS)
+                if stopped_at is None and self._context.stop_requested():
+                    stopped_at = loop.time()
+                cut = stopped_at is not None and loop.time() - stopped_at >= _STOPPED_WIND_DOWN_SECONDS
+                if cut and not task.done():
+                    logger.warning("chat_wind_down_cut_on_stop seconds=%s", _STOPPED_WIND_DOWN_SECONDS)
+                    break
+        finally:
+            if not task.done():
+                task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await task
+        if not task.cancelled():
+            task.result()
+
+    async def _run(self, scenario: Scenario, runtime: EnvironmentRuntime, sealing: asyncio.Event) -> CallOutcome:
         if self._contract is None:
             raise CallAborted(
                 "chat_contract_unavailable: bundle/contract.json is absent"
@@ -1024,6 +1074,7 @@ class HostedChatCallRunner:
                     scenario_key=scenario.scenario_key,
                 )
         finally:
+            sealing.set()
             if proxied:
                 from .call_runner import _write_trial_state
 
@@ -1035,7 +1086,7 @@ class HostedChatCallRunner:
                     await acting
                 # An actor the agent's last calls woke still takes its turn, within the settle's bound.
                 with contextlib.suppress(Exception):
-                    await dispatcher.settle()
+                    await self._within_stop_bound(dispatcher.settle())
             await _record_text_usage(
                 self._context.usage_reporter,
                 scenario_key=scenario.scenario_key,
