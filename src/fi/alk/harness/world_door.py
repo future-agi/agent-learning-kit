@@ -1,23 +1,11 @@
-"""The one way into a world.
+"""The one way into a world: every surface builds a `ToolCall` and calls `WorldDoor.enter`.
 
-Every surface that reaches a world's tools (the HTTP tool proxy in front of an agent's own tools service, the chat
-runner running a generated handler, the actors' dispatcher, later the release tool server and MCP bindings) builds one
-`ToolCall` and calls `WorldDoor.enter`. The door decides, in this order: may this actor take this action, has this
-idempotency key been answered, does the scenario set a fault on this call, then runs the call and logs what came of it
-(committed, refused, faulted, duplicate). `WorldDoor.events` is the read side: who did what, when, with what outcome.
-
-Three levels sit under the surfaces and none of them knows the others' inside: the door (rules), executors (how a call
-is run: forwarded over HTTP, run by a handler, or a record change) and the action log and roster (how the world keeps
-who may do what and what happened). The door never raises into its caller, and a log write that fails or is slow loses
-the row, never the call.
-
-This file is copied into each bundle beside the tool proxy and runs there as a plain module, so it needs nothing but
-the standard library, and `psycopg` only when a Postgres log or roster is used.
-"""
+Never raises into its caller. Copied into each bundle: standard library only, plus `psycopg` for Postgres."""
 
 from __future__ import annotations
 
 import json
+import logging
 import re
 import threading
 import time
@@ -37,12 +25,16 @@ FAULT_MODES = ("timeout_before_commit", "timeout_after_commit", "unavailable", "
 TIMEOUT_MODES = ("timeout_before_commit", "timeout_after_commit")
 LOG_WRITE_SECONDS = 2.0
 # A record change an actor may be permitted beside the world's tools: `<collection>.change` or `<collection>.put`.
+logger = logging.getLogger(__name__)
 RECORD_VERBS = ("change", "put")
 # How a tools service learns which person an actor's call is from: the actor's identity in that service.
 IDENTITY_HEADER = "X-ALK-Actor-Identity"
 # HTTP methods that only read: a call made with one changes nothing in the world.
 READ_METHODS = ("GET", "HEAD", "OPTIONS")
 _IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,62}$")
+# The code of a row that marks a call of the agent's which ran without the door deciding or recording it: the trial's
+# evidence is incomplete. Never a call or a change itself.
+EVIDENCE_INCOMPLETE = "evidence_incomplete"
 
 
 class EvidenceUnavailable(Exception):
@@ -184,7 +176,7 @@ def calls_tool(logged: str, tool: str) -> bool:
 
 
 def same_action(row: Mapping[str, Any], action: str) -> bool:
-    """Whether a log row is a call of this world action. A row names its action in full (`crm.update`), so
+    """Whether a log row is a call of this world action. A row names its action in full (`service_a.update`), so
     `ticket.update` is never taken for it; one written before actions were recorded has only its name, the action
     itself or its last part (`update`)."""
     if row.get("action"):
@@ -252,17 +244,13 @@ class WorldDoor:
         self.roster = roster
         self.faults = faults
         self.write_seconds = write_seconds
-        # A fault names the world action (`crm.update`); a surface whose calls are named by the tool (the chat runner)
-        # also matches the tool's own name, as it always has. Over HTTP the action alone, as the proxy always did.
+        # A surface whose calls are named by the tool also matches a fault by the tool's own name.
         self.faults_by_tool = faults_by_tool
         self._keys_lock = threading.Lock()
         self._key_locks: dict[str, threading.Lock] = {}
-        # Each keyed action this door ran, by actor and key: "pending" while it runs, "committed" with its answer, or
-        # "unknown" when the world may have applied it but did not say, with the action and arguments it was used for. Kept here as well as in the log, so a log that
-        # cannot be written or read never lets a retry run the action again.
+        # Kept here as well as in the log, so a log that cannot be written or read never lets a retry run it again.
         self._keyed: dict[str, tuple[str, Any, Any]] = {}
-        # How many calls of each faulted world action (in full: `crm.update`, never `update`) this door has numbered, so a call whose row the log failed to keep
-        # still counts and a one-shot fault is never taken again by the next call.
+        # Counted here, so a call whose row the log failed to keep still counts toward a one-shot fault.
         self._numbered: dict[str, int] = {}
         # Which trial the numbers belong to, for a door that outlives a trial (the tool proxy); None for one door a trial.
         self.trial = trial
@@ -284,7 +272,7 @@ class WorldDoor:
         self, actor: str | None = None, outcome: str | None = None
     ) -> list[dict[str, Any]]:
         """Every attempt in this trial's log, oldest first, optionally one participant's or one outcome's. Raises
-        `EvidenceUnavailable` when the log cannot be read: an empty answer would pass a check like "no refund was
+        `EvidenceUnavailable` when the log cannot be read: an empty answer would pass a check like "nothing was
         committed" on missing evidence."""
         try:
             rows = self.log.rows()
@@ -417,11 +405,7 @@ class WorldDoor:
         if call.actor == AGENT:
             named = self._named_faults(call)
             if named:
-                # Which call of this action this is, and its row, are decided under one lock: two calls at once
-                # never both take a one-shot fault set on the same call number. The lock is held across the world
-                # call, so calls of one faulted action run one at a time (each at most the executor's timeout).
-                # The lock and the call count belong to this door: a trial serves each action through one door, so
-                # the numbering holds per trial. Two doors serving the same action would number separately.
+                # Held across the world call, so two calls never both take a one-shot fault on the same number.
                 with self._key_lock(f"\x01calls\x00{call.action}"):
                     fault = self._fault(call, named)
                     if fault is not None:
@@ -463,7 +447,8 @@ class WorldDoor:
         """The faults this trial sets on this action of the agent's, whichever call of it they name."""
         try:
             faults = [one for one in self.faults() or [] if isinstance(one, dict)]
-        except Exception:  # noqa: BLE001 - unreadable faults are no faults
+        except Exception as exc:  # noqa: BLE001 - unreadable faults cannot be applied; the runner says so in notices
+            logger.warning("trial faults unreadable, none applied to %s: %s", call.action, type(exc).__name__)
             return []
         names = (call.action, call.name) if self.faults_by_tool else (call.action,)
         return [one for one in faults if one.get("action") in names]
@@ -486,11 +471,8 @@ class WorldDoor:
         )
 
     def _faulted(self, call: ToolCall, fault: dict[str, Any], key: str | None = None) -> Outcome:
-        """The fault the scenario sets on this call. A timeout before commit: the world never sees the call. After
-        commit: it does and the caller never hears back. Unavailable: the world never sees it and the caller hears the
-        service is down (503). Error: the world never sees it and the caller gets the scenario's status and message.
-        A retry without a key is not deduplicated, so a second commit is what a check can catch; a retry with the
-        first call's key is answered from the first result."""
+        """The fault the scenario sets on this call; only after a commit does the world see it. A retry with the first
+        call's key is answered from the first result; one without is not deduplicated."""
         mode = fault.get("mode")
         if mode == "timeout_after_commit":
             ran = self._execute(call)
@@ -576,7 +558,7 @@ class WorldDoor:
         outcome.action_id = action_id
         row = {
             "name": call.name,
-            # The world action in full: `name` alone cannot tell `crm.update` from `ticket.update`.
+            # The world action in full: `name` alone cannot tell `service_a.update` from `service_b.update`.
             "action": call.action,
             "arguments": call.arguments,
             "result": outcome.result
@@ -856,7 +838,7 @@ class PostgresLog:
         ]
         with self._connect() as connection:
             connection.execute(
-                f"INSERT INTO _alk_tool_trace({columns}) VALUES ({', '.join('%s' for _ in keys)})",  # noqa: S608
+                f"INSERT INTO _alk_tool_trace({columns}) VALUES ({', '.join('%s' for _ in keys)})",  # noqa: S608 - fixed columns
                 values,
             )
 

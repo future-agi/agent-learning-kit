@@ -238,10 +238,8 @@ def _message(turn: Exchange) -> dict[str, Any]:
 
 
 class ChatActors:
-    """The actors who write in one chat conversation. Each comes in when its trigger is met (one definition with every
-    other runtime, `due`), and from then on is asked after every agent turn what it does: write a message, act in the
-    world through the door, both, or wait. Nothing caps an actor but the limits the environment sets (`limits`, and
-    an actor's own `max_lines`); what happened to each is recorded as a call records it."""
+    """The actors who write in one chat conversation. Each comes in when its trigger is met (`due`), then is asked
+    after every agent turn whether it writes, acts in the world, both, or waits."""
 
     def __init__(
         self,
@@ -482,7 +480,8 @@ class ChatActors:
             **({"identity": identity} if identity and record_action(decision.action) is None else {}),
         )
         self.events.append(
-            {"actor": key, "kind": "acted", "action": decision.action, "outcome": outcome, "why": decision.why}
+            {"actor": key, "kind": "acted", "action": decision.action, "outcome": outcome, "why": decision.why,
+             "verdict": decision.verdict}
         )
         said = outcome.get("outcome") if isinstance(outcome, dict) else outcome
         self.acted.setdefault(key, []).append(

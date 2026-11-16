@@ -1,8 +1,6 @@
 """Bundle-owned observable HTTP tool proxy used by hosted process environments.
 
-One surface of the world's door (`world_door.py`, copied beside it): it reads an HTTP request into a `ToolCall`, proves
-an actor by this trial's token, and writes the door's outcome back as HTTP. Every rule lives in the door.
-"""
+The HTTP surface of the world's door (`world_door.py`): every rule lives in the door."""
 
 from __future__ import annotations
 
@@ -24,7 +22,6 @@ try:  # Beside the proxy in a bundle; the harness package when run from source.
         ToolCall,
         WorldDoor,
         is_timeout,
-        permitted,
     )
 except ImportError:  # pragma: no cover - imported as part of the package
     from fi.alk.harness.world_door import (  # type: ignore[no-redef]
@@ -38,7 +35,6 @@ except ImportError:  # pragma: no cover - imported as part of the package
         ToolCall,
         WorldDoor,
         is_timeout,
-        permitted,
     )
 
 UPSTREAM = os.environ.get("UPSTREAM_URL", "").rstrip("/")
@@ -46,7 +42,7 @@ DATABASE_URL = os.environ.get("DATABASE_URL", "")
 # The world actions the agent's contract declares read-only, whatever method they are called with.
 READ_ACTIONS = frozenset(one for one in os.environ.get("READ_ACTIONS", "").split(",") if one)
 
-__all__ = ["Handler", "door", "permitted"]
+__all__ = ["Handler", "door"]
 
 
 # One connection, opened on the first agent call and kept: reading the trial's faults never opens a connection per call.
@@ -58,9 +54,7 @@ _FAULTS_TRIAL = None
 
 def _trial_faults() -> list[dict]:
     """This trial's faults on the agent's calls, written by the runner into the world's database; never from a request.
-    Known limit: an agent whose own tools service holds the world's database URL can read and write that table too.
-    Read over one kept connection; a world whose runner set no faults has no row, and an unreadable table is no
-    faults."""
+    No row or an unreadable table is no faults."""
     global _FAULTS_CONNECTION, _FAULTS_TRIAL
     if not DATABASE_URL:
         return []

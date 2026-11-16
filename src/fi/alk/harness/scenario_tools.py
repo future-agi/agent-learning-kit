@@ -81,7 +81,7 @@ from .prove import (
     workspace_bindings,
     workspace_fixture,
 )
-from .actors import CALLER, Actor, cycles, load_actors
+from .actors import ACTORS_FILE, CALLER, Actor, ActorShare, cycles, load_actors, save_actors
 from .scenario import (
     ANSWERED_BY,
     CALLER_AWARENESS,
@@ -268,6 +268,12 @@ def _actor_fields() -> dict[str, Any]:
                             "properties": {
                                 "action": {"type": "string"},
                                 "arguments": {"type": "object"},
+                                "verdict": {
+                                    "type": "string",
+                                    "enum": ["approved", "refused"],
+                                    "description": "Only for an action that decides a request someone made of the "
+                                    "actor: whether it approves or refuses it.",
+                                },
                                 "trigger": {
                                     "type": "object",
                                     "properties": {
@@ -342,11 +348,16 @@ def _actor_fields() -> dict[str, Any]:
             "`timeout_before_commit` (the world never sees the call; the agent hears a timeout), "
             "`timeout_after_commit` (the world makes the change and the agent never hears back, so a careless retry "
             "makes it twice), `unavailable` (the service is down: the world never sees the call and the agent hears "
-            "503 at once; use it for 'inventory unavailable', 'payments down'), or `error` (the world never sees the "
+            "503 at once), or `error` (the world never sees the "
             "call and the agent gets `status` with `message`; use it when the service refuses in a specific way, a "
             "429 rate limit or a 500 with a message), on the agent's `on_call`th call of `action`, the world action "
-            "as the environment names it. A check reading the world then fails a duplicate, or one system changed "
-            "without the other. Never shown to any actor or the person.",
+            "as the environment names it. Give one only where the scenario is about coping with it. A check reading "
+            "the world then fails a duplicate, or one system changed without the other. A write retried after "
+            "`timeout_after_commit` that the world commits twice fails the scenario by itself; a retry carrying the "
+            "first call's `Idempotency-Key` is answered from the first result. When a workflow changes records in "
+            "two systems (`<system A>`, `<system B>`), write one "
+            "scenario whose checks read both, and a negative control where only one changes, which the check over "
+            "the other must fail. Never shown to any actor or the person.",
             "items": {
                 "type": "object",
                 "properties": {
@@ -1339,11 +1350,8 @@ def late_changes_note(scenario: Scenario, world_root: Path) -> str:
 
 
 def _records_the_agent_cannot_see(scenario: Scenario, world_root: Path) -> list[str]:
-    """A setup that writes records for an agent whose data lives inside its own process.
-
-    Such an agent builds its copy of the data when it starts, so a record added to the world is one it
-    never sees: every run of that scenario fails the agent for a record the scenario invented.
-    """
+    """A setup that writes records for an agent whose data lives inside its own process: the agent copied its data
+    at start, so it never sees such a record."""
     store = _in_process_store(world_root)
     if not store:
         return []
@@ -1953,6 +1961,9 @@ def scenario_tools(
     catalogue = catalogue if catalogue is not None else load_catalogue(destination)
     simulator_prompt = load_simulator_prompt(destination)
     target = {"count": wanted}
+    # The share an earlier session recorded carries over; an environment without one draws the default.
+    if (saved := load_actors(destination).actor_share) is not None:
+        target["actor_share"] = saved.model_dump()
     # Keys this environment has given out, a dropped scenario's included: never given to a new one.
     used = used_keys(destination)
     unique = with_unique_keys(kept, used)
@@ -1965,12 +1976,11 @@ def scenario_tools(
         return int(target["count"] or 0) if can_grow else wanted
 
     def call_actor_share() -> float:
-        """The share of scenarios that include an actor: what the person asked for through
-        `aim_for`, else this environment's default."""
-        asked = target.get("call_actor_share")
-        if asked is not None:
-            return float(asked)
-        return default_share(os.environ.get("ALK_HARNESS_JOB_ID") or str(destination))
+        """The share of scenarios that include an actor: drawn within the range the person asked for
+        through `aim_for`, else within this environment's default range."""
+        seed = os.environ.get("ALK_HARNESS_JOB_ID") or str(destination)
+        asked = target.get("actor_share")
+        return default_share(seed, (asked["min"], asked["max"])) if asked else default_share(seed)
 
     def usable_call_actors() -> list[str]:
         """The listed actors a run can deliver to this agent."""
@@ -2510,8 +2520,13 @@ def scenario_tools(
             # Nothing local can replay reference calls against a connect-only agent.
             args = {**args, "solution": []}
 
-        def _refuse(said: str, as_given: dict[str, Any] | None = None) -> dict[str, Any]:
-            seen = _count_refusal(refused, str(args.get("name") or ""), said)
+        def _refuse(said: str, as_given: dict[str, Any] | None = None, gate: str = "") -> dict[str, Any]:
+            # A gate held over the whole suite counts its refusals per stage, so a rename never resets it.
+            seen = (
+                _count_refusal(refused, gate, gate)
+                if gate
+                else _count_refusal(refused, str(args.get("name") or ""), said)
+            )
             if seen >= _REFUSALS_BEFORE_MOVING_ON:
                 return _err(
                     f"{said}\n\nThis is refusal {seen} of this scenario for the same reason, so "
@@ -2572,7 +2587,7 @@ def scenario_tools(
             )
         )
         if short:
-            return _refuse(short)
+            return _refuse(short, gate="actor_share")
         twin = _already_in_the_suite(
             {**args, "name": same}, kept, _first_names_on_disk(destination, same)
         )
@@ -2718,7 +2733,8 @@ def scenario_tools(
         "fix_tool",
         "Correct a tool that was read wrong, or remove one the agent does not have. Everything "
         "is built from these, so a wrong argument name produces a world that refuses everything. `arg_units` "
-        "records the unit or format of a field (cents or dollars, seconds or milliseconds); `returns` the fields "
+        "records the unit or format of a field (a currency's minor or major unit, seconds or milliseconds); "
+        "`returns` the fields "
         "the tool hands back, each with its type and unit.",
         schema(
             {
@@ -2819,18 +2835,18 @@ def scenario_tools(
                     "additionalProperties": {"type": "array", "items": {"type": "string"}},
                 },
                 "keywords": {"type": "array", "items": {"type": "string"}},
-                **(
-                    {
-                        "call_actor_share": {
-                            "type": "number",
-                            "minimum": 0,
-                            "maximum": 100,
-                            "description": "Only when the person asked how many scenarios should include "
-                            "an actor: that share as a percentage of the suite, 0 for none. It replaces "
-                            "the environment's default share. Leave it out otherwise.",
-                        }
-                    }
-                ),
+                "actor_share": {
+                    "type": "object",
+                    "properties": {
+                        "min": {"type": "number", "minimum": 0, "maximum": 1},
+                        "max": {"type": "number", "minimum": 0, "maximum": 1},
+                    },
+                    "required": ["min", "max"],
+                    "description": "Only when the person's request says how many scenarios should include an "
+                    "actor: that share of the suite as fractions, min and max both 1 for every scenario, both 0 "
+                    "for none, or the range they gave. It replaces the environment's default share. Leave it out "
+                    "otherwise.",
+                },
                 "axes": {
                     "type": "object",
                     "additionalProperties": {"type": "array", "items": {"type": "string"}},
@@ -2861,10 +2877,16 @@ def scenario_tools(
                 if people == "alike"
                 else ". No accent, language or location may dominate the suite"
             )
-        if args.get("call_actor_share") is not None:
-            target["call_actor_share"] = (
-                min(max(float(args["call_actor_share"]), 0.0), 100.0) / 100
-            )
+        if args.get("actor_share") is not None:
+            given = args["actor_share"]
+            try:
+                low, high = sorted(min(max(float(given[end]), 0.0), 1.0) for end in ("min", "max"))
+            except (TypeError, KeyError, ValueError):
+                return _err('actor_share takes {"min": <fraction>, "max": <fraction>}, each from 0 to 1')
+            target["actor_share"] = {"min": low, "max": high}
+            if can_save and (destination / ACTORS_FILE).is_file():
+                listed = load_actors(destination)
+                save_actors(destination, listed.model_copy(update={"actor_share": ActorShare(min=low, max=high)}))
         asked = {
             level_name(str(axis)): [str(one).strip() for one in levels if str(one).strip()]
             for axis, levels in (args.get("asked_for") or {}).items()

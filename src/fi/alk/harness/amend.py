@@ -29,11 +29,8 @@ CONTRACT = "contract.json"
 
 
 def _kept_shape(written: Any, before: Any) -> Any:
-    """``written`` without the empty keys ``before`` never had.
-
-    A contract read by an older harness lacks fields added since; dumping the model fills them with their empty
-    defaults, and an edit that touched one rule then also shows a change to a field nobody set.
-    """
+    """``written`` without the empty keys ``before`` never had, so an edit never shows a change to a field nobody
+    set."""
     if isinstance(written, dict) and isinstance(before, dict):
         return {
             key: _kept_shape(value, before.get(key))

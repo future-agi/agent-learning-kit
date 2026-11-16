@@ -88,7 +88,11 @@ def test_a_timeout_after_commit_lets_the_tool_run_and_loses_its_answer():
     assert (row["outcome"], row["error"]) == ("committed", "response_lost")
 
 
-def test_a_door_that_fails_lets_the_tool_run_as_without_it():
+def test_a_door_that_fails_lets_the_tool_run_and_marks_the_trial_s_evidence_incomplete(monkeypatch):
+    import fi.alk.harness.call_runner as cr
+    from fi.alk.harness.call_runner import evidence_notices, missing_evidence, read_tool_trace
+    from fi.alk.harness.world_door import EVIDENCE_INCOMPLETE
+
     door, log = _door()
 
     def broken(call):
@@ -97,6 +101,30 @@ def test_a_door_that_fails_lets_the_tool_run_as_without_it():
     door.door._enter = broken
     decision = door.begin("issue_refund", {})
     assert decision == {"run": True, "id": "", "door": "failed"}
+    marks = [row for row in log.rows() if row.get("refusal_code") == EVIDENCE_INCOMPLETE]
+    assert [(row["name"], row["outcome"], row["error"]) for row in marks] == [
+        ("issue_refund", "unrecorded", "the world's door failed")
+    ]
+    [notice] = evidence_notices(log.rows())
+    assert notice["code"] == EVIDENCE_INCOMPLETE and notice["count"] == 1
+    assert missing_evidence([notice], {}) == {"tool_calls": notice["message"]}
+    # The mark is never one of the agent's calls.
+    monkeypatch.setattr(cr, "_read_action_log", lambda dsn, **_: marks)
+    assert read_tool_trace("dsn") == []
+
+
+def test_a_door_that_does_not_decide_in_time_lets_the_tool_run_and_marks_it(monkeypatch):
+    from fi.alk.harness.world_door import EVIDENCE_INCOMPLETE
+
+    door, log = _door()
+    monkeypatch.setattr(in_process_door, "DECIDE_SECONDS", 0.01)
+    release = __import__("threading").Event()
+    door.door._enter = lambda call: release.wait(2) or None
+    assert door.begin("issue_refund", {}) == {"run": True, "id": "", "door": "undecided"}
+    release.set()
+    assert [row["error"] for row in log.rows() if row.get("refusal_code") == EVIDENCE_INCOMPLETE] == [
+        "the world's door did not decide in time"
+    ]
 
 
 def test_an_actor_cannot_take_one_of_the_agent_s_in_process_tools_but_can_change_a_record():
@@ -154,9 +182,28 @@ def test_the_wrapped_tool_keeps_its_signature_and_answer_and_raises_what_the_fau
         held(8)
 
 
-def test_a_door_out_of_reach_lets_the_tool_run(monkeypatch):
+def test_a_door_out_of_reach_lets_the_tool_run_and_says_so_once_it_is_back(monkeypatch):
+    from fi.alk.harness.world_door import EVIDENCE_INCOMPLETE
+
+    monkeypatch.setattr(bootstrap, "_UNRECORDED", {})
     monkeypatch.setattr(bootstrap, "_post", lambda path, body: None)
-    assert bootstrap.door("issue_refund")(lambda order: order + 1)(1) == 2
+    held = bootstrap.door("issue_refund")(lambda order: order + 1)
+    assert held(1) == 2 and held(2) == 3
+    door, log = _door()
+    sent = []
+
+    def back(path, body):
+        sent.append(body)
+        if path == "/begin":
+            return door.begin(body["name"], body["arguments"], unrecorded=body.get("unrecorded", 0))
+        return door.end(body["id"], body["ok"], body.get("result"))
+
+    monkeypatch.setattr(bootstrap, "_post", back)
+    assert held(3) == 4
+    assert sent[0]["unrecorded"] == 2 and "unrecorded" not in sent[-1]
+    assert [row["error"] for row in log.rows() if row.get("refusal_code") == EVIDENCE_INCOMPLETE] == [
+        "the world's door was out of reach"
+    ] * 2
 
 
 def test_an_async_tool_stays_async_and_loses_its_answer_on_a_timeout_after_commit(monkeypatch):

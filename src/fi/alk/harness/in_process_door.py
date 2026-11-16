@@ -1,20 +1,6 @@
-"""The world's door for tools an agent runs in its own process.
+"""The world's door for tools an agent runs in its own process: `POST /begin` decides, `POST /end` logs the outcome.
 
-An agent whose tools are Python callables in its own code (no tools service to stand a proxy in front of) still meets
-the world's rules: the agent's interpreter wraps each contract tool (see `in_process_door_bootstrap.py`), and every
-call asks this server first. The server runs the call through `WorldDoor` like every other surface, with one
-difference: the door's executor is the agent's own callable, which runs back in the agent's process. So a call is two
-requests:
-
-- `POST /begin {"name", "arguments"}`: the door decides. Held by the scenario's fault before commit (a timeout,
-  unavailable, an error), the answer says so and the tool never runs. Otherwise the answer says `run`, with an id.
-- `POST /end {"id", "ok", "result", "error"}`: the agent ran it; the door logs what came of it and answers whether the
-  scenario's `timeout_after_commit` fault loses that answer.
-
-Copied into each bundle beside `world_door.py` and `tool_trace_proxy.py` (whose trial faults it reads); standard
-library only, plus `psycopg` for the world's log. A tool call is never failed by this server: anything it cannot
-decide comes back as `run`, and the agent's tool runs as it would without a door.
-"""
+Anything this server cannot decide comes back as `run`, so a tool call is never failed by it."""
 
 from __future__ import annotations
 
@@ -29,6 +15,7 @@ from typing import Any
 try:  # Beside the server in a bundle; the harness package when run from source.
     import tool_trace_proxy as _proxy
     from world_door import (
+        EVIDENCE_INCOMPLETE,
         DictRoster,
         Executed,
         Outcome,
@@ -44,6 +31,7 @@ try:  # Beside the server in a bundle; the harness package when run from source.
 except ImportError:  # pragma: no cover - imported as part of the package
     from fi.alk.harness import tool_trace_proxy as _proxy  # type: ignore[no-redef]
     from fi.alk.harness.world_door import (  # type: ignore[no-redef]
+        EVIDENCE_INCOMPLETE,
         DictRoster,
         Executed,
         Outcome,
@@ -139,8 +127,12 @@ class InProcessDoor:
         if door is not None and isinstance(getattr(door, "executor", None), Routed):
             door.executor.tools = _AgentRuns(self.pending)
 
-    def begin(self, name: str, arguments: Any, action: str = "") -> dict[str, Any]:
-        """Whether the agent's tool may run: `{"run": true, "id"}`, or what the scenario's fault answers instead."""
+    def begin(self, name: str, arguments: Any, action: str = "", unrecorded: int = 0) -> dict[str, Any]:
+        """Whether the agent's tool may run: `{"run": true, "id"}`, or what the scenario's fault answers instead. A
+        call the door could not decide or record still runs, and is marked in the log as evidence missing, so the
+        trial reads unmeasured; `unrecorded` is how many of this tool's calls ran while the door was out of reach."""
+        for _ in range(max(0, min(int(unrecorded or 0), 1000))):
+            self._unrecorded(ToolCall(action=action or name, name=name), "the world's door was out of reach")
         call_id = uuid.uuid4().hex
         waiting = _Pending()
         with self._lock:
@@ -164,16 +156,23 @@ class InProcessDoor:
 
         threading.Thread(target=enter, daemon=True).start()
         if not waiting.decided.wait(DECIDE_SECONDS) or (waiting.ran is False and waiting.outcome is None):
-            # Undecided in time: the tool runs as it would without a door, never failed by it.
+            # Undecided in time: the tool runs as it would without a door, never failed by it, and the trial's
+            # evidence says a call went unrecorded.
             self._forget(call_id)
+            self._unrecorded(call, "the world's door did not decide in time")
             return {"run": True, "id": "", "door": "undecided"}
         if waiting.ran:
             return {"run": True, "id": call_id}
         self._forget(call_id)
         if waiting.outcome is None or waiting.outcome.fault is None:
-            # Not held by the scenario: the door itself failed, and the tool runs as it would without one.
+            # Not held by the scenario: the door itself failed, and the tool runs as it would without one, marked.
+            self._unrecorded(call, "the world's door failed")
             return {"run": True, "id": "", "door": "failed"}
         return {"run": False, **_held(waiting.outcome)}
+
+    def _unrecorded(self, call: ToolCall, why: str) -> None:
+        """Marks a call of the agent's that ran without the door recording what it did."""
+        self.door._write(call, Outcome("unrecorded", 0, reason=why, refusal_code=EVIDENCE_INCOMPLETE), wait=True)
 
     def end(self, call_id: str, ok: bool, result: Any, error: str = "") -> dict[str, Any]:
         """What the door made of a call the agent ran: `lost` with the delay when the scenario's fault loses its
@@ -202,6 +201,13 @@ class InProcessDoor:
     def _forget(self, call_id: str) -> None:
         with self._lock:
             self.pending.pop(call_id, None)
+
+
+def _int_or_zero(value: Any) -> int:
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return 0
 
 
 def _held(outcome: Outcome) -> dict[str, Any]:
@@ -250,7 +256,7 @@ class Handler(BaseHTTPRequestHandler):
         body = body if isinstance(body, dict) else {}
         if self.path == "/begin":
             self._reply(200, _door().begin(str(body.get("name") or "unknown"), body.get("arguments"),
-                                           str(body.get("action") or "")))
+                                           str(body.get("action") or ""), _int_or_zero(body.get("unrecorded"))))
         elif self.path == "/end":
             self._reply(200, _door().end(str(body.get("id") or ""), bool(body.get("ok")), body.get("result"),
                                          str(body.get("error") or "")))

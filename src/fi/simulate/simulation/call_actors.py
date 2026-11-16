@@ -1,9 +1,6 @@
 """How an actor can reach the agent under test, and when one enters.
 
-Shared by the build, which refuses an actor no run could deliver, and by every runner. Each
-channel names the agent types it reaches and whether a runner can deliver it yet, so a new agent
-type adds a channel here instead of a branch in the code that reads it.
-"""
+Shared by the build, which refuses an actor no run could deliver, and by every runner."""
 
 from __future__ import annotations
 
@@ -120,9 +117,7 @@ ACTOR_WORLD_ALIAS = "HARNESS_ACTOR_WORLD"
 TOOLS_READ_SECONDS = 1.0
 # How much of the conversation an actor hears before writing a line.
 CONVERSATION_LINES = 12
-# The defaults for every limit nobody set, per run: two voices on one phone line, the caller back after four
-# agent turns, a minute of actors per call, twenty messages in a conversation actors write among themselves. Each is a setting on the
-# environment's actor list, overridable per scenario; `None` there is no limit.
+# Defaults for every limit nobody set; each is overridable on the actor list and per scenario, `None` is no limit.
 LIMIT_DEFAULTS: dict[str, Any] = {
     "max_active": 2,
     "caller_takes_back_after_turns": 4,
@@ -136,8 +131,6 @@ LIMIT_DEFAULTS: dict[str, Any] = {
 # Someone can only take the phone from a person who already has it: not before the agent's second turn, by
 # which point the person has spoken at least once. A trigger that fires earlier waits for that turn.
 TAKES_PHONE_FROM_TURN = 2
-# Time all actors together have in one call (`actor_seconds_per_call`): wall clock from the first actor's trigger, the
-# agent's and the person's turns included. Once it runs out every actor stops and the person has the call.
 # Lines asked for and not yet ready; one more is dropped rather than queued behind them.
 MAX_WAITING_LINES = 2
 TIME_UP = "actor time used up"
@@ -159,14 +152,14 @@ def seeded(seed: str, *parts: object) -> random.Random:
     )
 
 
-# The share of a suite's scenarios that include an actor when the person has not asked for one:
-# drawn once per environment within this range, so suites differ and none goes without.
+# Drawn once per environment when the person has not asked for a share of scenarios with actors.
 SHARE_RANGE = (0.15, 0.25)
 
 
-def default_share(seed: str) -> float:
-    """The share of an environment's scenarios that include an actor, unless the person asked for one."""
-    return seeded(seed, "share").uniform(*SHARE_RANGE)
+def default_share(seed: str, within: tuple[float, float] = SHARE_RANGE) -> float:
+    """The share of an environment's scenarios that include an actor, drawn within the range the person
+    asked for, else within `SHARE_RANGE`."""
+    return seeded(seed, "share").uniform(*within)
 
 
 def at_least(share: float, of: int) -> int:
@@ -200,14 +193,11 @@ def limited(gain: float, peak: int) -> float:
 class Moment:
     """What a run knows now, the same shape for every runtime: enough to decide whether an actor is due.
 
-    `agent_turns` is None where turns are not how the run moves (an actor acting through the world beside the call):
-    there "present from the start" means at once. `contacted` is whether the agent has reached one of the actor's
-    identities; `records` reads the world's records of one collection, where the runtime can read them.
-    """
+    `agent_turns` is None where turns are not how the run moves; there "present from the start" means at once."""
 
     agent_turns: int | None
     last_text: str = ""
-    # Each world action the agent called, in full (`crm.update`), as the world's door logs it.
+    # Each world action the agent called, in full (`service_a.update`), as the world's door logs it.
     tools_called: list[str] = field(default_factory=list)
     elapsed: float = 0.0
     contacted: bool = False
@@ -349,8 +339,11 @@ def line_brief(
 DECISION_ASK = (
     "Decide what you do now. Reply with JSON only: "
     '{"line": "<what you say now, or null>", "action": "<one of your actions, or null>", "arguments": {...}, '
-    '"why": "<one sentence>"}. Use null for both to wait.'
+    '"why": "<one sentence>", "verdict": "approved", "refused" or null}. Use null for both to wait. Give a verdict '
+    "only when your action decides a request someone made of you."
 )
+# The verdicts an actor's action can carry on the request it decides.
+VERDICTS = ("approved", "refused")
 
 
 @dataclass
@@ -361,6 +354,8 @@ class Decision:
     action: str = ""
     arguments: dict[str, Any] = field(default_factory=dict)
     why: str = ""
+    # What the action decides about the request that brought the actor in: "approved", "refused", or None.
+    verdict: str | None = None
 
     @property
     def waits(self) -> bool:
@@ -438,14 +433,13 @@ def read_decision(raw: Any) -> Decision:
         action=str(parsed.get("action") or "").strip(),
         arguments=arguments,
         why=str(parsed.get("why") or "").strip(),
+        verdict=parsed.get("verdict") if parsed.get("verdict") in VERDICTS else None,
     )
 
 
 class Waits:
-    """How long the run waits for a speaking actor once it is due, and what happens when it does not answer in time:
-    the same rule the world uses for an actor acting through it. `silent` is a time-out, `decline` a declined request
-    (a labelled line, never spoken in the actor's voice), one of its own actions taken for it, or another actor who
-    answers instead."""
+    """How long the run waits for a speaking actor once it is due, and its fallback when it does not answer in time:
+    the same rule the world uses for an actor acting through it."""
 
     def __init__(self, clock: Callable[[], float] = time.time) -> None:
         self.clock = clock
@@ -490,10 +484,7 @@ def declined_line(actor: dict[str, Any]) -> str:
 
 
 class Cast:
-    """Every actor in one call: who enters when, the call-wide budget, and what happened to each.
-
-    Each actor is a resolved entry: its list fields plus the scenario's `instruction` and `trigger`.
-    """
+    """Every actor in one call: who enters when, the call-wide budget, and what happened to each."""
 
     def __init__(
         self,
@@ -679,10 +670,8 @@ class Cast:
         )
 
     def fallbacks(self) -> list[tuple[dict[str, Any], str, str]]:
-        """Each actor whose wait ran out unanswered: recorded with its fallback, and out of the call. Another actor
-        named as the fallback comes in next; its timeout reads `answered_by` only once that actor speaks, else
-        `limit_blocked` (a call or line limit stopped it) or `unresolved`. A declined request is recorded as a labelled
-        line, never voiced."""
+        """Each actor whose wait ran out unanswered, recorded with its fallback and out of the call. A fallback actor's
+        timeout reads `answered_by` only once that actor speaks, else `limit_blocked` or `unresolved`."""
         expired = self.waits.expired(self.actors)
         for actor, fallback, outcome in expired:
             key = str(actor["id"])

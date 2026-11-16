@@ -2286,13 +2286,20 @@ def test_a_field_s_unit_can_be_recorded_after_the_contract_is_written(tmp_path):
     assert not refused and "no argument called amount" in said
 
 
+def test_the_tables_a_tool_reads_and_changes_round_trip_and_read_empty_on_an_older_contract():
+    spec = ToolSpec.model_validate({"name": "update", "tables_read": ["accounts"], "tables_changed": ["ledger"]})
+    again = ToolSpec.model_validate_json(spec.model_dump_json())
+    assert (again.tables_read, again.tables_changed) == (["accounts"], ["ledger"])
+    older = ToolSpec.model_validate({"name": "update"})
+    assert (older.tables_read, older.tables_changed) == ([], [])
+    contract = AgentContract(agent="a", one_liner="x", modality="chat", tools=[spec])
+    assert "reads tables: accounts" in contract.brief() and "changes tables: ledger" in contract.brief()
+
+
 def test_a_tool_s_returned_fields_are_recorded_and_read_on_its_contract_line(tmp_path):
     from fi.alk.harness.amend import fix_tool
 
-    # A writer may give the fields under another name or as a bare list; both read as the same thing.
-    assert ToolSpec.model_validate({"name": "refund", "outputs": {"refund_id": "string"}}).returns == {
-        "refund_id": "string"
-    }
+    # A writer may give the fields as a bare list; it reads as the same thing.
     assert ToolSpec.model_validate({"name": "refund", "returns": ["refund_id"]}).returns == {"refund_id": ""}
     assert ToolSpec.model_validate({"name": "refund", "returns": "the new id"}).returns == {}
     contract = _written_contract(tmp_path)
@@ -4895,8 +4902,22 @@ def test_a_skill_only_names_tools_its_stage_actually_has():
     from fi.alk.harness.contract import AgentContract, ToolSpec
     from fi.alk.harness.scenario import Persona, Scenario, Step
 
-    fields = set()
-    for model in (AgentContract, ToolSpec, Scenario, Persona, Step, SubGoal):
+    from pydantic import BaseModel
+
+    from fi.alk.harness import actors as actors_module
+    from fi.alk.harness import contract as contract_module
+    from fi.alk.harness.catalogue import CONTRACT_SCHEMA
+    from fi.alk.harness.understand import READER
+
+    fields = {READER, *CONTRACT_SCHEMA["verifier"]["enum"]}
+    # Every model the contract and the actors are built from: the stages fill their fields too.
+    contract_models = [
+        one
+        for module in (contract_module, actors_module)
+        for one in vars(module).values()
+        if isinstance(one, type) and issubclass(one, BaseModel)
+    ]
+    for model in (AgentContract, ToolSpec, Scenario, Persona, Step, SubGoal, *contract_models):
         fields |= set(model.model_fields)
     # Names from the check-writing examples the skills contain.
     from fi.alk.harness.contract import CALL_DIRECTIONS, MODALITIES
@@ -9947,9 +9968,9 @@ def test_aim_for_reports_the_default_share_and_takes_the_person_s_own(
         in said()
     )
     monkeypatch.delenv("ALK_HARNESS_JOB_ID")
-    assert "At least 16 of the 40" in said(call_actor_share=40)
+    assert "At least 16 of the 40" in said(actor_share={"min": 0.4, "max": 0.4})
     assert "No scenario includes an actor, as the person asked" in said(
-        call_actor_share=0
+        actor_share={"min": 0, "max": 0}
     )
 
 

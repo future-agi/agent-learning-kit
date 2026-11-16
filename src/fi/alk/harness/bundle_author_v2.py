@@ -157,9 +157,8 @@ _TOOL_TRACE_DDL = (
 
 
 def _action_log_seed(authoring: Path) -> str:
-    """The world's full action log, and who may do what in it: every world records who did what and what came of it,
-    so World changes can be shown on every trial, actors or not. A world with no actors seeds no actor rows. A bundle
-    certified before this keeps the table it was seeded with; the door writes either shape."""
+    """The world's full action log, and who may do what in it, so World changes can be shown on every trial. An older
+    bundle keeps the table it was seeded with; the door writes either shape."""
     return _TOOL_TRACE_DDL + actors_seed(load_actors(authoring))
 
 
@@ -2006,7 +2005,6 @@ def _tool_proxy_process(read_actions: list[str] | None = None) -> SourceProcess:
         "DATABASE_URL": "{{WORLD_DATABASE_URL}}",
     }
     if read_actions:
-        # Only when declared, so a plan without declarations is the plan it always was.
         environment["READ_ACTIONS"] = ",".join(read_actions)
     return SourceProcess(
         name="tool-proxy",
@@ -2053,12 +2051,8 @@ _SCRIPT_RUN = r"(?<![^\s'\"])((?:\S*/)?python[0-9.]*)\s+({stem})\.py(?=[\s'\"]|$
 def run_bound_script_as_module(
     command: list[str], bound: list[dict[str, str]], environment: dict[str, str] | None = None
 ) -> list[str]:
-    """`python agent.py` as `python -m agent` when `agent` holds bound tools: a script started by its path is never
-    imported, so the door's import hook could not reach the tools it defines. Only where the two start the same:
-    a bare file name in the working directory (so `sys.path[0]` is that directory either way), a valid module name
-    that no standard-library or built-in module shares, and the working directory left on the path (no `-P`,
-    no `PYTHONSAFEPATH`). `__name__` is `"__main__"` and `__file__` the script's path in both. Any other command is
-    returned as it is, and the run says the faults on its tools were not applied."""
+    """`python agent.py` as `python -m agent` when `agent` holds bound tools, so the door's import hook reaches them.
+    Only where the two start the same; any other command is returned as it is."""
     if (environment or {}).get("PYTHONSAFEPATH"):
         return list(command)
     # `test` ships with Python though the list leaves it out.

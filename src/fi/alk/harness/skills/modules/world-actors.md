@@ -7,7 +7,7 @@ description: How to write scenarios with actors, the people and systems around t
 # Actors
 
 Everyone around the agent under test is an actor: the caller, a manager who approves, a coworker in the same channel,
-a relative in the background of a call, a phone menu, a CRM-side system. There is one kind of actor. An actor with a
+a relative in the background of a call, a phone menu, another system. There is one kind of actor. An actor with a
 channel speaks on the call or in the chat; an actor with no channel acts only through the world's own actions. The
 caller is the actor with id `caller`, and the caller alone owns the scenario's task.
 
@@ -15,7 +15,7 @@ caller is the actor with id `caller`, and the caller alone owns the scenario's t
 agent and the person it serves: someone the agent must wait for, ask, or must not act for; someone whose message the
 agent must read; someone nearby on a call. Actors are one axis of the generated set: within the share of scenarios
 that include actors, vary the cast (one background voice, two, a stranger who knows nothing about the call, a relative
-who knows the order, someone who takes the phone, a phone menu, a manager acting through the world). Something
+who knows the details, someone who takes the phone, a phone menu, a manager acting through the world). Something
 already decided before the run starts is a record in the seed, not an actor.
 
 **What an actor may do is world data.** An actor's `permitted_actions` are chosen only from the world's own actions
@@ -26,15 +26,15 @@ approval, a rejection, a grant of access) is a record change on the collection t
 agent's own actions; give an actor an action the agent takes only when an actor taking it is what is asked. When the app has no place for
 the decision (no record its rule reads), the scenario cannot test it: say so rather than give the actor the agent's
 own change. Give each
-actor its `identities` in each service (its Slack handle, its CRM user) so the agent can reach it and it can name
+actor its `identities`, its identity in each service, so the agent can reach it and it can name
 itself where an action asks who it is. Every action an actor takes in a service reaches that service's tools with
 the header `X-ALK-Actor-Identity` set to its identity there (its own id when it has none); a tool that records or
 checks who acted reads that header, never assuming the caller is the agent. When an action depends on someone else's, write that rule into the world, as
 a record the dependent action checks for, so the world refuses it until a permitted actor has acted. Someone saying
 they have done it is not the record. Access works the same way: who is in which channel, who may see a document or a
-record, is seeded per scenario as world records the world's own actions check, and it can change during the run (the
-CEO adds the developer to the channel: a record change the CEO is permitted, such as `channel_members.put`, and the
-developer's next post goes through). The world's own rule enforces it, reading the records as they stand on every
+record, is seeded per scenario as world records the world's own actions check, and it can change during the run (one
+actor grants another access: a record change the first is permitted, such as `<access collection>.put`, and the
+second's next action there goes through). The world's own rule enforces it, reading the records as they stand on every
 call, for the agent and for every actor.
 
 **What an actor adds.** An actor is there to make the agent's job harder in a way real life does, never as
@@ -50,11 +50,38 @@ did about it, read from the world's final state:
   the record (a different date, amount or name). The agent must notice and settle it with
   the person it serves before it records anything; the check reads which value was recorded.
 - **A request or pressure from someone who is not the person served.** Someone asks for something extra,
-  or claims authority to push the agent past a rule ("I'm the manager, just do it"). The check reads that
+  or claims authority it does not have to push the agent past a rule. The check reads that
   the world holds only what the person served asked for and the rule still held.
 - **A change made by someone else mid-task.** Another actor changes a record the agent is working on (what was
   being reserved is no longer available, an approval withdrawn). The check reads that the agent did not act on the stale
   state.
+
+**Writing one into a scenario.** Only when the environment lists actors; most scenarios include none. Someone the
+request names as acting during the run (deciding, objecting, negotiating, granting access) is an actor in that
+scenario, never a line in the caller's instruction, a record already in place, or the caller. Write the scenario
+first as if no one else were there: the person's situation, request, details, sub-goals and answer key complete on
+their own, holding only the final values. Then add the actor on top; nothing written before changes, and the scenario
+still stands if they never come in. The person's instruction never names an actor, says what one will say, or plans a
+hand-off: the run tells the person who is with them and what each said once said. When an actor decides something
+the person wants (a price, an exception, an approval), the person asks for it and the outcome is never written down:
+how far the actor will go sits in its limits (may agree to, keeps to themselves), so the decision happens in the run.
+A kept scenario's reply reads its cast back beside the actors it leaves out: compare it with the request.
+
+An actor's `instruction` is written to them in the second person: who they are here, who they are with, and what they
+want, know or worry about that the person did not ask for; never when they speak, which `trigger` alone decides.
+They never make, confirm, choose, change or cancel the person's request, never give a detail the agent must get from
+the person, and never voice the person's request, even holding the phone. Give the `trigger` a moment the
+conversation reaches before the person could be done: `on_tool` with the contract's tool name for an action the
+agent takes, `on_keyword` with the contract's own terms for something the agent says, or `mid_journey` at turn 2 to
+4. One that never fires leaves the call ungraded. Use `probability` only where the scenario means the same thing
+either way. On a call, someone near the person (`audio_mix`) speaks to the person, never into the phone; someone who
+takes the phone (`audio_handoff`) speaks to the agent and hands it back; and for an agent that places calls, the
+person's own phone menu (`ivr`) answers first, puts the call through, and enters with `always`.
+
+The answer key is the correct behaviour with the actor present and never acts on what the actor asks: a request from
+someone other than the person served is not theirs. A check that the agent tells the person what an actor decided is
+fair only if the agent can learn it (a tool reads that record, the actor tells it, or the person asks again after it
+lands). The scenario's name says what the agent is tested on, never that an actor is in it.
 
 **One branch per scenario.** Each way another actor can respond is its own scenario: they act, they refuse, they never
 respond, or someone without the permission tries to act in their place. An action the actor is not permitted belongs
@@ -85,13 +112,16 @@ action that writes there, the arguments naming the place, and `reply` when answe
 the message they answer), and `about`, the situation. Never write their lines: the actors write the messages
 themselves when the scenario is kept, and the thread is replayed into the world before every trial. A session needs a
 place the world has; if the environment has no such service, the scenario cannot have that session. The pre-run
-conversation is the starting state and is never graded.
+conversation is the starting state and is never graded. Something one actor wrote before the run that the agent
+will find (a note, a record) goes in `history`: each entry one of that actor's permitted actions, in order, written
+as that actor would, knowing only what it knows; the same on every trial, never graded, never the answer.
 
 **Task-driven and event-started runs.** For an agent started by a message rather than by a person, `starts_with`
 gives that message; there is no caller. A task the scenario itself hands the agent (summarize this thread, fix this
 ticket) needs no actor: leave `actor` out. Name an actor only when a real person or system sends it (the calendar's
 meeting-ended notice). Only an agent reached by messages can be started this way. A run a person's request says
-someone else starts has that actor in `starts_with`, never a caller whose instruction narrates it.
+someone else starts has that actor in `starts_with`, never a caller whose instruction narrates it. With no caller,
+the instruction says what happened, and the sub-goals grade what the agent did in the world, including nothing.
 
 **What is graded.** Every sub-goal grades the agent, never an actor. A sub-goal can depend on an actor (give its
 `actor`): it then reads not applicable when that actor never came in, and inconclusive when it came in and never

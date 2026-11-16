@@ -56,6 +56,7 @@ from fi.simulate.runtime.report import SimulationReport
 from fi.simulate.runtime.run import TestCaseStatus
 from fi.simulate.runtime.runner import SimulationRunner
 from fi.simulate.simulation.call_actors import (
+    VERDICTS,
     CHANNELS,
     ACTOR_VOICES_ALIAS,
     ACTOR_WORLD_ALIAS,
@@ -67,7 +68,7 @@ from fi.simulate.simulation.call_actors import (
 from .actor_dispatch import ActorDispatcher, DoorActs, build_dispatcher, world_summary
 from .actor_meter import ActorMeter
 from .egress_proxy import REFUSAL_CODE as EGRESS_BLOCKED
-from .world_door import is_read, logged_as, same_action
+from .world_door import EVIDENCE_INCOMPLETE, action_matches, is_read, logged_as, same_action
 from .actors import (
     AGENT,
     ScenarioActor,
@@ -918,11 +919,40 @@ def _clear_tool_trace_calls(dsn: str) -> None:
 
 def read_tool_trace(dsn: str, *, timeout_ms: int | None = None) -> list[dict[str, Any]]:
     """The agent's own calls in the world's tool trace so far, in call order, read without writing. A world
-    actor's actions are in the same table and are left out; a row from before `actor_id` existed is the agent's."""
+    actor's actions are in the same table and are left out; a row from before `actor_id` existed is the agent's. A
+    request the egress proxy stopped is not a tool call and is left out too: it shows in the trial's World state."""
     return [
         row
         for row in _read_action_log(dsn, timeout_ms=timeout_ms)
-        if (row.get("actor_id") or AGENT) == AGENT
+        if (row.get("actor_id") or AGENT) == AGENT and not _egress_blocked(row) and not _unrecorded(row)
+    ]
+
+
+def _egress_blocked(row: Mapping[str, Any]) -> bool:
+    """Whether a log row is a request to a host outside the test world, which the egress proxy refused."""
+    return row.get("refusal_code") == EGRESS_BLOCKED
+
+
+def _unrecorded(row: Mapping[str, Any]) -> bool:
+    """Whether a log row only marks a call that ran without the world's door recording it."""
+    return row.get("refusal_code") == EVIDENCE_INCOMPLETE
+
+
+def evidence_notices(log: Sequence[Mapping[str, Any]] | None) -> list[dict[str, Any]]:
+    """A notice when any of the agent's calls ran without the world's door recording it: what the world did on them
+    is unknown, so the trial is unmeasured."""
+    missing = [row for row in log or () if _unrecorded(row)]
+    if not missing:
+        return []
+    why = sorted({str(row.get("error") or "") for row in missing} - {""})
+    return [
+        {
+            "code": EVIDENCE_INCOMPLETE,
+            "count": len(missing),
+            "message": f"{len(missing)} of the agent's calls ran without the world's door recording them"
+            + (f" ({'; '.join(why)})" if why else "")
+            + ", so what they changed is unknown.",
+        }
     ]
 
 
@@ -937,7 +967,7 @@ def _read_only(dsn: str, timeout_ms: int | None = None) -> Any:
 
 def _action_log_rows(connection: Any) -> list[dict[str, Any]]:
     cursor = connection.execute(
-        f'SELECT * FROM "{_TOOL_TRACE_TABLE}" ORDER BY at ASC'  # noqa: S608
+        f'SELECT * FROM "{_TOOL_TRACE_TABLE}" ORDER BY at ASC'  # noqa: S608 - fixed identifier, no user input
     )
     columns = [description[0] for description in cursor.description or []]
     return [dict(zip(columns, row, strict=True)) for row in cursor.fetchall()]
@@ -1052,7 +1082,7 @@ def _shown_action(name: str, actor: Any) -> str:
 
 class _ChosenActions:
     """Each actor's actions in the order it chose them (scheduled or decided), with full names: what names a logged
-    row when the actor's permissions alone can't (`approvals.put` and `channel_members.put` both log as `put`)."""
+    row when the actor's permissions alone can't (`approvals.put` and `members.put` both log as `put`)."""
 
     def __init__(self, decisions: Sequence[dict[str, Any]]) -> None:
         self.left: dict[str, list[str]] = {}
@@ -1074,17 +1104,16 @@ def trial_state_changes(
     log: list[dict[str, Any]], listed: Mapping[str, Any], decisions: Sequence[dict[str, Any]] = ()
 ) -> list[dict[str, Any]]:
     """What each participant attempted in this trial and what the world made of it: one entry for the agent and one
-    per actor that acted, with attempted, committed, refused, faulted and duplicate counts and the actions it
-    committed, in order. Attempted, refused and committed are kept apart; a row from before outcomes were recorded
-    counts as committed when it succeeded and refused when the world refused it. A read changed nothing: it counts in
-    `read` and `read_actions`, never in `committed`. `answer_lost_actions` lists the committed actions whose answer a
-    `timeout_after_commit` fault replaced with a timeout; `blocked` lists the refused calls to hosts outside the test
-    world, each with its host, method and tool when known."""
+    per actor that acted. A row from before outcomes were recorded counts as committed when it succeeded, else
+    refused; a read counts in `read`, never in `committed`."""
     entries: dict[str, dict[str, Any]] = {}
     chosen = _ChosenActions(decisions)
     for row in log:
         if is_pre_run(row.get("idempotency_key")):
             # Written before the run: the trial's starting point, not a change made during it.
+            continue
+        if _unrecorded(row):
+            # A mark that a call ran unrecorded, never an attempt or a change: the trial's notices carry it.
             continue
         who = str(row.get("actor_id") or AGENT)
         actor = listed.get(who)
@@ -1100,6 +1129,19 @@ def trial_state_changes(
                 "read_actions": [],
             },
         )
+        if _egress_blocked(row):
+            # A call to a host outside the test world, stopped before it left: never a tool call or a change.
+            asked = _arguments(row.get("arguments"))
+            asked = asked if isinstance(asked, dict) else {}
+            seen = {key: str(asked[key]) for key in ("host", "method", "tool") if asked.get(key)}
+            blocked = entry.setdefault("blocked", [])
+            place = (seen.get("host"), seen.get("method"))
+            same = next((one for one in blocked if (one.get("host"), one.get("method")) == place), None)
+            if same is None:
+                blocked.append({**seen, "count": 1})
+            else:
+                same["count"] += 1
+            continue
         entry["attempted"] += 1
         outcome = row.get("outcome") or (
             "refused" if row.get("refused") else "committed" if row.get("ok", True) else "faulted"
@@ -1110,13 +1152,6 @@ def trial_state_changes(
             continue
         if outcome in _OUTCOMES:
             entry[outcome] += 1
-        if outcome == "refused" and row.get("refusal_code") == EGRESS_BLOCKED:
-            # A call to a host outside the test world, stopped before it left: an attempt, never a change.
-            asked = _arguments(row.get("arguments"))
-            asked = asked if isinstance(asked, dict) else {}
-            entry.setdefault("blocked", []).append(
-                {key: str(asked[key]) for key in ("host", "method", "tool") if asked.get(key)}
-            )
         if outcome == "committed":
             shown = str(row.get("name") or "") if who == AGENT else chosen.name(who, logged_as(row), actor)
             entry["committed_actions"].append(shown)
@@ -1132,11 +1167,10 @@ def trial_state_changes(
     return [agent] + list(entries.values())
 
 
-def duplicate_commits(log: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
-    """Each write the agent made twice after its answer was lost: a committed write whose answer a
-    `timeout_after_commit` fault replaced with a timeout (`response_lost`), then a later committed write of the same
-    action with equal arguments. The world applied it twice, whatever the scenario's checks say. A read is never a
-    duplicate, and a retry the door answered from its idempotency key is logged `duplicate`, never committed."""
+def duplicate_commits(log: Sequence[Mapping[str, Any]], solution: Sequence[Any] = ()) -> list[dict[str, Any]]:
+    """Each write the agent made twice after a `timeout_after_commit` fault lost its answer. The same record is read
+    from the arguments the reference solution fixes for that action, so a retry that rewords free text is still the
+    same write; with nothing fixed, every argument is compared."""
     rows = [
         row
         for row in log
@@ -1155,7 +1189,7 @@ def duplicate_commits(log: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
             later = rows[later_index]
             if later_index in repeated or logged_as(later) != action:
                 continue
-            if _arguments(later.get("arguments")) != _arguments(first.get("arguments")):
+            if not _same_write(first, later, _fixed_fields(solution, action)):
                 continue
             repeated.add(later_index)
             found.append(
@@ -1170,6 +1204,26 @@ def duplicate_commits(log: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
     return found
 
 
+def _fixed_fields(solution: Sequence[Any], action: str) -> set[str]:
+    """The arguments the reference solution fixes for this action, over every step that takes it."""
+    fields: set[str] = set()
+    for step in solution or ():
+        step = step.model_dump() if hasattr(step, "model_dump") else step
+        if isinstance(step, Mapping) and _same_action(action, str(step.get("tool") or "")):
+            fields |= set(step.get("fixed") or {})
+    return fields
+
+
+def _same_write(first: Mapping[str, Any], later: Mapping[str, Any], fixed: set[str]) -> bool:
+    """Whether two committed writes of one action are the same write: equal on every fixed argument either carries,
+    or, with nothing fixed, equal arguments."""
+    one, two = _arguments(first.get("arguments")), _arguments(later.get("arguments"))
+    if not fixed or not isinstance(one, dict) or not isinstance(two, dict):
+        return one == two
+    carried = [field for field in fixed if field in one or field in two]
+    return bool(carried) and all(one.get(field) == two.get(field) for field in carried)
+
+
 def _arguments(value: Any) -> Any:
     """A row's arguments as data: a log read back from the database can hold them as JSON text."""
     if isinstance(value, (str, bytes)):
@@ -1180,23 +1234,52 @@ def _arguments(value: Any) -> Any:
     return value
 
 
-def _duplicates(runtime: EnvironmentRuntime) -> list[dict[str, Any]]:
-    """This trial's duplicate commits, read from the world's action log; none when there is no log to read."""
+def _duplicates(runtime: EnvironmentRuntime, solution: Sequence[Any] = ()) -> list[dict[str, Any]] | None:
+    """This trial's duplicate commits, read from the world's action log; none when there is no log to read, and None
+    when the log is there but could not be read, which leaves the trial unmeasured rather than passed."""
     database = _find_postgres_endpoint(runtime)
     if database is None:
         return []
     try:
-        return duplicate_commits(_read_action_log(database.address))
-    except Exception as exc:  # noqa: BLE001 - no log read, no duplicate claimed
-        logger.debug("duplicate check skipped: %s", type(exc).__name__)
-        return []
+        return duplicate_commits(_read_action_log(database.address), solution)
+    except Exception as exc:  # noqa: BLE001 - no log read: no duplicate claimed, and none cleared either
+        logger.warning("duplicate check could not read the action log: %s", type(exc).__name__)
+        return None
+
+
+# Said when a trial's action log could not be read to find the writes its world applied twice.
+DUPLICATES_UNREADABLE = {
+    "code": "duplicates_unreadable",
+    "message": "The world's action log could not be read, so the agent's calls and any repeated write are unknown.",
+}
+
+
+def trial_faults_readable(dsn: str) -> bool:
+    """Whether the faults this runner wrote for the trial read back as the door reads them: a list of faults."""
+    try:
+        with _read_only(dsn) as connection:
+            row = connection.execute("SELECT faults FROM _alk_trial_faults WHERE id = 1").fetchone()
+    except Exception as exc:  # noqa: BLE001 - whatever broke, the door could not have read them either
+        logger.warning("trial faults unreadable: %s", type(exc).__name__)
+        return False
+    faults = _arguments(row[0]) if row else None
+    return isinstance(faults, list) and all(isinstance(one, dict) for one in faults)
 
 
 def approvals(log: list[dict[str, Any]], decisions: Sequence[dict[str, Any]] = ()) -> list[dict[str, Any]]:
-    """One line per approval, read from the action log only: the agent's request (the agent row an actor's row or a
-    timeout points at through its parent), the decision (that actor row, or the timeout's fallback), and the agent's
-    writes before the decision and after it, in log order. No record matching, no inference."""
-    rows = [row for row in log if not is_pre_run(row.get("idempotency_key"))]
+    """One line per approval, read from the action log only: the agent's request, the decision, and the agent's
+    writes before and after it. `verdict` is `approved`, `refused` (a declining timeout included) or None when no
+    verdict was recorded."""
+    rows = [
+        row
+        for row in log
+        if not is_pre_run(row.get("idempotency_key")) and not _egress_blocked(row) and not _unrecorded(row)
+    ]
+    # Each actor's actions as it chose them, in order: what says the verdict its logged row carries.
+    sent_by: dict[str, list[dict[str, Any]]] = {}
+    for one in decisions:
+        if one.get("play") in ("mocked", "live") and one.get("action"):
+            sent_by.setdefault(str(one.get("actor")), []).append(one)
     by_id = {str(row.get("action_id")): row for row in rows if row.get("action_id")}
     # A read changed nothing, so it is never a write before or after the decision; it can still be the request.
     agent_writes = [row for row in rows if (row.get("actor_id") or AGENT) == AGENT and not is_read(row)]
@@ -1205,12 +1288,27 @@ def approvals(log: list[dict[str, Any]], decisions: Sequence[dict[str, Any]] = (
         parent = by_id.get(str(row.get("parent_event_id") or ""))
         if (row.get("actor_id") or AGENT) == AGENT or parent is None or (parent.get("actor_id") or AGENT) != AGENT:
             continue
-        found.append((parent, {"by": row.get("actor_id"), "action": logged_as(row), "outcome": row.get("outcome"),
-                               "at": row.get("at")}))
+        action = logged_as(row)
+        said = sent_by.get(str(row.get("actor_id"))) or []
+        sent = next(
+            (
+                one
+                for one in said
+                if _same_action(str(one.get("action") or ""), action)
+                and one.get("parent") in (None, "", parent.get("action_id"))
+            ),
+            None,
+        )
+        if sent is not None:
+            said.remove(sent)
+        verdict = sent.get("verdict") if sent is not None else None
+        found.append((parent, {"by": row.get("actor_id"), "action": action, "outcome": row.get("outcome"),
+                               "at": row.get("at"), "verdict": verdict if verdict in VERDICTS else None}))
     for one in decisions:
         if one.get("play") == "timeout" and one.get("parent") in by_id:
             found.append((by_id[one["parent"]], {"by": one.get("actor"), "action": f"timeout: {one.get('fallback')}",
-                                                 "outcome": one.get("outcome"), "at": None}))
+                                                 "outcome": one.get("outcome"), "at": None,
+                                                 "verdict": "refused" if one.get("fallback") == "decline" else None}))
     out = []
     for request, decision in found:
         start = float(request.get("at") or 0)
@@ -1225,6 +1323,9 @@ def approvals(log: list[dict[str, Any]], decisions: Sequence[dict[str, Any]] = (
                 "before_decision": [{"action": w.get("name"), "outcome": w.get("outcome")} for w in between],
                 "after_decision": [{"action": w.get("name"), "outcome": w.get("outcome")} for w in after],
                 "acted_before_decision": any(w.get("outcome") == "committed" for w in between),
+                "verdict": decision["verdict"],
+                "committed_after_refusal": decision["verdict"] == "refused"
+                and any(w.get("outcome") == "committed" for w in after),
             }
         )
     return out
@@ -1318,8 +1419,7 @@ def _agent_marks(
     return marks
 
 
-# The trial's faults on the agent's calls, kept in the world's own database where the tool proxy reads them: never in a
-# file the agent's process could read or rewrite.
+# Kept in the world's database, never in a file the agent's process could read or rewrite.
 TRIAL_FAULTS_DDL = "CREATE TABLE IF NOT EXISTS _alk_trial_faults (id INT PRIMARY KEY, faults JSONB NOT NULL)"
 
 
@@ -1343,7 +1443,7 @@ def _write_trial_state(runtime: EnvironmentRuntime, faults: list[Any]) -> None:
 
 
 def _same_action(action: str, name: str) -> bool:
-    """A fault names the world action (`crm.apply_discount`); a call may carry the tool's own name (`apply_discount`)."""
+    """A fault names the world action (`service_a.update`); a call may carry the tool's own name (`update`)."""
     return bool(action) and bool(name) and (action == name or action.rsplit(".", 1)[-1] == name.rsplit(".", 1)[-1])
 
 
@@ -1353,11 +1453,13 @@ def fault_notices(
     calls: Sequence[Call],
     *,
     unreachable: str | None = None,
+    contract: Mapping[str, Any] | None = None,
+    code: str = "fault_not_applied",
 ) -> list[dict[str, Any]]:
-    """What became of each fault the scenario set, in plain words, for the faults that did not take effect: one that
-    could not be applied (no world database to hold it, or the call ran outside the world's door) and one the agent
-    never reached. A fault the door applied says nothing; the log already shows it as faulted."""
+    """A plain-words notice for each fault the scenario set that did not take effect: one that could not be applied
+    or one the agent never reached. A fault that could not be applied leaves the trial unmeasured."""
     notices: list[dict[str, Any]] = []
+    entries = [one for one in (contract or {}).get("tool_entrypoints") or [] if isinstance(one, Mapping)]
     for fault in faults:
         if not isinstance(fault, Mapping):
             continue
@@ -1366,15 +1468,27 @@ def fault_notices(
         mode = str(fault.get("mode") or "fault")
         base = {"action": action, "on_call": on_call, "mode": mode}
         if unreachable:
-            notices.append({**base, "code": "fault_not_applied",
+            notices.append({**base, "code": code,
                             "message": f"The {mode} fault on call {on_call} of {action} could not be applied: {unreachable}."})
             continue
+        if entries:
+            named = [one for one in entries if _names_action(one, action)]
+            if not named:
+                notices.append({**base, "code": "fault_unknown_action",
+                                "message": f"The {mode} fault on call {on_call} of {action} was never applied: the "
+                                           "agent has no tool or world action by that name."})
+                continue
+            held = [one for one in named if not str(one.get("door_unreached") or "")]
+            if not held:
+                notices.append({**base, "code": "fault_not_applied",
+                                "message": f"The {mode} fault on call {on_call} of {action} could not be applied: the "
+                                           f"world's door cannot hold that tool ({named[0].get('door_unreached')})."})
+                continue
         agent_rows = [row for row in log or [] if (row.get("actor_id") or AGENT) == AGENT]
         rows = [row for row in agent_rows if same_action(row, action)]
         if any(_fault_applied(row) for row in rows):
             continue
-        # A call names only its tool, so a call the door logged as another action with the same last part
-        # (`ticket.update` beside `crm.update`) is that action's, never this one's.
+        # A call the door logged as another action with the same last part is that action's.
         others = sum(
             1
             for row in agent_rows
@@ -1390,6 +1504,39 @@ def fault_notices(
                             "message": f"The {mode} fault on call {on_call} of {action} never took effect: the agent "
                                        f"made {made} call{'s' if made != 1 else ''} of it."})
     return notices
+
+
+def _names_action(entry: Mapping[str, Any], action: str) -> bool:
+    """Whether a contract's tool entry is the tool or world action a fault names: by the tool's name, or by its
+    route read as a world action."""
+    tool = str(entry.get("tool") or "")
+    route = str(entry.get("endpoint") or "").split("?", 1)[0].strip("/").replace("/", ".")
+    return _same_action(action, tool) or (
+        bool(route) and (action_matches(action, route) or action_matches(route, action))
+    )
+
+
+# Notices that make a trial unmeasured, never passed or failed on what it lacked.
+UNMEASURED_NOTICES = ("fault_not_applied", "fault_unknown_action", "fault_unreadable")
+
+
+def missing_evidence(notices: Sequence[Mapping[str, Any]], records: Mapping[str, Any] | None) -> dict[str, str]:
+    """Each kind of evidence a trial is missing or could not read, with why: the action log (`tool_calls`) when it
+    could not be read or a call ran without the door recording it, and the records before and after (`world_state`)
+    when they could not be read. A sub-goal that reads one is unmeasured."""
+    missing: dict[str, str] = {}
+    log_codes = (DUPLICATES_UNREADABLE["code"], EVIDENCE_INCOMPLETE)
+    log = [str(one.get("message")) for one in notices if one.get("code") in log_codes]
+    if log:
+        missing["tool_calls"] = " ".join(log)
+    if ((records or {}).get("records") or {}).get("unreadable"):
+        missing["world_state"] = "The world's records before and after the trial could not be read."
+    return missing
+
+
+def unmeasured_reasons(notices: Sequence[Mapping[str, Any]]) -> tuple[str, ...]:
+    """Why a trial is unmeasured, one reason per notice that makes it so; none when it can be graded."""
+    return tuple(str(one.get("message") or one.get("code")) for one in notices if one.get("code") in UNMEASURED_NOTICES)
 
 
 def _fault_applied(row: Mapping[str, Any]) -> bool:
@@ -1478,19 +1625,14 @@ def _actor_dispatcher(
     reported: Callable[[], list[dict[str, Any]]] | None = None,
     why_not: list[tuple[str, str]] | None = None,
 ) -> ActorDispatcher | None:
-    """The scenario's actors for this trial, acting through a world door built here in the runner's own process; the
-    tool proxy refuses any agent request that names an actor. Known limit: in a sandbox where the agent runs as the
-    same OS user as this runner, the agent can reach what this runner holds (the voice actions file included), so
-    actor identity is not isolated from the agent there.
-    None when the scenario has none. An actor that cannot act here is the scenario's problem, recorded by the caller
-    from `actor_problems`."""
-    if not (doc.get("actors") or doc.get("history") or doc.get("pre_run")):
+    """The scenario's actors for this trial, acting through a world door in the runner's own process; None when the
+    scenario has none. An actor that cannot act here is recorded by the caller from `actor_problems`."""
+    if not (doc.get("actors") or doc.get("pre_run")):
         return None
     tools = runtime.endpoints.get("tools_api")
     database = _find_postgres_endpoint(runtime)
     if database is not None and runtime.endpoints.get("world_door") is not None and tools is None:
-        # The agent's tools run in its own process behind the world's door there; an actor acts in the world through
-        # record changes, and one of the agent's own tools is refused with why.
+        # An actor acts through record changes there; one of the agent's own tools is refused with why.
         return build_dispatcher(
             dict(doc),
             bundle_dir,
@@ -2262,11 +2404,22 @@ class TrialRecords:
     end against, and whether it started clean. Snapshots are read on a connection that cannot write; one that cannot
     be read is sealed as unreadable, never a failed trial."""
 
-    def __init__(self) -> None:
+    def __init__(self, seed_dsn: Callable[[str], str | None] | None = None) -> None:
         self.seeded: dict[str, str] | None = None
+        # The sealed seed every world is reset from; trial 1's start only when the seed cannot be read.
+        self.seeded_from = ""
+        self._seed_dsn = seed_dsn
         self._seeded_taken = False
         self._starts: dict[Any, tuple[Any, dict[str, Any]]] = {}
         self._lock = threading.Lock()
+
+    def _sealed_seed(self, dsn: str) -> dict[str, str] | None:
+        """The sealed seed's records as one hash per table, or None when there is no sealed seed to read."""
+        from .world_snapshot import digest
+
+        seed = self._seed_dsn(dsn) if self._seed_dsn is not None else None
+        taken = self._read(seed, "seed") if seed else None
+        return digest(taken) if taken is not None else None
 
     @staticmethod
     def _read(dsn: str | None, moment: str) -> Any:
@@ -2281,8 +2434,8 @@ class TrialRecords:
 
     def start(self, key: Any, dsn: str | None) -> None:
         """Read the world's records at a trial's start, after its reset and before its pre-run sessions write theirs:
-        whether it started from the seed, and what World changes compares its end against. The first trial's start is
-        the run's seed."""
+        whether it started from the sealed seed, and what World changes compares its end against. Without a sealed seed
+        to read, the first trial's start stands in for it, and every start says which it was compared against."""
         from .world_snapshot import digest, start_state
 
         taken = self._read(dsn, "start")
@@ -2290,8 +2443,12 @@ class TrialRecords:
         with self._lock:
             if not self._seeded_taken:
                 self._seeded_taken = True
-                self.seeded = start
-            self._starts[key] = (taken, start_state(self.seeded, start))
+                sealed = self._sealed_seed(dsn) if dsn else None
+                if sealed is not None:
+                    self.seeded, self.seeded_from = sealed, "sealed_seed"
+                else:
+                    self.seeded, self.seeded_from = start, "first_trial"
+            self._starts[key] = (taken, {**start_state(self.seeded, start), "against": self.seeded_from})
 
     def rebase(self, key: Any, dsn: str | None) -> None:
         """Read a trial's records again once its pre-run sessions wrote theirs, so World changes shows only what the
@@ -2313,6 +2470,34 @@ class TrialRecords:
             return {"records": {"unreadable": True}, "start": start}
         # The end state itself is kept apart (`END_STATE_KEY`): stored as its own artifact, never in the transcript.
         return {"records": diff(before, after), "start": start, END_STATE_KEY: after}
+
+
+def sealed_seed_dsn(work_directory: Path) -> Callable[[str], str | None]:
+    """How to reach the sealed seed beside a world's database: the template database each world is reset from, as the
+    build output names it. None when the build sealed no template (a world reset another way)."""
+
+    def seed(dsn: str) -> str | None:
+        try:
+            build = json.loads((Path(work_directory) / "artifacts" / "build.json").read_text(encoding="utf-8"))
+            from psycopg.conninfo import conninfo_to_dict, make_conninfo
+
+            world = conninfo_to_dict(dsn).get("dbname")
+        except Exception:  # noqa: BLE001 - no build output or no readable address: no sealed seed to read
+            return None
+        templates = [
+            str(store.get("baseline_reference"))
+            for store in build.get("stores") or []
+            if isinstance(store, dict)
+            and store.get("strategy") == "template_database"
+            and store.get("baseline_reference")
+        ]
+        # The world's own store: a world database is a copy of exactly one template.
+        chosen = (
+            templates[0] if len(templates) == 1 else next((one for one in templates if world and one in world), None)
+        )
+        return make_conninfo(dsn, dbname=chosen) if chosen else None
+
+    return seed
 
 
 # What `TrialRecords.end` carries the trial's end snapshot under, for `upload_end_state`.
@@ -2365,7 +2550,7 @@ class CallRunnerImpl:
         self._adapter = adapter
         self._context = context
         self._place_call = place_call
-        self._records = TrialRecords()
+        self._records = TrialRecords(sealed_seed_dsn(context.work_directory))
         simulator_secret_values = _canonical_simulator_secrets(
             context.simulator_provider_secret_values
         )
@@ -2779,8 +2964,7 @@ class CallRunnerImpl:
             if self._context.evidence_seam is EvidenceSeam.TOOL_TRACE
             else None
         )
-        # An actor that should act in the world and cannot here is the scenario's problem, in the record, with the
-        # reason it could not.
+        # An actor that cannot act in the world here is the scenario's problem, recorded with why.
         problem, why = why_not[0] if why_not else (
             "no_world_door", "no world door: this agent's tools run where actors cannot act"
         )
@@ -2808,8 +2992,7 @@ class CallRunnerImpl:
             faults = list(doc.get("faults") or [])
             proxied = runtime.endpoints.get("tool_proxy") is not None or runtime.endpoints.get("world_door") is not None
             if faults or proxied:
-                # Every trial behind a tool proxy writes its own faults, none included, so nothing an earlier trial
-                # left can apply to this one.
+                # Written every trial, none included, so nothing an earlier trial left can apply.
                 _set_trial_faults(runtime, faults)
             try:
                 return await place_with_world_actors()
@@ -2874,6 +3057,7 @@ class CallRunnerImpl:
                 limits=actor_limits(doc, self._context.bundle_dir, "voice"),
                 actor_briefs=actors.briefs if actors is not None else None,
                 faults=list(doc.get("faults") or []),
+                solution=list(doc.get("solution") or []),
             )
         except (CallAborted, WorldUnavailable):
             # `_translate_report`'s own typed control-flow (non-completed status, no test case,
@@ -2898,11 +3082,16 @@ class CallRunnerImpl:
             return fault_notices(
                 faults, None, calls, unreachable="this world has no database the tool proxy reads trial state from"
             )
+        if not trial_faults_readable(database.address):
+            return fault_notices(
+                faults, None, calls, unreachable="the trial's faults were unreadable in the world's database",
+                code="fault_unreadable",
+            )
         try:
             log = _read_action_log(database.address)
         except Exception:  # noqa: BLE001 - an unreadable log says nothing rather than something wrong
             return []
-        return fault_notices(faults, log, calls)
+        return fault_notices(faults, log, calls, contract=_bundle_contract(self._context.bundle_dir))
 
     def _approvals(self, runtime: EnvironmentRuntime, decisions: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
         database = _find_postgres_endpoint(runtime)
@@ -2936,6 +3125,7 @@ class CallRunnerImpl:
         limits: Mapping[str, Any] | None = None,
         actor_briefs: Mapping[str, str] | None = None,
         faults: Sequence[Any] = (),
+        solution: Sequence[Any] = (),
     ) -> CallOutcome:
         case = report.test_cases[0] if report.test_cases else None
         took_part = (
@@ -2989,8 +3179,7 @@ class CallRunnerImpl:
         if not graded_calls(calls) and case is not None:
             calls = (*calls, *_collect_provider_tool_calls(case))
         capture_failed = capture_failed and not graded_calls(calls)
-        # The world's door saw the agent's tools: a tool proxy in front of its tools service, or the door in its own
-        # process. Only then can the trial say what changed in the world.
+        # Only when the world's door saw the agent's tools can the trial say what changed in the world.
         door_seen = (
             self._context.evidence_seam is EvidenceSeam.TOOL_TRACE or runtime.endpoints.get("world_door") is not None
         )
@@ -3017,7 +3206,13 @@ class CallRunnerImpl:
             if kept:
                 # Which stored artifact is this trial's end state, so the result can link it.
                 records["end_state_artifact"] = kept
-        duplicates = _duplicates(runtime) if case is not None and door_seen else []
+        found = _duplicates(runtime, solution) if case is not None and door_seen else []
+        duplicates = found or []
+        # Whether the trial can be graded at all: its faults applied and its evidence read and complete.
+        trial_notices = [] if found is not None else [dict(DUPLICATES_UNREADABLE)]
+        if world_database is not None and door_seen:
+            with contextlib.suppress(Exception):
+                trial_notices += evidence_notices(await asyncio.to_thread(_read_action_log, world_database.address))
         # Hand-off records are not the world's actions: marks pair the graded calls with the action log.
         graded = graded_calls(calls)
         marks = _agent_marks(runtime, self._context.bundle_dir, graded) if acted else []
@@ -3036,9 +3231,9 @@ class CallRunnerImpl:
             result = case.result
             combined = result.audio_combined_path
             recording = combined if combined and Path(combined).is_file() else None
-            notices = self._fault_notices(runtime, faults, calls)
-            # A call that ended with no words still says what did not take effect, and what actors did in the world,
-            # never only logging it; a call with words carries World changes, or why they were not recorded.
+            notices = self._fault_notices(runtime, faults, calls) + trial_notices
+            trial_notices = notices
+            # A call with no words still says what did not take effect and what actors did in the world.
             if result.transcript or notices or acted or actor_decisions or duplicates or took_part.get("call_actors"):
                 transcript_document = {
                     "schema_version": "futureagi.call-transcript.v1",
@@ -3058,9 +3253,7 @@ class CallRunnerImpl:
                         "events": took_part.get("call_actor_events") or [],
                     }
                 if door_seen:
-                    # Every trial the door saw, actors or not: World changes is shown on each. Kept out of the tool
-                    # trace, whose every line is one of the agent's own calls. `decisions` is what each actor chose
-                    # and why (live) or was scheduled to do (mocked); `actions` what the world made of it.
+                    # Kept out of the tool trace, whose every line is one of the agent's own calls.
                     transcript_document["world_actors"] = {
                         "actions": acted,
                         "decisions": list(actor_decisions),
@@ -3139,6 +3332,8 @@ class CallRunnerImpl:
             target_metrics=_target_metrics(case),
             world_actions=tuple(acted),
             duplicates=tuple(duplicates),
+            unmeasured=unmeasured_reasons(trial_notices),
+            missing_evidence=missing_evidence(trial_notices, records),
             actor_briefs={
                 **{str(one["id"]): str(one.get("brief") or "") for one in call_actors if one.get("brief")},
                 **(actor_briefs or {}),

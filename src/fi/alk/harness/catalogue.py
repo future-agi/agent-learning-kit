@@ -44,7 +44,7 @@ class SubGoal(BaseModel):
     # Which overlay level this sub-goal is the claim for, when it is one.
     overlay: str = ""
     # The actor this sub-goal is about, by id: not applicable on a call that actor never came into, inconclusive when
-    # it came in and never reached the agent (plan #76 s8). Empty: about the agent's task alone.
+    # it came in and never reached the agent. Empty: about the agent's task alone.
     actor: str = ""
     # The check contract; `verifier` is code, llm or both, empty settles by the check if there is one.
     reference: str = ""
@@ -342,7 +342,9 @@ CHECK_RULES = (
     "needed one (a category or destination the agent picks, a free-text note) is the agent's choice "
     "and is never compared. A value the person speaks (a date, an amount, a name) reaches the agent in "
     "the form they said it, so compare it in one common form (a date parsed, an amount as a number), "
-    "or compare what the tool decided with it instead. Check the outcome, not the route: where the "
+    "or compare what the tool decided with it instead. Compare an identifier with `same_id(a, b)`, never as "
+    "text: it ignores separators and case and nothing else, and the proof refuses a check that fails the same id "
+    "typed without its separators. Check the outcome, not the route: where the "
     "outcome leaves a record, "
     "check the record, and otherwise accept every call that achieves it. Use `judged` for what was "
     "said and what nothing observable settles; it holds the criteria. `output` is pass_fail.\n"

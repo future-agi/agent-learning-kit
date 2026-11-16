@@ -6063,13 +6063,25 @@ def _read_customer_code_environment(work_directory: Path) -> dict[str, str]:
 
 def _read_egress_allowed_hosts(work_directory: Path) -> tuple[str, ...] | None:
     """The hosts a controlled run allows the agent, from `/work/job.json` `metadata.egress_allowed_hosts`; None when
-    the platform sent none (egress not controlled, or a local run)."""
+    the platform sent none (egress not controlled, or a local run). A value that is not a list of host names fails the
+    spawn: a controlled run never starts with its egress uncontrolled."""
     try:
         raw = json.loads((work_directory / "job.json").read_text(encoding="utf-8"))
-        hosts = raw["metadata"]["egress_allowed_hosts"]
-        typed = HarnessJobMetadata.model_validate({"egress_allowed_hosts": hosts})
-    except (OSError, ValueError, KeyError, TypeError, ValidationError):
+    except (OSError, ValueError):
         return None
+    metadata = raw.get("metadata") if isinstance(raw, dict) else None
+    if not isinstance(metadata, dict) or "egress_allowed_hosts" not in metadata:
+        return None
+    try:
+        typed = HarnessJobMetadata.model_validate({"egress_allowed_hosts": metadata["egress_allowed_hosts"]})
+    except ValidationError as exc:
+        reasons = "; ".join(f"{'.'.join(map(str, one['loc']))}: {one['msg']}" for one in exc.errors())
+        raise ProcessRuntimeError(
+            "egress",
+            "spawn_failed",
+            f"job.json metadata.egress_allowed_hosts is not a list of host names ({reasons})",
+            domain=FailureDomain.INFRASTRUCTURE,
+        ) from exc
     return None if typed.egress_allowed_hosts is None else tuple(typed.egress_allowed_hosts)
 
 
@@ -6097,19 +6109,25 @@ def _egress_environment(
     configuration_addresses: dict[str, str],
 ) -> dict[str, str] | None:
     """The agent's proxy variables in a controlled run: this world's refusing proxy, started once per world and
-    logging to the world's action log, with every host of the environment's own processes left off it."""
+    logging to the world's action log, with every host of the environment's own processes left off it and let through
+    by it, for a client that ignores `NO_PROXY`."""
     if context.egress_allowed_hosts is None:
         return None
+    hosts = {urlsplit(address).hostname or "" for address in configuration_addresses.values() if "://" in address}
     proxy = context.egress_proxies.get(world_index)
     if proxy is None:
         database = next((one for one in endpoints.values() if one.protocol == "postgres"), None)
+        if database is None and not context.egress_proxies:
+            logger.warning(
+                "egress: the world has no postgres endpoint to hold its action log; calls outside the test world "
+                "are refused but not recorded"
+            )
         proxy = EgressProxy(
-            context.egress_allowed_hosts,
+            (*context.egress_allowed_hosts, *sorted(one for one in hosts if one)),
             PostgresLog(database.address) if database is not None else None,
             _egress_tools_by_host(context.bundle_dir),
         )
         context.egress_proxies[world_index] = proxy
-    hosts = {urlsplit(address).hostname or "" for address in configuration_addresses.values() if "://" in address}
     return proxy.environment(sorted(hosts))
 
 

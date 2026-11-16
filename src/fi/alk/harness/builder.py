@@ -279,12 +279,13 @@ def suite_server(
                 "arg_units": {
                     "type": "object",
                     "description": "The unit or format of a field whose name does not say it: "
-                    "refund_amount -> cents, USD; timeout -> milliseconds; due -> ISO 8601 date.",
+                    "<an amount field> -> <its minor unit and currency>; timeout -> milliseconds; "
+                    "due -> ISO 8601 date.",
                 },
                 "returns": {
                     "type": "object",
                     "description": "Each field the tool hands back, with its type and unit: "
-                    "refund_id -> string; amount -> integer, cents, USD.",
+                    "<an id field> -> string; <an amount field> -> integer, <its minor unit and currency>.",
                 },
                 "evidence_file": str,
                 "evidence_quote": str,

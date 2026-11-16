@@ -1,14 +1,11 @@
 """The proxy in front of the agent under test in a controlled run.
 
-The agent's process gets `HTTP_PROXY` and `HTTPS_PROXY` pointing here and `NO_PROXY` naming every destination the run
-allows, so allowed traffic goes straight out and never reaches this proxy. Whatever does reach it is a call to a host
-outside the test world: plain HTTP is answered 403 and an HTTPS `CONNECT` is refused, and each one is written to the
-world's action log as the agent's refused attempt (`egress_blocked`). A request for an allowed host from a client that
-ignores `NO_PROXY` is passed through untouched.
-"""
+A call to a host outside the test world is refused and logged as the agent's `egress_blocked` attempt."""
 
 from __future__ import annotations
 
+import os
+import re
 import select
 import socket
 import threading
@@ -22,6 +19,29 @@ from .world_door import AGENT, ActionLog, Executed, ToolCall, WorldDoor
 REFUSAL_CODE = "egress_blocked"
 LOOPBACK = ("localhost", "127.0.0.1", "::1")
 _TUNNEL_SECONDS = 300.0
+# How long a client may go silent while sending a request before its connection is dropped, unless
+# `ALK_EGRESS_CLIENT_TIMEOUT_SECONDS` says otherwise.
+_CLIENT_SECONDS = 30.0
+# Connections served at once for each CPU the sandbox has, unless `ALK_EGRESS_MAX_CLIENTS` says otherwise.
+_CLIENTS_PER_CPU = 32
+_PIECE = 65536
+# Request headers that describe the client's hop to this proxy, never forwarded to the host. `host` is rewritten
+# from the request URL, so the host that was checked is the host that is asked.
+_HOP_BY_HOP = frozenset(
+    {
+        "connection",
+        "proxy-connection",
+        "keep-alive",
+        "te",
+        "trailer",
+        "upgrade",
+        "proxy-authenticate",
+        "proxy-authorization",
+        "host",
+    }
+)
+# What marks where a request body ends: a `connection` header cannot list these away.
+_FRAMING = frozenset({"content-length", "transfer-encoding"})
 
 
 def no_proxy_entry(domain: str) -> str:
@@ -32,11 +52,7 @@ def no_proxy_entry(domain: str) -> str:
 
 def no_proxy(allowed: Iterable[str], hosts: Iterable[str] = ()) -> str:
     """`NO_PROXY` for a controlled run: loopback, the environment's own hosts and every allowed domain."""
-    entries = [
-        *LOOPBACK,
-        *(host.strip().lower() for host in hosts),
-        *(no_proxy_entry(one) for one in allowed),
-    ]
+    entries = [*LOOPBACK, *(host.strip().lower() for host in hosts), *(no_proxy_entry(one) for one in allowed)]
     return ",".join(dict.fromkeys(one for one in entries if one))
 
 
@@ -56,10 +72,61 @@ class _Refused:
     def run(self, call: ToolCall) -> Executed:  # pragma: no cover - never called
         return Executed(403, error="outside the test world")
 
-    def actor(
-        self, actor_id: str
-    ) -> Mapping[str, Any] | None:  # pragma: no cover - never called
+    def actor(self, actor_id: str) -> Mapping[str, Any] | None:  # pragma: no cover - never called
         return None
+
+
+def _setting(name: str, default: float) -> float:
+    """A positive number from the environment variable `name`, or `default` when it is unset."""
+    configured = os.environ.get(name, "").strip()
+    if not configured:
+        return default
+    try:
+        value = float(configured)
+    except ValueError:
+        value = 0.0
+    if not 0 < value < float("inf"):
+        raise ValueError(f"{name} must be a positive number, not {configured!r}")
+    return value
+
+
+def _max_clients() -> int:
+    """Connections served at once: `_CLIENTS_PER_CPU` for each CPU of the sandbox's quota, or of the machine when it
+    sets none."""
+    from .process_runtime import _cgroup_cpu_quota
+
+    cpus = _cgroup_cpu_quota() or os.cpu_count() or 1
+    return max(1, int(_setting("ALK_EGRESS_MAX_CLIENTS", cpus * _CLIENTS_PER_CPU)))
+
+
+class _BadBody(Exception):
+    """The client's request body does not follow its own framing."""
+
+
+class _Server(ThreadingHTTPServer):
+    """One thread per connection, at most `_max_clients()` of them; one more is closed straight away."""
+
+    daemon_threads = True
+
+    def __init__(self, address: tuple[str, int], handler: type[BaseHTTPRequestHandler]) -> None:
+        super().__init__(address, handler)
+        self.slots = threading.BoundedSemaphore(_max_clients())
+
+    def process_request(self, request: Any, client_address: Any) -> None:
+        if not self.slots.acquire(blocking=False):
+            self.shutdown_request(request)
+            return
+        try:
+            super().process_request(request, client_address)
+        except BaseException:
+            self.slots.release()
+            raise
+
+    def process_request_thread(self, request: Any, client_address: Any) -> None:
+        try:
+            super().process_request_thread(request, client_address)
+        finally:
+            self.slots.release()
 
 
 class EgressProxy:
@@ -73,11 +140,8 @@ class EgressProxy:
     ) -> None:
         self.allowed = tuple(allowed)
         self.door = WorldDoor(_Refused(), log, _Refused()) if log is not None else None
-        self.tools_by_host = {
-            key.lower(): value for key, value in (tools_by_host or {}).items()
-        }
-        self.server = ThreadingHTTPServer(("127.0.0.1", 0), _handler(self))
-        self.server.daemon_threads = True
+        self.tools_by_host = {key.lower(): value for key, value in (tools_by_host or {}).items()}
+        self.server = _Server(("127.0.0.1", 0), _handler(self))
         threading.Thread(target=self.server.serve_forever, daemon=True).start()
 
     @property
@@ -104,13 +168,7 @@ class EgressProxy:
         tool = self.tools_by_host.get(host.lower())
         arguments = {"host": host, "method": method, **({"tool": tool} if tool else {})}
         self.door.refuse(
-            ToolCall(
-                action=f"egress.{host}",
-                name=host,
-                arguments=arguments,
-                actor=AGENT,
-                method=method,
-            ),
+            ToolCall(action=f"egress.{host}", name=host, arguments=arguments, actor=AGENT, method=method),
             REFUSAL_CODE,
             f"{host} is outside the test world",
         )
@@ -122,6 +180,8 @@ class EgressProxy:
 
 def _handler(proxy: EgressProxy) -> type[BaseHTTPRequestHandler]:
     class Handler(BaseHTTPRequestHandler):
+        timeout = _setting("ALK_EGRESS_CLIENT_TIMEOUT_SECONDS", _CLIENT_SECONDS)
+
         def log_message(self, *_args: object) -> None:
             return
 
@@ -132,16 +192,27 @@ def _handler(proxy: EgressProxy) -> type[BaseHTTPRequestHandler]:
                 proxy.refuse(host, "CONNECT")
                 self._refuse(host)
                 return
-            try:
-                upstream = socket.create_connection(
-                    (host, int(port or 443)), timeout=30
-                )
-            except (OSError, ValueError):
-                self.send_error(502)
+            upstream = self._upstream(host, port or 443)
+            if upstream is None:
                 return
             self.send_response(200, "Connection established")
             self.end_headers()
             self._pipe(upstream)
+
+        def _upstream(self, host: str, port: int | str) -> socket.socket | None:
+            """A connection to an allowed host, or None once the client has its error: 502 when the host cannot be
+            reached, 400 when the address is this proxy's own, which would only relay the client back to itself."""
+            try:
+                upstream = socket.create_connection((host, int(port)), timeout=30)
+            except (OSError, ValueError):
+                self.send_error(502)
+                return None
+            if upstream.getpeername()[:2] == proxy.server.server_address[:2]:
+                upstream.close()
+                self.send_error(400, "The proxy cannot be its own destination")
+                return None
+            upstream.settimeout(_TUNNEL_SECONDS)
+            return upstream
 
         def _pipe(self, upstream: socket.socket) -> None:
             sockets = [self.connection, upstream]
@@ -154,9 +225,7 @@ def _handler(proxy: EgressProxy) -> type[BaseHTTPRequestHandler]:
                         data = one.recv(65536)
                         if not data:
                             return
-                        (
-                            upstream if one is self.connection else self.connection
-                        ).sendall(data)
+                        (upstream if one is self.connection else self.connection).sendall(data)
             except OSError:
                 return
             finally:
@@ -165,36 +234,97 @@ def _handler(proxy: EgressProxy) -> type[BaseHTTPRequestHandler]:
         def _forward(self) -> None:
             target = urlsplit(self.path)
             host = target.hostname or ""
+            try:
+                port = target.port or 80
+            except ValueError:
+                port = 0
+            if target.scheme.lower() != "http" or not host or not port:
+                # Not a proxy request (`GET /x` names no host): nothing was asked of the world, so nothing is logged.
+                self.send_error(400, "A proxy request names an absolute http:// URL")
+                return
             if not host_allowed(host, proxy.allowed):
                 proxy.refuse(host, self.command)
                 self._refuse(host)
                 return
-            size = int(self.headers.get("content-length") or 0)
-            body = self.rfile.read(size) if size else b""
+            framing = self._framing()
+            if framing is None:
+                self.send_error(400, "The request body's length cannot be told")
+                return
             path = target.path or "/"
             if target.query:
                 path += "?" + target.query
+            authority = (f"[{host}]" if ":" in host else host) + (f":{target.port}" if target.port else "")
+            # Connection names more hop-by-hop headers of its own.
+            named = {
+                one.strip().lower() for value in self.headers.get_all("connection") or [] for one in value.split(",")
+            }
+            dropped = _HOP_BY_HOP | (named - _FRAMING)
             # Relayed as bytes, as a CONNECT tunnel is: the answer goes back exactly as the host sent it.
-            head = [f"{self.command} {path} {self.request_version}"] + [
-                f"{key}: {value}"
-                for key, value in self.headers.items()
-                if key.lower() not in ("proxy-connection", "connection")
+            head = [f"{self.command} {path} {self.request_version}", f"host: {authority}"] + [
+                f"{key}: {value}" for key, value in self.headers.items() if key.lower() not in dropped
             ]
-            try:
-                upstream = socket.create_connection(
-                    (host, int(target.port or 80)), timeout=30
-                )
-            except (OSError, ValueError):
-                self.send_error(502)
+            upstream = self._upstream(host, port)
+            if upstream is None:
                 return
-            upstream.sendall(
-                ("\r\n".join([*head, "connection: close"]) + "\r\n\r\n").encode(
-                    "latin-1"
-                )
-                + body
-            )
             self.close_connection = True
+            try:
+                upstream.sendall(("\r\n".join([*head, "connection: close"]) + "\r\n\r\n").encode("latin-1"))
+                if framing == "chunked":
+                    self._relay_chunks(upstream)
+                else:
+                    self._relay(upstream, framing)
+            except _BadBody:
+                upstream.close()
+                self.send_error(400, "The request body does not match its framing")
+                return
+            except OSError:
+                upstream.close()
+                return
             self._pipe(upstream)
+
+        def _framing(self) -> int | str | None:
+            """Where the request body ends: `"chunked"`, its length in bytes, or None when that cannot be told."""
+            codings = [
+                one.strip().lower()
+                for value in self.headers.get_all("transfer-encoding") or []
+                for one in value.split(",")
+            ]
+            lengths = {value.strip() for value in self.headers.get_all("content-length") or []}
+            if codings:
+                return "chunked" if codings[-1] == "chunked" and not lengths else None
+            if len(lengths) > 1 or not all(re.fullmatch(r"[0-9]+", value) for value in lengths):
+                return None
+            return int(lengths.pop()) if lengths else 0
+
+        def _relay(self, upstream: socket.socket, size: int) -> None:
+            """Stream exactly `size` bytes of the request body on, a piece at a time."""
+            while size:
+                piece = self.rfile.read(min(size, _PIECE))
+                if not piece:
+                    raise _BadBody
+                upstream.sendall(piece)
+                size -= len(piece)
+
+        def _relay_chunks(self, upstream: socket.socket) -> None:
+            """Stream a chunked request body on as it was sent, up to the end of its trailer section."""
+            while True:
+                line = self._line()
+                size = line.split(b";", 1)[0].strip()
+                if not re.fullmatch(rb"[0-9A-Fa-f]+", size):
+                    raise _BadBody
+                upstream.sendall(line)
+                if not int(size, 16):
+                    break
+                self._relay(upstream, int(size, 16) + 2)
+            while (line := self._line()) not in (b"\r\n", b"\n"):
+                upstream.sendall(line)
+            upstream.sendall(line)
+
+        def _line(self) -> bytes:
+            line = self.rfile.readline(_PIECE + 1)
+            if len(line) > _PIECE or not line.endswith(b"\n"):
+                raise _BadBody
+            return line
 
         def _refuse(self, host: str) -> None:
             content = f"{host} is outside the test world".encode()
@@ -206,8 +336,7 @@ def _handler(proxy: EgressProxy) -> type[BaseHTTPRequestHandler]:
             self.wfile.write(content)
             self.close_connection = True
 
-        do_GET = do_POST = do_PUT = do_PATCH = do_DELETE = do_HEAD = do_OPTIONS = (
-            _forward  # noqa: N815
-        )
+        do_GET = do_POST = do_PUT = do_PATCH = _forward  # noqa: N815 - BaseHTTPRequestHandler API
+        do_DELETE = do_HEAD = do_OPTIONS = _forward  # noqa: N815 - BaseHTTPRequestHandler API
 
     return Handler

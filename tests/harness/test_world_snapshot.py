@@ -62,10 +62,40 @@ def test_a_second_trial_that_starts_from_changed_rows_reads_differs(monkeypatch)
     records.start("w0", "dsn")
     records._starts.pop("w0")
     records.start("w0", "dsn")
-    assert records._starts.pop("w0")[1] == {"state": "seeded", "tables": []}
+    assert records._starts.pop("w0")[1] == {"state": "seeded", "tables": [], "against": "first_trial"}
     # The third start is compared with the seed, not with the trial before it.
     records.start("w0", "dsn")
-    assert records._starts["w0"][1] == {"state": "differs", "tables": ["orders"]}
+    assert records._starts["w0"][1] == {"state": "differs", "tables": ["orders"], "against": "first_trial"}
+
+
+def test_every_trial_s_start_is_compared_with_the_sealed_seed_never_with_trial_one(monkeypatch):
+    import fi.alk.harness.world_snapshot as ws
+
+    taken = {
+        "seed": from_rows(_orders({"id": 1, "status": "paid"})),
+        "world": iter([from_rows(_orders({"id": 1, "status": "refunded"})), from_rows(_orders({"id": 1, "status": "paid"}))]),
+    }
+    monkeypatch.setattr(ws, "snapshot", lambda dsn, **_: taken["seed"] if dsn == "seed" else next(taken["world"]))
+    records = TrialRecords(lambda dsn: "seed")
+    # Trial 1 started from changed rows: it differs from the sealed seed, and it is no one's baseline.
+    records.start("w0", "dsn")
+    assert records._starts.pop("w0")[1] == {"state": "differs", "tables": ["orders"], "against": "sealed_seed"}
+    records.start("w0", "dsn")
+    assert records._starts.pop("w0")[1] == {"state": "seeded", "tables": [], "against": "sealed_seed"}
+
+
+def test_the_sealed_seed_is_the_template_the_build_output_names(tmp_path):
+    import json
+
+    from fi.alk.harness.call_runner import sealed_seed_dsn
+
+    (tmp_path / "artifacts").mkdir()
+    (tmp_path / "artifacts" / "build.json").write_text(
+        json.dumps({"stores": [{"strategy": "template_database", "baseline_reference": "world_tpl"}]})
+    )
+    seed = sealed_seed_dsn(tmp_path)("postgresql://u:p@h:5432/world_3")
+    assert "dbname=world_tpl" in seed and "host=h" in seed
+    assert sealed_seed_dsn(tmp_path / "none")("postgresql://u:p@h:5432/world_3") is None
 
 
 def test_start_state_is_unknown_when_a_start_could_not_be_read():
@@ -83,7 +113,9 @@ def test_a_trial_whose_records_cannot_be_read_is_sealed_unreadable_never_failed(
     monkeypatch.setattr(ws, "snapshot", broken)
     records = TrialRecords()
     records.start("w0", "dsn")
-    assert records.end("w0", "dsn") == {"records": {"unreadable": True}, "start": {"state": "unknown", "tables": []}}
+    assert records.end("w0", "dsn") == {
+        "records": {"unreadable": True}, "start": {"state": "unknown", "tables": [], "against": "first_trial"}
+    }
 
 
 def test_world_changes_carry_the_rows_the_trial_changed(monkeypatch):
@@ -175,5 +207,5 @@ def test_pre_run_sessions_neither_make_a_trial_read_differs_nor_count_as_its_cha
     records.start("w0", "dsn")
     records.rebase("w0", "dsn")
     sealed = records.end("w0", "dsn")
-    assert sealed["start"] == {"state": "seeded", "tables": []}
+    assert sealed["start"] == {"state": "seeded", "tables": [], "against": "first_trial"}
     assert [(one["table"], one["kind"]) for one in sealed["records"]["changes"]] == [("orders", "changed")]

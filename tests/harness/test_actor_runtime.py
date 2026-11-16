@@ -696,9 +696,13 @@ def test_an_identity_is_keyed_by_a_service_of_the_world_never_by_a_record_field(
     assert not edited.get("is_error") and load_actors(tmp_path).by_id()["old"].role == "the caller's manager"
 
 
-def test_the_builder_gives_an_actor_only_a_model_a_run_can_play_it_on(tmp_path):
-    from fi.alk.harness.actors import ACTOR_MODELS, Actor, ActorList, load_actors, save_actors
+def test_the_builder_gives_an_actor_only_a_model_a_run_can_play_it_on(tmp_path, monkeypatch):
+    from fi.alk.harness.actors import Actor, ActorList, load_actors, save_actors
     from fi.alk.harness.world.tools import world_actor_tools
+
+    monkeypatch.setenv("SIMULATOR_LLM_MODEL", "model-a")
+    monkeypatch.setenv("SIMULATOR_LLM_FALLBACK_MODELS", "model-b")
+    ACTOR_MODELS = ("model-a", "model-b")
 
     add, _drop, _note = world_actor_tools(tmp_path, SimpleNamespace(modality="chat", model_dump=lambda: {"tools": []}))
     out = asyncio.run(add.handler({"id": "lead", "name": "Sam", "model": "gpt-unknown"}))
@@ -1018,7 +1022,7 @@ def test_a_field_s_unit_reaches_the_actor_and_the_contract_line_every_stage_read
     from fi.alk.harness.contract import ToolSpec
 
     spec = ToolSpec.model_validate(
-        {"name": "refund", "args": ["refund_amount", "order_id"], "units": {"refund_amount": "cents, USD"},
+        {"name": "refund", "args": ["refund_amount", "order_id"], "arg_units": {"refund_amount": "cents, USD"},
          "description": "Refund an order"}
     )
     assert spec.arg_units == {"refund_amount": "cents, USD"}
@@ -1304,7 +1308,7 @@ def test_a_read_counts_apart_from_committed_writes_and_a_participant_that_only_r
         {"name": "get_order", "outcome": "committed", "effect": "read"},
         {"name": "list_refunds", "outcome": "committed", "effect": "read"},
         {"name": "issue_refund", "outcome": "committed", "effect": "write"},
-        # Logged before effects were recorded: a write, as it always was.
+        # Logged before effects were recorded: a write.
         {"name": "issue_refund", "outcome": "committed"},
         {"actor_id": "manager", "action": "orders.lookup", "name": "lookup", "outcome": "committed", "effect": "read"},
     ]

@@ -3179,6 +3179,66 @@ def test_arguments_read_back_as_json_text_still_match():
     assert len(duplicate_commits(log)) == 1
 
 
+def test_a_retry_that_rewords_free_text_but_writes_the_same_record_is_a_duplicate():
+    from fi.alk.harness.call_runner import duplicate_commits
+
+    log = [
+        _logged("issue_refund", {"order": 7, "amount": 500, "note": "first try"}, error="response_lost"),
+        _logged("issue_refund", {"order": 7, "amount": 500, "note": "retrying after the timeout"}),
+    ]
+    # The reference fixes the record and the value; the note is the agent's own words.
+    solution = [{"tool": "issue_refund", "arguments": {"order": 7, "amount": 500}, "fixed": {"order": "the person", "amount": "the person"}}]
+    [found] = duplicate_commits(log, solution)
+    assert found["action"] == "orders.issue_refund"
+    # Another record is another write, whatever the free text says.
+    other = [log[0], _logged("issue_refund", {"order": 8, "amount": 500, "note": "first try"})]
+    assert duplicate_commits(other, solution) == []
+    # With nothing fixed for the action, every argument still has to match.
+    assert duplicate_commits(log) == []
+
+
+def test_an_unreadable_action_log_leaves_duplicates_unknown_never_cleared(monkeypatch):
+    from types import SimpleNamespace
+
+    from fi.alk.harness import call_runner as cr
+
+    monkeypatch.setattr(cr, "_find_postgres_endpoint", lambda runtime: SimpleNamespace(address="dsn"))
+
+    def unreadable(dsn, **_):
+        raise RuntimeError("down")
+
+    monkeypatch.setattr(cr, "_read_action_log", unreadable)
+    assert cr._duplicates(object()) is None
+    # Missing evidence for every check that reads the agent's calls or the log, never an empty log.
+    assert cr.missing_evidence([dict(cr.DUPLICATES_UNREADABLE)], {}) == {"tool_calls": cr.DUPLICATES_UNREADABLE["message"]}
+    monkeypatch.setattr(cr, "_read_action_log", lambda dsn, **_: [])
+    assert cr._duplicates(object()) == []
+
+
+def test_egress_refusals_are_never_the_agent_s_tool_calls_and_show_once_per_host_and_method(monkeypatch):
+    from fi.alk.harness import call_runner as cr
+    from fi.alk.harness.egress_proxy import REFUSAL_CODE
+
+    def blocked(host, method):
+        return {"name": host, "actor_id": "agent", "outcome": "refused", "ok": False, "refusal_code": REFUSAL_CODE,
+                "arguments": {"host": host, "method": method}, "at": 1.0, "action_id": f"{host}-{method}"}
+
+    log = [
+        blocked("telemetry.example.net", "POST"),
+        blocked("telemetry.example.net", "POST"),
+        blocked("telemetry.example.net", "GET"),
+        _logged("issue_refund", {"order": 7}),
+    ]
+    monkeypatch.setattr(cr, "_read_action_log", lambda dsn, **_: log)
+    assert [row["name"] for row in cr.read_tool_trace("dsn")] == ["issue_refund"]
+    [agent] = cr.trial_state_changes(log, {})
+    assert agent["attempted"] == 1 and agent["refused"] == 0
+    assert agent["blocked"] == [
+        {"host": "telemetry.example.net", "method": "POST", "count": 2},
+        {"host": "telemetry.example.net", "method": "GET", "count": 1},
+    ]
+
+
 def test_voice_trial_without_actors_seals_world_changes(tmp_path, monkeypatch) -> None:
     _job_obj, context = _context(tmp_path=tmp_path, evidence_seam=EvidenceSeam.TOOL_TRACE)
     _write_scenario_doc(context.bundle_dir, scenario_key="k1")

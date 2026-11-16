@@ -111,12 +111,8 @@ _ARGUMENTS_PARAMETER = {"args", "arguments", "params", "payload", "body", "data"
 
 
 def call_agent_tool(fn: Any, args: Mapping[str, Any], db: Any, *, state: bool = False) -> Any:
-    """Call one of the agent's own tool functions the way its signature expects.
-
-    Most take the tool's arguments as keywords. A route-style function, as a small tools service writes it, takes a
-    database handle and the arguments as one dict (``def get_deal(db, args)``); calling that with keywords fails every
-    call with a TypeError. A function taking only the arguments dict gets the dict.
-    """
+    """Call one of the agent's own tool functions the way its signature expects: keywords, or a route-style
+    ``(db, args)``, or the arguments dict alone."""
     import inspect
 
     arguments = dict(args)

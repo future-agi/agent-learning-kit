@@ -304,14 +304,21 @@ def _trial_log(door: Any, since: float = 0.0) -> list[dict[str, Any]]:
     """This trial's action log. The world's own table holds every row, the agent's calls through its tool proxy
     included; this process's memory holds only what passed its own door. The table keeps every trial played on it, so
     this trial's rows are the ones from its start on."""
+    return _readable_trial_log(door, since) or []
+
+
+def _readable_trial_log(door: Any, since: float = 0.0) -> list[dict[str, Any]] | None:
+    """This trial's action log as `_trial_log` reads it, or None when neither the world's table nor this process's
+    own rows could be read."""
     try:
         log = door.log.rows()
-    except Exception:  # noqa: BLE001 - no rows, never a failed call
-        log = []
+    except Exception:  # noqa: BLE001 - the world's table unreadable: this process's own rows may stand
+        log = None
     mirror = getattr(door.log, "mirror", None)
     if mirror is not None:
         try:
-            log = [row for row in mirror.rows() if _at(row) >= since] or log
+            own = [row for row in mirror.rows() if _at(row) >= since]
+            log = own or (log if log is not None else own)
         except Exception:  # noqa: BLE001 - the world's table unreadable: this process's own rows stand
             pass
     return log
@@ -334,7 +341,8 @@ def _world_actors_record(
     if cast is not None:
         decisions += [
             {"actor": one["actor"], "play": "live", "action": one.get("action"),
-             "outcome": (one.get("outcome") or {}).get("outcome"), "why": one.get("why")}
+             "outcome": (one.get("outcome") or {}).get("outcome"), "why": one.get("why"),
+             "verdict": one.get("verdict")}
             for one in cast.events
             if one.get("kind") == "acted"
         ]
@@ -827,11 +835,11 @@ class HostedChatCallRunner:
     """Drive a repository chat ingress inside its leased world."""
 
     def __init__(self, adapter: ArtifactUploader, context: CallRunnerContext) -> None:
-        from .call_runner import TrialRecords
+        from .call_runner import TrialRecords, sealed_seed_dsn
 
         self._adapter = adapter
         self._context = context
-        self._records = TrialRecords()
+        self._records = TrialRecords(sealed_seed_dsn(context.work_directory))
         contract_path = context.bundle_dir / "contract.json"
         if not contract_path.is_file():
             self._contract: AgentContract | None = None
@@ -907,9 +915,7 @@ class HostedChatCallRunner:
         listing = load_actors(self._context.bundle_dir)
         world_db = runtime.endpoints.get("world_db")
         service = runtime.endpoints.get("tools_api")
-        # The tool proxy logs the agent's own calls (and the faults it applies) in the world's table: read that table
-        # whenever the trial is proxied, cast or not, so the trial record and the fault notices see those calls.
-        # The world's door for tools the agent runs in its own process logs to the same table and reads the same faults.
+        # Read the world's table whenever the trial is proxied, cast or not, so the fault notices see those calls.
         proxied = runtime.endpoints.get("tool_proxy") is not None or runtime.endpoints.get("world_door") is not None
         # The scenario's faults are a rule of its graded trials; a readiness probe checks the tools' binding without them.
         faults = [] if self._context.readiness_probe else list(document.get("faults") or [])
@@ -1084,7 +1090,7 @@ class HostedChatCallRunner:
         capture_failed = capture_failed and not graded_calls(transcript.calls)
 
         world_record = _world_actors_record(door, listing, dispatcher, cast, meter, limits, since=trial_started)
-        from .call_runner import NOT_RECORDED, duplicate_commits
+        from .call_runner import NOT_RECORDED, duplicate_commits, missing_evidence, unmeasured_reasons
 
         if door_sees_tools:
             from .call_runner import upload_end_state
@@ -1097,7 +1103,8 @@ class HostedChatCallRunner:
             world_record = dict(NOT_RECORDED)
 
         # The world applied one of the agent's writes twice after its answer was lost: the scenario fails.
-        duplicates = duplicate_commits(_trial_log(door, trial_started))
+        trial_log = _readable_trial_log(door, trial_started) if door is not None else []
+        duplicates = duplicate_commits(trial_log or [], getattr(scenario, "solution", None) or ())
         if duplicates:
             world_record = {**(world_record or {}), "duplicates": duplicates}
         if world_record is not None:
@@ -1110,11 +1117,22 @@ class HostedChatCallRunner:
                 "summary": summary,
                 "events": cast.events if cast is not None else [],
             }
-        if faults:
-            from .call_runner import fault_notices
+        from .call_runner import DUPLICATES_UNREADABLE, _bundle_contract, evidence_notices, fault_notices
 
+        if faults:
             # A fault that did not take effect is said, never only logged: the trial ran without it.
-            transcript.notices = fault_notices(faults, _trial_log(door, trial_started), transcript.calls)
+            transcript.notices = fault_notices(
+                faults, _trial_log(door, trial_started), transcript.calls,
+                contract=_bundle_contract(self._context.bundle_dir),
+            )
+        if door is not None:
+            # A call of the agent's that ran without the door recording it leaves the trial's evidence incomplete.
+            # An action log that could not be read is missing evidence, never an empty log.
+            transcript.notices = (
+                list(transcript.notices or [])
+                + evidence_notices(trial_log)
+                + ([dict(DUPLICATES_UNREADABLE)] if trial_log is None else [])
+            )
         ended = datetime.now(timezone.utc)
         transcript_id = await self._adapter.upload_artifact(
             transcript.artifact(),
@@ -1144,6 +1162,8 @@ class HostedChatCallRunner:
             call_actors=_chat_actor_summary(cast, world_record, listing),
             world_actions=tuple((world_record or {}).get("actions") or ()),
             duplicates=tuple(duplicates),
+            unmeasured=unmeasured_reasons(transcript.notices or ()),
+            missing_evidence=missing_evidence(transcript.notices or (), world_record),
             actor_briefs={
                 **{str(one["id"]): str(one.get("brief") or "") for one in chat_actors if one.get("brief")},
                 **(dispatcher.briefs if dispatcher is not None else {}),

@@ -232,10 +232,8 @@ class HostedWorld(HttpObservationHandle):
     def events(
         self, actor_id: str | None = None, outcome: str | None = None
     ) -> list[dict[str, Any]]:
-        """This trial's action log: every action attempted in the world, whose it was (`agent` for the
-        agent under test) and what came of it (`committed`, `refused`, `faulted`, `duplicate`). A world with no log
-        has no events; a log that exists but cannot be read raises `EvidenceUnavailable`, so a check that needs it is
-        unmeasured, never settled on an empty log."""
+        """This trial's action log: every action attempted in the world, whose it was and what came of it. No log is
+        no events; a log that cannot be read raises `EvidenceUnavailable`."""
         from ..world_door import EvidenceUnavailable
 
         try:

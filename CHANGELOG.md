@@ -22,7 +22,8 @@ Post-rc.1 increments on the release branch. Each one adds gates on top of the
   with a limiter; per-actor and call-wide limits keep the person in charge. Every call records whether each
   actor was triggered, delivered or dropped, and why, on voice and chat alike.
 - A build gives a speaking actor to between 15% and 25% of its scenarios by default; `aim_for` takes the
-  share the person asks for (`call_actor_share`, 0 for none) in its place.
+  share the person asks for (`actor_share` with `min` and `max`: every scenario, none, or a range) in its
+  place, and the actor list keeps it for later sessions.
 - A sub-goal may name the actor it is about (`actor`): it reads not applicable on a call that actor never
   came into and inconclusive when the actor came in and never reached the agent. A call one of its speaking
   actors never reached, with no sub-goal about that actor, is errored as inconclusive (`actor_missing`,

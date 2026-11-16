@@ -248,24 +248,6 @@ def with_unique_keys(
     return out
 
 
-def pre_run_of(data: Any) -> Any:
-    """A scenario document with any typed `history` moved into `pre_run` as one session; anything else unchanged."""
-    if not isinstance(data, dict) or not data.get("history"):
-        return data
-    history = [one for one in data.get("history") or [] if isinstance(one, dict)]
-    sessions = list(data.get("pre_run") or [])
-    sessions.insert(
-        0,
-        {
-            "actors": sorted({str(one.get("actor") or "") for one in history if one.get("actor")}),
-            "thread": [
-                {key: one[key] for key in ("actor", "action", "arguments") if key in one} for one in history
-            ],
-        },
-    )
-    return {**{key: value for key, value in data.items() if key != "history"}, "pre_run": sessions}
-
-
 class Scenario(BaseModel):
     """One test: what changes, what is asked, what a correct agent does, what must hold."""
 
@@ -382,13 +364,6 @@ class Scenario(BaseModel):
         if isinstance(persona, dict) and persona.get("keywords"):
             data = {**data, "keywords": list(persona["keywords"])}
         return data
-
-    @model_validator(mode="before")
-    @classmethod
-    def _history_as_session(cls, data: Any) -> Any:
-        """Read a scenario written with typed history: its entries are one pre-run session's thread, replayed the same
-        way, so a scenario sealed before sessions existed runs as it always has."""
-        return pre_run_of(data)
 
     @model_validator(mode="after")
     def _identify(self) -> "Scenario":

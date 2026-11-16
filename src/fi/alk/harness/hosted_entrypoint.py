@@ -38,6 +38,8 @@ from typing import Any, Callable, Protocol, Sequence
 
 from . import observability
 from . import outbound as ob
+from . import user_files
+from .actors import ACTOR_RULES_FILE, ACTORS_FILE
 from .backends import GOOGLE_ADK_APPROVAL_ENV
 from .bundle_v2 import BundleV2Error, EnvironmentBundleV2, RuntimeKindV2, load_bundle_v2
 from .compose_broker import BrokerError, ComposeBrokerClient
@@ -64,7 +66,7 @@ from .job import (
     HarnessJob,
     HarnessStage,
 )
-from .privilege import IsolationUnavailable, establish_isolation
+from .privilege import IsolationMode, IsolationUnavailable, establish_isolation, isolation_mode
 from .process_preflight import PreflightError, preflight_bundle
 from .process_runtime import (
     SECTION_2F_DOMAIN,
@@ -473,6 +475,19 @@ class DefaultBundleSource:
                 _bundle_unavailable_code(exc.args[0]), str(exc)
             ) from exc
         return manifest, bundle_dir
+
+
+def close_actor_files(bundle_dir: Path, *, chown: user_files.Chown = user_files.chown_no_follow) -> None:
+    """Under per-user isolation, the bundle's actor files become the harness's own, mode 0600: actors act in the
+    harness's process, which still reads them, and no customer process can. Without it nothing changes."""
+    if isolation_mode() is not IsolationMode.PER_USER:
+        return
+    for name in (ACTORS_FILE, ACTOR_RULES_FILE):
+        path = bundle_dir / name
+        if path.is_symlink() or not path.is_file():
+            continue
+        chown(path, os.geteuid(), os.getegid())
+        path.chmod(0o600)
 
 
 # =================================================================================================
@@ -2517,6 +2532,7 @@ async def run_job(
                 code=exc.code,
                 message=exc.message,
             )
+        close_actor_files(bundle_dir)
 
         if (manifest.metadata or {}).get("generic_harness") == "v1":
             from .certification import (

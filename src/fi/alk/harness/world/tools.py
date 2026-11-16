@@ -710,11 +710,13 @@ def world_actor_tools(
             actor = Actor.model_validate({**base, **merged})
         except ValueError as exc:
             return _err(f"Not added: {exc}")
-        from ..actors import ACTOR_MODELS
+        from ..actors import actor_models
 
-        if actor.model and actor.model != (current.model if current is not None else None) and actor.model not in ACTOR_MODELS:
+        models = actor_models()
+        kept = current.model if current is not None else None
+        if actor.model and actor.model != kept and actor.model not in models:
             # A run plays the actor on this model, so an unknown one would fail each of its turns.
-            return _err(f"Not added: model is one of {', '.join(ACTOR_MODELS)}, or left out for the environment's model.")
+            return _err(f"Not added: model is one of {', '.join(models)}, or left out for the environment's model.")
         if actor.channel:
             problems = entry_problems(
                 CallActor(
@@ -1626,8 +1628,8 @@ def world_tools(
     @tool(
         "fix_tool",
         "Correct a tool that was read wrong, or remove one the agent does not have. `args` "
-        "replaces its argument names in order; `arg_types`, `arg_units` (the unit or format of a field, cents or "
-        "dollars, seconds or milliseconds) and `description` update those. Set "
+        "replaces its argument names in order; `arg_types`, `arg_units` (the unit or format of a field, a "
+        "currency's minor or major unit, seconds or milliseconds) and `description` update those. Set "
         "`remove` to take the tool away entirely. Everything downstream is built from these, so "
         "a wrong argument name produces a world that refuses everything. Say why.",
         schema(
