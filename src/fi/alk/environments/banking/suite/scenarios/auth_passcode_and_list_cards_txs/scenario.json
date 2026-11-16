@@ -4,7 +4,7 @@
   "scenario_id": "",
   "use_case": "Verify customer identity and disclose owned card and transaction details",
   "branch": "Customer self-corrects the card details they inquired about; agent verifies identity, lists active cards, and lists transactions.",
-  "tests": "passes when customer identity is authenticated before listing owned cards and transaction history.",
+  "tests": "passes when the agent verifies Marie, her active cards and the posted transactions on CARD118 (the corrected card ending 6118) reach it from verified reads, and the reply states them as the records hold them (TX118, Pharmacie Santé, $32.00).",
   "instruction": "You are Marie Dubois (C118). You want to check your active payment cards and recent posted transactions on card ending 6118. In your first message, you paste an inquiry mentioning card ending 0000, then immediately clarify that you meant card ending 6118.\n\nWhen challenged for identity verification, provide passcode 6118.\nWhen the assistant presents your active card details and recent transactions for card 6118, thank the assistant and conclude.\n\nYour details:\n- Name: Marie Dubois\n- Customer ID: C118\n- Session ID: SESS118\n- Passcode: 6118\n- Card ending: 6118 (CARD118)",
   "keywords": [
     "authentication"
@@ -59,7 +59,10 @@
         "customer_id": "C118"
       },
       "environment_arguments": {},
-      "fixed": {}
+      "fixed": {
+        "customer_id": "record: C118",
+        "status": "caller: her active cards"
+      }
     },
     {
       "tool": "list_transactions",
@@ -71,7 +74,11 @@
         "status": "posted"
       },
       "environment_arguments": {},
-      "fixed": {}
+      "fixed": {
+        "customer_id": "record: C118",
+        "card_id": "caller: the corrected card ending 6118 (CARD118)",
+        "status": "caller: posted charges"
+      }
     }
   ],
   "alternatives": [],
@@ -86,7 +93,8 @@
     "overlay": "none"
   },
   "sub_goals": [
-    "authenticated_before_disclosure"
+    "authenticated_before_disclosure",
+    "requested_records_reported"
   ],
   "max_turns": 8,
   "background_noise": false,

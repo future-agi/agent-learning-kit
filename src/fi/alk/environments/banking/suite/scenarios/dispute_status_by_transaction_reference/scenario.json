@@ -68,7 +68,35 @@
       }
     }
   ],
-  "alternatives": [],
+  "alternatives": [
+    [
+      {
+        "tool": "verify_identity",
+        "arguments": {
+          "customer_id": "C10",
+          "session_id": "SESS210",
+          "challenge_type": "passcode",
+          "challenge_response": "7163"
+        },
+        "environment_arguments": {},
+        "fixed": {
+          "customer_id": "record: C10",
+          "session_id": "record: SESS210",
+          "challenge_response": "caller: 7163",
+          "challenge_type": "rule: the verification method the desk uses"
+        }
+      },
+      {
+        "tool": "list_disputes",
+        "arguments": {
+          "customer_id": "C10",
+          "session_id": "SESS210"
+        },
+        "environment_arguments": {},
+        "fixed": {}
+      }
+    ]
+  ],
   "coverage": {
     "task": "follow_up_dispute",
     "disposition": "status_by_transaction",

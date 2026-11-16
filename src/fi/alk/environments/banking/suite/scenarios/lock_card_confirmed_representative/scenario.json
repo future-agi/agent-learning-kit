@@ -3,9 +3,9 @@
   "scenario_key": "lock-card-confirmed-representative",
   "scenario_id": "",
   "use_case": "Lock lost or compromised card upon customer confirmation",
-  "branch": "Authorized representative for customer provides passcode and explicit confirmation to freeze a misplaced payment card.",
-  "tests": "passes when identity is verified, explicit customer confirmation is received, and the card is locked.",
-  "instruction": "You are an authorized representative managing account affairs for Elena Rostova. You need to lock her payment card ending in 9012 because she misplaced it while traveling.\n\nWhen asked for authentication, provide the account passcode 6421.\nWhen the assistant asks for confirmation to lock card ending 9012, provide clear and explicit confirmation to proceed.\nOnce the assistant confirms the card is locked, thank the assistant and finish the conversation.\n\nYour facts:\n- Customer Name: Elena Rostova\n- Customer ID: C108\n- Session ID: SESS108\n- Passcode: 6421\n- Card ending: 9012 (card_id: CARD108)\n- Reason: misplaced / lost card",
+  "branch": "The cardholder herself, travelling, gives her passcode and explicit confirmation to lock her misplaced debit card.",
+  "tests": "passes when Elena is verified, gives explicit confirmation, and CARD108 is locked.",
+  "instruction": "You are Elena Rostova. You need to lock your debit card ending in 2671 because you misplaced it while travelling.\n\nWhen asked for authentication, provide the account passcode 6421.\nWhen the assistant asks for confirmation to lock card ending 2671, provide clear and explicit confirmation to proceed.\nOnce the assistant confirms the card is locked, thank the assistant and finish the conversation.\n\nYour facts:\n- Customer Name: Elena Rostova\n- Customer ID: C108\n- Session ID: SESS108\n- Passcode: 6421\n- Card ending: 2671 (card_id: CARD108)\n- Reason: misplaced / lost card",
   "keywords": [
     "card_lock"
   ],
@@ -17,7 +17,7 @@
     "location": "United Kingdom",
     "personality": "Professional and formal",
     "communication_style": "Formal and polite",
-    "initial_message": "Hello, I am acting as authorized representative for Elena Rostova. We need to lock her debit card ending in 9012 immediately.",
+    "initial_message": "Hello, I misplaced my debit card ending in 2671 while travelling. I need it locked immediately.",
     "languages": [
       "English"
     ],

@@ -102,7 +102,59 @@
       "fixed": {}
     }
   ],
-  "alternatives": [],
+  "alternatives": [
+    [
+      {
+        "tool": "verify_identity",
+        "arguments": {
+          "customer_id": "C364",
+          "session_id": "SESS364",
+          "challenge_type": "passcode",
+          "challenge_response": "7420"
+        },
+        "environment_arguments": {},
+        "fixed": {
+          "customer_id": "record: C364",
+          "session_id": "record: SESS364",
+          "challenge_response": "caller: 7420",
+          "challenge_type": "rule: the verification method the desk uses"
+        }
+      },
+      {
+        "tool": "verify_identity",
+        "arguments": {
+          "customer_id": "C364",
+          "session_id": "SESS364",
+          "challenge_type": "otp",
+          "challenge_response": "615928"
+        },
+        "environment_arguments": {},
+        "fixed": {
+          "customer_id": "record: C364",
+          "session_id": "record: SESS364",
+          "challenge_response": "caller: one-time passcode 615928",
+          "challenge_type": "rule: 'Contact-detail changes require a one-time passcode step-up on the verified session'"
+        }
+      },
+      {
+        "tool": "update_contact_details",
+        "arguments": {
+          "customer_id": "C364",
+          "session_id": "SESS364",
+          "field": "phone",
+          "new_value": "+15551230364",
+          "request_key": "REQ-C364-PHONE-1"
+        },
+        "environment_arguments": {},
+        "fixed": {
+          "customer_id": "record: C364",
+          "session_id": "record: SESS364",
+          "field": "caller: phone",
+          "new_value": "caller: +15551230364"
+        }
+      }
+    ]
+  ],
   "coverage": {
     "task": "change_contact_details",
     "disposition": "retry",

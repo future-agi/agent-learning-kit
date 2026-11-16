@@ -1,7 +1,5 @@
 def ready(world):
-    state = world.state()
-    cards = state.get("cards", [])
-    c = next((x for x in cards if x["card_id"] == "CARD116"), None)
-    if not c or c.get("status") != "active":
-        return "CARD116 must exist and be active"
+    card = next((c for c in world.state().get("cards", []) if c["card_id"] == "CARD116"), None)
+    if not card or card.get("status") != "locked":
+        return "CARD116 must already be locked (the app lock of last night)"
     return None

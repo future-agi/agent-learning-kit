@@ -90,7 +90,47 @@
       "fixed": {}
     }
   ],
-  "alternatives": [],
+  "alternatives": [
+    [
+      {
+        "tool": "verify_identity",
+        "arguments": {
+          "customer_id": "C306",
+          "session_id": "SESS306",
+          "challenge_type": "passcode",
+          "challenge_response": "1187"
+        },
+        "environment_arguments": {},
+        "fixed": {
+          "customer_id": "record: C306",
+          "session_id": "record: SESS306",
+          "challenge_response": "caller: 1187",
+          "challenge_type": "rule: the verification method the desk uses"
+        }
+      },
+      {
+        "tool": "request_replacement_card",
+        "arguments": {
+          "customer_id": "C306",
+          "session_id": "SESS306",
+          "card_id": "CARD306",
+          "reason": "lost",
+          "delivery_speed": "standard",
+          "confirmed": true,
+          "request_key": "REQ-C306-CARD306-RPL"
+        },
+        "environment_arguments": {},
+        "fixed": {
+          "customer_id": "record: C306",
+          "session_id": "record: SESS306",
+          "card_id": "record: CARD306",
+          "reason": "rule: lost, stolen, damaged, expired or not_received",
+          "delivery_speed": "caller: standard",
+          "confirmed": "rule: 'The agent confirms the exact card and option before requesting a replacement'"
+        }
+      }
+    ]
+  ],
   "coverage": {
     "task": "service_card",
     "disposition": "retry",
