@@ -3486,9 +3486,7 @@ class CallRunnerImpl:
             else {}
         )
         # A worker the world told apart is kept beside the actors, so its refused attempts are never lost.
-        workers_acted = any(
-            str(entry.get("who") or "").startswith("worker:") for entry in changes
-        )
+        workers_acted = any(str(entry.get("who") or "").startswith("worker:") for entry in changes or ())
         if records:
             log_rows: list[dict[str, Any]] | None = None
             if world_database is not None:

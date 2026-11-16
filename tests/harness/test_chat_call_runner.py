@@ -2132,6 +2132,7 @@ def test_a_stopped_call_s_wind_down_is_cut_short_so_it_seals_inside_the_stop_bou
 
     class _Dispatcher:
         briefs: dict[str, str] = {}
+        pre_run: list[Any] = []
 
         async def replay(self) -> None:
             return None
