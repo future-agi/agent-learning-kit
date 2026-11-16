@@ -357,7 +357,7 @@ def test_a_digest_rebuild_opens_the_directories_it_just_recreated(tmp_path, monk
         pr._open_for_declared_users(work, worlds=2)
         with pytest.raises(Stop):
             provider._provision_sync(
-                SimpleNamespace(digest="new"),
+                SimpleNamespace(digest="new", seed=None, processes=[]),
                 source=tmp_path,
                 bundle_dir=tmp_path,
                 work_directory=work,
@@ -423,7 +423,7 @@ def test_per_user_provisioning_opens_the_seed_files_before_anything_runs(
         raise Stop
 
     monkeypatch.setattr(pr, "_open_seed_files_for_declared_users", record)
-    bundle = SimpleNamespace(digest="sha256:" + "0" * 64)
+    bundle = SimpleNamespace(digest="sha256:" + "0" * 64, seed=None, processes=[])
     provider = object.__new__(pr.ProcessRuntimeProvider)
 
     with pytest.raises(Stop):

@@ -1337,6 +1337,9 @@ _INTERNAL_ONLY_RUNTIME_CODES = frozenset(
         # Per-user isolation: a customer process reached a runner without its declared user.
         # Every call site passes one, so this marks a missed seam — a bug to fix here.
         "internal_undeclared_user",
+        # Per-user isolation: a postgres engine whose store is not `template_database` cannot be
+        # reached through a world's own role. The hosted generator writes no such bundle.
+        "internal_world_database_unscoped",
     }
 )
 

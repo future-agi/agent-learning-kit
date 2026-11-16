@@ -179,11 +179,13 @@ async def run_json_worker(
     environ: Mapping[str, str],
     work_directory: Path,
     suppress_output: bool = False,
+    pass_fds: tuple[int, ...] = (),
     serve: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Run a fresh interpreter; cancellation waits for process-group termination.
 
-    With ``serve``, the worker gets a channel to this process (its descriptor is named by
+    The worker inherits `pass_fds`; the caller keeps its own copies and closes them.
+    With ``serve``, the worker also gets a channel to this process (its descriptor is named by
     ``CHANNEL_FD_ENV``), and ``serve`` answers each of its requests while it runs.
     """
     if os.name != "posix":
@@ -197,6 +199,7 @@ async def run_json_worker(
             environ,
             work_directory,
             suppress_output,
+            pass_fds,
             serve,
             parent_end,
             child_end,
@@ -213,6 +216,7 @@ async def _run_json_worker(
     environ,
     work_directory,
     suppress_output,
+    pass_fds,
     serve,
     parent_end,
     child_end,
@@ -248,7 +252,10 @@ async def _run_json_worker(
                 env=child_env,
                 cwd=root,
                 start_new_session=True,
-                pass_fds=() if child_end is None else (child_end.fileno(),),
+                pass_fds=(
+                    *pass_fds,
+                    *(() if child_end is None else (child_end.fileno(),)),
+                ),
             )
         )
         try:

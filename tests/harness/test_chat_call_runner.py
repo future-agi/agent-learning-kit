@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import importlib
 import json
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -10,9 +11,11 @@ from typing import Any
 import pytest
 
 from fi.alk.harness import chat_call_runner as chat
+from fi.alk.harness import privilege
 from fi.alk.harness.call_runner import CallRunnerContext
 from fi.alk.harness.hosted_scheduler import CallAborted
 from fi.alk.harness.job import HarnessJob
+from fi.alk.harness.privilege import IsolationMode
 from fi.alk.harness.process_runtime import (
     EnvironmentRuntime,
     RuntimeEndpoint,
@@ -874,9 +877,11 @@ def test_hosted_chat_continues_when_agent_asks_customer_for_account_id(
     assert {"role": "user", "content": "My account ID is CLI-04."} in outcome.messages
 
 
-def test_tool_world_can_import_customer_tool_from_uploaded_source(
-    tmp_path: Path, monkeypatch: Any
+@pytest.mark.parametrize("mode", [IsolationMode.FIXED_USER, IsolationMode.PER_USER])
+def test_only_with_one_fixed_user_a_tool_world_imports_customer_code_from_the_upload(
+    tmp_path: Path, monkeypatch: Any, mode: IsolationMode
 ) -> None:
+    monkeypatch.setattr(privilege, "_mode", mode)
     context = _context(tmp_path)
     source = tmp_path / "source"
     source.mkdir()
@@ -926,6 +931,13 @@ def test_tool_world_can_import_customer_tool_from_uploaded_source(
         },
     )
 
+    if mode is IsolationMode.PER_USER:
+        # This process holds the harness's capabilities: the agent's code runs only in its
+        # handler child (tests/harness/test_handler_child.py).
+        with pytest.raises(CallAborted, match="handler_child_required"):
+            chat._tool_world(context.bundle_dir, contract, runtime, source)
+        assert str(source) not in sys.path
+        return
     world = chat._tool_world(context.bundle_dir, contract, runtime, source)
     result = world.handle_tool_call(
         {
