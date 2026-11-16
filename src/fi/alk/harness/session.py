@@ -58,7 +58,8 @@ STAGE_IDLE_TIMEOUT_SECONDS = float(
 )
 STAGE_IDLE_RETRIES = int(os.getenv("ALK_STAGE_IDLE_RETRIES", "1"))
 # Questions open to a person in this process. A turn waiting on a person's answer says nothing until they answer, and
-# however long they take is not a hang.
+# however long they take is not a hang. Process-wide, as a hosted chat process runs one authoring session; the chat
+# sandbox's own lifetime, not renewed while it waits on the person, still ends a question nobody answers.
 _ASKING = 0
 
 
