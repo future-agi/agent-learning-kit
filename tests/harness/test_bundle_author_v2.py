@@ -6267,6 +6267,24 @@ def test_a_sealed_tool_proxy_says_its_door_holds_each_worker_to_its_own_deadline
     assert _door_holds_worker_limits(tmp_path)
 
 
+def test_the_bundle_says_whether_a_door_stands_in_front_of_the_tools_and_why_not_from_the_contract() -> None:
+    from types import SimpleNamespace
+
+    from fi.alk.harness.bundle_author_v2 import WORLD_DOOR_PROCESS, door_outcome
+
+    def plan(*names: str) -> SimpleNamespace:
+        return SimpleNamespace(processes=[SimpleNamespace(name=name) for name in ("agent", *names)])
+
+    service_tool = {"tool_entrypoints": [{"tool": "a", "mode": "service", "service": "any-name", "endpoint": "/a"}]}
+    imported_tool = {"tool_entrypoints": [{"tool": "a", "mode": "import", "module": "m", "callable": "a"}]}
+    assert door_outcome(plan("tool-proxy"), service_tool)["present"] is True
+    assert door_outcome(plan(WORLD_DOOR_PROCESS), imported_tool)["present"] is True
+    # No door: why is read from the contract's tools, whatever the tool service is called.
+    assert door_outcome(plan(), service_tool) == {"present": False, "reason": "tool_service_not_fronted"}
+    assert door_outcome(plan(), imported_tool) == {"present": False, "reason": "in_process_unbound"}
+    assert door_outcome(plan(), {}) == {"present": False, "reason": "no_tool_service"}
+
+
 def test_the_tool_proxy_learns_the_declared_read_actions_and_a_plan_without_any_is_unchanged():
     from fi.alk.harness.bundle_author_v2 import _tool_proxy_process, declared_read_actions
 

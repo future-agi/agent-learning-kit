@@ -2159,6 +2159,22 @@ def _seal_tool_proxy(generated: Path, contract_body: dict[str, Any] | None) -> N
     (generated / DOOR_FILE).write_text(json.dumps(DOOR_CAPABILITIES, sort_keys=True) + "\n", encoding="utf-8")
 
 
+def door_outcome(plan: EnvironmentPlanV2, contract_body: dict[str, Any] | None) -> dict[str, Any]:
+    """Whether this build's world has a door in front of the agent's tools, and if not why, decided from the plan and
+    the contract's tools (never a service's name): what the platform reads instead of working it out again."""
+    names = {process.name for process in plan.processes}
+    if "tool-proxy" in names:
+        return {"present": True, "surface": "tool_proxy", **DOOR_CAPABILITIES}
+    if WORLD_DOOR_PROCESS in names:
+        return {"present": True, "surface": "in_process"}
+    modes = {entry.mode for entry in AgentContract.model_validate(contract_body or {}).tool_entrypoints}
+    if "service" in modes:
+        return {"present": False, "reason": "tool_service_not_fronted"}
+    if modes & {"import", "construct"}:
+        return {"present": False, "reason": "in_process_unbound"}
+    return {"present": False, "reason": "no_tool_service"}
+
+
 def _with_worker_channels(plan: EnvironmentPlanV2, contract_body: dict[str, Any] | None) -> EnvironmentPlanV2:
     """Point each separately wired worker's tool address at its own channel on the tool proxy, so the world attributes
     each worker's calls to it and applies its allow-list and deadline. Cooperative attribution, not isolation: every
@@ -4103,6 +4119,9 @@ def author_bundle_v2(
             write_worker_limits(temporary)
         if any(process.name == "tool-proxy" for process in plan.processes):
             _seal_tool_proxy(temporary / "generated" / "tool-proxy", contract_body)
+        (temporary / DOOR_FILE).write_text(
+            json.dumps(door_outcome(plan, contract_body), sort_keys=True) + "\n", encoding="utf-8"
+        )
         if any(process.name == WORLD_DOOR_PROCESS for process in plan.processes):
             generated = temporary / "generated" / WORLD_DOOR_PROCESS
             generated.mkdir(parents=True)
