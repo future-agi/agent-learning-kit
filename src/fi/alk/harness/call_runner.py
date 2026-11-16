@@ -1991,6 +1991,13 @@ def _read_file_tool_calls(
             from_spans.append(call)
             continue
         if record.get("source") != _LIVEKIT_HOOK_SOURCE:
+            # Two lines with one call id are one call written twice: kept once, with the time either carries.
+            same = next((one for one in calls if _call_id(call) and _call_id(one) == _call_id(call)), None)
+            if same is not None:
+                if call.at and not same.at:
+                    same.at, same.ended_at = call.at, call.ended_at
+                    untimed.remove(same)
+                continue
             calls.append(call)
             if not call.at:
                 untimed.append(call)
@@ -1998,13 +2005,16 @@ def _read_file_tool_calls(
         hooked.append(call)
     timed: list[tuple[Call, str]] = []
     for call in hooked:
-        # The agent's untimed line and the hook's timed line of one call: same tool or route, outcome and arguments.
+        # The agent's untimed line and the hook's timed line of one call: the same call id, or, when either line has
+        # none, the same tool or route, outcome and arguments.
         names = {_tool_key(call.name), _tool_key((routes or {}).get(call.name, ""))} - {""}
-        written = next(
+        written = next((pending for pending in untimed if _call_id(call) and _call_id(pending) == _call_id(call)), None)
+        written = written or next(
             (
                 pending
                 for pending in untimed
-                if _tool_key(pending.name) in names
+                if not (_call_id(call) and _call_id(pending))
+                and _tool_key(pending.name) in names
                 and pending.ok == call.ok
                 and all(
                     pending.arguments.get(key, _MISSING) == value
@@ -2022,7 +2032,8 @@ def _read_file_tool_calls(
     # The hook times every tool call it runs, so an untimed line identical to a timed call is that call written again.
     for extra in untimed:
         if any(
-            _tool_key(extra.name) in {_tool_key(one.name), _tool_key(as_written)}
+            not (_call_id(extra) and _call_id(one))
+            and _tool_key(extra.name) in {_tool_key(one.name), _tool_key(as_written)}
             and extra.ok == one.ok
             and extra.arguments == one.arguments
             and _loose(extra.result) == _loose(one.result)
@@ -2034,6 +2045,42 @@ def _read_file_tool_calls(
             f"tool_trace file has no readable record ({unreadable} unreadable)"
         )
     return calls, from_spans
+
+
+def _call_id(call: Call) -> str:
+    """The id the agent's runtime gave the call, when its trace line carries one."""
+    return call.runtime_ids.get("call_id") or call.runtime_ids.get("tool_call_id") or ""
+
+
+# Said when the agent's trace holds identical untimed lines with no call id: one call written twice or two calls.
+CALLS_MAYBE_REPEATED = "calls_maybe_repeated"
+
+
+def repeated_untimed_notices(calls: Sequence[Call]) -> list[dict[str, Any]]:
+    """A notice when two of the trial's calls carry no time and no call id and are identical: the agent's trace
+    cannot tell one call written twice from two calls, so both are kept and the reader is told."""
+    seen: dict[str, int] = {}
+    for call in calls:
+        if call.at or call.handoff or _call_id(call):
+            continue
+        key = json.dumps(
+            [_tool_key(call.name), call.ok, _loose_arguments(call.arguments), _loose(call.result)],
+            sort_keys=True,
+            default=str,
+        )
+        seen[key] = seen.get(key, 0) + 1
+    names = sorted({json.loads(key)[0] for key, count in seen.items() if count > 1})
+    if not names:
+        return []
+    repeated = [call.name for call in calls if _tool_key(call.name) in names and not call.at]
+    tools = ", ".join(sorted(set(repeated)))
+    return [
+        {
+            "code": CALLS_MAYBE_REPEATED,
+            "message": f"The agent's trace has identical lines for {tools} with no call id, so they may be one call "
+            "recorded twice; each is kept as a call.",
+        }
+    ]
 
 
 def _tool_key(name: str) -> str:
@@ -3399,6 +3446,7 @@ class CallRunnerImpl:
                 action_log = await asyncio.to_thread(_read_action_log, world_database.address)
                 calls = tuple(one_call_per_lost_answer(calls, action_log))
                 trial_notices += evidence_notices(action_log)
+        trial_notices += repeated_untimed_notices(calls)
         # Hand-off records are not the world's actions: marks pair the graded calls with the action log.
         graded = graded_calls(calls)
         marks = _agent_marks(runtime, self._context.bundle_dir, graded) if acted else []

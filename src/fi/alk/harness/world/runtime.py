@@ -194,7 +194,8 @@ class Call:
     # The worker this call handed work to, when the call is a hand-off, and when that worker returned.
     delegated_to: str = ""
     ended_at: float = 0.0
-    # The runtime's own ids for the event (`event_id`, `parent_event_id`, `started_event_id`), as it reported them.
+    # The runtime's own ids for the event (`event_id`, `parent_event_id`, `started_event_id`) and the call (`call_id`,
+    # `tool_call_id`), as it reported them.
     runtime_ids: dict[str, str] = field(default_factory=dict)
     # A worker's run the runtime reported in place of a tool call: kept in the trace, never graded.
     handoff: bool = False
@@ -235,7 +236,7 @@ def tool_call_attribution(record: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
-_RUNTIME_ID_FIELDS = ("event_id", "parent_event_id", "started_event_id")
+_RUNTIME_ID_FIELDS = ("event_id", "parent_event_id", "started_event_id", "call_id", "tool_call_id")
 
 
 def runtime_ids(record: dict[str, Any]) -> dict[str, str]:

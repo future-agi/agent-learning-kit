@@ -484,6 +484,53 @@ def test_file_tool_trace_keeps_two_calls_of_one_tool_the_hook_timed_twice(tmp_pa
     assert sorted(call.at for call in written) == [5.0, 9.0]
 
 
+def test_file_tool_trace_counts_lines_with_one_call_id_as_one_call(tmp_path: Path) -> None:
+    prepared = {"confirmation_token": "t1"}
+    line = {"name": "prepare_cancellation", "arguments": {}, "output": prepared, "is_error": False}
+    trace = _trace_lines(
+        tmp_path / "agent-tool-calls.jsonl",
+        {**line, "call_id": "call_a"},
+        {**line, "call_id": "call_a"},
+        {**line, "call_id": "call_b"},
+        {"name": "prepare_cancellation", "arguments": "{}", "output": "{}", "is_error": False, "at": 7.0,
+         "source": "livekit", "call_id": "call_b"},
+    )
+
+    written, _ = cr._read_file_tool_calls(_runtime(metadata={"tool_trace_path": str(trace)}))
+
+    assert [(cr._call_id(call), call.at) for call in written] == [("call_a", 0.0), ("call_b", 7.0)]
+    assert cr.repeated_untimed_notices(written) == []
+
+
+def test_identical_untimed_lines_with_no_call_id_stay_two_calls_and_say_so(tmp_path: Path) -> None:
+    # A trial's trace as the insurance agent wrote it: the hook did not time this call, and the agent's two
+    # recorders wrote it twice with no call id. Nothing tells one call written twice from two calls.
+    phantom = {
+        "name": "prepare_cancellation",
+        "arguments": {},
+        "output": {
+            "confirmation_token": "D_L4o2ag2yb0DTRk",
+            "summary_to_read": "cancelling policy MM-4471902, which ends the cover on it",
+        },
+        "is_error": False,
+    }
+    trace = _trace_lines(
+        tmp_path / "agent-tool-calls.jsonl",
+        phantom,
+        phantom,
+        {"name": "verify_identity", "arguments": {"policy_number": "MM-4471902"}, "output": {"policy_id": "pol_dana"},
+         "is_error": False, "at": 1794863063.19, "source": "livekit"},
+    )
+
+    written, _ = cr._read_file_tool_calls(_runtime(metadata={"tool_trace_path": str(trace)}))
+
+    assert [call.name for call in written] == ["prepare_cancellation", "prepare_cancellation", "verify_identity"]
+    [notice] = cr.repeated_untimed_notices(written)
+    assert notice["code"] == cr.CALLS_MAYBE_REPEATED
+    assert "prepare_cancellation" in notice["message"] and "no call id" in notice["message"]
+    assert notice["code"] not in cr.UNMEASURED_NOTICES
+
+
 def test_file_tool_trace_keeps_a_rejected_call_apart_from_a_same_name_success(
     tmp_path: Path,
 ) -> None:
