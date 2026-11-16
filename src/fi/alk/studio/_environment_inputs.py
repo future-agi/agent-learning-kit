@@ -770,7 +770,7 @@ def _propose_inputs(
                             for source_row, values in row_values[target.pin.source_id]
                         }
                         target_indexes[target_key] = target_rows
-                    if values <= target_rows.keys():
+                    if values & target_rows.keys():
                         if candidate is not None:
                             ambiguous = True
                             break
@@ -793,6 +793,7 @@ def _propose_inputs(
                                 target_rows[values[profile.source_field]],
                             )
                             for source_row, values in row_values[source.pin.source_id]
+                            if values[profile.source_field] in target_rows
                         ),
                     )
                 )

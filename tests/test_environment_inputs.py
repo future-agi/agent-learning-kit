@@ -1123,6 +1123,47 @@ def test_exact_mapping_and_observed_relationship_proposals_require_review() -> N
     ]
 
 
+def test_partial_relationship_proposal_exposes_missing_key_blocker() -> None:
+    sources = (
+        _record_source(b"id,status\na,ready\n", source_id="owners"),
+        _record_source(b"id,owner_id\nx,a\ny,missing\n", source_id="items"),
+    )
+    draft, _ = _approve_proposals(sources)
+    proposal = next(
+        item
+        for item in draft.proposals.relationships
+        if item.relationship.from_field == "owner_id"
+    )
+    assert proposal.matched_rows == ((2, 2),)
+    reviews = tuple(
+        RecordReview(
+            source.pin.source_id,
+            "agent_visible",
+            "none",
+            tuple(
+                item.mapping
+                for item in draft.proposals.field_mappings
+                if item.source_id == source.pin.source_id
+            ),
+        )
+        for source in draft.sources
+        if isinstance(source, ParsedRecordSource)
+    )
+    with pytest.raises(EnvironmentInputError) as exc:
+        review_environment_inputs(
+            draft,
+            review=EnvironmentInputReview(
+                draft.draft_digest,
+                reviews,
+                (),
+                (proposal.relationship,),
+            ),
+            reviewer_id="author",
+        )
+    assert exc.value.code == "source_relationship_missing"
+    assert exc.value.diagnostics[0].span.row == 3
+
+
 def test_ambiguous_relationships_stop_before_building_discarded_proposals(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
