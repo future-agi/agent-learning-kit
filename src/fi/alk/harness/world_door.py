@@ -229,6 +229,50 @@ def world_action(route: str) -> str:
 DOOR_FILE = "door.json"
 DOOR_CAPABILITIES = {"worker_deadlines": "per_worker"}
 
+# When this trial's call read its stopped workers to seal them; a worker's process is never ended after it, so a stop
+# is sealed or never made. Null until then, and again at each trial's start.
+TRIAL_SEALED_DDL = "ALTER TABLE _alk_trial_faults ADD COLUMN IF NOT EXISTS sealed_at DOUBLE PRECISION"
+
+
+# The workers the harness stopped in this trial, written by whoever ended a worker past its deadline (the scheduler ends
+# its process, the in-process door its task); cleared at each trial's start.
+WORKER_STOPS_DDL = (
+    "CREATE TABLE IF NOT EXISTS _alk_worker_stops "
+    "(worker TEXT PRIMARY KEY, process TEXT NOT NULL, at DOUBLE PRECISION NOT NULL, reason TEXT NOT NULL)"
+)
+
+
+def claim_worker_stop(address: str, worker: str, process: str, stop: Callable[[], bool]) -> bool:
+    """End this worker's own process and keep that it was ended, unless the call has already sealed its stops: the
+    trial's row stays locked from the check to the record, so the seal (`read_worker_stops`) waits for a stop under
+    way and a stop never lands after it. True when the process was ended and kept."""
+    import psycopg
+
+    with psycopg.connect(address, connect_timeout=5) as connection:
+        connection.execute(TRIAL_SEALED_DDL)
+        connection.execute(WORKER_STOPS_DDL)
+        connection.commit()
+        with connection.transaction():
+            row = connection.execute(
+                "SELECT sealed_at, worker_deadline_at, worker_deadlines FROM _alk_trial_faults WHERE id = 1 FOR UPDATE"
+            ).fetchone()
+            if row is None or row[0] is not None:
+                return False
+            # Read again under the lock: the deadline the watcher saw may since have been cleared with the call.
+            named = row[2] if isinstance(row[2], dict) else {}
+            due = named.get(worker, row[1])
+            if not isinstance(due, (int, float)) or time.time() <= due:
+                return False
+            if not stop():
+                return False
+            connection.execute(
+                "INSERT INTO _alk_worker_stops (worker, process, at, reason) VALUES (%s, %s, %s, %s) "
+                "ON CONFLICT (worker) DO NOTHING",
+                (worker, process, time.time(), "deadline_passed"),
+            )
+    return True
+
+
 _METHODS = frozenset({"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"})
 
 

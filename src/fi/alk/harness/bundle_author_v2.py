@@ -2381,6 +2381,29 @@ def with_in_process_door(
     )
 
 
+def with_in_process_workers(plan: EnvironmentPlanV2, contract_body: dict[str, Any] | None) -> EnvironmentPlanV2:
+    """The plan with the in-process door told which of the agent's workers run in its own process, by the name its
+    framework gives each, so it can stop one at its deadline. A plan with no such door is returned as it is."""
+    if not any(process.name == WORLD_DOOR_PROCESS for process in plan.processes):
+        return plan
+    named = {
+        worker.name: worker.id
+        for worker in AgentContract.model_validate(contract_body or {}).workers
+        if worker.name.strip() and not worker.process.strip()
+    }
+    if not named:
+        return plan
+    processes = tuple(
+        process.model_copy(
+            update={"environment": {**process.environment, "ALK_WORLD_DOOR_WORKERS": json.dumps(named, sort_keys=True)}}
+        )
+        if isinstance(process, SourceProcess) and process.name == plan.control_service
+        else process
+        for process in plan.processes
+    )
+    return replace(plan, processes=processes)
+
+
 def _mcp_toolbox_definition(root: Path) -> tuple[Path, dict[str, Any]] | None:
     """Find one source-owned MCP Toolbox SQL configuration.
 
@@ -4051,6 +4074,7 @@ def author_bundle_v2(
         contract_body.get("tool_entrypoints"),
         str((runtime if isinstance(runtime, dict) else {}).get("language") or "python"),
     )
+    plan = with_in_process_workers(plan, contract_body)
     if contract_body:
         contract_body = with_door_unreached(
             contract_body,

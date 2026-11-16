@@ -52,7 +52,7 @@ from .job import FailureDomain, HarnessStage
 from .checks import check_reads, reference_of, takes_reference
 from .joint_judge import OFF_SCRIPT
 from .judge import INCONCLUSIVE, NOT_APPLICABLE, UNMEASURED, verdict_named
-from .world_door import EvidenceUnavailable
+from .world_door import EvidenceUnavailable, claim_worker_stop
 from .judge import judge_sub_goal as _judge
 from .outbound import (
     HostedAttemptSupersededError,
@@ -1882,8 +1882,9 @@ class HostedScheduler:
 
     async def _stop_workers_past_deadline(self, runtime: EnvironmentRuntime) -> None:
         """While one call runs: end the own process of each worker whose deadline in this trial has passed, once, and
-        keep that it was stopped so the call seals it. A worker inside the app's one process is only refused."""
-        from .call_runner import _find_postgres_endpoint, claim_worker_stop, read_trial_deadlines
+        keep that it was stopped so the call seals it. A worker inside the app's one process is the in-process door's
+        to stop (`in_process_door_bootstrap.WORKER_RUNS`), else only refused."""
+        from .call_runner import _find_postgres_endpoint, read_trial_deadlines
 
         database = _find_postgres_endpoint(runtime)
         if database is None:

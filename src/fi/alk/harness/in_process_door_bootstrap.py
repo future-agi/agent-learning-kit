@@ -36,6 +36,10 @@ class ToolFailed(RuntimeError):
     """What the agent's tool raises when the scenario's fault answers with an error status."""
 
 
+class WorkerStopped(TimeoutError):
+    """What a worker's run raises to its coordinator when the door stopped it at its deadline."""
+
+
 def _post(path: str, body: dict[str, Any]) -> dict[str, Any] | None:
     try:
         outgoing = request.Request(
@@ -292,6 +296,116 @@ def bindings() -> dict[str, dict[str, str]]:
     return modules
 
 
+# Where a framework runs one of the app's agents as an asyncio task of its own: the module, the class and method that
+# run it, and the argument holding the agent. Only these workers are stopped at their deadline; on every other
+# framework a worker past its deadline is refused at the world's door and runs on.
+WORKER_RUNS = (
+    # OpenAI Agents SDK: a worker its coordinator holds as a tool runs as `Runner.run(worker, ...)`.
+    ("agents.run", "Runner", "run", "starting_agent"),
+    # LangGraph: a worker compiled as a graph of its own, which its coordinator awaits with `ainvoke`.
+    ("langgraph.pregel", "Pregel", "ainvoke", "self"),
+)
+_STOPS = "__alk_worker_stop__"
+
+
+def workers() -> dict[str, str]:
+    """The app's workers that run in its own process, by the name its framework gives each: `{name: worker id}`."""
+    try:
+        named = json.loads(os.environ.get("ALK_WORLD_DOOR_WORKERS", "{}"))
+    except ValueError:
+        return {}
+    if not isinstance(named, dict):
+        return {}
+    return {str(name): str(worker) for name, worker in named.items() if name and worker}
+
+
+def stop_at_deadline(run: Any, agent_argument: str, named: dict[str, str]) -> Any:
+    """`run` with a worker's run cancelled once the worker passes its deadline; any other agent's run is unchanged."""
+    signature = inspect.signature(run)
+
+    @functools.wraps(run)
+    async def stopping(*args: Any, **kwargs: Any) -> Any:
+        try:
+            agent = signature.bind_partial(*args, **kwargs).arguments.get(agent_argument)
+        except TypeError:
+            agent = None
+        worker = named.get(str(getattr(agent, "name", "") or ""))
+        answer = await asyncio.to_thread(_post, "/worker_deadline", {"worker": worker}) if worker else None
+        remaining = (answer or {}).get("remaining")
+        if isinstance(remaining, bool) or not isinstance(remaining, (int, float)):
+            return await run(*args, **kwargs)
+        task = asyncio.ensure_future(run(*args, **kwargs))
+        try:
+            done, _ = await asyncio.wait({task}, timeout=remaining)
+        except asyncio.CancelledError:
+            task.cancel()
+            raise
+        if task in done:
+            return task.result()
+        task.cancel()
+        await asyncio.to_thread(_post, "/worker_stopped", {"worker": worker})
+        raise WorkerStopped(f"{worker} was stopped at its deadline")
+
+    setattr(stopping, _STOPS, True)
+    return stopping
+
+
+def _stop_workers_in(module: Any, named: dict[str, str]) -> None:
+    for module_name, owner_name, method, agent_argument in WORKER_RUNS:
+        if module.__name__ != module_name:
+            continue
+        owner = getattr(module, owner_name, None)
+        raw = inspect.getattr_static(owner, method, None) if owner is not None else None
+        bound = isinstance(raw, (classmethod, staticmethod))
+        function = raw.__func__ if isinstance(raw, (classmethod, staticmethod)) else raw
+        if not inspect.iscoroutinefunction(function) or getattr(function, _STOPS, False):
+            continue
+        stopping = stop_at_deadline(function, agent_argument, named)
+        setattr(owner, method, type(raw)(stopping) if bound else stopping)
+
+
+class _AfterLoad(importlib.abc.Loader):
+    """Loads a module as Python would, then puts the worker stop on the run it holds."""
+
+    def __init__(self, original: Any, named: dict[str, str]) -> None:
+        self.original = original
+        self.named = named
+
+    def create_module(self, spec: Any) -> Any:
+        return self.original.create_module(spec) if hasattr(self.original, "create_module") else None
+
+    def exec_module(self, module: Any) -> None:
+        self.original.exec_module(module)
+        _stop_workers_in(module, self.named)
+
+
+class _WorkerRunFinder(importlib.abc.MetaPathFinder):
+    """Finds the modules that run a framework's agents, and loads them with the worker stop on that run."""
+
+    def __init__(self, named: dict[str, str]) -> None:
+        self.named = named
+
+    def find_spec(self, fullname: str, path: Any = None, target: Any = None) -> Any:
+        if fullname not in {one[0] for one in WORKER_RUNS}:
+            return None
+        spec = importlib.machinery.PathFinder.find_spec(fullname, path)
+        if spec is None or spec.loader is None:
+            return spec
+        spec.loader = _AfterLoad(spec.loader, self.named)
+        return spec
+
+
+def stop_workers(named: dict[str, str]) -> None:
+    """Stop each named worker's run at its deadline, in modules already loaded and in those loaded later."""
+    if not named:
+        return
+    for module_name, *_ in WORKER_RUNS:
+        loaded = sys.modules.get(module_name)
+        if loaded is not None:
+            _stop_workers_in(loaded, named)
+    sys.meta_path.insert(0, _WorkerRunFinder(named))
+
+
 def install() -> bool:
     """Put the door in front of the bound tools; False when there is no door or nothing to bind."""
     if not URL:
@@ -304,4 +418,5 @@ def install() -> bool:
         if loaded is not None:
             _patch_attributes(loaded, targets)
     sys.meta_path.insert(0, _DoorFinder(modules))
+    stop_workers(workers())
     return True

@@ -7,6 +7,7 @@ from __future__ import annotations
 import json
 import os
 import threading
+import time
 import uuid
 from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -27,6 +28,7 @@ try:  # Beside the server in a bundle; the harness package when run from source.
         Routed,
         ToolCall,
         WorldDoor,
+        claim_worker_stop,
         is_timeout,
     )
 except ImportError:  # pragma: no cover - imported as part of the package
@@ -44,6 +46,7 @@ except ImportError:  # pragma: no cover - imported as part of the package
         Routed,
         ToolCall,
         WorldDoor,
+        claim_worker_stop,
         is_timeout,
     )
 
@@ -232,6 +235,26 @@ def _held(outcome: Outcome) -> dict[str, Any]:
     }
 
 
+def worker_remaining(worker: str) -> dict[str, Any]:
+    """How long a worker has left this trial, `{"remaining": seconds}`; nothing when no deadline names it or none can
+    be read, and the worker then runs on, refused at the door past its deadline."""
+    row = _proxy._trial_row("worker_deadline_at, worker_deadlines")
+    if not row:
+        return {}
+    named = row[1] if isinstance(row[1], dict) else {}
+    due = named.get(worker, row[0])
+    if isinstance(due, bool) or not isinstance(due, (int, float)):
+        return {}
+    return {"remaining": max(float(due) - time.time(), 0.0)}
+
+
+def worker_stopped(worker: str) -> dict[str, Any]:
+    """Keep that the agent's process stopped this worker's run at its deadline, unless the call has sealed its stops."""
+    if not DATABASE_URL or not worker:
+        return {"kept": False}
+    return {"kept": claim_worker_stop(DATABASE_URL, worker, "", lambda: True)}
+
+
 _DOOR: InProcessDoor | None = None
 _DOOR_LOCK = threading.Lock()
 
@@ -264,6 +287,10 @@ class Handler(BaseHTTPRequestHandler):
         elif self.path == "/end":
             self._reply(200, _door().end(str(body.get("id") or ""), bool(body.get("ok")), body.get("result"),
                                          str(body.get("error") or "")))
+        elif self.path == "/worker_deadline":
+            self._reply(200, worker_remaining(str(body.get("worker") or "")))
+        elif self.path == "/worker_stopped":
+            self._reply(200, worker_stopped(str(body.get("worker") or "")))
         else:
             self._reply(404, {})
 

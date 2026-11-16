@@ -492,3 +492,123 @@ def test_a_mark_from_an_earlier_seal_is_cleared_when_the_door_reaches_the_tool()
 
     contract = {"tool_entrypoints": [{"tool": "issue_refund", "mode": "import", "door_unreached": "old"}]}
     assert "door_unreached" not in with_door_unreached(contract, {})["tool_entrypoints"][0]
+
+
+def _stopping_run(monkeypatch, remaining):
+    """A framework's run of one agent, behind the worker stop, with the door answering `remaining` for the worker."""
+    import asyncio
+
+    asked, ended = [], []
+
+    def post(path, body):
+        asked.append((path, body))
+        return {"remaining": remaining} if path == "/worker_deadline" and remaining is not None else {"kept": True}
+
+    monkeypatch.setattr(bootstrap, "_post", post)
+
+    async def run(starting_agent, seconds):
+        try:
+            await asyncio.sleep(seconds)
+        except asyncio.CancelledError:
+            ended.append(starting_agent.name)
+            raise
+        return f"{starting_agent.name} answered"
+
+    return bootstrap.stop_at_deadline(run, "starting_agent", {"Writer": "writer"}), asked, ended
+
+
+def test_a_worker_past_its_deadline_is_stopped_and_its_stop_kept(monkeypatch):
+    import asyncio
+    from types import SimpleNamespace
+
+    run, asked, ended = _stopping_run(monkeypatch, 0.05)
+
+    async def call():
+        run_task = asyncio.ensure_future(run(SimpleNamespace(name="Writer"), 30))
+        with pytest.raises(bootstrap.WorkerStopped):
+            await run_task
+        # The cancelled run sees its cancellation on the loop's next turn.
+        await asyncio.sleep(0.01)
+
+    asyncio.run(call())
+    assert ended == ["Writer"]
+    assert ("/worker_stopped", {"worker": "writer"}) in asked
+
+
+def test_a_worker_inside_its_deadline_and_any_other_agent_run_as_before(monkeypatch):
+    import asyncio
+    from types import SimpleNamespace
+
+    run, asked, ended = _stopping_run(monkeypatch, 5)
+    assert asyncio.run(run(SimpleNamespace(name="Writer"), 0)) == "Writer answered"
+    # The coordinator is no worker: its run is never timed, and the door is never asked about it.
+    assert asyncio.run(run(SimpleNamespace(name="Coordinator"), 0)) == "Coordinator answered"
+    assert ended == [] and all(path != "/worker_stopped" for path, _ in asked)
+    assert [body for path, body in asked if path == "/worker_deadline"] == [{"worker": "writer"}]
+    # No deadline for the worker this trial: it runs on.
+    run, asked, ended = _stopping_run(monkeypatch, None)
+    assert asyncio.run(run(SimpleNamespace(name="Writer"), 0)) == "Writer answered"
+
+
+def test_only_a_framework_in_the_table_has_its_worker_runs_stopped(monkeypatch):
+    import types
+
+    class Runner:
+        @classmethod
+        async def run(cls, starting_agent, text):
+            return text
+
+    stoppable = types.ModuleType(bootstrap.WORKER_RUNS[0][0])
+    setattr(stoppable, bootstrap.WORKER_RUNS[0][1], Runner)
+    other = types.ModuleType("another_framework.run")
+    other.Runner = type("Runner", (), {"run": Runner.__dict__["run"]})
+    before = other.Runner.__dict__["run"]
+    bootstrap._stop_workers_in(stoppable, {"Writer": "writer"})
+    bootstrap._stop_workers_in(other, {"Writer": "writer"})
+    # Stopped: still a classmethod, now cancelled at the deadline. Any other framework: refused at the door, not stopped.
+    assert isinstance(Runner.__dict__["run"], classmethod)
+    assert getattr(Runner.__dict__["run"].__func__, bootstrap._STOPS, False)
+    assert other.Runner.__dict__["run"] is before
+
+
+def test_the_door_tells_a_worker_how_long_it_has_left_from_this_trial_s_deadlines(monkeypatch):
+    import time
+
+    rows = {"row": (time.time() + 60, {"writer": time.time() + 5})}
+    monkeypatch.setattr(in_process_door._proxy, "_trial_row", lambda _columns: rows["row"])
+    assert 0 < in_process_door.worker_remaining("writer")["remaining"] <= 5
+    assert 5 < in_process_door.worker_remaining("reader")["remaining"] <= 60
+    rows["row"] = (None, {})
+    assert in_process_door.worker_remaining("writer") == {}
+    rows["row"] = None
+    assert in_process_door.worker_remaining("writer") == {}
+
+
+def test_the_plan_names_only_the_workers_inside_the_agent_s_process_to_its_door():
+    from dataclasses import replace
+
+    from fi.alk.harness.bundle_author_v2 import (
+        WORLD_DOOR_PROCESS,
+        EnvironmentPlanV2,
+        _world_door_process,
+        with_in_process_workers,
+    )
+
+    door = _world_door_process([]).model_copy(update={"depends_on": []})
+    agent = door.model_copy(update={"name": "agent", "environment": {}})
+    plan = EnvironmentPlanV2(
+        packaging="process", control_service="agent", processes=(agent, door), capabilities={}, readiness=()
+    )
+    contract = {
+        "workers": [
+            {"id": "writer", "name": "Writer"},
+            {"id": "served", "name": "Served", "process": "served-worker"},
+            {"id": "unnamed"},
+        ]
+    }
+    wired = {one.name: one.environment for one in with_in_process_workers(plan, contract).processes}
+    assert json.loads(wired["agent"]["ALK_WORLD_DOOR_WORKERS"]) == {"Writer": "writer"}
+    assert "ALK_WORLD_DOOR_WORKERS" not in wired[WORLD_DOOR_PROCESS]
+    # No in-process door: nothing can stop a worker there, and the plan stays as it was.
+    alone = replace(plan, processes=(agent,))
+    assert with_in_process_workers(alone, contract) is alone

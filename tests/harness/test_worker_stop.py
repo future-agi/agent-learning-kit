@@ -13,7 +13,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from fi.alk.harness import call_runner, hosted_scheduler
+from fi.alk.harness import call_runner, hosted_scheduler, world_door
 from fi.alk.harness.hosted_entrypoint import _worker_processes
 from fi.alk.harness.hosted_scheduler import HostedScheduler, WorldPool
 from fi.alk.harness.process_runtime import EnvironmentRuntime, ProcessRuntimeProvider, RuntimeState
@@ -58,7 +58,7 @@ def _watch(monkeypatch, scheduler, deadlines, *, rounds: int = 5) -> list[tuple]
             return True
         return False
 
-    monkeypatch.setattr(call_runner, "claim_worker_stop", claim)
+    monkeypatch.setattr(hosted_scheduler, "claim_worker_stop", claim)
 
     async def run() -> None:
         task = asyncio.create_task(scheduler._stop_workers_past_deadline(_runtime()))
@@ -180,7 +180,7 @@ def test_a_stop_the_seal_refuses_is_never_made(monkeypatch) -> None:
     monkeypatch.setattr(hosted_scheduler, "_WORKER_STOP_POLL_SECONDS", 0)
     monkeypatch.setattr(call_runner, "_find_postgres_endpoint", lambda _runtime: SimpleNamespace(address="db"))
     monkeypatch.setattr(call_runner, "read_trial_deadlines", lambda _address: (time.time() - 1, {}))
-    monkeypatch.setattr(call_runner, "claim_worker_stop", lambda _address, worker, process, stop: False)
+    monkeypatch.setattr(hosted_scheduler, "claim_worker_stop", lambda _address, worker, process, stop: False)
 
     async def run() -> None:
         task = asyncio.create_task(scheduler._stop_workers_past_deadline(_runtime()))
@@ -210,10 +210,10 @@ def test_a_stop_after_the_seal_is_never_made_and_the_next_trial_may_stop_again(w
     call_runner._write_trial_state(_runtime(), [], worker_deadline_at=time.time() - 1)
     assert call_runner.read_worker_stops(_runtime()) == []
     asked: list[str] = []
-    assert call_runner.claim_worker_stop(world_database, "refund", "refund-worker", lambda: asked.append("x") or True) is False
+    assert world_door.claim_worker_stop(world_database, "refund", "refund-worker", lambda: asked.append("x") or True) is False
     assert asked == []
     call_runner._write_trial_state(_runtime(), [], worker_deadline_at=time.time() - 1)
-    assert call_runner.claim_worker_stop(world_database, "refund", "refund-worker", lambda: True) is True
+    assert world_door.claim_worker_stop(world_database, "refund", "refund-worker", lambda: True) is True
     assert [row["worker"] for row in call_runner.read_worker_stops(_runtime())] == ["refund"]
 
 
@@ -228,7 +228,7 @@ def test_the_seal_waits_for_a_stop_under_way_and_seals_it(world_database) -> Non
 
     claimed: list[bool] = []
     thread = threading.Thread(
-        target=lambda: claimed.append(call_runner.claim_worker_stop(world_database, "refund", "refund-worker", slow_stop))
+        target=lambda: claimed.append(world_door.claim_worker_stop(world_database, "refund", "refund-worker", slow_stop))
     )
     thread.start()
     assert inside.wait(5)
@@ -242,6 +242,6 @@ def test_the_seal_waits_for_a_stop_under_way_and_seals_it(world_database) -> Non
 def test_a_deadline_cleared_with_the_call_stops_no_one(world_database) -> None:
     call_runner._write_trial_state(_runtime(), [], worker_deadline_at=time.time() - 1)
     call_runner._write_trial_state(_runtime(), [])
-    assert call_runner.claim_worker_stop(world_database, "refund", "refund-worker", lambda: True) is False
+    assert world_door.claim_worker_stop(world_database, "refund", "refund-worker", lambda: True) is False
     call_runner._write_trial_state(_runtime(), [], worker_deadlines={"refund": time.time() + 3600})
-    assert call_runner.claim_worker_stop(world_database, "refund", "refund-worker", lambda: True) is False
+    assert world_door.claim_worker_stop(world_database, "refund", "refund-worker", lambda: True) is False
