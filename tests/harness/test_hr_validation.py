@@ -668,8 +668,15 @@ WRONG_RUNS = [
         "cancel_started_leave_routed_to_hr_case",
         "explains the refusal but never opens the case the branch routes to",
         lambda k: _without(k, "create_hr_case"),
-        "hr_case_created_for_exception",
+        "started_leave_adjustment_case_opened",
         "not done",
+    ),
+    (
+        "cancel_started_leave_routed_to_hr_case",
+        "files the adjustment as a general inquiry, which the routing table does not send to the HR partner",
+        lambda k: _swap(k, "create_hr_case", category="general_inquiry"),
+        "started_leave_adjustment_case_opened",
+        "done wrong",
     ),
     # Distractors beside the enriched documents and threads: the wrong one must not pass.
     (
@@ -964,7 +971,7 @@ ANSWER_CONTROLS = [
     ),
     (
         "cancel_started_leave_routed_to_hr_case",
-        "hr_case_created_for_exception",
+        "started_leave_adjustment_case_opened",
         "REQ-1108 started on 19 October, so I can't cancel it directly. As you agreed, I've opened HR case CASE-3003 (policy exception) asking HR to adjust the record; the UK HR partner will review it and nothing changes until then.",
         [
             "I've cancelled REQ-1108 and your 2 sick days are back in your balance.",
@@ -1122,6 +1129,18 @@ ALTERNATE_ROUTES = [
         "old_handbook_carry_forward_superseded",
         "the current document alone, without opening the old handbook the caller cites",
         lambda k: _drop(k, 1),
+    ),
+    (
+        # Live round 4: the agent read REQ-1108, had the cancellation refused because the leave had
+        # started, and opened a balance_dispute case to restore the days. The policy routes taken
+        # leave to adjust (exceptions and disputes alike) to the regional HR partner through a case.
+        "cancel_started_leave_routed_to_hr_case",
+        "the request read, the refused cancellation, then a balance_dispute case instead of a policy exception",
+        lambda k: [
+            *_scenario(k).solution[:2],
+            *_then([], "cancel_leave_request", employee_id="E05", request_id="REQ-1108", confirmed=True),
+            *_swap(k, "create_hr_case", category="balance_dispute")[2:],
+        ],
     ),
 ]
 
