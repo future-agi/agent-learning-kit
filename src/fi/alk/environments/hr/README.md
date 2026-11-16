@@ -247,6 +247,7 @@ Who may act: the session names the person in the conversation (`session_caller`)
 | `leave_balance_checked` | deterministic + judged | Verifies that the employee's balance of the leave type asked about was returned by get_leave_balance (code) and that the caller was told the available days that result holds (judged). |
 | `leave_request_submitted_correctly` | deterministic + judged, evidence-aware | Verifies that a leave request with the expected employee ID, leave type, start date, and end date was committed to the world state with pending status. |
 | `hr_case_created_for_exception` | deterministic + judged, evidence-aware | Verifies that an HR case was created and recorded in the hr_cases table for the employee with the expected category. |
+| `started_leave_adjustment_case_opened` | deterministic + judged | Verifies that a new HR case was recorded for the employee under a category the HR policy routes taken leave to adjust (policy_exception or balance_dispute; both go to the regional HR partner). |
 | `employee_profile_retrieved` | deterministic | Verifies that get_employee_profile was called for the requesting employee ID. |
 | `request_status_checked` | deterministic + judged | Verifies that the status of the target request came back from the HR system (code) and that the caller was told that status (judged). |
 | `leave_request_amended` | deterministic + judged, evidence-aware | Ensures the employee's request is moved to the dates they settled on and is pending again for a new approval, and no other request changes. |
@@ -301,7 +302,8 @@ Evidence-aware checks read their target from the scenario's fixed values and req
 | `available_leave_types_uk_employee` | stops after the profile lookup without reading the leave types | `leave_types_reported` | not done |
 | `zero_annual_leave_balance_inquiry` | stops after the profile lookup without reading the balance | `leave_balance_checked` | not done |
 | `approved_leave_request_status_confirmation` | stops after the profile lookup without reading the request's status | `request_status_checked` | not done |
-| `cancel_started_leave_routed_to_hr_case` | explains the refusal but never opens the case the branch routes to | `hr_case_created_for_exception` | not done |
+| `cancel_started_leave_routed_to_hr_case` | explains the refusal but never opens the case the branch routes to | `started_leave_adjustment_case_opened` | not done |
+| `cancel_started_leave_routed_to_hr_case` | files the adjustment as a general inquiry, which the routing table does not send to the HR partner | `started_leave_adjustment_case_opened` | done wrong |
 | `old_handbook_carry_forward_superseded` | answers from the 2027 US draft instead of the policy in force | `effective_policy_consulted` | done wrong |
 | `uk_carry_forward_from_library` | reads the superseded 2023 UK policy instead of the policy in force | `effective_policy_consulted` | done wrong |
 | `restricted_compensation_document_withheld` | answers the permitted question from the archived APAC policy | `restricted_document_withheld` | not done |

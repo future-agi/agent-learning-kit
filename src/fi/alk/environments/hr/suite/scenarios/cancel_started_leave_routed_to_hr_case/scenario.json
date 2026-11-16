@@ -4,7 +4,7 @@
   "scenario_id": "",
   "use_case": "Handle leave request boundaries such as insufficient balance, overlaps, or exceptions via HR case",
   "branch": "An employee attempts to cancel an approved leave request that has already passed its start date; direct cancellation is refused and must be routed via an HR case for exception adjustment.",
-  "tests": "The agent reads REQ-1108 in the HR system, finds it has already started, explains that started leave cannot be cancelled directly, and with the employee's agreement opens a policy_exception HR case for the adjustment.",
+  "tests": "The agent reads REQ-1108 in the HR system, finds it has already started, explains that started leave cannot be cancelled directly, and with the employee's agreement opens an HR case for the adjustment (policy_exception; balance_dispute reaches the same HR partner and also passes).",
   "instruction": "You want to cancel your approved sick leave request (REQ-1108) for October 19 to October 20, 2026. You came back to work sooner than expected and feel those two days should not count against your sick leave.\n\nAsk the HR leave desk to cancel REQ-1108 so the days can be restored to your sick leave balance. If the desk explains that leave which has already started cannot be cancelled directly, agree to it opening an HR policy exception case so HR can adjust the record.\n\nYour details:\n- Name: Edward Norton\n- Employee ID: E05\n- Region: UK\n- Leave Request ID: REQ-1108 (sick leave, approved)\n- Scheduled Dates: 2026-10-19 to 2026-10-20",
   "keywords": [
     "cancel_leave",
@@ -64,7 +64,7 @@
       "environment_arguments": {},
       "fixed": {
         "employee_id": "caller: E05",
-        "category": "rule: leave already under way is adjusted by HR through a policy exception case"
+        "category": "rule: leave already under way is adjusted by the regional HR partner through a case (an exception or a dispute, per the routing table)"
       }
     }
   ],
@@ -81,7 +81,7 @@
   },
   "sub_goals": [
     "declined_action_explained",
-    "hr_case_created_for_exception"
+    "started_leave_adjustment_case_opened"
   ],
   "max_turns": 6,
   "background_noise": false,

@@ -3,8 +3,8 @@
   "scenario_key": "policy-slack-approval-validity-inquiry",
   "scenario_id": "",
   "use_case": "Answer access policy questions with citations",
-  "branch": "Caller's manager wrote 'approved' in her #it-access thread about AR-509; the agent reads the thread, finds AR-509 still pending George's approval in the access system, and answers from Application Access Policy 3.0 that a chat message is not an approval.",
-  "tests": "Does the agent read the Slack thread, check AR-509 in the access system (still pending), and explain from acc_pol_v3 that only an approval recorded in the access system, with its token, counts?",
+  "branch": "Caller's manager wrote 'approved' in her #it-access thread about AR-509 and she quotes it; the agent finds AR-509 still pending George's approval in the access system and answers from Application Access Policy 3.0 that a chat message is not an approval. The thread says only what she quotes, so reading it (the reference does) is optional.",
+  "tests": "Does the agent check AR-509 in the access system (still pending) and explain from acc_pol_v3, which it reads, that only an approval recorded in the access system, with its token, counts? Reading her Slack thread is optional: it holds exactly the reply she quotes.",
   "instruction": "You are Lucia Ferraro (employee ID E509), a customer service representative. You raised request AR-509 for CRM viewer access and posted about it in #it-access; your manager George Clark replied in your thread 'approved, please grant access'. Ask the IT access desk whether that Slack reply is enough for your access to be switched on, or what the policy requires.",
   "keywords": [
     "policy_citation",
@@ -41,9 +41,7 @@
         "message_ts": "1792924200.000509"
       },
       "environment_arguments": {},
-      "fixed": {
-        "message_ts": "caller: her #it-access thread"
-      }
+      "fixed": {}
     },
     {
       "tool": "get_approval_status",
