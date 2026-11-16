@@ -9,7 +9,9 @@ import pytest
 from fi.alk.studio import (
     EnvironmentInputError,
     EnvironmentRequirements,
+    ScenarioDiagnostic,
     SourceRecordReference,
+    coverage_report,
     generate_source_scenarios,
 )
 
@@ -329,6 +331,103 @@ def test_missing_record_preserves_other_cases_and_typed_requested_reference() ->
         "reviewable",
     ]
     assert generated.drafts[0].diagnostics[0].code == "source_relationship_missing"
+    assert len(generated.public_scenarios) == len(generated.evaluator_specs) == 3
+    report = coverage_report(generated)
+    assert report["obligation_coverage"]["per_axis"]["source_cases"] == {
+        "declared": 3,
+        "covered": 2,
+        "uncovered": [generated.drafts[0].scenario_id],
+    }
+    assert report["obligation_coverage"]["rate"] < 1.0
+    assert report["residual_uncovered"]["rate"] > 0.0
+    assert (
+        coverage_report(generated.public_scenarios)["obligation_coverage"]["rate"]
+        == 1.0
+    )
+
+
+def test_all_blocked_drafts_retain_uncovered_cases_without_tool_obligations() -> None:
+    _, reviewed = _approve_proposals(
+        (_policy_source("Explain the policy courteously."),)
+    )
+    generated = generate_source_scenarios(
+        reviewed,
+        environment_requirements=EnvironmentRequirements(task="Handle a request"),
+        requested_count=3,
+    )
+    assert all(draft.status == "blocked" for draft in generated.drafts)
+    assert len(generated.public_scenarios) == len(generated.scenario_payloads) == 3
+    report = coverage_report(generated, axes=())
+    assert report["obligation_coverage"]["declared"] == 3
+    assert report["obligation_coverage"]["covered"] == 0
+    assert report["obligation_coverage"]["rate"] == 0.0
+    assert report["residual_uncovered"]["rate"] == 1.0
+
+
+def test_reviewable_draft_coverage_measures_readiness_and_preserves_projections() -> (
+    None
+):
+    _, reviewed = _reviewed()
+    generated = generate_source_scenarios(
+        reviewed,
+        environment_requirements=EnvironmentRequirements(task="Handle a refund"),
+        requested_count=3,
+    )
+    assert all(draft.status == "reviewable" for draft in generated.drafts)
+    before = generated.scenario_payloads
+    report = coverage_report(generated)
+    assert report["obligation_coverage"]["per_axis"]["source_cases"]["covered"] == 3
+    assert report["obligation_coverage"]["rate"] == 1.0
+    assert generated.scenario_payloads == before
+    assert [item.name for item in generated.public_scenarios] == [
+        draft.scenario.name for draft in generated.drafts
+    ]
+    assert {item.expected_result for item in generated.evaluator_specs} == {
+        "unmeasured"
+    }
+
+
+def test_private_blocking_changes_trusted_coverage_without_changing_public_payloads() -> (
+    None
+):
+    _, reviewed = _reviewed()
+    generated = generate_source_scenarios(
+        reviewed,
+        environment_requirements=EnvironmentRequirements(
+            task="Handle a refund", declared_tools=("issue_refund",)
+        ),
+        requested_count=3,
+    )
+    blocked = replace(
+        generated,
+        drafts=tuple(
+            replace(
+                draft,
+                evaluator=replace(
+                    draft.evaluator,
+                    diagnostics=(
+                        ScenarioDiagnostic(
+                            "private_evidence_missing", "blocking", "Missing evidence"
+                        ),
+                    ),
+                ),
+            )
+            for draft in generated.drafts
+        ),
+    )
+    assert blocked.scenario_payloads == generated.scenario_payloads
+    assert blocked.public_scenarios == generated.public_scenarios
+    report = coverage_report(blocked)
+    tools = report["obligation_coverage"]["per_axis"]["tool_obligations"]
+    assert (
+        tools["declared"]
+        == coverage_report(generated)["obligation_coverage"]["per_axis"][
+            "tool_obligations"
+        ]["declared"]
+    )
+    assert tools["covered"] == 0
+    assert "allow:issue_refund" in tools["uncovered"]
+    assert report["obligation_coverage"]["rate"] == 0.0
 
 
 def test_tools_and_evidence_are_validated_and_revisions_are_deterministic() -> None:
