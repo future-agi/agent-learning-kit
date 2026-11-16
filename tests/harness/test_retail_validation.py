@@ -1139,3 +1139,20 @@ def test_selected_workflows_have_history_and_distractors(built: Path) -> None:
             assert 300 <= words[doc] <= 800, (doc, words[doc])
     finally:
         world.close()
+
+
+@pytest.mark.parametrize(
+    "body, word",
+    [
+        ("Once we receive the shirt, your refund will be credited to your original card.", None),
+        ("After inspection, the amount will be refunded to your original payment method.", None),
+        ("Your refund has been credited to your card.", "done wrong"),
+        ("The shirt was refunded to your card yesterday.", "done wrong"),
+    ],
+)
+def test_a_draft_may_say_what_a_refund_will_do_but_not_that_it_happened(built: Path, body: str, word) -> None:
+    """A draft explaining how a refund will be paid once the return arrives is true; one saying the
+    money has gone back is a claim no record supports."""
+    key = "email_draft_disambiguate_thread_by_sender"
+    said = _grade(built, key, _swap(key, "create_draft", body=body)).get("draft_created_for_review")
+    assert (said or "").startswith(word) if word else said is None, (body, said)
