@@ -3311,6 +3311,20 @@ def test_permitted_tools_on_a_shared_worker_the_scenario_does_not_rely_on_do_not
     assert cr._limits_not_held_cause(about_reader, tmp_path) == ("A worker's permitted tools", "shared_worker", ["reader"])
 
 
+def test_a_deadline_only_scenario_on_a_shared_worker_with_allowed_tools_is_not_held_for_permitted_tools(tmp_path):
+    (tmp_path / "contract.json").write_text(json.dumps({"workers": [
+        {"id": "writer", "binding": "separate", "address_env": "WRITER_URL"},
+        {"id": "reader", "binding": "shared", "tools": ["read"], "allowed_tools": ["read"]}]}))
+    (tmp_path / "generated" / "tool-proxy").mkdir(parents=True)
+    (tmp_path / "generated" / "tool-proxy" / "door.json").write_text(json.dumps({"worker_deadlines": "per_worker"}))
+    # One deadline for all is held beside the separate writer; no sub-goal judges the reader's permitted tools.
+    assert cr._limits_not_held_cause({"worker_budget_seconds": 30}, tmp_path) == ("", "", [])
+    assert cr.limits_not_held({"worker_budget_seconds": 30}, tmp_path) == []
+    # A deadline naming the shared reader is held for the deadline, not for its permitted tools.
+    assert cr._limits_not_held_cause({"worker_budget_seconds": {"reader": 5}}, tmp_path) == (
+        "A worker deadline", "shared_worker", ["reader"])
+
+
 def test_the_bundle_seals_each_worker_s_limited_flag_and_what_each_scenario_relies_on(tmp_path):
     (tmp_path / "contract.json").write_text(json.dumps({"workers": [
         {"id": "writer", "binding": "separate", "address_env": "WRITER_URL"}, {"id": "reader", "tools": ["read"]}]}))
@@ -3386,7 +3400,7 @@ def test_each_held_scenario_seals_the_workers_whose_limits_the_build_cannot_hold
     documents = {
         # The separate writer's deadline holds; the shared reader's deadline and permitted tools do not.
         "both_budgets": {"worker_budget_seconds": {"writer": 5, "reader": 5}, "sub_goals": ["reader_refused"]},
-        # One deadline for all holds beside a separate worker; the reader's permitted tools still do not.
+        # One deadline for all holds beside a separate worker, and no sub-goal judges the reader's permitted tools.
         "one_for_all": {"worker_budget_seconds": 30, "sub_goals": ["idle_said"]},
         # About a worker with no limits, and the task: nothing relied on, nothing listed.
         "no_limits": {"sub_goals": ["idle_said", "task_done"]},
@@ -3398,7 +3412,7 @@ def test_each_held_scenario_seals_the_workers_whose_limits_the_build_cannot_hold
     sealed = json.loads((tmp_path / cr.WORKER_LIMITS_FILE).read_text())["scenarios"]
     assert {key: (one["held"], one["unheld_workers"]) for key, one in sealed.items()} == {
         "both_budgets": (True, ["reader"]),
-        "one_for_all": (True, ["reader"]),
+        "one_for_all": (False, []),
         "no_limits": (False, []),
     }
     # The list is the runner's own rule, not a second one.

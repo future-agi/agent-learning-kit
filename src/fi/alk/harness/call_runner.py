@@ -2051,7 +2051,8 @@ def _sealed_tool_proxy(bundle_dir: Path | str | None) -> bool:
 def _limits_on_shared_workers(document: Mapping[str, Any], bundle_dir: Path | str | None) -> tuple[str, set[str]]:
     """Which limit, if any, this trial puts on a worker the world cannot tell apart, and every worker with a limit
     that cannot be held: a deadline naming a shared worker, one deadline for all when no worker is separate, or
-    permitted tools on a shared worker, each only on a worker this scenario relies on (`_workers_relied_on`)."""
+    permitted tools on a shared worker. A deadline counts only on a worker this scenario relies on
+    (`_workers_relied_on`), and permitted tools only on a worker one of its sub-goals is about."""
     if bundle_dir is None:
         return "", set()
     workers = [one for one in _bundle_contract(Path(bundle_dir)).get("workers") or [] if isinstance(one, dict)]
@@ -2084,7 +2085,7 @@ def _limits_on_shared_workers(document: Mapping[str, Any], bundle_dir: Path | st
     late = ({one for one in named if one not in separate} | (ids if everyone and not separate else set())) & relied
     tools = {
         str(one.get("id")) for one in workers if one.get("binding") != "separate" and one.get("allowed_tools")
-    } & relied
+    } & scenario_worker_subjects(document, bundle_dir)
     if late:
         return "A worker deadline", late | tools
     if tools:
