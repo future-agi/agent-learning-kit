@@ -35,7 +35,17 @@ from .hosted_conversation import (
     load_conversation_capabilities,
 )
 from .tools import schema
-from .session import ARTIFACT, DONE, RESULT, STAGE_IDLE_TIMEOUT_SECONDS, TEXT, TOOL, Event, Stage
+from .session import (
+    ARTIFACT,
+    DONE,
+    RESULT,
+    STAGE_IDLE_TIMEOUT_SECONDS,
+    TEXT,
+    TOOL,
+    Event,
+    Stage,
+    asking_a_person,
+)
 
 _NUMBERS = {"type": "array", "items": {"type": "integer"}}
 _RANGES = {
@@ -2003,46 +2013,47 @@ class HostedChatRuntime:
             stage=self.conversation.stage_name,
             payload={"prompt": question, "options": options},
         )
-        while not self.stopping.is_set():
-            commands = await self.client.commands()
-            for command in commands:
-                command_payload = command.get("payload") or {}
-                if str(command_payload.get("reply_to") or "") != message_id:
-                    continue
-                answer = str(command_payload.get("content") or "").strip()
-                try:
-                    pending_path.unlink()
-                except FileNotFoundError:
-                    pass
-                await self._checkpoint()
-                answer_sequence = int(command["sequence"])
-                answered = answer
-                if not any(
-                    self._turn_acknowledged_through
-                    < int(queued["sequence"])
-                    < answer_sequence
-                    for queued in commands
-                ):
-                    self._turn_acknowledged_through = max(
-                        self._turn_acknowledged_through, answer_sequence
-                    )
-                if asked and self.backend_name == "claude":
-                    # The CLI's own question tool takes its answers as an allowed, rewritten input.
-                    from claude_agent_sdk.types import PermissionResultAllow
+        with asking_a_person():
+            while not self.stopping.is_set():
+                commands = await self.client.commands()
+                for command in commands:
+                    command_payload = command.get("payload") or {}
+                    if str(command_payload.get("reply_to") or "") != message_id:
+                        continue
+                    answer = str(command_payload.get("content") or "").strip()
+                    try:
+                        pending_path.unlink()
+                    except FileNotFoundError:
+                        pass
+                    await self._checkpoint()
+                    answer_sequence = int(command["sequence"])
+                    answered = answer
+                    if not any(
+                        self._turn_acknowledged_through
+                        < int(queued["sequence"])
+                        < answer_sequence
+                        for queued in commands
+                    ):
+                        self._turn_acknowledged_through = max(
+                            self._turn_acknowledged_through, answer_sequence
+                        )
+                    if asked and self.backend_name == "claude":
+                        # The CLI's own question tool takes its answers as an allowed, rewritten input.
+                        from claude_agent_sdk.types import PermissionResultAllow
 
-                    return PermissionResultAllow(
-                        updated_input={
-                            "questions": asked,
-                            "answers": {
-                                str(one.get("question") or ""): answered for one in asked
-                            },
-                        }
-                    )
-                return {
-                    "content": [{"type": "text", "text": answer}],
-                    "is_error": not bool(answer),
-                }
-            await asyncio.sleep(0.5)
+                        return PermissionResultAllow(
+                            updated_input={
+                                "questions": asked,
+                                "answers": {
+                                    str(one.get("question") or ""): answered for one in asked
+                                },
+                            }
+                        )
+                    return {
+                        "content": [{"type": "text", "text": answer}],
+                        "is_error": not bool(answer),
+                    }
+                await asyncio.sleep(0.5)
         return {
             "content": [{"type": "text", "text": "The conversation was stopped."}],
             "is_error": True,

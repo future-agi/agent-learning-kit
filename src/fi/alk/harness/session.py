@@ -18,10 +18,11 @@ renders. Nothing above this line knows a vendor's name.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import os
 from collections import Counter
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Callable, Iterator
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -56,6 +57,20 @@ STAGE_IDLE_TIMEOUT_SECONDS = float(
     os.getenv("ALK_STAGE_IDLE_TIMEOUT_SECONDS", str(DEFAULT_STAGE_IDLE_TIMEOUT_SECONDS))
 )
 STAGE_IDLE_RETRIES = int(os.getenv("ALK_STAGE_IDLE_RETRIES", "1"))
+# Questions open to a person in this process. A turn waiting on a person's answer says nothing until they answer, and
+# however long they take is not a hang.
+_ASKING = 0
+
+
+@contextlib.contextmanager
+def asking_a_person() -> Iterator[None]:
+    """Hold the stage idle bound while a question waits on a person's answer."""
+    global _ASKING
+    _ASKING += 1
+    try:
+        yield
+    finally:
+        _ASKING -= 1
 
 logger = logging.getLogger(__name__)
 
@@ -311,17 +326,23 @@ class Stage:
         # emits nothing until that call returns, and killing it then throws away everything the
         # delegates proved.
         idle_bound = self._spec.idle_timeout_seconds or STAGE_IDLE_TIMEOUT_SECONDS
+        waiting: asyncio.Future[Any] | None = None
         while True:
-            try:
-                received = await asyncio.wait_for(
-                    replies.__anext__(), timeout=idle_bound
-                )
-            except StopAsyncIteration:
-                break
-            except TimeoutError as exc:
+            # The next reply is awaited without cancelling it, so a bound that passes while a person is asked waits on.
+            waiting = waiting or asyncio.ensure_future(replies.__anext__())
+            done, _ = await asyncio.wait({waiting}, timeout=idle_bound)
+            if not done:
+                if _ASKING:
+                    continue
+                waiting.cancel()
                 raise StageIdleTimeout(
                     f"{self.name or 'model'} produced no event for {idle_bound:g}s"
-                ) from exc
+                )
+            arrived, waiting = waiting, None
+            try:
+                received = arrived.result()
+            except StopAsyncIteration:
+                break
             for event in self._events(received, turn):
                 # Which stage this came from, stamped once here rather than by every caller,
                 # so a front end showing several stages can tell them apart.
