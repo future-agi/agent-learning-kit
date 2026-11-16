@@ -1146,6 +1146,7 @@ def test_selected_workflows_have_history_and_distractors(built: Path) -> None:
     [
         ("Once we receive the shirt, your refund will be credited to your original card.", None),
         ("After inspection, the amount will be refunded to your original payment method.", None),
+        ("You'd get back $50.00 as a refund once the inspection is complete.", None),
         ("Your refund has been credited to your card.", "done wrong"),
         ("The shirt was refunded to your card yesterday.", "done wrong"),
     ],
