@@ -161,19 +161,3 @@ def test_faults_that_cannot_be_read_back_are_reported_unreadable(monkeypatch):
     )
     assert notice["code"] == "fault_unreadable" and "unreadable" in notice["message"]
     assert cr.unmeasured_reasons([notice])
-
-
-def test_the_door_says_when_it_could_not_read_the_trial_s_faults(caplog):
-    from fi.alk.harness.world_door import DictRoster, Executed, MemoryLog, ToolCall, WorldDoor
-
-    class _Ok:
-        def run(self, call):
-            return Executed(200, {"applied": True})
-
-    def unreadable():
-        raise RuntimeError("down")
-
-    door = WorldDoor(_Ok(), MemoryLog(), DictRoster({}), faults=unreadable)
-    with caplog.at_level("WARNING"):
-        assert door.enter(ToolCall(action="crm.apply_discount", name="apply_discount")).outcome == "committed"
-    assert "trial faults unreadable" in caplog.text

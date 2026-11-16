@@ -2292,8 +2292,6 @@ def test_the_tables_a_tool_reads_and_changes_round_trip_and_read_empty_on_an_old
     assert (again.tables_read, again.tables_changed) == (["accounts"], ["ledger"])
     older = ToolSpec.model_validate({"name": "update"})
     assert (older.tables_read, older.tables_changed) == ([], [])
-    contract = AgentContract(agent="a", one_liner="x", modality="chat", tools=[spec])
-    assert "reads tables: accounts" in contract.brief() and "changes tables: ledger" in contract.brief()
 
 
 def test_a_tool_s_returned_fields_are_recorded_and_read_on_its_contract_line(tmp_path):

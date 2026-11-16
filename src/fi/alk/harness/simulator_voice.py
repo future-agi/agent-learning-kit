@@ -62,9 +62,15 @@ SIMULATOR_MODEL_ENV = frozenset(
 SIMULATOR_LLM_DEFAULTS = {"google": "gemini-3.8-flash", "openai": "gpt-4o-mini"}
 
 
-def simulator_llm_models(get: Callable[[str], str | None] = os.environ.get) -> tuple[str, ...]:
-    """The models the simulator is configured to run on: its own model, then each fallback, in order."""
-    provider = (get("SIMULATOR_LLM_PROVIDER") or "").strip().lower() or "google"
+def simulator_llm_models(
+    get: Callable[[str], str | None] = os.environ.get, config: Mapping[str, Any] | None = None
+) -> tuple[str, ...]:
+    """The models the simulator is configured to run on: its own model, then each fallback, in order. The provider is
+    read as the runner reads it: the job's `simulator_llm_provider` first, then the setting."""
+    provider = (
+        str((config or {}).get("simulator_llm_provider") or get("SIMULATOR_LLM_PROVIDER") or "").strip().lower()
+        or "google"
+    )
     primary = (get("SIMULATOR_LLM_MODEL") or "").strip() or SIMULATOR_LLM_DEFAULTS.get(
         provider, next(iter(SIMULATOR_LLM_DEFAULTS.values()))
     )

@@ -184,6 +184,21 @@ def _write_runtime_evidence(
         )
 
     contract = authoring / "contract.json"
+    from .contract import AgentContract
+    from .proofs import load_proofs
+    from .tool_certification import compare_declared_tables
+
+    proofs = load_proofs(authoring)
+    try:
+        declared = AgentContract.model_validate_json(contract.read_text(encoding="utf-8")) if proofs else None
+    except (OSError, ValueError):
+        declared = None
+    if declared is not None:
+        tool_report, skipped = compare_declared_tables(tool_report, declared, proofs)
+        if skipped:
+            limitations.append(
+                "declared tables were not compared for proof runs no one tool wrote in: " + "; ".join(skipped)
+            )
     scenarios = authoring / "scenarios"
     if not scenarios.exists():
         scenarios = authoring / "scenario"

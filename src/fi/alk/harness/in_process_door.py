@@ -15,6 +15,7 @@ from typing import Any
 try:  # Beside the server in a bundle; the harness package when run from source.
     import tool_trace_proxy as _proxy
     from world_door import (
+        DOOR_OUT_OF_REACH,
         EVIDENCE_INCOMPLETE,
         DictRoster,
         Executed,
@@ -31,6 +32,7 @@ try:  # Beside the server in a bundle; the harness package when run from source.
 except ImportError:  # pragma: no cover - imported as part of the package
     from fi.alk.harness import tool_trace_proxy as _proxy  # type: ignore[no-redef]
     from fi.alk.harness.world_door import (  # type: ignore[no-redef]
+        DOOR_OUT_OF_REACH,
         EVIDENCE_INCOMPLETE,
         DictRoster,
         Executed,
@@ -131,8 +133,10 @@ class InProcessDoor:
         """Whether the agent's tool may run: `{"run": true, "id"}`, or what the scenario's fault answers instead. A
         call the door could not decide or record still runs, and is marked in the log as evidence missing, so the
         trial reads unmeasured; `unrecorded` is how many of this tool's calls ran while the door was out of reach."""
-        for _ in range(max(0, min(int(unrecorded or 0), 1000))):
-            self._unrecorded(ToolCall(action=action or name, name=name), "the world's door was out of reach")
+        if unrecorded > 0:
+            # One mark for them all, carrying how many: a single log write, however long the door was away.
+            missed = ToolCall(action=action or name, name=name, arguments={"count": unrecorded})
+            self._unrecorded(missed, DOOR_OUT_OF_REACH)
         call_id = uuid.uuid4().hex
         waiting = _Pending()
         with self._lock:
@@ -172,7 +176,7 @@ class InProcessDoor:
 
     def _unrecorded(self, call: ToolCall, why: str) -> None:
         """Marks a call of the agent's that ran without the door recording what it did."""
-        self.door._write(call, Outcome("unrecorded", 0, reason=why, refusal_code=EVIDENCE_INCOMPLETE), wait=True)
+        self.door.record(call, Outcome("unrecorded", 0, reason=why, refusal_code=EVIDENCE_INCOMPLETE))
 
     def end(self, call_id: str, ok: bool, result: Any, error: str = "") -> dict[str, Any]:
         """What the door made of a call the agent ran: `lost` with the delay when the scenario's fault loses its

@@ -168,8 +168,8 @@ class ToolSpec(BaseModel):
     arg_units: dict[str, str] = Field(default_factory=dict)
     # What the tool hands back, by output field: its type and, where the name does not say it, its unit or format.
     returns: dict[str, str] = Field(default_factory=dict)
-    # The world's tables the tool reads, and the ones it adds to, changes or deletes from, read from its code. Empty
-    # means not recorded.
+    # The world's tables the tool reads, and the ones it adds to, changes or deletes from, declared from its code.
+    # Empty means not recorded.
     tables_read: list[str] = Field(default_factory=list)
     tables_changed: list[str] = Field(default_factory=list)
     description: str = ""
@@ -1236,8 +1236,8 @@ class AgentContract(BaseModel):
                         ("arguments from", ", ".join(f"{arg} <- {source}" for arg, source in tool.inputs_from.items())),
                         ("units", ", ".join(f"{arg} in {unit}" for arg, unit in sorted(tool.arg_units.items()))),
                         ("returns", ", ".join(f"{field}: {kind}" for field, kind in tool.returns.items())),
-                        ("reads tables", ", ".join(tool.tables_read)),
-                        ("changes tables", ", ".join(tool.tables_changed)),
+                        ("reads tables (declared)", ", ".join(tool.tables_read)),
+                        ("changes tables (declared)", ", ".join(tool.tables_changed)),
                     )
                     if text
                 )

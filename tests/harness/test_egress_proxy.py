@@ -141,7 +141,8 @@ def world_log():
 
     def rows() -> list[dict]:
         with psycopg.connect(dsn, autocommit=True) as connection:
-            cursor = connection.execute(f"SELECT * FROM {schema}._alk_tool_trace ORDER BY at")  # noqa: S608
+            query = f"SELECT * FROM {schema}._alk_tool_trace ORDER BY at"  # noqa: S608 - the test's own schema
+            cursor = connection.execute(query)
             columns = [one[0] for one in cursor.description]
             return [dict(zip(columns, row, strict=True)) for row in cursor.fetchall()]
 
@@ -167,8 +168,8 @@ for url in (os.environ["WORLD_URL"], "http://refunds.example.com/v1/refunds", "h
 
 def test_a_test_agent_s_call_outside_the_world_is_blocked_logged_and_counted_refused(world_log, upstream) -> None:
     """An agent process given the controlled run's proxy variables: its world call goes straight to the world, its
-    refund call to a host outside it is refused over HTTP and HTTPS, and World changes count both as refused attempts,
-    never as committed changes."""
+    refund call to a host outside it is refused over HTTP and HTTPS, and World changes list both as blocked hosts,
+    never as attempts or committed changes."""
     dsn, rows = world_log
     proxy = EgressProxy(["api.openai.com"], PostgresLog(dsn))
     world_url = f"http://127.0.0.1:{upstream.server_port}/orders"
@@ -192,9 +193,9 @@ def test_a_test_agent_s_call_outside_the_world_is_blocked_logged_and_counted_ref
     logged = rows()
     assert [(row["outcome"], row["refusal_code"]) for row in logged] == [("refused", "egress_blocked")] * 2
     [agent] = trial_state_changes(logged, {})
-    assert (agent["attempted"], agent["refused"], agent["committed"]) == (2, 2, 0)
+    assert (agent["attempted"], agent["refused"], agent["committed"]) == (0, 0, 0)
     assert agent["no_change"] is True
     assert agent["blocked"] == [
-        {"host": "refunds.example.com", "method": "GET"},
-        {"host": "refunds.example.com", "method": "CONNECT"},
+        {"host": "refunds.example.com", "method": "GET", "count": 1},
+        {"host": "refunds.example.com", "method": "CONNECT", "count": 1},
     ]

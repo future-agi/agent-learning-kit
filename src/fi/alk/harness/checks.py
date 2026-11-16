@@ -110,6 +110,14 @@ def check_reads(checker: object) -> tuple[str, ...]:
         and node.value.id == world
     )
     reads_log = log_reads > 0
+    receivers = sum(
+        1
+        for node in ast.walk(function)
+        if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name) and node.value.id == world
+    )
+    if world and names.count(world) > receivers:
+        # The world handed to a helper or another name: what that reads is not followed, so it may read either.
+        return both
     out = []
     # The world read for anything but its action log is its state.
     if world and names.count(world) > log_reads:

@@ -307,20 +307,29 @@ def _trial_log(door: Any, since: float = 0.0) -> list[dict[str, Any]]:
     return _readable_trial_log(door, since) or []
 
 
-def _readable_trial_log(door: Any, since: float = 0.0) -> list[dict[str, Any]] | None:
-    """This trial's action log as `_trial_log` reads it, or None when neither the world's table nor this process's
-    own rows could be read."""
+def _faults_readable(runtime: Any) -> bool:
+    """Whether the faults set for this trial read back from the world's database, where the tool proxy reads them."""
+    from .call_runner import _find_postgres_endpoint, trial_faults_readable
+
+    database = _find_postgres_endpoint(runtime)
+    return database is not None and trial_faults_readable(database.address)
+
+
+def _readable_trial_log(door: Any, since: float = 0.0, *, proxied: bool = False) -> list[dict[str, Any]] | None:
+    """This trial's action log as `_trial_log` reads it, or None when it could not be read: neither the world's table
+    nor this process's own rows, or, on a proxied trial, the world's table, which alone holds the agent's calls."""
     try:
         log = door.log.rows()
-    except Exception:  # noqa: BLE001 - the world's table unreadable: this process's own rows may stand
+    except Exception:  # noqa: BLE001 - this process's own rows unreadable: the world's table may stand
         log = None
     mirror = getattr(door.log, "mirror", None)
     if mirror is not None:
         try:
             own = [row for row in mirror.rows() if _at(row) >= since]
             log = own or (log if log is not None else own)
-        except Exception:  # noqa: BLE001 - the world's table unreadable: this process's own rows stand
-            pass
+        except Exception:  # noqa: BLE001 - the world's table unreadable: this process's own rows stand, unless proxied
+            if proxied:
+                return None
     return log
 
 
@@ -835,11 +844,11 @@ class HostedChatCallRunner:
     """Drive a repository chat ingress inside its leased world."""
 
     def __init__(self, adapter: ArtifactUploader, context: CallRunnerContext) -> None:
-        from .call_runner import TrialRecords, sealed_seed_dsn
+        from .call_runner import TrialRecords, sealed_seed
 
         self._adapter = adapter
         self._context = context
-        self._records = TrialRecords(sealed_seed_dsn(context.work_directory))
+        self._records = TrialRecords(sealed_seed(context.work_directory))
         contract_path = context.bundle_dir / "contract.json"
         if not contract_path.is_file():
             self._contract: AgentContract | None = None
@@ -1103,7 +1112,7 @@ class HostedChatCallRunner:
             world_record = dict(NOT_RECORDED)
 
         # The world applied one of the agent's writes twice after its answer was lost: the scenario fails.
-        trial_log = _readable_trial_log(door, trial_started) if door is not None else []
+        trial_log = _readable_trial_log(door, trial_started, proxied=proxied) if door is not None else []
         duplicates = duplicate_commits(trial_log or [], getattr(scenario, "solution", None) or ())
         if duplicates:
             world_record = {**(world_record or {}), "duplicates": duplicates}
@@ -1117,20 +1126,35 @@ class HostedChatCallRunner:
                 "summary": summary,
                 "events": cast.events if cast is not None else [],
             }
-        from .call_runner import DUPLICATES_UNREADABLE, _bundle_contract, evidence_notices, fault_notices
+        from .call_runner import (
+            DUPLICATES_UNREADABLE,
+            _bundle_contract,
+            evidence_notices,
+            fault_notices,
+            in_process_tools,
+        )
 
         if faults:
             # A fault that did not take effect is said, never only logged: the trial ran without it.
-            transcript.notices = fault_notices(
-                faults, _trial_log(door, trial_started), transcript.calls,
-                contract=_bundle_contract(self._context.bundle_dir),
+            transcript.notices = (
+                fault_notices(
+                    faults, None, transcript.calls, unreachable="the trial's faults were unreadable in the world's "
+                    "database", code="fault_unreadable",
+                )
+                if proxied and not _faults_readable(runtime)
+                else fault_notices(
+                    faults, _trial_log(door, trial_started), transcript.calls,
+                    contract=_bundle_contract(self._context.bundle_dir),
+                )
             )
         if door is not None:
             # A call of the agent's that ran without the door recording it leaves the trial's evidence incomplete.
             # An action log that could not be read is missing evidence, never an empty log.
             transcript.notices = (
                 list(transcript.notices or [])
-                + evidence_notices(trial_log)
+                + evidence_notices(
+                    trial_log, transcript.calls, in_process_tools(_bundle_contract(self._context.bundle_dir))
+                )
                 + ([dict(DUPLICATES_UNREADABLE)] if trial_log is None else [])
             )
         ended = datetime.now(timezone.utc)

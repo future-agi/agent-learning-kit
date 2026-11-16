@@ -44,7 +44,7 @@ import threading
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Awaitable, Callable, Mapping, Protocol, Sequence
+from typing import TYPE_CHECKING, Any, Awaitable, Callable, Collection, Mapping, Protocol, Sequence
 
 from fi import agentcc, simulate
 from fi.simulate.runtime import (
@@ -67,8 +67,17 @@ from fi.simulate.simulation.call_actors import (
 
 from .actor_dispatch import ActorDispatcher, DoorActs, build_dispatcher, world_summary
 from .actor_meter import ActorMeter
-from .egress_proxy import REFUSAL_CODE as EGRESS_BLOCKED
-from .world_door import EVIDENCE_INCOMPLETE, action_matches, is_read, logged_as, same_action
+from .world_door import (
+    APPROVAL_REQUIRED,
+    DOOR_OUT_OF_REACH,
+    EGRESS_BLOCKED,
+    EVIDENCE_INCOMPLETE,
+    action_matches,
+    is_attempt,
+    is_read,
+    logged_as,
+    same_action,
+)
 from .actors import (
     AGENT,
     ScenarioActor,
@@ -924,7 +933,7 @@ def read_tool_trace(dsn: str, *, timeout_ms: int | None = None) -> list[dict[str
     return [
         row
         for row in _read_action_log(dsn, timeout_ms=timeout_ms)
-        if (row.get("actor_id") or AGENT) == AGENT and not _egress_blocked(row) and not _unrecorded(row)
+        if (row.get("actor_id") or AGENT) == AGENT and is_attempt(row)
     ]
 
 
@@ -938,18 +947,40 @@ def _unrecorded(row: Mapping[str, Any]) -> bool:
     return row.get("refusal_code") == EVIDENCE_INCOMPLETE
 
 
-def evidence_notices(log: Sequence[Mapping[str, Any]] | None) -> list[dict[str, Any]]:
+def evidence_notices(
+    log: Sequence[Mapping[str, Any]] | None, calls: Sequence[Call] = (), held: Collection[str] = ()
+) -> list[dict[str, Any]]:
     """A notice when any of the agent's calls ran without the world's door recording it: what the world did on them
-    is unknown, so the trial is unmeasured."""
+    is unknown, so the trial is unmeasured. Beside the door's own marks, the agent's calls of each tool the door holds
+    (`held`) are counted against the rows the log holds for it, so a door down for the rest of the trial is seen."""
     missing = [row for row in log or () if _unrecorded(row)]
-    if not missing:
-        return []
     why = sorted({str(row.get("error") or "") for row in missing} - {""})
+    # One mark stands for every call made while the door was out of reach, with how many in its arguments.
+    count = sum(
+        _int_or(dict(_arguments(row.get("arguments")) or {}).get("count"), 1)
+        if row.get("error") == DOOR_OUT_OF_REACH and isinstance(_arguments(row.get("arguments")), dict)
+        else 1
+        for row in missing
+    )
+    for tool in sorted(set(held)):
+        made = sum(1 for call in calls if call.name == tool)
+        logged = sum(
+            1
+            for row in log or ()
+            if (row.get("actor_id") or AGENT) == AGENT and str(row.get("name") or "") == tool and is_attempt(row)
+        )
+        marked = sum(1 for row in missing if str(row.get("name") or "") == tool)
+        unseen = made - logged - marked
+        if unseen > 0:
+            count += unseen
+            why = sorted(set(why) | {"the world's door kept no row for them"})
+    if not count:
+        return []
     return [
         {
             "code": EVIDENCE_INCOMPLETE,
-            "count": len(missing),
-            "message": f"{len(missing)} of the agent's calls ran without the world's door recording them"
+            "count": count,
+            "message": f"{count} of the agent's calls ran without the world's door recording them"
             + (f" ({'; '.join(why)})" if why else "")
             + ", so what they changed is unknown.",
         }
@@ -1215,13 +1246,24 @@ def _fixed_fields(solution: Sequence[Any], action: str) -> set[str]:
 
 
 def _same_write(first: Mapping[str, Any], later: Mapping[str, Any], fixed: set[str]) -> bool:
-    """Whether two committed writes of one action are the same write: equal on every fixed argument either carries,
-    or, with nothing fixed, equal arguments."""
+    """Whether two committed writes of one action are the same write: equal arguments, or equal on every fixed
+    argument either carries and on every other argument that is not text. Text the solution does not fix is the
+    agent's own words, so a retry that rewords it is still the same write; a different record, named by a value that
+    is not text, is not."""
     one, two = _arguments(first.get("arguments")), _arguments(later.get("arguments"))
-    if not fixed or not isinstance(one, dict) or not isinstance(two, dict):
-        return one == two
+    if one == two:
+        return True
+    if not isinstance(one, dict) or not isinstance(two, dict):
+        return False
     carried = [field for field in fixed if field in one or field in two]
-    return bool(carried) and all(one.get(field) == two.get(field) for field in carried)
+    if not carried:
+        return False
+    others = (set(one) | set(two)) - set(fixed)
+    return all(one.get(field) == two.get(field) for field in carried) and all(
+        one.get(field) == two.get(field)
+        for field in others
+        if not isinstance(one.get(field), str) or not isinstance(two.get(field), str)
+    )
 
 
 def _arguments(value: Any) -> Any:
@@ -1273,7 +1315,7 @@ def approvals(log: list[dict[str, Any]], decisions: Sequence[dict[str, Any]] = (
     rows = [
         row
         for row in log
-        if not is_pre_run(row.get("idempotency_key")) and not _egress_blocked(row) and not _unrecorded(row)
+        if not is_pre_run(row.get("idempotency_key")) and is_attempt(row)
     ]
     # Each actor's actions as it chose them, in order: what says the verdict its logged row carries.
     sent_by: dict[str, list[dict[str, Any]]] = {}
@@ -1307,7 +1349,7 @@ def approvals(log: list[dict[str, Any]], decisions: Sequence[dict[str, Any]] = (
     for one in decisions:
         if one.get("play") == "timeout" and one.get("parent") in by_id:
             found.append((by_id[one["parent"]], {"by": one.get("actor"), "action": f"timeout: {one.get('fallback')}",
-                                                 "outcome": one.get("outcome"), "at": None,
+                                                 "outcome": one.get("outcome"), "at": one.get("at"),
                                                  "verdict": "refused" if one.get("fallback") == "decline" else None}))
     out = []
     for request, decision in found:
@@ -1420,6 +1462,7 @@ def _agent_marks(
 
 
 # Kept in the world's database, never in a file the agent's process could read or rewrite.
+# Known limit: a connection with the world's role can write it until per-user database isolation is on.
 TRIAL_FAULTS_DDL = "CREATE TABLE IF NOT EXISTS _alk_trial_faults (id INT PRIMARY KEY, faults JSONB NOT NULL)"
 
 
@@ -1486,7 +1529,8 @@ def fault_notices(
                 continue
         agent_rows = [row for row in log or [] if (row.get("actor_id") or AGENT) == AGENT]
         rows = [row for row in agent_rows if same_action(row, action)]
-        if any(_fault_applied(row) for row in rows):
+        # An approval hold is in force on every call the door saw, refused or let through after the approval.
+        if any(_fault_applied(row) for row in rows) or (mode == APPROVAL_REQUIRED and rows):
             continue
         # A call the door logged as another action with the same last part is that action's.
         others = sum(
@@ -1504,6 +1548,18 @@ def fault_notices(
                             "message": f"The {mode} fault on call {on_call} of {action} never took effect: the agent "
                                        f"made {made} call{'s' if made != 1 else ''} of it."})
     return notices
+
+
+def in_process_tools(contract: Mapping[str, Any]) -> set[str]:
+    """The tools the agent runs in its own process with the world's door in front of them."""
+    return {
+        str(entry.get("tool"))
+        for entry in contract.get("tool_entrypoints") or []
+        if isinstance(entry, Mapping)
+        and entry.get("tool")
+        and entry.get("mode") in ("import", "construct")
+        and not entry.get("door_unreached")
+    }
 
 
 def _names_action(entry: Mapping[str, Any], action: str) -> bool:
@@ -2404,22 +2460,15 @@ class TrialRecords:
     end against, and whether it started clean. Snapshots are read on a connection that cannot write; one that cannot
     be read is sealed as unreadable, never a failed trial."""
 
-    def __init__(self, seed_dsn: Callable[[str], str | None] | None = None) -> None:
+    def __init__(self, sealed_seed: Callable[[], dict[str, str] | None] | None = None) -> None:
         self.seeded: dict[str, str] | None = None
-        # The sealed seed every world is reset from; trial 1's start only when the seed cannot be read.
+        # What every trial's start is compared against: the seed's digest the build took at seal time (never a
+        # connection to the template every world is reset from); trial 1's start only when none was sealed.
         self.seeded_from = ""
-        self._seed_dsn = seed_dsn
+        self._sealed_seed = sealed_seed
         self._seeded_taken = False
         self._starts: dict[Any, tuple[Any, dict[str, Any]]] = {}
         self._lock = threading.Lock()
-
-    def _sealed_seed(self, dsn: str) -> dict[str, str] | None:
-        """The sealed seed's records as one hash per table, or None when there is no sealed seed to read."""
-        from .world_snapshot import digest
-
-        seed = self._seed_dsn(dsn) if self._seed_dsn is not None else None
-        taken = self._read(seed, "seed") if seed else None
-        return digest(taken) if taken is not None else None
 
     @staticmethod
     def _read(dsn: str | None, moment: str) -> Any:
@@ -2443,8 +2492,8 @@ class TrialRecords:
         with self._lock:
             if not self._seeded_taken:
                 self._seeded_taken = True
-                sealed = self._sealed_seed(dsn) if dsn else None
-                if sealed is not None:
+                sealed = self._sealed_seed() if self._sealed_seed is not None else None
+                if sealed:
                     self.seeded, self.seeded_from = sealed, "sealed_seed"
                 else:
                     self.seeded, self.seeded_from = start, "first_trial"
@@ -2472,30 +2521,21 @@ class TrialRecords:
         return {"records": diff(before, after), "start": start, END_STATE_KEY: after}
 
 
-def sealed_seed_dsn(work_directory: Path) -> Callable[[str], str | None]:
-    """How to reach the sealed seed beside a world's database: the template database each world is reset from, as the
-    build output names it. None when the build sealed no template (a world reset another way)."""
+def sealed_seed(work_directory: Path) -> Callable[[], dict[str, str] | None]:
+    """The seed's digest the build took at seal time (`seed_digest` in its build output), read from that file alone.
+    None when the build output is missing or holds no single store's digest."""
 
-    def seed(dsn: str) -> str | None:
+    def seed() -> dict[str, str] | None:
         try:
             build = json.loads((Path(work_directory) / "artifacts" / "build.json").read_text(encoding="utf-8"))
-            from psycopg.conninfo import conninfo_to_dict, make_conninfo
-
-            world = conninfo_to_dict(dsn).get("dbname")
-        except Exception:  # noqa: BLE001 - no build output or no readable address: no sealed seed to read
+        except (OSError, ValueError):
             return None
-        templates = [
-            str(store.get("baseline_reference"))
+        sealed = [
+            store["seed_digest"]
             for store in build.get("stores") or []
-            if isinstance(store, dict)
-            and store.get("strategy") == "template_database"
-            and store.get("baseline_reference")
+            if isinstance(store, dict) and isinstance(store.get("seed_digest"), dict) and store["seed_digest"]
         ]
-        # The world's own store: a world database is a copy of exactly one template.
-        chosen = (
-            templates[0] if len(templates) == 1 else next((one for one in templates if world and one in world), None)
-        )
-        return make_conninfo(dsn, dbname=chosen) if chosen else None
+        return {str(table): str(hashed) for table, hashed in sealed[0].items()} if len(sealed) == 1 else None
 
     return seed
 
@@ -2550,7 +2590,7 @@ class CallRunnerImpl:
         self._adapter = adapter
         self._context = context
         self._place_call = place_call
-        self._records = TrialRecords(sealed_seed_dsn(context.work_directory))
+        self._records = TrialRecords(sealed_seed(context.work_directory))
         simulator_secret_values = _canonical_simulator_secrets(
             context.simulator_provider_secret_values
         )
@@ -3089,8 +3129,10 @@ class CallRunnerImpl:
             )
         try:
             log = _read_action_log(database.address)
-        except Exception:  # noqa: BLE001 - an unreadable log says nothing rather than something wrong
-            return []
+        except Exception:  # noqa: BLE001 - whether the faults applied is unknown: said as unreadable
+            return fault_notices(
+                faults, None, calls, unreachable="the world's action log could not be read", code="fault_unreadable"
+            )
         return fault_notices(faults, log, calls, contract=_bundle_contract(self._context.bundle_dir))
 
     def _approvals(self, runtime: EnvironmentRuntime, decisions: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:

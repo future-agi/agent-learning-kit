@@ -1,6 +1,7 @@
 """The proxy in front of the agent under test in a controlled run.
 
-A call to a host outside the test world is refused and logged as the agent's `egress_blocked` attempt."""
+A call to a host outside the test world is refused and logged as the agent's `egress_blocked` attempt. The proxy is
+cooperative (`HTTP(S)_PROXY`): a client that ignores it goes direct, and the sandbox firewall is the boundary."""
 
 from __future__ import annotations
 
@@ -18,7 +19,6 @@ from .world_door import AGENT, ActionLog, Executed, ToolCall, WorldDoor
 
 REFUSAL_CODE = "egress_blocked"
 LOOPBACK = ("localhost", "127.0.0.1", "::1")
-_TUNNEL_SECONDS = 300.0
 # How long a client may go silent while sending a request before its connection is dropped, unless
 # `ALK_EGRESS_CLIENT_TIMEOUT_SECONDS` says otherwise.
 _CLIENT_SECONDS = 30.0
@@ -88,6 +88,16 @@ def _setting(name: str, default: float) -> float:
     if not 0 < value < float("inf"):
         raise ValueError(f"{name} must be a positive number, not {configured!r}")
     return value
+
+
+def _tunnel_seconds() -> float:
+    """How long a tunnel or relay may sit idle: as long as the longest call the runner allows, a voice call or one
+    chat turn, since an agent's connection may wait that long; or `ALK_EGRESS_TUNNEL_IDLE_SECONDS`."""
+    from .call_runner import _DEFAULT_CALL_TIMEOUT_SECONDS
+    from .chat_call_runner import _chat_target_timeout_seconds
+
+    longest = max(_DEFAULT_CALL_TIMEOUT_SECONDS, _chat_target_timeout_seconds())
+    return _setting("ALK_EGRESS_TUNNEL_IDLE_SECONDS", longest)
 
 
 def _max_clients() -> int:
@@ -181,6 +191,7 @@ class EgressProxy:
 def _handler(proxy: EgressProxy) -> type[BaseHTTPRequestHandler]:
     class Handler(BaseHTTPRequestHandler):
         timeout = _setting("ALK_EGRESS_CLIENT_TIMEOUT_SECONDS", _CLIENT_SECONDS)
+        tunnel = _tunnel_seconds()
 
         def log_message(self, *_args: object) -> None:
             return
@@ -197,6 +208,20 @@ def _handler(proxy: EgressProxy) -> type[BaseHTTPRequestHandler]:
                 return
             self.send_response(200, "Connection established")
             self.end_headers()
+            # What the client sent right behind its CONNECT already sits in the read buffer, never seen by `_pipe`.
+            self.connection.setblocking(False)
+            try:
+                early = self.rfile.read1(_PIECE)
+            except OSError:
+                early = b""
+            finally:
+                self.connection.settimeout(self.timeout)
+            try:
+                if early:
+                    upstream.sendall(early)
+            except OSError:
+                upstream.close()
+                return
             self._pipe(upstream)
 
         def _upstream(self, host: str, port: int | str) -> socket.socket | None:
@@ -211,14 +236,14 @@ def _handler(proxy: EgressProxy) -> type[BaseHTTPRequestHandler]:
                 upstream.close()
                 self.send_error(400, "The proxy cannot be its own destination")
                 return None
-            upstream.settimeout(_TUNNEL_SECONDS)
+            upstream.settimeout(self.tunnel)
             return upstream
 
         def _pipe(self, upstream: socket.socket) -> None:
             sockets = [self.connection, upstream]
             try:
                 while True:
-                    ready, _, _ = select.select(sockets, [], [], _TUNNEL_SECONDS)
+                    ready, _, _ = select.select(sockets, [], [], self.tunnel)
                     if not ready:
                         return
                     for one in ready:

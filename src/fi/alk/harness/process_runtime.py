@@ -4628,6 +4628,26 @@ def _datadir_copy_baseline_path(work_directory: Path, process_name: str) -> Path
     )
 
 
+def sealed_seed_digest(*, host: str, port: int, credentials: EngineCredentials, dbname: str) -> dict[str, str]:
+    """The seed's records as one hash per table, read before its template is sealed; empty when they cannot be read,
+    and then trials are compared with the first trial's start instead."""
+    from psycopg.conninfo import make_conninfo
+
+    from .world_snapshot import digest, snapshot
+
+    try:
+        return digest(
+            snapshot(
+                make_conninfo(
+                    host=host, port=port, user=credentials.username, password=credentials.password, dbname=dbname
+                )
+            )
+        )
+    except Exception as exc:  # noqa: BLE001 - only the type: a database error can carry the password
+        logger.warning("seed digest not taken: %s", type(exc).__name__)
+        return {}
+
+
 def _measure_postgres_row_counts(
     *,
     host: str,
@@ -4829,6 +4849,9 @@ class StoreBaselineRecord:
     inputs_digest: str
     baseline_reference: str
     row_counts: dict[str, int]
+    # The sealed seed's records as one hash per table (`world_snapshot.digest`), taken before a template closes to
+    # connections: what each trial's start is compared against. Empty when it could not be read.
+    seed_digest: dict[str, str] = field(default_factory=dict)
 
     def to_json(self) -> dict[str, JsonValue]:
         return {
@@ -4839,6 +4862,7 @@ class StoreBaselineRecord:
             "inputs_digest": self.inputs_digest,
             "baseline_reference": self.baseline_reference,
             "row_counts": dict(self.row_counts),
+            "seed_digest": dict(self.seed_digest),
         }
 
 
@@ -5073,6 +5097,7 @@ def _freeze_one_store(
             )
 
         row_counts: dict[str, int] = {}
+        seed_digest: dict[str, str] = {}
         baseline_reference = ""
         result_handle: SpawnedWorldProcess | None = None
         if strategy is BaselineStrategy.TEMPLATE_DATABASE:
@@ -5084,6 +5109,10 @@ def _freeze_one_store(
                     dbname=baseline_dbname,
                     sql_runner=context.sql_runner,
                     process_name=process.name,
+                )
+                # Read now: once sealed, the template takes no connections.
+                seed_digest = sealed_seed_digest(
+                    host="localhost", port=port, credentials=credentials, dbname=baseline_dbname
                 )
             if (
                 process.engine is ManagedEngine.POSTGRES
@@ -5181,6 +5210,7 @@ def _freeze_one_store(
             inputs_digest=store.baseline.inputs_digest,
             baseline_reference=baseline_reference,
             row_counts=row_counts,
+            seed_digest=seed_digest,
         )
         return record, result_handle
     except BaseException:
@@ -6063,26 +6093,31 @@ def _read_customer_code_environment(work_directory: Path) -> dict[str, str]:
 
 def _read_egress_allowed_hosts(work_directory: Path) -> tuple[str, ...] | None:
     """The hosts a controlled run allows the agent, from `/work/job.json` `metadata.egress_allowed_hosts`; None when
-    the platform sent none (egress not controlled, or a local run). A value that is not a list of host names fails the
-    spawn: a controlled run never starts with its egress uncontrolled."""
+    the platform sent none (egress not controlled, or a local run). A `job.json` that cannot say, or a value that is
+    not a list of host names, fails the spawn: a controlled run never starts with its egress uncontrolled."""
     try:
         raw = json.loads((work_directory / "job.json").read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+    except FileNotFoundError:
         return None
-    metadata = raw.get("metadata") if isinstance(raw, dict) else None
-    if not isinstance(metadata, dict) or "egress_allowed_hosts" not in metadata:
+    except (OSError, ValueError) as exc:
+        raise _egress_unknown(f"job.json cannot be read as JSON ({exc})") from exc
+    metadata = raw.get("metadata", {}) if isinstance(raw, dict) else None
+    if not isinstance(metadata, dict):
+        raise _egress_unknown(f"job.json {'metadata' if isinstance(raw, dict) else 'top level'} is not an object")
+    if "egress_allowed_hosts" not in metadata:
         return None
     try:
         typed = HarnessJobMetadata.model_validate({"egress_allowed_hosts": metadata["egress_allowed_hosts"]})
     except ValidationError as exc:
         reasons = "; ".join(f"{'.'.join(map(str, one['loc']))}: {one['msg']}" for one in exc.errors())
-        raise ProcessRuntimeError(
-            "egress",
-            "spawn_failed",
-            f"job.json metadata.egress_allowed_hosts is not a list of host names ({reasons})",
-            domain=FailureDomain.INFRASTRUCTURE,
-        ) from exc
+        reason = f"job.json metadata.egress_allowed_hosts is not a list of host names ({reasons})"
+        raise _egress_unknown(reason) from exc
     return None if typed.egress_allowed_hosts is None else tuple(typed.egress_allowed_hosts)
+
+
+def _egress_unknown(reason: str) -> ProcessRuntimeError:
+    """The spawn failure for a run whose allowed hosts cannot be told."""
+    return ProcessRuntimeError("egress", "spawn_failed", reason, domain=FailureDomain.INFRASTRUCTURE)
 
 
 def _egress_tools_by_host(bundle_dir: Path | None) -> dict[str, str]:

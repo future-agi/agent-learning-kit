@@ -3099,6 +3099,44 @@ def test_the_speaking_actors_actions_file_is_the_run_s_alone(tmp_path):
     assert path.read_text() == ""
 
 
+def test_a_voice_trial_whose_fault_could_not_apply_reaches_the_scheduler_as_unmeasured(tmp_path, monkeypatch) -> None:
+    _job_obj, context = _context(tmp_path=tmp_path, evidence_seam=EvidenceSeam.TOOL_TRACE)
+    _write_scenario_doc(context.bundle_dir, scenario_key="k1")
+    document = context.bundle_dir / "scenarios" / "k1" / "scenario.json"
+    body = json.loads(document.read_text())
+    body["faults"] = [{"action": "approve", "mode": "timeout_before_commit"}]
+    document.write_text(json.dumps(body))
+    monkeypatch.setattr(cr, "_write_trial_state", lambda runtime, faults: None)
+
+    async def place_call(spec):
+        return _report(transcript="hello", messages=[])
+
+    runner = cr.CallRunnerImpl(FakeAdapter(), context, place_call=place_call)
+    outcome = _run(runner, _FakeScenario("k1"), _runtime(metadata={"livekit_agent_name": "agent-w0"}))
+    # No world database held the fault, so the trial never ran under it.
+    assert outcome.unmeasured and "could not be applied" in outcome.unmeasured[0]
+
+
+def test_a_voice_trial_whose_log_or_faults_cannot_be_read_says_its_faults_are_unreadable(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    _job_obj, context = _context(tmp_path=tmp_path, evidence_seam=EvidenceSeam.TOOL_TRACE)
+    runner = cr.CallRunnerImpl(FakeAdapter(), context, place_call=None)
+    monkeypatch.setattr(cr, "_find_postgres_endpoint", lambda runtime: SimpleNamespace(address="dsn"))
+    fault = [{"action": "approve", "mode": "unavailable"}]
+
+    def unreadable(dsn, **_):
+        raise RuntimeError("down")
+
+    monkeypatch.setattr(cr, "trial_faults_readable", lambda dsn: False)
+    [notice] = runner._fault_notices(object(), fault, [])
+    assert notice["code"] == "fault_unreadable" and cr.unmeasured_reasons([notice])
+    monkeypatch.setattr(cr, "trial_faults_readable", lambda dsn: True)
+    monkeypatch.setattr(cr, "_read_action_log", unreadable)
+    [notice] = runner._fault_notices(object(), fault, [])
+    assert notice["code"] == "fault_unreadable" and "action log could not be read" in notice["message"]
+
+
 def test_a_voice_call_with_no_words_still_seals_the_notice_for_a_fault_it_never_reached(tmp_path, monkeypatch) -> None:
     _job_obj, context = _context(tmp_path=tmp_path, evidence_seam=EvidenceSeam.TOOL_TRACE)
     _write_scenario_doc(context.bundle_dir, scenario_key="k1")
@@ -3195,6 +3233,28 @@ def test_a_retry_that_rewords_free_text_but_writes_the_same_record_is_a_duplicat
     assert duplicate_commits(other, solution) == []
     # With nothing fixed for the action, every argument still has to match.
     assert duplicate_commits(log) == []
+
+
+def test_an_identical_retry_is_a_duplicate_even_when_the_solution_fixes_a_field_the_call_does_not_carry():
+    from fi.alk.harness.call_runner import duplicate_commits
+
+    log = [
+        _logged("issue_refund", {"order": 7}, error="response_lost"),
+        _logged("issue_refund", {"order": 7}),
+    ]
+    solution = [{"tool": "issue_refund", "arguments": {"reason": "late"}, "fixed": {"reason": "the person"}}]
+    assert len(duplicate_commits(log, solution)) == 1
+
+
+def test_writes_to_two_records_are_not_a_duplicate_when_only_their_amount_is_fixed():
+    from fi.alk.harness.call_runner import duplicate_commits
+
+    log = [
+        _logged("issue_refund", {"order": 7, "amount": 500}, error="response_lost"),
+        _logged("issue_refund", {"order": 8, "amount": 500}),
+    ]
+    solution = [{"tool": "issue_refund", "arguments": {"amount": 500}, "fixed": {"amount": "the person"}}]
+    assert duplicate_commits(log, solution) == []
 
 
 def test_an_unreadable_action_log_leaves_duplicates_unknown_never_cleared(monkeypatch):

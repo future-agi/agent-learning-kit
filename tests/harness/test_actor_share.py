@@ -70,30 +70,49 @@ def _no_job(monkeypatch):
     monkeypatch.delenv("ALK_HARNESS_JOB_ID", raising=False)
 
 
-def test_every_scenario_may_carry_an_actor_when_the_request_asks_for_all(tmp_path):
+def test_all_lets_every_scenario_carry_an_actor_and_refuses_nothing(tmp_path):
     tools = _stage(tmp_path, _written(9, with_actor=True), actor_share={"min": 1, "max": 1})
     assert SHARE_REFUSAL not in _submit(tools, "s9", with_actor=True)
-    refused = _submit(tools, "alone", with_actor=False)
-    assert SHARE_REFUSAL in refused and "at least 10 must" in refused
+    assert SHARE_REFUSAL not in _submit(tools, "alone", with_actor=False)
 
 
-def test_no_scenario_needs_an_actor_when_the_request_asks_for_none(tmp_path):
+def test_none_needs_no_actor_and_refuses_nothing(tmp_path):
     tools = _stage(tmp_path, _written(9, with_actor=False), actor_share={"min": 0, "max": 0})
     assert SHARE_REFUSAL not in _submit(tools, "s9", with_actor=False)
     assert SHARE_REFUSAL not in _submit(tools, "with-one", with_actor=True)
 
 
-def test_a_range_from_the_request_replaces_the_default(tmp_path):
-    tools = _stage(tmp_path, _written(9, with_actor=False), actor_share={"min": 0.5, "max": 0.5})
-    assert "at least 5 must" in _submit(tools, "s9", with_actor=False)
+def test_a_range_from_the_request_refuses_nothing(tmp_path):
+    tools = _stage(tmp_path, _written(9, with_actor=False), actor_share={"min": 0.5, "max": 0.6})
+    assert SHARE_REFUSAL not in _submit(tools, "s9", with_actor=False)
 
 
-def test_without_a_request_the_drawn_default_is_held(tmp_path):
+def test_unset_the_drawn_default_is_a_minimum(tmp_path):
     share = default_share(str(tmp_path))
     assert SHARE_RANGE[0] <= share <= SHARE_RANGE[1]
     tools = _stage(tmp_path, _written(9, with_actor=False))
     refused = _submit(tools, "s9", with_actor=False)
     assert SHARE_REFUSAL in refused and f"at least {at_least(share, 10)} must" in refused
+
+
+def test_an_override_mid_suite_holds_from_the_next_submission(tmp_path):
+    tools = _stage(tmp_path, _written(9, with_actor=False))
+    assert SHARE_REFUSAL in _submit(tools, "s9", with_actor=False)
+    asyncio.run(tools["aim_for"]({"count": 10, "actor_share": {"min": 0, "max": 0}}))
+    assert SHARE_REFUSAL not in _submit(tools, "s9", with_actor=False)
+
+
+def test_the_default_refuses_only_once_later_scenarios_cannot_carry_the_shortfall(tmp_path):
+    needed = at_least(default_share(str(tmp_path)), 10)
+    # Room left: the scenarios still to come can carry the actors.
+    tools = _stage(tmp_path, _written(10 - needed - 1, with_actor=False))
+    assert SHARE_REFUSAL not in _submit(tools, "next", with_actor=False)
+    # The shortfall carried by scenarios already written: an actor-free one still fits.
+    carried = _written(needed, with_actor=True) + [
+        Scenario(name=f"a{n}", actors=[]) for n in range(9 - needed)
+    ]
+    tools = _stage(tmp_path, carried)
+    assert SHARE_REFUSAL not in _submit(tools, "last", with_actor=False)
 
 
 def test_an_actor_share_that_is_not_two_fractions_is_refused(tmp_path):
@@ -124,8 +143,8 @@ def test_an_actor_list_without_a_share_reads_and_saves_as_before(tmp_path):
 
 
 def test_renaming_an_actor_free_scenario_does_not_reset_the_loop_breaker(tmp_path):
-    tools = _stage(tmp_path, _written(9, with_actor=False), actor_share={"min": 1, "max": 1})
+    tools = _stage(tmp_path, _written(9, with_actor=False))
     said = [_submit(tools, f"renamed-{n}", with_actor=False) for n in range(3)]
     assert all(SHARE_REFUSAL in one for one in said)
     assert "submitting it again will not work" not in said[1]
-    assert "submitting it again will not work" in said[2]
+    assert "refusal 3 across the scenarios written here" in said[2]

@@ -79,12 +79,12 @@ def limit_defaults() -> dict[str, dict[str, Any]]:
     }
 
 
-def actor_models() -> tuple[str, ...]:
+def actor_models(config: dict[str, Any] | None = None) -> tuple[str, ...]:
     """The models an actor or the environment's actors may name: the ones the caller simulator is configured to run
-    on. Unset is the caller's own."""
+    on, with the job's own config (`config`) read first, as the runner does. Unset is the caller's own."""
     from .simulator_voice import simulator_llm_models
 
-    return simulator_llm_models()
+    return simulator_llm_models(config=config)
 
 
 class Limits(BaseModel):
@@ -141,7 +141,8 @@ class Actor(BaseModel):
     # Who brings this actor in.
     parent: str | None = None
     persona: dict[str, Any] = Field(default_factory=dict)
-    goal: str = ""
+    # Optional and never graded: what the actor aims for in the conversation it is in; empty, nothing is assumed.
+    goal: str = Field(default="", title="Aim in this conversation")
     constraints: Constraints = Field(default_factory=Constraints)
     behaviour: Behaviour = Field(default_factory=Behaviour)
     # What it can read: `{"kind": "facts", "text"}`, `{"kind": "records", "store", "collection", "where"?}`,
@@ -370,16 +371,26 @@ def session_fingerprint(session: PreRunSession, actors: dict[str, "Actor"]) -> s
 
 class Fault(BaseModel):
     """What the world does to the agent on one call of one action. Only `timeout_after_commit` lets the world make
-    the change. `delay_seconds` is read for the two timeouts only; `status` and `message` for `error` only."""
+    the change. `delay_seconds` is read for the two timeouts only; `status` and `message` for `error` only.
+    `approval_required` holds every write of the action, whichever call, until an actor permitted `approval` has
+    taken it in the trial with arguments that include `approved_when`."""
 
     model_config = ConfigDict(extra="forbid")
 
     action: str = Field(min_length=1)
-    mode: Literal["timeout_before_commit", "timeout_after_commit", "unavailable", "error"]
+    mode: Literal["timeout_before_commit", "timeout_after_commit", "unavailable", "error", "approval_required"]
     on_call: int = Field(default=1, ge=1)
     delay_seconds: float = Field(default=30.0, ge=0, le=30)
     status: int = Field(default=500, ge=400, le=599)
     message: str = Field(default="", max_length=500)
+    approval: str = ""
+    approved_when: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def _approval_named(self) -> "Fault":
+        if self.mode == "approval_required" and not self.approval.strip():
+            raise ValueError("an approval_required fault names `approval`: the world action an approver takes")
+        return self
 
 
 class StartsWith(BaseModel):
@@ -764,7 +775,7 @@ def brief_text(items: list[dict[str, Any]]) -> str:
         "actor.name": "You are",
         "actor.role": "Who you are to the others",
         "actor.persona": "How you come across",
-        "actor.goal": "What you want",
+        "actor.goal": "Aim in this conversation",
         "actor.constraints": "What you will not do",
         "actor.behaviour": "How you behave",
         "actor.prompt": "Your instructions",
@@ -858,7 +869,7 @@ def with_caller_actor(doc: dict[str, Any], root: Path) -> dict[str, Any]:
     }
 
 
-def actor_rules() -> dict[str, Any]:
+def actor_rules(config: dict[str, Any] | None = None) -> dict[str, Any]:
     """Everything this release decides about actors, sealed into each bundle so the platform reads the rules of the
     release that built it instead of keeping its own copy."""
     from fi.simulate.simulation.call_actors import CHANNELS, DETAILS_MARK, LOUDNESS_RANGE
@@ -869,7 +880,7 @@ def actor_rules() -> dict[str, Any]:
 
     return {
         # The models an actor may be played on besides the caller simulator's own, which is what an unset model means.
-        "actor_models": list(actor_models()),
+        "actor_models": list(actor_models(config)),
         # Keyed as an actor list's `limits`; None is no limit.
         "limit_defaults": limit_defaults(),
         # Per modality; the editor shows these and a run reads the same values.
@@ -974,7 +985,7 @@ def permission_conflicts(listing: "ActorList", actor: "Actor") -> list[tuple[str
     return conflicts
 
 
-def write_actor_rules(bundle: Path) -> None:
+def write_actor_rules(bundle: Path, config: dict[str, Any] | None = None) -> None:
     (Path(bundle) / ACTOR_RULES_FILE).write_text(
-        json.dumps(actor_rules(), indent=2) + "\n", encoding="utf-8"
+        json.dumps(actor_rules(config), indent=2) + "\n", encoding="utf-8"
     )

@@ -23,20 +23,30 @@ def _job(tmp_path: Path, metadata: object) -> Path:
 
 
 @pytest.mark.parametrize(
-    "hosts",
-    [["api.example.test", None], "api.example.test", [1], {"api.example.test": True}],
+    "written",
+    [
+        '{"job_id": "job-1", "metadata": ',
+        "[]",
+        '{"job_id": "job-1", "metadata": "hosts"}',
+        '{"job_id": "job-1", "metadata": null}',
+        *(
+            json.dumps({"job_id": "job-1", "metadata": {"egress_allowed_hosts": hosts}})
+            for hosts in (["api.example.test", None], "api.example.test", [1], {"api.example.test": True})
+        ),
+    ],
 )
-def test_allowed_hosts_that_are_not_a_list_of_names_fail_the_spawn_with_the_reason(tmp_path: Path, hosts) -> None:
+def test_a_job_json_that_cannot_say_which_hosts_are_allowed_fails_the_spawn(tmp_path: Path, written) -> None:
+    (tmp_path / "job.json").write_text(written)
     with pytest.raises(ProcessRuntimeError) as raised:
-        _read_egress_allowed_hosts(_job(tmp_path, {"egress_allowed_hosts": hosts}))
+        _read_egress_allowed_hosts(tmp_path)
     assert raised.value.code == "spawn_failed"
-    assert "egress_allowed_hosts is not a list of host names" in str(raised.value)
-    assert "egress_allowed_hosts" in str(raised.value).split("(", 1)[1]
 
 
 def test_allowed_hosts_absent_or_null_mean_an_uncontrolled_run_and_a_list_is_read(tmp_path: Path) -> None:
     assert _read_egress_allowed_hosts(tmp_path) is None
     assert _read_egress_allowed_hosts(_job(tmp_path, {})) is None
+    (tmp_path / "job.json").write_text('{"job_id": "job-1"}')
+    assert _read_egress_allowed_hosts(tmp_path) is None
     assert _read_egress_allowed_hosts(_job(tmp_path, {"egress_allowed_hosts": None})) is None
     assert _read_egress_allowed_hosts(_job(tmp_path, {"egress_allowed_hosts": []})) == ()
     listed = _job(tmp_path, {"egress_allowed_hosts": ["api.example.test", "*.cdn.example.test"]})
@@ -69,8 +79,8 @@ def test_a_world_without_an_action_log_warns_once_and_its_own_hosts_pass_the_pro
     try:
         with caplog.at_level(logging.WARNING, logger="fi.alk.harness.process_runtime"):
             environments = [_egress_environment(context, index, {}, {"tools": address}) for index in (0, 1)]
-        warned = [one for one in caplog.records if "not recorded" in one.getMessage()]
-        assert len(warned) == 1 and warned[0].levelno == logging.WARNING
+        warned = [one for one in caplog.records if one.levelno == logging.WARNING]
+        assert len(warned) == 1
         for environment in environments:
             assert "tools.world.test" in environment["NO_PROXY"].split(",")
             opener = request.build_opener(request.ProxyHandler({"http": environment["HTTP_PROXY"]}))

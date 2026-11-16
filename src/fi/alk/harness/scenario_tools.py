@@ -112,6 +112,7 @@ from .scenario import (
 )
 from .simulator import load_simulator_prompt
 from .tools import brief, schema
+from .world_door import ToolCall, call_effect
 from .world.snapshot import read_manifest, restore
 
 logger = logging.getLogger(__name__)
@@ -364,12 +365,26 @@ def _actor_fields() -> dict[str, Any]:
                     "action": {"type": "string"},
                     "mode": {
                         "type": "string",
-                        "enum": ["timeout_before_commit", "timeout_after_commit", "unavailable", "error"],
+                        "enum": [
+                            "timeout_before_commit",
+                            "timeout_after_commit",
+                            "unavailable",
+                            "error",
+                            "approval_required",
+                        ],
                     },
                     "on_call": {"type": "integer", "minimum": 1},
                     "delay_seconds": {"type": "number", "minimum": 0, "maximum": 30},
                     "status": {"type": "integer", "minimum": 400, "maximum": 599},
                     "message": {"type": "string", "maxLength": 500},
+                    "approval": {
+                        "type": "string",
+                        "description": "For `approval_required` only: the world action an approver takes to approve "
+                        "(a record change or a tool), as the environment names it. Every write of `action` is "
+                        "refused until an actor in this scenario permitted to take it has taken it, with arguments "
+                        "that include `approved_when`; the writes after that go through. Never on a read.",
+                    },
+                    "approved_when": {"type": "object"},
                 },
                 "required": ["action", "mode"],
                 "additionalProperties": False,
@@ -406,6 +421,14 @@ def _unlisted_actors(scenario: Scenario, world_root: Path) -> list[str]:
         problems.append("actors: the caller is the person in every scenario, through its persona; leave it out of actors")
     problems += _activation_problems(scenario, listed)
     problems += _folded_actors(scenario, listed)
+    playing = _in_scenario(scenario)
+    problems += [
+        f"faults: approval_required on {fault.action} needs an actor in this scenario permitted to take "
+        f"{fault.approval}; add one to actors, or drop the fault"
+        for fault in scenario.faults
+        if fault.mode == "approval_required"
+        and not any(fault.approval in listed[one].permitted_actions for one in playing if one in listed)
+    ]
     for loop in cycles(listed, scenario.actors):
         if len(loop) == 1:
             problems.append(
@@ -1042,9 +1065,14 @@ def _call_actors_short(
         return ""
     return (
         f"{including} of the {wanted} scenarios you are writing include an actor who speaks on the call and at "
-        f"least {needed} must, so every remaining one has to include one. Write this same task with one of "
-        f"the environment's speaking actors ({', '.join(usable)}) whose presence fits the person's "
-        "situation, in `actors` with its instruction and trigger."
+        f"least {needed} must, and the scenarios still to come can no longer make up the difference. Where "
+        f"someone else fits this person's situation, write this same task with one of the environment's "
+        f"speaking actors ({', '.join(usable)}) in `actors` with its instruction and trigger. Where nobody "
+        "fits, keep this one actor-free and give the actor to a scenario already written whose situation has "
+        "someone else around: resubmit that one with its `scenario_key` and the actor added, then submit this "
+        "one again. If the person asked for another share, call aim_for with `actor_share` set to it: "
+        '{"min": 1, "max": 1} for every scenario, {"min": 0, "max": 0} for none, or their range; no submission '
+        "is refused for the share after that."
     )
 
 
@@ -1498,6 +1526,19 @@ def _service_tools(contract: Any) -> set[str]:
     } - {""}
 
 
+def _read_tools(contract: Any) -> set[str]:
+    """The agent's tools that only read, by the rule the world's door applies: the declared effect, else the method."""
+    entries = (one if isinstance(one, dict) else one.model_dump() for one in (contract.tool_entrypoints or []))
+    return {
+        str(entry.get("tool") or "")
+        for entry in entries
+        if call_effect(
+            ToolCall(action="", name="", method=str(entry.get("method") or "POST"), effect=str(entry.get("effect") or ""))
+        )
+        == "read"
+    } - {""}
+
+
 def _call_actors_that_cannot_run(
     scenario: Scenario,
     listing: CallActorList | None,
@@ -1587,6 +1628,7 @@ def accept_scenario(
     used: set[str] | None = None,
     renaming: bool = False,
     service_tools: set[str] | None = None,
+    read_tools: set[str] | None = None,
 ) -> dict[str, Any]:
     """Validate one scenario, then prove it. A plain function so both halves are testable.
 
@@ -1604,6 +1646,15 @@ def accept_scenario(
         return _err(f"Not kept. {invalid}"[:600])
     if unlisted := _unlisted_actors(scenario, world_root):
         return _err("Not kept. " + " ".join(unlisted))
+    if reading := [
+        fault.action
+        for fault in scenario.faults
+        if fault.mode == "approval_required" and fault.action.rsplit(".", 1)[-1] in (read_tools or set())
+    ]:
+        return _err(
+            "Not kept. faults: approval_required holds a change, and " + ", ".join(reading) + " only reads; set it "
+            "on the write that needs the approval"
+        )
     if scenario.starts_with is not None and spoken:
         # No transport delivers an event to a voice agent: the scenario would run as an ordinary call instead.
         return _err(
@@ -2529,7 +2580,9 @@ def scenario_tools(
             )
             if seen >= _REFUSALS_BEFORE_MOVING_ON:
                 return _err(
-                    f"{said}\n\nThis is refusal {seen} of this scenario for the same reason, so "
+                    f"{said}\n\nThis is refusal {seen} "
+                    + ("across the scenarios written here" if gate else "of this scenario")
+                    + " for the same reason, so "
                     "submitting it again will not work. Drop it and write a different scenario for "
                     "this cell, or place it on a level the call actually has."
                 )
@@ -2573,11 +2626,12 @@ def scenario_tools(
             short = _red_team_short(args, target.get("axes"), kept, cap())
             if short:
                 return _refuse(short)
-        # Held in every build for new scenarios; the person's own share replaces it. A scenario
-        # already in the suite is never refused for it, so editing one never changes what it tests.
+        # The default share is a minimum held for new scenarios; a share the person set is never
+        # refused for. A scenario already in the suite is never refused for it either, so editing one
+        # never changes what it tests.
         short = (
             ""
-            if any(one.name == same for one in kept)
+            if target.get("actor_share") or any(one.name == same for one in kept)
             else _call_actors_short(
                 {**args, "name": same},
                 kept,
@@ -2645,6 +2699,7 @@ def scenario_tools(
             tools=set(contract.tool_names()),
             used=used,
             service_tools=_service_tools(contract),
+            read_tools=_read_tools(contract),
         )
         if not result.get("is_error"):
             exploration["since_submit"] = 0

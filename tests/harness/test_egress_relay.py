@@ -11,7 +11,6 @@ from urllib import request
 
 import pytest
 
-from fi.alk.harness import egress_proxy, process_runtime
 from fi.alk.harness.egress_proxy import EgressProxy
 from fi.alk.harness.world_door import MemoryLog
 
@@ -201,6 +200,30 @@ def test_an_allowed_named_host_is_tunnelled_over_connect(upstream, proxy) -> Non
     assert log.rows() == []
 
 
+def test_bytes_sent_right_behind_a_connect_reach_the_host(upstream, proxy) -> None:
+    """A client that writes its first bytes (a TLS hello) without waiting for the 200 loses none of them."""
+    one, _ = proxy
+    inside = b"POST /inside HTTP/1.1\r\nContent-Length: 4\r\n\r\nping"
+    raw = f"CONNECT {NAME}:{upstream.port} HTTP/1.1\r\nHost: {NAME}\r\n\r\n".encode() + inside
+    answer = _send(one, raw)
+    assert answer.endswith(b"ping")
+    assert upstream.seen == [("POST /inside HTTP/1.1", {"content-length": "4"}, b"ping")]
+
+
+def test_an_idle_tunnel_is_closed_after_the_tunnel_idle_time(upstream, monkeypatch) -> None:
+    monkeypatch.setenv("ALK_EGRESS_TUNNEL_IDLE_SECONDS", "0.5")
+    one = EgressProxy([NAME])
+    try:
+        with socket.create_connection(("127.0.0.1", one.server.server_address[1]), timeout=5) as connection:
+            connection.sendall(f"CONNECT {NAME}:{upstream.port} HTTP/1.1\r\n\r\n".encode())
+            assert b" 200 " in connection.recv(4096).split(b"\r\n", 1)[0]
+            started = time.monotonic()
+            assert connection.recv(1) == b""
+            assert time.monotonic() - started < 3
+    finally:
+        one.close()
+
+
 @pytest.mark.parametrize("alias", ["127.0.0.1", "localhost"])
 def test_the_proxy_never_relays_to_itself(proxy, alias) -> None:
     one, log = proxy
@@ -246,18 +269,8 @@ def test_a_silent_client_is_dropped_and_connections_past_the_bound_are_closed(mo
 
 
 @pytest.mark.parametrize(
-    ("quota", "cores", "expected"), [(2.0, 16, 64), (0.5, 16, 16), (None, 3, 96), (None, None, 32)]
+    "name", ["ALK_EGRESS_MAX_CLIENTS", "ALK_EGRESS_CLIENT_TIMEOUT_SECONDS", "ALK_EGRESS_TUNNEL_IDLE_SECONDS"]
 )
-def test_the_connection_bound_follows_the_sandbox_cpus(monkeypatch, quota, cores, expected) -> None:
-    monkeypatch.delenv("ALK_EGRESS_MAX_CLIENTS", raising=False)
-    monkeypatch.setattr(process_runtime, "_cgroup_cpu_quota", lambda: quota)
-    monkeypatch.setattr(egress_proxy.os, "cpu_count", lambda: cores)
-    assert egress_proxy._max_clients() == expected
-    monkeypatch.setenv("ALK_EGRESS_MAX_CLIENTS", "5")
-    assert egress_proxy._max_clients() == 5
-
-
-@pytest.mark.parametrize("name", ["ALK_EGRESS_MAX_CLIENTS", "ALK_EGRESS_CLIENT_TIMEOUT_SECONDS"])
 @pytest.mark.parametrize("configured", ["0", "-3", "many", "inf"])
 def test_an_unusable_override_fails_naming_the_variable(monkeypatch, name, configured) -> None:
     monkeypatch.setenv(name, configured)

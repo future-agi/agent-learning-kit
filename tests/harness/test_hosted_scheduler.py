@@ -5018,6 +5018,10 @@ def test_a_check_s_evidence_is_read_from_its_own_code() -> None:
     assert check_reads(_compiled(CALLS_CHECK)) == ("tool_calls",)
     assert check_reads(_compiled(LOG_CHECK)) == ("tool_calls",)
     assert check_reads(lambda world, calls: None) == ("world_state", "tool_calls")
+    # A world handed to a helper, or under another name, may be read for either.
+    helper = "def check(world, calls):\n    return _committed(world)\n\ndef _committed(w):\n    return w.events()\n"
+    alias = "def check(world, calls):\n    w = world\n    return w.events()\n"
+    assert check_reads(_compiled(helper)) == check_reads(_compiled(alias)) == ("world_state", "tool_calls")
 
 
 def test_a_world_state_check_with_no_world_state_is_unmeasured_with_that_reason() -> None:
@@ -5027,6 +5031,12 @@ def test_a_world_state_check_with_no_world_state_is_unmeasured_with_that_reason(
     [result] = receipt.sub_goals
     assert result.held is None and result.reason == f"{hs.UNMEASURED}The world's records could not be read."
     assert receipt.status == "errored" and receipt.failure.code == "evidence_unmeasured"
+    # The receipt carries the verdict itself, so the platform never reads it from the reason's wording.
+    from fi.alk.harness.hosted_entrypoint import sub_goal_wire
+
+    assert [sub_goal_wire(one)["verdict"] for one in receipt.sub_goals] == ["unmeasured"]
+    inconclusive = hs.SubGoalResult(name="asked", held=None, reason=f"{hs.INCONCLUSIVE}never reached", judged=True)
+    assert sub_goal_wire(inconclusive)["verdict"] == "inconclusive"
     # The same check with its evidence there is graded: here it fails on the empty world.
     assert _graded_on({}, [goal]).status == "failed"
 

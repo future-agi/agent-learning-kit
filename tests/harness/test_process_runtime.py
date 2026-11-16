@@ -4973,6 +4973,7 @@ def test_write_build_output_shape(tmp_path: Path) -> None:
             "inputs_digest": "sha256:" + "a" * 64,
             "baseline_reference": "alk_baseline_postgres",
             "row_counts": {"riders": 3},
+            "seed_digest": {},
         }
     ]
 

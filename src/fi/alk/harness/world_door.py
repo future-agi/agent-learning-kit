@@ -21,8 +21,11 @@ OUTCOMES = ("committed", "refused", "faulted", "duplicate")
 # Longest a scenario's fault holds a call, and how long a log write may hold the answer before the row is given up.
 MAX_FAULT_SECONDS = 30.0
 # Every fault a scenario can set on one of the agent's calls, and the two that hold the call before answering.
-FAULT_MODES = ("timeout_before_commit", "timeout_after_commit", "unavailable", "error")
+FAULT_MODES = ("timeout_before_commit", "timeout_after_commit", "unavailable", "error", "approval_required")
 TIMEOUT_MODES = ("timeout_before_commit", "timeout_after_commit")
+# The fault that holds every write of an action until an actor has recorded an approval, and its refusal's code.
+APPROVAL_REQUIRED = "approval_required"
+APPROVAL_MISSING = "approval_missing"
 LOG_WRITE_SECONDS = 2.0
 # A record change an actor may be permitted beside the world's tools: `<collection>.change` or `<collection>.put`.
 logger = logging.getLogger(__name__)
@@ -35,6 +38,16 @@ _IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,62}$")
 # The code of a row that marks a call of the agent's which ran without the door deciding or recording it: the trial's
 # evidence is incomplete. Never a call or a change itself.
 EVIDENCE_INCOMPLETE = "evidence_incomplete"
+# Why such a mark was written for calls made while the in-process door could not be reached; it carries their `count`.
+DOOR_OUT_OF_REACH = "the world's door was out of reach"
+# The code of a row the egress proxy writes for a request to a host outside the test world (its `REFUSAL_CODE`).
+EGRESS_BLOCKED = "egress_blocked"
+
+
+def is_attempt(row: Mapping[str, Any]) -> bool:
+    """Whether a log row is an action someone attempted in the world: never a stopped request to a host outside it,
+    nor a mark that a call ran unrecorded."""
+    return row.get("refusal_code") not in (EGRESS_BLOCKED, EVIDENCE_INCOMPLETE)
 
 
 class EvidenceUnavailable(Exception):
@@ -281,7 +294,8 @@ class WorldDoor:
         return [
             row
             for row in rows
-            if (actor is None or str(row.get("actor_id") or AGENT) == actor)
+            if is_attempt(row)
+            and (actor is None or str(row.get("actor_id") or AGENT) == actor)
             and (outcome is None or row.get("outcome") == outcome)
         ]
 
@@ -404,6 +418,17 @@ class WorldDoor:
         """Run a call the rules let through: the agent's call takes the scenario's fault when one is set on it."""
         if call.actor == AGENT:
             named = self._named_faults(call)
+            held = [one for one in named if one.get("mode") == APPROVAL_REQUIRED]
+            if held and call_effect(call) == "write":
+                try:
+                    approved = all(self._approved(one) for one in held)
+                except Exception:  # noqa: BLE001 - unknown whether an approval exists: the world's fault, never the agent's
+                    outcome = Outcome("faulted", 503, reason="whether this action was approved could not be read")
+                    self._write(call, outcome, key=key)
+                    return outcome
+                if not approved:
+                    return self._refused(call, APPROVAL_MISSING, f"{call.action} needs an approval that has not been given")
+            named = [one for one in named if one.get("mode") != APPROVAL_REQUIRED]
             if named:
                 # Held across the world call, so two calls never both take a one-shot fault on the same number.
                 with self._key_lock(f"\x01calls\x00{call.action}"):
@@ -452,6 +477,27 @@ class WorldDoor:
             return []
         names = (call.action, call.name) if self.faults_by_tool else (call.action,)
         return [one for one in faults if one.get("action") in names]
+
+    def _approved(self, fault: Mapping[str, Any]) -> bool:
+        """Whether an actor has committed the fault's `approval` action in this trial, with arguments that include its
+        `approved_when`. The door commits an actor's action only when that actor is permitted it."""
+        wanted = fault.get("approved_when") if isinstance(fault.get("approved_when"), dict) else {}
+        for row in self.log.rows():
+            arguments = row.get("arguments")
+            if isinstance(arguments, (str, bytes)):
+                try:
+                    arguments = json.loads(arguments)
+                except ValueError:
+                    arguments = {}
+            arguments = arguments if isinstance(arguments, dict) else {}
+            if (
+                row.get("outcome") == "committed"
+                and str(row.get("actor_id") or AGENT) != AGENT
+                and action_matches(logged_as(row), str(fault.get("approval") or ""))
+                and all(arguments.get(name) == value for name, value in wanted.items())
+            ):
+                return True
+        return False
 
     def _fault(self, call: ToolCall, named: list[dict[str, Any]]) -> dict[str, Any] | None:
         """The fault set on this call of the action, by which call of it this is."""
@@ -542,6 +588,10 @@ class WorldDoor:
     def _key_lock(self, key: str) -> threading.Lock:
         with self._keys_lock:
             return self._key_locks.setdefault(key, threading.Lock())
+
+    def record(self, call: ToolCall, outcome: Outcome) -> None:
+        """Writes one row the door did not decide itself (a mark that a call ran unrecorded), and waits for it."""
+        self._write(call, outcome, wait=True)
 
     def _write(
         self,

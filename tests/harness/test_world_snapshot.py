@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import os
+
+import pytest
+
 from fi.alk.harness.call_runner import TrialRecords
 from fi.alk.harness.world_snapshot import diff, digest, from_rows, start_state
 
@@ -71,31 +75,67 @@ def test_a_second_trial_that_starts_from_changed_rows_reads_differs(monkeypatch)
 def test_every_trial_s_start_is_compared_with_the_sealed_seed_never_with_trial_one(monkeypatch):
     import fi.alk.harness.world_snapshot as ws
 
-    taken = {
-        "seed": from_rows(_orders({"id": 1, "status": "paid"})),
-        "world": iter([from_rows(_orders({"id": 1, "status": "refunded"})), from_rows(_orders({"id": 1, "status": "paid"}))]),
-    }
-    monkeypatch.setattr(ws, "snapshot", lambda dsn, **_: taken["seed"] if dsn == "seed" else next(taken["world"]))
-    records = TrialRecords(lambda dsn: "seed")
-    # Trial 1 started from changed rows: it differs from the sealed seed, and it is no one's baseline.
+    two = from_rows({"orders": (["id"], [{"id": 1}, {"id": 2}]), "refunds": (["id"], [])})
+    taken = iter([two, from_rows(_orders({"id": 1}))])
+    read: list[str] = []
+    monkeypatch.setattr(ws, "snapshot", lambda dsn, **_: read.append(dsn) or next(taken))
+    # The seed as the build digested it at seal time: one order.
+    records = TrialRecords(lambda: digest(from_rows(_orders({"id": 1}))))
+    # Trial 1 started with an extra row: it differs from the sealed seed, and it is no one's baseline.
     records.start("w0", "dsn")
     assert records._starts.pop("w0")[1] == {"state": "differs", "tables": ["orders"], "against": "sealed_seed"}
     records.start("w0", "dsn")
     assert records._starts.pop("w0")[1] == {"state": "seeded", "tables": [], "against": "sealed_seed"}
+    # Only the world's own database is ever read: never the template every world is reset from.
+    assert read == ["dsn", "dsn"]
 
 
-def test_the_sealed_seed_is_the_template_the_build_output_names(tmp_path):
+@pytest.mark.skipif(not os.environ.get("ALK_TEST_POSTGRES_DSN"), reason="needs ALK_TEST_POSTGRES_DSN")
+def test_a_seed_sealed_closed_to_connections_is_still_what_every_trial_s_start_is_compared_with(tmp_path):
     import json
+    import uuid
 
-    from fi.alk.harness.call_runner import sealed_seed_dsn
+    import psycopg
+    from psycopg.conninfo import conninfo_to_dict, make_conninfo
 
-    (tmp_path / "artifacts").mkdir()
-    (tmp_path / "artifacts" / "build.json").write_text(
-        json.dumps({"stores": [{"strategy": "template_database", "baseline_reference": "world_tpl"}]})
-    )
-    seed = sealed_seed_dsn(tmp_path)("postgresql://u:p@h:5432/world_3")
-    assert "dbname=world_tpl" in seed and "host=h" in seed
-    assert sealed_seed_dsn(tmp_path / "none")("postgresql://u:p@h:5432/world_3") is None
+    from fi.alk.harness.call_runner import sealed_seed
+    from fi.alk.harness.process_runtime import EngineCredentials, sealed_seed_digest
+
+    admin = os.environ["ALK_TEST_POSTGRES_DSN"]
+    parts = conninfo_to_dict(admin)
+    template, world = f"seed_{uuid.uuid4().hex[:8]}", f"world_{uuid.uuid4().hex[:8]}"
+    with psycopg.connect(admin, autocommit=True) as connection:
+        connection.execute(f'CREATE DATABASE "{template}"')
+    try:
+        with psycopg.connect(make_conninfo(admin, dbname=template), autocommit=True) as connection:
+            connection.execute("CREATE TABLE orders (id int PRIMARY KEY, status text)")
+            connection.execute("INSERT INTO orders VALUES (1, 'open')")
+        # The seal path: digest first, then the template closes, as the build does.
+        digested = sealed_seed_digest(
+            host=parts["host"], port=int(parts.get("port") or 5432),
+            credentials=EngineCredentials(parts["user"], parts.get("password", "")), dbname=template,
+        )
+        with psycopg.connect(admin, autocommit=True) as connection:
+            connection.execute(f'ALTER DATABASE "{template}" WITH IS_TEMPLATE true ALLOW_CONNECTIONS false')
+            connection.execute(f'CREATE DATABASE "{world}" TEMPLATE "{template}"')
+        (tmp_path / "artifacts").mkdir()
+        (tmp_path / "artifacts" / "build.json").write_text(
+            json.dumps({"stores": [{"strategy": "template_database", "baseline_reference": template,
+                                    "seed_digest": digested}]})
+        )
+        world_dsn = make_conninfo(admin, dbname=world)
+        records = TrialRecords(sealed_seed(tmp_path))
+        records.start("t1", world_dsn)
+        assert records._starts.pop("t1")[1] == {"state": "seeded", "tables": [], "against": "sealed_seed"}
+        with psycopg.connect(world_dsn, autocommit=True) as connection:
+            connection.execute("UPDATE orders SET status = 'closed'")
+        records.start("t2", world_dsn)
+        assert records._starts.pop("t2")[1] == {"state": "differs", "tables": ["orders"], "against": "sealed_seed"}
+    finally:
+        with psycopg.connect(admin, autocommit=True) as connection:
+            connection.execute(f'DROP DATABASE IF EXISTS "{world}"')
+            connection.execute(f'ALTER DATABASE "{template}" WITH IS_TEMPLATE false')
+            connection.execute(f'DROP DATABASE IF EXISTS "{template}"')
 
 
 def test_start_state_is_unknown_when_a_start_could_not_be_read():

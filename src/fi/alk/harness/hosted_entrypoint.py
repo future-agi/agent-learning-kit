@@ -1612,17 +1612,7 @@ class OutboundAdapter:
             scenario_attempt=receipt.scenario_attempt,
             world_index=receipt.world_index,
             status=receipt.status,
-            sub_goals=[
-                {
-                    "name": g.name,
-                    "held": g.held,
-                    "reason": g.reason,
-                    "judged": g.judged,
-                    **({"verdict": g.verdict} if g.verdict else {}),
-                    **({"evidence": list(g.evidence)} if getattr(g, "evidence", ()) else {}),
-                }
-                for g in receipt.sub_goals
-            ],
+            sub_goals=[sub_goal_wire(g) for g in receipt.sub_goals],
             evaluations=[_evaluation_wire(e) for e in receipt.evaluations],
             call=call,
             failure=failure,
@@ -1922,6 +1912,19 @@ class OutboundAdapter:
                 break
         await self.push_manifest(complete=complete, deadline=deadline)
         return self.is_fenced
+
+
+def sub_goal_wire(goal: Any) -> dict[str, Any]:
+    """One sub-goal as the receipt carries it. `verdict` is always given when there is one (`unmeasured`,
+    `inconclusive`, `not_applicable`, `pass`, `fail`), so the platform never reads it from the reason's wording."""
+    return {
+        "name": goal.name,
+        "held": goal.held,
+        "reason": goal.reason,
+        "judged": goal.judged,
+        **({"verdict": goal.verdict} if goal.verdict else {}),
+        **({"evidence": list(goal.evidence)} if getattr(goal, "evidence", ()) else {}),
+    }
 
 
 def _evaluation_wire(evaluation: Any) -> dict[str, Any]:

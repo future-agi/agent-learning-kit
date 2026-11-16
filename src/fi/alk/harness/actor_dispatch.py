@@ -564,6 +564,8 @@ class ActorDispatcher:
             "outcome": outcome,
             "timeout_seconds": actor.activation.timeout_seconds,
             "parent": cause or None,
+            # When the wait ran out, on the action log's clock: what the agent wrote after it is after the decision.
+            "at": time.time(),
         }
         if outcome == "fallback_action":
             sent = await self._send(

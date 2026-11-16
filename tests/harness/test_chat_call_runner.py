@@ -1657,6 +1657,59 @@ def test_a_chat_trial_s_faults_are_set_for_the_tool_proxy_and_cleared_after(tmp_
     assert written == []
 
 
+def test_a_proxied_chat_trial_whose_faults_cannot_be_read_back_reaches_the_scheduler_unmeasured(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    from fi.alk.harness import call_runner
+
+    context = _context(tmp_path)
+    path = context.bundle_dir / "scenarios" / "one" / "scenario.json"
+    document = json.loads(path.read_text(encoding="utf-8"))
+    document["faults"] = [{"action": "crm.apply_discount", "mode": "unavailable"}]
+    path.write_text(json.dumps(document), encoding="utf-8")
+    monkeypatch.setattr(call_runner, "_write_trial_state", lambda _runtime, _faults: None)
+    monkeypatch.setattr(call_runner, "trial_faults_readable", lambda _dsn: False)
+    monkeypatch.setattr(chat, "_tool_world", lambda *_args: _ToolWorld())
+    monkeypatch.setattr(chat, "_drive_conversation", _single_exchange)
+
+    class Wrapper:
+        def __init__(self, **_kwargs: Any) -> None:
+            return
+
+        async def call(self, _request: Any) -> AgentResponse:
+            return AgentResponse(content="Done.")
+
+    monkeypatch.setattr(chat, "HTTPAgentWrapper", Wrapper)
+    endpoints = {
+        "target_http": RuntimeEndpoint(capability="target_http", protocol="http", address="http://localhost:18080"),
+        "tool_proxy": RuntimeEndpoint(capability="tool_proxy", protocol="http", address="http://localhost:18081"),
+        "world_db": RuntimeEndpoint(capability="world_db", protocol="postgres", address="postgresql://world"),
+    }
+    runtime = EnvironmentRuntime(
+        runtime_id="runtime-1", world_index=0, bundle_digest="sha256:" + "a" * 64, state=RuntimeState.READY,
+        endpoints=endpoints,
+    )
+    real_door = chat.chat_door
+    monkeypatch.setattr(chat, "chat_door", lambda world, _mirror, *args, **kwargs: real_door(world, None, *args, **kwargs))
+    outcome = asyncio.run(
+        chat.HostedChatCallRunner(_Adapter(), context).run(SimpleNamespace(scenario_key="one", scenario_id="s1"), runtime)
+    )
+    assert outcome.unmeasured and "unreadable" in outcome.unmeasured[0]
+
+
+def test_a_chat_trial_whose_door_kept_no_row_for_an_in_process_call_reads_evidence_incomplete():
+    from fi.alk.harness.call_runner import evidence_notices, missing_evidence
+    from fi.alk.harness.world.runtime import Call
+
+    calls = [Call(name="update_record", arguments={}, ok=True)] * 3
+    log = [{"name": "update_record", "actor_id": "agent", "outcome": "committed"}]
+    # The door went down after the first call: two calls ran with no row and no mark.
+    [notice] = evidence_notices(log, calls, {"update_record"})
+    assert notice["count"] == 2 and "kept no row" in notice["message"]
+    assert "tool_calls" in missing_evidence([notice], {})
+    assert evidence_notices(log * 3, calls, {"update_record"}) == []
+
+
 def test_a_readiness_probe_applies_none_of_the_scenario_s_faults(tmp_path: Path, monkeypatch: Any) -> None:
     """The probe checks how the tools reach the world; a scenario's fault would fail it and block Validate and Save."""
     import dataclasses
@@ -1894,3 +1947,17 @@ def test_a_trial_without_actors_still_seals_world_changes() -> None:
     [agent] = record["state_changes"]
     assert agent["committed_actions"] == ["issue_refund"]
     assert chat._world_actors_record(None, ActorList(), None, None, SimpleNamespace(rows=list), {}) is None
+
+
+def test_a_proxied_trial_whose_world_log_cannot_be_read_has_no_log_never_only_this_process_s_rows():
+    def unreadable():
+        raise RuntimeError("down")
+
+    own = [{"name": "update", "at": 5.0}]
+    door = SimpleNamespace(log=SimpleNamespace(rows=lambda: own, mirror=SimpleNamespace(rows=unreadable)))
+    # The agent's calls go through the tool proxy into the world's table only: without it the log is unknown.
+    assert chat._readable_trial_log(door, 0.0, proxied=True) is None
+    # A trial that is not proxied has every call in this process's own rows.
+    assert chat._readable_trial_log(door, 0.0) == own
+    readable = SimpleNamespace(log=SimpleNamespace(rows=lambda: own, mirror=SimpleNamespace(rows=lambda: own)))
+    assert chat._readable_trial_log(readable, 0.0, proxied=True) == own

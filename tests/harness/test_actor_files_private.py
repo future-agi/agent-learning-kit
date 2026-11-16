@@ -14,7 +14,7 @@ from pathlib import Path
 import pytest
 
 from fi.alk.harness import hosted_entrypoint as he
-from fi.alk.harness import privilege, user_files
+from fi.alk.harness import privilege
 from fi.alk.harness.privilege import IsolationMode
 
 ACTOR_FILES = ("actors.json", "actor_rules.json")
@@ -33,40 +33,21 @@ def _mode(path: Path) -> int:
     return stat.S_IMODE(path.stat().st_mode)
 
 
-class _Chown:
-    def __init__(self) -> None:
-        self.calls: list[tuple[str, int, int]] = []
-
-    def __call__(self, path, uid, gid, *, dir_fd=None) -> None:
-        self.calls.append((Path(path).name, uid, gid))
-        user_files.chown_no_follow(path, uid, gid, dir_fd=dir_fd)
-
-
-def test_per_user_isolation_leaves_actor_files_to_the_harness_alone(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.setattr(privilege, "_mode", IsolationMode.PER_USER)
+@pytest.mark.parametrize(("mode", "private"), [(IsolationMode.PER_USER, True), (IsolationMode.FIXED_USER, False)])
+def test_actor_files_are_the_harness_s_alone_only_under_per_user_isolation(
+    tmp_path: Path, monkeypatch, mode, private
+) -> None:
+    monkeypatch.setattr(privilege, "_mode", mode)
     bundle = _bundle(tmp_path / "bundle")
-    chown = _Chown()
-    he.close_actor_files(bundle, chown=chown)
-    assert chown.calls == [(name, os.geteuid(), os.getegid()) for name in ACTOR_FILES]
+    he.close_actor_files(bundle)
     for name in ACTOR_FILES:
         path = bundle / name
-        assert _mode(path) == 0o600
+        assert _mode(path) == (0o600 if private else 0o644)
         assert path.stat().st_uid == os.geteuid()
         # The harness, as owner, still reads it.
         assert path.read_text(encoding="utf-8") == f'{{"file": "{name}"}}'
     for name in GRADER_FILES:
         assert _mode(bundle / name) == 0o644
-
-
-def test_without_per_user_isolation_nothing_changes(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.setattr(privilege, "_mode", IsolationMode.FIXED_USER)
-    bundle = _bundle(tmp_path / "bundle")
-    chown = _Chown()
-    he.close_actor_files(bundle, chown=chown)
-    assert chown.calls == []
-    assert {name: _mode(bundle / name) for name in (*ACTOR_FILES, *GRADER_FILES)} == dict.fromkeys(
-        (*ACTOR_FILES, *GRADER_FILES), 0o644
-    )
 
 
 def test_a_bundle_without_actors_or_with_a_linked_one_is_left_alone(tmp_path: Path, monkeypatch) -> None:
@@ -77,9 +58,7 @@ def test_a_bundle_without_actors_or_with_a_linked_one_is_left_alone(tmp_path: Pa
     elsewhere.write_text("{}", encoding="utf-8")
     elsewhere.chmod(0o644)
     (bundle / "actors.json").symlink_to(elsewhere)
-    chown = _Chown()
-    he.close_actor_files(bundle, chown=chown)
-    assert chown.calls == []
+    he.close_actor_files(bundle)
     assert _mode(elsewhere) == 0o644
 
 

@@ -113,8 +113,12 @@ the message they answer), and `about`, the situation. Never write their lines: t
 themselves when the scenario is kept, and the thread is replayed into the world before every trial. A session needs a
 place the world has; if the environment has no such service, the scenario cannot have that session. The pre-run
 conversation is the starting state and is never graded. Something one actor wrote before the run that the agent
-will find (a note, a record) goes in `history`: each entry one of that actor's permitted actions, in order, written
-as that actor would, knowing only what it knows; the same on every trial, never graded, never the answer.
+will find (a note, a record) is a session of that actor alone, written once; it knows only what that actor knows and
+never holds the answer:
+
+```json
+{"pre_run": [{"actors": ["<actor id>"], "where": {"action": "<service>.<action that writes it>", "arguments": {"<place field>": "<place>"}}, "about": "<what the note says>", "max_messages": 1}]}
+```
 
 **Task-driven and event-started runs.** For an agent started by a message rather than by a person, `starts_with`
 gives that message; there is no caller. A task the scenario itself hands the agent (summarize this thread, fix this
@@ -126,6 +130,6 @@ the instruction says what happened, and the sub-goals grade what the agent did i
 **What is graded.** Every sub-goal grades the agent, never an actor. A sub-goal can depend on an actor (give its
 `actor`): it then reads not applicable when that actor never came in, and inconclusive when it came in and never
 reached the agent. A check can read the trial's action log with `world.events(actor_id=None, outcome=None)`: every
-attempted action, whose it was (`agent` for the agent under test) and what came of it, so a check can assert the order
+action attempted in the world (never a request to a host outside it), whose it was (`agent` for the agent under test) and what came of it, so a check can assert the order
 of the agent's actions against an actor's, and the outcome of each of the agent's attempts. Never assert what an
 actor did as the thing tested.

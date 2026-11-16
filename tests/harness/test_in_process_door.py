@@ -201,9 +201,12 @@ def test_a_door_out_of_reach_lets_the_tool_run_and_says_so_once_it_is_back(monke
     monkeypatch.setattr(bootstrap, "_post", back)
     assert held(3) == 4
     assert sent[0]["unrecorded"] == 2 and "unrecorded" not in sent[-1]
-    assert [row["error"] for row in log.rows() if row.get("refusal_code") == EVIDENCE_INCOMPLETE] == [
-        "the world's door was out of reach"
-    ] * 2
+    # One log write for both, carrying how many.
+    marks = [row for row in log.rows() if row.get("refusal_code") == EVIDENCE_INCOMPLETE]
+    assert [(row["error"], row["arguments"]) for row in marks] == [("the world's door was out of reach", {"count": 2})]
+    from fi.alk.harness.call_runner import evidence_notices
+
+    assert evidence_notices(log.rows())[0]["count"] == 2
 
 
 def test_an_async_tool_stays_async_and_loses_its_answer_on_a_timeout_after_commit(monkeypatch):

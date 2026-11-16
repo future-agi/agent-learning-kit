@@ -437,13 +437,13 @@ def contract_tools(
                             "tables_read": {
                                 "type": "array",
                                 "items": {"type": "string"},
-                                "description": "The world's tables the tool reads, from its code.",
+                                "description": "The world's tables the tool reads, declared from its code.",
                             },
                             "tables_changed": {
                                 "type": "array",
                                 "items": {"type": "string"},
                                 "description": "The world's tables the tool adds to, changes or deletes from, "
-                                "from its code.",
+                                "declared from its code.",
                             },
                             "description": {"type": "string"},
                             "requires": {

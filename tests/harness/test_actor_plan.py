@@ -470,45 +470,73 @@ def test_an_approval_line_reads_request_decision_and_the_agent_s_writes_around_i
     assert line["acted_before_decision"] is False
 
 
-def _decided(verdict):
+@pytest.mark.parametrize(
+    "reply, verdict, flagged",
+    [('"verdict": "refused"', "refused", True), ('"verdict": "approved"', "approved", False),
+     ('"verdict": "maybe"', None, False), ('"why": "no verdict given"', None, False)],
+)
+def test_a_live_actor_s_verdict_is_recorded_and_a_write_after_a_refusal_is_flagged(reply, verdict, flagged):
     from fi.alk.harness.call_runner import approvals
+    from fi.simulate.simulation.call_actors import read_decision
 
+    said = read_decision('{"action": "approvals.change", ' + reply + "}")
     log = [
         {"actor_id": "agent", "name": "ask", "action_id": "a1", "at": 1.0, "outcome": "committed"},
         {"actor_id": "approver", "name": "approvals.change", "action_id": "m1", "at": 2.0, "outcome": "committed",
          "parent_event_id": "a1"},
         {"actor_id": "agent", "name": "apply", "action_id": "a2", "at": 3.0, "outcome": "committed"},
     ]
-    decisions = [{"actor": "approver", "play": "live", "action": "approvals.change", "parent": "a1",
-                  "outcome": "committed", "verdict": verdict}]
+    decisions = [{"actor": "approver", "play": "live", "action": said.action, "parent": "a1",
+                  "outcome": "committed", "verdict": said.verdict}]
     [line] = approvals(log, decisions)
-    return line
+    assert line["verdict"] == line["decision"]["verdict"] == verdict
+    assert line["committed_after_refusal"] is flagged
 
 
-def test_a_write_committed_after_a_refusal_is_flagged_with_the_refused_verdict():
-    line = _decided("refused")
-    assert line["verdict"] == "refused" and line["decision"]["verdict"] == "refused"
+@pytest.mark.parametrize("verdict", ["approved", "refused"])
+def test_a_scheduled_action_s_verdict_reaches_the_approval_line_through_the_dispatcher(verdict):
+    from fi.alk.harness.call_runner import approvals
+
+    sent: list = []
+    actor = Actor(id="mgr", name="Mgr", permitted_actions=["approvals.change"])
+    dispatcher = ActorDispatcher(
+        {"mgr": actor},
+        [ScenarioActor.model_validate(
+            {"id": "mgr", "actions": [{"action": "approvals.change", "arguments": {}, "verdict": verdict}]}
+        )],
+        act=door_acts(_sent_to(sent)),
+        trial_id="t",
+        read_log=list,
+        seed="t",
+    )
+    asyncio.run(dispatcher.tick())
+    [fired] = [one for one in dispatcher.record() if one.get("play") == "mocked"]
+    assert fired["verdict"] == verdict
+    log = [
+        {"actor_id": "agent", "name": "ask", "action_id": "a1", "at": 1.0, "outcome": "committed"},
+        {"actor_id": "mgr", "name": "approvals.change", "action_id": "m1", "at": 2.0, "outcome": "committed",
+         "parent_event_id": "a1"},
+        {"actor_id": "agent", "name": "apply", "action_id": "a2", "at": 3.0, "outcome": "committed"},
+    ]
+    [line] = approvals(log, [{**fired, "parent": "a1"}])
+    # The write after the decision committed, and the verdict is on the approval and on its decision.
+    assert line["after_decision"] == [{"action": "apply", "outcome": "committed"}]
+    assert line["verdict"] == line["decision"]["verdict"] == verdict
+    assert line["committed_after_refusal"] is (verdict == "refused")
+
+
+def test_a_declining_timeout_has_a_decision_time_so_a_later_write_reads_committed_after_refusal():
+    from fi.alk.harness.call_runner import approvals
+
+    log = [
+        {"action_id": "a1", "actor_id": "agent", "name": "approvals.request", "outcome": "committed", "at": 1.0},
+        {"action_id": "a2", "actor_id": "agent", "name": "orders.cancel", "outcome": "committed", "at": 5.0},
+    ]
+    decisions = [{"actor": "mgr", "play": "timeout", "fallback": "decline", "outcome": "declined", "parent": "a1",
+                  "at": 3.0}]
+    [line] = approvals(log, decisions)
+    assert line["after_decision"] == [{"action": "orders.cancel", "outcome": "committed"}]
     assert line["committed_after_refusal"] is True
-
-
-def test_a_write_committed_after_an_approval_is_not_flagged():
-    line = _decided("approved")
-    assert line["verdict"] == "approved"
-    assert line["committed_after_refusal"] is False
-
-
-def test_an_approval_with_no_recorded_verdict_reads_none_and_flags_nothing():
-    line = _decided(None)
-    assert line["verdict"] is None and line["committed_after_refusal"] is False
-
-
-def test_a_scheduled_action_s_verdict_and_a_live_reply_s_verdict_reach_the_decision_record():
-    from fi.alk.harness.actors import ScheduledAction
-    from fi.simulate.simulation.call_actors import read_decision
-
-    assert ScheduledAction(action="approvals.change", verdict="refused").verdict == "refused"
-    assert read_decision('{"action": "approvals.change", "verdict": "approved"}').verdict == "approved"
-    assert read_decision('{"action": "approvals.change", "verdict": "maybe"}').verdict is None
 
 
 def test_a_world_tool_that_asks_who_acts_gets_the_actor_s_identity_there():
@@ -1423,6 +1451,9 @@ def test_the_models_an_actor_may_name_are_the_simulator_s_configured_models_seal
     from fi.alk.harness.simulator_voice import SIMULATOR_LLM_DEFAULTS
 
     assert actor_rules()["actor_models"] == [SIMULATOR_LLM_DEFAULTS["openai"]]
+    # The job's own provider is read first, as the runner reads it.
+    monkeypatch.setenv("SIMULATOR_LLM_PROVIDER", "google")
+    assert actor_rules({"simulator_llm_provider": "openai"})["actor_models"] == [SIMULATOR_LLM_DEFAULTS["openai"]]
 
 
 def test_the_sealed_actor_rules_carry_each_limit_s_default_as_a_run_resolves_it(tmp_path):
