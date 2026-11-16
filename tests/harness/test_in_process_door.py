@@ -36,6 +36,25 @@ def test_a_tool_that_raised_is_logged_as_the_world_refusing_it():
 
 
 @pytest.mark.parametrize(
+    "answer",
+    [
+        json.dumps({"error": "the payment provider did not accept the refund: URLError"}),
+        {"error": "the payment provider did not accept the refund: URLError"},
+    ],
+)
+def test_a_tool_that_answered_with_an_error_is_refused_never_committed(answer):
+    # The tool returned instead of raising, but it did not do its work: the same as a tools service's 4xx.
+    door, log = _door()
+    decision = door.begin("issue_refund", {"order": 7})
+    assert door.end(decision["id"], True, answer)["outcome"] == "refused"
+    [row] = log.rows()
+    assert row["outcome"] == "refused" and row["error"].startswith("the payment provider did not accept")
+    # An answer that only mentions an error elsewhere still counts as done.
+    decision = door.begin("issue_refund", {"order": 8})
+    assert door.end(decision["id"], True, {"refund_id": "RF-9", "error_count": 0})["outcome"] == "committed"
+
+
+@pytest.mark.parametrize(
     ("fault", "status"),
     [
         ({"mode": "unavailable"}, 503),

@@ -80,6 +80,20 @@ class _Pending:
     outcome: Outcome | None = None
 
 
+def _answered_error(result: Any) -> str | None:
+    """The error a tool answered with instead of doing its work (`{"error": ...}`, as text or as an object): the
+    tool's own refusal, which a tools service says with a 4xx and an in-process tool says in its return value."""
+    value = result
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except ValueError:
+            return None
+    if isinstance(value, dict) and value.get("error"):
+        return str(value["error"])[:2000]
+    return None
+
+
 class _AgentRuns:
     """The door's executor for a tool the agent runs itself: it lets the call run in the agent's process and waits
     for the agent to say what came of it."""
@@ -166,8 +180,13 @@ class InProcessDoor:
             waiting = self.pending.get(call_id)
         if waiting is None:
             return {"lost": False}
+        answered = _answered_error(result) if ok else None
         waiting.executed = (
-            Executed(200, result) if ok else Executed(400, result, error=str(error or "the tool raised")[:2000])
+            Executed(400, result, error=answered)
+            if answered
+            else Executed(200, result)
+            if ok
+            else Executed(400, result, error=str(error or "the tool raised")[:2000])
         )
         waiting.ended.set()
         waiting.finished.wait(DECIDE_SECONDS)
