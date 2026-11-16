@@ -3687,6 +3687,30 @@ def test_a_row_without_a_logged_effect_takes_the_contract_s_declared_effect() ->
     assert record["committed_writes"] == 1
 
 
+def test_shared_records_say_which_cap_cut_them() -> None:
+    def fields(records: int, actions: int) -> dict[str, Any]:
+        log = [_row("list_refunds", "order_lookup", order_id=str(n)) for n in range(records)]
+        log += [_row("list_refunds", "refund", order_id=str(n)) for n in range(records)]
+        log += [_row("list_refunds", "refund", order_id="0") for _ in range(actions - 2)]
+        return cr.trial_shared_record_fields(log, _RETURNS_TOOLS)
+
+    below = fields(cr._SHARED_RECORD_KEYS, cr._SHARED_RECORD_ACTIONS)
+    assert below["shared_records_truncated"] is False
+    assert [one["actions_truncated"] for one in below["shared_records"]] == [False] * cr._SHARED_RECORD_KEYS
+    assert not any(one["truncated"] for one in below["shared_records"])
+
+    many_records = fields(cr._SHARED_RECORD_KEYS + 1, 2)
+    assert many_records["shared_records_truncated"] is True
+    assert len(many_records["shared_records"]) == cr._SHARED_RECORD_KEYS
+    assert not any(one["actions_truncated"] for one in many_records["shared_records"])
+
+    many_actions = fields(1, cr._SHARED_RECORD_ACTIONS + 1)
+    assert many_actions["shared_records_truncated"] is False
+    (record,) = many_actions["shared_records"]
+    assert record["actions_truncated"] is True and record["truncated"] is True
+    assert len(record["actions"]) == cr._SHARED_RECORD_ACTIONS
+
+
 def _cut_voice_call(runner: cr.CallRunnerImpl, entered: asyncio.Event) -> Any:
     async def scenario():
         task = asyncio.create_task(

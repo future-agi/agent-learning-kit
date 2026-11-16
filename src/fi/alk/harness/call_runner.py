@@ -1342,6 +1342,13 @@ def trial_shared_records(log: list[dict[str, Any]], contract: Any) -> list[dict[
     """Each record (`<argument>=<value>` for an `id` or `*_id` argument) two or more participants named in this trial,
     and what the world made of each call. `write` is the door's logged effect, else the contract's declared one, else
     true when the tool describes effects; null when nothing says."""
+    return trial_shared_record_fields(log, contract).get("shared_records", [])
+
+
+def trial_shared_record_fields(log: list[dict[str, Any]], contract: Any) -> dict[str, Any]:
+    """The trial's sealed `shared_records` and `shared_records_truncated` (more records than the cap), empty when no
+    record is shared. Each record says `actions_truncated` (more actions than the cap); `truncated` is either one, for
+    older readers."""
     effects = _tool_effects(contract)
     keys: dict[str, dict[str, Any]] = {}
     for row in log:
@@ -1369,10 +1376,13 @@ def trial_shared_records(log: list[dict[str, Any]], contract: Any) -> list[dict[
                 {"who": who, "tool": tool, "outcome": str(outcome), "write": _row_writes(row, effects.get(tool))}
             )
     shared = [entry for entry in keys.values() if len({one["who"] for one in entry["actions"]}) >= 2]
+    if not shared:
+        return {}
     truncated = len(shared) > _SHARED_RECORD_KEYS
     records = []
     for entry in shared[:_SHARED_RECORD_KEYS]:
         actions = entry["actions"]
+        actions_truncated = len(actions) > _SHARED_RECORD_ACTIONS
         records.append(
             {
                 **entry,
@@ -1380,22 +1390,23 @@ def trial_shared_records(log: list[dict[str, Any]], contract: Any) -> list[dict[
                 "committed_writes": sum(
                     1 for one in actions if one["write"] is True and one["outcome"] == "committed"
                 ),
-                "truncated": truncated or len(actions) > _SHARED_RECORD_ACTIONS,
+                "actions_truncated": actions_truncated,
+                "truncated": truncated or actions_truncated,
             }
         )
-    return records
+    return {"shared_records": records, "shared_records_truncated": truncated}
 
 
-def _shared_records(runtime: EnvironmentRuntime, bundle_dir: Path) -> list[dict[str, Any]]:
+def _shared_records(runtime: EnvironmentRuntime, bundle_dir: Path) -> dict[str, Any]:
     database = _find_postgres_endpoint(runtime)
     if database is None:
-        return []
+        return {}
     try:
         log = _read_action_log(database.address)
     except Exception as exc:  # noqa: BLE001 - no shared records, never a failed call
         logger.debug("shared records unreadable: %s", type(exc).__name__)
-        return []
-    return trial_shared_records(log, _bundle_contract(Path(bundle_dir)))
+        return {}
+    return trial_shared_record_fields(log, _bundle_contract(Path(bundle_dir)))
 
 
 def duplicate_commits(log: Sequence[Mapping[str, Any]], solution: Sequence[Any] = ()) -> list[dict[str, Any]]:
@@ -4037,9 +4048,7 @@ class CallRunnerImpl:
                         **records,
                         **({"unreadable": True} if changes is None else {}),
                     }
-                    shared = _shared_records(runtime, self._context.bundle_dir)
-                    if shared:
-                        transcript_document["world_actors"]["shared_records"] = shared
+                    transcript_document["world_actors"].update(_shared_records(runtime, self._context.bundle_dir))
                 else:
                     # The agent's tools run where the world's door cannot see them: said, never shown as no change.
                     transcript_document["world_actors"] = dict(NOT_RECORDED)

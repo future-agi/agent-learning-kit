@@ -432,7 +432,7 @@ def _world_actors_record(
     """What actors did in the world this trial and what each participant changed, sealed beside the transcript as a
     call seals it, on every trial with a door, actors or not (`actions` and `decisions` then empty); None only when
     there is no door."""
-    from .call_runner import actor_rows, approvals, trial_shared_records, trial_state_changes
+    from .call_runner import actor_rows, approvals, trial_shared_record_fields, trial_state_changes
 
     if door is None:
         return None
@@ -469,10 +469,8 @@ def _world_actors_record(
         "limits": dict(limits),
         "usage": meter.rows(),
     }
-    shared = trial_shared_records(log, contract)
-    if shared:
-        # Which participants named the same record and what the world made of each call.
-        record["shared_records"] = shared
+    # Which participants named the same record and what the world made of each call.
+    record.update(trial_shared_record_fields(log, contract))
     return record
 
 
