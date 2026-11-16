@@ -7,7 +7,7 @@ import asyncio
 import pytest
 
 from fi.alk.harness.actor_dispatch import ActorDispatcher as _Dispatcher
-from tests.harness._door_acts import door_acts
+from _door_acts import door_acts
 from fi.alk.harness.actors import Actor, ActorList, ScenarioActor
 
 

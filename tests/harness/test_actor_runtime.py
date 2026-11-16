@@ -424,7 +424,7 @@ def _history_dispatcher(history, actors):
         sent.append((url, headers, arguments))
         return 200
 
-    from tests.harness._door_acts import door_acts
+    from _door_acts import door_acts
     from fi.alk.harness.actors import PreRunSession
 
     dispatcher = ActorDispatcher(

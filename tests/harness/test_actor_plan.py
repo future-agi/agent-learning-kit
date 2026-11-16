@@ -9,7 +9,7 @@ import pytest
 
 from fi.alk.harness.actor_dispatch import ActorDispatcher, world_summary
 
-from tests.harness._door_acts import door_acts
+from _door_acts import door_acts
 from fi.alk.harness.actors import (
     Activation,
     Actor,
