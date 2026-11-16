@@ -12,7 +12,7 @@ import time
 from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Awaitable, Mapping, Sequence
+from typing import Any, Awaitable, Callable, Mapping, Sequence
 
 from fi._diagnostics import sanitize_diagnostic
 from fi.simulate.agent.wrapper import AgentInput
@@ -112,6 +112,73 @@ DEFAULT_CHAT_TARGET_TIMEOUT_SECONDS = 300.0
 # scheduler inside its seal bound (15 s from the stop), as a stopped voice call's teardown is cut short.
 _STOPPED_WIND_DOWN_SECONDS = 8.0
 _STOP_POLL_SECONDS = 0.25
+
+
+async def _sealed_through_stop(
+    stop_requested: Callable[[], bool], drive: Callable[[asyncio.Event], Awaitable[CallOutcome]]
+) -> CallOutcome:
+    """Run a chat call so that a person's stop cuts its conversation, never what follows it.
+
+    `drive` sets the event it is given once the conversation is over. A stop before that is passed on to the call, which
+    seals the cut conversation; a stop after it is absorbed, so the call seals what it kept and is then said as the
+    person's stop. A cancel that is not a stop reaches the call anywhere.
+    """
+    sealing = asyncio.Event()
+    call = asyncio.ensure_future(drive(sealing))
+    stopped_while_sealing = False
+    while not call.done():
+        try:
+            await asyncio.wait({call})
+        except asyncio.CancelledError:
+            if stop_requested():
+                task = asyncio.current_task()
+                if task is not None and hasattr(task, "uncancel"):
+                    task.uncancel()
+                if sealing.is_set():
+                    stopped_while_sealing = True
+                    continue
+            call.cancel()
+    outcome = call.result()
+    if stopped_while_sealing:
+        # Sealed like any call, then said as the person's stop.
+        raise CallCancelled(partial=replace(outcome, stop_reason="user_canceled"))
+    return outcome
+
+
+def _stopped_call(cancel: asyncio.CancelledError) -> tuple[CallCancelled, Transcript]:
+    """The failure and transcript a call seals when a person's stop cut its conversation (the caller checked the stop)."""
+    failure = CallCancelled()
+    partial = getattr(cancel, "partial_transcript", None)
+    setattr(failure, "partial_transcript", partial)
+    task = asyncio.current_task()
+    if task is not None and hasattr(task, "uncancel"):
+        # Python 3.11+: the uploads that follow run as an uncancelled task. On 3.10 the caught cancel leaves nothing
+        # pending.
+        task.uncancel()
+    return failure, partial or Transcript()
+
+
+async def _within_stop_bound(stop_requested: Callable[[], bool], step: Awaitable[None]) -> None:
+    """Wait for `step`, but no longer than `_STOPPED_WIND_DOWN_SECONDS` after a person's stop."""
+    task = asyncio.ensure_future(step)
+    loop = asyncio.get_running_loop()
+    stopped_at: float | None = None
+    try:
+        while not task.done():
+            await asyncio.wait({task}, timeout=_STOP_POLL_SECONDS)
+            if stopped_at is None and stop_requested():
+                stopped_at = loop.time()
+            cut = stopped_at is not None and loop.time() - stopped_at >= _STOPPED_WIND_DOWN_SECONDS
+            if cut and not task.done():
+                logger.warning("chat_wind_down_cut_on_stop seconds=%s", _STOPPED_WIND_DOWN_SECONDS)
+                break
+    finally:
+        if not task.done():
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+    if not task.cancelled():
+        task.result()
 
 
 def _unproxied_worker_notices(document: Mapping[str, Any], bundle_dir: Any = None) -> list[dict[str, Any]]:
@@ -814,50 +881,9 @@ class HostedChatCallRunner:
         del (
             world
         )  # Handler execution uses the same leased world's endpoint from runtime.
-        # A person's stop cuts the conversation, never what follows it: a stop that reaches the call once it is winding
-        # down or sealing leaves it to seal what it kept, as it seals a conversation the stop cut.
-        sealing = asyncio.Event()
-        call = asyncio.ensure_future(self._run(scenario, runtime, sealing))
-        stopped_while_sealing = False
-        while not call.done():
-            try:
-                await asyncio.wait({call})
-            except asyncio.CancelledError:
-                if self._context.stop_requested():
-                    task = asyncio.current_task()
-                    if task is not None and hasattr(task, "uncancel"):
-                        task.uncancel()
-                    if sealing.is_set():
-                        stopped_while_sealing = True
-                        continue
-                call.cancel()
-        outcome = call.result()
-        if stopped_while_sealing:
-            # Sealed like any call, then said as the person's stop.
-            raise CallCancelled(partial=replace(outcome, stop_reason="user_canceled"))
-        return outcome
-
-    async def _within_stop_bound(self, step: Awaitable[None]) -> None:
-        """Wait for `step`, but no longer than `_STOPPED_WIND_DOWN_SECONDS` after a person's stop."""
-        task = asyncio.ensure_future(step)
-        loop = asyncio.get_running_loop()
-        stopped_at: float | None = None
-        try:
-            while not task.done():
-                await asyncio.wait({task}, timeout=_STOP_POLL_SECONDS)
-                if stopped_at is None and self._context.stop_requested():
-                    stopped_at = loop.time()
-                cut = stopped_at is not None and loop.time() - stopped_at >= _STOPPED_WIND_DOWN_SECONDS
-                if cut and not task.done():
-                    logger.warning("chat_wind_down_cut_on_stop seconds=%s", _STOPPED_WIND_DOWN_SECONDS)
-                    break
-        finally:
-            if not task.done():
-                task.cancel()
-                with contextlib.suppress(asyncio.CancelledError):
-                    await task
-        if not task.cancelled():
-            task.result()
+        return await _sealed_through_stop(
+            self._context.stop_requested, lambda sealing: self._run(scenario, runtime, sealing)
+        )
 
     async def _run(self, scenario: Scenario, runtime: EnvironmentRuntime, sealing: asyncio.Event) -> CallOutcome:
         if self._contract is None:
@@ -1030,15 +1056,7 @@ class HostedChatCallRunner:
             if not self._context.stop_requested():
                 raise
             # The person stopped the run: seal what the call kept through the abort path below, then raise.
-            failure = CallCancelled()
-            partial = getattr(exc, "partial_transcript", None)
-            setattr(failure, "partial_transcript", partial)
-            transcript = partial or Transcript()
-            task = asyncio.current_task()
-            if task is not None and hasattr(task, "uncancel"):
-                # Python 3.11+: the uploads that follow run as an uncancelled task. On 3.10 the caught cancel leaves
-                # nothing pending.
-                task.uncancel()
+            failure, transcript = _stopped_call(exc)
         except Exception as exc:  # noqa: BLE001 - convert target transport failures to call faults
             status = (
                 exc.trace.get("status_code")
@@ -1086,7 +1104,7 @@ class HostedChatCallRunner:
                     await acting
                 # An actor the agent's last calls woke still takes its turn, within the settle's bound.
                 with contextlib.suppress(Exception):
-                    await self._within_stop_bound(dispatcher.settle())
+                    await _within_stop_bound(self._context.stop_requested, dispatcher.settle())
             await _record_text_usage(
                 self._context.usage_reporter,
                 scenario_key=scenario.scenario_key,
