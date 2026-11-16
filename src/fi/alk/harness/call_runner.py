@@ -1901,44 +1901,56 @@ def trial_worker_deadlines(
     told. A tool proxy sealed before this release has no worker limits at all, so neither a budget nor a worker's
     permitted actions are held there: a scenario that relies on either says so, and is held rather than graded."""
     deadline, deadlines = worker_deadline(document), worker_deadlines(document)
-    if not trial_relies_on_worker_limits(document, bundle_dir):
+    limit, cause = _limits_not_held_cause(document, bundle_dir)
+    if not cause:
         return deadline, deadlines, []
-    if _door_holds_worker_limits(bundle_dir):
-        unheld = _limits_on_shared_workers(document, bundle_dir)
-        if not unheld:
-            return deadline, deadlines, []
-        if _door_record(bundle_dir).get("surface") == "in_process":
-            return deadline, deadlines, [{
-                "code": WORKER_LIMITS_NOT_ENFORCED,
-                "message": f"{unheld} cannot be held for this agent's workers: the world's door inside the agent stops "
-                "a worker it runs at its deadline but cannot tell the workers' calls apart, so this trial's checks "
-                "were not graded.",
-            }]
-        return deadline, deadlines, [{
-            "code": WORKER_LIMITS_NOT_ENFORCED,
-            "message": f"{unheld} cannot be held for a worker wired as shared, because the world cannot tell its "
-            "calls apart, so this trial's checks were not graded. Record the worker as separate and rebuild the "
-            "environment.",
-        }]
-    if _door_record(bundle_dir).get("reason") == "tool_service_not_fronted":
-        # Sealed with the reason: the agent's tool service runs, but not behind the world's door.
+    if cause == "in_process":
+        message = (
+            f"{limit} cannot be held for this agent's workers: the world's door inside the agent stops a worker it "
+            "runs at its deadline but cannot tell the workers' calls apart, so this trial's checks were not graded."
+        )
+    elif cause == "shared_worker":
+        message = (
+            f"{limit} cannot be held for a worker wired as shared, because the world cannot tell its calls apart, so "
+            "this trial's checks were not graded. Record the worker as separate and rebuild the environment."
+        )
+    elif cause == "tool_service_not_fronted":
         message = (
             "This agent's tool service does not run behind the world's door in this environment, so no worker's "
             "deadline or permitted actions were enforced in this trial, and its checks were not graded."
         )
-    elif _sealed_tool_proxy(bundle_dir):
+    elif cause == "sealed_before_worker_limits":
         message = (
             "This environment was sealed before worker limits, so no worker's deadline or permitted actions were "
             "enforced in this trial, and its checks were not graded. Rebuild the environment to enforce them."
         )
     else:
-        # No tool proxy fronts this agent's tools, and a rebuild alone would not add one.
         message = (
             "This agent's tools are not reached through the world's tool proxy, so no worker's deadline or permitted "
             "actions were enforced in this trial, and its checks were not graded. Limits are held only for tools the "
             "agent calls over HTTP through the world's door."
         )
     return deadline, deadlines, [{"code": WORKER_LIMITS_NOT_ENFORCED, "message": message}]
+
+
+def _limits_not_held_cause(document: Mapping[str, Any], bundle_dir: Path | str | None) -> tuple[str, str]:
+    """Which of this trial's worker limits this environment cannot hold, and why, as (limit, cause); ("", "") when
+    every limit it relies on holds. The one rule both the run (`trial_worker_deadlines`) and the seal
+    (`write_worker_limits`) read. An empty limit with a cause means no limit at all is held."""
+    if not trial_relies_on_worker_limits(document, bundle_dir):
+        return "", ""
+    if _door_holds_worker_limits(bundle_dir):
+        unheld = _limits_on_shared_workers(document, bundle_dir)
+        if not unheld:
+            return "", ""
+        return unheld, "in_process" if _door_record(bundle_dir).get("surface") == "in_process" else "shared_worker"
+    if _door_record(bundle_dir).get("reason") == "tool_service_not_fronted":
+        # Sealed with the reason: the agent's tool service runs, but not behind the world's door.
+        return "", "tool_service_not_fronted"
+    if _sealed_tool_proxy(bundle_dir):
+        return "", "sealed_before_worker_limits"
+    # No tool proxy fronts this agent's tools, and a rebuild alone would not add one.
+    return "", "no_tool_proxy"
 
 
 def limits_not_held(document: Mapping[str, Any], bundle_dir: Path | str | None) -> list[dict[str, Any]]:
@@ -1962,16 +1974,22 @@ def deadlines_not_enforced(
     """Each worker the door inside the agent was told it runs whose deadline in this trial it could not hold, with why;
     empty on any other door, or when no deadline names such a worker. Decided at run time from the door's hook, since
     only the run shows whether the framework ran the worker as a task of its own."""
-    record = _door_record(bundle_dir)
-    if record.get("surface") != "in_process":
-        return []
-    everyone, named = worker_deadline(document) is not None, set(worker_deadlines(document))
-    due = [str(one) for one in record.get("workers") or [] if everyone or str(one) in named]
+    due = _in_process_deadline_workers(document, bundle_dir)
     if not due:
         return []
     ran = read_worker_runs(runtime)
     reason = _NOT_ITS_OWN_TASK if ran is not None else "the runs the world's door inside the agent saw could not be read"
     return [{"worker": one, "reason": reason} for one in due if one not in (ran or set())]
+
+
+def _in_process_deadline_workers(document: Mapping[str, Any], bundle_dir: Path | str | None) -> list[str]:
+    """The workers the door inside the agent was told it runs that a deadline of this trial names; whether each one's
+    deadline is held is known only once the trial runs (`deadlines_not_enforced`)."""
+    record = _door_record(bundle_dir)
+    if record.get("surface") != "in_process":
+        return []
+    everyone, named = worker_deadline(document) is not None, set(worker_deadlines(document))
+    return [str(one) for one in record.get("workers") or [] if everyone or str(one) in named]
 
 
 def unenforced_deadline_notices(unenforced: Sequence[Mapping[str, str]]) -> list[dict[str, Any]]:
@@ -2103,12 +2121,17 @@ def trial_relies_on_worker_limits(document: Mapping[str, Any], bundle_dir: Path 
     )
 
 
-# Each declared worker's `limited` flag and what each scenario relies on of its workers, sealed for the platform.
+# Each declared worker's `limited` flag and, per scenario, whether the run holds its trial as not graded, sealed for
+# the platform so it reads the run's own answer rather than deciding it again.
 WORKER_LIMITS_FILE = "worker-limits.json"
+_SEALED_LIMIT = {"A worker deadline": "deadline", "A worker's permitted tools": "permitted_tools", "": "all"}
 
 
 def write_worker_limits(bundle_dir: Path) -> None:
-    """Seal this rule's outcome beside the contract and catalogue it reads; a bundle declaring no workers gets none."""
+    """Seal, per scenario, the hold the run decides for it (`_limits_not_held_cause`), beside the contract, catalogue
+    and door outcome it reads; a bundle declaring no workers gets none. Written after `door.json` and the tool proxy's
+    seal, since the hold depends on them. Whether a deadline on the door inside the agent holds is known only at run
+    time (`deadlines_not_enforced`): such a scenario seals `held: false` with `deadline: "decided_at_run"`."""
     workers = [one for one in _bundle_contract(bundle_dir).get("workers") or [] if isinstance(one, dict)]
     if not workers:
         return
@@ -2119,11 +2142,21 @@ def write_worker_limits(bundle_dir: Path) -> None:
             document = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             continue
-        if isinstance(document, dict):
-            scenarios[str(document.get("scenario_key") or path.parent.name)] = {
-                "workers": sorted(scenario_worker_subjects(document, bundle_dir)),
-                "relies_on_worker_limits": trial_relies_on_worker_limits(document, bundle_dir),
-            }
+        if not isinstance(document, dict):
+            continue
+        limit, cause = _limits_not_held_cause(document, bundle_dir)
+        budgeted = set(worker_deadlines(document)) | (
+            {str(one.get("id")) for one in workers} if worker_deadline(document) is not None else set()
+        )
+        scenarios[str(document.get("scenario_key") or path.parent.name)] = {
+            "workers": sorted(scenario_worker_subjects(document, bundle_dir) | budgeted),
+            "relies_on_worker_limits": trial_relies_on_worker_limits(document, bundle_dir),
+            "held": bool(cause),
+            "reason": WORKER_LIMITS_NOT_ENFORCED if cause else None,
+            "cause": cause or None,
+            "limit": _SEALED_LIMIT.get(limit, limit) if cause else None,
+            "deadline": "decided_at_run" if not cause and _in_process_deadline_workers(document, bundle_dir) else None,
+        }
     sealed = {
         "workers": {str(one.get("id")): {"limited": str(one.get("id")) in limited} for one in workers},
         "scenarios": scenarios,

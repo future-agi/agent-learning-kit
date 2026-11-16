@@ -3310,17 +3310,48 @@ def test_the_bundle_seals_each_worker_s_limited_flag_and_what_each_scenario_reli
     cr.write_worker_limits(tmp_path)
     sealed = json.loads((tmp_path / cr.WORKER_LIMITS_FILE).read_text())
     assert sealed["workers"] == {"writer": {"limited": True}, "reader": {"limited": False}}
+    # No tool proxy fronts these tools, so every scenario relying on a worker limit is held.
+    no_proxy = {"held": True, "reason": cr.WORKER_LIMITS_NOT_ENFORCED, "cause": "no_tool_proxy", "limit": "all",
+                "deadline": None}
     assert sealed["scenarios"] == {
-        "about_writer": {"workers": ["writer"], "relies_on_worker_limits": True},
+        "about_writer": {"workers": ["writer"], "relies_on_worker_limits": True, **no_proxy},
         # About a worker with no limits of its own: nothing the door must hold.
-        "about_reader": {"workers": ["reader"], "relies_on_worker_limits": False},
-        "budgeted": {"workers": [], "relies_on_worker_limits": True},
+        "about_reader": {"workers": ["reader"], "relies_on_worker_limits": False, "held": False, "reason": None,
+                         "cause": None, "limit": None, "deadline": None},
+        "budgeted": {"workers": ["reader"], "relies_on_worker_limits": True, **no_proxy},
     }
     # A bundle whose agent declares no workers seals no file, as before.
     (tmp_path / cr.WORKER_LIMITS_FILE).unlink()
     (tmp_path / "contract.json").write_text(json.dumps({}))
     cr.write_worker_limits(tmp_path)
     assert not (tmp_path / cr.WORKER_LIMITS_FILE).exists()
+
+
+def test_each_scenario_s_sealed_hold_is_the_one_the_runner_decides_for_it(tmp_path):
+    (tmp_path / "contract.json").write_text(json.dumps({"workers": [
+        {"id": "writer", "binding": "separate", "address_env": "WRITER_URL"}, {"id": "reader", "tools": ["read"]}]}))
+    (tmp_path / "generated" / "tool-proxy").mkdir(parents=True)
+    (tmp_path / "generated" / "tool-proxy" / "door.json").write_text(json.dumps({"worker_deadlines": "per_worker"}))
+    documents = {
+        # A deadline on a separate worker: the door holds it, so the trial runs and is graded.
+        "writer_budget": {"worker_budget_seconds": {"writer": 5}},
+        # A deadline on a shared worker: the door cannot tell its calls apart, so the trial is held.
+        "reader_budget": {"worker_budget_seconds": {"reader": 5}},
+    }
+    for key, document in documents.items():
+        (tmp_path / "scenarios" / key).mkdir(parents=True)
+        (tmp_path / "scenarios" / key / "scenario.json").write_text(json.dumps({**document, "scenario_key": key}))
+    cr.write_worker_limits(tmp_path)
+    sealed = json.loads((tmp_path / cr.WORKER_LIMITS_FILE).read_text())["scenarios"]
+    for key, document in documents.items():
+        held = cr.limits_not_held(document, tmp_path)
+        assert sealed[key]["held"] is bool(held)
+        assert sealed[key]["reason"] == (held[0]["code"] if held else None)
+    assert sealed["writer_budget"]["held"] is False and sealed["writer_budget"]["workers"] == ["writer"]
+    assert sealed["reader_budget"] == {
+        "workers": ["reader"], "relies_on_worker_limits": True, "held": True,
+        "reason": cr.WORKER_LIMITS_NOT_ENFORCED, "cause": "shared_worker", "limit": "deadline", "deadline": None,
+    }
 
 
 def test_a_permission_only_scenario_on_a_door_sealed_before_worker_limits_is_said_not_enforced(tmp_path):

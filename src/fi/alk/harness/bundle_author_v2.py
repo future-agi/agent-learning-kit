@@ -4070,13 +4070,14 @@ def author_bundle_v2(
         adopted_chat_files.extend(
             _compile_source_tool_handlers(contract_body, temporary)
         )
-        if include_scenarios:
-            write_worker_limits(temporary)
         if any(process.name == "tool-proxy" for process in plan.processes):
             _seal_tool_proxy(temporary / "generated" / "tool-proxy", contract_body)
         (temporary / DOOR_FILE).write_text(
             json.dumps(door_outcome(plan, contract_body), sort_keys=True) + "\n", encoding="utf-8"
         )
+        if include_scenarios:
+            # After the door's seals: each scenario's sealed hold reads them.
+            write_worker_limits(temporary)
         if any(process.name == WORLD_DOOR_PROCESS for process in plan.processes):
             generated = temporary / "generated" / WORLD_DOOR_PROCESS
             generated.mkdir(parents=True)
