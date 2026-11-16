@@ -90,9 +90,11 @@ def validate_deterministic_assertion(assertion: Mapping[str, Any]) -> Dict[str, 
     allowed = {"type", "path", "value"} if path_check else {"type", "value"}
     if set(item) - allowed:
         raise ManifestError("unexpected deterministic assertion arguments")
+    path = item.get("path")
     if path_check and (
-        not isinstance(item.get("path"), str)
-        or not re.fullmatch(r"\$?(?:\.?[A-Za-z_][A-Za-z_0-9]*|\[\d+\])+", item["path"])
+        not isinstance(path, str)
+        or (path.startswith("$") and not path.startswith(("$.", "$[")))
+        or not re.fullmatch(r"\$?(?:\.?[A-Za-z_][A-Za-z_0-9]*|\[\d+\])+", path)
     ):
         raise ManifestError("deterministic assertion requires a simple JSON path")
     if kind == "json_path_exists":
@@ -117,6 +119,12 @@ def validate_deterministic_assertion(assertion: Mapping[str, Any]) -> Dict[str, 
     if kind in {"json_path_gte", "json_path_lte"}:
         if isinstance(value, bool) or not isinstance(value, (int, float)):
             raise ManifestError("numeric assertions require a number")
+        try:
+            finite_value = math.isfinite(float(value))
+        except (TypeError, ValueError, OverflowError):
+            finite_value = False
+        if not finite_value:
+            raise ManifestError("numeric assertions require a finite number")
     return item
 
 
@@ -1153,11 +1161,13 @@ def _json_path_numeric_compare(
     try:
         actual_number = float(actual)
         expected_number = float(expected)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return (
             False,
             f"expected numeric JSON path values, got actual={actual!r} expected={expected!r}",
         )
+    if not math.isfinite(actual_number) or not math.isfinite(expected_number):
+        return False, "expected finite numeric JSON path values"
     if operator == "gte":
         return actual_number >= expected_number, None
     return actual_number <= expected_number, None

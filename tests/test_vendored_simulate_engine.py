@@ -1385,6 +1385,8 @@ def test_public_eval_suite_api_reports_json_path_assertion_failures() -> None:
         {"type": "json_path_equals", "path": "$.score", "value": float("inf")},
         {"type": "json_path_exists", "path": "score", "value": True},
         {"type": "json_path_equals", "path": "$..[*]", "value": "x"},
+        {"type": "json_path_equals", "path": "$score", "value": 1},
+        {"type": "json_path_gte", "path": "score", "value": 10**400},
         {"type": "json_path_equals", "path": "score", "value": {"nested": True}},
     ],
 )
@@ -1429,3 +1431,14 @@ def test_validated_deterministic_assertions_run_through_real_evaluator(
 
     validated = validate_deterministic_assertion(assertion)
     assert evaluate_assertions(output, [validated])["passed"]
+
+
+def test_deterministic_numeric_assertion_handles_unrepresentable_actual() -> None:
+    from fi.simulate.suite import evaluate_assertions, validate_deterministic_assertion
+
+    assertion = validate_deterministic_assertion(
+        {"type": "json_path_gte", "path": "score", "value": 1}
+    )
+    result = evaluate_assertions(json.dumps({"score": 10**400}), [assertion])
+    assert not result["passed"]
+    assert "numeric JSON path values" in result["results"][0]["error"]
