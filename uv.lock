@@ -95,12 +95,16 @@ all = [
     { name = "chromadb" },
     { name = "livekit-agents", extra = ["cartesia", "deepgram", "google", "openai", "silero"] },
     { name = "livekit-plugins-elevenlabs" },
+    { name = "pypdf" },
     { name = "sentence-transformers" },
     { name = "torch" },
     { name = "transformers" },
 ]
 embeddings = [
     { name = "sentence-transformers" },
+]
+environment-inputs = [
+    { name = "pypdf" },
 ]
 feedback = [
     { name = "chromadb" },
@@ -203,6 +207,8 @@ requires-dist = [
     { name = "pipecat-ai", marker = "extra == 'pipecat'", specifier = ">=0.0.108" },
     { name = "psycopg", extras = ["binary"], marker = "extra == 'harness-stores'", specifier = ">=3.2" },
     { name = "pydantic", specifier = ">=2.0,<3" },
+    { name = "pypdf", marker = "extra == 'all'", specifier = ">=7.0.1,<8" },
+    { name = "pypdf", marker = "extra == 'environment-inputs'", specifier = ">=7.0.1,<8" },
     { name = "python-dotenv", specifier = ">=1.0.0" },
     { name = "pyyaml", specifier = ">=6.0" },
     { name = "requests", specifier = ">=2.32.5,<3" },
@@ -221,7 +227,7 @@ requires-dist = [
     { name = "typer", specifier = ">=0.9.0,<1.0.0" },
     { name = "uvicorn", marker = "extra == 'harness-ui'", specifier = ">=0.30,<1" },
 ]
-provides-extras = ["simulate", "evaluation", "optimize", "livekit", "langchain", "pipecat", "mcp", "a2a", "nli", "embeddings", "harness-ui", "harness-stores", "hosted-tracing", "feedback", "notebook", "trinity", "all"]
+provides-extras = ["simulate", "evaluation", "optimize", "livekit", "langchain", "pipecat", "mcp", "a2a", "nli", "embeddings", "harness-ui", "harness-stores", "hosted-tracing", "feedback", "environment-inputs", "notebook", "trinity", "all"]
 
 [package.metadata.requires-dev]
 dev = [
@@ -5373,6 +5379,15 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/23/00/f915eaa75326f4209941179c2b93ac477f2040e4aeff5bb21d16eb8058f9/pyloudnorm-0.2.0.tar.gz", hash = "sha256:8bf597658ea4e1975c275adf490f6deb5369ea409f2901f939915efa4b681b16", size = 14037, upload-time = "2026-01-04T11:43:35.265Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/aa/b6/65a49a05614b2548edbba3aab118f2ebe7441dfd778accdcdce9f6567f20/pyloudnorm-0.2.0-py3-none-any.whl", hash = "sha256:9bb69afb904f59d007a7f9ba3d75d16fb8aeef35c44d6df822a9f192d69cf13f", size = 10879, upload-time = "2026-01-04T11:43:34.534Z" },
+]
+
+[[package]]
+name = "pypdf"
+version = "7.0.1"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/00/c2/4c34b3229abae3e2fcc7809e6cf80fdea159771a37142f475fbf1009c809/pypdf-7.0.1.tar.gz", hash = "sha256:0a78bb99efb41e9088260e9a8e5da134a5cbb9a322014744177bf29b5267ea6d", size = 7206748, upload-time = "2026-11-10T11:47:22.582Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/d5/a9/ae11deef21eaac5113f8c3848da1c42423b7abeca0abc349bfec7abf4c4e/pypdf-7.0.1-py3-none-any.whl", hash = "sha256:6131b764b046282357037309e7ef2a1b7679d4a5c53eed3db2bfbf7c673ddc2b", size = 416136, upload-time = "2026-11-10T11:47:20.716Z" },
 ]
 
 [[package]]
