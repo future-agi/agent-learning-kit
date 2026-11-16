@@ -319,6 +319,9 @@ Evidence-aware checks read their target from the scenario's fixed values and req
 
 ### Live runs (10 Nov 2026)
 
+These runs predate the round-4 scenario corrections (16 Nov 2026). The round-4 live evidence is the
+answer controls in the scenario-quality section and the 16 Nov batches recorded in the Wave A execution plan.
+
 | Run | What | Result |
 |---|---|---|
 | MCP smoke (`e2e-harness/local/mcp_vertical_smoke.py`) | Every reference solution over the world's `/mcp` endpoint, the standard refusal probes, then Claude Code as `sample_agent.md` over `--mcp-config` on 12 scenarios across the jobs | 118/120 on the first pass. All 100 reference solutions hold over MCP. The misses were scenario findings: one instruction left out the phone number the customer lookup needs, and one demanded a slot lookup the question never asked for. Both corrected; rerun: 110/110 |
