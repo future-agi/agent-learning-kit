@@ -2568,3 +2568,19 @@ def test_stale_pre_run_sessions_are_written_again_before_a_save_seals_the_scenar
     asyncio.run(runtime._save_changes())
 
     assert order == [("refresh", runtime.workspace), ("reseal", runtime.workspace)]
+
+
+def test_a_change_waiting_on_the_person_asks_to_be_answered_with_an_option(tmp_path, monkeypatch):
+    from fi.alk.harness.hosted_chat_entrypoint import _CONFIRM
+
+    runtime, guarded, _ran, _offered = _guarded_refund_changes(tmp_path, monkeypatch, lambda asked: _CONFIRM)
+    asked = []
+
+    async def ask(tool, payload, context):
+        asked.append(payload)
+        return {"content": [{"type": "text", "text": _CONFIRM}]}
+
+    runtime._ask = ask
+    asyncio.run(guarded("edit_scenario")({"scenario_key": "one", "instruction": "ask for an exchange"}))
+
+    assert [one.get("options_only") for one in asked] == [True]

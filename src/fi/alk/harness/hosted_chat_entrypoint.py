@@ -649,6 +649,8 @@ class HostedChatRuntime:
                             "question": f"Confirm this change: {spec.name} "
                             + json.dumps(args, sort_keys=True, default=str, indent=1, ensure_ascii=False),
                             "options": [_CONFIRM, "No"] if alone else [_CONFIRM, _CONFIRM_ALL, "No"],
+                            # Only an option confirms a change, so the person answers with one, never in their words.
+                            "options_only": True,
                         },
                         None,
                     )
@@ -2011,7 +2013,7 @@ class HostedChatRuntime:
             "question_requested",
             message_id=message_id,
             stage=self.conversation.stage_name,
-            payload={"prompt": question, "options": options},
+            payload={"prompt": question, "options": options, **({"options_only": True} if payload.get("options_only") else {})},
         )
         with asking_a_person():
             while not self.stopping.is_set():
