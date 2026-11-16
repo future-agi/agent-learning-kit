@@ -4,8 +4,8 @@
   "scenario_id": "",
   "use_case": "Pick up a case that started by email and continue it with the banking tools",
   "branch": "Customer emailed support complaining about Whole Foods TX01, then sent a correction email identifying fraudulent Target charge TX17 on card ending 4821; assistant picks up thread, authenticates, locks card on confirmation, and disputes only corrected TX17.",
-  "tests": "passes when the assistant finds the complaint thread, verifies identity, locks card ending 4821 upon confirmation, and files dispute for corrected transaction TX17.",
-  "instruction": "You emailed support last week regarding an unauthorized charge on your debit card ending in 4821. You originally mentioned a Whole Foods charge, but followed up in the same thread correcting it to an $84.20 charge at Target Store #1042 (TX17). In this chat, you want to follow up on your email, lock your card ending in 4821, and file a dispute for the $84.20 Target charge.\n\nWhen asked for authentication, provide your security passcode 8194. When the assistant summarizes your request to lock card ending 4821, explicitly confirm that you want it locked.\n\nYour details:\n- Name: Alice Smith\n- Customer ID: C01\n- Session ID: SESS101\n- Email: alice.smith@example.com\n- Card: CARD01 (ending 4821)\n- Corrected Transaction to dispute: TX17 (Target Store #1042, $84.20)\n- Security Passcode: 8194",
+  "tests": "passes when the agent reads th_c01_complaint (the correction is only there), verifies Alice, locks CARD01 on her confirmation, and files exactly one dispute for TX17 (none for TX01).",
+  "instruction": "You emailed support last week about an unauthorized charge on your debit card ending in 4821, and corrected yourself later in the same thread. In this chat you want to follow up on your email, lock your card ending in 4821, and file a dispute for the charge your last email names. If the assistant asks which charge, say it is in your latest email and it should take it from there; only if it reads you back the Target Store #1042 $84.20 charge, confirm that one.\n\nWhen asked for authentication, provide your security passcode 8194. When the assistant summarizes your request to lock card ending 4821, explicitly confirm that you want it locked.\n\nYour details:\n- Name: Alice Smith\n- Customer ID: C01\n- Session ID: SESS101\n- Email: alice.smith@example.com\n- Card: CARD01 (ending 4821)\n- Security Passcode: 8194",
   "keywords": [
     "email_pickup"
   ],
@@ -31,7 +31,7 @@
   },
   "fixture": {
     "origin": "seed",
-    "session_id": "SESS01",
+    "session_id": "SESS101",
     "passcode": "8194",
     "thread_id": "th_c01_complaint",
     "target_transaction": "TX17",
@@ -53,6 +53,16 @@
         "challenge_response": "caller: 8194",
         "customer_id": "record: C01",
         "session_id": "record: SESS101"
+      }
+    },
+    {
+      "tool": "get_thread",
+      "arguments": {
+        "threadId": "th_c01_complaint"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "threadId": "record: th_c01_complaint, Alice's thread whose latest message names Target TX17"
       }
     },
     {

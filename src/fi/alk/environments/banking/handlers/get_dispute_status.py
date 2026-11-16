@@ -37,5 +37,8 @@ def handle(args, db):
         "status": dispute["status"],
         "created_at": dispute["created_at"],
         "updated_at": dispute["updated_at"],
-        "notes": dispute["notes"] or ""
+        "notes": dispute["notes"] or "",
+        # How a resolved dispute ended (empty while it is open): a caller asking why a resolved
+        # dispute cannot be withdrawn is told what the record says, not a guess.
+        "resolution": dispute["resolution"] or "",
     }

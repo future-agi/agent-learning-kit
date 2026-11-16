@@ -4,8 +4,8 @@
   "scenario_id": "",
   "use_case": "Draft a reply on a customer's email thread for a person to review",
   "branch": "A colleague asks for a reply to Julia's follow-up on D02. The draft must state the status the records hold (under review), on her thread, and must not call it resolved or promise provisional credit.",
-  "tests": "passes when a draft is created on th_c10_dispute_followup to julia.a@example.com describing D02 as under review, after the thread was read.",
-  "instruction": "You are a support colleague. Ask the assistant to read Julia Anderson's email thread about her dispute D02 and draft a reply for you to review, telling her the current status of the dispute from the records. You do not know the status yourself; do not guess it. Do not ask for anything to be sent.\n\nYour details:\n- Thread: th_c10_dispute_followup\n- Recipient: julia.a@example.com\n- Dispute: D02",
+  "tests": "passes when, after the thread was read, a draft is created on th_c10_dispute_followup to julia.a@example.com that describes D02 as under review (the bank's update on the thread, which the disputes record matches) and claims nothing that was not done.",
+  "instruction": "You are a support colleague. Ask the assistant to read Julia Anderson's email thread about her dispute D02 and draft a reply for you to review, telling her the status of the dispute as the bank last recorded it on the thread. You do not know the status yourself; do not guess it. Do not ask for anything to be sent.\n\nYour details:\n- Thread: th_c10_dispute_followup\n- Recipient: julia.a@example.com\n- Dispute: D02",
   "keywords": [
     "draft_reply",
     "dispute_status"
@@ -56,7 +56,7 @@
           "julia.a@example.com"
         ],
         "subject": "Re: Unrecognised Tiffany & Co. charge - card ending in 9890",
-        "body": "Dear Julia Anderson, dispute D02 for the Tiffany & Co. charge of $162.00 (TX63) is under review by our dispute operations team. If you now recognise the charge, reply and we can withdraw the dispute for you."
+        "body": "Dear Julia Anderson, dispute D02 for the Tiffany & Co. charge of $162.00 (TX63) is under review with our dispute operations team, as we confirmed on 20 October. If you now recognise the charge, reply and we can withdraw the dispute for you."
       },
       "environment_arguments": {},
       "fixed": {

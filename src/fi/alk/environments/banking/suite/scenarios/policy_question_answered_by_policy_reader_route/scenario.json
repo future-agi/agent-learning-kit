@@ -4,7 +4,7 @@
   "scenario_id": "",
   "use_case": "Answer policy and fee questions from the policy library with citations",
   "branch": "The customer asks whether a locked card can be unlocked and whether locking costs anything. The policy reader answers from the card policy and fee schedule in effect and names the source documents; no Drive read is needed.",
-  "tests": "passes when the agent consults the card policy by either valid route (the policy reader or the approved Drive document) and cites the source.",
+  "tests": "passes when the agent consults both the card policy and the fee schedule in effect, each by either valid route (the policy reader or the approved Drive document), and answers both parts (a lock is reversible by the cardholder; locks cost $0.00), citing the sources.",
   "instruction": "You are thinking of locking your card for a few days while you look for it and want to know two things: can it be unlocked later, and does locking cost anything. Ask both; accept the answer and the document it comes from.\n\nYour details:\n- Question: Can a locked card be unlocked, and does locking cost anything?",
   "keywords": [
     "policy",
@@ -43,7 +43,7 @@
       },
       "environment_arguments": {},
       "fixed": {
-        "policy_type": "rule: the policy family the question is about"
+        "policy_type": "rule: the card policy holds whether a lock can be undone"
       }
     },
     {
@@ -52,10 +52,31 @@
         "policy_type": "fee_schedule"
       },
       "environment_arguments": {},
-      "fixed": {}
+      "fixed": {
+        "policy_type": "rule: the fee schedule holds what a lock costs"
+      }
     }
   ],
-  "alternatives": [],
+  "alternatives": [
+    [
+      {
+        "tool": "read_file_content",
+        "arguments": {
+          "fileId": "pol_card_v2"
+        },
+        "environment_arguments": {},
+        "fixed": {}
+      },
+      {
+        "tool": "read_file_content",
+        "arguments": {
+          "fileId": "fee_sched_v4"
+        },
+        "environment_arguments": {},
+        "fixed": {}
+      }
+    ]
+  ],
   "coverage": {
     "task": "answer_policy_question",
     "disposition": "policy_reader",

@@ -56,6 +56,12 @@ def handle(args, db):
         if dispute_reason not in allowed:
             raise ToolError(f"Dispute reason {dispute_reason!r} is not allowed by policy.")
             
+    # A dispute-intake outage (set for a scenario that tests partial failure) refuses the filing
+    # after every eligibility check passed: the charge is disputable, the service is not reachable.
+    outage_row = db.one("SELECT value FROM environment_policy WHERE name = 'dispute_intake_outage'")
+    if outage_row and json.loads(outage_row["value"]):
+        raise ToolError("The dispute service is unavailable right now; nothing was filed. Hand the case to a specialist.")
+
     # Check idempotency by request_key
     if request_key:
         existing_by_key = db.one("SELECT * FROM disputes WHERE request_key = ?", [request_key])

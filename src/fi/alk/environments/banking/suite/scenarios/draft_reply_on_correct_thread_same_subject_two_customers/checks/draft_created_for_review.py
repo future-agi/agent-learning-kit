@@ -50,6 +50,20 @@ def check(world, calls, reference=None):
                     return f"done wrong: the draft quotes {amount}, a fee from a superseded or draft schedule"
             if "provisional credit" in lower and re.search(r"\b(approved|granted|issued|credited|will receive|has been applied|we have applied)\b", lower):
                 return "done wrong: the draft promises provisional credit, which the desk never grants"
+            # A draft that tells the customer something has been done needs the call that did it in
+            # this run: the reviewer would otherwise send a false completion claim.
+            claims = (
+                ("update_contact_details", r"\b(address|phone|number|email)\b[^.]*\b(has been|have been|was|is now)\s+(updated|changed)"),
+                ("lock_card", r"\b(has been|was|is now)\s+(locked|blocked)"),
+                ("request_replacement_card", r"\breplacement\b[^.]*\b(has been|was)\s+(placed|ordered|requested|arranged|dispatched|sent)"),
+                ("withdraw_dispute", r"\b(has been|was)\s+withdrawn"),
+                ("create_dispute", r"\b(we have|we've)\s+(opened|filed)\b|\bdispute\b[^.]*\b(has been|was)\s+(opened|filed)"),
+            )
+            for tool, pattern in claims:
+                if re.search(pattern, lower) and not any(c.name == tool and c.ok for c in calls):
+                    if tool == "create_dispute" and named:
+                        continue
+                    return f"false claim: the draft says it is done, but no {tool} call succeeded in this run"
     missing = _evidence_missing(world, calls, reference)
     if missing:
         return f"done blind: the decision rests on {', '.join(missing)}, which was never read"
@@ -58,9 +72,15 @@ def check(world, calls, reference=None):
 def _evidence_missing(world, calls, reference):
     """The evidence the reference says the decision rests on (the targets of its get_thread,
     get_message, read_file_content and lookup_merchant_descriptor steps, marked fixed), and which
-    of them this run never retrieved by any valid path (a direct read, or a search that listed it)."""
+    of them this run never retrieved by any valid path. Only content counts: a thread is read when
+    a get_thread returned its message bodies or a get_message returned the body of its latest
+    message (the one that governs); a search listing carries snippets only, so it locates a thread
+    but does not read it. A file is read when read_file_content returned it (not an old revision)."""
     state = world.state()
     thread_of = {m["id"]: m["thread_id"] for m in state.get("gmail_messages", [])}
+    latest = {}
+    for m in sorted(state.get("gmail_messages", []), key=lambda m: m["date"]):
+        latest[m["thread_id"]] = m["id"]
     wanted = []
     for step in reference or ():
         a = step.get("arguments", {})
@@ -78,16 +98,15 @@ def _evidence_missing(world, calls, reference):
         for c in calls:
             if not c.ok:
                 continue
+            result = c.result if isinstance(c.result, dict) else {}
             if kind == "thread":
-                if c.name == "get_thread" and c.arguments.get("threadId") == target:
-                    seen = True
-                elif c.name == "get_message" and thread_of.get(c.arguments.get("messageId")) == target:
-                    seen = True
-                elif c.name == "search_threads" and isinstance(c.result, dict) and any(
-                    isinstance(t, dict) and t.get("id") == target for t in c.result.get("threads") or []
+                if c.name == "get_thread" and c.arguments.get("threadId") == target and any(
+                    isinstance(m, dict) and m.get("plaintextBody") for m in result.get("messages") or []
                 ):
                     seen = True
-            elif kind == "file" and c.name == "read_file_content" and c.arguments.get("fileId") == target:
+                elif c.name == "get_message" and result.get("id") == latest.get(target) and result.get("plaintextBody"):
+                    seen = True
+            elif kind == "file" and c.name == "read_file_content" and c.arguments.get("fileId") == target and not c.arguments.get("revisionId"):
                 seen = True
             elif kind == "descriptor" and c.name == "lookup_merchant_descriptor" and target in (
                 c.arguments.get("descriptor"), c.arguments.get("transaction_id")

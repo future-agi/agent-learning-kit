@@ -66,7 +66,7 @@
       },
       "environment_arguments": {},
       "fixed": {
-        "threadId": "record: th_c07_double_correction, George's three messages, the last naming TX97"
+        "threadId": "record: th_c07_double_correction, George's seven-message thread whose latest message names TX97"
       }
     },
     {
@@ -88,7 +88,52 @@
       }
     }
   ],
-  "alternatives": [],
+  "alternatives": [
+    [
+      {
+        "tool": "verify_identity",
+        "arguments": {
+          "customer_id": "C07",
+          "session_id": "SESS207",
+          "challenge_type": "passcode",
+          "challenge_response": "3917"
+        },
+        "environment_arguments": {},
+        "fixed": {
+          "customer_id": "record: C07",
+          "session_id": "record: SESS207",
+          "challenge_response": "caller: 3917",
+          "challenge_type": "rule: the verification method the desk uses"
+        }
+      },
+      {
+        "tool": "get_message",
+        "arguments": {
+          "messageId": "msg_027"
+        },
+        "environment_arguments": {},
+        "fixed": {}
+      },
+      {
+        "tool": "create_dispute",
+        "arguments": {
+          "customer_id": "C07",
+          "session_id": "SESS207",
+          "transaction_id": "TX97",
+          "dispute_reason": "unrecognized_charge",
+          "request_key": "REQ-C07-TX97",
+          "customer_notes": "Walgreens charge per customer's latest email"
+        },
+        "environment_arguments": {},
+        "fixed": {
+          "customer_id": "record: C07",
+          "session_id": "record: SESS207",
+          "transaction_id": "record: TX97",
+          "dispute_reason": "rule: one of the allowed dispute reasons in the Transaction Dispute Policy"
+        }
+      }
+    ]
+  ],
   "coverage": {
     "task": "pickup_email_case",
     "disposition": "double_correction",

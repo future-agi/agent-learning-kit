@@ -3,22 +3,22 @@
   "scenario_key": "v01-s01-happy-path-lock-and-dispute",
   "scenario_id": "",
   "use_case": "Evaluate dispute eligibility and file or track transaction dispute",
-  "branch": "Customer discovers lost card ending 4821 with an unauthorized posted charge of $84.20 on TX101, confirms card lock, and requests dispute filing.",
+  "branch": "Customer discovers lost card ending 4762 with an unauthorized posted charge of $84.20 on TX101, confirms card lock, and requests dispute filing.",
   "tests": "passes when the agent verifies customer identity, locks the specified card upon confirmation, and creates an eligible transaction dispute.",
-  "instruction": "You lost your debit card ending in 4821 yesterday and noticed an unfamiliar $84.20 charge at Target Store #1042 on your account. You want to immediately lock the card to prevent further fraud and file a formal transaction dispute for the $84.20 charge.\n\nYou will provide your security passcode 8194 when requested to verify your identity. When the assistant summarizes your request to lock card ending 4821, explicitly confirm that you want it locked.\n\nYour details:\n- Name: Alice Smith\n- Customer ID: C101\n- Session ID: SESS101\n- Card ending: 4821 (Card ID: CARD101)\n- Transaction ID to dispute: TX101 (Target Store #1042, $84.20)\n- Security Passcode: 8194",
+  "instruction": "You lost your debit card ending in 4762 yesterday and noticed an unfamiliar $84.20 charge at Target Store #1042 on your account. You want to immediately lock the card to prevent further fraud and file a formal transaction dispute for the $84.20 charge.\n\nYou will provide your security passcode 5826 when requested to verify your identity. When the assistant summarizes your request to lock card ending 4762, explicitly confirm that you want it locked.\n\nYour details:\n- Name: Alice Thornbury\n- Customer ID: C101\n- Session ID: SESS101\n- Card ending: 4762 (Card ID: CARD101)\n- Transaction ID to dispute: TX101 (Target Store #1042, $84.20)\n- Security Passcode: 5826",
   "keywords": [
     "card_lock",
     "dispute_filing"
   ],
   "persona": {
-    "name": "Alice Smith",
+    "name": "Alice Thornbury",
     "gender": "female",
     "age_group": "25-32",
     "occupation": "Engineer",
     "location": "United States",
     "personality": "Professional and formal",
     "communication_style": "Direct and concise",
-    "initial_message": "I lost my debit card ending 4821 and I need to lock it right away and dispute an unauthorized charge of $84.20 for TX101.",
+    "initial_message": "I lost my debit card ending 4762 and I need to lock it right away and dispute an unauthorized charge of $84.20 for TX101.",
     "languages": [
       "English"
     ],
@@ -32,10 +32,10 @@
   },
   "fixture": {
     "amount": 8420,
-    "card_last_four": "4821",
+    "card_last_four": "4762",
     "origin": "generated",
     "card_id": "CARD101",
-    "passcode": "8194",
+    "passcode": "5826",
     "customer_id": "C101",
     "transaction_id": "TX101"
   },
@@ -43,14 +43,14 @@
     {
       "tool": "verify_identity",
       "arguments": {
-        "challenge_response": "8194",
+        "challenge_response": "5826",
         "challenge_type": "passcode",
         "session_id": "SESS101",
         "customer_id": "C101"
       },
       "environment_arguments": {},
       "fixed": {
-        "challenge_response": "caller: 8194",
+        "challenge_response": "caller: 5826",
         "customer_id": "record: C101",
         "session_id": "record: SESS101"
       }

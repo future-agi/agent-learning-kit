@@ -1,28 +1,31 @@
 def check(world, calls, reference=None):
+    # Every policy topic the reference consults (by the policy reader or by reading a document of
+    # that family) must have been consulted in effect by one of the two valid routes: the reader
+    # for that topic, or a read of the approved document of that family in effect today.
     families = {"transaction_dispute": "dispute_policy", "card_policy": "card_policy", "fee_schedule": "fee_schedule", "provisional_credit": "provisional_credit", "contact_changes": "contact_policy"}
-    wanted_type = wanted_file = None
-    for step in reference or ():
-        a = step.get("arguments", {})
-        if step.get("tool") == "get_dispute_policy" and a.get("policy_type"):
-            wanted_type = a["policy_type"]
-        if step.get("tool") == "read_file_content" and a.get("fileId"):
-            wanted_file = a["fileId"]
     state = world.state()
     clock = state.get("clock", [])
     today = (clock[0]["now"] if clock else "2026-10-26T12:00:00Z")[:10]
     files = state.get("drive_files", [])
-    if wanted_file and not wanted_type:
-        wanted_type = next((t for t, fam in families.items() if any(f["file_id"] == wanted_file and f.get("policy_family") == fam for f in files)), None)
-    effective = [
-        f["file_id"] for f in files
-        if wanted_type and f.get("policy_family") == families.get(wanted_type) and f.get("status") == "approved"
-        and not f.get("is_deleted") and (f.get("effective_date") or "") <= today and f.get("mime_type") != "application/octet-stream"
-    ]
+    wanted = []
+    for step in reference or ():
+        a = step.get("arguments", {})
+        if step.get("tool") == "get_dispute_policy" and a.get("policy_type"):
+            wanted.append(a["policy_type"])
+        if step.get("tool") == "read_file_content" and a.get("fileId"):
+            topic = next((t for t, fam in families.items() if any(f["file_id"] == a["fileId"] and f.get("policy_family") == fam for f in files)), None)
+            if topic and topic not in wanted:
+                wanted.append(topic)
     policy_calls = [c for c in calls if c.name == "get_dispute_policy" and c.ok]
-    reads = [c for c in calls if c.name == "read_file_content" and c.ok]
+    reads = [c for c in calls if c.name == "read_file_content" and c.ok and not c.arguments.get("revisionId")]
     if not policy_calls and not reads:
         return "not done: neither get_dispute_policy nor a policy document read was made"
-    if wanted_type:
+    for wanted_type in dict.fromkeys(wanted):
+        effective = [
+            f["file_id"] for f in files
+            if f.get("policy_family") == families.get(wanted_type) and f.get("status") == "approved"
+            and not f.get("is_deleted") and (f.get("effective_date") or "") <= today and f.get("mime_type") != "application/octet-stream"
+        ]
         by_tool = any(c.arguments.get("policy_type") == wanted_type for c in policy_calls)
         by_drive = any(c.arguments.get("fileId") in effective for c in reads)
         if not by_tool and not by_drive:

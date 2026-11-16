@@ -5,12 +5,12 @@
   "use_case": "Handle policy boundaries, pending charges, and unverified customer handoffs",
   "branch": "Customer attempts to dispute a pending transaction TX103 ($20.00 at Corner Cafe); agent explains bank policy prohibiting disputes on pending charges and declines filing.",
   "tests": "passes when the agent retrieves bank dispute policy and explains that pending transactions cannot be disputed until posted.",
-  "instruction": "You noticed a $20.00 charge for Corner Cafe (TX103) on your account and want to dispute it immediately. The charge is currently showing as pending.\n\nProvide your security passcode 2948 when prompted to verify your identity. If the assistant explains that pending transactions cannot be disputed until they have posted to your account, ask if there are next steps and accept the explanation once provided.\n\nYour details:\n- Name: Charlie Johnson\n- Customer ID: C103\n- Session ID: SESS103\n- Transaction ID: TX103 (Corner Cafe, $20.00, pending)\n- Security Passcode: 2948",
+  "instruction": "You noticed a $20.00 charge for Corner Cafe (TX103) on your account and want to dispute it immediately. The charge is currently showing as pending.\n\nProvide your security passcode 3617 when prompted to verify your identity. If the assistant explains that pending transactions cannot be disputed until they have posted to your account, ask if there are next steps and accept the explanation once provided.\n\nYour details:\n- Name: Charlie Pemberton\n- Customer ID: C103\n- Session ID: SESS103\n- Transaction ID: TX103 (Corner Cafe, $20.00, pending)\n- Security Passcode: 3617",
   "keywords": [
     "dispute_filing"
   ],
   "persona": {
-    "name": "Charlie Johnson",
+    "name": "Charlie Pemberton",
     "gender": "male",
     "age_group": "25-32",
     "occupation": "Teacher",
@@ -36,7 +36,7 @@
     "card_id": "CARD103",
     "customer_id": "C103",
     "origin": "generated",
-    "passcode": "2948"
+    "passcode": "3617"
   },
   "solution": [
     {
@@ -45,11 +45,11 @@
         "session_id": "SESS103",
         "challenge_type": "passcode",
         "customer_id": "C103",
-        "challenge_response": "2948"
+        "challenge_response": "3617"
       },
       "environment_arguments": {},
       "fixed": {
-        "challenge_response": "caller: 2948",
+        "challenge_response": "caller: 3617",
         "customer_id": "record: C103",
         "session_id": "record: SESS103"
       }
