@@ -270,6 +270,41 @@ def test_the_12_nov_deep_agents_reading_takes_the_graph_route(tmp_path):
     assert "ThreadingHTTPServer" in _agent_of(manifest).run_command[-1]
 
 
+def test_the_guidance_s_langgraph_shape_is_saved_by_a_reading_and_takes_the_graph_route(tmp_path):
+    # SKILL.md item 12's shape: no command, execution auto, a callable fi.alk interface. A reading
+    # on 17 Nov told to write no interface was refused nine times (missing-chat-interface).
+    from fi.alk.harness.tools import accept_contract
+
+    body = deep_reading()
+    body["runtime"].update(
+        command=[], execution="auto", interface={"kind": "callable", "protocol": "fi.alk"}
+    )
+    body["runtime"].pop("source_subfolder", None)
+    for cited in ("system_prompt_from", "model"):  # lines of the real agent, not this stand-in
+        body.pop(cited, None)
+    source = deep_source(tmp_path)
+    without = json.loads(json.dumps(body))
+    without["runtime"].pop("interface")
+    refused = accept_contract(
+        without, tmp_path / "refused", source_root=source, subfolder=DEEP, require_setup_contract=True
+    )
+    assert refused.get("is_error") and "missing-chat-interface" in json.dumps(refused)
+    result = accept_contract(
+        body, tmp_path / "saved", source_root=source, subfolder=DEEP, require_setup_contract=True
+    )
+    assert not result.get("is_error"), result
+    saved = json.loads((tmp_path / "saved" / "contract.json").read_text())
+
+    manifest, output = bundled(tmp_path / "b", source, DEEP, contract=saved)
+
+    # The kit's own no-command LangGraph route, which keeps the reading's callable interface.
+    agent = _agent_of(manifest)
+    assert agent.environment["ALK_LANGGRAPH_ENTRYPOINT"] == "agent.py:graph"
+    runtime = _sealed(output)["runtime"]
+    assert runtime["command"] == [] and runtime["execution"] == "auto"
+    assert runtime["interface"]["kind"] == "callable"
+
+
 @pytest.mark.parametrize("verb", ["dev", "up"])
 def test_langgraph_dev_and_up_both_take_it(tmp_path, verb):
     body = deep_reading()

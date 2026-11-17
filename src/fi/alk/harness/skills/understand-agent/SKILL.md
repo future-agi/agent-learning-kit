@@ -262,7 +262,8 @@ Find, in roughly this order:
    **A LangGraph app comes first.** Before choosing a command or an HTTP interface, look for a
    `langgraph.json` that names a graph. When the requirements the app installs have no
    `langgraph-cli`, `langgraph dev` and `langgraph up` can't run there: leave `runtime.command`
-   empty, set `execution` to `auto`, and write no interface; the kit serves the graph itself.
+   empty, set `execution` to `auto`, and declare the interface as `callable` with protocol
+   `fi.alk`; the kit serves the graph itself through it.
    Don't map the LangGraph server's `/runs/wait` with a JSON template. (An app whose
    `langgraph.json` has an `http` or `auth` key, or declares more than one graph, is run as
    written.)

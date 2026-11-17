@@ -68,6 +68,9 @@ def test_skill_tells_a_langgraph_app_without_the_cli_to_leave_the_command_empty(
     assert "`langgraph.json`" in text
     assert re.search(r"no `langgraph-cli`.*leave `runtime.command` empty", text)
     assert "`execution` to `auto`" in text
-    assert "write no interface" in text
+    # The save refuses a chat contract with no interface (missing-chat-interface); a reading on
+    # 17 Nov told to write none was refused nine times and never saved.
+    assert "declare the interface as `callable` with protocol `fi.alk`" in text
+    assert "write no interface" not in text
     assert "the kit serves the graph" in text
     assert "Don't map the LangGraph server's `/runs/wait` with a JSON template" in text
