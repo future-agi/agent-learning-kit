@@ -12,6 +12,7 @@ from typing import Any
 # --- begin text_of (kept identical in agent/content.py and the hosted adapters) ---
 _TEXT_KINDS = ("text", "output_text")
 _MISSING = object()
+_MOST_DEPTH = 32
 
 
 def _field(value: Any, name: str) -> Any:
@@ -20,7 +21,7 @@ def _field(value: Any, name: str) -> Any:
     return getattr(value, name, None)
 
 
-def _block_text(block: Any) -> str:
+def _block_text(block: Any, depth: int = 0) -> str:
     """Answer text of one content block; "" for any block that is not answer text."""
     kind = _field(block, "type")
     if kind in _TEXT_KINDS or (
@@ -36,7 +37,7 @@ def _block_text(block: Any) -> str:
         refusal = _field(block, "refusal")
         return refusal if isinstance(refusal, str) else ""
     if kind == "ai" or _field(block, "role") == "assistant":
-        return _text_of(_field(block, "content"))
+        return _text_of(_field(block, "content"), depth + 1)
     return ""
 
 
@@ -47,7 +48,7 @@ def _is_message(item: Any) -> bool:
     return kind == "ai" or _field(item, "role") == "assistant"
 
 
-def _text_of(content: Any) -> str:
+def _text_of(content: Any, depth: int = 0) -> str:
     """Keep only the answer text of a reply.
 
     Extended-thinking models return a list of blocks (``thinking``, ``text``, ...). Answer
@@ -56,7 +57,11 @@ def _text_of(content: Any) -> str:
     messages (``AIMessage``, ``{"role", "content"}``, which give the text of their content)
     are joined with ``" "``. Any other block (thinking, redacted_thinking, tool_use,
     tool_result, image, unknown) gives ``""``, never its repr.
+    A message inside a message is read down to ``_MOST_DEPTH`` levels; anything nested deeper
+    gives ``""``.
     """
+    if depth > _MOST_DEPTH:
+        return ""
     if isinstance(content, str):
         return content
     if content is None:
@@ -66,7 +71,7 @@ def _text_of(content: Any) -> str:
         after_block = False
         for item in content:
             is_block = not isinstance(item, str) and not _is_message(item)
-            piece = item if isinstance(item, str) else _block_text(item)
+            piece = item if isinstance(item, str) else _block_text(item, depth)
             if not piece:
                 if not isinstance(item, str) and _field(item, "type") not in _TEXT_KINDS:
                     after_block = False
@@ -82,17 +87,17 @@ def _text_of(content: Any) -> str:
         and isinstance(content.get("messages"), list)
         and content["messages"]
     ):
-        return _text_of(content["messages"][-1])
+        return _text_of(content["messages"][-1], depth + 1)
     kind = _field(content, "type")
     if kind in _TEXT_KINDS or kind == "refusal":
-        return _block_text(content)
+        return _block_text(content, depth)
     if kind != "tool_result":
         if isinstance(content, dict):
             inner = content.get("content", _MISSING)
         else:
             inner = getattr(content, "content", _MISSING)
         if inner is not _MISSING:
-            return _text_of(inner)
+            return _text_of(inner, depth + 1)
     if isinstance(kind, str):
         return ""
     return str(content)
