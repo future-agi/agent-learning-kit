@@ -218,7 +218,7 @@ def test_document_echoes_subfolder_exactly(tmp_path: Path, value: str) -> None:
 
 @pytest.mark.parametrize(
     ("built_from", "job_names"),
-    [("agents/a", "agents/b"), ("agents/a", None), (None, "agents/a")],
+    [("agents/a", None)],
 )
 def test_no_document_when_the_bundle_came_from_another_folder(
     tmp_path: Path,
@@ -453,3 +453,39 @@ def test_the_document_and_the_reading_hold_the_same_cleaned_prompt(tmp_path: Pat
     assert payload["agent"]["agent"]["behaviour"][0]["instructions"] == cleaned
     assert reading["agent"]["behaviour"][0]["instructions"] == cleaned
     assert "hunter2" not in json.dumps(reading) and "sk-1" not in json.dumps(reading)
+
+
+@pytest.mark.parametrize(
+    ("built_from", "job_names"), [("agents/a", "agents/b"), (None, "agents/a")]
+)
+def test_a_folder_build_from_another_folder_fails_instead_of_going_on_without_the_document(
+    tmp_path: Path, built_from: str | None, job_names: str
+) -> None:
+    _write_bundle(
+        tmp_path, _contract_from("p", built_from) if built_from else _contract("p")
+    )
+
+    with pytest.raises(RuntimeError) as raised:
+        _provision(tmp_path, SourceKind.GITHUB, subfolder=job_names)
+
+    assert type(raised.value).__name__ == "AgentDocumentFailed"
+    assert raised.value.code == "agent_invalid"
+    assert "agent_invalid" in raised.value.message
+
+
+def test_a_folder_build_with_any_other_document_error_fails_agent_document_failed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _write_bundle(tmp_path, _contract_from("p", "agents/a"))
+
+    def _raise(*_: Any, **__: Any) -> dict[str, Any]:
+        raise RuntimeError("private_detail")
+
+    monkeypatch.setattr(ss, "build_authored_agent", _raise)
+
+    with pytest.raises(RuntimeError) as raised:
+        _provision(tmp_path, SourceKind.GITHUB, subfolder="agents/a")
+
+    assert type(raised.value).__name__ == "AgentDocumentFailed"
+    assert raised.value.code == "agent_document_failed"
+    assert "private_detail" not in raised.value.message

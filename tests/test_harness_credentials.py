@@ -1,3 +1,4 @@
+import json
 import os
 from pathlib import Path
 
@@ -721,6 +722,194 @@ def test_a_script_import_reaches_an_index_and_a_compiled_name(tmp_path):
     assert _required(discover_credentials(root, agent_subfolder="agents/a"))["REAL_API_KEY"] is True
 
 
+@pytest.mark.parametrize(
+    "manifest",
+    [
+        {"main": "lib/llm.js"},
+        {"main": "./lib/llm"},
+        {"exports": "./lib/llm.js"},
+        {"exports": {".": "./lib/llm.js"}},
+        # require() of a folder reads main alone: it comes first, though exports is set.
+        {"exports": "./lib/other.js", "main": "lib/llm.js"},
+        # Without a main or an index that resolves, exports is tried.
+        {"exports": "./lib/llm.js", "main": "missing.js"},
+        {"exports": "./lib/llm.js", "main": 3},
+    ],
+)
+def test_a_package_folder_is_entered_through_its_package_json(tmp_path, manifest):
+    root = _agents_repo(
+        tmp_path,
+        {
+            "packages/shared/package.json": json.dumps(manifest),
+            "packages/shared/lib/llm.js": "export const key = process.env.SHARED_API_KEY;\n",
+            "agents/a/index.js": 'const shared = require("../../packages/shared");\n',
+        },
+    )
+
+    assert _required(discover_credentials(root, agent_subfolder="agents/a"))["SHARED_API_KEY"] is True
+
+
+@pytest.mark.parametrize("sub", [None, "agents/a"], ids=["whole-repo", "folder"])
+def test_a_package_main_is_required_though_exports_is_set(tmp_path, sub):
+    # Node's require() of a folder by path reads only "main"; "exports" is for a name found in
+    # node_modules. The whole-repo build and the folder build agree.
+    root = _agents_repo(
+        tmp_path,
+        {
+            "packages/shared/package.json": json.dumps({"exports": "./lib/esm.mjs", "main": "lib/cjs.js"}),
+            "packages/shared/lib/esm.mjs": "export const k = process.env.ESM_API_KEY;\n",
+            "packages/shared/lib/cjs.js": "module.exports = process.env.CJS_API_KEY;\n",
+            "agents/a/index.js": "const shared = require('../../packages/shared');\n",
+        },
+    )
+
+    required = _required(discover_credentials(root, agent_subfolder=sub))
+
+    assert required["CJS_API_KEY"] is True
+    if sub:
+        assert required["ESM_API_KEY"] is False
+
+
+@pytest.mark.parametrize(
+    "manifest", [{"main": 3}, {"main": ["lib/llm.js"]}, {"exports": {"import": "./lib/llm.js"}}, [1], "x"]
+)
+def test_a_package_entry_that_is_not_a_string_falls_back_to_the_index(tmp_path, manifest):
+    root = _agents_repo(
+        tmp_path,
+        {
+            "packages/shared/package.json": json.dumps(manifest),
+            "packages/shared/index.js": "export const key = process.env.INDEX_API_KEY;\n",
+            "packages/shared/lib/llm.js": "export const key = process.env.SHARED_API_KEY;\n",
+            "agents/a/index.js": 'const shared = require("../../packages/shared");\n',
+        },
+    )
+
+    required = _required(discover_credentials(root, agent_subfolder="agents/a"))
+
+    assert required["INDEX_API_KEY"] is True
+    assert required["SHARED_API_KEY"] is False
+
+
+def test_a_package_entry_that_does_not_resolve_falls_back_to_the_index(tmp_path):
+    root = _agents_repo(
+        tmp_path,
+        {
+            "packages/shared/package.json": '{"main": "lib/missing.js"}',
+            "packages/shared/index.js": "export const key = process.env.INDEX_API_KEY;\n",
+            "agents/a/index.js": 'const shared = require("../../packages/shared");\n',
+        },
+    )
+
+    assert _required(discover_credentials(root, agent_subfolder="agents/a"))["INDEX_API_KEY"] is True
+
+
+@pytest.mark.parametrize("sub", [None, "agents/a"], ids=["whole-repo", "folder"])
+def test_a_package_main_that_does_not_resolve_falls_back_to_the_index_before_exports(tmp_path, sub):
+    # Node's require() of a folder by path loads its index when main is missing, and never reads
+    # exports: the whole-repo build and the folder build agree.
+    root = _agents_repo(
+        tmp_path,
+        {
+            "packages/shared/package.json": json.dumps({"main": "missing.js", "exports": "./lib/llm.js"}),
+            "packages/shared/index.js": "export const key = process.env.INDEX_API_KEY;\n",
+            "packages/shared/lib/llm.js": "export const key = process.env.SHARED_API_KEY;\n",
+            "agents/a/index.js": 'const shared = require("../../packages/shared");\n',
+        },
+    )
+
+    required = _required(discover_credentials(root, agent_subfolder=sub))
+
+    assert required["INDEX_API_KEY"] is True
+    if sub:
+        assert required["SHARED_API_KEY"] is False
+
+
+def _ts_monorepo(tmp_path, main):
+    return _agents_repo(
+        tmp_path,
+        {
+            "package.json": json.dumps({"workspaces": ["agents/*", "packages/*"]}),
+            "agents/a/package.json": json.dumps({"name": "a"}),
+            "agents/a/src/index.ts": "import { k } from '../../../packages/shared';\n",
+            "packages/shared/package.json": json.dumps(
+                {"name": "shared", "main": main, "dependencies": {"puppeteer": "^23.0.0"}}
+            ),
+            "packages/shared/src/index.ts": (
+                "import puppeteer from 'puppeteer';\n"
+                "export const k = process.env.SHARED_API_KEY;\n"
+            ),
+        },
+    )
+
+
+@pytest.mark.parametrize("main", ["dist/index.js", "./build/index.js", "out/index.js"])
+def test_a_package_main_in_an_uncommitted_build_folder_is_found_in_src(tmp_path, main):
+    # Dileep, #225 (4596906756): the usual TypeScript monorepo shape. `main` points at build
+    # output that isn't committed; the code is in src/. The whole-repo build and the folder
+    # build agree, and the browser check sees what the package imports.
+    from fi.alk.harness.agent_type_check import browser_tools_in_agent
+
+    root = _ts_monorepo(tmp_path, main)
+
+    assert _required(discover_credentials(root))["SHARED_API_KEY"] is True
+    assert _required(discover_credentials(root, agent_subfolder="agents/a"))["SHARED_API_KEY"] is True
+    assert "puppeteer" in browser_tools_in_agent(root, "agents/a")
+
+
+@pytest.mark.parametrize(
+    "main, source",
+    [
+        ("dist/worker.js", "src/worker.ts"),
+        ("dist/worker.mjs", "src/worker.ts"),
+        ("dist/worker.cjs", "src/worker.ts"),
+        ("dist/src/worker.js", "src/worker.ts"),
+    ],
+)
+def test_a_build_entry_that_is_not_the_index_finds_its_own_source(tmp_path, main, source):
+    # Change review of 646c8c96 (M1): the entry's own source, never an unrelated src/index.
+    root = _agents_repo(
+        tmp_path,
+        {
+            "agents/a/src/index.ts": "import { k } from '../../../packages/shared';\n",
+            "packages/shared/package.json": json.dumps({"name": "shared", "main": main}),
+            f"packages/shared/{source}": "export const k = process.env.WORKER_API_KEY;\n",
+            "packages/shared/src/index.ts": "export const i = process.env.INDEX_API_KEY;\n",
+        },
+    )
+
+    required = _required(discover_credentials(root, agent_subfolder="agents/a"))
+
+    assert required["WORKER_API_KEY"] is True
+    assert required["INDEX_API_KEY"] is False
+
+
+def test_a_build_entry_with_no_source_of_its_own_takes_no_other_file(tmp_path):
+    root = _agents_repo(
+        tmp_path,
+        {
+            "agents/a/src/index.ts": "import { k } from '../../../packages/shared';\n",
+            "packages/shared/package.json": json.dumps({"name": "shared", "main": "dist/cjs/worker.js"}),
+            "packages/shared/src/index.ts": "export const i = process.env.INDEX_API_KEY;\n",
+        },
+    )
+
+    assert _required(discover_credentials(root, agent_subfolder="agents/a"))["INDEX_API_KEY"] is False
+
+
+def test_a_build_folder_main_is_entered_through_src_index(tmp_path):
+    # Change review of 646c8c96 (L1): "main": "dist", a folder.
+    root = _agents_repo(
+        tmp_path,
+        {
+            "agents/a/src/index.ts": "import { k } from '../../../packages/shared';\n",
+            "packages/shared/package.json": json.dumps({"name": "shared", "main": "dist"}),
+            "packages/shared/src/index.ts": "export const k = process.env.SHARED_API_KEY;\n",
+        },
+    )
+
+    assert _required(discover_credentials(root, agent_subfolder="agents/a"))["SHARED_API_KEY"] is True
+
+
 @pytest.mark.parametrize("make", ["link", "fifo"])
 def test_the_import_walk_does_not_read_a_link_or_a_pipe(tmp_path, make):
     from fi.alk.harness.credentials import imported_by_agent
@@ -1069,3 +1258,25 @@ def test_a_walk_that_cant_parse_a_file_marks_the_manifest_truncated(tmp_path):
 
     manifest = discover_credentials(root, agent_subfolder="agents/a")
     assert manifest.truncated
+
+
+@pytest.mark.parametrize("sub", [None, "agents/a"], ids=["whole-repo", "folder"])
+def test_a_workspace_member_the_agent_depends_on_is_followed_through_its_src(tmp_path, sub):
+    root = _agents_repo(
+        tmp_path,
+        {
+            "pyproject.toml": '[tool.uv.workspace]\nmembers = ["agents/a", "packages/shared"]\n',
+            "agents/a/pyproject.toml": (
+                '[project]\nname = "agent-a"\nversion = "0"\ndependencies = ["shared"]\n'
+                '[tool.uv.sources]\nshared = { workspace = true }\n'
+            ),
+            "agents/a/agent.py": "from shared.store import db\n",
+            "packages/shared/pyproject.toml": '[project]\nname = "shared"\nversion = "0"\n',
+            "packages/shared/src/shared/__init__.py": "",
+            "packages/shared/src/shared/store.py": (
+                'import os\ndb = os.environ["SHARED_DB_PASSWORD"]\n'
+            ),
+        },
+    )
+
+    assert _required(discover_credentials(root, agent_subfolder=sub))["SHARED_DB_PASSWORD"] is True
