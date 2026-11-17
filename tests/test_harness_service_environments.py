@@ -683,6 +683,13 @@ def _net(spec, name="job"):
         (_svc(ipc="host"), "agent: ipc=host"),
         (_svc(ipc="container:db"), "agent: ipc outside the project"),
         (_svc(ipc="service:missing"), "agent: ipc outside the project"),
+        # uts, userns_mode and cgroup
+        (_svc(uts="host"), "agent: uts outside the project"),
+        (_svc(uts="HOST"), "agent: uts outside the project"),
+        (_svc(userns_mode="host"), "agent: userns_mode outside the project"),
+        (_svc(userns_mode="HOST"), "agent: userns_mode outside the project"),
+        (_svc(cgroup="host"), "agent: cgroup outside the project"),
+        (_svc(cgroup="HOST"), "agent: cgroup outside the project"),
         # volumes_from
         (
             _svc(volumes_from=["container:db"]),
@@ -746,6 +753,13 @@ def test_compose_reach_outside_the_project_is_rejected(config, expected):
         _svc(ipc="private"),
         _svc(ipc="shareable"),
         _svc(ipc=""),
+        # uts, userns_mode and cgroup
+        _svc(uts="private"),
+        _svc(uts=""),
+        _svc(userns_mode="private"),
+        _svc(userns_mode=""),
+        _svc(cgroup="private"),
+        _svc(cgroup=""),
         # volumes_from
         _svc(volumes_from=["db"]),
         _svc(volumes_from=["db:ro"]),
@@ -773,6 +787,9 @@ def test_compose_settings_inside_the_project_are_accepted(config):
         _svc(network_mode="CANARY-7f3a"),
         _svc(pid="CANARY-7f3a"),
         _svc(ipc="CANARY-7f3a"),
+        _svc(uts="CANARY-7f3a"),
+        _svc(userns_mode="CANARY-7f3a"),
+        _svc(cgroup="CANARY-7f3a"),
         _svc(volumes_from=["CANARY-7f3a"]),
         _svc(build={"network": "CANARY-7f3a"}),
         _net({"name": "CANARY-7f3a"}),

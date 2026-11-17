@@ -560,6 +560,11 @@ def _validate_compose_security(config: dict[str, Any]) -> None:
                 if value.lower() == "host"
                 else f"{name}: {key} outside the project"
             )
+        # Host namespaces: Compose's only other value is "host" (any case); a name is not read.
+        for key in ("uts", "userns_mode", "cgroup"):
+            value = str(service.get(key) or "")
+            if value and value != "private":
+                violations.append(f"{name}: {key} outside the project")
         for entry in service.get("volumes_from") or []:
             source = str(entry)
             if source.startswith("container:"):
