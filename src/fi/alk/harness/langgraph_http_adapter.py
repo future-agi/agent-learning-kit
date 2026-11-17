@@ -12,9 +12,15 @@ loop costs little, but:
   request in flight until it returns;
 - synchronous nodes share the loop's default thread pool, and ``threading.local`` state in
   async node code is shared between requests (context variables stay per request);
-- a graph that runs past ``ALK_LANGGRAPH_TIMEOUT_SECONDS`` answers 500 ``RequestTimeout``,
-  as the subprocess adapter does: a slow graph is the agent's failure, not one to retry. Its
-  work is cancelled, and a request answered so never starts its graph later;
+- a graph still running at ``ALK_LANGGRAPH_TIMEOUT_SECONDS`` is cancelled and answers 500
+  ``RequestTimeout``, as the subprocess adapter does: a slow graph is the agent's failure,
+  not one to retry. A node that blocks the loop, or catches the cancel, can run past the
+  deadline; if it is still running ``_WAIT_MARGIN_SECONDS`` later, the request answers 500
+  ``RequestTimeout`` then. A request answered with a timeout before its graph started never
+  starts it;
+- tasks a turn starts and leaves running are not cancelled when the turn ends;
+- if the graph's code stops the loop itself, every later turn is refused and ``/health``
+  answers 503 instead of 200;
 - ``close()`` is for tests: it ends the loop for good, because clients built at import may
   be bound to it.
 """
@@ -115,7 +121,8 @@ async def _run_graph(messages: list[dict[str, str]], timeout: float, abandoned: 
     try:
         return await GRAPH.ainvoke({"messages": messages})
     except asyncio.CancelledError:
-        if expired:
+        # Once the request is abandoned nobody reads this task's result, so it ends cancelled.
+        if expired and not abandoned.is_set():
             raise RequestTimeout(f"graph did not answer within {timeout:g}s") from None
         raise
     except (SystemExit, KeyboardInterrupt) as exc:
@@ -132,13 +139,17 @@ def _submit(messages: list[dict[str, str]], timeout: float, abandoned: threading
 
 async def _shutdown() -> None:
     current = asyncio.current_task()
-    tasks = [task for task in asyncio.all_tasks() if task is not current]
+    tasks = {task for task in asyncio.all_tasks() if task is not current}
     for task in tasks:
         task.cancel()
-    await asyncio.gather(*tasks, return_exceptions=True)
+    pending: set[asyncio.Task[Any]] = set()
+    if tasks:
+        _, pending = await asyncio.wait(tasks, timeout=_CLOSE_WAIT_SECONDS)
     loop = asyncio.get_running_loop()
     await loop.shutdown_asyncgens()
-    await loop.shutdown_default_executor()
+    if not pending:
+        # A node that ignores the cancel may hold an executor thread; don't wait for it.
+        await loop.shutdown_default_executor()
 
 
 def close() -> None:
@@ -154,7 +165,9 @@ def close() -> None:
             return
         if thread is not None and thread.is_alive():
             try:
-                asyncio.run_coroutine_threadsafe(_shutdown(), loop).result(_CLOSE_WAIT_SECONDS)
+                asyncio.run_coroutine_threadsafe(_shutdown(), loop).result(
+                    _CLOSE_WAIT_SECONDS + _WAIT_MARGIN_SECONDS
+                )
             except Exception:  # noqa: BLE001 - a node that won't stop must not hold up close()
                 pass
             loop.call_soon_threadsafe(loop.stop)
@@ -185,7 +198,9 @@ def _invoke(payload: dict[str, Any]) -> dict[str, str]:
         # The margin lets the deadline fire first; this wait covers a node that ignores cancellation.
         state = future.result(timeout + _WAIT_MARGIN_SECONDS)
     except concurrent.futures.CancelledError as exc:
-        raise RuntimeError("the LangGraph adapter closed while the graph ran") from exc
+        if _CLOSED:
+            raise RuntimeError("the LangGraph adapter closed while the graph ran") from exc
+        raise RuntimeError("the graph was cancelled") from exc
     except concurrent.futures.TimeoutError:
         if not future.done():
             abandoned.set()
@@ -206,7 +221,12 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(encoded)
 
     def do_GET(self) -> None:  # noqa: N802
-        self._respond(200, {"status": "ok"}) if self.path == "/health" else self._respond(404, {"error": "not_found"})
+        if self.path != "/health":
+            self._respond(404, {"error": "not_found"})
+        elif _LOOP_THREAD is not None and not _LOOP_THREAD.is_alive():
+            self._respond(503, {"status": "event_loop_stopped"})
+        else:
+            self._respond(200, {"status": "ok"})
 
     def do_POST(self) -> None:  # noqa: N802
         if self.path != "/invoke":

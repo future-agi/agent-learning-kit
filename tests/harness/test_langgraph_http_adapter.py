@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import gc
 import importlib
 import json
 import sys
@@ -37,6 +38,7 @@ def test_declared_graph_receives_chat_and_returns_report(
             "content": "Finished report"
         }
     finally:
+        adapter.close()
         sys.modules.pop("fi.alk.harness.langgraph_http_adapter", None)
         sys.modules.pop("fixture_graph.graph", None)
         sys.modules.pop("fixture_graph", None)
@@ -239,6 +241,7 @@ def test_inner_timeout_answers_500(load, monkeypatch) -> None:
         server.server_close()
 
     assert status == 500
+    assert "RequestTimeout" in body["error"]
     assert body["content"] == ""
 
 
@@ -248,13 +251,14 @@ def test_node_that_ignores_cancellation_still_answers_500(load, monkeypatch) -> 
     monkeypatch.setattr(adapter, "_WAIT_MARGIN_SECONDS", 0.3)
     server, url = _serve(adapter)
     try:
-        status, _ = _post(url)
+        status, body = _post(url)
     finally:
         sys.modules["stubborn_graph.graph"].release.set()
         server.shutdown()
         server.server_close()
 
     assert status == 500
+    assert "RequestTimeout" in body["error"]
 
 
 def test_close_stops_and_joins_the_loop_thread_for_good(load) -> None:
@@ -339,7 +343,7 @@ graph = Graph()
 """
 
 
-def test_a_graph_that_outlives_its_deadline_is_cancelled_again(load, monkeypatch) -> None:
+def test_a_graph_that_outlives_its_deadline_is_cancelled_again(load, monkeypatch, caplog) -> None:
     monkeypatch.setenv("ALK_LANGGRAPH_TIMEOUT_SECONDS", "0.2")
     adapter = load(SECOND_CANCEL_GRAPH, "second_cancel_graph")
     monkeypatch.setattr(adapter, "_WAIT_MARGIN_SECONDS", 0.3)
@@ -354,12 +358,18 @@ def test_a_graph_that_outlives_its_deadline_is_cancelled_again(load, monkeypatch
     # The first cancel is the deadline's, which the node swallows; the second is the
     # abandoned request's.
     assert graph_module.cancels == [1, 1]
+    # Nobody is waiting for that request any more, so its end must not be logged as an
+    # exception never retrieved.
+    time.sleep(0.2)
+    gc.collect()
+    assert "never retrieved" not in caplog.text
 
 
 ABANDON_GRAPH = """
-import time
+import threading
 
 runs = []
+unblock = threading.Event()
 
 
 class Graph:
@@ -367,7 +377,7 @@ class Graph:
         text = state["messages"][-1]["content"]
         runs.append(text)
         if text == "block":
-            time.sleep(1.0)
+            unblock.wait(10)
         return {"final_report": text}
 
 
@@ -387,6 +397,7 @@ def test_a_request_answered_with_a_timeout_never_starts_its_graph(load, monkeypa
 
     with pytest.raises(adapter.RequestTimeout):
         _turn(adapter, "late")
+    graph_module.unblock.set()
     blocker.join(timeout=10)
     time.sleep(0.2)
 
@@ -538,3 +549,65 @@ def test_a_slow_graph_is_the_agents_failure_and_is_not_retried(
     assert code == "target_agent_failed"
     assert hosted_scheduler._domain_for(code) is FailureDomain.AGENT
     assert not hosted_scheduler._is_retryable(code)
+
+
+def test_a_graph_that_cancels_itself_is_not_reported_as_a_close(load) -> None:
+    adapter = load(
+        "import asyncio\n"
+        "class Graph:\n"
+        "    async def ainvoke(self, state):\n"
+        "        asyncio.current_task().cancel()\n"
+        "        await asyncio.sleep(1)\n"
+        "graph = Graph()\n",
+        "self_cancel_graph",
+    )
+
+    with pytest.raises(RuntimeError, match="cancelled") as raised:
+        _turn(adapter)
+
+    assert "closed" not in str(raised.value)
+
+
+def test_a_loop_stopped_by_the_graph_is_refused_and_health_says_so(load, monkeypatch) -> None:
+    monkeypatch.setenv("ALK_LANGGRAPH_TIMEOUT_SECONDS", "0.3")
+    adapter = load(
+        "import asyncio, sys\n"
+        "class Graph:\n"
+        "    async def ainvoke(self, state):\n"
+        "        asyncio.get_running_loop().call_soon(sys.exit, 3)\n"
+        "        await asyncio.sleep(5)\n"
+        "graph = Graph()\n",
+        "stopping_graph",
+    )
+    monkeypatch.setattr(adapter, "_WAIT_MARGIN_SECONDS", 0.3)
+    with pytest.raises(adapter.RequestTimeout):
+        _turn(adapter)
+    adapter._LOOP_THREAD.join(timeout=5)
+    server = ThreadingHTTPServer(("127.0.0.1", 0), adapter.Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        health = f"http://127.0.0.1:{server.server_address[1]}/health"
+        with pytest.raises(urllib.error.HTTPError) as unhealthy:
+            urllib.request.urlopen(health, timeout=10)
+    finally:
+        server.shutdown()
+        server.server_close()
+
+    # Clients built at import may be bound to the stopped loop, so no new one is started.
+    with pytest.raises(RuntimeError, match="stopped"):
+        _turn(adapter)
+    assert unhealthy.value.code == 503
+
+
+def test_close_refuses_to_run_on_the_adapters_own_loop(load) -> None:
+    adapter = load(
+        "import sys\n"
+        "class Graph:\n"
+        "    async def ainvoke(self, state):\n"
+        "        sys.modules['fi.alk.harness.langgraph_http_adapter'].close()\n"
+        "graph = Graph()\n",
+        "closing_graph",
+    )
+
+    with pytest.raises(RuntimeError, match="own event loop"):
+        _turn(adapter)
