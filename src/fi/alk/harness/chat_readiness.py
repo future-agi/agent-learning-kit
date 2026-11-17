@@ -35,6 +35,18 @@ def _failure_code(trace):
         return "chat_ingress_timeout"
     status = trace.get("status_code", 0)
     stage = trace.get("failure_stage")
+    stream_reason = trace.get("stream_reason")
+    if stage == "stream" and stream_reason in {
+        "sse_content_type",
+        "sse_encoding",
+    }:
+        return "chat_ingress_configuration_invalid"
+    if (
+        stage == "stream"
+        and stream_reason == "sse_incomplete"
+        and trace.get("stream_completion_path_seen") is False
+    ):
+        return "chat_ingress_configuration_invalid"
     if stage in {"setup", "http"} and status in {400, 404, 405, 415, 422}:
         return "chat_ingress_configuration_invalid"
     if status in {401, 403}:
@@ -48,6 +60,11 @@ def _failure_code(trace):
     if stage == "tool_events":
         return "chat_tool_evidence_unverified"
     return "chat_ingress_failed"
+
+
+def _reached_world(call):
+    """Whether a recorded call ran in the world: it succeeded, or the world's own rule refused it."""
+    return call.ok or (call.refused and getattr(call, "refusal_code", "") == "world_rule")
 
 
 def _usable_tool_call(call):
@@ -334,6 +351,7 @@ async def probe_chat_workflow(
             target_provider_secret_values=secret_values,
             attempt_number=1,
             source_directory=source,
+            readiness_probe=True,
         )
         # Under per-user isolation the tool handlers, and the agent code they import, run in a
         # child of their own: this process holds the capabilities and never imports that code.
@@ -364,6 +382,18 @@ async def probe_chat_workflow(
             )
         if not graded:
             receipt["tool_evidence_status"] = "not_observed"
+        elif not any(_reached_world(call) for call in outcome.calls):
+            if requires_tool_evidence:
+                raise failure(
+                    "chat_tool_evidence_unverified",
+                    "Every tool call stopped before the world ran it: "
+                    + "; ".join(
+                        f"{call.name}: {call.refusal_code or call.error or 'failed'}"[:200]
+                        for call in outcome.calls[:5]
+                    )
+                    + ". Inspect how the agent's tools are bound to the world.",
+                )
+            receipt["tool_evidence_status"] = "never_reached_world"
         receipt["status"] = "passed"
     except RuntimeValidationError:
         raise

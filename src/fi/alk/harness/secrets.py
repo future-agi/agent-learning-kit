@@ -20,6 +20,7 @@ _RUNTIME_CONFIGURATION_PREFIX = "ALK_RUNTIME_VALUE_"
 RUNTIME_CONFIGURATION_NAMES_ENV = "ALK_RUNTIME_CONFIGURATION_NAMES"
 
 
+# What a worker inherits from the host environment, and nothing else.
 WORKER_ENVIRONMENT_NAMES: frozenset[str] = frozenset(
     {
         "DOCKER_HOST",

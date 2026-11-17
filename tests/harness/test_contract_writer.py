@@ -1339,9 +1339,9 @@ ALLOWED: dict[tuple[str, str, str], tuple[int, str]] = {
         "before the cleaner stays as written (a named limit), and every send cleans again"),
     ("fi.alk.harness.authoring_entrypoint", "_prepare_source_data_invariants",
      "prune_invariant_scopes"): (1, _READS + " (the invariants file)"),
-    ("fi.alk.harness.authoring_runtime_validation", "validate_and_repair",
+    ("fi.alk.harness.authoring_runtime_validation", "_validate_and_repair",
      "_write_generic_certificate"): (1, _READS + " (the certificate)"),
-    ("fi.alk.harness.authoring_runtime_validation", "validate_and_repair", "write_text"): (
+    ("fi.alk.harness.authoring_runtime_validation", "_validate_and_repair", "write_text"): (
         3, _READS + " (diagnostics and runtime-validation records)"),
     ("fi.alk.harness.authoring_runtime_validation", "validate_once",
      "_freeze_certified_bundle"): (2, _READS + " (the frozen bundle)"),
@@ -1436,21 +1436,21 @@ ALLOWED: dict[tuple[str, str, str], tuple[int, str]] = {
     ("fi.alk.harness.agent_reading", "_reading", "model_error"): (1, _FAILURE),
     ("fi.alk.harness.agent_reading", "_reading", "refuse_unusable_folder"): (1, _FAILURE),
     ("fi.alk.harness.agent_reading", "_reading", "write_reading_failure"): (1, _FAILURE),
-    ("fi.alk.harness.authoring_runtime_validation", "validate_and_repair",
+    ("fi.alk.harness.authoring_runtime_validation", "_validate_and_repair",
      "apply_runtime_plan_patch"): (
         1, "the runtime-plan repair, which saves through write_contract (B13); " + _TEMP_COMPOSE),
-    ("fi.alk.harness.authoring_runtime_validation", "validate_and_repair", "repair"): (
+    ("fi.alk.harness.authoring_runtime_validation", "_validate_and_repair", "repair"): (
         3, "calls its nested repair, scanned as validate_and_repair.repair"),
-    ("fi.alk.harness.authoring_runtime_validation", "validate_and_repair", "validate"): (
+    ("fi.alk.harness.authoring_runtime_validation", "_validate_and_repair", "validate"): (
         2, "calls its nested validate, which runs validate_once (listed above)"),
-    ("fi.alk.harness.authoring_runtime_validation", "validate_and_repair", "write_scenarios"): (
+    ("fi.alk.harness.authoring_runtime_validation", "_validate_and_repair", "write_scenarios"): (
         1, "writes the scenario folders (folder.write_folder and write_index)"),
-    ("fi.alk.harness.authoring_runtime_validation", "validate_and_repair.repair", "_build"): (
+    ("fi.alk.harness.authoring_runtime_validation", "_validate_and_repair.repair", "_build"): (
         1, "the build stage (cli._build), which saves the contract through tools._save_contract "
         "and amend, both write_contract (B13); it writes the world besides"),
-    ("fi.alk.harness.authoring_runtime_validation", "validate_and_repair.repair", "_scenarios"): (
+    ("fi.alk.harness.authoring_runtime_validation", "_validate_and_repair.repair", "_scenarios"): (
         1, "the scenario stage (cli._scenarios), which writes the scenario folders"),
-    ("fi.alk.harness.authoring_runtime_validation", "validate_and_repair.repair",
+    ("fi.alk.harness.authoring_runtime_validation", "_validate_and_repair.repair",
      "request_runtime_plan_patch"): (1, "builds a runtime patch; " + _TEMP_COMPOSE),
     ("fi.alk.harness.bundle_author_v2", "<module>", "main"): (
         1, "the __main__ guard; main runs author_bundle_v2 (listed) and refuse_unusable_folder "

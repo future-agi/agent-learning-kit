@@ -1005,7 +1005,25 @@ def _ts_monorepo(tmp_path, main):
     )
 
 
-@pytest.mark.parametrize("main", ["dist/index.js", "./build/index.js", "out/index.js"])
+@pytest.mark.parametrize(
+    "main",
+    [
+        "dist/index.js",
+        "./build/index.js",
+        "out/index.js",
+        # Dileep, #225 (4598392979): the dual build, `tsc --outDir dist/cjs` from src/index.ts.
+        "dist/cjs/index.js",
+        "dist/esm/index.js",
+        # Rollup's flavoured name for the same src/index.ts.
+        "dist/index.esm.js",
+        # Check of e94c4640 (L1, L2): other bundlers' flavours, and flavours stacked.
+        "dist/index.es.js",
+        "dist/index.modern.js",
+        "dist/index.bundle.js",
+        "dist/index.esm.min.js",
+        "dist/index.umd.min.js",
+    ],
+)
 def test_a_package_main_in_an_uncommitted_build_folder_is_found_in_src(tmp_path, main):
     # Dileep, #225 (4596906756): the usual TypeScript monorepo shape. `main` points at build
     # output that isn't committed; the code is in src/. The whole-repo build and the folder
@@ -1026,6 +1044,10 @@ def test_a_package_main_in_an_uncommitted_build_folder_is_found_in_src(tmp_path,
         ("dist/worker.mjs", "src/worker.ts"),
         ("dist/worker.cjs", "src/worker.ts"),
         ("dist/src/worker.js", "src/worker.ts"),
+        ("dist/cjs/worker.js", "src/worker.ts"),
+        ("dist/esm/worker.mjs", "src/worker.ts"),
+        # Dileep, #225 (4598392989): one suffix is dropped, not two.
+        ("dist/app.module.js", "src/app.module.ts"),
     ],
 )
 def test_a_build_entry_that_is_not_the_index_finds_its_own_source(tmp_path, main, source):
@@ -1057,6 +1079,66 @@ def test_a_build_entry_with_no_source_of_its_own_takes_no_other_file(tmp_path):
     )
 
     assert _required(discover_credentials(root, agent_subfolder="agents/a"))["INDEX_API_KEY"] is False
+
+
+@pytest.mark.parametrize("main", ["dist/app.module.js", "dist/esm/app.module.js"])
+def test_a_dotted_build_entry_takes_its_own_source_not_a_shorter_name(tmp_path, main):
+    # Dileep, #225 (4598392989): dist/app.module.js was looked up as src/app.ts.
+    root = _agents_repo(
+        tmp_path,
+        {
+            "agents/a/src/index.ts": "import { k } from '../../../packages/shared';\n",
+            "packages/shared/package.json": json.dumps({"name": "shared", "main": main}),
+            "packages/shared/src/app.module.ts": "export const k = process.env.MODULE_API_KEY;\n",
+            "packages/shared/src/app.ts": "export const a = process.env.APP_API_KEY;\n",
+        },
+    )
+
+    required = _required(discover_credentials(root, agent_subfolder="agents/a"))
+
+    assert required["MODULE_API_KEY"] is True
+    assert required["APP_API_KEY"] is False
+
+
+def test_a_dotted_build_entry_with_no_source_of_its_own_takes_no_shorter_name(tmp_path):
+    # Only a build flavour (`.esm`, `.cjs`, `.umd`, `.min`) is dropped to find the source:
+    # dist/app.module.js never stands for src/app.ts.
+    root = _agents_repo(
+        tmp_path,
+        {
+            "agents/a/src/index.ts": "import { k } from '../../../packages/shared';\n",
+            "packages/shared/package.json": json.dumps({"name": "shared", "main": "dist/app.module.js"}),
+            "packages/shared/src/app.ts": "export const a = process.env.APP_API_KEY;\n",
+        },
+    )
+
+    assert _required(discover_credentials(root, agent_subfolder="agents/a"))["APP_API_KEY"] is False
+
+
+@pytest.mark.parametrize(
+    "main, own, other",
+    [
+        # Check of e94c4640 (L3): the exact path comes before the dual build's folder dropped...
+        ("dist/cjs/worker.js", "src/cjs/worker.ts", "src/worker.ts"),
+        # ...and the exact name before a flavour dropped.
+        ("dist/index.esm.js", "src/index.esm.ts", "src/index.ts"),
+    ],
+)
+def test_a_build_entry_takes_its_exact_source_before_a_fallback(tmp_path, main, own, other):
+    root = _agents_repo(
+        tmp_path,
+        {
+            "agents/a/src/index.ts": "import { k } from '../../../packages/shared';\n",
+            "packages/shared/package.json": json.dumps({"name": "shared", "main": main}),
+            f"packages/shared/{own}": "export const k = process.env.OWN_API_KEY;\n",
+            f"packages/shared/{other}": "export const o = process.env.OTHER_API_KEY;\n",
+        },
+    )
+
+    required = _required(discover_credentials(root, agent_subfolder="agents/a"))
+
+    assert required["OWN_API_KEY"] is True
+    assert required["OTHER_API_KEY"] is False
 
 
 def test_a_build_folder_main_is_entered_through_src_index(tmp_path):
@@ -1423,6 +1505,206 @@ def test_a_walk_that_cant_parse_a_file_marks_the_manifest_truncated(tmp_path):
     assert manifest.truncated
 
 
+# --- LiveKit plugin api_key= handling (TH-9519) ---------------------------------------
+
+_LK_ENV = ["LIVEKIT_URL", "LIVEKIT_API_KEY", "LIVEKIT_API_SECRET"]
+
+
+def _plugin_agent(tmp_path: Path, plugin: str, call: str, *, pre: str = "") -> None:
+    _write(
+        tmp_path,
+        "agent.py",
+        f"import os\nfrom livekit.plugins import {plugin}\n{pre}\nx = {plugin}.{call}\n",
+    )
+
+
+def _lk(tmp_path: Path, *supplied: str):
+    manifest = discover_credentials(
+        tmp_path, provided_environment=[*_LK_ENV, *supplied]
+    )
+    return manifest, _requirements(manifest)
+
+
+def _missing(tmp_path: Path, *supplied: str) -> set[str]:
+    manifest, found = _lk(tmp_path, *supplied)
+    assert manifest.ready is bool(
+        not any(r.status is RequirementStatus.MISSING for r in found.values())
+    )
+    return {
+        name for name, r in found.items() if r.status is RequirementStatus.MISSING
+    }
+
+
+@pytest.mark.parametrize("call", ["TTS()", "STT()"])
+def test_elevenlabs_plugin_asks_for_the_name_the_plugin_reads(tmp_path, call):
+    _plugin_agent(tmp_path, "elevenlabs", call)
+    _, found = _lk(tmp_path)
+    assert "ELEVENLABS_API_KEY" not in found
+    assert found["ELEVEN_API_KEY"].provider == "elevenlabs"
+    assert found["ELEVEN_API_KEY"].status is RequirementStatus.MISSING
+    manifest, _ = _lk(tmp_path, "ELEVEN_API_KEY")
+    assert manifest.ready
+
+
+def test_elevenlabs_environment_index_is_read_as_that_name_only(tmp_path):
+    _plugin_agent(
+        tmp_path, "elevenlabs", 'TTS(api_key=os.environ["ELEVENLABS_API_KEY"])'
+    )
+    assert _missing(tmp_path) == {"ELEVENLABS_API_KEY"}
+    _, found = _lk(tmp_path)
+    assert "ELEVEN_API_KEY" not in found
+    assert _lk(tmp_path, "ELEVENLABS_API_KEY")[0].ready
+
+
+@pytest.mark.parametrize(
+    "plugin,call,read_name,own_name",
+    [
+        ("elevenlabs", 'TTS(api_key=os.getenv("ELEVENLABS_API_KEY"))', "ELEVENLABS_API_KEY", "ELEVEN_API_KEY"),
+        ("elevenlabs", 'TTS(api_key=os.environ.get("ELEVENLABS_API_KEY", ""))', "ELEVENLABS_API_KEY", "ELEVEN_API_KEY"),
+        ("deepgram", 'STT(api_key=os.getenv("MY_DEEPGRAM"))', "MY_DEEPGRAM", "DEEPGRAM_API_KEY"),
+        ("deepgram", 'STT(api_key=os.environ.get("DG_KEY", ""))', "DG_KEY", "DEEPGRAM_API_KEY"),
+        ("deepgram", 'STT(api_key=os.getenv("DG_KEY", None))', "DG_KEY", "DEEPGRAM_API_KEY"),
+        ("deepgram", 'STT(api_key=os.getenv("DG_KEY", default=""))', "DG_KEY", "DEEPGRAM_API_KEY"),
+        ("elevenlabs", 'TTS(api_key=os.getenv("ELEVENLABS_API_KEY", "your-api-key"))', "ELEVENLABS_API_KEY", "ELEVEN_API_KEY"),
+    ],
+)
+def test_a_nullable_read_passed_as_api_key_is_required_by_its_own_name(
+    tmp_path, plugin, call, read_name, own_name
+):
+    _plugin_agent(tmp_path, plugin, call)
+    assert _missing(tmp_path) == {read_name}
+    _, found = _lk(tmp_path)
+    assert own_name not in found
+    assert found[read_name].required is True
+    assert _lk(tmp_path, read_name)[0].ready
+
+
+@pytest.mark.parametrize(
+    "plugin,call",
+    [
+        ("deepgram", 'STT(api_key=os.getenv("X_KEY", "fallback-value"))'),
+        ("deepgram", 'STT(api_key=os.getenv("DG_KEY", default="fallback-value"))'),
+        ("deepgram", 'STT(api_key="literal")'),
+        ("elevenlabs", 'TTS(api_key="literal")'),
+    ],
+)
+def test_a_literal_or_defaulted_api_key_adds_no_requirement(tmp_path, plugin, call):
+    _plugin_agent(tmp_path, plugin, call)
+    manifest, found = _lk(tmp_path)
+    assert manifest.ready
+    assert not any(
+        n in found for n in ("DEEPGRAM_API_KEY", "ELEVEN_API_KEY", "ELEVENLABS_API_KEY")
+    )
+    assert not any(
+        o.startswith("sdk:") for r in found.values() for o in r.detected_from
+    )
+
+
+@pytest.mark.parametrize(
+    "call,pre",
+    [
+        ("STT(api_key=KEY)", 'KEY = os.getenv("DEEPGRAM_API_KEY")'),
+        ("STT(api_key=settings.deepgram_api_key)", ""),
+        ("STT(api_key=os.getenv('DEEPGRAM_API_KEY') or '')", ""),
+        ("STT(**opts)", ""),
+        ("STT(api_key='')", ""),
+        ('STT(api_key=os.environ["dg_key"])', ""),
+        ('STT(api_key=os.getenv("dg_key"))', ""),
+        ('STT(api_key="  ")', ""),
+    ],
+)
+def test_an_unreadable_api_key_keeps_the_plugins_own_requirement(tmp_path, call, pre):
+    _plugin_agent(tmp_path, "deepgram", call, pre=pre)
+    assert "DEEPGRAM_API_KEY" in _missing(tmp_path)
+    assert _lk(tmp_path, "DEEPGRAM_API_KEY")[0].ready
+
+
+@pytest.mark.parametrize(
+    "plugin, call, own_name",
+    [
+        ("openai", 'LLM(api_key=os.getenv("ALK_CLAUDE_GATEWAY_API_KEY"))', "OPENAI_API_KEY"),
+        ("deepgram", 'STT(api_key=os.getenv("HOST"))', "DEEPGRAM_API_KEY"),
+        ("cartesia", 'TTS(api_key=os.getenv("ALK_X"))', "CARTESIA_API_KEY"),
+        ("openai", 'realtime.RealtimeModel(api_key=os.getenv("ALK_X"))', "OPENAI_API_KEY"),
+    ],
+)
+def test_a_reserved_name_passed_as_the_key_asks_for_the_plugins_own_name(
+    tmp_path, plugin, call, own_name
+):
+    _plugin_agent(tmp_path, plugin, call)
+    _, found = _lk(tmp_path)
+    assert "ALK_CLAUDE_GATEWAY_API_KEY" not in found and "HOST" not in found
+    assert "ALK_X" not in found
+    # The customer can never supply the reserved name, and several plugins then read their own
+    # variable, so the check asks for that rather than calling the agent ready.
+    assert own_name in _missing(tmp_path)
+
+
+def test_a_bare_getenv_imported_from_os_keeps_the_plugins_own_requirement(tmp_path):
+    _write(
+        tmp_path,
+        "agent.py",
+        "from os import getenv\nfrom livekit.plugins import deepgram\n"
+        'x = deepgram.STT(api_key=getenv("DEEPGRAM_API_KEY"))\n',
+    )
+    assert "DEEPGRAM_API_KEY" in _missing(tmp_path)
+
+
+def test_elevenlabs_options_dict_is_not_ready_without_the_plugins_name(tmp_path):
+    _plugin_agent(tmp_path, "elevenlabs", "TTS(**opts)")
+    assert {"ELEVEN_API_KEY", "ELEVENLABS_API_KEY"} <= _missing(tmp_path)
+    # No api_key= is passed, so the plugin reads only its own name: the other doesn't stand in.
+    assert "ELEVEN_API_KEY" in _missing(tmp_path, "ELEVENLABS_API_KEY")
+    assert _lk(tmp_path, "ELEVENLABS_API_KEY")[0].credential_choices == []
+
+
+@pytest.mark.parametrize(
+    "call,pre",
+    [
+        ("TTS(api_key=KEY)", 'KEY = os.getenv("ELEVENLABS_API_KEY")'),
+        ("TTS(api_key=settings.elevenlabs_api_key)", ""),
+    ],
+)
+def test_an_unreadable_elevenlabs_api_key_takes_either_name(tmp_path, call, pre):
+    # The code behind an unreadable api_key= may read either name: one is enough.
+    _plugin_agent(tmp_path, "elevenlabs", call, pre=pre)
+    assert _missing(tmp_path, "ELEVEN_API_KEY") == set()
+    assert _missing(tmp_path, "ELEVENLABS_API_KEY") == set()
+    assert _lk(tmp_path, "ELEVEN_API_KEY")[0].ready
+    assert _lk(tmp_path, "ELEVENLABS_API_KEY")[0].ready
+    manifest, _ = _lk(tmp_path)
+    assert not manifest.ready
+    assert {"ELEVEN_API_KEY", "ELEVENLABS_API_KEY"} <= _missing(tmp_path)
+    assert [choice.options for choice in manifest.credential_choices] == [
+        [["ELEVEN_API_KEY"], ["ELEVENLABS_API_KEY"]]
+    ]
+
+
+def test_an_unreadable_elevenlabs_api_key_beside_a_strict_read_keeps_that_name(tmp_path):
+    # The code itself needs ELEVENLABS_API_KEY, so it is required whatever the plugin takes.
+    _plugin_agent(
+        tmp_path,
+        "elevenlabs",
+        "TTS(api_key=settings.elevenlabs_api_key)",
+        pre='strict = os.environ["ELEVENLABS_API_KEY"]',
+    )
+    assert _lk(tmp_path, "ELEVENLABS_API_KEY")[0].ready
+    assert "ELEVENLABS_API_KEY" in _missing(tmp_path, "ELEVEN_API_KEY")
+    assert _lk(tmp_path)[0].credential_choices == []
+
+
+def test_code_reading_the_eleven_names_is_labelled_elevenlabs(tmp_path):
+    _write(
+        tmp_path,
+        "agent.py",
+        'import os\na = os.environ["ELEVEN_API_KEY"]\nb = os.environ["ELEVENLABS_API_KEY"]\n',
+    )
+    _, found = _lk(tmp_path)
+    for name in ("ELEVEN_API_KEY", "ELEVENLABS_API_KEY"):
+        assert found[name].provider == "elevenlabs"
+        assert found[name].required is True
+
+
 @pytest.mark.parametrize("sub", [None, "agents/a"], ids=["whole-repo", "folder"])
 def test_a_workspace_member_the_agent_depends_on_is_followed_through_its_src(tmp_path, sub):
     root = _agents_repo(
@@ -1443,3 +1725,53 @@ def test_a_workspace_member_the_agent_depends_on_is_followed_through_its_src(tmp
     )
 
     assert _required(discover_credentials(root, agent_subfolder=sub))["SHARED_DB_PASSWORD"] is True
+
+
+def test_a_sibling_agents_unreadable_elevenlabs_key_leaves_this_agent_alone(tmp_path):
+    # Agent b's constructor isn't agent a's code: it makes no choice a has to meet.
+    root = _agents_repo(
+        tmp_path,
+        {
+            "a/agent.py": "print('a')\n",
+            "b/agent.py": (
+                "from livekit.plugins import elevenlabs\n"
+                "x = elevenlabs.TTS(api_key=settings.eleven_key)\n"
+            ),
+        },
+    )
+    manifest = discover_credentials(root, agent_subfolder="a")
+    assert manifest.ready
+    assert manifest.credential_choices == []
+    rows = {
+        item.environment_name: item.status
+        for item in manifest.requirements
+        if item.environment_name in {"ELEVEN_API_KEY", "ELEVENLABS_API_KEY"}
+    }
+    assert rows == {
+        "ELEVEN_API_KEY": RequirementStatus.OPTIONAL,
+        "ELEVENLABS_API_KEY": RequirementStatus.OPTIONAL,
+    }
+
+
+def test_imported_code_behind_the_agent_makes_the_either_name_choice(tmp_path):
+    # The agent's folder imports the code that builds the plugin: that code is the agent's own.
+    root = _agents_repo(
+        tmp_path,
+        {
+            "lib/__init__.py": "",
+            "lib/voice.py": (
+                "from livekit.plugins import elevenlabs\n"
+                "x = elevenlabs.TTS(api_key=settings.eleven_key)\n"
+            ),
+            "agents/a/agent.py": "from lib import voice\n",
+        },
+    )
+    manifest = discover_credentials(
+        root,
+        agent_subfolder="agents/a",
+        provided_environment=["ELEVEN_API_KEY", "LIVEKIT_URL", "LIVEKIT_API_KEY", "LIVEKIT_API_SECRET"],
+    )
+    assert manifest.ready
+    assert [choice.options for choice in manifest.credential_choices] == [
+        [["ELEVEN_API_KEY"], ["ELEVENLABS_API_KEY"]]
+    ]

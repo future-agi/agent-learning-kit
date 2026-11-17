@@ -62,8 +62,18 @@ _CHAT_ENV = frozenset(
 
 class IsolatedChatCallRunner:
     def __init__(self, adapter: ArtifactUploader, context: CallRunnerContext) -> None:
+        from .call_runner import TrialRecords, sealed_seed
+
         self._adapter = adapter
         self._context = context
+        # Each trial runs in a worker of its own, so whether it started from the seed is read here, before its setup.
+        self._records = TrialRecords(sealed_seed(context.work_directory))
+
+    async def before_setup(self, runtime: EnvironmentRuntime) -> None:
+        """Read the trial's start on its reset world, before the scenario's setup writes."""
+        world_db = runtime.endpoints.get("world_db")
+        dsn = world_db.address if world_db is not None and world_db.protocol == "postgres" else None
+        await asyncio.to_thread(self._records.before_setup, id(runtime), dsn)
 
     async def run(
         self,
@@ -114,6 +124,7 @@ class IsolatedChatCallRunner:
                         scenario, "source_scenario_key", None
                     ),
                     "scenario_id": scenario.scenario_id,
+                    "start": self._records.start_of(id(runtime)),
                 },
                 environ=environ,
                 work_directory=context.work_directory / "chat-workers",
@@ -125,9 +136,15 @@ class IsolatedChatCallRunner:
                 handlers.close()
         await _record_worker_usage(context.usage_reporter, result.get("usage") or [], funding)
         artifact_ids = {}
-        for artifact in result.get("artifacts", []):
+        artifacts = list(result.get("artifacts", []))
+        # A transcript names the trial's end state by the worker's own id, so the end state is stored before it.
+        ends = [one for one in artifacts if one["kind"] == ArtifactKind.WORLD_STATE.value]
+        for artifact in ends + [one for one in artifacts if one not in ends]:
+            data = base64.b64decode(artifact["data"], validate=True)
+            if artifact["kind"] == "transcript":
+                data = _with_stored_end_state(data, artifact_ids)
             artifact_ids[artifact["id"]] = await self._adapter.upload_artifact(
-                base64.b64decode(artifact["data"], validate=True),
+                data,
                 kind=ArtifactKind(artifact["kind"]),
                 scenario_key=scenario.scenario_key,
             )
@@ -151,6 +168,25 @@ class IsolatedChatCallRunner:
                 partial=outcome,
             )
         return outcome
+
+
+def _with_stored_end_state(data: bytes, artifact_ids: dict[str, Any]) -> bytes:
+    """A transcript whose World changes name the end state by the worker's id, naming it by the id it was stored
+    under instead; any other transcript is returned as it was."""
+    try:
+        document = json.loads(data)
+    except ValueError:
+        return data
+    world = document.get("world_actors") if isinstance(document, dict) else None
+    local = world.get("end_state_artifact") if isinstance(world, dict) else None
+    if local is None:
+        return data
+    stored = artifact_ids.get(str(local))
+    if stored:
+        world["end_state_artifact"] = stored
+    else:
+        world.pop("end_state_artifact", None)
+    return json.dumps(document, sort_keys=True, default=str).encode("utf-8")
 
 
 async def _record_worker_usage(
@@ -256,7 +292,11 @@ async def main() -> None:
         )
         runtime = EnvironmentRuntime.model_validate(payload["runtime"])
         runtime._local_auth_values = dict(payload.get("local_auth_values", {}))
-        outcome = await runner_type(collector, context).run(
+        runner = runner_type(collector, context)
+        started = payload.get("start")
+        if isinstance(started, dict) and isinstance(runner, HostedChatCallRunner):
+            runner.started_before_setup(runtime, started)
+        outcome = await runner.run(
             SimpleNamespace(
                 scenario_key=payload["scenario_key"],
                 source_scenario_key=payload.get("source_scenario_key"),
