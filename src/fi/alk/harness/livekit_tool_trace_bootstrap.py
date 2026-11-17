@@ -50,6 +50,10 @@ import time
 from pathlib import Path
 from typing import Any
 
+# Which mechanism observes the tools in this process: "monitoring" (sys.monitoring, Python 3.12+)
+# or "profile" (the profile function, the fallback). Set once the install has chosen.
+_TOOL_TRACE_MECHANISM: str | None = None
+
 # A declared tool's trace line is kept under this size by cutting its values, never the line.
 _MAX_RECORD_CHARS = 10000
 _MAX_VALUE_CHARS = 2000
@@ -522,138 +526,65 @@ def _install_declared_python_tools() -> None:
         except Exception:  # noqa: BLE001 - an odd module name is no match, never an error
             return False
 
-    # frame id -> (frame, entry time). Holding the frame keeps its id from being
-    # reused while an entry for it is still open.
-    entries: dict[int, tuple[Any, float]] = {}
-    # frame id -> (how it was last thrown into, the instruction it was thrown at). A frame that
-    # `close()` or a task's `cancel()` ended is not a tool that raised.
-    thrown: dict[int, tuple[str, int]] = {}
-
-    def profile(frame: Any, event: str, value: Any) -> None:
-        if getattr(active, "busy", False):
-            return
+    def resolve_key(frame: Any) -> str | None:
+        """The bound tool's name this frame is a call of, or None."""
         code = frame.f_code
-        if code.co_name not in function_names:
-            return
-        if event == "call":
-            # A coroutine re-enters its frame on every resume after an await; the
-            # tool ran from its first entry, so keep that time.
-            entry = entries.get(id(frame))
-            if entry is None or entry[0] is not frame:
-                entries[id(frame)] = (frame, time.time())
-                thrown.pop(id(frame), None)
-            # On a throw into the frame the call event's value is the thrown exception.
-            if isinstance(value, GeneratorExit):
-                thrown[id(frame)] = ("closed", frame.f_lasti)
-            elif isinstance(value, BaseException) and type(value).__name__ == "CancelledError":
-                thrown[id(frame)] = ("cancelled", frame.f_lasti)
-            return
-        if event != "return":
-            return
-        # The opcode the frame ended on tells a return from a raise. A coroutine or generator
-        # also "returns" at every await or yield; only a real return, or a raise, ends it.
-        try:
-            opname = dis.opname[code.co_code[frame.f_lasti]]
-        except (IndexError, TypeError):
-            opname = "RETURN_VALUE"
-        # Python 3.13 reports a suspension on the RESUME after the yield (a non-zero oparg), where
-        # 3.12 and 3.14 report the YIELD_VALUE itself; on 3.14 a closed generator also ends on
-        # that RESUME, so the rule is 3.13's alone.
-        try:
-            resumes_after_yield = (
-                sys.version_info[:2] == (3, 13)
-                and opname == "RESUME"
-                and code.co_code[frame.f_lasti + 1] != 0
-            )
-        except IndexError:
-            resumes_after_yield = False
-        ended_by = None
-        mark = thrown.get(id(frame))
-        if mark is not None:
-            kind, thrown_at = mark
-            try:
-                bare_raise = opname == "RAISE_VARARGS" and code.co_code[frame.f_lasti + 1] == 0
-            except IndexError:
-                bare_raise = False
-            # The thrown exception passed through: a re-raise, an unwinding `finally`, an awaited
-            # callee ending, or (a generator) a frame closed at its `yield` without running.
-            if (
-                opname in {"CLEANUP_THROW", "RERAISE"}
-                or bare_raise
-                or (
-                    kind == "closed"
-                    and opname.startswith("YIELD")
-                    and frame.f_lasti == thrown_at
-                )
-            ):
-                ended_by = kind
-        if ended_by is None and (
-            opname == "RETURN_GENERATOR"
-            or (
-                code.co_flags & suspendable
-                and (opname.startswith("YIELD") or resumes_after_yield)
-            )
-        ):
-            return
-        thrown.pop(id(frame), None)
-        raised = ended_by is None and not opname.startswith("RETURN")
-        entry = entries.pop(id(frame), None)
-        if raised:
-            value = "the tool raised an exception"
-        elif ended_by == "cancelled":
-            value = "the tool was cancelled before it finished"
-        elif ended_by == "closed":
-            value = "the generator was closed before it finished"
-        started = entry[1] if entry is not None else time.time()
         key = next(
             (
                 name
                 for (module, function), name in declared.items()
-                if frame.f_code.co_name == function
+                if code.co_name == function and matches_module(frame, module)
+            ),
+            None,
+        )
+        if key is not None:
+            return key
+        # co_qualname exists from Python 3.11; before it, the last name alone decides.
+        frame_qualname = getattr(code, "co_qualname", None)
+        # A method inherited from a base class carries the base's qualname; the receiver's
+        # own class names it as the reading wrote it.
+        receiver_qualname = None
+        try:
+            receiver = frame.f_locals.get(code.co_varnames[0]) if (
+                code.co_argcount and code.co_varnames[0] in {"self", "cls"}
+            ) else None
+            if receiver is not None:
+                owner = receiver if code.co_varnames[0] == "cls" else type(receiver)
+                receiver_qualname = f"{owner.__qualname__}.{code.co_name}"
+        except Exception:  # noqa: BLE001 - observation must never reach the agent's call
+            receiver_qualname = None
+        return next(
+            (
+                name
+                for (module, function, full_name), name in qualified.items()
+                if code.co_name == function
+                and (
+                    frame_qualname is None
+                    # A tool defined inside a function is written by its own name.
+                    or frame_qualname.rsplit("<locals>.", 1)[-1] == full_name
+                    or receiver_qualname == full_name
+                )
                 and matches_module(frame, module)
             ),
             None,
         )
-        if key is None:
-            # co_qualname exists from Python 3.11; before it, the last name alone decides.
-            frame_qualname = getattr(frame.f_code, "co_qualname", None)
-            # A method inherited from a base class carries the base's qualname; the receiver's
-            # own class names it as the reading wrote it.
-            receiver_qualname = None
-            try:
-                receiver = frame.f_locals.get(frame.f_code.co_varnames[0]) if (
-                    frame.f_code.co_argcount and frame.f_code.co_varnames[0] in {"self", "cls"}
-                ) else None
-                if receiver is not None:
-                    owner = receiver if frame.f_code.co_varnames[0] == "cls" else type(receiver)
-                    receiver_qualname = f"{owner.__qualname__}.{frame.f_code.co_name}"
-            except Exception:  # noqa: BLE001 - observation must never reach the agent's call
-                receiver_qualname = None
-            key = next(
-                (
-                    name
-                    for (module, function, full_name), name in qualified.items()
-                    if frame.f_code.co_name == function
-                    and (
-                        frame_qualname is None
-                        # A tool defined inside a function is written by its own name.
-                        or frame_qualname.rsplit("<locals>.", 1)[-1] == full_name
-                        or receiver_qualname == full_name
-                    )
-                    and matches_module(frame, module)
-                ),
-                None,
-            )
-        if key is None:
-            return
-        active.busy = True
+
+    def collect_arguments(frame: Any) -> dict[str, Any]:
+        code = frame.f_code
+        parameter_count = code.co_argcount + code.co_kwonlyargcount
+        return {
+            name: frame.f_locals[name]
+            for name in code.co_varnames[:parameter_count]
+            if name in frame.f_locals and name not in {"self", "cls"}
+        }
+
+    def write_record(
+        key: str, get_arguments: Any, value: Any, raised: bool, started: float
+    ) -> None:
+        """Append one call's line. ``get_arguments`` is called inside the guard, so a failure
+        to read the arguments still leaves the call on record."""
         try:
-            parameter_count = frame.f_code.co_argcount + frame.f_code.co_kwonlyargcount
-            arguments = {
-                name: frame.f_locals[name]
-                for name in frame.f_code.co_varnames[:parameter_count]
-                if name in frame.f_locals and name not in {"self", "cls"}
-            }
+            arguments = get_arguments()
             path = Path(os.environ["HARNESS_TOOL_TRACE"])
             path.parent.mkdir(parents=True, exist_ok=True)
             record = {
@@ -697,29 +628,269 @@ def _install_declared_python_tools() -> None:
                     trace.write(json.dumps(minimal, sort_keys=True) + "\n")
             except Exception:  # noqa: BLE001 - observation must never reach the agent's call
                 pass
-        finally:
-            active.busy = False
 
-    sys.setprofile(profile)
-    threading.setprofile(profile)
+    def install_profile() -> None:
+        # frame id -> (frame, entry time). Holding the frame keeps its id from being
+        # reused while an entry for it is still open.
+        entries: dict[int, tuple[Any, float]] = {}
+        # frame id -> (how it was last thrown into, the instruction it was thrown at). A frame
+        # that `close()` or a task's `cancel()` ended is not a tool that raised.
+        thrown: dict[int, tuple[str, int]] = {}
 
-    rearming = threading.local()
-
-    def rearm(event: str, args: Any) -> None:
-        # CPython drops a profile function whose call raised, even one the tracer caught inside
-        # a deep recursion; put it back on the next audited event of the thread.
-        try:
-            if getattr(rearming, "now", False) or sys.getprofile() is not None:
+        def profile(frame: Any, event: str, value: Any) -> None:
+            if getattr(active, "busy", False):
                 return
-            rearming.now = True
+            code = frame.f_code
+            if code.co_name not in function_names:
+                return
+            if event == "call":
+                # A coroutine re-enters its frame on every resume after an await; the
+                # tool ran from its first entry, so keep that time.
+                entry = entries.get(id(frame))
+                if entry is None or entry[0] is not frame:
+                    entries[id(frame)] = (frame, time.time())
+                    thrown.pop(id(frame), None)
+                # On a throw into the frame the call event's value is the thrown exception.
+                if isinstance(value, GeneratorExit):
+                    thrown[id(frame)] = ("closed", frame.f_lasti)
+                elif isinstance(value, BaseException) and type(value).__name__ == "CancelledError":
+                    thrown[id(frame)] = ("cancelled", frame.f_lasti)
+                return
+            if event != "return":
+                return
+            # The opcode the frame ended on tells a return from a raise. A coroutine or
+            # generator also "returns" at every await or yield; only a real return, or a raise,
+            # ends it.
             try:
-                sys.setprofile(profile)
+                opname = dis.opname[code.co_code[frame.f_lasti]]
+            except (IndexError, TypeError):
+                opname = "RETURN_VALUE"
+            # Python 3.13 reports a suspension on the RESUME after the yield (a non-zero
+            # oparg), where 3.12 and 3.14 report the YIELD_VALUE itself; on 3.14 a closed
+            # generator also ends on that RESUME, so the rule is 3.13's alone.
+            try:
+                resumes_after_yield = (
+                    sys.version_info[:2] == (3, 13)
+                    and opname == "RESUME"
+                    and code.co_code[frame.f_lasti + 1] != 0
+                )
+            except IndexError:
+                resumes_after_yield = False
+            ended_by = None
+            mark = thrown.get(id(frame))
+            if mark is not None:
+                kind, thrown_at = mark
+                try:
+                    bare_raise = opname == "RAISE_VARARGS" and code.co_code[frame.f_lasti + 1] == 0
+                except IndexError:
+                    bare_raise = False
+                # The thrown exception passed through: a re-raise, an unwinding `finally`, an
+                # awaited callee ending, or (a generator) a frame closed at its `yield` without
+                # running.
+                if (
+                    opname in {"CLEANUP_THROW", "RERAISE"}
+                    or bare_raise
+                    or (
+                        kind == "closed"
+                        and opname.startswith("YIELD")
+                        and frame.f_lasti == thrown_at
+                    )
+                ):
+                    ended_by = kind
+            if ended_by is None and (
+                opname == "RETURN_GENERATOR"
+                or (
+                    code.co_flags & suspendable
+                    and (opname.startswith("YIELD") or resumes_after_yield)
+                )
+            ):
+                return
+            thrown.pop(id(frame), None)
+            raised = ended_by is None and not opname.startswith("RETURN")
+            entry = entries.pop(id(frame), None)
+            if raised:
+                value = "the tool raised an exception"
+            elif ended_by == "cancelled":
+                value = "the tool was cancelled before it finished"
+            elif ended_by == "closed":
+                value = "the generator was closed before it finished"
+            started = entry[1] if entry is not None else time.time()
+            key = resolve_key(frame)
+            if key is None:
+                return
+            active.busy = True
+            try:
+                write_record(key, lambda: collect_arguments(frame), value, raised, started)
             finally:
-                rearming.now = False
-        except Exception:  # noqa: BLE001 - observation must never reach the agent's call
-            pass
+                active.busy = False
 
-    sys.addaudithook(rearm)
+        sys.setprofile(profile)
+        threading.setprofile(profile)
+
+        rearming = threading.local()
+
+        def rearm(event: str, args: Any) -> None:
+            # CPython drops a profile function whose call raised, even one the tracer caught
+            # inside a deep recursion; put it back on the next audited event of the thread.
+            try:
+                if getattr(rearming, "now", False) or sys.getprofile() is not None:
+                    return
+                rearming.now = True
+                try:
+                    sys.setprofile(profile)
+                finally:
+                    rearming.now = False
+            except Exception:  # noqa: BLE001 - observation must never reach the agent's call
+                pass
+
+        sys.addaudithook(rearm)
+
+    def install_monitoring() -> bool:
+        """Trace through ``sys.monitoring`` (Python 3.12+). False when it cannot be claimed.
+
+        Only a function whose name a tool is bound to is ever reported: every other code object
+        is switched off at its first start, so the agent's own code runs at full speed. No
+        audit-hook re-arm is needed here: a monitoring tool is not a per-thread hook that
+        CPython drops when a call under it raises."""
+        monitoring = getattr(sys, "monitoring", None)
+        if monitoring is None:
+            return False
+        tool = None
+        for candidate in (5, 4):  # never the debugger, coverage or profiler ids
+            try:
+                if monitoring.get_tool(candidate) is not None:
+                    continue
+                monitoring.use_tool_id(candidate, "alk-tool-trace")
+            except Exception:  # noqa: BLE001 - a taken id means the profile path
+                continue
+            tool = candidate
+            break
+        if tool is None:
+            return False
+        events = monitoring.events
+        disable = monitoring.DISABLE
+        # frame id -> (frame, entry time, tool name, arguments or None); holding the frame
+        # keeps its id from being reused while an entry is open.
+        calls: dict[int, tuple[Any, float, str, Any]] = {}
+        # frame id -> how it was last thrown into ("closed" by close(), "cancelled" by cancel()).
+        thrown: dict[int, str] = {}
+        armed: set[Any] = set()
+        # PY_UNWIND and PY_THROW can only be set process-wide, so they are on only while a
+        # tool call is open (a paused generator or an awaiting coroutine is open); PY_RETURN
+        # is the one event set per code object.
+        start_only = events.PY_START
+        while_open = events.PY_START | events.PY_UNWIND | events.PY_THROW
+        guard = threading.Lock()
+
+        def arguments_of(call: tuple[Any, float, str, Any]) -> Any:
+            def get() -> Any:
+                if call[3] is None:
+                    raise ValueError("the arguments could not be read")
+                return call[3]
+
+            return get
+
+        def on_start(code: Any, offset: int) -> Any:
+            if code.co_name not in function_names:
+                return disable
+            try:
+                frame = sys._getframe(1)
+                key = resolve_key(frame)
+                if key is None:
+                    # Only a method's answer can differ between calls of one code object (it
+                    # follows the receiver's class); any other code is settled for good.
+                    if code.co_argcount and code.co_varnames[0] in {"self", "cls"}:
+                        return None
+                    return disable
+                if code not in armed:
+                    monitoring.set_local_events(tool, code, events.PY_RETURN)
+                    armed.add(code)
+                try:
+                    arguments = collect_arguments(frame)
+                except Exception:  # noqa: BLE001
+                    arguments = None
+                with guard:
+                    calls[id(frame)] = (frame, time.time(), key, arguments)
+                    thrown.pop(id(frame), None)
+                    if len(calls) == 1:
+                        monitoring.set_events(tool, while_open)
+            except Exception:  # noqa: BLE001 - observation must never reach the agent's call
+                pass
+            return None
+
+        def on_throw(code: Any, offset: int, exception: BaseException) -> None:
+            if code.co_name not in function_names:
+                return
+            try:
+                frame = sys._getframe(1)
+                if id(frame) not in calls:
+                    return
+                if isinstance(exception, GeneratorExit):
+                    thrown[id(frame)] = "closed"
+                elif type(exception).__name__ == "CancelledError":
+                    thrown[id(frame)] = "cancelled"
+            except Exception:  # noqa: BLE001 - observation must never reach the agent's call
+                pass
+
+        def finish(frame: Any, value: Any, raised: bool) -> None:
+            with guard:
+                call = calls.get(id(frame))
+                if call is None or call[0] is not frame:
+                    return
+                del calls[id(frame)]
+                thrown.pop(id(frame), None)
+                if not calls:
+                    monitoring.set_events(tool, start_only)
+            write_record(call[2], arguments_of(call), value, raised, call[1])
+
+        def on_return(code: Any, offset: int, retval: Any) -> None:
+            try:
+                finish(sys._getframe(1), retval, False)
+            except Exception:  # noqa: BLE001 - observation must never reach the agent's call
+                pass
+
+        def on_unwind(code: Any, offset: int, exception: BaseException) -> None:
+            if code.co_name not in function_names:
+                return
+            try:
+                frame = sys._getframe(1)
+                kind = thrown.get(id(frame))
+                # The exception ending the frame is known, so only the thrown one itself is not
+                # the tool's own error: an error raised later in a `finally` is.
+                if kind == "closed" and isinstance(exception, GeneratorExit):
+                    finish(frame, "the generator was closed before it finished", False)
+                elif kind == "cancelled" and type(exception).__name__ == "CancelledError":
+                    finish(frame, "the tool was cancelled before it finished", False)
+                else:
+                    finish(frame, "the tool raised an exception", True)
+            except Exception:  # noqa: BLE001 - observation must never reach the agent's call
+                pass
+
+        try:
+            monitoring.register_callback(tool, events.PY_START, on_start)
+            monitoring.register_callback(tool, events.PY_RETURN, on_return)
+            monitoring.register_callback(tool, events.PY_UNWIND, on_unwind)
+            monitoring.register_callback(tool, events.PY_THROW, on_throw)
+            monitoring.set_events(tool, events.PY_START)
+        except Exception:  # noqa: BLE001 - give the id back and use the profile path
+            try:
+                monitoring.set_events(tool, 0)
+                monitoring.free_tool_id(tool)
+            except Exception:  # noqa: BLE001
+                pass
+            return False
+        return True
+
+    global _TOOL_TRACE_MECHANISM
+    if (
+        os.environ.get("ALK_TOOL_TRACE_MECHANISM") != "profile"
+        and sys.version_info >= (3, 12)
+        and install_monitoring()
+    ):
+        _TOOL_TRACE_MECHANISM = "monitoring"
+    else:
+        install_profile()
+        _TOOL_TRACE_MECHANISM = "profile"
 
 
 try:
