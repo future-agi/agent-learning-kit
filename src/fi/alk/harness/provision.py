@@ -646,8 +646,9 @@ def _mounts_docker_socket(volume: Any, root: str | None = None) -> bool:
 
 # Deny by default: a service field this list does not name is refused, so a field added to
 # Compose later cannot reach the host unnoticed. Keys the function value-checks below
-# (network_mode, pid, ipc, uts, userns_mode, cgroup, volumes_from, build, volumes) are listed;
-# privileged and devices are refused outright and are not.
+# (network_mode, pid, ipc, uts, userns_mode, cgroup, volumes_from, security_opt, build, deploy,
+# logging, volumes, env_file, post_start, pre_stop) are listed; privileged and devices are refused
+# outright and are not.
 _ALLOWED_SERVICE_FIELDS = frozenset(
     {
         "image", "platform", "build", "command", "entrypoint", "environment", "env_file",
@@ -659,7 +660,7 @@ _ALLOWED_SERVICE_FIELDS = frozenset(
         "dns_search", "labels", "annotations", "logging", "extra_hosts", "container_name",
         "deploy", "cap_drop", "profiles", "links", "scale", "pull_policy", "tty",
         "stdin_open", "post_start", "pre_stop", "attach", "develop", "network_mode", "pid", "ipc",
-        "uts", "userns_mode", "cgroup", "volumes_from",
+        "uts", "userns_mode", "cgroup", "volumes_from", "security_opt",
     }
 )  # fmt: skip
 
@@ -763,6 +764,9 @@ def _build_violations(
     return found
 
 
+_HARDENING_SECURITY_OPTIONS = frozenset(
+    {"no-new-privileges:true", "no-new-privileges=true"}
+)
 _ALLOWED_DEPLOY_FIELDS = frozenset(
     {
         "mode", "replicas", "labels", "update_config", "rollback_config", "restart_policy",
@@ -903,6 +907,13 @@ def _validate_compose_security(
         violations.extend(_build_violations(name, build, config, roots))
         if service.get("devices"):
             violations.append(f"{name}: host devices")
+        # Hardening only: ``seccomp=unconfined``, ``apparmor=unconfined`` or ``label=disable``
+        # would switch the container's confinement off.
+        security = service.get("security_opt") or []
+        if not isinstance(security, list) or any(
+            str(value) not in _HARDENING_SECURITY_OPTIONS for value in security
+        ):
+            violations.append(f"{name}: security_opt")
         violations.extend(_deploy_violations(name, service.get("deploy")))
         # Any other logging driver makes the daemon dial out from the host's network namespace
         # (syslog, fluentd, gelf) or send with the daemon's own credentials (awslogs).

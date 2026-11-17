@@ -697,7 +697,9 @@ def test_a_bind_elsewhere_is_not_a_docker_socket_mount(volume):
     "field",
     [
         "cap_add",
-        "security_opt",
+        "use_api_socket",
+        "secrets",
+        "configs",
         "sysctls",
         "runtime",
         "isolation",
@@ -900,6 +902,7 @@ def test_compose_settings_inside_the_project_are_accepted(config):
         _svc(uts="CANARY-7f3a"),
         _svc(userns_mode="CANARY-7f3a"),
         _svc(cgroup="CANARY-7f3a"),
+        _svc(security_opt=["CANARY-7f3a"]),
         _svc(volumes_from=["CANARY-7f3a"]),
         _svc(build={"network": "CANARY-7f3a"}),
         _net({"name": "CANARY-7f3a"}),
@@ -2968,3 +2971,33 @@ def test_a_logging_driver_that_dials_out_is_rejected(logging):
 )
 def test_a_local_logging_driver_is_accepted(logging):
     _validate_compose_security(_svc(logging=logging))
+
+
+@pytest.mark.parametrize(
+    "security_opt",
+    [["no-new-privileges:true"], ["no-new-privileges=true"], []],
+)
+def test_the_no_new_privileges_hardening_flag_is_accepted(security_opt):
+    _validate_compose_security(_svc(security_opt=security_opt))
+
+
+@pytest.mark.parametrize(
+    "security_opt",
+    [
+        ["seccomp=unconfined"],
+        ["apparmor=unconfined"],
+        ["label=disable"],
+        ["no-new-privileges:true", "seccomp=unconfined"],
+        ["no-new-privileges:false"],
+        ["no-new-privileges"],
+        ["CANARY-7f3a"],
+        "no-new-privileges:true",
+    ],
+)
+def test_any_other_security_opt_is_rejected_by_category(security_opt):
+    with pytest.raises(ProvisionError, match="forbidden host access") as error:
+        _validate_compose_security(_svc(security_opt=security_opt))
+    assert "agent: security_opt" in str(error.value)
+    assert "field security_opt" not in str(error.value)
+    assert "CANARY" not in str(error.value)
+    assert "unconfined" not in str(error.value)
