@@ -140,6 +140,37 @@ def _only_the_cleaner(provider: Any, cleaner: Any) -> None:
 # The lengths traceai cuts span text to. A cut between ":" and "@" leaves a numeric password
 # looking like a port, which the URL cleaner keeps.
 _CUTS = (5000, 2000, 1000, 500)
+_LENGTH_LIMITS = (
+    "OTEL_SPAN_ATTRIBUTE_VALUE_LENGTH_LIMIT",
+    "OTEL_ATTRIBUTE_VALUE_LENGTH_LIMIT",
+)
+
+
+def _attribute_length_limit() -> int | None:
+    """The length the SDK cuts an attribute to, read as it reads it: the span-specific variable,
+    then the general one, each ignored when unset, empty, not a whole number or not positive.
+    The SDK cuts there with no "...", and the customer's own limit stays as it is."""
+    for name in _LENGTH_LIMITS:
+        try:
+            limit = int(os.environ.get(name, ""))
+        except ValueError:
+            continue
+        if limit > 0:
+            return limit
+    return None
+
+
+class _Secrets(tuple):
+    """The patterns _mask runs, and the lengths at which text may end in a cut."""
+
+    cuts: tuple[int, ...]
+
+    def __new__(cls, patterns: tuple[Any, ...], cuts: tuple[int, ...]) -> "_Secrets":
+        masks = super().__new__(cls, patterns)
+        masks.cuts = cuts
+        return masks
+
+
 _SCHEME_CHARACTERS = frozenset(
     "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789+.-"
 )
@@ -178,7 +209,10 @@ class _CleaningExporter(SpanExporter):
         self._inner = inner
         # The job's own secret values, replaced whole as the other outbound channels replace them
         # (outbound.redact_outbound_text): a key a tool printed has no shape to recognise.
-        self._secrets = _secret_patterns(secret_values)
+        limit = _attribute_length_limit()
+        self._secrets = _Secrets(
+            _secret_patterns(secret_values), _CUTS + ((limit,) if limit else ())
+        )
         # One cleaned copy per resource, made the first time it is seen.
         self._resources: dict[int, tuple[Any, Any]] = {}
 
@@ -322,13 +356,19 @@ def _secret_patterns(secret_values: tuple[str, ...]) -> tuple[Any, ...]:
     # value inside a longer one must not break the longer one's cut, and the cut rule of a value
     # that holds "..." must not run before its whole form has been replaced.
     for value in sorted(long, key=lambda v: (-len(v), v)):
-        forms = {value}
-        for ascii_only in (True, False):
-            once = json.dumps(value, ensure_ascii=ascii_only)[1:-1]
-            forms.add(once)
-            # JSON text inside JSON text, left unparsed (too deep, or cut short), is escaped twice.
-            for ascii_twice in (True, False):
-                forms.add(json.dumps(once, ensure_ascii=ascii_twice)[1:-1])
+        # repr is how traceai prints an error's text and a list result, and writes a value with
+        # both quotes in it with \' that no JSON form has.
+        forms = {value, repr(value)[1:-1]}
+        level = set(forms)
+        # JSON text inside JSON text, left unparsed (too deep, or cut short), is escaped again
+        # at each level; tool output that is itself a JSON dump goes three deep.
+        for _ in range(3):
+            level = {
+                json.dumps(form, ensure_ascii=ascii_only)[1:-1]
+                for form in level
+                for ascii_only in (True, False)
+            }
+            forms |= level
         forms -= seen
         seen |= forms
         ordered = sorted(forms, key=lambda form: (-len(form), form))
@@ -410,6 +450,11 @@ class _CutSecret:
     like the value is found by binary search, so the cost doesn't grow with the number of
     prefixes or with the value's length. A prefix followed by anything else is ordinary text that
     happens to begin like the secret, and stays.
+
+    The trade is honest text that happens to begin like a secret and then meets "...": with a
+    declared postgresql:// address, "Connecting to postgresql..." loses "postgresql", and so does
+    a 500-character text (a length traceai cuts to) that ends in the head of a declared value.
+    A cut can't be told from that text, and a credential leaking costs more than a word masked.
     """
 
     def __init__(self, value: str) -> None:
@@ -427,9 +472,10 @@ class _CutSecret:
             room = min(size, length - at)
             # The prefix ends at a "..." or at the end of the text; look before the work of
             # finding how far the text matches.
-            near_dots = (
-                dots and text.find("...", at + _SHORTEST_SECRET, at + room + 3) != -1
+            first_dots = (
+                text.find("...", at + _SHORTEST_SECRET, at + room + 3) if dots else -1
             )
+            near_dots = first_dots != -1
             if not near_dots and not (ends and room == length - at):
                 # Nothing here can be cut: go to where the next cut could start, which is within
                 # the value's length of the next "..." or of the end of the text.
@@ -441,6 +487,10 @@ class _CutSecret:
                 else:
                     break
                 at = text.find(head, max(at + 1, start))
+                continue
+            if near_dots and not text.startswith(value[: first_dots - at], at):
+                # The text leaves the value before its first "...", so before any cut.
+                at = text.find(head, at + 1)
                 continue
             low, high = _SHORTEST_SECRET, room
             while low < high:
@@ -527,7 +577,7 @@ def _take_text(value: str, flat: list[str], key: str, secrets: tuple[Any, ...]) 
             return ("json", _take_json(tree, flat, key, secrets))
     # The cut is decided on the value as recorded, but made on the masked text: cutting first can
     # take a secret's tail with the address and leave its head, which no longer matches.
-    masked = _mask(value, secrets, len(value) in _CUTS)
+    masked = _mask(value, secrets, len(value) in getattr(secrets, "cuts", _CUTS))
     flat.append(_cut_address(masked) if cut != value else masked)
     return ("text", len(flat) - 1)
 

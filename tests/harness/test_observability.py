@@ -1542,17 +1542,44 @@ def test_the_cut_rule_costs_a_small_multiple_of_a_plain_replace_on_repeating_tex
     # Measured against str.replace on the same strings, so a slow runner slows both alike.
     repeating = "0" * 64
     shared = tuple(f"sk-ant-api03-{n:02d}" + "Ab9" * 12 for n in range(30))
+    # Each family has its own multiplier and floor: the third runs 30 values against one
+    # replace, and needs room for that. A bound shared by all three let the first two pass
+    # without the jump to the next "...".
     families = [
-        ((repeating,), [(("0" * 63 + "x") * 80)[:4997] + "..."] * 1280),
-        ((repeating,), ["... " + ("0" * 63 + "x") * 80] * 1280),
-        (shared, [("sk-ant-api03-00 " * 320)[:4997] + "..."] * 1280),
+        ((repeating,), [(("0" * 63 + "x") * 80)[:4997] + "..."] * 1280, 10, 0.3),
+        ((repeating,), ["... " + ("0" * 63 + "x") * 80] * 1280, 10, 0.3),
+        (shared, [("sk-ant-api03-00 " * 320)[:4997] + "..."] * 1280, 60, 0.6),
     ]
 
-    for values, texts in families:
+    for values, texts, times, floor in families:
         patterns = observability._secret_patterns(values)
         plain = _best_of(2, lambda: [t.replace(values[0], "***") for t in texts])
         ours = _best_of(2, lambda: [observability._mask(t, patterns) for t in texts])
-        assert ours < 60 * plain + 0.3, (values[0][:16], plain, ours)
+        assert ours < times * plain + floor, (values[0][:16], plain, ours)
+
+
+class _CountingText(str):
+    starts = 0
+
+    def startswith(self, *args):
+        type(self).starts += 1
+        return super().startswith(*args)
+
+
+def test_a_head_hit_that_leaves_the_value_before_the_first_dots_costs_one_comparison():
+    # Dense "..." makes every head hit a candidate for a cut. The text here follows the value
+    # for 60 characters, then leaves it, so none is a cut: one comparison rejects each, where a
+    # binary search over the value's length took about six. Counted, because no timing bound
+    # separates the two with margin on a shared runner.
+    blocks = 80
+    text = _CountingText(("0" * 60 + "x...") * blocks)
+    hits = blocks * (60 - 7)
+    _CountingText.starts = 0
+
+    out = observability._CutSecret("0" * 64).sub("***", text, True, False)
+
+    assert out == text
+    assert _CountingText.starts <= 2 * hits, (_CountingText.starts, hits)
 
 
 def _best_of(runs, work):
@@ -1605,3 +1632,116 @@ def test_declared_pins_cost_a_fraction_of_a_lookbehind_first_pattern_on_prose():
     after = _best_of(2, mask_with(ours))
 
     assert after * 5 < before, (before, after)
+
+
+# -- Where an attribute's own length limit cuts, repr and deeper escapes -----------------------
+
+LIMIT_VARIABLES = (
+    "OTEL_SPAN_ATTRIBUTE_VALUE_LENGTH_LIMIT",
+    "OTEL_ATTRIBUTE_VALUE_LENGTH_LIMIT",
+)
+
+
+def _cut_by_limit(length):
+    # What the SDK leaves when a limit cuts an attribute: no "...", the secret's head last.
+    lead = "x" * (length - 20 - len("OPENAI_API_KEY="))
+    return lead + "OPENAI_API_KEY=" + CUT_SECRET[:20]
+
+
+def _with_limits(monkeypatch, **limits):
+    for name in LIMIT_VARIABLES:
+        monkeypatch.delenv(name, raising=False)
+    for name, value in limits.items():
+        monkeypatch.setenv(name, value)
+
+
+@pytest.mark.parametrize("variable", LIMIT_VARIABLES)
+def test_a_secret_cut_by_the_environments_attribute_limit_is_replaced(
+    monkeypatch, variable
+):
+    _with_limits(monkeypatch, **{variable: "4000"})
+    cut = _cut_by_limit(4000)
+    assert len(cut) == 4000 and not cut.endswith("...")
+    sink = InMemorySpanExporter()
+
+    observability._CleaningExporter(sink, (CUT_SECRET,)).export(
+        [_readable(**{"output.value": cut})]
+    )
+
+    out = sink.get_finished_spans()[0].attributes["output.value"]
+    assert CUT_SECRET[:8] not in out and out.endswith("OPENAI_API_KEY=***")
+
+
+def test_text_of_the_limits_length_is_kept_when_no_limit_is_set(monkeypatch):
+    _with_limits(monkeypatch)
+    text = _cut_by_limit(4000)
+
+    out = _export_one(_readable(**{"output.value": text}), (CUT_SECRET,)).attributes[
+        "output.value"
+    ]
+
+    assert out == text
+
+
+def test_the_span_specific_limit_wins_and_a_bad_value_is_ignored(monkeypatch):
+    _with_limits(
+        monkeypatch,
+        OTEL_SPAN_ATTRIBUTE_VALUE_LENGTH_LIMIT="3000",
+        OTEL_ATTRIBUTE_VALUE_LENGTH_LIMIT="4000",
+    )
+    assert (
+        observability._CleaningExporter(InMemorySpanExporter())._secrets.cuts[-1]
+        == 3000
+    )
+    for bad in ("", "abc", "0", "-5", "12.5"):
+        _with_limits(
+            monkeypatch,
+            OTEL_SPAN_ATTRIBUTE_VALUE_LENGTH_LIMIT=bad,
+            OTEL_ATTRIBUTE_VALUE_LENGTH_LIMIT="4000",
+        )
+        exporter = observability._CleaningExporter(InMemorySpanExporter())
+        assert exporter._secrets.cuts[-1] == 4000, bad
+    _with_limits(monkeypatch, OTEL_ATTRIBUTE_VALUE_LENGTH_LIMIT="abc")
+    exporter = observability._CleaningExporter(InMemorySpanExporter())
+    assert tuple(exporter._secrets.cuts) == observability._CUTS
+
+
+def test_a_secret_with_both_quotes_printed_by_repr_is_replaced():
+    value = "Zq7'Hk2mVx9\"pLr4TsW8nYb3c"
+    status = repr({"is_error": True, "content": f"DB_PASSWORD={value} rejected"})
+    listed = f"[Tool Result: {[{'type': 'text', 'text': 'k=' + value}]!r}...]"
+
+    for text in (status, listed):
+        out = _export_one(_readable(**{"output.value": text}), (value,)).attributes[
+            "output.value"
+        ]
+        assert "Zq7" not in out and "***" in out
+
+
+def test_a_secret_escaped_three_times_and_cut_is_replaced():
+    value = 'Zq7"Hk2mVx9\\pLr4TsW8nYb3c'
+    thrice = value
+    for _ in range(3):
+        thrice = json.dumps(thrice)[1:-1]
+    text = ("y" * (4997 - 20) + thrice)[:4997] + "..."
+    assert len(text) == 5000 and thrice[:12] in text
+
+    out = _export_one(_readable(**{"output.value": text}), (value,)).attributes[
+        "output.value"
+    ]
+
+    assert thrice[:10] not in out and out.endswith("***...")
+    whole = _export_one(
+        _readable(**{"output.value": f"k={thrice} done"}), (value,)
+    ).attributes["output.value"]
+    assert whole == "k=*** done"
+
+
+def test_a_value_with_nothing_to_escape_has_exactly_one_form():
+    forms = [
+        p
+        for p in observability._secret_patterns(("plainvalue12345",))
+        if isinstance(p, str)
+    ]
+
+    assert forms == ["plainvalue12345"]
