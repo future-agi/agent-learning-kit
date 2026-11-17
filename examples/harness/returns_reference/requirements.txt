@@ -1,0 +1,5 @@
+openai-agents[litellm]==0.24.0
+traceai-openai-agents==0.1.6
+opentelemetry-api==1.43.0
+opentelemetry-sdk==1.43.0
+opentelemetry-exporter-otlp-proto-http==1.43.0

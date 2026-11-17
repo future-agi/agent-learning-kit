@@ -362,24 +362,20 @@ def test_directory_ownership_includes_children_without_following_symlinks(
     (external / "file").write_text("external")
     (root / "link").symlink_to(external, target_is_directory=True)
     changed = []
-    fchanged = []
     original = os.chown
 
     def chown(path, uid, gid, **kwargs):
         assert kwargs["follow_symlinks"] is False
-        changed.append(path)
+        # Every call names an entry inside a folder the walk opened itself.
+        changed.append((os.fstat(kwargs["dir_fd"]).st_ino, path))
         original(path, os.getuid(), os.getgid(), **kwargs)
 
     monkeypatch.setattr(os, "chown", chown)
-    monkeypatch.setattr(
-        os,
-        "fchown",
-        lambda descriptor, uid, gid: fchanged.append(os.fstat(descriptor).st_ino),
-    )
     _own_directory(root, os.getuid(), os.getgid())
-    assert sorted(changed) == ["file", "nested"]
-    assert set(fchanged) == {root.stat().st_ino, nested.stat().st_ino}
-    assert external.stat().st_ino not in fchanged
+    assert sorted(changed) == sorted(
+        [(root.stat().st_ino, "."), (root.stat().st_ino, "nested"), (nested.stat().st_ino, "file")]
+    )
+    assert external.stat().st_ino not in {folder for folder, _ in changed}
 
 
 @pytest.mark.parametrize('mode', [None, 0, 1, 'false', 'true'])
