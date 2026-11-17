@@ -195,7 +195,7 @@ def test_an_actor_s_retried_action_reaches_the_world_once_and_is_answered_from_t
     url, rows = proxy
     first = _act(proxy.door, "reviewer", "/records/approve", {"item": "1"}, key="k-1")
     again = _act(proxy.door, "reviewer", "/records/approve", {"item": "1"}, key="k-1")
-    assert (first, again) == ((201, {"approval": "ap-1"}), (200, {"approval": "ap-1"}))
+    assert (first, again) == ((201, {"approval": "ap-1"}), (201, {"approval": "ap-1"}))
     assert _World.seen == ["/records/approve"]
     assert [(one["outcome"], one["ok"], one["idempotency_key"]) for one in rows()] == [
         ("committed", True, "k-1"),
@@ -219,8 +219,9 @@ def test_the_agent_s_keyed_retry_is_answered_from_the_first_result_and_reaches_t
         201,
         {"id": "d-1", "count": 1},
     )
+    # Answered as the first call was: its status and body, never a generic 200.
     assert _post(url, "/ok", {"item": "1"}, key="k-1") == (
-        200,
+        201,
         {"id": "d-1", "count": 1},
     )
     assert _post(url, "/ok", {"item": "1"}) == (201, {"id": "d-1", "count": 2})
@@ -391,6 +392,20 @@ def test_a_timeout_after_commit_commits_without_answering_so_a_retry_commits_twi
         ("committed", "response_lost"),
         ("committed", None),
     ]
+
+
+def test_a_fault_the_platform_names_by_the_tool_holds_the_agent_s_http_request_on_its_route(proxy, store):
+    """The runner writes a fault named by its tool as that tool's route action; the proxy, which sees only the route,
+    holds the request with it."""
+    from fi.alk.harness.world_door import routed_faults
+
+    url, rows = proxy
+    contract = {"tool_entrypoints": [{"tool": "place_order", "endpoint": "/ok", "method": "POST"}]}
+    _faults(store, routed_faults([{"action": "place_order", "mode": "unavailable", "on_call": 1}], contract))
+
+    assert _post(url, "/ok", {"item": "1"})[0] == 503
+    assert _World.seen == []
+    assert [(one["outcome"], one["error"]) for one in rows()] == [("faulted", "unavailable")]
 
 
 def test_a_fault_never_applies_to_an_actor_s_action(proxy, store):

@@ -1607,6 +1607,46 @@ def test_a_chat_trial_plays_its_actors_through_the_same_door_as_the_agent(tmp_pa
             "acts_in_world": True, "acted": 1} in outcome.call_actors
 
 
+def test_a_chat_trial_writes_a_fault_named_by_its_tool_as_that_tool_s_route_and_method(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    from fi.alk.harness import call_runner
+
+    context = _context(tmp_path)
+    contract_path = context.bundle_dir / "contract.json"
+    contract = json.loads(contract_path.read_text(encoding="utf-8")) if contract_path.is_file() else {}
+    contract["tool_entrypoints"] = [{"tool": "cancel_order", "endpoint": "/orders/{order_id}", "method": "DELETE"}]
+    contract_path.write_text(json.dumps(contract), encoding="utf-8")
+    path = context.bundle_dir / "scenarios" / "one" / "scenario.json"
+    document = json.loads(path.read_text(encoding="utf-8"))
+    document["faults"] = [{"action": "cancel_order", "mode": "unavailable", "on_call": 1}]
+    path.write_text(json.dumps(document), encoding="utf-8")
+    written: list[list] = []
+    monkeypatch.setattr(call_runner, "_write_trial_state", lambda _runtime, faults: written.append(list(faults)))
+    monkeypatch.setattr(chat, "_tool_world", lambda *_args: _ToolWorld())
+    monkeypatch.setattr(chat, "_drive_conversation", _single_exchange)
+
+    class Wrapper:
+        def __init__(self, **_kwargs: Any) -> None:
+            return
+
+        async def call(self, _request: Any) -> AgentResponse:
+            return AgentResponse(content="Done.")
+
+    monkeypatch.setattr(chat, "HTTPAgentWrapper", Wrapper)
+    endpoints = {
+        "target_http": RuntimeEndpoint(capability="target_http", protocol="http", address="http://localhost:18080"),
+        "tool_proxy": RuntimeEndpoint(capability="tool_proxy", protocol="http", address="http://localhost:18081"),
+    }
+    runtime = EnvironmentRuntime(
+        runtime_id="runtime-1", world_index=0, bundle_digest="sha256:" + "a" * 64, state=RuntimeState.READY,
+        endpoints=endpoints,
+    )
+    asyncio.run(chat.HostedChatCallRunner(_Adapter(), context).run(SimpleNamespace(scenario_key="one", scenario_id="scenario-1"), runtime))
+
+    assert written[0] == [{"action": "orders.{order_id}", "method": "DELETE", "mode": "unavailable", "on_call": 1}]
+
+
 def test_a_chat_trial_s_faults_are_set_for_the_tool_proxy_and_cleared_after(tmp_path: Path, monkeypatch: Any) -> None:
     from fi.alk.harness import call_runner
 

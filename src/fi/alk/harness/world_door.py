@@ -13,6 +13,7 @@ import time
 import uuid
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
+from decimal import ROUND_HALF_UP, Decimal
 from typing import Any, Protocol
 from urllib import error, request
 
@@ -114,6 +115,8 @@ class Outcome:
     refusal_code: str | None = None
     fault: dict[str, Any] | None = None
     action_id: str = ""
+    # The world's own answer when a fault replaced what the agent hears (a lost answer): what a keyed retry replays.
+    original: Response | None = None
 
     @property
     def delay_seconds(self) -> float:
@@ -196,8 +199,9 @@ def calls_tool(logged: str, tool: str) -> bool:
 
 
 def same_json(one: Any, other: Any) -> bool:
-    """Whether two values are the same JSON, nested values included: `true` is never `1`, `1.0` never the integer `1`,
-    and `null` only `null`. Python's own equality takes `True == 1`."""
+    """Whether two values are the same JSON, nested values included: numbers by their value (`89` is `89.0`, as JSON
+    has one number type), `true` never the number `1`, text never a number, and `null` only `null`. Python's own
+    equality takes `True == 1`."""
     if isinstance(one, bool) or isinstance(other, bool):
         return type(one) is type(other) and one == other
     if isinstance(one, Mapping) or isinstance(other, Mapping):
@@ -214,6 +218,8 @@ def same_json(one: Any, other: Any) -> bool:
             and len(one) == len(other)
             and all(same_json(a, b) for a, b in zip(one, other))
         )
+    if isinstance(one, (int, float, Decimal)) and isinstance(other, (int, float, Decimal)):
+        return Decimal(str(one)) == Decimal(str(other))
     return type(one) is type(other) and one == other
 
 
@@ -228,8 +234,9 @@ def calls_in(row: Mapping[str, Any]) -> int:
             arguments = None
     if row.get("error") == DOOR_OUT_OF_REACH and isinstance(arguments, dict):
         count = arguments.get("count")
-        if isinstance(count, int) and not isinstance(count, bool):
-            return max(count, 1)
+        # Any JSON number, read as the durable log reads it (`::numeric::int` rounds half away from zero).
+        if isinstance(count, (int, float)) and not isinstance(count, bool):
+            return max(int(Decimal(str(count)).quantize(Decimal(1), rounding=ROUND_HALF_UP)), 1)
     return 1
 
 
@@ -252,14 +259,17 @@ def routed_faults(faults: Sequence[Any], contract: Any) -> list[dict[str, Any]]:
     route, from the contract's own tool entrypoints, so the HTTP door, which sees only routes, holds it. A tool with no
     route (one the agent runs in its own process) keeps its name, which the in-process door matches."""
     entries = contract.get("tool_entrypoints") if isinstance(contract, Mapping) else getattr(contract, "tool_entrypoints", None)
-    routes: dict[str, str] = {}
+    routes: dict[str, dict[str, str]] = {}
     for entry in entries or []:
         entry = entry if isinstance(entry, Mapping) else entry.model_dump()
         tool, route = str(entry.get("tool") or ""), route_action(str(entry.get("endpoint") or ""))
         if tool and route:
-            routes[tool] = route
+            # Two tools can share a route under different methods (GET and DELETE on `/orders/{id}`): the method keeps
+            # a fault on one off the other.
+            method = str(entry.get("method") or "").strip().upper()
+            routes[tool] = {"action": route, **({"method": method} if method else {})}
     return [
-        {**one, "action": routes[str(one.get("action"))]} if str(one.get("action") or "") in routes else dict(one)
+        {**one, **routes[str(one.get("action"))]} if str(one.get("action") or "") in routes else dict(one)
         for one in faults or []
         if isinstance(one, Mapping)
     ]
@@ -447,7 +457,8 @@ class WorldDoor:
                 outcome = self._attempt(call, key, on_behalf_of)
                 if outcome.outcome == "committed":
                     # Committed, even when a fault then lost the answer: a retry with this key is answered from it.
-                    answered = _response(outcome)
+                    # The world's own answer, never the timeout a fault put in its place.
+                    answered = outcome.original or _response(outcome)
                     self._keyed[slot] = ("committed", call.action, call.arguments, outcome.result, answered)
                     self._settle(key, call.actor, "committed", logged, answered)
                 elif (
@@ -588,9 +599,13 @@ class WorldDoor:
         trial's faults cannot be read."""
         faults = [one for one in self.faults() or [] if isinstance(one, dict)]
         names = (call.action, call.name) if self.faults_by_tool else (call.action,)
-        # A fault on a route with a part (`orders.{id}.cancel`) holds every call of it (`orders.1043.cancel`).
+        # A fault on a route with a part (`orders.{id}.cancel`) holds every call of it (`orders.1043.cancel`); one that
+        # names its method holds only calls made with it.
         return [
-            one for one in faults if any(action_matches(name, str(one.get("action") or "")) for name in names)
+            one
+            for one in faults
+            if any(action_matches(name, str(one.get("action") or "")) for name in names)
+            and (not one.get("method") or str(one["method"]).upper() == (call.method or "").upper())
         ]
 
     def _approved(self, fault: Mapping[str, Any]) -> bool:
@@ -615,9 +630,12 @@ class WorldDoor:
         return False
 
     def _fault(self, call: ToolCall, named: list[dict[str, Any]]) -> dict[str, Any] | None:
-        """The fault set on this call of the action, by which call of it this is."""
+        """The fault set on this call of the action, by which call of it this is. A fault that names its method counts
+        only the calls made with that method (a GET of the route is not a call of its DELETE), which the log, keeping
+        no method, cannot tell apart: this door's own count numbers them."""
+        by_method = any(one.get("method") for one in named)
         try:
-            made = self.log.agent_calls(call.action, call.name)
+            made = 0 if by_method else self.log.agent_calls(call.action, call.name)
         except Exception:  # noqa: BLE001 - which call this is is unknown: a guess would fault every call as the first
             return None
         if self.trial is not None:
@@ -625,8 +643,9 @@ class WorldDoor:
             if current != self._numbered_trial:
                 self._numbered.clear()
                 self._numbered_trial = current
-        made = max(made, self._numbered.get(call.action, 0))
-        self._numbered[call.action] = made + 1
+        slot = f"{call.action}\x00{(call.method or '').upper()}" if by_method else call.action
+        made = max(made, self._numbered.get(slot, 0))
+        self._numbered[slot] = made + 1
         return next(
             (one for one in named if _int(one.get("on_call"), 1) == made + 1), None
         )
@@ -645,6 +664,7 @@ class WorldDoor:
                 status=504,
                 body=None,
                 refusal_code=None,
+                original=_response(ran),
             )
             self._write(call, logged, key=key, wait=True)
             return logged

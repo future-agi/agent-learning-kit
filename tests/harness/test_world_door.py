@@ -138,16 +138,24 @@ def test_the_agent_s_keyed_retry_is_answered_from_the_first_result_and_the_world
     assert other.refusal_code == "idempotency_conflict" and len(executor.ran) == 1
 
 
-def test_the_agent_s_keyed_retry_after_a_lost_answer_is_answered_not_committed_twice():
-    executor = _Executor(result={"refund": 1})
-    door = _door(
-        executor,
-        faults=[{"action": "orders.refund", "mode": "timeout_after_commit", "on_call": 1, "delay_seconds": 0}],
-    )
+@pytest.mark.parametrize("recovered", [False, True], ids=["same door", "door restarted on the log"])
+def test_the_agent_s_keyed_retry_after_a_lost_answer_is_answered_not_committed_twice(recovered):
+    class _Created(_Executor):
+        def run(self, call):
+            self.ran.append(call)
+            return Executed(201, {"refund": 1}, body=b"refund RF-1 created", content_type="text/plain")
+
+    executor = _Created()
+    log = MemoryLog()
+    faults = [{"action": "orders.refund", "mode": "timeout_after_commit", "on_call": 1, "delay_seconds": 0}]
+    door = _door(executor, faults=faults, log=log)
     lost = door.enter(ToolCall(action="orders.refund", name="refund", arguments={"order": 7}, key="k-1"))
-    retry = door.enter(ToolCall(action="orders.refund", name="refund", arguments={"order": 7}, key="k-1"))
-    assert lost.fault is not None and lost.outcome == "committed"
+    again = _door(executor, faults=faults, log=log) if recovered else door
+    retry = again.enter(ToolCall(action="orders.refund", name="refund", arguments={"order": 7}, key="k-1"))
+    assert lost.fault is not None and lost.outcome == "committed" and lost.status == 504
     assert retry.outcome == "duplicate" and len(executor.ran) == 1
+    # The retry hears what the world first answered, never the timeout the fault put in its place.
+    assert (retry.status, retry.answer(), retry.content_type) == (201, b"refund RF-1 created", "text/plain")
 
 
 def test_a_keyed_retry_after_a_write_that_ran_but_whose_answer_was_lost_to_a_reset_never_runs_it_again():
@@ -1148,3 +1156,42 @@ def test_the_durable_log_counts_a_mark_s_calls_and_replays_a_keyed_answer(world_
 
     assert len(executor.ran) == 1 and retry.outcome == "duplicate"
     assert (retry.status, retry.answer(), retry.content_type) == (201, b"created", "text/plain")
+
+
+def test_a_fault_on_the_delete_of_a_route_never_holds_the_get_of_the_same_route():
+    from fi.alk.harness.world_door import routed_faults
+
+    contract = {
+        "tool_entrypoints": [
+            {"tool": "get_order", "endpoint": "/orders/{order_id}", "method": "GET"},
+            {"tool": "cancel_order", "endpoint": "/orders/{order_id}", "method": "DELETE"},
+        ]
+    }
+    executor = _Executor()
+    door = _door(executor, faults=routed_faults([{"action": "cancel_order", "mode": "unavailable"}], contract))
+
+    read = door.enter(ToolCall(action="orders.1043", name="1043", arguments={}, method="GET", effect="read"))
+    cancel = door.enter(ToolCall(action="orders.1043", name="1043", arguments={}, method="DELETE"))
+
+    assert (read.outcome, cancel.outcome) == ("committed", "faulted")
+
+
+def test_a_keyed_retry_sending_89_0_for_89_is_the_same_write_but_true_for_1_is_not():
+    executor = _Executor()
+    door = _door(executor)
+    door.enter(ToolCall(action="orders.refund", name="refund", arguments={"amount": 89, "notify": 1}, key="k-1"))
+
+    same = door.enter(ToolCall(action="orders.refund", name="refund", arguments={"amount": 89.0, "notify": 1}, key="k-1"))
+    other = door.enter(ToolCall(action="orders.refund", name="refund", arguments={"amount": 89, "notify": True}, key="k-1"))
+
+    assert same.outcome == "duplicate" and len(executor.ran) == 1
+    assert (other.outcome, other.refusal_code) == ("refused", "idempotency_conflict")
+
+
+def test_a_mark_s_count_reads_the_same_in_memory_as_in_the_durable_log():
+    from fi.alk.harness.world_door import DOOR_OUT_OF_REACH, calls_in
+
+    def mark(count):
+        return {"error": DOOR_OUT_OF_REACH, "arguments": {"count": count}}
+
+    assert [calls_in(mark(one)) for one in (2, 2.0, 2.5, "2", True, None)] == [2, 2, 3, 1, 1, 1]
