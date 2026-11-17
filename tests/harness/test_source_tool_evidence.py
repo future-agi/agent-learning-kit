@@ -837,14 +837,16 @@ def test_tool_check_decodes_a_unicode_escape_module_as_python_does(tmp_path):
 
 
 def test_tool_check_decodes_a_utf_7_module_as_python_does(tmp_path):
-    # +AAo- is a line end and +AEA- an "@": Python reads a decorated lookup after the comment,
-    # where the bytes hold one comment line with the definition in it.
+    # +AAA- is a NUL at a line's start: Python reads nothing past it, so the definition after it
+    # never runs. Read plain, the NUL fails the parse and the file gives no problem.
     (tmp_path / "agent.py").write_bytes(
-        b"# coding: utf-7\nfrom agents import tool\n"
-        b"# def lookup(): an example+AAo-+AEA-tool+AAo-def lookup(): return 1\n"
+        b"# coding: utf-7\n# def lookup(): return 1\n+AAA-\ndef lookup(): return 1\n"
     )
 
-    assert tool_evidence_problems(_entry_contract(), tmp_path) == []
+    problems = tool_evidence_problems(_entry_contract(), tmp_path)
+    assert [p.split(" \u2014 ")[0] for p in problems] == [
+        "tool[lookup]:commented-only-entrypoint:agent.lookup"
+    ]
 
 
 def test_tool_check_reads_the_text_an_import_reads(tmp_path):
@@ -859,9 +861,10 @@ def test_tool_check_reads_the_text_an_import_reads(tmp_path):
 
 
 def test_tool_check_finds_a_def_a_utf_7_comment_hides(tmp_path):
-    # +ACM- is a "#": Python reads the definition as a comment. Read as UTF-8 the line doesn't
-    # parse, and a file not read gives no problem either.
-    (tmp_path / "agent.py").write_bytes(b"# coding: utf-7\n+ACM- def lookup(): return 1\n")
+    # +ACM- is a "#": Python reads the definition as a comment, and +AAA- a NUL that ends the
+    # text there. Read as UTF-8 or plain the NUL fails the parse, and a file not read gives no
+    # problem either.
+    (tmp_path / "agent.py").write_bytes(b"# coding: utf-7\n+ACM- def lookup(): return 1+AAA-\n")
 
     problems = tool_evidence_problems(_entry_contract(), tmp_path)
     assert [p.split(" — ")[0] for p in problems] == [
