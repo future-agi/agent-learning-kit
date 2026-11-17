@@ -8,12 +8,10 @@ import itertools
 import json
 import os
 import random
-import sys
 import tokenize
 import tracemalloc
 from collections.abc import Iterator
 from pathlib import Path
-from types import BuiltinFunctionType, CodeType, FunctionType, ModuleType
 
 import pytest
 
@@ -1783,8 +1781,22 @@ def _allocated(size: int) -> int:
     return max(32, (size + 8 + 15) // 16 * 16)
 
 
+# Deep enough that every allocation the walk makes still has a scan_walk frame in its record:
+# on the shapes here the deepest is 10 frames below one (the templates shape), and 6 more allow
+# for frames a test runner adds. Not deeper: every frame kept is recorded for every allocation,
+# which is most of what these tests cost.
+_TRACE_FRAMES = 16
+
+
 def _rounded_live() -> int:
-    return sum(_allocated(trace.size) for trace in tracemalloc.take_snapshot().traces)
+    """What is alive that the walk itself allocated, each block rounded as allocated.
+
+    Only allocations made beneath a scan_walk frame count, so memory another thread allocates
+    meanwhile (a server or loop an earlier test left running) is not charged to the walk."""
+    snapshot = tracemalloc.take_snapshot().filter_traces(
+        [tracemalloc.Filter(True, scan_walk.__file__, all_frames=True)]
+    )
+    return sum(_allocated(trace.size) for trace in snapshot.traces)
 
 
 def _largest_parse_peak(root: Path) -> int:
@@ -1814,30 +1826,10 @@ def _hazard_peak(root: Path) -> int:
         tracemalloc.stop()
 
 
-def _kept_by(*roots: object) -> int:
-    """What ``roots`` keep alive that was made while tracing, each block rounded as allocated.
-
-    Only objects reachable from the walk count, so memory another thread holds at the same
-    moment (a server or loop an earlier test left running) is not charged to the walk."""
-    skip = (type, ModuleType, FunctionType, BuiltinFunctionType, CodeType)
-    seen: set[int] = set()
-    stack = list(roots)
-    total = 0
-    while stack:
-        obj = stack.pop()
-        if id(obj) in seen or isinstance(obj, skip):
-            continue
-        seen.add(id(obj))
-        if tracemalloc.get_object_traceback(obj) is not None:
-            total += _allocated(sys.getsizeof(obj))
-        stack.extend(gc.get_referents(obj))
-    return total
-
-
 def _measure(root: Path) -> dict[str, int]:
     """Walk and join ``root`` under tracemalloc: what was charged, what is really kept."""
     gc.collect()
-    tracemalloc.start()
+    tracemalloc.start(_TRACE_FRAMES)
     try:
         walk = scan_walk._Walk(root, deadline=FOREVER, clock=lambda: 0.0)
         walk.run()
@@ -1849,7 +1841,6 @@ def _measure(root: Path) -> dict[str, int]:
         join_peak = tracemalloc.get_traced_memory()[1]
         gc.collect()
         live = _rounded_live()
-        kept = _kept_by(walk, result)
     finally:
         tracemalloc.stop()
     join_charged = scan_walk._JOIN_BASE
@@ -1859,7 +1850,6 @@ def _measure(root: Path) -> dict[str, int]:
     return {
         "charged": walk.reader.held,
         "live": live,
-        "kept": kept,
         "walk_peak": walk_peak,
         "join_rise": join_peak - after_walk,
         "join_charged": join_charged,
@@ -1932,15 +1922,15 @@ def test_many_small_files_are_read_whole_and_only_joined_files_count(
 # what is live after the join, the walk's peak (the folders `os.walk` holds until it enters
 # them), or the join's own rise (what the join builds for the files it reaches).
 KEPT = {
-    "templates": "kept",
-    "graphs": "kept",
-    "prompt_paths": "kept",
-    "project_sets": "kept",
+    "templates": "live",
+    "graphs": "live",
+    "prompt_paths": "live",
+    "project_sets": "live",
     "pending_folders": "walk_peak",
     "edges": "join",
     "join_share": "join",
-    "import_levels": "kept",
-    "line_numbers": "kept",
+    "import_levels": "live",
+    "line_numbers": "live",
 }
 
 

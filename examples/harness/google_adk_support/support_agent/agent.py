@@ -48,14 +48,17 @@ _ORDERS_BY_CONVERSATION: dict[str, dict] = {}
 
 
 def _orders() -> dict:
-    return _ORDERS_BY_CONVERSATION.setdefault(_CONVERSATION.get(), copy.deepcopy(_SEED_ORDERS))
+    conversation = _CONVERSATION.get()
+    if conversation not in _ORDERS_BY_CONVERSATION:
+        _ORDERS_BY_CONVERSATION[conversation] = copy.deepcopy(_SEED_ORDERS)
+    return _ORDERS_BY_CONVERSATION[conversation]
 
 
 def _name_the_conversation(tool, args, tool_context):
-    # ADK copies this context into the thread that runs a plain tool.
+    # Set in the task that runs the tool: ADK runs it on the loop there, or copies this
+    # context into the thread it uses for one.
     _CONVERSATION.set(tool_context.session.id)
     return None
-
 
 
 # ADK builds each tool's schema from the signature and the docstring, so the parameters stay

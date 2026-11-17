@@ -14,7 +14,6 @@ import shutil
 import sys
 import textwrap
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 from reference_agents import (
@@ -23,8 +22,10 @@ from reference_agents import (
     TOOLS,
     TRACE_HOOK,
     assert_bindings_match,
+    assert_a_failing_turn_keeps_the_key_out_of_its_frames,
     assert_detected,
     assert_each_conversation_has_its_own_orders,
+    assert_tool_calls_keep_each_conversations_orders,
     assert_pins,
     assert_refuses_key_without_base_url,
     build_control_service,
@@ -425,18 +426,34 @@ def test_each_conversation_has_its_own_orders(example_module, monkeypatch) -> No
     agent = example_module()
     assert_each_conversation_has_its_own_orders(agent)
 
-    # The callback names the conversation from the turn's thread before the run.
-    seen = []
-
-    async def kickoff_async(messages):
-        seen.append(agent._CONVERSATION.get())
-        return SimpleNamespace(raw="ok")
+    # The same through the callback, with CrewAI running each tool on its worker thread.
+    import crewai
 
     monkeypatch.setenv("OPENAI_BASE_URL", "http://gateway.test/v1")
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
-    monkeypatch.setattr(agent, "Agent", lambda **options: SimpleNamespace(kickoff_async=kickoff_async))
-    asyncio.run(agent.agent_callback(_agent_input(CONVERSATION)))
-    assert seen == ["scenario-one"]
+
+    def turn(thread_id: str, name: str, **arguments: str) -> str:
+        crewai.STATE["script"] = [(name, arguments)]
+        crewai.STATE["results"] = []
+        turn_input = _agent_input(CONVERSATION).model_copy(update={"thread_id": thread_id})
+        asyncio.run(agent.agent_callback(turn_input))
+        (result,) = crewai.STATE["results"]
+        return result
+
+    assert_tool_calls_keep_each_conversations_orders(turn)
+
+
+def test_a_turn_that_fails_later_keeps_the_key_out_of_its_frames(example_module) -> None:
+    def make_it_fail() -> None:
+        import crewai
+
+        crewai.STATE["raise"] = ConnectionError("model unreachable")
+
+    assert_a_failing_turn_keeps_the_key_out_of_its_frames(
+        example_module,
+        lambda agent: asyncio.run(agent.agent_callback(_agent_input(CONVERSATION))),
+        make_it_fail,
+    )
 
 
 def test_a_key_with_no_base_url_is_refused_before_a_model_is_built(
