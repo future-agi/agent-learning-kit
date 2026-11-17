@@ -1249,9 +1249,17 @@ def _content_blocks_text(value: Any) -> str:
     return text_of(value) if isinstance(value, (str, list, tuple)) else ""
 
 
+def _is_block_or_message(item: Any) -> bool:
+    if isinstance(item, Mapping):
+        return "type" in item or "role" in item
+    return hasattr(item, "type") or hasattr(item, "role")
+
+
 def _reply_text(value: Any) -> str:
-    """Text of a reply field: answer text for a block list, otherwise the plain stringified value."""
-    if isinstance(value, (list, tuple)):
+    """Answer text for a list of content blocks or messages, else the stringified value."""
+    if isinstance(value, (list, tuple)) and any(
+        _is_block_or_message(item) for item in value
+    ):
         return text_of(value)
     return _stringify(value)
 

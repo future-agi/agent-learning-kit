@@ -45,13 +45,21 @@ def _block_text(block: Any) -> str:
     return ""
 
 
+def _is_message(item: Any) -> bool:
+    kind = _field(item, "type")
+    if kind in _TEXT_KINDS or kind == "refusal":
+        return False
+    return kind == "ai" or _field(item, "role") == "assistant"
+
+
 def _text_of(content: Any) -> str:
     """Keep only the answer text of a reply.
 
-    Extended-thinking models return a list of blocks (``thinking``, ``text``, ...). Plain
-    strings and answer blocks are kept in order and joined with ``""``, because one answer can
-    be split across several text blocks. A message (``AIMessage``, ``{"role", "content"}``)
-    gives the text of its content. Any other block (thinking, redacted_thinking, tool_use,
+    Extended-thinking models return a list of blocks (``thinking``, ``text``, ...). Answer
+    blocks are kept in order and joined with ``""`` only when they sit next to each other,
+    because one answer can be split across several text blocks. Plain strings and whole
+    messages (``AIMessage``, ``{"role", "content"}``, which give the text of their content)
+    are joined with ``" "``. Any other block (thinking, redacted_thinking, tool_use,
     tool_result, image, unknown) gives ``""``, never its repr.
     """
     if isinstance(content, str):
@@ -59,9 +67,18 @@ def _text_of(content: Any) -> str:
     if content is None:
         return ""
     if isinstance(content, (list, tuple)):
-        return "".join(
-            item if isinstance(item, str) else _block_text(item) for item in content
-        )
+        text = ""
+        after_block = False
+        for item in content:
+            is_block = not isinstance(item, str) and not _is_message(item)
+            piece = item if isinstance(item, str) else _block_text(item)
+            if not piece:
+                continue
+            if text and not (is_block and after_block):
+                text += " "
+            text += piece
+            after_block = is_block
+        return text
     if (
         isinstance(content, dict)
         and "content" not in content

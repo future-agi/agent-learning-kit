@@ -234,6 +234,26 @@ def _generic_reply(reply):
         ({"messages": [{"role": "assistant", "content": [THINKING]}]}, ""),
         ({"choices": [{"message": {"content": _blocks()}}]}, ANSWER),
         ({"role": "assistant", "content": [{"text": "Your order shipped today."}]}, "Your order shipped today."),
+        (
+            {"result": [{"order_id": "A1", "status": "shipped"}]},
+            '[{"order_id": "A1", "status": "shipped"}]',
+        ),
+        ({"content": ["Sure.", "Your order shipped today."]}, "Sure. Your order shipped today."),
+        (
+            {
+                "output": [
+                    SimpleNamespace(type="human", content="Where is my order?"),
+                    SimpleNamespace(type="ai", content="Let me check."),
+                    SimpleNamespace(type="tool", content="shipped"),
+                    SimpleNamespace(type="ai", content="It shipped today."),
+                ]
+            },
+            "Let me check. It shipped today.",
+        ),
+        (
+            {"output": [{"role": "assistant", "content": "Let me check."}, {"role": "assistant", "content": "Done."}]},
+            "Let me check. Done.",
+        ),
     ],
     ids=[
         "output-key",
@@ -246,6 +266,10 @@ def _generic_reply(reply):
         "state-last-message-only-thinking",
         "choices-message",
         "untyped-text-block",
+        "list-of-records-stays-json",
+        "list-of-sentences",
+        "list-of-messages",
+        "list-of-dict-messages",
     ],
 )
 def test_generic_agent_wrapper_keeps_only_the_text(reply, expected):
