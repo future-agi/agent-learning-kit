@@ -8396,6 +8396,36 @@ def test_spawn_source_process_injects_sitecustomize_for_worker_isolation_alone(
     assert (world_dir / "sitecustomize.py").is_file()
 
 
+def test_spawn_source_process_injects_sitecustomize_for_the_openai_agents_mark_alone(
+    tmp_path: Path,
+) -> None:
+    build_dir = tmp_path / "build" / "svc"
+    build_dir.mkdir(parents=True)
+    captured: dict[str, Any] = {}
+
+    def fake_runner(argv, *, cwd, env, log_path, user=None, group=None):
+        captured.update(argv=argv, env=env)
+        return FakeHandle()
+
+    process = _source_process(
+        environment={"ALK_OPENAI_AGENTS_CHAT_COMPLETIONS": "1"}
+    ).model_copy(update={"run_command": [".venv/bin/python", "agent.py"]})
+    world_dir = tmp_path / "worlds" / "w0" / "svc"
+    pr.spawn_source_process(
+        process,
+        build_dir=build_dir,
+        world_dir=world_dir,
+        world_index=0,
+        port_plan=_solo_port_plan("svc"),
+        configuration_addresses={},
+        secret_values={},
+        secret_purposes={},
+        runner=fake_runner,
+    )
+    assert captured["env"]["PYTHONPATH"].split(os.pathsep)[0] == str(world_dir)
+    assert (world_dir / "sitecustomize.py").read_bytes() == _LIVEKIT_HOOK.read_bytes()
+
+
 def test_dispatch_metadata_sets_the_key_only_for_exactly_one_distinct_name(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
@@ -10195,11 +10225,12 @@ def test_mark_hook_written_with_its_module_first_on_pythonpath_for_every_exporti
         "/customer/lib",
     ]
 
-    # LiveKit alone is what it is today: its file, no mark module.
+    # LiveKit alone: its file, and the mark module beside it for the hand-on to the next
+    # `sitecustomize`; the path is the same.
     captured = _spawn(tmp_path / "livekit-only", both)
     world = captured["world_dir"]
     assert (world / "sitecustomize.py").read_bytes() == _LIVEKIT_HOOK.read_bytes()
-    assert not (world / "simulation_mark_bootstrap.py").exists()
+    assert (world / "simulation_mark_bootstrap.py").read_bytes() == _MARK_HOOK.read_bytes()
 
     # Framework observation reads spans through the mark module, exported or not.
     observed = both.model_copy(
@@ -11301,6 +11332,205 @@ def test_native_config_resource_path_rejects_escape_at_model_boundary(path):
         _source_process(config_files={path: {"values": {"MODE": "test"}}})
 
 
+# --- A repository's own `sitecustomize` runs once, whichever hook file the kit placed first ----
+
+_GATEWAY_MARK = {"ALK_OPENAI_AGENTS_CHAT_COMPLETIONS": "1"}
+
+
+def _repository_marker_hook(root: Path, body: str | None = None) -> tuple[Path, Path]:
+    repo = root / "repo"
+    repo.mkdir()
+    marker = root / "repo-hook.log"
+    (repo / "sitecustomize.py").write_text(
+        body
+        or (
+            "import os\n"
+            "with open(os.environ['REPO_HOOK_LOG'], 'a') as log:\n"
+            "    log.write('ran\\n')\n"
+        )
+    )
+    return repo, marker
+
+
+def _start(captured: dict[str, Any], repo: Path, marker: Path, code: str = "pass"):
+    env = {
+        key: value
+        for key, value in captured["env"].items()
+        if not key.startswith(("OTEL_EXPORTER", "PYTHONVERBOSE"))
+    }
+    env["PYTHONPATH"] = os.pathsep.join([str(captured["world_dir"]), str(repo)])
+    env["REPO_HOOK_LOG"] = str(marker)
+    return subprocess.run(
+        [sys.executable, "-c", code],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+
+_CHAIN_AGAIN = (
+    "import simulation_mark_bootstrap as m\n"
+    "m._chain()\n"
+)
+
+# What the repository hook logged at start-up, before the test's own _chain() call.
+_LOG_AT_START = (
+    "import json, os\n"
+    "with open(os.environ['REPO_HOOK_LOG']) as log:\n"
+    "    print(json.dumps(log.read().splitlines()))\n"
+)
+
+_INSTALLED_STATE = (
+    "import json, sys\n"
+    "print(json.dumps([type(f).__name__ for f in sys.meta_path]))\n"
+    "print(json.dumps(m._PATCHES, default=repr))\n"
+)
+
+
+@pytest.mark.parametrize(
+    ("environment", "customer"),
+    [
+        pytest.param(dict(_GATEWAY_MARK), None, id="gateway_without_export"),
+        pytest.param(
+            {"HARNESS_TOOL_TRACE": "{{WORLD_DIR}}/calls.jsonl"}, None, id="traced_without_export"
+        ),
+        pytest.param(dict(_GATEWAY_MARK), _EXPORT, id="gateway_with_export"),
+    ],
+)
+def test_a_repository_sitecustomize_runs_exactly_once(
+    tmp_path: Path, environment: dict[str, str], customer: dict[str, str] | None
+) -> None:
+    captured = _spawn(
+        tmp_path / "w", _source_process(environment=environment), customer
+    )
+    assert (captured["world_dir"] / "simulation_mark_bootstrap.py").is_file()
+    repo, marker = _repository_marker_hook(tmp_path)
+    result = _start(
+        captured, repo, marker, _LOG_AT_START + _CHAIN_AGAIN + _INSTALLED_STATE
+    )
+    assert result.returncode == 0, result.stderr
+    at_start, finders, patches = result.stdout.splitlines()
+    # It ran at start-up, through the kit's chain, not through the test's own call.
+    assert json.loads(at_start) == ["ran"]
+    assert marker.read_text().splitlines() == ["ran"]
+    # Where OpenTelemetry is installed (CI), a run with patches logs that they applied; nothing
+    # else may reach stderr.
+    assert set(result.stderr.splitlines()) <= {"simulation mark hook: applied"}
+    if customer is None and "HARNESS_TOOL_TRACE" not in environment:
+        assert result.stderr == ""
+        # A gateway run without an export: install() does nothing but chain.
+        assert "_MarkFinder" not in json.loads(finders)
+        assert json.loads(patches) == {}
+    elif customer is None:
+        # A traced run without an export patches only the tracer.
+        assert list(json.loads(patches)) == ["opentelemetry.sdk.trace"]
+
+
+def test_a_failing_repository_hook_is_reported_and_the_kit_hook_still_traces(
+    tmp_path: Path,
+) -> None:
+    captured = _spawn(
+        tmp_path / "w",
+        _source_process(
+            environment={
+                "HARNESS_TOOL_TRACE": "{{WORLD_DIR}}/calls.jsonl",
+                "ALK_TOOL_TRACE_BINDINGS": json.dumps(
+                    [{"name": "lookup", "module": "agent", "callable": "lookup"}]
+                ),
+            }
+        ),
+    )
+    repo, marker = _repository_marker_hook(
+        tmp_path, "raise RuntimeError('repository hook')\n"
+    )
+    (tmp_path / "agent.py").write_text("def lookup():\n    return 'found'\n")
+    trace = captured["world_dir"] / "calls.jsonl"
+    env = {**captured["env"], "PYTHONPATH": os.pathsep.join(
+        [str(captured["world_dir"]), str(repo), str(tmp_path)]
+    )}
+    result = subprocess.run(
+        [sys.executable, "-c", "import agent; print(agent.lookup())"],
+        env=env, capture_output=True, text=True, timeout=60,
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "found"
+    assert "Error in sitecustomize" in result.stderr
+    assert "RuntimeError: repository hook" in result.stderr
+    assert "simulation mark hook: failed" not in result.stderr
+    assert [json.loads(line)["name"] for line in trace.read_text().splitlines()] == [
+        "lookup"
+    ]
+
+
+def test_without_a_repository_hook_nothing_is_said_or_run(tmp_path: Path) -> None:
+    captured = _spawn(
+        tmp_path / "w", _source_process(environment=dict(_GATEWAY_MARK))
+    )
+    repo = tmp_path / "empty"
+    repo.mkdir()
+    result = _start(captured, repo, tmp_path / "never.log")
+    assert result.returncode == 0
+    assert result.stderr == ""
+    assert not (tmp_path / "never.log").exists()
+
+
+def test_a_pythons_own_sitecustomize_runs_once_after_the_kit_hook(tmp_path: Path) -> None:
+    captured = _spawn(
+        tmp_path / "w", _source_process(environment=dict(_GATEWAY_MARK))
+    )
+    directory = tmp_path / "own-venv"
+    venv.EnvBuilder(with_pip=False, symlinks=True).create(directory)
+    python = directory / "bin" / "python"
+    site_dir = Path(
+        subprocess.run(
+            [str(python), "-c", "import sysconfig; print(sysconfig.get_path('purelib'))"],
+            capture_output=True,
+            text=True,
+            check=True,
+            env={"PATH": os.environ.get("PATH", ""), **_library_path_env()},
+        ).stdout.strip()
+    )
+    (site_dir / "sitecustomize.py").write_text(
+        "import os, sys\n"
+        "with open(os.environ['REPO_HOOK_LOG'], 'a') as log:\n"
+        "    log.write('own after-kit=%s\\n' % getattr(sys, '_alk_sitecustomize_chained', False))\n"
+    )
+    marker = tmp_path / "own-hook.log"
+    env = {
+        key: value
+        for key, value in captured["env"].items()
+        if not key.startswith(("OTEL_EXPORTER", "PYTHONVERBOSE"))
+    }
+    env["PYTHONPATH"] = str(captured["world_dir"])
+    env["REPO_HOOK_LOG"] = str(marker)
+    env.update(_library_path_env())
+    result = subprocess.run(
+        [str(python), "-c", "pass"], env=env, capture_output=True, text=True, timeout=60
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stderr == ""
+    # The kit's hook came first (it had already set its flag), and the venv's own ran once.
+    assert marker.read_text().splitlines() == ["own after-kit=True"]
+
+
+def test_the_mark_module_is_written_only_beside_a_hook(tmp_path: Path) -> None:
+    hooked = _spawn(tmp_path / "a", _source_process(environment=dict(_GATEWAY_MARK)))
+    assert (hooked["world_dir"] / "simulation_mark_bootstrap.py").read_bytes() == (
+        _MARK_HOOK.read_bytes()
+    )
+    bare = _spawn(tmp_path / "b", _source_process())
+    assert not (bare["world_dir"] / "simulation_mark_bootstrap.py").exists()
+    assert not (bare["world_dir"] / "sitecustomize.py").exists()
+
+
+def test_the_agents_sdk_tracing_switch_alone_places_no_hook(tmp_path: Path) -> None:
+    captured = _spawn(
+        tmp_path / "w",
+        _source_process(environment={"OPENAI_AGENTS_DISABLE_TRACING": "1"}),
+    )
+    assert captured["env"]["OPENAI_AGENTS_DISABLE_TRACING"] == "1"
+    assert not (captured["world_dir"] / "sitecustomize.py").exists()
 
 
 @pytest.mark.parametrize(

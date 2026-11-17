@@ -2384,6 +2384,7 @@ def spawn_source_process(
         livekit_hook_due = (
             "HARNESS_TOOL_TRACE" in process.environment
             or "FI_WORKER_HEALTH_PORT" in process.environment
+            or "ALK_OPENAI_AGENTS_CHAT_COMPLETIONS" in process.environment
             or "ALK_WORLD_DOOR_URL" in process.environment
         )
         mark_hook_due = "FI_SIMULATION_EXPORT" in customer_code_environment
@@ -2407,8 +2408,13 @@ def spawn_source_process(
                         _SIMULATION_MARK_SITECUSTOMIZE, encoding="utf-8"
                     )
                 sitecustomize_hook.chmod(0o444)
-        if mark_hook_due or process.environment.get("ALK_OBSERVE_FRAMEWORKS") == "1":
+        if (
+            sitecustomize_hook is not None
+            or process.environment.get("ALK_OBSERVE_FRAMEWORKS") == "1"
+        ):
             # The customer's interpreter has no `fi.alk`, so the modules sit beside the hook.
+            # The mark module carries the one copy of the hand-on to the next `sitecustomize`,
+            # so every process that gets the hook gets it.
             for module_name in (
                 "simulation_mark_bootstrap.py",
                 "simulation_worker_events.py",
