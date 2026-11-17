@@ -13,7 +13,10 @@ child swaps these in after its trial. Each one runs the real check unless told o
   ``"real"``, or ``{"after": <file name>, "sleep": <seconds>}``, which writes ``.scan-waiting``,
   waits for that file at the root, then sleeps. A scan told anything writes ``.scan-done`` once
   it answers. ``"instrumentation"``: ``"raise"``, ``{"hold": <seconds>}``, or
-  ``{"value": <str>}``.
+  ``{"value": <str>}``, or
+  ``{"first": <n>, "how": "raise" | "exit"}``, which does that in its first ``n`` calls and then
+  reads for real (the count is kept in ``.instrumentation-calls`` at the root, since each
+  restarted child is a new process).
 """
 
 from __future__ import annotations
@@ -109,6 +112,14 @@ def instrumentation(source_root, reached=()):
     said = _session_said(Path(source_root) if source_root else None, "instrumentation")
     if said == "raise":
         raise OSError("stand-in instrumentation raised")
+    if isinstance(said, dict) and "first" in said and source_root is not None:
+        calls = Path(source_root) / ".instrumentation-calls"
+        with open(calls, "a", encoding="utf-8") as log:
+            log.write("x")
+        if len(calls.read_text(encoding="utf-8")) <= int(said["first"]):
+            if said.get("how") == "exit":
+                os._exit(9)
+            raise OSError("stand-in instrumentation raised")
     if isinstance(said, dict) and "hold" in said:
         time.sleep(float(said["hold"]))
     if isinstance(said, dict) and "value" in said:

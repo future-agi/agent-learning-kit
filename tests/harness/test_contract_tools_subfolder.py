@@ -2339,11 +2339,11 @@ def test_a_second_loop_call_reads_the_code_the_folder_reaches_itself(tmp_path, r
     assert checker.ran_in_child == 0
 
 
-def test_an_instrumentation_part_that_raises_twice_saves_with_none(tmp_path, repo):
+def test_an_instrumentation_part_that_raises_twice_is_read_by_the_save_itself(tmp_path, repo):
     from fi.alk.harness.save_checker import SessionChecksFailed
 
     (repo / "agents" / "a" / "agent.py").write_text("import traceai_openai\n")
-    _session(repo, instrumentation="raise")
+    _session(repo, instrumentation={"first": 2, "how": "raise"})
     destination, submit, checker = _child_server(tmp_path, repo)
 
     async def calls():
@@ -2354,8 +2354,29 @@ def test_an_instrumentation_part_that_raises_twice_saves_with_none(tmp_path, rep
     answer = asyncio.run(calls())
 
     assert not answer.get("is_error"), answer
-    assert _saved(destination)["instrumentation"] == "none"
+    # Never "none": the part gave no answer, so the save reads it under its own deadline.
+    assert _saved(destination)["instrumentation"] == "traceai"
     assert checker.ran_in_child == 1
+
+
+def test_a_child_that_dies_in_the_instrumentation_part_does_not_save_it_as_none(tmp_path, repo):
+    (repo / "agents" / "a" / "agent.py").write_text("import traceai_openai\n")
+    _session(repo, instrumentation={"first": 1, "how": "exit"})
+    destination, submit, checker = _child_server(tmp_path, repo)
+
+    async def calls():
+        answers = []
+        for _ in range(3):
+            answers.append(await submit(_plain("again")))
+            if (destination / "contract.json").exists():
+                break
+        return answers
+
+    answers = asyncio.run(calls())
+
+    assert (destination / "contract.json").exists(), answers
+    # The replacement child is asked the session job again and reads what the code imports.
+    assert _saved(destination)["instrumentation"] == "traceai"
 
 
 def test_after_two_deaths_the_checks_run_here_with_the_sessions_instrumentation(tmp_path, repo):

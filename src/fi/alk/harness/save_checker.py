@@ -274,6 +274,9 @@ class SaveChecker:
         self._send_lock = threading.Lock()
         self._scan: ScanAnswer | None = None
         self._instrumentation: str | None = None
+        # The part never answered (bound, two failures): the value stays None, so each save
+        # sends None and the save job reads it under its own deadline. Never cached as "none".
+        self._instrumentation_unknown = False
         self._failures = {part: 0 for part in _PARTS}
         self._failure: dict[str, tuple[str, str]] = {}
         self._watchers: list[tuple[asyncio.AbstractEventLoop, asyncio.Future[None]]] = []
@@ -518,7 +521,9 @@ class SaveChecker:
             return dict(self._failures)
 
     def _has(self, part: str) -> bool:
-        return (self._scan if part == "scan" else self._instrumentation) is not None
+        if part == "scan":
+            return self._scan is not None
+        return self._instrumentation is not None or self._instrumentation_unknown
 
     def _gave_way(self) -> bool:
         return self._closed or self._thread_reason is not None
@@ -540,7 +545,7 @@ class SaveChecker:
         if self._gave_way():
             return _THREAD
         self._raise_stand_in()
-        if self._scan is not None and self._instrumentation is not None:
+        if self._has("scan") and self._has("instrumentation"):
             return True
         for part in _PARTS:
             self._raise_failed(part, seen)
@@ -734,7 +739,7 @@ class SaveChecker:
             child = self._child
             if (
                 self._session is not None
-                or (self._scan is not None and self._instrumentation is not None)
+                or (self._has("scan") and self._has("instrumentation"))
                 or child is None
                 or not child.ready
                 or child.gone
@@ -766,19 +771,23 @@ class SaveChecker:
         """Caches ``part`` as cut, unless it answered: the first write wins. Under the lock."""
         if part == "scan" and self._scan is None:
             self._scan = ScanAnswer([], frozenset({"deadline"}))
-        elif part == "instrumentation" and self._instrumentation is None:
-            self._instrumentation = "none"
+        elif part == "instrumentation" and not self._has("instrumentation"):
+            # Unknown, not "none": "none" would be saved as an untraced agent.
+            self._instrumentation_unknown = True
 
-    def _end_session(self, session: _Session) -> list[str]:
-        """Takes ``session`` out of flight and caches its missing parts as cut. Under the lock."""
+    def _end_session(self, session: _Session, *, cut: bool) -> list[str]:
+        """Takes ``session`` out of flight and returns its missing parts, cached as cut when
+        ``cut`` (the bound); a death caches nothing, so the next child is asked again. Under the
+        lock."""
         self._session = None
         if session.timer is not None:
             session.timer.cancel()
         if session.child.request == session.id:
             session.child.request = None
         missing = [part for part in _PARTS if not self._has(part)]
-        for part in missing:
-            self._cut(part)
+        if cut:
+            for part in missing:
+                self._cut(part)
         return missing
 
     def _bound(self, session: _Session) -> None:
@@ -786,7 +795,7 @@ class SaveChecker:
         with self._cache_lock:
             if self._session is not session:
                 return
-            missing = self._end_session(session)
+            missing = self._end_session(session, cut=True)
             # Marked killed in the same hold that ends the session, so no call, waiting or new,
             # sends a save to a child about to go.
             ending = child.killed is None and not child.gone
@@ -830,7 +839,7 @@ class SaveChecker:
                 self._scan = ScanAnswer(
                     list(message.get("found") or []), frozenset(message.get("cut") or [])
                 )
-            elif part == "instrumentation" and self._instrumentation is None:
+            elif part == "instrumentation" and not self._has("instrumentation"):
                 self._instrumentation = str(message.get("value"))
             if not session.pending:
                 self._session = None
@@ -1088,12 +1097,12 @@ class SaveChecker:
             missing: list[str] = []
             session = self._session
             if session is not None and session.child is child:
-                missing = self._end_session(session)
+                missing = self._end_session(session, cut=False)
         code = reason if reason in ("watchdog", "start") else self._exit_code(child)
         logger.error("save checker: the child ended (%s)", code)
         if missing:
             logger.warning(
-                "save checker: the child ended during the session's checks; %s counts as cut",
+                "save checker: the child ended during the session's checks; %s will be asked again",
                 _which(missing),
             )
         self._notify()

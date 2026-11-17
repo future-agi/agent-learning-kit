@@ -380,7 +380,8 @@ def test_the_session_job_cut_at_its_bound_is_cached_and_not_run_again(
     assert isinstance(saved, Saved)
     assert _kinds(folder, 0) == ["trial", "session"]
     assert _kinds(folder, 1) == ["save"]
-    assert _requests(folder, 1)[0]["instrumentation"] == "none"
+    # Unknown, not "none": the save job reads it itself under its own deadline.
+    assert _requests(folder, 1)[0]["instrumentation"] is None
     # The restarted child never got `session`, so the save carries the parent's level.
     assert _requests(folder, 1)[0]["log_level"] == logging.getLogger().level
     assert (
@@ -390,7 +391,7 @@ def test_the_session_job_cut_at_its_bound_is_cached_and_not_run_again(
     assert checker._deaths == 0
 
 
-def test_a_death_during_the_session_job_keeps_what_answered_and_counts(
+def test_a_death_during_the_session_job_keeps_what_answered_and_asks_again(
     tmp_path: Path, warnings: pytest.LogCaptureFixture
 ) -> None:
     checker, folder = _checker(tmp_path, {"session": [[INSTRUMENTATION, ["die", 3]]]}, {})
@@ -402,16 +403,32 @@ def test_a_death_during_the_session_job_keeps_what_answered_and_counts(
 
     scanned, deaths, saved = asyncio.run(main())
 
-    assert scanned == CUT
+    # Nothing is cut by a death: the replacement child is sent the session job again.
+    assert scanned == FOUND
     assert deaths == 1
     assert isinstance(saved, Saved)
-    assert _kinds(folder, 1) == ["save"]
-    assert _requests(folder, 1)[0]["instrumentation"] == "traceai"
+    assert _kinds(folder, 1) == ["session", "save"]
+    assert _requests(folder, 1)[1]["instrumentation"] == "traceai"
     assert "save checker: the child ended (exit code 3)" in warnings.text
-    assert "the scan counts as cut" in warnings.text
+    assert "the scan will be asked again" in warnings.text
 
 
-def test_two_failed_instrumentation_parts_then_saves_go_on_with_none(
+def test_a_death_during_the_session_job_leaves_instrumentation_unanswered_not_none(
+    tmp_path: Path,
+) -> None:
+    checker, folder = _checker(tmp_path, {"session": [[SCAN, ["die", 9]]]}, {})
+
+    async def main() -> Any:
+        return await _save(checker)
+
+    saved = asyncio.run(main())
+
+    assert isinstance(saved, Saved)
+    assert _kinds(folder, 1) == ["session", "save"]
+    assert _requests(folder, 1)[1]["instrumentation"] == "traceai"
+
+
+def test_two_failed_instrumentation_parts_then_saves_go_on_with_it_unknown(
     tmp_path: Path, warnings: pytest.LogCaptureFixture
 ) -> None:
     checker, folder = _checker(tmp_path, {"session": [[SCAN, FAILED_INSTRUMENTATION]]})
@@ -425,9 +442,9 @@ def test_two_failed_instrumentation_parts_then_saves_go_on_with_none(
 
     assert (first.part, first.error, first.message) == ("instrumentation", "RuntimeError", "boom")
     assert isinstance(second, Saved)
-    # Sent again to the same child after the first failure; cached as cut after the second.
+    # Sent again to the same child after the first failure; left unknown after the second.
     assert _kinds(folder, 0) == ["trial", "session", "session", "save"]
-    assert _requests(folder, 0)[3]["instrumentation"] == "none"
+    assert _requests(folder, 0)[3]["instrumentation"] is None
     assert len(_pids(folder)) == 1
     # The type alone at ERROR: the message and trace can quote the customer's paths.
     assert "save checker: instrumentation failed in the child: RuntimeError\n" in warnings.text
