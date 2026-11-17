@@ -506,7 +506,7 @@ GENERATORS = (
     ],
 )
 @pytest.mark.parametrize("name", ["bare", "guarded"])
-def test_l2_a_generator_closed_early_is_recorded_and_is_not_an_error(
+def test_a_generator_closed_early_is_recorded_and_is_not_an_error(
     tmp_path: Path, name: str, driver: str
 ) -> None:
     records = _run_agent(
@@ -541,7 +541,7 @@ CANCEL_DRIVER = (
 
 
 @pytest.mark.parametrize("name", ["direct", "nested", "guarded", "reraises"])
-def test_l3_a_cancelled_coroutine_is_recorded_as_cancelled_not_as_a_raise(
+def test_a_cancelled_coroutine_is_recorded_as_cancelled_not_as_a_raise(
     tmp_path: Path, name: str
 ) -> None:
     records = _run_agent(tmp_path, ASYNC_TOOLS, [name], CANCEL_DRIVER.format(n=name))
@@ -550,7 +550,7 @@ def test_l3_a_cancelled_coroutine_is_recorded_as_cancelled_not_as_a_raise(
 
 
 @pytest.mark.parametrize("name", ["replaces", "fails"])
-def test_l3_a_tool_that_raises_its_own_error_is_still_an_error(
+def test_a_tool_that_raises_its_own_error_is_still_an_error(
     tmp_path: Path, name: str
 ) -> None:
     records = _run_agent(tmp_path, ASYNC_TOOLS, [name], CANCEL_DRIVER.format(n=name))
@@ -565,7 +565,7 @@ BAD_EXITS = (
 
 
 @pytest.mark.parametrize("bad", ["BadExit", "BadInt"])
-def test_l1_an_argument_whose_text_exits_never_ends_the_agent(tmp_path: Path, bad: str) -> None:
+def test_an_argument_whose_text_exits_never_ends_the_agent(tmp_path: Path, bad: str) -> None:
     records = _run_agent(
         tmp_path, BAD_EXITS, ["t"],
         f"import agent\nassert agent.t(agent.{bad}()) == 'ok'\nassert agent.t('second') == 'ok'\n",
@@ -574,7 +574,7 @@ def test_l1_an_argument_whose_text_exits_never_ends_the_agent(tmp_path: Path, ba
     assert any(r["arguments"] == {"x": f"<unprintable {bad}>"} for r in records)
 
 
-def test_l2_an_unprintable_argument_is_recorded_as_a_placeholder(tmp_path: Path) -> None:
+def test_an_unprintable_argument_is_recorded_as_a_placeholder(tmp_path: Path) -> None:
     source = (
         "class Bad:\n    def __str__(self):\n        raise RuntimeError('lazy load')\n"
         "    __repr__ = __str__\n"
@@ -594,7 +594,7 @@ def test_l2_an_unprintable_argument_is_recorded_as_a_placeholder(tmp_path: Path)
         pytest.param("agent.t({1: 'a', 'b': 2})", id="mixed-key-argument"),
     ],
 )
-def test_l3_a_value_that_cannot_be_encoded_still_records_the_call(
+def test_a_value_that_cannot_be_encoded_still_records_the_call(
     tmp_path: Path, first_call: str
 ) -> None:
     source = (
@@ -613,7 +613,7 @@ def test_l3_a_value_that_cannot_be_encoded_still_records_the_call(
     assert records[1]["arguments"] == {"x": "second"}
 
 
-def test_m2_a_caught_recursion_error_does_not_turn_tracing_off(tmp_path: Path) -> None:
+def test_a_caught_recursion_error_does_not_turn_tracing_off(tmp_path: Path) -> None:
     records = _run_agent(
         tmp_path,
         "def t(x):\n    return 'ok'\n",

@@ -118,7 +118,7 @@
   "sealed_sha": "d9a91b2b4f99d82f1bcf17b5499ef9f53f42292e6e63a1c64edffc525aa881b4",
   "trace_version": 1
  },
- "h2_two_graphs_with_the_cli_installed": {
+ "two_graphs_with_the_cli_installed": {
   "control_environment": {
    "ALK_OBSERVE_FRAMEWORKS": "1",
    "ALK_TOOL_TRACE_BINDINGS": "[{\"name\": \"look_up_order\", \"module\": \"agent\", \"callable\": \"look_up_order\"}, {\"name\": \"start_return\", \"module\": \"agent\", \"callable\": \"start_return\"}, {\"name\": \"return_policy\", \"module\": \"agent\", \"callable\": \"return_policy\"}]",
@@ -158,7 +158,7 @@
   "sealed_sha": "46b50b80d10858877e920e3025ab62cd7a239e56cbef2c3460f417129887f2be",
   "trace_version": 1
  },
- "h3_no_subfolder_root_relative_module": {
+ "no_subfolder_root_relative_module": {
   "control_environment": {
    "ALK_CALLBACK_ENTRYPOINT": "examples.harness.support.agent:agent_callback",
    "ALK_TOOL_TRACE_BINDINGS": "[{\"name\": \"look_up_order\", \"module\": \"examples.harness.support.agent\", \"callable\": \"look_up_order\"}, {\"name\": \"start_return\", \"module\": \"examples.harness.support.agent\", \"callable\": \"start_return\"}, {\"name\": \"return_policy\", \"module\": \"examples.harness.support.agent\", \"callable\": \"return_policy\"}]",
@@ -199,7 +199,7 @@
   "sealed_sha": "570142ade527887256514b4eca4a3cccc3eb70bd6df0eb3ecc2c3c422fdd679f",
   "trace_version": 1
  },
- "h3_no_subfolder_unreachable_root_relative_module": {
+ "no_subfolder_unreachable_root_relative_module": {
   "control_environment": {
    "ALK_CALLBACK_ENTRYPOINT": "examples.harness.support.agent:agent_callback",
    "HARNESS_MODE": "1",
@@ -232,7 +232,7 @@
   "sealed_sha": "6e58e6b3efec1f0dccae735a81172bea6a3a2f6fc593eb673a64434d29e65aca",
   "trace_version": null
  },
- "h4_agent_folder_inside_a_regular_package": {
+ "agent_folder_inside_a_regular_package": {
   "control_environment": {
    "ALK_CALLBACK_ENTRYPOINT": "tools:agent_callback",
    "ALK_TOOL_TRACE_BINDINGS": "[{\"name\": \"look_up_order\", \"module\": \"bench.envs.retail.tools\", \"callable\": \"look_up_order\"}, {\"name\": \"start_return\", \"module\": \"bench.envs.retail.tools\", \"callable\": \"start_return\"}, {\"name\": \"return_policy\", \"module\": \"bench.envs.retail.tools\", \"callable\": \"return_policy\"}]",
@@ -281,7 +281,7 @@
   "sealed_sha": "86d4af18d5abec8346cc342346cc8f060e5b83fe081812a187d689c35e45440f",
   "trace_version": 1
  },
- "h4_unreachable_inside_a_regular_package": {
+ "unreachable_inside_a_regular_package": {
   "control_environment": {
    "ALK_CALLBACK_ENTRYPOINT": "tools:agent_callback",
    "HARNESS_MODE": "1",

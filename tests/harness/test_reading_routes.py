@@ -90,7 +90,7 @@ def control_environment(manifest) -> dict:
     return next(p for p in manifest.processes if p.name == manifest.runtime.control_service).environment
 
 
-# --- Task 2: an unreachable entry that says where it is, is traced --------------------------
+# --- An unreachable entry that says where it is, is traced -----------------------------------
 
 
 def bound(entries, **options) -> list:
@@ -244,7 +244,7 @@ def test_the_tracer_records_a_function_tool_by_its_def_name(tmp_path):
     assert [(r["name"], r["arguments"]) for r in records] == [("look_up_order", {"order_id": "A-1"})]
 
 
-# --- Task 3: the LangGraph command that can't run takes the graph route ---------------------
+# --- The LangGraph command that can't run takes the graph route -----------------------------
 
 def graph_route(manifest, output) -> bool:
     agent = _agent_of(manifest)
@@ -407,7 +407,7 @@ def test_each_condition_failing_alone_keeps_todays_route(tmp_path, make, change)
 
 
 def test_the_h2_probe_two_graphs_with_the_cli_installed_still_bundles(tmp_path):
-    """Round 1, H2: a two-graph app with langgraph-cli installed bundles today, and must still."""
+    """A two-graph app with langgraph-cli installed bundles today, and must still."""
     source = deep_source(
         tmp_path,
         requirements=DEEP_REQUIREMENTS + "langgraph-cli\n",
@@ -464,8 +464,8 @@ def test_the_other_12_nov_readings_take_no_graph_route(tmp_path):
     assert _sealed(output)["runtime"]["interface"]["path"] == "/run_sse"
 
 
-def test_h3_the_name_kept_is_the_one_the_tracer_needs(tmp_path):
-    """Round 1, H3, through the real tracer: a callback process with no subfolder starts at the
+def test_the_name_kept_is_the_one_the_tracer_needs(tmp_path):
+    """Through the real tracer: a callback process with no subfolder starts at the
     repository root, where the frame carries the root-relative name. That name records the call;
     the name a rewrite would have written (`agent`) records nothing."""
     folder = tmp_path / "examples" / "harness" / "support"
@@ -486,9 +486,9 @@ def test_h3_the_name_kept_is_the_one_the_tracer_needs(tmp_path):
     assert records == []
 
 
-# --- Round 2, H3: a Compose selection keeps its command and its HTTP interface ---------------
+# --- A Compose selection keeps its command and its HTTP interface ---------------------------
 
-def test_h3_a_compose_selection_bundles_as_it_does_on_the_old_kit(tmp_path, monkeypatch):
+def test_a_compose_selection_bundles_as_it_does_on_the_old_kit(tmp_path, monkeypatch):
     """The service's Dockerfile installs langgraph-cli, which requirements.txt can't show. The
     graph route's `callable` interface is refused on Compose (compose_native_http_chat_required)."""
     monkeypatch.setenv("ALK_COMPOSE_BROKER_SOCKET", "/nonexistent/broker.sock")
@@ -512,10 +512,10 @@ def test_h3_a_compose_selection_bundles_as_it_does_on_the_old_kit(tmp_path, monk
 
 
 @pytest.mark.parametrize("execution", ["native", "auto"])
-def test_h3_an_auto_selected_compose_file_bundles_as_on_the_old_kit(
+def test_an_auto_selected_compose_file_bundles_as_on_the_old_kit(
     tmp_path, monkeypatch, execution
 ):
-    """Round 3, H1: the reading names no compose file, but `auto` (which `native` becomes on the
+    """The reading names no compose file, but `auto` (which `native` becomes on the
     graph route) selects the folder's docker-compose.yml, and Compose refuses `callable`."""
     monkeypatch.setenv("ALK_COMPOSE_BROKER_SOCKET", "/nonexistent/broker.sock")
     compose = (
@@ -552,17 +552,17 @@ def _scoped(source: Path, **selection):
     ],
     ids=["compose", "auto-with-a-compose-file"],
 )
-def test_h3_a_compose_selection_keeps_the_command(tmp_path, selection):
+def test_a_compose_selection_keeps_the_command(tmp_path, selection):
     root, run_folder, runtime = _scoped(deep_source(tmp_path), **selection)
     assert not bundle_author_v2._langgraph_command_cannot_run(root, run_folder, runtime)
 
 
-def test_h3_the_same_reading_with_no_compose_still_takes_the_graph_route(tmp_path):
+def test_the_same_reading_with_no_compose_still_takes_the_graph_route(tmp_path):
     root, run_folder, runtime = _scoped(deep_source(tmp_path))
     assert bundle_author_v2._langgraph_command_cannot_run(root, run_folder, runtime)
 
 
-# --- Round 2, M1: a call is matched on the full callable, not its last name ----------------
+# --- A call is matched on the full callable, not its last name ------------------------------
 
 TWO_TOOLS = (
     "class SearchRooms:\n"
@@ -577,16 +577,16 @@ def _unreachable_binding(name, callable):
     return binding
 
 
-def test_m1_unreachable_bindings_carry_the_full_callable():
+def test_unreachable_bindings_carry_the_full_callable():
     assert _unreachable_binding("search_rooms", "SearchRooms._run")["qualname"] == "SearchRooms._run"
 
 
-def test_m1_an_import_binding_carries_no_qualname():
+def test_an_import_binding_carries_no_qualname():
     (binding,) = bound([one("import", callable="SearchRooms._run")])
     assert "qualname" not in binding
 
 
-def test_m1_two_methods_with_one_last_name_are_each_their_own_tool(tmp_path):
+def test_two_methods_with_one_last_name_are_each_their_own_tool(tmp_path):
     (tmp_path / "agent.py").write_text(TWO_TOOLS)
     bindings = [
         _unreachable_binding("search_rooms", "SearchRooms._run"),
@@ -603,7 +603,7 @@ def test_m1_two_methods_with_one_last_name_are_each_their_own_tool(tmp_path):
     ]
 
 
-def test_m1_a_function_and_a_same_named_method_give_one_record(tmp_path):
+def test_a_function_and_a_same_named_method_give_one_record(tmp_path):
     (tmp_path / "agent.py").write_text(
         "class Orders:\n"
         "    def look_up_order(self, order_id):\n        return {'id': order_id}\n"
@@ -618,8 +618,8 @@ def test_m1_a_function_and_a_same_named_method_give_one_record(tmp_path):
     assert [(r["name"], r["arguments"]) for r in records] == [("look_up_order", {"order_id": "A1"})]
 
 
-def test_m1_a_tool_defined_inside_a_function_is_matched_by_its_own_name(tmp_path):
-    """Round 3, M1: the frame's qualname is `build.<locals>.search`; the reading writes `search`."""
+def test_a_tool_defined_inside_a_function_is_matched_by_its_own_name(tmp_path):
+    """The frame's qualname is `build.<locals>.search`; the reading writes `search`."""
     (tmp_path / "agent.py").write_text(
         "def build():\n"
         "    async def search(q):\n        return 'hit ' + q\n"
@@ -646,7 +646,7 @@ def test_m1_a_tool_defined_inside_a_function_is_matched_by_its_own_name(tmp_path
     assert [(r["name"], r["output"]) for r in records] == [("find", "found y")]
 
 
-def test_m1_a_tool_defined_inside_async_main_is_matched(tmp_path):
+def test_a_tool_defined_inside_async_main_is_matched(tmp_path):
     (tmp_path / "agent.py").write_text(
         "import asyncio\n"
         "async def main():\n"
@@ -661,7 +661,7 @@ def test_m1_a_tool_defined_inside_async_main_is_matched(tmp_path):
     assert [(r["name"], r["output"]) for r in records] == [("search", "hit z")]
 
 
-def test_l4_an_inherited_method_is_matched_under_the_subclass_name(tmp_path):
+def test_an_inherited_method_is_matched_under_the_subclass_name(tmp_path):
     (tmp_path / "agent.py").write_text(
         "class Base:\n"
         "    def _run(self, city):\n        return 'rooms in ' + city\n"
@@ -675,7 +675,7 @@ def test_l4_an_inherited_method_is_matched_under_the_subclass_name(tmp_path):
     assert [(r["name"], r["output"]) for r in records] == [("search_rooms", "rooms in Oslo")]
 
 
-# --- Round 2, M5: an include or a uv group may install the CLI, so today's route is kept ------
+# --- An include or a uv group may install the CLI, so today's route is kept -----------------
 
 @pytest.mark.parametrize(
     "line",
@@ -683,7 +683,7 @@ def test_l4_an_inherited_method_is_matched_under_the_subclass_name(tmp_path):
      "--constraint pins.txt", "-rbase.txt",
      "-e ./lib", "--editable ./lib", "./lib", "lib @ file:./lib", "git+https://example.com/lib.git"],
 )
-def test_m5_a_requirements_include_or_constraint_keeps_todays_route(tmp_path, line):
+def test_a_requirements_include_or_constraint_keeps_todays_route(tmp_path, line):
     body = deep_reading()
     source = deep_source(
         tmp_path,
@@ -695,8 +695,8 @@ def test_m5_a_requirements_include_or_constraint_keeps_todays_route(tmp_path, li
     todays_route(manifest, output, body)
 
 
-def test_m5_a_dockerfile_keeps_todays_route(tmp_path):
-    """Round 3, M2: the app's own Dockerfile may install the CLI, which the kit can't see."""
+def test_a_dockerfile_keeps_todays_route(tmp_path):
+    """The app's own Dockerfile may install the CLI, which the kit can't see."""
     body = deep_reading()
     source = deep_source(
         tmp_path,
@@ -706,7 +706,7 @@ def test_m5_a_dockerfile_keeps_todays_route(tmp_path):
     todays_route(manifest, output, body)
 
 
-def test_m5_a_runtime_dockerfile_keeps_the_command(tmp_path):
+def test_a_runtime_dockerfile_keeps_the_command(tmp_path):
     root, run_folder, runtime = _scoped(deep_source(tmp_path), dockerfile=f"{DEEP}/Dockerfile.agent")
     assert not bundle_author_v2._langgraph_command_cannot_run(root, run_folder, runtime)
 
@@ -719,7 +719,7 @@ def test_m5_a_runtime_dockerfile_keeps_the_command(tmp_path):
     ],
     ids=["dependency-groups", "uv-default-groups"],
 )
-def test_m5_a_uv_group_keeps_todays_route(tmp_path, pyproject):
+def test_a_uv_group_keeps_todays_route(tmp_path, pyproject):
     body = deep_reading()
     source = deep_source(
         tmp_path,
@@ -785,7 +785,7 @@ def test_a_requirements_txt_beside_a_pyproject_without_the_cli_still_takes_the_g
     assert bundle_author_v2._langgraph_command_cannot_run(root, run_folder, runtime)
 
 
-def test_l1_a_process_with_the_livekit_tool_trace_hook_binds_no_unreachable_entry():
+def test_a_process_with_the_livekit_tool_trace_hook_binds_no_unreachable_entry():
     """The hook already records the call; a second binding would grade it twice."""
     from types import SimpleNamespace as Process
 
@@ -800,8 +800,8 @@ def test_l1_a_process_with_the_livekit_tool_trace_hook_binds_no_unreachable_entr
     assert bound([one()], watch_unreachable=not bundle_author_v2._observed_by_frameworks([hooked])) == []
 
 
-def test_l1_a_declared_livekit_agent_name_alone_is_not_the_hook():
-    """Round 3, L1: a non-LiveKit reading may declare the name; only the worker knob marks the hook."""
+def test_a_declared_livekit_agent_name_alone_is_not_the_hook():
+    """A non-LiveKit reading may declare the name; only the worker knob marks the hook."""
     from types import SimpleNamespace as Process
 
     named = Process(environment={"LIVEKIT_AGENT_NAME": "x"})

@@ -102,9 +102,9 @@ def test_a_nested_module_keeps_its_own_dots(tmp_path):
     assert saved == [("unreachable", "pkg.inner")]
 
 
-def test_h3_no_subfolder_leaves_a_root_relative_module(tmp_path):
+def test_no_subfolder_leaves_a_root_relative_module(tmp_path):
     """A callback process with no subfolder starts at the repository root: the root-relative
-    name is the one its frames carry (round 1, H3)."""
+    name is the one its frames carry."""
     repo = _repo(tmp_path, {f"{SUBFOLDER}/agent.py": DEF})
     module = f"{SUBFOLDER.replace('/', '.')}.agent"
     for mode in ("import", "unreachable"):
@@ -112,7 +112,7 @@ def test_h3_no_subfolder_leaves_a_root_relative_module(tmp_path):
         assert saved == [(mode, module)]
 
 
-def test_h3_a_workdir_alone_is_not_a_subfolder(tmp_path):
+def test_a_workdir_alone_is_not_a_subfolder(tmp_path):
     repo = _repo(tmp_path, {f"{SUBFOLDER}/agent.py": DEF})
     module = f"{SUBFOLDER.replace('/', '.')}.agent"
     saved = _save(tmp_path, repo, _entries(module), None, workdir=SUBFOLDER)
@@ -120,9 +120,9 @@ def test_h3_a_workdir_alone_is_not_a_subfolder(tmp_path):
 
 
 @pytest.mark.parametrize("where", ["root", "above", "import root"])
-def test_h4_a_regular_package_keeps_the_package_qualified_name(tmp_path, where):
+def test_a_regular_package_keeps_the_package_qualified_name(tmp_path, where):
     """`bench/envs/retail/tools.py` does `from .data import ...`: it only imports as
-    `bench.envs.retail.tools` (round 1, H4)."""
+    `bench.envs.retail.tools`."""
     folder = "bench/envs/retail"
     files = {
         f"{folder}/tools.py": "from .data import ORDERS\n" + DEF,
@@ -135,7 +135,7 @@ def test_h4_a_regular_package_keeps_the_package_qualified_name(tmp_path, where):
     assert saved == [("import", "bench.envs.retail.tools")]
 
 
-def test_h4_a_folder_between_the_root_and_the_import_root_counts(tmp_path):
+def test_a_folder_between_the_root_and_the_import_root_counts(tmp_path):
     repo = _repo(
         tmp_path, {"a/b/c/agent.py": DEF, "a/b/__init__.py": ""}
     )
@@ -248,9 +248,9 @@ def _handler_imports(repo: Path, subfolder: str, module: str) -> str:
 
 @pytest.mark.parametrize("outer", [False, True])
 @pytest.mark.parametrize("mode", ["import", "construct"])
-def test_h2_a_workdir_deeper_than_the_subfolder_keeps_an_import_entry(tmp_path, mode, outer):
+def test_a_workdir_deeper_than_the_subfolder_keeps_an_import_entry(tmp_path, mode, outer):
     """The handler imports from the root and the subfolder, never the workdir, so the name
-    written from the root is the one that works (round 2, H2)."""
+    written from the root is the one that works."""
     folder, deep = "examples/x", "examples/x/app"
     files = {f"{deep}/tools.py": "where = 'inner'\n"}
     if outer:
@@ -262,7 +262,7 @@ def test_h2_a_workdir_deeper_than_the_subfolder_keeps_an_import_entry(tmp_path, 
     assert _handler_imports(repo, folder, saved[0][1]) == "inner"
 
 
-def test_h2_a_workdir_that_is_the_subfolder_still_rewrites_an_import_entry(tmp_path):
+def test_a_workdir_that_is_the_subfolder_still_rewrites_an_import_entry(tmp_path):
     repo = _repo(tmp_path, {f"{SUBFOLDER}/agent.py": DEF})
     saved = _save(
         tmp_path, repo, _entries(f"{SUBFOLDER.replace('/', '.')}.agent", "import"), SUBFOLDER,
@@ -273,7 +273,7 @@ def test_h2_a_workdir_that_is_the_subfolder_still_rewrites_an_import_entry(tmp_p
 
 @pytest.mark.parametrize("mode", ["unreachable", "import", "construct"])
 @pytest.mark.parametrize("module", [".", "/", "..", "agent\x00", "a..b", "agent-1", "a/b"])
-def test_m3_a_module_that_is_not_a_dotted_identifier_is_refused(tmp_path, mode, module):
+def test_a_module_that_is_not_a_dotted_identifier_is_refused(tmp_path, mode, module):
     repo = _repo(tmp_path, {f"{SUBFOLDER}/agent.py": DEF})
     result = accept_contract(
         _contract(_entries(module, mode)),
@@ -288,14 +288,14 @@ def test_m3_a_module_that_is_not_a_dotted_identifier_is_refused(tmp_path, mode, 
 
 
 @pytest.mark.parametrize("mode", ["import", "unreachable"])
-def test_m4_a_standard_library_name_is_not_rewritten(tmp_path, mode):
+def test_a_standard_library_name_is_not_rewritten(tmp_path, mode):
     """`calendar` would import the standard library's, not the tool file."""
     repo = _repo(tmp_path, {"examples/hotel/calendar.py": "def book():\n    return 1\n"})
     saved = _save(tmp_path, repo, _entries("examples.hotel.calendar", mode), "examples/hotel")
     assert saved == [(mode, "examples.hotel.calendar")]
 
 
-def test_l5_many_entries_naming_one_module_save_within_the_lookup_budget(tmp_path):
+def test_many_entries_naming_one_module_save_within_the_lookup_budget(tmp_path):
     folder = "/".join(f"d{i}" for i in range(12))
     repo = _repo(tmp_path, {f"{folder}/agent.py": DEF})
     module = f"{folder.replace('/', '.')}.agent"

@@ -129,8 +129,8 @@ def cases() -> dict[str, dict]:
                 "tool_entrypoints": entries("agent", "unreachable", ("search_books",)),
             },
         },
-        # Round 1's probes, each a contract that works today.
-        "h3_no_subfolder_root_relative_module": {
+        # Probes of contracts that work today.
+        "no_subfolder_root_relative_module": {
             "files": {
                 "examples/harness/support/agent.py": DEFS + _callback(),
                 "requirements.txt": "agent-simulate\n",
@@ -138,7 +138,7 @@ def cases() -> dict[str, dict]:
             "subfolder": None,
             "payload": payload(entries("examples.harness.support.agent")),
         },
-        "h3_no_subfolder_unreachable_root_relative_module": {
+        "no_subfolder_unreachable_root_relative_module": {
             "files": {
                 "examples/harness/support/agent.py": DEFS + _callback(),
                 "requirements.txt": "agent-simulate\n",
@@ -146,7 +146,7 @@ def cases() -> dict[str, dict]:
             "subfolder": None,
             "payload": payload(entries("examples.harness.support.agent", "unreachable")),
         },
-        "h4_agent_folder_inside_a_regular_package": {
+        "agent_folder_inside_a_regular_package": {
             "files": {
                 "bench/__init__.py": "",
                 "bench/envs/__init__.py": "",
@@ -158,7 +158,7 @@ def cases() -> dict[str, dict]:
             "subfolder": "bench/envs/retail",
             "payload": payload(entries("bench.envs.retail.tools")),
         },
-        "h4_unreachable_inside_a_regular_package": {
+        "unreachable_inside_a_regular_package": {
             "files": {
                 "bench/__init__.py": "",
                 "bench/envs/retail/tools.py": DEFS + _callback(),
@@ -167,7 +167,7 @@ def cases() -> dict[str, dict]:
             "subfolder": "bench/envs/retail",
             "payload": payload(entries("bench.envs.retail.tools", "unreachable")),
         },
-        "h2_two_graphs_with_the_cli_installed": langgraph_case(
+        "two_graphs_with_the_cli_installed": langgraph_case(
             command=["langgraph", "dev"],
             requirements="langgraph\nlanggraph-cli[inmem]\n",
             config={"graphs": {"a": "./agent.py:graph", "b": "./agent.py:graph"}},
@@ -224,8 +224,8 @@ CHANGED = ("agents_sdk_12_nov_reading", "deep_agents_12_nov_reading")
 # An `unreachable` entry that names its module and callable saves as it did, and is now traced.
 TRACED = (
     "saved_unreachable_entry_with_module_and_callable",
-    "h3_no_subfolder_unreachable_root_relative_module",
-    "h4_unreachable_inside_a_regular_package",
+    "no_subfolder_unreachable_root_relative_module",
+    "unreachable_inside_a_regular_package",
     "workdir_deeper_than_the_subfolder",
 )
 
@@ -354,7 +354,7 @@ def test_the_deep_agents_reading_changes_as_designed(tmp_path):
 def test_an_unreachable_entry_that_names_its_module_saves_as_it_did_and_is_now_traced(tmp_path, name):
     """Condition 2: the platform will see these contracts grade differently, since the calls are
     now recorded. The saved contract, the run command and the handlers don't move; the module is
-    bound as saved (so H3's and H4's root-relative names stay as the process carries them)."""
+    bound as saved (so a root-relative name stays as the process carries it)."""
     before, after = _golden()[name], run_case(cases()[name], tmp_path)
     assert after["saved_sha"] == before["saved_sha"]
     assert after["sealed_sha"] == before["sealed_sha"]
