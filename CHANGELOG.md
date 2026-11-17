@@ -33,7 +33,7 @@ Post-rc.1 increments on the release branch. Each one adds gates on top of the
 - Actors act in the world only through its own actions: the tool proxy lets an actor take only its
   `permitted_actions`, and logs every attempt with whose it was and what came of it (committed, refused,
   faulted, duplicate). The actors' files are locked to the harness; isolation from the agent in production
-  comes with T44, and until then an agent running as the same user can still write the voice actions file
+  comes with process isolation, in a later release, and until then an agent running as the same user can still write the voice actions file
   under an actor's id. An actor's actions are sealed with the call's transcript under `world_actors`, never in the
   agent's tool trace. A bundle with actors also seals `actor_rules.json`, the rules its release checks actors
   by; a world without actors is seeded and sealed exactly as before.
