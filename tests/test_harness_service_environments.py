@@ -658,12 +658,21 @@ def _net(spec, name="job"):
     ("config", "expected"),
     [
         # network_mode
-        (_svc(network_mode="container:other"), "agent: network_mode outside the project"),
+        (
+            _svc(network_mode="container:other"),
+            "agent: network_mode outside the project",
+        ),
         (_svc(network_mode="container:db"), "agent: network_mode outside the project"),
-        (_svc(network_mode="platform_default"), "agent: network_mode outside the project"),
+        (
+            _svc(network_mode="platform_default"),
+            "agent: network_mode outside the project",
+        ),
         (_svc(network_mode="bridge"), "agent: network_mode outside the project"),
         (_svc(network_mode="host"), "agent: network_mode=host"),
-        (_svc(network_mode="service:missing"), "agent: network_mode outside the project"),
+        (
+            _svc(network_mode="service:missing"),
+            "agent: network_mode outside the project",
+        ),
         (_svc(network_mode="NONE"), "agent: network_mode outside the project"),
         (_svc(network_mode="NoNe"), "agent: network_mode outside the project"),
         # pid and ipc
@@ -675,19 +684,37 @@ def _net(spec, name="job"):
         (_svc(ipc="container:db"), "agent: ipc outside the project"),
         (_svc(ipc="service:missing"), "agent: ipc outside the project"),
         # volumes_from
-        (_svc(volumes_from=["container:db"]), "agent: volumes_from outside the project"),
-        (_svc(volumes_from=["container:db:ro"]), "agent: volumes_from outside the project"),
+        (
+            _svc(volumes_from=["container:db"]),
+            "agent: volumes_from outside the project",
+        ),
+        (
+            _svc(volumes_from=["container:db:ro"]),
+            "agent: volumes_from outside the project",
+        ),
         (_svc(volumes_from=["missing"]), "agent: volumes_from outside the project"),
-        (_svc(volumes_from=["db", "missing:ro"]), "agent: volumes_from outside the project"),
+        (
+            _svc(volumes_from=["db", "missing:ro"]),
+            "agent: volumes_from outside the project",
+        ),
         (_svc(volumes_from=["service:db"]), "agent: volumes_from outside the project"),
         # build
         (_svc(build={"context": ".", "network": "host"}), "agent: build.network"),
-        (_svc(build={"context": ".", "network": "platform_default"}), "agent: build.network"),
+        (
+            _svc(build={"context": ".", "network": "platform_default"}),
+            "agent: build.network",
+        ),
         (_svc(build={"context": ".", "privileged": True}), "agent: build.privileged"),
-        (_svc(build={"context": ".", "entitlements": ["network.host"]}), "agent: build.entitlements"),
+        (
+            _svc(build={"context": ".", "entitlements": ["network.host"]}),
+            "agent: build.entitlements",
+        ),
         # top-level networks
         (_net({"name": "shared", "external": True}), "network back: external"),
-        (_net({"name": "otherproject_back"}), "network back: named outside the project"),
+        (
+            _net({"name": "otherproject_back"}),
+            "network back: named outside the project",
+        ),
         (_net({"name": "job_default"}), "network back: named outside the project"),
         (_net({"name": "job_back", "driver": "macvlan"}), "network back: driver"),
         (_net({"name": "job_back", "driver": "host"}), "network back: driver"),

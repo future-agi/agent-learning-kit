@@ -462,7 +462,9 @@ def test_provision_refuses_forbidden_compose_before_build_or_up(
 
     monkeypatch.setattr(provisioning, "_run", run)
 
-    with pytest.raises(provisioning.ProvisionError, match="network_mode outside the project"):
+    with pytest.raises(
+        provisioning.ProvisionError, match="network_mode outside the project"
+    ):
         provisioning.provision(source, session, _contract())
 
     assert any("config" in arguments for arguments in calls)
@@ -798,7 +800,9 @@ def test_generated_worker_translates_loopback_livekit_without_persisting_it(
     monkeypatch.setattr(
         provisioning,
         "_config",
-        lambda _environment, process_overrides=None: {"services": {"agent-runtime": {"environment": {}}}},
+        lambda _environment, process_overrides=None: {
+            "services": {"agent-runtime": {"environment": {}}}
+        },
     )
 
     def run(_environment, *arguments, **kwargs):
@@ -842,9 +846,7 @@ def test_runtime_does_not_revalidate_container_target_for_mounted_google_credent
         lambda _environment, process_overrides=None: {
             "services": {
                 "agent-runtime": {
-                    "environment": {
-                        "GOOGLE_APPLICATION_CREDENTIALS": container_target
-                    },
+                    "environment": {"GOOGLE_APPLICATION_CREDENTIALS": container_target},
                     "volumes": [
                         {"source": str(credential), "target": container_target}
                     ],
@@ -885,11 +887,7 @@ def test_hosted_runtime_rejects_raw_google_host_path(tmp_path, monkeypatch) -> N
     with pytest.raises(provisioning.ProvisionError, match="credential-file control"):
         provisioning._runtime_credential_mounts(
             {"GOOGLE_APPLICATION_CREDENTIALS": "/etc/vertex/creds.json"},
-            {
-                "volumes": [
-                    {"source": "/dev/null", "target": "/etc/vertex/creds.json"}
-                ]
-            },
+            {"volumes": [{"source": "/dev/null", "target": "/etc/vertex/creds.json"}]},
         )
 
 
@@ -991,7 +989,9 @@ def _network_mode_depends_on_injected_harness_mode(tmp_path: Path, monkeypatch):
             service: dict[str, object] = {"environment": {}}
             if overrides.get("HARNESS_MODE"):
                 service["network_mode"] = "container:x"
-            return json.dumps({"name": "runtime-validation", "services": {"agent-runtime": service}})
+            return json.dumps(
+                {"name": "runtime-validation", "services": {"agent-runtime": service}}
+            )
         return ""
 
     monkeypatch.setattr(provisioning, "_run", run)
@@ -1030,7 +1030,9 @@ def test_reset_validates_before_it_starts_services(tmp_path: Path, monkeypatch) 
     monkeypatch.setattr(provisioning, "_run", run)
     monkeypatch.setattr(provisioning, "_detach_runner_network", lambda *_a, **_k: None)
 
-    with pytest.raises(provisioning.ProvisionError, match="network_mode outside the project"):
+    with pytest.raises(
+        provisioning.ProvisionError, match="network_mode outside the project"
+    ):
         reset(tmp_path)
 
     assert any("down" in arguments for arguments in calls)
@@ -1050,12 +1052,16 @@ def test_start_runtime_refuses_a_file_that_only_reaches_out_with_injected_values
 
     # ... and start_runtime renders it again with them, finds container:x, and never runs it.
     calls.clear()
-    with pytest.raises(provisioning.ProvisionError, match="network_mode outside the project"):
+    with pytest.raises(
+        provisioning.ProvisionError, match="network_mode outside the project"
+    ):
         provisioning.start_runtime(tmp_path)
     assert not any("run" in arguments for arguments in calls)
 
 
-def test_start_runtime_runs_the_config_it_validated(tmp_path: Path, monkeypatch) -> None:
+def test_start_runtime_runs_the_config_it_validated(
+    tmp_path: Path, monkeypatch
+) -> None:
     environment = provisioning.ProvisionedEnvironment(
         source=str(tmp_path),
         compose_file=str(tmp_path / "compose.json"),
@@ -1073,7 +1079,10 @@ def test_start_runtime_runs_the_config_it_validated(tmp_path: Path, monkeypatch)
             "running" if arguments and arguments[0] == "inspect" else ""
         ),
     )
-    clean = {"name": "runtime-validation", "services": {"agent-runtime": {"environment": {}}}}
+    clean = {
+        "name": "runtime-validation",
+        "services": {"agent-runtime": {"environment": {}}},
+    }
     swapped = {
         "name": "runtime-validation",
         "services": {"agent-runtime": {"network_mode": "container:x"}},
@@ -1164,9 +1173,13 @@ def test_start_runtime_runs_when_the_file_is_clean_with_injected_values(
     def run(environment, *arguments, **kwargs):
         if "config" in arguments:
             return json.dumps(
-                {"name": "runtime-validation", "services": {"agent-runtime": {"environment": {}}}}
+                {
+                    "name": "runtime-validation",
+                    "services": {"agent-runtime": {"environment": {}}},
+                }
             )
         return original(environment, *arguments, **kwargs)
+
     monkeypatch.setattr(provisioning, "_run", run)
 
     provisioning.start_runtime(tmp_path)
@@ -1174,7 +1187,9 @@ def test_start_runtime_runs_when_the_file_is_clean_with_injected_values(
     assert any("run" in arguments for arguments in calls)
 
 
-def test_compose_process_overrides_uploaded_runtime_endpoint(tmp_path: Path, monkeypatch) -> None:
+def test_compose_process_overrides_uploaded_runtime_endpoint(
+    tmp_path: Path, monkeypatch
+) -> None:
     environment = provisioning.ProvisionedEnvironment(
         source=str(tmp_path),
         compose_file=str(tmp_path / "compose.json"),
@@ -1341,13 +1356,18 @@ def test_real_unpackaged_node_agent_builds_and_starts(
         stop_runtime(session)
         stop(session)
 
+
 @pytest.mark.parametrize("version", ["3.11.9", "not-a-version", "<3.12"])
-def test_generated_python_rejects_incompatible_version(tmp_path: Path, version: str) -> None:
+def test_generated_python_rejects_incompatible_version(
+    tmp_path: Path, version: str
+) -> None:
     (tmp_path / "pyproject.toml").write_text(
         "[project]\nname='agent'\nversion='1'\nrequires-python='>=3.12'\n"
     )
     (tmp_path / "agent.py").write_text("print('agent')\n")
-    with pytest.raises(GeneratedRuntimeError, match="generated_runtime_python_version_unsupported"):
+    with pytest.raises(
+        GeneratedRuntimeError, match="generated_runtime_python_version_unsupported"
+    ):
         detect_generated_runtime(tmp_path, Runtime(language="python", version=version))
 
 
@@ -1356,7 +1376,9 @@ def test_generated_python_range_intersects_project_requirement(tmp_path: Path) -
         "[project]\nname='agent'\nversion='1'\nrequires-python='>=3.13'\n"
     )
     (tmp_path / "agent.py").write_text("print('agent')\n")
-    plan = detect_generated_runtime(tmp_path, Runtime(language="python", version=">=3.12"))
+    plan = detect_generated_runtime(
+        tmp_path, Runtime(language="python", version=">=3.12")
+    )
     assert "FROM python:3.13-slim" in plan.dockerfile
 
 
@@ -1365,7 +1387,9 @@ def test_generated_python_minor_image_allows_source_patch_floor(tmp_path: Path) 
         "[project]\nname='agent'\nversion='1'\nrequires-python='>=3.12.1,<3.13'\n"
     )
     (tmp_path / "agent.py").write_text("print('agent')\n")
-    plan = detect_generated_runtime(tmp_path, Runtime(language="python", version="3.12"))
+    plan = detect_generated_runtime(
+        tmp_path, Runtime(language="python", version="3.12")
+    )
     assert "FROM python:3.12-slim" in plan.dockerfile
 
 

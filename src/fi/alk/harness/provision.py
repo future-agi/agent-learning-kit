@@ -540,7 +540,9 @@ def _validate_compose_security(config: dict[str, Any]) -> None:
         mode = str(service.get("network_mode") or "")
         # Docker reads any other string, in any case, as the name of a network to join.
         if mode and mode != "none":
-            if not (mode.startswith("service:") and mode[len("service:") :] in services):
+            if not (
+                mode.startswith("service:") and mode[len("service:") :] in services
+            ):
                 violations.append(
                     f"{name}: network_mode=host"
                     if mode.lower() == "host"
