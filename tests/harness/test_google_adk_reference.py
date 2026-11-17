@@ -15,6 +15,16 @@ import sys
 import textwrap
 from pathlib import Path
 
+# The ADK modules the example and these tests use are imported once, before any fixture
+# snapshots `sys.modules`. Otherwise a load's teardown drops only the part of ADK it imported,
+# and the next load's `Agent` comes from the dropped part while `Runner` is imported anew.
+import google.adk.agents  # noqa: F401
+import google.adk.cli.utils.agent_loader  # noqa: F401
+import google.adk.models.base_llm  # noqa: F401
+import google.adk.models.lite_llm  # noqa: F401
+import google.adk.models.llm_response  # noqa: F401
+import google.adk.runners  # noqa: F401
+import google.adk.sessions  # noqa: F401
 import pytest
 from reference_agents import (
     DETECTION_CASES,
