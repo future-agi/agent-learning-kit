@@ -164,6 +164,9 @@ _PACKAGE_JSONS_READ = 1024 * 1024
 # The folders a package's build writes to and doesn't commit: an entry there is looked for under
 # src/, where it is built from.
 _BUILD_FOLDERS = frozenset({"dist", "build", "out"})
+# What a build writes: an entry with one of these suffixes is looked for with every script
+# suffix of the same stem, so `.mjs` and `.cjs` are found from `.ts` as `.js` is.
+_BUILT_SUFFIXES = frozenset({".js", ".mjs", ".cjs", ".jsx"})
 _SCRIPT_IMPORT = re.compile(
     r"""(?:\bfrom\s*|\bimport\s*(?:\(\s*)?|\brequire\s*\(\s*)["']([^"'\n]+)["']"""
 )
@@ -1622,18 +1625,32 @@ def imported_by_agent(
         return hit
 
     def built_from_source(package: Path, target: Path) -> Path | None:
-        """An entry in a build folder that isn't committed (`dist/index.js`), found where it is
-        built from: the same path under `src/` with the script suffixes, then `src/index.*`.
-        Looked up through the walk's charged lookups like any other candidate."""
+        """An entry in a build folder that isn't committed (`dist/worker.js`), found where it is
+        built from: its own path under `src/` (or the package, for `dist/src/...`), with each
+        source suffix the build compiles to that name. A folder entry (`dist`, `dist/sub`) is
+        entered through its index there. Never another module: `src/index.*` stands in only
+        for an entry that is itself an index. Looked up through the walk's charged lookups like
+        any other candidate."""
         try:
             inside = target.relative_to(package).parts
         except ValueError:
             return None
-        if len(inside) < 2 or inside[0] not in _BUILD_FOLDERS:
+        if not inside or inside[0] not in _BUILD_FOLDERS:
             return None
+        rest = inside[1:]
         source = package / "src"
-        built = source.joinpath(*inside[1:])
-        return found_at((*script_candidates(built), *script_index(built), *script_index(source)))
+        if not rest:
+            return found_at(script_index(source))
+        # `tsc` with the package as its root writes src/worker.ts to dist/src/worker.js.
+        bases = (source.joinpath(*rest), *((package.joinpath(*rest),) if rest[0] == "src" else ()))
+        candidates: list[Path] = []
+        for built in bases:
+            if built.suffix in _BUILT_SUFFIXES:
+                stem = built.with_suffix("")
+                candidates += [stem.with_suffix(suffix) for suffix in _SCRIPT_SUFFIXES]
+            else:
+                candidates += [*script_candidates(built), *script_index(built)]
+        return found_at(dict.fromkeys(candidates))
 
     def script_module(path: Path, name: str) -> Path | None:
         if len(name) > _LONGEST_NAME:
