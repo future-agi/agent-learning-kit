@@ -33,3 +33,30 @@ def test_a_callback_message_sends_only_its_text(adapter):
         "content": [THINKING, {"type": "text", "text": "Done."}],
     }
     assert adapter._json_body({"message": message}) == {"content": "Done."}
+
+
+class _Model:
+    """A pydantic-like return value whose model_dump is a graph state."""
+
+    def __init__(self, state):
+        self._state = state
+
+    def model_dump(self, **_):
+        return self._state
+
+
+def test_a_model_whose_dump_is_a_graph_state_gets_the_graph_state_answer(adapter):
+    state = {
+        "messages": [
+            {"role": "user", "content": "q"},
+            {"type": "ai", "content": [THINKING, {"type": "text", "text": "Done."}]},
+        ],
+        "status": "ok",
+    }
+    body = adapter._json_body(_Model(state))
+    assert body == {"status": "ok", "content": "Done."}
+
+
+def test_a_model_whose_dump_has_content_is_sent_as_it_is(adapter):
+    body = adapter._json_body(_Model({"content": "Hi", "state": {"a": 1}}))
+    assert body == {"content": "Hi", "state": {"a": 1}}

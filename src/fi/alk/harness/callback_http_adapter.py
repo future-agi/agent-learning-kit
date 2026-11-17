@@ -162,8 +162,11 @@ def _json_fields(value: dict[str, Any]) -> dict[str, Any]:
 
 def _json_body(value: Any) -> dict[str, Any]:
     if hasattr(value, "model_dump"):
-        body = value.model_dump(mode="json", exclude_none=True)
-    elif isinstance(value, dict):
+        # A model's dump is read like the dict it gives: a graph state is a graph state.
+        value = value.model_dump(mode="json", exclude_none=True)
+        if not isinstance(value, dict):
+            raise TypeError("callback response must serialize to a JSON object")
+    if isinstance(value, dict):
         if "content" in value or "messages" not in value:
             body = dict(value)
         else:
@@ -173,8 +176,6 @@ def _json_body(value: Any) -> dict[str, Any]:
             body = {**_json_fields(value), "content": _text_of(last)}
     else:
         body = {"content": _text_of(value)}
-    if not isinstance(body, dict):
-        raise TypeError("callback response must serialize to a JSON object")
     if "content" in body and not isinstance(body["content"], str):
         body["content"] = _text_of(body["content"])
     if "content" not in body and "message" in body:
