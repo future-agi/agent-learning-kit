@@ -1616,6 +1616,11 @@ class LocalSandbox:
                         )
                     }
                 )
+            # A task that ended inside the wait cleared its secrets itself, unless it was cancelled
+            # before its own try (queued for a slot). Clear them only while it is still the job's
+            # task: a rerun that took the job in between keeps its own.
+            if self._tasks.get(job_id) in (None, task):
+                self._forget_job_secrets(job_id)
         else:
             # Not started, or already ended: nothing else will bring its environment down.
             output = self.artifacts_root / response.job.run_id

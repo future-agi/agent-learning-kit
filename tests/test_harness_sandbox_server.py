@@ -2982,6 +2982,32 @@ def test_a_rerun_that_lands_as_the_cleanup_ends_keeps_its_secrets(
     assert sandbox._ephemeral_secrets.get(job_id) == {"NEW_RUN_KEY": "kept"}
 
 
+def test_a_job_cancelled_while_queued_for_a_slot_loses_its_secrets(
+    tmp_path, monkeypatch, fake_worker, stops
+):
+    # A job queued for the one slot is cancelled before its task reaches its own cleanup.
+    source = _local_source(tmp_path, monkeypatch)
+    sandbox = LocalSandbox(tmp_path / "state", max_concurrency=1)
+    fake_worker.sleeping()
+
+    async def scenario():
+        running = sandbox.submit(LocalSandboxRequest(source_path=str(source))).job.job_id
+        await _until(lambda: _running(fake_worker))
+        queued = sandbox.submit(
+            LocalSandboxRequest(
+                source_path=str(source), environment_values={"MY_AGENT_KEY": "queued-canary"}
+            )
+        ).job.job_id
+        assert queued in sandbox._ephemeral_secrets
+        await sandbox.cancel(queued)
+        await sandbox.cancel(running)
+        return queued
+
+    queued = asyncio.run(scenario())
+
+    assert queued not in sandbox._ephemeral_secrets
+
+
 def test_the_server_stops_waiting_for_a_hung_cleanup(tmp_path, monkeypatch, fake_worker):
     import threading
     import time
