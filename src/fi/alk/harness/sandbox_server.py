@@ -290,7 +290,11 @@ class LocalSandbox:
         name = str(environment_name).strip()
         if not _ENVIRONMENT_NAME.fullmatch(name):
             raise HTTPException(status_code=400, detail="environment_name is invalid")
-        if name in _RUNNER_RESERVED_ENVIRONMENT or name.startswith("ALK_"):
+        if (
+            name in _RUNNER_RESERVED_ENVIRONMENT
+            or name.startswith("ALK_")
+            or client_name_reserved(name)
+        ):
             raise HTTPException(status_code=400, detail="environment_name is reserved")
         self._purge_stale_secret_files()
         identifier = str(uuid.uuid4())
@@ -1055,9 +1059,15 @@ class LocalSandbox:
         )
 
     def _rerun_target_aliases(self, job: HarnessJob) -> frozenset[str]:
-        """The aliases this rerun's own refs carried; the saved job's if none are held."""
+        """The aliases this rerun's own refs carried.
+
+        If none are held, fails closed like ``target_provider_aliases``: every name the rerun
+        holds is the agent's, so nothing is promoted to the controller.
+        """
         held = self._ephemeral_target_aliases.get(job.job_id)
-        return held if held is not None else _job_target_aliases(job)
+        if held is not None:
+            return held
+        return frozenset(self._ephemeral_secrets.get(job.job_id, {}))
 
     def _resolve_job_secrets(self, job: HarnessJob) -> dict[str, str]:
         """Resolve a job's refs; vault refs only from this job's own map."""
@@ -1613,10 +1623,13 @@ def _validate_controller_names(
             raise ValueError(f"connector_config_name_reserved: {name}")
     _validate_secret_alias_shapes(references)
     for alias, reference in references.items():
-        # An upload alias becomes a runtime value; every other alias is a controller variable.
+        # An upload alias becomes a runtime value, never a controller variable, but its name
+        # reaches Compose with a path to the customer's bytes, so a client name is refused.
         if reference.manager == "mounted" and reference.key.startswith(
             _SANDBOX_FILE_PREFIX
         ):
+            if client_name_reserved(alias):
+                raise ValueError(f"secret_alias_reserved: {alias}")
             continue
         if _target_alias(reference):
             # The customer agent's own credential (ANTHROPIC_API_KEY, GOOGLE_API_KEY): it reaches

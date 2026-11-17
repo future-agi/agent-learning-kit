@@ -2747,15 +2747,15 @@ def _compose_session(tmp_path, monkeypatch, services_environment, label):
     return session, docker_calls
 
 
-def _agent_runtime_command(worker_environment, tmp_path, monkeypatch):
+def _agent_runtime_command(worker_environment, tmp_path, monkeypatch, label="start"):
     """Start the agent's Compose runtime from a worker's environment, up to the docker client."""
     monkeypatch.setattr(os, "environ", dict(worker_environment))
-    session, docker_calls = _compose_session(tmp_path, monkeypatch, {}, "start")
+    session, docker_calls = _compose_session(tmp_path, monkeypatch, {}, label)
     provision.start_runtime(session, stable_seconds=0.25)
     return next(call for call in docker_calls if "run" in call[0] and "config" not in call[0])
 
 
-def _activate(worker_environment, tmp_path, monkeypatch, *, controller_lacks=()):
+def _activate(worker_environment, tmp_path, monkeypatch, *, controller_lacks=(), label="activate"):
     """provision.activate_voice_environment in a worker, over a Compose service naming all seven.
 
     The service environment is rendered with the runtime values under their own names, as Compose
@@ -2771,7 +2771,7 @@ def _activate(worker_environment, tmp_path, monkeypatch, *, controller_lacks=())
         for name in _PROVIDER_NAMES
         if f"ALK_RUNTIME_VALUE_{name}" in environment
     }
-    session, _ = _compose_session(tmp_path, monkeypatch, rendered, "activate")
+    session, _ = _compose_session(tmp_path, monkeypatch, rendered, label)
     provision.activate_voice_environment(session)
     return environment
 
@@ -2845,9 +2845,11 @@ def test_the_customers_own_provider_key_reaches_the_agent_and_the_controller_onl
         assert worker[_ALIASES_ENV] == expected_aliases, where
         assert name in worker["ALK_RUNTIME_CONFIGURATION_NAMES"].split(","), where
 
-    # The authoring session runs in the worker's environment with provider_env() over it. Its
-    # canary VALUE sits only where _assert_holders allows: not under any other name (a name check
-    # would be wrong: config.py sets ANTHROPIC_AUTH_TOKEN and ANTHROPIC_BASE_URL itself).
+    # The authoring session inherits the worker's environment with provider_env() over it, so it
+    # holds the canary in the runtime namespace (ALK_RUNTIME_VALUE_<name>, the known limit) and,
+    # for exception 1a, under its own name; _assert_holders pins exactly that set, so the value
+    # is under no other name (a name check would be wrong: config.py sets ANTHROPIC_AUTH_TOKEN
+    # and ANTHROPIC_BASE_URL itself).
     authoring = {**submit_worker, **config.provider_env()}
     _assert_holders(authoring, name, canary, route, "authoring")
 
@@ -2877,6 +2879,25 @@ def test_the_customers_own_provider_key_reaches_the_agent_and_the_controller_onl
     assert canary not in " ".join(argv)
     # Neither agent start gave the controller more than it had.
     assert dict(os.environ) == submit_worker
+
+    # The same for the rerun's own workers: an alias sent only on the rerun reaches the agent
+    # (activation does not copy it into the controller, Compose hands it to the agent by name).
+    for index, rerun_worker in enumerate(rerun_workers):
+        activated = _activate(
+            rerun_worker,
+            tmp_path,
+            monkeypatch,
+            controller_lacks={name} if _reaches_controller(route, name) else (),
+            label=f"rerun-activate-{index}",
+        )
+        _assert_holders(activated, name, canary, route, f"rerun activation {index}")
+        argv, docker_environment = _agent_runtime_command(
+            rerun_worker, tmp_path, monkeypatch, label=f"rerun-start-{index}"
+        )
+        assert docker_environment[name] == canary, index
+        assert any(argv[i : i + 2] == ["--env", name] for i in range(len(argv) - 1)), index
+        assert canary not in " ".join(argv), index
+        assert dict(os.environ) == rerun_worker, index
 
 
 @pytest.mark.parametrize("name", ["OPENAI_API_KEY", "GEMINI_API_KEY"])
@@ -2946,6 +2967,26 @@ def test_a_rerun_rebuilds_the_target_aliases_from_its_own_refs(
     for worker in launched_workers:
         _assert_holders(worker, name, canary, route, "rerun")
         assert worker[_ALIASES_ENV] == (name if route == "target_provider_ref" else "")
+
+
+def test_a_rerun_with_no_held_alias_set_treats_every_held_name_as_the_agents(local_sandbox):
+    # Not reachable today (rerun() sets the entry first); if it ever were, the submit's set
+    # (empty here) must not stand in for the rerun's, or a name sent only on the rerun is promoted.
+    async def run():
+        job = await _terminal_job(local_sandbox, source_path=str(local_sandbox.test_source))
+        assert sandbox_server._job_target_aliases(job) == frozenset()
+        local_sandbox._ephemeral_secrets[job.job_id] = {
+            "OPENAI_API_KEY": "canary-a",
+            "GEMINI_API_KEY": "canary-b",
+        }
+        local_sandbox._ephemeral_target_aliases.pop(job.job_id, None)
+        return job
+
+    job = asyncio.run(run())
+
+    assert local_sandbox._rerun_target_aliases(job) == {"OPENAI_API_KEY", "GEMINI_API_KEY"}
+    local_sandbox._ephemeral_target_aliases[job.job_id] = frozenset({"ONLY_THIS"})
+    assert local_sandbox._rerun_target_aliases(job) == {"ONLY_THIS"}
 
 
 @pytest.mark.parametrize("request_type", [LocalSandboxRequest, SandboxPreflightRequest, SandboxRerunRequest])
@@ -3033,6 +3074,51 @@ def test_a_caller_sent_target_provider_alias_cannot_be_an_alk_runner_or_client_n
     extra = {} if request_type is SandboxRerunRequest else {"source_path": "/tmp/agent"}
     with pytest.raises(ValidationError, match=f"secret_alias_reserved: {alias}"):
         request_type(**extra, secret_refs={alias: _ref("environment", "MY_KEY")})
+
+
+_CLIENT_NAMES_AN_UPLOAD_CANNOT_TAKE = ["LD_PRELOAD", "DOCKER_HOST", "PATH", "https_proxy", "NODE_OPTIONS"]
+
+
+@pytest.mark.parametrize("name", _CLIENT_NAMES_AN_UPLOAD_CANNOT_TAKE)
+def test_an_upload_cannot_be_named_for_a_client_name(tmp_path, name):
+    sandbox = LocalSandbox(
+        tmp_path / "state",
+        upload_root=tmp_path / "uploads",
+        secret_file_root=tmp_path / "secret-files",
+    )
+
+    with pytest.raises(HTTPException) as refused:
+        asyncio.run(_upload_credential(sandbox, name))
+
+    assert refused.value.status_code == 400
+    assert refused.value.detail == "environment_name is reserved"
+    assert not any(path.is_file() for path in (tmp_path / "secret-files").rglob("*"))
+
+
+@pytest.mark.parametrize("request_type", [LocalSandboxRequest, SandboxPreflightRequest, SandboxRerunRequest])
+@pytest.mark.parametrize("alias", _CLIENT_NAMES_AN_UPLOAD_CANNOT_TAKE)
+def test_an_upload_ref_aliased_to_a_client_name_is_refused(request_type, alias):
+    extra = {} if request_type is SandboxRerunRequest else {"source_path": "/tmp/agent"}
+    with pytest.raises(ValidationError, match=f"secret_alias_reserved: {alias}"):
+        request_type(
+            **extra,
+            secret_refs={alias: _ref("mounted", "ALK_SECRET_FILE_0123456789ABCDEF_ABC123")},
+        )
+
+
+def test_an_ordinary_upload_alias_still_uploads_and_validates(tmp_path):
+    sandbox = LocalSandbox(
+        tmp_path / "state",
+        upload_root=tmp_path / "uploads",
+        secret_file_root=tmp_path / "secret-files",
+    )
+
+    key = asyncio.run(_upload_credential(sandbox, "GOOGLE_APPLICATION_CREDENTIALS", b"{\"a\": 1}"))
+
+    LocalSandboxRequest(
+        source_path="/tmp/agent",
+        secret_refs={"GOOGLE_APPLICATION_CREDENTIALS": _ref("mounted", key)},
+    )
 
 
 @pytest.mark.parametrize("request_type", [LocalSandboxRequest, SandboxPreflightRequest, SandboxRerunRequest])
