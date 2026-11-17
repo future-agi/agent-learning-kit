@@ -1743,14 +1743,9 @@ def accept_scenario(
                 allow_empty_solution=allow_empty_solution or workspace,
                 spoken=spoken,
             )
-            problems.extend(
-                contract_sequence_problems(scenario, hard_constraints or [])
-            )
-            problems.extend(_credentials_the_world_lacks(scenario, trial))
-            problems.extend(_identifiers_the_instruction_invents(scenario, trial))
-            problems.extend(
-                _fixed_sources_that_do_not_hold(scenario, trial, instructions)
-            )
+            # A native or workspace agent has no world to prepare here, so the checks that read
+            # one (credentials, invented identifiers, fixed sources) run only in the branch below.
+            problems.extend(contract_sequence_problems(scenario, hard_constraints or []))
             problems.extend(_steps_the_contract_refuses(scenario, world_root, attached))
             problems.extend(_overlay_asserts_nothing(scenario, catalogue))
             problems.extend(_shared_check_bound_to_one_task(scenario, catalogue, kept))
@@ -1776,7 +1771,7 @@ def accept_scenario(
                 problems.extend(_credentials_the_world_lacks(scenario, trial))
                 problems.extend(_identifiers_the_instruction_invents(scenario, trial))
                 problems.extend(_fixed_sources_that_do_not_hold(scenario, trial, instructions))
-                problems.extend(_steps_the_contract_refuses(scenario, world_root))
+                problems.extend(_steps_the_contract_refuses(scenario, world_root, attached))
                 problems.extend(_records_the_agent_cannot_see(scenario, world_root))
                 problems.extend(_overlay_asserts_nothing(scenario, catalogue))
                 problems.extend(_shared_check_bound_to_one_task(scenario, catalogue, kept))

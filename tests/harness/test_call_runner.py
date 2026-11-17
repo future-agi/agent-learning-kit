@@ -2988,7 +2988,7 @@ def test_a_hand_off_record_among_the_agent_s_calls_takes_no_action_id_and_moves_
         Call(name="Approvals worker", arguments={}, delegated_to="Approvals worker", handoff=True),
         Call(name="request_approval", arguments={}, ok=True, at=1.0),
     )
-    monkeypatch.setattr(runner, "_collect_calls", lambda _runtime: calls)
+    monkeypatch.setattr(runner, "_collect_calls", lambda _runtime, **_: calls)
     _run(
         runner,
         _FakeScenario("k1"),
