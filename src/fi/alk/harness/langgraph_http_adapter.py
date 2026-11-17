@@ -2,6 +2,20 @@
 
 The graph remains submitted source code. This adapter only translates the harness chat
 request into LangGraph's standard messages state; it never edits or substitutes the graph.
+
+Every request runs on one event loop, on a daemon thread that lives as long as the process,
+so a model client built when the graph's module is imported keeps a live loop across turns.
+The kit runs one agent process per world and sends its turns one at a time, so sharing the
+loop costs little, but:
+
+- a node that blocks the loop (synchronous I/O inside an ``async`` node) stalls any other
+  request in flight until it returns;
+- synchronous nodes share the loop's default thread pool, and ``threading.local`` state in
+  async node code is shared between requests (context variables stay per request);
+- a graph that runs past ``ALK_LANGGRAPH_TIMEOUT_SECONDS`` answers 504, and its work is
+  cancelled; a request answered so never starts its graph later;
+- ``close()`` is for tests: it ends the loop for good, because clients built at import may
+  be bound to it.
 """
 
 from __future__ import annotations
@@ -55,38 +69,97 @@ def _response_text(state: Any) -> str:
 
 
 _WAIT_MARGIN_SECONDS = 5.0
+_CLOSE_WAIT_SECONDS = 5.0
 _LOOP_LOCK = threading.Lock()
 _LOOP: asyncio.AbstractEventLoop | None = None
 _LOOP_THREAD: threading.Thread | None = None
-
-
-def _get_loop() -> asyncio.AbstractEventLoop:
-    # One loop for the process, so clients built at import stay usable across requests.
-    global _LOOP, _LOOP_THREAD
-    with _LOOP_LOCK:
-        if _LOOP is None or _LOOP_THREAD is None or not _LOOP_THREAD.is_alive():
-            loop = asyncio.new_event_loop()
-            thread = threading.Thread(target=loop.run_forever, name="alk-langgraph-loop", daemon=True)
-            thread.start()
-            _LOOP, _LOOP_THREAD = loop, thread
-        return _LOOP
-
-
-def close() -> None:
-    global _LOOP, _LOOP_THREAD
-    with _LOOP_LOCK:
-        loop, thread = _LOOP, _LOOP_THREAD
-        _LOOP = _LOOP_THREAD = None
-    if loop is None:
-        return
-    loop.call_soon_threadsafe(loop.stop)
-    if thread is not None:
-        thread.join()
-    loop.close()
+_CLOSED = False
 
 
 class RequestTimeout(Exception):
     """The graph did not answer within the configured time."""
+
+
+def _start_loop() -> None:
+    # Called with the lock held.
+    global _LOOP, _LOOP_THREAD
+    if _CLOSED:
+        raise RuntimeError("the LangGraph adapter is closed")
+    if _LOOP_THREAD is not None and not _LOOP_THREAD.is_alive():
+        # A node stopped the loop; clients built at import may be bound to it, so a new loop
+        # would not help them.
+        raise RuntimeError("the LangGraph adapter's event loop stopped; restart the agent")
+    if _LOOP is None:
+        loop = asyncio.new_event_loop()
+        thread = threading.Thread(target=loop.run_forever, name="alk-langgraph-loop", daemon=True)
+        thread.start()
+        _LOOP, _LOOP_THREAD = loop, thread
+
+
+async def _run_graph(messages: list[dict[str, str]], timeout: float, abandoned: threading.Event) -> Any:
+    if abandoned.is_set():
+        # Answered already, while the loop was busy: never start the graph.
+        raise RequestTimeout(f"graph did not answer within {timeout:g}s")
+    task = asyncio.current_task()
+    expired = False
+
+    def expire() -> None:
+        nonlocal expired
+        expired = True
+        task.cancel()
+
+    # The graph runs in this task, not a child one, so the deadline is told apart from the
+    # graph's own TimeoutError on every Python version, and SystemExit can't stop the loop.
+    deadline = asyncio.get_running_loop().call_later(timeout, expire)
+    try:
+        return await GRAPH.ainvoke({"messages": messages})
+    except asyncio.CancelledError:
+        if expired:
+            raise RequestTimeout(f"graph did not answer within {timeout:g}s") from None
+        raise
+    except (SystemExit, KeyboardInterrupt) as exc:
+        raise RuntimeError(f"the graph raised {type(exc).__name__}") from exc
+    finally:
+        deadline.cancel()
+
+
+def _submit(messages: list[dict[str, str]], timeout: float, abandoned: threading.Event):
+    with _LOOP_LOCK:
+        _start_loop()
+        return asyncio.run_coroutine_threadsafe(_run_graph(messages, timeout, abandoned), _LOOP)
+
+
+async def _shutdown() -> None:
+    current = asyncio.current_task()
+    tasks = [task for task in asyncio.all_tasks() if task is not current]
+    for task in tasks:
+        task.cancel()
+    await asyncio.gather(*tasks, return_exceptions=True)
+    loop = asyncio.get_running_loop()
+    await loop.shutdown_asyncgens()
+    await loop.shutdown_default_executor()
+
+
+def close() -> None:
+    """End the loop for good, cancelling any request in flight. For tests."""
+    global _LOOP, _LOOP_THREAD, _CLOSED
+    with _LOOP_LOCK:
+        loop, thread = _LOOP, _LOOP_THREAD
+        if thread is not None and thread is threading.current_thread():
+            raise RuntimeError("close() can't run on the adapter's own event loop")
+        _CLOSED = True
+        _LOOP = _LOOP_THREAD = None
+        if loop is None:
+            return
+        if thread is not None and thread.is_alive():
+            try:
+                asyncio.run_coroutine_threadsafe(_shutdown(), loop).result(_CLOSE_WAIT_SECONDS)
+            except Exception:  # noqa: BLE001 - a node that won't stop must not hold up close()
+                pass
+            loop.call_soon_threadsafe(loop.stop)
+            thread.join(_CLOSE_WAIT_SECONDS)
+        if not loop.is_running():
+            loop.close()
 
 
 def _invoke(payload: dict[str, Any]) -> dict[str, str]:
@@ -105,15 +178,20 @@ def _invoke(payload: dict[str, Any]) -> dict[str, str]:
     if not messages:
         raise ValueError("chat request contains no messages")
     timeout = float(os.environ.get("ALK_LANGGRAPH_TIMEOUT_SECONDS", "110"))
-    future = asyncio.run_coroutine_threadsafe(
-        asyncio.wait_for(GRAPH.ainvoke({"messages": messages}), timeout), _get_loop()
-    )
+    abandoned = threading.Event()
+    future = _submit(messages, timeout, abandoned)
     try:
-        # The extra margin lets the inner timeout fire first; this one covers a node that ignores cancellation.
+        # The margin lets the deadline fire first; this wait covers a node that ignores cancellation.
         state = future.result(timeout + _WAIT_MARGIN_SECONDS)
-    except (TimeoutError, concurrent.futures.TimeoutError) as exc:
-        future.cancel()
-        raise RequestTimeout(f"graph did not answer within {timeout:g}s") from exc
+    except concurrent.futures.CancelledError as exc:
+        raise RuntimeError("the LangGraph adapter closed while the graph ran") from exc
+    except concurrent.futures.TimeoutError:
+        if not future.done():
+            abandoned.set()
+            future.cancel()
+            raise RequestTimeout(f"graph did not answer within {timeout:g}s") from None
+        # The graph finished, or raised a TimeoutError of its own, just as the wait ended.
+        state = future.result()
     return {"content": _response_text(state)}
 
 

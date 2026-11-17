@@ -4,6 +4,7 @@ import importlib
 import json
 import sys
 import threading
+import time
 import urllib.error
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -256,7 +257,7 @@ def test_node_that_ignores_cancellation_still_answers_504(load, monkeypatch) -> 
     assert status == 504
 
 
-def test_close_stops_and_joins_the_loop_thread_and_a_later_turn_restarts_it(load) -> None:
+def test_close_stops_and_joins_the_loop_thread_for_good(load) -> None:
     adapter = load(
         "class Graph:\n"
         "    async def ainvoke(self, state):\n"
@@ -273,4 +274,194 @@ def test_close_stops_and_joins_the_loop_thread_and_a_later_turn_restarts_it(load
     assert not thread.is_alive()
     assert adapter._LOOP is None
     adapter.close()
+    # Clients built at import may be bound to the closed loop, so no new one is started.
+    with pytest.raises(RuntimeError, match="closed"):
+        _turn(adapter)
+
+
+def test_a_graph_that_raises_its_own_timeout_error_answers_500_with_its_message(
+    load, monkeypatch
+) -> None:
+    adapter = load(
+        "class Graph:\n"
+        "    async def ainvoke(self, state):\n"
+        "        raise TimeoutError('upstream tool timed out')\n"
+        "graph = Graph()\n",
+        "own_timeout_graph",
+    )
+    server, url = _serve(adapter)
+    try:
+        status, body = _post(url)
+    finally:
+        server.shutdown()
+        server.server_close()
+
+    assert status == 500
+    assert "upstream tool timed out" in body["error"]
+    assert "RequestTimeout" not in body["error"]
+
+
+def test_the_deadline_fires_without_waiting_for_the_margin(load, monkeypatch) -> None:
+    monkeypatch.setenv("ALK_LANGGRAPH_TIMEOUT_SECONDS", "0.2")
+    adapter = load(SLOW_GRAPH % "plain", "deadline_graph")
+    monkeypatch.setattr(adapter, "_WAIT_MARGIN_SECONDS", 30.0)
+    server, url = _serve(adapter)
+    started = time.monotonic()
+    try:
+        status, body = _post(url)
+    finally:
+        server.shutdown()
+        server.server_close()
+
+    assert status == 504
+    assert "RequestTimeout" in body["error"]
+    assert time.monotonic() - started < 5
+
+
+SECOND_CANCEL_GRAPH = """
+import asyncio
+
+cancels = []
+
+
+class Graph:
+    async def ainvoke(self, state):
+        while True:
+            try:
+                await asyncio.sleep(0.05)
+            except asyncio.CancelledError:
+                cancels.append(1)
+                if len(cancels) == 2:
+                    raise
+
+
+graph = Graph()
+"""
+
+
+def test_a_graph_that_outlives_its_deadline_is_cancelled_again(load, monkeypatch) -> None:
+    monkeypatch.setenv("ALK_LANGGRAPH_TIMEOUT_SECONDS", "0.2")
+    adapter = load(SECOND_CANCEL_GRAPH, "second_cancel_graph")
+    monkeypatch.setattr(adapter, "_WAIT_MARGIN_SECONDS", 0.3)
+    graph_module = sys.modules["second_cancel_graph.graph"]
+
+    with pytest.raises(adapter.RequestTimeout):
+        _turn(adapter)
+    deadline = time.monotonic() + 5
+    while len(graph_module.cancels) < 2 and time.monotonic() < deadline:
+        time.sleep(0.02)
+
+    # The first cancel is the deadline's, which the node swallows; the second is the
+    # abandoned request's.
+    assert graph_module.cancels == [1, 1]
+
+
+ABANDON_GRAPH = """
+import time
+
+runs = []
+
+
+class Graph:
+    async def ainvoke(self, state):
+        text = state["messages"][-1]["content"]
+        runs.append(text)
+        if text == "block":
+            time.sleep(1.0)
+        return {"final_report": text}
+
+
+graph = Graph()
+"""
+
+
+def test_a_request_answered_with_a_timeout_never_starts_its_graph(load, monkeypatch) -> None:
+    adapter = load(ABANDON_GRAPH, "abandon_graph")
+    graph_module = sys.modules["abandon_graph.graph"]
+    blocker = threading.Thread(target=lambda: _turn(adapter, "block"))
+    blocker.start()
+    while graph_module.runs != ["block"]:
+        time.sleep(0.01)
+    monkeypatch.setenv("ALK_LANGGRAPH_TIMEOUT_SECONDS", "0.1")
+    monkeypatch.setattr(adapter, "_WAIT_MARGIN_SECONDS", 0.1)
+
+    with pytest.raises(adapter.RequestTimeout):
+        _turn(adapter, "late")
+    blocker.join(timeout=10)
+    time.sleep(0.2)
+
+    assert graph_module.runs == ["block"]
+
+
+def test_close_answers_a_request_in_flight_at_once(load, monkeypatch) -> None:
+    monkeypatch.setenv("ALK_LANGGRAPH_TIMEOUT_SECONDS", "30")
+    adapter = load(SLOW_GRAPH % "plain", "close_in_flight_graph")
+    outcome: list[BaseException] = []
+
+    def ask() -> None:
+        try:
+            _turn(adapter)
+        except BaseException as exc:  # noqa: BLE001 - the test inspects it
+            outcome.append(exc)
+
+    asker = threading.Thread(target=ask)
+    asker.start()
+    while adapter._LOOP is None:
+        time.sleep(0.01)
+    time.sleep(0.2)
+    started = time.monotonic()
+    adapter.close()
+    asker.join(timeout=10)
+
+    assert not asker.is_alive()
+    assert time.monotonic() - started < 5
+    (error,) = outcome
+    assert not isinstance(error, adapter.RequestTimeout)
+    assert "closed" in str(error)
+
+
+def test_close_from_two_threads_returns_only_once_the_loop_has_stopped(load) -> None:
+    adapter = load(
+        "class Graph:\n"
+        "    async def ainvoke(self, state):\n"
+        "        return {'final_report': 'ok'}\n"
+        "graph = Graph()\n",
+        "double_close_graph",
+    )
+    _turn(adapter)
+    thread = adapter._LOOP_THREAD
+    stopped: list[bool] = []
+
+    def close_it() -> None:
+        adapter.close()
+        stopped.append(not thread.is_alive())
+
+    closers = [threading.Thread(target=close_it) for _ in range(2)]
+    for closer in closers:
+        closer.start()
+    for closer in closers:
+        closer.join(timeout=10)
+
+    assert stopped == [True, True]
+
+
+def test_a_graph_that_raises_system_exit_answers_500_and_the_loop_lives_on(
+    load, monkeypatch
+) -> None:
+    monkeypatch.setenv("ALK_LANGGRAPH_TIMEOUT_SECONDS", "2")
+    adapter = load(
+        "class Graph:\n"
+        "    async def ainvoke(self, state):\n"
+        "        if state['messages'][-1]['content'] == 'exit':\n"
+        "            raise SystemExit(3)\n"
+        "        return {'final_report': 'ok'}\n"
+        "graph = Graph()\n",
+        "exit_graph",
+    )
+    started = time.monotonic()
+
+    with pytest.raises(RuntimeError, match="SystemExit"):
+        _turn(adapter, "exit")
+
+    assert time.monotonic() - started < 2
     assert _turn(adapter) == "ok"
