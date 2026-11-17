@@ -231,8 +231,9 @@ def start_handler_child(
                     "dsn": dsn,
                     "import_root": str(source) if source is not None else None,
                     # An agent built from a folder imports its own modules by flat name, as
-                    # it does in-process: `GeneratedWorld.reach` puts the folder first.
-                    "import_subfolder": subfolder,
+                    # it does in-process: `GeneratedWorld.reach` puts the folder first. A
+                    # build without a folder sends what it always did.
+                    **({"import_subfolder": subfolder} if subfolder else {}),
                 }
             ).encode("utf-8")
         )

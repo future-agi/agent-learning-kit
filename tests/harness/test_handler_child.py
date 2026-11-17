@@ -193,11 +193,9 @@ def test_under_isolation_the_handlers_run_as_their_user_and_the_worker_never_get
     # The world's own role, never the superuser, and only on stdin.
     assert init["dsn"] == _WORLD_DSN
     assert _WORLD_DSN not in json.dumps(kwargs["env"]) + str(child["argv"])
-    assert set(init) == {
-        "handlers", "tools", "refusal_signature", "dsn", "import_root", "import_subfolder"
-    }
+    # A build without a folder sends the child what it always did.
+    assert set(init) == {"handlers", "tools", "refusal_signature", "dsn", "import_root"}
     assert "lookup_account" in init["handlers"] and init["import_root"] == str(source)
-    assert init["import_subfolder"] == ""
     # The worker gets the child's socket and the mode, and never the source.
     payload = seen["payload"]
     assert payload["process_isolation"] == "per_user"

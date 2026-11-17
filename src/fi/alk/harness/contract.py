@@ -1480,6 +1480,12 @@ KEPT_AS_WRITTEN = (
     "AgentContract.runtime",
     "AgentContract.chosen_evals",
     "AgentContract.instrumentation",
+    # Names: a worker's id and name are matched against the spans the app exports, and its tools
+    # against the contract's tool names, so they are read as written.
+    "AgentContract.workers",
+    "DeclaredWorker.id",
+    "DeclaredWorker.name",
+    "DeclaredWorker.tools",
     "ToolSpec.name",
     "ToolSpec.args",
     "ToolSpec.arg_types",

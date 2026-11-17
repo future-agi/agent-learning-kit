@@ -165,15 +165,16 @@ def test_a_contract_without_a_model_saves_and_builds_as_before(tmp_path):
 
     assert not result.get("is_error"), result
     raw = (tmp_path / "out" / "contract.json").read_bytes()
+    # The bytes and hash dev writes for this contract, `workers` included since #226.
     assert hashlib.sha256(raw).hexdigest() == (
-        "7a61d8e863f75541c6d32c287fea02fb7a605d3b440a91f4c1b4212a3e1832b6"
+        "5705f539a00886a4bc8bacb34fcf50b35e22d145e36391de98b192ad73050c1d"
     )
     assert "model" not in json.loads(raw)
     document = build_authored_agent(
         AgentContract.model_validate(json.loads(raw)).model_dump(mode="json")
     )
     assert document["setup_hash"] == (
-        "sh1:3854d6ecb87a1ee2890c5c16f25e854e20be84c109dc80311ad292e6f656d622"
+        "sh1:7aedd9f36dd3ed3fd5a1c7fd67d8a2ec6abe34ed09d616b7dccccf49e8cb1aa3"
     )
     assert document["model"] is None
 
