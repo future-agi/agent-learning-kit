@@ -1086,9 +1086,11 @@ def contract_tools(
                                 "by a shipped HTTP service. unreachable: no runnable seam exists, "
                                 "which blocks environment creation rather than generating a "
                                 "replacement. The kit can't call it, but traces it when `module` "
-                                "and `callable` say where it is (a tool a framework holds as its "
-                                "own object, such as an Agents SDK `@function_tool`: name the "
-                                "module and the def's own name).",
+                                "and `callable` say where it is. Use it for a tool whose module "
+                                "attribute is an object the kit can't call, such as the OpenAI "
+                                "Agents SDK's `@function_tool`: name the module and the def's own "
+                                "name. A LangChain `@tool` or a LiveKit `@function_tool` method "
+                                "stays `import` or `construct`.",
                             },
                             "module": {
                                 "type": "string",

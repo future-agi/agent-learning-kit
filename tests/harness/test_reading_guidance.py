@@ -43,7 +43,24 @@ def test_skill_item_10_says_a_framework_held_tool_still_names_where_it_is():
     assert "dotted name the agent's own process imports, from the folder it runs in" in item
     assert re.search(r"`unreachable`.*`module` and `callable`", item)
     assert "the kit can't call it, but watches it when it knows where it is" in item
-    assert "plain function" in item and "`import`" in item
+    assert "`import`" in item and "`construct`" in item
+
+
+def test_skill_item_10_keeps_langchain_and_livekit_tools_in_their_modes():
+    # Real readings on 17 Nov moved a LangChain `@tool` and LiveKit `@function_tool` methods to
+    # `unreachable` under wording that named "`@function_tool`" and "a LangChain `@tool`": the
+    # only exception is the OpenAI Agents SDK's FunctionTool.
+    item = _skill()
+    item = item[item.index("10. **Whether its tools have code") : item.index("11. **How its code says no")]
+    assert "a LangChain `@tool`, and a LiveKit `@function_tool` method on an `Agent` class all keep those modes" in item
+    assert "the OpenAI Agents SDK's `@function_tool` (imported from `agents`)" in item
+    assert "LangChain `@tool` with no plain function" not in item
+
+
+def test_the_mode_text_keeps_langchain_and_livekit_tools_in_their_modes(tmp_path):
+    said = _flat(_entrypoint_properties(tmp_path)["mode"]["description"])
+    assert "OpenAI Agents SDK's `@function_tool`" in said
+    assert "A LangChain `@tool` or a LiveKit `@function_tool` method stays `import` or `construct`" in said
 
 
 def test_skill_tells_a_langgraph_app_without_the_cli_to_leave_the_command_empty():
@@ -53,3 +70,4 @@ def test_skill_tells_a_langgraph_app_without_the_cli_to_leave_the_command_empty(
     assert "`execution` to `auto`" in text
     assert "write no interface" in text
     assert "the kit serves the graph" in text
+    assert "Don't map the LangGraph server's `/runs/wait` with a JSON template" in text
