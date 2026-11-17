@@ -18,9 +18,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # The version the hook's exporter handling was read against, and the version the kit's
-        # reference example pins (examples/harness/openai_agents_support/requirements.txt).
-        openai-agents: ["0.18.3", "0.24.0"]
+        # The version the hook's exporter handling was read against, and the newest that installs
+        # beside the kit: 0.21.0 and later need openai>=3, and the kit pins openai<3.
+        openai-agents: ["0.18.3", "0.20.0"]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
