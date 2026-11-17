@@ -14,10 +14,12 @@ import os
 import shutil
 import subprocess
 import sys
+import traceback
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from pathlib import Path
 from types import ModuleType
 
+import pytest
 from test_bundle_author_v2 import (
     _authoring,
     _github_job,
@@ -263,6 +265,37 @@ def assert_bindings_match(
         # Each tool is bound to its own function, not to another tool's.
         assert item["callable"] == item["name"], item
         assert item["callable"] in plain, f"{item['callable']} is not a top-level def"
+
+
+# The key and the base URL -------------------------------------------------------------------
+
+
+def assert_refuses_key_without_base_url(
+    load: Callable[..., ModuleType],
+    call: Callable[[ModuleType], object] | None,
+    monkeypatch,
+    *,
+    key: str = "OPENAI_API_KEY",
+    base_url: str = "OPENAI_BASE_URL",
+    after_refusal: Callable[[], None] | None = None,
+) -> None:
+    """With `key` set and `base_url` unset, empty or blank, the example refuses.
+
+    The refusal is a RuntimeError naming `base_url`, raised at import when `call` is None and
+    otherwise by `call(module)`; the key is nowhere in it or its traceback. `load(**env)` is
+    the test file's fresh-import fixture; `after_refusal()` checks each case's side effects.
+    """
+    canary = "secret-canary-key"
+    for value in (None, "", "   "):
+        monkeypatch.delenv(base_url, raising=False)
+        environment = {key: canary} if value is None else {key: canary, base_url: value}
+        with pytest.raises(RuntimeError, match=base_url) as refused:
+            module = load(**environment)
+            if call is not None:
+                call(module)
+        assert canary not in "".join(traceback.format_exception(refused.value)), repr(value)
+        if after_refusal is not None:
+            after_refusal()
 
 
 # The tracer ---------------------------------------------------------------------------------

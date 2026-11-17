@@ -64,8 +64,9 @@ async def agent_callback(agent_input):
             history.append(ModelRequest(parts=[UserPromptPart(content=message["content"])]))
         elif message["role"] == "assistant":
             history.append(ModelResponse(parts=[TextPart(content=message["content"])]))
-    api_key = os.getenv("OPENAI_API_KEY")
-    base_url = os.getenv("OPENAI_BASE_URL")
+    # Blank counts as unset.
+    api_key = os.getenv("OPENAI_API_KEY", "").strip() or None
+    base_url = os.getenv("OPENAI_BASE_URL", "").strip() or None
     # With no base URL the client falls back to api.openai.com and would send the key there.
     if api_key and not base_url:
         raise RuntimeError(
