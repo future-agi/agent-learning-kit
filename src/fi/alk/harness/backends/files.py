@@ -171,9 +171,29 @@ _SECRET_PATHS = _compiled(ALL_SECRET_GLOBS)
 _SECRET_BUT_ENV = _compiled(tuple(glob for glob in ALL_SECRET_GLOBS if glob not in _ENV_GLOBS))
 
 
+def _anchors(globs: tuple[str, ...]) -> tuple[str, ...]:
+    """The longest literal piece of each glob, lowercased: a path the glob's regex matches holds
+    it. With the roots, any path the list's regex matches holds one of these."""
+    pieces = {max(glob.removeprefix("**/").split("*"), key=len).lower() for glob in globs}
+    return tuple(sorted(pieces | {"/proc", "/run/futureagi", "/run/secrets"}))
+
+
+_SECRET_ANCHORS = _anchors(ALL_SECRET_GLOBS)
+_SECRET_BUT_ENV_ANCHORS = _anchors(tuple(glob for glob in ALL_SECRET_GLOBS if glob not in _ENV_GLOBS))
+
+
 def secret_text(text: str, *, env_allowed: bool = False) -> bool:
     """Whether a path, as given and never resolved, names a place on the list. Callers pass a
-    path relative to the source, so the folders the source sits in don't count."""
+    path relative to the source, so the folders the source sits in don't count.
+
+    An ASCII path that holds none of the globs' literal pieces can't match, so it is answered
+    without the regex of every glob; the source walk asks this of every file it passes. A
+    non-ASCII path always takes the regex, whose case-insensitive match differs from lower()."""
+    if text.isascii():
+        lowered = text.lower()
+        anchors = _SECRET_BUT_ENV_ANCHORS if env_allowed else _SECRET_ANCHORS
+        if not any(anchor in lowered for anchor in anchors):
+            return False
     return bool((_SECRET_BUT_ENV if env_allowed else _SECRET_PATHS).search(text))
 
 

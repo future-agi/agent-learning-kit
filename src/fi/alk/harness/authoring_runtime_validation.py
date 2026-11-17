@@ -10,6 +10,7 @@ import argparse
 import asyncio
 import hashlib
 import json
+import logging
 import os
 import random
 import re
@@ -17,6 +18,7 @@ import shutil
 import tempfile
 import time
 from concurrent.futures import ThreadPoolExecutor
+from contextvars import ContextVar
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -1435,19 +1437,13 @@ async def validate_once(
             executor.shutdown(wait=False, cancel_futures=True)
             await provider.close(work_directory=work)
             if validation_error is not None:
-                from .process_diagnostics import (
-                    retained_process_evidence,
-                    source_secret_masks,
-                )
+                from .process_diagnostics import retained_process_evidence
 
                 try:
-                    # The listed files in the agent's source, walked once for this run's
-                    # evidence (and only when it fails), masked out of every log the repair
-                    # model reads. If the walk itself fails, no log goes to the model.
-                    try:
-                        source_masks = await asyncio.to_thread(source_secret_masks, source)
-                    except Exception:
-                        raise OSError("source secret masks unavailable") from None
+                    # The listed files in the agent's source, walked once a run (and only when
+                    # it fails), masked out of every log the repair model reads. If the walk
+                    # itself fails, no log goes to the model.
+                    source_masks = await _source_masks(source)
                     validation_error.process_evidence = retained_process_evidence(
                         process_logs, logs_before, redaction_values, masks=source_masks
                     )
@@ -1460,8 +1456,56 @@ async def validate_once(
                             process_logs, logs_before, redaction_values,
                             process_name=control_service, masks=source_masks,
                         )
-                except OSError:
-                    pass
+                except _SourceMasksUnavailable:
+                    pass  # logged where the walk failed
+                except OSError as exc:
+                    logger.warning(
+                        "process evidence withheld from the repair (%s)",
+                        type(exc).__name__,
+                        exc_info=True,
+                    )
+
+
+logger = logging.getLogger(__name__)
+
+
+class _SourceMasksUnavailable(OSError):
+    """The source's listed files could not be walked for masks; logged once, where it failed."""
+
+
+# One walk per validate_and_repair run, failure included: the repair never changes the source.
+_SOURCE_MASKS: ContextVar[dict[str, frozenset[str] | None] | None] = ContextVar(
+    "alk_source_masks", default=None
+)
+
+
+async def _source_masks(source: Path) -> frozenset[str]:
+    """The masks of the source's listed files. Raises _SourceMasksUnavailable if the walk fails,
+    and the callers then withhold the evidence."""
+    from . import process_diagnostics
+
+    cache = _SOURCE_MASKS.get()
+    key = str(Path(source).resolve())
+    if cache is not None and key in cache:
+        found = cache[key]
+        if found is None:
+            raise _SourceMasksUnavailable("source secret masks unavailable")
+        return found
+    try:
+        masks = await asyncio.to_thread(process_diagnostics.source_secret_masks, source)
+    except Exception as exc:
+        logger.warning(
+            "the source's listed files could not be masked (%s); the repair gets no "
+            "diagnostic evidence",
+            type(exc).__name__,
+            exc_info=True,
+        )
+        if cache is not None:
+            cache[key] = None
+        raise _SourceMasksUnavailable("source secret masks unavailable") from None
+    if cache is not None:
+        cache[key] = masks
+    return masks
 
 
 def _invariants_the_ir_still_breaks(world, authoring: Path) -> list[str]:
@@ -1511,6 +1555,33 @@ async def validate_and_repair(
     readiness_only: bool = False,
 ) -> None:
     """Two repairs per phase; environment repairs cannot exhaust setup's budget."""
+    token = _SOURCE_MASKS.set({})
+    try:
+        await _validate_and_repair(
+            job,
+            source,
+            authoring,
+            validate=validate,
+            repair=repair,
+            controller=controller,
+            sleeper=sleeper,
+            readiness_only=readiness_only,
+        )
+    finally:
+        _SOURCE_MASKS.reset(token)
+
+
+async def _validate_and_repair(
+    job,
+    source: Path,
+    authoring: Path,
+    *,
+    validate,
+    repair,
+    controller,
+    sleeper,
+    readiness_only: bool,
+) -> None:
     from .job import HarnessJob
 
     base_guidance = (
@@ -1653,14 +1724,14 @@ async def validate_and_repair(
     # Every text the repair step gets can echo process output (logs and diagnostics alike), so
     # all of it is masked against the contents of the source's listed files on the way in. If the
     # masks can't be built, the repair gets the standing instructions without the evidence.
-    from .process_diagnostics import mask_source_secrets, source_secret_masks
+    from .process_diagnostics import mask_source_secrets
 
     _unmasked_repair = repair
 
     async def source_masks_or_none():
         try:
-            return await asyncio.to_thread(source_secret_masks, source)
-        except Exception:
+            return await _source_masks(source)
+        except _SourceMasksUnavailable:
             return None
 
     async def repair(phase, guidance, *more, **options):

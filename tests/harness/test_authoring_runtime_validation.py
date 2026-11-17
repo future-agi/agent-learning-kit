@@ -3254,3 +3254,117 @@ def test_a_value_straddling_the_diagnostic_cut_is_masked_before_it_is_cut(tmp_pa
     )
     assert seen and value[:10] not in seen[0]
     assert "<redacted>" in seen[0]
+
+
+def _counted_mask_walks(monkeypatch, *, fails=False):
+    from fi.alk.harness import process_diagnostics
+
+    real = process_diagnostics.source_secret_masks
+    walks = []
+
+    def counted(root):
+        walks.append(root)
+        if fails:
+            raise OSError("a listed file is too large to mask")
+        return real(root)
+
+    monkeypatch.setattr(process_diagnostics, "source_secret_masks", counted)
+    return walks
+
+
+def test_one_failed_attempt_walks_the_source_once(tmp_path, monkeypatch):
+    # The repair never changes the source, so its listed files are walked once per run.
+    source = tmp_path / "source"
+    authoring = tmp_path / "authoring"
+    source.mkdir()
+    authoring.mkdir()
+    (source / ".env").write_text("DB_PASSWORD=canary-walk-once-0091\n")
+    walks = _counted_mask_walks(monkeypatch)
+    calls = []
+
+    async def validate(*args):
+        calls.append("validate")
+        if len(calls) == 1:
+            raise RuntimeValidationError("environment", "failed with canary-walk-once-0091")
+        return 10
+
+    async def repair(phase, guidance):
+        assert "canary-walk-once-0091" not in guidance
+        return 0
+
+    asyncio.run(validate_and_repair(None, source, authoring, validate=validate, repair=repair))
+    assert len(walks) == 1
+
+
+def test_a_failed_mask_walk_is_logged_once_and_the_evidence_is_withheld(
+    tmp_path, monkeypatch, caplog
+):
+    source = tmp_path / "source"
+    authoring = tmp_path / "authoring"
+    source.mkdir()
+    authoring.mkdir()
+    walks = _counted_mask_walks(monkeypatch, fails=True)
+    calls = []
+    seen = []
+
+    async def validate(*args):
+        calls.append("validate")
+        if len(calls) <= 2:
+            raise RuntimeValidationError("environment", "failed")
+        return 10
+
+    async def repair(phase, guidance):
+        seen.append(guidance)
+        return 0
+
+    with caplog.at_level("WARNING"):
+        asyncio.run(
+            validate_and_repair(None, source, authoring, validate=validate, repair=repair)
+        )
+    assert len(walks) == 1
+    assert all(guidance.startswith("The diagnostic evidence was withheld.") for guidance in seen)
+    warnings = [record for record in caplog.records if record.levelname == "WARNING"]
+    assert len(warnings) == 1
+    assert "OSError" in warnings[0].getMessage()
+
+
+def test_the_scenario_retry_guidance_is_masked(tmp_path, monkeypatch):
+    # The rejection text added on a retry comes from a check of the repaired scenarios, not from
+    # masked evidence: only the repair's own mask keeps a listed value out of it.
+    from fi.alk.harness import scenario_repair, scenario_tools
+
+    source = tmp_path / "source"
+    authoring = tmp_path / "authoring"
+    source.mkdir()
+    authoring.mkdir()
+    (source / ".env").write_text("API_KEY=canary-retry-secret-0042\n")
+    monkeypatch.setattr(scenario_tools, "load_scenarios", lambda _authoring: [])
+    monkeypatch.setattr(scenario_tools, "write_scenarios", lambda *_args: None)
+
+    def rejects(*_args, **_kwargs):
+        raise ValueError("scenario 1 sets canary-retry-secret-0042")
+
+    monkeypatch.setattr(scenario_repair, "certify_scenario_repair", rejects)
+    diagnostic = HarnessDiagnostic.create(
+        stage=HarnessStage.VALIDATING_ENVIRONMENT,
+        component="test",
+        code="ready_condition_invalid",
+        message="ready condition invalid",
+    )
+
+    async def validate(*args):
+        raise RuntimeValidationError("scenarios", "invalid", diagnostics=(diagnostic,))
+
+    seen = []
+
+    async def repair(phase, guidance):
+        seen.append(guidance)
+        return 0
+
+    job = SimpleNamespace(metadata={"generic_harness_v1": True}, scenario_count=1)
+    with pytest.raises(ValueError):
+        asyncio.run(validate_and_repair(job, source, authoring, validate=validate, repair=repair))
+    assert len(seen) >= 2
+    assert "rejected and undone" in seen[1]
+    assert all("canary-retry-secret-0042" not in guidance for guidance in seen)
+    assert "<redacted>" in seen[1]

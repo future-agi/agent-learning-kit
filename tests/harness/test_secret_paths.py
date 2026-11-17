@@ -485,3 +485,50 @@ def test_claude_code_and_the_kit_hide_the_same_files(
     # The worker's own session: the three file tools it was given, and none of the parent's others.
     assert all({"Read", "Glob", "Grep"} <= tools and len(tools) < len(parent_tools[0]) for tools in worker_tools)
     assert set(_MARK.findall(text)) == _expected(near, ""), _versions()
+
+
+def _sample_paths():
+    from fi.alk.harness.backends import files
+
+    for glob in files.ALL_SECRET_GLOBS:
+        body = glob.removeprefix("**/")
+        for filler in ("x", "Prod", ""):
+            name = body.replace("*", filler)
+            yield name
+            yield f"app/{name}"
+            yield f"app/{name}/inner.txt"
+            yield f"app/{name.upper()}"
+            yield f"app/not{name}"
+            yield f"app/{name}more"
+    yield from (
+        "src/app/module_123.py",
+        "README.md",
+        "frontend/node_modules/x/index.js",
+        "/proc/self/environ",
+        "/run/secrets/token",
+        "config/settings.yaml",
+    )
+
+
+def test_the_quick_check_agrees_with_the_list_on_every_path():
+    from fi.alk.harness.backends import files
+
+    for path in _sample_paths():
+        for env_allowed in (False, True):
+            pattern = files._SECRET_BUT_ENV if env_allowed else files._SECRET_PATHS
+            assert files.secret_text(path, env_allowed=env_allowed) == bool(
+                pattern.search(path)
+            ), (path, env_allowed)
+
+
+def test_a_path_off_the_list_is_judged_quickly():
+    # The source walk asks about every file twice; a mid-size repository has tens of thousands.
+    import time
+
+    from fi.alk.harness.backends import files
+
+    started = time.perf_counter()
+    for index in range(20_000):
+        files.secret_text(f"frontend/src/components/widget_{index}/index.tsx")
+    took = time.perf_counter() - started
+    assert took < 1.0, took
