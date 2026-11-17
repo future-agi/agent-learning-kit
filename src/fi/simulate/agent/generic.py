@@ -15,6 +15,7 @@ from fi.simulate.environment import (
     normalize_orchestration_trace_events,
     normalize_orchestration_trace_export,
 )
+from fi.simulate.agent.content import text_of
 from fi.simulate.agent.wrapper import (
     AgentInput,
     AgentResponse,
@@ -400,7 +401,7 @@ class GenericAgentWrapper(AgentWrapper):
         raw_mapping = _object_mapping(raw)
         if raw_mapping is not None:
             if self.output_key and self.output_key in raw_mapping:
-                return _stringify(raw_mapping[self.output_key])
+                return _reply_text(raw_mapping[self.output_key])
             for key in (
                 "content",
                 "output",
@@ -416,7 +417,7 @@ class GenericAgentWrapper(AgentWrapper):
                         block_text = _content_blocks_text(raw_mapping[key])
                         if block_text:
                             return block_text
-                    return _stringify(raw_mapping[key])
+                    return _reply_text(raw_mapping[key])
             if "message" in raw_mapping:
                 return _message_content(raw_mapping["message"])
             if "messages" in raw_mapping:
@@ -431,7 +432,7 @@ class GenericAgentWrapper(AgentWrapper):
             if hasattr(raw, attr):
                 value = getattr(raw, attr)
                 if value is not None:
-                    return _stringify(value)
+                    return _reply_text(value)
 
         if hasattr(raw, "message"):
             return _message_content(getattr(raw, "message"))
@@ -1245,24 +1246,14 @@ def _content_blocks(value: Any) -> List[Dict[str, Any]]:
 
 
 def _content_blocks_text(value: Any) -> str:
-    parts: List[str] = []
-    if isinstance(value, str):
-        return value
-    if not isinstance(value, (list, tuple)):
-        return ""
-    for item in value:
-        if isinstance(item, str):
-            parts.append(item)
-            continue
-        block = _object_mapping(item)
-        if not block:
-            continue
-        for key in ("text", "content"):
-            text = block.get(key)
-            if text not in (None, "", [], {}):
-                parts.append(_stringify(text))
-                break
-    return " ".join(part for part in parts if part)
+    return text_of(value) if isinstance(value, (str, list, tuple)) else ""
+
+
+def _reply_text(value: Any) -> str:
+    """Text of a reply field: answer text for a block list, otherwise the plain stringified value."""
+    if isinstance(value, (list, tuple)):
+        return text_of(value)
+    return _stringify(value)
 
 
 def _list_of_mappings(value: Any) -> List[Dict[str, Any]]:
@@ -8200,7 +8191,7 @@ def _message_content(message: Any) -> str:
             block_text = _content_blocks_text(message["content"])
             if block_text:
                 return block_text
-            return _stringify(message["content"])
+            return _reply_text(message["content"])
         if "text" in message and message["text"] is not None:
             return _stringify(message["text"])
         if "parts" in message:
@@ -8209,7 +8200,7 @@ def _message_content(message: Any) -> str:
         if hasattr(message, attr):
             value = getattr(message, attr)
             if value is not None:
-                return _stringify(value)
+                return _reply_text(value)
     return str(message)
 
 

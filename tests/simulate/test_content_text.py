@@ -7,9 +7,10 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from text_of_cases import ANSWER, CASES, _blocks
+from text_of_cases import ANSWER, CASES, THINKING, _blocks
 
 import fi.simulate.agent.content as content_module
+from fi.simulate.agent.generic import wrap_agent
 from fi.simulate.agent.wrapper import (
     AgentInput,
     AgentResponse,
@@ -190,3 +191,56 @@ def test_cleaning_an_agent_responses_content_keeps_every_other_field():
     # The copy changes `content` only; the caller's object and its metadata are untouched.
     assert reply.metadata == {"source": "kept"}
     assert reply.content == _blocks()
+
+
+def _generic_reply(reply):
+    """What a raw agent's reply becomes after ``wrap_agent(...).call(...)``."""
+
+    class Agent:
+        def invoke(self, inputs):
+            return reply
+
+    agent_input = AgentInput(
+        thread_id="t",
+        execution_id="t",
+        messages=[{"role": "user", "content": "hi"}],
+        new_message={"role": "user", "content": "hi"},
+    )
+    result = asyncio.run(wrap_agent(Agent()).call(agent_input))
+    return result.content if isinstance(result, AgentResponse) else result
+
+
+@pytest.mark.parametrize(
+    "reply, expected",
+    [
+        ({"output": _blocks()}, ANSWER),
+        (SimpleNamespace(content=[THINKING]), ""),
+        (SimpleNamespace(content=[{"type": "refusal", "refusal": "I can't."}]), "I can't."),
+        (SimpleNamespace(content=[{"type": "text", "text": {"value": "dv"}}]), "dv"),
+        (
+            SimpleNamespace(
+                content=[{"type": "text", "text": "The status "}, {"type": "text", "text": "is complete."}]
+            ),
+            ANSWER,
+        ),
+        ({"content": _blocks()}, ANSWER),
+        ({"messages": [{"role": "assistant", "content": _blocks()}]}, ANSWER),
+        ({"messages": [{"role": "assistant", "content": [THINKING]}]}, ""),
+        ({"choices": [{"message": {"content": _blocks()}}]}, ANSWER),
+    ],
+    ids=[
+        "output-key",
+        "only-thinking",
+        "refusal",
+        "dict-valued-text",
+        "split-text-no-extra-space",
+        "content-key",
+        "state-last-message",
+        "state-last-message-only-thinking",
+        "choices-message",
+    ],
+)
+def test_generic_agent_wrapper_keeps_only_the_text(reply, expected):
+    out = _generic_reply(reply)
+    assert out == expected
+    assert "signature" not in out and "thinking" not in out
