@@ -159,8 +159,8 @@ def assert_detected(
     - `subfolder`: it sits inside a bigger tree that also holds a package named `shadow_name`
       deep down, and is found with no blocker.
     - `in_place`: in the repository, with nothing named `shadow_name` on its path or inside.
-    - `shadowed`: a module named `shadow_name` in the folder makes the result not the
-      expected one, a blocker or another name, so the cases above prove something.
+    - `shadowed`: a module named `shadow_name` in the folder stops the folder being found as
+      `framework` at all, so the cases above prove something.
     `shadow_name` may be several names, the first being the one planted.
     """
     names = (shadow_name,) if isinstance(shadow_name, str) else tuple(shadow_name)
@@ -196,7 +196,7 @@ def assert_detected(
         assert detect_framework(run) == expected
         (run / f"{names[0]}.py").write_text("def helper():\n    return 1\n", encoding="utf-8")
         found = detect_framework(run)
-        assert found != expected, f"a shadowed import is still detected: {found!r}"
+        assert found.get("name") != framework, f"a shadowed import is still detected: {found!r}"
     else:
         raise ValueError(f"unknown case {where!r}")
 
@@ -258,6 +258,8 @@ def assert_bindings_match(
     plain = {node.name for node in tree.body if isinstance(node, ast.FunctionDef)}
     for item in bindings:
         assert item["module"] == module_name
+        # Each tool is bound to its own function, not to another tool's.
+        assert item["callable"] == item["name"], item
         assert item["callable"] in plain, f"{item['callable']} is not a top-level def"
 
 
