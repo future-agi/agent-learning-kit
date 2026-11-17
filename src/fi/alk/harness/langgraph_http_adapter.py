@@ -119,9 +119,7 @@ def _response_text(state: Any) -> str:
             if isinstance(content, str):
                 return content
             if isinstance(content, (list, tuple)):
-                text = _text_of(content)
-                if text:
-                    return text
+                return _text_of(content)
     raise ValueError("declared LangGraph graph returned no assistant content")
 
 

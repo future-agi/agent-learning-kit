@@ -4,6 +4,8 @@ import importlib
 import sys
 from pathlib import Path
 
+import pytest
+
 
 def test_declared_graph_receives_chat_and_returns_report(
     tmp_path: Path, monkeypatch,
@@ -74,5 +76,27 @@ def test_a_block_list_reply_keeps_only_its_text(tmp_path: Path, monkeypatch) -> 
         assert adapter._invoke({"new_message": {"content": "hi"}}) == {
             "content": "The status is complete."
         }
+    finally:
+        cleanup()
+
+
+@pytest.mark.parametrize(
+    "content",
+    ["[]", "[{'type': 'thinking', 'thinking': 'hmm', 'signature': 'sig-abc'}]", "''"],
+    ids=["empty-list", "only-thinking", "empty-string"],
+)
+def test_a_reply_with_no_text_is_an_empty_answer_whatever_its_form(tmp_path: Path, monkeypatch, content) -> None:
+    adapter, cleanup = _load_adapter(
+        tmp_path,
+        monkeypatch,
+        "class Message:\n"
+        f"    content = {content}\n"
+        "class Graph:\n"
+        "    async def ainvoke(self, state):\n"
+        "        return {'messages': [Message()]}\n"
+        "graph = Graph()\n",
+    )
+    try:
+        assert adapter._invoke({"new_message": {"content": "hi"}}) == {"content": ""}
     finally:
         cleanup()
