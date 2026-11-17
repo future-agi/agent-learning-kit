@@ -91,6 +91,22 @@ def test_no_subfolder_contract_dump_unchanged(tmp_path, repo):
         assert runtime["workdir"] == ""
 
 
+@pytest.mark.parametrize("written", ["agents/b/", "./agents/b", "../b", "/etc"])
+@pytest.mark.parametrize("subfolder", [None, "agents/a"])
+def test_a_folder_the_model_writes_itself_never_costs_a_turn(tmp_path, repo, written, subfolder):
+    # The harness records the folder; whatever the model put there is dropped, never refused.
+    result = accept_contract(
+        payload(runtime={"language": "python", "source_subfolder": written}),
+        tmp_path,
+        source_root=repo,
+        subfolder=subfolder,
+    )
+
+    assert not result.get("is_error"), result
+    runtime = _saved(tmp_path)["runtime"]
+    assert runtime.get("source_subfolder", "") == (subfolder or "")
+
+
 def test_amend_keeps_recorded_folder(tmp_path, repo):
     accept_contract(payload(), tmp_path, source_root=repo, subfolder="agents/a")
     contract = load(tmp_path)
