@@ -7,7 +7,7 @@ import stat
 import uuid
 from collections.abc import Iterable, Mapping
 from pathlib import Path
-from urllib.parse import parse_qsl, unquote, urlsplit, urlunsplit
+from urllib.parse import unquote, urlsplit, urlunsplit
 
 from fi._diagnostics import sanitize_diagnostic
 
@@ -202,16 +202,25 @@ def _url_masks(value: str, *, named: bool = False) -> set[str]:
             masks.add(segment)
             masks.add("/".join(segments[index:]))
     for field in (parts.query, parts.fragment):
-        masks.update(item for _, item in parse_qsl(field, keep_blank_values=False))
-        # As a log prints them, percent-encoded (an Azure SAS sig ends in %3D), and whole.
-        masks.update(pair.partition("=")[2] for pair in field.split("&"))
+        # A value on its own only when it has a secret's shape or its name says secret, so an
+        # ordinary word (production, verify-full) stays readable; decoded, and percent-encoded
+        # as a log prints it (an Azure SAS sig ends in %3D). The whole field is masked anyway.
+        for pair in field.split("&"):
+            name, _, raw = pair.partition("=")
+            decoded = unquote(raw.replace("+", " "))
+            if raw and (
+                _secret_name(name) or _looks_like_secret(decoded) or _looks_like_secret(raw)
+            ):
+                masks.update({raw, decoded})
         if field:
             masks.add(field)
     if parts.query:
         masks.add(parts.path + "?" + parts.query)
-    for field in (parts.password, parts.username):
-        if field and len(field) >= MIN_MASKED_LENGTH:
-            masks.update({field, unquote(field)})
+    if parts.password and len(parts.password) >= MIN_MASKED_LENGTH:
+        masks.update({parts.password, unquote(parts.password)})
+    # A username only when it is a token (ghp_...), not an ordinary account name.
+    if parts.username and _looks_like_secret(unquote(parts.username)):
+        masks.update({parts.username, unquote(parts.username)})
     host = (parts.hostname or "").lower()
     if host:
         netloc = host if port in (None, _DEFAULT_PORTS.get(parts.scheme.lower())) else f"{host}:{port}"

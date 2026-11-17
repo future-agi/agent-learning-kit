@@ -544,6 +544,9 @@ def test_a_url_with_userinfo_or_a_query_is_masked(tmp_path, value):
 
 
 _SLACK = "https://hooks.slack.com/services/T0FAKE1234/B0FAKE5678/fakeWebhookSecretValue24"
+_TELEGRAM = (
+    "https://api.telegram.org/bot1234567890:AAHfakeTelegramToken0123456789abcde/sendMessage"
+)
 _DISCORD = (
     "https://discord.com/api/webhooks/1234567890123/"
     "fake-Discord_Webhook_Token_Value_abcdefghijkl"
@@ -557,8 +560,10 @@ _DISCORD = (
         (f"DISCORD_WEBHOOK={_DISCORD}", _DISCORD),
         # Under a name with no secret part: the token in the URL's path still marks it.
         (f"NOTIFY_TARGET={_SLACK}", _SLACK),
+        # No webhook marker and no secret name: only the token's shape in the path marks it.
+        (f"NOTIFY_BOT={_TELEGRAM}", _TELEGRAM),
     ],
-    ids=["slack", "discord", "plain-name"],
+    ids=["slack", "discord", "plain-name", "telegram-path-token"],
 )
 def test_a_webhook_url_with_its_token_in_the_path_is_masked(tmp_path, line, url):
     source = _source(tmp_path, {".env": line + "\nOPENAI_API_KEY=sk-live-fakefakefake123\n"})
@@ -654,6 +659,21 @@ def test_a_url_with_a_model_or_plain_path_is_left_alone(tmp_path, url):
     source = _source(tmp_path, {".env": f"MODEL_URL={url}\n"})
     text = _evidence(tmp_path, source, f"calling {url}\n")
     assert url in text
+
+
+def test_ordinary_query_values_and_usernames_stay_readable(tmp_path):
+    # Only a value with a secret's shape, or under a secret parameter name, is masked on its own.
+    source = _source(
+        tmp_path,
+        {
+            ".env": "FLAGS_URL=https://flags.example.com/api/v1?environment=production&format=json\n"
+            "DATABASE_URL=postgresql://application:hunter2pw-longer@db:5432/agent?sslmode=verify-full\n"
+        },
+    )
+    line = "starting in production mode; connecting as application with sslmode verify-full\n"
+    text = _evidence(tmp_path, source, line)
+    assert "production" in text and "application" in text and "verify-full" in text
+    assert "hunter2pw-longer" not in _evidence(tmp_path, source, "password hunter2pw-longer\n")
 
 
 def test_a_letters_only_webhook_token_under_a_plain_name_is_masked(tmp_path):
