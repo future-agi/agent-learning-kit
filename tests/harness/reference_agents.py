@@ -213,11 +213,13 @@ def build_control_service(
     example: Path,
     tools: Sequence[str] = TOOLS,
     ignore: Sequence[str] = (),
+    secret_aliases: Sequence[str] = ("OPENAI_API_KEY", "OPENAI_BASE_URL"),
 ):
     """Build the example through the hosted path and return its control-service process.
 
     `contract_writer(authoring)` writes the contract (wrap `write_callable_contract` or
     `write_chat_contract`); the tools are then declared as entrypoints of `module`.
+    `secret_aliases` are the job's secret names, the ones the example reads.
     """
     source = tmp_path / "source"
     copy_example(example, source / subfolder, ignore)
@@ -236,7 +238,7 @@ def build_control_service(
         job=_github_job(
             subfolder,
             with_secrets=True,
-            secret_aliases=("OPENAI_API_KEY", "OPENAI_BASE_URL"),
+            secret_aliases=tuple(secret_aliases),
         ),
         authoring=authoring,
         output=tmp_path / "bundle",
