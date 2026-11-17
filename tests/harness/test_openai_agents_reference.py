@@ -25,6 +25,7 @@ from reference_agents import (
     assert_bindings_match,
     assert_detected,
     assert_pins,
+    assert_refuses_key_without_base_url,
     build_control_service,
     fresh_import,
     run_tracer,
@@ -421,23 +422,22 @@ def test_import_sets_up_the_agent_without_a_key_or_a_client(example_module) -> N
     assert "model" not in built.options
 
 
-@pytest.mark.parametrize("base_url", [None, ""])
 def test_a_key_with_no_base_url_is_refused_before_a_client_is_built(
-    example_module, monkeypatch, base_url
+    example_module, monkeypatch
 ) -> None:
-    monkeypatch.setenv("OPENAI_API_KEY", "secret-canary-key")
-    if base_url is not None:
-        monkeypatch.setenv("OPENAI_BASE_URL", base_url)
-    agent = example_module()
-    import agents
-    import openai
+    def nothing_built() -> None:
+        import agents
+        import openai
 
-    with pytest.raises(RuntimeError, match="OPENAI_BASE_URL") as refused:
-        asyncio.run(agent.agent_callback(_agent_input(CONVERSATION)))
+        assert openai.CLIENTS == []
+        assert agents.STATE["runs"] == []
 
-    assert "secret-canary-key" not in str(refused.value)
-    assert openai.CLIENTS == []
-    assert agents.STATE["runs"] == []
+    assert_refuses_key_without_base_url(
+        example_module,
+        lambda agent: asyncio.run(agent.agent_callback(_agent_input(CONVERSATION))),
+        monkeypatch,
+        after_refusal=nothing_built,
+    )
 
 
 def test_sdk_failure_is_not_hidden(example_module, monkeypatch) -> None:
