@@ -15,7 +15,7 @@ from fi.simulate.environment import (
     normalize_orchestration_trace_events,
     normalize_orchestration_trace_export,
 )
-from fi.simulate.agent.content import text_of
+from fi.simulate.agent.content import _is_message, text_of
 from fi.simulate.agent.wrapper import (
     AgentInput,
     AgentResponse,
@@ -439,9 +439,8 @@ class GenericAgentWrapper(AgentWrapper):
         if hasattr(raw, "messages"):
             return _last_message_content(getattr(raw, "messages"))
         if isinstance(raw, (list, tuple)):
-            if _is_bare_block_list(raw):
-                return _bare_blocks_text(raw)
-            return _last_message_content(raw)
+            text = _list_text(raw)
+            return _last_message_content(raw) if text is None else text
         realtime_text = _realtime_last_text(raw)
         if realtime_text:
             return realtime_text
@@ -1295,6 +1294,24 @@ def _is_bare_block_list(value: Any) -> bool:
     )
 
 
+def _list_text(items: Any) -> Optional[str]:
+    """Reply text of a list: one reply's blocks, or the last message of a history.
+
+    None when the list is neither (a list of records), so the caller keeps its own fallback.
+    """
+    if not items:
+        return None
+    if _is_bare_block_list(items):
+        return _bare_blocks_text(items)
+    if any(_is_message(item) for item in items):
+        return text_of(items)  # its history rule and depth bound apply
+    if any(_is_history_item(item) for item in items):
+        return _last_message_content(items)
+    if any(_is_block_or_message(item) for item in items):
+        return text_of(items)
+    return None
+
+
 def _bare_blocks_text(items: Any) -> str:
     """Text of one reply's bare block list.
 
@@ -1372,10 +1389,10 @@ def _reply_text(value: Any) -> str:
     message = _field_of(value, "message")
     if message is not None and _is_block_or_message(message):
         return _message_content(message)
-    if _is_single_reply(value) or (
-        isinstance(value, (list, tuple))
-        and any(_is_block_or_message(item) for item in value)
-    ):
+    if isinstance(value, (list, tuple)):
+        text = _list_text(value)
+        return _stringify(value) if text is None else text
+    if _is_single_reply(value):
         return text_of(value)
     return _stringify(value)
 

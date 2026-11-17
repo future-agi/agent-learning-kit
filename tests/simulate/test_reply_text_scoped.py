@@ -177,3 +177,45 @@ def test_a_record_under_a_reply_key_stays_json(reply, expected):
 )
 def test_untyped_text_items_of_a_bare_list_join_with_a_space(reply, expected):
     _check(reply, expected)
+
+
+@pytest.mark.parametrize(
+    "reply, expected",
+    [
+        (
+            {
+                "output": [
+                    NS(type="human", content="q"),
+                    NS(type="AIMessageChunk", content=_blocks()),
+                ]
+            },
+            ANSWER,
+        ),
+        (
+            {
+                "output": [
+                    {"role": "user", "parts": [{"text": "q"}]},
+                    {
+                        "role": "model",
+                        "parts": [{"text": PLAN, "thought": True}, {"text": ANSWER}],
+                    },
+                ]
+            },
+            ANSWER,
+        ),
+        (
+            {
+                "result": [
+                    {"role": "user", "content": "q1"},
+                    {"role": "assistant", "content": "A1"},
+                    {"role": "user", "content": "q2"},
+                    {"role": "assistant", "content": _blocks()},
+                ]
+            },
+            ANSWER,
+        ),
+    ],
+    ids=["langchain-history", "gemini-dict-history", "dict-history"],
+)
+def test_a_history_under_a_reply_key_gives_the_last_reply(reply, expected):
+    _check(reply, expected)
